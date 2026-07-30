@@ -33,7 +33,7 @@ test.describe("Line wrapping during live window resize", function()
     if context.doc then context.doc:on_close() end
   end)
 
-  test.it("defers repeated width-only reflow until live resizing settles", function(context)
+  test.it("reflows width changes during live resizing", function(context)
     local doc = Doc()
     context.doc = doc
     doc:insert(1, 1, string.rep("a word with wrapping spaces ", 80))
@@ -49,11 +49,6 @@ test.describe("Line wrapping during live window resize", function()
     view.size.x = 640
     LineWrapping.update_docview_breaks(view)
 
-    test.equal(initial_width, view.wrapped_settings.width)
-    test.equal(initial_rows, LineWrapping.get_total_wrapped_lines(view))
-
-    core.window_resizing_until = nil
-    LineWrapping.update_docview_breaks(view)
     test.ok(view.wrapped_settings.width > initial_width)
     test.ok(LineWrapping.get_total_wrapped_lines(view) < initial_rows)
   end)

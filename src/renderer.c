@@ -231,6 +231,53 @@ static const char* utf8_to_codepoint(const char *p, const char *endp, unsigned *
   return (const char*)up + 1;
 }
 
+static const char *utf8_to_codepoint_bounded(
+  const char *p, const char *end, unsigned int *dst
+) {
+  const unsigned char *bytes = (const unsigned char *)p;
+  size_t available = (size_t)(end - p);
+  unsigned int codepoint;
+  size_t length;
+
+  if (bytes[0] < 0x80) {
+    *dst = bytes[0];
+    return p + 1;
+  } else if (bytes[0] >= 0xc2 && bytes[0] <= 0xdf) {
+    codepoint = bytes[0] & 0x1f;
+    length = 2;
+  } else if (bytes[0] >= 0xe0 && bytes[0] <= 0xef) {
+    codepoint = bytes[0] & 0x0f;
+    length = 3;
+  } else if (bytes[0] >= 0xf0 && bytes[0] <= 0xf4) {
+    codepoint = bytes[0] & 0x07;
+    length = 4;
+  } else {
+    *dst = 0xfffd;
+    return p + 1;
+  }
+
+  if (available < length) {
+    *dst = 0xfffd;
+    return p + 1;
+  }
+  for (size_t index = 1; index < length; index++) {
+    if ((bytes[index] & 0xc0) != 0x80) {
+      *dst = 0xfffd;
+      return p + 1;
+    }
+    codepoint = (codepoint << 6) | (bytes[index] & 0x3f);
+  }
+  if ((length == 3 && (codepoint < 0x800
+      || (codepoint >= 0xd800 && codepoint <= 0xdfff)))
+    || (length == 4 && (codepoint < 0x10000 || codepoint > 0x10ffff))) {
+    *dst = 0xfffd;
+    return p + 1;
+  }
+
+  *dst = codepoint;
+  return p + length;
+}
+
 static int font_set_load_options(RenFont* font) {
   int load_target = font->antialiasing == FONT_ANTIALIASING_NONE ? FT_LOAD_TARGET_MONO
     : (font->hinting == FONT_HINTING_SLIGHT ? FT_LOAD_TARGET_LIGHT : FT_LOAD_TARGET_NORMAL);
@@ -2363,6 +2410,118 @@ size_t ren_font_group_get_advances(
     g_text_frame_stats.width_chars++;
   }
   return count;
+}
+
+static double font_group_get_standalone_advance(
+  RenFont **fonts, const char *text, size_t len, unsigned int codepoint,
+  hb_buffer_t **hb_buffer
+) {
+  unsigned int glyph_id = 0;
+  RenFont *font = font_group_find_font(fonts, codepoint, &glyph_id);
+  double advance = 0;
+
+  /* Plain line wrapping historically measured each non-ASCII character with
+   * font:get_width(character). Preserve that standalone shaping behavior: it
+   * matters for combining marks whose nominal glyph advance may be nonzero
+   * even though HarfBuzz positions the standalone mark with zero advance. */
+  if (!is_whitespace(codepoint)
+    && font && font->ligatures && font->hb_font && glyph_id
+    && text_needs_shaping(text, text + len)) {
+    if (!*hb_buffer) *hb_buffer = hb_buffer_create();
+    if (*hb_buffer) {
+      int unused_x_offset = 0;
+      bool ignore_x_offset = true;
+      g_text_frame_stats.width_shaped_runs++;
+      g_text_frame_stats.width_shape_probe_bytes += len;
+      advance = shaped_run_get_width(
+        *hb_buffer, font, text, len, &unused_x_offset, &ignore_x_offset
+      );
+#ifdef ANVIL_USE_SDL_RENDERER
+      advance /= fonts[0]->scale;
+#endif
+      return advance;
+    }
+  }
+
+  GlyphMetric *metric = NULL;
+  RenTab fixed_tab = { .offset = NAN };
+  font_group_get_glyph(fonts, codepoint, 0, NULL, &metric);
+  advance = font_get_xadvance(fonts[0], codepoint, metric, 0, fixed_tab);
+#ifdef ANVIL_USE_SDL_RENDERER
+  advance /= fonts[0]->scale;
+#endif
+  return advance;
+}
+
+void ren_font_group_wrap_text(
+  RenFont **fonts, const char *text, size_t text_len, size_t start, size_t end,
+  const RenTextWrapOptions *options, RenTextWrapEmit emit, void *userdata
+) {
+  if (!fonts || !fonts[0] || !text || !options || !emit) return;
+
+  if (start > text_len) start = text_len;
+  if (end > text_len) end = text_len;
+  while (start > 0 && start < text_len
+    && (((unsigned char)text[start] & 0xc0) == 0x80))
+    start--;
+  while (end > 0 && end < text_len
+    && (((unsigned char)text[end] & 0xc0) == 0x80))
+    end--;
+  if (end < start) end = start;
+
+  const char *range_start = text + start;
+  const char *range_end = text + end;
+  const char *cursor = range_start;
+  const char *row_start = range_start;
+  size_t last_space = SIZE_MAX;
+  double last_space_width = 0;
+  double row_width = options->first_leading;
+  hb_buffer_t *hb_buffer = NULL;
+
+  g_text_frame_stats.width_calls++;
+  g_text_frame_stats.width_bytes += end - start;
+  emit(start, userdata);
+
+  while (cursor < range_end) {
+    const char *char_start = cursor;
+    unsigned int codepoint;
+    cursor = utf8_to_codepoint_bounded(cursor, range_end, &codepoint);
+
+    double advance;
+    if (codepoint == '\t' && !isnan(options->tab_advance)) {
+      advance = options->tab_advance;
+    } else if (codepoint <= 0x7f && !isnan(options->ascii_advance)) {
+      advance = options->ascii_advance;
+    } else {
+      advance = font_group_get_standalone_advance(
+        fonts, char_start, (size_t)(cursor - char_start), codepoint, &hb_buffer
+      );
+    }
+    g_text_frame_stats.width_chars++;
+    row_width += advance;
+
+    if (options->width > 0
+      && row_width > options->width
+      && char_start > row_start) {
+      if (options->word_mode && last_space != SIZE_MAX) {
+        emit(last_space, userdata);
+        row_start = text + last_space;
+        /* `row_width - last_space_width` already contains the current
+         * character. Do not add its advance a second time. */
+        row_width = options->continuation_leading
+          + (row_width - last_space_width);
+      } else {
+        emit((size_t)(char_start - text), userdata);
+        row_start = char_start;
+        row_width = options->continuation_leading + advance;
+      }
+      last_space = SIZE_MAX;
+    } else if (codepoint == ' ' && cursor == char_start + 1) {
+      last_space = (size_t)(cursor - text);
+      last_space_width = row_width;
+    }
+  }
+  if (hb_buffer) hb_buffer_destroy(hb_buffer);
 }
 
 void ren_draw_rounded_rect(RenSurface *rs, RenRect rect, float radius, RenColor color) {

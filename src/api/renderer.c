@@ -666,6 +666,67 @@ static int f_font_text_layout(lua_State *L) {
   return 1;
 }
 
+static size_t utf8_boundary_at_or_before(
+  const char *text, size_t len, size_t byte_offset
+) {
+  if (byte_offset > len) byte_offset = len;
+  while (byte_offset > 0 && byte_offset < len
+    && (((unsigned char)text[byte_offset] & 0xc0) == 0x80))
+    byte_offset--;
+  return byte_offset;
+}
+
+typedef struct {
+  lua_State *L;
+  int table_index;
+  int next_index;
+} LuaTextWrapOutput;
+
+static void text_wrap_emit_lua(size_t byte_offset, void *userdata) {
+  LuaTextWrapOutput *output = (LuaTextWrapOutput *)userdata;
+  lua_pushinteger(output->L, (lua_Integer)byte_offset);
+  lua_rawseti(output->L, output->table_index, output->next_index++);
+}
+
+static int f_font_wrap_text(lua_State *L) {
+  RenFont *fonts[FONT_FALLBACK_MAX]; font_retrieve(L, fonts, 1);
+  size_t len;
+  const char *text = luaL_checklstring(L, 2, &len);
+  double wrap_width = luaL_checknumber(L, 3);
+  const char *mode = luaL_optstring(L, 4, "letter");
+  lua_Integer raw_start = luaL_optinteger(L, 5, 0);
+  lua_Integer raw_end = luaL_optinteger(L, 6, (lua_Integer)len);
+  double first_leading = luaL_optnumber(L, 7, 0);
+  double continuation_leading = luaL_optnumber(L, 8, 0);
+  double ascii_advance = luaL_optnumber(L, 9, NAN);
+  double tab_advance = luaL_optnumber(L, 10, NAN);
+
+  size_t start = raw_start <= 0 ? 0 : (size_t)raw_start;
+  size_t end = raw_end <= 0 ? 0 : (size_t)raw_end;
+  start = utf8_boundary_at_or_before(text, len, start);
+  end = utf8_boundary_at_or_before(text, len, end);
+  if (end < start) end = start;
+
+  lua_createtable(L, 8, 0);
+  LuaTextWrapOutput output = {
+    .L = L,
+    .table_index = lua_absindex(L, -1),
+    .next_index = 1,
+  };
+  RenTextWrapOptions options = {
+    .width = wrap_width,
+    .first_leading = first_leading,
+    .continuation_leading = continuation_leading,
+    .ascii_advance = ascii_advance,
+    .tab_advance = tab_advance,
+    .word_mode = strcmp(mode, "word") == 0,
+  };
+  ren_font_group_wrap_text(
+    fonts, text, len, start, end, &options, text_wrap_emit_lua, &output
+  );
+  return 1;
+}
+
 
 static int f_draw_rounded_rect(lua_State *L) {
   lua_Number x = luaL_checknumber(L, 1);
@@ -1342,6 +1403,7 @@ static const luaL_Reg fontLib[] = {
   { "set_tab_size",       f_font_set_tab_size       },
   { "get_width",          f_font_get_width          },
   { "text_layout",        f_font_text_layout        },
+  { "wrap_text",          f_font_wrap_text          },
   { "get_height",         f_font_get_height         },
   { "get_size",           f_font_get_size           },
   { "get_generation",     f_font_get_generation     },

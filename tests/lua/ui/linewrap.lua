@@ -429,6 +429,70 @@ test.describe("line wrapping visual navigation", function()
     test.equal(view.wrapped_line_to_idx[1], 1)
   end)
 
+  test.it("does not count the overflowing UTF-8 character twice after a word break", function(context)
+    local view = open_editor(context, "é aa aa aa aa")
+    configure_wrapping_for_test(context, view)
+    local cell = view:get_font():get_width(" ")
+    config.plugins.linewrapping.mode = "word"
+    config.plugins.linewrapping.width_override = cell * 5
+
+    LineWrapping.update_docview_breaks(view)
+
+    test.same(view.wrapped_lines, { 1, 1, 1, 7, 1, 10 })
+  end)
+
+  test.it("does not double-count after an ASCII tabbed word break", function(context)
+    local view = open_editor(context, "\taa aa aa aa")
+    configure_wrapping_for_test(context, view)
+    local cell = view:get_font():get_width(" ")
+    config.plugins.linewrapping.mode = "word"
+    config.plugins.linewrapping.width_override = cell * 5
+
+    LineWrapping.update_docview_breaks(view)
+
+    test.equal(view:get_total_visual_lines(), 3)
+  end)
+
+  test.it("does not double-count after a tokenized UTF-8 word break", function(context)
+    local view = open_editor(context, "é aa aa aa aa")
+    configure_wrapping_for_test(context, view)
+    local cell = view:get_font():get_width(" ")
+    config.plugins.linewrapping.mode = "word"
+    config.plugins.linewrapping.require_tokenization = true
+    config.plugins.linewrapping.width_override = cell * 5
+
+    LineWrapping.update_docview_breaks(view)
+
+    test.same(view.wrapped_lines, { 1, 1, 1, 7, 1, 10 })
+  end)
+
+  test.it("records large line wrapping outside frame statistics", function(context)
+    local view = open_editor(context, string.rep("x", 60000))
+    local perf = require "core.perf"
+    local old_frame_stats = core.perf_frame_stats
+    local old_is_recording = perf.is_recording
+    local old_record_linewrap_compute = perf.record_linewrap_compute
+    local recorded
+    core.perf_frame_stats = nil
+    perf.is_recording = function() return true end
+    perf.record_linewrap_compute = function(row) recorded = row end
+
+    local ok, err = pcall(function()
+      LineWrapping.compute_line_breaks(
+        view.doc, view:get_font(), 1, math.huge, "word", view
+      )
+    end)
+
+    core.perf_frame_stats = old_frame_stats
+    perf.is_recording = old_is_recording
+    perf.record_linewrap_compute = old_record_linewrap_compute
+    if not ok then error(err, 0) end
+
+    test.not_nil(recorded)
+    test.equal(recorded.bytes, #view.doc.lines[1])
+    test.ok(recorded.visible_bytes > 50000)
+  end)
+
   test.it("scrolls to the end of huge simple unwrapped lines without tokenizing for x offset", function(context)
     local view, doc = open_editor(context, string.rep("a", 5000))
     view.wrapping_enabled = false
@@ -932,6 +996,118 @@ test.describe("line wrapping visual navigation", function()
 
     test.same(view.wrapped_lines, incremental_lines)
     test.same(view.wrapped_line_offsets, incremental_offsets)
+  end)
+
+  test.it("updates non-structural multi-range edits without rebuilding the whole document", function(context)
+    local source = {}
+    for line = 1, 200 do
+      source[line] = string.format(
+        "line %03d alpha beta gamma delta epsilon\n", line
+      )
+    end
+    local view, doc = open_editor(context, table.concat(source))
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.mode = "word"
+    config.plugins.linewrapping.width_override =
+      view:get_font():get_width("xxxxxxxxxxxx")
+    LineWrapping.update_docview_breaks(view)
+    local initial_rows = LineWrapping.get_total_wrapped_lines(view)
+
+    local old_frame_stats = core.perf_frame_stats
+    local stats = {}
+    core.perf_frame_stats = stats
+    doc.selections = {
+      2, 10, 2, 10,
+      150, 10, 150, 10,
+      150, 21, 150, 21,
+    }
+    doc.last_selection = 3
+    local ok, transaction = pcall(
+      doc.text_input, doc, "wide wide wide "
+    )
+    core.perf_frame_stats = old_frame_stats
+    if not ok then error(transaction, 0) end
+
+    test.ok(transaction.changed)
+    test.equal(#transaction.changed_ranges, 3)
+    test.equal(stats.linewrapping_reconstruct_breaks_calls, nil)
+    test.equal(stats.linewrapping_update_breaks_calls, 1)
+    test.equal(stats.linewrapping_update_breaks_lines, 2)
+    test.ok(LineWrapping.get_total_wrapped_lines(view) > initial_rows)
+
+    local incremental_lines = { table.unpack(view.wrapped_lines) }
+    local incremental_offsets = { table.unpack(view.wrapped_line_offsets) }
+    LineWrapping.reconstruct_breaks(
+      view, view:get_font(), config.plugins.linewrapping.width_override
+    )
+
+    test.same(view.wrapped_lines, incremental_lines)
+    test.same(view.wrapped_line_offsets, incremental_offsets)
+  end)
+
+  test.it("keeps tokenized multi-range wrapping equivalent to a full rebuild", function(context)
+    local source = {}
+    for line = 1, 40 do
+      source[line] = string.format(
+        "local value_%02d = alpha_beta + gamma_delta\n", line
+      )
+    end
+    local view, doc = open_editor(context, table.concat(source))
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.mode = "word"
+    config.plugins.linewrapping.require_tokenization = true
+    config.plugins.linewrapping.width_override =
+      view:get_font():get_width("xxxxxxxxxxxx")
+    LineWrapping.update_docview_breaks(view)
+
+    local old_frame_stats = core.perf_frame_stats
+    local stats = {}
+    core.perf_frame_stats = stats
+    local ok, transaction = pcall(doc.apply_edits, doc, {
+      { line1 = 3, col1 = 7, line2 = 3, col2 = 7, text = "new_" },
+      { line1 = 31, col1 = 18, line2 = 31, col2 = 28, text = "replacement" },
+    }, { type = "multi-range-tokenized-linewrap-test" })
+    core.perf_frame_stats = old_frame_stats
+    if not ok then error(transaction, 0) end
+
+    test.equal(stats.linewrapping_reconstruct_breaks_calls, nil)
+    test.equal(stats.linewrapping_update_breaks_lines, 2)
+    local incremental_lines = { table.unpack(view.wrapped_lines) }
+    local incremental_offsets = { table.unpack(view.wrapped_line_offsets) }
+    LineWrapping.reconstruct_breaks(
+      view, view:get_font(), config.plugins.linewrapping.width_override
+    )
+    test.same(view.wrapped_lines, incremental_lines)
+    test.same(view.wrapped_line_offsets, incremental_offsets)
+  end)
+
+  test.it("falls back to full reconstruction for structural multi-range edits", function(context)
+    local view, doc = open_editor(context, table.concat({
+      "alpha beta gamma delta\n",
+      "epsilon zeta eta theta\n",
+      "iota kappa lambda mu\n",
+      "nu xi omicron pi\n",
+    }))
+    configure_wrapping_for_test(context, view)
+
+    local old_frame_stats = core.perf_frame_stats
+    local stats = {}
+    core.perf_frame_stats = stats
+    local ok, transaction = pcall(doc.apply_edits, doc, {
+      { line1 = 1, col1 = 7, line2 = 1, col2 = 7, text = "inserted\n" },
+      { line1 = 4, col1 = 4, line2 = 4, col2 = 4, text = "tail\n" },
+    }, { type = "multi-range-structural-linewrap-test" })
+    core.perf_frame_stats = old_frame_stats
+    if not ok then error(transaction, 0) end
+
+    test.equal(stats.linewrapping_reconstruct_breaks_calls, 1)
+    local reconstructed_lines = { table.unpack(view.wrapped_lines) }
+    local reconstructed_offsets = { table.unpack(view.wrapped_line_offsets) }
+    LineWrapping.reconstruct_breaks(
+      view, view:get_font(), config.plugins.linewrapping.width_override
+    )
+    test.same(view.wrapped_lines, reconstructed_lines)
+    test.same(view.wrapped_line_offsets, reconstructed_offsets)
   end)
 
   test.it("clamps oversized continuation indent for right-aligned extracted text", function(context)

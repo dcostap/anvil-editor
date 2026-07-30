@@ -17,28 +17,193 @@ local function make_view(text)
   return view, doc
 end
 
+local function make_slow_wrapping_view(text)
+  local view, doc = make_view(text or table.concat({
+    "first rendered line",
+    "second rendered line",
+    "third rendered line",
+  }, "\n"))
+  view:add_line_render_provider("slow-wrap", {
+    render_line = function(_, owner, line)
+      system.sleep(0.002)
+      local text = (owner.doc.lines[line] or ""):gsub("\n$", "")
+      return {
+        source_text = text,
+        fragments = {
+          { source_col1 = 1, source_col2 = #text + 1, text = text },
+        },
+      }
+    end,
+  })
+  return view, doc
+end
+
 test.describe("DocView variable visual row metrics", function()
   test.it("does not adopt sliced wrapping after the wrap cache is cleared", function()
-    local view = make_view(table.concat({
-      "first rendered line",
-      "second rendered line",
-      "third rendered line",
-    }, "\n"))
-    view:add_line_render_provider("slow-wrap", {
-      render_line = function(_, owner, line)
-        system.sleep(0.002)
-        local text = (owner.doc.lines[line] or ""):gsub("\n$", "")
-        return {
-          source_text = text,
-          fragments = { { source_col1 = 1, source_col2 = #text + 1, text = text } },
-        }
-      end,
-    })
+    local view = make_slow_wrapping_view()
     linewrapping.reconstruct_breaks_async(view, view:get_font(), 80, { budget_ms = 1 })
     linewrapping.clear_wrap_cache(view)
     for _ = 1, 8 do coroutine.yield(0.01) end
     test.equal(view.wrapped_settings, nil)
     test.equal(view.wrapped_lines, nil)
+  end)
+
+  test.it("rejects sliced wrapping when font metrics change", function()
+    local view = make_slow_wrapping_view()
+    local font = view:get_font()
+    local old_size = font:get_size()
+    local completions = {}
+    local started = linewrapping.reconstruct_breaks_async(
+      view, font, 80, {
+        budget_ms = 1,
+        on_complete = function(committed) completions[#completions + 1] = committed end,
+      }
+    )
+    test.equal(started, false, "expected the slow fixture to leave sliced wrapping pending")
+
+    font:set_size(old_size + 1)
+    local ok, committed = pcall(linewrapping.complete_async_reconstruction, view)
+    font:set_size(old_size)
+    if not ok then error(committed, 0) end
+
+    test.equal(committed, false)
+    test.same(completions, { false })
+    test.equal(view.wrapped_settings, nil)
+  end)
+
+  test.it("rejects sliced wrapping when continuation indent size changes", function()
+    local view, doc = make_slow_wrapping_view()
+    local cfg = config.plugins.linewrapping
+    local old_indent = cfg.indent
+    local old_wrapping_indent = cfg.wrapping_indent
+    local old_indent_size = config.indent_size
+    doc.indent_info = { type = "soft", size = 2, confirmed = true }
+    cfg.indent = true
+    cfg.wrapping_indent = "indent"
+    local completions = {}
+    local started = linewrapping.reconstruct_breaks_async(
+      view, view:get_font(), 80, {
+        budget_ms = 1,
+        on_complete = function(committed) completions[#completions + 1] = committed end,
+      }
+    )
+    test.equal(started, false, "expected the slow fixture to leave sliced wrapping pending")
+
+    config.indent_size = old_indent_size + 1
+    local ok, committed = pcall(linewrapping.complete_async_reconstruction, view)
+    config.indent_size = old_indent_size
+    cfg.indent = old_indent
+    cfg.wrapping_indent = old_wrapping_indent
+    if not ok then error(committed, 0) end
+
+    test.equal(committed, false)
+    test.same(completions, { false })
+    test.equal(view.wrapped_settings, nil)
+  end)
+
+  test.it("restarts sliced wrapping after targeted line-render invalidation", function()
+    local view = make_view("first\nsecond\nthird")
+    local expanded = false
+    local large_font = view:get_font():copy(view:get_font():get_size() * 4)
+    view:add_line_render_provider("changing-wrap", {
+      render_line = function(_, owner, line)
+        system.sleep(0.002)
+        local text = (owner.doc.lines[line] or ""):gsub("\n$", "")
+        return {
+          source_text = text,
+          fragments = {
+            {
+              source_col1 = 1,
+              source_col2 = #text + 1,
+              text = text,
+              font = line == 1 and expanded and large_font or nil,
+            },
+          },
+        }
+      end,
+    })
+    local completions = {}
+    local width = view:get_font():get_width(string.rep("x", 10))
+    local started = linewrapping.reconstruct_breaks_async(
+      view, view:get_font(), width, {
+        budget_ms = 1,
+        on_complete = function(committed) completions[#completions + 1] = committed end,
+      }
+    )
+    test.equal(started, false, "expected the slow fixture to leave sliced wrapping pending")
+
+    expanded = true
+    view:invalidate_line_render("changing-wrap", 1, 1)
+    local committed = linewrapping.complete_async_reconstruction(view)
+
+    test.equal(committed, true)
+    test.same(completions, { true })
+    test.ok(linewrapping.get_wrapped_line_count(view, 1) > 1)
+  end)
+
+  test.it("rejects non-tokenized sliced wrapping when the normal syntax font changes", function()
+    local long_line = string.rep("x", 300000)
+    local view = make_view(long_line .. "\n" .. long_line)
+    local cfg = config.plugins.linewrapping
+    local old_require_tokenization = cfg.require_tokenization
+    local old_normal_font = style.syntax_fonts.normal
+    local font = view:get_font()
+    cfg.require_tokenization = false
+    style.syntax_fonts.normal = font:copy(font:get_size())
+    local completions = {}
+
+    local ok, committed = pcall(function()
+      local started = linewrapping.reconstruct_breaks_async(
+        view, font, 80, {
+          budget_ms = 1,
+          on_complete = function(value) completions[#completions + 1] = value end,
+        }
+      )
+      test.equal(started, false, "expected the slow fixture to leave sliced wrapping pending")
+      style.syntax_fonts.normal = font:copy(font:get_size() + 1)
+      return linewrapping.complete_async_reconstruction(view)
+    end)
+
+    style.syntax_fonts.normal = old_normal_font
+    cfg.require_tokenization = old_require_tokenization
+    if not ok then error(committed, 0) end
+
+    test.equal(committed, false)
+    test.same(completions, { false })
+    test.equal(view.wrapped_settings, nil)
+  end)
+
+  test.it("observes performance recording enabled between wrapping slices", function()
+    local view = make_slow_wrapping_view(
+      "first rendered line\n" .. string.rep("x", 60000)
+    )
+    local perf = require "core.perf"
+    local old_frame_stats = core.perf_frame_stats
+    local old_is_recording = perf.is_recording
+    local old_record_linewrap_compute = perf.record_linewrap_compute
+    local recording = false
+    local recorded
+    core.perf_frame_stats = nil
+    perf.is_recording = function() return recording end
+    perf.record_linewrap_compute = function(row) recorded = row end
+
+    local ok, committed = pcall(function()
+      local started = linewrapping.reconstruct_breaks_async(
+        view, view:get_font(), 80, { budget_ms = 1 }
+      )
+      test.equal(started, false, "expected the slow fixture to leave sliced wrapping pending")
+      recording = true
+      return linewrapping.complete_async_reconstruction(view)
+    end)
+
+    core.perf_frame_stats = old_frame_stats
+    perf.is_recording = old_is_recording
+    perf.record_linewrap_compute = old_record_linewrap_compute
+    if not ok then error(committed, 0) end
+
+    test.equal(committed, true)
+    test.not_nil(recorded)
+    test.ok(recorded.visible_bytes > 50000)
   end)
 
   test.it("uses provider row heights for scroll size and line positions", function()

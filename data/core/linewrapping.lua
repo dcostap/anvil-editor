@@ -121,7 +121,9 @@ function LineWrapping.notify_doc_text_transaction(doc, transaction)
       if not LineWrapping.update_same_line_suffix_breaks(docview, range, transaction) then
         LineWrapping.update_breaks(docview, range.old_line1, range.old_line2, range.line_delta or 0)
       end
-    else
+    elseif not LineWrapping.update_multiple_nonstructural_breaks(
+      docview, ranges
+    ) then
       LineWrapping.reconstruct_breaks(docview, docview.wrapped_settings.font, docview.wrapped_settings.width)
     end
   end)
@@ -207,6 +209,10 @@ local function perf_recording()
   return perf and perf.is_recording and perf.is_recording() and perf.add_detail
 end
 
+local function perf_diagnostics_active()
+  return core.perf_frame_stats ~= nil or not not perf_recording()
+end
+
 local function perf_elapsed(key, start_time)
   if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
 end
@@ -215,16 +221,20 @@ end
 -- not need syntax fonts, expose the whole line as a single normal token.
 local function spew_tokens(state, emitted)
   if emitted then return end
-  local text = state.doc:get_utf8_line(state.line)
+  local text = state.text or state.doc:get_utf8_line(state.line)
   if state.scol and state.scol > 1 then text = text:sub(state.scol) end
   return math.huge, "normal", text
 end
 
-local function get_tokens(doc, line, scol)
-  if config.plugins.linewrapping.require_tokenization then
+local function get_tokens(doc, line, scol, line_text, measurement)
+  local require_tokenization = measurement and measurement.require_tokenization
+  if require_tokenization == nil then
+    require_tokenization = config.plugins.linewrapping.require_tokenization
+  end
+  if require_tokenization then
     return doc.highlighter:each_token(line, scol)
   end
-  return spew_tokens, { doc = doc, line = line, scol = scol }, nil
+  return spew_tokens, { doc = doc, line = line, scol = scol, text = line_text }, nil
 end
 
 local function append_plain_ascii_letter_splits(splits, start_col, byte_len, xoffset, cell_width, width, begin_width)
@@ -315,9 +325,63 @@ function LineWrapping.get_tokens(doc, line)
   return get_tokens(doc, line)
 end
 
-function LineWrapping.continuation_indent_width(font, text)
-  local mode = config.plugins.linewrapping.wrapping_indent
-  if mode == "none" or config.plugins.linewrapping.indent == false then
+local function new_measurement_context(doc, default_font, docview)
+  local _, indent_size = doc:get_indent_info()
+  local default_cell_width = default_font:get_width(" ")
+  local syntax_fonts = {}
+  for name, font in pairs(style.syntax_fonts) do syntax_fonts[name] = font end
+  local has_line_render_providers = false
+  if docview and docview.get_line_render then
+    has_line_render_providers = not docview.has_line_render_providers
+      or docview:has_line_render_providers()
+  end
+  return {
+    indent_size = indent_size or config.indent_size or 2,
+    mode = config.plugins.linewrapping.mode,
+    indent = config.plugins.linewrapping.indent,
+    wrapping_indent = config.plugins.linewrapping.wrapping_indent,
+    continuation_indent_size = config.indent_size or 4,
+    require_tokenization = config.plugins.linewrapping.require_tokenization,
+    syntax_fonts = syntax_fonts,
+    cell_widths = { [default_font] = default_cell_width },
+    char_widths = {},
+    extra_indent_widths = {},
+    has_line_render_providers = has_line_render_providers,
+    perf_active = perf_diagnostics_active(),
+  }
+end
+
+local function measurement_cell_width(context, font)
+  if not context then return font:get_width(" ") end
+  local width = context.cell_widths[font]
+  if width == nil then
+    width = font:get_width(" ")
+    context.cell_widths[font] = width
+  end
+  return width
+end
+
+local function measurement_syntax_font(context, token_type, default_font)
+  if context then return context.syntax_fonts[token_type] or default_font end
+  return style.syntax_fonts[token_type] or default_font
+end
+
+local function measurement_char_widths(context, font)
+  if not context then return {} end
+  local widths = context.char_widths[font]
+  if not widths then
+    widths = {}
+    context.char_widths[font] = widths
+  end
+  return widths
+end
+
+local function continuation_indent_width(font, text, measurement)
+  local mode = measurement and measurement.wrapping_indent
+    or config.plugins.linewrapping.wrapping_indent
+  local indent = measurement and measurement.indent
+  if indent == nil then indent = config.plugins.linewrapping.indent end
+  if mode == "none" or indent == false then
     return 0
   end
 
@@ -329,21 +393,39 @@ function LineWrapping.continuation_indent_width(font, text)
 
   local numeric_spaces = tonumber(mode)
   if numeric_spaces and numeric_spaces > 0 then
-    width = width + font:get_width(string.rep(" ", numeric_spaces))
+    local extra = measurement and measurement.extra_indent_widths[font]
+    if extra == nil then
+      extra = font:get_width(string.rep(" ", numeric_spaces))
+      if measurement then measurement.extra_indent_widths[font] = extra end
+    end
+    width = width + extra
   elseif mode == "indent" or mode == "deepIndent" then
     local levels = mode == "deepIndent" and 2 or 1
-    width = width + font:get_width(string.rep(" ", (config.indent_size or 4) * levels))
+    local spaces = (
+      measurement and measurement.continuation_indent_size
+      or config.indent_size or 4
+    ) * levels
+    local extra = measurement and measurement.extra_indent_widths[font]
+    if extra == nil then
+      extra = font:get_width(string.rep(" ", spaces))
+      if measurement then measurement.extra_indent_widths[font] = extra end
+    end
+    width = width + extra
   end
 
   return width
 end
 
+function LineWrapping.continuation_indent_width(font, text)
+  return continuation_indent_width(font, text)
+end
+
 -- Computes the breaks for a given line, width and mode. Returns a list of byte
 -- columns where visual rows start, plus the continuation indent width.
-local function line_continuation_indent_width(doc, default_font, line)
-  for _, type, text in get_tokens(doc, line) do
-    local font = style.syntax_fonts[type] or default_font
-    return LineWrapping.continuation_indent_width(font, text)
+local function line_continuation_indent_width(doc, default_font, line, measurement)
+  for _, type, text in get_tokens(doc, line, nil, nil, measurement) do
+    local font = measurement_syntax_font(measurement, type, default_font)
+    return continuation_indent_width(font, text, measurement)
   end
   return 0
 end
@@ -354,13 +436,14 @@ local function clamp_continuation_indent_width(indent_width, wrap_width)
 end
 
 local function compute_rendered_line_breaks(
-  docview, render_line, default_font, line, width, mode, start_col, initial_begin_width
+  docview, render_line, default_font, line, width, mode, start_col,
+  initial_begin_width, measurement
 )
   local text = docview.doc:get_utf8_line(line)
   local visible_end = #text - (text:sub(-1) == "\n" and 1 or 0)
   local begin_width = initial_begin_width
   if start_col > 1 and begin_width == nil then
-    begin_width = LineWrapping.continuation_indent_width(default_font, text)
+    begin_width = continuation_indent_width(default_font, text, measurement)
   end
   begin_width = clamp_continuation_indent_width(begin_width or 0, width)
   local splits = { start_col }
@@ -374,7 +457,7 @@ local function compute_rendered_line_breaks(
     begin_width = docview:get_line_render_col_x_offset(
       render_line, render_line.continuation_indent_col
     ) - line_x_offset
-      + LineWrapping.continuation_indent_width(continuation_font, "")
+      + continuation_indent_width(continuation_font, "", measurement)
     begin_width = clamp_continuation_indent_width(begin_width, width)
   end
   local rendered_x = docview.get_line_render_col_x_cursor
@@ -423,8 +506,14 @@ end
 -- Computes the breaks for a line suffix. `start_col` must be a valid byte
 -- column, normally an existing cached visual-row start. Returns row starts for
 -- the suffix, including `start_col`, plus the line continuation indent width.
-function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, width, mode, start_col, initial_begin_width, docview)
-  local perf_active = core.perf_frame_stats ~= nil
+function LineWrapping.compute_line_breaks_from_col(
+  doc, default_font, line, width, mode, start_col, initial_begin_width,
+  docview, measurement
+)
+  local perf_active = measurement and measurement.perf_active
+  if perf_active == nil then
+    perf_active = perf_diagnostics_active()
+  end
   local perf_start = perf_active and system.get_time()
   local perf_bytes = 0
   local perf_branch
@@ -432,10 +521,14 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
   local perf_has_space = false
   local perf_has_tab = false
   local perf_has_non_ascii = false
+  local require_tokenization = measurement and measurement.require_tokenization
+  if require_tokenization == nil then
+    require_tokenization = config.plugins.linewrapping.require_tokenization
+  end
   start_col = math.max(1, start_col or 1)
   local begin_width = initial_begin_width
   if start_col > 1 and begin_width == nil then
-    begin_width = line_continuation_indent_width(doc, default_font, line)
+    begin_width = line_continuation_indent_width(doc, default_font, line, measurement)
   end
   begin_width = begin_width or 0
   begin_width = clamp_continuation_indent_width(begin_width, width)
@@ -445,6 +538,7 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
   local visible_end_col = #line_text
   if line_text:sub(-1) == "\n" then visible_end_col = visible_end_col - 1 end
   local function finish(result_splits, result_begin_width, branch)
+    if not perf_active then return result_splits, result_begin_width end
     local perf_elapsed_ms = perf_start and ((system.get_time() - perf_start) * 1000) or 0
     local branch_key = tostring(branch or perf_branch or "empty"):gsub("[^%w_]", "_")
     perf_frame_add("linewrapping_compute_line_breaks_calls", 1)
@@ -463,7 +557,7 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
         splits = #result_splits,
         width = width,
         mode = mode,
-        tokenized = config.plugins.linewrapping.require_tokenization,
+        tokenized = require_tokenization,
         ascii = perf_ascii,
         has_space = perf_has_space,
         has_tab = perf_has_tab,
@@ -474,7 +568,9 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
     perf_frame_add("linewrapping_compute_line_breaks_ms", perf_elapsed_ms)
     return result_splits, result_begin_width
   end
-  if docview and docview.get_line_render then
+  local may_have_render_line = docview and docview.get_line_render
+    and (not measurement or measurement.has_line_render_providers)
+  if may_have_render_line then
     local render_line = docview:get_line_render(line)
     if render_line and render_line.disable_wrapping then
       return finish({ start_col }, 0, "rendered_disabled")
@@ -497,41 +593,54 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
       end
       local rendered_splits, rendered_begin_width, rendered_branch = compute_rendered_line_breaks(
         docview, render_line, default_font, line, width, mode,
-        start_col, begin_width
+        start_col, begin_width, measurement
       )
       return finish(rendered_splits, rendered_begin_width, rendered_branch)
     end
   end
-  local default_ascii_cell_width = default_font:get_width(" ")
-  local function note_branch(branch)
-    if not perf_branch then
-      perf_branch = branch
-    elseif perf_branch ~= branch then
-      perf_branch = "mixed"
+  local default_ascii_cell_width = measurement_cell_width(measurement, default_font)
+  local note_branch
+  if perf_active then
+    note_branch = function(branch)
+      if not perf_branch then
+        perf_branch = branch
+      elseif perf_branch ~= branch then
+        perf_branch = "mixed"
+      end
     end
   end
-  for idx, type, text in get_tokens(doc, line, start_col) do
+  for idx, type, text in get_tokens(
+    doc, line, start_col, line_text, measurement
+  ) do
     if i > visible_end_col then break end
     if i + #text - 1 > visible_end_col then
       text = text:sub(1, visible_end_col - i + 1)
     end
-    perf_bytes = perf_bytes + #text
-    local font = style.syntax_fonts[type] or default_font
+    if perf_active then perf_bytes = perf_bytes + #text end
+    local font = measurement_syntax_font(measurement, type, default_font)
     if start_col == 1 and (idx == 1 or idx == math.huge) then
-      begin_width = clamp_continuation_indent_width(LineWrapping.continuation_indent_width(font, text), width)
+      begin_width = clamp_continuation_indent_width(
+        continuation_indent_width(font, text, measurement), width
+      )
     end
     local has_tab = text:find("\t", 1, true) ~= nil
     local has_non_ascii = text:find("[\128-\255]") ~= nil
     local ascii_font = not has_non_ascii
-    local cell_width = font == default_font and default_ascii_cell_width or font:get_width(" ")
-    local tab_width = cell_width * (select(2, doc:get_indent_info()) or config.indent_size or 2)
+    local cell_width = font == default_font and default_ascii_cell_width
+      or measurement_cell_width(measurement, font)
+    local tab_width = cell_width * (
+      measurement and measurement.indent_size
+      or select(2, doc:get_indent_info()) or config.indent_size or 2
+    )
     local ascii_cell_width = ascii_font and cell_width or nil
     local ascii_tab_width = ascii_font and tab_width or nil
     local has_space = ascii_font and text:find(" ", 1, true) ~= nil
-    perf_ascii = perf_ascii and ascii_font
-    perf_has_space = perf_has_space or has_space
-    perf_has_tab = perf_has_tab or has_tab
-    perf_has_non_ascii = perf_has_non_ascii or has_non_ascii
+    if perf_active then
+      perf_ascii = perf_ascii and ascii_font
+      perf_has_space = perf_has_space or has_space
+      perf_has_tab = perf_has_tab or has_tab
+      perf_has_non_ascii = perf_has_non_ascii or has_non_ascii
+    end
     -- Avoid measuring enormous UTF-8 tokens as a whole only to discover they
     -- overflow and then measure them again character-by-character below.
     -- Long generated/minified lines can be hundreds of KB; whole-token shaping
@@ -541,7 +650,9 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
       or (ascii_font and (has_tab and fast_ascii_width(text, ascii_cell_width, ascii_tab_width) or (#text * ascii_cell_width)) or font:get_width(text))
     if xoffset + w > width then
       if ascii_font and mode ~= "word" then
-        note_branch(font == default_font and (has_tab and "ascii_tabs_letter" or "plain_ascii_letter") or (has_tab and "ascii_tabs_syntax_letter" or "plain_ascii_syntax_letter"))
+        if note_branch then
+          note_branch(font == default_font and (has_tab and "ascii_tabs_letter" or "plain_ascii_letter") or (has_tab and "ascii_tabs_syntax_letter" or "plain_ascii_syntax_letter"))
+        end
         xoffset = has_tab
           and append_ascii_letter_splits_with_tabs(splits, text, i, xoffset, ascii_cell_width, ascii_tab_width, width, begin_width)
           or append_plain_ascii_letter_splits(splits, i, #text, xoffset, ascii_cell_width, width, begin_width)
@@ -549,19 +660,23 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
         last_space = nil
       elseif ascii_font and idx == math.huge then
         if has_space and not has_tab then
-          note_branch(font == default_font and "plain_ascii_word_row" or "plain_ascii_syntax_word_row")
+          if note_branch then
+            note_branch(font == default_font and "plain_ascii_word_row" or "plain_ascii_syntax_word_row")
+          end
           xoffset, last_space, last_width = append_plain_ascii_word_splits(
             splits, text, i, #text, xoffset, ascii_cell_width, width, begin_width
           )
         elseif not has_space then
-          note_branch(font == default_font and (has_tab and "ascii_tabs_word_longword_letter" or "plain_ascii_word_longword_letter") or (has_tab and "ascii_tabs_syntax_word_longword_letter" or "plain_ascii_syntax_word_longword_letter"))
+          if note_branch then
+            note_branch(font == default_font and (has_tab and "ascii_tabs_word_longword_letter" or "plain_ascii_word_longword_letter") or (has_tab and "ascii_tabs_syntax_word_longword_letter" or "plain_ascii_syntax_word_longword_letter"))
+          end
           xoffset = has_tab
             and append_ascii_letter_splits_with_tabs(splits, text, i, xoffset, ascii_cell_width, ascii_tab_width, width, begin_width)
             or append_plain_ascii_letter_splits(splits, i, #text, xoffset, ascii_cell_width, width, begin_width)
           last_space = nil
           last_width = nil
         else
-          note_branch("ascii_tabs_word_spaces_slow")
+          if note_branch then note_branch("ascii_tabs_word_spaces_slow") end
           ascii_font = false
           for char in common.utf8_chars(text) do
             w = font:get_width(char)
@@ -569,7 +684,7 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
             if xoffset > width then
               if last_space then
                 table.insert(splits, last_space + 1)
-                xoffset = w + begin_width + (xoffset - last_width)
+                xoffset = begin_width + (xoffset - last_width)
               else
                 table.insert(splits, i)
                 xoffset = w + begin_width
@@ -583,9 +698,22 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
           end
         end
         i = ascii_font and (i + #text) or i
+      elseif idx == math.huge and font.wrap_text then
+        if note_branch then note_branch("plain_utf8_native") end
+        local native_splits = font:wrap_text(
+          text, width, mode, 0, #text, xoffset, begin_width,
+          cell_width, tab_width
+        )
+        for index = 2, #native_splits do
+          splits[#splits + 1] = i + native_splits[index]
+        end
+        return finish(splits, begin_width, "plain_utf8_native")
       else
-        note_branch(ascii_font and "plain_ascii_word_tokenized" or "slow_utf8")
-        local char_width_cache = not ascii_font and {} or nil
+        if note_branch then
+          note_branch(ascii_font and "plain_ascii_word_tokenized" or "slow_utf8")
+        end
+        local char_width_cache = not ascii_font
+          and measurement_char_widths(measurement, font) or nil
         for char in common.utf8_chars(text) do
           if ascii_font then
             w = ascii_cell_width
@@ -604,7 +732,7 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
           if xoffset > width then
             if mode == "word" and last_space then
               table.insert(splits, last_space + 1)
-              xoffset = w + begin_width + (xoffset - last_width)
+              xoffset = begin_width + (xoffset - last_width)
             else
               table.insert(splits, i)
               xoffset = w + begin_width
@@ -618,7 +746,9 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
         end
       end
     else
-      note_branch(ascii_font and (font == default_font and (has_tab and "fits_ascii_tabs" or "fits_plain_ascii") or (has_tab and "fits_ascii_tabs_syntax" or "fits_plain_ascii_syntax")) or "fits_utf8")
+      if note_branch then
+        note_branch(ascii_font and (font == default_font and (has_tab and "fits_ascii_tabs" or "fits_plain_ascii") or (has_tab and "fits_ascii_tabs_syntax" or "fits_plain_ascii_syntax")) or "fits_utf8")
+      end
       xoffset = xoffset + w
       i = i + #text
     end
@@ -626,9 +756,11 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
   return finish(splits, begin_width)
 end
 
-function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode, docview)
+function LineWrapping.compute_line_breaks(
+  doc, default_font, line, width, mode, docview, measurement
+)
   return LineWrapping.compute_line_breaks_from_col(
-    doc, default_font, line, width, mode, 1, nil, docview
+    doc, default_font, line, width, mode, 1, nil, docview, measurement
   )
 end
 
@@ -656,22 +788,23 @@ end
 local function wrap_settings_signature(docview, default_font, width)
   local _, indent_size = docview.doc:get_indent_info()
   local require_tokenization = config.plugins.linewrapping.require_tokenization
-  local syntax_font_signature
+  local names = {}
   if require_tokenization then
-    local names = {}
     for name in pairs(style.syntax_fonts) do names[#names + 1] = name end
     table.sort(names)
-    local parts = {}
-    for _, name in ipairs(names) do
-      local font = style.syntax_fonts[name]
-      parts[#parts + 1] = name
-      parts[#parts + 1] = tostring(font)
-      parts[#parts + 1] = tostring(font and font:get_size())
-      parts[#parts + 1] = font_native_value(font, "get_generation", 0)
-      parts[#parts + 1] = font_native_value(font, "get_surface_scale", 1)
-    end
-    syntax_font_signature = table.concat(parts, "\0")
+  else
+    names[1] = "normal"
   end
+  local parts = {}
+  for _, name in ipairs(names) do
+    local font = style.syntax_fonts[name]
+    parts[#parts + 1] = name
+    parts[#parts + 1] = tostring(font)
+    parts[#parts + 1] = tostring(font and font:get_size())
+    parts[#parts + 1] = font_native_value(font, "get_generation", 0)
+    parts[#parts + 1] = font_native_value(font, "get_surface_scale", 1)
+  end
+  local syntax_font_signature = table.concat(parts, "\0")
   return {
     width = width,
     font = default_font,
@@ -683,6 +816,7 @@ local function wrap_settings_signature(docview, default_font, width)
     mode = config.plugins.linewrapping.mode,
     indent = config.plugins.linewrapping.indent,
     wrapping_indent = config.plugins.linewrapping.wrapping_indent,
+    continuation_indent_size = config.indent_size or 4,
     require_tokenization = require_tokenization,
     syntax_generation = require_tokenization
       and (docview.doc.highlighter.packet_reset_generation or 0) or 0,
@@ -691,23 +825,21 @@ local function wrap_settings_signature(docview, default_font, width)
   }
 end
 
-local function same_wrap_settings_except_width(a, b)
+local function same_wrap_settings(a, b)
   if not a or not b then return false end
-  return a.font == b.font
+  return a.width == b.width
+    and a.font == b.font
     and a.font_size == b.font_size
     and a.font_generation == b.font_generation
     and a.font_surface_scale == b.font_surface_scale
     and a.mode == b.mode
     and a.indent == b.indent
     and a.wrapping_indent == b.wrapping_indent
+    and a.continuation_indent_size == b.continuation_indent_size
     and a.require_tokenization == b.require_tokenization
     and a.syntax_generation == b.syntax_generation
     and a.syntax_font_signature == b.syntax_font_signature
     and a.indent_size == b.indent_size
-end
-
-local function same_wrap_settings(a, b)
-  return same_wrap_settings_except_width(a, b) and a.width == b.width
 end
 
 function LineWrapping.reconstruct_breaks(docview, default_font, width)
@@ -719,6 +851,7 @@ function LineWrapping.reconstruct_breaks(docview, default_font, width)
   local reconstructed_lines = 0
   if width ~= math.huge then
     local doc = docview.doc
+    local measurement = new_measurement_context(doc, default_font, docview)
     docview.wrapped_lines = {}
     docview.wrapped_line_to_idx = {}
     docview.wrapped_line_offsets = {}
@@ -729,7 +862,8 @@ function LineWrapping.reconstruct_breaks(docview, default_font, width)
     for i = 1, #doc.lines do
       reconstructed_lines = reconstructed_lines + 1
       local breaks, offset = LineWrapping.compute_line_breaks(
-        doc, default_font, i, width, config.plugins.linewrapping.mode, docview
+        doc, default_font, i, width, measurement.mode,
+        docview, measurement
       )
       docview.wrapped_line_offsets[i] = offset
       docview.wrapped_line_to_idx[i] = wrapped_row_count + 1
@@ -759,6 +893,7 @@ function LineWrapping.reconstruct_breaks_async(docview, default_font, width, opt
     return true
   end
   local doc = docview.doc
+  local measurement = new_measurement_context(doc, default_font, docview)
   local token = {
     doc = doc,
     revision = doc.text_revision or 0,
@@ -771,15 +906,37 @@ function LineWrapping.reconstruct_breaks_async(docview, default_font, width, opt
     work_ms = 0,
     yields = 0,
     settings = wrap_settings_signature(docview, default_font, width),
+    measurement = measurement,
+    line_render_invalidation_generation =
+      docview.__line_render_invalidation_generation or 0,
+    has_line_render_providers = measurement.has_line_render_providers,
   }
   docview.__async_wrap_reconstruction = token
   perf_frame_add("linewrapping_async_reconstruct_calls", 1)
 
-  local function current()
+  local function base_current()
     return docview.__async_wrap_reconstruction == token
       and docview.doc == doc
       and (doc.text_revision or 0) == token.revision
       and #doc.lines == token.line_count
+      and same_wrap_settings(
+        token.settings,
+        wrap_settings_signature(docview, default_font, width)
+      )
+  end
+
+  local function line_render_current()
+    return (docview.__line_render_invalidation_generation or 0)
+        == token.line_render_invalidation_generation
+      and (
+        not docview.has_line_render_providers
+        or docview:has_line_render_providers()
+      ) == token.has_line_render_providers
+  end
+
+  local function current()
+    return base_current()
+      and line_render_current()
   end
 
   local function finish()
@@ -813,6 +970,18 @@ function LineWrapping.reconstruct_breaks_async(docview, default_font, width, opt
   local budget_ms = math.max(1, tonumber(opts.budget_ms) or 4)
   local function advance()
     if not current() then
+      if base_current() and not line_render_current() then
+        docview.__async_wrap_reconstruction = nil
+        perf_frame_add("linewrapping_async_reconstruct_restarts", 1)
+        core.log_quiet(
+          "Restarting sliced wrapped layout after line-render invalidation for %s at line %d/%d",
+          doc:get_name(), token.next_line, token.line_count
+        )
+        LineWrapping.reconstruct_breaks_async(
+          docview, default_font, width, opts
+        )
+        return "restarted"
+      end
       if docview.__async_wrap_reconstruction == token then
         docview.__async_wrap_reconstruction = nil
         perf_frame_add("linewrapping_async_reconstruct_cancelled", 1)
@@ -824,12 +993,14 @@ function LineWrapping.reconstruct_breaks_async(docview, default_font, width, opt
       end
       return "cancelled"
     end
+    token.measurement.perf_active = perf_diagnostics_active()
     local started = system.get_time()
     local lines = 0
     while token.next_line <= token.line_count do
       local line = token.next_line
       local breaks, offset = LineWrapping.compute_line_breaks(
-        doc, default_font, line, width, config.plugins.linewrapping.mode, docview
+        doc, default_font, line, width, token.measurement.mode,
+        docview, token.measurement
       )
       token.wrapped_line_offsets[line] = offset
       token.wrapped_line_to_idx[line] = token.wrapped_row_count + 1
@@ -873,12 +1044,15 @@ end
 ---Synchronously finish a pending sliced reconstruction when a caller requires
 ---immediate geometry (primarily deterministic headless/UI test setup).
 function LineWrapping.complete_async_reconstruction(docview)
-  local token = docview and docview.__async_wrap_reconstruction
-  while token and docview.__async_wrap_reconstruction == token and token.advance do
+  if not docview then return nil end
+  while docview.__async_wrap_reconstruction do
+    local token = docview.__async_wrap_reconstruction
+    if not token.advance then return false end
     local status = token.advance()
-    if status ~= "pending" then return status == "complete" end
+    if status == "complete" then return true end
+    if status ~= "pending" and status ~= "restarted" then return false end
   end
-  return docview and docview.__async_wrap_reconstruction == nil
+  return true
 end
 
 local function rebuild_line_to_idx_from(docview, line, offset)
@@ -895,6 +1069,148 @@ local function rebuild_line_to_idx_from(docview, line, offset)
   while line <= #docview.wrapped_line_to_idx do
     table.remove(docview.wrapped_line_to_idx)
   end
+end
+
+---Update the distinct Document lines touched by a batch of non-structural
+---edits. Unaffected Wrapped Visual Rows are copied without remeasurement.
+---Returns false when the transaction or view needs the conservative full
+---reconstruction path.
+function LineWrapping.update_multiple_nonstructural_breaks(docview, ranges)
+  if not (docview and ranges and #ranges > 1) then return false end
+  if not (
+    docview.wrapped_settings
+    and docview.wrapped_lines
+    and docview.wrapped_line_to_idx
+    and docview.wrapped_line_offsets
+  ) then
+    return false
+  end
+  if docview.has_line_render_providers
+  and docview:has_line_render_providers() then
+    return false
+  end
+
+  local doc = docview.doc
+  local line_count = #doc.lines
+  local revision = doc.text_revision or 0
+  if docview.wrapped_doc_line_count ~= line_count
+  or docview.wrapped_text_revision ~= revision - 1
+  or not same_wrap_settings(
+    docview.wrapped_settings,
+    wrap_settings_signature(
+      docview, docview.wrapped_settings.font,
+      docview.wrapped_settings.width
+    )
+  ) then
+    return false
+  end
+
+  local affected = {}
+  local affected_lines = {}
+  local affected_count = 0
+  local first_line, last_line
+  for _, range in ipairs(ranges) do
+    local old_line1, old_line2 = range.old_line1, range.old_line2
+    local new_line1, new_line2 = range.new_line1, range.new_line2
+    if not (
+      old_line1 and old_line2 and new_line1 and new_line2
+      and (range.line_delta or 0) == 0
+      and old_line1 == old_line2
+      and new_line1 == new_line2
+      and old_line1 == new_line1
+      and new_line1 >= 1 and new_line1 <= line_count
+    ) then
+      return false
+    end
+    if not affected[new_line1] then
+      affected[new_line1] = true
+      affected_lines[#affected_lines + 1] = new_line1
+      affected_count = affected_count + 1
+      first_line = math.min(first_line or new_line1, new_line1)
+      last_line = math.max(last_line or new_line1, new_line1)
+    end
+  end
+  if affected_count == 0 then return false end
+  table.sort(affected_lines)
+
+  local perf_active = core.perf_frame_stats ~= nil
+  local perf_start = perf_active and system.get_time()
+  local old_wrapped_lines = docview.wrapped_lines
+  local old_line_to_idx = docview.wrapped_line_to_idx
+  local old_row_count = #old_wrapped_lines / 2
+  local old_wrap_generation = docview.__wrap_layout_generation or 0
+  local measurement = new_measurement_context(
+    doc, docview.wrapped_settings.font, docview
+  )
+  local replacement_breaks = {}
+  local replacement_offsets = {}
+
+  for _, line in ipairs(affected_lines) do
+    local breaks, begin_width = LineWrapping.compute_line_breaks(
+      doc, docview.wrapped_settings.font, line,
+      docview.wrapped_settings.width, measurement.mode,
+      docview, measurement
+    )
+    replacement_breaks[line] = breaks
+    replacement_offsets[line] = begin_width
+  end
+
+  -- Build one replacement row map instead of repeatedly splicing and
+  -- renumbering the flat suffix for every cursor. This remains O(total rows),
+  -- but text measurement is limited to the distinct affected lines.
+  local new_wrapped_lines = {}
+  local new_line_to_idx = {}
+  local new_row_count = 0
+  for line = 1, line_count do
+    local first_idx = old_line_to_idx[line]
+    local next_idx = old_line_to_idx[line + 1] or (old_row_count + 1)
+    if not first_idx or next_idx <= first_idx then return false end
+    new_line_to_idx[line] = new_row_count + 1
+    local breaks = replacement_breaks[line]
+    if breaks then
+      for _, col in ipairs(breaks) do
+        new_row_count = new_row_count + 1
+        local offset = new_row_count * 2
+        new_wrapped_lines[offset - 1] = line
+        new_wrapped_lines[offset] = col
+      end
+    else
+      for idx = first_idx, next_idx - 1 do
+        local old_offset = idx * 2
+        new_row_count = new_row_count + 1
+        local new_offset = new_row_count * 2
+        new_wrapped_lines[new_offset - 1] = old_wrapped_lines[old_offset - 1]
+        new_wrapped_lines[new_offset] = old_wrapped_lines[old_offset]
+      end
+    end
+  end
+
+  local old_idx1 = old_line_to_idx[first_line]
+  local old_idx2 = (old_line_to_idx[last_line + 1] or (old_row_count + 1)) - 1
+  for _, line in ipairs(affected_lines) do
+    docview.wrapped_line_offsets[line] = replacement_offsets[line]
+  end
+  docview.__async_wrap_reconstruction = nil
+  docview.wrapped_lines = new_wrapped_lines
+  docview.wrapped_line_to_idx = new_line_to_idx
+  docview.wrapped_doc_line_count = line_count
+  docview.wrapped_text_revision = revision
+  docview.__wrap_layout_generation = old_wrap_generation + 1
+  docview.__composed_visual_row_cache = nil
+  docview.__line_render_wrap_change = {
+    old_row_count = old_row_count,
+    new_row_count = new_row_count,
+    old_row1 = old_idx1,
+    old_row2 = old_idx2,
+    new_row1 = new_line_to_idx[first_line],
+    new_row2 = (new_line_to_idx[last_line + 1] or (new_row_count + 1)) - 1,
+    old_wrap_generation = old_wrap_generation,
+  }
+
+  perf_frame_add("linewrapping_update_breaks_calls", 1)
+  perf_frame_add("linewrapping_update_breaks_lines", affected_count)
+  perf_elapsed("linewrapping_update_breaks_ms", perf_start)
+  return true
 end
 
 function LineWrapping.update_same_line_suffix_breaks(docview, range, transaction)
@@ -939,15 +1255,19 @@ function LineWrapping.update_same_line_suffix_breaks(docview, range, transaction
   if not restart_col then return false end
 
   local begin_width = restart_col == 1 and nil or docview.wrapped_line_offsets[line]
+  local measurement = new_measurement_context(
+    docview.doc, docview.wrapped_settings.font, docview
+  )
   local splits, new_begin_width = LineWrapping.compute_line_breaks_from_col(
     docview.doc,
     docview.wrapped_settings.font,
     line,
     docview.wrapped_settings.width,
-    config.plugins.linewrapping.mode,
+    measurement.mode,
     restart_col,
     begin_width,
-    docview
+    docview,
+    measurement
   )
   if restart_col == 1 then
     docview.wrapped_line_offsets[line] = new_begin_width
@@ -1017,12 +1337,16 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   local new_line2 = old_line2 + net_lines
   local new_pairs = {}
   local new_offsets = {}
+  local measurement = new_measurement_context(
+    docview.doc, docview.wrapped_settings.font, docview
+  )
 
   for line = new_line1, new_line2 do
     perf_lines = perf_lines + 1
     local breaks, begin_width = LineWrapping.compute_line_breaks(
       docview.doc, docview.wrapped_settings.font, line,
-      docview.wrapped_settings.width, config.plugins.linewrapping.mode, docview
+      docview.wrapped_settings.width, measurement.mode,
+      docview, measurement
     )
     new_offsets[#new_offsets + 1] = begin_width
     for _, b in ipairs(breaks) do
@@ -1102,25 +1426,6 @@ function LineWrapping.update_docview_breaks(docview)
   local stale_text = docview.wrapped_text_revision ~= (docview.doc.text_revision or 0)
   local settings_changed = not same_wrap_settings(docview.wrapped_settings, settings)
   if stale_line_count or stale_text or settings_changed then
-    local width_only = not stale_line_count and not stale_text
-      and docview.wrapped_settings
-      and docview.wrapped_settings.width ~= width
-      and same_wrap_settings_except_width(docview.wrapped_settings, settings)
-    local live_resize = core.in_live_resize_frame
-      or core.window_resizing_until and core.window_resizing_until > system.get_time()
-    if width_only and live_resize then
-      if not docview.__deferred_live_resize_wrap_width then
-        core.log_quiet(
-          "Deferring width-only wrapped layout during live resize for %s",
-          docview.doc:get_name()
-        )
-      end
-      docview.__deferred_live_resize_wrap_width = width
-      perf_frame_add("linewrapping_update_docview_breaks_live_resize_deferred", 1)
-      perf_frame_add("linewrapping_update_docview_breaks_calls", 1)
-      perf_elapsed("linewrapping_update_docview_breaks_ms", perf_start)
-      return
-    end
     if stale_line_count then
       perf_frame_add("linewrapping_update_docview_breaks_line_count_changed", 1)
     elseif stale_text then
@@ -1128,17 +1433,8 @@ function LineWrapping.update_docview_breaks(docview)
     else
       perf_frame_add("linewrapping_update_docview_breaks_width_changed", 1)
     end
-    if docview.__deferred_live_resize_wrap_width then
-      core.log_quiet(
-        "Applying deferred wrapped layout after live resize for %s",
-        docview.doc:get_name()
-      )
-      docview.__deferred_live_resize_wrap_width = nil
-    end
     docview.scroll.to.x = 0
     LineWrapping.reconstruct_breaks(docview, settings.font, width)
-  elseif docview.__deferred_live_resize_wrap_width then
-    docview.__deferred_live_resize_wrap_width = nil
   end
   perf_frame_add("linewrapping_update_docview_breaks_calls", 1)
   perf_elapsed("linewrapping_update_docview_breaks_ms", perf_start)

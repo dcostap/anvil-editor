@@ -33,6 +33,17 @@ typedef struct { SDL_Surface *surface; float scale_x, scale_y; } RenSurface;
 typedef struct { EFontMetaTag tag; char *value; size_t len; } FontMetaData;
 
 typedef struct {
+  double width;
+  double first_leading;
+  double continuation_leading;
+  double ascii_advance;
+  double tab_advance;
+  bool word_mode;
+} RenTextWrapOptions;
+
+typedef void (*RenTextWrapEmit)(size_t byte_offset, void *userdata);
+
+typedef struct {
   uint64_t width_calls;
   uint64_t width_bytes;
   uint64_t width_chars;
@@ -84,6 +95,13 @@ double ren_font_group_get_width(RenFont **font, const char *text, size_t len, Re
 size_t ren_font_group_get_advances(
   RenFont **font, const char *text, size_t len, RenTab tab,
   uint32_t *byte_offsets, double *advances
+);
+/* Scans one bounded UTF-8 byte range and emits zero-based visual-row starts
+ * without retaining the text or allocating per-character layout arrays.
+ * Optional ASCII and tab advance overrides are disabled when set to NAN. */
+void ren_font_group_wrap_text(
+  RenFont **font, const char *text, size_t text_len, size_t start, size_t end,
+  const RenTextWrapOptions *options, RenTextWrapEmit emit, void *userdata
 );
 double ren_draw_text(RenSurface *rs, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab);
 bool ren_draw_text_d3d11(SDL_Window *window, RenRect clip, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab);

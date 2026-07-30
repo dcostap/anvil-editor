@@ -417,6 +417,7 @@ local diagnostic_frame_keys = {
   "linewrapping_async_reconstruct_yields",
   "linewrapping_async_reconstruct_commits",
   "linewrapping_async_reconstruct_cancelled",
+  "linewrapping_async_reconstruct_restarts",
   "linewrapping_update_breaks_calls",
   "linewrapping_update_breaks_ms",
   "linewrapping_update_breaks_lines",
@@ -1326,6 +1327,7 @@ local function write_summary(path)
   drill_metric("linewrap async reconstruct yields", "linewrapping_async_reconstruct_yields", update_denom, "update")
   drill_metric("linewrap async reconstruct commits", "linewrapping_async_reconstruct_commits", update_denom, "update")
   drill_metric("linewrap async reconstruct cancelled", "linewrapping_async_reconstruct_cancelled", update_denom, "update")
+  drill_metric("linewrap async reconstruct restarts", "linewrapping_async_reconstruct_restarts", update_denom, "update")
   drill_metric("linewrap update_breaks calls", "linewrapping_update_breaks_calls", update_denom, "update")
   drill_metric("linewrap update_breaks ms", "linewrapping_update_breaks_ms", update_denom, "update")
   drill_metric("linewrap update_breaks lines", "linewrapping_update_breaks_lines", update_denom, "update")
