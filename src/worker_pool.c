@@ -1,6 +1,7 @@
 #include "worker_pool.h"
 
 #include "git_status_index.h"
+#include "project_file_manifest.h"
 #include "markdown_parser.h"
 #include "markdown_extensions.h"
 #include "treesitter/languages.h"
@@ -93,6 +94,7 @@ struct AnvilWorkerJob {
   uint32_t project_language_count;
   uint32_t project_progress_files;
   bool project_publish_partial_snapshots;
+  bool manifest_show_unsupported_files;
   struct AnvilWorkerJob *cancel_parent;
 
   struct AnvilWorkerJob *next;
@@ -132,6 +134,7 @@ struct AnvilWorkerResult {
   AnvilWorkerTreeSitterIndexResult *treesitter_index_result;
   AnvilTSProjectSnapshot *project_snapshot;
   AnvilGitStatusSnapshot *git_status_snapshot;
+  AnvilProjectFileManifestSnapshot *project_file_manifest;
   struct AnvilWorkerResult *next;
 };
 
@@ -3517,6 +3520,48 @@ static void run_filetree_git_status_index(AnvilWorkerContext *context, AnvilWork
   enqueue_simple_result(context->pool, job, "final");
 }
 
+static bool manifest_job_cancelled(void *userdata) {
+  return job_cancelled((AnvilWorkerJob *)userdata);
+}
+
+static void run_project_file_manifest(AnvilWorkerContext *context, AnvilWorkerJob *job) {
+  AnvilProjectFileManifestBuildSpec spec = {
+    .root = job->project_root,
+    .show_unsupported_files = job->manifest_show_unsupported_files,
+    .cancelled = manifest_job_cancelled,
+    .cancel_userdata = job,
+  };
+  char *error = NULL;
+  AnvilProjectFileManifestSnapshot *snapshot = anvil_project_file_manifest_build(&spec, &error);
+  if (!snapshot) {
+    if (job_cancelled(job) || (error && strcmp(error, "cancelled") == 0)) {
+      SDL_free(error);
+      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
+      enqueue_simple_result(context->pool, job, "cancelled");
+    } else {
+      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+      AnvilWorkerResult *result = result_new(job, "error");
+      if (result) result->error = error ? error : pool_strdup("native Project file manifest failed");
+      else SDL_free(error);
+      enqueue_result(context->pool, result);
+    }
+    return;
+  }
+  AnvilWorkerResult *result = result_new(job, "result");
+  if (!result) {
+    anvil_project_file_manifest_release(snapshot);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    AnvilWorkerResult *terminal = result_new(job, "error");
+    if (terminal) terminal->error = pool_strdup("out of memory publishing Project file manifest");
+    enqueue_result(context->pool, terminal);
+    return;
+  }
+  result->project_file_manifest = snapshot;
+  enqueue_result(context->pool, result);
+  SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
+  enqueue_simple_result(context->pool, job, "final");
+}
+
 static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
   AnvilWorkerPool *pool = context->pool;
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_RUNNING);
@@ -3567,6 +3612,8 @@ static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
     anvil_git_status_snapshot_release(snapshot);
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
     enqueue_simple_result(context->pool, job, "final");
+  } else if (strcmp(kind, "project_file_manifest") == 0) {
+    run_project_file_manifest(context, job);
   } else {
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
@@ -3779,6 +3826,11 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
     pool_set_error(error, "Tree-sitter worker input exceeds 4GB byte limit");
     return NULL;
   }
+  if (strcmp(spec->kind, "project_file_manifest") == 0 &&
+      (!spec->project_root || !spec->project_root[0])) {
+    pool_set_error(error, "Project file manifest requires a root");
+    return NULL;
+  }
   if ((spec->status_text_len && !spec->status_text) || (spec->numstat_text_len && !spec->numstat_text) ||
       spec->status_text_len > UINT32_MAX || spec->numstat_text_len > UINT32_MAX) {
     pool_set_error(error, "Git status worker input exceeds 4GB byte limit");
@@ -3872,6 +3924,7 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   job->project_scoped = spec->project_scoped;
   job->project_progress_files = spec->project_progress_files ? spec->project_progress_files : 64;
   job->project_publish_partial_snapshots = spec->project_publish_partial_snapshots;
+  job->manifest_show_unsupported_files = spec->manifest_show_unsupported_files;
   job->project_file_count = spec->project_file_count;
   if (job->project_file_count) {
     if (!spec->project_files || (size_t)job->project_file_count > SIZE_MAX / sizeof(*job->project_files)) {
@@ -4060,6 +4113,7 @@ void anvil_worker_result_free(AnvilWorkerResult *result) {
   anvil_worker_treesitter_index_result_free(result->treesitter_index_result);
   anvil_ts_project_snapshot_release(result->project_snapshot);
   anvil_git_status_snapshot_release(result->git_status_snapshot);
+  anvil_project_file_manifest_release(result->project_file_manifest);
   SDL_free(result);
 }
 
@@ -4081,6 +4135,13 @@ AnvilGitStatusSnapshot *anvil_worker_result_steal_git_status_snapshot(AnvilWorke
   if (!result) return NULL;
   AnvilGitStatusSnapshot *out = result->git_status_snapshot;
   result->git_status_snapshot = NULL;
+  return out;
+}
+
+AnvilProjectFileManifestSnapshot *anvil_worker_result_steal_project_file_manifest(AnvilWorkerResult *result) {
+  if (!result) return NULL;
+  AnvilProjectFileManifestSnapshot *out = result->project_file_manifest;
+  result->project_file_manifest = NULL;
   return out;
 }
 

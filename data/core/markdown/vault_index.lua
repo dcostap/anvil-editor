@@ -6,6 +6,7 @@ local json = require "core.json"
 local anchors = require "core.markdown.anchors"
 local links = require "core.markdown.links"
 local parser = require "core.markdown.parser"
+local worker_pool = require "core.worker_pool"
 
 local vault_index = {}
 
@@ -348,7 +349,18 @@ function Index:clear()
   self.note_keys_ci = {}
   self.attachment_keys = {}
   self.attachment_keys_ci = {}
-  self.generation = self.generation + 1
+end
+
+function Index:note(path)
+  if type(path) ~= "string" or path == "" then return nil end
+  local absolute = common.is_absolute_path(path) and path or join_path(self.root, path)
+  return note_entry_for_explicit_path(self, common.normalize_path(absolute))
+end
+
+function Index:attachment(path)
+  if type(path) ~= "string" or path == "" then return nil end
+  local absolute = common.is_absolute_path(path) and path or join_path(self.root, path)
+  return self.attachments_by_abs[path_key(absolute)]
 end
 
 function Index:remove_path_entry(path)
@@ -521,7 +533,7 @@ end
 
 function Index:make_note_entry(path, text, opts)
   opts = opts or {}
-  local file_info = system.get_file_info(path)
+  local file_info = opts.file_info or system.get_file_info(path)
   text = text or (not opts.shallow and read_file(path)) or ""
   local anchor_index, parsed
   if opts.shallow then
@@ -573,8 +585,8 @@ function Index:make_note_entry(path, text, opts)
   return entry
 end
 
-function Index:make_attachment_entry(path)
-  local file_info = system.get_file_info(path)
+function Index:make_attachment_entry(path, file_info)
+  file_info = file_info or system.get_file_info(path)
   return {
     kind = "attachment",
     abs_path = common.normalize_path(path),
@@ -610,105 +622,21 @@ function Index:watch_dir(dir)
   return true
 end
 
-function Index:scan_dir(dir, skip_key)
-  self:watch_dir(dir)
-  for _, name in ipairs(system.list_dir(dir) or {}) do
-    if name ~= ".git" and name ~= ".obsidian" and name ~= ".run-meson-tests" then
-      local path = join_path(dir, name)
-      local info = system.get_file_info(path)
-      if info and info.type == "dir" then
-        self:scan_dir(path, skip_key)
-      elseif info and info.type == "file" and path_key(path) ~= skip_key then
-        self:update_path(path, { rebuilding = true })
-      end
-    end
-  end
-end
-
 function Index:rebuild(reason, opts)
   opts = opts or {}
-  local started_at = system.get_time()
-  self:refresh_obsidian_settings()
-  self.rebuild_serial = self.rebuild_serial + 1
-  self.status, self.reason = "indexing", reason or "manual"
-  self:clear()
-  self:scan_dir(self.root, opts.skip_path and path_key(opts.skip_path) or nil)
-  for doc in pairs(self.doc_listeners) do self:update_doc(doc, { rebuilding = true }) end
-  self.status, self.reason = "ready", nil
-  self.generation = self.generation + 1
-  self:notify("ready")
-  local elapsed_ms = (system.get_time() - started_at) * 1000
-  self.diagnostics.last_rebuild = {
-    reason = reason or "manual",
-    elapsed_ms = elapsed_ms,
-    notes = self:note_count(),
-    attachments = self:attachment_count(),
-    cooperative = false,
-  }
-  core.log_quiet(
-    "Markdown vault index rebuilt: root=%s reason=%s elapsed=%.1fms notes=%d attachments=%d",
-    self.root, reason or "manual", elapsed_ms, self:note_count(), self:attachment_count()
-  )
+  self:rebuild_async(reason or "manual")
+  local serial = self.rebuild_serial
+  while self.status == "indexing" and self.rebuild_serial == serial do
+    coroutine.yield(0.001)
+  end
+  if opts.skip_path and self.status == "ready" then self:remove_path_entry(opts.skip_path) end
   return self
-end
-
-local function entry_is_current(entry, info)
-  return entry and entry.modified == info.modified and entry.size == info.size
 end
 
 function Index:queue_subtree_scan(dirs, reason)
   for _, dir in ipairs(dirs or {}) do self.pending_scan_dirs[dir] = true end
-  if self.subtree_scan_running then return false end
-  self.subtree_scan_running = true
-  local watcher_serial = self.watcher_serial
-  core.add_thread(function()
-    local changed = false
-    while next(self.pending_scan_dirs) do
-      if not self.watcher or self.watcher_serial ~= watcher_serial then
-        self.subtree_scan_running = false
-        return
-      end
-      local roots = self.pending_scan_dirs
-      self.pending_scan_dirs = {}
-      local stack, processed = {}, 0
-      for dir in pairs(roots) do stack[#stack + 1] = dir end
-      while #stack > 0 do
-        if not self.watcher or self.watcher_serial ~= watcher_serial then
-          self.subtree_scan_running = false
-          return
-        end
-        local dir = table.remove(stack)
-        self:watch_dir(dir)
-        for _, name in ipairs(system.list_dir(dir) or {}) do
-          if name ~= ".git" and name ~= ".obsidian" and name ~= ".run-meson-tests" then
-            local path = join_path(dir, name)
-            local info = system.get_file_info(path)
-            if info and info.type == "dir" then
-              stack[#stack + 1] = path
-            elseif info and info.type == "file" then
-              local key = path_key(path)
-              local entry = self.notes_by_abs[key] or self.attachments_by_abs[key]
-              if not (entry and entry.doc) and (is_markdown(path) or self:is_attachment(path)) then
-                self:update_path(path, { rebuilding = true, cooperative = true })
-                changed = true
-              end
-            end
-            processed = processed + 1
-            if processed % 32 == 0 then coroutine.yield(0) end
-          end
-        end
-      end
-    end
-    for doc in pairs(self.doc_listeners) do self:update_doc(doc, { rebuilding = true }) end
-    self.subtree_scan_running = false
-    if changed then
-      self.generation = self.generation + 1
-      self:notify("filesystem-reconciled", { reason = reason or "watch-subtree" })
-      core.redraw = true
-      core.log_quiet("Markdown index cooperatively adopted new filesystem subtree in %s", self.root)
-    end
-  end)
-  return true
+  self.pending_scan_dirs = {}
+  return self:rebuild_async(reason or "watch-subtree")
 end
 
 function Index:reconcile_dir(dir, reason, opts)
@@ -718,63 +646,9 @@ function Index:reconcile_dir(dir, reason, opts)
     path_key(normalized) ~= path_key(self.root)
     and not common.path_belongs_to(normalized, self.root)
   ) then return false end
-  local info = system.get_file_info(normalized)
-  if not (info and info.type == "dir") then normalized = common.dirname(normalized) end
-  info = system.get_file_info(normalized)
-  if not (info and info.type == "dir") then return false end
-
-  self:watch_dir(normalized)
-  local seen, changed, discovered_dirs = {}, false, {}
-  for _, name in ipairs(system.list_dir(normalized) or {}) do
-    if name ~= ".git" and name ~= ".obsidian" and name ~= ".run-meson-tests" then
-      local path = join_path(normalized, name)
-      local child_info = system.get_file_info(path)
-      if child_info and child_info.type == "dir" then
-        if not self.watched_dirs[path] then discovered_dirs[#discovered_dirs + 1] = path end
-        self:watch_dir(path)
-      elseif child_info and child_info.type == "file"
-        and (is_markdown(path) or self:is_attachment(path))
-      then
-        local key = path_key(path)
-        seen[key] = true
-        local entry = self.notes_by_abs[key] or self.attachments_by_abs[key]
-        if not (entry and entry.doc) and not entry_is_current(entry, child_info) then
-          self:update_path(path, { rebuilding = true, cooperative = true })
-          changed = true
-        end
-      end
-    end
-  end
-
-  for _, map in ipairs({ self.notes_by_abs, self.attachments_by_abs }) do
-    local remove = {}
-    for key, entry in pairs(map) do
-      if not entry.doc and (
-        (common.dirname(entry.abs_path) == normalized and not seen[key])
-        or (common.path_belongs_to(entry.abs_path, normalized) and not file_exists(entry.abs_path))
-      ) then
-        remove[#remove + 1] = entry.abs_path
-      end
-    end
-    for _, path in ipairs(remove) do self:remove_path_entry(path); changed = true end
-  end
-
-  if #discovered_dirs > 0 then
-    if opts.cooperative then
-      self:queue_subtree_scan(discovered_dirs, reason)
-    else
-      for _, path in ipairs(discovered_dirs) do self:scan_dir(path) end
-      for doc in pairs(self.doc_listeners) do self:update_doc(doc, { rebuilding = true }) end
-      changed = true
-    end
-  end
-  if changed then
-    self.generation = self.generation + 1
-    self:notify("filesystem-reconciled", { path = normalized, reason = reason or "watch" })
-    core.redraw = true
-    core.log_quiet("Markdown index reconciled filesystem directory %s", normalized)
-  end
-  return changed
+  if opts.cooperative then self:rebuild_async(reason or "watch")
+  else self:rebuild(reason or "filesystem-reconcile") end
+  return true
 end
 
 function Index:start_watcher()
@@ -862,70 +736,131 @@ end
 function Index:rebuild_async(reason)
   local started_at = system.get_time()
   local rebuild_reason = reason or "async-rebuild"
+  if self.manifest_job then
+    self.pending_manifest_reason = rebuild_reason
+    core.log_quiet("Markdown vault index coalesced native manifest request: root=%s reason=%s",
+      self.root, rebuild_reason)
+    return false
+  end
   self:refresh_obsidian_settings()
   self.rebuild_serial = self.rebuild_serial + 1
   local serial = self.rebuild_serial
   self.status, self.reason = "indexing", rebuild_reason
-  self:clear()
   self:notify("indexing")
   core.log_quiet(
-    "Markdown vault index scheduled cooperative rebuild: root=%s reason=%s",
-    self.root, rebuild_reason
+    "Markdown vault index scheduled native manifest: root=%s generation=%d reason=%s",
+    self.root, serial,
+    rebuild_reason
   )
-  core.add_thread(function()
-    local dirs, processed, scanned_dirs, scanned_files = { self.root }, 0, 0, 0
-    while #dirs > 0 do
-      if serial ~= self.rebuild_serial then return end
-      local dir = table.remove(dirs)
-      scanned_dirs = scanned_dirs + 1
-      self:watch_dir(dir)
-      for _, name in ipairs(system.list_dir(dir) or {}) do
-        if name ~= ".git" and name ~= ".obsidian" and name ~= ".run-meson-tests" then
-          local path = join_path(dir, name)
-          local info = system.get_file_info(path)
-          if info and info.type == "dir" then
-            dirs[#dirs + 1] = path
-          elseif info and info.type == "file" then
-            scanned_files = scanned_files + 1
-            local tracked = false
-            for doc in pairs(self.doc_listeners) do
-              if doc.abs_filename and path_key(doc.abs_filename) == path_key(path) then tracked = true break end
-            end
-            if not tracked then
-              local ok, err = pcall(self.update_path, self, path, {
-                rebuilding = true,
-                cooperative = true,
-              })
-              if not ok then core.log_quiet("Markdown index skipped %s: %s", path, tostring(err)) end
+
+  local pool = worker_pool.system()
+  local function finish_error(message)
+    if serial ~= self.rebuild_serial then return end
+    self.manifest_job = nil
+    self.status, self.reason = "error", tostring(message and (message.error or message) or "manifest failed")
+    self:notify("error", self.reason)
+    core.log_quiet("Markdown native manifest failed: root=%s generation=%d error=%s",
+      self.root, serial, self.reason)
+  end
+
+  local handle, submit_error = pool:submit {
+    kind = "markdown-project-file-manifest",
+    generation = serial,
+    phase = "manifest",
+    priority = "background",
+    native = true,
+    native_kind = "project_file_manifest",
+    native_payload = {
+      project_root = self.root,
+      show_unsupported_files = self.show_unsupported_files,
+    },
+    is_stale = function() return serial ~= self.rebuild_serial end,
+    on_stale = function(message)
+      local manifest = message.manifest or (message.payload and message.payload.manifest)
+      if manifest then manifest:close() end
+    end,
+    on_error = finish_error,
+    on_cancelled = function(message)
+      if serial == self.rebuild_serial then finish_error(message or "cancelled") end
+    end,
+    on_result = function(message)
+      local manifest = message.manifest or (message.payload and message.payload.manifest)
+      if not manifest and message.type == "final" then return end
+      if not manifest then return finish_error("native manifest result missing snapshot") end
+      self.manifest_job = nil
+      core.add_thread(function()
+        if serial ~= self.rebuild_serial then manifest:close(); return end
+        local summary = manifest:summary()
+        local staging = Index:new(self.root)
+        staging.show_unsupported_files = self.show_unsupported_files
+        staging.link_path_policy = self.link_path_policy
+        local tracked = {}
+        for doc in pairs(self.doc_listeners) do
+          if doc.abs_filename then tracked[path_key(doc.abs_filename)] = true end
+        end
+        local offset = 0
+        while offset < summary.records do
+          if serial ~= self.rebuild_serial then manifest:close(); return end
+          local page = manifest:page(offset, 64)
+          for _, record in ipairs(page) do
+            if not tracked[path_key(record.absolute_path)] then
+              if record.kind == "markdown" then
+                local text = read_file(record.absolute_path) or ""
+                local shallow = record.size > MAX_COOPERATIVE_NOTE_BYTES
+                staging:add_note_entry(staging:make_note_entry(record.absolute_path, text, {
+                  shallow = shallow,
+                  file_info = { size = record.size, modified = record.modified },
+                }))
+              elseif record.kind == "attachment" then
+                staging:add_attachment_entry(staging:make_attachment_entry(record.absolute_path, {
+                  size = record.size, modified = record.modified,
+                }))
+              end
             end
           end
-          processed = processed + 1
-          if processed % 32 == 0 then coroutine.yield(0) end
+          offset = page.next_offset
+          coroutine.yield(0)
         end
-      end
-    end
-    if serial ~= self.rebuild_serial then return end
-    for doc in pairs(self.doc_listeners) do self:update_doc(doc, { rebuilding = true }) end
-    self.status, self.reason = "ready", nil
-    self.generation = self.generation + 1
-    self:notify("ready")
-    core.redraw = true
-    local elapsed_ms = (system.get_time() - started_at) * 1000
-    self.diagnostics.last_rebuild = {
-      reason = rebuild_reason,
-      elapsed_ms = elapsed_ms,
-      directories = scanned_dirs,
-      files = scanned_files,
-      notes = self:note_count(),
-      attachments = self:attachment_count(),
-      cooperative = true,
-    }
-    core.log_quiet(
-      "Markdown vault index cooperative rebuild ready: root=%s reason=%s elapsed=%.1fms dirs=%d files=%d notes=%d attachments=%d",
-      self.root, rebuild_reason, elapsed_ms, scanned_dirs, scanned_files,
-      self:note_count(), self:attachment_count()
-    )
-  end)
+        if serial ~= self.rebuild_serial then manifest:close(); return end
+        for _, field in ipairs({
+          "notes_by_abs", "attachments_by_abs", "note_keys", "note_keys_ci",
+          "attachment_keys", "attachment_keys_ci",
+        }) do self[field] = staging[field] end
+        for doc in pairs(self.doc_listeners) do self:update_doc(doc, { rebuilding = true }) end
+        if self.manifest_snapshot then self.manifest_snapshot:close() end
+        self.manifest_snapshot = manifest
+        self.status, self.reason = "ready", nil
+        self.generation = self.generation + 1
+        self:notify("ready")
+        core.redraw = true
+        local elapsed_ms = (system.get_time() - started_at) * 1000
+        self.diagnostics.last_rebuild = {
+          reason = rebuild_reason,
+          elapsed_ms = elapsed_ms,
+          directories = summary.directories + 1,
+          files = summary.files,
+          notes = self:note_count(),
+          attachments = self:attachment_count(),
+          cooperative = true,
+          native_manifest = true,
+          manifest_ms = summary.scan_ms,
+        }
+        core.log_quiet(
+          "Markdown vault native manifest adopted: root=%s generation=%d elapsed=%.1fms native=%.1fms dirs=%d files=%d notes=%d attachments=%d",
+          self.root, serial, elapsed_ms, summary.scan_ms, summary.directories, summary.files,
+          self:note_count(), self:attachment_count()
+        )
+        local pending = self.pending_manifest_reason
+        self.pending_manifest_reason = nil
+        if pending then self:rebuild_async(pending) end
+      end)
+    end,
+  }
+  if not handle then
+    finish_error(submit_error or "native manifest submission failed")
+  else
+    self.manifest_job = handle
+  end
   return false
 end
 

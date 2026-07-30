@@ -18,6 +18,7 @@
 #define API_TYPE_PROJECT_BUILDER "NativeTreeSitterProjectBuilder"
 #define API_TYPE_PROJECT_SNAPSHOT "NativeTreeSitterProjectSnapshot"
 #define API_TYPE_GIT_STATUS_SNAPSHOT "NativeFileTreeGitStatusSnapshot"
+#define API_TYPE_PROJECT_FILE_MANIFEST "NativeProjectFileManifestSnapshot"
 
 typedef struct {
   AnvilWorkerPool *pool;
@@ -46,6 +47,10 @@ typedef struct {
 typedef struct {
   AnvilGitStatusSnapshot *snapshot;
 } LuaGitStatusSnapshot;
+
+typedef struct {
+  AnvilProjectFileManifestSnapshot *snapshot;
+} LuaProjectFileManifest;
 
 static LuaWorkerPool *check_pool(lua_State *L, int idx) {
   LuaWorkerPool *pool = (LuaWorkerPool *)luaL_checkudata(L, idx, API_TYPE_WORKER_POOL);
@@ -87,6 +92,12 @@ static LuaGitStatusSnapshot *check_git_status_snapshot(lua_State *L, int idx) {
   LuaGitStatusSnapshot *snapshot = (LuaGitStatusSnapshot *)luaL_checkudata(L, idx, API_TYPE_GIT_STATUS_SNAPSHOT);
   luaL_argcheck(L, snapshot && snapshot->snapshot, idx, "closed native File Tree Git status snapshot");
   return snapshot;
+}
+
+static LuaProjectFileManifest *check_project_file_manifest(lua_State *L, int idx) {
+  LuaProjectFileManifest *manifest = (LuaProjectFileManifest *)luaL_checkudata(L, idx, API_TYPE_PROJECT_FILE_MANIFEST);
+  luaL_argcheck(L, manifest && manifest->snapshot, idx, "closed native Project file manifest");
+  return manifest;
 }
 
 static int opt_int_field(lua_State *L, int table, const char *key, int def) {
@@ -253,6 +264,7 @@ static int pool_submit(lua_State *L) {
   spec.project_root = opt_string_field(L, 2, "project_root", NULL);
   spec.project_progress_files = opt_uint32_field(L, 2, "project_progress_files", 64);
   spec.project_publish_partial_snapshots = opt_bool_field(L, 2, "publish_partial_snapshots", NULL);
+  spec.manifest_show_unsupported_files = opt_bool_field(L, 2, "show_unsupported_files", NULL);
   spec.project_scoped = opt_bool_field(L, 2, "project_scoped", NULL);
   spec.max_file_bytes = opt_uint32_field(L, 2, "max_file_bytes", 0);
   bool capture_present = false, line_present = false, compact_present = false;
@@ -834,6 +846,74 @@ static int git_status_snapshot_lookup(lua_State *L) {
     lua_pushnumber(L, (lua_Number)lookup.additions); lua_setfield(L, -2, "additions");
     lua_pushnumber(L, (lua_Number)lookup.deletions); lua_setfield(L, -2, "deletions");
   }
+  return 1;
+}
+
+static void push_manifest_handle(lua_State *L, AnvilProjectFileManifestSnapshot *snapshot) {
+  LuaProjectFileManifest *manifest = (LuaProjectFileManifest *)lua_newuserdata(L, sizeof(*manifest));
+  manifest->snapshot = snapshot;
+  luaL_getmetatable(L, API_TYPE_PROJECT_FILE_MANIFEST);
+  lua_setmetatable(L, -2);
+}
+
+static int project_file_manifest_close(lua_State *L) {
+  LuaProjectFileManifest *manifest = (LuaProjectFileManifest *)luaL_checkudata(L, 1, API_TYPE_PROJECT_FILE_MANIFEST);
+  bool released = manifest && manifest->snapshot;
+  if (released) { anvil_project_file_manifest_release(manifest->snapshot); manifest->snapshot = NULL; }
+  lua_pushboolean(L, released);
+  return 1;
+}
+
+static int project_file_manifest_summary(lua_State *L) {
+  LuaProjectFileManifest *manifest = check_project_file_manifest(L, 1);
+  AnvilProjectFileManifestSummary summary;
+  anvil_project_file_manifest_summary(manifest->snapshot, &summary);
+  lua_createtable(L, 0, 9);
+#define SET_MANIFEST_SUMMARY(name) do { lua_pushnumber(L, (lua_Number)summary.name); lua_setfield(L, -2, #name); } while (0)
+  SET_MANIFEST_SUMMARY(records); SET_MANIFEST_SUMMARY(files); SET_MANIFEST_SUMMARY(directories);
+  SET_MANIFEST_SUMMARY(markdown_files); SET_MANIFEST_SUMMARY(attachments); SET_MANIFEST_SUMMARY(other_files);
+  SET_MANIFEST_SUMMARY(inaccessible_entries); SET_MANIFEST_SUMMARY(total_bytes);
+#undef SET_MANIFEST_SUMMARY
+  lua_pushnumber(L, summary.scan_ms); lua_setfield(L, -2, "scan_ms");
+  return 1;
+}
+
+static void push_manifest_record(lua_State *L, const AnvilProjectFileManifestRecord *record) {
+  lua_createtable(L, 0, 5);
+  lua_pushstring(L, record->absolute_path); lua_setfield(L, -2, "absolute_path");
+  lua_pushstring(L, record->relative_path); lua_setfield(L, -2, "relative_path");
+  lua_pushstring(L, anvil_manifest_entry_kind_name(record->kind)); lua_setfield(L, -2, "kind");
+  lua_pushnumber(L, (lua_Number)record->size); lua_setfield(L, -2, "size");
+  lua_pushnumber(L, (lua_Number)record->modified); lua_setfield(L, -2, "modified");
+}
+
+static int project_file_manifest_page(lua_State *L) {
+  LuaProjectFileManifest *manifest = check_project_file_manifest(L, 1);
+  uint64_t offset = (uint64_t)luaL_optinteger(L, 2, 0);
+  uint32_t limit = (uint32_t)luaL_optinteger(L, 3, 256);
+  luaL_argcheck(L, limit <= PROJECT_RECORD_PAGE_LIMIT, 3, "manifest page limit exceeds 4096");
+  uint64_t count = anvil_project_file_manifest_count(manifest->snapshot);
+  uint64_t available = offset < count ? count - offset : 0;
+  uint32_t returned = available < limit ? (uint32_t)available : limit;
+  lua_createtable(L, (int)returned, 3);
+  for (uint32_t i = 0; i < returned; i++) {
+    AnvilProjectFileManifestRecord record;
+    if (anvil_project_file_manifest_record_at(manifest->snapshot, offset + i, &record)) push_manifest_record(L, &record);
+    else lua_pushnil(L);
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_pushnumber(L, (lua_Number)count); lua_setfield(L, -2, "total");
+  lua_pushnumber(L, (lua_Number)(offset + returned)); lua_setfield(L, -2, "next_offset");
+  lua_pushboolean(L, offset + returned < count); lua_setfield(L, -2, "has_more");
+  return 1;
+}
+
+static int project_file_manifest_lookup(lua_State *L) {
+  LuaProjectFileManifest *manifest = check_project_file_manifest(L, 1);
+  const char *path = luaL_checkstring(L, 2);
+  AnvilProjectFileManifestRecord record;
+  if (!anvil_project_file_manifest_lookup(manifest->snapshot, path, &record)) { lua_pushnil(L); return 1; }
+  push_manifest_record(L, &record);
   return 1;
 }
 
@@ -1662,6 +1742,15 @@ static void push_result(lua_State *L, AnvilWorkerResult *result) {
     lua_setfield(L, -2, "snapshot");
     lua_setfield(L, -2, "payload");
   }
+  AnvilProjectFileManifestSnapshot *manifest = anvil_worker_result_steal_project_file_manifest(result);
+  if (manifest) {
+    push_manifest_handle(L, manifest);
+    lua_setfield(L, -2, "manifest");
+    lua_getfield(L, -1, "payload");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_createtable(L, 0, 1); }
+    lua_getfield(L, -2, "manifest"); lua_setfield(L, -2, "manifest");
+    lua_setfield(L, -2, "payload");
+  }
   const char *error = anvil_worker_result_error(result);
   if (error) {
     lua_pushstring(L, error);
@@ -1946,6 +2035,15 @@ static const luaL_Reg git_status_snapshot_methods[] = {
   { NULL, NULL }
 };
 
+static const luaL_Reg project_file_manifest_methods[] = {
+  { "summary", project_file_manifest_summary },
+  { "page", project_file_manifest_page },
+  { "lookup", project_file_manifest_lookup },
+  { "close", project_file_manifest_close },
+  { "__gc", project_file_manifest_close },
+  { NULL, NULL }
+};
+
 static const luaL_Reg lib[] = {
   { "new", f_new },
   { "new_project_builder", f_new_project_builder },
@@ -1995,6 +2093,12 @@ int luaopen_worker_pool_native(lua_State *L) {
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");
   luaL_setfuncs(L, git_status_snapshot_methods, 0);
+  lua_pop(L, 1);
+
+  luaL_newmetatable(L, API_TYPE_PROJECT_FILE_MANIFEST);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+  luaL_setfuncs(L, project_file_manifest_methods, 0);
   lua_pop(L, 1);
 
   luaL_newlib(L, lib);

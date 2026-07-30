@@ -143,6 +143,35 @@ test.describe("worker_pool_native", function()
     end))
   end)
 
+  test.test("Project file manifest jobs discover classified files without Lua traversal", function()
+    local root = USERDIR .. PATHSEP .. "native-manifest-" .. math.floor(system.get_time() * 1000000)
+    test.ok(common.mkdirp(root .. PATHSEP .. "notes"))
+    local function write(path, text)
+      local file = test.not_nil(io.open(path, "wb")); file:write(text); file:close()
+    end
+    write(root .. PATHSEP .. "notes" .. PATHSEP .. "a.md", "# A\n")
+    write(root .. PATHSEP .. "image.png", "png")
+    write(root .. PATHSEP .. "other.txt", "text")
+    local pool = new_pool("lua-native-project-manifest", 1)
+    test.not_nil(pool:submit({ kind = "project_file_manifest", project_root = root }))
+    local manifest
+    test.ok(drain_until(pool, function(message)
+      if message.type == "result" then manifest = message.manifest end
+      return message.type == "final"
+    end))
+    test.not_nil(manifest)
+    local summary = manifest:summary()
+    test.equal(summary.markdown_files, 1)
+    test.equal(summary.attachments, 1)
+    test.equal(summary.other_files, 1)
+    test.equal(manifest:lookup("notes/a.md").kind, "markdown")
+    local page = manifest:page(0, 2)
+    test.equal(#page, 2)
+    test.equal(page.total, summary.records)
+    manifest:close()
+    test.ok(common.rm(root, true))
+  end)
+
   test.test("Tree-sitter index job returns bounded result handle", function()
     local pool = new_pool("lua-native-treesitter-index", 1)
     local handle = pool:submit({

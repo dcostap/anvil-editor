@@ -10,6 +10,7 @@
 #include "treesitter/project_file.h"
 #include "treesitter/project_index.h"
 #include "git_status_index.h"
+#include "project_file_manifest.h"
 
 typedef struct AnvilWorkerPool AnvilWorkerPool;
 typedef struct AnvilWorkerJob AnvilWorkerJob;
@@ -127,6 +128,7 @@ typedef struct AnvilWorkerJobSpec {
   uint32_t project_language_count;
   uint32_t project_progress_files;
   bool project_publish_partial_snapshots;
+  bool manifest_show_unsupported_files;
 } AnvilWorkerJobSpec;
 
 AnvilWorkerPool *anvil_worker_pool_create(const char *name, int worker_count);
@@ -176,6 +178,7 @@ double anvil_worker_result_project_snapshot_ms(const AnvilWorkerResult *result);
 AnvilWorkerTreeSitterIndexResult *anvil_worker_result_steal_treesitter_index_result(AnvilWorkerResult *result);
 AnvilTSProjectSnapshot *anvil_worker_result_steal_project_snapshot(AnvilWorkerResult *result);
 AnvilGitStatusSnapshot *anvil_worker_result_steal_git_status_snapshot(AnvilWorkerResult *result);
+AnvilProjectFileManifestSnapshot *anvil_worker_result_steal_project_file_manifest(AnvilWorkerResult *result);
 
 void anvil_worker_treesitter_index_result_retain(AnvilWorkerTreeSitterIndexResult *result);
 void anvil_worker_treesitter_index_result_free(AnvilWorkerTreeSitterIndexResult *result);

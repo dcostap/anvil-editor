@@ -20,6 +20,7 @@ anvil_sources = [
     'worker_pool.c',
     'markdown_parser.c',
     'markdown_extensions.c',
+    'project_file_manifest.c',
     'treesitter/languages.c',
     'treesitter/project_file.c',
     'treesitter/project_index.c',
@@ -213,12 +214,21 @@ git_status_index_test = executable('git_status_index_test',
 )
 test('git-status-index', git_status_index_test, env: anvil_test_env)
 
+project_file_manifest_test = executable('project_file_manifest_test',
+    ['../tests/native/project_file_manifest_test.c', 'project_file_manifest.c'],
+    include_directories: anvil_includes,
+    dependencies: [sdl_dep],
+    c_args: anvil_cargs,
+)
+test('project-file-manifest', project_file_manifest_test, env: anvil_test_env)
+
 worker_pool_test = executable('worker_pool_test',
     [
         '../tests/native/worker_pool_test.c',
         'worker_pool.c',
         'fuzzy.c',
         'git_status_index.c',
+        'project_file_manifest.c',
         'markdown_parser.c',
         'markdown_extensions.c',
         'treesitter/languages.c',
