@@ -87,6 +87,33 @@ class MetricsSummaryTests(unittest.TestCase):
         self.assertEqual(stutter["status"], "regression")
 
 
+class StateValidationTests(unittest.TestCase):
+    def test_states_consistent_requires_exact_observable_state(self):
+        state = {
+            "doc_lines": 2,
+            "wrapped_rows": 701,
+            "text_revision": 2,
+            "selection_line": 1,
+            "selection_col": 8735,
+            "scroll_x": 0.0,
+            "scroll_y": 1729.1378133333,
+        }
+
+        self.assertTrue(gate.states_consistent([state, dict(state)]))
+
+        mismatches = {
+            "scroll_y": 1717.336,
+            "selection_col": 8734,
+            "doc_lines": 3,
+            "wrapped_rows": 700,
+        }
+        for field, value in mismatches.items():
+            with self.subTest(field=field):
+                changed = dict(state)
+                changed[field] = value
+                self.assertFalse(gate.states_consistent([state, changed]))
+
+
 class SpecimenTests(unittest.TestCase):
     def test_external_specimen_is_copied_and_described_without_source_path(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -28,6 +28,8 @@ local function env_number(name, default)
   return tonumber(os.getenv(name) or "") or default
 end
 
+local SCROLL_SETTLE_EPSILON = 1e-8
+
 local benchmark = {
   scenario = env_string("ANVIL_PERF_BENCHMARK_SCENARIO", "wrapped-document-steady"),
   mode = env_string("ANVIL_PERF_BENCHMARK_MODE", "metrics"),
@@ -42,6 +44,9 @@ local benchmark = {
   capture_settle_frames = math.max(0, math.floor(env_number("ANVIL_PERF_BENCHMARK_CAPTURE_SETTLE_FRAMES", 5))),
   warmup_frames = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_WARMUP_FRAMES", 120))),
   measured_frames = math.max(2, math.floor(env_number("ANVIL_PERF_BENCHMARK_FRAMES", 600))),
+  state_settle_max_frames = math.max(1, math.floor(env_number(
+    "ANVIL_PERF_BENCHMARK_STATE_SETTLE_MAX_FRAMES", 180
+  ))),
   start_line = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_START_LINE", 1))),
   scroll_lines = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_SCROLL_LINES", 1))),
   tab_count = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_TAB_COUNT", 40))),
@@ -58,6 +63,7 @@ local benchmark = {
   finished = false,
   capture_index = 0,
   capture_settle_count = 0,
+  state_settle_count = 0,
   started_at = system.get_time(),
   first_redraw_recorded = false,
   lifecycle = {},
@@ -139,6 +145,8 @@ local function heartbeat(force)
     warmup_frames = benchmark.warmup_count,
     measured_frames = benchmark.measure_count,
     action_count = benchmark.action_count,
+    state_settle_frames = benchmark.state_settle_count,
+    state_settle_max_frames = benchmark.state_settle_max_frames,
   }
   local keys, lines = {}, {}
   for key in pairs(fields) do keys[#keys + 1] = key end
@@ -413,6 +421,25 @@ local function metric_row(snapshot)
   return row
 end
 
+local function scroll_value_is_settled(value, target)
+  return math.abs((value or 0) - (target or 0)) < SCROLL_SETTLE_EPSILON
+end
+
+local function scroll_is_settled()
+  local view = benchmark.view
+  local scroll = view and view.scroll
+  if not scroll then return true end
+  local target = scroll.to or {}
+  return scroll_value_is_settled(scroll.x, target.x)
+    and scroll_value_is_settled(scroll.y, target.y)
+end
+
+local function begin_state_settle()
+  benchmark.state_settle_count = 0
+  set_phase("state_settle", "state_settle_started")
+  core.redraw = true
+end
+
 local function finish_success()
   if benchmark.finished then return end
   benchmark.finished = true
@@ -432,6 +459,8 @@ local function finish_success()
     mode = benchmark.mode,
     warmup_frames = benchmark.warmup_count,
     measured_frames = benchmark.measure_count,
+    state_settle_frames = benchmark.state_settle_count,
+    state_settle_max_frames = benchmark.state_settle_max_frames,
     elapsed_ms = string.format("%.6f", elapsed * 1000),
     active_fps = string.format("%.6f", benchmark.measure_count / elapsed),
     action_count = benchmark.action_count,
@@ -455,6 +484,10 @@ local function finish_success()
     selection_col = selection_col,
     scroll_x = benchmark.view and benchmark.view.scroll and benchmark.view.scroll.x or 0,
     scroll_y = benchmark.view and benchmark.view.scroll and benchmark.view.scroll.y or 0,
+    scroll_to_x = benchmark.view and benchmark.view.scroll and benchmark.view.scroll.to
+      and benchmark.view.scroll.to.x or 0,
+    scroll_to_y = benchmark.view and benchmark.view.scroll and benchmark.view.scroll.to
+      and benchmark.view.scroll.to.y or 0,
   }
   if not result_ok then
     core.log_quiet("Performance benchmark result write failed: %s", tostring(result_err))
@@ -547,7 +580,7 @@ function perf.on_frame(snapshot)
       end
       if benchmark.measure_count >= benchmark.measured_frames then
         benchmark.measure_end = system.get_time()
-        prepare_screenshot()
+        begin_state_settle()
       else
         perform_action()
       end
@@ -555,6 +588,23 @@ function perf.on_frame(snapshot)
       benchmark.capture_settle_count = benchmark.capture_settle_count + 1
       if benchmark.capture_settle_count >= benchmark.capture_settle_frames then
         request_screenshot()
+      else
+        core.redraw = true
+      end
+    elseif benchmark.phase == "state_settle" then
+      benchmark.state_settle_count = benchmark.state_settle_count + 1
+      if scroll_is_settled() then
+        mark_lifecycle("state_settled")
+        prepare_screenshot()
+      elseif benchmark.state_settle_count >= benchmark.state_settle_max_frames then
+        local view = benchmark.view
+        local scroll = view and view.scroll or {}
+        local target = scroll.to or {}
+        fail(string.format(
+          "scroll did not settle within %d frames (current=%.6f,%.6f target=%.6f,%.6f)",
+          benchmark.state_settle_max_frames,
+          scroll.x or 0, scroll.y or 0, target.x or 0, target.y or 0
+        ))
       else
         core.redraw = true
       end

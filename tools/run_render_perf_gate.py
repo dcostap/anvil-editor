@@ -631,6 +631,12 @@ def run_case(
         "launch_to_plugin_loaded_ms": float(launcher.get("first_heartbeat_ms") or 0),
         "peak_working_set_bytes": float(launcher.get("peak_working_set_bytes") or 0),
         "peak_private_bytes": float(launcher.get("peak_private_bytes") or 0),
+        "state_settle": {
+            "frames": int(float(values.get("state_settle_frames", 0))),
+            "max_frames": int(float(values.get("state_settle_max_frames", 0))),
+            "scroll_to_x": float(values.get("scroll_to_x", 0)),
+            "scroll_to_y": float(values.get("scroll_to_y", 0)),
+        },
         "state": {
             "doc_lines": int(values.get("doc_lines", 0)),
             "wrapped_rows": int(values.get("wrapped_rows", 0)),
@@ -682,6 +688,12 @@ def summarize_case_lifecycle(cases: list[dict[str, Any]]) -> dict[str, float]:
     if "first_ready_frame_ms" in lifecycle:
         lifecycle["startup_total_ms"] = launch_to_plugin + lifecycle["first_ready_frame_ms"]
     return lifecycle
+
+
+def states_consistent(states: Iterable[dict[str, Any] | None]) -> bool:
+    """Require every captured observable state to match exactly."""
+    captured = list(states)
+    return bool(captured) and all(state == captured[0] for state in captured)
 
 
 def run_case_safely(**kwargs: Any) -> dict[str, Any]:
@@ -1166,9 +1178,7 @@ def main() -> int:
             "state_primer": state_primer,
         }
         states = [item.get("state") for item in throughput_runs + metric_runs]
-        scenario_report["state_consistent"] = bool(states) and all(
-            state == states[0] for state in states
-        )
+        scenario_report["state_consistent"] = states_consistent(states)
         if not scenario_report["state_consistent"]:
             scenario_report["status"] = "failed"
             scenario_report["failures"] = [{
