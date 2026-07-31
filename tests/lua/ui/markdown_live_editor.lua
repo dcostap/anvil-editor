@@ -1032,6 +1032,57 @@ test.describe("Markdown Live Editor", function()
     test.equal(table.concat(visible), "See [[One|First]] and Second")
   end)
 
+  test.it("reuses wrapped link presentation while moving within the same construct", function()
+    local payload = ("A/0123456789"):rep(1000)
+    local source = "[embedded](data:image/png;base64," .. payload .. ")"
+    local view, doc = make_view(source .. "\nnext", "long-inline-link.md")
+    view.size.x = 240
+    view:set_wrapping_enabled(true)
+    doc:set_selection(1, 1000)
+    refresh(view)
+    test.ok(
+      view:get_visual_row_count_for_line(1) > 20,
+      "expected the active link source to produce many Wrapped Visual Rows"
+    )
+    test.equal(visible_render_text(view, 1), source)
+
+    local old_active = core.active_view
+    local old_frame_stats = core.perf_frame_stats
+    local stats = {}
+    core.active_view = view
+    core.perf_frame_stats = stats
+    local ok, moved = pcall(command.perform, "doc:move-to-next-line")
+    core.perf_frame_stats = old_frame_stats
+    core.active_view = old_active
+    if not ok then error(moved, 0) end
+
+    local line, col = doc:get_selection()
+    test.equal(moved, true)
+    test.equal(line, 1)
+    test.ok(col > 1000)
+    test.equal(visible_render_text(view, 1), source)
+    test.equal(
+      stats.linewrapping_update_breaks_calls,
+      nil,
+      "moving within one revealed construct must not rebuild its wrap map"
+    )
+
+    stats = {}
+    old_frame_stats = core.perf_frame_stats
+    core.perf_frame_stats = stats
+    local rebuilt, rebuild_error = pcall(
+      view.invalidate_line_render, view, "long-link-native-wrap-test", 1, 1
+    )
+    core.perf_frame_stats = old_frame_stats
+    if not rebuilt then error(rebuild_error, 0) end
+    test.equal(
+      stats.linewrapping_compute_branch_rendered_native_calls,
+      1,
+      "source-preserving Markdown fragments should use the native sequence scan"
+    )
+    test.equal(stats.linewrapping_compute_branch_rendered_cursor_calls, nil)
+  end)
+
   test.it("syntax-highlights JavaScript fences through the info string", function()
     local view, doc = make_view("```js\nconst value = 1\n```\n", "highlight.md")
     doc:set_selection(1, 1)
@@ -2751,11 +2802,14 @@ test.describe("Markdown Live Editor", function()
     )
   end)
 
-  test.it("keeps pathological single lines on the bounded source path", function()
-    local view, doc = make_view("# " .. string.rep("A", 70000), "huge-markdown-line.md")
+  test.it("keeps rich presentation for very long source lines", function()
+    local heading = string.rep("A", 70000)
+    local view, doc = make_view("# " .. heading .. "\nnext", "huge-markdown-line.md")
     view:set_wrapping_enabled(true)
+    doc:set_selection(2, 1)
     refresh(view)
-    test.equal(view:get_line_render(1), nil)
+    test.not_nil(view:get_line_render(1))
+    test.equal(visible_render_text(view, 1), heading)
     local _, _, wrapped_rows = linewrapping.get_line_idx_col_count(view, 1, 1)
     test.ok(wrapped_rows > 1)
     markdown.live_render.release(view, "test")

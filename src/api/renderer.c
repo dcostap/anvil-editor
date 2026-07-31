@@ -630,6 +630,117 @@ static int f_text_layout_wrap(lua_State *L) {
   return 1;
 }
 
+/* Wrap a source-preserving sequence of independently shaped text layouts.
+ * Fragment styling often splits one logical source line into several runs;
+ * scanning their retained native advances here avoids a Lua callback for
+ * every UTF-8 boundary while preserving shaping boundaries exactly. */
+static int f_wrap_text_layouts(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  size_t layout_count = lua_rawlen(L, 1);
+  double wrap_width = luaL_checknumber(L, 2);
+  const char *mode = luaL_optstring(L, 3, "letter");
+  lua_Integer raw_start = luaL_optinteger(L, 4, 0);
+  double first_leading = luaL_optnumber(L, 5, 0);
+  double continuation_leading = luaL_optnumber(L, 6, 0);
+  bool word_mode = strcmp(mode, "word") == 0;
+
+  size_t total_len = 0;
+  for (size_t item = 1; item <= layout_count; item++) {
+    lua_rawgeti(L, 1, (lua_Integer)item);
+    LuaTextLayout *layout = check_text_layout(L, -1);
+    if (SIZE_MAX - total_len < layout->text_len) {
+      return luaL_error(L, "text layout sequence is too large");
+    }
+    total_len += layout->text_len;
+    lua_pop(L, 1);
+  }
+
+  size_t requested_start = raw_start <= 0 ? 0 : (size_t)raw_start;
+  if (requested_start > total_len) requested_start = total_len;
+  size_t start_byte = 0;
+  double start_advance = 0;
+  size_t byte_base = 0;
+  double advance_base = 0;
+  bool found_start = false;
+  for (size_t item = 1; item <= layout_count; item++) {
+    lua_rawgeti(L, 1, (lua_Integer)item);
+    LuaTextLayout *layout = check_text_layout(L, -1);
+    if (!found_start && requested_start <= byte_base + layout->text_len) {
+      size_t local_start = requested_start - byte_base;
+      size_t boundary = text_layout_boundary_at_or_before(layout, local_start);
+      start_byte = byte_base + (layout->count ? layout->byte_offsets[boundary] : 0);
+      start_advance = advance_base + (layout->count ? layout->advances[boundary] : 0);
+      found_start = true;
+    }
+    byte_base += layout->text_len;
+    advance_base += layout->count ? layout->advances[layout->count - 1] : 0;
+    lua_pop(L, 1);
+  }
+  if (!found_start) {
+    start_byte = total_len;
+    start_advance = advance_base;
+  }
+
+  int output_index = 1;
+  lua_createtable(L, 8, 0);
+  int output_table = lua_absindex(L, -1);
+  lua_pushinteger(L, (lua_Integer)start_byte);
+  lua_rawseti(L, output_table, output_index++);
+
+  size_t row_start_byte = start_byte;
+  double row_start_advance = start_advance;
+  size_t last_space_start = SIZE_MAX;
+  size_t last_space_next = SIZE_MAX;
+  double last_space_next_advance = 0;
+  byte_base = 0;
+  advance_base = 0;
+  for (size_t item = 1; item <= layout_count; item++) {
+    lua_rawgeti(L, 1, (lua_Integer)item);
+    LuaTextLayout *layout = check_text_layout(L, -1);
+    for (size_t index = 1; index < layout->count; index++) {
+      size_t char_start = byte_base + layout->byte_offsets[index - 1];
+      size_t boundary_byte = byte_base + layout->byte_offsets[index];
+      double previous_advance = advance_base + layout->advances[index - 1];
+      double boundary_advance = advance_base + layout->advances[index];
+      if (boundary_byte <= start_byte) continue;
+      if (layout->text[layout->byte_offsets[index - 1]] == ' '
+          && layout->byte_offsets[index] == layout->byte_offsets[index - 1] + 1) {
+        last_space_start = char_start;
+        last_space_next = boundary_byte;
+        last_space_next_advance = boundary_advance;
+      }
+      double leading = row_start_byte == start_byte
+        ? first_leading : continuation_leading;
+      double row_width = leading + boundary_advance - row_start_advance;
+      if (wrap_width > 0 && row_width > wrap_width && char_start > row_start_byte) {
+        size_t split_byte = char_start;
+        double split_advance = previous_advance;
+        if (word_mode && last_space_start != SIZE_MAX
+            && last_space_start >= row_start_byte) {
+          split_byte = last_space_next;
+          split_advance = last_space_next_advance;
+        }
+        if (split_byte <= row_start_byte) {
+          split_byte = char_start;
+          split_advance = previous_advance;
+        }
+        lua_pushinteger(L, (lua_Integer)split_byte);
+        lua_rawseti(L, output_table, output_index++);
+        row_start_byte = split_byte;
+        row_start_advance = split_advance;
+        if (last_space_next <= row_start_byte) {
+          last_space_start = SIZE_MAX;
+          last_space_next = SIZE_MAX;
+        }
+      }
+    }
+    byte_base += layout->text_len;
+    advance_base += layout->count ? layout->advances[layout->count - 1] : 0;
+    lua_pop(L, 1);
+  }
+  return 1;
+}
+
 static int f_font_text_layout(lua_State *L) {
   RenFont *fonts[FONT_FALLBACK_MAX]; font_retrieve(L, fonts, 1);
   size_t len;
@@ -1396,6 +1507,7 @@ static const luaL_Reg lib[] = {
   { "draw_rounded_rect",  f_draw_rounded_rect  },
   { "draw_text",          f_draw_text          },
   { "draw_text_known_bounds", f_draw_text_known_bounds },
+  { "wrap_text_layouts",  f_wrap_text_layouts  },
   { "draw_poly",          f_draw_poly          },
   { "draw_canvas",        f_draw_canvas        },
   { "draw_canvas_scaled", f_draw_canvas_scaled },

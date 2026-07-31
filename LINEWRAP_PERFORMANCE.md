@@ -24,6 +24,12 @@ The ordinary non-tokenized path has specialized scans for:
 
 A source-preserving rendered line can use the renderer's native text layout and native wrap scan. Mixed hidden/widget/font fragments use a monotonic rendered-column cursor. Tokenization-dependent wrapping additionally requires syntax tokenization and syntax-font metrics.
 
+Contiguous source-preserving rendered fragments share one native sequence wrap
+scan even when styling shaped them as separate runs. The scan concatenates
+their retained byte boundaries and advances without reshaping across fragment
+boundaries. Hidden, widget, remapped, and explicit-width fragments retain the
+general rendered-column cursor.
+
 The fast ASCII scans are already efficient for very long lines. Whole-Document overhead on many ordinary short lines and repeated reconstruction are more important in typical source files.
 
 ## Permanent benchmark
@@ -102,6 +108,22 @@ reconstruction is about 45% faster. The latter retains per-line and produced-row
 costs that cannot move into the font scan. Plain ASCII continues to use its
 existing specialized Lua paths.
 
+The same native-scan principle now applies to contiguous rendered fragments.
+The permanent 60 KB multi-fragment Markdown benchmark improved from 29.877 ms
+to 7.622 ms on the development machine while preserving separately shaped run
+geometry.
+
+Markdown Live Preview selection transitions compare the old and new reveal
+units before invalidating rendered lines. Moving between Wrapped Visual Rows
+inside one already-revealed link or image therefore preserves both the rendered
+line and its wrap map; entering or leaving a reveal unit still invalidates the
+affected presentation range.
+
+The previous 64 KiB Markdown source-line fallback was removed rather than
+raised or repurposed as a latency guard. Very long lines continue through rich
+Markdown presentation and the same measured wrapping paths; a 70 KB heading is
+covered by the UI regression suite.
+
 An attempted scratch-table reuse for per-line split results did not show a repeatable gain under LuaJIT and was not retained.
 
 Multi-range transactions previously forced a full-Document reconstruction even
@@ -125,5 +147,5 @@ number of distinct affected lines rather than the whole Document.
 2. **Reuse width-only work.** On widening, every previously single-row line can remain single-row without text measurement. With cached unwrapped widths, narrowing can also skip lines known to fit.
 3. **Replace the monolithic row map if edit scaling matters.** Per-line break arrays plus a prefix-sum/Fenwick or chunked row index would make same-line row-count changes logarithmic instead of moving and renumbering the entire suffix. The tradeoff is logarithmic visual-row-to-line lookup and a larger refactor of geometry consumers.
 4. **Share equivalent standard layouts.** Document Views with the same Document, font, width, and plain wrapping settings could share immutable break data. Render-provider layouts must remain view-specific.
-5. **Move remaining expensive scans native only where profiles justify it.** Plain non-tokenized UTF-8 is now native; the remaining candidates are tokenization-dependent and mixed rendered-fragment lines. Plain long ASCII is already fast enough that additional native crossings may not help.
+5. **Move remaining expensive scans native only where profiles justify it.** Plain non-tokenized UTF-8 and contiguous source-preserving rendered fragments are now native; the remaining candidates are tokenization-dependent and genuinely remapped/hidden/widget fragment lines. Plain long ASCII is already fast enough that additional native crossings may not help.
 6. **Keep sliced reconstruction for responsiveness.** It should remain a latency mechanism for unavoidable rich whole-Document rebuilds, with cancellation diagnostics used to detect wasted repeated work.

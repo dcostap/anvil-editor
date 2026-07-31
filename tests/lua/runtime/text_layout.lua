@@ -23,6 +23,17 @@ test.describe("Native text layout", function()
     test.equal(text:sub(breaks[2] + 1, breaks[3]), "beta ")
   end)
 
+  test.it("wraps separately shaped source-preserving layout runs", function()
+    local font = test.not_nil(style.code_font or style.font)
+    local parts = { "alpha ", "beta ", "gamma" }
+    local layouts = {}
+    for index, part in ipairs(parts) do layouts[index] = font:text_layout(part) end
+    local breaks = renderer.wrap_text_layouts(
+      layouts, font:get_width("alpha b"), "word"
+    )
+    test.same(breaks, { 0, 6, 11 })
+  end)
+
   test.it("wraps UTF-8 directly without retaining a text layout", function()
     local font = test.not_nil(style.code_font or style.font)
     local cell = font:get_width(" ")

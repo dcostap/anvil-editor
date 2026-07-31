@@ -1497,7 +1497,6 @@ local TABLE_MAX_PRESENTATION_ROWS = 256
 local TABLE_MAX_PRESENTATION_COLUMNS = 64
 local TABLE_MAX_CELL_PRESENTATION_BYTES = 4096
 local TABLE_LAYOUT_GEOMETRY_CACHE_LIMIT = 4
-local MAX_RICH_SOURCE_LINE_BYTES = 64 * 1024
 
 local function table_pipe_positions(text)
   local positions = {}
@@ -3572,13 +3571,6 @@ end
 
 function provider:line_generation(view, line)
   if view_in_source_mode(view) then return "source" end
-  if #(view.doc.lines[line] or "") > MAX_RICH_SOURCE_LINE_BYTES then
-    local context = view.__markdown_live_line_generation_context or {}
-    view.__markdown_live_line_generation_context = context
-    context.line, context.optimistic, context.owner, context.fenced =
-      line, false, view.__markdown_live_owner or false, false
-    return "bounded-source:" .. tostring(view.doc.text_revision or 0)
-  end
   local optimistic = optimistic_render(view, line)
   local owner = view.__markdown_live_owner
   local fence_generation = ""
@@ -4132,10 +4124,6 @@ function provider:render_line(view, line, _context)
   if view_in_source_mode(view) then
     return { raw_passthrough = true }
   end
-  if #(view.doc.lines[line] or "") > MAX_RICH_SOURCE_LINE_BYTES then
-    record_raw_fallback(view, line, "source-line-limit")
-    return { raw_passthrough = true }
-  end
   local generation_context = view.__markdown_live_line_generation_context
   if not generation_context or generation_context.line ~= line then generation_context = nil end
   local optimistic
@@ -4670,12 +4658,52 @@ local function invalidate_selection_lines(view, new_state, old_state)
   local states = { old_state, new_state }
   local touched_by_state = { {}, {} }
   local fenced_by_state = { {}, {} }
-  local function add_reveal_ranges(state, line)
-    for _, unit in ipairs(reveal_units_for_line(view, line, state)) do
+  local reveal_candidates = {}
+  local reveal_units_by_state = { {}, {} }
+  local reveal_units_known = { {}, {} }
+  local function state_reveal_units(state_index, line)
+    if not reveal_units_known[state_index][line] then
+      reveal_units_by_state[state_index][line] = reveal_units_for_line(
+        view, line, states[state_index]
+      )
+      reveal_units_known[state_index][line] = true
+    end
+    return reveal_units_by_state[state_index][line]
+  end
+  local function add_reveal_candidates(state_index, line)
+    reveal_candidates[line] = true
+    for _, unit in ipairs(state_reveal_units(state_index, line)) do
       if unit.line1 and unit.line2 then
-        for unit_line = unit.line1, unit.line2 do lines[unit_line] = true end
+        for unit_line = unit.line1, unit.line2 do
+          reveal_candidates[unit_line] = true
+        end
       end
     end
+  end
+  local function same_reveal_unit(left, right)
+    return left.type == right.type
+      and left.id == right.id
+      and left.col1 == right.col1
+      and left.col2 == right.col2
+      and left.line1 == right.line1
+      and left.line2 == right.line2
+      and (left.whole_line == true) == (right.whole_line == true)
+  end
+  local function same_reveal_units(left, right)
+    if #left ~= #right then return false end
+    local matched = {}
+    for _, left_unit in ipairs(left) do
+      local found
+      for index, right_unit in ipairs(right) do
+        if not matched[index] and same_reveal_unit(left_unit, right_unit) then
+          matched[index] = true
+          found = true
+          break
+        end
+      end
+      if not found then return false end
+    end
+    return true
   end
   for state_index = 1, 2 do
     local state = states[state_index]
@@ -4699,12 +4727,7 @@ local function invalidate_selection_lines(view, new_state, old_state)
           if fenced then
             fenced_by_state[state_index][fenced.id] = fenced
           else
-            lines[endpoint] = true
-          end
-        end
-        for _, endpoint in ipairs({ line1, line2 }) do
-          if not fenced_code_for_line(view, endpoint) then
-            add_reveal_ranges(state, endpoint)
+            add_reveal_candidates(state_index, endpoint)
           end
         end
         local selection_line1, selection_line2 = math.min(line1, line2), math.max(line1, line2)
@@ -4738,9 +4761,8 @@ local function invalidate_selection_lines(view, new_state, old_state)
     if not touched_by_state[1][line] then changed_touch_lines[line] = true end
   end
   for line in pairs(changed_touch_lines) do
-    lines[line] = true
-    add_reveal_ranges(old_state, line)
-    add_reveal_ranges(new_state, line)
+    add_reveal_candidates(1, line)
+    add_reveal_candidates(2, line)
   end
   for state_index = 1, 2 do
     local other = fenced_by_state[3 - state_index]
@@ -4748,6 +4770,13 @@ local function invalidate_selection_lines(view, new_state, old_state)
       if not other[id] then
         for line = fenced.source.line1, fenced.effective_line2 do lines[line] = true end
       end
+    end
+  end
+  for line in pairs(reveal_candidates) do
+    if not same_reveal_units(
+      state_reveal_units(1, line), state_reveal_units(2, line)
+    ) then
+      lines[line] = true
     end
   end
   local ordered = {}

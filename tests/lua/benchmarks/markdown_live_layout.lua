@@ -113,6 +113,46 @@ test.describe("Markdown live layout benchmark", function()
       view:remove_line_render_provider("long-wrap-benchmark")
     end
 
+    local multi_text = ("A/0123456789"):rep(5000)
+    local multi_doc = Doc(
+      "long-multi-fragment-wrap-benchmark.md",
+      "long-multi-fragment-wrap-benchmark.md",
+      true
+    )
+    multi_doc:insert(1, 1, multi_text)
+    multi_doc:clear_undo_redo()
+    local multi_view = DocView(multi_doc)
+    multi_view.size.x, multi_view.size.y = 500, 800
+    multi_view:set_wrapping_enabled(false)
+    local cut1, cut2 = 12, 32
+    multi_view:add_line_render_provider("long-multi-fragment-wrap-benchmark", {
+      render_line = function(_, owner)
+        return {
+          source_text = multi_text,
+          fragments = {
+            {
+              source_col1 = 1, source_col2 = cut1,
+              text = multi_text:sub(1, cut1 - 1), font = owner:get_font(),
+            },
+            {
+              source_col1 = cut1, source_col2 = cut2,
+              text = multi_text:sub(cut1, cut2 - 1), font = owner:get_font(),
+            },
+            {
+              source_col1 = cut2, source_col2 = #multi_text + 1,
+              text = multi_text:sub(cut2), font = owner:get_font(),
+            },
+          },
+        }
+      end,
+    })
+    local multi_started = system.get_time()
+    local multi_splits = linewrapping.compute_line_breaks_from_col(
+      multi_doc, multi_view:get_font(), 1, 500, "word", 1, 0, multi_view
+    )
+    local multi_wrap_ms = (system.get_time() - multi_started) * 1000
+    multi_view:remove_line_render_provider("long-multi-fragment-wrap-benchmark")
+
     print(string.format(
       "Markdown cold metric benchmark: bytes=%d lines=%d metric_ms=%.3f post_metric_render_60_ms=%.3f total_height=%.1f provider_queries=%d sparse_skips=%d",
       #table.concat(metric_doc.lines), #metric_doc.lines, metric_ms,
@@ -132,6 +172,11 @@ test.describe("Markdown live layout benchmark", function()
       ))
       test.ok(result.rows > 1)
     end
+    print(string.format(
+      "Markdown multi-fragment rendered wrap benchmark: bytes=%d rows=%d wrap_ms=%.3f",
+      #multi_text, #multi_splits, multi_wrap_ms
+    ))
+    test.ok(#multi_splits > 1)
     io.stdout:flush()
     test.equal(metric_cache.row_count, #metric_doc.lines)
     markdown.live_render.release(metric_view, "benchmark")
