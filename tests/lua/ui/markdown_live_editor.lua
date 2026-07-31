@@ -1045,19 +1045,31 @@ test.describe("Markdown Live Editor", function()
       "expected the active link source to produce many Wrapped Visual Rows"
     )
     test.equal(visible_render_text(view, 1), source)
+    local initial_row_count = view:get_visual_row_count_for_line(1)
 
     local old_active = core.active_view
     local old_frame_stats = core.perf_frame_stats
     local stats = {}
     core.active_view = view
     core.perf_frame_stats = stats
-    local ok, moved = pcall(command.perform, "doc:move-to-next-line")
+    local ok, moved
+    local previous_col = 1000
+    for _ = 1, 3 do
+      ok, moved = pcall(command.perform, "doc:move-to-next-line")
+      if not ok then break end
+      local line, col = doc:get_selection()
+      test.equal(moved, true)
+      test.equal(line, 1)
+      test.ok(col > previous_col)
+      test.equal(visible_render_text(view, 1), source)
+      test.equal(view:get_visual_row_count_for_line(1), initial_row_count)
+      previous_col = col
+    end
     core.perf_frame_stats = old_frame_stats
     core.active_view = old_active
     if not ok then error(moved, 0) end
 
     local line, col = doc:get_selection()
-    test.equal(moved, true)
     test.equal(line, 1)
     test.ok(col > 1000)
     test.equal(visible_render_text(view, 1), source)
@@ -1065,6 +1077,22 @@ test.describe("Markdown Live Editor", function()
       stats.linewrapping_update_breaks_calls,
       nil,
       "moving within one revealed construct must not rebuild its wrap map"
+    )
+
+    doc:set_selection(1, #source)
+    test.equal(visible_render_text(view, 1), source)
+    stats = {}
+    old_frame_stats = core.perf_frame_stats
+    core.perf_frame_stats = stats
+    local crossed, cross_error = pcall(command.perform, "doc:move-to-next-line")
+    core.perf_frame_stats = old_frame_stats
+    if not crossed then error(cross_error, 0) end
+    line, col = doc:get_selection()
+    test.equal(line, 2)
+    test.ok(col >= 1)
+    test.ok(
+      visible_render_text(view, 1) ~= source,
+      "leaving the link should collapse its source presentation"
     )
 
     stats = {}

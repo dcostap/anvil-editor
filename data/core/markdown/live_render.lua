@@ -212,10 +212,18 @@ local function task_marker_for_line(view, line)
   end
 end
 
-local function node_line_range(node, line, line_text)
+local function source_line_length(text)
+  local length = #(text or "")
+  if length > 0 and text:byte(length) == 10 then
+    return length - 1
+  end
+  return length
+end
+
+local function node_line_range(node, line, line_length)
   if line < node.source.line1 or line > node.source.line2 then return nil end
   return line == node.source.line1 and node.source.col1 or 1,
-    line == node.source.line2 and node.source.col2 or #line_text + 1
+    line == node.source.line2 and node.source.col2 or line_length + 1
 end
 
 local function position_before(line1, col1, line2, col2)
@@ -235,18 +243,18 @@ local function source_intersects_selection(source, line1, col1, line2, col2)
     and position_before(line1, col1, source.line2, source.col2)
 end
 
-local function selection_touches_line(line, line_text, line1, col1, line2, col2)
+local function selection_touches_line(line, line_length, line1, col1, line2, col2)
   line1, col1, line2, col2 = ordered_selection(line1, col1, line2, col2)
   if line < line1 or line > line2 then return false end
   local from = line == line1 and col1 or 1
-  local to = line == line2 and col2 or #line_text + 1
+  local to = line == line2 and col2 or line_length + 1
   return from < to
 end
 
 local function reveal_units_for_line(view, line, state)
   state = state or current_selection_state(view)
   local selections = state and state.selections or view.doc.selections or {}
-  local line_text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local line_length = source_line_length(view.doc.lines[line] or "")
   local units = {}
   for i = 1, #selections, 4 do
     local line1, col1 = selections[i], selections[i + 1]
@@ -255,7 +263,7 @@ local function reveal_units_for_line(view, line, state)
       local collapsed = line1 == line2 and col1 == col2
       if not collapsed then
         local touches_line = selection_touches_line(
-          line, line_text, line1, col1, line2, col2
+          line, line_length, line1, col1, line2, col2
         )
         local has_localized_reveal, added = false, {}
         for _, node in ipairs(semantic_line(view, line) or {}) do
@@ -275,7 +283,7 @@ local function reveal_units_for_line(view, line, state)
               )
             end
             if intersects and not added[node.id] then
-              local unit_col1, unit_col2 = node_line_range(node, line, line_text)
+              local unit_col1, unit_col2 = node_line_range(node, line, line_length)
               units[#units + 1] = {
                 type = node.type, id = node.id, col1 = unit_col1, col2 = unit_col2,
                 line1 = node.source.line1, line2 = node.source.line2,
@@ -309,19 +317,19 @@ local function reveal_units_for_line(view, line, state)
           }
         end
         if touches_line and not has_localized_reveal and not list_marker then
-          units[#units + 1] = { type = "line", col1 = 1, col2 = #line_text + 1, whole_line = true }
+          units[#units + 1] = { type = "line", col1 = 1, col2 = line_length + 1, whole_line = true }
         end
       elseif config.markdown_live_reveal_mode == "line" then
         if line == line1 then
-          units[#units + 1] = { type = "line", col1 = 1, col2 = #line_text + 1, whole_line = true }
+          units[#units + 1] = { type = "line", col1 = 1, col2 = line_length + 1, whole_line = true }
         end
       else
-        local cursor_text = (view.doc.lines[line1] or ""):gsub("\n$", "")
+        local cursor_length = source_line_length(view.doc.lines[line1] or "")
         local best, best_size, best_contains, has_localized_reveal
         for _, node in ipairs(semantic_line(view, line1) or {}) do
           if REVEAL_TYPES[node.type] then
             if node.type ~= "heading" then has_localized_reveal = true end
-            local node_col1, node_col2 = node_line_range(node, line1, cursor_text)
+            local node_col1, node_col2 = node_line_range(node, line1, cursor_length)
             local contains = node_col1 and col1 >= node_col1 and col1 < node_col2
             local inclusive_right_edge = node_col1 and col1 == node_col2
             if contains or inclusive_right_edge then
@@ -349,13 +357,13 @@ local function reveal_units_for_line(view, line, state)
             line1 = line1, line2 = line1,
           }
         elseif best and line >= best.source.line1 and line <= best.source.line2 then
-          local unit_col1, unit_col2 = node_line_range(best, line, line_text)
+          local unit_col1, unit_col2 = node_line_range(best, line, line_length)
           units[#units + 1] = {
             type = best.type, id = best.id, col1 = unit_col1, col2 = unit_col2,
             line1 = best.source.line1, line2 = best.source.line2,
           }
         elseif not best and not list_marker and not has_localized_reveal and line == line1 then
-          units[#units + 1] = { type = "line", col1 = 1, col2 = #line_text + 1, whole_line = true }
+          units[#units + 1] = { type = "line", col1 = 1, col2 = line_length + 1, whole_line = true }
         end
       end
     end
@@ -4715,9 +4723,9 @@ local function invalidate_selection_lines(view, new_state, old_state)
       local col2 = state.selections[i + 3] or col1
       if line1 then
         for line = math.min(line1, line2), math.max(line1, line2) do
-          local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+          local line_length = source_line_length(view.doc.lines[line] or "")
           if not fenced_code_for_line(view, line)
-            and selection_touches_line(line, text, line1, col1, line2, col2)
+            and selection_touches_line(line, line_length, line1, col1, line2, col2)
           then
             touched[line] = true
           end
