@@ -7,6 +7,8 @@ Automated and diagnostic tests for Anvil.
 - `lua/runtime/` — Anvil-runtime Lua tests for non-visual APIs and behavior.
 - `lua/ui/` — in-process UI tests. These use the same Lua test framework, but instantiate UI objects and call event handlers/methods directly.
 - `native/` — native C/C++ tests wired into Meson.
+- `tools/` — programmatic harness tests, including hidden-desktop watchdog and
+  process-tree integration coverage on Windows.
 - `run-lua-tests.sh` — Meson helper that builds an isolated `.run-meson-tests/<suite>` app/user/test tree and invokes `anvil test` internally.
 
 ## Main test command
@@ -32,6 +34,7 @@ meson test -C build-windows-x86_64 --suite anvil --print-errorlogs
 Anvil's Meson suite contains:
 
 - `anvil:fuzzy`
+- `anvil:render-perf-harness`
 - `anvil:lua-runtime`
 - `anvil:lua-ui`
 
@@ -39,6 +42,7 @@ Anvil's Meson suite contains:
 
 ```sh
 meson test -C build-windows-x86_64 anvil:fuzzy
+meson test -C build-windows-x86_64 anvil:render-perf-harness
 meson test -C build-windows-x86_64 anvil:lua-runtime
 meson test -C build-windows-x86_64 anvil:lua-ui
 ```

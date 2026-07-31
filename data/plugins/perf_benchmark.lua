@@ -35,6 +35,8 @@ local benchmark = {
   tab_dir = env_string("ANVIL_PERF_BENCHMARK_TAB_DIR"),
   result_file = env_string("ANVIL_PERF_BENCHMARK_RESULT"),
   metrics_file = env_string("ANVIL_PERF_BENCHMARK_METRICS"),
+  heartbeat_file = env_string("ANVIL_PERF_BENCHMARK_HEARTBEAT"),
+  lifecycle_file = env_string("ANVIL_PERF_BENCHMARK_LIFECYCLE"),
   screenshot_file = env_string("ANVIL_PERF_BENCHMARK_SCREENSHOT"),
   capture_frames = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_CAPTURE_FRAMES", 3))),
   capture_settle_frames = math.max(0, math.floor(env_number("ANVIL_PERF_BENCHMARK_CAPTURE_SETTLE_FRAMES", 5))),
@@ -56,6 +58,10 @@ local benchmark = {
   finished = false,
   capture_index = 0,
   capture_settle_count = 0,
+  started_at = system.get_time(),
+  first_redraw_recorded = false,
+  lifecycle = {},
+  last_heartbeat_at = 0,
 }
 
 local metric_fields = {
@@ -67,6 +73,7 @@ local metric_fields = {
   "display_packet_replays", "display_packet_commands_replayed",
   "display_packet_frame_bytes_copied", "display_packet_replay_ms",
   "text_render_calls", "text_render_glyphs", "text_render_hb_shape_ms",
+  "lua_heap_kib",
 }
 
 local function write_atomic(path, contents)
@@ -96,6 +103,58 @@ local function write_result(fields)
   end
   return write_atomic(benchmark.result_file, table.concat(lines, "\n") .. "\n")
 end
+
+local function elapsed_ms()
+  return math.max(0, (system.get_time() - benchmark.started_at) * 1000)
+end
+
+local function write_lifecycle()
+  if benchmark.lifecycle_file == "" then return true end
+  local lines = { "milestone,elapsed_ms" }
+  for _, row in ipairs(benchmark.lifecycle) do
+    lines[#lines + 1] = string.format("%s,%.6f", row.milestone, row.elapsed_ms)
+  end
+  return write_atomic(benchmark.lifecycle_file, table.concat(lines, "\n") .. "\n")
+end
+
+local function mark_lifecycle(milestone)
+  benchmark.lifecycle[#benchmark.lifecycle + 1] = {
+    milestone = tostring(milestone):gsub("[^%w_.-]", "_"),
+    elapsed_ms = elapsed_ms(),
+  }
+  local ok, err = write_lifecycle()
+  if not ok and core.log_quiet then
+    core.log_quiet("Performance lifecycle write failed: %s", tostring(err))
+  end
+end
+
+local function heartbeat(force)
+  if benchmark.heartbeat_file == "" then return true end
+  local now = system.get_time()
+  if not force and now - benchmark.last_heartbeat_at < 0.20 then return true end
+  benchmark.last_heartbeat_at = now
+  local fields = {
+    phase = benchmark.phase,
+    elapsed_ms = string.format("%.6f", elapsed_ms()),
+    warmup_frames = benchmark.warmup_count,
+    measured_frames = benchmark.measure_count,
+    action_count = benchmark.action_count,
+  }
+  local keys, lines = {}, {}
+  for key in pairs(fields) do keys[#keys + 1] = key end
+  table.sort(keys)
+  for _, key in ipairs(keys) do lines[#lines + 1] = key .. "=" .. tostring(fields[key]) end
+  return write_atomic(benchmark.heartbeat_file, table.concat(lines, "\n") .. "\n")
+end
+
+local function set_phase(phase, milestone)
+  benchmark.phase = phase
+  if milestone then mark_lifecycle(milestone) end
+  heartbeat(true)
+end
+
+mark_lifecycle("plugin_loaded")
+heartbeat(true)
 
 -- Publish a startup marker immediately so the harness can distinguish a load
 -- failure from a scenario failure or an unexpected process exit.
@@ -231,6 +290,7 @@ local function open_primitive_view()
 end
 
 local function setup_scenario()
+  set_phase("setup", "setup_started")
   assert(benchmark.fixture ~= "", "ANVIL_PERF_BENCHMARK_FILE is required")
   system.set_window_size(core.window, benchmark.window_width, benchmark.window_height, 0, 0)
   config.auto_fps = false
@@ -246,6 +306,7 @@ local function setup_scenario()
   end
 
   local view = open_file(benchmark.fixture)
+  mark_lifecycle("fixture_opened")
   setup_tabs(view)
   if benchmark.scenario == "renderer-primitives" then
     view = open_primitive_view()
@@ -265,23 +326,51 @@ local function setup_scenario()
     linewrapping.update_docview_breaks(view)
   elseif benchmark.scenario == "caret-repeat" then
     view:set_wrapping_enabled(false)
+  elseif benchmark.scenario:find("specimen%-", 1, false) then
+    view:set_wrapping_enabled(true)
+    linewrapping.update_docview_breaks(view)
   end
 
   collectgarbage("collect")
   core.redraw = true
 end
 
+local function scenario_is_ready()
+  local view = benchmark.view
+  if not view then return false end
+  if not view.doc then return true end
+  if view.__markdown_live_attached then
+    local markdown_model = require "core.markdown.model"
+    local instance = markdown_model.peek(view.doc)
+    if not (instance and instance.status == "ready"
+      and instance.published_revision == view.doc.text_revision)
+    then
+      return false
+    end
+  end
+  return view.__async_wrap_reconstruction == nil
+end
+
 local function perform_action()
   local view = benchmark.view or active_docview()
   if not view then return end
   local started = system.get_time()
-  if benchmark.scenario == "wrapped-document-scroll" then
+  if benchmark.scenario == "wrapped-document-scroll"
+      or benchmark.scenario == "specimen-scroll"
+  then
     local line = benchmark.start_line + benchmark.action_count * benchmark.scroll_lines
     if line > #view.doc.lines then line = benchmark.start_line end
     set_position(view, line)
     benchmark.action_count = benchmark.action_count + 1
+  elseif benchmark.scenario == "specimen-soak" then
+    local span = math.max(1, #view.doc.lines - benchmark.start_line)
+    local offset = benchmark.action_count % (span * 2)
+    if offset > span then offset = span * 2 - offset end
+    set_position(view, benchmark.start_line + offset)
+    benchmark.action_count = benchmark.action_count + 1
   elseif benchmark.scenario == "caret-repeat"
       or benchmark.scenario == "markdown-long-link-caret-repeat"
+      or benchmark.scenario == "specimen-caret-repeat"
   then
     if benchmark.scenario == "markdown-long-link-caret-repeat" then
       local line = view.doc:get_selection()
@@ -301,6 +390,7 @@ local function metric_row(snapshot)
   local row = {
     completion_ms = (system.get_time() - benchmark.measure_start) * 1000,
     action_ms = benchmark.pending_action_ms,
+    lua_heap_kib = collectgarbage("count"),
   }
   benchmark.pending_action_ms = 0
   for _, key in ipairs({
@@ -326,10 +416,14 @@ end
 local function finish_success()
   if benchmark.finished then return end
   benchmark.finished = true
-  benchmark.phase = "finished"
+  set_phase("finished", "completed")
   benchmark.measure_end = benchmark.measure_end or system.get_time()
   local elapsed = math.max(0.000001, benchmark.measure_end - benchmark.measure_start)
   local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
+  local selection_line, selection_col = 0, 0
+  if benchmark.view and benchmark.view.doc then
+    selection_line, selection_col = benchmark.view.doc:get_selection()
+  end
   local metrics_ok, metrics_err = write_metrics()
   local result_ok, result_err = write_result {
     done = metrics_ok and 1 or 0,
@@ -350,6 +444,17 @@ local function finish_success()
     screenshot = benchmark.screenshot_file,
     capture_frames = benchmark.capture_index,
     metrics_file = benchmark.metrics_file,
+    lifecycle_file = benchmark.lifecycle_file,
+    heartbeat_file = benchmark.heartbeat_file,
+    doc_lines = benchmark.view and benchmark.view.doc and #benchmark.view.doc.lines or 0,
+    wrapped_rows = benchmark.view and benchmark.view.doc
+      and linewrapping.get_total_wrapped_lines(benchmark.view) or 0,
+    text_revision = benchmark.view and benchmark.view.doc
+      and benchmark.view.doc.text_revision or 0,
+    selection_line = selection_line,
+    selection_col = selection_col,
+    scroll_x = benchmark.view and benchmark.view.scroll and benchmark.view.scroll.x or 0,
+    scroll_y = benchmark.view and benchmark.view.scroll and benchmark.view.scroll.y or 0,
   }
   if not result_ok then
     core.log_quiet("Performance benchmark result write failed: %s", tostring(result_err))
@@ -367,7 +472,7 @@ end
 local function fail(err)
   if benchmark.finished then return end
   benchmark.finished = true
-  benchmark.phase = "failed"
+  set_phase("failed", "failed")
   write_result {
     done = 0,
     scenario = benchmark.scenario,
@@ -397,7 +502,7 @@ local function request_screenshot()
     fail("frame capture request failed: " .. tostring(reason))
     return
   end
-  benchmark.phase = "capture"
+  set_phase("capture", benchmark.capture_index == 1 and "capture_started" or nil)
   core.redraw = true
 end
 
@@ -407,7 +512,7 @@ local function prepare_screenshot()
   elseif benchmark.capture_settle_frames == 0 then
     request_screenshot()
   else
-    benchmark.phase = "capture_settle"
+    set_phase("capture_settle", "capture_settle_started")
     benchmark.capture_settle_count = 0
     core.redraw = true
   end
@@ -417,12 +522,17 @@ local old_on_frame = perf.on_frame
 function perf.on_frame(snapshot)
   old_on_frame(snapshot)
   if benchmark.finished or not snapshot or not snapshot.did_redraw then return end
+  if not benchmark.first_redraw_recorded then
+    benchmark.first_redraw_recorded = true
+    mark_lifecycle("first_redraw")
+  end
+  heartbeat(false)
   local ok, err = xpcall(function()
     if benchmark.phase == "warmup" then
       benchmark.warmup_count = benchmark.warmup_count + 1
       if benchmark.warmup_count >= benchmark.warmup_frames then
         collectgarbage("collect")
-        benchmark.phase = "measure"
+        set_phase("measure", "measurement_started")
         benchmark.measure_start = system.get_time()
         perform_action()
       else
@@ -468,12 +578,24 @@ core.add_thread(function()
     return
   end
   -- Let resize, syntax setup, line packets, and font atlases settle before the
-  -- fixed warmup begins.
-  for _ = 1, 30 do
+  -- fixed warmup begins, then require semantic and wrapped presentation to be
+  -- current. The external heartbeat watchdog bounds this wait.
+  set_phase("await_ready", "readiness_wait_started")
+  local settle_frames = 0
+  repeat
     core.redraw = true
+    heartbeat(false)
+    coroutine.yield()
+    settle_frames = settle_frames + 1
+  until settle_frames >= 30 and scenario_is_ready()
+  mark_lifecycle("scenario_ready")
+  for _ = 1, 5 do
+    core.redraw = true
+    heartbeat(false)
     coroutine.yield()
   end
-  benchmark.phase = "warmup"
+  mark_lifecycle("first_ready_frame")
+  set_phase("warmup", "warmup_started")
   perform_action()
 end)
 
