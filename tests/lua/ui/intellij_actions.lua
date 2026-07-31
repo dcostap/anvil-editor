@@ -1,6 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
+local project_paths = require "core.project_paths"
 local test = require "core.test"
 
 require "plugins.intellij_actions"
@@ -56,6 +57,14 @@ end
 
 test.describe("IntelliJ actions batch behavior", function()
   test.after_each(function(context)
+    if context.original_set_clipboard then
+      system.set_clipboard = context.original_set_clipboard
+      context.original_set_clipboard = nil
+    end
+    if context.project_paths_configured then
+      project_paths.configure_project {}
+      context.project_paths_configured = nil
+    end
     if context.original_system_exec then
       system.exec = context.original_system_exec
       context.original_system_exec = nil
@@ -181,6 +190,32 @@ test.describe("IntelliJ actions batch behavior", function()
     end)
     doc.set_selections = original_set_selections
     if not ok then error(err) end
+  end)
+
+  test.it("copies the active file's project path", function(context)
+    context.temp_root = join_path(core.root_project().path, "intellij-actions-project-path")
+    local shared_root = join_path(context.temp_root, "shared")
+    local file_path = join_path(shared_root, "main.lua")
+    test.ok(common.mkdirp(shared_root))
+    write_file(file_path, "return true\n")
+
+    local doc = track(context, "docs", core.open_doc(file_path))
+    local view = track(context, "views", core.root_panel:open_doc(doc))
+    core.set_active_view(view)
+
+    project_paths.configure_project {
+      external = {
+        { path = shared_root, label = "shared" },
+      },
+    }
+    context.project_paths_configured = true
+
+    local copied
+    context.original_set_clipboard = system.set_clipboard
+    system.set_clipboard = function(text) copied = text end
+
+    test.ok(command.perform("user:copy-project-path"))
+    test.equal(copied, "shared" .. PATHSEP .. "main.lua")
   end)
 
   test.it("open terminal command uses the active file directory", function(context)

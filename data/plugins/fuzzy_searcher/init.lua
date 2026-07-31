@@ -2103,6 +2103,9 @@ local function command_preview_parts(name)
     elseif path then
       preview = "not inside project"
     end
+  elseif name == "user:copy-project-path" then
+    local display = path and project_paths.display_path(path)
+    preview = display and display.text
   elseif name == "user:copy-filename" then
     preview = path and basename(path)
   end
