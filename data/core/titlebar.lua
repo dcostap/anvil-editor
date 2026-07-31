@@ -88,6 +88,13 @@ local function title_bar_height()
   return math.max(style.font:get_height() + style.padding.y * 2, math.floor(title_height or 32 * SCALE))
 end
 
+local function project_title_font()
+  local font = style.prose_heading_font or style.font
+  local size = style.font:get_size()
+  if font:get_size() == size then return font end
+  return style.get_scaled_font(font, size)
+end
+
 local function current_project_title()
   local project = core.root_project and core.root_project()
   if project and project.path and project.path ~= "" then
@@ -96,11 +103,14 @@ local function current_project_title()
   return "Anvil"
 end
 
+local PROJECT_TITLE_MAX_WIDTH = 320 * SCALE
+
 local function title_tabs_x()
   local logo_slot = math.floor(math.min(22 * SCALE, title_bar_height() - 6 * SCALE))
   local title_x = logo_slot + style.padding.x * 2
-  local natural_x = title_x + style.font:get_width(current_project_title()) + style.padding.x
-  return math.ceil(math.min(220 * SCALE, natural_x))
+  local font = project_title_font()
+  local title_width = math.min(PROJECT_TITLE_MAX_WIDTH, font:get_width(current_project_title()))
+  return math.ceil(title_x + title_width + style.padding.x)
 end
 
 local TITLEBAR_SAFE_ZONE_RATIO = 0.10
@@ -372,7 +382,8 @@ function TitleBar:has_window_focus()
 end
 
 function TitleBar:draw_window_title()
-  local h = style.font:get_height()
+  local font = project_title_font()
+  local h = font:get_height()
   local ox, oy = self:get_content_offset()
   local color = self:has_window_focus() and style.text or style.dim
   local y = oy + math.floor((self.size.y - h) / 2)
@@ -394,8 +405,8 @@ function TitleBar:draw_window_title()
   right_x = math.min(right_x, title_tabs_x() - style.padding.x)
   local x = ox + title_x
   local w = math.max(0, right_x - title_x)
-  local title = truncate_text_right(style.font, current_project_title(), w)
-  common.draw_text(style.font, color, title, "left", x, y, w, h)
+  local title = truncate_text_right(font, current_project_title(), w)
+  common.draw_text(font, color, title, "left", x, y, w, h)
 end
 
 local function allocate_cooperative_tab_widths(

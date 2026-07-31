@@ -40,11 +40,39 @@ test.describe("Title Bar", function()
 
     test.equal(#calls, 1)
     local call = calls[1]
-    test.ok(style.font:get_width(project_title) > call.w, "expected test Project title to exceed available width")
-    test.ok(style.font:get_width(call.text) <= call.w, call.text)
+    test.equal(call.font, style.prose_heading_font)
+    test.ok(style.prose_heading_font:get_width(project_title) > call.w,
+      "expected test Project title to exceed available width")
+    test.ok(style.prose_heading_font:get_width(call.text) <= call.w, call.text)
     test.ok(call.text:find("^prefix%-"), call.text)
     test.ok(call.text:find("…$"), call.text)
     test.ok(not call.text:find("SUFFIX", 1, true), call.text)
+  end)
+
+  test.it("keeps a useful width for longer Project titles", function(context)
+    context.original_root_project = core.root_project
+    context.original_common_draw_text = common.draw_text
+    core.root_project = function()
+      return { path = "C:" .. PATHSEP .. "project-title-with-a-long-name" }
+    end
+
+    local titlebar = TitleBar()
+    titlebar.position.x, titlebar.position.y = 0, 0
+    titlebar.size.x, titlebar.size.y = 420 * SCALE, 32 * SCALE
+
+    local call
+    common.draw_text = function(font, color, text, align, x, y, w, h)
+      call = { font = font, text = text, x = x, w = w }
+      return x + font:get_width(text), y + font:get_height(), x, y
+    end
+
+    titlebar:draw_window_title()
+
+    local long_prefix = "project-title-with-a-long"
+    test.ok(style.prose_heading_font:get_width(long_prefix) <= call.w,
+      string.format("title width=%g prefix width=%g", call.w, style.prose_heading_font:get_width(long_prefix)))
+    test.ok(call.text:find("^project%-title%-with%-a%-long"), call.text)
+    test.equal(call.font, style.prose_heading_font)
   end)
 
   test.it("starts Left Pane tabs immediately after the Project title", function(context)
