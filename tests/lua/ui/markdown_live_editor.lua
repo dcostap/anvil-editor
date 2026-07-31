@@ -1079,22 +1079,6 @@ test.describe("Markdown Live Editor", function()
       "moving within one revealed construct must not rebuild its wrap map"
     )
 
-    doc:set_selection(1, #source)
-    test.equal(visible_render_text(view, 1), source)
-    stats = {}
-    old_frame_stats = core.perf_frame_stats
-    core.perf_frame_stats = stats
-    local crossed, cross_error = pcall(command.perform, "doc:move-to-next-line")
-    core.perf_frame_stats = old_frame_stats
-    if not crossed then error(cross_error, 0) end
-    line, col = doc:get_selection()
-    test.equal(line, 2)
-    test.ok(col >= 1)
-    test.ok(
-      visible_render_text(view, 1) ~= source,
-      "leaving the link should collapse its source presentation"
-    )
-
     stats = {}
     old_frame_stats = core.perf_frame_stats
     core.perf_frame_stats = stats
@@ -1109,6 +1093,30 @@ test.describe("Markdown Live Editor", function()
       "source-preserving Markdown fragments should use the native sequence scan"
     )
     test.equal(stats.linewrapping_compute_branch_rendered_cursor_calls, nil)
+
+    doc:set_selection(1, #source)
+    test.equal(visible_render_text(view, 1), source)
+    stats = {}
+    old_frame_stats = core.perf_frame_stats
+    core.active_view = view
+    core.perf_frame_stats = stats
+    local crossed, cross_error
+    for _ = 1, 2 do
+      crossed, cross_error = pcall(command.perform, "doc:move-to-next-line")
+      if not crossed then break end
+      line, col = doc:get_selection()
+      if line == 2 then break end
+    end
+    core.perf_frame_stats = old_frame_stats
+    core.active_view = old_active
+    if not crossed then error(cross_error, 0) end
+    line, col = doc:get_selection()
+    test.equal(line, 2)
+    test.ok(col >= 1)
+    test.ok(
+      visible_render_text(view, 1) ~= source,
+      "leaving the link should collapse its source presentation"
+    )
   end)
 
   test.it("syntax-highlights JavaScript fences through the info string", function()
