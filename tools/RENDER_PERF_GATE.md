@@ -73,6 +73,7 @@ case.
 - `wrapped-document-scroll` — deterministic one-line scrolling and cache churn
 - `tab-heavy-titlebar` — 40 Pane Tabs with a stable active Editor
 - `caret-repeat` — one `doc:move-to-next-line` command per redraw in an unwrapped Document View
+- `markdown-long-link-caret-repeat` — one wrapped-row caret move per redraw inside a long revealed Markdown link
 - `renderer-primitives` — deterministic clipping, alpha, text, and shape scene
 
 Fixtures are generated deterministically inside the isolated run directory. Their hash is recorded in every report.

@@ -29,6 +29,7 @@ BASELINE_PATH = ROOT / "tools" / "baselines" / "render_perf_windows.json"
 GOLDEN_ROOT = ROOT / "tools" / "baselines" / "render"
 HIDDEN_LAUNCHER = ROOT / "tools" / "run_anvil_hidden_desktop.ps1"
 IMAGE_COMPARATOR = ROOT / "tools" / "compare_anvil_screenshot.ps1"
+MARKDOWN_LONG_LINK_PAYLOAD_REPETITIONS = 4950
 
 SCENARIOS: dict[str, dict[str, Any]] = {
     "wrapped-document-steady": {
@@ -61,6 +62,15 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "visual": True,
         "paced": True,
     },
+    "markdown-long-link-caret-repeat": {
+        "fixture": "markdown-long-link",
+        "payload_repetitions": MARKDOWN_LONG_LINK_PAYLOAD_REPETITIONS,
+        "start_line": 1,
+        "window_width": 1400,
+        "window_height": 900,
+        "visual": True,
+        "paced": False,
+    },
     "renderer-primitives": {
         "start_line": 1,
         "window_width": 1400,
@@ -77,6 +87,8 @@ SUITES = {
 }
 
 LOWER_IS_BETTER = {
+    "action_ms_p50": (0.08, 0.10),
+    "action_ms_p95": (0.12, 0.20),
     "frame_ms_p50": (0.05, 0.15),
     "frame_ms_p95": (0.08, 0.25),
     "draw_emit_ms_p50": (0.05, 0.12),
@@ -148,7 +160,7 @@ def copy_app_tree(destination: Path) -> Path:
     return bindir / "anvil.exe"
 
 
-def generate_fixture(work: Path) -> tuple[Path, Path]:
+def generate_fixture(work: Path) -> tuple[Path, Path, Path]:
     fixture_dir = work / "fixtures"
     tab_dir = fixture_dir / "tabs"
     tab_dir.mkdir(parents=True)
@@ -178,7 +190,14 @@ def generate_fixture(work: Path) -> tuple[Path, Path]:
             f"-- benchmark tab {i}\nreturn {{ id = {i}, title = 'tab-{i:03d}' }}\n",
             encoding="utf-8", newline="\n",
         )
-    return fixture, tab_dir
+    markdown_fixture = fixture_dir / "markdown-long-link.md"
+    # Match the roughly 59 KiB rich rendered links in the captured workload.
+    payload = "A/0123456789" * MARKDOWN_LONG_LINK_PAYLOAD_REPETITIONS
+    markdown_fixture.write_text(
+        "[embedded](data:image/png;base64," + payload + ")\nnext\n",
+        encoding="utf-8", newline="\n",
+    )
+    return fixture, tab_dir, markdown_fixture
 
 
 def read_key_values(path: Path) -> dict[str, str]:
@@ -290,6 +309,10 @@ def run_case(
     result_file = run_dir / "result.txt"
     metrics_file = run_dir / "metrics.csv"
     screenshot_file = run_dir / "screenshot.png"
+    case_fixture = (
+        work / "fixtures" / "markdown-long-link.md"
+        if settings.get("fixture") == "markdown-long-link" else fixture
+    )
     environment = {
         "ANVIL_USERDIR": str(user),
         "USERPROFILE": str(user),
@@ -302,7 +325,7 @@ def run_case(
         "ANVIL_PERF_BENCHMARK": "1",
         "ANVIL_PERF_BENCHMARK_SCENARIO": scenario,
         "ANVIL_PERF_BENCHMARK_MODE": mode,
-        "ANVIL_PERF_BENCHMARK_FILE": str(fixture),
+        "ANVIL_PERF_BENCHMARK_FILE": str(case_fixture),
         "ANVIL_PERF_BENCHMARK_TAB_DIR": str(tab_dir),
         "ANVIL_PERF_BENCHMARK_RESULT": str(result_file),
         "ANVIL_PERF_BENCHMARK_METRICS": str(metrics_file),
@@ -574,7 +597,7 @@ def main() -> int:
     work.mkdir(parents=True)
     user.mkdir(parents=True)
     exe = copy_app_tree(app_root)
-    fixture, tab_dir = generate_fixture(work)
+    fixture, tab_dir, _markdown_fixture = generate_fixture(work)
 
     report: dict[str, Any] = {
         "schema": 1,
@@ -594,10 +617,11 @@ def main() -> int:
 
     if args.update_baseline and partial_baseline_update:
         baseline_scenarios = baseline.get("scenarios", {})
-        untouched_scenarios = set(SCENARIOS) - set(selected_scenarios)
+        untouched_scenarios = set(baseline_scenarios) - set(selected_scenarios)
         incompatible = []
-        if set(baseline_scenarios) != set(SCENARIOS):
-            incompatible.append("the existing baseline is not a complete scenario set")
+        missing_scenarios = set(SCENARIOS) - set(baseline_scenarios)
+        if missing_scenarios - set(selected_scenarios):
+            incompatible.append("the existing baseline is missing untouched scenarios")
         if baseline.get("machine", {}).get("node") != report["machine"]["node"]:
             incompatible.append("machine")
         if (baseline.get("machine", {}).get("fixture_sha256")

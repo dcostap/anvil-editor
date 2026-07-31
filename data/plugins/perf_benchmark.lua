@@ -258,6 +258,11 @@ local function setup_scenario()
   if benchmark.scenario:find("wrapped%-document", 1, false) then
     view:set_wrapping_enabled(true)
     linewrapping.update_docview_breaks(view)
+  elseif benchmark.scenario == "markdown-long-link-caret-repeat" then
+    assert(view.__markdown_live_attached, "Markdown Live Preview did not attach")
+    view:set_wrapping_enabled(true)
+    view.doc:set_selection(1, 1000)
+    linewrapping.update_docview_breaks(view)
   elseif benchmark.scenario == "caret-repeat" then
     view:set_wrapping_enabled(false)
   end
@@ -275,7 +280,13 @@ local function perform_action()
     if line > #view.doc.lines then line = benchmark.start_line end
     set_position(view, line)
     benchmark.action_count = benchmark.action_count + 1
-  elseif benchmark.scenario == "caret-repeat" then
+  elseif benchmark.scenario == "caret-repeat"
+      or benchmark.scenario == "markdown-long-link-caret-repeat"
+  then
+    if benchmark.scenario == "markdown-long-link-caret-repeat" then
+      local line = view.doc:get_selection()
+      if line ~= 1 then view.doc:set_selection(1, 1000) end
+    end
     if not command.perform("doc:move-to-next-line") then
       error("doc:move-to-next-line was unavailable")
     end
