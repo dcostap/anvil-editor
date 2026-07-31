@@ -111,6 +111,37 @@ local function visible_render_text(view, line)
   return table.concat(visible)
 end
 
+local function collect_render_fragments(view, line)
+  local render_line = test.not_nil(view:get_line_render(line))
+  local fragments = {}
+  for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
+    fragments[#fragments + 1] = fragment
+  end
+  return render_line, fragments
+end
+
+local function fragment_shape(fragments)
+  local shape = {}
+  for _, fragment in ipairs(fragments) do
+    shape[#shape + 1] = {
+      source_col1 = fragment.source_col1,
+      source_col2 = fragment.source_col2,
+      text = fragment.text,
+      hidden = fragment.hidden,
+      text_source_col1 = fragment.text_source_col1,
+      text_source_col2 = fragment.text_source_col2,
+      link = fragment.link ~= nil,
+    }
+  end
+  return shape
+end
+
+local function is_utf8_boundary(text, col)
+  if col <= 1 or col > #text then return true end
+  local byte = text:byte(col)
+  return byte < 0x80 or byte >= 0xC0
+end
+
 test.describe("Markdown Live Editor", function()
   test.before_each(function(context)
     context.old_markdown_live_editor = config.markdown_live_editor
@@ -1117,6 +1148,144 @@ test.describe("Markdown Live Editor", function()
       visible_render_text(view, 1) ~= source,
       "leaving the link should collapse its source presentation"
     )
+  end)
+
+  test.it("preserves UTF-8 link source mappings across reveal transitions", function()
+    local label = "éλ漢"
+    local prefix, suffix = "See ", " now"
+    local target = "folder/target"
+    local source = prefix .. "[" .. label .. "](" .. target .. ")" .. suffix
+    local document_text = source .. "\nnext\n"
+    local view, doc = make_view(document_text, "utf8-link-boundaries.md")
+    local label_col1 = test.not_nil(source:find(label, 1, true))
+    local link_col1 = test.not_nil(source:find("[", 1, true))
+    local link_col2 = test.not_nil(source:find(")", link_col1, true)) + 1
+    local original_revision = doc.text_revision
+    local old_active = core.active_view
+    core.active_view = view
+
+    local function snapshot()
+      local render_line, fragments = collect_render_fragments(view, 1)
+      local cursor, link
+      cursor = 1
+      for _, fragment in ipairs(fragments) do
+        test.equal(fragment.source_col1, cursor)
+        test.ok(fragment.source_col2 >= fragment.source_col1)
+        cursor = math.max(cursor, fragment.source_col2)
+        if fragment.link and fragment.text == label then link = fragment end
+      end
+      test.equal(cursor, #source + 1)
+      return render_line, fragments, test.not_nil(link)
+    end
+
+    local ok, err = pcall(function()
+      doc:set_selection(1, label_col1)
+      refresh(view)
+      test.equal(table.concat(doc.lines), document_text)
+      test.equal(#doc.lines, 2)
+      test.equal(doc.lines[1], source .. "\n")
+      test.equal(doc.lines[2], "next\n")
+      test.equal(doc.text_revision, original_revision)
+      test.equal(test.not_nil(view:get_line_render(1)).source_text, source)
+      test.equal(test.not_nil(view:get_line_render(2)).source_text, "next")
+
+      local active_render, active_fragments, active_link = snapshot()
+      test.equal(active_render.source_text, source)
+      test.equal(active_link.source_col1, label_col1)
+      test.equal(active_link.source_col2, label_col1 + #label)
+      test.equal(active_link.text_source_col1, nil)
+      test.equal(active_link.text_source_col2, nil)
+      local active_shape = fragment_shape(active_fragments)
+
+      doc:set_selection(1, #source + 1)
+      local right_line, right_fragments, right_link = snapshot()
+      test.equal(doc:get_selection(), 1)
+      local _, right_col = doc:get_selection()
+      test.equal(right_col, #source + 1)
+      test.equal(right_line.source_text, source)
+      test.equal(visible_render_text(view, 1), source)
+      test.same(active_shape, fragment_shape(right_fragments))
+      test.equal(right_link.source_col1, label_col1)
+      test.equal(right_link.source_col2, label_col1 + #label)
+
+      doc:set_selection(2, 1)
+      local inactive_line, _, inactive_link = snapshot()
+      test.equal(inactive_line.source_text, source)
+      test.equal(visible_render_text(view, 1), prefix .. label .. suffix)
+      test.equal(inactive_link.source_col1, link_col1)
+      test.equal(inactive_link.source_col2, link_col2)
+      test.equal(inactive_link.text_source_col1, label_col1)
+      test.equal(inactive_link.text_source_col2, label_col1 + #label)
+
+      doc:set_selection(1, label_col1)
+      local reentered_line, reentered_fragments, reentered_link = snapshot()
+      test.equal(reentered_line.source_text, source)
+      test.equal(visible_render_text(view, 1), source)
+      test.same(active_shape, fragment_shape(reentered_fragments))
+      test.equal(reentered_link.source_col1, label_col1)
+      test.equal(reentered_link.source_col2, label_col1 + #label)
+
+      local line, col = doc:get_selection()
+      test.equal(line, 1)
+      test.equal(col, label_col1)
+      test.equal(table.concat(doc.lines), document_text)
+      test.equal(doc.text_revision, original_revision)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("maps wrapped UTF-8 link rows to source byte boundaries", function()
+    local label = "éλ漢"
+    local target = ("folder/segment/"):rep(4) .. "target"
+    local source = "See [" .. label .. "](" .. target .. ") after"
+    local view, doc = make_view(source .. "\nnext\n", "wrapped-utf8-link.md")
+    view.size.x = 170
+    view:set_wrapping_enabled(true)
+    local label_col1 = test.not_nil(source:find(label, 1, true))
+    local old_active = core.active_view
+    core.active_view = view
+
+    local ok, err = pcall(function()
+      doc:set_selection(1, label_col1)
+      refresh(view)
+      local render_line = test.not_nil(view:get_line_render(1))
+      test.equal(render_line.source_text, source)
+
+      local first_idx, _, row_count, first_col =
+        linewrapping.get_line_idx_col_count(view, 1, 1)
+      test.equal(first_col, 1)
+      test.ok(row_count >= 2, "expected the link source to wrap into multiple rows")
+
+      local starts, ends = {}, {}
+      for offset = 0, row_count - 1 do
+        local idx = first_idx + offset
+        local line, start_col = linewrapping.get_idx_line_col(view, idx)
+        local end_col = linewrapping.get_idx_visual_end_col(view, idx, 1)
+        test.equal(line, 1)
+        test.ok(end_col > start_col)
+        test.equal(linewrapping.get_idx_line_length(view, idx), end_col - start_col)
+        test.ok(is_utf8_boundary(source, start_col), "wrapped row split inside UTF-8")
+        test.ok(is_utf8_boundary(source, end_col), "wrapped row ended inside UTF-8")
+        starts[#starts + 1] = start_col
+        ends[#ends + 1] = end_col
+      end
+      test.equal(starts[1], 1)
+      for index = 2, #starts do test.equal(starts[index], ends[index - 1]) end
+      test.equal(ends[#ends], #source + 1)
+
+      local function round_trip(idx, col)
+        local x = view:get_col_x_offset(1, col)
+        local hit_line, hit_col = linewrapping.get_line_col_from_index_and_x(view, idx, x)
+        test.equal(hit_line, 1)
+        test.equal(hit_col, col)
+      end
+      round_trip(first_idx, starts[1])
+      round_trip(first_idx + row_count - 1, starts[#starts])
+      round_trip(first_idx + row_count - 1, ends[#ends])
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
   end)
 
   test.it("syntax-highlights JavaScript fences through the info string", function()
