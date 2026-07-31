@@ -1417,10 +1417,10 @@ function LineWrapping.compute_wrap_width(docview)
     or (docview.size.x - docview:get_gutter_width() - scrollbar_width)
 end
 
-function LineWrapping.update_docview_breaks(docview)
+function LineWrapping.update_docview_breaks(docview, width)
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
-  local width = LineWrapping.compute_wrap_width(docview)
+  width = width or LineWrapping.compute_wrap_width(docview)
   local settings = wrap_settings_signature(docview, docview:get_font(), width)
   local stale_line_count = docview.wrapped_doc_line_count ~= #docview.doc.lines
   local stale_text = docview.wrapped_text_revision ~= (docview.doc.text_revision or 0)

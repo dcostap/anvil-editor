@@ -906,6 +906,26 @@ test.describe("Document View line display packet parity baseline", function()
     test.ok(source_commands < total_rows / 4)
   end)
 
+  test.it("reuses a bounded long-line packet while scrolling within its row chunk", function(context)
+    local _, view = new_view(context, string.rep("x", 4000))
+    view.__test_force_line_packets = true
+    view.size.y = view:get_line_height() * 4
+    configure_wrapping(view, 8)
+    local window = packet_window()
+
+    view.scroll.y = view:get_line_height() * 97
+    view.scroll.to.y = view.scroll.y
+    draw_packet_line(window, view, 1)
+    local initial = line_packets.diagnostics(view)
+
+    view.scroll.y = view:get_line_height() * 98
+    view.scroll.to.y = view.scroll.y
+    draw_packet_line(window, view, 1)
+    local scrolled = line_packets.diagnostics(view)
+    test.equal(scrolled.builds, initial.builds,
+      "expected a small scroll within one packet row chunk to reuse the packet")
+  end)
+
   test.it("reloads packet contributors without stacking drawing hooks", function(context)
     command.perform("draw-whitespace:toggle", true)
     local doc, view = new_view(context, "        value  ")

@@ -30,6 +30,10 @@ function line_packets.persistent_contributor_config(name, defaults)
 end
 local DEFAULT_MAX_PACKETS = 1024
 local DEFAULT_MAX_BYTES = 12 * 1024 * 1024
+-- Long physical lines are compiled in viewport-sized slices.  Align those
+-- slices to stable row chunks so a one-row scroll does not rebuild the same
+-- text packet with a shifted first/last row on every frame.
+local LONG_LINE_PACKET_CHUNK_ROWS = 8
 
 local function perf_add(name, value)
   local stats = core.perf_frame_stats
@@ -290,8 +294,15 @@ local function row_slice(view, line)
   local visible_first = math.max(first_idx, view.__wrapped_draw_first_idx or first_idx)
   local visible_last = math.min(last_idx, view.__wrapped_draw_last_idx or last_idx)
   if count <= 128 then return first_idx, last_idx, first_idx, last_idx, count end
+  local chunk = LONG_LINE_PACKET_CHUNK_ROWS
+  local relative_first = visible_first - first_idx
+  local relative_last = visible_last - first_idx
+  local built_first = first_idx
+    + math.floor(relative_first / chunk) * chunk
+  local built_last = first_idx
+    + (math.floor(relative_last / chunk) + 1) * chunk - 1
   return first_idx, last_idx,
-    math.max(first_idx, visible_first - 2), math.min(last_idx, visible_last + 2), count
+    built_first, math.min(last_idx, built_last), count
 end
 
 local function append_font_signature(parts, font)

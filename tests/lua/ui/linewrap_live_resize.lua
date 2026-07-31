@@ -52,4 +52,35 @@ test.describe("Line wrapping during live window resize", function()
     test.ok(view.wrapped_settings.width > initial_width)
     test.ok(LineWrapping.get_total_wrapped_lines(view) < initial_rows)
   end)
+
+  test.it("keeps the top visible Document line anchored while wrapping reflows", function(context)
+    local lines = {}
+    for i = 1, 80 do
+      lines[i] = string.format("line %d %s", i, string.rep("wrapped words ", (i % 5) + 2))
+    end
+    local doc = Doc()
+    context.doc = doc
+    doc:insert(1, 1, table.concat(lines, "\n"))
+    local view = DocView(doc)
+    view.wrapping_enabled = true
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 320, 240
+    LineWrapping.update_docview_breaks(view)
+
+    local anchor_line = 45
+    local _, anchor_y = view:get_line_screen_position(anchor_line)
+    view.scroll.y, view.scroll.to.y = anchor_y, anchor_y
+    local _, before_y = view:get_line_screen_position(anchor_line)
+
+    core.window_resizing_until = system.get_time() + 10
+    core.in_live_resize_frame = true
+    for _, width in ipairs({ 520, 260, 460, 300 }) do
+      view.size.x = width
+      view:update_wrap_cache()
+
+      local _, after_y = view:get_line_screen_position(anchor_line)
+      test.equal(after_y, before_y)
+      test.equal(view.scroll.y, view.scroll.to.y)
+    end
+  end)
 end)

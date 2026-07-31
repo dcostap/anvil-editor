@@ -74,8 +74,51 @@ function DocView:compute_wrap_width()
   return linewrapping.compute_wrap_width(self)
 end
 
+local function capture_wrap_viewport_anchor(view, new_width)
+  local settings = view.wrapped_settings
+  if not settings or settings.width == new_width or not view.scroll then return end
+  if view.wrapped_doc_line_count ~= #view.doc.lines
+    or view.wrapped_text_revision ~= (view.doc.text_revision or 0)
+  then
+    return
+  end
+
+  local scroll_y = math.max(0, view.scroll.y or 0)
+  local row = view:get_visual_row_at_y(math.max(0, scroll_y - style.padding.y))
+  local line, col = view:get_visual_row_line_col(row)
+  if not line then return end
+  return {
+    line = line,
+    col = col or 1,
+    row_offset = scroll_y - style.padding.y - view:get_visual_row_y_offset(row),
+    scroll_y = scroll_y,
+  }
+end
+
+local function restore_wrap_viewport_anchor(view, anchor, expected_width)
+  if not anchor or not view.wrapped_settings
+    or view.wrapped_settings.width ~= expected_width
+  then
+    return
+  end
+
+  local row = view:get_visual_row(anchor.line, anchor.col)
+  local anchored_y = style.padding.y + view:get_visual_row_y_offset(row) + anchor.row_offset
+  local max_scroll = math.max(0, view:get_scrollable_size() - view.size.y)
+  anchored_y = common.clamp(anchored_y, 0, max_scroll)
+  local delta = anchored_y - anchor.scroll_y
+  if delta ~= 0 then
+    view.scroll.y = (view.scroll.y or 0) + delta
+    view.scroll.to.y = (view.scroll.to.y or 0) + delta
+  end
+end
+
 function DocView:update_wrap_cache()
-  return linewrapping.update_docview_breaks(self)
+  local width = self:compute_wrap_width()
+  local anchor = capture_wrap_viewport_anchor(self, width)
+  local result = linewrapping.update_docview_breaks(self, width)
+  restore_wrap_viewport_anchor(self, anchor, width)
+  return result
 end
 
 function DocView:set_wrapping_enabled(enabled)
