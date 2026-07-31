@@ -72,22 +72,28 @@ function trimwhitespace.trim(doc)
 
   local edits = {}
   for i = 1, #doc.lines do
-    local old_text = doc:get_text(i, 1, i, math.huge)
-    local new_text = old_text:gsub("%s*$", "")
+    local line = doc.lines[i]
+    local content_end = #line - 1
+    local keep_end = content_end
+    while keep_end > 0 do
+      local byte = line:byte(keep_end)
+      if byte ~= 32 and (byte < 9 or byte > 13) then break end
+      keep_end = keep_end - 1
+    end
 
     -- don't remove whitespace which would cause any caret/selection endpoint to reposition
     local protected_col = protected_cols_by_line[i]
-    if protected_col and protected_col > #new_text then
-      new_text = old_text:sub(1, protected_col - 1)
+    if protected_col then
+      keep_end = math.max(keep_end, protected_col - 1)
     end
 
-    if old_text ~= new_text then
+    if keep_end < content_end then
       edits[#edits + 1] = {
         line1 = i,
-        col1 = 1,
+        col1 = keep_end + 1,
         line2 = i,
-        col2 = #doc.lines[i],
-        text = new_text,
+        col2 = content_end + 1,
+        text = "",
       }
     end
   end

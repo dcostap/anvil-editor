@@ -73,6 +73,21 @@ test.describe("trimwhitespace", function()
     test.equal(doc.last_selection, 2)
   end)
 
+  test.it("scans whitespace-heavy long lines without stalling", function()
+    local doc = Doc()
+    local line = string.rep(string.rep(" ", 1300) .. "x", 2000)
+    set_text(doc, line)
+
+    local started = system.get_time()
+    trimwhitespace.trim(doc)
+    local elapsed = system.get_time() - started
+
+    test.equal(text(doc), line .. "\n")
+    test.ok(elapsed < 0.5, string.format(
+      "trailing-whitespace scan stalled for %.3fs", elapsed
+    ))
+  end)
+
   test.it("removes trailing empty lines in one document edit", function()
     local doc = Doc()
     set_text(doc, "aa\n\n\n")
