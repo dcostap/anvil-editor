@@ -27,6 +27,14 @@ local function clear_prompt()
   end
 end
 
+local function wait_until(predicate, timeout)
+  local deadline = system.get_time() + timeout
+  while not predicate() and system.get_time() < deadline do
+    coroutine.yield(0.01)
+  end
+  return predicate()
+end
+
 test.describe("Command Slots", function()
   test.before_each(function(context)
     context.previous_active_view = core.active_view
@@ -555,6 +563,24 @@ test.describe("Command Slots", function()
 
     test.contains(output, "slot-payload-ok")
     test.contains(output, marker .. "0")
+  end)
+
+  test.it("reads commands after an exited worker is replaced", function()
+    test.skip_if(PLATFORM ~= "Windows", "Command Slots use PowerShell on Windows")
+    config.plugins.command_slots.powershell_candidates = { "powershell.exe" }
+
+    test.ok(command_slots.run_command(1, "Write-Output 'replacement-first'"))
+    local slot = command_slots.slots[1]
+    test.ok(wait_until(function() return slot.proc ~= nil end, 2), "first worker did not start")
+    local first_worker = slot.proc
+    test.ok(wait_until(function() return not slot.running end, 5), "first command did not finish")
+    test.ok(wait_until(function()
+      return slot.proc ~= nil and slot.proc ~= first_worker and slot.proc:running()
+    end, 3), "exited worker was not replaced")
+
+    test.ok(command_slots.run_command(1, "Write-Output 'replacement-second'"))
+    test.ok(wait_until(function() return not slot.running end, 5), "replacement reader did not finish the second command")
+    test.contains(slot.view.doc:get_text(1, 1, math.huge, math.huge), "replacement-second")
   end)
 
   test.it("strips ANSI control sequences from command output", function()

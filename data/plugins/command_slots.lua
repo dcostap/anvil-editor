@@ -30,6 +30,8 @@ local STORAGE_MODULE = "command-slots"
 local DONE_PREFIX = "__ANVIL_COMMAND_SLOT_DONE__"
 local MARKER_TAIL_BYTES = 512
 local READ_CHUNK_BYTES = 8192
+local ACTIVE_WORKER_POLL_SECONDS = 0.01
+local IDLE_WORKER_POLL_SECONDS = 1
 local COMMAND_OUTPUT_PANEL_VERSION = 2
 
 M.slots = M.slots or {}
@@ -1188,7 +1190,14 @@ local function start_worker(slot)
           if chunk and #chunk > 0 then
             M._process_worker_output(slot, chunk)
           elseif chunk == "" then
-            coroutine.yield(1 / config.fps)
+            -- A prewarmed shell has no useful frame-rate-coupled work. Poll
+            -- it sparsely until a command is running, then switch to a short
+            -- fixed interval for responsive streaming output. Tying four idle
+            -- workers to a high-refresh display wakes the entire app hundreds
+            -- of times per second.
+            coroutine.yield(slot.running
+              and ACTIVE_WORKER_POLL_SECONDS
+              or IDLE_WORKER_POLL_SECONDS)
           else
             if read_err then
               core.log_quiet("Command Slot %d: PowerShell read ended: %s", slot.index, tostring(read_err))
@@ -1208,7 +1217,7 @@ local function start_worker(slot)
             start_worker(slot)
           end
         end
-      end)
+      end, slot)
 
       return proc
     end
@@ -1277,6 +1286,10 @@ local function default_run_command(slot, command_text)
   local run_token = slot.token
   slot.start_time = system.get_time()
   slot.pending_output = ""
+  -- Prewarmed readers normally sleep for a full second. A command becoming
+  -- active is explicit work, so make its stable slot-keyed reader runnable
+  -- immediately rather than trading idle efficiency for output latency.
+  core.wake_thread(slot)
   slot.output_bytes = 0
   slot.truncated = false
   slot.last_command_text = command_text

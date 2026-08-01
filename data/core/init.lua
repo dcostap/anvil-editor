@@ -1586,8 +1586,19 @@ function core.show_title_bar(show)
   core.title_bar.visible = show
 end
 
+local next_thread_id = 0
+
 local function add_thread(f, weak_ref, background, ...)
-  local key = weak_ref or #core.threads + 1
+  local key = weak_ref
+  if not key then
+    -- Returned scheduler keys are public handles (for example, wake_thread
+    -- accepts one). Never derive them from the array length: removing an
+    -- earlier coroutine must not shift the identity of every later thread.
+    repeat
+      next_thread_id = next_thread_id + 1
+      key = next_thread_id
+    until core.threads[key] == nil
+  end
   local args = {...}
   local fn = function() return core.try(f, table.unpack(args)) end
   local info = debug.getinfo(2, "Sl")
@@ -1607,6 +1618,16 @@ end
 
 function core.add_background_thread(f, weak_ref, ...)
   return add_thread(f, weak_ref, true, ...)
+end
+
+---Make an existing scheduler thread eligible to run immediately.
+---@param key any The key returned by core.add_thread or core.add_background_thread.
+---@return boolean woke True when the thread still exists.
+function core.wake_thread(key)
+  local thread = core.threads[key]
+  if not thread then return false end
+  thread.wake = 0
+  return true
 end
 
 
@@ -2585,15 +2606,15 @@ local last_run_threads_runs = 0
 
 local run_threads = coroutine.wrap(function()
   while true do
-    -- Wait time until next run_threads iteration
-    local minimal_time_to_wake = math.huge
+    -- Absolute deadline of the earliest scheduler thread seen in this pass.
+    -- Keeping this absolute avoids subtracting the pass duration twice from
+    -- already-relative sleeping-thread deadlines.
+    local earliest_wake = math.huge
     -- a count on the amount of threads that ran
     local runs = 0
+    local pass_runs = 0
     local slowest_loc = ""
     local slowest_time = 0
-    -- used to re-adjust the minimal_time_to_wake to prioritize recurrent threads
-    local run_start = system.get_time()
-
     for k, thread in pairs(core.threads) do
       -- run thread
       local end_time = 0
@@ -2613,14 +2634,16 @@ local run_threads = coroutine.wrap(function()
           local _, wait = assert(coroutine.resume(thread.cr))
           end_time = system.get_time() - start_time
           runs = runs + 1
+          pass_runs = pass_runs + 1
           if end_time > slowest_time then
             slowest_time = end_time
             slowest_loc = thread.loc or ""
           end
           if coroutine.status(thread.cr) == "dead" then
-            if type(k) == "number" then
-              table.remove(core.threads, k)
-            else
+            -- A terminating coroutine may install its replacement under the
+            -- same stable key. Only remove the entry if it still identifies
+            -- the coroutine we just resumed.
+            if core.threads[k] == thread then
               core.threads[k] = nil
             end
             if thread.background then
@@ -2650,7 +2673,7 @@ local run_threads = coroutine.wrap(function()
               wait = end_time
             end
             thread.wake = system.get_time() + wait
-            minimal_time_to_wake = math.min(minimal_time_to_wake, wait)
+            earliest_wake = math.min(earliest_wake, thread.wake)
             if config.log_slow_threads and end_time > core.co_max_time then
               core.log_quiet(
                 "Slow co-routine took %fs of max %fs at: \n%s",
@@ -2659,9 +2682,7 @@ local run_threads = coroutine.wrap(function()
             end
           end
         else
-          minimal_time_to_wake =  math.min(
-            minimal_time_to_wake, thread.wake - system.get_time()
-          )
+          earliest_wake = math.min(earliest_wake, thread.wake)
         end
       end
 
@@ -2672,16 +2693,20 @@ local run_threads = coroutine.wrap(function()
         if max_coroutines > 1 then
           max_coroutines = math.max(runs-1, 1)
         end
+        last_run_threads_slowest_loc = slowest_loc
+        last_run_threads_slowest_ms = slowest_time * 1000
+        last_run_threads_runs = runs
         coroutine.yield(0)
+        runs, slowest_loc, slowest_time = 0, "", 0
       elseif runs >= max_coroutines then
-        coroutine.yield(
-          yield_time - run_start > minimal_time_to_wake
-            and 0
-            or (minimal_time_to_wake > yield_time
-              and minimal_time_to_wake - yield_time
-              or minimal_time_to_wake
-            )
-        )
+        last_run_threads_slowest_loc = slowest_loc
+        last_run_threads_slowest_ms = slowest_time * 1000
+        last_run_threads_runs = runs
+        coroutine.yield(math.max(0, earliest_wake - system.get_time()))
+        -- The coroutine resumes in the middle of this table traversal. Start
+        -- a fresh per-callback budget; retaining the previous run count made
+        -- every remaining sleeping thread trigger another immediate yield.
+        runs, slowest_loc, slowest_time = 0, "", 0
       end
     end
 
@@ -2691,17 +2716,9 @@ local run_threads = coroutine.wrap(function()
 
     -- if we reached here it means it was able to run coroutines without
     -- slow downs so we reset the maximum coroutines to amount it ran
-    max_coroutines = math.max(max_coroutines, runs)
+    max_coroutines = math.max(max_coroutines, pass_runs)
 
-    local yield_time = system.get_time() - run_start
-    coroutine.yield(
-      yield_time > minimal_time_to_wake
-        and 0
-        or (minimal_time_to_wake > yield_time
-          and minimal_time_to_wake - yield_time
-          or minimal_time_to_wake
-        )
-    )
+    coroutine.yield(math.max(0, earliest_wake - system.get_time()))
   end
 end)
 
@@ -2945,6 +2962,11 @@ function core.run_step(options)
   local function run_step_sleep(seconds)
     seconds = seconds or 0
     if seconds <= 0 then return end
+    -- Tiny SDL_Delay values truncate or fall below practical timer precision
+    -- on Windows and create clusters of callbacks around staggered coroutine
+    -- deadlines. Coalesce deadlines within 2 ms; active 10 ms polling and UI
+    -- frame deadlines remain comfortably more precise than this floor.
+    seconds = math.max(seconds, 0.002)
     sleep_requested_ms = sleep_requested_ms + seconds * 1000
     if immediate then return end
     local sleep_start = system.get_time()
@@ -2956,7 +2978,17 @@ function core.run_step(options)
   if core.frame_start >= cycle_end_time then
     cycle_end_time  = core.frame_start + (core.co_max_time * core.fps)
     main_loop_time  = 0
+    local had_focus = run_has_focus
     run_has_focus   = system.window_has_focus(core.window)
+    if had_focus and not run_has_focus then
+      -- Keep background work responsive briefly after focus is lost without
+      -- defeating the focused idle scheduler on every loop iteration.
+      run_skip_no_focus = core.frame_start + 5
+      core.log_quiet("Run loop: window lost focus; retaining foreground scheduling for 5s")
+    elseif not had_focus and run_has_focus then
+      run_next_step = nil
+      core.log_quiet("Run loop: window regained focus; scheduling an immediate UI step")
+    end
   end
 
   -- run all coroutine tasks. Immediate resize frames are inside the Win32
@@ -3004,8 +3036,10 @@ function core.run_step(options)
     end
   end
 
-  -- respect coroutines redraw requests
-  if run_has_focus or core.redraw then
+  -- A coroutine redraw request invalidates the next scheduled UI deadline.
+  -- Focus by itself is not work: clearing run_next_step merely because the
+  -- window is focused makes every scheduler wake run a full core.step().
+  if core.redraw then
     run_skip_no_focus = core.frame_start + 5
     run_next_step     = nil
   end
@@ -3035,6 +3069,7 @@ function core.run_step(options)
   end
 
   local did_redraw = false
+  local did_core_step = false
   local core_step_ms = 0
 
   if run_threads_mode == "background" then
@@ -3050,6 +3085,7 @@ function core.run_step(options)
     -- listen events and perform drawing as needed
     if immediate or not run_next_step or now >= run_next_step then
       local core_step_start = system.get_time()
+      did_core_step = true
       did_redraw    = core.step(run_next_frame_time, options)
       core_step_ms  = (system.get_time() - core_step_start) * 1000
       now           = system.get_time()
@@ -3074,7 +3110,13 @@ function core.run_step(options)
           run_next_step = now + cursor_time_to_wake
         end
         local nframe = run_next_frame_time - system.get_time()
-        nframe = nframe > 0 and nframe or (1/core.fps)
+        -- SDL3 main callbacks cannot block in SDL_WaitEvent, so a focused
+        -- idle window still polls often enough to notice input promptly. Do
+        -- not inherit a high-refresh monitor's full render cadence here: an
+        -- expired frame deadline otherwise turns 165 Hz into 165 empty Lua
+        -- callbacks per second even though no UI work is scheduled.
+        local idle_event_poll = 1 / math.min(core.fps, 60)
+        nframe = nframe > 0 and math.min(nframe, idle_event_poll) or idle_event_poll
         local b = (uncapped and run_burst_events > now) and rendering_speed or nframe
         -- Sleep instead of SDL_WaitEvent: SDL3 callbacks prohibit blocking waits
         -- inside SDL_AppIterate.  Any events that arrive during this sleep will
@@ -3125,7 +3167,7 @@ function core.run_step(options)
   )
 
   local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
-  local step_stats = did_redraw and last_core_step_stats or {}
+  local step_stats = did_core_step and last_core_step_stats or {}
   step_stats.event_count = step_stats.event_count or 0
   step_stats.event_ms = step_stats.event_ms or 0
   step_stats.update_ms = step_stats.update_ms or 0
@@ -3147,7 +3189,12 @@ function core.run_step(options)
     total_ms = (system.get_time() - run_step_start) * 1000,
     run_mode = run_threads_mode,
   }
-  local docview_stats = core.perf_frame_stats or core.docview_frame_stats or {}
+  -- Frame/update counters belong to the core.step() that produced them. Do
+  -- not repeat the previous step's nonzero counters across scheduler-only
+  -- iterations; that made idle captures report phantom Root Panel updates.
+  local docview_stats = did_core_step
+    and (core.perf_frame_stats or core.docview_frame_stats or {})
+    or {}
   local total_ms = (system.get_time() - run_step_start) * 1000
   if did_redraw then
     local t = system.get_time()
