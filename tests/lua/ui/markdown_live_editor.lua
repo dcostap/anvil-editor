@@ -3419,6 +3419,53 @@ test.describe("Markdown Live Editor", function()
     test.ok(empty.text_source_col2 <= empty.source_col2)
   end)
 
+  test.it("draws complete row borders through empty table cells", function()
+    local view, doc = make_view(
+      "| Company | Project | Notes |\n| --- | --- | --- |\n|   | Total 1 |   |\n\nplain",
+      "empty-table-cell-borders.md"
+    )
+    doc:set_selection(5, 1)
+    refresh(view)
+
+    local render_line = test.not_nil(view:get_line_render(3))
+    local table_width = 0
+    for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
+      table_width = table_width + (fragment.width or 0)
+    end
+
+    local border_width = math.max(1, math.floor(SCALE))
+    local row_height = view:get_position_visual_row_height(3, 1)
+    local intervals = {}
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    renderer.draw_rect = function(x, y, width, height)
+      if height == border_width and y >= row_height - border_width then
+        intervals[#intervals + 1] = { x, x + width }
+      end
+    end
+    renderer.draw_text = function(font, text, x)
+      return x + font:get_width(text)
+    end
+    local ok, err = pcall(function()
+      view:draw_line_text(3, 0, 0)
+    end)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    if not ok then error(err) end
+
+    table.sort(intervals, function(a, b) return a[1] < b[1] end)
+    local covered_to = 0
+    for _, interval in ipairs(intervals) do
+      if interval[1] <= covered_to + 0.01 then
+        covered_to = math.max(covered_to, interval[2])
+      end
+    end
+    test.ok(
+      covered_to >= table_width - 0.01,
+      "empty cells should not leave gaps in the table row border"
+    )
+  end)
+
   test.it("edits canonical GFM table rows and columns through commands", function()
     local view, doc = make_view("| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\nplain", "table-commands.md")
     local old_active = core.active_view

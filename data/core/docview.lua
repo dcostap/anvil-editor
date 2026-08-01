@@ -5728,9 +5728,11 @@ local function draw_render_fragment_text(
           fragment.text_line_background
         )
       end
-      renderer.draw_text(
-        font, line_text or "", x + line_x_offset, line_y, color, opts
-      )
+      if line_text and line_text ~= "" then
+        renderer.draw_text(
+          font, line_text, x + line_x_offset, line_y, color, opts
+        )
+      end
       line_y = line_y + line_height
     end
     return x + width
@@ -5996,7 +5998,7 @@ function DocView:draw_line_text(line, x, y)
             "render widget"
           )
           tx = draw_x + (fragment.width or fragment.widget.width or 0)
-        elseif text ~= "" then
+        elseif text ~= "" or fragment.text_lines then
           local color = render_fragment_color(fragment)
           tx = draw_render_fragment_text(
             fragment, font, text, draw_x, ty, color,
