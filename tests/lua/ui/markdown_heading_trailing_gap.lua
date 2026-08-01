@@ -43,7 +43,7 @@ test.describe("Markdown wrapped heading spacing", function()
     config.markdown_live_editor = context.old_markdown_live_editor
   end)
 
-  test.it("keeps trailing block spacing below final-row text and its highlight", function()
+  test.it("keeps heading spacing above the first row instead of below the final row", function()
     local source = "# This rendered heading wraps across several visual rows in a narrow editor"
     local view, doc = make_view(source .. "\nbody")
     doc:set_selection(1, #source + 1)
@@ -54,7 +54,7 @@ test.describe("Markdown wrapped heading spacing", function()
     local final_row = first_row + row_count - 1
     local render_line = test.not_nil(view:get_line_render(1))
     local content_height = test.not_nil(render_line.text_row_height)
-    test.ok(view:get_visual_row_height(final_row) > content_height)
+    test.equal(view:get_visual_row_height(final_row), content_height)
 
     local old_draw_text = renderer.draw_text
     local text_ys = {}
@@ -72,7 +72,10 @@ test.describe("Markdown wrapped heading spacing", function()
     test.equal(#ordered_ys, row_count)
     local final_row_y = view:get_visual_row_y_offset(final_row)
       - view:get_visual_row_y_offset(first_row)
-    test.equal(ordered_ys[#ordered_ys] - final_row_y, ordered_ys[1])
+    test.ok(
+      ordered_ys[1] > ordered_ys[#ordered_ys] - final_row_y,
+      "leading spacing must affect only the first wrapped heading row"
+    )
 
     local old_draw_rect = renderer.draw_rect
     local highlight_height

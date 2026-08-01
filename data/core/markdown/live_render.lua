@@ -268,7 +268,12 @@ local function reveal_units_for_line(view, line, state)
         local has_localized_reveal, added = false, {}
         for _, node in ipairs(semantic_line(view, line) or {}) do
           if REVEAL_TYPES[node.type] then
-            has_localized_reveal = true
+            -- A heading is a block-level presentation. Its marker ranges
+            -- decide whether its source is revealed, but the heading itself
+            -- must not suppress the ordinary whole-line fallback for a
+            -- selection in otherwise plain heading text. Keep this aligned
+            -- with the collapsed-caret path below.
+            if node.type ~= "heading" then has_localized_reveal = true end
             local intersects = false
             if node.type == "heading" then
               for _, marker in ipairs(node.marker_ranges or {}) do
@@ -1908,7 +1913,7 @@ local function table_row_fragments(view, table_node, line)
   local fragments = {}
   local header = line == layout.line1
   local row_height = layout.row_heights[line] or markdown_live_body_line_height(view)
-  local function border_fragment(separator, id)
+  local function border_fragment(separator, id, first)
     local line_width = math.max(1, math.floor(SCALE))
     return {
       source_col1 = separator.col1, source_col2 = separator.col2,
@@ -1927,7 +1932,7 @@ local function table_row_fragments(view, table_node, line)
           )
           if header then
             renderer.draw_rect(
-              x, y, layout.separator_width, line_width,
+              x, y, first and layout.total_width or layout.separator_width, line_width,
               style.markdown_live_table_separator
             )
           end
@@ -1963,7 +1968,7 @@ local function table_row_fragments(view, table_node, line)
     end
     local separator = row.separators[column]
     fragments[#fragments + 1] = border_fragment(
-      separator, table_node.id .. ":pipe:" .. line .. ":" .. column
+      separator, table_node.id .. ":pipe:" .. line .. ":" .. column, column == 1
     )
     fragments[#fragments + 1] = {
       source_col1 = cell.col1, source_col2 = cell.col2,
@@ -3924,6 +3929,10 @@ local function inactive_heading_fragments(view, text, heading, font, reveal_unit
   return fragments
 end
 
+local function markdown_block_gap(view)
+  return math.max(1, math.floor(markdown_live_body_font(view):get_height() * 0.7))
+end
+
 local function heading_render_line(view, text, heading, reveal_units)
   local font = heading_font(view, heading.level)
   local text_row_height = math.max(
@@ -3936,6 +3945,7 @@ local function heading_render_line(view, text, heading, reveal_units)
   return prose_render_line(view, text, {
     source_text = text,
     text_row_height = text_row_height,
+    first_row_content_y_offset = markdown_block_gap(view),
     highlight_height = text_row_height,
     caret_height = text_row_height,
     semantic_id = heading.semantic_id,
@@ -3946,19 +3956,18 @@ local function heading_render_line(view, text, heading, reveal_units)
   })
 end
 
-local function markdown_block_gap(view)
-  return math.max(1, math.floor(markdown_live_body_font(view):get_height() * 0.7))
-end
-
-local function block_spacing_after(view, line, heading)
+local function block_spacing_after(view, line)
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local next_text = (view.doc.lines[line + 1] or ""):gsub("\n$", "")
   if text:match("^%s*$") or next_text == "" or next_text:match("^%s*$") then
     return 0
   end
-  if heading and not heading.setext then return markdown_block_gap(view) end
-  if semantic_heading_for_line(view, next_text, line + 1) then
-    return markdown_block_gap(view)
+  local table_node = table_for_line(view, line)
+  if table_node then
+    local next_table = table_for_line(view, line + 1)
+    if not next_table or next_table.id ~= table_node.id then
+      return markdown_block_gap(view)
+    end
   end
   return 0
 end
@@ -3969,8 +3978,14 @@ local function final_visual_row_for_line(view, line, entry)
 end
 
 local function with_block_spacing(view, line, entry, height, heading)
-  if not height or not final_visual_row_for_line(view, line, entry) then return height end
-  return height + block_spacing_after(view, line, heading)
+  if not height then return height end
+  if heading and (not entry or entry.row_in_line == 1) then
+    height = height + markdown_block_gap(view)
+  end
+  if final_visual_row_for_line(view, line, entry) then
+    height = height + block_spacing_after(view, line)
+  end
+  return height
 end
 
 local function compute_line_height(view, line, entry)
@@ -4004,8 +4019,12 @@ local function compute_line_height(view, line, entry)
     end
     return with_block_spacing(view, line, entry, height, heading)
   end
-  if render_line.layout_height then return render_line.layout_height end
-  if render_line.table_row_height then return render_line.table_row_height end
+  if render_line.layout_height then
+    return with_block_spacing(view, line, entry, render_line.layout_height, heading)
+  end
+  if render_line.table_row_height then
+    return with_block_spacing(view, line, entry, render_line.table_row_height, heading)
+  end
   local height = math.max(body_height, render_line_metric_height(view, render_line))
   return with_block_spacing(view, line, entry, height, heading)
 end
@@ -4089,7 +4108,6 @@ function provider:sparse_line_metrics(view)
       local line1 = math.max(1, node.source.line1 or 1)
       local line2 = math.min(#view.doc.lines, node.source.line2 or line1)
       for line = line1, line2 do lines[line] = true end
-      if node.type == "heading" and line1 > 1 then lines[line1 - 1] = true end
     end
   end
   local owner = view.__markdown_live_owner

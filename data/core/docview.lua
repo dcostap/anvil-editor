@@ -3430,13 +3430,24 @@ local function position_ge(line1, col1, line2, col2)
   return line1 > line2 or line1 == line2 and col1 >= col2
 end
 
-local function line_render_content_geometry(render_line, row_height)
-  local content_height = render_line.table_row and row_height or math.min(
-    row_height, render_line.text_row_height or row_height
+local function line_render_content_geometry(render_line, row_height, first_row)
+  local first_row_offset = first_row
+    and math.max(0, tonumber(render_line.first_row_content_y_offset) or 0) or 0
+  first_row_offset = math.min(first_row_offset, math.max(0, row_height - 1))
+  local available_height = math.max(1, row_height - first_row_offset)
+  local content_height = render_line.table_row and available_height or math.min(
+    available_height, render_line.text_row_height or available_height
   )
-  local y_offset = render_line.content_vertical_alignment == "bottom"
-    and math.max(0, row_height - content_height) or 0
+  local y_offset = first_row_offset
+  if render_line.content_vertical_alignment == "bottom" then
+    y_offset = y_offset + math.max(0, available_height - content_height)
+  end
   return y_offset, content_height
+end
+
+local function position_is_first_visual_row(view, line, col, line_end)
+  return view:get_visual_row(line, col or 1, line_end)
+    == view:get_visual_row(line, 1, false)
 end
 
 local function selection_covers_fold(doc, fold)
@@ -4057,7 +4068,11 @@ function DocView:get_position_highlight_geometry(line, col, line_end)
   )
   local render_line = self:get_line_render(line)
   if render_line and render_line.highlight_height then
-    return y + (render_line.highlight_y_offset or 0), math.min(
+    local content_y_offset = line_render_content_geometry(
+      render_line, row_height,
+      position_is_first_visual_row(self, line, col, line_end)
+    )
+    return y + (render_line.highlight_y_offset or content_y_offset), math.min(
       row_height, math.max(1, tonumber(render_line.highlight_height) or row_height)
     )
   end
@@ -5817,7 +5832,7 @@ function DocView:draw_line_text(line, x, y)
       local row_y = y + self:get_visual_row_y_offset(visual_row) - first_row_y_offset
       local row_height = self:get_visual_row_height(visual_row)
       local content_y_offset, content_height = line_render_content_geometry(
-        render_line, row_height
+        render_line, row_height, idx == first_idx
       )
       local content_y = row_y + content_y_offset
       for _, fragment in ipairs(fragments) do
@@ -5950,7 +5965,7 @@ function DocView:draw_line_text(line, x, y)
     local row = self:get_visual_row(line, 1)
     local row_height = self:get_visual_row_height(row)
     local content_y_offset, content_height = line_render_content_geometry(
-      render_line, row_height
+      render_line, row_height, true
     )
     local content_y = y + content_y_offset
     local _, indent_size = self.doc:get_indent_info()
@@ -6569,7 +6584,10 @@ function DocView:draw_caret(x, y, line, col, caret_idx, color)
   local _, position_row = self:get_position_line_render_row(line, col)
   if render_line and not position_row then
     local row_height = self:get_position_visual_row_height(line, col, line_end)
-    local content_y_offset = line_render_content_geometry(render_line, row_height)
+    local content_y_offset = line_render_content_geometry(
+      render_line, row_height,
+      position_is_first_visual_row(self, line, col, line_end)
+    )
     y = y + content_y_offset
   end
   if self.doc.overwrite then

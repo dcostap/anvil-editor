@@ -454,17 +454,29 @@ test.describe("Markdown Live Editor", function()
     test.ok(view:get_col_x_offset(1, 8) > 0)
   end)
 
-  test.it("keeps heading caret and highlight out of trailing block spacing", function()
+  test.it("keeps a plain heading raw while its title is selected", function()
+    local source = "## Resultados"
+    local view, doc = make_view("body\n" .. source .. "\nplain", "heading-selection.md")
+    doc:set_selection(3, 1)
+    refresh(view)
+
+    doc:set_selection(2, 4, 2, #source + 1)
+    test.equal(visible_render_text(view, 2), source)
+  end)
+
+  test.it("aligns heading caret and highlight below leading block spacing", function()
     local view, doc = make_view("# Title\nbody", "note.md")
     doc:set_selection(1, 4)
     refresh(view)
 
     local row_height = view:get_visual_row_height(1)
     local old_draw_rect = renderer.draw_rect
-    local highlight_height, caret_height
+    local highlight_y, highlight_height, caret_y, caret_height
     renderer.draw_rect = function(x, y, width, height, color)
-      if color == style.line_highlight then highlight_height = height end
-      if color == style.caret then caret_height = height end
+      if color == style.line_highlight then
+        highlight_y, highlight_height = y, height
+      end
+      if color == style.caret then caret_y, caret_height = y, height end
     end
     local ok, err = pcall(function()
       view:draw_current_line_highlights(1, 2)
@@ -477,10 +489,11 @@ test.describe("Markdown Live Editor", function()
     test.equal(highlight_height, view:get_line_render(1).highlight_height)
     test.equal(caret_height, view:get_line_render(1).caret_height)
     test.equal(highlight_height, caret_height)
+    test.equal(highlight_y, caret_y)
     test.ok(caret_height < row_height)
   end)
 
-  test.it("keeps heading content and its caret above trailing block spacing", function()
+  test.it("keeps heading content and its caret below leading spacing", function()
     local view, doc = make_view("# Title\nbody", "note.md")
     doc:set_selection(2, 1)
     refresh(view)
@@ -488,7 +501,9 @@ test.describe("Markdown Live Editor", function()
     local render_line = test.not_nil(view:get_line_render(1))
     local row_height = view:get_visual_row_height(1)
     local content_height = test.not_nil(render_line.text_row_height)
+    local leading_spacing = test.not_nil(render_line.first_row_content_y_offset)
     test.ok(row_height > content_height, "expected heading block spacing")
+    test.ok(leading_spacing > 0, "expected heading leading spacing")
 
     local old_draw_text = renderer.draw_text
     local old_draw_rect = renderer.draw_rect
@@ -515,9 +530,10 @@ test.describe("Markdown Live Editor", function()
     title_font = test.not_nil(title_font)
     test.equal(
       title_y,
-      math.max(0, (content_height - title_font:get_height()) / 2)
+      leading_spacing
+        + math.max(0, (content_height - title_font:get_height()) / 2)
     )
-    test.equal(caret_y, 0)
+    test.equal(caret_y, leading_spacing)
   end)
 
   test.it("uses heading content height for its highlight when wrapping is enabled", function()
@@ -1763,8 +1779,9 @@ test.describe("Markdown Live Editor", function()
 
     local first_row, _, row_count = linewrapping.get_line_idx_col_count(view, 1)
     test.ok(row_count > 1)
+    local render_line = test.not_nil(view:get_line_render(1))
     local heading_font
-    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+    for _, fragment in ipairs(render_line.fragments or {}) do
       if fragment.text and fragment.text:find("rendered", 1, true) then
         heading_font = fragment.font
         break
@@ -1779,29 +1796,32 @@ test.describe("Markdown Live Editor", function()
       )
     end
     test.ok(
-      view:get_visual_row_height(first_row)
+      test.not_nil(render_line.text_row_height)
         < math.floor(heading_font:get_height() * config.line_height),
-      "wrapped heading leading must be tighter than body-text leading"
+      "wrapped heading content leading must be tighter than body-text leading"
+    )
+    test.ok(
+      view:get_visual_row_height(first_row) > render_line.text_row_height,
+      "the first wrapped row must preserve heading leading spacing"
     )
     test.ok(
       view:get_visual_row_height(first_row + row_count - 1)
-        > view:get_visual_row_height(first_row),
+        > render_line.text_row_height,
       "the final wrapped row must preserve heading block separation"
     )
   end)
 
-  test.it("separates a heading from a preceding nonblank block", function()
-    local view, doc = make_view("body\n# Heading\nafter", "heading-spacing.md")
-    doc:set_selection(3, 1)
+  test.it("keeps heading spacing out of the preceding nonblank block", function()
+    local view, doc = make_view("plain\nbody\n# Heading\nafter", "heading-spacing.md")
+    doc:set_selection(4, 1)
     refresh(view)
 
-    local _, body_y = view:get_line_screen_position(1)
-    local _, heading_y = view:get_line_screen_position(2)
-    test.equal(heading_y - body_y, view:get_position_visual_row_height(1, 1))
-    test.ok(
-      view:get_position_visual_row_height(1, 1) > view:get_line_height(),
-      "a heading must not run directly into the preceding block"
-    )
+    local plain_height = view:get_position_visual_row_height(1, 1)
+    local body_height = view:get_position_visual_row_height(2, 1)
+    test.equal(body_height, plain_height)
+    local _, body_y = view:get_line_screen_position(2)
+    local _, heading_y = view:get_line_screen_position(3)
+    test.equal(heading_y - body_y, body_height)
   end)
 
   test.it("removes the line-number lane only while presenting Live Preview", function()
@@ -3280,6 +3300,60 @@ test.describe("Markdown Live Editor", function()
       test.ok(not fragment.table_cell)
     end
     test.ok(visible_render_text(view, 3):find("`/rp_campaign_status`", 1, true))
+  end)
+
+  test.it("draws a table top edge when the header cells are empty", function()
+    local view, doc = make_view(
+      "|  |  |\n| --- | --- |\n| Name | Value |\n| one | two |",
+      "empty-table-header.md"
+    )
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    local render_line = test.not_nil(view:get_line_render(1))
+    local table_width = 0
+    for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
+      table_width = table_width + (fragment.width or 0)
+    end
+
+    local old_draw_rect = renderer.draw_rect
+    local horizontal_widths = {}
+    renderer.draw_rect = function(_, _, width, height)
+      if height <= math.max(1, math.floor(SCALE)) then
+        horizontal_widths[#horizontal_widths + 1] = width
+      end
+    end
+    local ok, err = pcall(function()
+      view:draw_line_text(1, 0, 0)
+    end)
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err) end
+
+    local found_top_edge = false
+    for _, width in ipairs(horizontal_widths) do
+      if width >= table_width - 1 then
+        found_top_edge = true
+        break
+      end
+    end
+    test.ok(found_top_edge, "empty table headers should still have a top edge")
+  end)
+
+  test.it("leaves space between a table and a following heading", function()
+    local view, doc = make_view(
+      "|  |  |\n| --- | --- |\n| Name | Value |\n## Types 2",
+      "table-heading-gap.md"
+    )
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    local table_line = test.not_nil(view:get_line_render(3))
+    local _, table_y = view:get_line_screen_position(3)
+    local _, heading_y = view:get_line_screen_position(4)
+    test.ok(
+      heading_y > table_y + test.not_nil(table_line.table_row_height),
+      "following heading should not touch the table"
+    )
   end)
 
   test.it("bounds embedded data-image presentation inside table cells", function()
