@@ -277,6 +277,37 @@ local function suggestion_within_length(item)
   return #suggestion_text(item) <= max_symbol_length()
 end
 
+local WORD_APOSTROPHES = { "'", "’", "ʼ" }
+
+local function is_ascii_letter_at(text, byte_index)
+  local byte = text:byte(byte_index)
+  return byte and (byte >= 65 and byte <= 90 or byte >= 97 and byte <= 122) or false
+end
+
+-- The generic symbol pattern deliberately excludes apostrophes because they
+-- are not valid in most programming-language identifiers. In prose, however,
+-- blindly accepting each pattern match would learn `Isn` and `t` from
+-- `Isn't`. Reject a match only when an apostrophe directly joins letters on
+-- its two sides; standalone quotation marks remain ordinary boundaries.
+local function is_apostrophe_word_fragment(line, match_start, match_end)
+  for _, apostrophe in ipairs(WORD_APOSTROPHES) do
+    local apostrophe_length = #apostrophe
+    if is_ascii_letter_at(line, match_end)
+      and line:sub(match_end + 1, match_end + apostrophe_length) == apostrophe
+      and is_ascii_letter_at(line, match_end + apostrophe_length + 1)
+    then
+      return true
+    end
+    if is_ascii_letter_at(line, match_start)
+      and line:sub(match_start - apostrophe_length, match_start - 1) == apostrophe
+      and is_ascii_letter_at(line, match_start - apostrophe_length - 1)
+    then
+      return true
+    end
+  end
+  return false
+end
+
 local function display_text(text, max_len)
   text = tostring(text or "")
   max_len = max_len or max_symbol_length()
@@ -337,13 +368,20 @@ core.add_thread(function()
     local slice_start = system.get_time()
     local slice_budget = 0.001
     while i <= #doc.lines do
-      for sym in doc.lines[i]:gmatch(symbol_pattern) do
+      local line = doc.lines[i]
+      local search_from = 1
+      while search_from <= #line do
+        local match_start, match_end, captured_symbol = line:find(symbol_pattern, search_from)
+        if not match_start then break end
+        local sym = captured_symbol or line:sub(match_start, match_end)
         scanned_symbols = scanned_symbols + 1
         if scanned_symbols % 200 == 0 and system.get_time() - slice_start >= slice_budget then
           coroutine.yield()
           slice_start = system.get_time()
         end
-        if #sym <= max_symbol_length() and not s[sym] and not syntax_symbols[sym] then
+        if not is_apostrophe_word_fragment(line, match_start, match_end)
+          and #sym <= max_symbol_length() and not s[sym] and not syntax_symbols[sym]
+        then
           symbols_count = symbols_count + 1
           if symbols_count > max_symbols then
             s = nil
@@ -364,6 +402,7 @@ core.add_thread(function()
           end
           s[sym] = true
         end
+        search_from = math.max(match_end + 1, match_start + 1)
       end
       i = i + 1
       if i % 25 == 0 and system.get_time() - slice_start >= slice_budget then

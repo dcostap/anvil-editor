@@ -124,6 +124,9 @@ end
 test.describe("autocomplete batch behavior", function()
   test.after_each(function(context)
     autocomplete.close()
+    if context.autocomplete_min_len then
+      config.plugins.autocomplete.min_len = context.autocomplete_min_len
+    end
     if context.autocomplete_max_symbol_length then
       config.plugins.autocomplete.max_symbol_length = context.autocomplete_max_symbol_length
     end
@@ -208,6 +211,25 @@ test.describe("autocomplete batch behavior", function()
     core.root_panel:on_text_input("can")
 
     test.ok(not autocomplete.is_open(), "should not offer a completion that would change nothing")
+  end)
+
+  test.it("does not learn word fragments split from contractions", function(context)
+    context.autocomplete_min_len = config.plugins.autocomplete.min_len
+    context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
+    config.plugins.autocomplete.min_len = 2
+    config.plugins.autocomplete.suggestions_scope = "local"
+    open_editor(context, "Isn't okay. Won’t happen. 'Quoted'.\n")
+
+    -- The document-symbol cache refreshes asynchronously.
+    coroutine.yield(1.1)
+    core.root_panel:on_text_input("Is")
+
+    test.ok(not autocomplete.is_open(), "should not offer 'Isn' from the contraction \"Isn't\"")
+    core.root_panel:on_text_input("\nWo")
+    test.ok(not autocomplete.is_open(), "should not offer 'Won' from the contraction \"Won’t\"")
+    core.root_panel:on_text_input("\nQu")
+    test.ok(autocomplete.is_open(), "quotation marks should remain ordinary word boundaries")
+    test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "Quoted")
   end)
 
   test.it("ignores oversized suggestions before matching", function(context)
