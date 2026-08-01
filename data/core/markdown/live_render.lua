@@ -1740,9 +1740,19 @@ local function table_layout(view, table_node)
       TABLE_MAX_PRESENTATION_ROWS, view.doc:get_name(), line1)
     return nil
   end
+  local theme_generation = core.color_theme_generation or 0
   local cache = view.__markdown_live_table_layout_cache
-  if not cache or cache.generation ~= instance.generation then
-    cache = { generation = instance.generation, buckets = {}, bucket_order = {} }
+  -- Table presentations retain resolved style colors, so do not reuse the
+  -- semantic geometry cache across a theme reload.
+  if not cache or cache.generation ~= instance.generation
+    or cache.theme_generation ~= theme_generation
+  then
+    cache = {
+      generation = instance.generation,
+      theme_generation = theme_generation,
+      buckets = {},
+      bucket_order = {},
+    }
     view.__markdown_live_table_layout_cache = cache
   end
   local geometry_key = table.concat({
