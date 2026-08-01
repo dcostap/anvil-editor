@@ -52,6 +52,42 @@ local function perf_scope_begin(name)
   return perf and perf.scope_begin and perf.scope_begin(name) or nil
 end
 
+local function draw_match_background(view, line, col1, col2, x, y, color)
+  local base_x, base_y = view:get_line_screen_position(line)
+  local row_count = view:get_visual_row_count_for_line(line)
+  local first_visual_row = view:get_visual_row(line, 1, false)
+  local first_row = math.max(
+    1, view:get_visual_row(line, col1, false) - first_visual_row + 1
+  )
+  local last_row = math.min(
+    row_count, view:get_visual_row(line, col2, true) - first_visual_row + 1
+  )
+  for row = first_row, last_row do
+    local row_col1, row_col2 = view:get_visual_row_bounds_for_line(line, row)
+    if not row_col1 then break end
+    if col2 > row_col1 and col1 < row_col2 then
+      local segment_col1 = math.max(col1, row_col1)
+      local segment_col2 = math.min(col2, row_col2)
+      local screen_x1, screen_y = view:get_line_screen_position(
+        line, segment_col1, false
+      )
+      local screen_x2 = view:get_line_screen_position(
+        line, segment_col2, segment_col2 == row_col2
+      )
+      local x1 = x + screen_x1 - base_x
+      local x2 = x + screen_x2 - base_x
+      local row_y = y + screen_y - base_y
+      if x2 > x1 then
+        renderer.draw_rect(
+          x1, row_y, x2 - x1,
+          view:get_position_visual_row_height(line, segment_col1, false),
+          color
+        )
+      end
+    end
+  end
+end
+
 local function perf_scope_end(token)
   if not token then return end
   local perf = package.loaded["core.perf"]
@@ -70,7 +106,6 @@ function DocView:draw_line_body(line, x, y)
   if line1 == line2 and col1 ~= col2 then
     local selection = self.doc:get_text(line1, col1, line2, col2)
     if #selection > 1 and not selection:match("^%s+$") then
-      local lh = self:get_line_height()
       local selected_text = self.doc.lines[line1]:sub(col1, col2 - 1)
       local search_selected_text = selected_text:lower()
       local vcol1, vcol2 = get_visible_cols_range(self, line, 300)
@@ -86,10 +121,10 @@ function DocView:draw_line_body(line, x, y)
         local absolute_start_col = vcol1 + start_col - 1
         -- don't draw box around the selection
         if line ~= line1 or absolute_start_col ~= col1 then
-          local x1 = x + self:get_col_x_offset(line, absolute_start_col)
-          local x2 = x + self:get_col_x_offset(line, vcol1 + end_col)
-          local color = style.selectionhighlight
-          renderer.draw_rect(x1, y, x2 - x1, lh, color)
+          draw_match_background(
+            self, line, absolute_start_col, vcol1 + end_col,
+            x, y, style.selectionhighlight
+          )
         end
         last_col = end_col + 1
       end
