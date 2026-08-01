@@ -3066,7 +3066,7 @@ local function capture_optimistic_renders(view, transaction)
               source_text = current,
               render_line = render,
               height = height,
-              row_heights = captured.row_heights,
+              row_heights = exact and captured.row_heights or nil,
             }
             next_metric_state.overrides[new_line] = height
           end

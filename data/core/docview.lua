@@ -1418,13 +1418,15 @@ function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
       local providers = self:visual_metric_provider_entries()
       local inserted = {}
       local inserted_height = 0
+      local line_metrics_cache = {}
       -- Measure the replacement slice before publishing the new metric tree.
       -- A tree containing the new row mapping but temporary base heights can
       -- map the old scroll offset to the wrong anchor row, causing the later
       -- dirty pass to apply the same height change as a viewport correction.
       for offset = 0, insert_count - 1 do
         local height = compute_visual_row_height(
-          self, new_row1 + offset, providers, default_height
+          self, new_row1 + offset, providers, default_height,
+          nil, false, line_metrics_cache
         )
         inserted[offset + 1] = height
         inserted_height = inserted_height + height
