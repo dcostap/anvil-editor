@@ -480,7 +480,8 @@ test.describe("Markdown Live Editor", function()
     end
     local ok, err = pcall(function()
       view:draw_current_line_highlights(1, 2)
-      view:draw_caret(10, 10, 1, 4)
+      local _, line_y = view:get_line_screen_position(1, 4)
+      view:draw_caret(10, line_y, 1, 4)
     end)
     renderer.draw_rect = old_draw_rect
     if not ok then error(err) end
@@ -1804,10 +1805,10 @@ test.describe("Markdown Live Editor", function()
       view:get_visual_row_height(first_row) > render_line.text_row_height,
       "the first wrapped row must preserve heading leading spacing"
     )
-    test.ok(
-      view:get_visual_row_height(first_row + row_count - 1)
-        > render_line.text_row_height,
-      "the final wrapped row must preserve heading block separation"
+    test.equal(
+      view:get_visual_row_height(first_row + row_count - 1),
+      render_line.text_row_height,
+      "the final wrapped row must not absorb heading block separation"
     )
   end)
 

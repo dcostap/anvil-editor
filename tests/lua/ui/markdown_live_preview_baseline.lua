@@ -32,10 +32,14 @@ local function refresh(view)
     repeat
       local pool = worker_pool.current_system()
       if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
-      if instance.status == "ready" then return result end
+      if instance.status == "ready" then
+        linewrapping.complete_async_reconstruction(view)
+        return result
+      end
       system.sleep(0.001)
     until system.get_time() >= deadline
     test.equal(instance.status, "ready", instance.reason)
+    linewrapping.complete_async_reconstruction(view)
   end
   return result
 end
