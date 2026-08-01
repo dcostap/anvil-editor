@@ -1180,12 +1180,36 @@ function update_suggestions()
   -- we remove the punctuations to ensure results with plugins like lsp
   if triggered_manually then partial = partial:gsub("^%p+", "") end
 
+  -- Do not display a completion that is already exactly under the caret. It
+  -- can happen when the generic symbol scanner finds the current word in the
+  -- document (including ordinary prose), but accepting it would not change
+  -- the document.
+  local function is_noop_completion(item)
+    if type(item) == "table" and item.onselect then return false end
+    if suggestion_text(item) ~= partial then return false end
+
+    local prefix = type(item) == "table" and item.completion_prefix
+    if not prefix or prefix == "" then return true end
+
+    local av = core.active_view
+    if not av or not av.doc then return false end
+    local _, line1, col1 = autocomplete.get_partial_symbol()
+    local prefix_line, prefix_col = av.doc:position_offset(line1, col1, -#prefix)
+    return prefix_line == line1
+      and av.doc:get_text(prefix_line, prefix_col, line1, col1) == prefix
+  end
+
   local si = 0 -- suggestions index
   local max_items = config.plugins.autocomplete.max_suggestions
 
   -- we prioritize the manually added symbols
   if #manual_items > 0 then
-    manual_items = sort_display_matches(annotate_matches(common.fuzzy_match(manual_items, partial, false), partial), partial)
+    local matched = common.fuzzy_match(manual_items, partial, false)
+    local filtered = {}
+    for _, item in ipairs(matched or {}) do
+      if not is_noop_completion(item) then filtered[#filtered + 1] = item end
+    end
+    manual_items = sort_display_matches(annotate_matches(filtered, partial), partial)
     for i = 1, max_items do
       suggestions[i] = manual_items[i]
     end
@@ -1203,7 +1227,7 @@ function update_suggestions()
     local function append_matches(matches, query)
       for _, item in ipairs(matches or {}) do
         local key = suggestion_text(item)
-        if key ~= "" and not seen[key] then
+        if key ~= "" and not is_noop_completion(item) and not seen[key] then
           annotate_match(item, query)
           seen[key] = item
           ordered[#ordered + 1] = item

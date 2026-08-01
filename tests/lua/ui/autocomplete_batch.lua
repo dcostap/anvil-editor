@@ -175,7 +175,7 @@ test.describe("autocomplete batch behavior", function()
     autocomplete.add({
       name = "test-autocomplete-delete-refresh",
       files = ".*",
-      items = { foobar = "", foobaz = "" },
+      items = { foobarx = "", foobaz = "" },
     })
 
     core.root_panel:on_text_input("foobar")
@@ -187,7 +187,7 @@ test.describe("autocomplete batch behavior", function()
     test.equal(table.concat(doc.lines), "fooba\n")
     test.ok(autocomplete.is_open(), "expected autocomplete to stay open after deleting a letter")
     test.ok(command.perform("autocomplete:next"))
-    test.equal(autocomplete.get_selected_suggestion().text, "foobaz")
+    test.equal(autocomplete.get_selected_suggestion().text, "foobarx")
 
     for _ = 1, 3 do
       test.ok(command.perform("doc:backspace"))
@@ -195,6 +195,19 @@ test.describe("autocomplete batch behavior", function()
     end
     test.equal(table.concat(doc.lines), "fo\n")
     test.ok(autocomplete.is_open(), "expected autocomplete to stay open below the normal minimum length")
+  end)
+
+  test.it("does not show a completion identical to the current word", function(context)
+    open_editor(context, "")
+    autocomplete.add({
+      name = "test-autocomplete-noop-completion",
+      files = ".*",
+      items = { can = "" },
+    })
+
+    core.root_panel:on_text_input("can")
+
+    test.ok(not autocomplete.is_open(), "should not offer a completion that would change nothing")
   end)
 
   test.it("ignores oversized suggestions before matching", function(context)
