@@ -167,7 +167,7 @@ local function wait_for_redraws_until(deadline)
   end
 end
 
-core.add_thread(function()
+core.add_background_thread(function()
   coroutine.yield()
   local dv = open_target_file()
 

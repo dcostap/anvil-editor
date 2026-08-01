@@ -702,8 +702,7 @@ function perf.on_frame(snapshot)
   record.iteration_count = record.iteration_count + 1
   local ui_update_ms = math.max(
     snapshot.core_root_panel_update_ms or 0,
-    snapshot.rootpanel_update_ms or 0,
-    snapshot.update_ms or 0
+    snapshot.rootpanel_update_ms or 0
   )
   if ui_update_ms > 0 then
     record.update_iteration_count = record.update_iteration_count + 1

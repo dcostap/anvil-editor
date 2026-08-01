@@ -12,6 +12,9 @@ These scripts launch Anvil, open a target file, run the same detailed performanc
 - `anvil_perf_capture_file.bat` / `anvil_perf_capture_file.ps1`
   - End-to-end benchmark harness.
   - Opens a file, records performance for a fixed duration, writes perf artifacts, captures `screenshot.png`, and compares it to a baseline.
+- `anvil_idle_perf_test.bat` / `anvil_idle_perf_test.ps1`
+  - Focused-idle regression gate.
+  - Launches a separate debug instance, records without forced redraws, and fails on excessive run-loop cadence, idle Root Panel updates, awake time, or queued-event wakeups.
 - `compare_anvil_screenshot.bat` / `compare_anvil_screenshot.ps1`
   - Standalone image comparator for baseline-vs-current screenshots.
 
@@ -66,6 +69,28 @@ tools\anvil_perf_capture_file.bat ^
 
 Keep the same window size, start line, renderer, and relevant plugin settings between baseline generation and comparisons. Pixel comparison is intentionally strict by default.
 
+## Focused-idle CPU gate
+
+Build Anvil, then run:
+
+```bat
+tools\anvil_idle_perf_test.bat
+```
+
+The window must remain focused and untouched during the measurement. The gate
+rejects unfocused captures rather than accepting an artificially quiet
+background window. To test another Document:
+
+```bat
+tools\anvil_idle_perf_test.bat -File "C:\path\to\example.md"
+```
+
+The default limits are intentionally behavioral rather than machine-speed
+budgets: at most 120 run-loop iterations/second, at most 10% of idle iterations
+updating the Root Panel, at most 20% measured awake time, and at most 10% of
+iterations starting with queued events. `tools/analyze_idle_perf.py` can also
+validate an existing `_frames.csv` directly.
+
 ## Useful options
 
 ### Target and duration
@@ -114,11 +139,14 @@ Generated baseline PNGs matching `tools/baselines/perf_capture_*.png` are ignore
 
 ```bat
 -SoftwareRenderer
+-NewInstance
 -KeepOpen
 -NoKillExisting
 ```
 
 By default the harness stops existing Anvil processes for the same exe, launches the configured portable app, and closes it at the end. Use `-KeepOpen` while debugging. Use `-SoftwareRenderer` only when you specifically want the software renderer.
+Use `-NewInstance` to invoke Anvil's explicit `edit` command and bypass
+single-instance forwarding; the idle gate uses this automatically.
 
 ## Output files
 

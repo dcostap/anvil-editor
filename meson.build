@@ -452,5 +452,11 @@ if not get_option('source-only')
         suite : 'anvil',
         timeout : 60,
     )
+    test('idle-perf-harness', render_perf_test_python,
+        args : [anvil_source_root / 'tests/tools/test_idle_perf_gate.py', '-v'],
+        env : anvil_test_env,
+        suite : 'anvil',
+        timeout : 30,
+    )
     subdir('scripts')
 endif

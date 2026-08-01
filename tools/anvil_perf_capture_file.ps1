@@ -22,6 +22,7 @@ param(
   [switch]$AllowVisualMismatch,
   [switch]$NoScreenshot,
   [switch]$SoftwareRenderer,
+  [switch]$NewInstance,
   [switch]$KeepOpen,
   [switch]$NoKillExisting
 )
@@ -194,7 +195,13 @@ try {
   Write-Host "Launching $Exe"
   Write-Host "File: $File"
   Write-Host "Run dir: $runDir"
-  $p = Start-Process -FilePath $Exe -ArgumentList @($File) -WorkingDirectory (Split-Path -Parent $Exe) -PassThru
+  # Windows PowerShell joins Start-Process ArgumentList elements into one raw
+  # command line; it does not preserve an element containing spaces. The file
+  # system has already resolved this path and Windows paths cannot contain a
+  # quote, so explicit command-line quoting is sufficient here.
+  $quotedFile = '"' + $File + '"'
+  $launchArguments = if ($NewInstance) { @("edit", $quotedFile) } else { @($quotedFile) }
+  $p = Start-Process -FilePath $Exe -ArgumentList $launchArguments -WorkingDirectory (Split-Path -Parent $Exe) -PassThru
   $targetProcess = $p
   Write-Host "Started pid $($p.Id)"
 
@@ -269,6 +276,7 @@ try {
     measured_end_time = [double]$captureResult.end_time
     duration = [double]$captureResult.duration
     force_redraw = $ForceRedraw
+    new_instance = [bool]$NewInstance
     screenshot = if ($NoScreenshot) { $null } else { $Screenshot }
     baseline = if ($NoScreenshot) { $null } else { $Baseline }
     baseline_status = $baselineStatus
