@@ -151,6 +151,61 @@ function tables.source_bounds(view, line)
   return source_table_bounds(view.doc, line)
 end
 
+local function source_row_is_empty(row)
+  if not row then return false end
+  for _, cell in ipairs(row.cells) do
+    if cell.content_col1 ~= cell.content_col2 then return false end
+  end
+  return true
+end
+
+---Extend a real semantic table across canonical all-empty body rows that the
+---Markdown parser treats as a table terminator. The extension is allowed only
+---when a current semantic table owns the same header, so source lookalikes in
+---fences and other raw blocks remain excluded.
+function tables.extend_semantic_table(view, line, table_node)
+  if not (view and view.doc and line) then return table_node end
+  local line1, source_line2 = source_table_bounds(view.doc, line)
+  if not line1 then return table_node end
+  local instance = model.peek(view.doc)
+  if not (instance and instance.status == "ready"
+    and instance.published_revision == view.doc.text_revision)
+  then
+    return table_node
+  end
+  if not table_node then
+    local nodes = instance:nodes_for_lines(line1, line1, { limit = 1024 })
+    for _, node in ipairs(nodes or {}) do
+      if node.type == "table" and node.source.line1 == line1 then
+        table_node = node
+        break
+      end
+    end
+  end
+  if not table_node or table_node.source.line1 ~= line1 then return table_node end
+  local semantic_line2 = effective_line2(table_node)
+  if source_line2 <= semantic_line2 then return table_node end
+  local has_empty_body_row = false
+  for row_line = semantic_line2 + 1, source_line2 do
+    if source_row_is_empty(source_row(line_text(view.doc, row_line))) then
+      has_empty_body_row = true
+      break
+    end
+  end
+  if not has_empty_body_row then return table_node end
+  local extended = {}
+  for key, value in pairs(table_node) do extended[key] = value end
+  extended.source = {}
+  for key, value in pairs(table_node.source or {}) do extended.source[key] = value end
+  extended.id = table.concat({
+    tostring(table_node.id), "empty-row-extension", tostring(view.doc.text_revision),
+    tostring(source_line2),
+  }, ":")
+  extended.source.line2 = source_line2
+  extended.source.col2 = #line_text(view.doc, source_line2) + 1
+  return extended
+end
+
 local function context_at(view, line, col, require_canonical)
   local instance = view and view.doc and model.peek(view.doc)
   if not (view and view.doc) then return nil, "view is unavailable" end
@@ -163,6 +218,9 @@ local function context_at(view, line, col, require_canonical)
   local table_node
   for _, node in ipairs(nodes or {}) do
     if node.type == "table" then table_node = node break end
+  end
+  if semantic_current then
+    table_node = tables.extend_semantic_table(view, line, table_node)
   end
   local line1, line2
   if table_node then

@@ -645,6 +645,63 @@ test.describe("Markdown Interactive Table Editing", function()
     test.equal(doc.lines[4], "|  |  |  |\n")
   end)
 
+  test.it("keeps a wide table rendered after inserting an empty body row", function()
+    local view, doc = make_view(table.concat({
+      "| CodigoEmpresa | Proyecto | proyecto2                              | PROT PROD |",
+      "| ------------- | -------- | -------------------------------------- | --------- |",
+      "| 1             | 2023/017 | TIB-RUIZ / MAGNUS. ES GNC ARTd         |           |",
+      "| 2             | 2023/023 | E. SAGALES / MG. E PA GNC ART.         |           |",
+      "| 2             | 2024/004 | MOBILIS-CRAddfCOV/ NEW CITY 12M GNC    |           |",
+      "|               | Total 1  |                                        |           |",
+      "| 2             | 2023/122 | EL-GITARR 75CS 15M LE ELÉCTRICO        |           |",
+      "| 2             | 2024/106 | POZUELO LLORENTE - NEW CITY VOLVO B5LH |           |",
+      "|               | Total 2  |                                        |           |",
+      "",
+    }, "\n"))
+    view.size.x = 760
+    view:set_wrapping_enabled(true)
+    doc:set_selection(3, 4)
+    refresh(view)
+
+    local control = test.not_nil(table_control(view, 3, "row", 3))
+    local line_x, line_y = view:get_line_screen_position(3)
+    local x = line_x + control.layout_x + (control.hit_width or control.widget.width) / 2
+    local y = line_y + control.draw_y_offset + control.widget.height / 2
+    view:on_mouse_moved(x, y, 0, 0)
+    test.equal(view:on_mouse_pressed("left", x, y, 1), true)
+    test.equal(doc.lines[4], "|  |  |  |  |\n")
+
+    markdown_model.get(doc):submit("interactive-table-empty-row")
+    refresh(view)
+    local semantic = {}
+    for _, node in ipairs(markdown_model.peek(doc):nodes_for_lines(1, 10, { limit = 200 }) or {}) do
+      if node.type == "table" then
+        semantic[#semantic + 1] = string.format(
+          "%s:%d-%d", node.type, node.source.line1, node.source.line2
+        )
+      end
+    end
+    local semantic_summary = table.concat(semantic, ",")
+    local expected_boundaries
+    for line = 1, 10 do
+      if line ~= 2 then
+        local render = test.not_nil(view:get_line_render(line))
+        test.ok(render.table_row, string.format(
+          "row %d fell back to source (tables=%s)", line, semantic_summary
+        ))
+        local boundaries, offset = {}, 0
+        for _, fragment in ipairs(render.fragments or {}) do
+          if fragment.table_border then boundaries[#boundaries + 1] = offset end
+          offset = offset + (fragment.width or 0)
+        end
+        expected_boundaries = expected_boundaries or boundaries
+        test.same(expected_boundaries, boundaries)
+      end
+    end
+    doc:set_selection(5, 4)
+    test.equal(test.not_nil(markdown_tables.interactive_context(view)).line, 5)
+  end)
+
   test.it("reveals insertion controls progressively as the pointer approaches", function()
     local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n")
     doc:set_selection(3, 4)

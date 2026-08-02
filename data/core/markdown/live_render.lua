@@ -1478,13 +1478,18 @@ local function callout_for_line(view, line)
 end
 
 local function table_for_line(view, line)
+  local table_node
   for _, node in ipairs(semantic_line(view, line) or {}) do
     if node.type == "table" then
       local line2 = node.source.line2
       if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
-      if line >= node.source.line1 and line <= line2 then return node end
+      if line >= node.source.line1 and line <= line2 then
+        table_node = node
+        break
+      end
     end
   end
+  return markdown_tables.extend_semantic_table(view, line, table_node)
 end
 
 local TABLE_MAX_PRESENTATION_ROWS = markdown_tables.MAX_PRESENTATION_ROWS
@@ -4019,7 +4024,10 @@ function provider:horizontal_extent(view)
   for _, node in ipairs(nodes or {}) do
     if node.type == "table" and not seen[node.id] then
       seen[node.id] = true
-      local layout = table_layout(view, node, false)
+      local table_node = markdown_tables.extend_semantic_table(
+        view, node.source.line1, node
+      )
+      local layout = table_layout(view, table_node, false)
       if layout then width = math.max(width, layout.total_width or 0) end
     end
   end
