@@ -24,6 +24,21 @@ offsets when normalization changes source byte lengths, such as escaping a
 table pipe. Source Mode and ordinary rendered lines continue through the
 standard Document input paths.
 
+A line-render provider may expose `horizontal_extent(view)` when rendered
+content has a meaningful minimum width greater than a wrapped Document View's
+viewport. Document View combines that extent with its gutter and padding and
+uses its ordinary horizontal scrollbar. Presentation-driven overflow keeps
+that scrollbar expanded rather than applying the editor's contracted default.
+Drawing, source hit testing, carets,
+selection geometry, hover controls, and IME therefore share the existing
+`scroll.x` coordinate transform rather than implementing widget-local panning.
+
+Rendered widgets may set `proximity_radius` to receive a smooth spatial
+`fragment.proximity` value as the pointer approaches their hit area. This lets
+small contextual controls reveal progressively before they become the direct
+hover target. `suppress_hover_overlay` disables Document View's generic square
+hover treatment when a widget supplies its own shape and feedback.
+
 ## Intra-line caret rows
 
 A rendered Document line that places editable text in more than one vertical

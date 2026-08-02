@@ -1281,15 +1281,48 @@ local function get_max_unwrapped_line_width(self)
   return cache.width
 end
 
----Get the scrollable width for unwrapped document text.
+local function get_max_line_render_horizontal_extent(self)
+  local width = 0
+  for _, entry in ipairs(self:line_render_provider_entries()) do
+    local provider = entry.provider
+    if provider.horizontal_extent then
+      local ok, result = pcall(provider.horizontal_extent, provider, self)
+      if ok then
+        width = math.max(width, tonumber(result) or 0)
+      else
+        core.log_quiet(
+          "DocView horizontal extent provider %s failed for %s: %s",
+          entry.id, self.doc:get_name(), tostring(result)
+        )
+      end
+    end
+  end
+  return width
+end
+
+---Get the scrollable width for unwrapped text or overflowing rendered content.
 ---@return number width Total horizontal scrollable width in pixels
 function DocView:get_h_scrollable_size()
-  if self.wrapping_enabled then return 0 end
+  local presentation_width = get_max_line_render_horizontal_extent(self)
+  if self.wrapping_enabled and presentation_width <= 0 then return 0 end
   local gutter_width = self:get_gutter_width()
   local _, _, v_scroll_w = self.v_scrollbar:get_track_rect()
   local right_padding = math.max(style.padding.x, v_scroll_w or 0)
-  local content_width = gutter_width + get_max_unwrapped_line_width(self) + right_padding
+  local text_width = self.wrapping_enabled and 0 or get_max_unwrapped_line_width(self)
+  local content_width = gutter_width + math.max(text_width, presentation_width) + right_padding
   return math.max(self.size.x, content_width)
+end
+
+function DocView:update_scrollbar()
+  local presentation_width = get_max_line_render_horizontal_extent(self)
+  local _, _, v_scroll_w = self.v_scrollbar:get_track_rect()
+  local rendered_width = self:get_gutter_width() + presentation_width
+    + math.max(style.padding.x, v_scroll_w or 0)
+  local rendered_overflow = presentation_width > 0 and rendered_width > self.size.x
+  self.h_scrollbar:set_forced_status(
+    rendered_overflow and "expanded" or config.force_scrollbar_status
+  )
+  return DocView.super.update_scrollbar(self)
 end
 
 
@@ -3819,6 +3852,58 @@ function DocView:get_render_widget_at_position(x, y)
   end
 end
 
+function DocView:get_render_widget_near_position(x, y)
+  if not self:has_line_render_providers() then return nil end
+  local resolved_line = self:resolve_screen_position(x, y)
+  local best
+  for line = math.max(1, resolved_line - 1), math.min(#self.doc.lines, resolved_line + 1) do
+    local render_line = self:get_line_render(line)
+    if render_line then
+      local line_x, line_y = self:get_line_screen_position(line)
+      local row = self:get_visual_row(line, 1)
+      local row_height = self:get_visual_row_height(row)
+      local tx = render_line.x_offset or 0
+      local _, indent_size = self.doc:get_indent_info()
+      for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+        if not fragment.hidden then
+          local font = fragment.font or self:get_font()
+          font:set_tab_size(indent_size)
+          local widget = fragment.widget
+          local text = fragment.text or ""
+          local width = widget and (fragment.hit_width or widget.width or fragment.width)
+            or fragment.width or font:get_width(text, { tab_offset = tx })
+          local radius = widget and tonumber(widget.proximity_radius) or 0
+          if radius > 0 then
+            local padding = widget.padding or 0
+            local height = widget.image_height or widget.height or row_height
+            local left = line_x + (fragment.layout_x ~= nil and fragment.layout_x or tx)
+              + (fragment.draw_x_offset or 0)
+            local top = line_y + (fragment.draw_y_offset and
+              (fragment.draw_y_offset - padding)
+              or (math.max(0, (row_height - height) / 2) - padding))
+            local right, bottom = left + width, top + height + padding * 2
+            local dx = x < left and left - x or x > right and x - right or 0
+            local dy = y < top and top - y or y > bottom and y - bottom or 0
+            local distance = math.sqrt(dx * dx + dy * dy)
+            if distance <= radius then
+              local proximity = 1 - distance / radius
+              proximity = proximity * proximity * (3 - 2 * proximity)
+              if not best or proximity > best.proximity then
+                best = {
+                  line = line, fragment = fragment, widget = widget,
+                  proximity = proximity,
+                }
+              end
+            end
+          end
+          tx = tx + width
+        end
+      end
+    end
+  end
+  return best
+end
+
 local function render_fragment_font(view, fragment)
   return fragment.font or view:get_font()
 end
@@ -4818,8 +4903,10 @@ function DocView:scroll_to_make_visible(line, col, instant, opts)
   if self.wrapping_enabled then self:update_wrap_cache() end
   if self.wrapped_settings then
     with_wrapped_caret_affinity(self, DocView.scroll_to_make_visible_unwrapped, line, col, instant, opts)
-    self.scroll.to.x = 0
-    if instant then self.scroll.x = self.scroll.to.x end
+    if self:get_h_scrollable_size() <= self.size.x then
+      self.scroll.to.x = 0
+      if instant then self.scroll.x = self.scroll.to.x end
+    end
     self:notify_scroll_listeners("scroll_to_make_visible")
     return
   end
@@ -4964,6 +5051,27 @@ function DocView:on_mouse_moved(x, y, ...)
     core.redraw = true
   end
 
+  local proximity_fragment, proximity = nil, 0
+  if not selecting and not self.hovering_gutter and
+    not self:scrollbar_hovering() and not self:scrollbar_dragging()
+  then
+    local near = self:get_render_widget_near_position(x, y)
+    if near then
+      proximity_fragment, proximity = near.fragment, near.proximity
+    end
+  end
+  local previous_proximity = self.proximity_render_fragment
+  local previous_value = previous_proximity and previous_proximity.proximity or 0
+  if previous_proximity ~= proximity_fragment then
+    if previous_proximity then previous_proximity.proximity = nil end
+    self.proximity_render_fragment = proximity_fragment
+    if proximity_fragment then proximity_fragment.proximity = proximity end
+    core.redraw = true
+  elseif proximity_fragment and math.abs(previous_value - proximity) > 0.01 then
+    proximity_fragment.proximity = proximity
+    core.redraw = true
+  end
+
   if self.mouse_selecting then
     local l1, c1 = self:resolve_screen_position(x, y)
     local l2, c2, snap_type = table.unpack(self.mouse_selecting)
@@ -5006,6 +5114,11 @@ function DocView:on_mouse_left()
   if self.hovered_render_fragment then
     self.hovered_render_fragment.hovered = nil
     self.hovered_render_fragment = nil
+    core.redraw = true
+  end
+  if self.proximity_render_fragment then
+    self.proximity_render_fragment.proximity = nil
+    self.proximity_render_fragment = nil
     core.redraw = true
   end
 end
@@ -5869,7 +5982,11 @@ local function draw_render_widget(view, fragment, x, y, row_height, context)
     )
     return false
   end
-  if not (fragment.hovered and fragment_uses_hand_cursor(fragment)) then return true end
+  if widget.suppress_hover_overlay
+  or not (fragment.hovered and fragment_uses_hand_cursor(fragment))
+  then
+    return true
+  end
 
   local padding = widget.padding or 0
   local width = fragment.hit_width or widget.width or fragment.width or 0

@@ -526,6 +526,82 @@ test.describe("Markdown Interactive Table Editing", function()
     test.ok(narrow > wide, "optimistic table row retained stale wide geometry")
   end)
 
+  test.it("exposes horizontal overflow for a wide rendered table", function()
+    local view = make_view(table.concat({
+      "|   |   |   |   |   |   |   |   |   |",
+      "|---|---|---|---|---|---|---|---|---|",
+      "|CodigoEmpresa|Proyecto|proyecto2|PROT PROD|Reales|Previstos|Diferencia|Incremento|Previsto + Incre|",
+      "|1|2023/031|MISTY MOUNTAINS/ MG. LE 15M D|1|1.428,15|1.263,41|164,73|324,25|1.587,66|",
+      "",
+    }, "\n"))
+    view.size.x = 760
+    view:set_wrapping_enabled(true)
+    refresh(view)
+    local function column_boundaries(line)
+      local boundaries, x = {}, 0
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(line)).fragments or {}) do
+        if fragment.table_border then boundaries[#boundaries + 1] = x end
+        x = x + (fragment.width or 0)
+      end
+      return boundaries
+    end
+    test.same(column_boundaries(1), column_boundaries(3))
+    test.same(column_boundaries(1), column_boundaries(4))
+    local function drawn_vertical_borders(line)
+      local result = {}
+      local row_height = view:get_position_visual_row_height(line, 1)
+      local old_draw_rect = renderer.draw_rect
+      local old_draw_text = renderer.draw_text
+      renderer.draw_rect = function(x, _, width, height)
+        if width <= math.max(1, math.ceil(SCALE)) and height >= row_height - 1 then
+          result[#result + 1] = math.floor(x * 100 + 0.5) / 100
+        end
+      end
+      renderer.draw_text = function(font, text, x)
+        return x + font:get_width(text)
+      end
+      local ok, err = pcall(function() view:draw_line_text(line, 0, 0) end)
+      renderer.draw_rect = old_draw_rect
+      renderer.draw_text = old_draw_text
+      if not ok then error(err, 0) end
+      table.sort(result)
+      return result
+    end
+    test.same(drawn_vertical_borders(1), drawn_vertical_borders(3))
+    test.same(drawn_vertical_borders(1), drawn_vertical_borders(4))
+    local scrollable_width = view:get_h_scrollable_size()
+    test.ok(
+      scrollable_width > view.size.x,
+      "wide rendered table should extend the horizontal scroll range"
+    )
+    view:update_scrollbar()
+    test.equal(view.h_scrollbar.force_status, "expanded")
+    local _, _, scrollbar_width, scrollbar_height = view.h_scrollbar:get_track_rect()
+    test.ok(scrollbar_width > 0 and scrollbar_height > 0)
+
+    local last_cell = table_cells(view, 4)[9]
+    view:scroll_to_make_visible(4, last_cell.text_source_col1, true)
+    test.ok(view.scroll.x > 0, "caret visibility should scroll a wide wrapped table")
+
+    view.scroll.x = scrollable_width - view.size.x
+    view.scroll.to.x = view.scroll.x
+    local x, y = cell_center(view, 4, 9)
+    test.ok(x >= view.position.x and x <= view.position.x + view.size.x)
+    local line, col = view:resolve_screen_position(x, y)
+    local context = test.not_nil(markdown_tables.interactive_context(view, line, col))
+    test.equal(context.column, 9)
+
+    view.size.x = 2000
+    test.equal(view:get_h_scrollable_size(), view.size.x)
+    view:clamp_scroll_position()
+    test.equal(view.scroll.to.x, 0)
+
+    view.size.x = 760
+    view:set_wrapping_enabled(false)
+    view:update_scrollbar()
+    test.equal(view.h_scrollbar.force_status, "expanded")
+  end)
+
   test.it("shows hover controls that insert columns and rows at their edges", function()
     local function click_control(view, line, control)
       local line_x, line_y = view:get_line_screen_position(line)
@@ -567,6 +643,46 @@ test.describe("Markdown Interactive Table Editing", function()
     refresh(view)
     click_control(view, 3, test.not_nil(table_control(view, 3, "row", 3)))
     test.equal(doc.lines[4], "|  |  |  |\n")
+  end)
+
+  test.it("reveals insertion controls progressively as the pointer approaches", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n")
+    doc:set_selection(3, 4)
+    refresh(view)
+    local control = test.not_nil(table_control(view, 1, "column", 2))
+    local line_x, line_y = view:get_line_screen_position(1)
+    local size = control.widget.width
+    local x = line_x + control.layout_x - size
+    local y = line_y + control.draw_y_offset + size / 2
+    local near = test.not_nil(view:get_render_widget_near_position(x, y), string.format(
+      "control proximity missing at %d:%d (radius=%s)",
+      view:resolve_screen_position(x, y), select(2, view:resolve_screen_position(x, y)),
+      tostring(control.widget.proximity_radius)
+    ))
+    test.equal(near.fragment.semantic_id, control.semantic_id)
+    view:on_mouse_moved(x, y, 0, 0)
+    local approaching = test.not_nil(view.proximity_render_fragment)
+    test.equal(approaching.semantic_id, control.semantic_id)
+    test.ok(not approaching.hovered)
+    test.ok((approaching.proximity or 0) > 0 and approaching.proximity < 1)
+  end)
+
+  test.it("scales insertion controls with editor zoom", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n")
+    doc:set_selection(3, 4)
+    refresh(view)
+    local normal = test.not_nil(table_control(view, 1, "column", 1)).control_size
+    local font = view:get_font()
+    local old_size = font:get_size()
+    local ok, err = pcall(function()
+      font:set_size(old_size * 0.5)
+      view:invalidate_line_render("test-zoom")
+      local smaller = test.not_nil(table_control(view, 1, "column", 1)).control_size
+      test.ok(smaller < normal * 0.75)
+    end)
+    font:set_size(old_size)
+    view:invalidate_line_render("test-zoom-restore")
+    if not ok then error(err, 0) end
   end)
 
   test.it("reveals only the active cell's inline Markdown source", function()

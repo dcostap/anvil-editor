@@ -1777,6 +1777,12 @@ local function table_available_width(view)
   return math.max(math.floor(SCALE * 160), width)
 end
 
+local function table_geometry_key(font, available_width)
+  return table.concat({
+    tostring(font), tostring(font:get_size()), tostring(available_width),
+  }, ":")
+end
+
 local function table_layout(view, table_node, allow_pending)
   local instance = render_semantic_model(view, table_node.source.line1)
   if not instance and allow_pending then instance = markdown_model.peek(view.doc) end
@@ -1806,9 +1812,7 @@ local function table_layout(view, table_node, allow_pending)
     }
     view.__markdown_live_table_layout_cache = cache
   end
-  local geometry_key = table.concat({
-    tostring(font), tostring(font:get_size()), tostring(available_width),
-  }, ":")
+  local geometry_key = table_geometry_key(font, available_width)
   local bucket = cache.buckets[geometry_key]
   if not bucket then
     bucket = {
@@ -1900,7 +1904,10 @@ local function table_layout(view, table_node, allow_pending)
     local header_text = table_cell_text(rows[line1].text, rows[line1].cells[column])
     minimums[column] = math.max(
       pad * 2 + inline_style_font(view, "strong"):get_width(header_text),
-      pad * 2 + font:get_width("MMMM")
+      -- Below this floor dense grids become columns of individually wrapped
+      -- glyphs. Keep a readable cell width and let Document View expose the
+      -- table's horizontal overflow instead of crushing every column.
+      pad * 2 + font:get_width("MMMMMMMM")
     )
     for row_line = line1, line2 do
       local presentation = presentations[row_line] and presentations[row_line][column]
@@ -1979,6 +1986,18 @@ local function table_layout(view, table_node, allow_pending)
   }
   layouts[table_node.id] = layout
   return layout
+end
+
+local function cached_table_horizontal_extent(view)
+  local cache = view.__markdown_live_table_layout_cache
+  if not cache then return 0 end
+  local font = markdown_live_body_font(view)
+  local bucket = cache.buckets[table_geometry_key(font, table_available_width(view))]
+  local width = 0
+  for _, layout in pairs(bucket and bucket.layouts or {}) do
+    if layout then width = math.max(width, tonumber(layout.total_width) or 0) end
+  end
+  return width
 end
 
 local function table_row_fragments(view, table_node, line, allow_pending)
@@ -2134,6 +2153,11 @@ local function table_row_fragments(view, table_node, line, allow_pending)
   local fragment_x = 0
   local cell_x = {}
   for _, fragment in ipairs(fragments) do
+    -- A table row is one shared grid. Source-position mappings describe caret
+    -- placement inside cells, but must never reposition the border/cell
+    -- fragments themselves; empty and differently wrapped rows would then
+    -- draw each column at different x coordinates.
+    fragment.layout_x = fragment_x
     if fragment.table_cell then
       cell_x[fragment.table_column] = {
         x1 = fragment_x,
@@ -2170,43 +2194,61 @@ local function table_row_fragments(view, table_node, line, allow_pending)
   end
 
   local control_size = math.max(
-    math.floor(SCALE * 14),
-    math.min(math.floor(row_height - SCALE * 4), layout.text_line_height)
+    math.floor(SCALE * 6),
+    math.floor(layout.text_line_height * 0.72 + 0.5)
+  )
+  local control_hit_padding = math.max(
+    math.floor(SCALE * 2), math.floor(control_size * 0.18 + 0.5)
+  )
+  local control_hit_size = control_size + control_hit_padding * 2
+  local control_proximity_radius = math.max(
+    layout.text_line_height * 1.6, control_size * 2
   )
   local function insertion_control(kind, after, source_col, x, y_offset, action)
-    local icon_thickness = math.max(1, math.floor(SCALE * 2))
-    local icon_length = math.max(icon_thickness * 3, math.floor(control_size * 0.42))
+    local icon_thickness = math.max(1, math.floor(control_size * 0.11 + 0.5))
+    local icon_length = math.max(icon_thickness * 3, math.floor(control_size * 0.44))
     fragments[#fragments + 1] = {
       source_col1 = source_col,
       source_col2 = source_col,
       text = "",
       width = 0,
-      hit_width = control_size,
-      layout_x = x,
-      draw_y_offset = y_offset,
+      hit_width = control_hit_size,
+      layout_x = x - control_hit_padding,
+      draw_y_offset = y_offset - control_hit_padding,
+      control_size = control_size,
       semantic_id = table_node.id .. ":insert:" .. kind .. ":" .. tostring(after),
       table_insert_control = kind,
       table_insert_after = after,
       widget = {
-        width = control_size,
-        height = control_size,
+        width = control_hit_size,
+        height = control_hit_size,
+        proximity_radius = control_proximity_radius,
+        suppress_hover_overlay = true,
         cursor = "hand",
         draw = function(_, fragment, draw_x, draw_y)
-          if not fragment.hovered then return end
+          local visibility = fragment.hovered and 1 or fragment.proximity or 0
+          if visibility <= 0.01 then return end
+          visibility = visibility * visibility * (3 - 2 * visibility)
+          local button_x = draw_x + control_hit_padding
           local button_y = draw_y + (fragment.draw_y_offset or 0)
+            + control_hit_padding
+          local accent = { table.unpack(style.accent) }
+          accent[4] = (accent[4] or 255) * visibility * (0.35 + visibility * 0.4)
           renderer.draw_rounded_rect(
-            draw_x, button_y, control_size, control_size, control_size / 2,
-            style.accent
+            button_x, button_y, control_size, control_size, control_size / 2,
+            accent
           )
-          local center_x = draw_x + control_size / 2
+          local center_x = button_x + control_size / 2
           local center_y = button_y + control_size / 2
+          local foreground = { table.unpack(style.background) }
+          foreground[4] = (foreground[4] or 255) * visibility
           renderer.draw_rect(
             center_x - icon_length / 2, center_y - icon_thickness / 2,
-            icon_length, icon_thickness, style.background
+            icon_length, icon_thickness, foreground
           )
           renderer.draw_rect(
             center_x - icon_thickness / 2, center_y - icon_length / 2,
-            icon_thickness, icon_length, style.background
+            icon_thickness, icon_length, foreground
           )
         end,
         on_mouse_pressed = function(_, owner, _, button)
@@ -3946,6 +3988,54 @@ function provider:generation(view)
     .. ":image-width:" .. tostring(image_width)
     .. ":interactive-tables:" .. tostring(state.interactive_tables)
   return state.generation
+end
+
+function provider:horizontal_extent(view)
+  if view_in_source_mode(view)
+  or config.markdown_live_interactive_tables ~= true
+  then
+    return 0
+  end
+  local instance = current_semantic_model(view)
+  if not instance then return cached_table_horizontal_extent(view) end
+  local owner = view.__markdown_live_owner
+  local key = table.concat({
+    tostring(instance.generation), tostring(view.doc.text_revision),
+    tostring(self:generation(view)),
+  }, ":")
+  local cached = owner and owner.table_horizontal_extent
+  if cached and cached.key == key then
+    if not cached.complete then
+      cached.width = math.max(cached.width, cached_table_horizontal_extent(view))
+    end
+    return cached.width
+  end
+
+  local width = 0
+  local nodes, reason = instance:nodes_for_lines(1, #view.doc.lines, {
+    limit = 100000,
+  })
+  local seen = {}
+  for _, node in ipairs(nodes or {}) do
+    if node.type == "table" and not seen[node.id] then
+      seen[node.id] = true
+      local layout = table_layout(view, node, false)
+      if layout then width = math.max(width, layout.total_width or 0) end
+    end
+  end
+  if reason == "limit" then
+    width = math.max(width, cached_table_horizontal_extent(view))
+    core.log_quiet(
+      "Markdown table horizontal extent used partial semantic results for %s",
+      view.doc:get_name()
+    )
+  end
+  if owner then
+    owner.table_horizontal_extent = {
+      key = key, width = width, complete = reason ~= "limit",
+    }
+  end
+  return width
 end
 
 function provider:line_generation(view, line)
