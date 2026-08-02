@@ -19,12 +19,11 @@ def trim_alpha(img: Image.Image, threshold: int = 4) -> Image.Image:
     return img.crop(bbox) if bbox else img
 
 
-def contain_square(img: Image.Image, size: int, padding: float = 0.08) -> Image.Image:
-    """Return a square transparent icon with the source preserved and centered."""
+def contain_square(img: Image.Image, size: int) -> Image.Image:
+    """Return a tight square icon with the trimmed source preserved and centered."""
     img = trim_alpha(img).convert("RGBA")
-    target = max(1, round(size * (1.0 - padding * 2.0)))
     work = img.copy()
-    work.thumbnail((target, target), Image.Resampling.LANCZOS)
+    work.thumbnail((size, size), Image.Resampling.LANCZOS)
     out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     out.alpha_composite(work, ((size - work.width) // 2, (size - work.height) // 2))
     return out
@@ -38,7 +37,7 @@ def paste_contained(dst: Image.Image, src: Image.Image, box: tuple[int, int, int
 
 
 def save_icon_inl(img: Image.Image) -> None:
-    icon64 = contain_square(img, 64, padding=0.05)
+    icon64 = contain_square(img, 64)
     data = icon64.tobytes("raw", "RGBA")
     lines = ["static unsigned char icon_rgba[] = {\n"]
     for i in range(0, len(data), 16):
@@ -89,7 +88,7 @@ def main() -> None:
     args = parser.parse_args()
 
     img = Image.open(args.source).convert("RGBA")
-    logo = contain_square(img, 1024, padding=0.05)
+    logo = contain_square(img, 1024)
 
     OUT.mkdir(parents=True, exist_ok=True)
     logo.save(OUT / "logo.png", optimize=True)
