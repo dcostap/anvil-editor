@@ -1100,7 +1100,7 @@ Exit gate: normal note-taking no longer drops to raw presentation for common blo
 
 ### Phase 7: selected advanced blocks and embeds
 
-**Internal-note embeds, generic attachment chips, styled-source math, and semantic table-presentation slices completed July 10, 2026.** Resolved note/heading/block embeds now retain editable source and add bounded generation-keyed visual preview rows sourced cooperatively from the authoritative Project index. Parser-confirmed PDF/audio/video links and embeds use source-preserving chips while retaining shared resolution, POI, activation, alias, and reveal behavior. Parser-confirmed inline/display LaTeX receives bounded source-preserving code-style presentation and construct reveal without adding a runtime web renderer. Parser-confirmed GFM tables now receive stable cell identities and source-preserving header/body/delimiter styling; canonical tables support undoable insert/delete/move row and column commands with semantic-context and structural fallback guards.
+**Internal-note embeds, generic attachment chips, styled-source math, semantic table presentation, and Interactive Table Editing are complete.** Resolved note/heading/block embeds retain editable source and add bounded generation-keyed visual preview rows sourced cooperatively from the authoritative Project index. Parser-confirmed PDF/audio/video links and embeds use source-preserving chips while retaining shared resolution, POI, activation, alias, and reveal behavior. Parser-confirmed inline/display LaTeX receives bounded source-preserving code-style presentation and construct reveal without adding a runtime web renderer. Parser-confirmed GFM tables retain stable cell identities and source-preserving header/body/delimiter styling. Interactive Table Editing keeps the grid active while cells are edited, maps wrapped cell rows to ordinary Document selections and carets, keeps same-cell drags as text selections, promotes cross-cell drags to rectangular Table Cell Selections, provides Hover Insertion Controls, supports cell-local keyboard navigation and `<br>` line breaks, and retains explicit palette commands for structural edits.
 
 Implement separate vertical slices for the required selected scope:
 
@@ -1109,7 +1109,7 @@ Implement separate vertical slices for the required selected scope:
 - note, heading, and block embeds
 - generic clickable attachment chips, including PDF/audio/video files
 
-Keep rich table grids, editable property-row UI, rendered math, native PDF previews, media players, and Canvas/Base previews as deferred follow-up slices.
+Keep editable property-row UI, rendered math, native PDF previews, media players, and Canvas/Base previews as deferred follow-up slices.
 
 Each implemented slice needs its own public behavior tests, mapping tests, focus/keyboard tests, wrapping tests, malformed-source fallback, and performance check.
 
@@ -1356,7 +1356,7 @@ Include note, heading, and block embeds plus generic clickable attachment chips 
 
 ### 14. Tables
 
-Ship styled editable table source with reliable row/column commands first. Treat a full interactive visual grid as a later dedicated feature slice.
+Styled source-backed table presentation shipped first. Interactive Table Editing is now the default in Markdown Live Preview, with a setting that falls back to raw table Markdown. Same-cell drags make ordinary text selections; cross-cell drags make full-content rectangular Table Cell Selections with explicit cell outlines, including empty cells. Hover Insertion Controls provide direct row/column insertion on structurally editable canonical tables, while structural palette commands remain available and apply to the primary cell. The grid reveals inline Markdown only in active cells, moves every selected cell during navigation, stores visual cell line breaks as canonical `<br>` source, retains and remeasures rendered rows through all direct editing paths, and reserves stable active/inactive row geometry to avoid cursor-driven scroll jitter. Interactive routing is restricted to a rendered Live Preview grid with cell-contained selections; Source Mode, fenced/fallback content, and mixed selections preserve ordinary Editor behavior. Cell-safe text, matching multi-cursor paste, primary-selection paste, and IME paths share lexical pipe/newline normalization, while inline code remains literal and row insertion is safe at end of Document.
 
 ### 15. Properties/frontmatter
 

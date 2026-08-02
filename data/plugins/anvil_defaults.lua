@@ -328,6 +328,9 @@ keymap.add_direct({
 -- USERDIR/project-module override loaded before first-party defaults.
 if config.markdown_live_editor == nil then config.markdown_live_editor = true end
 if config.markdown_live_reveal_mode == nil then config.markdown_live_reveal_mode = "construct" end
+if config.markdown_live_interactive_tables == nil then
+  config.markdown_live_interactive_tables = true
+end
 if config.markdown_live_heading_line_height == nil then
   config.markdown_live_heading_line_height = 1.08
 end

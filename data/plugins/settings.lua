@@ -690,6 +690,13 @@ settings.add("Editor",
       default = false
     },
     {
+      label = "Markdown editor: Interactive table editing",
+      description = "When enabled, tables are rendered as an interactive widget in the editor. Disable this if you prefer to edit tables as raw Markdown.",
+      path = "markdown_live_interactive_tables",
+      type = settings.type.TOGGLE,
+      default = true
+    },
+    {
       label = "Line Limit",
       description = "Amount of characters at which the line breaking column will be drawn.",
       path = "line_limit",

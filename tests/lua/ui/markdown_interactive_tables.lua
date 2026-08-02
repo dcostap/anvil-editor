@@ -1,0 +1,827 @@
+local command = require "core.command"
+local config = require "core.config"
+local core = require "core"
+local Doc = require "core.doc"
+local DocView = require "core.docview"
+local linewrapping = require "core.linewrapping"
+local markdown = require "core.markdown"
+local markdown_model = require "core.markdown.model"
+local markdown_tables = require "core.markdown.tables"
+local style = require "core.style"
+local test = require "core.test"
+local worker_pool = require "core.worker_pool"
+
+local function make_view(text, filename)
+  local doc = Doc(filename or "interactive-table.md", filename or "interactive-table.md", true)
+  doc:insert(1, 1, text)
+  doc:clear_undo_redo()
+  local view = DocView(doc)
+  view.position.x, view.position.y = 0, 0
+  view.size.x, view.size.y = 500, 300
+  view:set_wrapping_enabled(false)
+  return view, doc
+end
+
+local function refresh(view)
+  markdown.live_render.refresh_view(view)
+  local instance = markdown_model.peek(view.doc)
+  local deadline = system.get_time() + 5
+  while instance and instance.status ~= "ready" and system.get_time() < deadline do
+    local pool = worker_pool.current_system()
+    if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+    if instance.status ~= "ready" then system.sleep(0.001) end
+  end
+  test.equal(test.not_nil(instance).status, "ready", instance.reason)
+  linewrapping.complete_async_reconstruction(view)
+end
+
+local function table_cells(view, line)
+  local cells = {}
+  for _, fragment in ipairs(test.not_nil(view:get_line_render(line)).fragments or {}) do
+    if fragment.table_cell then cells[#cells + 1] = fragment end
+  end
+  return cells
+end
+
+local function cell_center(view, line, column)
+  local render = test.not_nil(view:get_line_render(line))
+  local x = 0
+  for _, fragment in ipairs(render.fragments or {}) do
+    local width = fragment.width or 0
+    if fragment.table_cell and fragment.table_column == column then
+      local line_x, line_y = view:get_line_screen_position(line)
+      return line_x + x + width / 2, line_y + (render.table_row_height or view:get_line_height()) / 2
+    end
+    x = x + width
+  end
+  error("table cell not found")
+end
+
+local function table_control(view, line, kind, index)
+  for _, fragment in ipairs(test.not_nil(view:get_line_render(line)).fragments or {}) do
+    if fragment.table_insert_control == kind
+    and (index == nil or fragment.table_insert_after == index)
+    then
+      return fragment
+    end
+  end
+end
+
+test.describe("Markdown Interactive Table Editing", function()
+  test.before_each(function(context)
+    context.live = config.markdown_live_editor
+    context.interactive = config.markdown_live_interactive_tables
+    config.markdown_live_editor = true
+    config.markdown_live_interactive_tables = true
+  end)
+
+  test.after_each(function(context)
+    config.markdown_live_editor = context.live
+    config.markdown_live_interactive_tables = context.interactive
+  end)
+
+  test.it("keeps the grid rendered while a body cell is active", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
+    doc:set_selection(3, 4)
+    refresh(view)
+
+    local cells = table_cells(view, 3)
+    test.equal(#cells, 2)
+    test.ok(test.not_nil(view:get_line_render(3)).table_row)
+  end)
+
+  test.it("falls back to raw table Markdown when interactive editing is disabled", function()
+    config.markdown_live_interactive_tables = false
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
+    doc:set_selection(5, 1)
+    refresh(view)
+    test.equal(view:get_line_render(1), nil)
+    test.equal(view:get_line_render(3), nil)
+  end)
+
+  test.it("does not intercept table commands in Markdown Source Mode", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n")
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      doc:set_selection(3, 4)
+      refresh(view)
+      markdown.live_render.set_source_mode(view, true, "interactive-table-test")
+      test.equal(command.perform("markdown-live-preview:table-next-cell"), false)
+      test.same({ doc:get_selection() }, { 3, 4, 3, 4 })
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("does not fabricate interactive tables inside fenced code", function()
+    local view, doc = make_view(
+      "```markdown\n| A | B |\n| --- | --- |\n| one | two |\n```\n"
+    )
+    doc:set_selection(4, 4)
+    refresh(view)
+    test.equal(markdown_tables.has_interactive_context(view), false)
+  end)
+
+  test.it("does not intercept tables beyond the rendered column limit", function()
+    local cells, markers = {}, {}
+    for column = 1, markdown_tables.MAX_PRESENTATION_COLUMNS + 1 do
+      cells[column], markers[column] = " C" .. column .. " ", " --- "
+    end
+    local source = "|" .. table.concat(cells, "|") .. "|\n|"
+      .. table.concat(markers, "|") .. "|\n|"
+      .. table.concat(cells, "|") .. "|\n"
+    local view, doc = make_view(source)
+    doc:set_selection(3, 3)
+    refresh(view)
+    test.equal(markdown_tables.has_interactive_context(view), false)
+    test.equal(test.not_nil(view:get_line_render(3)).table_row, nil)
+  end)
+
+  test.it("does not show insertion controls for optional-pipe tables", function()
+    local view, doc = make_view("A | B\n--- | ---\none | two\n")
+    doc:set_selection(3, 4)
+    refresh(view)
+    test.equal(table_control(view, 1, "column", 1), nil)
+    test.equal(table_control(view, 3, "row", 3), nil)
+  end)
+
+  test.it("navigates every selected cell and selects destination contents", function()
+    local view, doc = make_view(
+      "| A | B | C |\n| --- | --- | --- |\n| one | two | three |\n| four | five | six |\n\nplain"
+    )
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      doc:set_selection_list({
+        3, 4, 3, 4,
+        4, 4, 4, 4,
+      }, 2)
+      refresh(view)
+
+      test.equal(command.perform("markdown-live-preview:table-next-cell"), true)
+      local selections = view:get_selection_state().selections
+      test.same(selections, {
+        3, 12, 3, 9,
+        4, 14, 4, 10,
+      })
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("moves down in the same column and appends a row at the bottom", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      doc:set_selection(3, 9)
+      refresh(view)
+
+      test.equal(command.perform("markdown-live-preview:table-cell-below"), true)
+      test.equal(doc.lines[4], "|  |  |\n")
+      local appended = test.not_nil(
+        view.__markdown_live_owner.optimistic_lines[4],
+        "appended table row did not receive an optimistic presentation"
+      )
+      test.ok(test.not_nil(appended.render_line).table_row, "appended row fell back to source")
+      test.equal(#table_cells(view, 4), 2)
+      local line1, col1, line2, col2 = doc:get_selection()
+      test.same({ line1, col1, line2, col2 }, { 4, 6, 4, 6 })
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("appends a distinct row when the table ends the Document", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |")
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      doc:set_selection(3, 10)
+      refresh(view)
+      test.equal(command.perform("markdown-live-preview:table-next-cell"), true)
+      test.equal(doc.lines[3], "| one | two |\n")
+      test.equal(doc.lines[4], "|  |  |\n")
+      test.equal(#table_cells(view, 4), 2)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("inserts an explicit row below a table at end of Document", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |")
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      doc:set_selection(3, 4)
+      refresh(view)
+      test.equal(command.perform("markdown-live-preview:table-insert-row-below"), true)
+      test.equal(doc.lines[3], "| one | two |\n")
+      test.equal(doc.lines[4], "|  |  |\n")
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("renders a Tab-appended row before a following thematic break", function()
+    local source = table.concat({
+      "| CodigoEmpresa | Proyecto                  | proyecto2                      | PROT PROD |",
+      "| ------------- | ------------------------- | ------------------------------ | --------- |",
+      "| 1             | 2023/031                  | MISTY MOUNTAINS/ MG. LE 15M D  | 1         |",
+      "| 2             | 202<3/121<br><br><br>test | ARRIVA/ NELEC 12M 2P           | 1         |",
+      "|               | Total 2                   |                                |           |",
+      "---",
+    }, "\n")
+    local view, doc = make_view(source)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      doc:set_selection(5, 82)
+      refresh(view)
+      test.equal(command.perform("markdown-live-preview:table-next-cell"), true)
+      test.equal(doc.lines[6], "|  |  |  |  |\n")
+      local cells = table_cells(view, 6)
+      test.equal(#cells, 4)
+      local header = table_cells(view, 1)
+      for column = 1, 4 do
+        test.equal(cells[column].width, header[column].width)
+        test.equal(cells[column].text_lines[1].text, "")
+      end
+      test.ok(test.not_nil(view:get_line_render(6)).table_row)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("inserts canonical br breaks in every selected cell", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      doc:set_selection_list({
+        3, 4, 3, 4,
+        3, 10, 3, 10,
+      }, 2)
+      refresh(view)
+
+      test.equal(command.perform("markdown-live-preview:table-insert-cell-break"), true)
+      test.equal(doc.lines[3], "| o<br>ne | t<br>wo |\n")
+      local cells = table_cells(view, 3)
+      test.equal(#cells[1].text_lines, 2)
+      test.equal(#cells[2].text_lines, 2)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("renders br variants as cell-local visual lines for Home and End", function()
+    local source = "| A | B |\n| --- | --- |\n| one<br>two<br/>three<br />four | x |\n\nplain"
+    local view, doc = make_view(source)
+    local two = test.not_nil(doc.lines[3]:find("two", 1, true))
+    doc:set_selection(3, two + 2)
+    refresh(view)
+
+    local first = test.not_nil(table_cells(view, 3)[1])
+    test.equal(#test.not_nil(first.text_lines), 4)
+    test.ok(#test.not_nil(view:get_line_render(3)).position_rows >= 5)
+
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("doc:move-to-start-of-line"), true)
+      local line, col = doc:get_selection()
+      test.same({ line, col }, { 3, two })
+
+      doc:set_selection(3, two + 1)
+      test.equal(command.perform("doc:move-to-end-of-line"), true)
+      line, col = doc:get_selection()
+      test.same({ line, col }, { 3, two + 3 })
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("moves vertically within a cell and then to the same column below", function()
+    local source = "| A | B |\n| --- | --- |\n| one<br>two<br>three | x |\n| four | y |\n\nplain"
+    local view, doc = make_view(source)
+    local three = test.not_nil(doc.lines[3]:find("three", 1, true))
+    local two = test.not_nil(doc.lines[3]:find("two", 1, true))
+    doc:set_selection(3, three + 2)
+    refresh(view)
+
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("markdown-live-preview:table-cell-up"), true)
+      local line, col = doc:get_selection()
+      test.same({ line, col }, { 3, two + 2 })
+
+      local one = test.not_nil(doc.lines[3]:find("one", 1, true))
+      doc:set_selection(3, one + 1)
+      test.equal(command.perform("markdown-live-preview:table-cell-down"), true)
+      line, col = doc:get_selection()
+      test.same({ line, col }, { 3, two + 1 })
+
+      doc:set_selection(3, three + 1)
+      test.equal(command.perform("markdown-live-preview:table-cell-down"), true)
+      line, col = doc:get_selection()
+      test.equal(line, 4)
+      test.ok(col >= 3 and col <= 7)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("drag-selects a rectangle as full-content cell selections", function()
+    local view, doc = make_view(
+      "| A | B |\n| --- | --- |\n| one | two |\n| four | five |\n\nplain"
+    )
+    doc:set_selection(5, 1)
+    refresh(view)
+    local start_x, start_y = cell_center(view, 3, 1)
+    local finish_x, finish_y = cell_center(view, 4, 2)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      local hit_line, hit_col = view:resolve_screen_position(finish_x, finish_y)
+      test.equal(hit_line, 4)
+      test.ok(hit_col >= 10, "second-column hit resolved to source column " .. tostring(hit_col))
+      test.equal(command.perform("doc:set-cursor", start_x, start_y), true)
+      view:on_mouse_moved(finish_x, finish_y, finish_x - start_x, finish_y - start_y)
+      view:on_mouse_released("left", finish_x, finish_y)
+      test.same(view:get_selection_state().selections, {
+        3, 6, 3, 3,
+        3, 12, 3, 9,
+        4, 7, 4, 3,
+        4, 14, 4, 10,
+      })
+      test.equal(view:get_selection_state().last_selection, 4)
+
+      test.equal(view:on_text_input("x"), true)
+      test.equal(doc.lines[3], "| x | x |\n")
+      test.equal(doc.lines[4], "| x | x |\n")
+      test.equal(#table_cells(view, 3), 2)
+      test.equal(#table_cells(view, 4), 2)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps a drag within one cell as an ordinary text selection", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
+    doc:set_selection(5, 1)
+    refresh(view)
+    local line_x, line_y = view:get_line_screen_position(3)
+    local start_x = line_x + view:get_col_x_offset(3, 3)
+    local finish_x = line_x + view:get_col_x_offset(3, 5)
+    local y = line_y + view:get_position_visual_row_height(3, 3) / 2
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("doc:set-cursor", start_x, y), true)
+      view:on_mouse_moved(finish_x, y, finish_x - start_x, 0)
+      view:on_mouse_released("left", finish_x, y)
+      local line1, col1, line2, col2 = doc:get_selection(true)
+      test.same({ line1, line2 }, { 3, 3 })
+      test.equal(doc:get_text(line1, col1, line2, col2), "on")
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("draws partial text selection above table cell backgrounds", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
+    view:set_wrapping_enabled(true)
+    doc:set_selection(3, 5, 3, 3)
+    refresh(view)
+    view:prepare_line_body_draw_cache(3, 3)
+    local x, y = view:get_line_screen_position(3)
+    local calls = {}
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    renderer.draw_rect = function(rx, ry, width, height, color)
+      calls[#calls + 1] = { rx, ry, width, height, color }
+    end
+    renderer.draw_text = function(font, text, tx)
+      return tx + font:get_width(text)
+    end
+    local ok, err = pcall(function() view:draw_line_body(3, x, y) end)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    if not ok then error(err, 0) end
+
+    local selected
+    for _, call in ipairs(calls) do
+      if call[5] == style.selection and call[3] > 1 then selected = call break end
+    end
+    selected = test.not_nil(selected, "partial table text selection was not drawn")
+    local px, py = selected[1] + selected[3] / 2, selected[2] + selected[4] / 2
+    local top_color
+    for _, call in ipairs(calls) do
+      if px >= call[1] and px <= call[1] + call[3]
+      and py >= call[2] and py <= call[2] + call[4]
+      then
+        top_color = call[5]
+      end
+    end
+    test.equal(top_color, style.selection)
+  end)
+
+  test.it("outlines a completely selected cell", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
+    doc:set_selection(3, 6, 3, 3)
+    refresh(view)
+    view:prepare_line_body_draw_cache(3, 3)
+    local x, y = view:get_line_screen_position(3)
+    local outlines = 0
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    renderer.draw_rect = function(_, _, _, _, color)
+      if color == style.caret then outlines = outlines + 1 end
+    end
+    renderer.draw_text = function(font, text, tx)
+      return tx + font:get_width(text)
+    end
+    local ok, err = pcall(function() view:draw_line_body(3, x, y) end)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    if not ok then error(err, 0) end
+    test.ok(outlines >= 4, "fully selected table cell did not receive an outline")
+  end)
+
+  test.it("paints selection state for an empty selected cell", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n|  | two |\n\nplain")
+    doc:set_selection(3, 3)
+    refresh(view)
+    view:prepare_line_body_draw_cache(3, 3)
+    local x, y = view:get_line_screen_position(3)
+    local selection_fills, outlines = 0, 0
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    renderer.draw_rect = function(_, _, width, height, color)
+      if color == style.selection and width > 1 and height > 1 then
+        selection_fills = selection_fills + 1
+      elseif color == style.caret then
+        outlines = outlines + 1
+      end
+    end
+    renderer.draw_text = function(font, text, tx)
+      return tx + font:get_width(text)
+    end
+    local ok, err = pcall(function() view:draw_line_body(3, x, y) end)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    if not ok then error(err, 0) end
+    test.ok(selection_fills >= 1, "empty selected table cell was not painted")
+    test.ok(outlines >= 4, "empty selected table cell was not outlined")
+  end)
+
+  test.it("keeps every table row rendered through direct editing paths", function()
+    local view, doc = make_view(
+      "| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n\nplain"
+    )
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      doc:set_selection(3, 5)
+      refresh(view)
+      view:on_ime_text_editing("x", 0, 1)
+      for line = 1, 4 do
+        test.ok(
+          test.not_nil(view:get_line_render(line)).table_row,
+          "table row " .. line .. " flashed to raw source during IME editing"
+        )
+      end
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps table row height stable when a cell becomes active", function()
+    local view, doc = make_view(
+      "| A |\n| --- |\n| ``````abcdefghijklmnop`````` |\n\nplain"
+    )
+    view.size.x = 180
+    doc:set_selection(5, 1)
+    refresh(view)
+    local inactive_height = test.not_nil(view:get_line_render(3)).layout_height
+    doc:set_selection(3, 10)
+    local active_height = test.not_nil(view:get_line_render(3)).layout_height
+    test.equal(active_height, inactive_height)
+  end)
+
+  test.it("remeasures optimistic table rows when the viewport narrows", function()
+    local view, doc = make_view(
+      "| A | B |\n| --- | --- |\n"
+        .. "| one two three four five six seven eight | value |\n\nplain"
+    )
+    view.size.x = 900
+    doc:set_selection(3, 4)
+    refresh(view)
+    test.equal(view:on_text_input("x"), true)
+    local wide = test.not_nil(view:get_line_render(3)).layout_height
+    view.size.x = 190
+    local narrow = test.not_nil(view:get_line_render(3)).layout_height
+    test.ok(narrow > wide, "optimistic table row retained stale wide geometry")
+  end)
+
+  test.it("shows hover controls that insert columns and rows at their edges", function()
+    local function click_control(view, line, control)
+      local line_x, line_y = view:get_line_screen_position(line)
+      local width = control.hit_width or control.widget.width
+      local height = control.widget.height
+      local x = line_x + control.layout_x + width / 2
+      local y = line_y + control.draw_y_offset + height / 2
+      local hit_line, hit_col = view:resolve_screen_position(x, y)
+      if not view:get_render_widget_at_position(x, y) then
+        error(string.format(
+          "table insertion control was not hit (wanted line %d, resolved %d:%d at %.1f,%.1f)",
+          line, hit_line, hit_col, x, y
+        ), 0)
+      end
+      view:on_mouse_moved(x, y, 0, 0)
+      local hovered = view.hovered_render_fragment
+      if not hovered then
+        error(string.format(
+          "table insertion control did not hover (cursor=%s gutter=%s scrollbar=%s selecting=%s posthit=%s)",
+          tostring(view.cursor), tostring(view.hovering_gutter),
+          tostring(view:scrollbar_hovering()), tostring(view.mouse_selecting),
+          tostring(view:get_render_widget_at_position(x, y) ~= nil)
+        ), 0)
+      end
+      test.equal(hovered.table_insert_control, control.table_insert_control)
+      test.equal(hovered.hovered, true)
+      test.equal(view.cursor, "hand")
+      test.equal(view:on_mouse_pressed("left", x, y, 1), true)
+    end
+
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
+    doc:set_selection(5, 1)
+    refresh(view)
+    click_control(view, 1, test.not_nil(table_control(view, 1, "column", 1)))
+    test.equal(doc.lines[1], "| A |  | B |\n")
+    test.equal(doc.lines[3], "| one |  | two |\n")
+
+    markdown_model.get(doc):submit("interactive-table-hover-column")
+    refresh(view)
+    click_control(view, 3, test.not_nil(table_control(view, 3, "row", 3)))
+    test.equal(doc.lines[4], "|  |  |  |\n")
+  end)
+
+  test.it("reveals only the active cell's inline Markdown source", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| `one` | `two` |\n\nplain")
+    doc:set_selection(5, 1)
+    refresh(view)
+    local cells = table_cells(view, 3)
+    test.equal(cells[1].text_lines[1].text, "one")
+    test.equal(cells[2].text_lines[1].text, "two")
+
+    doc:set_selection(3, 4)
+    cells = table_cells(view, 3)
+    test.equal(cells[1].text_lines[1].text, "`one`")
+    test.equal(cells[2].text_lines[1].text, "two")
+  end)
+
+  test.it("refreshes elided active-cell identity within one row", function()
+    local view, doc = make_view(table.concat({
+      "| A | B |",
+      "| --- | --- |",
+      "| ![one](data:image/png;base64,AAAA) | ![two](data:image/png;base64,BBBB) |",
+      "",
+    }, "\n"))
+    doc:set_selection(3, 4)
+    refresh(view)
+    local cells = table_cells(view, 3)
+    test.ok(cells[1].text:find("![one]", 1, true) ~= nil)
+    test.ok(cells[2].text:find("Embedded image: two", 1, true) ~= nil)
+
+    local second = test.not_nil(doc.lines[3]:find("![two]", 1, true))
+    doc:set_selection(3, second + 3)
+    test.equal(test.not_nil(markdown_tables.interactive_context(view)).column, 2)
+    cells = table_cells(view, 3)
+    test.ok(cells[1].text:find("Embedded image: one", 1, true) ~= nil)
+    test.ok(cells[2].text:find("![two]", 1, true) ~= nil)
+  end)
+
+  test.it("converts typed newlines to br and escapes pipes inside cells", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
+    doc:set_selection(3, 6, 3, 3)
+    refresh(view)
+
+    test.equal(view:on_text_input("left|\nright"), true)
+    test.equal(doc.lines[3], "| left\\|<br>right | two |\n")
+    local optimistic = view.__markdown_live_owner.optimistic_lines[3]
+    test.not_nil(optimistic, "interactive table edit did not retain an optimistic row")
+    test.ok(test.not_nil(optimistic.render_line).table_row, "optimistic row fell back to source")
+    local cells = table_cells(view, 3)
+    test.equal(#cells[1].text_lines, 2)
+
+    local context, reason = markdown_tables.interactive_context(view)
+    test.not_nil(context, reason)
+    local old_active = core.active_view
+    core.active_view = view
+    local navigated = command.perform("markdown-live-preview:table-next-cell")
+    core.active_view = old_active
+    test.equal(navigated, true)
+    local line, col1, _, col2 = doc:get_selection()
+    test.same({ line, col1, col2 }, { 3, 24, 21 })
+  end)
+
+  test.it("preserves escaped pipes and code-span pipes during cell input", function()
+    test.equal(markdown_tables.normalize_cell_input("\\|"), "\\|")
+    local view, doc = make_view(
+      "| A | B |\n| --- | --- |\n| one\\ | `code` |\n"
+    )
+    doc:set_selection(3, 7)
+    refresh(view)
+    test.equal(view:on_text_input("|"), true)
+    test.equal(doc.lines[3], "| one\\| | `code` |\n")
+
+    local code = test.not_nil(doc.lines[3]:find("code", 1, true))
+    doc:set_selection(3, code + 2)
+    test.equal(view:on_text_input("|"), true)
+    test.equal(doc.lines[3], "| one\\| | `co|de` |\n")
+  end)
+
+  test.it("normalizes IME newlines and pipes without flashing raw rows", function()
+    local view, doc = make_view(
+      "| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n"
+    )
+    doc:set_selection(3, 4)
+    refresh(view)
+    view:on_ime_text_editing("x|\ny", 0, 4)
+    test.equal(doc.lines[3], "| ox\\|<br>yne | two |\n")
+    for line = 1, 4 do test.ok(test.not_nil(view:get_line_render(line)).table_row) end
+  end)
+
+  test.it("normalizes IME text independently for every selected cell", function()
+    local view, doc = make_view(
+      "| A | B |\n| --- | --- |\n| one | `code` |\n"
+    )
+    local code = test.not_nil(doc.lines[3]:find("code", 1, true))
+    doc:set_selection_list({ 3, 4, 3, 4, 3, code + 2, 3, code + 2 }, 2)
+    refresh(view)
+    view:on_ime_text_editing("|", 0, 1)
+    test.equal(doc.lines[3], "| o\\|ne | `co|de` |\n")
+  end)
+
+  test.it("keeps br literal inside a whole-cell code span", function()
+    local view, doc = make_view(
+      "| A |\n| --- |\n| `one<br>two` |\n"
+    )
+    doc:set_selection(5, 1)
+    refresh(view)
+    local cell = test.not_nil(table_cells(view, 3)[1])
+    test.equal(#cell.text_lines, 1)
+    test.equal(cell.text_lines[1].text, "one<br>two")
+  end)
+
+  test.it("rejects mixed table and prose selections before routing commands", function()
+    local view, doc = make_view(
+      "| A | B |\n| --- | --- |\n| one | two |\n\nplain\n"
+    )
+    doc:set_selection_list({
+      5, 2, 5, 2,
+      3, 4, 3, 4,
+    }, 2)
+    refresh(view)
+    test.equal(markdown_tables.has_interactive_context(view), false)
+  end)
+
+  test.it("rejects a selection spanning table structure", function()
+    local view, doc = make_view(
+      "| A | B |\n| --- | --- |\n| one | two |\n"
+    )
+    doc:set_selection(3, 4, 1, 3)
+    refresh(view)
+    test.equal(markdown_tables.has_interactive_context(view), false)
+  end)
+
+  test.it("preserves matching per-cursor clipboard payloads", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n")
+    doc:set_selection_list({ 3, 6, 3, 3, 3, 12, 3, 9 }, 2)
+    refresh(view)
+    local old_get = system.get_clipboard
+    local old_clipboard = core.cursor_clipboard
+    local old_whole = core.cursor_clipboard_whole_line
+    system.get_clipboard = function() return "first\nsecond" end
+    core.cursor_clipboard = {
+      [1] = "left|value", [2] = "right\nvalue", full = "first\nsecond",
+    }
+    core.cursor_clipboard_whole_line = { false, false }
+    local ok, err = pcall(function()
+      test.equal(markdown_tables.paste(view), true)
+      test.equal(doc.lines[3], "| left\\|value | right<br>value |\n")
+    end)
+    system.get_clipboard = old_get
+    core.cursor_clipboard = old_clipboard
+    core.cursor_clipboard_whole_line = old_whole
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("normalizes primary-selection paste inside a cell", function()
+    local view, doc = make_view("| A |\n| --- |\n| one |\n")
+    doc:set_selection(3, 4)
+    refresh(view)
+    local old_primary = system.get_primary_selection
+    system.get_primary_selection = function() return "x|y\nz" end
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("markdown-live-preview:table-paste-primary"), true)
+      test.equal(doc.lines[3], "| ox\\|y<br>zne |\n")
+    end)
+    core.active_view = old_active
+    system.get_primary_selection = old_primary
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("routes middle-click paste by the clicked cell", function()
+    local view, doc = make_view("| A |\n| --- |\n| one |\n\nplain\n")
+    doc:set_selection(5, 2)
+    refresh(view)
+    local x, y = cell_center(view, 3, 1)
+    local old_primary = system.get_primary_selection
+    system.get_primary_selection = function() return "x|y" end
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(
+        command.perform("markdown-live-preview:table-paste-primary", x, y), true
+      )
+      test.ok(doc.lines[3]:find("x\\|y", 1, true) ~= nil)
+      local plain_x, plain_y = view:get_line_screen_position(5)
+      test.equal(command.perform(
+        "markdown-live-preview:table-paste-primary", plain_x + 5, plain_y + 5
+      ), false)
+    end)
+    core.active_view = old_active
+    system.get_primary_selection = old_primary
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("navigates across and deletes br variants atomically", function()
+    local view, doc = make_view("| A |\n| --- |\n| one<br/>two |\n\nplain")
+    local break_start, break_end = doc.lines[3]:find("<br/>", 1, true)
+    doc:set_selection(3, break_end + 1)
+    refresh(view)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("markdown-live-preview:table-previous-char"), true)
+      local line, col = doc:get_selection()
+      test.same({ line, col }, { 3, break_start })
+
+      test.equal(command.perform("markdown-live-preview:table-next-char"), true)
+      line, col = doc:get_selection()
+      test.same({ line, col }, { 3, break_end + 1 })
+
+      test.equal(command.perform("markdown-live-preview:table-backspace"), true)
+      test.equal(doc.lines[3], "| onetwo |\n")
+      test.equal(table_cells(view, 3)[1].text_lines[1].text, "onetwo")
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("collapses a selected cell before moving left or right", function()
+    local view, doc = make_view("| A |\n| --- |\n| one |\n")
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      doc:set_selection(3, 6, 3, 3)
+      refresh(view)
+      test.equal(command.perform("markdown-live-preview:table-previous-char"), true)
+      test.same({ doc:get_selection() }, { 3, 3, 3, 3 })
+      doc:set_selection(3, 6, 3, 3)
+      test.equal(command.perform("markdown-live-preview:table-next-char"), true)
+      test.same({ doc:get_selection() }, { 3, 6, 3, 6 })
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("inserts rows and columns on explicit palette sides", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n\nplain")
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      doc:set_selection(4, 11)
+      refresh(view)
+      test.equal(command.perform("markdown-live-preview:table-insert-row-above"), true)
+      test.equal(doc.lines[4], "|  |  |\n")
+      doc:undo()
+      markdown_model.get(doc):submit("interactive-table-command-undo")
+      refresh(view)
+
+      doc:set_selection(3, 10)
+      test.equal(command.perform("markdown-live-preview:table-insert-column-left"), true)
+      test.equal(doc.lines[1], "| A |  | B |\n")
+      test.equal(doc.lines[3], "| one |  | two |\n")
+      test.equal(#table_cells(view, 3), 3)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+end)

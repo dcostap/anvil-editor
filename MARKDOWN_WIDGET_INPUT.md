@@ -13,9 +13,16 @@ Rendered fragments may expose a `widget` with:
 - `draw(...)`; and
 - `on_mouse_pressed(widget, view, hit, button, x, y, clicks)`.
 
-`DocView:get_render_widget_at_position()` resolves line geometry and fragment layout once. Core mouse movement applies the widget cursor, and core mouse press dispatches through the callback before ordinary text selection/fold handling. Failures are isolated through quiet diagnostics.
+`DocView:get_render_widget_at_position()` resolves line geometry and fragment layout once. When widgets overlap, the last-drawn widget receives the hit, allowing transient controls to sit above decorative widgets. Core mouse movement applies the widget cursor, and core mouse press dispatches through the callback before ordinary text selection/fold handling. Failures are isolated through quiet diagnostics.
 
 This removes Markdown-specific global wrappers around `DocView.on_mouse_moved` and `DocView.on_mouse_pressed`.
+
+Rendered lines may also expose `on_text_input(...)` and
+`on_ime_text_editing(...)` when a source-backed interaction needs to normalize
+all text-entry paths consistently. The IME hook returns adjusted composition
+offsets when normalization changes source byte lengths, such as escaping a
+table pipe. Source Mode and ordinary rendered lines continue through the
+standard Document input paths.
 
 ## Intra-line caret rows
 
@@ -32,6 +39,18 @@ Rows may override Current Line Highlight geometry with `highlight_y_offset` and
 `highlight_height`. Inline image layout uses this only for the prefix row: a
 prefix caret highlights the complete prefix/image/suffix presentation, while a
 caret in text below the image highlights only that text row.
+
+Rows may also provide `hit_x1` / `hit_x2` when several independently editable
+regions share one vertical band, as in an interactive table row. Vertical
+navigation can keep moving inside one region through `navigation_group` and
+`navigation_index`, then choose the horizontally nearest region when it crosses
+to another Document line. `position_rows_draw_full_line` allows these caret
+regions to coexist with one full-line fragment draw, so table borders and cell
+backgrounds are painted once rather than once per caret region.
+
+Fragment backgrounds may opt into drawing below ordinary selection geometry.
+Interactive table cells use that layer so partial text selections stay visible,
+while complete Table Cell Selections additionally receive a cell outline.
 
 The regression fixture uses `aaaa ![[image.png]] Testing this change`. Before
 the caret-row integration, the suffix highlight inherited the complete image

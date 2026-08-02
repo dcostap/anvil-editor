@@ -9,6 +9,7 @@ local link_completion = require "core.markdown.completion"
 local linewrapping = require "core.linewrapping"
 local markdown_links = require "core.markdown.links"
 local markdown_model = require "core.markdown.model"
+local markdown_tables = require "core.markdown.tables"
 local tokenizer = require "core.tokenizer"
 local vault_index = require "core.markdown.vault_index"
 local style = require "core.style"
@@ -70,26 +71,6 @@ end
 local function current_selection_state(view)
   if view.get_line_render_selection_state then return view:get_line_render_selection_state() end
   return view.selection_state or { selections = view.doc.selections }
-end
-
-local function selection_intersects_line(view, line)
-  local state = current_selection_state(view)
-  for i = 1, #(state and state.selections or {}), 4 do
-    local line1 = state.selections[i]
-    local line2 = state.selections[i + 2] or line1
-    if line1 and line >= math.min(line1, line2) and line <= math.max(line1, line2) then
-      return true
-    end
-  end
-  return false
-end
-
-local function table_line_revealed(view, line, reveal_units)
-  if selection_intersects_line(view, line) then return true end
-  for _, unit in ipairs(reveal_units or {}) do
-    if unit.whole_line then return true end
-  end
-  return false
 end
 
 local function heading_for_line(line_text, line)
@@ -1506,8 +1487,8 @@ local function table_for_line(view, line)
   end
 end
 
-local TABLE_MAX_PRESENTATION_ROWS = 256
-local TABLE_MAX_PRESENTATION_COLUMNS = 64
+local TABLE_MAX_PRESENTATION_ROWS = markdown_tables.MAX_PRESENTATION_ROWS
+local TABLE_MAX_PRESENTATION_COLUMNS = markdown_tables.MAX_PRESENTATION_COLUMNS
 local TABLE_MAX_CELL_PRESENTATION_BYTES = 4096
 local TABLE_LAYOUT_GEOMETRY_CACHE_LIMIT = 4
 
@@ -1576,7 +1557,11 @@ local function table_source_row(text)
       col1 = pipes[#pipes], col2 = #text + 1,
     }
   end
-  return { cells = cells, separators = separators }
+  return {
+    cells = cells,
+    separators = separators,
+    canonical = outer_left and outer_right,
+  }
 end
 
 local function table_cell_content(text, cell)
@@ -1635,6 +1620,7 @@ local function table_cell_presentation(view, text, source_col1, source_col2, hea
         color = style.markdown_live_table_cell,
         background = style.markdown_live_inline_code_bg,
         nowrap = true,
+        literal_breaks = true,
       }
     end
   end
@@ -1717,6 +1703,70 @@ local function table_wrap_text(font, text, width)
   return lines
 end
 
+local TABLE_BREAK_PATTERN = "<[bB][rR]%s*/?%s*>"
+
+local function next_table_break(text, start)
+  local escaped, ticks = false, 0
+  local col = 1
+  while col <= #text do
+    local char = text:sub(col, col)
+    if escaped then
+      escaped = false
+    elseif char == "\\" then
+      escaped = true
+    elseif char == "`" then
+      local finish = col
+      while text:sub(finish + 1, finish + 1) == "`" do finish = finish + 1 end
+      local count = finish - col + 1
+      if ticks == 0 then ticks = count elseif ticks == count then ticks = 0 end
+      col = finish
+    elseif ticks == 0 and col >= start and char == "<" then
+      local col1, col2 = text:find(TABLE_BREAK_PATTERN, col)
+      if col1 == col then return col1, col2 end
+    end
+    col = col + 1
+  end
+end
+
+local function table_wrap_cell_text(font, text, width, literal_breaks)
+  if literal_breaks then return table_wrap_text(font, text, width) end
+  local lines = {}
+  local start = 1
+  while true do
+    local break_col1, break_col2 = next_table_break(text, start)
+    local finish = break_col1 or (#text + 1)
+    local segment = text:sub(start, finish - 1)
+    local wrapped = table_wrap_text(font, segment, width)
+    for _, visual in ipairs(wrapped) do
+      lines[#lines + 1] = {
+        text = visual.text,
+        col1 = start + (visual.col1 or 1) - 1,
+        col2 = start + (visual.col2 or 1) - 1,
+      }
+    end
+    if not break_col1 then break end
+    start = break_col2 + 1
+    if start > #text then
+      lines[#lines + 1] = { text = "", col1 = start, col2 = start }
+      break
+    end
+  end
+  if #lines == 0 then lines[1] = { text = "", col1 = 1, col2 = 1 } end
+  return lines
+end
+
+local function table_cell_natural_width(font, text, literal_breaks)
+  if literal_breaks then return font:get_width(text) end
+  local width, start = 0, 1
+  while true do
+    local break_col1, break_col2 = next_table_break(text, start)
+    local finish = break_col1 or (#text + 1)
+    width = math.max(width, font:get_width(text:sub(start, finish - 1)))
+    if not break_col1 then return width end
+    start = break_col2 + 1
+  end
+end
+
 local function table_available_width(view)
   -- Tables may use the full editor viewport even when prose has a narrower
   -- configured wrap column. This matches reading-mode table layout and avoids
@@ -1727,8 +1777,9 @@ local function table_available_width(view)
   return math.max(math.floor(SCALE * 160), width)
 end
 
-local function table_layout(view, table_node)
+local function table_layout(view, table_node, allow_pending)
   local instance = render_semantic_model(view, table_node.source.line1)
+  if not instance and allow_pending then instance = markdown_model.peek(view.doc) end
   if not instance then return nil end
   local font = markdown_live_body_font(view)
   local available_width = table_available_width(view)
@@ -1781,7 +1832,7 @@ local function table_layout(view, table_node)
     return layouts[table_node.id] or nil
   end
 
-  local rows, columns = {}, nil
+  local rows, columns, canonical = {}, nil, true
   for line = line1, line2 do
     local text = (view.doc.lines[line] or ""):gsub("\n$", "")
     local row = table_source_row(text)
@@ -1799,27 +1850,49 @@ local function table_layout(view, table_node)
       return nil
     end
     row.line, row.text = line, text
+    canonical = canonical and row.canonical
     rows[line] = row
   end
 
   local pad = math.max(font:get_width(" ") * 1.5, SCALE * 6)
   local vertical_pad = math.max(math.floor(SCALE * 5), 2)
-  local widths, presentations = {}, {}
+  local widths, presentations, active_presentations = {}, {}, {}
   local minimums = {}
+  local selection_stable_layout = true
   for column = 1, columns do widths[column] = pad * 4 end
   for line = line1, line2 do
     if line ~= line1 + 1 then
       local row = rows[line]
       presentations[line] = {}
+      active_presentations[line] = {}
       for column, cell in ipairs(row.cells) do
         local text, source_col1, source_col2 = table_cell_content(row.text, cell)
         local presentation = table_cell_presentation(
           view, text, source_col1, source_col2, line == line1
         )
         presentations[line][column] = presentation
+        if presentation.source_elided then
+          selection_stable_layout = false
+        else
+          active_presentations[line][column] = {
+            text = text,
+            source_col1 = source_col1,
+            source_col2 = source_col2,
+            font = line == line1 and inline_style_font(view, "strong") or font,
+          }
+        end
         widths[column] = math.max(
-          widths[column], presentation.font:get_width(presentation.text) + pad * 2
+          widths[column], table_cell_natural_width(
+            presentation.font, presentation.text, presentation.literal_breaks
+          ) + pad * 2
         )
+        local active = active_presentations[line][column]
+        if active then
+          widths[column] = math.max(
+            widths[column],
+            table_cell_natural_width(active.font, active.text) + pad * 2
+          )
+        end
       end
     end
   end
@@ -1873,11 +1946,21 @@ local function table_layout(view, table_node)
       local max_lines = 1
       for column, cell in ipairs(row.cells) do
         local presentation = presentations[row_line][column]
-        local wrapped = table_wrap_text(
-          presentation.font, presentation.text, widths[column] - pad * 2
+        local wrapped = table_wrap_cell_text(
+          presentation.font, presentation.text, widths[column] - pad * 2,
+          presentation.literal_breaks
         )
         wrapped_cells[row_line][column] = wrapped
         max_lines = math.max(max_lines, #wrapped)
+        local active = active_presentations[row_line][column]
+        if active then
+          max_lines = math.max(
+            max_lines,
+            #table_wrap_cell_text(
+              active.font, active.text, widths[column] - pad * 2
+            )
+          )
+        end
       end
       row_heights[row_line] = max_lines * text_line_height + vertical_pad * 2
     end
@@ -1889,14 +1972,17 @@ local function table_layout(view, table_node)
     vertical_padding = vertical_pad, text_line_height = text_line_height,
     row_heights = row_heights, wrapped_cells = wrapped_cells,
     presentations = presentations,
+    active_presentations = active_presentations,
+    selection_stable_layout = selection_stable_layout,
     separator_width = separator_width, total_width = total_width,
+    canonical = canonical,
   }
   layouts[table_node.id] = layout
   return layout
 end
 
-local function table_row_fragments(view, table_node, line)
-  local layout = table_layout(view, table_node)
+local function table_row_fragments(view, table_node, line, allow_pending)
+  local layout = table_layout(view, table_node, allow_pending)
   if not layout then return nil end
   local row = layout.rows[line]
   if not row then return nil end
@@ -1923,6 +2009,42 @@ local function table_row_fragments(view, table_node, line)
   local fragments = {}
   local header = line == layout.line1
   local row_height = layout.row_heights[line] or markdown_live_body_line_height(view)
+  local row_presentations, row_wrapped = {}, {}
+  local selection_state = current_selection_state(view)
+  local function cell_active(cell)
+    for index = 1, #(selection_state and selection_state.selections or {}), 4 do
+      local line1, col1 = selection_state.selections[index], selection_state.selections[index + 1]
+      local line2, col2 = selection_state.selections[index + 2], selection_state.selections[index + 3]
+      if line1 == line and col1 >= cell.col1 and col1 <= cell.col2 then return true end
+      if line2 == line and col2 >= cell.col1 and col2 <= cell.col2 then return true end
+    end
+    return false
+  end
+  local max_lines = 1
+  for column, cell in ipairs(row.cells) do
+    local presentation = layout.presentations[line][column]
+    local wrapped = layout.wrapped_cells[line][column]
+    if cell_active(cell) then
+      local text, source_col1, source_col2 = table_cell_content(row.text, cell)
+      presentation = {
+        text = text,
+        source_col1 = source_col1,
+        source_col2 = source_col2,
+        font = header and inline_style_font(view, "strong") or markdown_live_body_font(view),
+        color = header and style.markdown_live_table_header or style.markdown_live_table_cell,
+      }
+      wrapped = table_wrap_cell_text(
+        presentation.font, text, layout.widths[column] - layout.padding * 2,
+        presentation.literal_breaks
+      )
+    end
+    row_presentations[column], row_wrapped[column] = presentation, wrapped
+    max_lines = math.max(max_lines, #wrapped)
+  end
+  row_height = math.max(
+    row_height,
+    max_lines * layout.text_line_height + layout.vertical_padding * 2
+  )
   local function border_fragment(separator, id, first)
     local line_width = math.max(1, math.floor(SCALE))
     return {
@@ -1957,11 +2079,11 @@ local function table_row_fragments(view, table_node, line)
     }
   end
   for column, cell in ipairs(row.cells) do
-    local presentation = layout.presentations[line][column]
+    local presentation = row_presentations[column]
     local cell_font = presentation.font
     local alignment = layout.alignments[column]
     local text_lines = {}
-    for _, wrapped in ipairs(layout.wrapped_cells[line][column]) do
+    for _, wrapped in ipairs(row_wrapped[column]) do
       local wrapped_text = wrapped.text or ""
       local text_width = cell_font:get_width(wrapped_text)
       local offset = alignment == "right"
@@ -1996,6 +2118,7 @@ local function table_row_fragments(view, table_node, line)
       font = cell_font,
       color = presentation.color,
       background = style.markdown_live_table_background,
+      background_under_selection = true,
       background_full_height = true,
       background_border_top = header and style.markdown_live_table_separator or nil,
       background_border_bottom = not header and style.markdown_live_table_separator or nil,
@@ -2007,7 +2130,137 @@ local function table_row_fragments(view, table_node, line)
   fragments[#fragments + 1] = border_fragment(
     separator, table_node.id .. ":pipe:" .. line .. ":end"
   )
-  return fragments, layout
+  local position_rows = {}
+  local fragment_x = 0
+  local cell_x = {}
+  for _, fragment in ipairs(fragments) do
+    if fragment.table_cell then
+      cell_x[fragment.table_column] = {
+        x1 = fragment_x,
+        x2 = fragment_x + (fragment.width or 0),
+      }
+      for visual_index, text_line in ipairs(fragment.text_lines or {}) do
+        position_rows[#position_rows + 1] = {
+          source_col1 = text_line.source_col1,
+          source_col2 = text_line.source_col2,
+          end_inclusive = true,
+          x_offset = fragment_x + (text_line.x_offset or 0),
+          hit_x1 = fragment_x,
+          hit_x2 = fragment_x + (fragment.width or 0),
+          y_offset = (fragment.text_y_padding or 0)
+            + (visual_index - 1) * (fragment.text_line_height or layout.text_line_height),
+          height = fragment.text_line_height or layout.text_line_height,
+          navigation_group = fragment.table_column,
+          navigation_index = visual_index,
+          table_cell = fragment.table_column,
+          cell_source_col1 = fragment.text_source_col1,
+          cell_source_col2 = fragment.text_source_col2,
+          selection_full_cell = visual_index == 1,
+          selection_empty_cell = visual_index == 1
+            and fragment.text_source_col1 == fragment.text_source_col2,
+          selection_x1 = fragment_x,
+          selection_x2 = fragment_x + (fragment.width or 0),
+          selection_y = 0,
+          selection_height = row_height,
+          selection_outline = style.caret,
+        }
+      end
+    end
+    fragment_x = fragment_x + (fragment.width or 0)
+  end
+
+  local control_size = math.max(
+    math.floor(SCALE * 14),
+    math.min(math.floor(row_height - SCALE * 4), layout.text_line_height)
+  )
+  local function insertion_control(kind, after, source_col, x, y_offset, action)
+    local icon_thickness = math.max(1, math.floor(SCALE * 2))
+    local icon_length = math.max(icon_thickness * 3, math.floor(control_size * 0.42))
+    fragments[#fragments + 1] = {
+      source_col1 = source_col,
+      source_col2 = source_col,
+      text = "",
+      width = 0,
+      hit_width = control_size,
+      layout_x = x,
+      draw_y_offset = y_offset,
+      semantic_id = table_node.id .. ":insert:" .. kind .. ":" .. tostring(after),
+      table_insert_control = kind,
+      table_insert_after = after,
+      widget = {
+        width = control_size,
+        height = control_size,
+        cursor = "hand",
+        draw = function(_, fragment, draw_x, draw_y)
+          if not fragment.hovered then return end
+          local button_y = draw_y + (fragment.draw_y_offset or 0)
+          renderer.draw_rounded_rect(
+            draw_x, button_y, control_size, control_size, control_size / 2,
+            style.accent
+          )
+          local center_x = draw_x + control_size / 2
+          local center_y = button_y + control_size / 2
+          renderer.draw_rect(
+            center_x - icon_length / 2, center_y - icon_thickness / 2,
+            icon_length, icon_thickness, style.background
+          )
+          renderer.draw_rect(
+            center_x - icon_thickness / 2, center_y - icon_length / 2,
+            icon_thickness, icon_length, style.background
+          )
+        end,
+        on_mouse_pressed = function(_, owner, _, button)
+          if button ~= "left" then return false end
+          core.log_quiet(
+            "Markdown table Hover Insertion Control: insert %s after %s at %s:%d",
+            kind, tostring(after), owner.doc:get_name(), line
+          )
+          return action(owner)
+        end,
+      },
+    }
+  end
+  if header and layout.canonical then
+    for column, bounds in ipairs(cell_x) do
+      local target_column = column
+      local cell = row.cells[column]
+      insertion_control(
+        "column", column, cell.col2,
+        bounds.x2 - control_size / 2,
+        math.max(0, (row_height - control_size) / 2),
+        function(owner)
+          owner.doc:set_selection(
+            line, row_presentations[target_column].source_col1
+          )
+          return markdown_tables.insert_column(owner, "right")
+        end
+      )
+    end
+  end
+  local first_bounds = cell_x[1]
+  local first_presentation = row_presentations[1]
+  if layout.canonical and first_bounds and first_presentation then
+    insertion_control(
+      "row", line, first_presentation.source_col1,
+      (first_bounds.x1 + first_bounds.x2 - control_size) / 2,
+      math.max(0, row_height - control_size - math.max(1, SCALE * 2)),
+      function(owner)
+        owner.doc:set_selection(line, first_presentation.source_col1)
+        return markdown_tables.insert_row(owner, "below")
+      end
+    )
+  end
+  return fragments, layout, position_rows, row_height
+end
+
+local function table_geometry_signature(view)
+  local font = markdown_live_body_font(view)
+  return table.concat({
+    tostring(table_available_width(view)),
+    tostring(style.prose_font),
+    tostring(font:get_size()),
+    tostring(core.color_theme_generation or 0),
+  }, ":")
 end
 
 local function frontmatter_for_line(view, line)
@@ -2220,7 +2473,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
   local frontmatter, frontmatter_line2 = frontmatter_for_line(view, line)
   local table_node = table_for_line(view, line)
   if table_node then
-    if table_line_revealed(view, line, reveal_units) then return {} end
+    if config.markdown_live_interactive_tables ~= true then return {} end
     return table_row_fragments(view, table_node, line) or {}
   end
   if frontmatter then
@@ -2836,6 +3089,91 @@ local function optimistic_source_render(view, render_line, current_text, code)
   return replacement
 end
 
+local interactive_table_render_line
+
+local function optimistic_table_render(view, previous, line, current_text)
+  local table_node = previous and previous.markdown_table_node
+  if not table_node then return nil end
+  return interactive_table_render_line(view, table_node, line, true)
+end
+
+local function publish_optimistic_table_row(view, line, render_line)
+  local state = view.__markdown_live_owner
+  if not (state and render_line) then return false end
+  local current = (view.doc.lines[line] or ""):gsub("\n$", "")
+  state.optimistic_lines = state.optimistic_lines or {}
+  state.optimistic_lines[line] = {
+    revision = view.doc.text_revision,
+    source_text = current,
+    render_line = render_line,
+    height = render_line.layout_height
+      or view:get_position_visual_row_height(line, 1),
+    table_geometry = table_geometry_signature(view),
+  }
+  return true
+end
+
+interactive_table_render_line = function(view, table_node, line, allow_pending)
+  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local fragments, layout, position_rows, interactive_row_height =
+    table_row_fragments(view, table_node, line, allow_pending)
+  if not (fragments and layout) then return nil end
+  local metric_height = interactive_row_height or layout.row_heights[line]
+  if line == layout.delimiter_line then metric_height = math.max(1, math.floor(SCALE)) end
+
+  local on_mouse_selection = function(owner, anchor_line, anchor_col, current_line, current_col)
+    return markdown_tables.select_rectangle(
+      owner, anchor_line, anchor_col, current_line, current_col
+    )
+  end
+  local rebuild_optimistic = function(owner)
+    local rebuilt = interactive_table_render_line(owner, table_node, line, true)
+    return publish_optimistic_table_row(owner, line, rebuilt)
+  end
+  local on_structure_changed = function(owner, line1, line2)
+    local adjusted = {}
+    for key, value in pairs(table_node) do adjusted[key] = value end
+    adjusted.source = {}
+    for key, value in pairs(table_node.source or {}) do adjusted.source[key] = value end
+    adjusted.id = "interactive-table:optimistic:" .. tostring(line1)
+      .. ":" .. tostring(owner.doc.text_revision) .. ":" .. tostring(line2)
+    adjusted.source.line1 = line1
+    adjusted.source.line2 = line2
+    adjusted.source.col2 = #(owner.doc.lines[line2] or "")
+    local published = false
+    for row_line = line1, line2 do
+      local rebuilt = interactive_table_render_line(owner, adjusted, row_line, true)
+      published = publish_optimistic_table_row(owner, row_line, rebuilt) or published
+    end
+    return published
+  end
+  local on_text_input = function(owner, input)
+    if not markdown_tables.text_input(owner, input) then return false end
+    return true
+  end
+  local on_ime_text_editing = function(owner, input, start, length)
+    return markdown_tables.ime_text_editing(owner, input, start, length)
+  end
+
+  return prose_render_line(view, text, {
+    fragments = fragments,
+    disable_wrapping = true,
+    table_row = true,
+    table_row_height = metric_height,
+    position_rows = position_rows,
+    position_rows_draw_full_line = true,
+    under_selection_backgrounds = true,
+    selection_preserves_metrics = layout.selection_stable_layout,
+    layout_height = metric_height,
+    markdown_table_node = table_node,
+    on_mouse_selection = on_mouse_selection,
+    on_text_input = on_text_input,
+    on_ime_text_editing = on_ime_text_editing,
+    on_table_source_changed = rebuild_optimistic,
+    on_table_structure_changed = on_structure_changed,
+  })
+end
+
 local function split_optimistic_render(render_line, text)
   local lines, line_start = {}, 1
   while true do
@@ -3165,6 +3503,7 @@ local function capture_optimistic_renders(view, transaction)
 
   for line, edits in pairs(edits_by_line) do
     local old_render = cached_render_line(view, line)
+      or pre_edit_lines[line] and pre_edit_lines[line].render_line
     local render = old_render and clone_render_line(old_render)
     local had_position_rows = render and render.position_rows ~= nil
     local text = render and render.source_text
@@ -3192,9 +3531,11 @@ local function capture_optimistic_renders(view, transaction)
       core.log_quiet("Markdown Live Preview retained rendered line %d while semantics are pending", line)
     else
       local service = owner.fence_service
-      local fallback = old_render and optimistic_source_render(
-        view, old_render, current_text, service and service:contains_line(line)
-      )
+      local fallback = old_render and optimistic_table_render(
+        view, old_render, line, current_text
+      ) or old_render and optimistic_source_render(
+          view, old_render, current_text, service and service:contains_line(line)
+        )
       owner.optimistic_lines[line] = fallback and {
         revision = view.doc.text_revision,
         source_text = current_text,
@@ -3303,6 +3644,18 @@ local function optimistic_render(view, line)
   local entry = owner and owner.optimistic_lines and owner.optimistic_lines[line]
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   if entry and entry.revision == view.doc.text_revision and entry.source_text == text then
+    if entry.render_line and entry.render_line.table_row
+    and entry.table_geometry ~= table_geometry_signature(view)
+    then
+      local table_node = entry.render_line.markdown_table_node
+      local rebuilt = table_node and interactive_table_render_line(
+        view, table_node, line, true
+      )
+      if rebuilt then
+        publish_optimistic_table_row(view, line, rebuilt)
+        entry = owner.optimistic_lines[line]
+      end
+    end
     return entry
   end
   local transitional = transitional_renders(view)
@@ -3525,6 +3878,7 @@ local function provider_generation_state(view)
     and cache.body_font_size == body_font_size
     and cache.scrollbar_width == scrollbar_width
     and cache.padding_x == padding_x
+    and cache.interactive_tables == (config.markdown_live_interactive_tables == true)
     and cache.scale == SCALE
   then
     return cache
@@ -3548,6 +3902,7 @@ local function provider_generation_state(view)
     body_font_size = body_font_size,
     scrollbar_width = scrollbar_width,
     padding_x = padding_x,
+    interactive_tables = config.markdown_live_interactive_tables == true,
     scale = SCALE,
   }
   view.__markdown_live_provider_generation_state = cache
@@ -3589,6 +3944,7 @@ function provider:generation(view)
   state.generation = state.prose_typography_signature .. ":" .. tostring(font:get_size())
     .. ":width:" .. tostring(table_width)
     .. ":image-width:" .. tostring(image_width)
+    .. ":interactive-tables:" .. tostring(state.interactive_tables)
   return state.generation
 end
 
@@ -3799,6 +4155,33 @@ function provider:on_text_transaction(view, transaction, line1, line2)
       if entry.render_line and entry.render_line.table_row then
         owner.optimistic_lines[line] = nil
       end
+    end
+    local source_line1, source_line2 = markdown_tables.source_bounds(
+      view, table_line1
+    )
+    if source_line1 then
+      local optimistic_node = {
+        id = "interactive-table:transaction:" .. tostring(source_line1)
+          .. ":" .. tostring(view.doc.text_revision),
+        source = {
+          line1 = source_line1, col1 = 1,
+          line2 = source_line2,
+          col2 = #(view.doc.lines[source_line2] or ""),
+        },
+      }
+      local published = 0
+      for row_line = source_line1, source_line2 do
+        local rebuilt = interactive_table_render_line(
+          view, optimistic_node, row_line, true
+        )
+        if publish_optimistic_table_row(view, row_line, rebuilt) then
+          published = published + 1
+        end
+      end
+      core.log_quiet(
+        "Markdown Interactive Table Editing retained %d rendered row(s) through revision %d",
+        published, view.doc.text_revision
+      )
     end
   end
   local structural_change = transaction and transaction.type == "load"
@@ -4211,7 +4594,10 @@ function provider:render_line(view, line, _context)
     end
     return fenced_code_content_render_line(view, line, text, fenced)
   end
-  if not in_comment and line_in_raw_block(view, line) then return { raw_passthrough = true } end
+  local table_node = table_for_line(view, line)
+  if not in_comment and not table_node and line_in_raw_block(view, line) then
+    return { raw_passthrough = true }
+  end
 
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local reveal_units = reveal_units_for_line(view, line)
@@ -4229,28 +4615,11 @@ function provider:render_line(view, line, _context)
   local heading = semantic_heading_for_line(view, text, line)
   if heading then return heading_render_line(view, text, heading, reveal_units) end
 
-  local table_node = table_for_line(view, line)
-  local table_revealed = table_line_revealed(view, line, reveal_units)
-  if table_node and table_revealed then
-    return prose_render_line(view, text, {
-      fragments = {},
-      metric_height = view:get_line_height(),
-    })
-  end
-  if table_node and not table_revealed then
-    local fragments, layout = table_row_fragments(view, table_node, line)
-    if fragments and layout then
-      local metric_height = layout.row_heights[line]
-      if line == layout.delimiter_line then
-        metric_height = math.max(1, math.floor(SCALE))
-      end
-      return prose_render_line(view, text, {
-        fragments = fragments,
-        disable_wrapping = true,
-        table_row = true,
-        table_row_height = metric_height,
-      })
-    end
+  local interactive_table = config.markdown_live_interactive_tables == true
+  if table_node and not interactive_table then return { raw_passthrough = true } end
+  if table_node and interactive_table then
+    local rendered = interactive_table_render_line(view, table_node, line, false)
+    if rendered then return rendered end
   end
 
   local image_span = image_only_span(view, text, line)
@@ -4692,6 +5061,7 @@ end
 local function invalidate_selection_lines(view, new_state, old_state)
   local lines = {}
   local states = { old_state, new_state }
+  local table_cells_by_state = { {}, {} }
   local touched_by_state = { {}, {} }
   local fenced_by_state = { {}, {} }
   local reveal_candidates = {}
@@ -4750,6 +5120,25 @@ local function invalidate_selection_lines(view, new_state, old_state)
       local line2 = state.selections[i + 2] or line1
       local col2 = state.selections[i + 3] or col1
       if line1 then
+        for _, endpoint in ipairs({ { line1, col1 }, { line2, col2 } }) do
+          local endpoint_line, endpoint_col = endpoint[1], endpoint[2]
+          local render = view:get_line_render(endpoint_line)
+          if render and render.table_row then
+            for _, fragment in ipairs(render.fragments or {}) do
+              if fragment.table_cell
+              and endpoint_col >= (fragment.source_col1 or 1)
+              and endpoint_col <= (fragment.source_col2 or fragment.source_col1 or 1)
+              then
+                local node = render.markdown_table_node
+                table_cells_by_state[state_index][table.concat({
+                  node and node.source and node.source.line1 or endpoint_line,
+                  endpoint_line, fragment.table_column,
+                }, ":")] = endpoint_line
+                break
+              end
+            end
+          end
+        end
         for line = math.min(line1, line2), math.max(line1, line2) do
           local line_length = source_line_length(view.doc.lines[line] or "")
           if not fenced_code_for_line(view, line)
@@ -4815,14 +5204,30 @@ local function invalidate_selection_lines(view, new_state, old_state)
       lines[line] = true
     end
   end
+  for state_index = 1, 2 do
+    local other = table_cells_by_state[3 - state_index]
+    for key, line in pairs(table_cells_by_state[state_index]) do
+      if not other[key] then lines[line] = true end
+    end
+  end
   local ordered = {}
   for line in pairs(lines) do ordered[#ordered + 1] = line end
   table.sort(ordered)
   local line1, line2
   local function invalidate_range()
     if not line1 then return end
+    local preserves_metrics = true
+    for line = line1, line2 do
+      local render = view:get_line_render(line)
+      if not (render and render.selection_preserves_metrics) then
+        preserves_metrics = false
+        break
+      end
+    end
     view:invalidate_line_render(PROVIDER_ID, line1, line2)
-    view:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
+    if not preserves_metrics then
+      view:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
+    end
   end
   for _, line in ipairs(ordered) do
     if not line1 then

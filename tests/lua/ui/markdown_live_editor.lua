@@ -3169,12 +3169,17 @@ test.describe("Markdown Live Editor", function()
     test.ok(test.not_nil(updated_width) > old_width)
 
     doc:set_selection(3, 4)
-    test.equal(visible_render_text(view, 3), "| a much longer value one | two |")
-    test.equal(view:get_position_visual_row_height(3, 1), view:get_line_height())
+    local active_row = test.not_nil(view:get_line_render(3))
+    local active_cells = 0
+    for _, fragment in ipairs(active_row.fragments or {}) do
+      if fragment.table_cell then active_cells = active_cells + 1 end
+    end
+    test.equal(active_cells, 2)
 
     doc:set_selection(2, 4)
-    test.equal(visible_render_text(view, 2), "| :--- | ---: |")
-    test.equal(view:get_position_visual_row_height(2, 1), view:get_line_height())
+    local active_delimiter = test.not_nil(view:get_line_render(2))
+    test.not_nil(active_delimiter.fragments[1].widget)
+    test.ok(view:get_position_visual_row_height(2, 1) < view:get_line_height())
   end)
 
   test.it("wraps long table cells inside aligned variable-height rows", function()
@@ -3297,10 +3302,12 @@ test.describe("Markdown Live Editor", function()
     doc:set_selection(3, 8)
     test.equal(view:get_line_render_selection_state().selections[1], 3)
     local active_row = test.not_nil(view:get_line_render(3))
+    local active_code
     for _, fragment in ipairs(active_row.fragments or {}) do
-      test.ok(not fragment.table_cell)
+      if fragment.table_cell and fragment.table_column == 1 then active_code = fragment end
     end
-    test.ok(visible_render_text(view, 3):find("`/rp_campaign_status`", 1, true))
+    active_code = test.not_nil(active_code)
+    test.ok(active_code.text_lines[1].text:find("`/rp_campaign_status`", 1, true))
   end)
 
   test.it("draws a table top edge when the header cells are empty", function()
@@ -3477,7 +3484,7 @@ test.describe("Markdown Live Editor", function()
     local ok, err = pcall(function()
       doc:set_selection(3, 3)
       refresh(view)
-      test.equal(command.perform("markdown-live-preview:table-insert-row"), true)
+      test.equal(command.perform("markdown-live-preview:table-insert-row-below"), true)
       test.equal(doc.lines[4], "|  |  |\n")
       doc:undo(); reparse()
 
@@ -3493,7 +3500,7 @@ test.describe("Markdown Live Editor", function()
       doc:undo(); reparse()
 
       doc:set_selection(3, 3)
-      test.equal(command.perform("markdown-live-preview:table-insert-column"), true)
+      test.equal(command.perform("markdown-live-preview:table-insert-column-right"), true)
       test.equal(doc.lines[1], "| A |  | B |\n")
       test.equal(doc.lines[3], "| 1 |  | 2 |\n")
       doc:undo(); reparse()

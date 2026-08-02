@@ -124,6 +124,18 @@ _Avoid_: Live Markdown Editor, Markdown Live Editor
 An Editor mode that shows all Markdown source syntax normally instead of presenting formatted Markdown inline.
 _Avoid_: Raw rendering mode
 
+**Interactive Table Editing**:
+A Markdown Live Preview behavior that keeps a Markdown table presented as an editable grid while its cells are navigated, selected, structurally changed, and edited. Hover Insertion Controls provide direct row and column insertion at table boundaries.
+_Avoid_: Table Source Mode, raw table editing
+
+**Table Cell Selection**:
+A selection of one table cell's complete editable contents in Interactive Table Editing. Dragging within one cell creates an ordinary text selection; dragging across cell boundaries creates a rectangular group represented as multiple Table Cell Selections. A selected cell, including an empty selected cell, is visually distinguished from a partial text selection.
+_Avoid_: Grid cursor, table highlight
+
+**Hover Insertion Control**:
+A temporary table-edge control that appears on hover and inserts a row or column at the indicated boundary.
+_Avoid_: permanent table toolbar, table context menu
+
 **Markdown Reveal Unit**:
 The smallest formatted Markdown construct whose source syntax becomes visible while it is being edited in Markdown Live Preview.
 _Avoid_: Raw rendering mode

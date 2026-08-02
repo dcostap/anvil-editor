@@ -3782,6 +3782,7 @@ function DocView:get_render_widget_at_position(x, y)
   local row_height = self:get_visual_row_height(row)
   local tx = render_line.x_offset or 0
   local _, indent_size = self.doc:get_indent_info()
+  local widget_hits = {}
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
     if not fragment.hidden then
       local font = fragment.font or self:get_font()
@@ -3797,13 +3798,23 @@ function DocView:get_render_widget_at_position(x, y)
           + (fragment.draw_x_offset or 0)
         local top = fragment.draw_y_offset and (fragment.draw_y_offset - padding)
           or (math.max(0, (row_height - height) / 2) - padding)
-        if xrel >= left and xrel <= left + width and
-          yrel >= top and yrel <= top + height + padding * 2
-        then
-          return { line = line, fragment = fragment, widget = widget }
-        end
+        widget_hits[#widget_hits + 1] = {
+          fragment = fragment, widget = widget,
+          left = left, top = top, width = width,
+          height = height + padding * 2,
+        }
       end
       tx = tx + width
+    end
+  end
+  -- Later fragments draw on top of earlier ones, so overlapping interactive
+  -- controls receive the hit before decorative widgets underneath them.
+  for index = #widget_hits, 1, -1 do
+    local hit = widget_hits[index]
+    if xrel >= hit.left and xrel <= hit.left + hit.width
+    and yrel >= hit.top and yrel <= hit.top + hit.height
+    then
+      return { line = line, fragment = hit.fragment, widget = hit.widget }
     end
   end
 end
@@ -4012,14 +4023,27 @@ end
 function DocView:move_within_line_render_position_rows(line, col, direction)
   local render_line, rows = self:get_line_render_position_rows(line)
   if not rows or #rows < 2 then return nil end
-  local _, _, index = self:get_position_line_render_row(line, col)
-  local target = index and rows[index + direction]
+  local _, current, index = self:get_position_line_render_row(line, col)
+  local target, target_index
+  if current and current.navigation_group ~= nil then
+    local wanted = (current.navigation_index or 1) + direction
+    for candidate_index, candidate in ipairs(rows) do
+      if candidate.navigation_group == current.navigation_group
+      and (candidate.navigation_index or 1) == wanted then
+        target, target_index = candidate, candidate_index
+        break
+      end
+    end
+  else
+    target_index = index and index + direction
+    target = target_index and rows[target_index]
+  end
   if not target then return nil end
   local x = desired_position_row_x(self, line, col)
   local target_col = position_row_target_col(self, render_line, target, x)
   remember_position_row_x(self, line, target_col, x)
   self:queue_line_render_position_row_affinity(
-    line, target_col, index + direction
+    line, target_col, target_index
   )
   return line, target_col
 end
@@ -4029,9 +4053,26 @@ end
 function DocView:land_on_line_render_position_row(line, fallback_col, direction, x)
   local render_line, rows = self:get_line_render_position_rows(line)
   if not rows or #rows < 2 then return fallback_col end
-  local target = direction < 0 and rows[#rows] or rows[1]
-  local target_index = direction < 0 and #rows or 1
   x = x or 0
+  local edge
+  for _, row in ipairs(rows) do
+    local y = row.y_offset or 0
+    edge = edge == nil and y
+      or direction < 0 and math.max(edge, y)
+      or direction >= 0 and math.min(edge, y)
+  end
+  local target, target_index, best_distance
+  for index, row in ipairs(rows) do
+    if (row.y_offset or 0) == edge then
+      local x1 = row.hit_x1 or row.x_offset or 0
+      local x2 = row.hit_x2 or x1
+      local distance = x < x1 and x1 - x or x > x2 and x - x2 or 0
+      if not best_distance or distance < best_distance then
+        target, target_index, best_distance = row, index, distance
+      end
+    end
+  end
+  target, target_index = target or rows[1], target_index or 1
   local col = position_row_target_col(self, render_line, target, x)
   remember_position_row_x(self, line, col, x)
   self:queue_line_render_position_row_affinity(line, col, target_index)
@@ -4368,7 +4409,10 @@ function DocView:get_line_render_position_col(render_line, x, y)
     for index, candidate in ipairs(render_line.position_rows) do
       local top = candidate.y_offset or 0
       local height = candidate.height or self:get_line_height()
-      if y >= top and y < top + height then
+      local hit_x1, hit_x2 = candidate.hit_x1, candidate.hit_x2
+      if y >= top and y < top + height
+      and (not hit_x1 or x >= hit_x1 and x <= (hit_x2 or hit_x1))
+      then
         row, row_index = candidate, index
         break
       end
@@ -4923,7 +4967,23 @@ function DocView:on_mouse_moved(x, y, ...)
   if self.mouse_selecting then
     local l1, c1 = self:resolve_screen_position(x, y)
     local l2, c2, snap_type = table.unpack(self.mouse_selecting)
-    if keymap.modkeys["ctrl"] then
+    local special_handled = false
+    local anchor_render = self:get_line_render(l2)
+    if anchor_render and anchor_render.on_mouse_selection then
+      local ok, handled = pcall(
+        anchor_render.on_mouse_selection, self, l2, c2, l1, c1
+      )
+      if not ok then
+        core.log_quiet(
+          "DocView rendered selection handler failed for %s: %s",
+          self.doc:get_name(), tostring(handled)
+        )
+      end
+      special_handled = ok and handled == true
+    end
+    if special_handled then
+      -- The rendered interaction owns Selection State for this drag.
+    elseif keymap.modkeys["ctrl"] then
       if l1 > l2 then l1, l2 = l2, l1 end
       self.doc.selections = { }
       for i = l1, l2 do
@@ -5077,7 +5137,21 @@ end
 function DocView:on_text_input(text)
   if not self:can_edit("text input", { warn = true, text = text }) then return false end
   self.doc:clear_search_selections()
+  local line = self.doc:get_selection()
+  local render_line = self:get_line_render(line)
+  if render_line and render_line.on_text_input then
+    local ok, handled = pcall(render_line.on_text_input, self, text)
+    if not ok then
+      core.log_quiet(
+        "DocView rendered text input failed for %s: %s",
+        self.doc:get_name(), tostring(handled)
+      )
+    elseif handled then
+      return true
+    end
+  end
   self.doc:text_input(text)
+  return true
 end
 
 
@@ -5094,10 +5168,28 @@ function DocView:on_ime_text_editing(text, start, length)
     self:begin_line_render_interaction("ime-composition")
   end
   self.doc:clear_search_selections()
-  self.doc:ime_text_editing(text, start, length)
+  local handled, adjusted_start, adjusted_length = false, start, length
+  local line = self.doc:get_selection()
+  local render_line = self:get_line_render(line)
+  if render_line and render_line.on_ime_text_editing then
+    local ok, result, result_start, result_length = pcall(
+      render_line.on_ime_text_editing, self, text, start, length
+    )
+    if not ok then
+      core.log_quiet(
+        "DocView rendered IME input failed for %s: %s",
+        self.doc:get_name(), tostring(result)
+      )
+    elseif result then
+      handled = true
+      adjusted_start = tonumber(result_start) or start
+      adjusted_length = tonumber(result_length) or length
+    end
+  end
+  if not handled then self.doc:ime_text_editing(text, start, length) end
   self.ime_status = composing
-  self.ime_selection.from = start
-  self.ime_selection.size = length
+  self.ime_selection.from = adjusted_start
+  self.ime_selection.size = adjusted_length
   if not composing and was_composing then
     self:end_line_render_interaction("ime-composition-end")
   end
@@ -5107,7 +5199,7 @@ function DocView:on_ime_text_editing(text, start, length)
   local line1, col1, line2, col2 = self.doc:get_selection(true)
   local col = math.min(col1, col2)
   self:update_ime_location()
-  self:scroll_to_make_visible(line1, col + start)
+  self:scroll_to_make_visible(line1, col + adjusted_start)
 end
 
 
@@ -5665,8 +5757,8 @@ local function cached_fast_ascii_monospace_width(self, line, text, font, indent_
   return width
 end
 
-local function draw_render_fragment_background(fragment, x, y, width, height)
-  if fragment.background then
+local function draw_render_fragment_background(fragment, x, y, width, height, force)
+  if fragment.background and (force or not fragment.background_under_selection) then
     renderer.draw_rect(x, y, width, height, fragment.background)
   end
   if fragment.hovered and fragment_uses_hand_cursor(fragment) then
@@ -5897,7 +5989,7 @@ function DocView:draw_line_text(line, x, y)
     return self:get_visual_row_y_offset(first_visual_row + count) - first_row_y_offset
   end
   if render_line then
-    if render_line.position_rows then
+    if render_line.position_rows and not render_line.position_rows_draw_full_line then
       local fragments = self:iter_line_render_fragments(render_line)
       local _, indent_size = self.doc:get_indent_info()
       local layout_height = render_line.layout_height
@@ -6694,6 +6786,26 @@ function DocView:iter_text_range_screen_segments(line, col1, col2, origin_x, ori
   end
 end
 
+local function draw_render_line_under_selection_backgrounds(view, render_line, x, y, line)
+  if not (render_line and render_line.under_selection_backgrounds) then return end
+  local tx = x + (render_line.x_offset or 0)
+  local row_height = render_line.layout_height
+    or view:get_position_visual_row_height(line, 1)
+  for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
+    local font = render_fragment_font(view, fragment)
+    local width = fragment.width or (fragment.widget and fragment.widget.width)
+      or font:get_width(fragment.text or "")
+    local draw_x = fragment.layout_x ~= nil and x + fragment.layout_x or tx
+    if fragment.background_under_selection and fragment.background then
+      draw_render_fragment_background(
+        fragment, draw_x, y, width,
+        fragment.background_full_height and row_height or font:get_height(), true
+      )
+    end
+    tx = draw_x + width
+  end
+end
+
 function DocView:draw_search_match_background(line, col1, col2, primary)
   local bg = self:search_match_style(primary)
   for x1, y, x2, h in self:iter_text_range_screen_segments(
@@ -6932,6 +7044,28 @@ end
   ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
 ---@return integer height Line height
+local function draw_line_render_full_cell(view, row, x, y, color)
+  local x1 = x + (row.selection_x1 or row.hit_x1 or 0)
+  local x2 = x + (row.selection_x2 or row.hit_x2 or x1)
+  if x2 <= x1 then return false end
+  local sy = y + (row.selection_y or 0)
+  local sh = math.max(
+    1, row.selection_height or row.height or view:get_line_height()
+  )
+  renderer.draw_rect(x1, sy, x2 - x1, sh, color)
+  if row.selection_outline then
+    local border = math.max(1, math.floor(SCALE))
+    renderer.draw_rect(x1, sy, x2 - x1, border, row.selection_outline)
+    renderer.draw_rect(
+      x1, sy + math.max(0, sh - border), x2 - x1, border,
+      row.selection_outline
+    )
+    renderer.draw_rect(x1, sy, border, sh, row.selection_outline)
+    renderer.draw_rect(x2 - border, sy, border, sh, row.selection_outline)
+  end
+  return true
+end
+
 local function draw_line_render_position_row_range(
   view, render_line, col1, col2, x, y, color
 )
@@ -6939,6 +7073,13 @@ local function draw_line_render_position_row_range(
   if type(rows) ~= "table" or #rows == 0 then return false end
   local drawn = false
   for _, row in ipairs(rows) do
+    if row.selection_full_cell
+    and col1 <= (row.cell_source_col1 or math.huge)
+    and col2 >= (row.cell_source_col2 or -math.huge)
+    then
+      drawn = draw_line_render_full_cell(view, row, x, y, color) or drawn
+      goto continue_position_row_selection
+    end
     local row_col1 = math.max(1, row.source_col1 or 1)
     local row_col2 = math.max(row_col1, row.source_col2 or row_col1)
     local from = math.max(col1, row_col1)
@@ -6953,6 +7094,30 @@ local function draw_line_render_position_row_range(
         )
         drawn = true
       end
+    end
+    ::continue_position_row_selection::
+  end
+  return drawn
+end
+
+local function draw_line_render_empty_cell_selections(
+  view, line, render_line, x, y, color
+)
+  local rows = render_line and render_line.position_rows
+  if type(rows) ~= "table" then return false end
+  local carets = {}
+  for _, caret_line, caret_col, anchor_line, anchor_col in
+    view.doc:get_selections(false)
+  do
+    if caret_line == line and anchor_line == line and caret_col == anchor_col then
+      carets[caret_col] = true
+    end
+  end
+  if not next(carets) then return false end
+  local drawn = false
+  for _, row in ipairs(rows) do
+    if row.selection_empty_cell and carets[row.cell_source_col1] then
+      drawn = draw_line_render_full_cell(view, row, x, y, color) or drawn
     end
   end
   return drawn
@@ -7020,6 +7185,9 @@ function DocView:draw_line_body(line, x, y)
     perf_scope_end(body_phase_scope)
     body_phase_scope = perf_scope_begin("backgrounds_and_selections")
     draw_decoration_line_backgrounds(self, line, x, y)
+    draw_render_line_under_selection_backgrounds(
+      self, self:get_line_render(line), x, y, line
+    )
     local highlight_rows
     local hcl = config.highlight_current_line
     if not self.__current_line_highlights_drawn_before_content
@@ -7052,6 +7220,9 @@ function DocView:draw_line_body(line, x, y)
 
     local search_matches
     local render_line = self:get_line_render(line)
+    draw_line_render_empty_cell_selections(
+      self, line, render_line, x, y, style.selection
+    )
     for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
       if line >= line1 and line <= line2 then
         if line1 ~= line then col1 = 1 end
@@ -7120,6 +7291,9 @@ function DocView:draw_line_body(line, x, y)
   end
 
   draw_decoration_line_backgrounds(self, line, x, y)
+  draw_render_line_under_selection_backgrounds(
+    self, self:get_line_render(line), x, y, line
+  )
 
   if not self.__current_line_highlights_drawn_before_content
   and self:line_has_current_line_highlight(line) then
@@ -7142,6 +7316,9 @@ function DocView:draw_line_body(line, x, y)
   local lh = self:get_position_visual_row_height(line, 1)
   local selection_cache = self.__line_body_selection_cache
   local render_line = self:get_line_render(line)
+  draw_line_render_empty_cell_selections(
+    self, line, render_line, x, y, style.selection
+  )
   local fallback_search_matches
   local cached_selections = selection_cache and selection_cache[line]
   if cached_selections then

@@ -1979,14 +1979,15 @@ function Doc:text_input(text, idx)
 end
 
 
-function Doc:ime_text_editing(text, start, length, idx)
-  text = tostring(text or "")
+function Doc:ime_text_editing_by_selection(text_for_selection, idx)
+  assert(type(text_for_selection) == "function", "IME text provider must be a function")
   local edits = {}
   local ranges_by_idx = {}
   for sidx, line1, col1, line2, col2 in self:get_selections(true, idx or true) do
     edits[#edits + 1] = {
       line1 = line1, col1 = col1, line2 = line2, col2 = col2,
-      text = text, idx = sidx,
+      text = tostring(text_for_selection(sidx, line1, col1, line2, col2) or ""),
+      idx = sidx,
     }
     ranges_by_idx[sidx] = { "end", "start" }
   end
@@ -1999,6 +2000,12 @@ function Doc:ime_text_editing(text, start, length, idx)
     last_selection = last_selection,
     merge_cursors = false,
   })
+end
+
+
+function Doc:ime_text_editing(text, start, length, idx)
+  text = tostring(text or "")
+  return self:ime_text_editing_by_selection(function() return text end, idx)
 end
 
 
