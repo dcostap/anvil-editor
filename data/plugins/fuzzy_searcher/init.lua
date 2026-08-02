@@ -2795,6 +2795,10 @@ function FSView:new(prefix, opts)
   self.source_file_line = source_doc and source_doc:get_selection(false) or 1
 
   self.input = TextBox(self, prefix or "", "")
+  -- The picker query is a single-line field.  DocView defaults to the global
+  -- editor wrapping setting, which can otherwise make long queries wrap in
+  -- the input widget instead of scrolling horizontally.
+  self.input.textview:set_wrapping_enabled(false)
   local default_input_draw_line_text = self.input.textview.draw_line_text
   function self.input.textview:draw_line_text(line, x, y)
     local text = self.doc.lines[line] or ""

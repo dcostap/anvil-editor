@@ -62,6 +62,13 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.same({ split("files") }, { "", "files" })
   end)
 
+  test.it("keeps the search prompt input on one visual row", function()
+    fuzzy_searcher.open("")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    local textview = test.not_nil(picker.input and picker.input.textview)
+    test.equal(textview:is_wrapping_enabled(), false)
+  end)
+
   test.after_each(function(context)
     if core.fuzzy_searcher_active_view then
       core.fuzzy_searcher_active_view:close()
