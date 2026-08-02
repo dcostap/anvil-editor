@@ -6896,7 +6896,7 @@ function DocView:iter_text_range_screen_segments(line, col1, col2, origin_x, ori
         local x2 = origin_x + screen_x2 - base_x
         local y = origin_y + screen_y - base_y
         return x1, y, x2,
-          self:get_position_visual_row_height(line, segment_col1, false),
+          self:get_position_caret_height(line, segment_col1, false),
           segment_col1, segment_col2, row
       end
     end

@@ -147,4 +147,35 @@ test.describe("Bracket match frame", function()
     test.ok(rows[first_y] and rows[second_y], "expected frame edges on both Wrapped Visual Rows")
   end)
 
+  test.it("keeps bracket frames text-height inside a tall specialized presentation", function(context)
+    local view = open_text_view(context, "()", 1)
+    local text_height = view:get_line_height()
+    local presentation_height = text_height * 20
+    view:add_line_render_provider("test-tall-presentation", {
+      render_line = function(_, _, _, render_context)
+        return {
+          source_text = render_context.source_text,
+          caret_height = text_height,
+          fragments = {
+            {
+              source_col1 = 1,
+              source_col2 = #render_context.source_text + 1,
+              text = render_context.source_text,
+            },
+          },
+          disable_wrapping = true,
+        }
+      end,
+    })
+    view:add_visual_metric_provider("test-tall-presentation", {
+      line_height = function() return presentation_height end,
+    })
+    view:update()
+
+    local frame = capture_frame_rects(view, 1)
+    test.equal(#frame, 4)
+    test.equal(frame[3].h, text_height)
+    test.equal(frame[4].h, text_height)
+  end)
+
 end)
