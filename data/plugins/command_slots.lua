@@ -728,19 +728,22 @@ function CommandOutputView:draw_poi_underlines(line, x, y)
   local cache = self.poi_cache
   local points = cache and cache.by_line and cache.by_line[line]
   if not points or #points == 0 then return end
-  local lh = self:get_line_height()
   local thickness = math.max(1, math.floor(SCALE))
-  local underline_y = y + lh - thickness * 2
   local min_x = self.position.x
   local max_x = self.position.x + self.size.x
   for _, poi in ipairs(points) do
     if poi.text_bounds and poi.line == line and (poi.line2 or poi.line) == line then
-      local x1 = x + self:get_col_x_offset(line, poi.col)
-      local x2 = x + self:get_col_x_offset(line, poi.col2 or poi.col)
-      if x2 > min_x and x1 < max_x and x2 > x1 then
-        x1 = math.max(x1, min_x)
-        x2 = math.min(x2, max_x)
-        renderer.draw_rect(x1, underline_y, x2 - x1, thickness, style.accent or style.text)
+      for x1, row_y, x2, row_height in self:iter_text_range_screen_segments(
+        line, poi.col, poi.col2 or poi.col, x, y
+      ) do
+        if x2 > min_x and x1 < max_x and x2 > x1 then
+          x1 = math.max(x1, min_x)
+          x2 = math.min(x2, max_x)
+          renderer.draw_rect(
+            x1, row_y + row_height - thickness * 2,
+            x2 - x1, thickness, style.accent or style.text
+          )
+        end
       end
     end
   end

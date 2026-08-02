@@ -711,8 +711,6 @@ local function append_packet_whitespace(builder, self, idx, context)
   local entry = get_line_runs(self, idx)
   local font = self:get_font()
     or style.syntax_fonts.whitespace or style.syntax_fonts.comment
-  local line_height = self:get_line_height()
-  local text_y_offset = self:get_line_text_y_offset()
   local x_cache
   for row_idx = context.built_first, context.built_last do
     local _, row_start_col = linewrapping.get_idx_line_col(self, row_idx)
@@ -722,8 +720,11 @@ local function append_packet_whitespace(builder, self, idx, context)
     local row_continues = next_line == idx
     if not row_continues then row_end_col = #self.doc.lines[idx] end
     local row_y = context.screen_y
-      + (row_idx - context.first_idx) * line_height
-    local text_y = row_y + text_y_offset
+      + self:get_visual_row_y_offset(row_idx)
+      - self:get_visual_row_y_offset(context.first_idx)
+    local text_y = row_y + math.max(
+      0, (self:get_visual_row_height(row_idx) - font:get_height()) / 2
+    )
     local local_row = row_idx - context.first_idx + 1
     for _, run in ipairs(entry.runs) do
       local substitution = drawwhitespace.substitutions[run.substitution]
@@ -783,16 +784,18 @@ local function draw_wrapped_whitespace(self, idx, x, y, font, entry)
   local visible_idx2 = math.min(last_idx, self.__wrapped_draw_last_idx or last_idx)
   if visible_idx2 < visible_idx1 then return end
 
-  local lh = self:get_line_height()
-  local text_y_offset = self:get_line_text_y_offset()
   local x_cache
   for row_idx = visible_idx1, visible_idx2 do
     local _, row_start_col = linewrapping.get_idx_line_col(self, row_idx)
     local row_next_line, row_end_col = linewrapping.get_idx_line_col(self, row_idx + 1)
     local row_continues_line = row_next_line == idx
     if not row_continues_line then row_end_col = #self.doc.lines[idx] end
-    local row_y = y + (row_idx - first_idx) * lh
-    local row_ty = row_y + text_y_offset
+    local row_y = y
+      + self:get_visual_row_y_offset(row_idx)
+      - self:get_visual_row_y_offset(first_idx)
+    local row_ty = row_y + math.max(
+      0, (self:get_visual_row_height(row_idx) - font:get_height()) / 2
+    )
 
     for _, run in ipairs(entry.runs) do
       local substitution = drawwhitespace.substitutions[run.substitution]

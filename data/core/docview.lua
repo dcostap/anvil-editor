@@ -5137,25 +5137,28 @@ function DocView:update_ime_location()
   IME_STATE.w = self.size.x
   IME_STATE.h = self.size.y
 
-  local x, y = self:get_line_screen_position(line1)
-  local h = self:get_line_height()
   local col = math.min(col1, col2)
-
-  local x1, x2 = 0, 0
+  local from_line, from_col, to_line, to_col = line1, col1, line2, col2
 
   if self.ime_selection.size > 0 then
     -- focus on a part of the text
-    local from = col + self.ime_selection.from
-    local to = from + self.ime_selection.size
-    x1 = self:get_col_x_offset(line1, from)
-    x2 = self:get_col_x_offset(line1, to)
-  else
-    -- focus the whole text
-    x1 = self:get_col_x_offset(line1, col1)
-    x2 = self:get_col_x_offset(line2, col2)
+    from_line, to_line = line1, line1
+    from_col = col + self.ime_selection.from
+    to_col = from_col + self.ime_selection.size
   end
 
-  ime.set_location(x + x1, y, x2 - x1, h)
+  local x1, y, x2, h
+  if from_line == to_line then
+    x1, y, x2, h = self:iter_text_range_screen_segments(
+      from_line, from_col, to_col
+    )()
+  end
+  if not x1 then
+    x1, y = self:get_line_screen_position(from_line, from_col)
+    x2 = x1
+    h = self:get_position_visual_row_height(from_line, from_col)
+  end
+  ime.set_location(x1, y, math.max(0, x2 - x1), h)
 end
 
 
@@ -6610,37 +6613,109 @@ function DocView:search_match_style(primary)
   return style.selectionhighlight, style.search_selection_secondary_outline
 end
 
-function DocView:search_match_screen_rect(line, col1, col2)
-  local x1, y1 = self:get_line_screen_position(line, col1)
-  local x2, y2 = self:get_line_screen_position(line, col2)
-  if y2 ~= y1 then
-    -- A very long match can cross a soft-wrap boundary. Draw a useful
-    -- first-segment marker rather than placing the whole match on the physical
-    -- line's first visual row.
-    x2 = self.position.x + self.size.x
+---Iterate the screen rectangles occupied by a single-line Document range.
+---Soft-wrapped ranges are split into one rectangle per Wrapped Visual Row.
+---@param line integer
+---@param col1 integer
+---@param col2 integer
+---@param origin_x? number Optional draw-line x origin
+---@param origin_y? number Optional draw-line y origin
+---@return function iterator
+function DocView:iter_text_range_screen_segments(line, col1, col2, origin_x, origin_y)
+  local text = self.doc.lines[line] or ""
+  col1 = common.clamp(math.floor(tonumber(col1) or 1), 1, #text + 1)
+  col2 = common.clamp(math.floor(tonumber(col2) or col1), 1, #text + 1)
+  if col2 < col1 then col1, col2 = col2, col1 end
+
+  local base_x, base_y = self:get_line_screen_position(line)
+  origin_x = origin_x or base_x
+  origin_y = origin_y or base_y
+
+  local render_line = self:get_line_render(line)
+  local position_rows = render_line and render_line.position_rows
+  if type(position_rows) == "table" and #position_rows > 0 then
+    local index = 0
+    return function()
+      while true do
+        index = index + 1
+        local row = position_rows[index]
+        if not row then return nil end
+        local row_col1 = math.max(1, row.source_col1 or 1)
+        local row_col2 = math.max(row_col1, row.source_col2 or row_col1)
+        local segment_col1 = math.max(col1, row_col1)
+        local segment_col2 = math.min(col2, row_col2)
+        if segment_col2 > segment_col1 then
+          local x1 = origin_x + self:get_line_render_col_x_offset(
+            render_line, segment_col1, row
+          )
+          local x2 = origin_x + self:get_line_render_col_x_offset(
+            render_line, segment_col2, row
+          )
+          return x1, origin_y + (row.y_offset or 0), x2,
+            math.max(1, row.height or self:get_line_height()),
+            segment_col1, segment_col2, index
+        end
+      end
+    end
   end
-  local _, position_row = self:get_position_line_render_row(line, col1)
-  local height = position_row and position_row.height
-    or self:get_position_visual_row_height(line, col1)
-  return x1, y1, x2, height
+
+  local row_count = self:get_visual_row_count_for_line(line)
+  local first_visual_row = self:get_visual_row(line, 1, false)
+  local first_row = math.max(
+    1, self:get_visual_row(line, col1, false) - first_visual_row + 1
+  )
+  local last_row = math.min(
+    row_count, self:get_visual_row(line, col2, true) - first_visual_row + 1
+  )
+  local row = first_row - 1
+  return function()
+    while true do
+      row = row + 1
+      if row > last_row then return nil end
+      local row_col1, row_col2 = self:get_visual_row_bounds_for_line(line, row)
+      if not row_col1 then return nil end
+      if col2 > row_col1 and col1 < row_col2 then
+        local segment_col1 = math.max(col1, row_col1)
+        local segment_col2 = math.min(col2, row_col2)
+        local screen_x1, screen_y = self:get_line_screen_position(
+          line, segment_col1, false
+        )
+        local screen_x2 = self:get_line_screen_position(
+          line, segment_col2, segment_col2 == row_col2
+        )
+        local x1 = origin_x + screen_x1 - base_x
+        local x2 = origin_x + screen_x2 - base_x
+        local y = origin_y + screen_y - base_y
+        return x1, y, x2,
+          self:get_position_visual_row_height(line, segment_col1, false),
+          segment_col1, segment_col2, row
+      end
+    end
+  end
 end
 
 function DocView:draw_search_match_background(line, col1, col2, primary)
-  local x1, y, x2, h = self:search_match_screen_rect(line, col1, col2)
-  if x2 <= x1 then return end
   local bg = self:search_match_style(primary)
-  renderer.draw_rect(x1, y, x2 - x1, h, bg)
+  for x1, y, x2, h in self:iter_text_range_screen_segments(
+    line, col1, col2
+  ) do
+    if x2 > x1 then renderer.draw_rect(x1, y, x2 - x1, h, bg) end
+  end
 end
 
 function DocView:draw_search_match_outline(line, col1, col2, primary)
-  local x1, y, x2, h = self:search_match_screen_rect(line, col1, col2)
-  if x2 <= x1 then return end
   local _, outline = self:search_match_style(primary)
   local t = math.max(1, SCALE)
-  renderer.draw_rect(x1, y, x2 - x1, t, outline)
-  renderer.draw_rect(x1, y + h - t, x2 - x1, t, outline)
-  renderer.draw_rect(x1, y, t, h, outline)
-  renderer.draw_rect(x2 - t, y, t, h, outline)
+  for x1, y, x2, h in self:iter_text_range_screen_segments(
+    line, col1, col2
+  ) do
+    if x2 > x1 then
+      renderer.draw_rect(x1, y, x2 - x1, t, outline)
+      renderer.draw_rect(x1, y + h - t, x2 - x1, t, outline)
+      renderer.draw_rect(x1, y, t, h, outline)
+      renderer.draw_rect(x2 - t, y, t, h, outline)
+    end
+  end
 end
 
 ---Prepare per-visible-line selection/highlight data for draw_line_body().
@@ -7189,26 +7264,41 @@ end
 ---@param line2 integer End line
 ---@param col2 integer End column
 function DocView:draw_ime_decoration(line1, col1, line2, col2)
-  local x, y = self:get_line_screen_position(line1, col1)
   local line_size = math.max(1, SCALE)
-  local lh = self:get_position_caret_height(line1, col1)
+  if line2 < line1 or line1 == line2 and col2 < col1 then
+    line1, col1, line2, col2 = line2, col2, line1, col1
+  end
 
   -- Draw IME underline
-  local x1 = self:get_col_x_offset(line1, col1)
-  local x2 = self:get_col_x_offset(line2, col2)
-  renderer.draw_rect(x + math.min(x1, x2), y + lh - line_size, math.abs(x1 - x2), line_size, style.text)
+  for line = line1, line2 do
+    local range_col1 = line == line1 and col1 or 1
+    local range_col2 = line == line2 and col2 or #(self.doc.lines[line] or "") + 1
+    for x1, y, x2, row_height in self:iter_text_range_screen_segments(
+      line, range_col1, range_col2
+    ) do
+      renderer.draw_rect(
+        x1, y + row_height - line_size,
+        x2 - x1, line_size, style.text
+      )
+    end
+  end
 
   -- Draw IME selection
-  local col = math.min(col1, col2)
-  local from = col + self.ime_selection.from
+  local from = col1 + self.ime_selection.from
   local to = from + self.ime_selection.size
-  x1 = self:get_col_x_offset(line1, from)
   if from ~= to then
-    x2 = self:get_col_x_offset(line1, to)
     line_size = style.caret_width
-    renderer.draw_rect(x + math.min(x1, x2), y + lh - line_size, math.abs(x1 - x2), line_size, style.caret)
+    for x1, y, x2, row_height in self:iter_text_range_screen_segments(
+      line1, from, to
+    ) do
+      renderer.draw_rect(
+        x1, y + row_height - line_size,
+        x2 - x1, line_size, style.caret
+      )
+    end
   end
-  self:draw_caret(x + x1, y, line1, col)
+  local caret_x, caret_y = self:get_line_screen_position(line1, from)
+  self:draw_caret(caret_x, caret_y, line1, from)
 end
 
 

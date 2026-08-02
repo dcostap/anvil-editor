@@ -2,6 +2,7 @@
 -- Highlights changed lines, if file is in a git repository.
 -- Also supports MiniMap, if user has it installed and activated.
 local core = require "core"
+local common = require "core.common"
 local config = require "core.config"
 local DocView = require "core.docview"
 local Doc = require "core.doc"
@@ -471,21 +472,26 @@ function DocView:draw_line_gutter(line, x, y, width)
 	end
 
 	local lh = self:get_line_height()
-	old_docview_gutter(self, line, x, y, width)
+	local gutter_height = old_docview_gutter(self, line, x, y, width) or lh
 
 	local line_diff = effective_diff_for_line(self.doc, line)
-	if line_diff == nil then return lh end
+	if line_diff == nil then return gutter_height end
+	local first_row = self:get_visual_row(line, 1, false)
+	local marker_height = self:get_visual_row_y_offset(
+		first_row + self:get_visual_row_count_for_line(line)
+	) - self:get_visual_row_y_offset(first_row)
+	marker_height = math.max(1, marker_height)
 
 	local color = color_for_diff(line_diff)
 	x = x + gitdiff_padding(self)
 
 	if line_diff ~= "deletion" then
-		renderer.draw_rect(x, y, style.gitdiff_width, lh, color)
-		return lh
+		renderer.draw_rect(x, y, style.gitdiff_width, marker_height, color)
+		return gutter_height
 	end
 
 	renderer.draw_rect(x - style.gitdiff_width * 3, y, style.gitdiff_width * 6, math.max(1, 2 * SCALE), color)
-	return lh
+	return gutter_height
 end
 
 function DocView:get_gutter_width()
@@ -506,15 +512,25 @@ function DocView:draw_scrollbar()
 	local sx, sy, sw, sh = self.v_scrollbar:get_track_rect()
 	if sw <= 0 or sh <= 0 then return end
 
-	local lh = self:get_line_height()
-	local source_h = math.max(1, #self.doc.lines * lh)
+	local source_h = math.max(1, self:get_scrollable_size())
 	local min_h = style.gitdiff_overview_min_height
 
 	for _, range in ipairs(state.ranges) do
 		local count = math.max(0, range.current_end - range.current_start)
 		local anchor = math.max(1, math.min(#self.doc.lines, range.current_start))
-		local y = sy + (((anchor - 1) * lh) / source_h) * sh
-		local h = math.max(min_h, (count * lh / source_h) * sh)
+		local start_row = self:get_visual_row(anchor, 1, false)
+		local start_offset = self:get_visual_row_y_offset(start_row)
+		local end_offset = start_offset
+		if count > 0 then
+			local end_line = math.max(1, math.min(#self.doc.lines, range.current_end - 1))
+			local end_row = self:get_visual_row(end_line, 1, false)
+				+ self:get_visual_row_count_for_line(end_line)
+			end_offset = self:get_visual_row_y_offset(end_row)
+		end
+		local ratio_start = common.clamp(start_offset / source_h, 0, 1)
+		local ratio_end = common.clamp(end_offset / source_h, ratio_start, 1)
+		local y = sy + ratio_start * sh
+		local h = math.max(min_h, (ratio_end - ratio_start) * sh)
 		if y + h > sy + sh then h = sy + sh - y end
 		if h > 0 then
 			-- Overview markers are a narrow stripe aligned to the left edge of the

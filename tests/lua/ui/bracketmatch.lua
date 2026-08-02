@@ -1,6 +1,8 @@
 local core = require "core"
+local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
+local LineWrapping = require "core.linewrapping"
 
 require "plugins.bracketmatch"
 
@@ -25,6 +27,20 @@ local function open_brace_view(context)
   view.scroll.x, view.scroll.to.x = 0, 0
   view.scroll.y, view.scroll.to.y = 0, 0
   view:update()
+  context.view, context.doc = view, doc
+  return view, doc
+end
+
+local function open_text_view(context, text, col)
+  local doc = core.open_doc()
+  doc:text_input(text)
+  doc:set_selection(1, col)
+  local view = core.root_panel:open_doc(doc)
+  core.set_active_view(view)
+  view.position.x, view.position.y = 0, 0
+  view.size.x, view.size.y = 320, 240
+  view.scroll.x, view.scroll.to.x = 0, 0
+  view.scroll.y, view.scroll.to.y = 0, 0
   context.view, context.doc = view, doc
   return view, doc
 end
@@ -55,6 +71,17 @@ local function capture_frame_rects(view, line)
 end
 
 test.describe("Bracket match frame", function()
+  test.before_each(function(context)
+    local wrapping = config.plugins.linewrapping
+    context.wrapping = {
+      mode = wrapping.mode,
+      width_override = wrapping.width_override == nil and false or wrapping.width_override,
+      indent = wrapping.indent,
+      wrapping_indent = wrapping.wrapping_indent,
+      require_tokenization = wrapping.require_tokenization,
+    }
+  end)
+
   test.after_each(function(context)
     local root = core.root_panel.root_node
     if context.view then
@@ -64,6 +91,10 @@ test.describe("Bracket match frame", function()
     if context.doc then
       if context.doc:is_dirty() then context.doc:clean() end
       remove_doc(context.doc)
+    end
+    local wrapping = config.plugins.linewrapping
+    for key, value in pairs(context.wrapping or {}) do
+      wrapping[key] = key == "width_override" and value == false and nil or value
     end
   end)
 
@@ -90,4 +121,30 @@ test.describe("Bracket match frame", function()
     test.equal(frame[1].h, expected)
     test.equal(frame[3].w, expected)
   end)
+
+  test.it("draws adjacent brackets on both sides of a soft-wrap boundary", function(context)
+    local view = open_text_view(context, "xxxxxxx()", 8)
+    local wrapping = config.plugins.linewrapping
+    wrapping.mode = "letter"
+    wrapping.width_override = view:get_font():get_width("xxxxxxxx")
+    wrapping.indent = false
+    wrapping.wrapping_indent = 0
+    wrapping.require_tokenization = false
+    view:set_wrapping_enabled(true)
+    LineWrapping.update_docview_breaks(view)
+    view:update()
+
+    local frame = capture_frame_rects(view, 1)
+    local _, first_y = view:get_line_screen_position(1, 8)
+    local _, second_y = view:get_line_screen_position(1, 9)
+    local max_width = view:get_font():get_width("(") + math.max(1, SCALE)
+    local rows = {}
+    for _, rect in ipairs(frame) do
+      test.ok(rect.w <= max_width, "expected each frame segment to stay within one wrapped row")
+      rows[rect.y] = true
+    end
+    test.ok(second_y > first_y, "expected the bracket pair to straddle Wrapped Visual Rows")
+    test.ok(rows[first_y] and rows[second_y], "expected frame edges on both Wrapped Visual Rows")
+  end)
+
 end)

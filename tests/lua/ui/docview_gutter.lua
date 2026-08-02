@@ -4,6 +4,7 @@ local Doc = require "core.doc"
 local DocView = require "core.docview"
 local style = require "core.style"
 local test = require "core.test"
+local LineWrapping = require "core.linewrapping"
 
 local gitdiff = require "plugins.gitdiff_highlight"
 
@@ -27,6 +28,15 @@ test.describe("DocView gutter line numbers", function()
     context.docs = {}
     context.show_line_numbers = config.show_line_numbers
     context.gitdiff_gutter = config.plugins.gitdiff_highlight.gutter
+    context.gitdiff_overview = config.plugins.gitdiff_highlight.overview
+    local wrapping = config.plugins.linewrapping
+    context.wrapping = {
+      mode = wrapping.mode,
+      width_override = wrapping.width_override == nil and false or wrapping.width_override,
+      indent = wrapping.indent,
+      wrapping_indent = wrapping.wrapping_indent,
+      require_tokenization = wrapping.require_tokenization,
+    }
     config.show_line_numbers = true
     config.plugins.gitdiff_highlight.gutter = true
   end)
@@ -34,6 +44,11 @@ test.describe("DocView gutter line numbers", function()
   test.after_each(function(context)
     config.show_line_numbers = context.show_line_numbers
     config.plugins.gitdiff_highlight.gutter = context.gitdiff_gutter
+    config.plugins.gitdiff_highlight.overview = context.gitdiff_overview
+    local wrapping = config.plugins.linewrapping
+    for key, value in pairs(context.wrapping or {}) do
+      wrapping[key] = key == "width_override" and value == false and nil or value
+    end
     if context.original_draw_rect then renderer.draw_rect = context.original_draw_rect end
     if context.original_common_draw_text then common.draw_text = context.original_common_draw_text end
     for _, doc in ipairs(context.docs or {}) do doc:on_close() end
@@ -108,5 +123,87 @@ test.describe("DocView gutter line numbers", function()
     test.ok(marker.x >= 0, "expected the marker to start inside the gutter")
     test.ok(marker.x + marker.width <= gutter_width,
       "expected the marker not to overlap document text")
+  end)
+
+  test.it("spans git hunk gutter markers across all Wrapped Visual Rows", function(context)
+    local doc = Doc()
+    doc:insert(1, 1, string.rep("x", 24))
+    doc:clear_undo_redo()
+    context.docs[#context.docs + 1] = doc
+    local view = DocView(doc)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 320, 200
+    local wrapping = config.plugins.linewrapping
+    wrapping.mode = "letter"
+    wrapping.width_override = view:get_font():get_width("xxxxxxxx")
+    wrapping.indent = false
+    wrapping.wrapping_indent = 0
+    wrapping.require_tokenization = false
+    view:set_wrapping_enabled(true)
+    LineWrapping.update_docview_breaks(view)
+    gitdiff._set_state_for_tests(doc, {
+      is_in_repo = true,
+      line_index = { [1] = "addition" },
+      ranges = {},
+    })
+
+    local marker
+    context.original_draw_rect = renderer.draw_rect
+    context.original_common_draw_text = common.draw_text
+    common.draw_text = function() end
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.git_change_addition then marker = { x = x, y = y, w = w, h = h } end
+    end
+    view:draw_line_gutter(1, 0, 0, view:get_gutter_width())
+
+    local visual_rows = view:get_visual_row_count_for_line(1)
+    test.ok(visual_rows > 1)
+    test.equal(marker.h, visual_rows * view:get_line_height())
+  end)
+
+  test.it("maps git overview markers through the visual-row scroll model", function(context)
+    local doc = Doc()
+    doc:insert(1, 1, string.rep("x", 24) .. "\nchanged\nend")
+    doc:clear_undo_redo()
+    context.docs[#context.docs + 1] = doc
+    local view = DocView(doc)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 320, 200
+    local wrapping = config.plugins.linewrapping
+    wrapping.mode = "letter"
+    wrapping.width_override = view:get_font():get_width("xxxxxxxx")
+    wrapping.indent = false
+    wrapping.wrapping_indent = 0
+    wrapping.require_tokenization = false
+    view:set_wrapping_enabled(true)
+    LineWrapping.update_docview_breaks(view)
+    config.plugins.gitdiff_highlight.overview = true
+    gitdiff._set_state_for_tests(doc, {
+      is_in_repo = true,
+      line_index = { [2] = "addition" },
+      ranges = { { type = "addition", current_start = 2, current_end = 3 } },
+    })
+
+    local marker
+    context.original_draw_rect = renderer.draw_rect
+    renderer.draw_rect = function(x, y, w, h, color)
+      if type(color) == "table"
+      and color[1] == style.git_change_addition[1]
+      and color[4] == (style.git_change_addition[4] or 255) * 0.8
+      then
+        marker = { x = x, y = y, w = w, h = h }
+      end
+    end
+    view.v_scrollbar.draw = function() end
+    view.h_scrollbar.draw = function() end
+    view.v_scrollbar.draw_thumb = function() end
+    view.v_scrollbar.get_track_rect = function() return 0, 0, 10, 100 end
+    view:draw_scrollbar()
+
+    local start_row = view:get_visual_row(2, 1)
+    local expected_y = view:get_visual_row_y_offset(start_row)
+      / view:get_scrollable_size() * 100
+    test.ok(view:get_visual_row_count_for_line(1) > 1)
+    test.equal(marker.y, expected_y)
   end)
 end)

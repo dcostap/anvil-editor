@@ -1,8 +1,10 @@
 local core = require "core"
 local command = require "core.command"
+local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
 local MessageBox = require "widget.messagebox"
+local LineWrapping = require "core.linewrapping"
 
 require "plugins.intellij_find"
 
@@ -147,5 +149,43 @@ test.describe("DocView Prompt Bar find", function()
 
     test.equal(table.concat(doc.lines), "omega beta omega\nomega\n\n")
     test.equal(changes, 1)
+  end)
+
+  test.it("splits find highlights across Wrapped Visual Rows", function(context)
+    local view = open_editor(context, "xxxxxxNEEDLE")
+    local wrapping = config.plugins.linewrapping
+    local previous = {
+      mode = wrapping.mode,
+      width_override = wrapping.width_override,
+      indent = wrapping.indent,
+      wrapping_indent = wrapping.wrapping_indent,
+      require_tokenization = wrapping.require_tokenization,
+    }
+    wrapping.mode = "letter"
+    wrapping.width_override = view:get_font():get_width("xxxxxxxx")
+    wrapping.indent = false
+    wrapping.wrapping_indent = 0
+    wrapping.require_tokenization = false
+    view:set_wrapping_enabled(true)
+    LineWrapping.update_docview_breaks(view)
+
+    local rects = {}
+    local old_draw_rect = renderer.draw_rect
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.selectionhighlight then
+        rects[#rects + 1] = { x = x, y = y, w = w, h = h }
+      end
+    end
+    local ok, err = pcall(view.draw_search_match_background, view, 1, 7, 13, false)
+    renderer.draw_rect = old_draw_rect
+    wrapping.mode = previous.mode
+    wrapping.width_override = previous.width_override
+    wrapping.indent = previous.indent
+    wrapping.wrapping_indent = previous.wrapping_indent
+    wrapping.require_tokenization = previous.require_tokenization
+    if not ok then error(err, 0) end
+
+    test.equal(#rects, 2)
+    test.ok(rects[2].y > rects[1].y)
   end)
 end)

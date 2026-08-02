@@ -178,7 +178,11 @@ local function redraw_char(dv, x, y, screen_x, screen_y, width, height, line, co
     renderer.draw_rect(screen_x, screen_y, width, height, bg_color)
   end
   -- redraw char
-  renderer.draw_text(font, char, screen_x, screen_y + dv:get_line_text_y_offset(), char_color)
+  renderer.draw_text(
+    font, char, screen_x,
+    screen_y + math.max(0, (height - font:get_height()) / 2),
+    char_color
+  )
 end
 
 
@@ -199,28 +203,41 @@ local function draw_decoration(dv, x, y, line, col, width)
 
   local thickness = math.max(1, SCALE)
 
-  -- position data
-  local screen_x, screen_y = dv:get_line_screen_position(line, col)
-  local screen_x2 = dv:get_line_screen_position(line, col + width)
-  local screen_w = math.abs(screen_x2 - screen_x)
-  local lh = dv:get_line_height()
-
   -- color char or block style
   if conf.color_char or conf.style == "block" then
     for i = 1, width, 1 do
-      redraw_char(dv, x, y, screen_x, screen_y, screen_w, lh, line, col + i - 1,
-                  conf.style == "block" and block_color, conf.color_char and char_color)
+      local char_col = col + i - 1
+      for screen_x, screen_y, screen_x2, row_height in
+        dv:iter_text_range_screen_segments(
+          line, char_col, char_col + 1, x, y
+        )
+      do
+        redraw_char(
+          dv, x, y, screen_x, screen_y, screen_x2 - screen_x,
+          row_height, line, char_col,
+          conf.style == "block" and block_color,
+          conf.color_char and char_color
+        )
+      end
     end
   end
 
   -- draw decoration
-  if conf.style == "underline" then
-    renderer.draw_rect(screen_x, screen_y + lh - thickness, screen_w, thickness, color)
-  elseif conf.style == "frame" then
-    renderer.draw_rect(screen_x, screen_y, screen_w, thickness, frame_color) --top
-    renderer.draw_rect(screen_x, screen_y + lh - thickness, screen_w, thickness, frame_color) --bottom
-    renderer.draw_rect(screen_x, screen_y, thickness, lh, frame_color) --left
-    renderer.draw_rect(screen_x2 - thickness, screen_y, thickness, lh, frame_color) --right
+  for screen_x, screen_y, screen_x2, row_height in
+    dv:iter_text_range_screen_segments(line, col, col + width, x, y)
+  do
+    local screen_w = screen_x2 - screen_x
+    if conf.style == "underline" then
+      renderer.draw_rect(
+        screen_x, screen_y + row_height - thickness,
+        screen_w, thickness, color
+      )
+    elseif conf.style == "frame" then
+      renderer.draw_rect(screen_x, screen_y, screen_w, thickness, frame_color)
+      renderer.draw_rect(screen_x, screen_y + row_height - thickness, screen_w, thickness, frame_color)
+      renderer.draw_rect(screen_x, screen_y, thickness, row_height, frame_color)
+      renderer.draw_rect(screen_x2 - thickness, screen_y, thickness, row_height, frame_color)
+    end
   end
 end
 

@@ -408,6 +408,41 @@ test.describe("LSP Diagnostic Underlines", function()
     test.equal(max_y2 - max_y1, lh)
   end)
 
+  test.it("uses resolved visual-row offsets for wrapped underlines", function(context)
+    require "core.linewrapping"
+    local doc = track_doc(context, new_doc(join_path(temp_root, "wrapped-variable.cpp"), "abcdefghi"))
+    local client = track_client(context, fake_client())
+    documents.attach(client, doc, { language_id = "cpp" })
+    diagnostics.attach_client(client)
+    publish(client, {
+      textDocument = { uri = uri.path_to_uri(doc.filename), version = 0 },
+      diagnostics = {
+        { range = lsp_range(0, 2, 0, 8), severity = 1, message = "wrapped variable" },
+      },
+    })
+
+    local view = DocView(doc)
+    view.wrapped_settings = {}
+    view.wrapped_lines = { 1, 1, 1, 6 }
+    view.wrapped_line_to_idx = { [1] = 1, [2] = 3 }
+    view.wrapped_line_offsets = { 0 }
+    local lh = view:get_line_height()
+    view:add_visual_metric_provider("test-variable", {
+      line_metrics = function()
+        return { heights = { lh * 2, lh }, row_count = 2 }
+      end,
+    })
+
+    local calls = with_fake_draw_poly(function()
+      diagnostic_underlines.draw_line(view, 1, 0, 100)
+    end)
+
+    test.equal(#calls, 2)
+    local _, min_y1 = point_bounds(calls[1].points)
+    local _, min_y2 = point_bounds(calls[2].points)
+    test.equal(min_y2 - min_y1, lh * 2)
+  end)
+
   test.it("draws wrapped underlines once through DocView line body", function(context)
     local doc = track_doc(context, new_doc(join_path(temp_root, "wrapped-once.cpp"), "abcdefghi"))
     local client = track_client(context, fake_client())

@@ -5,9 +5,11 @@ local common = require "core.common"
 local process = require "core.process"
 local panes = require "core.panes"
 local storage = require "core.storage"
+local style = require "core.style"
 local test = require "core.test"
 local View = require "core.view"
 local Project = require "core.project"
+local LineWrapping = require "core.linewrapping"
 
 local command_slots = require "plugins.command_slots"
 
@@ -41,6 +43,14 @@ test.describe("Command Slots", function()
     context.previous_projects = core.projects
     context.previous_cwd = system.getcwd()
     context.previous_powershell_candidates = config.plugins.command_slots.powershell_candidates
+    local wrapping = config.plugins.linewrapping
+    context.previous_wrapping = {
+      mode = wrapping.mode,
+      width_override = wrapping.width_override == nil and false or wrapping.width_override,
+      indent = wrapping.indent,
+      wrapping_indent = wrapping.wrapping_indent,
+      require_tokenization = wrapping.require_tokenization,
+    }
     clear_prompt()
     storage.clear("command-slots")
     command_slots._reset_for_tests()
@@ -51,6 +61,12 @@ test.describe("Command Slots", function()
     command_slots._reset_for_tests()
     storage.clear("command-slots")
     config.plugins.command_slots.powershell_candidates = context.previous_powershell_candidates
+    if context.previous_wrapping then
+      local wrapping = config.plugins.linewrapping
+      for key, value in pairs(context.previous_wrapping) do
+        wrapping[key] = key == "width_override" and value == false and nil or value
+      end
+    end
     if context.cleanup_views and core.root_panel and core.root_panel.root_node then
       for _, view in ipairs(context.cleanup_views) do
         local node = core.root_panel.root_node:get_node_for_view(view)
@@ -328,6 +344,49 @@ test.describe("Command Slots", function()
 
     test.equal(#rects, 1)
     test.ok(rects[1].w > 0)
+  end)
+
+  test.it("draws Command Output POI underlines on their Wrapped Visual Rows", function(context)
+    context.temp_root = join_path(USERDIR, "command-output-wrapped-poi")
+    test.ok(common.mkdirp(join_path(context.temp_root, "src")))
+    local target = join_path(context.temp_root, "src", "a.c")
+    write_file(target, "x\n")
+    core.projects = { Project(context.temp_root) }
+
+    local view = command_slots.CommandOutputView({ label = "T" })
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 320, 200
+    view.scroll.x, view.scroll.to.x = 0, 0
+    view.scroll.y, view.scroll.to.y = 0, 0
+    view.doc:set_text(string.rep("x", 16) .. " src/a.c:1:1: ok\n")
+
+    local wrapping = config.plugins.linewrapping
+    wrapping.mode = "letter"
+    wrapping.width_override = view:get_font():get_width(string.rep("x", 16))
+    wrapping.indent = false
+    wrapping.wrapping_indent = 0
+    wrapping.require_tokenization = false
+    view:set_wrapping_enabled(true)
+    LineWrapping.update_docview_breaks(view)
+
+    local poi = view:get_points_of_interest({ force_revalidate = true })[1]
+    test.ok(poi, "expected a detected Text POI")
+    local rects = {}
+    local old_draw_rect = renderer.draw_rect
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == (style.accent or style.text) then
+        rects[#rects + 1] = { x = x, y = y, w = w, h = h }
+      end
+    end
+    local x, y = view:get_line_screen_position(1)
+    local ok, err = pcall(view.draw_poi_underlines, view, 1, x, y)
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err, 0) end
+
+    local _, poi_y = view:get_line_screen_position(1, poi.col)
+    local thickness = math.max(1, math.floor(SCALE))
+    test.ok(poi_y > y, "expected the POI on a continuation row")
+    test.equal(rects[1].y, poi_y + view:get_position_visual_row_height(1, poi.col) - thickness * 2)
   end)
 
   test.it("keeps focus in the starting pane while stepping through Right Pane Command Output POIs", function(context)

@@ -1,0 +1,134 @@
+local core = require "core"
+local config = require "core.config"
+local Doc = require "core.doc"
+local DocView = require "core.docview"
+local ime = require "core.ime"
+local style = require "core.style"
+local test = require "core.test"
+local LineWrapping = require "core.linewrapping"
+
+local function make_view(text)
+  local doc = Doc(nil, nil, true)
+  doc:insert(1, 1, text)
+  doc:clear_undo_redo()
+  local view = DocView(doc)
+  view.position.x, view.position.y = 0, 0
+  view.size.x, view.size.y = 320, 200
+  view.scroll.x, view.scroll.to.x = 0, 0
+  view.scroll.y, view.scroll.to.y = 0, 0
+  return view, doc
+end
+
+test.describe("Document View IME geometry", function()
+  test.before_each(function(context)
+    context.active_view = core.active_view
+    local wrapping = config.plugins.linewrapping
+    context.wrapping = {
+      mode = wrapping.mode,
+      width_override = wrapping.width_override == nil and false or wrapping.width_override,
+      indent = wrapping.indent,
+      wrapping_indent = wrapping.wrapping_indent,
+      require_tokenization = wrapping.require_tokenization,
+    }
+  end)
+
+  test.after_each(function(context)
+    core.active_view = context.active_view
+    local wrapping = config.plugins.linewrapping
+    for key, value in pairs(context.wrapping or {}) do
+      wrapping[key] = key == "width_override" and value == false and nil or value
+    end
+    if context.old_set_location then ime.set_location = context.old_set_location end
+  end)
+
+  test.it("draws composition underlines at their Document columns", function()
+    local view = make_view("abcdefghij")
+    local rects = {}
+    local old_draw_rect = renderer.draw_rect
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.text then rects[#rects + 1] = { x = x, y = y, w = w, h = h } end
+    end
+    local ok, err = pcall(view.draw_ime_decoration, view, 1, 7, 1, 5)
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err, 0) end
+
+    local expected_x = select(1, view:get_line_screen_position(1, 5))
+    local expected_x2 = select(1, view:get_line_screen_position(1, 7))
+    test.equal(rects[1].x, expected_x)
+    test.equal(rects[1].w, expected_x2 - expected_x)
+  end)
+
+  test.it("anchors the system IME rectangle to a wrapped continuation row", function(context)
+    local view, doc = make_view(string.rep("x", 16) .. "AB")
+    local wrapping = config.plugins.linewrapping
+    wrapping.mode = "letter"
+    wrapping.width_override = view:get_font():get_width(string.rep("x", 16))
+    wrapping.indent = false
+    wrapping.wrapping_indent = 0
+    wrapping.require_tokenization = false
+    view:set_wrapping_enabled(true)
+    LineWrapping.update_docview_breaks(view)
+    doc:set_selection(1, 19, 1, 17)
+    view.ime_status = true
+    core.active_view = view
+
+    local location
+    context.old_set_location = ime.set_location
+    ime.set_location = function(x, y, w, h) location = { x = x, y = y, w = w, h = h } end
+    view:update_ime_location()
+
+    local expected_x, expected_y = view:get_line_screen_position(1, 17)
+    test.ok(expected_y > select(2, view:get_line_screen_position(1)))
+    test.equal(location.x, expected_x)
+    test.equal(location.y, expected_y)
+  end)
+
+  test.it("splits a composition underline across Wrapped Visual Rows", function()
+    local view = make_view("xxxxxxxAB")
+    local wrapping = config.plugins.linewrapping
+    wrapping.mode = "letter"
+    wrapping.width_override = view:get_font():get_width("xxxxxxxx")
+    wrapping.indent = false
+    wrapping.wrapping_indent = 0
+    wrapping.require_tokenization = false
+    view:set_wrapping_enabled(true)
+    LineWrapping.update_docview_breaks(view)
+
+    local rects = {}
+    local old_draw_rect = renderer.draw_rect
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.text then rects[#rects + 1] = { x = x, y = y, w = w, h = h } end
+    end
+    local ok, err = pcall(view.draw_ime_decoration, view, 1, 10, 1, 8)
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err, 0) end
+
+    test.equal(#rects, 2)
+    test.ok(rects[2].y > rects[1].y)
+  end)
+
+  test.it("gives the system IME a positive first-row rect for a wrapped composition", function(context)
+    local view, doc = make_view("xxxxxxxAB")
+    local wrapping = config.plugins.linewrapping
+    wrapping.mode = "letter"
+    wrapping.width_override = view:get_font():get_width("xxxxxxxx")
+    wrapping.indent = false
+    wrapping.wrapping_indent = 0
+    wrapping.require_tokenization = false
+    view:set_wrapping_enabled(true)
+    LineWrapping.update_docview_breaks(view)
+    doc:set_selection(1, 10, 1, 8)
+    view.ime_status = true
+    core.active_view = view
+
+    local location
+    context.old_set_location = ime.set_location
+    ime.set_location = function(x, y, w, h) location = { x = x, y = y, w = w, h = h } end
+    view:update_ime_location()
+
+    local expected_x, expected_y = view:get_line_screen_position(1, 8)
+    test.equal(location.x, expected_x)
+    test.equal(location.y, expected_y)
+    test.ok(location.w > 0, "expected a positive first-segment IME width")
+  end)
+end)
