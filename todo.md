@@ -1,0 +1,2 @@
+- being able to highlight a match in the file like in searches, but while being in a search, aka still being able to move around and edit freely
+- 
