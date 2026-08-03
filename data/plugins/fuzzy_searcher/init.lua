@@ -5143,7 +5143,7 @@ function FSView:draw()
   local root = core.root_panel
 
   local phase_scope = fuzzy_searcher._perf_scope_begin("overlay")
-  renderer.draw_rect(root.position.x, root.position.y, root.size.x, root.size.y, style.fuzzy_searcher_overlay_background)
+  root:draw_app_overlay(style.fuzzy_searcher_overlay_background)
   fuzzy_searcher._perf_scope_end(phase_scope)
 
   phase_scope = fuzzy_searcher._perf_scope_begin("widget_chrome")

@@ -177,6 +177,7 @@ style.image_grid_bright = c("ffffff")
 style.image_grid_dark = c("dfe1e5")
 style.fuzzy_searcher_preview_background = { 255, 255, 255, 235 }
 style.fuzzy_searcher_overlay_background = { 0, 0, 0, 70 }
+style.global_prompt_bar_overlay_background = { 0, 0, 0, 48 }
 style.filetree_operation_create = { 32, 138, 60, 255 }
 style.filetree_operation_copy = { 3, 155, 161, 255 }
 style.filetree_operation_move = { 53, 116, 240, 255 }

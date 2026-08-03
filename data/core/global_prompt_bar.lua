@@ -503,10 +503,23 @@ local function draw_suggestions_box(self)
 end
 
 
+---Dim the app above and below the focused Global Prompt Bar.
+---The prompt itself stays undimmed, while deferred suggestion rendering remains
+---on top of the overlay.
+---@param self core.global_prompt_bar
+local function draw_attention_overlay(self)
+  if core.active_view ~= self then return end
+  core.root_panel:draw_app_overlay(style.global_prompt_bar_overlay_background, self)
+end
+
+
 ---Draw the Global Prompt Bar.
----Renders input text and defers suggestions box drawing.
+---Renders input text and defers its attention overlay and suggestions box.
 function GlobalPromptBar:draw()
   GlobalPromptBar.super.draw(self)
+  if core.active_view == self then
+    core.root_panel:defer_draw(draw_attention_overlay, self)
+  end
   if self.state.show_suggestions then
     core.root_panel:defer_draw(draw_suggestions_box, self)
   end

@@ -149,6 +149,54 @@ function RootPanel:defer_draw(fn, ...)
 end
 
 
+---Dim the application behind an attention-demanding surface.
+---When an unobscured view is supplied, the overlay is drawn around that view.
+---@param color renderer.color Overlay color
+---@param unobscured_view core.view? View that should remain undimmed
+function RootPanel:draw_app_overlay(color, unobscured_view)
+  local root_left = self.position.x
+  local root_top = self.position.y
+  local root_right = root_left + self.size.x
+  local root_bottom = root_top + self.size.y
+
+  if not unobscured_view then
+    renderer.draw_rect(root_left, root_top, self.size.x, self.size.y, color)
+    return
+  end
+
+  local view_left = common.clamp(unobscured_view.position.x, root_left, root_right)
+  local view_top = common.clamp(unobscured_view.position.y, root_top, root_bottom)
+  local view_right = common.clamp(
+    unobscured_view.position.x + unobscured_view.size.x, root_left, root_right
+  )
+  local view_bottom = common.clamp(
+    unobscured_view.position.y + unobscured_view.size.y, root_top, root_bottom
+  )
+
+  if view_right <= root_left or view_left >= root_right
+    or view_bottom <= root_top or view_top >= root_bottom
+  then
+    renderer.draw_rect(root_left, root_top, self.size.x, self.size.y, color)
+    return
+  end
+
+  if view_top > root_top then
+    renderer.draw_rect(root_left, root_top, self.size.x, view_top - root_top, color)
+  end
+  if view_bottom < root_bottom then
+    renderer.draw_rect(root_left, view_bottom, self.size.x, root_bottom - view_bottom, color)
+  end
+
+  local middle_height = view_bottom - view_top
+  if view_left > root_left and middle_height > 0 then
+    renderer.draw_rect(root_left, view_top, view_left - root_left, middle_height, color)
+  end
+  if view_right < root_right and middle_height > 0 then
+    renderer.draw_rect(view_right, view_top, root_right - view_right, middle_height, color)
+  end
+end
+
+
 ---Get the layout node containing the currently active view.
 ---Falls back to the Left Pane if active view is not found.
 ---@return core.node node Node containing active view or the Left Pane node
