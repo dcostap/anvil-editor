@@ -13,7 +13,7 @@ This is a temporary comparison record for Phase 0 of `MARKDOWN_LIVE_EDITOR_PLAN.
 
 ## Deterministic prototype gaps
 
-`tests/lua/ui/markdown_live_preview_baseline.lua` demonstrates that the current product path:
+The former UI characterization suite recorded that the prototype product path:
 
 1. does not attach or detach automatically after direct filename/syntax lifecycle changes;
 2. has no `markdown-live-preview:open-link` command;
@@ -23,7 +23,11 @@ This is a temporary comparison record for Phase 0 of `MARKDOWN_LIVE_EDITOR_PLAN.
 6. keeps missing and remote-disabled image cache entries stale after the file appears or remote policy changes; and
 7. sends an actually wrapped alias line through raw rendering instead of a provider-aware wrapped render plan.
 
-`tests/lua/runtime/markdown_live_preview_baseline.lua` demonstrates that first use of the prototype vault index does not scan its owning Project: an existing note is reported missing until an explicit rebuild.
+The former runtime characterization suite recorded that first use of the prototype vault index did not scan its owning Project: an existing note was reported missing until an explicit rebuild.
+
+Those temporary characterization files were removed after their observations had been
+migrated into durable behavior coverage. This document remains a historical record,
+not a reference to runnable baseline tests.
 
 These are characterization seams only. The rebuild should migrate them to stable public behavior tests as each gap is fixed.
 

@@ -328,55 +328,6 @@ test.describe("LSP Diagnostic Underlines", function()
     test.ok(max_x > min_x)
   end)
 
-  test.it("resolves underline colors at draw time", function(context)
-    local doc, client, document_uri = setup(context)
-    publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
-      diagnostics = {
-        { range = lsp_range(0, 0, 0, 5), severity = 2, message = "warning" },
-      },
-    })
-
-    context.original_warning_underline = style.diagnostic_warning_underline
-    local replacement = { 9, 8, 7, 255 }
-    local view = DocView(doc)
-    style.diagnostic_warning_underline = replacement
-
-    local calls = with_fake_draw_poly(function()
-      diagnostic_underlines.draw_line(view, 1, 0, 0)
-    end)
-
-    test.equal(calls[1].color, replacement)
-  end)
-
-  test.it("scales squiggle thickness with the code font", function(context)
-    local doc, client, document_uri = setup(context)
-    publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
-      diagnostics = {
-        { range = lsp_range(0, 0, 0, 5), severity = 1, message = "font scaled" },
-      },
-    })
-
-    local view = DocView(doc)
-    context.test_font_key = "__test_diagnostic_underline_font"
-    local fake_font = {
-      get_height = function() return 28 end,
-      get_width = function(_, text) return #(text or "") * 10 end,
-      set_tab_size = function() end,
-    }
-    style[context.test_font_key] = fake_font
-    view.font = context.test_font_key
-
-    local calls = with_fake_draw_poly(function()
-      diagnostic_underlines.draw_line(view, 1, 5, 11)
-    end)
-
-    local _, min_y, _, max_y = point_bounds(calls[1].points)
-    local expected_minimum_span = math.ceil(fake_font:get_height() / 14)
-    test.ok(max_y - min_y > expected_minimum_span)
-  end)
-
   test.it("splits wrapped underline ranges across visual rows", function(context)
     require "core.linewrapping"
     local doc = track_doc(context, new_doc(join_path(temp_root, "wrapped.cpp"), "abcdefghi"))

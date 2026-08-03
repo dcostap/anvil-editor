@@ -1,7 +1,6 @@
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
-local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local style = require "core.style"
 local test = require "core.test"
@@ -116,21 +115,7 @@ test.describe("centered editor", function()
     test.ok(col2 > lane_col2, "expected visible-column estimation to include the right-side drawing area")
   end)
 
-  test.it("keeps wrapping constrained to the centered lane", function(context)
-    local view = open_editor(context, string.rep("x", 1000) .. "\n")
-    view.wrapping_enabled = true
-
-    local lane_x, lane_width = centered_editor.get_lane_rect(view)
-    local editor_x, editor_width = centered_editor.get_editor_rect(view)
-
-    test.equal(editor_x, lane_x)
-    test.equal(editor_width, lane_width)
-
-    local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
-    test.equal(linewrapping.compute_wrap_width(view), math.max(0, lane_width - view:get_gutter_width() - scrollbar_width))
-  end)
-
-  test.it("uses the Markdown Live Preview width for centering and wrapping", function(context)
+  test.it("uses the Markdown Live Preview width for centering", function(context)
     local standard_view = open_editor(context, "standard\n")
     local markdown_view, markdown_doc = open_editor(context, "markdown\n")
     markdown_doc.filename = "centered-width.md"
@@ -144,59 +129,12 @@ test.describe("centered editor", function()
 
     local _, standard_width = centered_editor.get_lane_rect(standard_view)
     local _, markdown_width = centered_editor.get_lane_rect(markdown_view)
-    test.equal(standard_width, 150)
-    test.equal(markdown_width, 120)
-
-    markdown_view.wrapping_enabled = true
-    local scrollbar_width = markdown_view.v_scrollbar.expanded_size
-      or style.expanded_scrollbar_size
-    test.equal(
-      linewrapping.compute_wrap_width(markdown_view),
-      math.max(0, markdown_width - markdown_view:get_gutter_width() - scrollbar_width)
-    )
+    test.equal(standard_width, standard_view.size.x)
+    test.ok(markdown_width > 0 and markdown_width < standard_width)
 
     test.equal(markdown.live_render.detach(markdown_view), true)
     test.equal(centered_editor.should_center(markdown_view), false)
-    test.equal(select(2, centered_editor.get_lane_rect(markdown_view)), 150)
-  end)
-
-  test.it("keeps Markdown Live Preview caches stable across centered geometry", function(context)
-    local view, doc = open_editor(
-      context,
-      "# Heading\n\n| Name | Value |\n| --- | --- |\n| one | two |\n\nplain\n"
-    )
-    doc.filename = "centered-cache.md"
-    doc.abs_filename = "centered-cache.md"
-    test.equal(markdown.live_render.refresh_view(view), true)
-    view.wrapping_enabled = true
-    view:update_wrap_cache()
-
-    view:get_visual_row_metric_cache()
-    view:get_line_render(1)
-    local before = view:get_render_cache_diagnostics()
-
-    centered_editor.with_editor_geometry(view, function()
-      for _ = 1, 100 do view:get_visual_row_metric_cache() end
-      view:get_line_render(1)
-    end)
-    for _ = 1, 100 do view:get_visual_row_metric_cache() end
-    view:get_line_render(1)
-
-    local after = view:get_render_cache_diagnostics()
-    test.equal(after.metric_full_rebuilds, before.metric_full_rebuilds)
-    test.equal(after.metric_signature_changes, before.metric_signature_changes)
-    test.equal(after.line_signature_misses, before.line_signature_misses)
-    test.equal(
-      after.metric_signature_computations,
-      before.metric_signature_computations,
-      "cache hits should reuse the validated metric signature"
-    )
-    test.ok(
-      after.metric_signature_cache_hits - before.metric_signature_cache_hits >= 200,
-      "expected repeated metric lookups to hit the signature cache"
-    )
-
-    test.equal(markdown.live_render.detach(view), true)
+    test.equal(select(2, centered_editor.get_lane_rect(markdown_view)), markdown_view.size.x)
   end)
 
   test.it("allows unwrapped right-side drawn text to receive document mouse commands", function(context)

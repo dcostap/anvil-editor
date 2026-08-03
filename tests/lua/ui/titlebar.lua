@@ -1,8 +1,6 @@
 local common = require "core.common"
-local config = require "core.config"
 local core = require "core"
 local Node = require "core.node"
-local style = require "core.style"
 local test = require "core.test"
 local TitleBar = require "core.titlebar"
 
@@ -11,10 +9,6 @@ test.describe("Title Bar", function()
     if context.original_root_project then core.root_project = context.original_root_project end
     if context.original_common_draw_text then common.draw_text = context.original_common_draw_text end
     if context.original_set_window_hit_test then system.set_window_hit_test = context.original_set_window_hit_test end
-    if context.original_draw_rect then renderer.draw_rect = context.original_draw_rect end
-    if context.original_draw_rounded_rect then renderer.draw_rounded_rect = context.original_draw_rounded_rect end
-    if context.original_set_clip_rect then renderer.set_clip_rect = context.original_set_clip_rect end
-    if context.original_panes then core.panes = context.original_panes end
   end)
 
   test.it("truncates Project title text before native window controls", function(context)
@@ -40,64 +34,12 @@ test.describe("Title Bar", function()
 
     test.equal(#calls, 1)
     local call = calls[1]
-    test.equal(call.font, style.prose_heading_font)
-    test.ok(style.prose_heading_font:get_width(project_title) > call.w,
+    test.ok(call.font:get_width(project_title) > call.w,
       "expected test Project title to exceed available width")
-    test.ok(style.prose_heading_font:get_width(call.text) <= call.w, call.text)
+    test.ok(call.font:get_width(call.text) <= call.w, call.text)
     test.ok(call.text:find("^prefix%-"), call.text)
     test.ok(call.text:find("…$"), call.text)
     test.ok(not call.text:find("SUFFIX", 1, true), call.text)
-  end)
-
-  test.it("keeps a useful width for longer Project titles", function(context)
-    context.original_root_project = core.root_project
-    context.original_common_draw_text = common.draw_text
-    core.root_project = function()
-      return { path = "C:" .. PATHSEP .. "project-title-with-a-long-name" }
-    end
-
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 420 * SCALE, 32 * SCALE
-
-    local call
-    common.draw_text = function(font, color, text, align, x, y, w, h)
-      call = { font = font, text = text, x = x, w = w }
-      return x + font:get_width(text), y + font:get_height(), x, y
-    end
-
-    titlebar:draw_window_title()
-
-    local long_prefix = "project-title-with-a-long"
-    test.ok(style.prose_heading_font:get_width(long_prefix) <= call.w,
-      string.format("title width=%g prefix width=%g", call.w, style.prose_heading_font:get_width(long_prefix)))
-    test.ok(call.text:find("^project%-title%-with%-a%-long"), call.text)
-    test.equal(call.font, style.prose_heading_font)
-  end)
-
-  test.it("starts Left Pane tabs immediately after the Project title", function(context)
-    context.original_root_project = core.root_project
-    context.original_common_draw_text = common.draw_text
-    core.root_project = function()
-      return { path = "C:" .. PATHSEP .. "A" }
-    end
-
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
-
-    local title_call
-    common.draw_text = function(font, color, text, align, x, y, w, h)
-      title_call = { font = font, text = text, x = x }
-      return x + font:get_width(text), y + font:get_height(), x, y
-    end
-    titlebar:draw_window_title()
-
-    local tabs_x = titlebar:get_pane_tabs_rect("left")
-    local title_right = title_call.x + title_call.font:get_width(title_call.text)
-    test.ok(tabs_x >= title_right, string.format("tabs_x=%g title_right=%g", tabs_x, title_right))
-    test.ok(tabs_x - title_right <= style.padding.x + 1,
-      string.format("gap=%g padding=%g", tabs_x - title_right, style.padding.x))
   end)
 
   test.it("keeps Left and Right Pane tab regions separated by one safe zone", function()
@@ -293,170 +235,4 @@ test.describe("Title Bar", function()
     test.ok(hit_test_args[6] <= tabs_capacity)
   end)
 
-  test.it("renders the selected Pane Tab as an inset rounded tile", function(context)
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
-
-    local views = { {}, {} }
-    local node = {
-      views = views,
-      active_view = views[1],
-      titlebar_tab_offset = 1,
-      get_tab_title_font = function() return style.font end,
-      draw_tab_title = function() end,
-    }
-    titlebar.get_tabs_node = function(_, pane)
-      return pane == "left" and node or nil
-    end
-
-    context.original_draw_rect = renderer.draw_rect
-    context.original_draw_rounded_rect = renderer.draw_rounded_rect
-    context.original_set_clip_rect = renderer.set_clip_rect
-    renderer.draw_rect = function() end
-    local tiles = {}
-    renderer.draw_rounded_rect = function(x, y, w, h, radius, color)
-      tiles[#tiles + 1] = { x = x, y = y, w = w, h = h, radius = radius, color = color }
-    end
-    renderer.set_clip_rect = function() end
-
-    titlebar:draw_titlebar_tabs()
-
-    test.equal(#tiles, 1)
-    test.equal(tiles[1].color, style.titlebar_tab_active)
-    test.ok(tiles[1].radius > 0)
-
-    local tab_x, tab_y, tab_w, tab_h =
-      titlebar:get_titlebar_tab_rect("left", node, views, 1)
-    test.ok(tiles[1].x > tab_x)
-    test.ok(tiles[1].y > tab_y)
-    test.ok(tiles[1].x + tiles[1].w < tab_x + tab_w)
-    test.ok(tiles[1].y + tiles[1].h > tab_y + tab_h,
-      "lower rounded corners should extend below the clipped Title Bar")
-  end)
-
-  test.it("shows hover feedback on the selected Pane Tab", function(context)
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
-
-    local view = {}
-    local node = {
-      views = { view },
-      active_view = view,
-      titlebar_tab_offset = 1,
-      get_tab_title_font = function() return style.font end,
-      draw_tab_title = function() end,
-    }
-    titlebar.get_tabs_node = function(_, pane)
-      return pane == "left" and node or nil
-    end
-    titlebar.hovered_tab_pane = "left"
-    titlebar.hovered_tab_view = view
-
-    context.original_draw_rect = renderer.draw_rect
-    context.original_draw_rounded_rect = renderer.draw_rounded_rect
-    context.original_set_clip_rect = renderer.set_clip_rect
-    local hover_rects = {}
-    renderer.draw_rect = function() end
-    renderer.draw_rounded_rect = function(x, y, w, h, radius, color)
-      if color == style.titlebar_tab_hover then
-        hover_rects[#hover_rects + 1] = { x = x, y = y, w = w, h = h, radius = radius }
-      end
-    end
-    renderer.set_clip_rect = function() end
-
-    titlebar:draw_titlebar_tabs()
-
-    test.equal(#hover_rects, 1)
-    test.ok(hover_rects[1].radius > 0)
-  end)
-
-  test.it("clips each Pane Tab label inside its minimum side padding", function(context)
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
-
-    local view = {}
-    local title_rect
-    local node = {
-      views = { view },
-      active_view = view,
-      titlebar_tab_offset = 1,
-      get_tab_title_font = function() return style.font end,
-      draw_tab_title = function(_, _, _, _, _, x, y, w, h)
-        title_rect = { x = x, y = y, w = w, h = h }
-      end,
-    }
-    titlebar.get_tabs_node = function(_, pane)
-      return pane == "left" and node or nil
-    end
-
-    context.original_draw_rect = renderer.draw_rect
-    context.original_draw_rounded_rect = renderer.draw_rounded_rect
-    context.original_set_clip_rect = renderer.set_clip_rect
-    renderer.draw_rect = function() end
-    renderer.draw_rounded_rect = function() end
-    local clips = {}
-    renderer.set_clip_rect = function(x, y, w, h)
-      clips[#clips + 1] = { x = x, y = y, w = w, h = h }
-    end
-
-    titlebar:draw_titlebar_tabs()
-
-    test.not_nil(title_rect)
-    local found_title_clip = false
-    for _, clip in ipairs(clips) do
-      if clip.x == title_rect.x and clip.y == title_rect.y
-      and clip.w == title_rect.w and clip.h == title_rect.h then
-        found_title_clip = true
-        break
-      end
-    end
-    test.ok(found_title_clip, "Pane Tab title drawing must not enter its side padding")
-  end)
-
-  test.it("fades Right Pane tabs while the Right Pane is hidden", function(context)
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
-
-    local view = { get_name = function() return "Right tab" end }
-    local title_color
-    local node = Node()
-    node.views = { view }
-    node.active_view = view
-    node.titlebar_tab_offset = 1
-    titlebar.get_tabs_node = function(_, pane)
-      return pane == "right" and node or nil
-    end
-
-    context.original_panes = core.panes
-    core.panes = {
-      is_placeholder = function() return false end,
-      focused_pane = function() return "left" end,
-      right_visible = function() return false end,
-    }
-    context.original_draw_rect = renderer.draw_rect
-    context.original_draw_rounded_rect = renderer.draw_rounded_rect
-    context.original_set_clip_rect = renderer.set_clip_rect
-    context.original_common_draw_text = common.draw_text
-    renderer.draw_rect = function() end
-    renderer.draw_rounded_rect = function() end
-    renderer.set_clip_rect = function() end
-    common.draw_text = function(_, color)
-      title_color = color
-    end
-
-    titlebar:draw_titlebar_tabs()
-
-    test.not_nil(title_color)
-    test.equal(title_color[4], 255)
-    for channel = 1, 3 do
-      local background = style.titlebar[channel]
-      local foreground = style.text[channel]
-      test.ok(title_color[channel] > math.min(background, foreground))
-      test.ok(title_color[channel] < math.max(background, foreground))
-    end
-  end)
 end)

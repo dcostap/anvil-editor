@@ -996,10 +996,10 @@ tests/lua/ui/drawwhitespace.lua
 tests/lua/ui/indent_guides.lua
 ```
 
-Add a focused file such as:
+The focused packet tests live in:
 
 ```text
-tests/lua/ui/docview_line_packets.lua
+tests/lua/ui/display_packet.lua
 ```
 
 Test through Document View drawing and renderer-operation capture, not by asserting private Lua helper call counts. Cache diagnostics may be asserted where the behavior under test is specifically retained reuse/invalidation.
@@ -1023,7 +1023,7 @@ At relevant phases run only affected tests, for example:
 ```sh
 PATH=/c/msys64/mingw64/bin:$PATH /c/msys64/mingw64/bin/meson.exe test \
   -C build-windows-x86_64 anvil:lua-ui \
-  --test-args ui/docview_line_packets.lua \
+  --test-args ui/display_packet.lua \
   --print-errorlogs
 ```
 
@@ -1039,7 +1039,7 @@ After Lua edits:
   data/core/docview_line_packets.lua \
   data/plugins/drawwhitespace.lua \
   data/plugins/indent_guides.lua \
-  tests/lua/ui/docview_line_packets.lua
+  tests/lua/ui/display_packet.lua
 ```
 
 ## Correctness scenarios

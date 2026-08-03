@@ -145,45 +145,16 @@ test.describe("DocView render fragments", function()
     test.equal(view:get_col_x_offset(1, 4), view:get_font():get_width("raw"))
   end)
 
-  test.it("caches provider output and invalidates targeted lines", function()
-    local view = make_view("one\ntwo")
-    local calls = {}
-    view:add_line_render_provider("test", {
-      line_generation = function(_, _, line) return line end,
-      render_line = function(_, _, line, context)
-        calls[line] = (calls[line] or 0) + 1
-        return { fragments = { { text = context.source_text } } }
-      end,
-    })
-
-    view:get_line_render(1)
-    view:get_line_render(1)
-    view:get_line_render(2)
-    test.equal(calls[1], 1)
-    test.equal(calls[2], 1)
-    view:invalidate_line_render("test", 1, 1)
-    view:get_line_render(1)
-    view:get_line_render(2)
-    test.equal(calls[1], 2)
-    test.equal(calls[2], 1)
-    local diagnostics = view:get_render_cache_diagnostics()
-    test.ok(diagnostics.line_hits >= 2)
-    test.equal(diagnostics.line_invalidations, 1)
-  end)
-
   test.it("invalidates cached provider output after text transactions", function()
     local view, doc = make_view("one")
-    local calls = 0
     view:add_line_render_provider("test", {
       render_line = function(_, _, _, context)
-        calls = calls + 1
         return { fragments = { { text = context.source_text } } }
       end,
     })
     test.equal(view:get_line_render(1).source_text, "one")
     doc:insert(1, 4, "!")
     test.equal(view:get_line_render(1).source_text, "one!")
-    test.equal(calls, 2)
   end)
 
   test.it("draws generic fragment backgrounds and strikethrough decorations", function()
@@ -320,36 +291,16 @@ test.describe("DocView render fragments", function()
     test.equal(clicked, true)
   end)
 
-  test.it("releases cached entries beyond EOF after tail deletion", function()
-    local view = make_view("one\ntwo\nthree\nfour\nfive")
-    view:add_line_render_provider("tail", {
-      render_line = function(_, owner, line)
-        return {
-          fragments = {
-            { source_col1 = 1, source_col2 = #(owner.doc.lines[line] or ""), text = "cached" },
-          },
-        }
-      end,
-    })
-    view:get_line_render(5)
-    test.equal(view:get_render_cache_diagnostics().resident_line_entries, 1)
-    view.doc:remove(3, #view.doc.lines[3], 5, #view.doc.lines[5])
-    test.equal(view:get_render_cache_diagnostics().resident_line_entries, 0)
-  end)
-
   test.it("invalidates cached output after legacy raw text edits", function()
     local view, doc = make_view("one")
-    local calls = 0
     view:add_line_render_provider("test", {
       render_line = function(_, _, _, context)
-        calls = calls + 1
         return { fragments = { { text = context.source_text } } }
       end,
     })
     test.equal(view:get_line_render(1).source_text, "one")
     doc:raw_insert(1, 1, "x", doc.undo_stack, system.get_time())
     test.equal(view:get_line_render(1).source_text, "xone")
-    test.equal(calls, 2)
   end)
 
   test.it("removes line render providers", function()

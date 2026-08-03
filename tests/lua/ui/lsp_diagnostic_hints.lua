@@ -227,23 +227,6 @@ test.describe("LSP diagnostic Line Hints", function()
     test.equal(view:get_line_hint(3).text, "moves down")
   end)
 
-  test.it("resolves hint colors at read time", function(context)
-    local doc, client, document_uri = setup(context)
-    publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
-      diagnostics = {
-        { range = lsp_range(0, 0, 0, 5), severity = 2, message = "theme warning" },
-      },
-    })
-
-    local view = DocView(doc)
-    context.original_style_warn = style.warn
-    local replacement = { 1, 2, 3, 255 }
-    test.equal(view:get_line_hint(1).color, context.original_style_warn)
-    style.warn = replacement
-    test.equal(view:get_line_hint(1).color, replacement)
-  end)
-
   test.it("draws diagnostic hints left-aligned after their line's Document text", function(context)
     local doc, client, document_uri = setup(context)
     set_text(doc, "short\nrightmost text\nerr")

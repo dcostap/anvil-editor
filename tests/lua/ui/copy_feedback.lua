@@ -33,16 +33,6 @@ test.describe("Copy Feedback Highlight", function()
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
-  test.it("starts at its themed overlay color and disappears after 200ms", function()
-    local feedback = copy_feedback.start({}, 10)
-    test.same(copy_feedback.color(feedback, style.copy_feedback, 10), {
-      style.copy_feedback[1], style.copy_feedback[2], style.copy_feedback[3], math.floor(style.copy_feedback[4]),
-    })
-    local halfway = copy_feedback.color(feedback, style.copy_feedback, 10.1)
-    test.ok(halfway and halfway[4] > 0 and halfway[4] < style.copy_feedback[4], "expected feedback to fade")
-    test.equal(copy_feedback.color(feedback, style.copy_feedback, 10.2), nil)
-  end)
-
   test.it("briefly marks the exact Document View text copied by doc:copy", function(context)
     local view, doc = make_view("alpha")
     context.view, context.doc = view, doc

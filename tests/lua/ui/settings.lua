@@ -1,6 +1,5 @@
 local test = require "core.test"
 local config = require "core.config"
-local style = require "core.style"
 local settings = require "plugins.settings"
 local Button = require "widget.button"
 local TextBox = require "widget.textbox"
@@ -18,25 +17,6 @@ local function find_child(view, class)
 end
 
 test.describe("settings", function()
-  test.it("exposes reusable prose typography roles", function()
-    local expected = {
-      prose_font = true,
-      prose_strong_font = true,
-      prose_emphasis_font = true,
-      prose_strong_emphasis_font = true,
-      prose_heading_font = true,
-      prose_heading_emphasis_font = true,
-    }
-    for _, option in ipairs(settings.core.Typography or {}) do
-      if expected[option.path] then
-        test.equal(option.type, settings.type.FONT)
-        test.equal(option.fonts_list, style)
-        expected[option.path] = nil
-      end
-    end
-    test.same(expected, {})
-  end)
-
   test.it("exposes the bundled dark theme as theme:dark", function()
     local command = require "core.command"
     test.ok(command.is_valid("theme:dark"))

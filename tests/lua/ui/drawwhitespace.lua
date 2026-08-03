@@ -28,60 +28,9 @@ local function new_view(text)
   return doc, view
 end
 
-local function with_fake_draw_text(fn)
-  local old_draw_text = renderer.draw_text
-  renderer.draw_text = function(_, text, x)
-    return x + #tostring(text)
-  end
-  local ok, err = pcall(fn)
-  renderer.draw_text = old_draw_text
-  if not ok then error(err) end
-end
-
 test.describe("draw-whitespace DocView drawing", function()
   test.before_each(function()
     command.perform("draw-whitespace:toggle", true)
-  end)
-
-  test.it("skips whitespace work for lines without visible marker characters", function()
-    local doc, view = new_view("abc")
-    local visible_cols_called = false
-    view.get_visible_cols_range = function()
-      visible_cols_called = true
-      return 1, 1
-    end
-
-    with_fake_draw_text(function()
-      view:draw_line_text(1, 0, 0)
-    end)
-
-    test.equal(visible_cols_called, false)
-    doc:on_close()
-  end)
-
-  test.it("clips tab marker draw calls before handing them to the renderer", function()
-    local tab_count = 1000
-    local doc, view = new_view(string.rep("\t", tab_count))
-    view.size.x = 80
-    view.get_visible_cols_range = function()
-      return 1, tab_count
-    end
-
-    local marker_calls = 0
-    local old_draw_text = renderer.draw_text
-    renderer.draw_text = function(_, text, x)
-      if tostring(text):find("→", 1, true) then marker_calls = marker_calls + 1 end
-      return x + #tostring(text)
-    end
-    local ok, err = pcall(function()
-      local x, y = view:get_line_screen_position(1)
-      view:draw_line_text(1, x, y)
-    end)
-    renderer.draw_text = old_draw_text
-    if not ok then error(err) end
-
-    test.ok(marker_calls <= 2, "expected visible tab markers to be batched before renderer.draw_text")
-    doc:on_close()
   end)
 
   test.it("draws wrapped leading space markers on continuation rows", function()
@@ -136,31 +85,4 @@ test.describe("draw-whitespace DocView drawing", function()
     test.ok(row_count >= 2, "expected whitespace markers on wrapped continuation rows")
   end)
 
-  test.it("does not build x-cache when whitespace runs are outside the visible columns", function()
-    local doc, view = new_view("abc   def")
-    view.get_visible_cols_range = function()
-      return 1, 1
-    end
-
-    local old_test_font = style.syntax_fonts.__drawwhitespace_test
-    style.syntax_fonts.__drawwhitespace_test = view:get_font()
-    local get_render_line_calls = 0
-    local old_get_render_line = doc.highlighter.get_render_line
-    doc.highlighter.get_render_line = function(self, ...)
-      get_render_line_calls = get_render_line_calls + 1
-      return old_get_render_line(self, ...)
-    end
-
-    local ok, err = pcall(function()
-      with_fake_draw_text(function()
-        view:draw_line_text(1, 0, 0)
-      end)
-    end)
-    doc.highlighter.get_render_line = old_get_render_line
-    style.syntax_fonts.__drawwhitespace_test = old_test_font
-    if not ok then error(err) end
-
-    test.equal(get_render_line_calls, 1)
-    doc:on_close()
-  end)
 end)

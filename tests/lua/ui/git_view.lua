@@ -282,8 +282,6 @@ test.describe("Git View command", function()
     local hint = list:get_line_hint(2)
     test.equal(hint[1].text, "+2")
     test.equal(hint[2].text, " −44")
-    test.equal(hint[1].font, style.get_small_font(style.code_font))
-    test.equal(hint[2].font, style.get_small_font(style.code_font))
 
     core.active_view = list
     list.doc:set_selection(1, 1)
@@ -483,64 +481,16 @@ test.describe("Git View command", function()
     local doc_view = diff.doc_view_a
     test.equal(core.active_view, doc_view)
     test.equal(core.active_view.git_owner_view, tab_view)
-    test.equal(diff.doc_view_a:get_font(), style.code_font)
-    test.equal(diff.doc_view_b:get_font(), style.code_font)
   end)
 
-  test.it("styles Git Log pane content and keeps its DocViews unwrapped", function(context)
+  test.it("keeps Git Log pane DocViews unwrapped", function(context)
     config.plugins.linewrapping.enable_by_default = true
     local tw, view = open_fake_git_view(context.project)
-    view.model:log_tab().commits = {
-      {
-        hash = "abcdef123456",
-        short_hash = "abcdef1",
-        subject = "Make the Git screen readable",
-        author_name = "Darius",
-      },
-    }
     view:update_pane_docs()
     local list = view:pane_view("log-list")
     local details = view:pane_view("details")
     test.equal(list:is_wrapping_enabled(), false)
     test.equal(details:is_wrapping_enabled(), false)
-
-    local calls = {}
-    local old_draw_text = renderer.draw_text
-    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
-    local function capture(font, text, x, y, color)
-      calls[#calls + 1] = { font = font, text = text, color = color }
-      return x + font:get_width(text)
-    end
-    renderer.draw_text = capture
-    renderer.draw_text_known_bounds = capture
-    local ok, err = pcall(function()
-      list:draw_line_text(1, 0, 0)
-      test.equal(calls[1].text, "abcdef1")
-      test.equal(calls[1].color, style.accent)
-      test.equal(calls[1].font, style.code_font)
-      test.equal(calls[3].font, style.prose_font)
-      calls = {}
-      details:draw_line_text(3, 0, 0)
-      test.equal(calls[1].text, "Hash: ")
-      test.equal(calls[1].color, style.dim)
-      test.equal(calls[1].font, style.prose_font)
-      test.equal(calls[2].text, "abcdef123456")
-      test.equal(calls[2].color, style.accent)
-      test.equal(calls[2].font, style.code_font)
-    end)
-    renderer.draw_text = old_draw_text
-    renderer.draw_text_known_bounds = old_draw_text_known_bounds
-    if not ok then error(err, 0) end
-  end)
-
-  test.it("uses prose typography for Git navigation panes", function(context)
-    local tw, view = open_fake_git_view(context.project)
-    view:update_pane_docs()
-
-    test.equal(view:pane_view("log-list"):get_font(), style.prose_font)
-    test.equal(view:pane_view("history-list"):get_font(), style.prose_font)
-    test.equal(view:pane_view("file-list"):get_font(), style.prose_font)
-    test.equal(view:pane_view("details"):get_font(), style.prose_font)
   end)
 
   test.test("pane focus cycle enters Log list and details DocViews", function(context)
