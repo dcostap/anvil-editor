@@ -1383,10 +1383,14 @@ end
 
 
 ---Update status bar height, message scroll, and active items.
+---The focused Global Prompt Bar replaces this bottom slot instead of stacking
+---above an empty Status Bar.
 function StatusBar:update()
-  if not self.visible and self.size.y <= 0 then
+  local replaced_by_global_prompt = core.active_view == core.global_prompt_bar
+  local collapsed = not self.visible or replaced_by_global_prompt
+  if collapsed and self.size.y <= 0 then
     return
-  elseif not self.visible and self.size.y > 0 then
+  elseif collapsed and self.size.y > 0 then
     self:move_towards(self.size, "y", 0, nil, "statusbar")
     return
   end

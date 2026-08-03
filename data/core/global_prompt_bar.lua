@@ -283,6 +283,10 @@ function GlobalPromptBar:enter(label, ...)
   end
 
   core.set_active_view(self)
+  core.root_panel:show_app_overlay(self, "global_prompt_bar_overlay_background", {
+    unobscured_view = self,
+    transition_name = "global_prompt_bar",
+  })
   self:update_suggestions()
   self.gutter_text_brightness = 100
   self.label = label .. ": "
@@ -297,6 +301,7 @@ function GlobalPromptBar:exit(submitted, inexplicit)
   if core.active_view == self then
     core.set_active_view(core.last_active_view)
   end
+  core.root_panel:hide_app_overlay(self)
   local cancel = self.state.cancel
   self.state = default_state
   self.doc:reset()
@@ -503,23 +508,10 @@ local function draw_suggestions_box(self)
 end
 
 
----Dim the app above and below the focused Global Prompt Bar.
----The prompt itself stays undimmed, while deferred suggestion rendering remains
----on top of the overlay.
----@param self core.global_prompt_bar
-local function draw_attention_overlay(self)
-  if core.active_view ~= self then return end
-  core.root_panel:draw_app_overlay(style.global_prompt_bar_overlay_background, self)
-end
-
-
 ---Draw the Global Prompt Bar.
----Renders input text and defers its attention overlay and suggestions box.
+---Renders input text and defers its suggestions box above the app overlay.
 function GlobalPromptBar:draw()
   GlobalPromptBar.super.draw(self)
-  if core.active_view == self then
-    core.root_panel:defer_draw(draw_attention_overlay, self)
-  end
   if self.state.show_suggestions then
     core.root_panel:defer_draw(draw_suggestions_box, self)
   end

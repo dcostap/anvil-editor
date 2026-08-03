@@ -1,5 +1,6 @@
 local core = require "core"
 local common = require "core.common"
+local config = require "core.config"
 local style = require "core.style"
 local Node = require "core.node"
 local View = require "core.view"
@@ -23,6 +24,15 @@ local file_context = require "core.file_context"
 ---@field color renderer.color
 ---@field to core.rootpanel.overlay.to
 
+---@class core.rootpanel.appoverlay
+---@field owner any
+---@field color renderer.color|string Overlay color or style key
+---@field unobscured_view core.view?
+---@field transition_name string?
+---@field progress number Linear fade progress in [0, 1]
+---@field target number Target fade progress (0 or 1)
+---@field last_time number Last animation update timestamp
+
 ---@class core.rootpanel.mousegrab
 ---@field view core.view
 ---@field button core.view.mousebutton
@@ -38,12 +48,15 @@ local file_context = require "core.file_context"
 ---@field drag_overlay_tab core.rootpanel.overlay
 ---@field grab core.rootpanel.mousegrab?
 ---@field deferred_draws table[]
+---@field app_overlay core.rootpanel.appoverlay?
 ---@field overlapping_view core.view?
 ---@field touched_view core.view?
 ---@field defer_open_docs table[]
 ---@field first_dnd_processed boolean
 ---@field first_update_done boolean
 local RootPanel = View:extend()
+
+local APP_OVERLAY_FADE_DURATION = 0.08
 
 local function perf_frame_add(key, amount)
   local perf = package.loaded["core.perf"]
@@ -122,6 +135,7 @@ function RootPanel:new()
   self.root_node = Node()
   self.root_node.pane_id = "left"
   self.deferred_draws = {}
+  self.app_overlay = nil
   self.mouse = { x = 0, y = 0 }
   self.drag_overlay = { x = 0, y = 0, w = 0, h = 0, visible = false, opacity = 0,
                         base_color = style.drag_overlay,
@@ -146,6 +160,95 @@ end
 ---@param ... any Arguments to pass to the function
 function RootPanel:defer_draw(fn, ...)
   table.insert(self.deferred_draws, 1, { fn = fn, ... })
+end
+
+
+local function quadratic_ease_in_out(progress)
+  if progress < 0.5 then return 2 * progress * progress end
+  local remaining = 1 - progress
+  return 1 - 2 * remaining * remaining
+end
+
+
+---Advance the shared application-overlay animation.
+---@param now? number Current timestamp, primarily for deterministic callers
+---@return number progress
+function RootPanel:update_app_overlay(now)
+  local overlay = self.app_overlay
+  if not overlay then return 0 end
+  now = now or system.get_time()
+
+  local transition_disabled = not config.transitions
+    or (overlay.transition_name and config.disabled_transitions[overlay.transition_name])
+    or (overlay.transition_name == "global_prompt_bar" and config.disabled_transitions.commandview)
+    or core.in_live_resize_frame
+    or (core.fps or config.fps) < 30
+  local progress = overlay.progress
+  if transition_disabled then
+    progress = overlay.target
+  elseif overlay.target ~= progress then
+    local elapsed = math.max(0, now - overlay.last_time)
+    local direction = overlay.target > progress and 1 or -1
+    progress = common.clamp(
+      progress + direction * elapsed / APP_OVERLAY_FADE_DURATION,
+      0,
+      1
+    )
+  end
+
+  overlay.last_time = now
+  if progress ~= overlay.progress then
+    overlay.progress = progress
+    core.redraw = true
+  end
+  if overlay.target == 0 and progress == 0 then
+    self.app_overlay = nil
+  end
+  return progress
+end
+
+
+---Show or take over the shared application attention overlay.
+---A takeover preserves the current fade progress so transitions between
+---attention-demanding surfaces do not flash or stack multiple dimmers.
+---@param owner any Stable owner identity
+---@param color renderer.color|string Overlay color or key in core.style
+---@param options? { unobscured_view?:core.view, transition_name?:string }
+function RootPanel:show_app_overlay(owner, color, options)
+  assert(owner ~= nil, "app overlay owner is required")
+  options = options or {}
+  local now = system.get_time()
+  self:update_app_overlay(now)
+  local overlay = self.app_overlay
+  if not overlay then
+    overlay = { progress = 0, target = 0, last_time = now }
+    self.app_overlay = overlay
+  end
+  overlay.owner = owner
+  overlay.color = color
+  overlay.unobscured_view = options.unobscured_view
+  overlay.transition_name = options.transition_name
+  overlay.target = 1
+  overlay.last_time = now
+  core.redraw = true
+end
+
+
+---Fade out the shared application attention overlay if owned by the caller.
+---@param owner any Stable owner identity
+---@return boolean hidden Whether this owner controlled the overlay
+function RootPanel:hide_app_overlay(owner)
+  local overlay = self.app_overlay
+  if not overlay or overlay.owner ~= owner then return false end
+  local now = system.get_time()
+  self:update_app_overlay(now)
+  overlay = self.app_overlay
+  if not overlay or overlay.owner ~= owner then return false end
+  overlay.target = 0
+  overlay.unobscured_view = nil
+  overlay.last_time = now
+  core.redraw = true
+  return true
 end
 
 
@@ -194,6 +297,18 @@ function RootPanel:draw_app_overlay(color, unobscured_view)
   if view_right < root_right and middle_height > 0 then
     renderer.draw_rect(view_right, view_top, root_right - view_right, middle_height, color)
   end
+end
+
+
+---Draw the current shared application attention overlay at its eased opacity.
+function RootPanel:draw_active_app_overlay()
+  local overlay = self.app_overlay
+  if not overlay or overlay.progress <= 0 then return end
+  local source = type(overlay.color) == "string" and style[overlay.color] or overlay.color
+  if type(source) ~= "table" then return end
+  local color = { table.unpack(source) }
+  color[4] = (color[4] or 255) * quadratic_ease_in_out(overlay.progress)
+  self:draw_app_overlay(color, overlay.unobscured_view)
 end
 
 
@@ -811,6 +926,8 @@ function RootPanel:update()
   local perf_active = core.perf_frame_stats ~= nil
   local update_start = perf_active and system.get_time()
   local phase_start = perf_active and system.get_time()
+  self:update_app_overlay()
+  phase_start = perf_active and system.get_time()
   Node.copy_position_and_size(self.root_node, self)
   perf_elapsed("rootpanel_copy_position_ms", phase_start)
   -- Keep view geometry current before per-view update hooks run.  View:update()
@@ -958,11 +1075,15 @@ end
 
 
 ---Render the entire UI each frame.
----Draw order: 1) node tree, 2) deferred draws, 3) drag overlays, 4) cursor update
+---Draw order: 1) node tree, 2) app overlay, 3) deferred draws,
+---4) drag overlays, 5) cursor update
 function RootPanel:draw()
   local scope = perf_scope_begin("root_panel_core", true)
   local phase = perf_scope_begin("node_tree")
   self.root_node:draw()
+  perf_scope_end(phase)
+  phase = perf_scope_begin("app_overlay")
+  self:draw_active_app_overlay()
   perf_scope_end(phase)
   phase = perf_scope_begin("deferred_draws")
   while #self.deferred_draws > 0 do

@@ -2846,6 +2846,7 @@ function FSView:new(prefix, opts)
     fuzzy_searcher.refresh_file_index_for_picker_open()
   end
   self:show()
+  core.root_panel:show_app_overlay(self, "fuzzy_searcher_overlay_background")
   self:layout()
   ensure_input_focus(self)
   fuzzy_focus_log("open", self, "prefix_len=" .. tostring(#tostring(prefix or "")))
@@ -4996,6 +4997,7 @@ end
 
 function FSView:close()
   fuzzy_focus_log("close", self)
+  core.root_panel:hide_app_overlay(self)
   self:record_prompt_history()
   self:cancel_deferred_loading_feedback()
   self:cancel_deferred_everything_loading()
@@ -5140,13 +5142,8 @@ end
 function FSView:draw()
   if not self:is_visible() then return false end
   local draw_scope = fuzzy_searcher._perf_scope_begin("fuzzy_searcher", true)
-  local root = core.root_panel
 
-  local phase_scope = fuzzy_searcher._perf_scope_begin("overlay")
-  root:draw_app_overlay(style.fuzzy_searcher_overlay_background)
-  fuzzy_searcher._perf_scope_end(phase_scope)
-
-  phase_scope = fuzzy_searcher._perf_scope_begin("widget_chrome")
+  local phase_scope = fuzzy_searcher._perf_scope_begin("widget_chrome")
   local widget_drawn = FSView.super.draw(self)
   fuzzy_searcher._perf_scope_end(phase_scope)
   if not widget_drawn then
