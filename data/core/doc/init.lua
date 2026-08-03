@@ -5,6 +5,7 @@ local core = require "core"
 local syntax = require "core.syntax"
 local config = require "core.config"
 local common = require "core.common"
+local language_mode = require "core.language_mode"
 local linewrapping = require "core.linewrapping"
 
 -- Match IntelliJ-style default: keep a backup and restore it if writing fails.
@@ -119,15 +120,30 @@ function Doc:reset_syntax(opts)
     path = core.root_project().path .. PATHSEP .. self.filename
   end
   if path then path = common.normalize_path(path) end
-  local syn = syntax.get(path, header)
+  local override = language_mode.override_for_document(self, path)
+  local syn
+  if override then
+    syn = language_mode.resolve(override)
+    if not syn then
+      core.log_quiet("Language Mode: waiting for unavailable mode %s on %s", override, self:get_name())
+    end
+  end
+  syn = syn or syntax.get(path, header)
   return self:set_syntax(syn, opts.reason or "reset-syntax", opts)
+end
+
+
+function Doc:set_language_mode(mode, opts)
+  return language_mode.set_document_mode(self, mode, opts)
 end
 
 
 function Doc:set_filename(filename, abs_filename)
   local old = metadata_snapshot(self)
+  local old_path = language_mode.document_path(self)
   self.filename = filename
   self.abs_filename = abs_filename
+  language_mode.on_document_path_changed(self, old_path, language_mode.document_path(self))
   local syntax_changed = self:reset_syntax({ notify = false })
   local filename_changed = old.filename ~= self.filename or old.abs_filename ~= self.abs_filename
   if filename_changed or syntax_changed then

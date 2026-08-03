@@ -4,6 +4,7 @@ local command = require "core.command"
 local common = require "core.common"
 local storage = require "core.storage"
 local project_paths = require "core.project_paths"
+local language_mode = require "core.language_mode"
 local panes = require "core.panes"
 local tool_window = require "core.tool_window"
 local untitled_recovery = require "plugins.untitled_recovery"
@@ -285,6 +286,7 @@ local function save_workspace()
     path = project_dir,
     documents = documents,
     project_paths = project_paths.save_workspace_state(),
+    language_modes = language_mode.save_workspace_state(),
     visited_files = core.prune_visited_files and core.prune_visited_files() or core.visited_files,
     tool_windows = tool_window.get_project_state(project),
   })
@@ -328,6 +330,7 @@ local function load_workspace()
   core.add_thread(function()
     local function restore_workspace_state()
       local workspace = consume_workspace(core.root_project().path)
+      language_mode.load_workspace_state(workspace and workspace.language_modes)
       local _, project_paths_changed = project_paths.load_workspace_state(
         workspace and workspace.project_paths,
         workspace and workspace.directories

@@ -451,7 +451,7 @@ function M.ensure_doc_backing(doc, opts)
       name = doc.intellij_untitled_name,
       backing = doc.intellij_untitled_backing_rel,
       crlf = doc.crlf or false,
-      language = doc.syntax and doc.syntax.name or nil,
+      language_mode = doc.language_mode_override or false,
       last_snapshot_change_id = doc.intellij_untitled_last_snapshot_change_id,
     })
     log_quiet("Untitled recovery: ensured backing %s for %s", doc.intellij_untitled_backing_path, doc.intellij_untitled_name)
@@ -480,7 +480,27 @@ function M.state_for_doc(doc)
     intellij_untitled_change_id = doc.get_change_id and doc:get_change_id() or nil,
     intellij_untitled_backing_saved_at = doc.intellij_untitled_backing_saved_at,
     intellij_untitled_workspace_saved_at = system.get_time(),
+    language_mode = doc.language_mode_override,
   }
+end
+
+function M.update_doc_metadata(doc, reason)
+  if not is_untitled_doc(doc) then return false end
+  M.ensure_doc_backing(doc, { no_manifest = true })
+  update_manifest_entry(doc, {
+    name = doc.intellij_untitled_name,
+    backing = doc.intellij_untitled_backing_rel,
+    crlf = doc.crlf or false,
+    encoding = doc.encoding,
+    language_mode = doc.language_mode_override or false,
+    last_snapshot_change_id = doc.intellij_untitled_last_snapshot_change_id,
+  })
+  log_quiet(
+    "Untitled recovery: updated metadata for %s (%s)",
+    doc.intellij_untitled_name or doc.intellij_untitled_id,
+    reason or "metadata"
+  )
+  return true
 end
 
 function M.flush_doc(doc, reason, force)
@@ -510,7 +530,7 @@ function M.flush_doc(doc, reason, force)
     backing = doc.intellij_untitled_backing_rel,
     crlf = doc.crlf or false,
     encoding = doc.encoding,
-    language = doc.syntax and doc.syntax.name or nil,
+    language_mode = doc.language_mode_override or false,
     last_snapshot_change_id = change_id,
   })
   log_quiet("Untitled recovery: flushed %s (%s)", doc.intellij_untitled_name or doc.intellij_untitled_id, reason or "snapshot")
@@ -650,6 +670,10 @@ function M.attach_from_workspace_state(doc, state)
   local paths = project_paths(doc.intellij_untitled_project_path)
   local manifest = load_manifest_for(paths)
   local manifest_doc = manifest_entry(manifest, doc.intellij_untitled_id)
+  local restored_language_mode = state.language_mode or (manifest_doc and manifest_doc.language_mode)
+  if type(restored_language_mode) == "string" then
+    doc:set_language_mode(restored_language_mode, { persist = false, reason = "untitled-workspace-restore" })
+  end
   doc.intellij_untitled_backing_rel = (manifest_doc and manifest_doc.backing) or state.intellij_untitled_backing or backing_rel_for_id(doc.intellij_untitled_id)
   doc.intellij_untitled_backing_path, doc.intellij_untitled_backing_rel = backing_abs_for(doc.intellij_untitled_project_path, doc.intellij_untitled_id, doc.intellij_untitled_backing_rel)
   M.ensure_doc_backing(doc, { no_manifest = true })
@@ -706,7 +730,7 @@ function M.attach_from_workspace_state(doc, state)
         backing = doc.intellij_untitled_backing_rel,
         crlf = doc.crlf or false,
         encoding = doc.encoding,
-        language = doc.syntax and doc.syntax.name or nil,
+        language_mode = doc.language_mode_override or false,
         last_snapshot_change_id = doc.intellij_untitled_last_snapshot_change_id,
       })
       log_quiet("Untitled recovery: attached workspace doc %s from backing", doc.intellij_untitled_name or doc.intellij_untitled_id)
@@ -738,6 +762,9 @@ local function open_recovered_doc(entry, paths, backing, reason)
   doc.intellij_untitled_project_path = paths.project
   doc.intellij_untitled_backing_rel = entry.backing or backing_rel_for_id(doc.intellij_untitled_id)
   doc.intellij_untitled_backing_path, doc.intellij_untitled_backing_rel = backing_abs_for(paths.project, doc.intellij_untitled_id, doc.intellij_untitled_backing_rel)
+  if type(entry.language_mode) == "string" then
+    doc:set_language_mode(entry.language_mode, { persist = false, reason = "untitled-manifest-restore" })
+  end
   load_text_into_doc(doc, text, entry.crlf)
   doc.intellij_untitled_force_dirty = true
   doc.intellij_untitled_backing_dirty = false

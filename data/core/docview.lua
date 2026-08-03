@@ -951,6 +951,7 @@ function DocView:get_state()
     scroll = { x = self.scroll.to.x, y = self.scroll.to.y },
     crlf = self.doc.crlf,
     text = self.doc.new_file and self.doc:get_text(1, 1, math.huge, math.huge),
+    language_mode = self.doc.language_mode_override,
     owned_features = self:get_owned_feature_state(),
   }
 end
@@ -974,6 +975,9 @@ function DocView.from_state(state)
     if dv.doc.new_file and state.text then
       dv.doc:insert(1, 1, state.text)
       dv.doc.crlf = state.crlf
+    end
+    if state.language_mode then
+      dv.doc:set_language_mode(state.language_mode, { reason = "workspace-restore" })
     end
     if state.selection_state then
       dv:set_selection_state(state.selection_state)

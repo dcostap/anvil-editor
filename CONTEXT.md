@@ -80,6 +80,10 @@ _Avoid_: file history, tab history
 The in-memory editable text for a file or untitled document.
 _Avoid_: Buffer
 
+**Language Mode**:
+The language Anvil uses to interpret a Document for syntax highlighting and other language-aware behavior. It is normally detected from the file name or content, but a Document may have an explicit Language Mode override.
+_Avoid_: File type, syntax mode
+
 **Document View / DocView**:
 A visual surface showing a Document. A Document View can be an Editor or a document-backed tool panel.
 _Avoid_: Editor tab, buffer view

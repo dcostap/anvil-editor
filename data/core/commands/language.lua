@@ -3,6 +3,7 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local intelligence = require "core.language_intelligence"
+local language_mode = require "core.language_mode"
 local lsp_position = require "core.lsp.position"
 local panes = require "core.panes"
 local poi = require "core.poi"
@@ -26,6 +27,49 @@ end
 local function doc_view_predicate(value)
   local view = is_doc_view(value) and value or core.active_view
   return is_doc_view(view), view
+end
+
+local function language_mode_suggestions(text)
+  local choices = language_mode.choices()
+  if text == "" then return choices end
+  local by_name = {}
+  local names = {}
+  for _, item in ipairs(choices) do
+    names[#names + 1] = item.text
+    by_name[item.text] = item
+  end
+  local results = {}
+  for _, name in ipairs(common.fuzzy_match(names, text)) do results[#results + 1] = by_name[name] end
+  return results
+end
+
+local function persist_language_mode(doc)
+  if doc.intellij_untitled then
+    local ok, recovery = pcall(require, "plugins.untitled_recovery")
+    if ok and recovery.update_doc_metadata then recovery.update_doc_metadata(doc, "Language Mode change") end
+  end
+  if core.save_workspace then core.save_workspace() end
+end
+
+local function set_language_mode_command(view)
+  local doc = view.doc
+  core.global_prompt_bar:enter("Language Mode", {
+    text = doc.language_mode_override or "Automatic",
+    select_text = true,
+    suggest = language_mode_suggestions,
+    validate = function(text, item)
+      return item ~= nil or language_mode.find_choice(text) ~= nil
+    end,
+    submit = function(text, item)
+      item = item or language_mode.find_choice(text)
+      local changed, err = doc:set_language_mode(item and item.mode, { reason = "language-mode-command" })
+      if err then
+        core.warn("%s", err)
+        return
+      end
+      if changed then persist_language_mode(doc) end
+    end,
+  })
 end
 
 local function quiet_log(...)
@@ -536,6 +580,10 @@ command.add(symbol_doc_view_predicate, {
   ["language:show-references"] = function(view)
     return language.show_references(view)
   end,
+})
+
+command.add(doc_view_predicate, {
+  ["language:set-mode"] = set_language_mode_command,
 })
 
 poi.add_activation_provider("language-declaration", {
