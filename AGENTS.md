@@ -188,6 +188,24 @@ Avoid tests that:
 
 Use fakes/mocks mainly at true external or nondeterministic boundaries: filesystem temp roots, LSP transports/servers, processes, network/http, timers/threads, renderer/window boundaries, and platform integrations.
 
+#### Durable behavior vs. implementation and tuning details
+
+A user-requested value is not automatically a testable contract. Before adding a
+test, classify the requirement as either:
+
+- **Durable behavior**: observable semantics that users or callers rely on.
+- **Implementation or tuning detail**: internal mechanisms, cosmetic values,
+  thresholds, ordering, timing, or preferences that may change without changing
+  the intended behavior.
+
+Test durable behavior through stable public seams. Do not test implementation or
+tuning details merely because they are easy to assert. If a change only retunes
+presentation or preference, use focused manual or visual verification and avoid
+creating a brittle automated test.
+
+Test exact values only when they are externally documented, required for
+interoperability, persisted user data, or otherwise necessary for correctness.
+
 #### What to test and what not to test
 
 Prefer tests for stable user-facing behavior and bug-prone logic:
@@ -214,6 +232,9 @@ A test should generally fail when there is a bug, not merely because a preferenc
 #### Bugfix regression tests
 
 For user-reported bugs, behavior discrepancies, and non-trivial feature changes, use a red-green regression workflow by default. Work in vertical slices: one chosen seam, one targeted failing test, the smallest implementation needed to pass it, then repeat if more behavior is needed. Do not write a broad speculative suite up front for imagined behavior.
+
+Red-green applies after identifying a durable behavioral contract; it does not
+turn implementation details or preference tuning into regression requirements.
 
 1. Add or identify a targeted test/repro that demonstrates the missing or broken behavior.
 2. Run it before changing the implementation and confirm it fails for the expected reason.
