@@ -1478,8 +1478,22 @@ local function callout_for_line(view, line)
 end
 
 local function table_for_line(view, line)
+  local nodes, semantic_generation = semantic_line(view, line)
+  local cache_key = table.concat({
+    tostring(view.doc.text_revision or 0),
+    tostring(semantic_generation or 0),
+    tostring(view.__line_render_invalidation_generation or 0),
+  }, ":")
+  local cache = view.__markdown_live_table_line_cache
+  if not cache or cache.key ~= cache_key then
+    cache = { key = cache_key, lines = {} }
+    view.__markdown_live_table_line_cache = cache
+  end
+  local cached = cache.lines[line]
+  if cached ~= nil then return cached ~= false and cached or nil end
+
   local table_node
-  for _, node in ipairs(semantic_line(view, line) or {}) do
+  for _, node in ipairs(nodes or {}) do
     if node.type == "table" then
       local line2 = node.source.line2
       if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
@@ -1489,7 +1503,9 @@ local function table_for_line(view, line)
       end
     end
   end
-  return markdown_tables.extend_semantic_table(view, line, table_node)
+  table_node = markdown_tables.extend_semantic_table(view, line, table_node)
+  cache.lines[line] = table_node or false
+  return table_node
 end
 
 local TABLE_MAX_PRESENTATION_ROWS = markdown_tables.MAX_PRESENTATION_ROWS
@@ -1497,77 +1513,7 @@ local TABLE_MAX_PRESENTATION_COLUMNS = markdown_tables.MAX_PRESENTATION_COLUMNS
 local TABLE_MAX_CELL_PRESENTATION_BYTES = 4096
 local TABLE_LAYOUT_GEOMETRY_CACHE_LIMIT = 4
 
-local function table_pipe_positions(text)
-  local positions = {}
-  if not text:find("[\\`]", 1) then
-    local search = 1
-    while true do
-      local pipe = text:find("|", search, true)
-      if not pipe then break end
-      positions[#positions + 1] = pipe
-      search = pipe + 1
-    end
-    return positions
-  end
-  local escaped, ticks = false, 0
-  local i = 1
-  while i <= #text do
-    local char = text:sub(i, i)
-    if escaped then
-      escaped = false
-    elseif char == "\\" then
-      escaped = true
-    elseif char == "`" then
-      local finish = i
-      while text:sub(finish + 1, finish + 1) == "`" do finish = finish + 1 end
-      local count = finish - i + 1
-      if ticks == 0 then ticks = count elseif ticks == count then ticks = 0 end
-      i = finish
-    elseif char == "|" and ticks == 0 then
-      positions[#positions + 1] = i
-    end
-    i = i + 1
-  end
-  return positions
-end
-
-local function table_source_row(text)
-  local pipes = table_pipe_positions(text)
-  if #pipes == 0 then return nil end
-  local first = text:find("%S")
-  local last = text:match("^.*()%S")
-  local outer_left = first and pipes[1] == first
-  local outer_right = last and pipes[#pipes] == last
-  local first_inner = outer_left and 2 or 1
-  local last_inner = outer_right and #pipes - 1 or #pipes
-  local cells, separators = {}, {}
-  local start_col = outer_left and pipes[1] + 1 or 1
-  if outer_left then
-    separators[#separators + 1] = { col1 = 1, col2 = pipes[1] + 1 }
-  else
-    separators[#separators + 1] = { col1 = 1, col2 = 1 }
-  end
-  for i = first_inner, last_inner do
-    local pipe = pipes[i]
-    cells[#cells + 1] = { col1 = start_col, col2 = pipe }
-    separators[#separators + 1] = { col1 = pipe, col2 = pipe + 1 }
-    start_col = pipe + 1
-  end
-  local end_col = outer_right and pipes[#pipes] or #text + 1
-  if end_col >= start_col then cells[#cells + 1] = { col1 = start_col, col2 = end_col } end
-  if not outer_right then
-    separators[#separators + 1] = { col1 = #text + 1, col2 = #text + 1 }
-  elseif separators[#separators].col1 ~= pipes[#pipes] then
-    separators[#separators + 1] = {
-      col1 = pipes[#pipes], col2 = #text + 1,
-    }
-  end
-  return {
-    cells = cells,
-    separators = separators,
-    canonical = outer_left and outer_right,
-  }
-end
+local table_source_row = markdown_tables.source_row
 
 local function table_cell_content(text, cell)
   local raw = text:sub(cell.col1, cell.col2 - 1)
@@ -3897,8 +3843,10 @@ function decoration_provider:line_number_gutter_visible(view)
 end
 
 local function provider_generation_state(view)
+  -- Wrapped-row topology is tracked by DocView's metric signature. It is not
+  -- a Markdown presentation change: coupling it to this generation made a
+  -- local wrap splice look like a document-wide metric invalidation.
   local presentation_generation = view:get_presentation_layout_generation()
-  local wrap_generation = view.__wrap_layout_generation or 0
   local theme_generation = core.color_theme_generation or 0
   local body_font = style.prose_font
   local body_font_size = view:get_font():get_size()
@@ -3918,7 +3866,6 @@ local function provider_generation_state(view)
   end
   if cache
     and cache.presentation_generation == presentation_generation
-    and cache.wrap_generation == wrap_generation
     and cache.theme_generation == theme_generation
     and cache.body_font == body_font
     and prose_typography_unchanged
@@ -3941,7 +3888,6 @@ local function provider_generation_state(view)
   end
   cache = {
     presentation_generation = presentation_generation,
-    wrap_generation = wrap_generation,
     theme_generation = theme_generation,
     body_font = body_font,
     prose_fonts = prose_fonts,

@@ -1355,6 +1355,43 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
     end
   end
 
+  -- When the recomputed wrapped layout is identical to the current one, skip
+  -- the splice, row-map rebuild, and wrap-generation bump. Bumping
+  -- unconditionally here made
+  -- selection-only line-render invalidations (e.g. Markdown interactive
+  -- table cell selection, hover changes) invalidate the whole visual metric
+  -- cache on the next lookup, forcing an expensive full-document metric
+  -- rebuild on every mouse press/release.
+  if net_lines == 0 then
+    local identical = #new_pairs == remove_count
+    if identical then
+      for i = 1, remove_count do
+        if docview.wrapped_lines[offset + i - 1] ~= new_pairs[i] then
+          identical = false
+          break
+        end
+      end
+    end
+    if identical then
+      for line = old_line1, old_line2 do
+        if docview.wrapped_line_offsets[line] ~= new_offsets[line - old_line1 + 1] then
+          identical = false
+          break
+        end
+      end
+    end
+    if identical then
+      docview.wrapped_doc_line_count = #docview.doc.lines
+      docview.wrapped_text_revision = docview.doc.text_revision or 0
+      docview.__line_render_wrap_change = nil
+      perf_frame_add("linewrapping_update_breaks_calls", 1)
+      perf_frame_add("linewrapping_update_breaks_unchanged_calls", 1)
+      perf_frame_add("linewrapping_update_breaks_lines", perf_lines)
+      perf_elapsed("linewrapping_update_breaks_ms", perf_start)
+      return nil
+    end
+  end
+
   common.splice(docview.wrapped_lines, offset, remove_count, new_pairs)
   common.splice(docview.wrapped_line_offsets, old_line1, old_line2 - old_line1 + 1, new_offsets)
 
@@ -1382,6 +1419,7 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   perf_frame_add("linewrapping_update_breaks_calls", 1)
   perf_frame_add("linewrapping_update_breaks_lines", perf_lines)
   perf_elapsed("linewrapping_update_breaks_ms", perf_start)
+  return docview.__line_render_wrap_change
 end
 
 function LineWrapping.guide_color()

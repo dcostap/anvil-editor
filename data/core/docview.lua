@@ -1614,23 +1614,12 @@ function DocView:invalidate_line_render(_provider_id, line1, line2, opts)
     local layout_line1 = common.clamp(requested_line1, 1, #self.doc.lines)
     local layout_line2 = common.clamp(requested_line2, layout_line1, #self.doc.lines)
     if self.wrapped_settings and not self.__line_render_wrap_invalidating then
-      local old_row_count = linewrapping.get_total_wrapped_lines(self)
-      local old_row1 = self.wrapped_line_to_idx[layout_line1] or 1
-      local old_row2 = (self.wrapped_line_to_idx[layout_line2 + 1] or (old_row_count + 1)) - 1
-      local old_wrap_generation = self.__wrap_layout_generation or 0
       self.__line_render_wrap_invalidating = true
-      linewrapping.update_breaks(self, layout_line1, layout_line2, 0)
+      local wrap_change = linewrapping.update_breaks(
+        self, layout_line1, layout_line2, 0
+      )
       self.__line_render_wrap_invalidating = nil
-      local new_row_count = linewrapping.get_total_wrapped_lines(self)
-      self.__line_render_wrap_change = {
-        old_row_count = old_row_count,
-        new_row_count = new_row_count,
-        old_row1 = old_row1,
-        old_row2 = old_row2,
-        new_row1 = self.wrapped_line_to_idx[layout_line1] or 1,
-        new_row2 = (self.wrapped_line_to_idx[layout_line2 + 1] or (new_row_count + 1)) - 1,
-        old_wrap_generation = old_wrap_generation,
-      }
+      self.__line_render_wrap_change = wrap_change
     end
     return
   end

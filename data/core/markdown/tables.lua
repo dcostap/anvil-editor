@@ -5,6 +5,7 @@ local model = require "core.markdown.model"
 
 local tables = {}
 local collect_interactive_contexts
+local source_indexes = setmetatable({}, { __mode = "k" })
 
 tables.MAX_PRESENTATION_ROWS = 256
 tables.MAX_PRESENTATION_COLUMNS = 64
@@ -83,8 +84,26 @@ local function source_row(text)
     }
   end
   if #cells == 0 then return nil end
+  local separators = {}
+  if outer_left then
+    separators[#separators + 1] = { col1 = 1, col2 = pipes[1] + 1 }
+  else
+    separators[#separators + 1] = { col1 = 1, col2 = 1 }
+  end
+  for index = first_separator, last_separator do
+    local pipe = pipes[index]
+    separators[#separators + 1] = { col1 = pipe, col2 = pipe + 1 }
+  end
+  if not outer_right then
+    separators[#separators + 1] = { col1 = #text + 1, col2 = #text + 1 }
+  elseif separators[#separators].col1 ~= pipes[#pipes] then
+    separators[#separators + 1] = {
+      col1 = pipes[#pipes], col2 = #text + 1,
+    }
+  end
   return {
-    text = text, pipes = pipes, cells = cells, columns = #cells,
+    text = text, pipes = pipes, cells = cells,
+    separators = separators, columns = #cells,
     canonical = outer_left and outer_right,
   }
 end
@@ -98,27 +117,83 @@ local function delimiter_row(row)
   return true
 end
 
-local function source_table_bounds(doc, line)
-  local first = math.max(2, line - 256)
-  local last = math.min(#doc.lines, line + 1)
-  for delimiter_line = first, last do
-    local delimiter = source_row(line_text(doc, delimiter_line))
-    local header = source_row(line_text(doc, delimiter_line - 1))
-    if delimiter_row(delimiter) and header
+local function source_index(doc)
+  local revision = doc.text_revision or 0
+  local line_count = #doc.lines
+  local cached = source_indexes[doc]
+  if cached and cached.revision == revision and cached.line_count == line_count then
+    return cached
+  end
+
+  -- Parse each source line once.  Table discovery is queried from rendering,
+  -- hit testing, selection handling, and metric calculation, so searching
+  -- around the requested line (the old implementation) multiplies this work
+  -- by the number of visual rows in the document.
+  local rows = {}
+  for line = 1, line_count do
+    local row = source_row(line_text(doc, line))
+    if row then
+      -- Keep the index compact. Full cell bounds are only needed by the
+      -- presentation parser and by the uncommon empty-row extension path.
+      rows[line] = {
+        columns = row.columns,
+        delimiter = delimiter_row(row),
+      }
+    end
+  end
+
+  local by_line = {}
+  for delimiter_line = 2, line_count do
+    local delimiter = rows[delimiter_line]
+    local header = rows[delimiter_line - 1]
+    if delimiter and delimiter.delimiter and header
     and header.columns == delimiter.columns
     then
       local line2 = delimiter_line
-      for body_line = delimiter_line + 1, math.min(#doc.lines, delimiter_line + 255) do
-        local body = source_row(line_text(doc, body_line))
+      for body_line = delimiter_line + 1, math.min(line_count, delimiter_line + 255) do
+        local body = rows[body_line]
         if not body or body.columns ~= header.columns then break end
         line2 = body_line
       end
       local line1 = delimiter_line - 1
-      if line >= line1 and line <= line2 and line ~= delimiter_line then
-        return line1, line2
+      local table_range = {
+        line1 = line1, line2 = line2,
+        delimiter_line = delimiter_line, columns = header.columns,
+      }
+      -- Preserve the old search order: the first matching delimiter wins for
+      -- a line when malformed source produces overlapping candidates.
+      for line = line1, line2 do
+        if line ~= delimiter_line and by_line[line] == nil then
+          by_line[line] = table_range
+        end
       end
     end
   end
+
+  cached = {
+    revision = revision, line_count = line_count,
+    rows = rows, by_line = by_line,
+  }
+  source_indexes[doc] = cached
+  return cached
+end
+
+local function source_table_bounds(doc, line)
+  local table_range = source_index(doc).by_line[line]
+  if table_range then
+    return table_range.line1, table_range.line2
+  end
+end
+
+local function source_row_at(doc, line)
+  return source_row(line_text(doc, line))
+end
+
+---Parse one Markdown table source row.
+---The parsed row is shared by table commands and Markdown Live Preview so
+---table discovery and presentation cannot drift into separate parsers.
+function tables.source_row(text)
+  return source_row(tostring(text or ""))
 end
 
 local function source_line_in_fence_or_frontmatter(doc, target)
@@ -187,7 +262,7 @@ function tables.extend_semantic_table(view, line, table_node)
   if source_line2 <= semantic_line2 then return table_node end
   local has_empty_body_row = false
   for row_line = semantic_line2 + 1, source_line2 do
-    if source_row_is_empty(source_row(line_text(view.doc, row_line))) then
+    if source_row_is_empty(source_row_at(view.doc, row_line)) then
       has_empty_body_row = true
       break
     end
