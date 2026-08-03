@@ -46,7 +46,7 @@ test.describe("Command Slots", function()
     local wrapping = config.plugins.linewrapping
     context.previous_wrapping = {
       mode = wrapping.mode,
-      width_override = wrapping.width_override == nil and false or wrapping.width_override,
+      width_override = wrapping.width_override,
       indent = wrapping.indent,
       wrapping_indent = wrapping.wrapping_indent,
       require_tokenization = wrapping.require_tokenization,
@@ -63,9 +63,11 @@ test.describe("Command Slots", function()
     config.plugins.command_slots.powershell_candidates = context.previous_powershell_candidates
     if context.previous_wrapping then
       local wrapping = config.plugins.linewrapping
-      for key, value in pairs(context.previous_wrapping) do
-        wrapping[key] = key == "width_override" and value == false and nil or value
-      end
+      wrapping.mode = context.previous_wrapping.mode
+      wrapping.width_override = context.previous_wrapping.width_override
+      wrapping.indent = context.previous_wrapping.indent
+      wrapping.wrapping_indent = context.previous_wrapping.wrapping_indent
+      wrapping.require_tokenization = context.previous_wrapping.require_tokenization
     end
     if context.cleanup_views and core.root_panel and core.root_panel.root_node then
       for _, view in ipairs(context.cleanup_views) do

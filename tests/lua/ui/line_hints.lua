@@ -24,11 +24,25 @@ local function hint_has_folder_count(hint, count)
   return tostring(hint or ""):match("^%s*" .. tostring(count) .. "%s*·") ~= nil
 end
 
+local function line_hint_text(hint)
+  if not hint then return nil end
+  if hint.text then return hint.text end
+  local last = hint[#hint]
+  return last and last.text
+end
+
+local function line_hint_font(hint)
+  if not hint then return nil end
+  if hint.font then return hint.font end
+  local last = hint[#hint]
+  return last and last.font
+end
+
 local function wait_for_folder_count(filetree, line, count, timeout)
   local deadline = system.get_time() + (timeout or 2)
   local hint
   repeat
-    hint = filetree:get_line_hint(line).text
+    hint = line_hint_text(filetree:get_line_hint(line))
     if hint_has_folder_count(hint, count) then
       return hint
     end
@@ -102,11 +116,14 @@ test.describe("File Tree Line Hints", function()
     test.not_nil(folder_d_line, "expected empty folder row in File Tree")
     test.not_nil(file_line, "expected file row in File Tree")
 
-    local initial_folder_a_hint = filetree:get_line_hint(folder_a_line).text
-    local initial_folder_b_hint = filetree:get_line_hint(folder_b_line).text
+    local initial_folder_a_hint = line_hint_text(filetree:get_line_hint(folder_a_line))
+    local initial_folder_b_hint = line_hint_text(filetree:get_line_hint(folder_b_line))
     local file_hint_data = filetree:get_line_hint(file_line)
-    local file_hint = file_hint_data.text
+    local file_hint = line_hint_text(file_hint_data)
 
+    test.not_nil(initial_folder_a_hint, "expected a metadata hint for folder-a")
+    test.not_nil(initial_folder_b_hint, "expected a metadata hint for folder-b")
+    test.not_nil(file_hint, "expected a metadata hint for file.bin")
     test.ok(initial_folder_a_hint:find("…", 1, true), initial_folder_a_hint)
     test.ok(initial_folder_a_hint:find("·", 1, true), initial_folder_a_hint)
     test.ok(initial_folder_b_hint:find("…", 1, true), initial_folder_b_hint)
@@ -132,7 +149,9 @@ test.describe("File Tree Line Hints", function()
     test.ok(file_hint:find("ago", 1, true)
       or file_hint:find("just now", 1, true), file_hint)
     test.ok(not file_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), file_hint)
-    test.ok(file_hint_data.font:get_size() < filetree:get_font():get_size(),
+    local file_hint_font_value = line_hint_font(file_hint_data)
+    test.not_nil(file_hint_font_value, "expected a font on the metadata hint")
+    test.ok(file_hint_font_value:get_size() < filetree:get_font():get_size(),
       "File Tree metadata should use a smaller font")
   end)
 

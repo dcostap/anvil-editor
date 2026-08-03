@@ -75,7 +75,7 @@ test.describe("Bracket match frame", function()
     local wrapping = config.plugins.linewrapping
     context.wrapping = {
       mode = wrapping.mode,
-      width_override = wrapping.width_override == nil and false or wrapping.width_override,
+      width_override = wrapping.width_override,
       indent = wrapping.indent,
       wrapping_indent = wrapping.wrapping_indent,
       require_tokenization = wrapping.require_tokenization,
@@ -93,8 +93,12 @@ test.describe("Bracket match frame", function()
       remove_doc(context.doc)
     end
     local wrapping = config.plugins.linewrapping
-    for key, value in pairs(context.wrapping or {}) do
-      wrapping[key] = key == "width_override" and value == false and nil or value
+    if context.wrapping then
+      wrapping.mode = context.wrapping.mode
+      wrapping.width_override = context.wrapping.width_override
+      wrapping.indent = context.wrapping.indent
+      wrapping.wrapping_indent = context.wrapping.wrapping_indent
+      wrapping.require_tokenization = context.wrapping.require_tokenization
     end
   end)
 
