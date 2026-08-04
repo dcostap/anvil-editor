@@ -302,14 +302,20 @@ local function drag_selection_case()
   refresh(view)
   local start_x, start_y = view:get_line_screen_position(1, 8)
   local finish_x, finish_y = view:get_line_screen_position(1, 1)
-  local pressed = view:on_mouse_pressed("left", start_x, start_y + 2, 1)
-  local moved = view:on_mouse_moved(finish_x, finish_y + 2, finish_x - start_x, finish_y - start_y)
-  local released = view:on_mouse_released("left", finish_x, finish_y + 2)
-  return string.format(
-    "pressed=%s moved=%s released=%s %s",
-    tostring(pressed), tostring(moved), tostring(released),
-    document_summary(view, doc, { 1, 2 })
-  )
+  return with_active_view(view, function()
+    local pressed = command.perform(
+      "doc:set-cursor", start_x, start_y + 2
+    )
+    local moved = view:on_mouse_moved(
+      finish_x, finish_y + 2, finish_x - start_x, finish_y - start_y
+    )
+    view:on_mouse_released("left", finish_x, finish_y + 2)
+    return string.format(
+      "pressed=%s moved=%s released=true %s",
+      tostring(pressed), tostring(moved),
+      document_summary(view, doc, { 1, 2 })
+    )
+  end)
 end
 
 local function selection_delete_case()

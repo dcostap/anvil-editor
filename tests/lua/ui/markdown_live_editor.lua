@@ -1620,6 +1620,41 @@ test.describe("Markdown Live Editor", function()
     test.equal(list_bullet, nil)
   end)
 
+  test.it("selects task source when dragging from its body into the marker", function()
+    local view, doc = make_view(
+      "- [ ] task body\n  continuation\nplain", "task-drag-selection.md"
+    )
+    doc:set_selection(3, 1)
+    refresh(view)
+
+    local start_x, start_y = view:get_line_screen_position(1, 8)
+    local finish_x, finish_y = view:get_line_screen_position(1, 1)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("doc:set-cursor", start_x, start_y + 2), true)
+      view:on_mouse_moved(
+        finish_x, finish_y + 2, finish_x - start_x, finish_y - start_y
+      )
+      view:on_mouse_released("left", finish_x, finish_y + 2)
+
+      local line1, col1, line2, col2 = doc:get_selection(true)
+      test.same({ line1, col1, line2, col2 }, { 1, 1, 1, 8 })
+      test.equal(doc.lines[1], "- [ ] task body\n")
+
+      local marker_source
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+        if fragment.markdown_task_source_marker then
+          marker_source = fragment
+          break
+        end
+      end
+      test.equal(test.not_nil(marker_source).text, "[ ]")
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("presents ordered markers, hard breaks, and indented code without replacing source content", function()
     local view, doc = make_view("    local code\nplain\n\n1. first\n   2. nested\n\nline  \nnext\nplain", "remaining-blocks.md")
     doc:set_selection(9, 1)
