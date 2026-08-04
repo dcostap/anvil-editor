@@ -482,7 +482,7 @@ local function markdown_empty_list_item(doc, line, col, line_text)
     or content:match("^%s*%d+%)%s+%[[ xX]%]%s+$")
 end
 
-local function markdown_list_content_start(doc, line, line_text)
+local function markdown_list_content_start(doc, line, line_text, allow_empty)
   local syntax_name = tostring(doc and doc.syntax and doc.syntax.name or ""):lower()
   if not syntax_name:find("markdown", 1, true) then return nil end
   local end_col = line_end_col(line_text)
@@ -493,27 +493,35 @@ local function markdown_list_content_start(doc, line, line_text)
   )
   if indent then
     local content_start = #indent + #bullet + #before_task + 3 + #after_task + 1
-    if content:sub(content_start):match("^%S") then return content_start, #indent end
+    if allow_empty or content:sub(content_start):match("^%S") then
+      return content_start, #indent
+    end
   end
 
   local spaces
   indent, bullet, spaces = content:match("^([\t ]*)([-%*%+])([\t ]+)")
   if indent then
     local content_start = #indent + #bullet + #spaces + 1
-    if content:sub(content_start):match("^%S") then return content_start, #indent end
+    if allow_empty or content:sub(content_start):match("^%S") then
+      return content_start, #indent
+    end
   end
 
   local number, delimiter
   indent, number, delimiter, spaces = content:match("^([\t ]*)(%d+)(%.)([\t ]+)")
   if indent then
     local content_start = #indent + #number + #delimiter + #spaces + 1
-    if content:sub(content_start):match("^%S") then return content_start, #indent end
+    if allow_empty or content:sub(content_start):match("^%S") then
+      return content_start, #indent
+    end
   end
 
   indent, number, delimiter, spaces = content:match("^([\t ]*)(%d+)(%))([\t ]+)")
   if indent then
     local content_start = #indent + #number + #delimiter + #spaces + 1
-    if content:sub(content_start):match("^%S") then return content_start, #indent end
+    if allow_empty or content:sub(content_start):match("^%S") then
+      return content_start, #indent
+    end
   end
 end
 
@@ -1768,7 +1776,7 @@ local commands = {
       if line1 == line2 and col1 == col2 then
         local line_text = dv.doc.lines[line1] or ""
         local content_start = markdown_list_content_start(
-          dv.doc, line1, line_text
+          dv.doc, line1, line_text, true
         )
         if content_start and col1 == content_start then
           list_indent_count = list_indent_count + 1

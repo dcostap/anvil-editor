@@ -313,6 +313,17 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 1, 5, 1, 5 })
   end)
 
+  test.it("indents an empty Markdown task item from after its checkbox", function(context)
+    local doc, view = new_editor(context, "- [ ] \n- [ ] second", "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(1, 7, 1, 7)
+
+    test.ok(command.perform("doc:indent"))
+
+    test.equal(text(doc), "  - [ ] \n- [ ] second\n")
+    test.same(view:get_selection_state().selections, { 1, 9, 1, 9 })
+  end)
+
   test.it("removes an empty Markdown list marker on the next Enter", function(context)
     local doc, view = new_editor(context, "- item\nnext", "sample.md")
     core.set_active_view(view)
