@@ -124,6 +124,7 @@ end
 function DocView:set_wrapping_enabled(enabled)
   self.wrapping_enabled = not not enabled
   if self.wrapping_enabled then
+    self:cancel_horizontal_extent_scan()
     if self.size and self.size.x > 0 then self:update_wrap_cache() end
   else
     self:clear_wrap_cache()
@@ -1050,6 +1051,7 @@ end
 ---@param do_close function Callback to execute when close is confirmed
 function DocView:try_close(do_close)
   local function unregister_and_close()
+    self:cancel_horizontal_extent_scan()
     self:clear_fold_regions("view-close")
     unregister_fold_view(self)
     linewrapping.unregister_docview(self)
@@ -1195,6 +1197,59 @@ function DocView:get_scrollable_size()
 end
 
 
+-- Measuring the widest unwrapped line can be substantially more expensive than
+-- the rest of a view update for large documents.  Keep this work out of the
+-- synchronous scrollbar path.  The scheduler is cooperative, so the scan
+-- still uses the normal renderer thread, but it is sliced between UI frames.
+local UNWRAPPED_WIDTH_SCAN_BUDGET_MS = 2
+local UNWRAPPED_WIDTH_SCAN_YIELD = 0.005
+
+local function get_unwrapped_width_settings(self)
+  local font = self:get_font()
+  local _, indent_size = self.doc:get_indent_info()
+  return {
+    font = font,
+    font_size = font:get_size(),
+    indent_size = indent_size,
+    line_render_generation = self.__line_render_generation or 0,
+    line_render_invalidation_generation =
+      self.__line_render_invalidation_generation or 0,
+  }
+end
+
+local function unwrapped_width_cache_is_current(self, cache, settings)
+  settings = settings or get_unwrapped_width_settings(self)
+  return cache
+    and cache.font == settings.font
+    and cache.font_size == settings.font_size
+    and cache.indent_size == settings.indent_size
+    and cache.line_count == #self.doc.lines
+    and cache.text_revision == (self.doc.text_revision or 0)
+    and cache.line_render_generation == settings.line_render_generation
+    and cache.line_render_invalidation_generation
+      == settings.line_render_invalidation_generation
+    and cache.line
+    and self.doc.lines[cache.line] == cache.line_text
+end
+
+local function unwrapped_width_scan_is_current(self, token)
+  if not token or token.cancelled
+  or self.__async_horizontal_extent_scan ~= token
+  or self.doc ~= token.doc
+  then
+    return false
+  end
+  local settings = get_unwrapped_width_settings(self)
+  return settings.font == token.font
+    and settings.font_size == token.font_size
+    and settings.indent_size == token.indent_size
+    and settings.line_render_generation == token.line_render_generation
+    and settings.line_render_invalidation_generation
+      == token.line_render_invalidation_generation
+    and #self.doc.lines == token.line_count
+    and (self.doc.text_revision or 0) == token.text_revision
+end
+
 local function get_unwrapped_line_width(self, line)
   local cache = self.__line_width_cache
   if not cache then
@@ -1234,6 +1289,101 @@ local function cache_unwrapped_max_line(cache, doc, line, width)
   cache.line_count = #doc.lines
 end
 
+function DocView:cancel_horizontal_extent_scan()
+  local token = self.__async_horizontal_extent_scan
+  if not token then return false end
+  token.cancelled = true
+  self.__async_horizontal_extent_scan = nil
+  if token.thread_key then core.wake_thread(token.thread_key) end
+  perf_frame_add("docview_async_horizontal_extent_cancellations", 1)
+  return true
+end
+
+function DocView:is_horizontal_extent_scan_pending()
+  return self.__async_horizontal_extent_scan ~= nil
+end
+
+local function start_unwrapped_width_scan(self)
+  if self.__async_horizontal_extent_scan then return end
+
+  local settings = get_unwrapped_width_settings(self)
+  local token = {
+    doc = self.doc,
+    font = settings.font,
+    font_size = settings.font_size,
+    indent_size = settings.indent_size,
+    line_render_generation = settings.line_render_generation,
+    line_render_invalidation_generation = settings.line_render_invalidation_generation,
+    text_revision = self.doc.text_revision or 0,
+    line_count = #self.doc.lines,
+    next_line = 1,
+    max_line = 1,
+    width = 0,
+    work_ms = 0,
+    yields = 0,
+  }
+  self.__async_horizontal_extent_scan = token
+  perf_frame_add("docview_async_horizontal_extent_scans", 1)
+
+  token.thread_key = core.add_background_thread(function()
+    while unwrapped_width_scan_is_current(self, token) do
+      local started = system.get_time()
+      local lines = 0
+      while token.next_line <= token.line_count do
+        if not unwrapped_width_scan_is_current(self, token) then return end
+        local line = token.next_line
+        local width = get_unwrapped_line_width(self, line)
+        if width > token.width then
+          token.width = width
+          token.max_line = line
+        end
+        token.next_line = line + 1
+        lines = lines + 1
+        if lines >= 50
+        or (system.get_time() - started) * 1000 >= UNWRAPPED_WIDTH_SCAN_BUDGET_MS
+        then
+          break
+        end
+      end
+      token.work_ms = token.work_ms + (system.get_time() - started) * 1000
+      perf_frame_add("docview_async_horizontal_extent_lines", lines)
+
+      if not unwrapped_width_scan_is_current(self, token) then return end
+      if token.next_line > token.line_count then
+        local line = token.max_line
+        self.__unwrapped_content_width_cache = {
+          font = token.font,
+          font_size = token.font_size,
+          indent_size = token.indent_size,
+          width = token.width,
+          line = line,
+          line_text = self.doc.lines[line] or "",
+          line_count = token.line_count,
+          text_revision = token.text_revision,
+          line_render_generation = token.line_render_generation,
+          line_render_invalidation_generation = token.line_render_invalidation_generation,
+        }
+        self.__async_horizontal_extent_scan = nil
+        perf_frame_add("docview_async_horizontal_extent_commits", 1)
+        perf_frame_add("docview_async_horizontal_extent_ms", token.work_ms)
+        if token.yields > 0 then
+          core.log_quiet(
+            "Committed async horizontal extent for %s: lines=%d width=%.1f work_ms=%.1f yields=%d",
+            self.doc:get_name(), token.line_count, token.width,
+            token.work_ms, token.yields
+          )
+        end
+        core.redraw = true
+        return
+      end
+
+      token.yields = token.yields + 1
+      perf_frame_add("docview_async_horizontal_extent_yields", 1)
+      coroutine.yield(UNWRAPPED_WIDTH_SCAN_YIELD)
+    end
+  end, token)
+end
+
 local function update_unwrapped_width_from_active_lines(self, cache)
   local function consider(line)
     if not line or line < 1 or line > #self.doc.lines then return end
@@ -1250,39 +1400,21 @@ local function update_unwrapped_width_from_active_lines(self, cache)
 end
 
 local function get_max_unwrapped_line_width(self)
-  local font = self:get_font()
-  local _, indent_size = self.doc:get_indent_info()
-  local font_size = font:get_size()
   local cache = self.__unwrapped_content_width_cache
-  if cache
-    and cache.font == font
-    and cache.font_size == font_size
-    and cache.indent_size == indent_size
-    and cache.line_count == #self.doc.lines
-    and cache.text_revision == self.doc.text_revision
-    and cache.line
-    and self.doc.lines[cache.line] == cache.line_text
-  then
+  if unwrapped_width_cache_is_current(self, cache) then
     update_unwrapped_width_from_active_lines(self, cache)
     return cache.width
   end
 
-  cache = {
-    font = font,
-    font_size = font_size,
-    indent_size = indent_size,
-    width = 0,
-    line_count = #self.doc.lines,
-    text_revision = self.doc.text_revision,
-  }
-  for line = 1, #self.doc.lines do
-    local width = get_unwrapped_line_width(self, line)
-    if width > cache.width then
-      cache_unwrapped_max_line(cache, self.doc, line, width)
-    end
+  local pending = self.__async_horizontal_extent_scan
+  if pending and not unwrapped_width_scan_is_current(self, pending) then
+    self:cancel_horizontal_extent_scan()
   end
-  self.__unwrapped_content_width_cache = cache
-  return cache.width
+  if not self.__async_horizontal_extent_scan then
+    start_unwrapped_width_scan(self)
+  end
+
+  return nil
 end
 
 local function get_max_line_render_horizontal_extent(self)
@@ -1312,9 +1444,30 @@ function DocView:get_h_scrollable_size()
   local gutter_width = self:get_gutter_width()
   local _, _, v_scroll_w = self.v_scrollbar:get_track_rect()
   local right_padding = math.max(style.padding.x, v_scroll_w or 0)
-  local text_width = self.wrapping_enabled and 0 or get_max_unwrapped_line_width(self)
+  local text_width = 0
+  if not self.wrapping_enabled then
+    text_width = get_max_unwrapped_line_width(self) or 0
+  end
   local content_width = gutter_width + math.max(text_width, presentation_width) + right_padding
   return math.max(self.size.x, content_width)
+end
+
+---Clamp vertical scrolling immediately, but leave horizontal scrolling
+---uncapped while an unwrapped extent scan is pending.  The scan reports the
+---real bound later; clamping to the temporary viewport-sized fallback here
+---would discard a match reveal requested by a preview or find operation.
+function DocView:clamp_scroll_position()
+  local max = self:get_scrollable_size() - self.size.y
+  self.scroll.to.y = common.clamp(self.scroll.to.y, 0, max)
+
+  local horizontal = self:get_h_scrollable_size()
+  if self:is_horizontal_extent_scan_pending() then
+    self.scroll.to.x = math.max(0, self.scroll.to.x or 0)
+    return
+  end
+
+  max = horizontal - self.size.x
+  self.scroll.to.x = common.clamp(self.scroll.to.x, 0, max)
 end
 
 function DocView:update_scrollbar()

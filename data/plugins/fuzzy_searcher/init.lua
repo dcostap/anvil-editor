@@ -3165,6 +3165,9 @@ end
 
 function FSView:clear_preview_view()
   if self.preview_view and self.preview_view.doc then
+    if self.preview_view.cancel_horizontal_extent_scan then
+      self.preview_view:cancel_horizontal_extent_scan()
+    end
     self.preview_view.doc:clear_search_selections()
   end
   self.preview_view = nil

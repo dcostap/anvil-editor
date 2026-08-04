@@ -52,6 +52,14 @@ local function numbered_lines(count)
   return table.concat(lines, "\n")
 end
 
+local function wait_until(predicate, timeout)
+  local deadline = system.get_time() + timeout
+  while not predicate() and system.get_time() < deadline do
+    coroutine.yield(0.01)
+  end
+  return predicate()
+end
+
 local function disable_wrapping(view)
   view:set_wrapping_enabled(false)
   view.scroll.x, view.scroll.to.x = 0, 0
@@ -162,12 +170,25 @@ test.describe("DocView selection scrolling", function()
     local line_width = view:get_gutter_width() + view:get_col_x_offset(1, #view.doc.lines[1] + 1)
     test.ok(line_width > view.size.x, "expected test line to overflow horizontally")
 
-    view:update_scrollbar()
+    test.ok(wait_until(function()
+      view:update_scrollbar()
+      return view:get_h_scrollable_size() > view.size.x
+    end, 1), "expected the horizontal extent scan to complete")
 
     local _, _, track_w, track_h = view.h_scrollbar:get_track_rect()
     local _, _, thumb_w, thumb_h = view.h_scrollbar:get_thumb_rect()
     test.ok(track_w > 0 and track_h > 0, "expected overflowing unwrapped text to show a horizontal scrollbar track")
     test.ok(thumb_w > 0 and thumb_h > 0, "expected overflowing unwrapped text to show a horizontal scrollbar thumb")
+  end)
+
+  test.it("defers the initial unwrapped horizontal extent until the scan completes", function(context)
+    local view = open_editor(context, string.rep("x", 120))
+    disable_wrapping(view)
+
+    test.equal(view:get_h_scrollable_size(), view.size.x)
+    test.ok(wait_until(function()
+      return view:get_h_scrollable_size() > view.size.x
+    end, 1), "expected the deferred horizontal extent scan to complete")
   end)
 
   test.it("reuses unwrapped horizontal extent after ordinary same-line edits", function(context)
@@ -186,12 +207,17 @@ test.describe("DocView selection scrolling", function()
     end
 
     view:get_h_scrollable_size()
-    test.ok(calls >= #lines, "expected initial horizontal extent calculation to inspect the document")
+    test.ok(wait_until(function()
+      view:get_h_scrollable_size()
+      return calls >= #lines
+    end, 1), "expected initial horizontal extent calculation to inspect the document")
 
     calls = 0
     doc:set_selection(1, 1, 1, 1)
     doc:text_input("x")
-    view:get_h_scrollable_size()
+    test.ok(wait_until(function()
+      return view:get_h_scrollable_size() > view.size.x
+    end, 1), "expected the horizontal extent to be rebuilt after the edit")
 
     test.ok(calls < 20, "expected horizontal extent cache to avoid a full document rescan after a small edit")
   end)
