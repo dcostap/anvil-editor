@@ -517,6 +517,87 @@ local function markdown_list_content_start(doc, line, line_text)
   end
 end
 
+local function markdown_list_join_info(doc, line, line_text)
+  local content_start = markdown_list_content_start(doc, line, line_text)
+  if not content_start then return nil end
+  local end_col = line_end_col(line_text)
+  local content = tostring(line_text or ""):sub(1, end_col - 1)
+  local indent, bullet = content:match("^([\t ]*)([-%+%*])")
+  if bullet then
+    return {
+      kind = "unordered", marker = bullet,
+      indent = indent, content_start = content_start,
+    }
+  end
+  local number, delimiter
+  indent, number, delimiter = content:match("^([\t ]*)(%d+)([%.%)])")
+  if number then
+    return {
+      kind = "ordered", marker = delimiter,
+      indent = indent, content_start = content_start,
+    }
+  end
+end
+
+local function markdown_list_join_content_col(doc, line, line_text, next_line_text)
+  local current = markdown_list_join_info(doc, line, line_text)
+  local following = markdown_list_join_info(doc, line + 1, next_line_text)
+  if not current or not following
+    or current.kind ~= following.kind
+    or current.marker ~= following.marker
+    or current.indent ~= following.indent
+  then
+    return nil
+  end
+  return following.content_start
+end
+
+local function markdown_list_marker_delete_end(doc, line, line_text, col)
+  local syntax_name = tostring(doc and doc.syntax and doc.syntax.name or ""):lower()
+  if not syntax_name:find("markdown", 1, true) then return nil end
+  local end_col = line_end_col(line_text)
+  local content = tostring(line_text or ""):sub(1, end_col - 1)
+  local indent, bullet, spaces = content:match("^([\t ]*)([-%+%*])([\t ]+)")
+  if bullet and col == #indent + 1 then
+    return #indent + #bullet + #spaces + 1
+  end
+  local number, delimiter
+  indent, number, delimiter, spaces = content:match(
+    "^([\t ]*)(%d+)([%.%)])([\t ]+)"
+  )
+  if number and col == #indent + 1 then
+    return #indent + #number + #delimiter + #spaces + 1
+  end
+end
+
+local function markdown_join_lines_text(doc, line1, line2)
+  local result = ""
+  for line = line1, line2 do
+    local raw = doc.lines[line] or ""
+    local current = raw:gsub("\n$", "")
+    if line == line1 then
+      result = current
+    else
+      local previous_raw = doc.lines[line - 1] or ""
+      local next_content_col = markdown_list_join_content_col(
+        doc, line - 1, previous_raw, raw
+      )
+      if next_content_col then
+        local separator = result:sub(-1):match("[ \t]") and "" or " "
+        result = result .. separator .. current:sub(next_content_col)
+      else
+        local leading = current:match("^[\t ]*") or ""
+        if previous_raw:gsub("\n$", ""):match("^%s*$") then
+          result = result .. current:sub(#leading + 1)
+        else
+          result = result .. " " .. current:sub(#leading + 1)
+        end
+      end
+    end
+  end
+  return result
+end
+
 local function token_at(doc, line, col)
   local column = 0
   for _, token_type, token_text in doc.highlighter:each_token(line) do
@@ -1176,7 +1257,40 @@ local commands = {
         text_by_idx[projected_idx] = text
         normal_final_by_idx[projected_idx] = "end"
 
-        if not whitespace_only_line
+        local content_start = not whitespace_only_line
+          and line1 == line2 and col1 == col2
+          and markdown_list_content_start(dv.doc, line, line_text)
+        local previous_line = line > 1 and (dv.doc.lines[line - 1] or "") or nil
+        local exits_split_list_boundary = content_start == col1
+          and previous_line ~= nil
+          and markdown_empty_list_item(
+            dv.doc, line - 1, line_end_col(previous_line), previous_line
+          )
+
+        if exits_split_list_boundary then
+          has_empty_list_item = true
+          final_by_idx[projected_idx] = "start"
+          core.log_quiet(
+            "Markdown newline exited split list boundary in %s at %d:%d",
+            dv.doc:get_name(), line1, col1
+          )
+          edits[#edits + 1] = {
+            line1 = line,
+            col1 = 1,
+            line2 = line,
+            col2 = col,
+            text = "",
+            idx = projected_idx,
+          }
+          normal_edits[#normal_edits + 1] = {
+            line1 = line1,
+            col1 = col1,
+            line2 = line2,
+            col2 = col2,
+            text = text,
+            idx = projected_idx,
+          }
+        elseif not whitespace_only_line
         and line1 == line2 and col1 == col2
         and markdown_empty_list_item(dv.doc, line, col, line_text)
         then
@@ -1340,6 +1454,86 @@ local commands = {
 
   ["doc:delete"] = function(dv)
     if not can_edit(dv, "delete") then return end
+    local selections = {}
+    for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+      selections[#selections + 1] = {
+        idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2,
+      }
+    end
+    local list_join_edits, list_join_finals = {}, {}
+    for _, selection in ipairs(selections) do
+      if selection.line1 == selection.line2 and selection.col1 == selection.col2
+        and selection.line1 < #dv.doc.lines
+      then
+        local line_text = dv.doc.lines[selection.line1] or ""
+        local end_col = line_end_col(line_text)
+        if selection.col1 == end_col then
+          local next_line_text = dv.doc.lines[selection.line1 + 1] or ""
+          local next_content_col = markdown_list_join_content_col(
+            dv.doc, selection.line1, line_text, next_line_text
+          )
+          if next_content_col then
+            local before = line_text:sub(1, end_col - 1)
+            local join_text = before:sub(-1):match("[ \t]") and "" or " "
+            list_join_edits[#list_join_edits + 1] = {
+              line1 = selection.line1,
+              col1 = end_col,
+              line2 = selection.line1 + 1,
+              col2 = next_content_col,
+              text = join_text,
+              idx = selection.idx,
+            }
+            list_join_finals[selection.idx] = "end"
+          end
+        end
+      end
+    end
+    if #list_join_edits == #selections and #list_join_edits > 0 then
+      local after, last_selection = dv.doc:selections_after_edits(
+        list_join_edits, list_join_finals, dv.doc.last_selection
+      )
+      dv.doc:apply_edits(list_join_edits, {
+        type = "remove",
+        selections = after,
+        last_selection = last_selection,
+        merge_cursors = true,
+      })
+      core.log_quiet("Markdown delete joined adjacent list items in %s", dv.doc:get_name())
+      return
+    end
+    local list_marker_edits, list_marker_finals = {}, {}
+    for _, selection in ipairs(selections) do
+      if selection.line1 == selection.line2 and selection.col1 == selection.col2 then
+        local line_text = dv.doc.lines[selection.line1] or ""
+        local delete_end = markdown_list_marker_delete_end(
+          dv.doc, selection.line1, line_text, selection.col1
+        )
+        if delete_end then
+          list_marker_edits[#list_marker_edits + 1] = {
+            line1 = selection.line1,
+            col1 = selection.col1,
+            line2 = selection.line1,
+            col2 = delete_end,
+            text = "",
+            idx = selection.idx,
+          }
+          list_marker_finals[selection.idx] = "start"
+        end
+      end
+    end
+    if #list_marker_edits == #selections and #list_marker_edits > 0 then
+      local after, last_selection = dv.doc:selections_after_edits(
+        list_marker_edits, list_marker_finals, dv.doc.last_selection
+      )
+      dv.doc:apply_edits(list_marker_edits, {
+        type = "remove",
+        selections = after,
+        last_selection = last_selection,
+        merge_cursors = true,
+      })
+      core.log_quiet("Markdown delete removed list markers in %s", dv.doc:get_name())
+      return
+    end
     local fallback = false
     for _, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
       if line1 == line2 and col1 == col2 and dv.doc.lines[line1]:find("^%s*$", col1) then
@@ -1537,10 +1731,7 @@ local commands = {
 
     local edits = {}
     for _, action in ipairs(merged) do
-      action.text = dv.doc:get_text(action.line1, 1, action.line2, math.huge)
-      action.text = action.text:gsub("(.-)\n[\t ]*", function(x)
-        return x:find("^%s*$") and x or x .. " "
-      end)
+      action.text = markdown_join_lines_text(dv.doc, action.line1, action.line2)
       edits[#edits + 1] = {
         line1 = action.line1,
         col1 = 1,

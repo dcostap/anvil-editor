@@ -889,6 +889,25 @@ test.describe("Markdown Live Editor", function()
     test.not_nil(marker.widget, "new list marker lost its bullet widget")
   end)
 
+  test.it("keeps a split Markdown list suffix rendered while semantics are pending", function()
+    local view, doc = make_view("- first item\nplain", "pending-split-list.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    doc:set_selection(1, 6)
+    local old_active = core.active_view
+    core.active_view = view
+    command.perform("doc:newline")
+    core.active_view = old_active
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    local marker
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(2)).fragments or {}) do
+      if fragment.unordered_list_marker then marker = fragment break end
+    end
+    test.not_nil(marker, "split list suffix lost its bullet widget")
+    test.not_nil(marker.widget, "split list suffix lost its bullet widget")
+  end)
+
   test.it("keeps optimistic task and parenthesized list markers rendered", function()
     local cases = {
       { source = "- [ ] item", field = "markdown_task_checkbox" },
@@ -1479,6 +1498,19 @@ test.describe("Markdown Live Editor", function()
     core.command_view.enter, core.nag_view.show = old_enter, old_show
     common.rm(root, true)
     if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps an empty task marker as a checkbox after semantic rendering", function()
+    local view, doc = make_view("- [ ] \nafter", "empty-task-render.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    local checkbox
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+      if fragment.markdown_task_checkbox then checkbox = fragment break end
+    end
+    test.not_nil(checkbox)
+    test.equal(checkbox.text or "", "")
   end)
 
   test.it("renders task markers as consistent checkbox widgets without list bullets", function()

@@ -183,12 +183,42 @@ local function list_marker_for_line(view, line)
   end
 end
 
+local function source_task_marker(line_text, marker)
+  if not marker then return nil end
+  local col = marker.col2
+  while col <= #line_text and line_text:sub(col, col):match("[ \t]") do
+    col = col + 1
+  end
+  if line_text:sub(col, col) ~= "[" then return nil end
+  local state = line_text:sub(col + 1, col + 1)
+  if (state ~= " " and state ~= "x" and state ~= "X")
+    or line_text:sub(col + 2, col + 2) ~= "]"
+  then
+    return nil
+  end
+  local after = col + 3
+  if after <= #line_text then
+    local next_char = line_text:sub(after, after)
+    if not next_char:match("[ \t\r\n]") then return nil end
+  end
+  return {
+    line1 = marker.line1, line2 = marker.line1,
+    col1 = col, col2 = after,
+  }, state ~= " "
+end
+
 local function task_marker_for_line(view, line)
   for _, node in ipairs(semantic_line(view, line) or {}) do
     local attributes = node.attributes or {}
     local marker = attributes.task_checked or attributes.task_unchecked
+    local source_checked
+    if not marker then
+      marker, source_checked = source_task_marker(
+        view.doc.lines[line] or "", attributes.list
+      )
+    end
     if marker and marker.line1 == line then
-      return marker, node
+      return marker, node, source_checked
     end
   end
 end
@@ -2457,6 +2487,21 @@ local function task_checkbox_widget(
   }
 end
 
+local function list_bullet_widget(width, height, indent_width, marker_control_width, marker_size)
+  return {
+    wrapping = "inline", width = width, height = height,
+    draw = function(_, _, x, y, visual_row_height)
+      local bullet_x = x + indent_width
+        + math.floor((marker_control_width - marker_size) / 2)
+      local bullet_y = y + math.floor((visual_row_height - marker_size) / 2)
+      renderer.draw_rounded_rect(
+        bullet_x, bullet_y, marker_size, marker_size,
+        marker_size / 2, style.markdown_live_list_marker
+      )
+    end,
+  }
+end
+
 local function semantic_block_fragments(view, line_text, line, reveal_units)
   for _, unit in ipairs(reveal_units or {}) do
     if unit.whole_line then return {} end
@@ -2604,6 +2649,10 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
     elseif node.type == "list" or node.type == "list_item" then
       local task = attributes.task_checked or attributes.task_unchecked
       local marker = attributes.list
+      local source_checked
+      if not task then
+        task, source_checked = source_task_marker(line_text, marker)
+      end
       local body_font = markdown_live_body_font(view)
       local checkmark_font = markdown_live_scaled_font(
         view, style.prose_strong_font,
@@ -2611,6 +2660,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       )
       local row_height = markdown_live_body_line_height(view)
       local checked = task and attributes.task_checked ~= nil
+      if source_checked ~= nil then checked = source_checked end
       local task_semantic_id = task and (node.id .. ":task")
       local task_revealed = task and reveal_unit_matches(
         reveal_units, task_semantic_id, task.col1, task.col2
@@ -2733,18 +2783,10 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
             )
             if not marker_revealed then
               fragment.unordered_list_marker = true
-              fragment.widget = {
-                wrapping = "inline", width = marker_width, height = row_height,
-                draw = function(_, _, x, y, visual_row_height)
-                  local bullet_x = x + indent_width
-                    + math.floor((marker_control_width - marker_size) / 2)
-                  local bullet_y = y + math.floor((visual_row_height - marker_size) / 2)
-                  renderer.draw_rounded_rect(
-                    bullet_x, bullet_y, marker_size, marker_size,
-                    marker_size / 2, style.markdown_live_list_marker
-                  )
-                end,
-              }
+              fragment.widget = list_bullet_widget(
+                marker_width, row_height, indent_width,
+                marker_control_width, marker_size
+              )
             end
           end
         end
@@ -2883,12 +2925,14 @@ local function set_render_line_task_completion(render_line, checked, content_col
 end
 
 local function apply_task_completion_presentation(view, line_text, line, render_line)
-  local task, node = task_marker_for_line(view, line)
+  local task, node, source_checked = task_marker_for_line(view, line)
   if not (task and node) then return render_line end
   local attributes = node.attributes or {}
   local content_col = list_item_content_col(line_text, attributes.list, task)
+  local checked = source_checked
+  if checked == nil then checked = attributes.task_checked ~= nil end
   return set_render_line_task_completion(
-    render_line, attributes.task_checked ~= nil, content_col
+    render_line, checked, content_col
   )
 end
 
@@ -3109,38 +3153,36 @@ local function optimistic_list_marker_render(view, previous, current_text)
   end
   if not previous_marker then return nil end
 
-  local kind, indent, content_col, checked, marker_text
-  if previous_marker.markdown_task_checkbox then
-    local task_indent, bullet, before_task, state, after_task = current_text:match(
-      "^([\t ]*)([-%*%+])([\t ]+)%[([ xX])%]([\t ]*)$"
-    )
-    if not task_indent then return nil end
+  local kind, indent, content_col, checked, marker_text, body_text
+  local task_indent, bullet, before_task, state, after_task, task_body = current_text:match(
+    "^([\t ]*)([-%*%+])([\t ]+)%[([ xX])%]([\t ]*)(.*)$"
+  )
+  if task_indent then
     kind = "task"
     indent = task_indent
-    content_col = #current_text + 1
+    content_col = #indent + #bullet + #before_task + 3 + #after_task + 1
     checked = state == "x" or state == "X"
-  elseif previous_marker.ordered_list_marker then
-    local ordered_indent, number, delimiter, spaces = current_text:match(
-      "^([\t ]*)(%d+)(%.)([\t ]+)$"
-    )
-    if not ordered_indent then
-      ordered_indent, number, delimiter, spaces = current_text:match(
-        "^([\t ]*)(%d+)(%))([\t ]+)$"
-      )
-    end
-    if not ordered_indent then return nil end
-    kind = "ordered"
-    indent = ordered_indent
-    content_col = #current_text + 1
-    marker_text = number .. delimiter
+    body_text = task_body
   else
-    local bullet_indent, bullet, spaces = current_text:match(
-      "^([\t ]*)([-%*%+])([\t ]+)$"
+    local ordered_indent, number, delimiter, spaces, ordered_body = current_text:match(
+      "^([\t ]*)(%d+)([.)])([\t ]+)(.*)$"
     )
-    if not bullet_indent then return nil end
-    kind = "unordered"
-    indent = bullet_indent
-    content_col = #current_text + 1
+    if ordered_indent then
+      kind = "ordered"
+      indent = ordered_indent
+      content_col = #indent + #number + 1 + #spaces + 1
+      marker_text = number .. delimiter
+      body_text = ordered_body
+    else
+      local bullet_indent, unordered_bullet, unordered_spaces, unordered_body = current_text:match(
+        "^([\t ]*)([-%*%+])([\t ]+)(.*)$"
+      )
+      if not bullet_indent then return nil end
+      kind = "unordered"
+      indent = bullet_indent
+      content_col = #indent + #unordered_bullet + #unordered_spaces + 1
+      body_text = unordered_body
+    end
   end
 
   local render = clone_render_line(previous)
@@ -3152,7 +3194,11 @@ local function optimistic_list_marker_render(view, previous, current_text)
   marker.source_col2 = content_col
   marker.text_source_col1 = nil
   marker.text_source_col2 = nil
+  marker.text_x_offset = nil
+  marker.draw_x_offset = nil
+  marker.hit_width = nil
   marker.markdown_list_content_col = content_col
+  marker.markdown_task_content_col = nil
   marker.markdown_task_source_marker = nil
   marker.unordered_list_source_marker = nil
   marker.ordered_list_source_marker = nil
@@ -3160,25 +3206,69 @@ local function optimistic_list_marker_render(view, previous, current_text)
   if kind == "task" then
     marker.text = ""
     marker.checked = checked
+    marker.markdown_task_checkbox = true
+    marker.unordered_list_marker = nil
+    marker.ordered_list_marker = nil
+    marker.markdown_task_content_col = content_col
     marker.color = checked and style.markdown_live_task_checked
       or style.markdown_live_task_unchecked
-    if marker.widget then
-      local widget = {}
-      for key, value in pairs(marker.widget) do widget[key] = value end
-      widget.checked = checked
-      -- The original callback closes over the old semantic line. Do not let a
-      -- transient optimistic row toggle the wrong source line before parsing.
-      widget.on_mouse_pressed = nil
-      marker.widget = widget
-    end
+    local body_font = markdown_live_body_font(view)
+    local box_size = math.max(
+      math.floor(SCALE * 10), math.floor(body_font:get_height() * 0.72)
+    )
+    local marker_control_width = math.max(body_font:get_width("-"), box_size)
+    local checkmark_font = markdown_live_scaled_font(
+      view, style.prose_strong_font,
+      math.max(1, math.floor(body_font:get_size() * 0.78))
+    )
+    local widget = task_checkbox_widget(
+      marker.width, markdown_live_body_line_height(view), box_size,
+      checked, checkmark_font, body_font:get_width(
+        string.rep(" ", markdown_indent_width(indent))
+      ), marker_control_width
+    )
+    widget.on_mouse_pressed = nil
+    marker.widget = widget
   elseif kind == "ordered" then
     marker.text = marker_text
+    marker.markdown_task_checkbox = nil
+    marker.checked = nil
+    marker.unordered_list_marker = nil
     marker.ordered_list_marker = true
+    marker.color = style.markdown_live_list_marker
+    marker.widget = nil
   else
     marker.text = ""
+    marker.markdown_task_checkbox = nil
+    marker.checked = nil
+    marker.ordered_list_marker = nil
     marker.unordered_list_marker = true
+    marker.color = style.markdown_live_list_marker
+    local body_font = markdown_live_body_font(view)
+    local indent_width = body_font:get_width(
+      string.rep(" ", markdown_indent_width(indent))
+    )
+    local marker_control_width = math.max(
+      body_font:get_width("-"), math.max(
+        math.floor(SCALE * 10), math.floor(body_font:get_height() * 0.72)
+      )
+    )
+    local marker_size = math.max(2, math.floor(body_font:get_height() * 0.24))
+    marker.widget = list_bullet_widget(
+      marker.width, markdown_live_body_line_height(view),
+      indent_width, marker_control_width, marker_size
+    )
   end
   render.fragments[1] = marker
+  if body_text and body_text ~= "" then
+    render.fragments[2] = {
+      source_col1 = content_col,
+      source_col2 = #current_text + 1,
+      text = body_text,
+      font = markdown_live_body_font(view),
+      color = style.text,
+    }
+  end
   return render
 end
 

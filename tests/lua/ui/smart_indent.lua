@@ -315,6 +315,21 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 2, 1, 2, 1 })
   end)
 
+  test.it("does not leave a stray list marker after repeating Enter at a split boundary", function(context)
+    local doc, view = new_editor(
+      context, "- [ ] task text\n  continuation\nafter", "sample.md"
+    )
+    core.set_active_view(view)
+    doc:set_selection(1, 7)
+    test.ok(command.perform("doc:newline"))
+
+    doc:set_selection(2, 3)
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "- [ ] \ntask text\n  continuation\nafter\n")
+    test.same(view:get_selection_state().selections, { 2, 1, 2, 1 })
+  end)
+
   test.it("outdents a nested Markdown list item at the content start", function(context)
     local doc, view = new_editor(context, "- parent\n  - child\nafter", "sample.md")
     core.set_active_view(view)
@@ -346,6 +361,37 @@ test.describe("smart indentation", function()
 
     test.equal(text(doc), "\nafter\n")
     test.same(view:get_selection_state().selections, { 1, 1, 1, 1 })
+  end)
+
+  test.it("joins adjacent Markdown list items cleanly on Delete", function(context)
+    local doc, view = new_editor(context, "- first\n- second\nafter", "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(1, #doc.lines[1])
+
+    test.ok(command.perform("doc:delete"))
+
+    test.equal(text(doc), "- first second\nafter\n")
+  end)
+
+  test.it("removes the list marker gap when deleting a nested Markdown marker", function(context)
+    local doc, view = new_editor(context, "- parent\n  - child\nafter", "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(2, 3)
+
+    test.ok(command.perform("doc:delete"))
+
+    test.equal(text(doc), "- parent\n  child\nafter\n")
+    test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
+  end)
+
+  test.it("removes the following marker when joining adjacent Markdown list items", function(context)
+    local doc, view = new_editor(context, "- first\n- second\nafter", "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(1, 5)
+
+    test.ok(command.perform("doc:join-lines"))
+
+    test.equal(text(doc), "- first second\nafter\n")
   end)
 
   test.it("indents Markdown list items ending in a colon instead of continuing the marker", function(context)
