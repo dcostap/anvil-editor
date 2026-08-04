@@ -1011,6 +1011,98 @@ test.describe("Markdown Live Editor", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("keeps nested task rows presented after pressing Enter", function()
+    local source_lines = {
+      "- [ ] Si se hace picking con el qr, seleccionará la línea y meterá las unidades a recibir",
+      "- [ ] Si no se hace picking",
+      "    - [ ] test",
+      "    - [ ] test",
+      "    - [ ] ",
+    }
+    for index = 1, 1000 do
+      source_lines[#source_lines + 1] = "background paragraph line " .. index
+    end
+    local source = table.concat(source_lines, "\n")
+    local view, doc = make_view(source, "pending-nested-task-enter.md")
+    view.size.y = 400
+    view:set_wrapping_enabled(false)
+    doc:set_selection(2, 1)
+    refresh(view)
+    doc:set_selection(3, #doc.lines[3] + 1)
+    view:invalidate_line_render("nested-enter-cold-render-cache")
+    view:invalidate_visual_metrics("nested-enter-cold-render-cache")
+    local old_active = core.active_view
+    core.active_view = view
+
+    local ok, err = pcall(function()
+      local function draw_frame()
+        local old_draw_rect = renderer.draw_rect
+        local old_draw_text = renderer.draw_text
+        local old_push_clip_rect = core.push_clip_rect
+        local old_pop_clip_rect = core.pop_clip_rect
+        local drawn = {}
+        renderer.draw_rect = function() end
+        renderer.draw_text = function(font, text, x)
+          drawn[#drawn + 1] = text
+          return x + (font and font:get_width(text) or 0)
+        end
+        core.push_clip_rect = function() end
+        core.pop_clip_rect = function() end
+        local drew, draw_error = pcall(view.draw, view)
+        renderer.draw_rect = old_draw_rect
+        renderer.draw_text = old_draw_text
+        core.push_clip_rect = old_push_clip_rect
+        core.pop_clip_rect = old_pop_clip_rect
+        return drew, draw_error, drawn
+      end
+
+      local function assert_presented(label)
+        local drew, draw_error, drawn = draw_frame()
+        test.ok(drew, label .. " draw failed: " .. tostring(draw_error))
+        test.ok(not table.concat(drawn):match("%- %[ %]"),
+          label .. " drew a raw task marker")
+        for line = 1, 6 do
+          test.not_nil(
+            view:get_line_render(line),
+            string.format("%s: line %d fell back to raw source", label, line)
+          )
+        end
+        local raw = view.__markdown_live_owner
+          and view.__markdown_live_owner.raw_fallback_record
+        test.equal(raw, nil, raw and string.format(
+          "%s recorded raw fallback count=%d range=%d-%d scan_pending=%s",
+          label, raw.count, raw.line1, raw.line2,
+          tostring(view:is_horizontal_extent_scan_pending())
+        ) or label .. " recorded a raw fallback")
+      end
+
+      test.equal(command.perform("doc:newline"), true)
+      local cursor_line, cursor_col = doc:get_selection()
+      view:scroll_to_make_visible(cursor_line, cursor_col)
+      view:get_h_scrollable_size()
+      view.draw_overlay = function() end
+      assert_presented("after Enter")
+      for line = 3, 5 do
+        local render = test.not_nil(view:get_line_render(line))
+        local checkbox
+        for _, fragment in ipairs(render.fragments or {}) do
+          if fragment.markdown_task_checkbox then checkbox = fragment break end
+        end
+        test.not_nil(checkbox, string.format(
+          "line %d lost its task checkbox after Enter", line
+        ))
+      end
+      coroutine.yield(0.01)
+      assert_presented("frame after Enter")
+      for frame = 1, 4 do
+        coroutine.yield(0.01)
+        assert_presented("frame after Enter " .. frame)
+      end
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("aligns Markdown continuation text with task content", function()
     local view, doc = make_view(
       "- [ ] task\n  continuation\nplain",

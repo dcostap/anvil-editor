@@ -1261,22 +1261,29 @@ local function get_unwrapped_line_width(self, line)
   local font = self:get_font()
   local _, indent_size = self.doc:get_indent_info()
   local font_size = font:get_size()
+  local markdown_owner = self.__markdown_live_owner
+  local skip_render = markdown_owner
+    and markdown_owner.semantic_pending_line
+    and line >= markdown_owner.semantic_pending_line
+    or false
   local entry = cache[line]
   if entry
     and entry.text == text
     and entry.font == font
     and entry.font_size == font_size
     and entry.indent_size == indent_size
+    and entry.skip_render == skip_render
   then
     return entry.width
   end
 
-  local width = self:get_col_x_offset(line, #text + 1)
+  local width = self:get_col_x_offset(line, #text + 1, nil, skip_render == true)
   cache[line] = {
     text = text,
     font = font,
     font_size = font_size,
     indent_size = indent_size,
+    skip_render = skip_render,
     width = width,
   }
   return width
@@ -4708,9 +4715,11 @@ end
 ---Accounts for tabs, syntax highlighting fonts, and caches long lines.
 ---@param line integer Line number
 ---@param col integer Column number (byte offset)
+---@param line_end boolean? Whether this is the visual line end
+---@param skip_render boolean? Measure source text without requesting a rendered line
 ---@return number offset Horizontal pixel offset
-function DocView:get_col_x_offset(line, col, line_end)
-  local render_line = self:get_line_render(line)
+function DocView:get_col_x_offset(line, col, line_end, skip_render)
+  local render_line = not skip_render and self:get_line_render(line) or nil
   if render_line then
     local _, position_row = self:get_position_line_render_row(line, col)
     local rendered_offset = self:get_line_render_col_x_offset(
