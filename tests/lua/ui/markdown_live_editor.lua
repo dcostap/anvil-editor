@@ -1015,7 +1015,7 @@ test.describe("Markdown Live Editor", function()
     local source_lines = {
       "- [ ] Si se hace picking con el qr, seleccionará la línea y meterá las unidades a recibir",
       "- [ ] Si no se hace picking",
-      "    - [ ] test",
+      "    - [ ] ",
       "    - [ ] test",
       "    - [ ] ",
     }
@@ -1025,7 +1025,7 @@ test.describe("Markdown Live Editor", function()
     local source = table.concat(source_lines, "\n")
     local view, doc = make_view(source, "pending-nested-task-enter.md")
     view.size.y = view:get_line_height() * 2
-    view:set_wrapping_enabled(false)
+    view:set_wrapping_enabled(true)
     doc:set_selection(2, 1)
     refresh(view)
     doc:set_selection(3, #doc.lines[3] + 1)
@@ -1076,6 +1076,9 @@ test.describe("Markdown Live Editor", function()
         ) or label .. " recorded a raw fallback")
       end
 
+      for index = 1, #"test" do
+        test.equal(view:on_text_input(("test"):sub(index, index)), true)
+      end
       test.equal(command.perform("doc:newline"), true)
       local cursor_line, cursor_col = doc:get_selection()
       view:scroll_to_make_visible(cursor_line, cursor_col)

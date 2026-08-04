@@ -3140,18 +3140,19 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
 end
 
 local function optimistic_list_marker_render(view, previous, current_text)
-  if not (previous and current_text) then return nil end
+  if not current_text then return nil end
   local previous_marker
-  for _, fragment in ipairs(previous.fragments or {}) do
-    if fragment.markdown_task_checkbox
-      or fragment.unordered_list_marker
-      or fragment.ordered_list_marker
-    then
-      previous_marker = fragment
-      break
+  if previous then
+    for _, fragment in ipairs(previous.fragments or {}) do
+      if fragment.markdown_task_checkbox
+        or fragment.unordered_list_marker
+        or fragment.ordered_list_marker
+      then
+        previous_marker = fragment
+        break
+      end
     end
   end
-  if not previous_marker then return nil end
 
   local kind, indent, content_col, checked, marker_text, body_text
   local task_indent, bullet, before_task, state, after_task, task_body = current_text:match(
@@ -3185,7 +3186,25 @@ local function optimistic_list_marker_render(view, previous, current_text)
     end
   end
 
-  local render = clone_render_line(previous)
+  if not previous_marker then
+    local body_font = markdown_live_body_font(view)
+    local indent_width = body_font:get_width(
+      string.rep(" ", markdown_list_visual_indent_width(indent))
+    )
+    local marker_control_width = math.max(
+      body_font:get_width("-"), math.max(
+        math.floor(SCALE * 10), math.floor(body_font:get_height() * 0.72)
+      )
+    )
+    local marker_text_width = kind == "ordered"
+      and body_font:get_width(marker_text .. " ")
+      or marker_control_width + body_font:get_width(" ")
+    previous_marker = {
+      width = indent_width + marker_text_width,
+    }
+  end
+
+  local render = clone_render_line(previous or {})
   render.source_text = current_text
   render.fragments = {}
   local marker = {}
@@ -4917,6 +4936,24 @@ function provider:render_line(view, line, _context)
   end
   if optimistic and not current_semantic_model(view) then return optimistic.render_line end
   if not render_semantic_model(view, line) then
+    -- A shifted or newly exposed list row may not have a retained semantic
+    -- fragment yet. Keep its marker presented from the source grammar rather
+    -- than flashing the entire Markdown line through raw Source rendering.
+    local semantic_model = owner and owner.semantic_model
+    local semantic_pending = owner and (
+      owner.semantic_pending_line ~= nil
+      or semantic_model and (
+        semantic_model.status == "pending"
+        or semantic_model.published_revision ~= view.doc.text_revision
+      )
+    )
+    if semantic_pending
+      and (not owner.semantic_pending_line or line >= owner.semantic_pending_line)
+    then
+      local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+      local pending_list = optimistic_list_marker_render(view, nil, text)
+      if pending_list then return pending_list end
+    end
     record_raw_fallback(view, line, "semantic-unavailable")
     return { raw_passthrough = true }
   end

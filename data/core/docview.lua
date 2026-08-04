@@ -1262,10 +1262,18 @@ local function get_unwrapped_line_width(self, line)
   local _, indent_size = self.doc:get_indent_info()
   local font_size = font:get_size()
   local markdown_owner = self.__markdown_live_owner
-  local skip_render = markdown_owner
-    and markdown_owner.semantic_pending_line
-    and line >= markdown_owner.semantic_pending_line
-    or false
+  local semantic_model = markdown_owner and markdown_owner.semantic_model
+  local semantic_pending = markdown_owner and (
+    markdown_owner.semantic_pending_line ~= nil
+    or semantic_model and (
+      semantic_model.status == "pending"
+      or semantic_model.published_revision ~= self.doc.text_revision
+    )
+  )
+  local skip_render = semantic_pending and (
+    not markdown_owner.semantic_pending_line
+    or line >= markdown_owner.semantic_pending_line
+  ) or false
   local entry = cache[line]
   if entry
     and entry.text == text
