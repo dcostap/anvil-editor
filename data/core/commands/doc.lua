@@ -1380,10 +1380,21 @@ local commands = {
     for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
       selection_count = selection_count + 1
       if line1 == line2 and col1 == col2 then
+        local line_text = dv.doc.lines[line1] or ""
         local content_start, indent_length = markdown_list_content_start(
-          dv.doc, line1, dv.doc.lines[line1] or ""
+          dv.doc, line1, line_text
         )
-        if content_start and indent_length > 0 and col1 == content_start then
+        indent_length = indent_length or #(line_text:match("^[\t ]*") or "")
+        local empty_list_item = markdown_empty_list_item(
+          dv.doc, line1, col1, line_text
+        )
+        local action
+        if empty_list_item then
+          action = indent_length > 0 and "outdent" or "clear"
+        elseif content_start and indent_length > 0 and col1 == content_start then
+          action = "outdent"
+        end
+        if action then
           list_outdent_count = list_outdent_count + 1
           list_outdent_items[#list_outdent_items + 1] = {
             idx = idx,
@@ -1392,18 +1403,40 @@ local commands = {
             line2 = line2,
             col2 = col2,
             indent_length = indent_length,
+            action = action,
           }
         end
       end
     end
     if selection_count > 0 and list_outdent_count == selection_count then
       for _, item in ipairs(list_outdent_items) do
-        local line1, col1, line2, col2 = dv.doc:indent_text(
-          true, item.line1, item.col1, item.line2, item.col2
-        )
-        local content_col = math.max(1, item.col1 - item.indent_length)
-        dv.doc:set_selections(item.idx, line1, content_col, line2, content_col)
-        core.log_quiet("Markdown backspace outdented list item in %s at %d:%d", dv.doc:get_name(), item.line1, item.col1)
+        if item.action == "clear" then
+          local edit = {
+            line1 = item.line1,
+            col1 = 1,
+            line2 = item.line1,
+            col2 = item.col1,
+            text = "",
+            idx = item.idx,
+          }
+          local selections, last_selection = dv.doc:selections_after_edits(
+            { edit }, { [item.idx] = "start" }, dv.doc.last_selection
+          )
+          dv.doc:apply_edits({ edit }, {
+            type = "remove",
+            selections = selections,
+            last_selection = last_selection,
+            merge_cursors = false,
+          })
+          core.log_quiet("Markdown backspace removed empty list marker in %s at %d:%d", dv.doc:get_name(), item.line1, item.col1)
+        else
+          local line1, col1, line2, col2 = dv.doc:indent_text(
+            true, item.line1, item.col1, item.line2, item.col2
+          )
+          local content_col = math.max(1, item.col1 - item.indent_length)
+          dv.doc:set_selections(item.idx, line1, content_col, line2, content_col)
+          core.log_quiet("Markdown backspace outdented list item in %s at %d:%d", dv.doc:get_name(), item.line1, item.col1)
+        end
       end
       return
     end

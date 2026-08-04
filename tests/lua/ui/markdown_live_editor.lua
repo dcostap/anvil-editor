@@ -913,6 +913,22 @@ test.describe("Markdown Live Editor", function()
     end
   end)
 
+  test.it("aligns Markdown continuation text with task content", function()
+    local view, doc = make_view(
+      "- [ ] task\n  continuation\nplain",
+      "list-continuation-alignment.md"
+    )
+    doc:set_selection(3, 1)
+    refresh(view)
+
+    local task_x = view:get_col_x_offset(1, 7)
+    local continuation_x = view:get_col_x_offset(2, 3)
+    test.ok(
+      math.abs(task_x - continuation_x) < 0.1,
+      string.format("task content x=%.2f continuation x=%.2f", task_x, continuation_x)
+    )
+  end)
+
   test.it("keeps a formatted row stable when one edit crosses rendered fragments", function()
     local view, doc = make_view("Before **bold** after\nplain", "pending-cross-fragment.md")
     view:set_wrapping_enabled(true)

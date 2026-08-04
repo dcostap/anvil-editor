@@ -2502,7 +2502,50 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       },
     }
   end
-  for _, node in ipairs(semantic_line(view, line) or {}) do
+  local semantic_nodes = semantic_line(view, line) or {}
+  local current_list_marker = list_marker_for_line(view, line) ~= nil
+  local continuation_parent
+  for _, candidate in ipairs(semantic_nodes) do
+    local candidate_marker = candidate.attributes and candidate.attributes.list
+    if candidate.type == "list_item" and not candidate_marker then
+      candidate_marker = list_marker_for_line(view, candidate.source.line1)
+    end
+    if candidate.type == "list_item"
+      and candidate_marker and candidate_marker.line1 < line
+      and candidate.source.line1 < line and candidate.source.line2 >= line
+      and (not continuation_parent
+        or candidate_marker.line1 > continuation_parent.marker.line1)
+    then
+      continuation_parent = { node = candidate, marker = candidate_marker }
+    end
+  end
+  if not current_list_marker and continuation_parent then
+    local parent_render = view:get_line_render(continuation_parent.marker.line1)
+    local target_x
+    for _, fragment in ipairs(parent_render and parent_render.fragments or {}) do
+      if fragment.markdown_list_content_col then
+        target_x = view:get_line_render_col_x_offset(
+          parent_render, fragment.markdown_list_content_col
+        )
+        break
+      end
+    end
+    if target_x then
+      local body_font = markdown_live_body_font(view)
+      local leading = line_text:match("^[\t ]*") or ""
+      local source_leading_width = body_font:get_width(
+        string.rep(" ", markdown_indent_width(leading))
+      )
+      local width = target_x - source_leading_width
+      if width > 0.1 then
+        fragments[#fragments + 1] = {
+          source_col1 = 1, source_col2 = 1, text = "", width = width,
+          font = body_font, markdown_list_continuation_indent = true,
+        }
+      end
+    end
+  end
+  for _, node in ipairs(semantic_nodes) do
     local attributes = node.attributes or {}
     if node.type == "link_reference" and attributes.reference_label
       and attributes.reference_destination and node.source.line1 == line
@@ -2631,6 +2674,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
               color = style.markdown_live_list_marker,
               semantic_id = node.id .. ":marker",
               ordered_list_source_marker = true,
+              markdown_list_content_col = list_item_content_col(line_text, marker, nil),
             }
           else
             fragments[#fragments + 1] = {
@@ -2640,6 +2684,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
               color = style.markdown_live_list_marker,
               semantic_id = node.id .. ":marker",
               ordered_list_marker = true,
+              markdown_list_content_col = list_item_content_col(line_text, marker, nil),
             }
           end
         else
