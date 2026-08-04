@@ -945,6 +945,72 @@ test.describe("Markdown Live Editor", function()
     end
   end)
 
+  test.it("keeps Markdown list rows presented through rapid editing", function()
+    local source_lines = { "- [ ] ", "plain" }
+    for index = 1, 1000 do
+      source_lines[#source_lines + 1] = "background paragraph line " .. index
+    end
+    local view, doc = make_view(
+      table.concat(source_lines, "\n"), "pending-rapid-list-editing.md"
+    )
+    view.size.y = 400
+    doc:set_selection(2, 1)
+    refresh(view)
+    local old_active = core.active_view
+    core.active_view = view
+
+    local ok, err = pcall(function()
+      local function assert_rows(label, last_line)
+        for line = 1, last_line do
+          test.not_nil(
+            view:get_line_render(line),
+            string.format("%s: line %d fell back to raw source", label, line)
+          )
+        end
+        local raw = view.__markdown_live_owner
+          and view.__markdown_live_owner.raw_fallback_record
+        local visible_line1, visible_line2 = view:get_visible_line_range()
+        local raw_detail = raw and string.format(
+          " count=%s range=%s-%s visible=%s-%s",
+          tostring(raw.count), tostring(raw.line1), tostring(raw.line2),
+          tostring(visible_line1), tostring(visible_line2)
+        ) or ""
+        test.equal(raw, nil, label .. ": recorded a raw fallback" .. raw_detail)
+      end
+
+      local function type_text(text, last_line)
+        for index = 1, #text do
+          test.equal(view:on_text_input(text:sub(index, index)), true)
+          assert_rows("typing character " .. index, last_line)
+          coroutine.yield(0.01)
+          assert_rows("frame after character " .. index, last_line)
+        end
+      end
+
+      doc:set_selection(1, 7)
+      type_text("first", 2)
+      test.equal(command.perform("doc:newline"), true)
+      assert_rows("first Enter", 3)
+      coroutine.yield(0.01)
+      assert_rows("frame after first Enter", 3)
+
+      type_text("more", 3)
+      test.equal(command.perform("doc:newline"), true)
+      assert_rows("second Enter", 4)
+      coroutine.yield(0.01)
+      assert_rows("frame after second Enter", 4)
+
+      test.equal(command.perform("doc:indent"), true)
+      assert_rows("indent at new task content start", 4)
+      coroutine.yield(0.01)
+      assert_rows("frame after indent", 4)
+      type_text("nested", 4)
+      assert_rows("typing nested item", 4)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("aligns Markdown continuation text with task content", function()
     local view, doc = make_view(
       "- [ ] task\n  continuation\nplain",

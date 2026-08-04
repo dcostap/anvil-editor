@@ -4696,13 +4696,20 @@ end
 local function compute_line_height(view, line, entry)
   if view_in_source_mode(view) then return nil end
   local wrapped = line_is_wrapped(view, line)
+  local semantic_model = current_semantic_model(view)
   local optimistic = optimistic_render(view, line)
-  if optimistic and not current_semantic_model(view) then
+  if optimistic and not semantic_model then
     local row = entry and entry.row_in_line
     if row and optimistic.row_heights and optimistic.row_heights[row] then
       return optimistic.row_heights[row]
     end
     if not wrapped then return optimistic.height end
+  end
+  local owner = view.__markdown_live_owner
+  if not semantic_model and owner and owner.semantic_pending_line
+    and line >= owner.semantic_pending_line
+  then
+    return view:get_line_height()
   end
   -- Resolve the presentation once through DocView's line cache. Metrics and
   -- drawing now consume the same fragment/widget/layout plan instead of
@@ -4737,12 +4744,29 @@ end
 function provider:line_height(view, line, entry)
   local owner = view.__markdown_live_owner
   local wrapped = line_is_wrapped(view, line)
-  if not wrapped and not current_semantic_model(view) then
+  local semantic_model = current_semantic_model(view)
+  if not wrapped and not semantic_model then
     local retained = owner and retained_metric_height(owner.pending_metric_state, line)
     if retained then return retained end
   end
+  if not semantic_model and owner and owner.semantic_pending_line
+    and line >= owner.semantic_pending_line
+  then
+    local optimistic = optimistic_render(view, line)
+    if optimistic then
+      local row = entry and entry.row_in_line
+      if row and optimistic.row_heights and optimistic.row_heights[row] then
+        return optimistic.row_heights[row]
+      end
+      if not wrapped and optimistic.height then return optimistic.height end
+    end
+    -- Do not ask the line-render provider for an unretained suffix row while
+    -- the parser is pending. That turns a metric pass into a raw-source cache
+    -- fill, which can flash Markdown syntax while the user is editing.
+    return view:get_line_height()
+  end
   local height = compute_line_height(view, line, entry)
-  if current_semantic_model(view) and owner then
+  if semantic_model and owner then
     owner.published_line_heights = owner.published_line_heights or {}
     if not wrapped and height and height ~= view:get_line_height() then
       owner.published_line_heights[line] = height
