@@ -1761,6 +1761,51 @@ local commands = {
 
   ["doc:indent"] = function(dv)
     if not can_edit(dv, "indent") then return end
+    local list_indent_edits, list_indent_lines = {}, {}
+    local selection_count, list_indent_count = 0, 0
+    for _, line1, col1, line2, col2 in doc_multiline_selections(true) do
+      selection_count = selection_count + 1
+      if line1 == line2 and col1 == col2 then
+        local line_text = dv.doc.lines[line1] or ""
+        local content_start = markdown_list_content_start(
+          dv.doc, line1, line_text
+        )
+        if content_start and col1 == content_start then
+          list_indent_count = list_indent_count + 1
+          if not list_indent_lines[line1] then
+            local indent_end, normalized = dv.doc:get_line_indent(
+              line_text, false
+            )
+            local indent = select(1, dv.doc:get_indent_string(1))
+            list_indent_lines[line1] = true
+            list_indent_edits[#list_indent_edits + 1] = {
+              line1 = line1,
+              col1 = 1,
+              line2 = line1,
+              col2 = (indent_end or 0) + 1,
+              text = normalized .. indent,
+              idx = 0,
+            }
+          end
+        end
+      end
+    end
+    if selection_count > 0 and list_indent_count == selection_count then
+      local selections, last_selection = dv.doc:selections_after_edits(
+        list_indent_edits, nil, dv.doc.last_selection
+      )
+      dv.doc:apply_edits(list_indent_edits, {
+        type = "insert",
+        selections = selections,
+        last_selection = last_selection,
+        merge_cursors = false,
+      })
+      core.log_quiet(
+        "Markdown indent moved list items at their content start in %s",
+        dv.doc:get_name()
+      )
+      return
+    end
     local repair_edits, final_by_idx = {}, {}
     local selection_count, repairable_count = 0, 0
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do

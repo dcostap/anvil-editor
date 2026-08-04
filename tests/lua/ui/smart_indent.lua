@@ -302,6 +302,17 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 2, 4, 2, 4 })
   end)
 
+  test.it("indents a Markdown bullet from the item content start", function(context)
+    local doc, view = new_editor(context, "- first\n- second", "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(1, 3, 1, 3)
+
+    test.ok(command.perform("doc:indent"))
+
+    test.equal(text(doc), "  - first\n- second\n")
+    test.same(view:get_selection_state().selections, { 1, 5, 1, 5 })
+  end)
+
   test.it("removes an empty Markdown list marker on the next Enter", function(context)
     local doc, view = new_editor(context, "- item\nnext", "sample.md")
     core.set_active_view(view)
