@@ -3453,6 +3453,27 @@ local function cached_render_line(view, line)
   return cached and cached.render_line ~= false and cached.render_line or nil
 end
 
+local function markdown_list_structure_signature(text)
+  text = tostring(text or ""):gsub("\n$", "")
+  local indent, bullet = text:match("^([\t ]*)([-%*%+])[\t ]+%[[ xX]%]")
+  if indent then return "task:" .. tostring(#indent) .. ":" .. bullet end
+  indent, bullet = text:match("^([\t ]*)([-%*%+])[\t ]+")
+  if indent then return "unordered:" .. tostring(#indent) .. ":" .. bullet end
+  local number, delimiter
+  indent, number, delimiter = text:match("^([\t ]*)(%d+)([.)])[\t ]+")
+  if indent then
+    return "ordered:" .. tostring(#indent) .. ":" .. delimiter
+  end
+  return ""
+end
+
+local function edit_changes_markdown_list_structure(edit)
+  -- Empty-list Enter is normalized to a deletion-only edit, so neither the
+  -- replacement text nor the net line count carries the structural change.
+  return edit and markdown_list_structure_signature(edit.old_text)
+    ~= markdown_list_structure_signature(edit.text)
+end
+
 local function capture_pre_edit_renders(view, change)
   local owner = view.__markdown_live_owner
   if not owner or view_in_source_mode and view_in_source_mode(view) then return end
@@ -3464,7 +3485,10 @@ local function capture_pre_edit_renders(view, change)
   local structural = false
   for _, edit in ipairs(transaction and transaction.edits or {}) do
     for line = edit.line1 or 1, edit.line2 or edit.line1 or 1 do lines[line] = true end
-    if edit.line1 ~= edit.line2 or (edit.text or ""):find("\n", 1, true) then
+    if edit.line1 ~= edit.line2
+      or (edit.text or ""):find("\n", 1, true)
+      or edit_changes_markdown_list_structure(edit)
+    then
       structural = true
     end
   end
@@ -3569,7 +3593,10 @@ local function capture_optimistic_renders(view, transaction)
 
   local structural = false
   for _, edit in ipairs(transaction.edits or {}) do
-    if edit.line1 ~= edit.line2 or (edit.text or ""):find("\n", 1, true) then
+    if edit.line1 ~= edit.line2
+      or (edit.text or ""):find("\n", 1, true)
+      or edit_changes_markdown_list_structure(edit)
+    then
       structural = true
       break
     end
@@ -4399,6 +4426,22 @@ local function raw_context_signature(text)
   return fence_context_signature(text) .. "\0" .. inline_context_marker_signature(text)
 end
 
+local function transaction_changes_list_structure(view, transaction, pre_edit_lines)
+  for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
+    local old_line = range.old_line1 or range.new_line1 or 1
+    local new_line = range.new_line1 or old_line
+    local previous = pre_edit_lines and pre_edit_lines[old_line]
+    local old_signature = markdown_list_structure_signature(
+      previous and previous.source_text or ""
+    )
+    local new_signature = markdown_list_structure_signature(
+      view.doc.lines[new_line] or ""
+    )
+    if old_signature ~= new_signature then return true end
+  end
+  return false
+end
+
 local function transaction_changes_raw_context(view, transaction, pre_edit_lines)
   if transaction and transaction.type == "load" then return true end
   local lines = {}
@@ -4537,9 +4580,22 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     end
   end
   local structural_change = transaction and transaction.type == "load"
+  -- A newline edit can replace one logical line with one logical line (for
+  -- example, pressing Enter on an empty Markdown list item exits the list),
+  -- so a zero net line delta does not prove that block structure is stable.
+  for _, edit in ipairs(transaction and transaction.edits or {}) do
+    if edit.line1 ~= edit.line2 or (edit.text or ""):find("\n", 1, true) then
+      structural_change = true
+      break
+    end
+  end
   for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
     if (range.line_delta or 0) ~= 0 then structural_change = true break end
   end
+  local list_structure_changed = transaction_changes_list_structure(
+    view, transaction, pre_edit_lines
+  )
+  structural_change = structural_change or list_structure_changed
   local raw_context_changed = transaction_changes_raw_context(view, transaction, pre_edit_lines)
   if raw_context_changed and owner then
     local fenced = provisional_fenced_lines(view)

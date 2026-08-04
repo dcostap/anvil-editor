@@ -1018,6 +1018,7 @@ test.describe("Markdown Live Editor", function()
       "    - [ ] test",
       "    - [ ] test",
       "    - [ ] ",
+      "    - [ ] suffix task",
     }
     for index = 1, 1000 do
       source_lines[#source_lines + 1] = "background paragraph line " .. index
