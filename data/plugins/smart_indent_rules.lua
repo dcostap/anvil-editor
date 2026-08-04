@@ -291,10 +291,18 @@ function smart_indent.newline_continuation(doc, line, context)
 
   if rule.id == "markdown" then
     if matches_any(before, rule.indent_after) then return nil, "indent-after", "unavailable" end
+    local task_indent, task_bullet = before:match(
+      "^(%s*)([%-%*%+])%s+%[[ xX]%]%s+%S"
+    )
+    if task_indent then return task_indent .. task_bullet .. " [ ] ", nil, "fresh" end
     local indent, bullet = before:match("^(%s*)([%-%*%+])%s+%S")
     if indent then return indent .. bullet .. " ", nil, "fresh" end
     local ordered_indent, number = before:match("^(%s*)(%d+)%.%s+%S")
     if ordered_indent and number then return ordered_indent .. tostring(tonumber(number) + 1) .. ". ", nil, "fresh" end
+    local paren_indent, paren_number = before:match("^(%s*)(%d+)%)[%s]+%S")
+    if paren_indent and paren_number then
+      return paren_indent .. tostring(tonumber(paren_number) + 1) .. ") ", nil, "fresh"
+    end
     local quote_indent = before:match("^(%s*>%s*)%S")
     if quote_indent then return quote_indent, nil, "fresh" end
   end

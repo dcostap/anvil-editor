@@ -280,6 +280,52 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 2, 4, 2, 4 })
   end)
 
+  test.it("continues Markdown task lists on Enter with a fresh task marker", function(context)
+    local doc, view = new_editor(context, "- [ ] item", "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(1, #"- [ ] item" + 1, 1, #"- [ ] item" + 1)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "- [ ] item\n- [ ] \n")
+    test.same(view:get_selection_state().selections, { 2, 7, 2, 7 })
+  end)
+
+  test.it("continues Markdown parenthesized ordered lists on Enter", function(context)
+    local doc, view = new_editor(context, "3) item", "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(1, #"3) item" + 1, 1, #"3) item" + 1)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "3) item\n4) \n")
+    test.same(view:get_selection_state().selections, { 2, 4, 2, 4 })
+  end)
+
+  test.it("removes an empty Markdown list marker on the next Enter", function(context)
+    local doc, view = new_editor(context, "- item\nnext", "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(1, #"- item" + 1, 1, #"- item" + 1)
+    test.ok(command.perform("doc:newline"))
+
+    doc:set_selection(2, #doc.lines[2], 2, #doc.lines[2])
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "- item\n\nnext\n")
+    test.same(view:get_selection_state().selections, { 2, 1, 2, 1 })
+  end)
+
+  test.it("outdents a nested Markdown list item at the content start", function(context)
+    local doc, view = new_editor(context, "- parent\n  - child\nafter", "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(2, 5, 2, 5)
+
+    test.ok(command.perform("doc:backspace"))
+
+    test.equal(text(doc), "- parent\n- child\nafter\n")
+    test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
+  end)
+
   test.it("indents Markdown list items ending in a colon instead of continuing the marker", function(context)
     local doc, view = new_editor(context, "- item:", "sample.md")
     core.set_active_view(view)

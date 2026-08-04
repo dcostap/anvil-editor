@@ -468,6 +468,55 @@ local function line_end_col(text)
   return nl or (#tostring(text or "") + 1)
 end
 
+local function markdown_empty_list_item(doc, line, col, line_text)
+  local syntax_name = tostring(doc and doc.syntax and doc.syntax.name or ""):lower()
+  if not syntax_name:find("markdown", 1, true) then return false end
+  local end_col = line_end_col(line_text)
+  if col ~= end_col then return false end
+  local content = tostring(line_text or ""):sub(1, end_col - 1)
+  return content:match("^%s*[-%+%*]%s+$")
+    or content:match("^%s*%d+%.%s+$")
+    or content:match("^%s*%d+%)%s+$")
+    or content:match("^%s*[-%+%*]%s+%[[ xX]%]%s+$")
+    or content:match("^%s*%d+%.%s+%[[ xX]%]%s+$")
+    or content:match("^%s*%d+%)%s+%[[ xX]%]%s+$")
+end
+
+local function markdown_list_content_start(doc, line, line_text)
+  local syntax_name = tostring(doc and doc.syntax and doc.syntax.name or ""):lower()
+  if not syntax_name:find("markdown", 1, true) then return nil end
+  local end_col = line_end_col(line_text)
+  local content = tostring(line_text or ""):sub(1, end_col - 1)
+
+  local indent, bullet, before_task, after_task = content:match(
+    "^([\t ]*)([-%*%+])([\t ]+)%[[ xX]%]([\t ]+)"
+  )
+  if indent then
+    local content_start = #indent + #bullet + #before_task + 3 + #after_task + 1
+    if content:sub(content_start):match("^%S") then return content_start, #indent end
+  end
+
+  local spaces
+  indent, bullet, spaces = content:match("^([\t ]*)([-%*%+])([\t ]+)")
+  if indent then
+    local content_start = #indent + #bullet + #spaces + 1
+    if content:sub(content_start):match("^%S") then return content_start, #indent end
+  end
+
+  local number, delimiter
+  indent, number, delimiter, spaces = content:match("^([\t ]*)(%d+)(%.)([\t ]+)")
+  if indent then
+    local content_start = #indent + #number + #delimiter + #spaces + 1
+    if content:sub(content_start):match("^%S") then return content_start, #indent end
+  end
+
+  indent, number, delimiter, spaces = content:match("^([\t ]*)(%d+)(%))([\t ]+)")
+  if indent then
+    local content_start = #indent + #number + #delimiter + #spaces + 1
+    if content:sub(content_start):match("^%S") then return content_start, #indent end
+  end
+end
+
 local function token_at(doc, line, col)
   local column = 0
   for _, token_type, token_text in doc.highlighter:each_token(line) do
@@ -1056,6 +1105,7 @@ local commands = {
     local whitespace_line_owner = {}
     local has_whitespace_cleanup = false
     local has_smart_newline = false
+    local has_empty_list_item = false
 
     local function project_selection(idx, line1, col1, line2, col2)
       local projected_idx = #projected_selections / 4 + 1
@@ -1126,7 +1176,30 @@ local commands = {
         text_by_idx[projected_idx] = text
         normal_final_by_idx[projected_idx] = "end"
 
-        if whitespace_only_line then
+        if not whitespace_only_line
+        and line1 == line2 and col1 == col2
+        and markdown_empty_list_item(dv.doc, line, col, line_text)
+        then
+          has_empty_list_item = true
+          final_by_idx[projected_idx] = "start"
+          core.log_quiet("Markdown newline exited empty list item in %s at %d:%d", dv.doc:get_name(), line1, col1)
+          edits[#edits + 1] = {
+            line1 = line,
+            col1 = 1,
+            line2 = line,
+            col2 = col,
+            text = "",
+            idx = projected_idx,
+          }
+          normal_edits[#normal_edits + 1] = {
+            line1 = line1,
+            col1 = col1,
+            line2 = line2,
+            col2 = col2,
+            text = text,
+            idx = projected_idx,
+          }
+        elseif whitespace_only_line then
           has_whitespace_cleanup = true
           whitespace_line_owner[line] = projected_idx
           final_by_idx[projected_idx] = "end"
@@ -1177,7 +1250,7 @@ local commands = {
       end
     end
 
-    if has_whitespace_cleanup or has_smart_newline then
+    if has_whitespace_cleanup or has_smart_newline or has_empty_list_item then
       local non_overlapping, normalized = edits_are_non_overlapping(dv.doc, edits)
       if not non_overlapping then
         if has_smart_newline then
@@ -1302,6 +1375,38 @@ local commands = {
 
   ["doc:backspace"] = function(dv)
     if not can_edit(dv, "backspace") then return end
+    local list_outdent_items = {}
+    local selection_count, list_outdent_count = 0, 0
+    for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+      selection_count = selection_count + 1
+      if line1 == line2 and col1 == col2 then
+        local content_start, indent_length = markdown_list_content_start(
+          dv.doc, line1, dv.doc.lines[line1] or ""
+        )
+        if content_start and indent_length > 0 and col1 == content_start then
+          list_outdent_count = list_outdent_count + 1
+          list_outdent_items[#list_outdent_items + 1] = {
+            idx = idx,
+            line1 = line1,
+            col1 = col1,
+            line2 = line2,
+            col2 = col2,
+            indent_length = indent_length,
+          }
+        end
+      end
+    end
+    if selection_count > 0 and list_outdent_count == selection_count then
+      for _, item in ipairs(list_outdent_items) do
+        local line1, col1, line2, col2 = dv.doc:indent_text(
+          true, item.line1, item.col1, item.line2, item.col2
+        )
+        local content_col = math.max(1, item.col1 - item.indent_length)
+        dv.doc:set_selections(item.idx, line1, content_col, line2, content_col)
+        core.log_quiet("Markdown backspace outdented list item in %s at %d:%d", dv.doc:get_name(), item.line1, item.col1)
+      end
+      return
+    end
     local _, indent_size = dv.doc:get_indent_info()
     local fallback = false
     for _, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do

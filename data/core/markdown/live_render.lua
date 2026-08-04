@@ -3050,7 +3050,98 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
   return current_text
 end
 
+local function optimistic_list_marker_render(view, previous, current_text)
+  if not (previous and current_text) then return nil end
+  local previous_marker
+  for _, fragment in ipairs(previous.fragments or {}) do
+    if fragment.markdown_task_checkbox
+      or fragment.unordered_list_marker
+      or fragment.ordered_list_marker
+    then
+      previous_marker = fragment
+      break
+    end
+  end
+  if not previous_marker then return nil end
+
+  local kind, indent, content_col, checked, marker_text
+  if previous_marker.markdown_task_checkbox then
+    local task_indent, bullet, before_task, state, after_task = current_text:match(
+      "^([\t ]*)([-%*%+])([\t ]+)%[([ xX])%]([\t ]*)$"
+    )
+    if not task_indent then return nil end
+    kind = "task"
+    indent = task_indent
+    content_col = #current_text + 1
+    checked = state == "x" or state == "X"
+  elseif previous_marker.ordered_list_marker then
+    local ordered_indent, number, delimiter, spaces = current_text:match(
+      "^([\t ]*)(%d+)(%.)([\t ]+)$"
+    )
+    if not ordered_indent then
+      ordered_indent, number, delimiter, spaces = current_text:match(
+        "^([\t ]*)(%d+)(%))([\t ]+)$"
+      )
+    end
+    if not ordered_indent then return nil end
+    kind = "ordered"
+    indent = ordered_indent
+    content_col = #current_text + 1
+    marker_text = number .. delimiter
+  else
+    local bullet_indent, bullet, spaces = current_text:match(
+      "^([\t ]*)([-%*%+])([\t ]+)$"
+    )
+    if not bullet_indent then return nil end
+    kind = "unordered"
+    indent = bullet_indent
+    content_col = #current_text + 1
+  end
+
+  local render = clone_render_line(previous)
+  render.source_text = current_text
+  render.fragments = {}
+  local marker = {}
+  for key, value in pairs(previous_marker) do marker[key] = value end
+  marker.source_col1 = #indent + 1
+  marker.source_col2 = content_col
+  marker.text_source_col1 = nil
+  marker.text_source_col2 = nil
+  marker.markdown_list_content_col = content_col
+  marker.markdown_task_source_marker = nil
+  marker.unordered_list_source_marker = nil
+  marker.ordered_list_source_marker = nil
+
+  if kind == "task" then
+    marker.text = ""
+    marker.checked = checked
+    marker.color = checked and style.markdown_live_task_checked
+      or style.markdown_live_task_unchecked
+    if marker.widget then
+      local widget = {}
+      for key, value in pairs(marker.widget) do widget[key] = value end
+      widget.checked = checked
+      -- The original callback closes over the old semantic line. Do not let a
+      -- transient optimistic row toggle the wrong source line before parsing.
+      widget.on_mouse_pressed = nil
+      marker.widget = widget
+    end
+  elseif kind == "ordered" then
+    marker.text = marker_text
+    marker.ordered_list_marker = true
+  else
+    marker.text = ""
+    marker.unordered_list_marker = true
+  end
+  render.fragments[1] = marker
+  return render
+end
+
 local function optimistic_source_render(view, render_line, current_text, code)
+  if not code then
+    local list_render = optimistic_list_marker_render(view, render_line, current_text)
+    if list_render then return list_render end
+  end
   local font
   for _, fragment in ipairs(render_line and render_line.fragments or {}) do
     if fragment.font and fragment.text and fragment.text ~= "" then
@@ -3371,6 +3462,10 @@ local function capture_optimistic_renders(view, transaction)
         local split = combined == current and split_optimistic_render(transformed, combined) or nil
         if split and #split == new_line2 - new_line1 + 1 then
           for i, render in ipairs(split) do
+            local optimistic_marker = optimistic_list_marker_render(
+              view, transformed, render.source_text
+            )
+            if optimistic_marker then render = optimistic_marker end
             local render_height = render_line_metric_height(view, render)
             next_lines[new_line1 + i - 1] = {
               revision = view.doc.text_revision, source_text = render.source_text,
@@ -3465,6 +3560,44 @@ local function capture_optimistic_renders(view, transaction)
           cached.render_line ~= false and cached.render_line or nil,
           retained_metric_height(previous_metric_state, old_line)
         )
+      end
+      for _, changed in ipairs(ordered) do
+        local old_line1 = changed.old_line1 or 1
+        local old_line2 = changed.old_line2 or old_line1
+        local new_line1 = changed.new_line1 or old_line1
+        local new_line2 = changed.new_line2 or new_line1
+        local fallback_capture = pre_edit_lines[old_line1]
+          or pre_edit_lines[old_line2]
+        for new_line = new_line1, new_line2 do
+          if not next_lines[new_line] then
+            local current = (view.doc.lines[new_line] or ""):gsub("\n$", "")
+            local exact
+            for old_line = old_line1, old_line2 do
+              local captured = pre_edit_lines[old_line]
+              if captured and captured.render_line and captured.source_text == current then
+                exact = captured
+                break
+              end
+            end
+            local captured = exact or fallback_capture
+            if captured and captured.render_line then
+              local render = exact and clone_render_line(captured.render_line)
+                or optimistic_source_render(
+                  view, captured.render_line, current,
+                  owner.fence_service and owner.fence_service:contains_line(old_line1)
+                )
+              local height = captured.height or render_line_metric_height(view, render)
+              next_lines[new_line] = {
+                revision = view.doc.text_revision,
+                source_text = current,
+                render_line = render,
+                height = height,
+                row_heights = exact and captured.row_heights or nil,
+              }
+              next_metric_state.heights[new_line] = height
+            end
+          end
+        end
       end
     end
     owner.optimistic_lines = next_lines

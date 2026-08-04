@@ -857,6 +857,62 @@ test.describe("Markdown Live Editor", function()
     test.not_nil(view:get_line_render(6), "a shifted visible heading flashed as raw source")
   end)
 
+  test.it("keeps multi-cursor list rows represented while semantics are pending", function()
+    local view, doc = make_view("- first\n- second\nplain", "pending-multicursor-list.md")
+    doc:set_selection(1, #doc.lines[1])
+    doc:add_selection(2, #doc.lines[2])
+    refresh(view)
+    local old_active = core.active_view
+    core.active_view = view
+    command.perform("doc:newline")
+    core.active_view = old_active
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    for line = 1, 4 do
+      test.not_nil(view:get_line_render(line), "list row %d disappeared while parsing" .. line)
+    end
+  end)
+
+  test.it("keeps a new Markdown list marker rendered while semantics are pending", function()
+    local view, doc = make_view("- item\nplain", "pending-list-marker.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    doc:set_selection(1, #doc.lines[1])
+    local old_active = core.active_view
+    core.active_view = view
+    command.perform("doc:newline")
+    core.active_view = old_active
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    local marker = test.not_nil(view:get_line_render(2)).fragments[1]
+    test.ok(marker.unordered_list_marker, "new list marker lost its semantic marker")
+    test.not_nil(marker.widget, "new list marker lost its bullet widget")
+  end)
+
+  test.it("keeps optimistic task and parenthesized list markers rendered", function()
+    local cases = {
+      { source = "- [ ] item", field = "markdown_task_checkbox" },
+      { source = "3) item", field = "ordered_list_marker" },
+    }
+    for _, item in ipairs(cases) do
+      local view, doc = make_view(item.source .. "\nplain", "pending-list-marker-types.md")
+      doc:set_selection(2, 1)
+      refresh(view)
+      doc:set_selection(1, #doc.lines[1])
+      local old_active = core.active_view
+      core.active_view = view
+      command.perform("doc:newline")
+      core.active_view = old_active
+
+      test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+      local marker
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(2)).fragments or {}) do
+        if fragment[item.field] then marker = fragment break end
+      end
+      test.not_nil(marker, "optimistic marker missing for " .. item.source)
+    end
+  end)
+
   test.it("keeps a formatted row stable when one edit crosses rendered fragments", function()
     local view, doc = make_view("Before **bold** after\nplain", "pending-cross-fragment.md")
     view:set_wrapping_enabled(true)
