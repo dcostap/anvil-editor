@@ -3473,7 +3473,28 @@ local function capture_pre_edit_renders(view, change)
   local visible_line1, visible_line2
   if structural and view.get_visible_line_range then
     visible_line1, visible_line2 = view:get_visible_line_range()
-    for line = visible_line1, visible_line2 do lines[line] = true end
+    local structural_shift = 0
+    for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
+      structural_shift = structural_shift + math.abs(range.line_delta or 0)
+    end
+    if structural_shift == 0 then
+      for _, edit in ipairs(transaction and transaction.edits or {}) do
+        local inserted = 0
+        for _ in (edit.text or ""):gmatch("\n") do inserted = inserted + 1 end
+        local removed = math.max(0, (edit.line2 or edit.line1) - edit.line1)
+        structural_shift = structural_shift + math.abs(inserted - removed)
+      end
+    end
+    -- A structural edit can expose one or more previously off-screen lines
+    -- at either edge of the viewport. Capture a bounded context around the
+    -- old visible range so those shifted rows can keep their presentation
+    -- while the semantic parser catches up.
+    local visible_span = math.max(1, visible_line2 - visible_line1 + 1)
+    local context = math.min(structural_shift, visible_span)
+    local capture_line1 = math.max(1, visible_line1 - context)
+    local capture_line2 = math.min(#view.doc.lines, visible_line2 + context)
+    for line = capture_line1, capture_line2 do lines[line] = true end
+    visible_line1, visible_line2 = capture_line1, capture_line2
   end
   owner.pre_edit_lines = {}
   local captured, fallback_count = 0, 0

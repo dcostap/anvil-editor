@@ -1024,7 +1024,7 @@ test.describe("Markdown Live Editor", function()
     end
     local source = table.concat(source_lines, "\n")
     local view, doc = make_view(source, "pending-nested-task-enter.md")
-    view.size.y = 400
+    view.size.y = view:get_line_height() * 2
     view:set_wrapping_enabled(false)
     doc:set_selection(2, 1)
     refresh(view)
