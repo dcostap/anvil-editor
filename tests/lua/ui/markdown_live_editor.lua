@@ -30,6 +30,14 @@ local function wait_status(instance, wanted, timeout)
   return instance.status == wanted
 end
 
+local function wait_until(predicate, timeout)
+  local deadline = system.get_time() + (timeout or 1)
+  while not predicate() and system.get_time() < deadline do
+    coroutine.yield(0.01)
+  end
+  return predicate()
+end
+
 local function make_view(text, filename)
   local doc = Doc(filename or "note.md", filename or "note.md", true)
   doc:insert(1, 1, text)
@@ -207,7 +215,12 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_line_render(2), nil)
     test.same(view:get_selection_state().selections, selection.selections)
     test.equal(view.scroll.y, 11)
-    test.ok(view:get_h_scrollable_size() > live_width)
+    test.ok(
+      wait_until(function()
+        return view:get_h_scrollable_size() > live_width
+      end),
+      "expected Source Mode horizontal extent scan to complete"
+    )
     local feature_state = test.not_nil(view:get_state().owned_features)
 
     local split = DocView(doc)
