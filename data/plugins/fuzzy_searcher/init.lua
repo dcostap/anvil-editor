@@ -2104,8 +2104,8 @@ local function command_preview_parts(name)
       preview = "not inside project"
     end
   elseif name == "user:copy-project-path" then
-    local display = path and project_paths.display_path(path)
-    preview = display and display.text
+    local project = core.root_project and core.root_project()
+    preview = project and project.path
   elseif name == "user:copy-filename" then
     preview = path and basename(path)
   end

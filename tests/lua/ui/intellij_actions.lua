@@ -192,16 +192,14 @@ test.describe("IntelliJ actions batch behavior", function()
     if not ok then error(err) end
   end)
 
-  test.it("copies the active file's project path", function(context)
+  test.it("copies the Root Project path regardless of the focused file", function(context)
     context.temp_root = join_path(core.root_project().path, "intellij-actions-project-path")
     local shared_root = join_path(context.temp_root, "shared")
-    local file_path = join_path(shared_root, "main.lua")
+    local external_file_path = join_path(shared_root, "main.lua")
+    local project_file_path = join_path(context.temp_root, "project.lua")
     test.ok(common.mkdirp(shared_root))
-    write_file(file_path, "return true\n")
-
-    local doc = track(context, "docs", core.open_doc(file_path))
-    local view = track(context, "views", core.root_panel:open_doc(doc))
-    core.set_active_view(view)
+    write_file(external_file_path, "return true\n")
+    write_file(project_file_path, "return true\n")
 
     project_paths.configure_project {
       external = {
@@ -214,8 +212,17 @@ test.describe("IntelliJ actions batch behavior", function()
     context.original_set_clipboard = system.set_clipboard
     system.set_clipboard = function(text) copied = text end
 
+    local external_doc = track(context, "docs", core.open_doc(external_file_path))
+    local external_view = track(context, "views", core.root_panel:open_doc(external_doc))
+    core.set_active_view(external_view)
     test.ok(command.perform("user:copy-project-path"))
-    test.equal(copied, "shared" .. PATHSEP .. "main.lua")
+    test.equal(copied, core.root_project().path)
+
+    local project_doc = track(context, "docs", core.open_doc(project_file_path))
+    local project_view = track(context, "views", core.root_panel:open_doc(project_doc))
+    core.set_active_view(project_view)
+    test.ok(command.perform("user:copy-project-path"))
+    test.equal(copied, core.root_project().path)
   end)
 
   test.it("open terminal command uses the active file directory", function(context)

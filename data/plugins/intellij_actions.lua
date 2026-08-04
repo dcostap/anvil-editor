@@ -10,7 +10,6 @@ local config = require "core.config"
 local Doc = require "core.doc"
 local Node = require "core.node"
 local file_context = require "core.file_context"
-local project_paths = require "core.project_paths"
 local navigation_history = require "plugins.navigation_history"
 
 local function can_edit(dv, reason)
@@ -335,15 +334,14 @@ local function copy_relative_filepath(dv)
   copy_text_to_clipboard("relative filepath", common.relative_path(root_path, path):gsub("\\", "/"))
 end
 
-local function copy_project_path(dv)
-  local path = active_file_or_error(dv)
-  if not path then return end
-  local display = project_paths.display_path(path)
-  if not display or not display.text then
-    core.error("Could not determine project path: %s", path)
+local function copy_project_path()
+  local project = core.root_project and core.root_project()
+  local path = project and project.path
+  if not path or path == "" then
+    core.error("No Root Project")
     return
   end
-  copy_text_to_clipboard("project path", display.text)
+  copy_text_to_clipboard("project path", path)
 end
 
 local function copy_filename(dv)
@@ -1377,6 +1375,10 @@ end, {
   end,
 })
 
+command.add(nil, {
+  ["user:copy-project-path"] = copy_project_path,
+})
+
 command.add(function(target)
   if type(target) == "string" and target ~= "" then return true, target end
   local view = core.active_view
@@ -1385,7 +1387,6 @@ end, {
   ["user:copy-absolute-filepath"] = copy_absolute_filepath,
   ["user:copy-absolute-filepath-with-line"] = copy_absolute_filepath_with_line,
   ["user:copy-relative-filepath"] = copy_relative_filepath,
-  ["user:copy-project-path"] = copy_project_path,
   ["user:copy-filename"] = copy_filename,
   ["user:open-file-as-raw-text"] = open_file_as_raw_text,
   ["user:open-file-in-associated-program"] = open_file_in_associated_program,
