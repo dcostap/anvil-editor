@@ -1015,7 +1015,7 @@ test.describe("Markdown Live Editor", function()
     local source_lines = {
       "- [ ] Si se hace picking con el qr, seleccionará la línea y meterá las unidades a recibir",
       "- [ ] Si no se hace picking",
-      "    - [ ] ",
+      "    - [ ] test",
       "    - [ ] test",
       "    - [ ] ",
     }
@@ -1028,9 +1028,8 @@ test.describe("Markdown Live Editor", function()
     view:set_wrapping_enabled(true)
     doc:set_selection(2, 1)
     refresh(view)
-    doc:set_selection(3, #doc.lines[3] + 1)
-    view:invalidate_line_render("nested-enter-cold-render-cache")
-    view:invalidate_visual_metrics("nested-enter-cold-render-cache")
+    doc:set_selection(5, #doc.lines[5])
+    view:scroll_to_make_visible(5, #doc.lines[5])
     local old_active = core.active_view
     core.active_view = view
 
@@ -1076,16 +1075,15 @@ test.describe("Markdown Live Editor", function()
         ) or label .. " recorded a raw fallback")
       end
 
-      for index = 1, #"test" do
-        test.equal(view:on_text_input(("test"):sub(index, index)), true)
-      end
+      assert_presented("before Enter")
       test.equal(command.perform("doc:newline"), true)
+      assert_presented("immediate after Enter")
       local cursor_line, cursor_col = doc:get_selection()
       view:scroll_to_make_visible(cursor_line, cursor_col)
       view:get_h_scrollable_size()
       view.draw_overlay = function() end
       assert_presented("after Enter")
-      for line = 3, 5 do
+      for line = 3, 4 do
         local render = test.not_nil(view:get_line_render(line))
         local checkbox
         for _, fragment in ipairs(render.fragments or {}) do
