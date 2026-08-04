@@ -2064,8 +2064,13 @@ function core.get_view_title(view)
 end
 
 
-function core.compose_window_title(title)
-  return (title == "" or title == nil) and "Anvil" or title .. " - Anvil"
+---Return the label supplied to the operating system for the Anvil window.
+function core.get_window_title()
+  local project = core.root_project and core.root_project()
+  if project and project.path and project.path ~= "" then
+    return common.basename(project.path)
+  end
+  return "Anvil"
 end
 
 local draw_stats_fps = 0
@@ -2481,9 +2486,9 @@ function core.step(next_frame_time, options)
   end
 
   -- update window title
-  local current_title = core.get_view_title(core.active_view)
-  if current_title ~= nil and current_title ~= core.window_title then
-    system.set_window_title(core.window, core.compose_window_title(current_title))
+  local current_title = core.get_window_title()
+  if current_title ~= core.window_title then
+    system.set_window_title(core.window, current_title)
     core.window_title = current_title
   end
 
