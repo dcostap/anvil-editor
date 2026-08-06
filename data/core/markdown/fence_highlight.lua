@@ -518,10 +518,12 @@ function Service:on_text_transaction(transaction)
       block.body_line2 = map_old_line(old_body_line2, "end")
       block.closing_line = old_closing and map_old_line(old_closing, "end") or nil
     end
+    -- Even an edit entirely before this block changes the Document revision.
+    -- Its mapped coordinates belong to that new revision immediately.
+    block.source_revision = doc.text_revision
 
     if intersects then
       affected = true
-      block.source_revision = doc.text_revision
       if structural then
         block.structurally_unsafe = true
         block.retain_after_structure = retain_after_structure
@@ -781,6 +783,28 @@ function Service:peek_line_tokens(node, line)
   end
 end
 
+function Service:peek_line_tokens_at_line(line)
+  if self.closed then return nil end
+  for _, block in pairs(self.blocks) do
+    if line >= block.body_line1 and line <= block.body_line2
+      and block.source_revision == (self:doc() and self:doc().text_revision)
+      and block.tokenizer_generation == self.tokenizer_generation
+      and not block.structurally_unsafe
+    then
+      local relative = line - block.body_line1 + 1
+      if not block.unsafe_from or relative < block.unsafe_from then
+        local entry = block.lines[relative]
+        local doc = self:doc()
+        if entry and entry.complete and doc
+          and entry.text == doc:get_utf8_line(line)
+        then
+          return entry
+        end
+      end
+    end
+  end
+end
+
 function Service:line_generation(node, line)
   local entry = self:peek_line_tokens(node, line)
   if entry then return entry.generation end
@@ -801,7 +825,7 @@ end
 
 ---Returns whether a line belonged to a known fenced block in the most recent
 ---published semantics. The block coordinates are transaction-adjusted, so
----this remains suitable for optimistic presentation while a reparse is
+---this remains suitable for pending presentation while a reparse is
 ---pending.
 function Service:contains_line(line)
   for _, block in pairs(self.blocks) do

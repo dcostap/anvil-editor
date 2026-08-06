@@ -11,6 +11,37 @@ Implemented July 29, 2026.
 
 `tests/lua/benchmarks/markdown_semantic_model.lua` also reports a normalized 60-line semantic-node query.
 
+The semantic-model benchmark also exercises character insertion, newline
+insertion, list indentation, delimiter creation, and a ten-line paste at
+10 KiB, 100 KiB, and 1 MiB. A focused August 6, 2026 run measured native
+publication work at roughly 1–2 ms for 10 KiB, 6–14 ms for 100 KiB, and
+78–145 ms for 1 MiB. End-to-end publication remained quantized by worker
+scheduling and the edit debounce. Ordinary editing therefore keeps the
+asynchronous semantic model; the Live Preview projection must present the
+current edit safely instead of exposing a raw-source frame while it waits.
+
+The focused Live Preview benchmarks on the same build measured cached 100 KiB
+viewport latency at 0.225 ms p95 / 0.315 ms p99 and caret-transition latency
+at 0.234 ms p95 / 0.414 ms p99. Cold
+whole-Document metric discovery for 100 KiB took 39.1 ms, followed by 3.7 ms
+to render 60 rows. A 25 KiB semantic edit reached committed publication in
+98.2 ms including debounce and worker scheduling. Multi-fragment wrapping of
+a 60 KiB rendered line took 5.5 ms. The one-pass provisional fence/comment
+topology scan measured 12.3 ms p95 / 13.0 ms p99 for 1 MiB after adding
+display-math, frontmatter, and raw-HTML ownership. Cached interactive
+rendering has ample headroom, but cold metric discovery and semantic
+publication do not; pending
+presentation therefore remains a required correctness path rather than an
+optional optimization.
+
+The complete synchronous edit-to-pending-presentation path for ordinary
+100 KiB character edits measured 3.2 ms p95 / 10.2 ms p99 after pre-edit
+capture stopped forcing a cold whole-Document metric rebuild. Pre-edit capture
+itself measured 0.74 ms p95 and projection measured 0.48 ms p95. With wrapping
+enabled, the same path measured 3.4 ms p95 / 7.3 ms p99. A visible-bounded
+structural edit in a 1 MiB Document measured 7.4 ms. These paths leave
+substantial frame headroom while asynchronous semantic publication proceeds.
+
 ## Native text layout
 
 Fonts expose `font:text_layout(text, options)`. The returned native layout stores UTF-8 byte boundaries and cumulative advances and provides:

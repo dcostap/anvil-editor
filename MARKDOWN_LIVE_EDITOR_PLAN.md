@@ -409,10 +409,10 @@ The selected execution path must define:
 - worker/native-job protocol when parsing or publication can exceed the synchronous frame budget
 - revision, filename, syntax, and link-root checks before publication
 - stale-result disposal without touching closed Documents/Editors
-- behavior while a fresh parse is pending: retain unaffected old ranges, show changed/uncertain ranges raw, and never hide syntax from a stale snapshot
+- behavior while a fresh parse is pending: retain only revision-mapped, context-safe presentation; rebuild changed/uncertain ranges from current source without a transient raw-source frame; and never hide syntax from a stale snapshot
 - shutdown and test isolation
 
-`core.add_thread()` is cooperative and cannot preempt a long native parser call. A synchronous native path is acceptable only if end-to-end parse **and publication** stay within the measured hard budget for the selected maximum synchronous input. Larger/slow inputs must use a worker/native job or immediately remain raw while background reconciliation completes.
+`core.add_thread()` is cooperative and cannot preempt a long native parser call. A synchronous native path is acceptable only if end-to-end parse **and publication** stay within the measured hard budget for the selected maximum synchronous input. Larger/slow inputs must use a worker/native job and current-source pending projection while background reconciliation completes.
 
 ## Supported-feature tiers
 
@@ -1004,7 +1004,7 @@ Exit gate: known gaps reproduce deterministically and the current prototype can 
 
 ### Phase 1: parser and semantic-model spike
 
-**Completed July 10, 2026.** Tree-sitter Markdown 0.5.3 was selected and the evidence is recorded in `MARKDOWN_PARSER_BACKEND.md`. The worker-backed composite parser, revision-checked per-Document semantic model, exact-range compatibility fixtures, request coalescing/cancellation, pending raw fallback, persistent incremental block/inline and block-capture reuse, edit-mapped stable semantic IDs, coalesced changed-line publication, indexed bounded line queries, and native Wikilink/embed/highlight/comment layer are implemented. Repeatable 100 KiB/1 MiB measurements are recorded in `MARKDOWN_OBSIDIAN_EXTENSIONS.md`; final correctness-gated 100 KiB runs produced a 17–18 ms native total, slightly above the provisional 16 ms latency target. Phase 1 therefore calibrates the accepted budget to a 20 ms background publication: no parser/adoption work runs synchronously, visible-result queries remain below 0.05 ms, and the 1 MiB path stays background/cancellable and bounded at adoption.
+**Completed July 10, 2026; pending presentation revised August 6, 2026.** Tree-sitter Markdown 0.5.3 was selected and the evidence is recorded in `MARKDOWN_PARSER_BACKEND.md`. The worker-backed composite parser, revision-checked per-Document semantic model, exact-range compatibility fixtures, request coalescing/cancellation, current-source pending projection, persistent incremental block/inline and block-capture reuse, edit-mapped stable semantic IDs, coalesced changed-line publication, indexed bounded line queries, and native Wikilink/embed/highlight/comment layer are implemented. Repeatable 100 KiB/1 MiB measurements are recorded in `MARKDOWN_OBSIDIAN_EXTENSIONS.md`; final correctness-gated 100 KiB runs produced a 17–18 ms native total, slightly above the provisional 16 ms latency target. Phase 1 therefore calibrates the accepted budget to a 20 ms background publication: no parser/adoption work runs synchronously, visible-result queries remain below 0.05 ms, and the 1 MiB path stays background/cancellable and bounded at adoption.
 
 - Build an independent compatibility fixture corpus from CommonMark/GFM/official Obsidian syntax examples without copying large documentation bodies.
 - Pin/vendor and compile the smallest viable MD4C integration through Meson; publish one exact source-ranged fixture through an Anvil native API and native test.
@@ -1012,7 +1012,7 @@ Exit gate: known gaps reproduce deterministically and the current prototype can 
 - Define native result memory ownership, compact snapshot serialization/querying, worker job protocol, request coalescing, cancellation/supersession, and stale-result disposal.
 - Measure native parse plus publication, not parser time alone, synchronously and through the worker path.
 - Select one backend and document why; remove the losing experimental integration rather than retaining two parser stacks.
-- Implement Document semantic model with revision checking, pending-state raw fallback, and bounded adoption work.
+- Implement Document semantic model with revision checking, current-source pending projection, and bounded adoption work.
 - Cover CommonMark delimiter edge cases, nesting, escapes, code suppression, tables, frontmatter, Unicode, CRLF, and incomplete typing.
 
 Exit gate: the selected parser is reproducibly built by Meson, passes native plus Lua-facing compatibility tests, exposes exact source ranges, survives pathological fixtures, coalesces/cancels stale work, publishes a compact revision-checked snapshot without unbounded UI adoption, and meets the measured synchronous/background budgets.
@@ -1115,7 +1115,7 @@ Each implemented slice needs its own public behavior tests, mapping tests, focus
 
 ### Phase 8: promotion and cleanup
 
-**Release stabilization started July 10, 2026.** Semantic identities are now reconciled across adjacent publications by native identity and exact semantic source range, and duplicate equivalent captures are suppressed during bounded adoption. The focused semantic-model and Markdown Live Editor suites pass, as does the complete 633-test Lua runtime suite. Global default promotion remains intentionally withheld: the complete Lua UI target still encounters the previously documented SDL event-queue saturation/timeout outside the focused Markdown Live Preview suite.
+**Release stabilization started July 10, 2026.** Semantic identities are now reconciled across adjacent publications by native identity and exact semantic source range, and duplicate equivalent captures are suppressed during bounded adoption. The focused semantic-model and Markdown Live Preview suites pass, as does the complete 633-test Lua runtime suite. Global default promotion remains intentionally withheld: the complete Lua UI target still encounters the previously documented SDL event-queue saturation/timeout outside the focused Markdown Live Preview suite.
 
 - Run targeted and full Anvil suites.
 - Run GUI smoke and manual scenario matrix under D3D11 and software rendering where relevant.

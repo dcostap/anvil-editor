@@ -697,9 +697,14 @@ function Index:rebuild_async(reason)
           if self.watcher then self:adopt_manifest_watch_dirs(manifest, self.watcher, self.watcher_serial) end
           self.status, self.reason = "ready", nil
           self.generation = self.generation + 1
-          self:notify("ready")
-          core.redraw = true
           local vault_summary = snapshot:summary()
+          self:notify("ready", {
+            reason = rebuild_reason,
+            notes_reused = vault_summary.reused_notes,
+            notes_rebuilt = vault_summary.rebuilt_notes,
+            bytes_read = vault_summary.bytes_read,
+          })
+          core.redraw = true
           local elapsed_ms = (system.get_time() - started_at) * 1000
           self.diagnostics.last_rebuild = {
             reason = rebuild_reason,

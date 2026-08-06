@@ -329,7 +329,10 @@ keymap.add_direct({
 if config.markdown_live_editor == nil then config.markdown_live_editor = true end
 if config.markdown_live_reveal_mode == nil then config.markdown_live_reveal_mode = "construct" end
 if config.markdown_live_interactive_tables == nil then
-  config.markdown_live_interactive_tables = true
+  -- Keep advanced table projection out of the ordinary editing path while
+  -- Markdown Live Preview is being stabilized. The feature remains available
+  -- as an explicit opt-in and its focused tests enable it directly.
+  config.markdown_live_interactive_tables = false
 end
 if config.markdown_live_heading_line_height == nil then
   config.markdown_live_heading_line_height = 1.08

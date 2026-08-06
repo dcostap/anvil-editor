@@ -43,4 +43,4 @@ Before implementation:
 - the UI lifecycle test remained attached until manual `refresh_view()`; and
 - the owned-feature close test failed because `DocView:add_owned_feature()` did not exist.
 
-After implementation, the focused Document metadata, Markdown model, and Markdown Live Editor UI suites pass, including split-view and close cleanup coverage.
+After implementation, the focused Document metadata, Markdown model, and Markdown Live Preview UI suites pass, including split-view and close cleanup coverage.

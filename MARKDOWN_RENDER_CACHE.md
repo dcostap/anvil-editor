@@ -38,4 +38,4 @@ These are counters, not timing assertions.
 
 Before implementation, the baseline caret test recomputed all 80 Document rows and repeated line rendering across coordinate mapping and draw paths. The updated tests failed with 80 recomputations and multiple provider calls. After implementation, the same caret move recomputes exactly the old/new rows, and mapping plus drawing shares one provider render.
 
-Focused generic render-fragment, variable-row, Markdown baseline, and Markdown Live Editor UI suites pass.
+Focused generic render-fragment, variable-row, Markdown baseline, and Markdown Live Preview UI suites pass.

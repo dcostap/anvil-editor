@@ -145,14 +145,16 @@ local function is_utf8_boundary(text, col)
   return byte < 0x80 or byte >= 0xC0
 end
 
-test.describe("Markdown Live Editor", function()
+test.describe("Markdown Live Preview", function()
   test.before_each(function(context)
     context.old_markdown_live_editor = config.markdown_live_editor
+    context.old_markdown_live_interactive_tables = config.markdown_live_interactive_tables
     config.markdown_live_editor = true
   end)
 
   test.after_each(function(context)
     config.markdown_live_editor = context.old_markdown_live_editor
+    config.markdown_live_interactive_tables = context.old_markdown_live_interactive_tables
   end)
 
   test.it("attaches only to Markdown DocViews", function()
@@ -239,13 +241,15 @@ test.describe("Markdown Live Editor", function()
     core.active_view = old_active
   end)
 
-  test.it("falls back to raw source while the first semantic snapshot is pending", function()
+  test.it("keeps formatted source presentation while the first semantic snapshot is pending", function()
     local view = make_view("# Title\n**bold**", "note.md")
     markdown.live_render.refresh_view(view)
     local instance = test.not_nil(markdown_model.peek(view.doc))
     test.equal(instance.status, "pending")
-    test.equal(view:get_line_render(1), nil)
-    test.equal(view:get_line_render(2), nil)
+    test.equal(visible_render_text(view, 1), "Title")
+    test.equal(visible_render_text(view, 2), "bold")
+    test.equal(view:get_line_render(1).markdown_provenance, "unavailable")
+    test.equal(view:get_line_render(2).markdown_provenance, "unavailable")
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.not_nil(view:get_line_render(1))
     test.not_nil(view:get_line_render(2))
@@ -267,6 +271,164 @@ test.describe("Markdown Live Editor", function()
     test.equal(instance.status, "pending")
     test.not_nil(view:get_line_render(1))
     test.equal(visible_render_text(view, 1), "Before bold after!?")
+  end)
+
+  test.it("presents a newly completed highlight without a raw-source frame", function()
+    local view, doc = make_view("mark\nplain", "pending-highlight.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    doc:apply_edits({
+      { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "==" },
+      { line1 = 1, col1 = 5, line2 = 1, col2 = 5, text = "==" },
+    }, { type = "highlight", merge_cursors = false })
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 1), "mark")
+    local pending = test.not_nil(view:get_line_render(1))
+    test.equal(pending.source_text, "==mark==")
+    test.equal(pending.markdown_document_revision, doc.text_revision)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 1), "mark")
+  end)
+
+  test.it("presents a newly completed Markdown link without a raw-source frame", function()
+    local view, doc = make_view("Alias\nplain", "pending-link.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    doc:apply_edits({
+      { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "[" },
+      { line1 = 1, col1 = 6, line2 = 1, col2 = 6, text = "](Target.md)" },
+    }, { type = "link", merge_cursors = false })
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 1), "Alias")
+    local pending = test.not_nil(view:get_line_render(1))
+    test.equal(pending.source_text, "[Alias](Target.md)")
+    for _, fragment in ipairs(pending.fragments or {}) do
+      test.equal(fragment.on_mouse_pressed, nil)
+    end
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 1), "Alias")
+  end)
+
+  test.it("reprojects references before a removed definition while pending", function()
+    local view, doc = make_view(
+      "[Alias][ref]\n\n[ref]: Target.md\nplain",
+      "pending-reference-definition.md"
+    )
+    doc:set_selection(4, 1)
+    refresh(view)
+    test.ok(wait_until(function()
+      return visible_render_text(view, 1) == "Alias"
+    end, 5))
+    test.equal(visible_render_text(view, 1), "Alias")
+
+    doc:remove(3, 1, 3, #doc.lines[3])
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 1), "[Alias][ref]")
+    local pending = test.not_nil(view:get_line_render(1))
+    test.equal(pending.markdown_document_revision, doc.text_revision)
+    for _, fragment in ipairs(pending.fragments or {}) do
+      test.equal(fragment.on_mouse_pressed, nil)
+    end
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 1), "[Alias][ref]")
+  end)
+
+  test.it("hides a newly completed inline comment while semantics are pending", function()
+    local view, doc = make_view("before hidden after\nplain", "pending-comment.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    doc:apply_edits({
+      { line1 = 1, col1 = 8, line2 = 1, col2 = 8, text = "%%" },
+      { line1 = 1, col1 = 14, line2 = 1, col2 = 14, text = "%%" },
+    }, { type = "comment", merge_cursors = false })
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 1), "before  after")
+    local pending = test.not_nil(view:get_line_render(1))
+    test.equal(pending.source_text, "before %%hidden%% after")
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 1), "before  after")
+  end)
+
+  test.it("presents a newly created blockquote without a raw-source frame", function()
+    local view, doc = make_view("body\nplain", "pending-blockquote.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    doc:insert(1, 1, "> ")
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 1), "│ body")
+    local pending = test.not_nil(view:get_line_render(1))
+    test.equal(pending.source_text, "> body")
+    test.equal(pending.markdown_document_revision, doc.text_revision)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 1), "│ body")
+  end)
+
+  test.it("presents a newly created callout without a raw-source frame", function()
+    local view, doc = make_view("Title\nplain", "pending-callout.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    doc:insert(1, 1, "> [!note]+ ")
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 1), "◆ ▾ Title")
+    local pending = test.not_nil(view:get_line_render(1))
+    test.equal(pending.source_text, "> [!note]+ Title")
+    test.equal(pending.markdown_document_revision, doc.text_revision)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 1), "◆ ▾ Title")
+  end)
+
+  test.it("presents a newly completed thematic break without a raw-source frame", function()
+    local view, doc = make_view("body\n\n**\nplain", "pending-rule.md")
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    doc:insert(3, 3, "*")
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    local pending = test.not_nil(view:get_line_render(3))
+    test.equal(visible_render_text(view, 3), "────────────────")
+    test.equal(pending.source_text, "***")
+    test.equal(pending.markdown_document_revision, doc.text_revision)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 3), "────────────────")
+  end)
+
+  test.it("reprojects a newly created Setext heading while semantics are pending", function()
+    local view, doc = make_view("Title\n\nplain", "pending-setext.md")
+    doc:set_selection(3, 1)
+    refresh(view)
+
+    doc:insert(2, 1, "=")
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    local pending_title = test.not_nil(view:get_line_render(1))
+    test.ok(pending_title.markdown_provenance ~= "retained")
+    test.equal(visible_render_text(view, 1), "Title")
+    test.equal(visible_render_text(view, 2), "")
+    local pending_font = test.not_nil(pending_title.fragments[1].font)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    local current_title = test.not_nil(view:get_line_render(1))
+    test.equal(current_title.markdown_provenance, "current")
+    test.equal(current_title.fragments[1].font:get_size(), pending_font:get_size())
   end)
 
   test.it("captures current presentation before an edit even after selection invalidation", function()
@@ -343,13 +505,13 @@ test.describe("Markdown Live Editor", function()
     end
     test.not_nil(semantic_fragment)
 
-    local heading_before = heading
+    local heading_id = heading.semantic_id
     local generation_before = instance.generation
     doc:insert(2, #doc.lines[2], "!")
-    test.equal(view:get_line_render(1), heading_before)
+    test.equal(test.not_nil(view:get_line_render(1)).semantic_id, heading_id)
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.ok(instance.generation > generation_before)
-    test.equal(view:get_line_render(1), heading_before)
+    test.equal(test.not_nil(view:get_line_render(1)).semantic_id, heading_id)
     test.equal(view:get_line_render(2).semantic_generation, instance.generation)
   end)
 
@@ -363,13 +525,15 @@ test.describe("Markdown Live Editor", function()
 
     local previous_generation = instance.generation
     doc:insert(1, 1, "inserted\n")
-    local optimistic = test.not_nil(view:get_line_render(4))
-    test.equal(optimistic.semantic_generation, instance.generation)
+    local pending = test.not_nil(view:get_line_render(4))
+    test.equal(pending.source_text, "# B")
+    test.equal(pending.markdown_document_revision, doc.text_revision)
+    test.ok(pending.markdown_provenance ~= "current")
     local split = DocView(doc)
     split.size.x, split.size.y = 500, 200
     split:set_wrapping_enabled(false)
     markdown.live_render.refresh_view(split)
-    test.equal(split:get_line_render(4), nil)
+    test.equal(visible_render_text(split, 4), "B")
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.ok(instance.generation > previous_generation)
     local published = test.not_nil(view:get_line_render(4))
@@ -469,7 +633,7 @@ test.describe("Markdown Live Editor", function()
     refresh(view)
     test.equal(view:get_col_x_offset(2, #"still hidden%%" + 1), 0)
     doc:remove(1, 1, 1, 2)
-    test.equal(view:get_line_render(2), nil)
+    test.equal(visible_render_text(view, 2), "still hidden%%")
     local instance = test.not_nil(markdown_model.peek(doc))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(
@@ -484,10 +648,71 @@ test.describe("Markdown Live Editor", function()
     refresh(view)
     test.equal(view:get_col_x_offset(2, #"secret" + 1), live_body_font(view):get_width("secret"))
     doc:remove(1, 9, 1, 10)
-    test.equal(view:get_line_render(2), nil)
+    test.equal(visible_render_text(view, 2), "")
+    test.equal(view:get_col_x_offset(2, #"secret" + 1), 0)
     local instance = test.not_nil(markdown_model.peek(doc))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(view:get_col_x_offset(2, #"secret" + 1), 0)
+  end)
+
+  test.it("lets a newly formed comment own fence-looking lines while pending", function()
+    local view, doc = make_view("%x%\n```\n# hidden\n```\n%%\nplain", "pending-comment-fence.md")
+    doc:set_selection(6, 1)
+    refresh(view)
+
+    doc:remove(1, 2, 1, 3)
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 2), "")
+    test.equal(visible_render_text(view, 3), "")
+    test.equal(visible_render_text(view, 4), "")
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 3), "")
+  end)
+
+  test.it("does not form provisional comments inside fenced code", function()
+    local view, doc = make_view("```\nprint('%x%')\n```\nplain", "pending-fence-comment.md")
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    doc:remove(2, 9, 2, 10)
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 2), "print('%%')")
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 2), "print('%%')")
+  end)
+
+  test.it("does not extend provisional comments from inline code spans", function()
+    local view, doc = make_view("`value %x%` after\nplain", "pending-code-comment.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    doc:remove(1, 9, 1, 10)
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 1), "value %% after")
+    test.equal(visible_render_text(view, 2), "plain")
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 2), "plain")
+  end)
+
+  test.it("does not form provisional comments inside display math", function()
+    local view, doc = make_view("$$\nvalue %x%\n$$\nplain", "pending-math-comment.md")
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    doc:remove(2, 8, 2, 9)
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 2), "value %%")
+    test.equal(visible_render_text(view, 4), "plain")
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 4), "plain")
   end)
 
   test.it("keeps a wrapped suffix rendered while typing after a literal percentage", function()
@@ -521,7 +746,7 @@ test.describe("Markdown Live Editor", function()
 
     doc:insert(1, 9, "x")
     test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
-    test.equal(view:get_line_render(2), nil)
+    test.equal(visible_render_text(view, 2), "secret")
   end)
 
   test.it("keeps a fenced suffix rendered while editing only the info string", function()
@@ -542,7 +767,7 @@ test.describe("Markdown Live Editor", function()
 
     doc:insert(1, 1, "x")
     test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
-    test.equal(view:get_line_render(2), nil)
+    test.equal(visible_render_text(view, 2), "code")
   end)
 
   test.it("applies semantic comments and escapes inside headings", function()
@@ -870,6 +1095,25 @@ test.describe("Markdown Live Editor", function()
     test.not_nil(view:get_line_render(6), "a shifted visible heading flashed as raw source")
   end)
 
+  test.it("projects uncaptured lines requested while semantics are pending", function()
+    local lines = { "start" }
+    for line = 2, 199 do lines[line] = "prose line " .. line end
+    lines[200] = "# Ending heading"
+    local view, doc = make_view(table.concat(lines, "\n"), "pending-offscreen.md")
+    view.size.y = live_body_font(view):get_height() * 4
+    doc:set_selection(1, 6)
+    refresh(view)
+
+    view:on_text_input("!")
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    view:invalidate_line_render("pending-offscreen-projection")
+    test.equal(visible_render_text(view, 200), "Ending heading")
+    local pending = test.not_nil(view:get_line_render(200))
+    test.equal(pending.source_text, "# Ending heading")
+    test.equal(pending.markdown_document_revision, doc.text_revision)
+  end)
+
   test.it("keeps multi-cursor list rows represented while semantics are pending", function()
     local view, doc = make_view("- first\n- second\nplain", "pending-multicursor-list.md")
     doc:set_selection(1, #doc.lines[1])
@@ -921,7 +1165,7 @@ test.describe("Markdown Live Editor", function()
     test.not_nil(marker.widget, "split list suffix lost its bullet widget")
   end)
 
-  test.it("keeps optimistic task and parenthesized list markers rendered", function()
+  test.it("keeps pending task and parenthesized list markers rendered", function()
     local cases = {
       { source = "- [ ] item", field = "markdown_task_checkbox" },
       { source = "3) item", field = "ordered_list_marker" },
@@ -941,7 +1185,7 @@ test.describe("Markdown Live Editor", function()
       for _, fragment in ipairs(test.not_nil(view:get_line_render(2)).fragments or {}) do
         if fragment[item.field] then marker = fragment break end
       end
-      test.not_nil(marker, "optimistic marker missing for " .. item.source)
+      test.not_nil(marker, "pending marker missing for " .. item.source)
     end
   end)
 
@@ -1035,6 +1279,27 @@ test.describe("Markdown Live Editor", function()
     core.active_view = view
 
     local ok, err = pcall(function()
+      local function checkbox_x(line)
+        local render = test.not_nil(view:get_line_render(line))
+        for _, fragment in ipairs(render.fragments or {}) do
+          if fragment.markdown_task_checkbox and fragment.widget then
+            local old_draw_rounded_rect = renderer.draw_rounded_rect
+            local x
+            renderer.draw_rounded_rect = function(box_x)
+              x = x or box_x
+            end
+            local drew, draw_error = pcall(
+              fragment.widget.draw, fragment.widget, fragment,
+              0, 0, view:get_line_height()
+            )
+            renderer.draw_rounded_rect = old_draw_rounded_rect
+            test.ok(drew, draw_error)
+            return test.not_nil(x)
+          end
+        end
+        error("line " .. line .. " has no checkbox widget")
+      end
+
       local function draw_frame()
         local old_draw_rect = renderer.draw_rect
         local old_draw_text = renderer.draw_text
@@ -1077,6 +1342,7 @@ test.describe("Markdown Live Editor", function()
       end
 
       assert_presented("before Enter")
+      local nested_checkbox_x = checkbox_x(3)
       test.equal(command.perform("doc:newline"), true)
       assert_presented("immediate after Enter")
       local cursor_line, cursor_col = doc:get_selection()
@@ -1093,6 +1359,10 @@ test.describe("Markdown Live Editor", function()
         test.not_nil(checkbox, string.format(
           "line %d lost its task checkbox after Enter", line
         ))
+        test.equal(
+          checkbox_x(line), nested_checkbox_x,
+          string.format("line %d checkbox jumped horizontally after Enter", line)
+        )
       end
       coroutine.yield(0.01)
       assert_presented("frame after Enter")
@@ -1100,6 +1370,91 @@ test.describe("Markdown Live Editor", function()
         coroutine.yield(0.01)
         assert_presented("frame after Enter " .. frame)
       end
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("does not reveal neighboring task markers when completing an empty task", function()
+    local view, doc = make_view(table.concat({
+      "- [ ] informar FechaSuAlbaran. Obligado",
+      "- [ ] informar SuAlbaranNo Obligado",
+      "- [ ]",
+      "## Albaranes.",
+      "```sql",
+      "select CodigoEmpresa from CabeceraAlbaranProveedor",
+      "```",
+    }, "\n"), "task-reveal-isolation.md")
+    doc:set_selection(3, 6)
+    refresh(view)
+    local old_active = core.active_view
+    core.active_view = view
+
+    local ok, err = pcall(function()
+      for char in ("- [ ]"):gmatch(".") do
+        test.equal(view:on_text_input(char), true)
+      end
+      local instance = test.not_nil(markdown_model.peek(doc))
+      test.ok(wait_status(instance, "ready"), instance.reason)
+
+      for line = 1, 2 do
+        local _, fragments = collect_render_fragments(view, line)
+        local checkbox, source_marker
+        for _, fragment in ipairs(fragments) do
+          checkbox = checkbox or fragment.markdown_task_checkbox
+          source_marker = source_marker or fragment.markdown_task_source_marker
+        end
+        test.ok(checkbox, string.format(
+          "line %d lost its checkbox when another task marker was completed", line
+        ))
+        test.equal(source_marker, nil, string.format(
+          "line %d revealed another task's source marker", line
+        ))
+        test.equal(visible_render_text(view, line):find("[ ]", 1, true), nil)
+      end
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps a following heading's pending metric stable during an incomplete list marker", function()
+    local view, doc = make_view(table.concat({
+      "- [ ] informar FechaSuAlbaran. Obligado",
+      "- [ ] informar SuAlbaranNo Obligado",
+      "- [ ]",
+      "## Albaranes.",
+      "```sql",
+      "select CodigoEmpresa from CabeceraAlbaranProveedor",
+      "```",
+    }, "\n"), "task-heading-metric-stability.md")
+    view:set_wrapping_enabled(true)
+    doc:set_selection(3, 6)
+    refresh(view)
+    local old_active = core.active_view
+    core.active_view = view
+
+    local function heading_provider_height()
+      for _, entry in ipairs(view:visual_metric_provider_entries()) do
+        if entry.id == "markdown-live" and entry.provider.line_height then
+          return entry.provider:line_height(view, 4, { row_in_line = 1 })
+        end
+      end
+    end
+
+    local ok, err = pcall(function()
+      doc:set_selection(3, 1, 3, 6)
+      test.equal(command.perform("doc:backspace"), true)
+      local instance = test.not_nil(markdown_model.peek(doc))
+      test.ok(wait_status(instance, "ready"), instance.reason)
+
+      local expected_height = test.not_nil(heading_provider_height())
+      test.equal(view:on_text_input("-"), true)
+      test.equal(instance.status, "pending")
+      test.equal(
+        heading_provider_height(), expected_height,
+        "the provisional heading metric dropped while the parser was pending"
+      )
+      test.ok(wait_status(instance, "ready"), instance.reason)
     end)
     core.active_view = old_active
     if not ok then error(err, 0) end
@@ -1133,6 +1488,69 @@ test.describe("Markdown Live Editor", function()
     test.not_nil(view:get_line_render(1), "the edited row flashed as raw source")
   end)
 
+  test.it("keeps ordinary prose presented through typing, line edits, paste, and undo", function()
+    local view, doc = make_view(
+      "First paragraph with ordinary words.\nSecond paragraph stays visible.\nplain",
+      "pending-prose-editing.md"
+    )
+    view:set_wrapping_enabled(true)
+    doc:set_selection(3, 1)
+    refresh(view)
+    local old_active = core.active_view
+    core.active_view = view
+
+    local ok, err = pcall(function()
+      local function assert_presented(label)
+        local first, last = view:get_visible_line_range()
+        for line = first, last do
+          local render = test.not_nil(
+            view:get_line_render(line),
+            string.format("%s: line %d fell through to raw source", label, line)
+          )
+          test.ok(
+            render.markdown_provenance ~= "unavailable",
+            string.format("%s: line %d used unavailable source", label, line)
+          )
+        end
+      end
+      local function publish()
+        local instance = test.not_nil(markdown_model.peek(doc))
+        test.ok(wait_status(instance, "ready"), instance.reason)
+      end
+
+      doc:set_selection(1, 6)
+      test.equal(view:on_text_input(" edited"), true)
+      assert_presented("typing")
+      publish()
+
+      doc:set_selection(1, 13)
+      test.equal(command.perform("doc:newline"), true)
+      assert_presented("Enter")
+      publish()
+
+      local line, _ = doc:get_selection()
+      doc:set_selection(line, 1)
+      test.equal(command.perform("doc:backspace"), true)
+      assert_presented("Backspace")
+      publish()
+
+      doc:set_selection(2, 8)
+      local pasted = {}
+      for index = 1, 10 do pasted[index] = "pasted prose " .. index end
+      test.equal(view:on_text_input(table.concat(pasted, "\n")), true)
+      assert_presented("paste")
+      publish()
+
+      test.equal(command.perform("doc:undo"), true)
+      assert_presented("undo")
+      publish()
+      test.equal(command.perform("doc:redo"), true)
+      assert_presented("redo")
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps a paragraph rendered when deleting its following blank line", function()
     local view, doc = make_view(
       "A paragraph that must remain in the Live Preview font.\n\nFollowing paragraph.\n",
@@ -1151,6 +1569,24 @@ test.describe("Markdown Live Editor", function()
     )
   end)
 
+  test.it("retains unrelated visible rows during a local block-context edit", function()
+    local lines = { "- [ ] item", "- [ ] " }
+    for line = 3, 12 do lines[line] = "plain " .. line end
+    lines[13] = "### Unrelated heading"
+    local view, doc = make_view(table.concat(lines, "\n"), "local-context-retention.md")
+    view.size.y = 1200
+    doc:set_selection(2, 1)
+    refresh(view)
+    test.equal(visible_render_text(view, 13), "Unrelated heading")
+
+    doc:remove(2, 1, 2, #doc.lines[2])
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    local heading = test.not_nil(view:get_line_render(13))
+    test.equal(visible_render_text(view, 13), "Unrelated heading")
+    test.equal(heading.markdown_provenance, "retained")
+  end)
+
   test.it("does not retain prose formatting when a new fence changes its context", function()
     local view, doc = make_view("before\n*italic*\nafter\n", "new-fence-context.md")
     doc:set_selection(1, 1)
@@ -1164,6 +1600,105 @@ test.describe("Markdown Live Editor", function()
       visible_render_text(view, 3), "*italic*",
       "the newly fenced row retained its old prose semantics"
     )
+  end)
+
+  test.it("does not retain prose formatting when a new math block changes its context", function()
+    local view, doc = make_view("before\n*value*\n$$\nafter", "new-math-context.md")
+    doc:set_selection(4, 1)
+    refresh(view)
+    test.equal(visible_render_text(view, 2), "value")
+
+    doc:insert(2, 1, "$$\n")
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(
+      visible_render_text(view, 3), "*value*",
+      "the newly math-owned row retained its old prose semantics"
+    )
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 3), "*value*")
+  end)
+
+  test.it("does not retain prose formatting when frontmatter is created", function()
+    local view, doc = make_view("key: *value*\n---\n# Heading", "new-frontmatter.md")
+    doc:set_selection(3, 1)
+    refresh(view)
+    test.equal(visible_render_text(view, 1), "key: value")
+
+    doc:insert(1, 1, "---\n")
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(
+      visible_render_text(view, 2), "key: *value*",
+      "the newly frontmatter-owned row retained prose formatting"
+    )
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 2), "key: *value*")
+  end)
+
+  test.it("does not retain prose formatting when an HTML block is created", function()
+    local view, doc = make_view("before\n*value*\n</div>\nafter", "new-html-block.md")
+    doc:set_selection(4, 1)
+    refresh(view)
+    test.equal(visible_render_text(view, 2), "value")
+
+    doc:insert(2, 1, "<div>\n")
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(
+      visible_render_text(view, 3), "*value*",
+      "the newly HTML-owned row retained prose formatting"
+    )
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+  end)
+
+  test.it("keeps fenced-code background ownership after a structural edit above it", function()
+    local view, doc = make_view(
+      "before\n\n```lua\nprint('ok')\n```\nafter",
+      "shifted-fence-background.md"
+    )
+    doc:set_selection(6, 1)
+    refresh(view)
+
+    local markdown_decoration
+    for _, entry in ipairs(view:decoration_provider_entries()) do
+      if entry.id == "markdown-live" then
+        markdown_decoration = entry.provider
+        break
+      end
+    end
+    markdown_decoration = test.not_nil(markdown_decoration)
+    test.equal(
+      markdown_decoration:line_background(view, 4),
+      style.markdown_live_code_background
+    )
+    local code_x_offset = test.not_nil(view:get_line_render(4)).x_offset
+    view:invalidate_line_render("cold-shifted-fence")
+
+    doc:insert(1, 1, "inserted\n")
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(
+      markdown_decoration:line_background(view, 5),
+      style.markdown_live_code_background,
+      "the transaction-mapped fence lost its code background while semantics were pending"
+    )
+    test.equal(
+      visible_render_text(view, 4), "",
+      "the shifted opening fence flashed as raw source while semantics were pending"
+    )
+    test.equal(
+      visible_render_text(view, 6), "",
+      "the shifted closing fence flashed as raw source while semantics were pending"
+    )
+    test.equal(
+      test.not_nil(view:get_line_render(5)).x_offset, code_x_offset,
+      "the shifted fenced-code body jumped horizontally while semantics were pending"
+    )
+    test.equal(markdown_decoration:line_background(view, 7), nil)
   end)
 
   test.it("reveals a Wikilink at the caret position after its closing brackets", function()
@@ -1748,6 +2283,61 @@ test.describe("Markdown Live Editor", function()
     test.equal(child_task_x - parent_task_x, indent_step)
   end)
 
+  test.it("keeps formatted list content and source mappings through indentation", function()
+    local source = "- See [[Target|Alias]] now"
+    local view, doc = make_view(
+      "- Parent\n" .. source .. "\nplain",
+      "pending-list-indent-link.md"
+    )
+    doc:set_selection(3, 1)
+    refresh(view)
+
+    local before_body_x = view:get_col_x_offset(2, 3)
+    test.equal(visible_render_text(view, 2), "See Alias now")
+
+    doc:set_selection(2, 3)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("doc:indent"), true)
+      test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+
+      local indented = doc.lines[2]:gsub("\n$", "")
+      local indent = test.not_nil(indented:match("^([\t ]+)%- See"))
+      test.equal(indented:sub(#indent + 1), source)
+      test.equal(
+        visible_render_text(view, 2),
+        "See Alias now"
+      )
+      local pending = test.not_nil(view:get_line_render(2))
+      test.ok(
+        pending.markdown_provenance ~= "unavailable",
+        "list indentation used the unavailable source presentation"
+      )
+      test.equal(pending.markdown_document_revision, doc.text_revision)
+      for _, fragment in ipairs(pending.fragments or {}) do
+        test.equal(fragment.on_mouse_pressed, nil)
+        if fragment.widget then test.equal(fragment.widget.on_mouse_pressed, nil) end
+      end
+      local body_col = #indent + 3
+      test.ok(view:get_col_x_offset(2, body_col) > before_body_x)
+      local end_col = #indented + 1
+      local end_x = view:get_col_x_offset(2, end_col)
+      test.equal(view:get_x_offset_col(2, end_x), end_col)
+
+      local instance = test.not_nil(markdown_model.peek(doc))
+      test.ok(wait_status(instance, "ready"), instance.reason)
+      test.equal(visible_render_text(view, 2), "See Alias now")
+      local published = test.not_nil(view:get_line_render(2))
+      test.equal(published.markdown_provenance, "current")
+      test.equal(published.markdown_semantic_revision, doc.text_revision)
+      local published_end_x = view:get_col_x_offset(2, end_col)
+      test.equal(view:get_x_offset_col(2, published_end_x), end_col)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("toggles task checkboxes without moving the caret", function()
     local view, doc = make_view("- [ ] todo\nplain", "task-toggle.md")
     doc:set_selection(2, 3)
@@ -2132,6 +2722,7 @@ test.describe("Markdown Live Editor", function()
   end)
 
   test.it("presents inactive GFM tables as an aligned compact grid", function()
+    config.markdown_live_interactive_tables = true
     local view, doc = make_view("| Name | Value |\n| :--- | ---: |\n| one | two |\n\nplain", "table.md")
     doc:set_selection(5, 1)
     refresh(view)
@@ -2173,6 +2764,7 @@ test.describe("Markdown Live Editor", function()
   end)
 
   test.it("wraps long table cells inside aligned variable-height rows", function()
+    config.markdown_live_interactive_tables = true
     local view, doc = make_view(
       "| Command | Action |\n| --- | --- |\n"
         .. "| `/rp_campaign_status` | Show scene, turn, configuration, and Git state |\n"
@@ -2219,6 +2811,7 @@ test.describe("Markdown Live Editor", function()
   end)
 
   test.it("keeps empty table-cell source mappings valid", function()
+    config.markdown_live_interactive_tables = true
     local view, doc = make_view(
       "| A | B |\n| --- | --- |\n|   | value |\n\nplain",
       "empty-table-cell.md"
@@ -2769,6 +3362,15 @@ test.describe("Markdown Live Editor", function()
       view:update_wrap_cache()
       doc:set_selection(1, #fixture.source + 1)
       view:on_text_input(" with enough additional words to wrap onto several rows")
+
+      test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+      local pending = test.not_nil(view:get_line_render(1))
+      for _, fragment in ipairs(pending.fragments or {}) do
+        test.equal(fragment.on_mouse_pressed, nil)
+        if fragment.widget then
+          test.equal(fragment.widget.on_mouse_pressed, nil)
+        end
+      end
 
       command.perform("doc:move-to-previous-line")
       core.active_view = old_active

@@ -1784,7 +1784,10 @@ local commands = {
             local indent_end, normalized = dv.doc:get_line_indent(
               line_text, false
             )
-            local indent = select(1, dv.doc:get_indent_string(1))
+            -- A literal tab before a Markdown marker is parsed as indented
+            -- code by the semantic grammar. Use the interoperable four-space
+            -- nesting step even when the Document otherwise prefers tabs.
+            local indent = "    "
             list_indent_lines[line1] = true
             list_indent_edits[#list_indent_edits + 1] = {
               line1 = line1,

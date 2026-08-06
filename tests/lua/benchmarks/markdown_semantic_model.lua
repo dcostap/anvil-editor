@@ -16,6 +16,28 @@ local function fixture(target_bytes)
   return table.concat(lines), #lines
 end
 
+local function operation_fixture(target_bytes)
+  local lines, bytes, index = {}, 0, 1
+  while bytes < target_bytes do
+    local line
+    if index % 29 == 0 then
+      line = "- list item with **formatting** and enough representative body text"
+    elseif index % 17 == 0 then
+      line = "## Heading with [[Note|Alias]], *emphasis*, and `inline code`"
+    else
+      line = "Ordinary paragraph text with several words for an incremental edit target."
+    end
+    lines[#lines + 1] = line
+    bytes = bytes + #line + 1
+    if index % 4 == 0 then
+      lines[#lines + 1] = ""
+      bytes = bytes + 1
+    end
+    index = index + 1
+  end
+  return table.concat(lines, "\n")
+end
+
 local function wait_ready(instance, timeout)
   local deadline = system.get_time() + timeout
   repeat
@@ -73,9 +95,77 @@ local function run_case(target_bytes)
   markdown_model.close(doc, "benchmark")
 end
 
+local function run_operation_case(target_bytes)
+  local source = operation_fixture(target_bytes)
+  local doc = Doc("markdown-operation-benchmark.md", "markdown-operation-benchmark.md", true)
+  doc:insert(1, 1, source)
+  doc:clear_undo_redo()
+  local instance = markdown_model.get(doc)
+  test.ok(wait_ready(instance, 15), instance.reason)
+
+  local function middle_line(matcher)
+    local middle = math.max(1, math.floor(#doc.lines / 2))
+    if not matcher then return middle end
+    for distance = 0, #doc.lines do
+      for _, line in ipairs({ middle - distance, middle + distance }) do
+        local text = line >= 1 and line <= #doc.lines and doc.lines[line] or nil
+        if text and text:match(matcher) then return line end
+      end
+    end
+    error("benchmark fixture has no matching line")
+  end
+
+  local function measure_operation(name, edit)
+    local started = system.get_time()
+    edit()
+    test.ok(wait_ready(instance, 15), instance.reason)
+    local elapsed_ms = (system.get_time() - started) * 1000
+    local summary = instance.result:summary()
+    print(string.format(
+      "markdown-semantic-operation bytes=%d operation=%s e2e_ms=%.3f native_parse_ms=%.3f native_total_ms=%.3f block_parse_ms=%.3f inline_parse_ms=%.3f",
+      #source, name, elapsed_ms,
+      instance.diagnostics.last_parse_ms,
+      summary.metrics.total_ms or 0,
+      summary.metrics.block_parse_ms or 0,
+      summary.metrics.inline_parse_ms or 0
+    ))
+    io.stdout:flush()
+  end
+
+  measure_operation("character-insert", function()
+    doc:insert(middle_line(), 10, "x")
+  end)
+  measure_operation("newline-insert", function()
+    doc:insert(middle_line("^Ordinary"), 24, "\n")
+  end)
+  measure_operation("list-indent", function()
+    doc:insert(middle_line("^%- "), 1, "    ")
+  end)
+  measure_operation("delimiter-create", function()
+    local line = middle_line("^Ordinary")
+    doc:apply_edits({
+      { line1 = line, col1 = 10, line2 = line, col2 = 10, text = "**" },
+      { line1 = line, col1 = 19, line2 = line, col2 = 19, text = "**" },
+    }, { type = "benchmark-delimiter-create", merge_cursors = false })
+  end)
+  measure_operation("ten-line-paste", function()
+    local paste = {}
+    for index = 1, 10 do paste[index] = "pasted representative line " .. index end
+    doc:insert(middle_line(), 15, table.concat(paste, "\n"))
+  end)
+
+  markdown_model.close(doc, "benchmark")
+end
+
 test.describe("Markdown semantic-model benchmark", function()
   test.it("measures 100 KiB and 1 MiB publication paths", function()
     run_case(100 * 1024)
     run_case(1024 * 1024)
+  end)
+
+  test.it("measures ordinary edit publication at representative sizes", function()
+    run_operation_case(10 * 1024)
+    run_operation_case(100 * 1024)
+    run_operation_case(1024 * 1024)
   end)
 end)

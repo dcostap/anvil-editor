@@ -181,8 +181,8 @@ test.describe("Markdown Interactive Table Editing", function()
       test.equal(command.perform("markdown-live-preview:table-cell-below"), true)
       test.equal(doc.lines[4], "|  |  |\n")
       local appended = test.not_nil(
-        view.__markdown_live_owner.optimistic_lines[4],
-        "appended table row did not receive an optimistic presentation"
+        view.__markdown_live_owner.pending_lines[4],
+        "appended table row did not receive an pending presentation"
       )
       test.ok(test.not_nil(appended.render_line).table_row, "appended row fell back to source")
       test.equal(#table_cells(view, 4), 2)
@@ -511,7 +511,7 @@ test.describe("Markdown Interactive Table Editing", function()
     test.equal(active_height, inactive_height)
   end)
 
-  test.it("remeasures optimistic table rows when the viewport narrows", function()
+  test.it("remeasures pending table rows when the viewport narrows", function()
     local view, doc = make_view(
       "| A | B |\n| --- | --- |\n"
         .. "| one two three four five six seven eight | value |\n\nplain"
@@ -523,7 +523,7 @@ test.describe("Markdown Interactive Table Editing", function()
     local wide = test.not_nil(view:get_line_render(3)).layout_height
     view.size.x = 190
     local narrow = test.not_nil(view:get_line_render(3)).layout_height
-    test.ok(narrow > wide, "optimistic table row retained stale wide geometry")
+    test.ok(narrow > wide, "pending table row retained stale wide geometry")
   end)
 
   test.it("exposes horizontal overflow for a wide rendered table", function()
@@ -784,9 +784,9 @@ test.describe("Markdown Interactive Table Editing", function()
 
     test.equal(view:on_text_input("left|\nright"), true)
     test.equal(doc.lines[3], "| left\\|<br>right | two |\n")
-    local optimistic = view.__markdown_live_owner.optimistic_lines[3]
-    test.not_nil(optimistic, "interactive table edit did not retain an optimistic row")
-    test.ok(test.not_nil(optimistic.render_line).table_row, "optimistic row fell back to source")
+    local pending = view.__markdown_live_owner.pending_lines[3]
+    test.not_nil(pending, "interactive table edit did not retain an pending row")
+    test.ok(test.not_nil(pending.render_line).table_row, "pending row fell back to source")
     local cells = table_cells(view, 3)
     test.equal(#cells[1].text_lines, 2)
 

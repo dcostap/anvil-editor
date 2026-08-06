@@ -35,4 +35,4 @@ The prior baseline deliberately asserted that an actually wrapped Wikilink alias
 - wrapped drawing emits `See Alias after` rather than the hidden target; and
 - rendered wrapping uses fewer rows than the same raw source.
 
-Focused Markdown baseline, Markdown Live Editor, render-fragment, and variable-row suites pass. The attempted unrelated `ui/docview_selection_state.lua` invocation named a nonexistent file and consequently ran into the already documented broad UI harness timeout; it is not a wrapping regression.
+Focused Markdown baseline, Markdown Live Preview, render-fragment, and variable-row suites pass. The attempted unrelated `ui/docview_selection_state.lua` invocation named a nonexistent file and consequently ran into the already documented broad UI harness timeout; it is not a wrapping regression.

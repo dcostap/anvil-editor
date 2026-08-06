@@ -6,13 +6,13 @@ Implemented July 10, 2026 as the sixth Phase 2 slice in `MARKDOWN_LIVE_EDITOR_PL
 
 Every attached Markdown Live Preview `DocView` subscribes to the shared per-Document `core.markdown.model`. Split views retain independent listeners and view-local caches while sharing native parse snapshots. Detach and owned-feature release remove the listener deterministically.
 
-The first async publication invalidates the view and establishes semantic render identities. Later publications use changed ranges. A view records the earliest edited suffix while a model is pending so lines rendered from the conservative fallback cannot remain permanently without current semantic identities after a structural edit.
+The first async publication invalidates the view and establishes semantic render identities. Later publications use changed ranges. While publication is pending, each view builds a revision-tagged presentation from current source, exact transaction-mapped retained lines, and provisional block topology. Publication then replaces that presentation with current semantic identities.
 
 ## Semantic identity bridge
 
 The existing Phase 2 renderer remains deliberately narrow, but heading render lines and emphasis fragments now adopt stable IDs from semantic nodes. This includes emphasis nested inside headings and triple-delimiter strong/emphasis reconciliation. Render results expose the semantic generation used to construct them.
 
-Cold, unavailable, and unsupported semantic states retain conservative raw fallback. Once a current snapshot exists, ordinary resident-line edits use a view-local optimistic render patched from the exact text transaction until the next authoritative publication.
+Cold and pending semantic states use a non-interactive current-source projection rather than exposing a transient raw-source frame. Exact unchanged lines may retain presentation after transaction mapping; changed or context-dependent lines are rebuilt from current source. Every projected line records the Document revision, semantic revision, and `current`, `retained`, `active-source-reveal`, or `unavailable` provenance. Unsupported semantic states still use source presentation as their stable result.
 
 ## Live Preview typography
 
@@ -22,7 +22,15 @@ Inline code, fenced and indented code blocks, math source, raw HTML blocks, and 
 
 ## Contextual invalidation
 
-A generic line-render-provider transaction hook can widen ordinary changed-line invalidation. Markdown widens edits to the suffix because fenced/raw-block and reference context can affect later lines. Sparse line-render caches clear only resident entries in that range. Line-count changes already invalidate shifted suffixes; semantic publication now also re-adopts those suffixes after pending fallback rendering.
+A generic line-render-provider transaction hook can widen ordinary changed-line invalidation. Markdown widens edits to the suffix because fenced/raw-block and reference context can affect later lines. Sparse line-render caches clear only resident entries in that range. Line-count changes already invalidate shifted suffixes; semantic publication now also re-adopts those suffixes after pending projection.
+
+The pending projection computes current fence, Obsidian-comment, display-math,
+frontmatter, and raw-HTML ownership in one source pass bounded to the relevant
+visible region and extends that topology on demand. Context-changing block
+signatures reject otherwise identical retained lines, including Setext-heading,
+quote/callout, list, thematic-break, and reference-definition transitions.
+Retained fragments and widgets have interaction callbacks removed until
+authoritative semantics publish.
 
 Line cache signatures no longer include the global Document revision. Source text, explicit transaction ranges, provider generations, metadata/provider changes, selection state, and async publication notifications are the authoritative invalidation seams. Legacy raw insert/remove and full load/reload paths now publish the same transaction contract (without duplicate wrapping work), so undo, reload, Tree-sitter, range observers, and the Markdown model cannot bypass cache/model refresh. Identical reloads still publish a full-refresh transaction because `Doc:reset()` advances the revision. Snapshot transactions distinguish changed content so range markers invalidate on unrelated replacement text but survive an identical reload. Views attached while a shared model is already pending conservatively invalidate their whole fallback cache on the first publication. This preserves unaffected cached lines across same-line edits without accepting stale contextual Markdown.
 
@@ -35,14 +43,21 @@ Red-green tests cover:
 - retention of an unaffected heading cache entry across a same-line edit/publication;
 - immediate rendered text and typography across repeated pending paragraph edits;
 - stable revealed inline syntax while typing inside a construct;
-- semantic re-adoption after a line-shifting edit rendered while pending; and
-- a fence edit changing a later line from raw passthrough to rendered heading; and
+- semantic re-adoption after a line-shifting edit rendered while pending;
+- fence, comment, display-math, and frontmatter ownership changes;
+- newly completed highlights, blockquotes, callouts, thematic breaks, and Setext headings without transient raw presentation;
+- comment/fence/inline-code precedence in provisional topology;
+- a fence edit changing a later line from source presentation to a rendered heading; and
 - proportional prose/heading rendering with monospaced inline, fenced, and Source Mode code paths.
 
-The representative 100 KiB benchmark (`tests/lua/benchmarks/markdown_live_render.lua`) measured on July 10, 2026:
+The representative benchmark (`tests/lua/benchmarks/markdown_live_render.lua`) measured on August 6, 2026:
 
 - 102,482 bytes / 1,201 lines;
-- cached 60-line viewport query p95: **0.378 ms**;
-- caret-transition render/update p95: **0.148 ms**.
+- cached 60-line viewport query: **0.225 ms p95 / 0.315 ms p99**;
+- caret-transition render/update: **0.234 ms p95 / 0.414 ms p99**;
+- one-pass 1 MiB provisional topology: **12.3 ms p95 / 13.0 ms p99**;
+- 100 KiB edit-to-pending presentation: **3.2 ms p95 / 10.2 ms p99**;
+- the same path with wrapping: **3.4 ms p95 / 7.3 ms p99**;
+- visible-bounded 1 MiB structural edit-to-pending presentation: **7.4 ms**.
 
-The benchmark reports timings rather than asserting brittle machine-specific thresholds. Both observed p95 values are below the Phase 2 2 ms viewport and 3 ms caret targets.
+The benchmark reports timings rather than asserting brittle machine-specific thresholds. Cached viewport and caret work remain well below their Phase 2 targets; the topology scan is reserved for edits that can change cross-line ownership.
