@@ -202,6 +202,70 @@ test.describe("Markdown heading leading spacing", function()
     test.equal(view:get_position_visual_row_height(1, 1), inactive_height)
   end)
 
+  test.it("keeps following content fixed through publication when a heading unwraps", function()
+    local source = "# This rendered heading wraps across several visual rows in a narrow editor"
+    local view, doc = make_view(source .. "\nstuff")
+    view.size.x = 300
+    view:set_wrapping_enabled(true)
+    doc:set_selection(1, 10)
+    refresh(view)
+
+    test.ok(
+      view:get_visual_row_count_for_line(1) > 1,
+      "the heading must initially occupy multiple Wrapped Visual Rows"
+    )
+    doc:remove(1, 10, 1, #doc.lines[1])
+    test.equal(
+      view:get_visual_row_count_for_line(1), 1,
+      "deleting the suffix must unwrap the heading"
+    )
+
+    local _, pending_y = view:get_line_screen_position(2)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_ready(instance), instance.reason)
+    local _, published_y = view:get_line_screen_position(2)
+
+    test.equal(
+      published_y, pending_y,
+      string.format(
+        "following content moved from %d to %d when the heading presentation published",
+        pending_y, published_y
+      )
+    )
+  end)
+
+  test.it("keeps following content fixed through publication when a heading wraps", function()
+    local source = "# Procedimiento Apagado conexión host iDrac testing testinga"
+    local view, doc = make_view(source .. "\nstuff")
+    view.size.x = 620
+    view:set_wrapping_enabled(true)
+    doc:set_selection(1, #doc.lines[1])
+    refresh(view)
+
+    test.equal(
+      view:get_visual_row_count_for_line(1), 1,
+      "the heading must initially occupy one Wrapped Visual Row"
+    )
+    view:on_text_input("a")
+    test.ok(
+      view:get_visual_row_count_for_line(1) > 1,
+      "typing the suffix must wrap the heading"
+    )
+
+    local _, pending_y = view:get_line_screen_position(2)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_ready(instance), instance.reason)
+    local _, published_y = view:get_line_screen_position(2)
+
+    test.equal(
+      published_y, pending_y,
+      string.format(
+        "following content moved from %d to %d when the heading presentation published",
+        pending_y, published_y
+      )
+    )
+  end)
+
   test.it("keeps spacing stable when Enter and following characters are separate edits", function()
     local view, doc = make_view("# Heading")
     doc:set_selection(1, #doc.lines[1] + 1)

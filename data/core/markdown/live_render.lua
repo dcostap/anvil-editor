@@ -3733,12 +3733,21 @@ end
 
 local function pending_entry(view, render_line, source_text, height, row_heights, provenance)
   if not render_line or render_line.source_text ~= source_text then return nil end
+  local rendered_height = render_line_metric_height(view, render_line)
+  local metric_height = height or render_line.markdown_pending_metric_height
+    or rendered_height
+  local leading_spacing = tonumber(render_line.first_row_content_y_offset) or 0
+  if leading_spacing > 0 then
+    metric_height = math.max(
+      metric_height or 0,
+      rendered_height + leading_spacing
+    )
+  end
   return {
     revision = view.doc.text_revision,
     source_text = source_text,
     render_line = render_line,
-    height = height or render_line.markdown_pending_metric_height
-      or render_line_metric_height(view, render_line),
+    height = metric_height,
     row_heights = row_heights,
     provenance = provenance,
   }
@@ -4801,10 +4810,12 @@ local function final_visual_row_for_line(view, line, entry)
   return entry and entry.row_in_line == view:get_visual_row_count_for_line(line)
 end
 
-local function with_block_spacing(view, line, entry, height, heading)
+local function with_block_spacing(view, line, entry, height, leading_spacing)
   if not height then return height end
-  if heading and (not entry or entry.row_in_line == 1) then
-    height = height + markdown_block_gap(view)
+  if leading_spacing and leading_spacing > 0
+    and (not entry or entry.row_in_line == 1)
+  then
+    height = height + leading_spacing
   end
   if final_visual_row_for_line(view, line, entry) then
     height = height + block_spacing_after(view, line)
@@ -4836,9 +4847,7 @@ local function compute_line_height(view, line, entry)
   local render_line = view:get_line_render(line)
   if not render_line then return view:get_line_height() end
   if render_line.metric_height then return render_line.metric_height end
-  local text = render_line.source_text
-    or (view.doc.lines[line] or ""):gsub("\n$", "")
-  local heading = semantic_heading_for_line(view, text, line)
+  local leading_spacing = tonumber(render_line.first_row_content_y_offset) or 0
   local body_height = render_line.text_row_height
     or markdown_live_body_line_height(view)
   if wrapped then
@@ -4848,16 +4857,20 @@ local function compute_line_height(view, line, entry)
     if final_row then
       height = math.max(height, render_line_metric_height(view, render_line))
     end
-    return with_block_spacing(view, line, entry, height, heading)
+    return with_block_spacing(view, line, entry, height, leading_spacing)
   end
   if render_line.layout_height then
-    return with_block_spacing(view, line, entry, render_line.layout_height, heading)
+    return with_block_spacing(
+      view, line, entry, render_line.layout_height, leading_spacing
+    )
   end
   if render_line.table_row_height then
-    return with_block_spacing(view, line, entry, render_line.table_row_height, heading)
+    return with_block_spacing(
+      view, line, entry, render_line.table_row_height, leading_spacing
+    )
   end
   local height = math.max(body_height, render_line_metric_height(view, render_line))
-  return with_block_spacing(view, line, entry, height, heading)
+  return with_block_spacing(view, line, entry, height, leading_spacing)
 end
 
 function provider:line_height(view, line, entry)
