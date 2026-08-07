@@ -7,6 +7,14 @@ Implemented July 10, 2026 as the fifth Phase 2 slice in `MARKDOWN_LIVE_EDITOR_PL
 Rendered fragments may expose a `widget` with:
 
 - `width` / `height` and optional padding/layout offsets;
+- optional `hover_outline_padding`, `hover_outline_width`, and
+  `hover_outline_outside` values for widget-specific hover geometry. An
+  outside outline is drawn symmetrically around the widget bounds without
+  overlapping its corners (and is clipped at the content edge); omitting
+  `hover_outline_width` uses the current editor scale at draw time;
+- optional `hover_inner_outline_color`, with matching optional width and
+  `hover_inner_outline_width` and `hover_inner_outline_padding` fields, for a
+  second outline inside the widget bounds;
 - optional `wrapping = "inline"` for one-row atomic widgets that can safely
   participate in rendered-width wrapping;
 - `cursor` for hover feedback;

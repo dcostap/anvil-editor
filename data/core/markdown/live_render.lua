@@ -995,8 +995,8 @@ local function image_fragment(view, span, opts)
         image_height = height,
         padding = padding,
         hover_outline_padding = 0,
-        hover_outline_width = math.max(1, math.floor(2 * SCALE)),
         hover_outline_outside = true,
+        hover_inner_outline_color = style.markdown_live_image_hover_inner_border,
         suppress_hover_background = true,
         cursor = "hand",
         on_mouse_pressed = function(_, owner, hit, button)
@@ -2577,10 +2577,40 @@ local function frontmatter_for_line(view, line)
   end
 end
 
+local function semantic_math_overlaps_link_destination(math_node, nodes, line_text, line)
+  for _, node in ipairs(nodes or {}) do
+    local attributes = node.attributes
+    local destination = attributes and (
+      attributes.link_destination or attributes.reference_destination
+    )
+    if destination and source_intersects_selection(
+      math_node.source,
+      destination.line1, destination.col1,
+      destination.line2, destination.col2
+    ) then
+      return true
+    end
+  end
+  for _, link in ipairs(markdown_links.find_links(line_text or "", line)) do
+    local destination = link.link_destination_range
+    if destination and source_intersects_selection(
+      math_node.source,
+      destination.line1, destination.col1,
+      destination.line2, destination.col2
+    ) then
+      return true
+    end
+  end
+  return false
+end
+
 local function semantic_math_fragments(view, line_text, line, reveal_units)
   local fragments = {}
-  for _, node in ipairs(semantic_line(view, line) or {}) do
-    if node.type == "math" and line >= node.source.line1 and line <= node.source.line2 then
+  local nodes = semantic_line(view, line) or {}
+  for _, node in ipairs(nodes) do
+    if node.type == "math" and line >= node.source.line1 and line <= node.source.line2
+      and not semantic_math_overlaps_link_destination(node, nodes, line_text, line)
+    then
       local col1 = line == node.source.line1 and node.source.col1 or 1
       local col2 = line == node.source.line2 and node.source.col2 or #line_text + 1
       if col2 > col1 and not reveal_unit_matches(reveal_units, node.id, col1, col2) then
@@ -3552,9 +3582,13 @@ local function clone_render_line(render_line)
 end
 
 local function line_in_semantic_math(view, line)
-  for _, node in ipairs(semantic_line(view, line) or {}) do
+  local nodes = semantic_line(view, line) or {}
+  for _, node in ipairs(nodes) do
     if node.type == "math"
       and line >= node.source.line1 and line <= node.source.line2
+      and not semantic_math_overlaps_link_destination(
+        node, nodes, view.doc.lines[line] or "", line
+      )
     then
       return true
     end

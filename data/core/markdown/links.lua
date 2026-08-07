@@ -152,15 +152,32 @@ local function parse_parenthesized_target(text, open_col)
     elseif ch == ")" then
       depth = depth - 1
       if depth == 0 then
-        local body = trim(text:sub(open_col + 1, i - 1))
-        local target
-        if body:sub(1, 1) == "<" then
-          local close = body:find(">", 2, true)
-          target = close and body:sub(2, close - 1) or body
-        else
-          target = body:match("^(%S+)") or ""
+        local body_start, body_end = open_col + 1, i - 1
+        while body_start <= body_end and text:sub(body_start, body_start):match("%s") do
+          body_start = body_start + 1
         end
-        return target, i
+        while body_end >= body_start and text:sub(body_end, body_end):match("%s") do
+          body_end = body_end - 1
+        end
+        local target
+        local destination_col1, destination_col2
+        if text:sub(body_start, body_start) == "<" then
+          local close = text:find(">", body_start + 1, true)
+          if close and close > body_end then close = nil end
+          destination_col1 = close and body_start + 1 or body_start
+          destination_col2 = close or body_end + 1
+          target = text:sub(destination_col1, destination_col2 - 1)
+        else
+          destination_col1 = body_start
+          destination_col2 = body_start
+          while destination_col2 <= body_end
+            and not text:sub(destination_col2, destination_col2):match("%s")
+          do
+            destination_col2 = destination_col2 + 1
+          end
+          target = text:sub(destination_col1, destination_col2 - 1)
+        end
+        return target, i, destination_col1, destination_col2
       end
     end
   end
@@ -177,7 +194,8 @@ function links.parse_markdown_link_at(text, start_col, source_line)
     return nil
   end
 
-  local target, finish = parse_parenthesized_target(text, label_close + 1)
+  local target, finish, destination_col1, destination_col2 =
+    parse_parenthesized_target(text, label_close + 1)
   if not finish or target == "" then return nil end
 
   local label = text:sub(label_open + 1, label_close - 1)
@@ -206,6 +224,10 @@ function links.parse_markdown_link_at(text, start_col, source_line)
     source_col2 = finish + 1,
     is_embed = is_image,
     resize = resize,
+    link_destination_range = {
+      line1 = source_line, col1 = destination_col1,
+      line2 = source_line, col2 = destination_col2,
+    },
   }, target, alias)
   if is_image then
     result.alt = alias

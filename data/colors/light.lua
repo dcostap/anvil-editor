@@ -315,6 +315,7 @@ style.markdown_live_math_background = style.background2
 style.markdown_live_math = style.syntax.literal
 style.markdown_live_footnote = style.accent
 style.markdown_live_image_background = style.background2
+style.markdown_live_image_hover_inner_border = c("000000")
 style.markdown_live_image_loading = style.dim
 style.markdown_live_image_blocked = c("9a6700")
 style.markdown_live_image_error = style.error

@@ -438,27 +438,101 @@ test.describe("DocView render fragments", function()
     local image_height = view:get_line_height()
     local border = math.max(1, math.floor(2 * SCALE))
     local outline_offset = border
-    test.same(
+    local function assert_rect(actual, expected)
+      test.not_nil(actual)
+      for index = 1, 4 do
+        test.ok(
+          math.abs(actual[index] - expected[index]) < 0.01,
+          string.format("outline coordinate %d differs: %.4f vs %.4f",
+            index, actual[index], expected[index])
+        )
+      end
+    end
+    assert_rect(
       hover_border_rectangles[1],
       { line_x, line_y - outline_offset, 40 + border, border }
     )
-    test.same(
+    assert_rect(
       hover_border_rectangles[2],
-      {
-        line_x, line_y + image_height,
-        40 + border, border,
-      }
+      { line_x, line_y + image_height, 40 + border, border }
     )
-    test.same(
+    assert_rect(
       hover_border_rectangles[3],
-      { line_x, line_y - outline_offset, border, image_height + border * 2 }
+      { line_x, line_y, border, image_height }
     )
-    test.same(
+    assert_rect(
       hover_border_rectangles[4],
-      { line_x + 40, line_y - outline_offset, border, image_height + border * 2 }
+      { line_x + 40, line_y, border, image_height }
     )
     test.equal(view:on_mouse_pressed("left", x, y, 1), true)
     test.equal(clicked, true)
+  end)
+
+  test.it("draws image-like widget hover around its bounds at the current zoom", function()
+    local view = make_view("image")
+    view.scroll.x, view.scroll.to.x = 0, 0
+    local image_height = math.max(1, view:get_line_height() - 4)
+    local fragment
+    view:add_line_render_provider("image-like-widget", {
+      render_line = function()
+        fragment = {
+          source_col1 = 1,
+          source_col2 = 6,
+          layout_x = 20,
+          widget = {
+            type = "image",
+            width = 40,
+            height = view:get_line_height(),
+            image_height = image_height,
+            padding = 5,
+            hover_outline_padding = 0,
+            hover_outline_outside = true,
+            suppress_hover_background = true,
+            cursor = "hand",
+            draw = function() end,
+          },
+        }
+        return { fragments = { fragment } }
+      end,
+    })
+
+    fragment = test.not_nil(view:get_line_render(1).fragments[1])
+    fragment.hovered = true
+    local old_scale = SCALE
+    local old_draw_rect = renderer.draw_rect
+    local ok, err = pcall(function()
+      local function draw_hover_outline()
+        local rectangles = {}
+        renderer.draw_rect = function(x, y, w, h, color)
+          if color == style.interactive_hover_border then
+            rectangles[#rectangles + 1] = { x, y, w, h }
+          end
+        end
+        local line_x, line_y = view:get_line_screen_position(1)
+        view:draw_line_text(1, line_x, line_y)
+        return line_x, line_y, rectangles
+      end
+
+      local line_x, line_y, rectangles = draw_hover_outline()
+      local border = math.max(1, math.floor(old_scale))
+      local image_x, image_y = line_x + 20, line_y + 2
+      test.same(rectangles, {
+        { image_x - border, image_y - border, 40 + border * 2, border },
+        { image_x - border, image_y + image_height, 40 + border * 2, border },
+        { image_x - border, image_y, border, image_height },
+        { image_x + 40, image_y, border, image_height },
+      })
+
+      SCALE = math.max(old_scale * 2, old_scale + 1)
+      local _, _, zoomed_rectangles = draw_hover_outline()
+      local zoomed_border = math.max(1, math.floor(SCALE))
+      test.equal(zoomed_rectangles[1][4], zoomed_border)
+      test.equal(zoomed_rectangles[3][3], zoomed_border)
+      test.equal(zoomed_rectangles[4][1], image_x + 40)
+    end)
+    SCALE = old_scale
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err, 0) end
   end)
 
   test.it("invalidates cached output after legacy raw text edits", function()

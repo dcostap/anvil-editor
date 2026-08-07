@@ -6427,6 +6427,30 @@ local function draw_render_fragment_text(
   return math.max(next_x, x + width)
 end
 
+local function draw_render_widget_outline(
+  outline_left, outline_top, outline_width, outline_height, outline_border, color
+)
+  if not color or outline_width <= 0 or outline_height <= 0 then return end
+  renderer.draw_rect(
+    outline_left, outline_top, outline_width, outline_border, color
+  )
+  renderer.draw_rect(
+    outline_left, outline_top + math.max(0, outline_height - outline_border),
+    outline_width, outline_border, color
+  )
+  local vertical_height = outline_height - outline_border * 2
+  if vertical_height > 0 then
+    renderer.draw_rect(
+      outline_left, outline_top + outline_border,
+      outline_border, vertical_height, color
+    )
+    renderer.draw_rect(
+      outline_left + math.max(0, outline_width - outline_border),
+      outline_top + outline_border, outline_border, vertical_height, color
+    )
+  end
+end
+
 local function draw_render_widget(view, fragment, x, y, row_height, context)
   local widget = fragment.widget
   local ok, err = pcall(widget.draw, view, fragment, x, y, row_height)
@@ -6446,6 +6470,7 @@ local function draw_render_widget(view, fragment, x, y, row_height, context)
   local left, top, width, height = render_widget_rect(
     fragment, x, y, row_height, widget.hover_outline_padding
   )
+
   if not widget.suppress_hover_background then
     renderer.draw_rect(left, top, width, height, style.interactive_hover_overlay)
   end
@@ -6458,30 +6483,49 @@ local function draw_render_widget(view, fragment, x, y, row_height, context)
   local outline_left, outline_top = left, top
   local outline_width, outline_height = width, height
   if widget.hover_outline_outside then
-    local offset = border
-    -- Keep the left edge inside the DocView content clip; extend the
-    -- opposite edge so the outline does not consume image pixels.
-    outline_left = left
-    outline_top = top - offset
-    outline_width = width + border
-    outline_height = height + border * 2
+    -- Keep the outline outside the widget bounds so image pixels are not
+    -- covered by the feedback. Clamp to the content clip so an image at the
+    -- viewport edge still has a visible, closed outline instead of losing
+    -- its outer edge to the clip.
+    local clip_left = view.position.x + (view:get_gutter_width() or 0)
+    local clip_top = view.position.y
+    local clip_right = view.position.x + view.size.x
+    local clip_bottom = view.position.y + view.size.y
+    local outer_left = left - border
+    local outer_top = top - border
+    local outer_right = left + width + border
+    local outer_bottom = top + height + border
+    if outer_left < clip_left then outer_left = left end
+    if outer_top < clip_top then outer_top = top end
+    if outer_right > clip_right then outer_right = left + width end
+    if outer_bottom > clip_bottom then outer_bottom = top + height end
+    outline_left = outer_left
+    outline_top = outer_top
+    outline_width = math.max(0, outer_right - outer_left)
+    outline_height = math.max(0, outer_bottom - outer_top)
   end
-  renderer.draw_rect(
-    outline_left, outline_top, outline_width, border, style.interactive_hover_border
+  draw_render_widget_outline(
+    outline_left, outline_top, outline_width, outline_height,
+    border, style.interactive_hover_border
   )
-  renderer.draw_rect(
-    outline_left, outline_top + math.max(0, outline_height - border),
-    outline_width, border,
-    style.interactive_hover_border
-  )
-  renderer.draw_rect(
-    outline_left, outline_top, border, outline_height, style.interactive_hover_border
-  )
-  renderer.draw_rect(
-    outline_left + math.max(0, outline_width - border), outline_top,
-    border, outline_height,
-    style.interactive_hover_border
-  )
+
+  local inner_color = widget.hover_inner_outline_color
+  if inner_color then
+    local inner_border = widget.hover_inner_outline_width
+    if inner_border == nil then
+      inner_border = border
+    else
+      inner_border = math.max(1, math.floor(inner_border))
+    end
+    local inset = widget.hover_inner_outline_padding
+    if inset == nil then inset = inner_border end
+    inset = math.max(0, math.floor(inset))
+    draw_render_widget_outline(
+      left + inset, top + inset,
+      width - inset * 2, height - inset * 2,
+      inner_border, inner_color
+    )
+  end
   return true
 end
 
