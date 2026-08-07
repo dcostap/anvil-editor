@@ -16,6 +16,12 @@ Targeted visual-height updates now identify the old first visible metric row bef
 
 Current Line Highlights, selections, search markers, line-number layout, decoration backgrounds, and carets resolve the same visual-row metric as rendered text. Enlarged headings therefore keep their text, row chrome, and caret geometry aligned instead of mixing heading metrics with the base Editor line height.
 
+Text-relative range decorations (including bracket frames, search/LSP
+underlines, and inline decoration ranges), line hints, rendered fragment/widget
+hit regions, and IME fallback bounds use the rendered content rectangle inside
+that visual row. Full-row backgrounds remain full-row by design; they are not
+text overlays and continue to cover the reserved block spacing.
+
 Markdown Live Preview retains the normal gutter width without drawing line numbers. Source Mode restores ordinary all-line numbering, and Standard Editors remain unchanged.
 
 ## Pending-publication continuity

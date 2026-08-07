@@ -166,6 +166,56 @@ test.describe("LSP Diagnostic Underlines", function()
     end
   end)
 
+  test.it("anchors rendered-line underlines to the rendered text row", function(context)
+    local doc, client, document_uri = setup(context, "heading")
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(0, 0, 0, 7), severity = 1, message = "error" },
+      },
+    })
+
+    local view = DocView(doc)
+    local base_height = view:get_line_height()
+    local leading_gap = math.max(2, math.floor(base_height / 2))
+    view:add_visual_metric_provider("tall-rendered-row", {
+      line_height = function() return base_height + leading_gap end,
+    })
+    view:add_line_render_provider("tall-rendered-row", {
+      render_line = function()
+        return {
+          first_row_content_y_offset = leading_gap,
+          text_row_height = base_height,
+          caret_height = base_height,
+          fragments = {
+            { source_col1 = 1, source_col2 = 8, text = "heading" },
+          },
+        }
+      end,
+    })
+
+    local old_draw_text = renderer.draw_text
+    local text_y
+    renderer.draw_text = function(font, text, x, y, color, opts)
+      if text == "heading" then text_y = y end
+      return x + font:get_width(text, opts)
+    end
+    local x, y = view:get_line_screen_position(1)
+    view:draw_line_text(1, x, y)
+    renderer.draw_text = old_draw_text
+    test.not_nil(text_y)
+
+    local calls = with_fake_draw_poly(function()
+      diagnostic_underlines.draw_line(view, 1, x, y)
+    end)
+    local _, min_y, _, max_y = point_bounds(calls[1].points)
+    test.ok(
+      math.abs(max_y - (text_y + base_height)) <= 4,
+      string.format("underline bottom %s was not near text bottom %s", max_y, text_y + base_height)
+    )
+    test.ok(min_y > y + leading_gap - 2)
+  end)
+
   test.it("keeps stale-tracked underlines visible when document sync makes diagnostics stale", function(context)
     local doc, client, document_uri = setup(context)
     publish(client, {

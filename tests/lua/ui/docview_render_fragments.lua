@@ -243,6 +243,141 @@ test.describe("DocView render fragments", function()
     test.equal(clicked, false)
   end)
 
+  test.it("keeps rendered fragment hit testing inside a line's content row", function()
+    local view = make_view("heading")
+    local base_height = view:get_line_height()
+    local leading_gap = math.max(2, math.floor(base_height / 2))
+    local fragment
+    view:add_visual_metric_provider("tall-rendered-row", {
+      line_height = function() return base_height + leading_gap end,
+    })
+    view:add_line_render_provider("tall-rendered-row", {
+      render_line = function()
+        fragment = {
+          source_col1 = 1, source_col2 = 8, text = "heading", cursor = "hand",
+        }
+        return {
+          first_row_content_y_offset = leading_gap,
+          text_row_height = base_height,
+          caret_height = base_height,
+          fragments = { fragment },
+        }
+      end,
+    })
+
+    local x, y = view:get_line_screen_position(1)
+    test.equal(view:get_render_fragment_at_position(x + 2, y + 1), nil)
+    local hit = test.not_nil(view:get_render_fragment_at_position(
+      x + 2, y + leading_gap + 1
+    ))
+    test.equal(hit.fragment.text, fragment.text)
+
+    view:set_wrapping_enabled(true)
+    view:update_wrap_cache()
+    x, y = view:get_line_screen_position(1)
+    test.equal(view:get_render_fragment_at_position(x + 2, y + 1), nil)
+    hit = test.not_nil(view:get_render_fragment_at_position(
+      x + 2, y + leading_gap + 1
+    ))
+    test.equal(hit.fragment.text, fragment.text)
+  end)
+
+  test.it("draws line hints in a rendered line's content row", function()
+    local view = make_view("heading")
+    local base_height = view:get_line_height()
+    local leading_gap = math.max(2, math.floor(base_height / 2))
+    view:add_visual_metric_provider("tall-rendered-row", {
+      line_height = function() return base_height + leading_gap end,
+    })
+    view:add_line_render_provider("tall-rendered-row", {
+      render_line = function()
+        return {
+          first_row_content_y_offset = leading_gap,
+          text_row_height = base_height,
+          caret_height = base_height,
+          fragments = {
+            { source_col1 = 1, source_col2 = 8, text = "heading" },
+          },
+        }
+      end,
+    })
+    view.get_line_hint = function()
+      return { text = "hint", font = view:get_font(), placement = "after_line_document_text" }
+    end
+
+    local old_draw_text = renderer.draw_text
+    local old_track_rect = view.v_scrollbar.get_track_rect
+    local old_push_clip_rect = core.push_clip_rect
+    local old_pop_clip_rect = core.pop_clip_rect
+    local hint_y
+    view.v_scrollbar.get_track_rect = function() return 0, 0, 0, 0 end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+    renderer.draw_text = function(font, text, x, y, color, opts)
+      if text == "hint" then hint_y = y end
+      return x + font:get_width(text, opts)
+    end
+    local ok, err = pcall(function()
+      local x, y = view:get_line_screen_position(1)
+      view:draw_line_hint(1, x, y)
+    end)
+    renderer.draw_text = old_draw_text
+    view.v_scrollbar.get_track_rect = old_track_rect
+    core.push_clip_rect = old_push_clip_rect
+    core.pop_clip_rect = old_pop_clip_rect
+    if not ok then error(err, 0) end
+
+    local _, line_y = view:get_line_screen_position(1)
+    test.equal(
+      hint_y,
+      line_y + leading_gap + (base_height - view:get_font():get_height()) / 2
+    )
+  end)
+
+  test.it("keeps rendered widget hit testing inside a line's content row", function()
+    local view = make_view("image")
+    local base_height = view:get_line_height()
+    local leading_gap = math.max(2, math.floor(base_height / 2))
+    local widget = {
+      width = 40, height = base_height, draw = function() end,
+    }
+    view:add_visual_metric_provider("tall-rendered-row", {
+      line_height = function() return base_height + leading_gap end,
+    })
+    view:add_line_render_provider("tall-rendered-row", {
+      render_line = function()
+        return {
+          first_row_content_y_offset = leading_gap,
+          text_row_height = base_height,
+          caret_height = base_height,
+          fragments = {
+            { source_col1 = 1, source_col2 = 6, width = 40, widget = widget },
+          },
+        }
+      end,
+    })
+
+    local x, y = view:get_line_screen_position(1)
+    test.equal(view:get_render_widget_at_position(x + 2, y + 1), nil)
+    test.equal(
+      test.not_nil(view:get_render_widget_at_position(
+        x + 2, y + leading_gap + 1
+      )).widget,
+      widget
+    )
+
+    view:set_wrapping_enabled(true)
+    view:update_wrap_cache()
+    x, y = view:get_line_screen_position(1)
+    test.equal(view:get_render_widget_at_position(x + 2, y + 1), nil)
+    test.equal(
+      test.not_nil(view:get_render_widget_at_position(
+        x + 2, y + leading_gap + 1
+      )).widget.width,
+      widget.width
+    )
+  end)
+
   test.it("draws outline-only widget hover and routes pointer clicks", function()
     local view = make_view("widget")
     local clicked = false

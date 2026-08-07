@@ -1095,14 +1095,11 @@ function DiffView:sync_caret_from(doc_view, is_a)
 end
 
 function DiffView:get_scrollable_size()
-  local a_count = self.doc_view_a:get_scrollable_line_count()
-  local b_count = self.doc_view_b:get_scrollable_line_count()
-  local lc = math.max(a_count, b_count)
-  if not config.scroll_past_end then
-    local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
-    return self.doc_view_a:get_line_height() * lc + style.padding.y * 2 + h_scroll
-  end
-  return self.doc_view_a:get_line_height() * math.max(0, lc - 1) + self.size.y
+  return math.max(
+    self.size.y,
+    self.doc_view_a:get_scrollable_size(),
+    self.doc_view_b:get_scrollable_size()
+  )
 end
 
 local function diff_color(tag, background)
@@ -1226,9 +1223,19 @@ local function cached_change_blocks(view, side, kind, tags, use_raw_tag)
 end
 
 local function line_range_y(doc_view, start_line, end_line)
-  local _, start_y = doc_view:get_line_screen_position(start_line, 1)
-  local _, end_y = doc_view:get_line_screen_position(end_line, 1)
-  end_y = end_y + visual_line_count(doc_view, end_line) * doc_view:get_line_height()
+  local _, start_y = doc_view:get_line_screen_position(start_line)
+  local _, end_y = doc_view:get_line_screen_position(end_line)
+  local first_row = doc_view:get_visual_row(end_line, 1)
+  local row_count = visual_line_count(doc_view, end_line)
+  local end_row = first_row + row_count
+  local end_height
+  if doc_view.get_visual_row_y_offset then
+    end_height = doc_view:get_visual_row_y_offset(end_row)
+      - doc_view:get_visual_row_y_offset(first_row)
+  else
+    end_height = row_count * doc_view:get_line_height()
+  end
+  end_y = end_y + end_height
   return start_y, end_y
 end
 
@@ -1431,7 +1438,6 @@ local function draw_divider_side_line_numbers(doc_view, folds, x, width)
   if config.show_line_numbers == false or width <= 0 then return end
   local minline, maxline = doc_view:get_visible_line_range()
   local font = doc_view:get_font()
-  local line_height = doc_view:get_line_height()
   local fold_index = 1
   local fold = folds and folds[fold_index]
   local line = minline
@@ -1442,14 +1448,17 @@ local function draw_divider_side_line_numbers(doc_view, folds, x, width)
     end
     if fold and line >= fold.hidden_start and line <= fold.hidden_end then
       local _, y = doc_view:get_line_screen_position(fold.hidden_start)
-      if y + line_height >= doc_view.position.y and y <= doc_view.position.y + doc_view.size.y then
-        common.draw_text(font, style.line_number, "…", "right", x, y, width - style.padding.x, line_height)
+      local fold_height = doc_view:get_visual_row_height(
+        doc_view:get_visual_row(fold.hidden_start, 1, false)
+      )
+      if y + fold_height >= doc_view.position.y and y <= doc_view.position.y + doc_view.size.y then
+        common.draw_text(font, style.line_number, "…", "right", x, y, width - style.padding.x, fold_height)
       end
       line = fold.hidden_end + 1
     else
-      local _, y = doc_view:get_line_screen_position(line)
-      if y + line_height >= doc_view.position.y and y <= doc_view.position.y + doc_view.size.y then
-        common.draw_text(font, line_number_color(doc_view.doc, line), line, "right", x, y, width - style.padding.x, line_height)
+      local y, height = doc_view:get_position_highlight_geometry(line, 1, false)
+      if y + height >= doc_view.position.y and y <= doc_view.position.y + doc_view.size.y then
+        common.draw_text(font, line_number_color(doc_view.doc, line), line, "right", x, y, width - style.padding.x, height)
       end
       line = line + 1
     end

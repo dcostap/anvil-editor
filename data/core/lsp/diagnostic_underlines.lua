@@ -91,16 +91,17 @@ function diagnostic_underlines.ranges_for_line(doc, line)
   return cached_line_ranges(doc)[line] or {}
 end
 
-local function squiggle_metrics(view, y)
-  local font = view:get_font()
-  local font_height = font:get_height()
-  -- Match the editor font rather than the full visual row: the squiggle sits
-  -- at the bottom of the rendered code text and scales with the same font that
+local function squiggle_metrics(view, y, content_height, content_font_height)
+  local font_height = content_font_height or view:get_font():get_height()
+  -- Match the rendered text font rather than the full visual row: the squiggle
+  -- sits at the bottom of the rendered text and scales with the same font that
   -- produced the diagnostic text range.
   local thickness = math.max(1, math.ceil(font_height / 14))
   local wave_height = math.max(thickness * 2, math.ceil(font_height / 7))
   local step = math.max(wave_height, math.ceil(font_height / 4))
-  local text_bottom = y + view:get_line_text_y_offset() + font_height
+  local text_bottom = content_height
+    and y + content_height
+    or y + view:get_line_text_y_offset() + font_height
   local bottom = text_bottom - math.ceil(thickness / 2) + SQUIGGLE_Y_OFFSET
   local top = bottom - wave_height
   return top, bottom, thickness, step
@@ -135,18 +136,58 @@ local function draw_squiggle(x1, x2, top, bottom, thickness, step, color)
   renderer.draw_poly(points, color)
 end
 
-local function draw_segment(view, x1, x2, y, severity)
+local function draw_segment(view, x1, x2, y, severity, content_height, font_height)
   local color = severity_color(severity)
   if not color then return end
   if x2 <= x1 then
     local width = view:get_font():get_width(" ")
     x2 = x1 + math.max(width, style.caret_width or 1)
   end
-  local top, bottom, thickness, step = squiggle_metrics(view, y)
+  local top, bottom, thickness, step = squiggle_metrics(
+    view, y, content_height, font_height
+  )
   draw_squiggle(x1, x2, top, bottom, thickness, step, color)
 end
 
+local function rendered_font_height(view, line, col1, col2)
+  local render_line = view:get_line_render(line)
+  if not render_line then return nil end
+  local height
+  for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
+    local fragment_col1 = fragment.source_col1 or 1
+    local fragment_col2 = fragment.source_col2 or fragment_col1
+    if not fragment.hidden and col2 > fragment_col1 and col1 < fragment_col2 then
+      local font = fragment.font or view:get_font()
+      height = math.max(height or 0, font:get_height())
+    end
+  end
+  return height
+end
+
+local function draw_rendered_range(view, line, x, y, range)
+  local font_height = rendered_font_height(view, line, range.col1, range.col2)
+  if range.col1 == range.col2 then
+    local x1 = x + view:get_col_x_offset(line, range.col1)
+    local row_y, row_height = view:get_position_highlight_geometry(
+      line, range.col1, false
+    )
+    draw_segment(view, x1, x1, row_y, range.severity, row_height, font_height)
+    return
+  end
+  for x1, row_y, x2, row_height in view:iter_text_range_screen_segments(
+    line, range.col1, range.col2, x, y
+  ) do
+    draw_segment(view, x1, x2, row_y, range.severity, row_height, font_height)
+  end
+end
+
 local function draw_unwrapped_line(view, line, x, y, ranges)
+  if view:get_line_render(line) then
+    for _, range in ipairs(ranges) do
+      draw_rendered_range(view, line, x, y, range)
+    end
+    return
+  end
   for _, range in ipairs(ranges) do
     local x1 = x + view:get_col_x_offset(line, range.col1)
     local x2 = x + view:get_col_x_offset(line, range.col2)
@@ -169,6 +210,12 @@ local function wrapped_line_bounds(view, line, idx)
 end
 
 local function draw_wrapped_line(view, line, x, y, ranges)
+  if view:get_line_render(line) then
+    for _, range in ipairs(ranges) do
+      draw_rendered_range(view, line, x, y, range)
+    end
+    return
+  end
   local logical_first_idx = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line]
   if not logical_first_idx then return draw_unwrapped_line(view, line, x, y, ranges) end
   local logical_last_idx = (view.wrapped_line_to_idx[line + 1] or (total_wrapped_lines(view) + 1)) - 1

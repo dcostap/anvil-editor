@@ -54,6 +54,55 @@ test.describe("DocView decoration providers", function()
     test.ok(found_inline, "expected inline provider range to be drawn")
   end)
 
+  test.it("aligns inline ranges with rendered line content", function()
+    local view = make_view("heading")
+    local base_height = view:get_line_height()
+    local leading_gap = math.max(2, math.floor(base_height / 2))
+    local inline_color = { 9, 8, 7, 255 }
+    view:add_visual_metric_provider("tall-rendered-row", {
+      line_height = function() return base_height + leading_gap end,
+    })
+    view:add_line_render_provider("tall-rendered-row", {
+      render_line = function()
+        return {
+          first_row_content_y_offset = leading_gap,
+          text_row_height = base_height,
+          caret_height = base_height,
+          fragments = {
+            { source_col1 = 1, source_col2 = 8, text = "heading" },
+          },
+        }
+      end,
+    })
+    view:add_decoration_provider("rendered-inline", {
+      inline_ranges = function()
+        return { { col1 = 1, col2 = 8, color = inline_color } }
+      end,
+    })
+
+    local old_rect = renderer.draw_rect
+    local old_text = renderer.draw_text
+    local inline_rect
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == inline_color then inline_rect = { x = x, y = y, w = w, h = h } end
+    end
+    renderer.draw_text = function(font, text, x, y, color, opts)
+      return x + font:get_width(text, opts)
+    end
+    local ok, err = pcall(function()
+      local x, y = view:get_line_screen_position(1)
+      view:draw_line_body(1, x, y)
+    end)
+    renderer.draw_rect = old_rect
+    renderer.draw_text = old_text
+    if not ok then error(err, 0) end
+
+    local _, line_y = view:get_line_screen_position(1)
+    local rect = test.not_nil(inline_rect)
+    test.equal(rect.y, line_y + leading_gap)
+    test.equal(rect.h, base_height)
+  end)
+
   test.it("removes decoration and POI providers", function()
     local view = make_view("alpha")
     view:add_decoration_provider("test", { line_background = function() return { 1, 1, 1, 255 } end })

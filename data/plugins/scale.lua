@@ -26,14 +26,14 @@ local function capture_active_docview_caret_y()
   local view = core.active_view
   if not DocView or not view or not view.extends or not view:extends(DocView) then return nil end
   local line, col = view.doc:get_selection()
-  local _, y = view:get_line_screen_position(line, col)
+  local y = view:get_position_highlight_geometry(line, col)
   return { view = view, line = line, col = col, y = y }
 end
 
 local function restore_active_docview_caret_y(anchor)
   if not anchor or not anchor.view or not anchor.view.doc then return end
   local view = anchor.view
-  local _, y = view:get_line_screen_position(anchor.line, anchor.col)
+  local y = view:get_position_highlight_geometry(anchor.line, anchor.col)
   local target = (view.scroll.to.y or view.scroll.y or 0) + (y - anchor.y)
   local max = view:get_scrollable_size() - view.size.y
   target = common.clamp(target, 0, max)

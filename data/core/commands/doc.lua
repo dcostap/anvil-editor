@@ -502,14 +502,16 @@ local function markdown_list_content_start(doc, line, line_text, allow_empty)
   local task, after_task = content:sub(content_start):match(
     "^(%[[ xX]%])([\t ]*)"
   )
+  local task_start
   if task then
     local after_col = content_start + #task + #after_task
     if #after_task > 0 or after_col == #content + 1 then
+      task_start = content_start
       content_start = after_col
     end
   end
   if allow_empty or content:sub(content_start):match("^%S") then
-    return content_start, #indent
+    return content_start, #indent, task_start
   end
 end
 
@@ -1668,13 +1670,13 @@ local commands = {
 
   ["doc:backspace"] = function(dv)
     if not can_edit(dv, "backspace") then return end
-    local list_outdent_items = {}
-    local selection_count, list_outdent_count = 0, 0
+    local list_actions = {}
+    local selection_count, list_action_count = 0, 0
     for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
       selection_count = selection_count + 1
       if line1 == line2 and col1 == col2 then
         local line_text = dv.doc.lines[line1] or ""
-        local content_start, indent_length = markdown_list_content_start(
+        local content_start, indent_length, task_start = markdown_list_content_start(
           dv.doc, line1, line_text
         )
         indent_length = indent_length or #(line_text:match("^[\t ]*") or "")
@@ -1684,25 +1686,26 @@ local commands = {
         local action
         if empty_list_item then
           action = indent_length > 0 and "outdent" or "clear"
-        elseif content_start and indent_length > 0 and col1 == content_start then
-          action = "outdent"
+        elseif content_start and col1 == content_start then
+          action = task_start and "remove_task" or "remove_marker"
         end
         if action then
-          list_outdent_count = list_outdent_count + 1
-          list_outdent_items[#list_outdent_items + 1] = {
+          list_action_count = list_action_count + 1
+          list_actions[#list_actions + 1] = {
             idx = idx,
             line1 = line1,
             col1 = col1,
             line2 = line2,
             col2 = col2,
             indent_length = indent_length,
+            prefix_start = task_start or (indent_length + 1),
             action = action,
           }
         end
       end
     end
-    if selection_count > 0 and list_outdent_count == selection_count then
-      for _, item in ipairs(list_outdent_items) do
+    if selection_count > 0 and list_action_count == selection_count then
+      for _, item in ipairs(list_actions) do
         if item.action == "clear" then
           local edit = {
             line1 = item.line1,
@@ -1722,6 +1725,29 @@ local commands = {
             merge_cursors = false,
           })
           core.log_quiet("Markdown backspace removed empty list marker in %s at %d:%d", dv.doc:get_name(), item.line1, item.col1)
+        elseif item.action == "remove_task" or item.action == "remove_marker" then
+          local edit = {
+            line1 = item.line1,
+            col1 = item.prefix_start,
+            line2 = item.line1,
+            col2 = item.col1,
+            text = "",
+            idx = item.idx,
+          }
+          local selections, last_selection = dv.doc:selections_after_edits(
+            { edit }, { [item.idx] = "start" }, dv.doc.last_selection
+          )
+          dv.doc:apply_edits({ edit }, {
+            type = "remove",
+            selections = selections,
+            last_selection = last_selection,
+            merge_cursors = false,
+          })
+          core.log_quiet(
+            "Markdown backspace removed %s in %s at %d:%d",
+            item.action == "remove_task" and "task marker" or "list marker",
+            dv.doc:get_name(), item.line1, item.col1
+          )
         else
           local line1, col1, line2, col2 = dv.doc:indent_text(
             true, item.line1, item.col1, item.line2, item.col2

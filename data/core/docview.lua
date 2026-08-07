@@ -384,6 +384,16 @@ local function wrapped_row_geometry(view, y, first_idx, idx)
 end
 
 local function draw_wrapped_search_match(view, line, col1, col2, x, y, idx0, primary, outline, visible_idx1, visible_idx2)
+  if view:get_line_render(line) then
+    for x1, row_y, x2, row_height in view:iter_text_range_screen_segments(
+      line, col1, col2, x, y
+    ) do
+      draw_wrapped_search_match_segment(
+        view, x1, row_y, x2, row_height, primary, outline
+      )
+    end
+    return
+  end
   local idx1 = linewrapping.get_line_idx_col_count(view, line, col1)
   local idx2 = linewrapping.get_line_idx_col_count(view, line, col2)
   local from_idx = math.max(idx1, visible_idx1 or idx1)
@@ -3666,6 +3676,39 @@ local function position_is_first_visual_row(view, line, col, line_end)
     == view:get_visual_row(line, 1, false)
 end
 
+---Return the content geometry of a specialized rendered line.
+---The visual row may include spacing that is not occupied by the rendered
+---text (for example, Markdown block spacing before a heading). Consumers
+---that draw or hit-test text-relative elements must use this geometry rather
+---than treating the visual row origin as the content origin.
+---@param line integer
+---@param col? integer
+---@param line_end? boolean
+---@return number? y_offset Relative Y offset of the rendered content
+---@return number? height Height of the rendered content
+---@return table? render_line
+---@return table? position_row
+function DocView:get_line_render_content_geometry(line, col, line_end)
+  local render_line = self:get_line_render(line)
+  if not render_line then return nil end
+
+  local _, position_row = self:get_position_line_render_row(line, col or 1)
+  if position_row then
+    return position_row.y_offset or 0,
+      math.max(1, position_row.height or self:get_line_height()),
+      render_line, position_row
+  end
+
+  local row_height = self:get_position_visual_row_height(
+    line, col or 1, line_end
+  )
+  local y_offset, height = line_render_content_geometry(
+    render_line, row_height,
+    position_is_first_visual_row(self, line, col, line_end)
+  )
+  return y_offset, height, render_line, nil
+end
+
 local function selection_covers_fold(doc, fold)
   local fold_col1 = fold.col1 or 1
   local fold_col2 = fold.col2 or (#(doc.lines[fold.line2] or "") + 1)
@@ -3679,8 +3722,8 @@ local function selection_covers_fold(doc, fold)
   return false
 end
 
-function DocView:draw_fold_widget_gutter(fold, x, y, width)
-  local lh = self:get_line_height()
+function DocView:draw_fold_widget_gutter(fold, x, y, width, height)
+  local lh = height or self:get_line_height()
   renderer.draw_rect(x, y, width, lh, style.gutter_bg or style.background2)
   if self:line_number_visible_at(fold.line1) then
     local color = selection_overlaps_fold(self.doc, fold) and style.line_number2 or style.line_number
@@ -3689,8 +3732,8 @@ function DocView:draw_fold_widget_gutter(fold, x, y, width)
   return lh
 end
 
-function DocView:draw_fold_widget_body(fold, x, y)
-  local lh = self:get_line_height()
+function DocView:draw_fold_widget_body(fold, x, y, height)
+  local lh = height or self:get_line_height()
   local bx = x + self.scroll.x
   local bw = math.max(0, self.position.x + self.size.x - bx)
   local bg = selection_covers_fold(self.doc, fold) and style.selection or style.fold_widget_background
@@ -3931,7 +3974,23 @@ function DocView:get_render_fragment_at_position(x, y)
     local idx, _, _, row_start = linewrapping.get_line_idx_col_count(self, line, col)
     local next_line, row_end = linewrapping.get_idx_line_col(self, idx + 1)
     if next_line ~= line then row_end = #(self.doc.lines[line] or "") end
-    local line_x = self:get_line_screen_position(line)
+    local line_x, line_y = self:get_line_screen_position(line)
+    local first_idx = self:get_visual_row(line, 1, false)
+    local row_y = line_y + self:get_visual_row_y_offset(idx)
+      - self:get_visual_row_y_offset(first_idx)
+    local row_height = self:get_visual_row_height(idx)
+    if not (type(render_line.position_rows) == "table"
+      and #render_line.position_rows > 0)
+    then
+      local content_y_offset, content_height = line_render_content_geometry(
+        render_line, row_height, idx == first_idx
+      )
+      if y < row_y + content_y_offset
+      or y >= row_y + content_y_offset + content_height
+      then
+        return nil
+      end
+    end
     local begin_width = row_start ~= 1 and (self.wrapped_line_offsets[line] or 0) or 0
     local line_x_offset = render_line.x_offset or 0
     local row_render_x = self:get_line_render_col_x_offset(render_line, row_start)
@@ -3955,6 +4014,14 @@ function DocView:get_render_fragment_at_position(x, y)
   local xrel, yrel = x - line_x, y - line_y
   local row = self:get_visual_row(line, 1)
   local row_height = self:get_visual_row_height(row)
+  local content_y_offset, content_height = 0, row_height
+  if not (type(render_line.position_rows) == "table" and #render_line.position_rows > 0) then
+    content_y_offset, content_height = self:get_line_render_content_geometry(
+      line, col
+    )
+    content_y_offset = content_y_offset or 0
+    content_height = content_height or row_height
+  end
   local tx = render_line.x_offset or 0
   local _, indent_size = self.doc:get_indent_info()
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
@@ -3973,8 +4040,10 @@ function DocView:get_render_fragment_at_position(x, y)
           render_line, col1, position_row
         )
         or tx
-      local top = position_row and (position_row.y_offset or 0) or 0
-      local height = position_row and (position_row.height or row_height) or row_height
+      local top = position_row and (position_row.y_offset or 0)
+        or content_y_offset
+      local height = position_row and (position_row.height or row_height)
+        or content_height
       if xrel >= left and xrel <= left + width
         and yrel >= top and yrel <= top + height
       then
@@ -4000,13 +4069,78 @@ end
 
 function DocView:get_render_widget_at_position(x, y)
   if not self:has_line_render_providers() then return nil end
-  local line = self:resolve_screen_position(x, y)
+  local line, col = self:resolve_screen_position(x, y)
   local render_line = self:get_line_render(line)
   if not render_line then return nil end
+
+  if self.wrapped_settings and not render_line.disable_wrapping then
+    local idx, _, _, row_start = linewrapping.get_line_idx_col_count(
+      self, line, col
+    )
+    local next_line, row_end = linewrapping.get_idx_line_col(self, idx + 1)
+    local last_row = next_line ~= line
+    if last_row then row_end = #(self.doc.lines[line] or "") end
+    local line_x, line_y = self:get_line_screen_position(line)
+    local first_idx = self:get_visual_row(line, 1, false)
+    local row_height = self:get_visual_row_height(idx)
+    local row_y = line_y + self:get_visual_row_y_offset(idx)
+      - self:get_visual_row_y_offset(first_idx)
+    local content_y_offset, content_height = line_render_content_geometry(
+      render_line, row_height, idx == first_idx
+    )
+    local begin_width = row_start ~= 1 and (self.wrapped_line_offsets[line] or 0) or 0
+    local row_render_x = self:get_line_render_col_x_offset(render_line, row_start)
+    local xrel, yrel = x - line_x, y - row_y
+    local widget_hits = {}
+    for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+      if not fragment.hidden and fragment.widget then
+        local col1 = fragment.source_col1 or 1
+        local col2 = fragment.source_col2 or col1
+        local from, to = math.max(col1, row_start), math.min(col2, row_end)
+        local left
+        local width = fragment.hit_width or fragment.widget.width or fragment.width or 0
+        local anchored = col1 == col2 and col1 >= row_start
+          and (col1 < row_end or (last_row and col1 == row_end))
+        if anchored then
+          left = self:get_line_render_col_x_offset(render_line, col1) - width
+        elseif from < to and from == col1 and to == col2 then
+          left = (render_line.x_offset or 0) + begin_width
+            + self:get_line_render_col_x_offset(render_line, col1)
+            - row_render_x
+        end
+        if left then
+          local hit_left, hit_top, hit_width, hit_height = render_widget_rect(
+            fragment, left, content_y_offset, content_height
+          )
+          widget_hits[#widget_hits + 1] = {
+            fragment = fragment, widget = fragment.widget,
+            left = hit_left, top = hit_top, width = hit_width,
+            height = hit_height,
+          }
+        end
+      end
+    end
+    for index = #widget_hits, 1, -1 do
+      local hit = widget_hits[index]
+      if xrel >= hit.left and xrel <= hit.left + hit.width
+      and yrel >= hit.top and yrel <= hit.top + hit.height
+      then
+        return { line = line, fragment = hit.fragment, widget = hit.widget }
+      end
+    end
+    return nil
+  end
+
   local line_x, line_y = self:get_line_screen_position(line)
   local xrel, yrel = x - line_x, y - line_y
   local row = self:get_visual_row(line, 1)
   local row_height = self:get_visual_row_height(row)
+  local content_y_offset, content_height = 0, row_height
+  if not (type(render_line.position_rows) == "table" and #render_line.position_rows > 0) then
+    content_y_offset, content_height = self:get_line_render_content_geometry(line, 1)
+    content_y_offset = content_y_offset or 0
+    content_height = content_height or row_height
+  end
   local tx = render_line.x_offset or 0
   local _, indent_size = self.doc:get_indent_info()
   local widget_hits = {}
@@ -4022,8 +4156,8 @@ function DocView:get_render_widget_at_position(x, y)
         local left, top, hit_width, hit_height = render_widget_rect(
           fragment,
           fragment.layout_x ~= nil and fragment.layout_x or tx,
-          0,
-          row_height
+          content_y_offset,
+          content_height
         )
         widget_hits[#widget_hits + 1] = {
           fragment = fragment, widget = widget,
@@ -4056,6 +4190,12 @@ function DocView:get_render_widget_near_position(x, y)
       local line_x, line_y = self:get_line_screen_position(line)
       local row = self:get_visual_row(line, 1)
       local row_height = self:get_visual_row_height(row)
+      local content_y_offset, content_height = 0, row_height
+      if not (type(render_line.position_rows) == "table" and #render_line.position_rows > 0) then
+        content_y_offset, content_height = self:get_line_render_content_geometry(line, 1)
+        content_y_offset = content_y_offset or 0
+        content_height = content_height or row_height
+      end
       local tx = render_line.x_offset or 0
       local _, indent_size = self.doc:get_indent_info()
       for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
@@ -4071,8 +4211,8 @@ function DocView:get_render_widget_near_position(x, y)
             local left, top, hit_width, hit_height = render_widget_rect(
               fragment,
               line_x + (fragment.layout_x ~= nil and fragment.layout_x or tx),
-              line_y,
-              row_height
+              line_y + content_y_offset,
+              content_height
             )
             local right, bottom = left + hit_width, top + hit_height
             local dx = x < left and left - x or x > right and x - right or 0
@@ -4388,13 +4528,18 @@ function DocView:get_position_highlight_geometry(line, col, line_end)
     line, col or 1, line_end
   )
   local render_line = self:get_line_render(line)
-  if render_line and render_line.highlight_height then
-    local content_y_offset = line_render_content_geometry(
-      render_line, row_height,
-      position_is_first_visual_row(self, line, col, line_end)
+  if render_line then
+    local content_y_offset, content_height = self:get_line_render_content_geometry(
+      line, col, line_end
     )
-    return y + (render_line.highlight_y_offset or content_y_offset), math.min(
-      row_height, math.max(1, tonumber(render_line.highlight_height) or row_height)
+    local requested = render_line.highlight_height
+      or render_line.caret_height
+      or content_height
+    if type(requested) == "function" then
+      requested = self:get_position_caret_height(line, col, line_end)
+    end
+    return y + (render_line.highlight_y_offset or content_y_offset or 0), math.min(
+      row_height, math.max(1, tonumber(requested) or content_height or row_height)
     )
   end
   return y, row_height
@@ -4751,6 +4896,18 @@ function DocView:get_line_render_position_col(render_line, x, y)
   end
 end
 
+local function rendered_position_hit_y(view, line, render_line, visual_row, y)
+  if type(render_line.position_rows) == "table" and #render_line.position_rows > 0 then
+    return y
+  end
+  local row_height = view:get_visual_row_height(visual_row)
+  local content_y_offset = line_render_content_geometry(
+    render_line, row_height,
+    visual_row == view:get_visual_row(line, 1, false)
+  )
+  return y - content_y_offset
+end
+
 ---Get the horizontal pixel offset for a column position.
 ---Accounts for tabs, syntax highlighting fonts, and caches long lines.
 ---@param line integer Line number
@@ -4972,7 +5129,11 @@ function DocView:resolve_screen_position(x, y)
         local rendered_col, rendered_row
         if render_line then
           rendered_col, rendered_row = self:get_line_render_position_col(
-            render_line, x - ox, y - (oy + self:get_visual_row_y_offset(idx))
+            render_line, x - ox,
+            rendered_position_hit_y(
+              self, entry.line, render_line, idx,
+              y - (oy + self:get_visual_row_y_offset(idx))
+            )
           )
         end
         if rendered_col then
@@ -4994,7 +5155,11 @@ function DocView:resolve_screen_position(x, y)
     local rendered_col, rendered_row
     if render_line then
       rendered_col, rendered_row = self:get_line_render_position_col(
-        render_line, x - ox, y - (oy + self:get_visual_row_y_offset(idx))
+        render_line, x - ox,
+        rendered_position_hit_y(
+          self, row_line, render_line, idx,
+          y - (oy + self:get_visual_row_y_offset(idx))
+        )
       )
     end
     if rendered_col then
@@ -5036,7 +5201,11 @@ function DocView:resolve_screen_position(x, y)
   local rendered_col, rendered_row
   if render_line then
     rendered_col, rendered_row = self:get_line_render_position_col(
-      render_line, x - ox, y - (oy + self:get_visual_row_y_offset(row))
+      render_line, x - ox,
+      rendered_position_hit_y(
+        self, line, render_line, row,
+        y - (oy + self:get_visual_row_y_offset(row))
+      )
     )
   end
   if rendered_col then
@@ -5116,8 +5285,7 @@ function DocView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
     self.scroll.y = math.max(0, self.scroll.y or 0)
     self.scroll.to.y = math.max(0, self.scroll.to.y or 0)
     local _, oy = self:get_content_offset()
-    local _, ly = self:get_line_screen_position(line, col)
-    local lh = self:get_line_height()
+    local ly, lh = self:get_position_highlight_geometry(line, col, false)
     local scroll_h = self:get_horizontal_scrollbar_height()
 
     local pad = self:get_visible_scroll_context_lines()
@@ -5129,7 +5297,9 @@ function DocView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
     if config.scroll_past_end and not self.mouse_selecting then
       local end_pad = self:get_scroll_past_end_context_lines()
       if end_pad > below_pad then
-        local target_idx = math.max(1, math.floor((ly - oy - style.padding.y) / lh) + 1)
+        local target_idx = self:get_visual_row_at_y(
+          math.max(0, ly - oy - style.padding.y)
+        )
         local rows_below = math.max(0, self:get_scrollable_line_count() - target_idx)
         if rows_below < end_pad then
           below_pad = end_pad
@@ -5554,9 +5724,9 @@ function DocView:update_ime_location()
     )()
   end
   if not x1 then
-    x1, y = self:get_line_screen_position(from_line, from_col)
+    x1 = self:get_line_screen_position(from_line, from_col)
+    y, h = self:get_position_highlight_geometry(from_line, from_col, false)
     x2 = x1
-    h = self:get_position_visual_row_height(from_line, from_col)
   end
   ime.set_location(x1, y, math.max(0, x2 - x1), h)
 end
@@ -5997,14 +6167,28 @@ function DocView:draw_line_hint(line, x, y)
 
   local draw_x = placement == "after_line_document_text" and hint_left_limit or content_right - width
   local tx = draw_x
+  local line_text = self.doc.lines[line] or ""
+  local hint_col = self.wrapped_settings and #line_text + 1 or 1
+  local content_y_offset, content_height = self:get_line_render_content_geometry(
+    line, hint_col, self.wrapped_settings and true or false
+  )
+  local hint_y = content_y_offset and y + content_y_offset or y
+  local hint_height = content_height or self:get_line_height()
   local ty = y + self:get_line_text_y_offset()
   local lh = self:get_line_height()
 
   phase_start = stats and system.get_time()
-  core.push_clip_rect(hint_left_limit, y, math.max(0, content_right - hint_left_limit), lh)
+  core.push_clip_rect(
+    hint_left_limit, hint_y, math.max(0, content_right - hint_left_limit), hint_height
+  )
   for _, segment in ipairs(segments) do
     local draw_text_start = stats and system.get_time()
-    tx = renderer.draw_text(segment.font, segment.text, tx, ty, segment.color)
+    local segment_y = content_y_offset
+      and hint_y + math.max(0, (hint_height - segment.font:get_height()) / 2)
+      or ty
+    tx = renderer.draw_text(
+      segment.font, segment.text, tx, segment_y, segment.color
+    )
     if stats then
       local elapsed = (system.get_time() - draw_text_start) * 1000
       stats.draw_text_calls = stats.draw_text_calls + 1
@@ -7110,8 +7294,23 @@ function DocView:iter_text_range_screen_segments(line, col1, col2, origin_x, ori
         local x1 = origin_x + screen_x1 - base_x
         local x2 = origin_x + screen_x2 - base_x
         local y = origin_y + screen_y - base_y
-        return x1, y, x2,
-          self:get_position_caret_height(line, segment_col1, false),
+        local caret_height = self:get_position_caret_height(
+          line, segment_col1, false
+        )
+        if render_line then
+          -- Specialized render lines can reserve visual-row space around
+          -- their text (Markdown headings use a leading block gap). Keep
+          -- range decorations on the same content row as the text draw.
+          local row_height = self:get_visual_row_height(
+            first_visual_row + row - 1
+          )
+          local content_y_offset, content_height = line_render_content_geometry(
+            render_line, row_height, row == 1
+          )
+          y = y + content_y_offset
+            + math.max(0, (content_height - caret_height) / 2)
+        end
+        return x1, y, x2, caret_height,
           segment_col1, segment_col2, row
       end
     end
@@ -7129,9 +7328,20 @@ local function draw_render_line_under_selection_backgrounds(view, render_line, x
       or font:get_width(fragment.text or "")
     local draw_x = fragment.layout_x ~= nil and x + fragment.layout_x or tx
     if fragment.background_under_selection and fragment.background then
+      local background_y, background_height = y, font:get_height()
+      if fragment.background_full_height then
+        background_height = row_height
+      else
+        local content_y_offset, content_height = view:get_line_render_content_geometry(
+          line, fragment.source_col1 or 1
+        )
+        if content_y_offset then
+          background_y = y + content_y_offset
+            + math.max(0, (content_height - font:get_height()) / 2)
+        end
+      end
       draw_render_fragment_background(
-        fragment, draw_x, y, width,
-        fragment.background_full_height and row_height or font:get_height(), true
+        fragment, draw_x, background_y, width, background_height, true
       )
     end
     tx = draw_x + width
@@ -7321,6 +7531,7 @@ local function draw_decoration_line_backgrounds(view, line, x, y)
 end
 
 local function draw_decoration_inline_ranges(view, line, x, y)
+  local render_line = view:get_line_render(line)
   for _, entry in ipairs(view:decoration_provider_entries()) do
     local ranges = provider_call(view, entry, "inline_ranges", view, line)
     for _, range in ipairs(ranges or {}) do
@@ -7328,7 +7539,31 @@ local function draw_decoration_inline_ranges(view, line, x, y)
       local col2 = math.max(col1, math.floor(tonumber(range.col2 or range[2]) or col1))
       local color = range.color or range[3]
       if color then
-        if view.wrapped_settings and view.__wrapped_draw_first_idx then
+        if render_line and not view.wrapped_settings
+        and not (type(render_line.position_rows) == "table"
+          and #render_line.position_rows > 0)
+        then
+          local tx1 = view:get_col_x_offset(line, col1)
+          local tx2 = view:get_col_x_offset(line, col2)
+          local width = tx2 - tx1
+          if width > 0 then
+            local content_y_offset, content_height =
+              view:get_line_render_content_geometry(line, col1)
+            renderer.draw_rect(
+              x + tx1, y + (content_y_offset or 0), width,
+              content_height or view:get_position_visual_row_height(line, col1),
+              color
+            )
+          end
+        elseif render_line then
+          for x1, row_y, x2, row_height in view:iter_text_range_screen_segments(
+            line, col1, col2, x, y
+          ) do
+            if x2 > x1 then
+              renderer.draw_rect(x1, row_y, x2 - x1, row_height, color)
+            end
+          end
+        elseif view.wrapped_settings and view.__wrapped_draw_first_idx then
           local first_idx = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line]
           if first_idx then
             for idx = view.__wrapped_draw_first_idx, view.__wrapped_draw_last_idx do
@@ -7428,6 +7663,26 @@ local function draw_line_render_position_row_range(
       end
     end
     ::continue_position_row_selection::
+  end
+  return drawn
+end
+
+local function draw_line_render_source_range(
+  view, line, render_line, col1, col2, x, y, color
+)
+  if type(render_line.position_rows) == "table" and #render_line.position_rows > 0 then
+    return draw_line_render_position_row_range(
+      view, render_line, col1, col2, x, y, color
+    )
+  end
+  local drawn = false
+  for x1, row_y, x2, row_height in view:iter_text_range_screen_segments(
+    line, col1, col2, x, y
+  ) do
+    if x2 > x1 then
+      renderer.draw_rect(x1, row_y, x2 - x1, row_height, color)
+      drawn = true
+    end
   end
   return drawn
 end
@@ -7567,6 +7822,10 @@ function DocView:draw_line_body(line, x, y)
             draw_line_render_position_row_range(
               self, render_line, col1, col2, x, y, style.selection
             )
+          elseif render_line then
+            draw_line_render_source_range(
+              self, line, render_line, col1, col2, x, y, style.selection
+            )
           else
             local idx1 = linewrapping.get_line_idx_col_count(self, line, col1)
             local idx2 = linewrapping.get_line_idx_col_count(self, line, col2)
@@ -7659,6 +7918,10 @@ function DocView:draw_line_body(line, x, y)
         draw_line_render_position_row_range(
           self, render_line, sel[1], sel[2], x, y, sel[3]
         )
+      elseif render_line then
+        draw_line_render_source_range(
+          self, line, render_line, sel[1], sel[2], x, y, sel[3]
+        )
       else
         local x1 = x + self:get_col_x_offset(line, sel[1])
         local x2 = x + self:get_col_x_offset(line, sel[2])
@@ -7682,6 +7945,10 @@ function DocView:draw_line_body(line, x, y)
         elseif render_line and render_line.position_rows then
           draw_line_render_position_row_range(
             self, render_line, col1, col2, x, y, style.selection
+          )
+        elseif render_line then
+          draw_line_render_source_range(
+            self, line, render_line, col1, col2, x, y, style.selection
           )
         else
           local x1 = x + self:get_col_x_offset(line, col1)
@@ -7736,14 +8003,23 @@ end
 ---@param width number Gutter width
 ---@return integer height Line height
 function DocView:draw_line_gutter(line, x, y, width)
-  local lh = self:get_line_height()
-  local render_line = self.wrapped_settings and self:get_line_render(line)
+  local render_line = self:get_line_render(line)
   local uses_wrapped_rows = self.wrapped_settings
     and not (render_line and render_line.disable_wrapping)
-  local row_height = uses_wrapped_rows and lh
+  local first_visual_row = self:get_visual_row(line, 1, false)
+  local row_height = uses_wrapped_rows
+    and self:get_visual_row_height(first_visual_row)
     or self:get_position_visual_row_height(line, 1)
   local height = row_height
-  if self:line_number_visible_at(line) and row_height >= self:get_font():get_height() then
+  local text_y, text_height = y, row_height
+  if render_line then
+    local content_y_offset, content_height = self:get_line_render_content_geometry(line, 1)
+    if content_y_offset then
+      text_y = y + content_y_offset
+      text_height = content_height
+    end
+  end
+  if self:line_number_visible_at(line) and text_height >= self:get_font():get_height() then
     local color = style.line_number
     local gutter_selection_cache = self.__line_gutter_selection_cache
     if gutter_selection_cache then
@@ -7758,10 +8034,15 @@ function DocView:draw_line_gutter(line, x, y, width)
       end
     end
     x = x + style.padding.x
-    common.draw_text(self:get_font(), color, line, "right", x, y, width, row_height)
+    common.draw_text(self:get_font(), color, line, "right", x, text_y, width, text_height)
   end
   if uses_wrapped_rows then
-    height = math.max(height, lh * linewrapping.get_wrapped_line_count(self, line))
+    local row_count = linewrapping.get_wrapped_line_count(self, line)
+    height = math.max(
+      height,
+      self:get_visual_row_y_offset(first_visual_row + row_count)
+        - self:get_visual_row_y_offset(first_visual_row)
+    )
   end
   return height
 end
@@ -7882,15 +8163,26 @@ function DocView:draw_folded()
   local x = self.position.x - self.scroll.x
   local gw, gpad = self:get_gutter_width()
   local gutter_w = gpad and gw - gpad or gw
+  local function line_origin_y(entry)
+    local first_row = self:get_visual_row(entry.line, 1, false)
+    local visual_row = entry.visual_row
+      or first_row + (entry.row_in_line or 1) - 1
+    return entry.y - (
+      self:get_visual_row_y_offset(visual_row)
+      - self:get_visual_row_y_offset(first_row)
+    )
+  end
   local drawn_gutters = {}
   for entry in self:iter_visible_visual_rows() do
     if entry.type == "fold" then
-      self:draw_fold_widget_gutter(entry.fold, self.position.x, entry.y, gutter_w)
+      self:draw_fold_widget_gutter(
+        entry.fold, self.position.x, entry.y, gutter_w, entry.height
+      )
     elseif entry.type == "extra" or entry.type == "provider" then
       -- provider-owned visual row; no default gutter
     elseif not drawn_gutters[entry.line] then
       drawn_gutters[entry.line] = true
-      local line_y = entry.y - (entry.row_in_line - 1) * self:get_line_height()
+      local line_y = line_origin_y(entry)
       self:draw_line_gutter(entry.line, self.position.x, line_y, gutter_w)
     end
   end
@@ -7899,16 +8191,19 @@ function DocView:draw_folded()
   local drawn_bodies = {}
   for entry in self:iter_visible_visual_rows() do
     if entry.type == "fold" then
-      self:draw_fold_widget_body(entry.fold, x + gw, entry.y)
+      self:draw_fold_widget_body(entry.fold, x + gw, entry.y, entry.height)
     elseif entry.type == "extra" or entry.type == "provider" then
       local row = entry.provider_row
       if entry.type == "provider" and row and row.draw then
-        local ok, err = pcall(row.draw, self, row, x + gw, entry.y, math.max(0, self.size.x - gw), self:get_line_height())
+        local ok, err = pcall(
+          row.draw, self, row, x + gw, entry.y,
+          math.max(0, self.size.x - gw), entry.height or self:get_line_height()
+        )
         if not ok then core.log_quiet("DocView provider row draw failed for %s: %s", self.doc:get_name(), tostring(err)) end
       end
     elseif not drawn_bodies[entry.line] then
       drawn_bodies[entry.line] = true
-      local line_y = entry.y - (entry.row_in_line - 1) * self:get_line_height()
+      local line_y = line_origin_y(entry)
       self:draw_line_body(entry.line, x + gw, line_y)
     end
   end

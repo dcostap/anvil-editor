@@ -400,14 +400,30 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 2, 1, 2, 1 })
   end)
 
-  test.it("outdents a nested Markdown list item at the content start", function(context)
+  test.it("removes a nested Markdown list marker at the content start", function(context)
     local doc, view = new_editor(context, "- parent\n  - child\nafter", "sample.md")
     core.set_active_view(view)
     doc:set_selection(2, 5, 2, 5)
 
     test.ok(command.perform("doc:backspace"))
 
-    test.equal(text(doc), "- parent\n- child\nafter\n")
+    test.equal(text(doc), "- parent\n  child\nafter\n")
+    test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
+  end)
+
+  test.it("removes a Markdown task marker before removing its list marker", function(context)
+    local doc, view = new_editor(context, "- parent\n  - [ ] child\nafter", "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(2, 9, 2, 9)
+
+    test.ok(command.perform("doc:backspace"))
+
+    test.equal(text(doc), "- parent\n  - child\nafter\n")
+    test.same(view:get_selection_state().selections, { 2, 5, 2, 5 })
+
+    test.ok(command.perform("doc:backspace"))
+
+    test.equal(text(doc), "- parent\n  child\nafter\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
   end)
 
