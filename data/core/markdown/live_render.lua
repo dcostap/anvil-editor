@@ -971,6 +971,10 @@ local function image_fragment(view, span, opts)
         height = height + padding * 2,
         image_height = height,
         padding = padding,
+        hover_outline_padding = 0,
+        hover_outline_width = math.max(1, math.floor(2 * SCALE)),
+        hover_outline_outside = true,
+        suppress_hover_background = true,
         cursor = "hand",
         on_mouse_pressed = function(_, owner, hit, button)
           if button ~= "left" then return false end
@@ -1193,6 +1197,14 @@ local function image_only_render_line(view, text, line, span, active)
       image.draw_x_offset = leading_width - body_font:get_width(text)
       image.draw_y_offset = markdown_live_body_line_height(view) + image_vertical_padding()
       image.widget.height = image.widget.height + markdown_live_body_line_height(view)
+      -- The revealed source and the image are separate visual rows.  Keep the
+      -- widget attached to the image block rather than letting the zero-width
+      -- source anchor participate in ordinary selection geometry.
+      image.image_block = true
+      image.image_block_col1 = span.col1
+      image.image_block_col2 = span.col2
+      image.image_block_active = true
+      image.image_block_layout_x = leading_width
       fragments[#fragments + 1] = image
     end
     return {
@@ -3006,7 +3018,7 @@ local function layout_inline_image_rows(view, line_text, render_line)
       rows[#rows].end_inclusive = true
     end
 
-    block.layout_x = 0
+    block.layout_x = block.image_block_layout_x or 0
     block.draw_x_offset = 0
     block.draw_y_offset = y + (block.widget.padding or 0)
     y = y + block.widget.height
@@ -5126,7 +5138,11 @@ local function build_render_line(view, line, _context)
           decorate_link_fragment(view, line, image_span, fragment)
         end
       end
-      return prose_render_line(view, text, render_line)
+      render_line = prose_render_line(view, text, render_line)
+      if image_revealed then
+        render_line = layout_inline_image_rows(view, text, render_line)
+      end
+      return render_line
     end
   end
 

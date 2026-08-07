@@ -3140,6 +3140,16 @@ test.describe("Markdown Live Preview", function()
     test.ok(inactive_height > 32)
     doc:set_selection(1, 1)
     test.ok(view:get_visual_row_height(1) > inactive_height)
+    local active_render_line = test.not_nil(view:get_line_render(1))
+    local rendered_line, source_row = view:get_position_line_render_row(1, 1)
+    test.equal(rendered_line, active_render_line)
+    test.not_nil(source_row)
+    test.equal(source_row.source_col1, 1)
+    test.equal(source_row.source_col2, #doc.lines[1])
+    test.ok(
+      active_render_line.layout_height > source_row.height,
+      "the revealed image source must occupy its own row above the image"
+    )
     view:draw_line_text(1, 0, 0)
     test.equal(table.concat(drawn_text), "![Alt](" .. image_url .. ")")
     doc:set_selection(2, 1)
