@@ -4,6 +4,23 @@ local style = require "core.style"
 
 local pending_render = {}
 
+local CALLOUT_CANONICAL_TYPES = {
+  note = "note", abstract = "abstract", summary = "abstract", tldr = "abstract",
+  info = "info", todo = "todo", tip = "tip", hint = "tip", important = "tip",
+  success = "success", check = "success", done = "success",
+  question = "question", help = "question", faq = "question",
+  warning = "warning", caution = "warning", attention = "warning",
+  failure = "failure", fail = "failure", missing = "failure",
+  danger = "danger", error = "danger", bug = "bug", example = "example",
+  quote = "quote", cite = "quote",
+}
+
+local CALLOUT_ICONS = {
+  note = "✎", abstract = "≡", info = "i", todo = "☑", tip = "✦",
+  success = "✓", question = "?", warning = "!", failure = "×",
+  danger = "⚡", bug = "●", example = "◆", quote = "❝",
+}
+
 function pending_render.current_source(
   view, line, previous, current_text, code,
   source_fallback, prose_render, scaled_font, heading_from_source, heading_font,
@@ -223,16 +240,22 @@ function pending_render.current_source(
     if callout_end then
       local content_col1 = callout_end + 1
       local title = current_text:sub(content_col1)
-      local display_type = callout_type:lower()
+      local normalized_type = callout_type:lower()
+      local canonical_type = CALLOUT_CANONICAL_TYPES[normalized_type] or "note"
+      local display_type = normalized_type
         :gsub("[_-]+", " "):gsub("^%l", string.upper)
       local fold = callout_fold == "+" and "▾ "
         or callout_fold == "-" and "▸ " or ""
+      local palette = style.markdown_live_callout_palette
+        and (style.markdown_live_callout_palette[canonical_type]
+          or style.markdown_live_callout_palette.note)
       local fragments = inline_fragments(title, content_col1)
       table.insert(fragments, 1, {
         source_col1 = 1,
         source_col2 = content_col1,
-        text = "◆ " .. fold .. (title == "" and display_type or ""),
-        color = style.markdown_live_callout_icon,
+        text = CALLOUT_ICONS[canonical_type] .. " " .. fold
+          .. (title == "" and display_type or ""),
+        color = palette and palette.accent or style.accent,
       })
       if #fragments == 1 and title ~= "" then
         fragments[#fragments + 1] = {

@@ -79,6 +79,40 @@ test.describe("DocView folding", function()
     test.equal(view:get_scrollable_line_count(), 7)
   end)
 
+  test.it("keeps a fold header row visible when its widget is hidden", function(context)
+    local view = open_editor(context, numbered_lines(6), { wrapping = false })
+
+    local fold = assert(view:add_fold_region {
+      line1 = 2, line2 = 4, show_widget = false,
+    })
+
+    test.equal(fold.show_widget, false)
+    test.equal(view:get_scrollable_line_count(), 4)
+    local header = view:get_visual_row_entry(2)
+    test.equal(header.type, "line")
+    test.equal(header.line, 2)
+    test.equal(view:is_line_hidden_by_fold(2), false)
+    test.equal(view:is_line_hidden_by_fold(3), true)
+  end)
+
+  test.it("retains nested collapsed fold state when explicitly allowed", function(context)
+    local view = open_editor(context, numbered_lines(8), { wrapping = false })
+    local outer = assert(view:add_fold_region {
+      line1 = 2, line2 = 7, show_widget = false, allow_nested = true,
+      collapsed = false,
+    })
+    local inner = assert(view:add_fold_region {
+      line1 = 3, line2 = 5, show_widget = false, allow_nested = true,
+    })
+
+    test.equal(inner.collapsed, true)
+    test.equal(view:collapse_fold_region(outer, "nested-test"), true)
+    test.equal(inner.collapsed, true)
+    test.equal(view:expand_fold_region(outer, "nested-test"), true)
+    test.equal(inner.collapsed, true)
+    test.equal(view:is_line_hidden_by_fold(4), true)
+  end)
+
   test.it("maps a fold widget row at the folded range start", function(context)
     local view = open_editor(context, numbered_lines(8), { wrapping = false })
     view:add_fold_region { line1 = 3, line2 = 5 }

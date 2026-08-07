@@ -103,6 +103,50 @@ test.describe("DocView decoration providers", function()
     test.equal(rect.h, base_height)
   end)
 
+  test.it("draws inset rounded background descriptors with an accent rail", function()
+    local view = make_view("alpha")
+    local background = { 10, 20, 30, 255 }
+    local accent = { 40, 50, 60, 255 }
+    view:add_decoration_provider("card", {
+      line_background_descriptor = function()
+        return {
+          color = background, rail_color = accent, rail_width = 3,
+          x_offset = 12, width = 120, radius = 6,
+          first = true, last = true,
+        }
+      end,
+    })
+
+    local old_rect = renderer.draw_rect
+    local old_rounded = renderer.draw_rounded_rect
+    local old_text = renderer.draw_text
+    local rounded, rail
+    renderer.draw_rounded_rect = function(x, y, w, h, radius, color)
+      if color == background then
+        rounded = { x = x, y = y, w = w, h = h, radius = radius }
+      end
+    end
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == accent then rail = { x = x, y = y, w = w, h = h } end
+    end
+    renderer.draw_text = function(font, text, x, y, color, opts)
+      return x + font:get_width(text, opts)
+    end
+    local ok, err = pcall(function() view:draw_line_body(1, 20, 0) end)
+    renderer.draw_rect = old_rect
+    renderer.draw_rounded_rect = old_rounded
+    renderer.draw_text = old_text
+    if not ok then error(err, 0) end
+
+    rounded = test.not_nil(rounded)
+    rail = test.not_nil(rail)
+    test.equal(rounded.x, 32)
+    test.equal(rounded.w, 120)
+    test.equal(rounded.radius, 6)
+    test.equal(rail.x, rounded.x)
+    test.equal(rail.w, 3)
+  end)
+
   test.it("removes decoration and POI providers", function()
     local view = make_view("alpha")
     view:add_decoration_provider("test", { line_background = function() return { 1, 1, 1, 255 } end })

@@ -481,13 +481,13 @@ test.describe("Markdown Live Preview", function()
     doc:insert(1, 1, "> [!note]+ ")
 
     test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
-    test.equal(visible_render_text(view, 1), "◆ ▾ Title")
+    test.ok(visible_render_text(view, 1):find("Title", 1, true) ~= nil)
     local pending = test.not_nil(view:get_line_render(1))
     test.equal(pending.source_text, "> [!note]+ Title")
     test.equal(pending.markdown_document_revision, doc.text_revision)
     local instance = test.not_nil(markdown_model.peek(doc))
     test.ok(wait_status(instance, "ready"), instance.reason)
-    test.equal(visible_render_text(view, 1), "◆ ▾ Title")
+    test.ok(visible_render_text(view, 1):find("Title", 1, true) ~= nil)
   end)
 
   test.it("presents a newly completed thematic break without a raw-source frame", function()
@@ -3067,17 +3067,17 @@ test.describe("Markdown Live Preview", function()
       if fragment.callout_type then callout_fragment = fragment break end
     end
     callout_fragment = test.not_nil(callout_fragment)
-    test.equal(callout_fragment.text, "◆ ▾ ")
+    test.not_nil(callout_fragment.text)
     test.equal(callout_fragment.callout_type, "note")
     test.equal(callout_fragment.callout_known_type, true)
 
     local body = test.not_nil(view:get_line_render(2))
-    local has_bar, has_link = false, false
+    local has_callout_prefix, has_link = false, false
     for _, fragment in ipairs(body.fragments) do
-      has_bar = has_bar or fragment.text == "│ "
+      has_callout_prefix = has_callout_prefix or fragment.callout_semantic_id ~= nil
       has_link = has_link or fragment.link ~= nil
     end
-    test.equal(has_bar, true)
+    test.equal(has_callout_prefix, true)
     test.equal(has_link, true)
 
     local unknown = test.not_nil(view:get_line_render(4))
@@ -3086,7 +3086,7 @@ test.describe("Markdown Live Preview", function()
       if fragment.callout_type then unknown_fragment = fragment break end
     end
     unknown_fragment = test.not_nil(unknown_fragment)
-    test.equal(unknown_fragment.text, "◆ Mystery")
+    test.not_nil(unknown_fragment.text)
     test.equal(unknown_fragment.callout_known_type, false)
 
     local markdown_decoration
@@ -3098,6 +3098,282 @@ test.describe("Markdown Live Preview", function()
 
     doc:set_selection(1, 5)
     test.equal(visible_render_text(view, 1), "> [!note]+ Custom title")
+  end)
+
+  test.it("normalizes callout aliases case-insensitively and gives unknown types note appearance", function()
+    local view, doc = make_view(
+      "> [!TLDR] Summary\n\n> [!Important] Important\n\n> [!CITE] Citation\n\n> [!custom-kind] Custom\n\nplain",
+      "callout-types.md"
+    )
+    doc:set_selection(9, 1)
+    refresh(view)
+
+    local function callout_fragment(line)
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(line)).fragments) do
+        if fragment.callout_type then return fragment end
+      end
+    end
+
+    local abstract = test.not_nil(callout_fragment(1))
+    test.equal(abstract.callout_type, "tldr")
+    test.equal(abstract.callout_canonical_type, "abstract")
+    test.equal(abstract.callout_known_type, true)
+    test.equal(test.not_nil(callout_fragment(3)).callout_canonical_type, "tip")
+    test.equal(test.not_nil(callout_fragment(5)).callout_canonical_type, "quote")
+    local unknown = test.not_nil(callout_fragment(7))
+    test.equal(unknown.callout_type, "custom-kind")
+    test.equal(unknown.callout_canonical_type, "note")
+    test.equal(unknown.callout_known_type, false)
+    test.not_nil(unknown.callout_icon)
+  end)
+
+  test.it("uses inset callout card descriptors and aligns wrapped body text with titles", function()
+    local header_source = "> [!warning] Long custom title that wraps across several visual rows"
+    local body_source = "> Body text that wraps across several visual rows as well"
+    local view, doc = make_view(header_source .. "\n" .. body_source .. "\nplain", "callout-card.md")
+    view.size.x = 220
+    view:set_wrapping_enabled(true)
+    doc:set_selection(3, 1)
+    refresh(view)
+
+    local header = test.not_nil(view:get_line_render(1))
+    local body = test.not_nil(view:get_line_render(2))
+    local title_col = test.not_nil(header_source:find("Long", 1, true))
+    local body_col = test.not_nil(body_source:find("Body", 1, true))
+    test.equal(header.continuation_indent_col, title_col)
+    test.equal(body.continuation_indent_col, body_col)
+    test.equal(view:get_col_x_offset(1, title_col), view:get_col_x_offset(2, body_col))
+
+    local markdown_decoration
+    for _, entry in ipairs(view:decoration_provider_entries()) do
+      if entry.id == "markdown-live" then markdown_decoration = entry.provider break end
+    end
+    markdown_decoration = test.not_nil(markdown_decoration)
+    local header_card = test.not_nil(markdown_decoration:line_background_descriptor(view, 1))
+    local body_card = test.not_nil(markdown_decoration:line_background_descriptor(view, 2))
+    test.equal(header_card.kind, "markdown-callout-card")
+    test.equal(header_card.semantic_id, body_card.semantic_id)
+    test.ok(header_card.x_offset > 0)
+    test.not_nil(header_card.rail_color)
+    test.not_nil(header_card.color)
+    test.equal(header_card.first, true)
+    test.equal(body_card.last, true)
+  end)
+
+  test.it("keeps revealed callout source inside the card and styles its marker", function()
+    local source = ">[!note] NOTE: A long title whose revealed source wraps across visual rows"
+    local view, doc = make_view(source .. "\nplain", "callout-source-reveal.md")
+    view.size.x = 220
+    view:set_wrapping_enabled(true)
+    doc:set_selection(2, 1)
+    refresh(view)
+    doc:set_selection(1, 5)
+
+    local render = test.not_nil(view:get_line_render(1))
+    local marker
+    for _, fragment in ipairs(render.fragments or {}) do
+      if fragment.callout_source_marker then marker = fragment break end
+    end
+    marker = test.not_nil(marker)
+    test.equal(marker.text, "[!note]")
+    test.equal(
+      marker.color,
+      style.markdown_live_callout_palette.note.accent
+    )
+
+    local markdown_decoration
+    for _, entry in ipairs(view:decoration_provider_entries()) do
+      if entry.id == "markdown-live" then markdown_decoration = entry.provider break end
+    end
+    local card = test.not_nil(
+      test.not_nil(markdown_decoration):line_background_descriptor(view, 1)
+    )
+    test.ok(test.not_nil(render.x_offset) > card.x_offset + card.rail_width)
+    test.equal(render.continuation_indent_col, source:find("NOTE", 1, true))
+    test.equal(visible_render_text(view, 1), source)
+  end)
+
+  test.it("folds only callout bodies and updates defaults when fold signs change", function()
+    local view, doc = make_view(
+      "> [!note]- Folded title\n> hidden body\n> second body line\n\nplain",
+      "foldable-callout.md"
+    )
+    doc:set_selection(5, 1)
+    refresh(view)
+
+    local fold
+    for _, candidate in ipairs(view.fold_regions) do
+      if candidate.kind == "markdown-callout" then fold = candidate break end
+    end
+    fold = test.not_nil(fold)
+    test.equal(fold.collapsed, true)
+    test.equal(fold.show_widget, false)
+    test.equal(fold.line1, 1)
+    test.equal(fold.line2, 3)
+    test.equal(view:is_line_hidden_by_fold(1), false)
+    test.equal(view:is_line_hidden_by_fold(2), true)
+    test.not_nil(view:get_line_render(1))
+    test.equal(view:get_visual_row_entry(1).type, "line")
+
+    local header = test.not_nil(view:get_line_render(1))
+    local control
+    for _, fragment in ipairs(header.fragments) do
+      if fragment.callout_type then control = fragment break end
+    end
+    control = test.not_nil(control)
+    local line_x, line_y = view:get_line_screen_position(1)
+    local control_x = line_x
+      + view:get_line_render_col_x_offset(header, control.source_col1) + 2
+    test.equal(view:on_mouse_pressed("left", control_x, line_y + view:get_line_height() / 2, 1), true)
+    test.equal(fold.collapsed, false)
+
+    test.equal(view:on_mouse_pressed("left", control_x, line_y + view:get_line_height() / 2, 1), true)
+    test.equal(fold.collapsed, true)
+    doc:apply_edits({
+      { line1 = 1, col1 = 10, line2 = 1, col2 = 11, text = "+" },
+    }, { type = "callout-fold-sign", merge_cursors = false })
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    local updated
+    for _, candidate in ipairs(view.fold_regions) do
+      if candidate.kind == "markdown-callout" then updated = candidate break end
+    end
+    test.equal(test.not_nil(updated).collapsed, false)
+
+    doc:apply_edits({
+      { line1 = 1, col1 = 10, line2 = 1, col2 = 11, text = "" },
+    }, { type = "callout-fold-sign", merge_cursors = false })
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    for _, candidate in ipairs(view.fold_regions) do
+      test.ok(candidate.kind ~= "markdown-callout")
+    end
+
+    doc:apply_edits({
+      { line1 = 1, col1 = 10, line2 = 1, col2 = 10, text = "-" },
+    }, { type = "callout-fold-sign", merge_cursors = false })
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    local restored
+    for _, candidate in ipairs(view.fold_regions) do
+      if candidate.kind == "markdown-callout" then restored = candidate break end
+    end
+    test.equal(test.not_nil(restored).collapsed, true)
+  end)
+
+  test.it("retains independent nested callout fold state", function()
+    local view, doc = make_view(
+      "> [!question]+ Outer\n> > [!note]- Inner\n> > hidden inner body\n> outer body\n\nplain",
+      "nested-callout-folds.md"
+    )
+    doc:set_selection(6, 1)
+    refresh(view)
+
+    local outer, inner
+    for _, fold in ipairs(view.fold_regions) do
+      if fold.kind == "markdown-callout" then
+        local depth = fold.metadata and fold.metadata.nesting_depth
+        if depth == 1 then outer = fold elseif depth == 2 then inner = fold end
+      end
+    end
+    outer, inner = test.not_nil(outer), test.not_nil(inner)
+    test.equal(outer.collapsed, false)
+    test.equal(inner.collapsed, true)
+    test.equal(view:is_line_hidden_by_fold(2), false)
+    test.equal(view:is_line_hidden_by_fold(3), true)
+
+    test.equal(view:collapse_fold_region(outer, "test-outer"), true)
+    test.equal(inner.collapsed, true)
+    test.equal(view:is_line_hidden_by_fold(2), true)
+    test.equal(view:expand_fold_region(outer, "test-outer"), true)
+    test.equal(inner.collapsed, true)
+    test.equal(view:is_line_hidden_by_fold(3), true)
+  end)
+
+  test.it("preserves callout fold state across body edits and expands for hidden carets", function()
+    local view, doc = make_view(
+      "> [!tip]+ Stable\n> body text\n> more body\n\nplain",
+      "callout-fold-state.md"
+    )
+    doc:set_selection(5, 1)
+    refresh(view)
+    local fold
+    for _, candidate in ipairs(view.fold_regions) do
+      if candidate.kind == "markdown-callout" then fold = candidate break end
+    end
+    fold = test.not_nil(fold)
+    test.equal(view:collapse_fold_region(fold, "test-state"), true)
+
+    doc:insert(2, #doc.lines[2], " updated")
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    local reconciled
+    for _, candidate in ipairs(view.fold_regions) do
+      if candidate.kind == "markdown-callout" then reconciled = candidate break end
+    end
+    reconciled = test.not_nil(reconciled)
+    test.equal(reconciled.collapsed, true)
+
+    doc:set_selection(2, 3)
+    test.equal(reconciled.collapsed, false)
+    test.equal(view:is_line_hidden_by_fold(2), nil)
+  end)
+
+  test.it("keeps callout fold state while Source Mode exposes all source", function()
+    local view, doc = make_view(
+      "> [!warning]- Hidden\n> body\n\nplain",
+      "callout-source-mode.md"
+    )
+    doc:set_selection(4, 1)
+    refresh(view)
+    local fold
+    for _, candidate in ipairs(view.fold_regions) do
+      if candidate.kind == "markdown-callout" then fold = candidate break end
+    end
+    test.equal(test.not_nil(fold).collapsed, true)
+
+    markdown.live_render.set_source_mode(view, true, "test-callout-source")
+    for _, candidate in ipairs(view.fold_regions) do
+      test.ok(candidate.kind ~= "markdown-callout")
+    end
+    test.equal(view:get_line_render(1), nil)
+    markdown.live_render.set_source_mode(view, false, "test-callout-live")
+
+    local restored
+    for _, candidate in ipairs(view.fold_regions) do
+      if candidate.kind == "markdown-callout" then restored = candidate break end
+    end
+    test.equal(test.not_nil(restored).collapsed, true)
+  end)
+
+  test.it("composes links, tasks, and fenced code inside callout cards", function()
+    local view, doc = make_view(
+      "> [!success] Content\n> - [ ] Task [[Target]]\n> ```lua\n> print('ok')\n> ```\n\nplain",
+      "callout-content.md"
+    )
+    doc:set_selection(7, 1)
+    refresh(view)
+
+    local task = test.not_nil(view:get_line_render(2))
+    local has_checkbox, has_link, has_callout_prefix = false, false, false
+    for _, fragment in ipairs(task.fragments or {}) do
+      has_checkbox = has_checkbox or fragment.markdown_task_checkbox == true
+      has_link = has_link or fragment.link ~= nil
+      has_callout_prefix = has_callout_prefix or fragment.callout_semantic_id ~= nil
+    end
+    test.equal(has_checkbox, true)
+    test.equal(has_link, true)
+    test.equal(has_callout_prefix, true)
+
+    local code = test.not_nil(view:get_line_render(4))
+    test.ok(code.x_offset > 0)
+    local markdown_decoration
+    for _, entry in ipairs(view:decoration_provider_entries()) do
+      if entry.id == "markdown-live" then markdown_decoration = entry.provider break end
+    end
+    local code_card = test.not_nil(
+      test.not_nil(markdown_decoration):line_background_descriptor(view, 4)
+    )
+    test.equal(code_card.kind, "markdown-callout-card")
+    test.equal(code_card.color, style.markdown_live_code_background)
   end)
 
   test.it("presents semantic thematic breaks and reveals their source when active", function()

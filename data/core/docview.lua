@@ -2615,7 +2615,13 @@ function DocView:add_fold_region(opts)
   local contained_folds = {}
   for _, fold in ipairs(self:get_collapsed_folds()) do
     if line1 <= fold.line1 and line2 >= fold.line2 then
-      contained_folds[#contained_folds + 1] = fold
+      if not (opts.allow_nested and fold.allow_nested) then
+        contained_folds[#contained_folds + 1] = fold
+      end
+    elseif fold.line1 <= line1 and fold.line2 >= line2 then
+      if not (opts.allow_nested and fold.allow_nested) then
+        return nil, "fold region overlaps an existing collapsed fold"
+      end
     elseif not (line2 < fold.line1 or line1 > fold.line2) then
       return nil, "fold region overlaps an existing collapsed fold"
     end
@@ -2633,7 +2639,7 @@ function DocView:add_fold_region(opts)
     col2 = opts.col2 or (#self.doc.lines[line2] + 1),
     kind = "docview-fold",
     data = { view = self, id = id },
-    invalidate_on_edit_overlap = true,
+    invalidate_on_edit_overlap = opts.invalidate_on_edit_overlap ~= false,
     greedy_left = false,
     greedy_right = false,
     on_change = function(marker, reason)
@@ -2658,6 +2664,8 @@ function DocView:add_fold_region(opts)
     col2 = opts.col2 or (#self.doc.lines[line2] + 1),
     collapsed = opts.collapsed ~= false,
     placeholder = opts.placeholder,
+    show_widget = opts.show_widget ~= false,
+    allow_nested = opts.allow_nested == true,
     kind = opts.kind,
     metadata = opts.metadata,
     hidden_count = line2 - line1 + 1,
@@ -2723,7 +2731,13 @@ function DocView:collapse_fold_region(id_or_fold, reason)
   for _, other in ipairs(self:get_collapsed_folds()) do
     if other ~= fold then
       if line1 <= other.line1 and line2 >= other.line2 then
-        contained_folds[#contained_folds + 1] = other
+        if not (fold.allow_nested and other.allow_nested) then
+          contained_folds[#contained_folds + 1] = other
+        end
+      elseif other.line1 <= line1 and other.line2 >= line2 then
+        if not (fold.allow_nested and other.allow_nested) then
+          return false, "fold region overlaps an existing collapsed fold"
+        end
       elseif not (line2 < other.line1 or line1 > other.line2) then
         return false, "fold region overlaps an existing collapsed fold"
       end
@@ -2758,9 +2772,11 @@ function DocView:get_folded_visual_row_count()
   local folds = self:get_collapsed_folds()
   local fidx = 1
   while line <= #self.doc.lines do
+    while folds[fidx] and folds[fidx].line1 < line do fidx = fidx + 1 end
     local fold = folds[fidx]
     if fold and line == fold.line1 then
-      count = count + 1
+      count = count + (fold.show_widget == false
+        and self:get_line_visual_row_count(line) or 1)
       line = fold.line2 + 1
       fidx = fidx + 1
     else
@@ -2777,10 +2793,19 @@ function DocView:get_folded_visual_row_for_position(line, col, line_end)
   local folds = self:get_collapsed_folds()
   local fidx = 1
   while current <= #self.doc.lines do
+    while folds[fidx] and folds[fidx].line1 < current do fidx = fidx + 1 end
     local fold = folds[fidx]
     if fold and current == fold.line1 then
-      if line >= fold.line1 and line <= fold.line2 then return row end
-      row = row + 1
+      if line >= fold.line1 and line <= fold.line2 then
+        if fold.show_widget == false and line == fold.line1 and self.wrapped_settings then
+          local idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
+          local first_idx = self.wrapped_line_to_idx and self.wrapped_line_to_idx[line] or idx
+          return row + math.max(0, idx - first_idx)
+        end
+        return row
+      end
+      row = row + (fold.show_widget == false
+        and self:get_line_visual_row_count(current) or 1)
       current = fold.line2 + 1
       fidx = fidx + 1
     else
@@ -2950,12 +2975,29 @@ function DocView:build_composed_visual_rows()
 
   local line = 1
   while line <= #self.doc.lines do
+    while folds[fidx] and folds[fidx].line1 < line do fidx = fidx + 1 end
     self:append_legacy_provider_rows(entries, "visual-row-extension", line, "before", extension_count(line, "before"))
     append_provider_placement(line, "before")
 
     local fold = folds[fidx]
     if fold and line == fold.line1 then
-      append_composed_entry(entries, { type = "fold", fold = fold, line = fold.line1, row_in_line = 1 })
+      if fold.show_widget == false then
+        local count = self:get_line_visual_row_count(line)
+        for row_in_line = 1, count do
+          local wrapped_idx
+          if self.wrapped_settings then
+            wrapped_idx = (self.wrapped_line_to_idx[line] or 1) + row_in_line - 1
+          end
+          append_composed_entry(entries, {
+            type = "line", line = line, row_in_line = row_in_line,
+            wrapped_idx = wrapped_idx, collapsed_fold = fold,
+          })
+        end
+      else
+        append_composed_entry(entries, {
+          type = "fold", fold = fold, line = fold.line1, row_in_line = 1,
+        })
+      end
       append_provider_placement(line, "after")
       self:append_legacy_provider_rows(entries, "visual-row-extension", line, "after", extension_count(line, "after"))
       line = fold.line2 + 1
@@ -2991,6 +3033,19 @@ function DocView:composed_visual_rows()
       elseif entry.type == "fold" then
         for line = entry.fold.line1, entry.fold.line2 do
           position_rows[line] = index
+        end
+      end
+    end
+    -- A body-only fold keeps its first line as an ordinary rendered line.
+    -- Hidden positions still map to that visible header row so navigation and
+    -- reveal operations have a deterministic visual anchor.
+    for _, fold in ipairs(self:get_collapsed_folds()) do
+      if fold.show_widget == false then
+        local header_row = position_rows[fold.line1]
+        if header_row then
+          for line = fold.line1 + 1, fold.line2 do
+            if not position_rows[line] then position_rows[line] = header_row end
+          end
         end
       end
     end
@@ -5383,9 +5438,10 @@ function DocView:on_mouse_moved(x, y, ...)
     self.hovered_fold_widget = nil
     if self:has_collapsed_folds() then
       local line = self:resolve_screen_position(x, y)
-      local fold = self.resolved_fold_widget or self:get_collapsed_fold_at_line(line)
+      local resolved_widget = self.resolved_fold_widget
+      local fold = resolved_widget or self:get_collapsed_fold_at_line(line)
       self.resolved_fold_widget = nil
-      if fold then
+      if fold and (resolved_widget or fold.show_widget ~= false) then
         self.cursor = "hand"
         self.hovered_fold_widget = fold
       end
@@ -5568,9 +5624,10 @@ function DocView:on_mouse_pressed(button, x, y, clicks)
       end
       return true
     end
-    local fold = self.resolved_fold_widget or self:get_collapsed_fold_at_line(line)
+    local resolved_widget = self.resolved_fold_widget
+    local fold = resolved_widget or self:get_collapsed_fold_at_line(line)
     self.resolved_fold_widget = nil
-    if fold then
+    if fold and (resolved_widget or fold.show_widget ~= false) then
       self:expand_fold_region(fold.id, "mouse")
       self.doc:set_selection(fold.line1, 1, fold.line1, 1)
       return true
@@ -7507,7 +7564,63 @@ local function provider_call(view, entry, method, ...)
 end
 
 local function draw_decoration_line_backgrounds(view, line, x, y)
+  local function draw_descriptor(descriptor, row_y, row_height, first, last)
+    if type(descriptor) ~= "table" or not descriptor.color then return end
+    local bx = x + (tonumber(descriptor.x_offset) or 0)
+    local available = math.max(0, view.position.x + view.size.x - bx)
+    local bw = math.max(0, math.min(
+      tonumber(descriptor.width) or available,
+      available - (tonumber(descriptor.right_inset) or 0)
+    ))
+    local by = row_y + (tonumber(descriptor.y_offset) or 0)
+    local bh = math.max(0, row_height - (tonumber(descriptor.y_offset) or 0)
+      - (tonumber(descriptor.bottom_inset) or 0))
+    if bw <= 0 or bh <= 0 then return end
+    local radius = math.max(0, math.min(
+      tonumber(descriptor.radius) or 0, bw / 2, bh / 2
+    ))
+    if radius > 0 and (first or last) then
+      renderer.draw_rounded_rect(bx, by, bw, bh, radius, descriptor.color)
+      -- Join adjacent rows without leaving rounded notches inside the block.
+      if first and not last then
+        renderer.draw_rect(bx, by + bh / 2, bw, bh / 2, descriptor.color)
+      elseif last and not first then
+        renderer.draw_rect(bx, by, bw, bh / 2, descriptor.color)
+      end
+    else
+      renderer.draw_rect(bx, by, bw, bh, descriptor.color)
+    end
+    local rail_width = math.max(0, tonumber(descriptor.rail_width) or 0)
+    if rail_width > 0 and descriptor.rail_color then
+      renderer.draw_rect(bx, by, math.min(rail_width, bw), bh, descriptor.rail_color)
+    end
+  end
+
   for _, entry in ipairs(view:decoration_provider_entries()) do
+    local descriptor = provider_call(
+      view, entry, "line_background_descriptor", view, line
+    )
+    if descriptor then
+      if view.wrapped_settings and view.__wrapped_draw_first_idx then
+        local first_idx = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line]
+        if first_idx then
+          local final_idx = first_idx + view:get_visual_row_count_for_line(line) - 1
+          for idx = view.__wrapped_draw_first_idx, view.__wrapped_draw_last_idx do
+            local row_y, row_height = wrapped_row_geometry(view, y, first_idx, idx)
+            draw_descriptor(
+              descriptor, row_y, row_height,
+              descriptor.first and idx == first_idx,
+              descriptor.last and idx == final_idx
+            )
+          end
+        end
+      else
+        draw_descriptor(
+          descriptor, y, view:get_position_visual_row_height(line, 1),
+          descriptor.first, descriptor.last
+        )
+      end
+    end
     local color = provider_call(view, entry, "line_background", view, line)
     if color then
       if view.wrapped_settings and view.__wrapped_draw_first_idx then

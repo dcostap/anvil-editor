@@ -285,8 +285,21 @@ style.markdown_live_code_background = style.background2
 style.markdown_live_code_header = style.dim
 style.markdown_live_highlight_bg = c("fff1b8")
 style.markdown_live_quote_bar = style.accent
-style.markdown_live_callout_background = style.background2
-style.markdown_live_callout_icon = style.accent
+style.markdown_live_callout_palette = {
+  note     = { accent = c("2878c8"), background = c("eaf3fc") },
+  abstract = { accent = c("16869a"), background = c("e7f6f8") },
+  info     = { accent = c("1f76b8"), background = c("e9f3fb") },
+  todo     = { accent = c("1f76b8"), background = c("e9f3fb") },
+  tip      = { accent = c("168878"), background = c("e7f6f2") },
+  success  = { accent = c("39884a"), background = c("eaf6ec") },
+  question = { accent = c("a77a13"), background = c("fbf5df") },
+  warning  = { accent = c("b56516"), background = c("fff0df") },
+  failure  = { accent = c("b64250"), background = c("fbeaec") },
+  danger   = { accent = c("c52f3f"), background = c("fce7ea") },
+  bug      = { accent = c("b63870"), background = c("f8e8ef") },
+  example  = { accent = c("7650b5"), background = c("f1ebfa") },
+  quote    = { accent = c("626872"), background = c("f0f1f3") },
+}
 style.markdown_live_frontmatter_background = style.background2
 style.markdown_live_frontmatter_delimiter = style.dim
 style.markdown_live_frontmatter_key = style.accent

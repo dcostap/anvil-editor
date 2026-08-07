@@ -128,6 +128,14 @@ _Avoid_: Standard Editor DocView, normal Editor, plain Editor
 An Editor mode that presents formatted Markdown inline while keeping the underlying Markdown source directly editable.
 _Avoid_: Live Markdown Editor, Markdown Live Editor
 
+**Markdown Callout**:
+A blockquote whose first line contains a case-insensitive `[!type]` marker, with an optional custom title and Markdown-formatted body.
+_Avoid_: admonition, alert block
+
+**Foldable Callout**:
+A Markdown Callout whose type marker is followed by `+` or `-`, declaring whether its body starts expanded or collapsed while its header remains visible.
+_Avoid_: collapsible callout, folded blockquote
+
 **Markdown Source Mode**:
 An Editor mode that shows all Markdown source syntax normally instead of presenting formatted Markdown inline.
 _Avoid_: Raw rendering mode

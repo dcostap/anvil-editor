@@ -3,6 +3,7 @@ local common = require "core.common"
 local config = require "core.config"
 local DocView = require "core.docview"
 local attachments = require "core.markdown.attachments"
+local callouts = require "core.markdown.callouts"
 local images = require "core.markdown.images"
 local fence_highlight = require "core.markdown.fence_highlight"
 local link_completion = require "core.markdown.completion"
@@ -1509,47 +1510,282 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
   return fragments
 end
 
-local CALLOUT_TYPES = {
-  abstract = true, attention = true, bug = true, caution = true, check = true,
-  danger = true, done = true, error = true, example = true, fail = true,
-  failure = true, faq = true, help = true, hint = true, info = true,
-  missing = true, note = true, question = true, quote = true, success = true,
-  summary = true, tip = true, todo = true, tldr = true, warning = true,
-}
+local view_in_source_mode
 
-local function parse_callout_header(text)
-  local col1, col2, kind, fold, spacing = text:find("^%s*>%s*%[!([%w_-]+)%]([+-]?)(%s*)")
-  if not col1 then return nil end
-  kind = kind:lower()
-  local title = text:sub(col2 + 1)
-  local display_type = kind:gsub("[_-]+", " "):gsub("^%l", string.upper)
-  return {
-    col1 = col1,
-    col2 = col2 + 1,
-    type = kind,
-    known_type = CALLOUT_TYPES[kind] == true,
-    fold = fold ~= "" and fold or nil,
-    title = title,
-    display_type = display_type,
-    spacing = spacing,
-  }
+local callout_runtime = {}
+
+function callout_runtime.line_ranges(view, callout, line)
+  local cached = callout.line_ranges[line]
+  if cached ~= nil then return cached ~= false and cached or nil end
+  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  cached = callouts.line_ranges(text, callout.nesting_depth, line)
+  if not cached then
+    callout.line_ranges[line] = false
+    return nil
+  end
+  callout.line_ranges[line] = cached
+  return cached
 end
 
-local function callout_for_line(view, line)
+function callout_runtime.from_quote(view, node)
+  local _, generation = semantic_line(view, node.source.line1)
+  local cache = view.__markdown_live_callout_cache
+  if not cache or cache.generation ~= generation then
+    cache = { generation = generation, records = {} }
+    view.__markdown_live_callout_cache = cache
+  end
+  local key = tostring(node.id)
+  if cache.records[key] ~= nil then
+    return cache.records[key] ~= false and cache.records[key] or nil
+  end
+  local text = (view.doc.lines[node.source.line1] or ""):gsub("\n$", "")
+  local callout = callouts.parse_header(text, node.source.col1)
+  if not callout then cache.records[key] = false return nil end
+  local line2 = node.source.line2
+  if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
+  while line2 > node.source.line1 do
+    local end_text = (view.doc.lines[line2] or ""):gsub("\n$", "")
+    if callouts.line_ranges(end_text, callout.nesting_depth, line2) then break end
+    line2 = line2 - 1
+  end
+  callout.line1, callout.line2 = node.source.line1, line2
+  callout.block_range = {
+    line1 = callout.line1, col1 = node.source.col1,
+    line2 = line2, col2 = line2 == node.source.line2 and node.source.col2
+      or #(view.doc.lines[line2] or "") + 1,
+  }
+  callout.semantic_id = tostring(node.id) .. ":callout"
+  callout.quote_node_id = node.id
+  callout.line_ranges = {}
+  for line = callout.line1, callout.line2 do
+    local line_text = (view.doc.lines[line] or ""):gsub("\n$", "")
+    callout.line_ranges[line] = callouts.line_ranges(
+      line_text, callout.nesting_depth, line
+    ) or false
+  end
+  callout.palette = callouts.palette(style, callout.canonical_type)
+  callout.marker_range.line1, callout.marker_range.line2 = callout.line1, callout.line1
+  callout.title_range.line1, callout.title_range.line2 = callout.line1, callout.line1
+  if callout.fold_range then
+    callout.fold_range.line1, callout.fold_range.line2 = callout.line1, callout.line1
+  end
+  cache.records[key] = callout
+  return callout
+end
+
+function callout_runtime.for_line(view, line)
+  local best
   for _, node in ipairs(semantic_line(view, line) or {}) do
     if node.type == "quote" then
-      local line2 = node.source.line2
-      if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
-      if line >= node.source.line1 and line <= line2 then
-        local text = (view.doc.lines[node.source.line1] or ""):gsub("\n$", "")
-        local header = parse_callout_header(text)
-        if header then
-          header.line1, header.line2, header.semantic_id = node.source.line1, line2, node.id
-          return header
+      local callout = callout_runtime.from_quote(view, node)
+      if callout and line >= callout.line1 and line <= callout.line2
+        and (not best or callout.nesting_depth > best.nesting_depth
+          or callout.nesting_depth == best.nesting_depth
+            and (callout.line2 - callout.line1) < (best.line2 - best.line1))
+      then
+        best = callout
+      end
+    end
+  end
+  if best then
+    best.current_line_ranges = callout_runtime.line_ranges(view, best, line)
+  end
+  return best
+end
+
+function callout_runtime.content_inset(view, callout, control_text)
+  local body_font = markdown_live_body_font(view)
+  local card_offset = math.floor((8 + (callout.nesting_depth - 1) * 16) * SCALE)
+  local rail_width = math.max(2, math.floor(3 * SCALE))
+  local padding = math.max(4, math.floor(9 * SCALE))
+  if control_text == nil then
+    control_text = (callout.icon or "") .. (callout.fold and " ▾" or "")
+  end
+  local lane = body_font:get_width(control_text)
+    + body_font:get_width("  ")
+  return card_offset + rail_width + padding + lane,
+    card_offset + rail_width + padding
+end
+
+function callout_runtime.fold_for_id(view, semantic_id)
+  local owner = view and view.__markdown_live_owner
+  return owner and owner.callout_folds and owner.callout_folds[semantic_id] or nil
+end
+
+function callout_runtime.toggle_fold(view, semantic_id)
+  local fold = callout_runtime.fold_for_id(view, semantic_id)
+  if not fold then return false end
+  local changed
+  if fold.collapsed then
+    changed = view:expand_fold_region(fold, "markdown-callout-click")
+  else
+    changed = view:collapse_fold_region(fold, "markdown-callout-click")
+  end
+  if changed then
+    view:invalidate_line_render(PROVIDER_ID, fold.line1, fold.line1)
+    view:invalidate_visual_metrics(PROVIDER_ID, fold.line1, fold.line1)
+    core.log_quiet(
+      "Markdown Callout %s %s at line %d",
+      semantic_id, fold.collapsed and "collapsed" or "expanded", fold.line1
+    )
+  end
+  return changed == true
+end
+
+function callout_runtime.remove_folds(view, reason)
+  local owner = view and view.__markdown_live_owner
+  if not owner then return end
+  for semantic_id, fold in pairs(owner.callout_folds or {}) do
+    view:remove_fold_region(fold, reason or "markdown-callout-remove")
+    owner.callout_folds[semantic_id] = nil
+  end
+end
+
+function callout_runtime.reconcile_folds(view, reason)
+  local owner = view and view.__markdown_live_owner
+  if not (owner and view.__markdown_live_attached) then return end
+  owner.callout_folds = owner.callout_folds or {}
+  owner.callout_fold_states = owner.callout_fold_states or {}
+  owner.callout_fold_position_states = owner.callout_fold_position_states or {}
+  if view_in_source_mode(view) then
+    callout_runtime.remove_folds(view, "markdown-callout-source-mode")
+    return
+  end
+  local instance = current_semantic_model(view)
+  if not instance then return end
+  local nodes, query_reason = instance:nodes_for_lines(1, #view.doc.lines, {
+    limit = 100000,
+  })
+  if not nodes or query_reason == "limit" then
+    core.log_quiet(
+      "Markdown Callout fold reconciliation skipped for %s: %s",
+      view.doc:get_name(), tostring(query_reason or "semantic query unavailable")
+    )
+    return
+  end
+  local wanted = {}
+  local wanted_position_keys = {}
+  for _, node in ipairs(nodes) do
+    if node.type == "quote" then
+      local callout = callout_runtime.from_quote(view, node)
+      if callout and callout.fold and callout.line2 > callout.line1 then
+        wanted[callout.semantic_id] = callout
+      end
+    end
+  end
+
+  for semantic_id, fold in pairs(owner.callout_folds) do
+    if not wanted[semantic_id] then
+      view:remove_fold_region(fold, "markdown-callout-stale")
+      owner.callout_folds[semantic_id] = nil
+    end
+  end
+
+  for semantic_id, callout in pairs(wanted) do
+    local position_key = table.concat({
+      callout.line1, callout.nesting_depth, callout.fold,
+    }, ":")
+    wanted_position_keys[position_key] = true
+    local state = owner.callout_fold_states[semantic_id]
+      or owner.callout_fold_position_states[position_key]
+    if not state or state.declaration ~= callout.fold then
+      state = {
+        declaration = callout.fold,
+        collapsed = callout.fold == "-",
+      }
+      owner.callout_fold_states[semantic_id] = state
+    end
+    owner.callout_fold_states[semantic_id] = state
+    owner.callout_fold_position_states[position_key] = state
+    local fold = owner.callout_folds[semantic_id]
+    local valid = fold and view:refresh_fold_region(fold)
+      and fold.line1 == callout.line1 and fold.line2 == callout.line2
+    if not valid then
+      if fold then view:remove_fold_region(fold, "markdown-callout-range-change") end
+      local added, err = view:add_fold_region {
+        id = "markdown-callout:" .. semantic_id,
+        line1 = callout.line1,
+        col1 = callout.block_range.col1,
+        line2 = callout.line2,
+        col2 = #(view.doc.lines[callout.line2] or "") + 1,
+        collapsed = state.collapsed,
+        show_widget = false,
+        allow_nested = true,
+        invalidate_on_edit_overlap = false,
+        kind = "markdown-callout",
+        metadata = {
+          semantic_id = semantic_id,
+          canonical_type = callout.canonical_type,
+          nesting_depth = callout.nesting_depth,
+        },
+      }
+      if added then
+        fold = added
+        owner.callout_folds[semantic_id] = fold
+      else
+        owner.callout_folds[semantic_id] = nil
+        core.log_quiet(
+          "Markdown Callout fold unavailable at lines %d-%d: %s",
+          callout.line1, callout.line2, tostring(err)
+        )
+      end
+    else
+      fold.metadata = {
+        semantic_id = semantic_id,
+        canonical_type = callout.canonical_type,
+        nesting_depth = callout.nesting_depth,
+      }
+      if state.collapsed ~= fold.collapsed then
+        if state.collapsed then
+          view:collapse_fold_region(fold, "markdown-callout-reconcile")
+        else
+          view:expand_fold_region(fold, "markdown-callout-reconcile")
         end
       end
     end
   end
+  for semantic_id in pairs(owner.callout_fold_states) do
+    if not wanted[semantic_id] then owner.callout_fold_states[semantic_id] = nil end
+  end
+  for position_key in pairs(owner.callout_fold_position_states) do
+    if not wanted_position_keys[position_key] then
+      owner.callout_fold_position_states[position_key] = nil
+    end
+  end
+  core.log_quiet(
+    "Markdown Callout folds reconciled for %s: %d foldable callout(s), reason=%s",
+    view.doc:get_name(), (function()
+      local count = 0
+      for _ in pairs(wanted) do count = count + 1 end
+      return count
+    end)(), tostring(reason or "semantic publication")
+  )
+  callout_runtime.expand_folds_for_selection(
+    view, current_selection_state(view), "markdown-callout-caret-already-in-body"
+  )
+end
+
+function callout_runtime.expand_folds_for_selection(view, state, reason)
+  local owner = view and view.__markdown_live_owner
+  if not (owner and state and state.selections) then return false end
+  local changed = false
+  for i = 1, #state.selections, 4 do
+    local line1, line2 = state.selections[i], state.selections[i + 2]
+    if line1 and line2 then
+      line1, line2 = math.min(line1, line2), math.max(line1, line2)
+      for _, fold in pairs(owner.callout_folds or {}) do
+        if fold.collapsed and line2 > fold.line1 and line1 <= fold.line2 then
+          if view:expand_fold_region(fold, reason or "markdown-callout-selection") then
+            local fold_state = owner.callout_fold_states
+              and owner.callout_fold_states[fold.metadata.semantic_id]
+            if fold_state then fold_state.collapsed = false end
+            changed = true
+          end
+        end
+      end
+    end
+  end
+  return changed
 end
 
 local function table_for_line(view, line)
@@ -2550,11 +2786,13 @@ local function list_bullet_widget(width, height, indent_width, marker_control_wi
 end
 
 local function semantic_block_fragments(view, line_text, line, reveal_units)
+  local whole_line_reveal = false
   for _, unit in ipairs(reveal_units or {}) do
-    if unit.whole_line then return {} end
+    if unit.whole_line then whole_line_reveal = true break end
   end
   local fragments, seen = {}, {}
-  local callout = callout_for_line(view, line)
+  local callout = callout_runtime.for_line(view, line)
+  if whole_line_reveal and not callout then return {} end
   local frontmatter, frontmatter_line2 = frontmatter_for_line(view, line)
   local table_node = table_for_line(view, line)
   if table_node then
@@ -2595,6 +2833,113 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
     }
   end
   local semantic_nodes = semantic_line(view, line) or {}
+  if callout and callout.current_line_ranges then
+    local ranges = callout.current_line_ranges
+    local body_font = markdown_live_body_font(view)
+    if whole_line_reveal then
+      local accent = callout.palette and callout.palette.accent or style.accent
+      local prefix = {
+        source_col1 = ranges.quote_prefix_range.col1,
+        source_col2 = ranges.quote_prefix_range.col2,
+        text = line_text:sub(
+          ranges.quote_prefix_range.col1,
+          ranges.quote_prefix_range.col2 - 1
+        ),
+        color = accent,
+        semantic_id = callout.semantic_id .. ":revealed-prefix:" .. line,
+        callout_semantic_id = callout.semantic_id,
+        markdown_callout_content_col = line == callout.line1
+          and callout.title_range.col1 or ranges.content_range.col1,
+        markdown_callout_line = line,
+        markdown_callout_source_reveal = true,
+        callout_title_col1 = line == callout.line1
+          and callout.title_range.col1 or nil,
+        callout_record = callout,
+      }
+      fragments[#fragments + 1] = prefix
+      if line == callout.line1 then
+        fragments[#fragments + 1] = {
+          source_col1 = callout.marker_range.col1,
+          source_col2 = callout.marker_range.col2,
+          text = line_text:sub(
+            callout.marker_range.col1, callout.marker_range.col2 - 1
+          ),
+          font = inline_style_font(view, "strong", body_font),
+          color = accent,
+          semantic_id = callout.semantic_id .. ":revealed-marker",
+          callout_source_marker = true,
+        }
+        if callout.fold_range then
+          fragments[#fragments + 1] = {
+            source_col1 = callout.fold_range.col1,
+            source_col2 = callout.fold_range.col2,
+            text = callout.fold,
+            font = inline_style_font(view, "strong", body_font),
+            color = accent,
+            semantic_id = callout.semantic_id .. ":revealed-fold",
+            callout_source_fold = true,
+          }
+        end
+      end
+      seen.quote = true
+    else
+    local chevron = callout.fold and (
+      (function()
+        local owner = view.__markdown_live_owner
+        local fold = owner and owner.callout_folds
+          and owner.callout_folds[callout.semantic_id]
+        local collapsed = fold and fold.collapsed or callout.fold == "-"
+        return collapsed and "▸" or "▾"
+      end)()
+    ) or nil
+    local control_text = callout.icon .. (chevron and (" " .. chevron) or "")
+    local content_width, control_x_offset = callout_runtime.content_inset(
+      view, callout, control_text
+    )
+    local source_col1 = ranges.quote_prefix_range.col1
+    local source_col2 = line == callout.line1
+      and callout.col2 or ranges.content_range.col1
+    local control = {
+      source_col1 = source_col1,
+      source_col2 = source_col2,
+      text = line == callout.line1 and control_text or "",
+      width = content_width,
+      text_x_offset = control_x_offset,
+      color = callout.palette and callout.palette.accent or style.accent,
+      semantic_id = callout.semantic_id .. (line == callout.line1 and ":header" or ":prefix:" .. line),
+      callout_semantic_id = callout.semantic_id,
+      markdown_callout_content_col = source_col2,
+      markdown_callout_line = line,
+      callout_title_col1 = line == callout.line1 and callout.title_range.col1 or nil,
+      callout_record = callout,
+    }
+    if line == callout.line1 then
+      control.callout_type = callout.type
+      control.callout_canonical_type = callout.canonical_type
+      control.callout_known_type = callout.known_type
+      control.callout_icon = callout.icon
+    end
+    if line == callout.line1 and callout.fold then
+      control.cursor = "hand"
+      control.on_mouse_pressed = function(_, owner, _, button)
+        if button ~= "left" then return false end
+        return callout_runtime.toggle_fold(owner, callout.semantic_id)
+      end
+    end
+    fragments[#fragments + 1] = control
+    if line == callout.line1 and callout.title == "" then
+      fragments[#fragments + 1] = {
+        source_col1 = callout.col2, source_col2 = callout.col2,
+        text = callout.display_type,
+        font = inline_style_font(view, "strong", body_font),
+        color = normal_text_color(),
+        semantic_id = callout.semantic_id .. ":default-title",
+        callout_default_title = true,
+      }
+    end
+    seen.quote = true
+    end
+  end
   local current_list_marker = list_marker_for_line(view, line) ~= nil
   local continuation_parent
   for _, candidate in ipairs(semantic_nodes) do
@@ -2675,23 +3020,11 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       local col1, col2 = line_text:find("^%s*>%s*")
       if col1 then
         seen.quote = true
-        if callout and line == callout.line1 then
-          local fold = callout.fold == "+" and "▾ " or callout.fold == "-" and "▸ " or ""
-          fragments[#fragments + 1] = {
-            source_col1 = callout.col1, source_col2 = callout.col2,
-            text = "◆ " .. fold .. (callout.title == "" and callout.display_type or ""),
-            color = style.markdown_live_callout_icon,
-            semantic_id = node.id .. ":callout-header",
-            callout_type = callout.type,
-            callout_known_type = callout.known_type,
-          }
-        else
-          fragments[#fragments + 1] = {
-            source_col1 = col1, source_col2 = col2 + 1,
-            text = "│ ", color = style.markdown_live_quote_bar,
-            semantic_id = node.id,
-          }
-        end
+        fragments[#fragments + 1] = {
+          source_col1 = col1, source_col2 = col2 + 1,
+          text = "│ ", color = style.markdown_live_quote_bar,
+          semantic_id = node.id,
+        }
       end
     elseif node.type == "list" or node.type == "list_item" then
       local task = attributes.task_checked or attributes.task_unchecked
@@ -2744,6 +3077,13 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         local token_col = marker.col1 + token_start - 1
         local indent = line_text:sub(1, token_col - 1):match("([ \t]*)$") or ""
         local marker_source_col1 = token_col - #indent
+        if callout and callout.current_line_ranges then
+          local callout_content_col = callout.current_line_ranges.content_range.col1
+          if marker_source_col1 < callout_content_col then
+            marker_source_col1 = callout_content_col
+            indent = line_text:sub(callout_content_col, token_col - 1)
+          end
+        end
         local raw = line_text:sub(marker_source_col1, marker.col2 - 1)
         local ordered = raw:match("^%s*(%d+[.)])")
         local indent_width = body_font:get_width(
@@ -2974,6 +3314,19 @@ local function prose_render_line(view, line_text, render_line)
       render_line.continuation_indent_col = fragment.markdown_list_content_col
       render_line.continuation_indent_font = font
     end
+    if fragment.markdown_callout_content_col then
+      render_line.continuation_indent_col = fragment.markdown_callout_content_col
+      render_line.continuation_indent_font = font
+      render_line.callout_record = fragment.callout_record
+      render_line.callout_semantic_id = fragment.callout_semantic_id
+      render_line.callout_line = fragment.markdown_callout_line
+      if fragment.markdown_callout_source_reveal then
+        render_line.callout_source_reveal = true
+      end
+      if fragment.callout_title_col1 then
+        render_line.callout_title_col1 = fragment.callout_title_col1
+      end
+    end
     cursor = math.max(cursor, col2)
   end
   if cursor <= #line_text then
@@ -2988,6 +3341,44 @@ local function prose_render_line(view, line_text, render_line)
   end
   render_line.source_text = line_text
   render_line.fragments = fragments
+  local callout = render_line.callout_record
+  if callout then
+    if render_line.callout_source_reveal then
+      local _, source_x_offset = callout_runtime.content_inset(
+        view, callout, ""
+      )
+      render_line.x_offset = source_x_offset
+    end
+    if render_line.callout_title_col1 then
+      local title_font = inline_style_font(view, "strong", font)
+      for _, fragment in ipairs(fragments) do
+        if not fragment.widget and not fragment.callout_type
+          and (fragment.source_col2 or 1) > render_line.callout_title_col1
+          and fragment.font == font
+        then
+          fragment.font = title_font
+        end
+      end
+    end
+    local padding_y = math.max(2, math.floor(6 * SCALE))
+    local owner = view.__markdown_live_owner
+    local fold = owner and owner.callout_folds
+      and owner.callout_folds[callout.semantic_id]
+    local effective_last = fold and fold.collapsed and callout.line1 or callout.line2
+    local current_line = render_line.callout_line
+    if callout.line1 == callout.line2 then effective_last = callout.line1 end
+    if current_line == callout.line1 and effective_last == callout.line1 then
+      render_line.first_row_content_y_offset = padding_y
+      render_line.metric_height = render_line.text_row_height + padding_y * 2
+    else
+      if current_line == callout.line1 then
+        render_line.first_row_content_y_offset = padding_y
+      end
+      if current_line == effective_last then
+        render_line.metric_height = render_line.text_row_height + padding_y
+      end
+    end
+  end
   return render_line
 end
 
@@ -3134,8 +3525,6 @@ local function layout_inline_image_rows(view, line_text, render_line)
   render_line.disable_wrapping = true
   return render_line
 end
-
-local view_in_source_mode
 
 local function clone_render_line(render_line)
   local clone = {}
@@ -4368,11 +4757,49 @@ local function fenced_code_content_render_line(view, line, text, fenced)
   local owner = view.__markdown_live_owner
   local service = owner and owner.fence_service
   local entry = service and service:line_tokens(fenced, line, 100)
-  return {
+  local render = {
     source_text = text,
     x_offset = view:get_font():get_width(" "),
     text_row_height = fenced_code_line_height(view),
     fragments = fenced_code_fragments(text, entry),
+  }
+  local callout = callout_runtime.for_line(view, line)
+  if callout then
+    render.x_offset = callout_runtime.content_inset(view, callout)
+    render.callout_record = callout
+    render.callout_semantic_id = callout.semantic_id
+  end
+  return render
+end
+
+function decoration_provider:line_background_descriptor(view, line)
+  if view_in_source_mode(view) then return nil end
+  local callout = callout_runtime.for_line(view, line)
+  if not callout then return nil end
+  local palette = callout.palette or callouts.palette(style, callout.canonical_type)
+  if not palette then return nil end
+  local owner = view.__markdown_live_owner
+  local fold = owner and owner.callout_folds
+    and owner.callout_folds[callout.semantic_id]
+  local line2 = fold and fold.collapsed and callout.line1 or callout.line2
+  local x_offset = math.floor((8 + (callout.nesting_depth - 1) * 16) * SCALE)
+  local background = palette.background
+  if fenced_code_for_line(view, line) or indented_code_for_line(view, line) then
+    background = style.markdown_live_code_background
+  end
+  return {
+    kind = "markdown-callout-card",
+    semantic_id = callout.semantic_id,
+    canonical_type = callout.canonical_type,
+    nesting_depth = callout.nesting_depth,
+    color = background,
+    rail_color = palette.accent,
+    rail_width = math.max(2, math.floor(3 * SCALE)),
+    radius = math.max(3, math.floor(6 * SCALE)),
+    x_offset = x_offset,
+    width = math.max(1, image_available_width(view) - x_offset - math.floor(8 * SCALE)),
+    first = line == callout.line1,
+    last = line == line2,
   }
 end
 
@@ -4400,6 +4827,7 @@ function decoration_provider:line_background(view, line)
   end
   local fenced = fenced_code_for_line(view, line)
   if fenced then
+    if callout_runtime.for_line(view, line) then return nil end
     return style.markdown_live_code_background
   end
   if not current_semantic_model(view) and owner then
@@ -4414,9 +4842,9 @@ function decoration_provider:line_background(view, line)
     end
   end
   if indented_code_for_line(view, line) then
+    if callout_runtime.for_line(view, line) then return nil end
     return style.markdown_live_code_background
   end
-  if callout_for_line(view, line) then return style.markdown_live_callout_background end
   if frontmatter_for_line(view, line) then return style.markdown_live_frontmatter_background end
   return nil
 end
@@ -5455,6 +5883,11 @@ local function apply_source_mode(view, enabled, reason)
   enabled = enabled == true
   if owner.source_mode == enabled then return false end
   owner.source_mode = enabled
+  if enabled then
+    callout_runtime.remove_folds(view, "markdown-callout-source-mode")
+  else
+    callout_runtime.reconcile_folds(view, "leave-source-mode")
+  end
   view:invalidate_line_render(PROVIDER_ID)
   view:invalidate_visual_metrics(PROVIDER_ID)
   core.redraw = true
@@ -5740,6 +6173,7 @@ local function invalidate_semantic_publication(view, instance, reason)
       metric_invalidate_ms = metric_invalidate_ms,
     })
   end
+  callout_runtime.reconcile_folds(view, reason)
   core.redraw = true
 end
 
@@ -5821,6 +6255,9 @@ local function bind_semantic_model(view)
     if reason == "pending" then return end
     invalidate_semantic_publication(view, published, reason)
   end)
+  if instance.status == "ready" then
+    callout_runtime.reconcile_folds(view, "bind-semantic-model")
+  end
 end
 
 local function unbind_semantic_model(view)
@@ -6150,6 +6587,26 @@ function live.attach(view)
   view:add_clipboard_paste_provider(PROVIDER_ID, clipboard_paste_provider)
   view:add_file_drop_provider(PROVIDER_ID, file_drop_provider)
   view:add_poi_provider(PROVIDER_ID, poi_provider)
+  view:add_fold_listener(PROVIDER_ID, function(owner, event, fold)
+    if not (fold and fold.kind == "markdown-callout") then return end
+    local markdown_owner = owner.__markdown_live_owner
+    local semantic_id = fold.metadata and fold.metadata.semantic_id
+    local state = markdown_owner and semantic_id
+      and markdown_owner.callout_fold_states
+      and markdown_owner.callout_fold_states[semantic_id]
+    if state and (event == "collapse" or event == "expand") then
+      state.collapsed = fold.collapsed == true
+      local metadata = fold.metadata or {}
+      local position_key = table.concat({
+        fold.line1, metadata.nesting_depth or 1, state.declaration or "",
+      }, ":")
+      markdown_owner.callout_fold_position_states[position_key] = state
+    end
+    if event == "collapse" or event == "expand" then
+      owner:invalidate_line_render(PROVIDER_ID, fold.line1, fold.line1)
+      owner:invalidate_visual_metrics(PROVIDER_ID, fold.line1, fold.line1)
+    end
+  end)
   view:add_selection_listener(PROVIDER_ID, function(owner, new_state, old_state)
     -- During mouse drag and IME interactions the renderer deliberately uses
     -- the frozen selection captured at interaction start. Rebuilding rows for
@@ -6160,6 +6617,9 @@ function live.attach(view)
     if affinity and affinity.selection_key ~= selection_snapshot_key(new_state) then
       owner.__markdown_task_source_affinity = nil
     end
+    callout_runtime.expand_folds_for_selection(
+      owner, new_state, "markdown-callout-caret-entered-body"
+    )
     invalidate_selection_lines(owner, new_state, old_state)
   end)
   view.__markdown_live_attached = true
@@ -6176,6 +6636,8 @@ function live.detach(view)
   unbind_fence_service(view)
   unbind_semantic_model(view)
   clear_image_cache(view)
+  callout_runtime.remove_folds(view, "markdown-callout-detach")
+  view:remove_fold_listener(PROVIDER_ID)
   view:remove_visual_metric_provider(PROVIDER_ID)
   -- Restore ordinary gutter policy before removing rendered wrapping so the
   -- reconstruction returns directly to the Source/standard Editor width.
