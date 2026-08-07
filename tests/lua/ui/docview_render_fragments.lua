@@ -243,7 +243,7 @@ test.describe("DocView render fragments", function()
     test.equal(clicked, false)
   end)
 
-  test.it("routes pointer cursor and clicks through rendered widgets", function()
+  test.it("draws outline-only widget hover and routes pointer clicks", function()
     local view = make_view("widget")
     local clicked = false
     local widget_fragment
@@ -256,6 +256,11 @@ test.describe("DocView render fragments", function()
           widget = {
             width = 40,
             height = view:get_line_height(),
+            padding = 5,
+            hover_outline_padding = 0,
+            hover_outline_width = math.max(1, math.floor(2 * SCALE)),
+            hover_outline_outside = true,
+            suppress_hover_background = true,
             cursor = "hand",
             on_mouse_pressed = function(_, owner, hit, button)
               test.equal(owner, view)
@@ -280,13 +285,43 @@ test.describe("DocView render fragments", function()
 
     local old_draw_rect = renderer.draw_rect
     local hover_drawn = false
-    renderer.draw_rect = function(_, _, _, _, color)
-      if color == style.interactive_hover_overlay then hover_drawn = true end
+    local hover_border_count = 0
+    local hover_border_rectangles = {}
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.interactive_hover_overlay then
+        hover_drawn = true
+      elseif color == style.interactive_hover_border then
+        hover_border_count = hover_border_count + 1
+        hover_border_rectangles[#hover_border_rectangles + 1] = { x, y, w, h }
+      end
     end
     local line_x, line_y = view:get_line_screen_position(1)
     view:draw_line_text(1, line_x, line_y)
     renderer.draw_rect = old_draw_rect
-    test.equal(hover_drawn, true)
+    test.equal(hover_drawn, false)
+    test.equal(hover_border_count, 4)
+    local image_height = view:get_line_height()
+    local border = math.max(1, math.floor(2 * SCALE))
+    local outline_offset = border
+    test.same(
+      hover_border_rectangles[1],
+      { line_x, line_y - outline_offset, 40 + border, border }
+    )
+    test.same(
+      hover_border_rectangles[2],
+      {
+        line_x, line_y + image_height,
+        40 + border, border,
+      }
+    )
+    test.same(
+      hover_border_rectangles[3],
+      { line_x, line_y - outline_offset, border, image_height + border * 2 }
+    )
+    test.same(
+      hover_border_rectangles[4],
+      { line_x + 40, line_y - outline_offset, border, image_height + border * 2 }
+    )
     test.equal(view:on_mouse_pressed("left", x, y, 1), true)
     test.equal(clicked, true)
   end)

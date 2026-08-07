@@ -3965,6 +3965,19 @@ function DocView:get_render_fragment_at_position(x, y)
   end
 end
 
+local function render_widget_rect(fragment, x, y, row_height, padding)
+  local widget = fragment.widget
+  if not widget then return nil end
+  if padding == nil then padding = widget.padding or 0 end
+  local content_height = widget.image_height or widget.height or row_height
+  local width = fragment.hit_width or widget.width or fragment.width or 0
+  local left = x + (fragment.draw_x_offset or 0)
+  local top = fragment.draw_y_offset
+    and (y + fragment.draw_y_offset - padding)
+    or (y + math.max(0, (row_height - content_height) / 2) - padding)
+  return left, top, width, content_height + padding * 2
+end
+
 function DocView:get_render_widget_at_position(x, y)
   if not self:has_line_render_providers() then return nil end
   local line = self:resolve_screen_position(x, y)
@@ -3986,16 +3999,16 @@ function DocView:get_render_widget_at_position(x, y)
       local width = widget and (fragment.hit_width or widget.width or fragment.width)
         or fragment.width or font:get_width(text, { tab_offset = tx })
       if widget then
-        local padding = widget.padding or 0
-        local height = widget.image_height or widget.height or row_height
-        local left = (fragment.layout_x ~= nil and fragment.layout_x or tx)
-          + (fragment.draw_x_offset or 0)
-        local top = fragment.draw_y_offset and (fragment.draw_y_offset - padding)
-          or (math.max(0, (row_height - height) / 2) - padding)
+        local left, top, hit_width, hit_height = render_widget_rect(
+          fragment,
+          fragment.layout_x ~= nil and fragment.layout_x or tx,
+          0,
+          row_height
+        )
         widget_hits[#widget_hits + 1] = {
           fragment = fragment, widget = widget,
-          left = left, top = top, width = width,
-          height = height + padding * 2,
+          left = left, top = top, width = hit_width,
+          height = hit_height,
         }
       end
       tx = tx + width
@@ -4035,14 +4048,13 @@ function DocView:get_render_widget_near_position(x, y)
             or fragment.width or font:get_width(text, { tab_offset = tx })
           local radius = widget and tonumber(widget.proximity_radius) or 0
           if radius > 0 then
-            local padding = widget.padding or 0
-            local height = widget.image_height or widget.height or row_height
-            local left = line_x + (fragment.layout_x ~= nil and fragment.layout_x or tx)
-              + (fragment.draw_x_offset or 0)
-            local top = line_y + (fragment.draw_y_offset and
-              (fragment.draw_y_offset - padding)
-              or (math.max(0, (row_height - height) / 2) - padding))
-            local right, bottom = left + width, top + height + padding * 2
+            local left, top, hit_width, hit_height = render_widget_rect(
+              fragment,
+              line_x + (fragment.layout_x ~= nil and fragment.layout_x or tx),
+              line_y,
+              row_height
+            )
+            local right, bottom = left + hit_width, top + hit_height
             local dx = x < left and left - x or x > right and x - right or 0
             local dy = y < top and top - y or y > bottom and y - bottom or 0
             local distance = math.sqrt(dx * dx + dy * dy)
@@ -6151,23 +6163,43 @@ local function draw_render_widget(view, fragment, x, y, row_height, context)
     return true
   end
 
-  local padding = widget.padding or 0
-  local width = fragment.hit_width or widget.width or fragment.width or 0
-  local content_height = widget.image_height or widget.height or row_height
-  local left = x + (fragment.draw_x_offset or 0)
-  local top = fragment.draw_y_offset and (y + fragment.draw_y_offset - padding)
-    or (y + math.max(0, (row_height - content_height) / 2) - padding)
-  local height = content_height + padding * 2
-  renderer.draw_rect(left, top, width, height, style.interactive_hover_overlay)
-  local border = math.max(1, math.floor(SCALE))
-  renderer.draw_rect(left, top, width, border, style.interactive_hover_border)
+  local left, top, width, height = render_widget_rect(
+    fragment, x, y, row_height, widget.hover_outline_padding
+  )
+  if not widget.suppress_hover_background then
+    renderer.draw_rect(left, top, width, height, style.interactive_hover_overlay)
+  end
+  local border = widget.hover_outline_width
+  if border == nil then
+    border = math.max(1, math.floor(SCALE))
+  else
+    border = math.max(1, math.floor(border))
+  end
+  local outline_left, outline_top = left, top
+  local outline_width, outline_height = width, height
+  if widget.hover_outline_outside then
+    local offset = border
+    -- Keep the left edge inside the DocView content clip; extend the
+    -- opposite edge so the outline does not consume image pixels.
+    outline_left = left
+    outline_top = top - offset
+    outline_width = width + border
+    outline_height = height + border * 2
+  end
   renderer.draw_rect(
-    left, top + math.max(0, height - border), width, border,
+    outline_left, outline_top, outline_width, border, style.interactive_hover_border
+  )
+  renderer.draw_rect(
+    outline_left, outline_top + math.max(0, outline_height - border),
+    outline_width, border,
     style.interactive_hover_border
   )
-  renderer.draw_rect(left, top, border, height, style.interactive_hover_border)
   renderer.draw_rect(
-    left + math.max(0, width - border), top, border, height,
+    outline_left, outline_top, border, outline_height, style.interactive_hover_border
+  )
+  renderer.draw_rect(
+    outline_left + math.max(0, outline_width - border), outline_top,
+    border, outline_height,
     style.interactive_hover_border
   )
   return true
