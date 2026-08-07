@@ -108,12 +108,20 @@ function projection.source_topology(lines, line_limit)
   local html_lines = {}
   local fence_delimiters = {}
   local first = ((lines or {})[1] or ""):gsub("\n$", "")
-  if first:match("^%s*%-%-%-%s*$") then
+  local frontmatter_delimiter = first:match("^%s*([%-%+][%-%+][%-%+])%s*$")
+  if frontmatter_delimiter == "---" or frontmatter_delimiter == "+++" then
+    local frontmatter_close_pattern = frontmatter_delimiter == "+++"
+      and "^%s*%+%+%+%s*$" or "^%s*%-%-%-%s*$"
     frontmatter_lines[1] = true
     for line = 2, line_count do
       frontmatter_lines[line] = true
       local text = (lines[line] or ""):gsub("\n$", "")
-      if text:match("^%s*%-%-%-%s*$") or text:match("^%s*%.%.%.%s*$") then
+      local closes_frontmatter = text:match(frontmatter_close_pattern) ~= nil
+      if frontmatter_delimiter == "---" then
+        closes_frontmatter = closes_frontmatter
+          or text:match("^%s*%.%.%.%s*$") ~= nil
+      end
+      if closes_frontmatter then
         break
       end
     end
@@ -274,7 +282,7 @@ function projection.block_signature(text)
     return "rule"
   end
   if body:match("^%[[^%]]+%]:") then return "reference" end
-  if body == "---" then return "frontmatter-or-rule" end
+  if body == "---" or body == "+++" then return "frontmatter-or-rule" end
   return "prose"
 end
 
@@ -320,6 +328,9 @@ function projection.transaction_changes_block_context(doc, transaction, pre_edit
     then
       global = true
     end
+    if previous and (previous.comment or previous.math or previous.frontmatter) then
+      changed = true
+    end
     if old_signature ~= new_signature then
       changed = true
     end
@@ -329,6 +340,11 @@ end
 
 local function link_target_signature(text)
   text = tostring(text or ""):gsub("\n$", "")
+  -- A list marker such as "- " also matches the permissive Setext
+  -- underline shape below, but it is not a link target owned by the
+  -- following block. Do not widen pending presentation for ordinary list
+  -- edits as though a reference/heading target changed.
+  if projection.list_signature(text) ~= "" then return "" end
   local body = text:match("^%s*#{1,6}%s+(.+)$")
   if body then return "heading:" .. body end
   local setext = text:match("^%s*([=%-]+)%s*$")
@@ -361,6 +377,7 @@ function projection.transaction_changes_frontmatter(doc, transaction, pre_edit_l
   local function delimiter(text)
     text = tostring(text or ""):gsub("\n$", "")
     return text:match("^%s*%-%-%-%s*$") ~= nil
+      or text:match("^%s*%+%+%+%s*$") ~= nil
       or text:match("^%s*%.%.%.%s*$") ~= nil
   end
   for _, range in ipairs(projection.ordered_changed_ranges(transaction)) do

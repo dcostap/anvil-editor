@@ -71,6 +71,17 @@ function pending_render.current_source(
 
   local owner = view.__markdown_live_owner
   local topology = owner and owner.provisional_topology
+  local function frontmatter_source_render()
+    local render = source_fallback(view, previous, current_text, false)
+    render.markdown_pending_provenance = "unavailable"
+    for _, fragment in ipairs(render.fragments or {}) do
+      fragment.color = (current_text:match("^%s*%-%-%-%s*$")
+          or current_text:match("^%s*%+%+%+%s*$")
+          or current_text:match("^%s*%.%.%.%s*$"))
+        and style.markdown_live_frontmatter_delimiter or style.text
+    end
+    return render
+  end
   if topology and topology.revision == view.doc.text_revision
     and topology.fence_delimiters and topology.fence_delimiters[line]
   then
@@ -93,14 +104,12 @@ function pending_render.current_source(
   if topology and topology.revision == view.doc.text_revision
     and topology.frontmatter[line]
   then
-    local render = source_fallback(view, previous, current_text, false)
-    render.markdown_pending_provenance = "unavailable"
-    for _, fragment in ipairs(render.fragments or {}) do
-      fragment.color = (current_text:match("^%s*%-%-%-%s*$")
-          or current_text:match("^%s*%.%.%.%s*$"))
-        and style.markdown_live_frontmatter_delimiter or style.text
-    end
-    return render
+    return frontmatter_source_render()
+  end
+  if owner and owner.pending_frontmatter_lines
+    and owner.pending_frontmatter_lines[line]
+  then
+    return frontmatter_source_render()
   end
   if topology and topology.revision == view.doc.text_revision
     and topology.html[line]

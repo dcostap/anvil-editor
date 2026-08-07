@@ -18,6 +18,7 @@ local vault_index = require "core.markdown.vault_index"
 local style = require "core.style"
 
 local live = {}
+local pending_visual_projection = {}
 
 local PROVIDER_ID = "markdown-live"
 local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
@@ -4224,6 +4225,58 @@ local function cached_render_line(view, line)
   return cached and cached.render_line ~= false and cached.render_line or nil
 end
 
+-- Image completion callbacks are keyed by the line that was current when the
+-- semantic render resolved the asset. A structural pending projection can
+-- move that line before the callback fires, so rebase consumers immediately
+-- instead of making completion invalidate an unrelated line (or no longer
+-- invalidating the visible image at all).
+pending_visual_projection.rebase_image_consumers = function(view, ranges)
+  local references = view and view.__markdown_live_image_references
+  local cache = view and view.__markdown_live_image_cache
+  if not (references and cache and ranges and #ranges > 0) then return end
+  for _, record in pairs(cache) do
+    for reference_id, old_line in pairs(record.consumers or {}) do
+      local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+      if new_line and view.doc.lines[new_line] then
+        record.consumers[reference_id] = new_line
+      else
+        record.consumers[reference_id] = nil
+        -- Keep the key until the pending line is rendered again. A changed
+        -- source line may still reuse the old image fragment, and that
+        -- fragment needs the key to rebind its completion consumer.
+      end
+    end
+  end
+end
+
+pending_visual_projection.provisional_frontmatter_for_line = function(view, line)
+  local _, _, _, frontmatter = pending_projection.source_topology(
+    view.doc.lines, line
+  )
+  return frontmatter and frontmatter[line] == true or false
+end
+
+pending_visual_projection.rebind_image_consumers = function(view, render_line, line)
+  local references = view and view.__markdown_live_image_references
+  local cache = view and view.__markdown_live_image_cache
+  if not (references and cache and render_line) then return end
+  for _, fragment in ipairs(render_line.fragments or {}) do
+    local widget_type = fragment.widget and fragment.widget.type
+    if (fragment.image_path or fragment.image_status
+      or widget_type == "image") and fragment.link
+    then
+      local reference_id = fragment.link.semantic_id
+        or fragment.image_block_col1 and table.concat({
+          line, fragment.image_block_col1, fragment.image_block_col2,
+        }, ":")
+        or table.concat({ line, fragment.source_col1, fragment.source_col2 }, ":")
+      local key = reference_id and references[reference_id]
+      local record = key and cache[key]
+      if record then record.consumers[reference_id] = line end
+    end
+  end
+end
+
 local function pending_capture_visible_range(view, owner)
   local metric_cache = view.__visual_metric_cache
   if metric_cache
@@ -4321,6 +4374,12 @@ local function capture_pre_edit_renders(view, change)
     visible_line1, visible_line2 = capture_line1, capture_line2
   end
   owner.pre_edit_lines = {}
+  local old_topology_limit = owner.pending_visible_line2 or 1
+  for line in pairs(lines) do
+    old_topology_limit = math.max(old_topology_limit, line)
+  end
+  local _, old_comments, old_math, old_frontmatter =
+    pending_projection.source_topology(view.doc.lines, old_topology_limit)
   local metric_cache = view.__visual_metric_cache
   local metrics_current = metric_cache
     and metric_cache.signature == view:get_visual_metric_signature()
@@ -4329,6 +4388,12 @@ local function capture_pre_edit_renders(view, change)
   for line in pairs(lines) do
     local render = cached_render_line(view, line)
     local source_text = (view.doc.lines[line] or ""):gsub("\n$", "")
+    local indented_node
+    if not (owner.pending_indented_lines and owner.pending_indented_lines[line]) then
+      indented_node = indented_code_for_line(view, line)
+    end
+    local frontmatter_node, frontmatter_end_line =
+      frontmatter_for_line(view, line)
     local pending = owner.pending_lines and owner.pending_lines[line]
     if pending and (pending.revision ~= view.doc.text_revision
       or pending.source_text ~= source_text)
@@ -4359,7 +4424,15 @@ local function capture_pre_edit_renders(view, change)
       fenced = service and service:contains_line(line) or false,
       indented = owner.pending_indented_lines
         and owner.pending_indented_lines[line]
-        or indented_code_for_line(view, line) ~= nil,
+        or indented_node ~= nil,
+      indented_line1 = indented_node and indented_node.source.line1 or nil,
+      indented_line2 = indented_node and indented_node.source.line2 or nil,
+      frontmatter = frontmatter_node ~= nil or old_frontmatter[line] == true,
+      frontmatter_line1 = frontmatter_node
+        and frontmatter_node.source.line1 or nil,
+      frontmatter_line2 = frontmatter_end_line,
+      comment = old_comments[line] == true or line_in_semantic_comment(view, line),
+      math = old_math[line] == true or line_in_semantic_math(view, line),
       callout_record = callout_runtime.for_line(view, line),
     }
     captured = captured + 1
@@ -4376,8 +4449,6 @@ local function retained_metric_height(state, line)
   return state and state.heights and state.heights[line] or nil
 end
 
-local pending_visual_projection = {}
-
 function pending_visual_projection.contains_retainable_presentation(render_line)
   if render_line and render_line.table_row then return false end
   -- These presentations are either source-local (tags, escapes, footnotes,
@@ -4389,7 +4460,7 @@ function pending_visual_projection.contains_retainable_presentation(render_line)
     if fragment.attachment_chip or fragment.image_status
       or fragment.embed_preview or fragment.hard_break or fragment.footnote
       or fragment.footnote_definition or fragment.tag
-      or fragment.reference_definition or fragment.escape
+      or fragment.reference_definition or fragment.escape or fragment.math_source
       or fragment.widget and (
         fragment.widget.type == "image"
         or fragment.widget.type == "markdown-embed-preview"
@@ -4404,14 +4475,20 @@ end
 function pending_visual_projection.context_is_safe(view, line, render_line)
   local owner = view.__markdown_live_owner
   if owner and owner.link_targets_changed_revision == view.doc.text_revision then
-    -- A reference-derived attachment can change when its definition changes;
-    -- do not carry that chip across the definition transaction.
+    -- A resolved attachment/image/embed can change when a reference
+    -- definition changes. The retained fragment does not carry enough source
+    -- context to prove that its old target is still valid, so do not carry
+    -- any target-dependent presentation across that transaction.
     render_line = render_line or view.__line_render_cache
       and view.__line_render_cache.lines[line]
       and view.__line_render_cache.lines[line].render_line
     for _, fragment in ipairs(render_line and render_line.fragments or {}) do
-      if fragment.attachment_chip and fragment.link
-        and fragment.link.kind == "reference"
+      if fragment.attachment_chip or fragment.image_status
+        or fragment.embed_preview
+        or fragment.widget and (
+          fragment.widget.type == "image"
+          or fragment.widget.type == "markdown-embed-preview"
+        )
       then
         return false
       end
@@ -4426,7 +4503,8 @@ end
 
 function pending_visual_projection.find_capture(view, pre_edit_lines, source)
   if not source:find("[", 1, true) and not source:find("#", 1, true)
-    and not source:find("\\", 1, true) and not source:match("  $")
+    and not source:find("\\", 1, true) and not source:find("$", 1, true)
+    and not source:find(">", 1, true) and not source:match("  $")
   then
     return nil
   end
@@ -4542,6 +4620,9 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
         retained_height, row_heights, "retained"
       )
       if entry then
+        pending_visual_projection.rebind_image_consumers(
+          view, entry.render_line, new_line
+        )
         next_lines[new_line] = entry
         next_metrics.heights[new_line] = nil
       elseif retained_height then
@@ -4585,6 +4666,7 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
       provenance or render.markdown_pending_provenance
     )
     if not entry then return false end
+    pending_visual_projection.rebind_image_consumers(view, entry.render_line, line)
     next_lines[line] = entry
     next_metrics.heights[line] = nil
     return true
@@ -4697,13 +4779,15 @@ local function capture_pending_renders(view, transaction)
   local pre_edit_lines = owner.pre_edit_lines or {}
   local previous_indented = owner.pending_indented_lines or {}
   local previous_indented_sources = owner.pending_indented_sources or {}
+  local previous_frontmatter = owner.pending_frontmatter_lines or {}
   local previous_callouts = owner.pending_callouts or {}
+  local ranges = pending_projection.ordered_changed_ranges(transaction)
+  pending_visual_projection.rebase_image_consumers(view, ranges)
   local context_changed, context_line1, context_line2
   owner.pending_lines, owner.pending_metric_state, context_changed,
     context_line1, context_line2 = build_pending_projection(
     view, transaction, pre_edit_lines
   )
-  local ranges = pending_projection.ordered_changed_ranges(transaction)
   local pending_indented = {}
   local pending_indented_sources = {}
   local function retain_indented(old_line, source_text)
@@ -4714,15 +4798,99 @@ local function capture_pending_renders(view, transaction)
     pending_indented[new_line] = true
     pending_indented_sources[new_line] = current
   end
+  local function retain_indented_range(line1, line2)
+    if not line1 or not line2 then return end
+    for old_line = line1, line2 do
+      local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+      if new_line then
+        local current = (view.doc.lines[new_line] or ""):gsub("\n$", "")
+        pending_indented[new_line] = true
+        pending_indented_sources[new_line] = current
+      end
+    end
+  end
   for old_line, captured in pairs(pre_edit_lines) do
-    if captured.indented then retain_indented(old_line, captured.source_text) end
+    if captured.indented then
+      retain_indented_range(captured.indented_line1, captured.indented_line2)
+      retain_indented(old_line, captured.source_text)
+    end
   end
   for old_line in pairs(previous_indented) do
     local source = previous_indented_sources[old_line]
     if source then retain_indented(old_line, source) end
   end
+  -- A changed range can create a second copy of an unchanged indented-code
+  -- line. The transaction map cannot identify that new line because it has
+  -- no old coordinate, but the pre-edit capture can still prove its source
+  -- ownership. Keep this bounded to the changed ranges and reject current
+  -- raw-block owners, which have a stricter provisional topology.
+  local function current_indented_context_is_safe(line)
+    local topology = owner.provisional_topology
+    if not topology or topology.revision ~= view.doc.text_revision then return true end
+    return not (topology.fenced[line] or topology.comments[line]
+      or topology.math[line] or topology.frontmatter[line]
+      or topology.html[line])
+  end
+  for _, range in ipairs(ranges) do
+    local new_line1 = range.new_line1 or range.old_line1 or 1
+    local new_line2 = range.new_line2 or new_line1
+    for new_line = new_line1, new_line2 do
+      if not pending_indented[new_line] and current_indented_context_is_safe(new_line) then
+        local source = (view.doc.lines[new_line] or ""):gsub("\n$", "")
+        for _, captured in pairs(pre_edit_lines) do
+          if captured.indented and captured.source_text == source then
+            pending_indented[new_line] = true
+            pending_indented_sources[new_line] = source
+            break
+          end
+        end
+      end
+    end
+  end
   owner.pending_indented_lines = pending_indented
   owner.pending_indented_sources = pending_indented_sources
+  local pending_frontmatter = {}
+  local function retain_frontmatter(old_line)
+    local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+    if new_line
+      and pending_visual_projection.provisional_frontmatter_for_line(view, new_line)
+    then
+      pending_frontmatter[new_line] = true
+    end
+  end
+  local function retain_frontmatter_range(line1, line2)
+    if not line1 or not line2 then return end
+    for old_line = line1, line2 do retain_frontmatter(old_line) end
+  end
+  for _, captured in pairs(pre_edit_lines) do
+    if captured.frontmatter then
+      retain_frontmatter_range(
+        captured.frontmatter_line1, captured.frontmatter_line2
+      )
+    end
+  end
+  for old_line in pairs(previous_frontmatter) do
+    retain_frontmatter(old_line)
+  end
+  for _, range in ipairs(ranges) do
+    local new_line1 = range.new_line1 or range.old_line1 or 1
+    local new_line2 = range.new_line2 or new_line1
+    for new_line = new_line1, new_line2 do
+      if not pending_frontmatter[new_line]
+        and pending_visual_projection.provisional_frontmatter_for_line(
+          view, new_line
+        )
+      then
+        for _, captured in pairs(pre_edit_lines) do
+          if captured.frontmatter then
+            pending_frontmatter[new_line] = true
+            break
+          end
+        end
+      end
+    end
+  end
+  owner.pending_frontmatter_lines = pending_frontmatter
   local pending_callouts = {}
   local function shifted_callout(record)
     if not record then return nil end
@@ -4739,21 +4907,70 @@ local function capture_pending_renders(view, transaction)
       end
       copy.block_range.line1 = line1
       copy.block_range.line2 = line2
+      copy.block_range.col2 = #(view.doc.lines[line2] or "") + 1
+    end
+    for _, range_name in ipairs({ "marker_range", "title_range", "fold_range" }) do
+      if record[range_name] then
+        copy[range_name] = {}
+        for key, value in pairs(record[range_name]) do
+          copy[range_name][key] = value
+        end
+        copy[range_name].line1 = line1
+        copy[range_name].line2 = line1
+      end
     end
     copy.line_ranges = {}
     return copy
   end
-  local function retain_callout(old_line, record)
-    local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+  local function retain_callout_range(record, extend_to)
+    if not record then return end
     local shifted = shifted_callout(record)
-    if new_line and shifted then pending_callouts[new_line] = shifted end
+    if not shifted then return end
+    if extend_to and extend_to > shifted.line2 then
+      shifted.line2 = extend_to
+      if shifted.block_range then
+        shifted.block_range.line2 = extend_to
+        shifted.block_range.col2 = #(view.doc.lines[extend_to] or "") + 1
+      end
+    end
+    for old_line = record.line1, record.line2 do
+      local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+      if new_line then pending_callouts[new_line] = shifted end
+    end
+    if extend_to then pending_callouts[extend_to] = shifted end
   end
-  for old_line, captured in pairs(pre_edit_lines) do
-    retain_callout(old_line, captured.callout_record
-      or captured.render_line and captured.render_line.callout_record)
+  local seen_callouts = {}
+  for _, captured in pairs(pre_edit_lines) do
+    local record = captured.callout_record
+      or captured.render_line and captured.render_line.callout_record
+    if record and not seen_callouts[record] then
+      seen_callouts[record] = true
+      retain_callout_range(record)
+    end
   end
-  for old_line, record in pairs(previous_callouts) do
-    retain_callout(old_line, record)
+  for _, record in pairs(previous_callouts) do
+    if record and not seen_callouts[record] then
+      seen_callouts[record] = true
+      retain_callout_range(record)
+    end
+  end
+  -- The same source line may be inserted into a still-contiguous callout.
+  -- It has no old line to map, so use the captured callout record as the
+  -- ownership witness and extend the provisional card through that line.
+  for _, range in ipairs(ranges) do
+    local new_line1 = range.new_line1 or range.old_line1 or 1
+    local new_line2 = range.new_line2 or new_line1
+    for new_line = new_line1, new_line2 do
+      local source = (view.doc.lines[new_line] or ""):gsub("\n$", "")
+      for _, captured in pairs(pre_edit_lines) do
+        local record = captured.callout_record
+          or captured.render_line and captured.render_line.callout_record
+        if record and captured.source_text == source then
+          retain_callout_range(record, new_line)
+          break
+        end
+      end
+    end
   end
   owner.pending_callouts = pending_callouts
   pending_metric_invariant.enforce(view, "pending-projection")
@@ -5085,8 +5302,16 @@ function decoration_provider:line_background(view, line)
     if provisional and provisional.revision == view.doc.text_revision then
       if provisional.comments[line] then return nil end
       if provisional.fenced[line] then return style.markdown_live_code_background end
+      if provisional.frontmatter[line] then
+        return style.markdown_live_frontmatter_background
+      end
     elseif owner.fence_service and owner.fence_service:contains_line(line) then
       return style.markdown_live_code_background
+    end
+    if owner.pending_frontmatter_lines
+      and owner.pending_frontmatter_lines[line]
+    then
+      return style.markdown_live_frontmatter_background
     end
   end
   local topology = current_provisional_topology(view, line)
@@ -5349,6 +5574,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     owner.pending_metric_state = { heights = {} }
     owner.pending_indented_lines = {}
     owner.pending_indented_sources = {}
+    owner.pending_frontmatter_lines = {}
     owner.pending_callouts = {}
     owner.pending_context_revision = view.doc.text_revision
     owner.pending_context_line1 = 1
@@ -5404,8 +5630,8 @@ function provider:on_text_transaction(view, transaction, line1, line2)
       end
     end
   end
-  local topology_changed = raw_context_changed or frontmatter_changed
-    or html_changed or line_structure_changed
+  local topology_changed = raw_context_changed or block_context_changed
+    or frontmatter_changed or html_changed or line_structure_changed
     or owner and owner.reload_projection_revision ~= nil
   if topology_changed and owner then
     local topology_started = system.get_time()
@@ -6313,6 +6539,7 @@ local function invalidate_semantic_publication(view, instance, reason)
     owner.pending_metric_state = nil
     owner.pending_indented_lines = nil
     owner.pending_indented_sources = nil
+    owner.pending_frontmatter_lines = nil
     owner.pending_callouts = nil
     owner.pending_context_revision = nil
     owner.pending_context_line1 = nil

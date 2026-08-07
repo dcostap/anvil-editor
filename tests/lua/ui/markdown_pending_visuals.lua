@@ -52,6 +52,14 @@ local function count_flag(view, line, field)
   return count
 end
 
+local function visible_render_text(view, line)
+  local text = {}
+  for _, fragment in ipairs((view:get_line_render(line) or {}).fragments or {}) do
+    if not fragment.hidden and fragment.text then text[#text + 1] = fragment.text end
+  end
+  return table.concat(text)
+end
+
 local function exit_empty_list(doc)
   -- This is the normalized edit produced by doc:newline for an empty list
   -- item: remove the marker and insert the newline at the same position.
@@ -268,6 +276,202 @@ test.describe("Markdown pending visual continuity", function()
       test.not_nil(decoration:line_background_descriptor(view, 4))
       test.ok(wait_ready(instance), instance.reason)
       test.not_nil(decoration:line_background_descriptor(view, 4))
+    end)
+    if view then markdown.live_render.detach(view) end
+    config.markdown_live_editor = old_live
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps callout ownership for a duplicated body line in a changed range", function()
+    local old_live = config.markdown_live_editor
+    local old_active = core.active_view
+    local filename = USERDIR .. PATHSEP
+      .. "markdown-pending-callout-duplicate-body.md"
+    local view
+    local ok, err = pcall(function()
+      config.markdown_live_editor = true
+      view = make_view(filename, "> [!NOTE] title\n> body\nplain")
+      local doc = view.doc
+      doc:set_selection(3, 1)
+      core.active_view = view
+      markdown.live_render.refresh_view(view)
+      local decoration
+      for _, entry in ipairs(view:decoration_provider_entries()) do
+        if entry.id == "markdown-live" then decoration = entry.provider break end
+      end
+      decoration = test.not_nil(decoration)
+      local instance = test.not_nil(markdown_model.peek(doc))
+      test.ok(wait_ready(instance), instance.reason)
+      test.not_nil(decoration:line_background_descriptor(view, 2))
+
+      doc:apply_edits({
+        { line1 = 3, col1 = 1, line2 = 3, col2 = 1, text = "> body\n" },
+      }, { type = "insert" })
+
+      test.equal(instance.status, "pending")
+      test.not_nil(
+        decoration:line_background_descriptor(view, 3),
+        "the duplicated callout body lost its card while semantics were pending"
+      )
+      test.ok(wait_ready(instance), instance.reason)
+      test.not_nil(decoration:line_background_descriptor(view, 3))
+    end)
+    if view then markdown.live_render.detach(view) end
+    config.markdown_live_editor = old_live
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps indented-code ownership for a duplicated code line in a changed range", function()
+    local old_live = config.markdown_live_editor
+    local old_active = core.active_view
+    local filename = USERDIR .. PATHSEP
+      .. "markdown-pending-indented-duplicate.md"
+    local view
+    local ok, err = pcall(function()
+      config.markdown_live_editor = true
+      view = make_view(filename, "- \n\n    local code\nplain")
+      local doc = view.doc
+      doc:set_selection(4, 1)
+      core.active_view = view
+      markdown.live_render.refresh_view(view)
+      local decoration
+      for _, entry in ipairs(view:decoration_provider_entries()) do
+        if entry.id == "markdown-live" then decoration = entry.provider break end
+      end
+      decoration = test.not_nil(decoration)
+      local instance = test.not_nil(markdown_model.peek(doc))
+      test.ok(wait_ready(instance), instance.reason)
+      test.equal(decoration:line_background(view, 3), style.markdown_live_code_background)
+
+      doc:apply_edits({
+        { line1 = 4, col1 = 1, line2 = 4, col2 = 1, text = "    local code\n" },
+      }, { type = "insert" })
+
+      test.equal(instance.status, "pending")
+      test.equal(
+        decoration:line_background(view, 4),
+        style.markdown_live_code_background,
+        "the duplicated indented-code line lost its background while semantics were pending"
+      )
+      test.ok(wait_ready(instance), instance.reason)
+      test.equal(decoration:line_background(view, 4), style.markdown_live_code_background)
+    end)
+    if view then markdown.live_render.detach(view) end
+    config.markdown_live_editor = old_live
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps plus-delimited frontmatter ownership during a pending edit", function()
+    local old_live = config.markdown_live_editor
+    local old_active = core.active_view
+    local filename = USERDIR .. PATHSEP
+      .. "markdown-pending-plus-frontmatter.md"
+    local view
+    local ok, err = pcall(function()
+      config.markdown_live_editor = true
+      view = make_view(filename, "+++\nkey: value\n+++\nplain")
+      local doc = view.doc
+      doc:set_selection(4, 1)
+      core.active_view = view
+      markdown.live_render.refresh_view(view)
+      local decoration
+      for _, entry in ipairs(view:decoration_provider_entries()) do
+        if entry.id == "markdown-live" then decoration = entry.provider break end
+      end
+      decoration = test.not_nil(decoration)
+      local instance = test.not_nil(markdown_model.peek(doc))
+      test.ok(wait_ready(instance), instance.reason)
+
+      doc:insert(2, 5, "\n")
+
+      test.equal(instance.status, "pending")
+      test.equal(
+        decoration:line_background(view, 2),
+        style.markdown_live_frontmatter_background,
+        "plus-delimited frontmatter lost its pending background"
+      )
+      test.ok(wait_ready(instance), instance.reason)
+      test.equal(
+        decoration:line_background(view, 2),
+        style.markdown_live_frontmatter_background
+      )
+    end)
+    if view then markdown.live_render.detach(view) end
+    config.markdown_live_editor = old_live
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps frontmatter ownership through an ordinary pending edit", function()
+    local old_live = config.markdown_live_editor
+    local old_active = core.active_view
+    local filename = USERDIR .. PATHSEP
+      .. "markdown-pending-frontmatter-content.md"
+    local view
+    local ok, err = pcall(function()
+      config.markdown_live_editor = true
+      view = make_view(filename, "---\nkey: value\n---\nplain")
+      local doc = view.doc
+      doc:set_selection(4, 1)
+      core.active_view = view
+      markdown.live_render.refresh_view(view)
+      local decoration
+      for _, entry in ipairs(view:decoration_provider_entries()) do
+        if entry.id == "markdown-live" then decoration = entry.provider break end
+      end
+      decoration = test.not_nil(decoration)
+      local instance = test.not_nil(markdown_model.peek(doc))
+      test.ok(wait_ready(instance), instance.reason)
+
+      doc:insert(2, #doc.lines[2] - 1, "!")
+
+      test.equal(instance.status, "pending")
+      test.equal(
+        decoration:line_background(view, 2),
+        style.markdown_live_frontmatter_background,
+        "frontmatter lost its background during an ordinary pending edit"
+      )
+      test.ok(wait_ready(instance), instance.reason)
+      test.equal(
+        decoration:line_background(view, 2),
+        style.markdown_live_frontmatter_background
+      )
+    end)
+    if view then markdown.live_render.detach(view) end
+    config.markdown_live_editor = old_live
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps comment ownership through an ordinary pending edit", function()
+    local old_live = config.markdown_live_editor
+    local old_active = core.active_view
+    local filename = USERDIR .. PATHSEP
+      .. "markdown-pending-comment-content.md"
+    local view
+    local ok, err = pcall(function()
+      config.markdown_live_editor = true
+      view = make_view(filename, "%%hidden\ncomment body\nend%%\nplain")
+      local doc = view.doc
+      doc:set_selection(4, 1)
+      core.active_view = view
+      markdown.live_render.refresh_view(view)
+      local instance = test.not_nil(markdown_model.peek(doc))
+      test.ok(wait_ready(instance), instance.reason)
+      test.equal(visible_render_text(view, 2), "")
+
+      doc:insert(2, #doc.lines[2] - 1, "!")
+
+      test.equal(instance.status, "pending")
+      test.equal(
+        visible_render_text(view, 2), "",
+        "comment content became visible during a pending edit"
+      )
+      test.ok(wait_ready(instance), instance.reason)
+      test.equal(visible_render_text(view, 2), "")
     end)
     if view then markdown.live_render.detach(view) end
     config.markdown_live_editor = old_live
