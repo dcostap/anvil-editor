@@ -1164,6 +1164,56 @@ local function semantic_link_spans(view, line_text, line)
       end
     end
   end
+  if nodes then
+    for _, link in ipairs(markdown_links.find_links(line_text, line)) do
+      local key = link.source_col1 .. ":" .. link.source_col2
+      local source = {
+        line1 = link.source_line, col1 = link.source_col1,
+        line2 = link.source_line, col2 = link.source_col2,
+      }
+      local allowed = true
+      for _, node in ipairs(nodes) do
+        if node.type == "code" or node.type == "comment" or node.type == "html" then
+          if source_intersects_selection(
+            node.source, source.line1, source.col1, source.line2, source.col2
+          ) then
+            allowed = false
+            break
+          end
+        elseif node.type == "math"
+          and not position_before(source.line1, source.col1, node.source.line1, node.source.col1)
+          and not position_before(node.source.line2, node.source.col2, source.line2, source.col2)
+        then
+          -- A link-like sequence inside an already-open math span is still
+          -- math. If math starts inside the label or crosses into the
+          -- destination, the link delimiters take precedence.
+          allowed = false
+          break
+        end
+      end
+      if not by_range[key] and allowed then
+        local link_type = link.kind == "image" and "image"
+          or link.kind == "embed" and "embed"
+          or link.kind == "wiki" and "wiki_link"
+          or "link"
+        by_range[key] = {
+          type = link_type,
+          line = line,
+          col1 = link.source_col1,
+          col2 = link.source_col2,
+          link = link,
+          text = link.display,
+          semantic_id = table.concat({
+            "fallback-link", line, link.source_col1, link.source_col2,
+          }, ":"),
+          attributes = {
+            link_text = link.link_text_range,
+            link_destination = link.link_destination_range,
+          },
+        }
+      end
+    end
+  end
   local spans = {}
   for _, span in pairs(by_range) do spans[#spans + 1] = span end
   table.sort(spans, function(a, b) return a.col1 < b.col1 end)

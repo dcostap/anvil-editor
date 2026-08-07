@@ -224,6 +224,10 @@ function links.parse_markdown_link_at(text, start_col, source_line)
     source_col2 = finish + 1,
     is_embed = is_image,
     resize = resize,
+    link_text_range = {
+      line1 = source_line, col1 = label_open + 1,
+      line2 = source_line, col2 = label_close,
+    },
     link_destination_range = {
       line1 = source_line, col1 = destination_col1,
       line2 = source_line, col2 = destination_col2,
