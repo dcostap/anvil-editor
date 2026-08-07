@@ -17,6 +17,16 @@ local function make_view(text)
 end
 
 test.describe("DocView variable visual row metrics", function()
+  test.before_each(function(context)
+    context.old_scroll_past_end = config.scroll_past_end
+    context.old_scroll_context_lines = config.scroll_context_lines
+  end)
+
+  test.after_each(function(context)
+    config.scroll_past_end = context.old_scroll_past_end
+    config.scroll_context_lines = context.old_scroll_context_lines
+  end)
+
   test.it("uses provider row heights for scroll size and line positions", function()
     local view = make_view("one\ntwo\nthree")
     local lh = view:get_line_height()
@@ -267,6 +277,63 @@ test.describe("DocView variable visual row metrics", function()
     config.scroll_past_end = old_scroll_past_end
     config.scroll_context_lines = old_scroll_context_lines
     test.equal(with_provider, base)
+  end)
+
+  test.it("uses normal rows for context around a taller target row", function()
+    local lines = {}
+    for line = 1, 40 do lines[line] = "line " .. line end
+    local view = make_view(table.concat(lines, "\n"))
+    view.size.y = 200
+    config.scroll_past_end = true
+    config.scroll_context_lines = 28
+
+    local lh = view:get_line_height()
+    view:add_visual_metric_provider("tall-target", {
+      line_height = function(_, _, line)
+        return line == 20 and lh * 2 or nil
+      end,
+    })
+
+    view:scroll_to_make_visible(19, 1, true)
+    local before_top = view:get_position_highlight_geometry(19, 1)
+    view:scroll_to_make_visible(20, 1, true)
+    local target_top = view:get_position_highlight_geometry(20, 1)
+    view:scroll_to_make_visible(21, 1, true)
+    local after_top = view:get_position_highlight_geometry(21, 1)
+
+    test.ok(
+      math.abs(target_top - after_top) <= lh,
+      string.format(
+        "tall target left the navigation band: %.1f vs %.1f",
+        target_top, after_top
+      )
+    )
+    test.ok(
+      math.abs(before_top - after_top) <= lh,
+      string.format(
+        "adjacent rows diverged after tall target: %.1f vs %.1f",
+        before_top, after_top
+      )
+    )
+  end)
+
+  test.it("counts a special final row once when adding scroll-past-end context", function()
+    local view = make_view(table.concat({
+      "one", "two", "three", "four", "five", "six", "seven", "eight",
+    }, "\n"))
+    view.size.y = 120
+    config.scroll_past_end = true
+    config.scroll_context_lines = 3
+
+    local lh = view:get_line_height()
+    local base_size = view:get_scrollable_size()
+    view:add_visual_metric_provider("tall-final", {
+      line_height = function(_, _, line)
+        return line == #view.doc.lines and lh * 3 or nil
+      end,
+    })
+
+    test.equal(view:get_scrollable_size(), base_size + lh * 2)
   end)
 
   test.it("removes metric providers and restores constant-height mapping", function()

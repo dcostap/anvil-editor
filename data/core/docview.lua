@@ -1197,7 +1197,10 @@ function DocView:get_scrollable_size()
     if config.scroll_past_end then
       local pad = self:get_scroll_past_end_context_lines()
       local last_line_y = style.padding.y + self:get_visual_row_y_offset(cache.row_count)
-      local context_height = self:get_visual_row_height(cache.row_count) * (pad + 1)
+      local last_row_height = self:get_visual_row_height(cache.row_count)
+      -- Only the final row contributes its specialized height here; the
+      -- configurable context is still made of ordinary visual rows.
+      local context_height = last_row_height + self:get_line_height() * pad
       local max_scroll = math.max(0, last_line_y - self:get_vertical_viewport_height() + context_height)
       return math.max(self.size.y, max_scroll + self.size.y)
     end
@@ -5341,6 +5344,21 @@ function DocView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
     self.scroll.to.y = math.max(0, self.scroll.to.y or 0)
     local _, oy = self:get_content_offset()
     local ly, lh = self:get_position_highlight_geometry(line, col, false)
+    -- The highlight may be taller or shorter than a normal editor row (for
+    -- example, Markdown headings reserve leading block spacing).  Context is
+    -- expressed in normal visual rows, so do not use the target highlight
+    -- height as the pixel size of every surrounding context row.
+    local context_lh = self:get_line_height()
+    local target_row = self:get_visual_row(line, col, false)
+    local target_row_height = self:get_visual_row_height(target_row)
+    local target_row_y = oy + style.padding.y
+      + self:get_visual_row_y_offset(target_row)
+    -- Preserve any trailing layout space as part of the target row rather
+    -- than treating it as one of the normal context rows below the caret.
+    local target_bottom = math.max(
+      ly + lh,
+      target_row_y + target_row_height
+    )
     local scroll_h = self:get_horizontal_scrollbar_height()
 
     local pad = self:get_visible_scroll_context_lines()
@@ -5362,8 +5380,9 @@ function DocView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
       end
     end
 
-    local above = math.max(0, ly - oy - style.padding.y - lh * pad)
-    local below = ly - oy - self.size.y + scroll_h + lh * (below_pad + 1)
+    local above = math.max(0, ly - oy - style.padding.y - context_lh * pad)
+    local below = target_bottom - oy - self.size.y + scroll_h
+      + context_lh * below_pad
 
     self.scroll.to.y = math.max(0, common.clamp(self.scroll.to.y, below, above))
   end
