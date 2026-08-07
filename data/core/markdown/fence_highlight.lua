@@ -201,6 +201,20 @@ end
 
 function Service:reconcile(model)
   if self.closed then return false end
+  local doc = self:doc()
+  if self.awaiting_reload_revision then
+    if not (doc and model and model.status == "ready"
+      and model.published_revision == doc.text_revision
+      and doc.text_revision == self.awaiting_reload_revision)
+    then
+      return false
+    end
+    core.log_quiet(
+      "Markdown fence service adopted reload revision %d generation %s",
+      doc.text_revision, tostring(model.generation)
+    )
+    self.awaiting_reload_revision = nil
+  end
   self.model = model
   self.model_generation = model and model.generation or nil
   return true
@@ -406,6 +420,28 @@ function Service:cancel_queued_work(reason)
   core.log_quiet("Markdown fence work cancelled: %s", reason or "cancelled")
 end
 
+function Service:reset_for_full_snapshot(transaction)
+  local doc = self:doc()
+  local previous_generation = self.generation
+  self:release_heavy_caches("full-snapshot")
+  -- A reload is an epoch boundary even when no render-token entries happen to
+  -- be resident. Advancing the generation unconditionally prevents an old
+  -- worker from publishing into the new Document revision.
+  if self.generation == previous_generation then
+    self.generation = self.generation + 1
+  end
+  self.model = nil
+  self.model_generation = nil
+  self.awaiting_reload_revision = doc and doc.text_revision or nil
+  self.last_transaction_line1 = nil
+  self.last_transaction_line2 = nil
+  core.log_quiet(
+    "Markdown fence state reset for full snapshot revision=%s type=%s",
+    tostring(self.awaiting_reload_revision),
+    tostring(transaction and transaction.type)
+  )
+end
+
 function Service:invalidate_block_suffix(block, relative)
   relative = math.max(1, math.min(relative, block.unsafe_from or relative))
   local old_suffix = block.old_suffix or {}
@@ -456,6 +492,16 @@ function Service:on_text_transaction(transaction)
   self.last_transaction = transaction
   local doc = self:doc()
   if not doc then return nil end
+  if transaction.full_snapshot then
+    self:reset_for_full_snapshot(transaction)
+    return nil
+  end
+  if self.awaiting_reload_revision then
+    -- Edits may arrive before the replacement semantic parse publishes. Keep
+    -- the epoch pinned to the newest Document revision so that publication of
+    -- that revision can re-enable fence membership.
+    self.awaiting_reload_revision = doc.text_revision
+  end
   local invalid_line1, invalid_line2
   local affected = false
   local ranges = transaction.changed_ranges or {}
@@ -478,8 +524,8 @@ function Service:on_text_transaction(transaction)
 
   for _, block in pairs(self.blocks) do
     local body_relative
-    local structural = transaction.full_snapshot == true
-    local retain_after_structure = not transaction.full_snapshot
+    local structural = false
+    local retain_after_structure = true
     local intersects = structural
     local old_opening = block.opening_line
     local old_body_line1 = block.body_line1
@@ -507,17 +553,10 @@ function Service:on_text_transaction(transaction)
       end
     end
 
-    if transaction.full_snapshot then
-      block.opening_line = 1
-      block.body_line1 = 1
-      block.body_line2 = #doc.lines
-      block.closing_line = nil
-    else
-      block.opening_line = map_old_line(old_opening, "start")
-      block.body_line1 = map_old_line(old_body_line1, "start")
-      block.body_line2 = map_old_line(old_body_line2, "end")
-      block.closing_line = old_closing and map_old_line(old_closing, "end") or nil
-    end
+    block.opening_line = map_old_line(old_opening, "start")
+    block.body_line1 = map_old_line(old_body_line1, "start")
+    block.body_line2 = map_old_line(old_body_line2, "end")
+    block.closing_line = old_closing and map_old_line(old_closing, "end") or nil
     -- Even an edit entirely before this block changes the Document revision.
     -- Its mapped coordinates belong to that new revision immediately.
     block.source_revision = doc.text_revision
@@ -568,6 +607,7 @@ end
 function Service:describe_block(node, line)
   local doc = self:doc()
   if not (doc and node and node.type == "code_fenced") then return nil, "missing" end
+  if self.awaiting_reload_revision then return nil, "reload-pending" end
   node = self:complete_node(node, line)
   if not node then return nil, "incomplete" end
 
@@ -611,6 +651,7 @@ function Service:describe_block(node, line)
     requested_relatives = {},
     token_generation = 0,
     service_generation = self.generation,
+    model_generation = self.model_generation,
     tokenizer_generation = self.tokenizer_generation,
   }
 end
@@ -813,8 +854,12 @@ function Service:line_generation(node, line)
 end
 
 function Service:is_line_unsafe(line)
+  local doc = self:doc()
   for _, block in pairs(self.blocks) do
-    if line >= block.body_line1 and line <= block.body_line2 then
+    if block.service_generation == self.generation
+      and block.source_revision == (doc and doc.text_revision)
+      and line >= block.body_line1 and line <= block.body_line2
+    then
       local relative = line - block.body_line1 + 1
       return block.structurally_unsafe == true
         or (block.unsafe_from ~= nil and relative >= block.unsafe_from)
@@ -823,21 +868,36 @@ function Service:is_line_unsafe(line)
   return false
 end
 
----Returns whether a line belonged to a known fenced block in the most recent
----published semantics. The block coordinates are transaction-adjusted, so
----this remains suitable for pending presentation while a reparse is
----pending.
+---Returns whether a line belongs to transaction-mapped, current-revision
+---fence state. Structurally unsafe and reload-era blocks are never
+---authoritative presentation membership.
 function Service:contains_line(line)
+  if self.awaiting_reload_revision then return false end
+  local doc = self:doc()
   for _, block in pairs(self.blocks) do
     local line2 = block.closing_line or block.body_line2
-    if line >= block.opening_line and line <= line2 then return true end
+    if block.service_generation == self.generation
+      and block.source_revision == (doc and doc.text_revision)
+      and not block.structurally_unsafe
+      and line >= block.opening_line and line <= line2
+    then
+      return true
+    end
   end
   return false
 end
 
 function Service:is_opening_line(line)
+  if self.awaiting_reload_revision then return false end
+  local doc = self:doc()
   for _, block in pairs(self.blocks) do
-    if line == block.opening_line then return true end
+    if block.service_generation == self.generation
+      and block.source_revision == (doc and doc.text_revision)
+      and not block.structurally_unsafe
+      and line == block.opening_line
+    then
+      return true
+    end
   end
   return false
 end

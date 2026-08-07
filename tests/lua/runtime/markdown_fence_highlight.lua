@@ -256,7 +256,8 @@ test.describe("Markdown fenced-code highlighting", function()
     file:close()
     doc:load(path)
     test.is_nil(service:peek_line_tokens(node, 3))
-    test.equal(service:is_line_unsafe(3), true)
+    test.equal(service:is_line_unsafe(3), false)
+    test.equal(service:contains_line(3), false)
 
     test.ok(wait_status(model, "ready"), model.reason)
     service:reconcile(model)
@@ -264,6 +265,108 @@ test.describe("Markdown fenced-code highlighting", function()
     test.is_nil(service:line_tokens(node, 3, 100))
     local after = test.not_nil(wait_entry(service, node, 3))
     test.equal(types_by_text(after).inside, "comment")
+
+    os.remove(path)
+    service:remove_listener(listener)
+    service:close("test")
+    markdown_model.close(doc, "test")
+  end)
+
+  test.it("does not retain zombie fence membership after a full reload", function()
+    local source = table.concat({
+      "intro",
+      "```lua",
+      "local first = 1",
+      "```",
+      "between",
+      "```js",
+      "const second = 2",
+      "```",
+      "outro",
+      "",
+    }, "\n")
+    local path = USERDIR .. PATHSEP .. "fence-multi-reload-"
+      .. system.get_process_id() .. ".md"
+    local file = test.not_nil(io.open(path, "wb"))
+    file:write(source)
+    file:close()
+
+    local doc = Doc("fence-multi-reload.md", path)
+    local model = markdown_model.get(doc)
+    test.ok(wait_status(model, "ready"), model.reason)
+    local first = test.not_nil(model:fenced_node_for_line(3))
+    local second = test.not_nil(model:fenced_node_for_line(7))
+    local service = fence_highlight.get(doc)
+    service:reconcile(model)
+    local listener = {}
+    local transaction_invalidation
+    service:add_listener(listener, function(_, line1, line2, reason)
+      if reason == "transaction" then
+        transaction_invalidation = { line1, line2 }
+      end
+    end)
+    test.is_nil(service:line_tokens(first, 3, 100))
+    test.not_nil(wait_entry(service, first, 3))
+    test.is_nil(service:line_tokens(second, 7, 100))
+    test.not_nil(wait_entry(service, second, 7))
+    test.equal(service:contains_line(1), false)
+
+    file = test.not_nil(io.open(path, "wb"))
+    file:write(source)
+    file:close()
+    doc:load(path)
+
+    test.equal(service:get_diagnostics().cached_lines, 0)
+    test.equal(service:contains_line(1), false)
+    test.equal(service:contains_line(3), false)
+    test.equal(service:is_line_unsafe(3), false)
+    test.ok(wait_status(model, "ready"), model.reason)
+    service:reconcile(model)
+    test.equal(service:contains_line(1), false)
+
+    doc:insert(1, 1, "x")
+    test.is_nil(transaction_invalidation)
+
+    os.remove(path)
+    service:remove_listener(listener)
+    service:close("test")
+    markdown_model.close(doc, "test")
+  end)
+
+  test.it("cancels pre-reload fence work at the snapshot generation boundary", function()
+    local lines = { "```lua" }
+    for index = 1, 600 do
+      lines[#lines + 1] = "local value" .. index .. " = " .. index
+    end
+    lines[#lines + 1] = "```"
+    local doc = make_doc(table.concat(lines, "\n") .. "\n")
+    local model = markdown_model.get(doc)
+    test.ok(wait_status(model, "ready"), model.reason)
+    local node = test.not_nil(model:fenced_node_for_line(601))
+    local service = fence_highlight.get(doc)
+    service:reconcile(model)
+    local listener = {}
+    service:add_listener(listener, function() end)
+    test.is_nil(service:line_tokens(node, 601, 100))
+    local previous_generation = service:get_diagnostics().generation
+
+    local path = USERDIR .. PATHSEP .. "fence-worker-reload-"
+      .. system.get_process_id() .. ".md"
+    local file = test.not_nil(io.open(path, "wb"))
+    file:write("plain replacement\n")
+    file:close()
+    doc:load(path)
+
+    local diagnostics = service:get_diagnostics()
+    test.ok(diagnostics.generation > previous_generation)
+    test.equal(diagnostics.cached_lines, 0)
+    test.equal(diagnostics.blocks, 0)
+    test.equal(diagnostics.pending_work, false)
+    doc:insert(1, 1, "edited ")
+    test.ok(wait_status(model, "ready"), model.reason)
+    test.equal(service:reconcile(model), true)
+    for _ = 1, 3 do coroutine.yield(0) end
+    test.equal(service:get_diagnostics().cached_lines, 0)
 
     os.remove(path)
     service:remove_listener(listener)

@@ -253,13 +253,16 @@ function projection.edit_changes_list_structure(edit)
 end
 
 function projection.block_signature(text)
+  -- Nested lists can use tab indentation. Recognize their marker before the
+  -- generic indented-block branch so indentation does not look like a change
+  -- from list presentation to code/prose presentation.
+  if projection.list_signature(text) ~= "" then return "list" end
   local indent, body = text:match("^([ ]*)(.*)$")
   if not body or #indent > 3 then return "indented" end
   if body:match("^```+") or body:match("^~~~+") then return "fence" end
   if html_block_mode(text) then return "html" end
   if body:match("^>") then return "quote" end
   if body:match("^#{1,6}%s") then return "heading" end
-  if projection.list_signature(text) ~= "" then return "list" end
   local setext = body:gsub("%s", "")
   if setext:match("^=+$") or setext:match("^%-+$") then
     return "setext-or-rule:" .. math.min(#setext, 3)

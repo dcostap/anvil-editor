@@ -1720,6 +1720,10 @@ local function sorted_inline_provider_entries(entries)
   return result
 end
 
+-- Keep line-render invalidation on the input path bounded. Larger wrapped
+-- layouts are prepared in slices and atomically adopted by linewrapping.
+local MAX_SYNC_LINE_RENDER_WRAP_LINES = 128
+
 function DocView:has_line_render_providers()
   return next(self.line_render_providers or {}) ~= nil
 end
@@ -1787,9 +1791,23 @@ function DocView:invalidate_line_render(_provider_id, line1, line2, opts)
     local layout_line2 = common.clamp(requested_line2, layout_line1, #self.doc.lines)
     if self.wrapped_settings and not self.__line_render_wrap_invalidating then
       self.__line_render_wrap_invalidating = true
-      local wrap_change = linewrapping.update_breaks(
-        self, layout_line1, layout_line2, 0
-      )
+      local invalidated_layout_lines = layout_line2 - layout_line1 + 1
+      local defer_wrapped_reconstruction = opts.defer_wrapped_reconstruction
+        or invalidated_layout_lines > MAX_SYNC_LINE_RENDER_WRAP_LINES
+      local wrap_change
+      if defer_wrapped_reconstruction then
+        perf_frame_add("linewrapping_async_line_render_invalidation_calls", 1)
+        linewrapping.reconstruct_breaks_async(
+          self, self.wrapped_settings.font, self.wrapped_settings.width, {
+            budget_ms = opts.wrapped_reconstruction_budget_ms,
+            on_complete = opts.on_wrapped_reconstructed,
+          }
+        )
+      else
+        wrap_change = linewrapping.update_breaks(
+          self, layout_line1, layout_line2, 0
+        )
+      end
       self.__line_render_wrap_invalidating = nil
       self.__line_render_wrap_change = wrap_change
     end
@@ -1807,7 +1825,9 @@ function DocView:invalidate_line_render(_provider_id, line1, line2, opts)
   self.__unwrapped_content_width_cache = nil
   if self.wrapped_settings and not self.__line_render_wrap_invalidating then
     self.__line_render_wrap_invalidating = true
-    if opts.defer_wrapped_reconstruction then
+    if opts.defer_wrapped_reconstruction
+      or #self.doc.lines > MAX_SYNC_LINE_RENDER_WRAP_LINES
+    then
       perf_frame_add("linewrapping_async_line_render_invalidation_calls", 1)
       linewrapping.reconstruct_breaks_async(
         self, self.wrapped_settings.font, self.wrapped_settings.width, {

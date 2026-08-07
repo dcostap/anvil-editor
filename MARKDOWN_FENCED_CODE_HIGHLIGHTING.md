@@ -298,6 +298,22 @@ Opening/closing delimiter edits, fence splitting/merging, changing backticks to 
 
 Removed blocks cancel queued work and release token arrays. New blocks start cold.
 
+### Full-snapshot reload
+
+A `full_snapshot` transaction is a hard revision boundary, not an incremental
+structural edit. Discard every cached fence descriptor, token/checkpoint entry,
+queued request, and active worker generation immediately. Do not map old fence
+bounds onto the replacement source and never widen an uncertain block to the
+whole Document.
+
+Until a ready semantic model for the loaded Document revision is reconciled,
+the fence service reports no authoritative block membership and rejects token
+requests. Live Preview uses its current-source provisional topology during this
+interval. Structurally unsafe, stale-revision, and stale-service-generation
+blocks must never satisfy membership queries. Worker publications retain the
+same Document/service generation checks so pre-reload work cannot repopulate
+the reset cache.
+
 ### Edits before a fence
 
 If semantic identity survives and body text is unchanged, shifting a fence by inserting/removing lines before it should update absolute coordinates while retaining relative line entries and tokenizer states.

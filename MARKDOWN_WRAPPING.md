@@ -14,7 +14,7 @@ Queries without a rendered line keep the existing tokenized/raw wrapping path un
 
 Wrapped provider output is drawn row by row, slicing visible fragments by each row's source-column range. Wrapped x mapping subtracts the rendered width before the row start and adds continuation indentation. Pointer hit testing maps row-local x through the same rendered fragment model and clamps the result to that row's source range.
 
-Changing provider state, active-line reveal state, image completion, or provider attachment updates affected wrap breaks. Full provider changes rebuild wrapping; targeted line invalidations rebuild only the affected logical lines.
+Changing provider state, active-line reveal state, image completion, or provider attachment updates affected wrap breaks. Small targeted invalidations rebuild only the affected logical lines. Full invalidations and targeted ranges larger than the synchronous input-path budget prepare replacement wrapping in bounded slices and atomically adopt it, preventing one incorrect conservative range from turning a keystroke into a whole-Document stall. Full-snapshot reload reconstruction is deferred until transaction providers have reset to the loaded revision.
 
 ## Widget boundary
 

@@ -116,6 +116,33 @@ function LineWrapping.notify_doc_text_transaction(doc, transaction)
   local ranges = transaction and transaction.changed_ranges
   if not ranges then return end
   each_wrapped_docview(doc, function(docview)
+    if transaction and transaction.type == "load" then
+      -- A loaded snapshot is a revision boundary. Let transaction/render
+      -- providers reset their state first, then prepare the new wrapped layout
+      -- in slices and adopt it atomically. The previous committed rows remain
+      -- readable until the replacement is complete.
+      docview.__wrap_reload_reconstruction_serial =
+        (docview.__wrap_reload_reconstruction_serial or 0) + 1
+      local serial = docview.__wrap_reload_reconstruction_serial
+      core.add_thread(function()
+        coroutine.yield(0)
+        if docview.doc ~= doc
+          or docview.__wrap_reload_reconstruction_serial ~= serial
+          or not docview.wrapped_settings
+        then
+          return
+        end
+        local settings = docview.wrapped_settings
+        core.log_quiet(
+          "Preparing wrapped layout after loaded snapshot for %s revision=%d",
+          doc:get_name(), doc.text_revision or 0
+        )
+        LineWrapping.reconstruct_breaks_async(
+          docview, settings.font, settings.width, { budget_ms = 4 }
+        )
+      end)
+      return
+    end
     if #ranges == 1 then
       local range = ranges[1]
       if not LineWrapping.update_same_line_suffix_breaks(docview, range, transaction) then

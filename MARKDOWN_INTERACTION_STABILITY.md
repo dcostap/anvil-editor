@@ -26,7 +26,31 @@ The optimistic entry is accepted only when its reconstructed source exactly matc
 
 Visual-metric reconstruction follows the same continuity rule. During an ordinary non-structural edit, unchanged lines may read the last published semantic result only outside the coalesced changed range. This preserves heading, image, compact-table, and other nonstandard row heights when wrapping forces a full metric-tree rebuild. Delimiter-sensitive and structural edits mark their affected suffix unsafe, so stale semantics are never used where block structure may have changed.
 
+An external/full-snapshot reload is different: it has no trusted positional
+mapping to the previous source. Live Preview clears retained pending entries,
+renders a bounded provisional presentation from the newly loaded source, and
+does not query the pre-reload semantic result. Wrapped layout reconstruction is
+deferred until transaction providers have reset, runs in bounded slices, and
+atomically replaces the previously committed wrap rows. Semantic publication
+then replaces the provisional presentation for the same Document revision.
+
 Structural edits preserve geometry without querying stale shifted semantics. The view maintains published per-line metric results and represents each pending line insertion/removal as an O(1) line-map layer over those results. Unaffected heights therefore shift to their new line numbers immediately, while split rendered lines derive their own fragment/widget heights. Repeated Enter presses chain line maps without rescanning the Document or collapsing headings and other tall rows to the base Editor height.
+
+During a pending structural transaction, a revision-matched per-line pending
+entry is the metric authority ahead of the coarser retained metric map.
+Current-source rows whose block class changes (for example, an empty task
+becoming a blank line) discard captured render and row-height contracts and
+measure from the new presentation. A single-row pending heading uses its full
+current presentation height, including the larger heading text row and leading
+block gap, rather than an edit-mapped row height captured before the shift.
+
+Pending metric ownership is deliberately disjoint: a line is owned either by
+its current-source pending render entry or by the fallback metric map, never
+both. Projection and transaction checkpoints enforce this invariant. If future
+code creates duplicate ownership, Live Preview removes the fallback value,
+keeps the current-source metric, increments the view's invariant diagnostic,
+and emits a deduplicated `core.warn` containing the Document, revision, line,
+both heights, and the checkpoint that detected it.
 
 Multi-range structural transactions map every unaffected logical line in one pass. Pre-edit and shifted height capture resolve each Document line through its first visual row, avoiding accidental use of an unrelated absolute wrapped-row index.
 

@@ -355,4 +355,127 @@ test.describe("Markdown heading leading spacing", function()
       string.format("separate edits moved following line from %d to %d", inactive_y, active_y)
     )
   end)
+
+  test.it("keeps a following heading aligned while exiting a task and inserting blank rows", function()
+    local view, doc = make_view(table.concat({
+      "- [ ] informar FechaSuAlbaran. Obligado",
+      "- [ ] informar SuAlbaranNo Obligado",
+      "- [ ] ",
+      "## Albaranes.",
+      "```sql",
+      "select CodigoEmpresa from CabeceraAlbaranProveedor",
+      "```",
+    }, "\n"))
+    view:set_wrapping_enabled(true)
+    doc:set_selection(3, #doc.lines[3])
+    core.active_view = view
+    refresh(view)
+
+    local function assert_heading_matches_fresh(label)
+      local heading_line
+      for line, text in ipairs(doc.lines) do
+        if text:find("## Albaranes.", 1, true) then heading_line = line break end
+      end
+      heading_line = test.not_nil(heading_line)
+      local _, actual_heading_y = view:get_line_screen_position(heading_line)
+      local actual_text_y = heading_text_y(view, heading_line, "Albaranes.")
+      local actual_heading_height = view:get_position_visual_row_height(heading_line, 1)
+      local actual_row_count = view:get_visual_row_count_for_line(heading_line)
+
+      local fresh_view, fresh_doc = make_view(table.concat(doc.lines))
+      fresh_view:set_wrapping_enabled(true)
+      fresh_doc:set_selection(math.max(1, heading_line - 1), 1)
+      refresh(fresh_view)
+      linewrapping.complete_async_reconstruction(fresh_view)
+      local _, expected_heading_y = fresh_view:get_line_screen_position(heading_line)
+      local expected_text_y = heading_text_y(fresh_view, heading_line, "Albaranes.")
+      local expected_heading_height = fresh_view:get_position_visual_row_height(heading_line, 1)
+      local expected_row_count = fresh_view:get_visual_row_count_for_line(heading_line)
+
+      test.equal(
+        actual_heading_y, expected_heading_y,
+        string.format(
+          "%s left heading row at y=%s instead of fresh-layout y=%s",
+          label, tostring(actual_heading_y), tostring(expected_heading_y)
+        )
+      )
+      test.equal(
+        actual_heading_height, expected_heading_height,
+        string.format(
+          "%s left heading height at %s instead of %s",
+          label, tostring(actual_heading_height), tostring(expected_heading_height)
+        )
+      )
+      test.equal(actual_row_count, expected_row_count)
+      test.equal(actual_text_y, expected_text_y)
+      return heading_line
+    end
+
+    local function assert_pending_metrics_have_one_owner(label)
+      local owner = test.not_nil(view.__markdown_live_owner)
+      local fallback_heights = owner.pending_metric_state
+        and owner.pending_metric_state.heights or {}
+      for line in pairs(owner.pending_lines or {}) do
+        test.equal(
+          fallback_heights[line], nil,
+          string.format(
+            "%s gave line %d both a pending render metric and a fallback metric",
+            label, line
+          )
+        )
+      end
+    end
+
+    test.equal(command.perform("doc:newline"), true)
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    assert_pending_metrics_have_one_owner("exiting the empty task")
+    assert_heading_matches_fresh("exiting the empty task")
+    test.equal(command.perform("doc:newline"), true)
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    assert_pending_metrics_have_one_owner("inserting the following blank row")
+    assert_heading_matches_fresh("inserting the following blank row")
+    doc:set_selection(4, 1)
+    test.equal(command.perform("doc:backspace"), true)
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    assert_pending_metrics_have_one_owner("deleting the inserted blank row")
+    assert_heading_matches_fresh("deleting the inserted blank row")
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_ready(instance), instance.reason)
+    linewrapping.complete_async_reconstruction(view)
+
+    local heading_line = assert_heading_matches_fresh("semantic publication")
+    test.ok(heading_line >= 4)
+  end)
+
+  test.it("keeps retained fallback metrics disjoint through consecutive edits", function()
+    local lines = {}
+    for line = 1, 60 do
+      lines[line] = line % 5 == 0
+        and ("## Heading " .. line)
+        or ("ordinary Markdown line " .. line)
+    end
+    local view, doc = make_view(table.concat(lines, "\n"))
+    view:set_wrapping_enabled(true)
+    doc:set_selection(10, #doc.lines[10])
+    refresh(view)
+    linewrapping.complete_async_reconstruction(view)
+
+    doc:insert(10, #doc.lines[10], "a")
+    doc:insert(10, #doc.lines[10], "b")
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+
+    local owner = test.not_nil(view.__markdown_live_owner)
+    test.equal(
+      owner.pending_metric_invariant_violations or 0, 0,
+      "ordinary typing required metric ownership repair"
+    )
+    local fallback_heights = owner.pending_metric_state
+      and owner.pending_metric_state.heights or {}
+    for line in pairs(owner.pending_lines or {}) do
+      test.equal(
+        fallback_heights[line], nil,
+        string.format("line %d has duplicate pending metric ownership", line)
+      )
+    end
+  end)
 end)

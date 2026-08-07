@@ -3562,20 +3562,87 @@ local function current_source_render(view, line, previous, current_text, code)
 end
 
 local interactive_table_render_line
+local pending_metric_invariant = {}
+
+function pending_metric_invariant.warn(view, state, line, pending_height,
+                                       fallback_height, reason)
+  local revision = view.doc.text_revision
+  state.pending_metric_invariant_violations =
+    (state.pending_metric_invariant_violations or 0) + 1
+  state.last_pending_metric_invariant_violation = {
+    revision = revision,
+    line = line,
+    pending_height = pending_height,
+    fallback_height = fallback_height,
+    reason = reason,
+  }
+  if state.pending_metric_warning_revision == revision then return end
+  state.pending_metric_warning_revision = revision
+  core.warn(
+    "Markdown Live Preview repaired duplicate metric ownership in %s "
+      .. "revision=%d line=%d pending=%s fallback=%s checkpoint=%s",
+    view.doc:get_name(), revision, line, tostring(pending_height),
+    tostring(fallback_height), tostring(reason)
+  )
+end
+
+-- A logical line has exactly one pending metric owner. A pending render entry
+-- owns its metric; pending_metric_state only retains fallback heights for lines
+-- that do not have a current-source render entry. Keeping the stores disjoint
+-- makes disagreement impossible instead of relying on reader priority.
+function pending_metric_invariant.repair_line(view, state, line, reason)
+  local pending = state.pending_lines and state.pending_lines[line]
+  local fallback_heights = state.pending_metric_state
+    and state.pending_metric_state.heights
+  local fallback = fallback_heights and fallback_heights[line]
+  if not (pending and fallback ~= nil) then return 0 end
+  pending_metric_invariant.warn(
+    view, state, line, pending.height, fallback, reason
+  )
+  fallback_heights[line] = nil
+  return 1
+end
+
+function pending_metric_invariant.enforce(view, reason, only_line)
+  local state = view.__markdown_live_owner
+  local pending_lines = state and state.pending_lines
+  local fallback_heights = state and state.pending_metric_state
+    and state.pending_metric_state.heights
+  if not (pending_lines and fallback_heights) then return 0 end
+  if only_line then
+    return pending_metric_invariant.repair_line(view, state, only_line, reason)
+  end
+  local repaired = 0
+  for line in pairs(pending_lines) do
+    repaired = repaired + pending_metric_invariant.repair_line(
+      view, state, line, reason
+    )
+  end
+  return repaired
+end
+
+function pending_metric_invariant.store(state, line, entry)
+  state.pending_lines = state.pending_lines or {}
+  state.pending_lines[line] = entry
+  if entry and state.pending_metric_state
+    and state.pending_metric_state.heights
+  then
+    state.pending_metric_state.heights[line] = nil
+  end
+end
 
 local function publish_pending_table_row(view, line, render_line)
   local state = view.__markdown_live_owner
   if not (state and render_line) then return false end
   local current = (view.doc.lines[line] or ""):gsub("\n$", "")
-  state.pending_lines = state.pending_lines or {}
-  state.pending_lines[line] = {
+  pending_metric_invariant.store(state, line, {
     revision = view.doc.text_revision,
     source_text = current,
     render_line = render_line,
     height = render_line.layout_height
       or view:get_position_visual_row_height(line, 1),
     table_geometry = table_geometry_signature(view),
-  }
+  })
   return true
 end
 
@@ -3785,13 +3852,14 @@ local function capture_pre_edit_renders(view, change)
   local captured = 0
   for line in pairs(lines) do
     local render = cached_render_line(view, line)
-    if not render then
-      local pending = owner.pending_lines and owner.pending_lines[line]
-      if pending and pending.source_text == (view.doc.lines[line] or ""):gsub("\n$", "") then
-        render = pending.render_line
-      end
-    end
     local source_text = (view.doc.lines[line] or ""):gsub("\n$", "")
+    local pending = owner.pending_lines and owner.pending_lines[line]
+    if pending and (pending.revision ~= view.doc.text_revision
+      or pending.source_text ~= source_text)
+    then
+      pending = nil
+    end
+    if not render and pending then render = pending.render_line end
     local row_heights
     if view.wrapped_settings and metrics_current then
       local first, _, count = linewrapping.get_line_idx_col_count(view, line)
@@ -3800,7 +3868,8 @@ local function capture_pre_edit_renders(view, change)
         row_heights[row] = view:get_visual_row_height(first + row - 1)
       end
     end
-    local captured_height = owner.pending_metric_state
+    local captured_height = pending and pending.height
+      or owner.pending_metric_state
       and owner.pending_metric_state.heights
       and owner.pending_metric_state.heights[line]
       or owner.published_line_heights and owner.published_line_heights[line]
@@ -3834,9 +3903,13 @@ local function pending_entry(view, render_line, source_text, height, row_heights
     or rendered_height
   local leading_spacing = tonumber(render_line.first_row_content_y_offset) or 0
   if leading_spacing > 0 then
+    local content_height = math.max(
+      rendered_height or 0,
+      tonumber(render_line.text_row_height) or 0
+    )
     metric_height = math.max(
       metric_height or 0,
-      rendered_height + leading_spacing
+      content_height + leading_spacing
     )
   end
   return {
@@ -3895,11 +3968,16 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
     local source = (view.doc.lines[new_line] or ""):gsub("\n$", "")
     if render_line and render_line.source_text == source then
       local retained_height = height or retained_metric_height(previous_metrics, old_line)
-      next_lines[new_line] = pending_entry(
+      local entry = pending_entry(
         view, clone_render_line(render_line), source,
         retained_height, row_heights, "retained"
       )
-      if retained_height then next_metrics.heights[new_line] = retained_height end
+      if entry then
+        next_lines[new_line] = entry
+        next_metrics.heights[new_line] = nil
+      elseif retained_height then
+        next_metrics.heights[new_line] = retained_height
+      end
     end
   end
 
@@ -3908,7 +3986,9 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
   end
   for old_line, height in pairs(previous_metrics.heights or {}) do
     local new_line = pending_projection.map_unchanged_line(ranges, old_line)
-    if new_line and not next_metrics.heights[new_line] then
+    if new_line and not next_lines[new_line]
+      and not next_metrics.heights[new_line]
+    then
       next_metrics.heights[new_line] = height
     end
   end
@@ -3916,6 +3996,14 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
   local function publish(line, render, captured, provenance)
     if not render then return false end
     local source = (view.doc.lines[line] or ""):gsub("\n$", "")
+    if captured and pending_projection.block_signature(captured.source_text or "")
+      ~= pending_projection.block_signature(source)
+    then
+      -- Source-class changes need the new render plan's metric contract.
+      -- Carrying row heights from an active task onto the blank row produced
+      -- by Enter leaves following headings vertically displaced.
+      captured = nil
+    end
     if render.position_rows then
       render.position_rows = nil
       render.layout_height = nil
@@ -3929,7 +4017,7 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
     )
     if not entry then return false end
     next_lines[line] = entry
-    next_metrics.heights[line] = entry.height
+    next_metrics.heights[line] = nil
     return true
   end
 
@@ -3982,6 +4070,14 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
           publish(new_line, clone_render_line(exact.render_line), exact, "retained")
         else
           local previous = fallback and fallback.render_line or nil
+          if previous and pending_projection.block_signature(previous.source_text or "")
+            ~= pending_projection.block_signature(source)
+          then
+            -- Block-class changes cannot inherit the previous row's metric
+            -- contract. In particular, exiting an empty task must not clone
+            -- its checkbox height onto the resulting blank prose row.
+            previous = nil
+          end
           local list = pending_list_marker_render(view, previous, source)
           local render = list or current_source_render(
             view, new_line, previous, source,
@@ -4009,6 +4105,7 @@ local function capture_pending_renders(view, transaction)
     context_line1, context_line2 = build_pending_projection(
     view, transaction, pre_edit_lines
   )
+  pending_metric_invariant.enforce(view, "pending-projection")
   owner.pending_context_revision = context_changed and view.doc.text_revision or nil
   owner.pending_context_line1 = context_line1
   owner.pending_context_line2 = context_line2
@@ -4534,6 +4631,33 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     end
   end
   local owner = view.__markdown_live_owner
+  local external_reload = transaction and transaction.type == "load"
+  if owner and external_reload then
+    -- A loaded snapshot has no positional relationship to the previous
+    -- source. Do not retain semantic nodes or pending render entries across
+    -- this revision boundary; render from the new source until its semantic
+    -- model is published.
+    owner.pending_lines = {}
+    owner.pending_metric_state = { heights = {} }
+    owner.pending_context_revision = view.doc.text_revision
+    owner.pending_context_line1 = 1
+    owner.pending_context_line2 = #view.doc.lines
+    owner.semantic_pending_line = 1
+    owner.semantic_pending_wrap_line = 1
+    owner.pre_edit_lines = nil
+    owner.pre_edit_transaction = nil
+    owner.pre_edit_revision = nil
+    owner.pre_edit_capture = nil
+    owner.pending_visible_line1, owner.pending_visible_line2 =
+      pending_capture_visible_range(view, owner)
+    owner.reload_projection_revision = view.doc.text_revision
+    core.log_quiet(
+      "Markdown Live Preview reset pending presentation for loaded revision %d",
+      view.doc.text_revision
+    )
+  elseif owner and owner.reload_projection_revision then
+    owner.reload_projection_revision = view.doc.text_revision
+  end
   local pre_edit_lines = owner and owner.pre_edit_lines
   if owner then
     owner.link_targets_changed_revision =
@@ -4571,17 +4695,20 @@ function provider:on_text_transaction(view, transaction, line1, line2)
   end
   local topology_changed = raw_context_changed or frontmatter_changed
     or html_changed or line_structure_changed
+    or owner and owner.reload_projection_revision ~= nil
   if topology_changed and owner then
     local topology_started = system.get_time()
     local topology_limit = math.max(
       line1 or 1,
       owner.pending_visible_line2 or 1
     )
-    for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
-      topology_limit = math.max(
-        topology_limit,
-        range.new_line2 or range.new_line1 or 1
-      )
+    if not external_reload then
+      for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
+        topology_limit = math.max(
+          topology_limit,
+          range.new_line2 or range.new_line1 or 1
+        )
+      end
     end
     topology_limit = math.min(#view.doc.lines, topology_limit)
     local fenced, comments, math, frontmatter, html, fence_delimiters =
@@ -4650,7 +4777,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
         if cached_line >= fence_line1 and cached_line <= (fence_line2 or fence_line1)
           and not owner.pending_lines[cached_line]
         then
-          owner.pending_lines[cached_line] = cached
+          pending_metric_invariant.store(owner, cached_line, cached)
         end
       end
     end
@@ -4734,6 +4861,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
       end
     end
   end
+  pending_metric_invariant.enforce(view, "text-transaction")
   local suffix_changed = structural_change or topology_changed or block_context_changed
   if not suffix_changed then
     local affected_line1 = math.min(table_line1 or math.huge, fence_line1 or math.huge)
@@ -4925,14 +5053,14 @@ local function compute_line_height(view, line, entry)
   local semantic_model = current_semantic_model(view)
   local pending = pending_render(view, line)
   if pending and not semantic_model then
+    if not wrapped and pending.height then return pending.height end
     local row = entry and entry.row_in_line
     if row and pending.row_heights and pending.row_heights[row] then
       return pending.row_heights[row]
     end
-    if not wrapped then return pending.height end
   end
   local owner = view.__markdown_live_owner
-  if not semantic_model and owner and owner.semantic_pending_line
+  if not pending and not semantic_model and owner and owner.semantic_pending_line
     and line >= owner.semantic_pending_line
   then
     return view:get_line_height()
@@ -4971,27 +5099,28 @@ end
 
 function provider:line_height(view, line, entry)
   local owner = view.__markdown_live_owner
+  pending_metric_invariant.enforce(view, "line-height", line)
   local wrapped = line_is_wrapped(view, line)
   local semantic_model = current_semantic_model(view)
-  if not wrapped and not semantic_model then
+  local pending = pending_render(view, line)
+  if not wrapped and not semantic_model and not pending then
     local retained = owner and retained_metric_height(owner.pending_metric_state, line)
     if retained then return retained end
   end
   if not semantic_model and owner and owner.semantic_pending_line
     and line >= owner.semantic_pending_line
   then
-    local pending = pending_render(view, line)
     if pending then
+      if not wrapped and pending.height then return pending.height end
       local row = entry and entry.row_in_line
       if row and pending.row_heights and pending.row_heights[row] then
         return pending.row_heights[row]
       end
-      if not wrapped and pending.height then return pending.height end
     end
     -- Do not ask the line-render provider for an unretained suffix row while
     -- the parser is pending. That turns a metric pass into a raw-source cache
     -- fill, which can flash Markdown syntax while the user is editing.
-    return view:get_line_height()
+    if not pending then return view:get_line_height() end
   end
   local height = compute_line_height(view, line, entry)
   if semantic_model and owner then
@@ -5454,6 +5583,7 @@ local function invalidate_semantic_publication(view, instance, reason)
     owner.raw_fallback_record = nil
     owner.unavailable_projection_record = nil
     owner.provisional_topology = nil
+    owner.reload_projection_revision = nil
     if owner.fence_service then
       local reconcile_started = system.get_time()
       owner.fence_service:reconcile(instance)

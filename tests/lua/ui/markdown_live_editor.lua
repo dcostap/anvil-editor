@@ -273,6 +273,102 @@ test.describe("Markdown Live Preview", function()
     test.equal(visible_render_text(view, 1), "Before bold after!?")
   end)
 
+  test.it("uses current-source presentation and atomically adopts wrapping after reload", function()
+    local path = USERDIR .. PATHSEP .. "markdown-live-external-reload-"
+      .. tostring(system.get_process_id()) .. ".md"
+    local function write(text)
+      local fp = test.not_nil(io.open(path, "wb"))
+      fp:write(text)
+      fp:close()
+    end
+    local function fixture(prefix, repetitions)
+      local lines = {
+        "# " .. prefix .. " heading",
+        "- [ ] " .. prefix .. " task",
+        "**" .. prefix .. " text**",
+      }
+      for index = 1, 180 do
+        lines[#lines + 1] = "- [ ] stable "
+          .. string.rep("wrapped content ", repetitions) .. tostring(index)
+      end
+      return table.concat(lines, "\n") .. "\n"
+    end
+    write(fixture("Old", 10))
+    local doc = Doc("markdown-live-external-reload.md", path)
+    local view = DocView(doc)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 300, 200
+    view:set_wrapping_enabled(true)
+    doc:set_selection(#doc.lines, 1)
+    refresh(view)
+    local old_stable_row = view:get_visual_row(100, 1)
+
+    write(fixture("New", 2))
+    doc:load(path)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.equal(view:get_visual_row(100, 1), old_stable_row)
+    local line1 = test.not_nil(view:get_line_render(1))
+    local line2 = test.not_nil(view:get_line_render(2))
+    local line3 = test.not_nil(view:get_line_render(3))
+    test.equal(instance.status, "pending")
+    test.equal(line1.raw_passthrough, nil)
+    test.equal(line2.raw_passthrough, nil)
+    test.equal(line3.raw_passthrough, nil)
+    test.equal(visible_render_text(view, 1), "New heading")
+    test.equal(visible_render_text(view, 2), "New task")
+    test.equal(visible_render_text(view, 3), "New text")
+
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    linewrapping.complete_async_reconstruction(view)
+    test.not_equal(view:get_visual_row(100, 1), old_stable_row)
+    os.remove(path)
+  end)
+
+  test.it("does not apply pre-reload semantics to unchanged text in a new fence", function()
+    local path = USERDIR .. PATHSEP .. "markdown-live-reload-context-"
+      .. tostring(system.get_process_id()) .. ".md"
+    local function write(text)
+      local fp = test.not_nil(io.open(path, "wb"))
+      fp:write(text)
+      fp:close()
+    end
+    write("before\nsame body\nafter\n")
+    local doc = Doc("markdown-live-reload-context.md", path)
+    local view = DocView(doc)
+    refresh(view)
+    local markdown_decoration
+    for _, entry in ipairs(view:decoration_provider_entries()) do
+      if entry.id == "markdown-live" then
+        markdown_decoration = entry.provider
+        break
+      end
+    end
+
+    write("```lua\nsame body\n```\n")
+    doc:load(path)
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    local render = test.not_nil(view:get_line_render(2))
+    test.equal(render.source_text, "same body")
+    test.equal(render.markdown_document_revision, doc.text_revision)
+    test.not_nil(render.x_offset)
+    test.equal(
+      test.not_nil(markdown_decoration):line_background(view, 2),
+      style.markdown_live_code_background
+    )
+    test.equal(markdown_decoration:line_background(view, 4), nil)
+
+    doc:insert(2, #(doc.lines[2] or ""), "!")
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(view:get_line_render(2)).source_text, "same body!")
+    test.equal(
+      markdown_decoration:line_background(view, 2),
+      style.markdown_live_code_background
+    )
+    test.equal(markdown_decoration:line_background(view, 4), nil)
+    os.remove(path)
+  end)
+
   test.it("presents a newly completed highlight without a raw-source frame", function()
     local view, doc = make_view("mark\nplain", "pending-highlight.md")
     doc:set_selection(2, 1)
