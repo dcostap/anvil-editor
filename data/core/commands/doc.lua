@@ -1866,10 +1866,11 @@ local commands = {
       selection_count = selection_count + 1
       if line1 == line2 and col1 == col2 then
         local line_text = dv.doc.lines[line1] or ""
-        local content_start = markdown_list_content_start(
+        local content_start, indent_length = markdown_list_content_start(
           dv.doc, line1, line_text, true
         )
-        if content_start and col1 == content_start then
+        local prefix_start = (indent_length or 0) + 1
+        if content_start and col1 >= prefix_start and col1 <= content_start then
           list_indent_count = list_indent_count + 1
           if markdown_list_can_indent(dv.doc, line1, line_text)
             and not list_indent_lines[line1]

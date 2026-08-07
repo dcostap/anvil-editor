@@ -357,6 +357,21 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 2, 11, 2, 11 })
   end)
 
+  test.it("does not over-indent from the start of an invalid Markdown list prefix", function(context)
+    config.indent_size = 4
+    local source = "- [ ] parent\n    - [ ] \n    - [ ] sibling"
+    local doc, view = new_editor(context, source, "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(2, 5, 2, 5)
+
+    for _ = 1, 3 do
+      test.ok(command.perform("doc:indent"))
+    end
+
+    test.equal(text(doc), source .. "\n")
+    test.same(view:get_selection_state().selections, { 2, 5, 2, 5 })
+  end)
+
   test.it("removes an empty Markdown list marker on the next Enter", function(context)
     local doc, view = new_editor(context, "- item\nnext", "sample.md")
     core.set_active_view(view)
