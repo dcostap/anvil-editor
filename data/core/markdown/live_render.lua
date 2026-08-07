@@ -4624,7 +4624,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
       local is_math = topology.math[pending_line] == true
       local was_frontmatter = frontmatter_for_line(view, pending_line) ~= nil
       local is_frontmatter = topology.frontmatter[pending_line] == true
-      local was_html = line_in_raw_block(view, pending_line) ~= nil
+      local was_html = line_in_raw_block(view, pending_line)
       local is_html = topology.html[pending_line] == true
       if was_fenced ~= is_fenced or was_comment ~= is_comment
         or was_math ~= is_math or was_frontmatter ~= is_frontmatter
