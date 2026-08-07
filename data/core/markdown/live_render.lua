@@ -61,6 +61,7 @@ local function closes_fence(line, marker, count)
 end
 
 local semantic_line
+local indented_code_for_line
 
 local function line_in_raw_block(view, line)
   for _, node in ipairs(semantic_line(view, line) or {}) do
@@ -814,10 +815,13 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
           hidden = not revealed,
           font = opts.base_font,
           color = style.markdown_live_hidden_syntax,
+          escape = escape_marker ~= nil or nil,
           semantic_id = escape_marker and escape_marker.id or nil,
         }
       elseif #active_spans > 0 or escape_content then
-        fragments[#fragments + 1] = composed_fragment(escape_content and escape_content.id)
+        local fragment = composed_fragment(escape_content and escape_content.id)
+        fragment.escape = escape_content ~= nil or nil
+        fragments[#fragments + 1] = fragment
       end
     end
   end
@@ -3809,7 +3813,6 @@ local function pending_list_marker_render(view, previous, current_text)
       width = indent_width + marker_text_width,
     }
   end
-
   local render = clone_render_line(previous or {})
   render.source_text = current_text
   render.markdown_pending_provenance = "active-source-reveal"
@@ -4354,6 +4357,10 @@ local function capture_pre_edit_renders(view, change)
       height = captured_height,
       row_heights = row_heights,
       fenced = service and service:contains_line(line) or false,
+      indented = owner.pending_indented_lines
+        and owner.pending_indented_lines[line]
+        or indented_code_for_line(view, line) ~= nil,
+      callout_record = callout_runtime.for_line(view, line),
     }
     captured = captured + 1
   end
@@ -4367,6 +4374,93 @@ end
 
 local function retained_metric_height(state, line)
   return state and state.heights and state.heights[line] or nil
+end
+
+local pending_visual_projection = {}
+
+function pending_visual_projection.contains_retainable_presentation(render_line)
+  if render_line and render_line.table_row then return false end
+  -- These presentations are either source-local (tags, escapes, footnotes,
+  -- hard breaks) or attached to a source-ranged link/asset. They can be
+  -- carried across a structural pending edit when the raw block topology is
+  -- unchanged; table rows have their own pending rebuild path.
+  if render_line and render_line.callout_record then return true end
+  for _, fragment in ipairs(render_line and render_line.fragments or {}) do
+    if fragment.attachment_chip or fragment.image_status
+      or fragment.embed_preview or fragment.hard_break or fragment.footnote
+      or fragment.footnote_definition or fragment.tag
+      or fragment.reference_definition or fragment.escape
+      or fragment.widget and (
+        fragment.widget.type == "image"
+        or fragment.widget.type == "markdown-embed-preview"
+      )
+    then
+      return true
+    end
+  end
+  return false
+end
+
+function pending_visual_projection.context_is_safe(view, line, render_line)
+  local owner = view.__markdown_live_owner
+  if owner and owner.link_targets_changed_revision == view.doc.text_revision then
+    -- A reference-derived attachment can change when its definition changes;
+    -- do not carry that chip across the definition transaction.
+    render_line = render_line or view.__line_render_cache
+      and view.__line_render_cache.lines[line]
+      and view.__line_render_cache.lines[line].render_line
+    for _, fragment in ipairs(render_line and render_line.fragments or {}) do
+      if fragment.attachment_chip and fragment.link
+        and fragment.link.kind == "reference"
+      then
+        return false
+      end
+    end
+  end
+  local topology = owner and owner.provisional_topology
+  if not topology or topology.revision ~= view.doc.text_revision then return true end
+  return not (topology.fenced[line] or topology.comments[line]
+    or topology.math[line] or topology.frontmatter[line]
+    or topology.html[line])
+end
+
+function pending_visual_projection.find_capture(view, pre_edit_lines, source)
+  if not source:find("[", 1, true) and not source:find("#", 1, true)
+    and not source:find("\\", 1, true) and not source:match("  $")
+  then
+    return nil
+  end
+  for _, captured in pairs(pre_edit_lines or {}) do
+    if captured.source_text == source
+      and pending_visual_projection.contains_retainable_presentation(captured.render_line)
+    then
+      return captured
+    end
+  end
+  -- The pre-edit capture is deliberately bounded to the old viewport. The
+  -- transaction hook still runs before DocView drops its old line cache, so a
+  -- resident rendered visual can be adopted here even when that bounded
+  -- capture missed its logical line.
+  for _, cached in pairs(view.__line_render_cache
+    and view.__line_render_cache.lines or {}) do
+    local render = cached.render_line ~= false and cached.render_line or nil
+    local cached_source = cached.source_line
+      and cached.source_line:gsub("\n$", "")
+    if cached_source == source
+      and pending_visual_projection.contains_retainable_presentation(render)
+    then
+      return {
+        source_text = source,
+        render_line = render,
+        height = render.layout_height or render_line_metric_height(view, render),
+      }
+    end
+  end
+end
+
+function pending_visual_projection.can_retain(view, line, render_line)
+  return pending_visual_projection.contains_retainable_presentation(render_line)
+    and pending_visual_projection.context_is_safe(view, line, render_line)
 end
 
 local function pending_entry(view, render_line, source_text, height, row_heights, provenance)
@@ -4432,9 +4526,11 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
   local function retain(old_line, render_line, height, row_heights)
     local new_line = pending_projection.map_unchanged_line(ranges, old_line)
     if not new_line or next_lines[new_line] then return end
+    render_line = render_line or cached_render_line(view, old_line)
     if context_changed
       and new_line >= (context_line1 or new_line)
       and new_line <= (context_line2 or new_line)
+      and not pending_visual_projection.can_retain(view, new_line, render_line)
     then
       return
     end
@@ -4516,8 +4612,20 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
       for index, render in ipairs(split) do
         local line = new_line1 + index - 1
         local source = (view.doc.lines[line] or ""):gsub("\n$", "")
-        local list = pending_list_marker_render(view, transformed, source)
-        publish(line, list or render, captured, "active-source-reveal")
+        local visual_capture = pending_visual_projection.find_capture(
+          view, pre_edit_lines, source
+        )
+        if visual_capture and pending_visual_projection.can_retain(
+          view, line, visual_capture.render_line
+        ) then
+          publish(
+            line, clone_render_line(visual_capture.render_line),
+            visual_capture, "retained"
+          )
+        else
+          local list = pending_list_marker_render(view, transformed, source)
+          publish(line, list or render, captured, "active-source-reveal")
+        end
       end
     end
   end
@@ -4539,7 +4647,9 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
             break
           end
         end
-        if exact and not context_changed then
+        if exact and (not context_changed
+          or pending_visual_projection.can_retain(view, new_line, exact.render_line))
+        then
           publish(new_line, clone_render_line(exact.render_line), exact, "retained")
         else
           local previous = fallback and fallback.render_line or nil
@@ -4551,15 +4661,27 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
             -- its checkbox height onto the resulting blank prose row.
             previous = nil
           end
-          local list = pending_list_marker_render(view, previous, source)
-          local render = list or current_source_render(
-            view, new_line, previous, source,
-            owner.fence_service and owner.fence_service:contains_line(new_line)
+          local visual_capture = pending_visual_projection.find_capture(
+            view, pre_edit_lines, source
           )
-          publish(
-            new_line, render, context_changed and nil or fallback,
-            render.markdown_pending_provenance
-          )
+          if visual_capture and pending_visual_projection.can_retain(
+            view, new_line, visual_capture.render_line
+          ) then
+            publish(
+              new_line, clone_render_line(visual_capture.render_line),
+              visual_capture, "retained"
+            )
+          else
+            local list = pending_list_marker_render(view, previous, source)
+            local render = list or current_source_render(
+              view, new_line, previous, source,
+              owner.fence_service and owner.fence_service:contains_line(new_line)
+            )
+            publish(
+              new_line, render, context_changed and nil or fallback,
+              render.markdown_pending_provenance
+            )
+          end
         end
       end
     end
@@ -4573,11 +4695,67 @@ local function capture_pending_renders(view, transaction)
   local owner = view.__markdown_live_owner
   if not owner or not transaction or transaction.type == "load" then return end
   local pre_edit_lines = owner.pre_edit_lines or {}
+  local previous_indented = owner.pending_indented_lines or {}
+  local previous_indented_sources = owner.pending_indented_sources or {}
+  local previous_callouts = owner.pending_callouts or {}
   local context_changed, context_line1, context_line2
   owner.pending_lines, owner.pending_metric_state, context_changed,
     context_line1, context_line2 = build_pending_projection(
     view, transaction, pre_edit_lines
   )
+  local ranges = pending_projection.ordered_changed_ranges(transaction)
+  local pending_indented = {}
+  local pending_indented_sources = {}
+  local function retain_indented(old_line, source_text)
+    local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+    if not new_line then return end
+    local current = (view.doc.lines[new_line] or ""):gsub("\n$", "")
+    if source_text ~= current then return end
+    pending_indented[new_line] = true
+    pending_indented_sources[new_line] = current
+  end
+  for old_line, captured in pairs(pre_edit_lines) do
+    if captured.indented then retain_indented(old_line, captured.source_text) end
+  end
+  for old_line in pairs(previous_indented) do
+    local source = previous_indented_sources[old_line]
+    if source then retain_indented(old_line, source) end
+  end
+  owner.pending_indented_lines = pending_indented
+  owner.pending_indented_sources = pending_indented_sources
+  local pending_callouts = {}
+  local function shifted_callout(record)
+    if not record then return nil end
+    local line1 = pending_projection.map_unchanged_line(ranges, record.line1)
+    local line2 = pending_projection.map_unchanged_line(ranges, record.line2)
+    if not line1 or not line2 then return nil end
+    local copy = {}
+    for key, value in pairs(record) do copy[key] = value end
+    copy.line1, copy.line2 = line1, line2
+    if record.block_range then
+      copy.block_range = {}
+      for key, value in pairs(record.block_range) do
+        copy.block_range[key] = value
+      end
+      copy.block_range.line1 = line1
+      copy.block_range.line2 = line2
+    end
+    copy.line_ranges = {}
+    return copy
+  end
+  local function retain_callout(old_line, record)
+    local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+    local shifted = shifted_callout(record)
+    if new_line and shifted then pending_callouts[new_line] = shifted end
+  end
+  for old_line, captured in pairs(pre_edit_lines) do
+    retain_callout(old_line, captured.callout_record
+      or captured.render_line and captured.render_line.callout_record)
+  end
+  for old_line, record in pairs(previous_callouts) do
+    retain_callout(old_line, record)
+  end
+  owner.pending_callouts = pending_callouts
   pending_metric_invariant.enforce(view, "pending-projection")
   owner.pending_context_revision = context_changed and view.doc.text_revision or nil
   owner.pending_context_line1 = context_line1
@@ -4632,6 +4810,8 @@ local function pending_render(view, line)
     elseif owner and owner.fence_service then
       code = owner.fence_service:contains_line(line)
     end
+    code = code or owner and owner.pending_indented_lines
+      and owner.pending_indented_lines[line] == true
     local render = current_source_render(view, line, nil, text, code == true)
     return pending_entry(
       view, render, text, nil, nil, render.markdown_pending_provenance
@@ -4718,7 +4898,7 @@ local function fenced_code_for_line(view, line)
   end
 end
 
-local function indented_code_for_line(view, line)
+indented_code_for_line = function(view, line)
   for _, node in ipairs(semantic_line(view, line) or {}) do
     if node.type == "code_indented" then
       local line2 = node.source.line2
@@ -4858,11 +5038,17 @@ end
 
 function decoration_provider:line_background_descriptor(view, line)
   if view_in_source_mode(view) then return nil end
+  local owner = view.__markdown_live_owner
   local callout = callout_runtime.for_line(view, line)
+  if not callout and owner and owner.pending_callouts
+    and owner.pending_callouts[line]
+    and pending_visual_projection.context_is_safe(view, line)
+  then
+    callout = owner and owner.pending_callouts and owner.pending_callouts[line]
+  end
   if not callout then return nil end
   local palette = callout.palette or callouts.palette(style, callout.canonical_type)
   if not palette then return nil end
-  local owner = view.__markdown_live_owner
   local fold = owner and owner.callout_folds
     and owner.callout_folds[callout.semantic_id]
   local line2 = fold and fold.collapsed and callout.line1 or callout.line2
@@ -4911,6 +5097,16 @@ function decoration_provider:line_background(view, line)
   end
   local fenced = fenced_code_for_line(view, line)
   if fenced then
+    if callout_runtime.for_line(view, line) then return nil end
+    return style.markdown_live_code_background
+  end
+  if owner and owner.pending_indented_lines
+    and owner.pending_indented_lines[line]
+    and (not topology or topology.revision ~= view.doc.text_revision
+      or not (topology.fenced[line] or topology.comments[line]
+        or topology.math[line] or topology.frontmatter[line]
+        or topology.html[line]))
+  then
     if callout_runtime.for_line(view, line) then return nil end
     return style.markdown_live_code_background
   end
@@ -5151,6 +5347,9 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     -- model is published.
     owner.pending_lines = {}
     owner.pending_metric_state = { heights = {} }
+    owner.pending_indented_lines = {}
+    owner.pending_indented_sources = {}
+    owner.pending_callouts = {}
     owner.pending_context_revision = view.doc.text_revision
     owner.pending_context_line1 = 1
     owner.pending_context_line2 = #view.doc.lines
@@ -5786,6 +5985,8 @@ local function build_render_line(view, line, _context)
       else
         code = owner.fence_service and owner.fence_service:contains_line(line)
       end
+      code = code or owner and owner.pending_indented_lines
+        and owner.pending_indented_lines[line] == true
       return current_source_render(view, line, nil, text, code == true)
     end
     record_raw_fallback(view, line, "semantic-unavailable")
@@ -5942,6 +6143,8 @@ function provider:render_line(view, line, context)
     elseif owner and owner.fence_service then
       code = owner.fence_service:contains_line(line)
     end
+    code = code or owner and owner.pending_indented_lines
+      and owner.pending_indented_lines[line] == true
     local safe = current_source_render(view, line, nil, source, code == true)
     safe.markdown_provenance = "unavailable"
     safe.markdown_document_revision = revision
@@ -6108,6 +6311,9 @@ local function invalidate_semantic_publication(view, instance, reason)
     end
     owner.pending_lines = nil
     owner.pending_metric_state = nil
+    owner.pending_indented_lines = nil
+    owner.pending_indented_sources = nil
+    owner.pending_callouts = nil
     owner.pending_context_revision = nil
     owner.pending_context_line1 = nil
     owner.pending_context_line2 = nil
