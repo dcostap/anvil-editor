@@ -1221,9 +1221,10 @@ resolve_live_link = function(view, link)
   local target = link.raw_target or link.path or ""
   if not common.is_absolute_path(target) and target:match("^[%a][%w+.-]*:") then
     return { status = "external", target = target, path = target }
-  elseif index and index.status == "ready" then
+  elseif index and index:can_resolve() then
     return index:resolve(link, view.doc.abs_filename)
   end
+  if owner then owner.link_resolution_pending = true end
   return { status = "pending", target = target, reason = "indexing" }
 end
 
@@ -5613,6 +5614,7 @@ local function bind_link_index(view)
     owner.link_index:remove_listener(listener_id)
     owner.link_index:release(listener_id)
   end
+  owner.link_resolution_pending = nil
   owner.link_index = index
   owner.link_listener_id = listener_id
   index:acquire(listener_id)
@@ -5634,7 +5636,11 @@ local function bind_link_index(view)
       )
       return
     end
-    if reason == "ready" and detail and (detail.notes_rebuilt or 0) == 0 then
+    local had_pending_resolution = owner.link_resolution_pending == true
+    if reason == "ready" then owner.link_resolution_pending = nil end
+    if reason == "ready" and detail and (detail.notes_rebuilt or 0) == 0
+      and not had_pending_resolution
+    then
       core.log_quiet(
         "Markdown Live Preview skipped unchanged vault snapshot link refresh"
       )

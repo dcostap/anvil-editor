@@ -1347,8 +1347,10 @@ local function get_suggestions_rect(av)
   end
 
   local _, partial_line, partial_col = autocomplete.get_partial_symbol()
-  local rect_x, y = av:get_line_screen_position(partial_line, partial_col)
-  y = y + av:get_line_height() + style.padding.y
+  local rect_x = av:get_line_screen_position(partial_line, partial_col)
+  local row_y, row_height = av:get_position_highlight_geometry(
+    partial_line, partial_col
+  )
   local font = av:get_font()
   local th = font:get_height()
   local lh = th + style.padding.y
@@ -1375,8 +1377,8 @@ local function get_suggestions_rect(av)
   local _, window_height = system.get_window_size(core.window)
   view_bottom = math.min(view_bottom, window_height - style.padding.y)
 
-  local below_rect_y = y - style.padding.y
-  local above_bottom = y - av:get_line_height() - style.padding.y
+  local below_rect_y = row_y + row_height
+  local above_bottom = row_y
 
   local function visible_count_for(available_height)
     return math.max(1, math.min(#suggestions, math.floor((available_height - style.padding.y) / lh)))
@@ -2272,6 +2274,7 @@ keymap.add_direct {
 autocomplete._test = {
   code_symbol_chunk_query = code_symbol_chunk_query,
   code_symbol_chunk_match_score = code_symbol_chunk_match_score,
+  get_suggestions_rect = get_suggestions_rect,
 }
 
 return autocomplete

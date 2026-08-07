@@ -570,6 +570,12 @@ function Index:ensure(reason)
   return self:rebuild_async(reason or "first-use")
 end
 
+---Whether link resolution can use a published vault snapshot.
+---The previous snapshot remains valid while its replacement is indexing.
+function Index:can_resolve()
+  return self.status == "ready" or self.disk_snapshot ~= nil
+end
+
 function Index:rebuild_async(reason)
   local started_at = system.get_time()
   local rebuild_reason = reason or "async-rebuild"

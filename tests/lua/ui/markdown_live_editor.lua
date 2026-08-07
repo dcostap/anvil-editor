@@ -3416,6 +3416,64 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("publishes a pending preview from an attachment-only vault", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-attachment-only-" .. system.get_process_id()
+    local media = root .. PATHSEP .. "attachments"
+    test.ok(common.mkdirp(media))
+    for i = 1, 200 do
+      local file = test.not_nil(io.open(media .. PATHSEP .. "Image" .. i .. ".png", "wb"))
+      file:write("png")
+      file:close()
+    end
+    local image_path = media .. PATHSEP .. "Pasted image.png"
+    local image = test.not_nil(io.open(image_path, "wb"))
+    image:write("png")
+    image:close()
+
+    local old_projects = core.projects
+    local old_load_image = canvas.load_image
+    local view
+    core.projects = { Project(root) }
+    canvas.load_image = function(path)
+      if common.path_equals(path, image_path) then
+        return {
+          get_size = function() return 80, 40 end,
+          scaled = function(self) return self end,
+        }
+      end
+      return old_load_image(path)
+    end
+
+    local function rendered_image()
+      for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+        if fragment.widget and fragment.widget.type == "image" then return fragment end
+      end
+    end
+
+    local ok, err = pcall(function()
+      local doc
+      view, doc = make_view(
+        "![[Pasted image.png]]\nnext", root .. PATHSEP .. "Source.md"
+      )
+      doc:set_selection(2, 1)
+      refresh(view)
+      local index = view.__markdown_live_owner.link_index
+      test.equal(index.status, "indexing")
+      test.match(visible_render_text(view, 1), "[loading image:", nil, true)
+
+      test.ok(wait_status(index, "ready"))
+      test.not_nil(
+        rendered_image(),
+        "the first attachment snapshot must replace the pending preview"
+      )
+    end)
+    if view then markdown.live_render.detach(view) end
+    canvas.load_image = old_load_image
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("renders wikilink image embeds from Obsidian attachmentFolderPath", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-attachments-" .. system.get_process_id()
     local obsidian = root .. PATHSEP .. ".obsidian"
@@ -3496,6 +3554,64 @@ test.describe("Markdown Live Preview", function()
       end
       test.not_nil(image_fragment)
       test.ok(common.path_equals(test.not_nil(loaded_path), image_path))
+    end)
+    if view then markdown.live_render.detach(view) end
+    canvas.load_image = old_load_image
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps a published image preview while the vault refreshes", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-image-refresh-" .. system.get_process_id()
+    local notes = root .. PATHSEP .. "SISTEMAS"
+    local media = notes .. PATHSEP .. "attachments"
+    test.ok(common.mkdirp(media))
+    local image_path = media .. PATHSEP .. "Pasted image.png"
+    local image = test.not_nil(io.open(image_path, "wb"))
+    image:write("png")
+    image:close()
+    local source_path = notes .. PATHSEP .. "Source.md"
+    local source_file = test.not_nil(io.open(source_path, "wb"))
+    source_file:write("![[Pasted image.png]]\n")
+    source_file:close()
+
+    local old_projects = core.projects
+    local old_load_image = canvas.load_image
+    local view
+    core.projects = { Project(root) }
+    local index = markdown.vault_index.get_index(root):rebuild("image-refresh-fixture")
+    canvas.load_image = function()
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+
+    local function rendered_image()
+      for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+        if fragment.widget and fragment.widget.type == "image" then return fragment end
+      end
+    end
+
+    local ok, err = pcall(function()
+      local doc
+      view, doc = make_view("![[Pasted image.png]]\nnext", source_path)
+      doc:set_selection(2, 1)
+      refresh(view)
+      test.not_nil(rendered_image())
+      canvas.load_image = old_load_image
+
+      index:rebuild("image-refresh-settle")
+      index:rebuild_async("image-refresh-regression")
+      test.equal(index.status, "indexing")
+      view:invalidate_line_render("image-refresh-regression", 1, 1)
+
+      test.not_nil(
+        rendered_image(),
+        "a refresh must keep using the last published attachment snapshot"
+      )
+      test.ok(wait_status(index, "ready"))
     end)
     if view then markdown.live_render.detach(view) end
     canvas.load_image = old_load_image

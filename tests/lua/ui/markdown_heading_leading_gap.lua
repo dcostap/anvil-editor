@@ -1,12 +1,15 @@
+local core = require "core"
 local config = require "core.config"
 local command = require "core.command"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
+local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
 local style = require "core.style"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
+local autocomplete = require "plugins.autocomplete"
 
 local function wait_ready(instance)
   local deadline = system.get_time() + 5
@@ -77,11 +80,14 @@ end
 test.describe("Markdown heading leading spacing", function()
   test.before_each(function(context)
     context.old_markdown_live_editor = config.markdown_live_editor
+    context.old_active_view = core.active_view
     config.markdown_live_editor = true
   end)
 
   test.after_each(function(context)
+    autocomplete.close()
     config.markdown_live_editor = context.old_markdown_live_editor
+    core.active_view = context.old_active_view
   end)
 
   test.it("keeps a heading fixed when its preceding blank line becomes text", function()
@@ -263,6 +269,67 @@ test.describe("Markdown heading leading spacing", function()
         "following content moved from %d to %d when the heading presentation published",
         pending_y, published_y
       )
+    )
+  end)
+
+  test.it("does not transiently unwrap an active heading before publication", function()
+    local source = "# Procedimiento Apagado conexión host iDrac testing testingaa"
+    local view, doc = make_view(source .. "\nstuff")
+    view.size.x = 1200
+    doc:set_selection(1, #doc.lines[1])
+    core.active_view = view
+    refresh(view)
+
+    local render = test.not_nil(view:get_line_render(1))
+    local marker = test.not_nil(render.fragments[1])
+    local content = test.not_nil(render.fragments[2])
+    test.equal(marker.text, "# ")
+    test.equal(content.text:sub(-1), "a")
+    local marker_width = marker.font:get_width(marker.text)
+    local final_content_width = content.font:get_width(content.text:sub(1, -2))
+    local view_chrome = view.size.x - linewrapping.compute_wrap_width(view)
+    view.size.x = math.floor(
+      view_chrome + final_content_width + marker_width / 2
+    )
+    view:set_wrapping_enabled(true)
+
+    test.ok(
+      view:get_visual_row_count_for_line(1) > 1,
+      "the heading must initially occupy multiple Wrapped Visual Rows"
+    )
+    test.ok(command.perform("doc:backspace"))
+
+    test.ok(
+      view:get_visual_row_count_for_line(1) > 1,
+      "the pending heading must not transiently unwrap"
+    )
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_ready(instance), instance.reason)
+    test.ok(
+      view:get_visual_row_count_for_line(1) > 1,
+      "the published heading must remain wrapped"
+    )
+  end)
+
+  test.it("positions autocomplete below the rendered heading row", function()
+    local view, doc = make_view("# Proce")
+    doc:set_selection(1, #doc.lines[1])
+    core.active_view = view
+    refresh(view)
+
+    autocomplete.complete({
+      name = "test-markdown-heading-popup-position",
+      files = ".*",
+      items = { Procedimiento = "" },
+    })
+    test.ok(autocomplete.is_open(), "autocomplete must be open for the heading")
+
+    local line, col = doc:get_selection()
+    local row_y, row_height = view:get_position_highlight_geometry(line, col)
+    local _, popup_y = autocomplete._test.get_suggestions_rect(view)
+    test.ok(
+      popup_y >= row_y + row_height,
+      "the autocomplete popup must not overlap the rendered heading row"
     )
   end)
 

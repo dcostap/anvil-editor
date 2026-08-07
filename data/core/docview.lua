@@ -8112,10 +8112,10 @@ Doc.register_text_transaction_handler("docview-render-caches", function(doc, tra
         invalid_line2 = math.max(invalid_line2 or line1, #doc.lines)
       end
       if view:has_line_render_providers() then
-        local wrapping_already_updated = invalid_line1 == line1 and invalid_line2 == line2
-        if wrapping_already_updated then view.__line_render_wrap_invalidating = true end
+        -- Line wrapping observes the text transaction before render providers
+        -- build their pending presentation. Remeasure after the provider hooks
+        -- so wrapping never exposes breaks computed from an interim fallback.
         view:invalidate_line_render("text-change", invalid_line1, invalid_line2)
-        if wrapping_already_updated then view.__line_render_wrap_invalidating = nil end
       end
       if view:has_visual_metric_providers() then
         view:invalidate_visual_metrics("text-change", invalid_line1, invalid_line2)
