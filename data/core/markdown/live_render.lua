@@ -233,6 +233,23 @@ local function source_line_length(text)
   return length
 end
 
+local function has_task_source_affinity(view, line, col)
+  local affinity = view.__markdown_task_source_affinity
+  if not affinity then return false end
+  if affinity.text_revision ~= (view.doc.text_revision or 0)
+    or affinity.selection_key ~= linewrapping.selection_state_key(view.doc)
+  then
+    view.__markdown_task_source_affinity = nil
+    return false
+  end
+  return affinity.positions[linewrapping.position_key(line, col)] == true
+end
+
+local function selection_snapshot_key(state)
+  return table.concat(state and state.selections or {}, "\31")
+    .. "\30" .. tostring(state and state.last_selection or 1)
+end
+
 local function node_line_range(node, line, line_length)
   if line < node.source.line1 or line > node.source.line2 then return nil end
   return line == node.source.line1 and node.source.col1 or 1,
@@ -372,6 +389,11 @@ local function reveal_units_for_line(view, line, state)
           }
         elseif line == line1 and task_marker
           and col1 >= task_marker.col1 and col1 <= task_marker.col2
+          and not (
+            col1 == task_marker.col2
+            and task_marker.col2 == line_length + 1
+            and not has_task_source_affinity(view, line1, col1)
+          )
         then
           units[#units + 1] = {
             type = "task_marker", id = task_node.id .. ":task",
@@ -2481,6 +2503,8 @@ local function task_checkbox_widget(
   box_area_width = box_area_width or width
   return {
     wrapping = "inline", cursor = "hand", width = width, height = height,
+    suppress_hover_overlay = true,
+    suppress_hover_background = true,
     checked = checked,
     draw = function(_, fragment, x, y, visual_row_height)
       local is_checked = fragment.checked
@@ -2711,7 +2735,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         return true
       end
 
-      local task_checkbox_in_marker = false
+      local task_control_in_marker = false
       local marker_key = marker and table.concat({ marker.line1, marker.col1, marker.col2 }, ":")
       if marker and marker.line1 == line and not seen[marker_key] then
         seen[marker_key] = true
@@ -2735,7 +2759,29 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         local marker_revealed = reveal_unit_matches(
           reveal_units, node.id, marker.col1, marker.col2
         )
-        if ordered then
+        if (marker_revealed or task_revealed) and task then
+          task_control_in_marker = true
+          local prefix_raw = line_text:sub(token_col, task.col2 - 1)
+          fragments[#fragments + 1] = {
+            source_col1 = marker_source_col1,
+            source_col2 = task_content_col,
+            text_source_col1 = token_col,
+            text_source_col2 = task.col2,
+            text = prefix_raw,
+            width = math.max(
+              marker_width,
+              indent_width + body_font:get_width(prefix_raw .. " ")
+            ),
+            text_x_offset = indent_width,
+            color = style.markdown_live_list_marker,
+            semantic_id = task_semantic_id,
+            markdown_task_source_marker = true,
+            unordered_list_source_marker = not ordered or nil,
+            ordered_list_source_marker = ordered and true or nil,
+            suppress_bracketmatch = true,
+            markdown_list_content_col = task_content_col,
+          }
+        elseif ordered then
           local display_marker = ordered_list_display_marker(view, line, ordered)
           marker_width = math.max(
             marker_width, indent_width + body_font:get_width(display_marker .. " ")
@@ -2771,8 +2817,27 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
               semantic_id = node.id .. ":marker",
               unordered_list_source_marker = true,
             }
-          elseif task and not task_revealed then
-            task_checkbox_in_marker = true
+          elseif task and task_revealed then
+            task_control_in_marker = true
+            local source_x_offset = indent_width
+              + math.floor((marker_control_width - box_size) / 2)
+            local source_width = body_font:get_width(task_raw .. " ")
+            fragments[#fragments + 1] = {
+              source_col1 = marker_source_col1,
+              source_col2 = task_content_col,
+              text_source_col1 = task.col1,
+              text_source_col2 = task.col2,
+              text = task_raw,
+              width = math.max(marker_width, source_x_offset + source_width),
+              text_x_offset = source_x_offset,
+              color = style.markdown_live_list_marker,
+              semantic_id = task_semantic_id,
+              markdown_task_source_marker = true,
+              suppress_bracketmatch = true,
+              markdown_list_content_col = task_content_col,
+            }
+          elseif task then
+            task_control_in_marker = true
             local checkbox_widget = task_checkbox_widget(
               marker_width, row_height, box_size, checked,
               checkmark_font, indent_width, marker_control_width
@@ -2785,6 +2850,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
                 or style.markdown_live_task_unchecked,
               semantic_id = task_semantic_id,
               markdown_task_checkbox = true, checked = checked,
+              suppress_bracketmatch = true,
               markdown_list_content_col = task_content_col,
               draw_x_offset = indent_width
                 + math.floor((marker_control_width - box_size) / 2),
@@ -2815,7 +2881,13 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         end
       end
       if task and task.line1 == line then
-        if task_revealed then
+        if task_control_in_marker then
+          fragments[#fragments + 1] = {
+            source_col1 = task.col1, source_col2 = task_content_col,
+            text = "", width = 0, semantic_id = task_semantic_id,
+            markdown_list_content_col = task_content_col,
+          }
+        elseif task_revealed then
           fragments[#fragments + 1] = {
             source_col1 = task.col1, source_col2 = task_content_col,
             text_source_col1 = task.col1, text_source_col2 = task.col2,
@@ -2826,9 +2898,10 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
             color = style.markdown_live_list_marker,
             semantic_id = task_semantic_id,
             markdown_task_source_marker = true,
+            suppress_bracketmatch = true,
             markdown_list_content_col = task_content_col,
           }
-        elseif not task_checkbox_in_marker then
+        else
           local checkbox_widget = task_checkbox_widget(
             task_source_width, row_height, box_size, checked, checkmark_font
           )
@@ -2840,16 +2913,11 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
               or style.markdown_live_task_unchecked,
             semantic_id = task_semantic_id,
             markdown_task_checkbox = true, checked = checked,
+            suppress_bracketmatch = true,
             markdown_list_content_col = task_content_col,
             draw_x_offset = math.floor((task_source_width - box_size) / 2),
             hit_width = box_size,
             widget = checkbox_widget,
-          }
-        else
-          fragments[#fragments + 1] = {
-            source_col1 = task.col1, source_col2 = task_content_col,
-            text = "", width = 0, semantic_id = task_semantic_id,
-            markdown_list_content_col = task_content_col,
           }
         end
       end
@@ -2954,9 +3022,23 @@ local function apply_task_completion_presentation(view, line_text, line, render_
   local content_col = list_item_content_col(line_text, attributes.list, task)
   local checked = source_checked
   if checked == nil then checked = attributes.task_checked ~= nil end
-  return set_render_line_task_completion(
+  set_render_line_task_completion(
     render_line, checked, content_col
   )
+  if content_col == task.col2 and task.col2 == #line_text + 1 then
+    render_line.markdown_task_implicit_gap = true
+    render_line.on_text_input = function(owner, input)
+      local line1, col1, line2, col2 = owner.doc:get_selection()
+      if line1 ~= line or line2 ~= line
+        or col1 ~= task.col2 or col2 ~= task.col2
+      then
+        return false
+      end
+      owner.doc:text_input(input:match("^[\t ]") and input or " " .. input)
+      return true
+    end
+  end
+  return render_line
 end
 
 local function layout_inline_image_rows(view, line_text, render_line)
@@ -3290,6 +3372,7 @@ local function pending_list_marker_render(view, previous, current_text)
     marker.text = ""
     marker.checked = checked
     marker.markdown_task_checkbox = true
+    marker.suppress_bracketmatch = true
     marker.unordered_list_marker = nil
     marker.ordered_list_marker = nil
     marker.markdown_task_content_col = content_col
@@ -5921,6 +6004,7 @@ local function invalidate_selection_lines(view, new_state, old_state)
 end
 
 function provider:on_selection_interaction_end(view, new_state, old_state)
+  view.__markdown_task_source_affinity = nil
   invalidate_selection_lines(view, new_state, old_state)
   return true
 end
@@ -5942,6 +6026,10 @@ function live.attach(view)
     -- every transient selection is therefore both expensive and ineffective;
     -- the interaction-end hook invalidates the final old/new ranges once.
     if owner.__line_render_interaction_state then return end
+    local affinity = owner.__markdown_task_source_affinity
+    if affinity and affinity.selection_key ~= selection_snapshot_key(new_state) then
+      owner.__markdown_task_source_affinity = nil
+    end
     invalidate_selection_lines(owner, new_state, old_state)
   end)
   view.__markdown_live_attached = true
@@ -5967,6 +6055,7 @@ function live.detach(view)
   view:remove_file_drop_provider(PROVIDER_ID)
   view:remove_poi_provider(PROVIDER_ID)
   view:remove_selection_listener(PROVIDER_ID)
+  view.__markdown_task_source_affinity = nil
   view.__markdown_live_attached = nil
   core.log_quiet("Markdown Live Preview detached from %s", view.doc and view.doc:get_name() or tostring(view))
   return true

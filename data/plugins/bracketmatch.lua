@@ -241,6 +241,20 @@ local function draw_decoration(dv, x, y, line, col, width)
   end
 end
 
+local function render_suppresses_range(dv, line, col, width)
+  local render_line = dv:get_line_render(line)
+  if not render_line then return false end
+  local range_col2 = col + width
+  for _, fragment in ipairs(render_line.fragments or {}) do
+    if fragment.suppress_bracketmatch then
+      local col1 = fragment.text_source_col1 or fragment.source_col1 or 1
+      local col2 = fragment.text_source_col2 or fragment.source_col2 or col1
+      if col < col2 and col1 < range_col2 then return true end
+    end
+  end
+  return false
+end
+
 
 local draw_line_text = DocView.draw_line_text
 
@@ -276,10 +290,15 @@ function DocView:draw_line_text(line, x, y)
           offset = 1
         end
       end
-      draw_decoration(self, x, y, line, state.col + select_adj + offset - 1, width)
+      local col = state.col + select_adj + offset - 1
+      if not render_suppresses_range(self, line, col, width) then
+        draw_decoration(self, x, y, line, col, width)
+      end
     end
     if line == state.line2 and width == 1 then
-      draw_decoration(self, x, y, line, state.col2, width)
+      if not render_suppresses_range(self, line, state.col2, width) then
+        draw_decoration(self, x, y, line, state.col2, width)
+      end
     end
   end
   perf_scope_end(scope)

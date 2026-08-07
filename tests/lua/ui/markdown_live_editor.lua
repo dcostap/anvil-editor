@@ -2338,6 +2338,41 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("keeps a first nested task stable when it cannot be indented further", function()
+    local old_tab_type, old_indent_size = config.tab_type, config.indent_size
+    config.tab_type, config.indent_size = "soft", 4
+    local view, doc = make_view(
+      "- [ ] parent\n    - [ ] \n    - [ ] sibling\nplain",
+      "pending-task-indent.md"
+    )
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    doc:set_selection(2, 11)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("doc:indent"), true)
+      test.equal(doc.lines[2], "    - [ ] \n")
+      test.equal(test.not_nil(markdown_model.peek(doc)).status, "ready")
+
+      local function task_checkbox()
+        for _, fragment in ipairs(
+          test.not_nil(view:get_line_render(2)).fragments or {}
+        ) do
+          if fragment.markdown_task_checkbox then return fragment end
+        end
+      end
+
+      test.not_nil(task_checkbox())
+      local published = test.not_nil(view:get_line_render(2))
+      test.equal(published.markdown_provenance, "current")
+    end)
+    core.active_view = old_active
+    config.tab_type, config.indent_size = old_tab_type, old_indent_size
+    if not ok then error(err, 0) end
+  end)
+
   test.it("toggles task checkboxes without moving the caret", function()
     local view, doc = make_view("- [ ] todo\nplain", "task-toggle.md")
     doc:set_selection(2, 3)
@@ -2364,26 +2399,379 @@ test.describe("Markdown Live Preview", function()
     test.equal(immediate_checkbox.widget.checked, true)
   end)
 
-  test.it("reveals only the task marker source when the caret enters its checkbox", function()
+  test.it("reveals the complete task-list prefix when the caret enters its checkbox", function()
     local view, doc = make_view(" - [ ] todo\nplain", "task-reveal.md")
     doc:set_selection(2, 1)
     refresh(view)
 
     doc:set_selection(1, 4)
-    local task_source, checkbox, list_bullet
+    local task_source, checkbox
     for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
       if fragment.markdown_task_source_marker then task_source = fragment end
       if fragment.markdown_task_checkbox then checkbox = fragment end
-      if fragment.unordered_list_marker and fragment.widget then list_bullet = fragment end
     end
     task_source = test.not_nil(task_source)
-    test.equal(task_source.text, "[ ]")
+    test.equal(task_source.text, "- [ ]")
+    test.equal(task_source.unordered_list_source_marker, true)
     test.equal(task_source.widget, nil)
     test.equal(checkbox, nil)
-    test.equal(list_bullet, nil)
   end)
 
-  test.it("selects task source when dragging from its body into the marker", function()
+  test.it("reveals the complete task-list prefix on the second Home", function()
+    local view, doc = make_view(
+      "- [ ] parent\n    - [ ] test\nplain",
+      "task-prefix-home.md"
+    )
+    doc:set_selection(3, 1)
+    refresh(view)
+
+    doc:set_selection(2, #doc.lines[2])
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("doc:move-to-start-of-indentation"), true)
+      test.same({ doc:get_selection() }, { 2, 11, 2, 11 })
+      test.equal(command.perform("doc:move-to-start-of-indentation"), true)
+      test.same({ doc:get_selection() }, { 2, 5, 2, 5 })
+
+      local prefix, checkbox
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(2)).fragments or {}) do
+        if fragment.markdown_task_source_marker
+          and fragment.unordered_list_source_marker
+        then
+          prefix = fragment
+        end
+        if fragment.markdown_task_checkbox then checkbox = fragment end
+      end
+      prefix = test.not_nil(prefix)
+      test.equal(prefix.text, "- [ ]")
+      test.equal(checkbox, nil)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("reveals a marker-only task after moving left from implicit content", function()
+    local view, doc = make_view(
+      "- [ ] parent\n    - [ ]\n    - [ ] sibling\nplain",
+      "empty-task-caret-edge.md"
+    )
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    local inactive = test.not_nil(view:get_line_render(2))
+    local inactive_checkbox
+    for _, fragment in ipairs(inactive.fragments or {}) do
+      if fragment.markdown_task_checkbox then inactive_checkbox = fragment break end
+    end
+    inactive_checkbox = test.not_nil(inactive_checkbox)
+    local checkbox_x = view:get_line_render_col_x_offset(
+      inactive, inactive_checkbox.source_col1
+    ) + (inactive_checkbox.draw_x_offset or 0)
+
+    doc:set_selection(2, 10)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      local implicit = test.not_nil(view:get_line_render(2))
+      local implicit_checkbox
+      for _, fragment in ipairs(implicit.fragments or {}) do
+        if fragment.markdown_task_checkbox then implicit_checkbox = fragment break end
+      end
+      test.not_nil(implicit_checkbox)
+
+      test.equal(command.perform("doc:move-to-previous-char"), true)
+      test.same({ doc:get_selection() }, { 2, 10, 2, 10 })
+      local active = test.not_nil(view:get_line_render(2))
+      local checkbox, task_source
+      for _, fragment in ipairs(active.fragments or {}) do
+        if fragment.markdown_task_checkbox then checkbox = fragment end
+        if fragment.markdown_task_source_marker then task_source = fragment end
+      end
+      task_source = test.not_nil(task_source)
+      test.equal(checkbox, nil)
+      local task_source_x = view:get_line_render_col_x_offset(
+        active, task_source.text_source_col1 or task_source.source_col1
+      )
+      test.equal(task_source_x, checkbox_x)
+      test.equal(
+        view:get_col_x_offset(2, 10),
+        task_source_x + task_source.font:get_width("- [ ] ")
+      )
+
+      view:update()
+      local old_draw_rect = renderer.draw_rect
+      local old_draw_text = renderer.draw_text
+      local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+      local bracket_frames = 0
+      renderer.draw_rect = function(_, _, _, _, color)
+        if color == style.bracketmatch_frame_color then
+          bracket_frames = bracket_frames + 1
+        end
+      end
+      renderer.draw_text = function(font, text, x, _, _, opts)
+        return x + font:get_width(text, opts)
+      end
+      renderer.draw_text_known_bounds = function(_, _, x, _, _, _, width)
+        return x + width
+      end
+      local draw_ok, draw_err = pcall(function()
+        local x, y = view:get_line_screen_position(2)
+        view:draw_line_text(2, x, y)
+      end)
+      renderer.draw_rect = old_draw_rect
+      renderer.draw_text = old_draw_text
+      renderer.draw_text_known_bounds = old_draw_text_known_bounds
+      if not draw_ok then error(draw_err, 0) end
+      test.equal(bracket_frames, 0)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("does not draw a bracket frame through a marker-only task checkbox", function()
+    local view, doc = make_view("- [ ]\nplain", "task-checkbox-bracket-frame.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    doc:set_selection(1, 6)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      view:update()
+      local old_draw_rect = renderer.draw_rect
+      local old_draw_text = renderer.draw_text
+      local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+      local bracket_frames = 0
+      renderer.draw_rect = function(_, _, _, _, color)
+        if color == style.bracketmatch_frame_color then
+          bracket_frames = bracket_frames + 1
+        end
+      end
+      renderer.draw_text = function(font, text, x, _, _, opts)
+        return x + font:get_width(text, opts)
+      end
+      renderer.draw_text_known_bounds = function(_, _, x, _, _, _, width)
+        return x + width
+      end
+      local draw_ok, draw_err = pcall(function()
+        local x, y = view:get_line_screen_position(1)
+        view:draw_line_text(1, x, y)
+      end)
+      renderer.draw_rect = old_draw_rect
+      renderer.draw_text = old_draw_text
+      renderer.draw_text_known_bounds = old_draw_text_known_bounds
+      if not draw_ok then error(draw_err, 0) end
+      test.equal(bracket_frames, 0)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("moves down onto implicit task content without revealing its prefix", function()
+    local view, doc = make_view(
+      "- [ ] parent\n    - [ ] test\n    - [ ]\nplain",
+      "empty-task-vertical-affinity.md"
+    )
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    doc:set_selection(2, 15)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("doc:move-to-next-line"), true)
+      test.same({ doc:get_selection() }, { 3, 10, 3, 10 })
+
+      local checkbox, task_source
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(3)).fragments or {}) do
+        if fragment.markdown_task_checkbox then checkbox = fragment end
+        if fragment.markdown_task_source_marker then task_source = fragment end
+      end
+      test.not_nil(checkbox)
+      test.equal(task_source, nil)
+
+      test.equal(command.perform("doc:move-to-previous-char"), true)
+      test.same({ doc:get_selection() }, { 3, 10, 3, 10 })
+      local revealed_source
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(3)).fragments or {}) do
+        if fragment.markdown_task_source_marker then revealed_source = fragment break end
+      end
+      test.equal(test.not_nil(revealed_source).text, "- [ ]")
+
+      test.equal(command.perform("doc:move-to-previous-char"), true)
+      test.same({ doc:get_selection() }, { 3, 9, 3, 9 })
+      test.equal(command.perform("doc:move-to-next-char"), true)
+      test.same({ doc:get_selection() }, { 3, 10, 3, 10 })
+      local right_source
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(3)).fragments or {}) do
+        if fragment.markdown_task_source_marker then right_source = fragment break end
+      end
+      test.equal(test.not_nil(right_source).text, "- [ ]")
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("moves Home directly from implicit task content to the prefix start", function()
+    local view, doc = make_view(
+      "- [ ] parent\n    - [ ] test\n    - [ ]\nplain",
+      "empty-task-home-affinity.md"
+    )
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    doc:set_selection(2, 15)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("doc:move-to-next-line"), true)
+      test.same({ doc:get_selection() }, { 3, 10, 3, 10 })
+      test.equal(command.perform("doc:move-to-start-of-indentation"), true)
+      test.same({ doc:get_selection() }, { 3, 5, 3, 5 })
+
+      local prefix
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(3)).fragments or {}) do
+        if fragment.markdown_task_source_marker then prefix = fragment break end
+      end
+      test.equal(test.not_nil(prefix).text, "- [ ]")
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("renders a checkbox while constructing a marker-only task", function()
+    local view, doc = make_view("\nplain", "construct-task-prefix.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    doc:set_selection(1, 1)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      for _, input in ipairs({ "-", " ", "[", " ", "]" }) do
+        test.equal(view:on_text_input(input), true)
+      end
+      test.equal(doc.lines[1], "- [ ]\n")
+      local instance = test.not_nil(markdown_model.peek(doc))
+      test.ok(wait_status(instance, "ready"), instance.reason)
+
+      local prefix, checkbox
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+        if fragment.markdown_task_source_marker then prefix = fragment end
+        if fragment.markdown_task_checkbox then checkbox = fragment end
+      end
+      test.equal(prefix, nil)
+      test.not_nil(checkbox)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps a marker-only task rendered after backspacing from the next line", function()
+    local view, doc = make_view(
+      "- [ ] text\n- [ ]\n\nplain",
+      "empty-task-backspace-affinity.md"
+    )
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    doc:set_selection(3, 1)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("doc:backspace"), true)
+      test.same({ doc:get_selection() }, { 2, 6, 2, 6 })
+      local instance = test.not_nil(markdown_model.peek(doc))
+      test.ok(wait_status(instance, "ready"), instance.reason)
+
+      local prefix, checkbox
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(2)).fragments or {}) do
+        if fragment.markdown_task_source_marker then prefix = fragment end
+        if fragment.markdown_task_checkbox then checkbox = fragment end
+      end
+      test.equal(prefix, nil)
+      test.not_nil(checkbox)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("inserts the implicit task gap before typing on a marker-only item", function()
+    local view, doc = make_view(
+      "- [ ] parent\n    - [ ]\n    - [ ] sibling\nplain",
+      "empty-task-implicit-gap.md"
+    )
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    doc:set_selection(2, 10)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(view:on_text_input("a"), true)
+      test.equal(doc.lines[2], "    - [ ] a\n")
+
+      local function task_checkbox()
+        for _, fragment in ipairs(
+          test.not_nil(view:get_line_render(2)).fragments or {}
+        ) do
+          if fragment.markdown_task_checkbox then return fragment end
+        end
+      end
+
+      test.not_nil(task_checkbox())
+      local instance = test.not_nil(markdown_model.peek(doc))
+      test.ok(wait_status(instance, "ready"), instance.reason)
+      test.not_nil(task_checkbox())
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("does not draw a generic hover box around task checkboxes", function()
+    local view, doc = make_view("- [ ] task\nplain", "task-hover.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    local checkbox
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+      if fragment.markdown_task_checkbox then checkbox = fragment break end
+    end
+    checkbox = test.not_nil(checkbox)
+    test.equal(checkbox.widget.suppress_hover_overlay, true)
+    test.equal(checkbox.widget.suppress_hover_background, true)
+    checkbox.hovered = true
+
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+    local hover_rects = 0
+    renderer.draw_rect = function(_, _, _, _, color)
+      if color == style.interactive_hover_overlay
+        or color == style.interactive_hover_border
+      then
+        hover_rects = hover_rects + 1
+      end
+    end
+    renderer.draw_text = function(font, text, x, _, _, opts)
+      return x + font:get_width(text, opts)
+    end
+    renderer.draw_text_known_bounds = function(_, _, x, _, _, _, width)
+      return x + width
+    end
+    local draw_ok, draw_err = pcall(function()
+      local x, y = view:get_line_screen_position(1)
+      view:draw_line_text(1, x, y)
+    end)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    renderer.draw_text_known_bounds = old_draw_text_known_bounds
+    if not draw_ok then error(draw_err, 0) end
+    test.equal(hover_rects, 0)
+  end)
+
+  test.it("selects and reveals the task-list prefix when dragging into it", function()
     local view, doc = make_view(
       "- [ ] task body\n  continuation\nplain", "task-drag-selection.md"
     )
@@ -2412,7 +2800,7 @@ test.describe("Markdown Live Preview", function()
           break
         end
       end
-      test.equal(test.not_nil(marker_source).text, "[ ]")
+      test.equal(test.not_nil(marker_source).text, "- [ ]")
     end)
     core.active_view = old_active
     if not ok then error(err, 0) end

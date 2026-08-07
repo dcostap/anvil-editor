@@ -477,9 +477,9 @@ local function markdown_empty_list_item(doc, line, col, line_text)
   return content:match("^%s*[-%+%*]%s+$")
     or content:match("^%s*%d+%.%s+$")
     or content:match("^%s*%d+%)%s+$")
-    or content:match("^%s*[-%+%*]%s+%[[ xX]%]%s+$")
-    or content:match("^%s*%d+%.%s+%[[ xX]%]%s+$")
-    or content:match("^%s*%d+%)%s+%[[ xX]%]%s+$")
+    or content:match("^%s*[-%+%*]%s+%[[ xX]%]%s*$")
+    or content:match("^%s*%d+%.%s+%[[ xX]%]%s*$")
+    or content:match("^%s*%d+%)%s+%[[ xX]%]%s*$")
 end
 
 local function markdown_list_content_start(doc, line, line_text, allow_empty)
@@ -500,12 +500,120 @@ local function markdown_list_content_start(doc, line, line_text, allow_empty)
 
   local content_start = #indent + #marker + #spaces + 1
   local task, after_task = content:sub(content_start):match(
-    "^(%[[ xX]%])([\t ]+)"
+    "^(%[[ xX]%])([\t ]*)"
   )
-  if task then content_start = content_start + #task + #after_task end
+  if task then
+    local after_col = content_start + #task + #after_task
+    if #after_task > 0 or after_col == #content + 1 then
+      content_start = after_col
+    end
+  end
   if allow_empty or content:sub(content_start):match("^%S") then
     return content_start, #indent
   end
+end
+
+local function markdown_indent_width(indent)
+  local width = 0
+  for i = 1, #(indent or "") do
+    if indent:byte(i) == 9 then
+      width = width + 4 - width % 4
+    else
+      width = width + 1
+    end
+  end
+  return width
+end
+
+local function markdown_list_indent_width(doc, line, line_text)
+  local content_start, indent_length = markdown_list_content_start(
+    doc, line, line_text, true
+  )
+  if not content_start then return nil end
+  return markdown_indent_width(tostring(line_text or ""):sub(1, indent_length))
+end
+
+local function markdown_list_can_indent(doc, line, line_text)
+  local indent_width = markdown_list_indent_width(doc, line, line_text)
+  if indent_width == nil then return false end
+  for previous_line = line - 1, 1, -1 do
+    local previous_width = markdown_list_indent_width(
+      doc, previous_line, doc.lines[previous_line] or ""
+    )
+    if previous_width ~= nil then
+      if previous_width == indent_width then return true end
+      if previous_width < indent_width then return false end
+    end
+  end
+  return false
+end
+
+local function markdown_space_indent(line_text, indent_length)
+  return string.rep(
+    " ", markdown_indent_width(tostring(line_text or ""):sub(1, indent_length))
+  )
+end
+
+local function markdown_marker_only_task_end_col(line_text)
+  local text = tostring(line_text or ""):gsub("\n$", "")
+  if text:match("^[\t ]*[-%+%*][\t ]+%[[ xX]%]$")
+    or text:match("^[\t ]*%d+[%.%)][\t ]+%[[ xX]%]$")
+  then
+    return #text + 1
+  end
+end
+
+local function marker_only_task_selection_positions(dv)
+  local positions = {}
+  local count = 0
+  for _, line1, col1, line2, col2 in dv.doc:get_selections(false) do
+    local end_col = line1 == line2 and markdown_marker_only_task_end_col(
+      dv.doc.lines[line1]
+    )
+    if end_col and col1 == end_col and col2 == end_col then
+      positions[linewrapping.position_key(line1, col1)] = true
+      count = count + 1
+    else
+      return nil
+    end
+  end
+  return count > 0 and positions or nil
+end
+
+local function clear_markdown_task_source_affinity(dv)
+  if not dv.__markdown_task_source_affinity then return false end
+  dv.__markdown_task_source_affinity = nil
+  dv:invalidate_line_render("markdown-task-source-affinity")
+  return true
+end
+
+local function has_markdown_task_source_affinity(dv)
+  local affinity = dv.__markdown_task_source_affinity
+  if affinity and (
+    affinity.text_revision ~= (dv.doc.text_revision or 0)
+    or affinity.selection_key ~= linewrapping.selection_state_key(dv.doc)
+  ) then
+    clear_markdown_task_source_affinity(dv)
+    affinity = nil
+  end
+  return affinity ~= nil
+end
+
+local function set_markdown_task_source_affinity(dv)
+  local positions = marker_only_task_selection_positions(dv)
+  if not positions then return false end
+  dv.__markdown_task_source_affinity = {
+    text_revision = dv.doc.text_revision or 0,
+    selection_key = linewrapping.selection_state_key(dv.doc),
+    positions = positions,
+  }
+  dv:invalidate_line_render("markdown-task-source-affinity")
+  return true
+end
+
+local function reveal_markdown_task_source_from_implicit_content(dv)
+  if has_markdown_task_source_affinity(dv) then return false end
+  return set_markdown_task_source_affinity(dv)
 end
 
 local function markdown_list_join_info(doc, line, line_text)
@@ -1763,21 +1871,23 @@ local commands = {
         )
         if content_start and col1 == content_start then
           list_indent_count = list_indent_count + 1
-          if not list_indent_lines[line1] then
-            local indent_end, normalized = dv.doc:get_line_indent(
-              line_text, false
-            )
+          if markdown_list_can_indent(dv.doc, line1, line_text)
+            and not list_indent_lines[line1]
+          then
+            local indent_end = line_text:find("[^\t ]")
+            indent_end = indent_end and indent_end - 1 or 0
             -- A literal tab before a Markdown marker is parsed as indented
             -- code by the semantic grammar. Use the interoperable four-space
-            -- nesting step even when the Document otherwise prefers tabs.
-            local indent = "    "
+            -- nesting step and expand the existing prefix to spaces even when
+            -- the Document otherwise prefers tabs.
+            local indent = markdown_space_indent(line_text, indent_end) .. "    "
             list_indent_lines[line1] = true
             list_indent_edits[#list_indent_edits + 1] = {
               line1 = line1,
               col1 = 1,
               line2 = line1,
               col2 = (indent_end or 0) + 1,
-              text = normalized .. indent,
+              text = indent,
               idx = 0,
             }
           end
@@ -1785,18 +1895,20 @@ local commands = {
       end
     end
     if selection_count > 0 and list_indent_count == selection_count then
-      local selections, last_selection = dv.doc:selections_after_edits(
-        list_indent_edits, nil, dv.doc.last_selection
-      )
-      dv.doc:apply_edits(list_indent_edits, {
-        type = "insert",
-        selections = selections,
-        last_selection = last_selection,
-        merge_cursors = false,
-      })
+      if #list_indent_edits > 0 then
+        local selections, last_selection = dv.doc:selections_after_edits(
+          list_indent_edits, nil, dv.doc.last_selection
+        )
+        dv.doc:apply_edits(list_indent_edits, {
+          type = "insert",
+          selections = selections,
+          last_selection = last_selection,
+          merge_cursors = false,
+        })
+      end
       core.log_quiet(
-        "Markdown indent moved list items at their content start in %s",
-        dv.doc:get_name()
+        "Markdown indent moved %d eligible list item(s) at their content start in %s",
+        #list_indent_edits, dv.doc:get_name()
       )
       return
     end
@@ -2422,6 +2534,7 @@ for name, obj in pairs(translations) do
 end
 
 local function move_char_batch(dv, move_fn, collapse_to_end)
+  clear_markdown_task_source_affinity(dv)
   local doc = dv.doc
   local selections = {}
   local last_selection = doc.last_selection
@@ -2445,11 +2558,13 @@ local function move_char_batch(dv, move_fn, collapse_to_end)
 end
 
 commands["doc:move-to-previous-char"] = function(dv)
+  if reveal_markdown_task_source_from_implicit_content(dv) then return end
   move_char_batch(dv, translate.previous_char, false)
 end
 
 commands["doc:move-to-next-char"] = function(dv)
   move_char_batch(dv, translate.next_char, true)
+  set_markdown_task_source_affinity(dv)
 end
 
 local function move_line_batch(dv, line_offset)
@@ -3053,10 +3168,14 @@ local function move_to_wrapped_start_of_indentation(doc, line, col, dv, logical_
 end
 
 commands["doc:move-to-previous-line"] = function(dv)
-  return wrapped_move_to(dv, "doc:move-to-previous-line", move_to_wrapped_previous_line, dv)
+  return wrapped_move_to(
+    dv, "doc:move-to-previous-line", move_to_wrapped_previous_line, dv
+  )
 end
 commands["doc:move-to-next-line"] = function(dv)
-  return wrapped_move_to(dv, "doc:move-to-next-line", move_to_wrapped_next_line, dv)
+  return wrapped_move_to(
+    dv, "doc:move-to-next-line", move_to_wrapped_next_line, dv
+  )
 end
 commands["doc:select-to-previous-line"] = function(dv)
   return wrapped_select_to(dv, "doc:select-to-previous-line", move_to_wrapped_previous_line, dv)

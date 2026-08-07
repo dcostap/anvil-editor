@@ -305,23 +305,56 @@ test.describe("smart indentation", function()
   test.it("indents a Markdown bullet from the item content start", function(context)
     local doc, view = new_editor(context, "- first\n- second", "sample.md")
     core.set_active_view(view)
-    doc:set_selection(1, 3, 1, 3)
+    doc:set_selection(2, 3, 2, 3)
 
     test.ok(command.perform("doc:indent"))
 
-    test.equal(text(doc), "  - first\n- second\n")
-    test.same(view:get_selection_state().selections, { 1, 5, 1, 5 })
+    test.equal(text(doc), "- first\n    - second\n")
+    test.same(view:get_selection_state().selections, { 2, 7, 2, 7 })
   end)
 
   test.it("indents an empty Markdown task item from after its checkbox", function(context)
-    local doc, view = new_editor(context, "- [ ] \n- [ ] second", "sample.md")
+    local doc, view = new_editor(context, "- [ ] parent\n- [ ] ", "sample.md")
     core.set_active_view(view)
-    doc:set_selection(1, 7, 1, 7)
+    doc:set_selection(2, 7, 2, 7)
 
     test.ok(command.perform("doc:indent"))
 
-    test.equal(text(doc), "  - [ ] \n- [ ] second\n")
-    test.same(view:get_selection_state().selections, { 1, 9, 1, 9 })
+    test.equal(text(doc), "- [ ] parent\n    - [ ] \n")
+    test.same(view:get_selection_state().selections, { 2, 11, 2, 11 })
+  end)
+
+  test.it("keeps nested Markdown indentation as spaces in hard-tab documents", function(context)
+    config.tab_type = "hard"
+    config.indent_size = 4
+    local doc, view = new_editor(
+      context,
+      "- [ ] parent\n    - [ ] branch\n    - [ ] ",
+      "sample.md"
+    )
+    core.set_active_view(view)
+    doc:set_selection(3, 11, 3, 11)
+
+    test.ok(command.perform("doc:indent"))
+
+    test.equal(
+      text(doc),
+      "- [ ] parent\n    - [ ] branch\n        - [ ] \n"
+    )
+    test.same(view:get_selection_state().selections, { 3, 15, 3, 15 })
+  end)
+
+  test.it("does not over-indent a nested Markdown item without a preceding sibling", function(context)
+    config.indent_size = 4
+    local source = "- [ ] parent\n    - [ ] \n    - [ ] sibling"
+    local doc, view = new_editor(context, source, "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(2, 11, 2, 11)
+
+    test.ok(command.perform("doc:indent"))
+
+    test.equal(text(doc), source .. "\n")
+    test.same(view:get_selection_state().selections, { 2, 11, 2, 11 })
   end)
 
   test.it("removes an empty Markdown list marker on the next Enter", function(context)
@@ -380,6 +413,28 @@ test.describe("smart indentation", function()
     doc:set_selection(1, 7, 1, 7)
 
     test.ok(command.perform("doc:backspace"))
+
+    test.equal(text(doc), "\nafter\n")
+    test.same(view:get_selection_state().selections, { 1, 1, 1, 1 })
+  end)
+
+  test.it("removes a marker-only Markdown task without a physical gap on Backspace", function(context)
+    local doc, view = new_editor(context, "- [ ]\nafter", "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(1, 6, 1, 6)
+
+    test.ok(command.perform("doc:backspace"))
+
+    test.equal(text(doc), "\nafter\n")
+    test.same(view:get_selection_state().selections, { 1, 1, 1, 1 })
+  end)
+
+  test.it("exits a marker-only Markdown task without a physical gap on Enter", function(context)
+    local doc, view = new_editor(context, "- [ ]\nafter", "sample.md")
+    core.set_active_view(view)
+    doc:set_selection(1, 6, 1, 6)
+
+    test.ok(command.perform("doc:newline"))
 
     test.equal(text(doc), "\nafter\n")
     test.same(view:get_selection_state().selections, { 1, 1, 1, 1 })
