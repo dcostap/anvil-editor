@@ -35,6 +35,8 @@ local tree_sitter_registry = require "core.treesitter.registry"
 ---@field icon? string
 ---Description shown when the symbol is hovered on the autocomplete box.
 ---@field desc? string
+---Internal source classification used to keep Document Word Completion behavior distinct.
+---@field autocomplete_source? "document_word"
 ---An optional callback called once when the symbol is hovered.
 ---@field onhover? fun(idx:integer,item:plugins.autocomplete.symbolinfo)
 ---An optional callback called when the symbol is selected.
@@ -134,7 +136,7 @@ config.plugins.autocomplete.config_spec = {
       description = "Which symbols to show on the suggestions list.",
       path = "suggestions_scope",
       type = "selection",
-      default = "related",
+      default = "local",
       values = {
         {"All Documents", "global"},
         {"Current Document", "local"},
@@ -723,6 +725,24 @@ local function completion_sort_text(item)
   return suggestion_text(item):gsub("^%s+", "")
 end
 
+local function character_count(text)
+  text = tostring(text or "")
+  local count = 0
+  for i = 1, #text do
+    local byte = text:byte(i)
+    if byte < 128 or byte >= 192 then count = count + 1 end
+  end
+  return count
+end
+
+local function automatic_document_word_match(item, needle)
+  if type(item) ~= "table" or item.autocomplete_source ~= "document_word" then return true end
+  local text = suggestion_text(item)
+  needle = tostring(needle or "")
+  return character_count(text) >= 5
+    and text:sub(1, #needle):lower() == needle:lower()
+end
+
 local function match_stats(text, needle)
   text = tostring(text or ""):lower()
   needle = tostring(needle or ""):lower()
@@ -1060,7 +1080,15 @@ function update_suggestions()
     end
 
     local function add_cache_symbols(symbols)
-      for name in pairs(symbols or {}) do add_text_symbol(name, "normal") end
+      for name in pairs(symbols or {}) do
+        if name and name ~= "" and #name <= max_symbol_length() then
+          add_candidate_item(setmetatable({
+            text = name,
+            info = "normal",
+            autocomplete_source = "document_word",
+          }, mt), false)
+        end
+      end
     end
 
     local locals = tree_sitter_locals_module()
@@ -1263,6 +1291,17 @@ function update_suggestions()
   if max_items > 0 then
     local ordered, seen = {}, {}
     for _, item in ipairs(suggestions) do seen[suggestion_text(item)] = item end
+    local matchable_items = items
+    -- Automatic Document Word Completion is deliberately conservative. A
+    -- manual invocation keeps the full fuzzy set, including short words.
+    if not triggered_manually then
+      matchable_items = {}
+      for _, item in ipairs(items) do
+        if automatic_document_word_match(item, partial) then
+          matchable_items[#matchable_items + 1] = item
+        end
+      end
+    end
     local function append_matches(matches, query)
       for _, item in ipairs(matches or {}) do
         local key = suggestion_text(item)
@@ -1276,12 +1315,12 @@ function update_suggestions()
       end
     end
 
-    append_matches(sort_display_matches(common.fuzzy_match(items, partial, false), partial), partial)
+    append_matches(sort_display_matches(common.fuzzy_match(matchable_items, partial, false), partial), partial)
 
     local chunk_query, query_chunks = code_symbol_chunk_query(partial)
     if chunk_query and chunk_query ~= partial then
       local scored = {}
-      for _, match in ipairs(fuzzy_match_with_scores(items, chunk_query)) do
+      for _, match in ipairs(fuzzy_match_with_scores(matchable_items, chunk_query)) do
         local chunk_score = code_symbol_chunk_match_score(suggestion_text(match.item), query_chunks)
         if chunk_score then
           scored[#scored + 1] = {

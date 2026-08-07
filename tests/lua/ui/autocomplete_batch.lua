@@ -232,6 +232,55 @@ test.describe("autocomplete batch behavior", function()
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "Quoted")
   end)
 
+  test.it("automatically offers only Document words that start with the partial", function(context)
+    context.autocomplete_min_len = config.plugins.autocomplete.min_len
+    context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
+    config.plugins.autocomplete.min_len = 3
+    config.plugins.autocomplete.suggestions_scope = "local"
+    open_editor(context, "encyclopedia\n")
+
+    coroutine.yield(1.1)
+    core.root_panel:on_text_input("clo")
+
+    test.ok(not autocomplete.is_open(), "a middle match should not open automatic Document Word Completion")
+  end)
+
+  test.it("automatically discards Document words shorter than five characters", function(context)
+    context.autocomplete_min_len = config.plugins.autocomplete.min_len
+    context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
+    config.plugins.autocomplete.min_len = 3
+    config.plugins.autocomplete.suggestions_scope = "local"
+    open_editor(context, "test testing\n")
+
+    coroutine.yield(1.1)
+    core.root_panel:on_text_input("tes")
+
+    test.ok(autocomplete.is_open(), "the longer prefix match should remain available")
+    test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "testing")
+  end)
+
+  test.it("manual Document Word Completion retains fuzzy matches and short words", function(context)
+    context.autocomplete_min_len = config.plugins.autocomplete.min_len
+    context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
+    config.plugins.autocomplete.min_len = 3
+    config.plugins.autocomplete.suggestions_scope = "local"
+    open_editor(context, "test encyclopedia\n")
+
+    coroutine.yield(1.1)
+    core.root_panel:on_text_input("clo")
+    test.ok(not autocomplete.is_open(), "the middle match should not open automatically")
+
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open(), "manual completion should include the middle match")
+    test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "encyclopedia")
+
+    autocomplete.close()
+    core.root_panel:on_text_input("\ntes")
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open(), "manual completion should include short words")
+    test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "test")
+  end)
+
   test.it("ignores oversized suggestions before matching", function(context)
     context.autocomplete_max_symbol_length = config.plugins.autocomplete.max_symbol_length
     config.plugins.autocomplete.max_symbol_length = 40
@@ -351,6 +400,23 @@ test.describe("autocomplete batch behavior", function()
 
     test.ok(autocomplete.is_open())
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "resolve_message")
+  end)
+
+  test.it("does not apply automatic Document-word filters to Project symbols", function(context)
+    local _, active_path = seed_odin_project_symbol(context, "current.odin")
+    local symbol = symbol_index.status(core.root_project().path).symbols[1]
+    symbol.name = "exec"
+    symbol.text = "exec"
+    symbol.kind = "function"
+    symbol.parent_name = nil
+    symbol.signature = "()"
+    write_file(active_path, "")
+    open_file_editor(context, active_path)
+
+    core.root_panel:on_text_input("xec")
+
+    test.ok(autocomplete.is_open(), "a short, fuzzy Project symbol should remain available automatically")
+    test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "exec")
   end)
 
   test.it("does not duplicate an enum prefix already present at the caret", function(context)
