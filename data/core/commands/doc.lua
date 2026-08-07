@@ -488,40 +488,23 @@ local function markdown_list_content_start(doc, line, line_text, allow_empty)
   local end_col = line_end_col(line_text)
   local content = tostring(line_text or ""):sub(1, end_col - 1)
 
-  local indent, bullet, before_task, after_task = content:match(
-    "^([\t ]*)([-%*%+])([\t ]+)%[[ xX]%]([\t ]+)"
+  local indent, marker, spaces = content:match(
+    "^([\t ]*)([-%*%+])([\t ]+)"
   )
-  if indent then
-    local content_start = #indent + #bullet + #before_task + 3 + #after_task + 1
-    if allow_empty or content:sub(content_start):match("^%S") then
-      return content_start, #indent
-    end
+  if not indent then
+    indent, marker, spaces = content:match(
+      "^([\t ]*)(%d+[%.%)])([\t ]+)"
+    )
   end
+  if not indent then return nil end
 
-  local spaces
-  indent, bullet, spaces = content:match("^([\t ]*)([-%*%+])([\t ]+)")
-  if indent then
-    local content_start = #indent + #bullet + #spaces + 1
-    if allow_empty or content:sub(content_start):match("^%S") then
-      return content_start, #indent
-    end
-  end
-
-  local number, delimiter
-  indent, number, delimiter, spaces = content:match("^([\t ]*)(%d+)(%.)([\t ]+)")
-  if indent then
-    local content_start = #indent + #number + #delimiter + #spaces + 1
-    if allow_empty or content:sub(content_start):match("^%S") then
-      return content_start, #indent
-    end
-  end
-
-  indent, number, delimiter, spaces = content:match("^([\t ]*)(%d+)(%))([\t ]+)")
-  if indent then
-    local content_start = #indent + #number + #delimiter + #spaces + 1
-    if allow_empty or content:sub(content_start):match("^%S") then
-      return content_start, #indent
-    end
+  local content_start = #indent + #marker + #spaces + 1
+  local task, after_task = content:sub(content_start):match(
+    "^(%[[ xX]%])([\t ]+)"
+  )
+  if task then content_start = content_start + #task + #after_task end
+  if allow_empty or content:sub(content_start):match("^%S") then
+    return content_start, #indent
   end
 end
 
@@ -2635,7 +2618,24 @@ local function move_to_end_of_line(doc, line)
   return line, #doc.lines[line]
 end
 
+local function move_to_markdown_list_content(doc, line, col)
+  local list_content_col = markdown_list_content_start(
+    doc, line, doc.lines[line], true
+  )
+  if list_content_col and col > list_content_col then
+    return line, list_content_col
+  end
+end
+
+local function move_to_start_of_line(doc, line, col)
+  local target_line, target_col = move_to_markdown_list_content(doc, line, col)
+  if target_line then return target_line, target_col end
+  return translate.start_of_line(doc, line, col)
+end
+
 local function move_to_start_of_indentation(doc, line, col)
+  local target_line, target_col = move_to_markdown_list_content(doc, line, col)
+  if target_line then return target_line, target_col end
   local _, indent_end = doc.lines[line]:find("^[\t ]*")
   local indent_col = indent_end + 1
   return line, col > indent_col and indent_col or (col == 1 and indent_col or 1)
@@ -2643,6 +2643,10 @@ end
 
 commands["doc:move-to-end-of-line"] = function(dv)
   move_collapsed_carets_batch(dv, move_to_end_of_line)
+end
+
+commands["doc:move-to-start-of-line"] = function(dv)
+  move_collapsed_carets_batch(dv, move_to_start_of_line)
 end
 
 commands["doc:move-to-start-of-indentation"] = function(dv)
@@ -3018,7 +3022,7 @@ local function move_to_wrapped_end_of_line(doc, line, col, dv)
   return linewrapping.wrapped_end_of_line_position(dv, doc, line, col, translate.end_of_line)
 end
 
-local function move_to_wrapped_start_of_line(doc, line, col, dv)
+local function move_to_wrapped_start_of_line(doc, line, col, dv, logical_start)
   if dv and dv.get_line_render_position_row_bounds then
     local row_start, _, row_index = dv:get_line_render_position_row_bounds(line, col)
     if row_start and col ~= row_start then
@@ -3028,10 +3032,12 @@ local function move_to_wrapped_start_of_line(doc, line, col, dv)
       return line, row_start, false
     end
   end
-  return linewrapping.wrapped_start_of_line_position(dv, doc, line, col, translate.start_of_line)
+  return linewrapping.wrapped_start_of_line_position(
+    dv, doc, line, col, logical_start or translate.start_of_line
+  )
 end
 
-local function move_to_wrapped_start_of_indentation(doc, line, col, dv)
+local function move_to_wrapped_start_of_indentation(doc, line, col, dv, logical_start)
   if dv and dv.get_line_render_position_row_bounds then
     local row_start, _, row_index = dv:get_line_render_position_row_bounds(line, col)
     if row_start and row_start ~= 1 and col ~= row_start then
@@ -3041,7 +3047,9 @@ local function move_to_wrapped_start_of_indentation(doc, line, col, dv)
       return line, row_start, false
     end
   end
-  return linewrapping.wrapped_start_of_indentation_position(dv, doc, line, col, translate.start_of_indentation)
+  return linewrapping.wrapped_start_of_indentation_position(
+    dv, doc, line, col, logical_start or translate.start_of_indentation
+  )
 end
 
 commands["doc:move-to-previous-line"] = function(dv)
@@ -3076,7 +3084,10 @@ for _, name in ipairs({
 end
 
 commands["doc:move-to-start-of-line"] = function(dv)
-  return wrapped_move_to(dv, "doc:move-to-start-of-line", move_to_wrapped_start_of_line, dv)
+  return wrapped_move_to(
+    dv, "doc:move-to-start-of-line",
+    move_to_wrapped_start_of_line, dv, move_to_start_of_line
+  )
 end
 commands["doc:select-to-start-of-line"] = function(dv)
   return wrapped_select_to(dv, "doc:select-to-start-of-line", move_to_wrapped_start_of_line, dv)
@@ -3085,7 +3096,10 @@ commands["doc:delete-to-start-of-line"] = function(dv)
   return wrapped_delete_to(dv, "doc:delete-to-start-of-line", move_to_wrapped_start_of_line, dv)
 end
 commands["doc:move-to-start-of-indentation"] = function(dv)
-  return wrapped_move_to(dv, "doc:move-to-start-of-indentation", move_to_wrapped_start_of_indentation, dv)
+  return wrapped_move_to(
+    dv, "doc:move-to-start-of-indentation",
+    move_to_wrapped_start_of_indentation, dv, move_to_start_of_indentation
+  )
 end
 commands["doc:select-to-start-of-indentation"] = function(dv)
   return wrapped_select_to(dv, "doc:select-to-start-of-indentation", move_to_wrapped_start_of_indentation, dv)
