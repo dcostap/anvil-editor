@@ -197,6 +197,8 @@ test.describe("DocView decoration providers", function()
     local view, doc = make_view("one\ntwo\nthree")
     view.position.x = 17
     view.size.x = 360
+    view.__full_width_highlight_position_x = 3
+    view.__full_width_highlight_size_x = 500
     view:add_visual_row_provider("test", {})
     local decoration = { 12, 34, 56, 255 }
     view:add_decoration_provider("current-line-order", {
@@ -214,9 +216,9 @@ test.describe("DocView decoration providers", function()
     local events = {}
     config.highlight_current_line = true
     renderer.draw_text = function(font, text, x) return x + (font and font:get_width(text) or 0) end
-    renderer.draw_rect = function(_, _, _, _, color)
+    renderer.draw_rect = function(x, _, width, _, color)
       if color == style.line_highlight then
-        events[#events + 1] = { kind = "highlight" }
+        events[#events + 1] = { kind = "highlight", x = x, width = width }
       elseif color == decoration then
         events[#events + 1] = { kind = "decoration" }
       end
@@ -248,6 +250,8 @@ test.describe("DocView decoration providers", function()
     test.ok(#highlight_indexes >= 2, "expected gutter and content highlights")
     test.ok(highlight_indexes[1] < decoration_index, "expected gutter coverage before row content")
     test.ok(highlight_indexes[#highlight_indexes] > decoration_index, "expected content highlight over its decoration")
+    test.equal(events[highlight_indexes[1]].x, 3)
+    test.equal(events[highlight_indexes[1]].width, 500)
   end)
 
   test.it("draws and clicks provider-owned visual rows without selecting text", function()

@@ -5993,16 +5993,12 @@ function DocView:draw_current_line_highlights(minline, maxline, draw_highlight)
   self:draw_content_left_edge()
 end
 
----Draw the gutter portion before gutter contents; the content portion is
----drawn later by draw_line_body() over semantic decoration backgrounds.
-function DocView:draw_current_line_gutter_highlights(minline, maxline)
-  local gutter_width = self:get_gutter_width()
-  self:draw_current_line_highlights(minline, maxline, function(_, y, height)
-    if gutter_width > 0 then
-      renderer.draw_rect(
-        self.position.x, y, gutter_width, height, style.line_highlight
-      )
-    end
+---Draw the full-width underlay before gutter and row contents. The content
+---portion is drawn again later over semantic line decoration backgrounds.
+function DocView:draw_current_line_underlay_highlights(minline, maxline)
+  self:draw_current_line_highlights(minline, maxline, function(x, y, height)
+    local rx, ry, rw, rh = self:get_line_highlight_rect(x, y, height)
+    renderer.draw_rect(rx, ry, rw, rh, style.line_highlight)
   end)
 end
 
@@ -8398,7 +8394,7 @@ function DocView:draw_folded()
 
   local minline, maxline = self:get_visible_line_range()
   self:prepare_line_body_draw_cache(minline, maxline)
-  self:draw_current_line_gutter_highlights(minline, maxline)
+  self:draw_current_line_underlay_highlights(minline, maxline)
 
   local x = self.position.x - self.scroll.x
   local gw, gpad = self:get_gutter_width()
@@ -8501,7 +8497,7 @@ function DocView:draw_wrapped()
 
   phase_scope = perf_scope_begin("prepare")
   self:prepare_line_body_draw_cache(first_line, last_line)
-  self:draw_current_line_gutter_highlights(first_line, last_line)
+  self:draw_current_line_underlay_highlights(first_line, last_line)
   perf_scope_end(phase_scope)
 
   phase_scope = perf_scope_begin("gutters")
@@ -8601,7 +8597,7 @@ local function draw_docview(self)
   local stats = core.docview_frame_stats
   if stats then stats.visible_lines = stats.visible_lines + math.max(0, maxline - minline + 1) end
   self:prepare_line_body_draw_cache(minline, maxline)
-  self:draw_current_line_gutter_highlights(minline, maxline)
+  self:draw_current_line_underlay_highlights(minline, maxline)
 
   local x, y = self:get_line_screen_position(minline)
   local gw, gpad = self:get_gutter_width()
