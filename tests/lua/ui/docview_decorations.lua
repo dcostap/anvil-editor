@@ -193,11 +193,17 @@ test.describe("DocView decoration providers", function()
     test.equal(view:get_scrollable_line_count(), base)
   end)
 
-  test.it("draws composed-row current-line highlights across the gutter before row content", function()
+  test.it("draws current-line highlights over decoration backgrounds with gutter coverage", function()
     local view, doc = make_view("one\ntwo\nthree")
     view.position.x = 17
     view.size.x = 360
     view:add_visual_row_provider("test", {})
+    local decoration = { 12, 34, 56, 255 }
+    view:add_decoration_provider("current-line-order", {
+      line_background = function(_, _, line)
+        if line == 2 then return decoration end
+      end,
+    })
     doc:set_selection(2, 1)
 
     local old_highlight = config.highlight_current_line
@@ -208,18 +214,19 @@ test.describe("DocView decoration providers", function()
     local events = {}
     config.highlight_current_line = true
     renderer.draw_text = function(font, text, x) return x + (font and font:get_width(text) or 0) end
-    renderer.draw_rect = function() end
+    renderer.draw_rect = function(_, _, _, _, color)
+      if color == style.line_highlight then
+        events[#events + 1] = { kind = "highlight" }
+      elseif color == decoration then
+        events[#events + 1] = { kind = "decoration" }
+      end
+    end
     core.push_clip_rect = function() end
     core.pop_clip_rect = function() end
     view.draw_overlay = function() end
     view.draw_line_gutter = function(_, line)
       events[#events + 1] = { kind = "gutter", line = line }
     end
-    view.draw_line_highlight = function(self, x, y)
-      local rx, ry, rw, rh = self:get_line_highlight_rect(x, y)
-      events[#events + 1] = { kind = "highlight", x = rx, y = ry, w = rw, h = rh }
-    end
-
     local ok, err = pcall(function() view:draw() end)
     config.highlight_current_line = old_highlight
     renderer.draw_text = old_text
@@ -228,16 +235,19 @@ test.describe("DocView decoration providers", function()
     core.pop_clip_rect = old_pop
     if not ok then error(err, 0) end
 
-    local highlight_index
-    local first_gutter_index
+    local highlight_indexes = {}
+    local decoration_index
     for index, event in ipairs(events) do
-      if event.kind == "highlight" and not highlight_index then highlight_index = index end
-      if event.kind == "gutter" and not first_gutter_index then first_gutter_index = index end
+      if event.kind == "highlight" then
+        highlight_indexes[#highlight_indexes + 1] = index
+      elseif event.kind == "decoration" then
+        decoration_index = index
+      end
     end
-    test.not_nil(highlight_index, "expected a Current Line Highlight")
-    test.ok(highlight_index < first_gutter_index, "expected the highlight beneath the gutter and row content")
-    test.equal(events[highlight_index].x, view.position.x)
-    test.equal(events[highlight_index].w, view.size.x)
+    test.not_nil(decoration_index)
+    test.ok(#highlight_indexes >= 2, "expected gutter and content highlights")
+    test.ok(highlight_indexes[1] < decoration_index, "expected gutter coverage before row content")
+    test.ok(highlight_indexes[#highlight_indexes] > decoration_index, "expected content highlight over its decoration")
   end)
 
   test.it("draws and clicks provider-owned visual rows without selecting text", function()

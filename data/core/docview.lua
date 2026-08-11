@@ -5932,7 +5932,10 @@ function DocView:line_has_current_line_highlight(line)
   return false
 end
 
-function DocView:draw_current_line_highlights(minline, maxline)
+function DocView:draw_current_line_highlights(minline, maxline, draw_highlight)
+  draw_highlight = draw_highlight or function(x, y, height)
+    self:draw_line_highlight(x, y, height)
+  end
   if self:has_composed_visual_rows() then
     if config.highlight_current_line == false then return end
     local highlighted_rows = {}
@@ -5954,7 +5957,7 @@ function DocView:draw_current_line_highlights(minline, maxline)
         local y, height = self:get_position_highlight_geometry(
           position.line, position.col, position.line_end
         )
-        self:draw_line_highlight(self.position.x, y, height)
+        draw_highlight(self.position.x, y, height)
       end
     end
     self:draw_content_left_edge()
@@ -5970,7 +5973,7 @@ function DocView:draw_current_line_highlights(minline, maxline)
         local y, height = self:get_position_highlight_geometry(
           line1, col1, line_end
         )
-        self:draw_line_highlight(self.position.x, y, height)
+        draw_highlight(self.position.x, y, height)
       end
     end
     self:draw_content_left_edge()
@@ -5984,10 +5987,23 @@ function DocView:draw_current_line_highlights(minline, maxline)
     and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2))
     then
       local y, height = self:get_position_highlight_geometry(line1, col1, false)
-      self:draw_line_highlight(self.position.x, y, height)
+      draw_highlight(self.position.x, y, height)
     end
   end
   self:draw_content_left_edge()
+end
+
+---Draw the gutter portion before gutter contents; the content portion is
+---drawn later by draw_line_body() over semantic decoration backgrounds.
+function DocView:draw_current_line_gutter_highlights(minline, maxline)
+  local gutter_width = self:get_gutter_width()
+  self:draw_current_line_highlights(minline, maxline, function(_, y, height)
+    if gutter_width > 0 then
+      renderer.draw_rect(
+        self.position.x, y, gutter_width, height, style.line_highlight
+      )
+    end
+  end)
 end
 
 
@@ -7998,13 +8014,9 @@ function DocView:draw_line_body(line, x, y)
     perf_scope_end(body_phase_scope)
     body_phase_scope = perf_scope_begin("backgrounds_and_selections")
     draw_decoration_line_backgrounds(self, line, x, y)
-    draw_render_line_under_selection_backgrounds(
-      self, self:get_line_render(line), x, y, line
-    )
     local highlight_rows
     local hcl = config.highlight_current_line
-    if not self.__current_line_highlights_drawn_before_content
-    and hcl ~= false and core.active_view == self then
+    if hcl ~= false then
       for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
         if line1 == line and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
           local line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col1)
@@ -8030,6 +8042,9 @@ function DocView:draw_line_body(line, x, y)
         end
       end
     end
+    draw_render_line_under_selection_backgrounds(
+      self, self:get_line_render(line), x, y, line
+    )
 
     local search_matches
     local render_line = self:get_line_render(line)
@@ -8109,12 +8124,8 @@ function DocView:draw_line_body(line, x, y)
   end
 
   draw_decoration_line_backgrounds(self, line, x, y)
-  draw_render_line_under_selection_backgrounds(
-    self, self:get_line_render(line), x, y, line
-  )
 
-  if not self.__current_line_highlights_drawn_before_content
-  and self:line_has_current_line_highlight(line) then
+  if self:line_has_current_line_highlight(line) then
     for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
       if line1 == line
       and (config.highlight_current_line ~= "no_selection"
@@ -8129,6 +8140,9 @@ function DocView:draw_line_body(line, x, y)
       end
     end
   end
+  draw_render_line_under_selection_backgrounds(
+    self, self:get_line_render(line), x, y, line
+  )
 
   -- draw selection if it overlaps this line
   local lh = self:get_position_visual_row_height(line, 1)
@@ -8384,8 +8398,7 @@ function DocView:draw_folded()
 
   local minline, maxline = self:get_visible_line_range()
   self:prepare_line_body_draw_cache(minline, maxline)
-  self:draw_current_line_highlights(minline, maxline)
-  self.__current_line_highlights_drawn_before_content = true
+  self:draw_current_line_gutter_highlights(minline, maxline)
 
   local x = self.position.x - self.scroll.x
   local gw, gpad = self:get_gutter_width()
@@ -8437,7 +8450,6 @@ function DocView:draw_folded()
   self:draw_overlay()
   core.pop_clip_rect()
 
-  self.__current_line_highlights_drawn_before_content = nil
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
   self.__line_body_search_match_cache = nil
@@ -8489,8 +8501,7 @@ function DocView:draw_wrapped()
 
   phase_scope = perf_scope_begin("prepare")
   self:prepare_line_body_draw_cache(first_line, last_line)
-  self:draw_current_line_highlights(first_line, last_line)
-  self.__current_line_highlights_drawn_before_content = true
+  self:draw_current_line_gutter_highlights(first_line, last_line)
   perf_scope_end(phase_scope)
 
   phase_scope = perf_scope_begin("gutters")
@@ -8518,7 +8529,6 @@ function DocView:draw_wrapped()
   perf_scope_end(phase_scope)
   core.pop_clip_rect()
 
-  self.__current_line_highlights_drawn_before_content = nil
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
   self.__line_body_search_match_cache = nil
@@ -8591,8 +8601,7 @@ local function draw_docview(self)
   local stats = core.docview_frame_stats
   if stats then stats.visible_lines = stats.visible_lines + math.max(0, maxline - minline + 1) end
   self:prepare_line_body_draw_cache(minline, maxline)
-  self:draw_current_line_highlights(minline, maxline)
-  self.__current_line_highlights_drawn_before_content = true
+  self:draw_current_line_gutter_highlights(minline, maxline)
 
   local x, y = self:get_line_screen_position(minline)
   local gw, gpad = self:get_gutter_width()
@@ -8616,7 +8625,6 @@ local function draw_docview(self)
   if stats then stats.body_ms = stats.body_ms + (system.get_time() - body_start) * 1000 end
   self:draw_overlay()
   core.pop_clip_rect()
-  self.__current_line_highlights_drawn_before_content = nil
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
   self.__line_gutter_selection_cache = nil
