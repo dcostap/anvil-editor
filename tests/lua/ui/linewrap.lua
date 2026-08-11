@@ -268,7 +268,7 @@ test.describe("line wrapping current line highlight", function()
     local cfg = config.plugins.linewrapping
     cfg.indent = true
     cfg.wrapping_indent = 6
-    cfg.continuation_indicator = "→"
+    cfg.continuation_indicator = "↪"
     cfg.width_override = view:get_font():get_width(string.rep("x", 40))
     LineWrapping.update_docview_breaks(view)
 
@@ -280,7 +280,9 @@ test.describe("line wrapping current line highlight", function()
       local stub_draw_text = renderer.draw_text
       renderer.draw_text = function(font, text, x, y, color, opts)
         if text == cfg.continuation_indicator then
-          indicators[#indicators + 1] = { x = x, y = y, color = color }
+          indicators[#indicators + 1] = {
+            x = x, y = y, color = color, font = font,
+          }
         end
         return x + font:get_width(text, opts)
       end
@@ -290,6 +292,7 @@ test.describe("line wrapping current line highlight", function()
     end)
 
     test.equal(#indicators, row_count - 1)
+    test.equal(indicators[1].font, style.soft_wrap_indicator_font)
     for index = 2, #indicators do
       test.ok(indicators[index].y > indicators[index - 1].y)
     end

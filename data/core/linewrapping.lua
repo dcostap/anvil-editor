@@ -209,7 +209,7 @@ config.plugins.linewrapping.config_spec = {
     description = "Prefix drawn in the visual indent before each soft-wrapped continuation row.",
     path = "continuation_indicator",
     type = "string",
-    default = "→"
+    default = "↪"
   },
   {
     label = "Enable by Default",

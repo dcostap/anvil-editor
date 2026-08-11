@@ -169,7 +169,7 @@ plugin_defaults("linewrapping", {
   guide_color = nil,
   indent = true,
   wrapping_indent = 0,
-  continuation_indicator = "→",
+  continuation_indicator = "↪",
   enable_by_default = true,
   require_tokenization = false,
 })
@@ -272,6 +272,9 @@ style.code_font = load_text_font(code_font_path)
 -- Reusable proportional typography roles. Live Preview prose and compact
 -- navigation surfaces use these roles; source and diff text retain code_font.
 style.prose_font = load_text_font(prose_font_path)
+-- Keep the wrap arrow on Inter's monochrome text glyph instead of allowing
+-- the code-font fallback group to select Segoe UI Emoji's boxed arrow.
+style.soft_wrap_indicator_font = style.prose_font
 style.prose_strong_font = load_text_font(
   prose_strong_font_path, nil, { ligatures = true, bold = true }
 )

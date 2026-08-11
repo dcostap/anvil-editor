@@ -951,6 +951,7 @@ Second line
     test.equal(#indicators, #text_rows - 1)
     for index, indicator in ipairs(indicators) do
       test.equal(indicator.text, config.plugins.linewrapping.continuation_indicator)
+      test.equal(indicator.font, style.soft_wrap_indicator_font)
       test.ok(indicator.x < text_rows[index + 1].x)
       test.equal(indicator.y, text_rows[index + 1].y)
     end

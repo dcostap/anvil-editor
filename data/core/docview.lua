@@ -6550,7 +6550,7 @@ function DocView:draw_soft_wrap_continuation_indicators(line, x, y)
   if visible_idx2 < visible_idx1 then return end
 
   local render_line = self:get_line_render(line)
-  local font = self:get_font()
+  local font = style.soft_wrap_indicator_font
   local gap = font:get_width(" ")
   local indicator_width = font:get_width(indicator)
   local begin_width = self.wrapped_line_offsets[line] or 0

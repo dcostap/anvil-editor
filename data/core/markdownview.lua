@@ -1752,7 +1752,7 @@ local function layout_text_lines(self, segments, fontset, base_color, accent_col
   local indicator_text = config.plugins.linewrapping.continuation_indicator
   local indicator
   if type(indicator_text) == "string" and indicator_text ~= "" then
-    local font = fontset.normal
+    local font = style.soft_wrap_indicator_font
     indicator = {
       text = indicator_text,
       font = font,
