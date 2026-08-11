@@ -169,7 +169,7 @@ plugin_defaults("linewrapping", {
   guide_color = nil,
   indent = true,
   wrapping_indent = 0,
-  continuation_indicator = "↪",
+  continuation_indicator = "→",
   enable_by_default = true,
   require_tokenization = false,
 })

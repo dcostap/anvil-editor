@@ -268,7 +268,7 @@ test.describe("line wrapping current line highlight", function()
     local cfg = config.plugins.linewrapping
     cfg.indent = true
     cfg.wrapping_indent = 6
-    cfg.continuation_indicator = "↪"
+    cfg.continuation_indicator = "→"
     cfg.width_override = view:get_font():get_width(string.rep("x", 40))
     LineWrapping.update_docview_breaks(view)
 
