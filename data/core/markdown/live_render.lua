@@ -3424,6 +3424,16 @@ local function prose_render_line(view, line_text, render_line)
       source_col1 = 1, source_col2 = 1, text = "", font = font,
     }
   end
+  if not render_line.continuation_indent_font then
+    for _, fragment in ipairs(fragments) do
+      if not fragment.hidden and fragment.font then
+        render_line.continuation_indent_font = fragment.font
+        break
+      end
+    end
+    render_line.continuation_indent_font = render_line.continuation_indent_font
+      or font
+  end
   render_line.source_text = line_text
   render_line.fragments = fragments
   local callout = render_line.callout_record

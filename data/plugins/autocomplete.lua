@@ -7,7 +7,7 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
-local MarkdownView = require "core.markdownview"
+local View = require "core.view"
 local RootPanel = require "core.rootpanel"
 local project_paths = require "core.project_paths"
 local poi = require "core.poi"
@@ -942,6 +942,112 @@ local desc_font_size = config.plugins.autocomplete.desc_font_size
 local previous_scale = SCALE
 local desc_font = style.code_font:copy(desc_font_size * SCALE)
 
+local DescriptionView = View:extend()
+
+function DescriptionView:new(text, font)
+  DescriptionView.super.new(self)
+  self.text = tostring(text or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+  self.font = font
+  self.scrollable = true
+  self.layout = nil
+end
+
+local function split_description_word(font, word, max_width)
+  if font:get_width(word) <= max_width then return { word } end
+  local chunks, chunk = {}, ""
+  for char in common.utf8_chars(word) do
+    local candidate = chunk .. char
+    if chunk ~= "" and font:get_width(candidate) > max_width then
+      chunks[#chunks + 1] = chunk
+      chunk = char
+    else
+      chunk = candidate
+    end
+  end
+  if chunk ~= "" then chunks[#chunks + 1] = chunk end
+  return chunks
+end
+
+function DescriptionView:get_layout(width)
+  width = math.max(1, width or self.size.x)
+  local scrollbar_width = style.expanded_scrollbar_size or 0
+  local text_width = math.max(1, width - style.padding.x * 2 - scrollbar_width)
+  if self.layout and self.layout.width == width then return self.layout end
+
+  local lines, used_width = {}, 0
+  local function append(text)
+    lines[#lines + 1] = text
+    used_width = math.max(used_width, self.font:get_width(text))
+  end
+  for source_line in (self.text .. "\n"):gmatch("(.-)\n") do
+    local current = ""
+    local had_word = false
+    for word in source_line:gmatch("%S+") do
+      had_word = true
+      for _, chunk in ipairs(split_description_word(self.font, word, text_width)) do
+        local candidate = current == "" and chunk or (current .. " " .. chunk)
+        if current ~= "" and self.font:get_width(candidate) > text_width then
+          append(current)
+          current = chunk
+        else
+          current = candidate
+        end
+      end
+    end
+    if had_word then append(current) else append("") end
+  end
+
+  local font_height = self.font:get_height()
+  local line_height = math.max(
+    common.round(font_height * config.line_height), font_height
+  )
+  self.layout = {
+    width = width,
+    lines = lines,
+    line_height = line_height,
+    content_width = used_width + style.padding.x * 2,
+    height = #lines * line_height + style.padding.y * 2,
+  }
+  return self.layout
+end
+
+function DescriptionView:get_rendered_size(width)
+  local layout = self:get_layout(width)
+  return math.min(width, layout.content_width), layout.height
+end
+
+function DescriptionView:get_scrollable_size()
+  return self:get_layout(self.size.x).height
+end
+
+function DescriptionView:get_h_scrollable_size()
+  return self.size.x
+end
+
+function DescriptionView:draw_at(x, y, width, height, background, show_scrollbars)
+  self.position.x, self.position.y = x, y
+  self.size.x, self.size.y = width, height
+  local layout = self:get_layout(width)
+  self:clamp_scroll_position()
+  self.scroll.y = common.clamp(
+    self.scroll.y, 0, math.max(0, layout.height - height)
+  )
+  self:sync_scrollbar_geometry()
+  if background then renderer.draw_rect(x, y, width, height, background) end
+
+  core.push_clip_rect(x, y, width, height)
+  local text_x = x + style.padding.x
+  local text_y = y + style.padding.y - self.scroll.y
+  for index, line in ipairs(layout.lines) do
+    local line_y = text_y + (index - 1) * layout.line_height
+    if line_y + layout.line_height >= y and line_y <= y + height then
+      renderer.draw_text(self.font, line, text_x, line_y, style.text)
+    end
+  end
+  core.pop_clip_rect()
+  if show_scrollbars and layout.height > height then self:draw_scrollbar() end
+end
+
 
 local function reset_suggestions(skip_close)
   suggestions_offset = 1
@@ -1480,11 +1586,7 @@ local function get_description_view(text)
     or desc_view_text ~= text
     or desc_view_font ~= desc_font
   then
-    desc_view = MarkdownView({
-      text = text,
-      title = "Completion Documentation",
-      font = desc_font
-    })
+    desc_view = DescriptionView(text, desc_font)
     desc_view_text = text
     desc_view_font = desc_font
   end

@@ -1173,6 +1173,38 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("reserves the indicator lane for ordinary prose soft wraps", function()
+    local wrapping = config.plugins.linewrapping
+    local old = {
+      indent = wrapping.indent,
+      wrapping_indent = wrapping.wrapping_indent,
+      width_override = wrapping.width_override,
+    }
+    local view = make_view(
+      string.rep("ordinary rendered Markdown prose ", 16),
+      "wrapped-prose-indent.md"
+    )
+    wrapping.indent = true
+    wrapping.wrapping_indent = 6
+    wrapping.width_override = view:get_font():get_width(string.rep("x", 36))
+    view:set_wrapping_enabled(true)
+
+    local ok, err = pcall(function()
+      refresh(view)
+      local _, _, rows = linewrapping.get_line_idx_col_count(view, 1)
+      test.ok(rows > 1, "expected a wrapped Markdown prose fixture")
+      local offset = view.wrapped_line_offsets[1] or 0
+      local indicator_width = style.soft_wrap_indicator_font:get_width(
+        wrapping.continuation_indicator .. " "
+      )
+      test.ok(offset >= indicator_width, "expected the soft-wrap indicator lane")
+    end)
+    wrapping.indent = old.indent
+    wrapping.wrapping_indent = old.wrapping_indent
+    wrapping.width_override = old.width_override
+    if not ok then error(err, 0) end
+  end)
+
   test.it("captures visible presentation before a structural edit when render caches are cold", function()
     local lines = { "# Heading", "", "Before **bold** after", "", "## Following" }
     for i = 1, 80 do lines[#lines + 1] = "plain line " .. i end

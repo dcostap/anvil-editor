@@ -25,7 +25,7 @@ Run a specific Lua file or directory by passing a path through `--test-args`:
 
 ```sh
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/tokenizer.lua
-meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdownview.lua
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_live_editor.lua
 ```
 
 ### Build

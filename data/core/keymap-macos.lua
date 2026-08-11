@@ -5,7 +5,6 @@ local function keymap_macos(keymap)
     ["cmd+,"] = "core:open-user-module",
     ["cmd+shift+c"] = "core:change-project-folder",
     ["cmd+shift+o"] = "core:open-project-folder",
-    ["cmd+option+m"] = "markdown-view:preview",
     ["cmd+option+r"] = "core:restart",
     ["cmd+ctrl+return"] = "core:toggle-fullscreen",
 
@@ -46,7 +45,7 @@ local function keymap_macos(keymap)
     ["cmd+z"] = "doc:undo",
     ["cmd+y"] = "doc:redo",
     ["cmd+x"] = "doc:cut",
-    ["cmd+c"] = { "markdown-view:copy", "doc:copy" },
+    ["cmd+c"] = "doc:copy",
     ["cmd+v"] = "doc:paste",
     ["ctrl+insert"] = "doc:copy",
     ["shift+insert"] = "doc:paste",

@@ -290,14 +290,14 @@ To run a specific Lua file or subdirectory without registering another Meson tar
 
 ```sh
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args tests/lua/runtime/tokenizer.lua
-meson test -C build-windows-x86_64 anvil:lua-ui --test-args tests/lua/ui/markdownview.lua
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args tests/lua/ui/markdown_live_editor.lua
 ```
 
 Short paths under `tests/lua` are also accepted:
 
 ```sh
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/tokenizer.lua
-meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdownview.lua
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_live_editor.lua
 ```
 
 Use `--no-rebuild` only when the build artifacts are known to be current.

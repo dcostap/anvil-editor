@@ -56,12 +56,12 @@ Use Meson's `--test-args` to pass a specific Lua test path to the relevant Lua s
 
 ```sh
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args tests/lua/runtime/tokenizer.lua
-meson test -C build-windows-x86_64 anvil:lua-ui --test-args tests/lua/ui/markdownview.lua
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args tests/lua/ui/markdown_live_editor.lua
 ```
 
 Short paths under `tests/lua` are also accepted:
 
 ```sh
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/tokenizer.lua
-meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdownview.lua
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_live_editor.lua
 ```

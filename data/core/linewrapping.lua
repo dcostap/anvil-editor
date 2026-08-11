@@ -477,8 +477,11 @@ local function compute_rendered_line_breaks(
   local text = docview.doc:get_utf8_line(line)
   local visible_end = #text - (text:sub(-1) == "\n" and 1 or 0)
   local begin_width = initial_begin_width
-  if start_col > 1 and begin_width == nil then
-    begin_width = continuation_indent_width(default_font, text, measurement)
+  local continuation_font = render_line.continuation_indent_font or default_font
+  if begin_width == nil then
+    begin_width = continuation_indent_width(
+      continuation_font, text, measurement
+    )
   end
   begin_width = clamp_continuation_indent_width(begin_width or 0, width)
   local splits = { start_col }
@@ -488,7 +491,6 @@ local function compute_rendered_line_breaks(
   local last_space_next_x
   local line_x_offset = render_line.x_offset or 0
   if render_line.continuation_indent_col then
-    local continuation_font = render_line.continuation_indent_font or default_font
     begin_width = docview:get_line_render_col_x_offset(
       render_line, render_line.continuation_indent_col
     ) - line_x_offset
@@ -565,8 +567,6 @@ function LineWrapping.compute_line_breaks_from_col(
   if start_col > 1 and begin_width == nil then
     begin_width = line_continuation_indent_width(doc, default_font, line, measurement)
   end
-  begin_width = begin_width or 0
-  begin_width = clamp_continuation_indent_width(begin_width, width)
   local xoffset, i, last_space, last_width = start_col > 1 and begin_width or 0, start_col, nil, 0
   local splits = { start_col }
   local line_text = doc:get_utf8_line(line)
@@ -633,6 +633,7 @@ function LineWrapping.compute_line_breaks_from_col(
       return finish(rendered_splits, rendered_begin_width, rendered_branch)
     end
   end
+  begin_width = clamp_continuation_indent_width(begin_width or 0, width)
   local default_ascii_cell_width = measurement_cell_width(measurement, default_font)
   local note_branch
   if perf_active then
