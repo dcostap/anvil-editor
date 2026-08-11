@@ -1713,7 +1713,7 @@ local function tokenize_segments(self, segments, fontset, base_color, accent_col
   return tokens
 end
 
-local function append_line(lines, line, max_width)
+local function append_line(lines, line, max_width, soft_wrap)
   while line.fragments[#line.fragments] and line.fragments[#line.fragments].is_space do
     line.width = line.width - line.fragments[#line.fragments].width
     table.remove(line.fragments)
@@ -1728,15 +1728,19 @@ local function append_line(lines, line, max_width)
     indent = line.indent,
     width = math.max(line.width - line.indent, 0),
     height = height,
+    wrap_indicator = line.wrap_indicator,
     fragments = line.fragments
   }
 
   return {
-    indent = line.next_indent,
-    width = line.next_indent,
+    indent = soft_wrap and line.next_soft_indent or line.next_indent,
+    width = soft_wrap and line.next_soft_indent or line.next_indent,
     font_height = line.default_font_height,
     default_font_height = line.default_font_height,
     next_indent = line.next_indent,
+    next_soft_indent = line.next_soft_indent,
+    wrap_indicator = soft_wrap and line.next_wrap_indicator or nil,
+    next_wrap_indicator = line.next_wrap_indicator,
     fragments = {}
   }, math.max(max_width, line.width)
 end
@@ -1745,18 +1749,32 @@ local function layout_text_lines(self, segments, fontset, base_color, accent_col
   local tokens = tokenize_segments(self, segments, fontset, base_color, accent_color)
   local lines = {}
   local used_width = 0
+  local indicator_text = config.plugins.linewrapping.continuation_indicator
+  local indicator
+  if type(indicator_text) == "string" and indicator_text ~= "" then
+    local font = fontset.normal
+    indicator = {
+      text = indicator_text,
+      font = font,
+      color = style.soft_wrap_indicator,
+      width = font:get_width(indicator_text),
+      lane_width = font:get_width(indicator_text .. " "),
+    }
+  end
   local line = {
     indent = first_indent,
     width = first_indent,
     font_height = fontset.normal:get_height(),
     default_font_height = fontset.normal:get_height(),
     next_indent = next_indent,
+    next_soft_indent = next_indent + (indicator and indicator.lane_width or 0),
+    next_wrap_indicator = indicator,
     fragments = {}
   }
 
   for _, token in ipairs(tokens) do
     if token.type == "linebreak" then
-      line, used_width = append_line(lines, line, used_width)
+      line, used_width = append_line(lines, line, used_width, false)
       goto continue
     elseif token.type ~= "image" then
       token.width = token.font:get_width(token.text)
@@ -1766,9 +1784,9 @@ local function layout_text_lines(self, segments, fontset, base_color, accent_col
     end
 
     if not token.is_space and #line.fragments > 0 and line.width + token.width > max_width then
-      line, used_width = append_line(lines, line, used_width)
+      line, used_width = append_line(lines, line, used_width, true)
     elseif token.is_space and line.width + token.width > max_width then
-      line, used_width = append_line(lines, line, used_width)
+      line, used_width = append_line(lines, line, used_width, true)
       goto continue
     end
 
@@ -1784,7 +1802,7 @@ local function layout_text_lines(self, segments, fontset, base_color, accent_col
   end
 
   if #line.fragments > 0 or #lines == 0 then
-    line, used_width = append_line(lines, line, used_width)
+    line, used_width = append_line(lines, line, used_width, false)
   end
 
   return lines, math.max(used_width, next_indent)
@@ -1805,6 +1823,18 @@ local function add_text_line(commands, x, y, line)
       }
     end
     offset_x = offset_x + fragment.width
+  end
+  if line.wrap_indicator then
+    commands[#commands + 1] = {
+      type = "wrap_indicator",
+      x = x + line.indent - line.wrap_indicator.lane_width,
+      y = y,
+      height = line.height,
+      text = line.wrap_indicator.text,
+      font = line.wrap_indicator.font,
+      color = line.wrap_indicator.color,
+      width = line.wrap_indicator.width,
+    }
   end
   commands[#commands + 1] = {
     type = "text",
@@ -2682,6 +2712,14 @@ local function draw_layout_commands(commands, start_x, start_y, clip_x, clip_y, 
         end
       elseif command.type == "image" then
         renderer.draw_canvas(command.image, x, y)
+      elseif command.type == "wrap_indicator" then
+        renderer.draw_text(
+          command.font,
+          command.text,
+          x,
+          y + (command.height - command.font:get_height()) / 2,
+          resolve_color(command.color)
+        )
       elseif command.type == "text" then
         local cursor_x = x
         local tab_offset = 0
@@ -3387,7 +3425,9 @@ end
 ---@return table
 function MarkdownView:ensure_layout()
   local width = math.max(self.size.x - style.padding.x * 2, 1)
-  if self.layout and self.layout.width == width then
+  local continuation_indicator = config.plugins.linewrapping.continuation_indicator
+  if self.layout and self.layout.width == width
+  and self.layout.continuation_indicator == continuation_indicator then
     return self.layout
   end
 
@@ -3402,7 +3442,8 @@ function MarkdownView:ensure_layout()
     height = y > 0 and (y - BLOCK_SPACING) or 0,
     content_width = content_width,
     commands = commands,
-    anchors = anchors
+    anchors = anchors,
+    continuation_indicator = continuation_indicator,
   }
 
   return self.layout
@@ -3417,7 +3458,9 @@ function MarkdownView:ensure_partial_layout()
 
   local layout = self:ensure_layout()
   local width = layout.width
-  if self.partial_layout and self.partial_layout.width == width then
+  local continuation_indicator = config.plugins.linewrapping.continuation_indicator
+  if self.partial_layout and self.partial_layout.width == width
+  and self.partial_layout.continuation_indicator == continuation_indicator then
     return self.partial_layout
   end
 
@@ -3444,7 +3487,8 @@ function MarkdownView:ensure_partial_layout()
     width = width,
     height = next_y > 0 and (next_y - BLOCK_SPACING) or layout.height,
     content_width = content_width,
-    commands = commands
+    commands = commands,
+    continuation_indicator = continuation_indicator,
   }
 
   return self.partial_layout

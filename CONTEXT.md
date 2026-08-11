@@ -192,6 +192,10 @@ _Avoid_: Line highlighting, active line highlight
 A visual row produced when one Document line wraps; it is not a separate Document line.
 _Avoid_: Fake line, wrapped file line
 
+**Soft-Wrap Indicator**:
+A visual prefix marking a Wrapped Visual Row that continues the same Document line.
+_Avoid_: Continuation arrow, wrapped-line marker
+
 **Selection Mirror**:
 A compatibility copy of one Document View's Selection State exposed through the Document for older command and plugin code.
 _Avoid_: Source selection, canonical selection

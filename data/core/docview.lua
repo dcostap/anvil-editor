@@ -6529,6 +6529,56 @@ local function draw_render_widget(view, fragment, x, y, row_height, context)
   return true
 end
 
+---Draw a visual prefix in the indent of each visible soft-wrap continuation.
+---@param line integer Logical document line
+---@param x number Screen x coordinate of the line body
+---@param y number Screen y coordinate of the first visual row
+function DocView:draw_soft_wrap_continuation_indicators(line, x, y)
+  if not self.wrapped_settings then return end
+  local indicator = config.plugins.linewrapping.continuation_indicator
+  if type(indicator) ~= "string" or indicator == "" then return end
+
+  local first_idx, _, count = linewrapping.get_line_idx_col_count(self, line)
+  if count <= 1 then return end
+  local visible_idx1 = math.max(
+    first_idx + 1, self.__wrapped_draw_first_idx or first_idx + 1
+  )
+  local visible_idx2 = math.min(
+    first_idx + count - 1,
+    self.__wrapped_draw_last_idx or first_idx + count - 1
+  )
+  if visible_idx2 < visible_idx1 then return end
+
+  local render_line = self:get_line_render(line)
+  local font = self:get_font()
+  local gap = font:get_width(" ")
+  local indicator_width = font:get_width(indicator)
+  local begin_width = self.wrapped_line_offsets[line] or 0
+  if begin_width < indicator_width + gap then return end
+  local indicator_x = x + (render_line and render_line.x_offset or 0)
+    + begin_width - indicator_width - gap
+  local color = style.soft_wrap_indicator
+
+  for idx = visible_idx1, visible_idx2 do
+    local row_y, row_height = wrapped_row_geometry(self, y, first_idx, idx)
+    local content_y, content_height = row_y, row_height
+    if render_line then
+      local offset
+      offset, content_height = line_render_content_geometry(
+        render_line, row_height, false
+      )
+      content_y = row_y + offset
+    end
+    renderer.draw_text(
+      font,
+      indicator,
+      indicator_x,
+      content_y + math.max(0, (content_height - font:get_height()) / 2),
+      color
+    )
+  end
+end
+
 ---Draw the text content of a line with syntax highlighting.
 ---@param line integer Line number
 ---@param x number Screen x coordinate
@@ -8028,6 +8078,7 @@ function DocView:draw_line_body(line, x, y)
     perf_scope_end(body_phase_scope)
 
     body_phase_scope = perf_scope_begin("text")
+    self:draw_soft_wrap_continuation_indicators(line, x, y)
     local line_height = self:draw_line_text(line, x, y)
     perf_scope_end(body_phase_scope)
 

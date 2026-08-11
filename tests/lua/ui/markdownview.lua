@@ -824,14 +824,18 @@ Second line
 
     local layout = view:ensure_layout()
     local text_commands = {}
+    local wrap_indicators = 0
     for _, command in ipairs(layout.commands) do
       if command.type == "text" then
         text_commands[#text_commands + 1] = command
+      elseif command.type == "wrap_indicator" then
+        wrap_indicators = wrap_indicators + 1
       end
     end
 
     test.ok(#text_commands >= 2)
     test.ok(text_commands[2].y > text_commands[1].y)
+    test.equal(wrap_indicators, 0)
   end)
 
   test.test("renders inline images inside paragraphs", function(context)
@@ -926,6 +930,30 @@ Second line
     test.same(code_fragments, {
       'cmake -G "Visual Studio 12 2013" -DCMAKE_BUILD_TYPE=Release ..'
     })
+  end)
+
+  test.test("prefixes wrapped paragraph continuations with the soft-wrap indicator", function()
+    local view = MarkdownView(string.rep("wrapped paragraph words ", 12))
+    view.size.x = 240
+    view.size.y = 240
+
+    local indicators = {}
+    local text_rows = {}
+    for _, layout_command in ipairs(view:ensure_layout().commands) do
+      if layout_command.type == "wrap_indicator" then
+        indicators[#indicators + 1] = layout_command
+      elseif layout_command.type == "text" then
+        text_rows[#text_rows + 1] = layout_command
+      end
+    end
+
+    test.ok(#text_rows > 1, "expected a wrapped paragraph fixture")
+    test.equal(#indicators, #text_rows - 1)
+    for index, indicator in ipairs(indicators) do
+      test.equal(indicator.text, config.plugins.linewrapping.continuation_indicator)
+      test.ok(indicator.x < text_rows[index + 1].x)
+      test.equal(indicator.y, text_rows[index + 1].y)
+    end
   end)
 
   test.test("resolves inline links split across soft line breaks", function()

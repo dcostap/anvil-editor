@@ -45,6 +45,7 @@ local function configure_wrapping_for_test(context, view)
       width_override = cfg.width_override,
       indent = cfg.indent,
       wrapping_indent = cfg.wrapping_indent,
+      continuation_indicator = cfg.continuation_indicator,
       guide = cfg.guide,
       require_tokenization = cfg.require_tokenization,
     }
@@ -88,6 +89,7 @@ local function restore_config(context)
     cfg.width_override = context.linewrapping_config.width_override
     cfg.indent = context.linewrapping_config.indent
     cfg.wrapping_indent = context.linewrapping_config.wrapping_indent
+    cfg.continuation_indicator = context.linewrapping_config.continuation_indicator
     cfg.guide = context.linewrapping_config.guide
     cfg.require_tokenization = context.linewrapping_config.require_tokenization
   end
@@ -258,6 +260,39 @@ test.describe("line wrapping current line highlight", function()
 
     test.equal(#highlights, 1)
     test.equal(highlights[1].y, expected_y)
+  end)
+
+  test.it("prefixes every soft-wrapped continuation row with an indicator", function(context)
+    local view = open_editor(context, string.rep("wrapped ", 20) .. "\n")
+    configure_wrapping_for_test(context, view)
+    local cfg = config.plugins.linewrapping
+    cfg.indent = true
+    cfg.wrapping_indent = 6
+    cfg.continuation_indicator = "↪"
+    cfg.width_override = view:get_font():get_width(string.rep("x", 40))
+    LineWrapping.update_docview_breaks(view)
+
+    local _, _, row_count = LineWrapping.get_line_idx_col_count(view, 1)
+    test.ok(row_count > 1, "expected a wrapped fixture")
+
+    local indicators = {}
+    with_stubbed_renderer(function()
+      local stub_draw_text = renderer.draw_text
+      renderer.draw_text = function(font, text, x, y, color, opts)
+        if text == cfg.continuation_indicator then
+          indicators[#indicators + 1] = { x = x, y = y, color = color }
+        end
+        return x + font:get_width(text, opts)
+      end
+      local x, y = view:get_line_screen_position(1)
+      view:draw_line_body(1, x, y)
+      renderer.draw_text = stub_draw_text
+    end)
+
+    test.equal(#indicators, row_count - 1)
+    for index = 2, #indicators do
+      test.ok(indicators[index].y > indicators[index - 1].y)
+    end
   end)
 
   test.it("keeps current-line highlight but hides caret when the DocView is inactive", function(context)

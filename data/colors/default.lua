@@ -202,6 +202,7 @@ style.bracketmatch_block_char_color = style.background
 style.bracketmatch_block_color = style.line_number2
 style.bracketmatch_frame_color = c("9da1a7")
 style.line_wrapping_guide = { common.color "rgba(255, 255, 255, 0.15)" }
+style.soft_wrap_indicator = style.dim
 style.guide = style.line_wrapping_guide
 style.sticky_scroll_shadow = { common.color "rgba(0, 0, 0, 0.10)" }
 style.sticky_scroll_shadow_height = 10 * SCALE

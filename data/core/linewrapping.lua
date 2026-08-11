@@ -167,6 +167,7 @@ end
 ---@field guide_color? renderer.color
 ---@field indent boolean
 ---@field wrapping_indent integer | "none" | "indent" | "deepIndent"
+---@field continuation_indicator string
 ---@field enable_by_default boolean
 ---@field require_tokenization boolean
 config.plugins.linewrapping.config_spec = {
@@ -202,6 +203,13 @@ config.plugins.linewrapping.config_spec = {
     path = "wrapping_indent",
     type = "number",
     default = 0
+  },
+  {
+    label = "Continuation Indicator",
+    description = "Prefix drawn in the visual indent before each soft-wrapped continuation row.",
+    path = "continuation_indicator",
+    type = "string",
+    default = "↪"
   },
   {
     label = "Enable by Default",
