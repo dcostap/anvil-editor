@@ -6,6 +6,7 @@ local DocView = require "core.docview"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local StatusBar = require "core.statusbar"
+local config = require "core.config"
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
@@ -83,5 +84,31 @@ test.describe("status bar document file item", function()
 
     test.equal(status_file_text(external_file), "Java Sources" .. PATHSEP .. "java" .. PATHSEP .. "lang" .. PATHSEP .. "String.java")
     test.equal(status_file_text(vendored_file), "library1" .. PATHSEP .. "foo" .. PATHSEP .. "Baz.java")
+  end)
+end)
+
+test.describe("status bar caret position item", function()
+  test.before_each(function(context)
+    context.original_active_view = core.active_view
+    context.original_caret_column_mode = config.caret_column_mode
+    config.caret_column_mode = "char"
+  end)
+
+  test.after_each(function(context)
+    core.active_view = context.original_active_view
+    config.caret_column_mode = context.original_caret_column_mode
+  end)
+
+  test.it("renders safely when a restored caret is past the current line end", function()
+    local doc = Doc(nil, nil, true)
+    doc:set_selection_list({ 1, 20, 1, 20 }, 1, {
+      sanitized = true,
+      take_ownership = true,
+    })
+    core.active_view = DocView(doc)
+
+    local item = StatusBar():get_item("doc:position")
+    local width = item.on_draw(0, 0, 20, false, true)
+    test.ok(width > 0)
   end)
 end)

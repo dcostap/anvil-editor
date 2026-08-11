@@ -370,18 +370,20 @@ function StatusBar:register_docview_items()
     get_item = {},
     on_draw = function(x, y, h, _, calc_only)
       local dv = core.active_view
-      local line, col = dv.doc:get_selection()
+      local line, col = dv.doc:sanitize_position(dv.doc:get_selection())
+      local line_text = dv.doc:get_utf8_line(line)
+      local byte_col = col
       if config.caret_column_mode == "char" then
-        col = dv.doc.lines[line]:ulen(1, col, true)
+        col = line_text:ulen(1, byte_col, true)
       end
       local tab_type, indent_size = dv.doc:get_indent_info()
       -- Calculating tabs when the doc is using the "hard" indent type.
       local ntabs = 0
       if tab_type == "hard" then
         local last_idx = 0
-        while last_idx < col do
-          local s, e = string.find(dv.doc.lines[line], "\t", last_idx, true)
-          if s and s < col then
+        while last_idx < byte_col do
+          local s, e = string.find(line_text, "\t", last_idx, true)
+          if s and s < byte_col then
             ntabs = ntabs + 1
             last_idx = e + 1
           else
