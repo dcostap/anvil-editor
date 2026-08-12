@@ -14,6 +14,7 @@ local function fake_native()
       options = options,
       writes = {},
       keys = {},
+      pastes = {},
       resizes = {},
       closed = false,
     }
@@ -29,7 +30,14 @@ local function fake_native()
       }
     end
     function session:write(text) self.writes[#self.writes + 1] = text; return true end
-    function session:key(key, mods) self.keys[#self.keys + 1] = { key, mods }; return true end
+    function session:key(key, mods, action, event)
+      self.keys[#self.keys + 1] = { key, mods, action, event }
+      return true
+    end
+    function session:paste(text, allow_unsafe)
+      self.pastes[#self.pastes + 1] = { text, allow_unsafe }
+      return true
+    end
     function session:resize(cols, rows, cell_width, cell_height)
       self.resizes[#self.resizes + 1] = { cols, rows, cell_width, cell_height }
       return true
@@ -74,10 +82,15 @@ test.describe("Terminal View", function()
     local session = context.sessions[1]
 
     core.on_event("textinput", "echo hello")
-    core.on_event("keypressed", "f13")
+    local raw = { scancode = 104, keycode = 0, modifiers = 0, ["repeat"] = true }
+    core.on_event("keypressed", "f13", raw)
+    core.on_event("keyreleased", "f13", raw)
 
     test.same({ "echo hello" }, session.writes)
     test.equal(session.keys[1][1], "f13")
+    test.equal(session.keys[1][3], "repeat")
+    test.equal(session.keys[1][4], raw)
+    test.equal(session.keys[2][3], "release")
   end)
 
   test.it("resizes the terminal from its visible cell geometry", function(context)
@@ -92,5 +105,16 @@ test.describe("Terminal View", function()
     test.ok(resize[2] > 0)
     test.ok(resize[3] > 0)
     test.ok(resize[4] > 0)
+  end)
+
+  test.it("pastes clipboard text through the terminal encoder", function(context)
+    local previous = system.get_clipboard()
+    system.set_clipboard("terminal paste")
+    local view = terminal.open()
+
+    test.ok(command.perform("terminal:paste"))
+    test.same({ "terminal paste", false }, context.sessions[1].pastes[1])
+
+    system.set_clipboard(previous or "")
   end)
 end)

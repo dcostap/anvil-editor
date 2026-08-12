@@ -171,15 +171,47 @@ function TerminalView:on_text_input(text)
   return self.session:write(text) == true
 end
 
-function TerminalView:on_key_pressed(key)
-  if not self.session or self.running == false then return false end
-  local mods = {
+function TerminalView:paste(text, allow_unsafe)
+  if not self.session or self.running == false or not text or text == "" then return false end
+  local ok, reason = self.session:paste(text, allow_unsafe == true)
+  if ok then return true end
+  if reason ~= "unsafe" then return false end
+
+  core.nag_view:show(
+    "Paste Multiple Lines Into Terminal",
+    "This text contains a newline. It can run one or more commands. Paste it?",
+    {
+      { text = "Paste", default_yes = false },
+      { text = "Cancel", default_no = true },
+    },
+    function(item)
+      if item.text == "Paste" and self.session and self.running ~= false then
+        self.session:paste(text, true)
+      end
+    end
+  )
+  return true
+end
+
+local function key_modifiers(event)
+  if event and event.modifiers then return { raw = event.modifiers } end
+  return {
     shift = keymap.modkeys.shift == true,
     ctrl = keymap.modkeys.ctrl == true,
     alt = keymap.modkeys.alt == true or keymap.modkeys.altgr == true,
     super = keymap.modkeys.super == true,
   }
-  return self.session:key(key, mods) == true
+end
+
+function TerminalView:on_key_pressed(key, event)
+  if not self.session or self.running == false then return false end
+  local action = event and event["repeat"] and "repeat" or "press"
+  return self.session:key(key, key_modifiers(event), action, event) == true
+end
+
+function TerminalView:on_key_released(key, event)
+  if not self.session or self.running == false then return false end
+  return self.session:key(key, key_modifiers(event), "release", event) == true
 end
 
 function TerminalView:on_mouse_pressed(button)
@@ -231,6 +263,19 @@ M.TerminalView = TerminalView
 
 command.add(nil, {
   ["terminal:open"] = function() return M.open() ~= nil end,
+})
+
+command.add(function()
+  local view = core.active_view
+  return view and view.terminal_view == true and view.running ~= false, view
+end, {
+  ["terminal:paste"] = function(view)
+    return view:paste(system.get_clipboard())
+  end,
+})
+
+keymap.add({
+  ["ctrl+shift+v"] = "terminal:paste",
 })
 
 return M

@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_scancode.h>
 #include <ghostty/vt.h>
 
 #include "api.h"
@@ -540,6 +542,50 @@ static int f_terminal_write(lua_State *L) {
   return 1;
 }
 
+static int f_terminal_paste(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  size_t length = 0;
+  const char *text = luaL_checklstring(L, 2, &length);
+  bool allow_unsafe = lua_toboolean(L, 3) != 0;
+  bool safe = ghostty_paste_is_safe(text, length);
+  if (!safe && !allow_unsafe) {
+    lua_pushboolean(L, false);
+    lua_pushliteral(L, "unsafe");
+    return 2;
+  }
+
+  GhosttyTerminalModeConfig mode = {
+    .mode = GHOSTTY_MODE_BRACKETED_PASTE,
+    .value = false,
+  };
+  ghostty_terminal_get(session->terminal, GHOSTTY_TERMINAL_DATA_MODE, &mode);
+
+  size_t capacity = length + 16;
+  char *input = (char *)HeapAlloc(GetProcessHeap(), 0, length ? length : 1);
+  char *encoded = (char *)HeapAlloc(GetProcessHeap(), 0, capacity);
+  if (!input || !encoded) {
+    if (input) HeapFree(GetProcessHeap(), 0, input);
+    if (encoded) HeapFree(GetProcessHeap(), 0, encoded);
+    lua_pushboolean(L, false);
+    lua_pushliteral(L, "out_of_memory");
+    return 2;
+  }
+  if (length) memcpy(input, text, length);
+
+  size_t written = 0;
+  GhosttyResult result = ghostty_paste_encode(
+    input, length, mode.value, encoded, capacity, &written
+  );
+  bool ok = result == GHOSTTY_SUCCESS && write_all(
+    session, (const uint8_t *)encoded, written
+  );
+  HeapFree(GetProcessHeap(), 0, input);
+  HeapFree(GetProcessHeap(), 0, encoded);
+  lua_pushboolean(L, ok);
+  if (!ok) lua_pushliteral(L, "write_failed");
+  return ok ? 1 : 2;
+}
+
 static int f_terminal_resize(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
   uint16_t cols = (uint16_t)luaL_checkinteger(L, 2);
@@ -633,6 +679,78 @@ static GhosttyKey key_from_name(const char *name, uint32_t *codepoint, bool *pri
   return GHOSTTY_KEY_UNIDENTIFIED;
 }
 
+static GhosttyKey key_from_scancode(lua_Integer value) {
+  SDL_Scancode scancode = (SDL_Scancode)value;
+  if (scancode >= SDL_SCANCODE_A && scancode <= SDL_SCANCODE_Z) {
+    return (GhosttyKey)(GHOSTTY_KEY_A + scancode - SDL_SCANCODE_A);
+  }
+  if (scancode >= SDL_SCANCODE_1 && scancode <= SDL_SCANCODE_9) {
+    return (GhosttyKey)(GHOSTTY_KEY_DIGIT_1 + scancode - SDL_SCANCODE_1);
+  }
+  if (scancode == SDL_SCANCODE_0) return GHOSTTY_KEY_DIGIT_0;
+  if (scancode >= SDL_SCANCODE_F1 && scancode <= SDL_SCANCODE_F12) {
+    return (GhosttyKey)(GHOSTTY_KEY_F1 + scancode - SDL_SCANCODE_F1);
+  }
+  if (scancode >= SDL_SCANCODE_F13 && scancode <= SDL_SCANCODE_F24) {
+    return (GhosttyKey)(GHOSTTY_KEY_F13 + scancode - SDL_SCANCODE_F13);
+  }
+
+  struct ScanKey { SDL_Scancode scancode; GhosttyKey key; };
+  static const struct ScanKey keys[] = {
+    { SDL_SCANCODE_RETURN, GHOSTTY_KEY_ENTER },
+    { SDL_SCANCODE_ESCAPE, GHOSTTY_KEY_ESCAPE },
+    { SDL_SCANCODE_BACKSPACE, GHOSTTY_KEY_BACKSPACE },
+    { SDL_SCANCODE_TAB, GHOSTTY_KEY_TAB },
+    { SDL_SCANCODE_SPACE, GHOSTTY_KEY_SPACE },
+    { SDL_SCANCODE_MINUS, GHOSTTY_KEY_MINUS },
+    { SDL_SCANCODE_EQUALS, GHOSTTY_KEY_EQUAL },
+    { SDL_SCANCODE_LEFTBRACKET, GHOSTTY_KEY_BRACKET_LEFT },
+    { SDL_SCANCODE_RIGHTBRACKET, GHOSTTY_KEY_BRACKET_RIGHT },
+    { SDL_SCANCODE_BACKSLASH, GHOSTTY_KEY_BACKSLASH },
+    { SDL_SCANCODE_NONUSHASH, GHOSTTY_KEY_INTL_BACKSLASH },
+    { SDL_SCANCODE_SEMICOLON, GHOSTTY_KEY_SEMICOLON },
+    { SDL_SCANCODE_APOSTROPHE, GHOSTTY_KEY_QUOTE },
+    { SDL_SCANCODE_GRAVE, GHOSTTY_KEY_BACKQUOTE },
+    { SDL_SCANCODE_COMMA, GHOSTTY_KEY_COMMA },
+    { SDL_SCANCODE_PERIOD, GHOSTTY_KEY_PERIOD },
+    { SDL_SCANCODE_SLASH, GHOSTTY_KEY_SLASH },
+    { SDL_SCANCODE_PRINTSCREEN, GHOSTTY_KEY_PRINT_SCREEN },
+    { SDL_SCANCODE_SCROLLLOCK, GHOSTTY_KEY_SCROLL_LOCK },
+    { SDL_SCANCODE_PAUSE, GHOSTTY_KEY_PAUSE },
+    { SDL_SCANCODE_INSERT, GHOSTTY_KEY_INSERT },
+    { SDL_SCANCODE_HOME, GHOSTTY_KEY_HOME },
+    { SDL_SCANCODE_PAGEUP, GHOSTTY_KEY_PAGE_UP },
+    { SDL_SCANCODE_DELETE, GHOSTTY_KEY_DELETE },
+    { SDL_SCANCODE_END, GHOSTTY_KEY_END },
+    { SDL_SCANCODE_PAGEDOWN, GHOSTTY_KEY_PAGE_DOWN },
+    { SDL_SCANCODE_RIGHT, GHOSTTY_KEY_ARROW_RIGHT },
+    { SDL_SCANCODE_LEFT, GHOSTTY_KEY_ARROW_LEFT },
+    { SDL_SCANCODE_DOWN, GHOSTTY_KEY_ARROW_DOWN },
+    { SDL_SCANCODE_UP, GHOSTTY_KEY_ARROW_UP },
+    { SDL_SCANCODE_NUMLOCKCLEAR, GHOSTTY_KEY_NUM_LOCK },
+    { SDL_SCANCODE_KP_DIVIDE, GHOSTTY_KEY_NUMPAD_DIVIDE },
+    { SDL_SCANCODE_KP_MULTIPLY, GHOSTTY_KEY_NUMPAD_MULTIPLY },
+    { SDL_SCANCODE_KP_MINUS, GHOSTTY_KEY_NUMPAD_SUBTRACT },
+    { SDL_SCANCODE_KP_PLUS, GHOSTTY_KEY_NUMPAD_ADD },
+    { SDL_SCANCODE_KP_ENTER, GHOSTTY_KEY_NUMPAD_ENTER },
+    { SDL_SCANCODE_KP_1, GHOSTTY_KEY_NUMPAD_1 },
+    { SDL_SCANCODE_KP_2, GHOSTTY_KEY_NUMPAD_2 },
+    { SDL_SCANCODE_KP_3, GHOSTTY_KEY_NUMPAD_3 },
+    { SDL_SCANCODE_KP_4, GHOSTTY_KEY_NUMPAD_4 },
+    { SDL_SCANCODE_KP_5, GHOSTTY_KEY_NUMPAD_5 },
+    { SDL_SCANCODE_KP_6, GHOSTTY_KEY_NUMPAD_6 },
+    { SDL_SCANCODE_KP_7, GHOSTTY_KEY_NUMPAD_7 },
+    { SDL_SCANCODE_KP_8, GHOSTTY_KEY_NUMPAD_8 },
+    { SDL_SCANCODE_KP_9, GHOSTTY_KEY_NUMPAD_9 },
+    { SDL_SCANCODE_KP_0, GHOSTTY_KEY_NUMPAD_0 },
+    { SDL_SCANCODE_KP_PERIOD, GHOSTTY_KEY_NUMPAD_DECIMAL },
+  };
+  for (size_t index = 0; index < sizeof(keys) / sizeof(keys[0]); index++) {
+    if (keys[index].scancode == scancode) return keys[index].key;
+  }
+  return GHOSTTY_KEY_UNIDENTIFIED;
+}
+
 static bool table_bool(lua_State *L, int index, const char *name) {
   lua_getfield(L, index, name);
   bool value = lua_toboolean(L, -1) != 0;
@@ -650,21 +768,50 @@ static int f_terminal_key(lua_State *L) {
   }
 
   GhosttyMods mods = 0;
-  if (table_bool(L, 3, "shift")) mods |= GHOSTTY_MODS_SHIFT;
-  if (table_bool(L, 3, "ctrl")) mods |= GHOSTTY_MODS_CTRL;
-  if (table_bool(L, 3, "alt")) mods |= GHOSTTY_MODS_ALT;
-  if (table_bool(L, 3, "super")) mods |= GHOSTTY_MODS_SUPER;
+  lua_getfield(L, 3, "raw");
+  if (lua_isnumber(L, -1)) {
+    SDL_Keymod raw = (SDL_Keymod)lua_tointeger(L, -1);
+    if (raw & SDL_KMOD_SHIFT) mods |= GHOSTTY_MODS_SHIFT;
+    if (raw & SDL_KMOD_CTRL) mods |= GHOSTTY_MODS_CTRL;
+    if (raw & SDL_KMOD_ALT) mods |= GHOSTTY_MODS_ALT;
+    if (raw & SDL_KMOD_GUI) mods |= GHOSTTY_MODS_SUPER;
+    if (raw & SDL_KMOD_CAPS) mods |= GHOSTTY_MODS_CAPS_LOCK;
+    if (raw & SDL_KMOD_NUM) mods |= GHOSTTY_MODS_NUM_LOCK;
+    if (raw & SDL_KMOD_RSHIFT) mods |= GHOSTTY_MODS_SHIFT_SIDE;
+    if (raw & SDL_KMOD_RCTRL) mods |= GHOSTTY_MODS_CTRL_SIDE;
+    if (raw & SDL_KMOD_RALT) mods |= GHOSTTY_MODS_ALT_SIDE;
+    if (raw & SDL_KMOD_RGUI) mods |= GHOSTTY_MODS_SUPER_SIDE;
+  } else {
+    if (table_bool(L, 3, "shift")) mods |= GHOSTTY_MODS_SHIFT;
+    if (table_bool(L, 3, "ctrl")) mods |= GHOSTTY_MODS_CTRL;
+    if (table_bool(L, 3, "alt")) mods |= GHOSTTY_MODS_ALT;
+    if (table_bool(L, 3, "super")) mods |= GHOSTTY_MODS_SUPER;
+  }
+  lua_pop(L, 1);
 
   uint32_t codepoint = 0;
   bool printable = false;
   GhosttyKey key = key_from_name(name, &codepoint, &printable);
-  if (key == GHOSTTY_KEY_UNIDENTIFIED || (printable && mods == 0)) {
+  if (lua_istable(L, 5)) {
+    lua_getfield(L, 5, "scancode");
+    if (lua_isnumber(L, -1)) {
+      GhosttyKey physical = key_from_scancode(lua_tointeger(L, -1));
+      if (physical != GHOSTTY_KEY_UNIDENTIFIED) key = physical;
+    }
+    lua_pop(L, 1);
+  }
+  GhosttyKeyAction action = GHOSTTY_KEY_ACTION_PRESS;
+  const char *action_name = luaL_optstring(L, 4, "press");
+  if (strcmp(action_name, "repeat") == 0) action = GHOSTTY_KEY_ACTION_REPEAT;
+  else if (strcmp(action_name, "release") == 0) action = GHOSTTY_KEY_ACTION_RELEASE;
+  if (key == GHOSTTY_KEY_UNIDENTIFIED ||
+      (printable && mods == 0 && action != GHOSTTY_KEY_ACTION_RELEASE)) {
     lua_pushboolean(L, false);
     return 1;
   }
 
   ghostty_key_encoder_setopt_from_terminal(session->key_encoder, session->terminal);
-  ghostty_key_event_set_action(session->key_event, GHOSTTY_KEY_ACTION_PRESS);
+  ghostty_key_event_set_action(session->key_event, action);
   ghostty_key_event_set_key(session->key_event, key);
   ghostty_key_event_set_mods(session->key_event, mods);
   ghostty_key_event_set_consumed_mods(session->key_event, 0);
@@ -861,6 +1008,7 @@ static int f_terminal_gc(lua_State *L) {
 static const luaL_Reg terminal_methods[] = {
   { "update", f_terminal_update },
   { "write", f_terminal_write },
+  { "paste", f_terminal_paste },
   { "resize", f_terminal_resize },
   { "key", f_terminal_key },
   { "scroll", f_terminal_scroll },

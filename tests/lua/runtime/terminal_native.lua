@@ -50,7 +50,7 @@ test.describe("Native terminal session", function()
       cwd = system.getcwd(),
     })
     test.ok(session, start_error)
-    test.ok(session:write("Write-Output ANVIL_TERMINAL_INPUT"))
+    test.ok(session:paste("Write-Output ANVIL_TERMINAL_INPUT", false))
     test.ok(session:key("return", {}))
 
     local deadline = system.get_time() + 8

@@ -386,16 +386,18 @@ end
 
 ---Handle a key press that no Anvil command consumed.
 ---@param key string Normalized key name
+---@param event table? Raw platform key data
 ---@return boolean? consumed True when the view consumed the key
-function View:on_key_pressed(key)
+function View:on_key_pressed(key, event)
   -- no-op
 end
 
 
 ---Handle a key release after Anvil updates its modifier state.
 ---@param key string Normalized key name
+---@param event table? Raw platform key data
 ---@return boolean? consumed True when the view consumed the key
-function View:on_key_released(key)
+function View:on_key_released(key, event)
   -- no-op
 end
 

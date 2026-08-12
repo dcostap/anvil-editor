@@ -192,6 +192,18 @@ static const char *get_key_name(const SDL_Event *e, char *buf) {
   }
 }
 
+static void push_key_event_info(lua_State *L, const SDL_KeyboardEvent *event) {
+  lua_createtable(L, 0, 5);
+  lua_pushinteger(L, event->key);
+  lua_setfield(L, -2, "keycode");
+  lua_pushinteger(L, event->scancode);
+  lua_setfield(L, -2, "scancode");
+  lua_pushinteger(L, event->mod);
+  lua_setfield(L, -2, "modifiers");
+  lua_pushboolean(L, event->repeat);
+  lua_setfield(L, -2, "repeat");
+}
+
 #ifdef _WIN32
 static char *win32_error(DWORD rc) {
   LPSTR message;
@@ -331,7 +343,8 @@ top:
 #endif
       lua_pushstring(L, "keypressed");
       lua_pushstring(L, get_key_name(&e, buf));
-      return 2;
+      push_key_event_info(L, &e.key);
+      return 3;
 
     case SDL_EVENT_KEY_UP:
 #ifdef __APPLE__
@@ -348,7 +361,8 @@ top:
 #endif
       lua_pushstring(L, "keyreleased");
       lua_pushstring(L, get_key_name(&e, buf));
-      return 2;
+      push_key_event_info(L, &e.key);
+      return 3;
 
     case SDL_EVENT_TEXT_INPUT:
       lua_pushstring(L, "textinput");
