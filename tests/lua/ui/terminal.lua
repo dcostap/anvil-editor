@@ -17,6 +17,7 @@ local function fake_native()
       pastes = {},
       selections = {},
       mouse_events = {},
+      focus_events = {},
       resizes = {},
       closed = false,
     }
@@ -49,6 +50,10 @@ local function fake_native()
     function session:mouse(...)
       self.mouse_events[#self.mouse_events + 1] = { ... }
       return true, true
+    end
+    function session:focus(focused)
+      self.focus_events[#self.focus_events + 1] = focused
+      return true
     end
     function session:resize(cols, rows, cell_width, cell_height)
       self.resizes[#self.resizes + 1] = { cols, rows, cell_width, cell_height }
@@ -161,5 +166,15 @@ test.describe("Terminal View", function()
     test.equal(session.mouse_events[2][1], "motion")
     test.equal(session.mouse_events[3][1], "release")
     test.ok(session.selection_cleared)
+  end)
+
+  test.it("reports Terminal View focus changes", function(context)
+    local view = terminal.open()
+    local session = context.sessions[1]
+    view:update()
+    core.set_active_view(context.previous_active_view)
+    view:update()
+
+    test.same({ true, false }, session.focus_events)
   end)
 end)

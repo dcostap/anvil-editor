@@ -996,6 +996,28 @@ static int f_terminal_mouse(lua_State *L) {
   return 2;
 }
 
+static int f_terminal_focus(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  bool focused = lua_toboolean(L, 2) != 0;
+  GhosttyTerminalModeConfig mode = {
+    .mode = GHOSTTY_MODE_FOCUS_EVENT,
+    .value = false,
+  };
+  GhosttyResult result = ghostty_terminal_get(
+    session->terminal, GHOSTTY_TERMINAL_DATA_MODE, &mode
+  );
+  bool ok = result == GHOSTTY_SUCCESS;
+  if (ok && mode.value) {
+    static const uint8_t focus_in[] = "\x1b[I";
+    static const uint8_t focus_out[] = "\x1b[O";
+    ok = focused
+      ? write_all(session, focus_in, sizeof(focus_in) - 1)
+      : write_all(session, focus_out, sizeof(focus_out) - 1);
+  }
+  lua_pushboolean(L, ok);
+  return 1;
+}
+
 static uint32_t color_value(GhosttyColorRgb color) {
   return ((uint32_t)color.r << 16) | ((uint32_t)color.g << 8) | color.b;
 }
@@ -1178,6 +1200,7 @@ static const luaL_Reg terminal_methods[] = {
   { "clear_selection", f_terminal_clear_selection },
   { "selected_text", f_terminal_selected_text },
   { "mouse", f_terminal_mouse },
+  { "focus", f_terminal_focus },
   { "snapshot", f_terminal_snapshot },
   { "close", f_terminal_close },
   { "__gc", f_terminal_gc },

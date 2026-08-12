@@ -91,6 +91,12 @@ function TerminalView:update()
   TerminalView.super.update(self)
   if not self.session then return end
 
+  local focused = core.active_view == self
+  if focused ~= self.focused then
+    self.focused = focused
+    self.session:focus(focused)
+  end
+
   local cols, rows = self:cell_geometry()
   if cols ~= self.cols or rows ~= self.rows then
     local ok = self.session:resize(cols, rows, self.cell_width, self.cell_height)
