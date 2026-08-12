@@ -162,6 +162,10 @@ test.describe("Terminal View", function()
       ctrl = true, alt = true, altgr = true, modifiers = 0, scancode = 20,
     })
     test.equal(#context.sessions[1].keys, key_count)
+    core.on_event("keypressed", "left", {
+      ctrl = true, alt = true, altgr = true, modifiers = 0, scancode = 80,
+    })
+    test.equal(#context.sessions[1].keys, key_count + 1)
     test.equal(view:on_key_pressed_before_keymap("f", {
       ctrl = true, shift = true, modifiers = 0,
     }), false)

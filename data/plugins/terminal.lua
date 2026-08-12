@@ -86,7 +86,13 @@ local function terminal_pwd(snapshot)
   local pwd = snapshot and snapshot.pwd
   if type(pwd) ~= "string" or pwd == "" then return nil end
   if pwd:match("^file://") then
-    pwd = pwd:gsub("^file://localhost/?", ""):gsub("^file:///?", "")
+    local authority, path = pwd:match("^file://([^/]*)(/.*)$")
+    if authority and authority ~= "" and authority:lower() ~= "localhost" then
+      pwd = "\\\\" .. authority .. path:gsub("/", "\\")
+    else
+      pwd = path or pwd:gsub("^file:///?", "")
+      if pwd:match("^/[A-Za-z]:") then pwd = pwd:sub(2) end
+    end
     pwd = pwd:gsub("%%(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end)
   end
   return pwd ~= "" and pwd or nil
@@ -298,7 +304,8 @@ function TerminalView:handle_events()
     if event.type == "bell" then
       self.bell_count = (self.bell_count or 0) + (event.count or 1)
       self.bell_until = system.get_time() + 0.15
-      if core.active_view ~= self and system.flash_window then
+      if system.flash_window and (core.active_view ~= self or
+          not system.window_has_focus(core.window)) then
         system.flash_window(core.window, "briefly")
       end
       core.redraw = true
@@ -323,10 +330,11 @@ function TerminalView:handle_events()
         end
       )
     elseif event.type == "notification" then
-      self.notification_count = (self.notification_count or 0) + 1
+      self.notification_count = (self.notification_count or 0) + (event.count or 1)
       local title = event.title ~= "" and event.title or "Terminal"
       core.log("%s: %s", title, event.body or "")
-      if core.active_view ~= self and system.flash_window then
+      if system.flash_window and (core.active_view ~= self or
+          not system.window_has_focus(core.window)) then
         system.flash_window(core.window, "until_focused")
       end
     end
@@ -465,7 +473,8 @@ function TerminalView:draw()
   end
   perf_scope_end(phase_scope)
 
-  if self.composition and self.composition.text ~= "" then
+  if self.composition and self.composition.text ~= "" and
+      snapshot.cursor and snapshot.cursor.visible then
     local cursor = snapshot.cursor or {}
     local x = origin_x + (cursor.x or 0) * self.cell_width
     local y = origin_y + (cursor.y or 0) * self.cell_height
@@ -560,7 +569,7 @@ end
 
 function TerminalView:on_key_pressed(key, event)
   if not self.session or self.running == false then return false end
-  if event and event.altgr then return false end
+  if event and event.altgr and (#key == 1 or key == "space") then return false end
   local function scroll(kind, value)
     if not self.session:scroll(kind, value) then return false end
     self:refresh_snapshot()
@@ -586,10 +595,14 @@ end
 
 function TerminalView:on_key_pressed_before_keymap(key, event)
   if not self.session or self.running == false or not event then return false end
-  if event.altgr then return false end
+  if event.altgr then
+    if #key == 1 or key == "space" or key:find("alt", 1, true) then return false end
+    return self:on_key_pressed(key, event) == true
+  end
   local control = event.ctrl or event.alt
   if not control then return false end
-  if event.ctrl and event.shift and (key == "c" or key == "v" or key == "f" or key == "p") then
+  if event.ctrl and event.shift and
+      (key == "c" or key == "v" or key == "f" or key == "p" or key == "k") then
     return false
   end
   if event.ctrl and (key == "tab" or key == "f3") then return false end
@@ -598,7 +611,7 @@ end
 
 function TerminalView:on_key_released(key, event)
   if not self.session or self.running == false then return false end
-  if event and event.altgr then return false end
+  if event and event.altgr and (#key == 1 or key == "space") then return false end
   return self.session:key(key, key_modifiers(event), "release", event) == true
 end
 

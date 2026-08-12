@@ -211,7 +211,7 @@ static void push_key_event_info(lua_State *L, const SDL_KeyboardEvent *event) {
   lua_pushboolean(L, (event->mod & SDL_KMOD_GUI) != 0);
   lua_setfield(L, -2, "super");
   lua_pushboolean(L, (event->mod & SDL_KMOD_MODE) != 0 ||
-    ((event->mod & SDL_KMOD_RALT) != 0 && (event->mod & SDL_KMOD_CTRL) != 0));
+    (event->mod & SDL_KMOD_RALT) != 0);
   lua_setfield(L, -2, "altgr");
 }
 

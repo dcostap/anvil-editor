@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,6 +84,7 @@ typedef struct {
   char *notification_body;
   size_t notification_body_length;
   bool notification_pending;
+  size_t notification_count;
   char *search_query;
   size_t search_query_length;
   size_t search_row;
@@ -353,7 +355,9 @@ static void terminal_desktop_notification(
 ) {
   (void)terminal;
   TerminalSession *session = (TerminalSession *)userdata;
-  if (!notification || notification->title.len > TERMINAL_NOTIFICATION_MAX_BYTES ||
+  if (!notification || notification->size <
+        offsetof(GhosttyTerminalDesktopNotification, body) + sizeof(notification->body) ||
+      notification->title.len > TERMINAL_NOTIFICATION_MAX_BYTES ||
       notification->body.len > TERMINAL_NOTIFICATION_MAX_BYTES) return;
   char *title = (char *)HeapAlloc(
     GetProcessHeap(), 0, notification->title.len ? notification->title.len : 1
@@ -379,6 +383,7 @@ static void terminal_desktop_notification(
   session->notification_body = body;
   session->notification_body_length = notification->body.len;
   session->notification_pending = true;
+  session->notification_count++;
 }
 
 static bool terminal_size(
@@ -1010,7 +1015,10 @@ static int f_terminal_clear(lua_State *L) {
     lua_pushboolean(L, false);
     return 1;
   }
-  ghostty_terminal_reset(session->terminal);
+  static const uint8_t clear_sequence[] = "\x1b[2J\x1b[3J\x1b[H";
+  ghostty_terminal_vt_write(
+    session->terminal, clear_sequence, sizeof(clear_sequence) - 1
+  );
   ghostty_render_state_update(session->render_state, session->terminal);
   lua_pushboolean(L, true);
   return 1;
@@ -2068,6 +2076,9 @@ static int f_terminal_snapshot(lua_State *L) {
   ) == GHOSTTY_SUCCESS && pwd.ptr && pwd.len > 0) {
     lua_pushlstring(L, (const char *)pwd.ptr, pwd.len);
     lua_setfield(L, -2, "pwd");
+  } else {
+    lua_pushnil(L);
+    lua_setfield(L, -2, "pwd");
   }
   lua_createtable(L, (session->bell_count > 0 ? 1 : 0) +
     (session->clipboard_pending ? 1 : 0) + (session->notification_pending ? 1 : 0), 0);
@@ -2103,8 +2114,10 @@ static int f_terminal_snapshot(lua_State *L) {
     lua_setfield(L, -2, "title");
     lua_pushlstring(L, session->notification_body, session->notification_body_length);
     lua_setfield(L, -2, "body");
+    set_integer_field(L, "count", (lua_Integer)session->notification_count);
     lua_rawseti(L, -2, ++event_count);
     session->notification_pending = false;
+    session->notification_count = 0;
   }
   lua_setfield(L, -2, "events");
   GhosttyTerminalScrollbar scrollbar = {0};
