@@ -271,6 +271,15 @@ end
 style.font = load_text_font(font_path)
 style.code_font = load_text_font(code_font_path)
 style.terminal_font = style.code_font:copy(font_size, { ligatures = false })
+style.terminal_bold_font = style.code_font:copy(
+  font_size, { ligatures = false, bold = true }
+)
+style.terminal_italic_font = style.code_font:copy(
+  font_size, { ligatures = false, italic = true }
+)
+style.terminal_bold_italic_font = style.code_font:copy(
+  font_size, { ligatures = false, bold = true, italic = true }
+)
 -- Reusable proportional typography roles. Live Preview prose and compact
 -- navigation surfaces use these roles; source and diff text retain code_font.
 style.prose_font = load_text_font(prose_font_path)

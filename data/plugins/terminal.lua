@@ -117,8 +117,9 @@ function TerminalView:update()
 end
 
 local function cell_font(view, cell)
-  -- The first prototype keeps one font. Native style data remains available
-  -- for proper bold and italic font roles in the next rendering pass.
+  if cell.bold and cell.italic then return style.terminal_bold_italic_font or view.font end
+  if cell.bold then return style.terminal_bold_font or view.font end
+  if cell.italic then return style.terminal_italic_font or view.font end
   return view.font
 end
 
@@ -133,27 +134,44 @@ function TerminalView:draw()
   for row_index, row in ipairs(snapshot.rows or {}) do
     local y = origin_y + (row_index - 1) * self.cell_height
     if y >= self.position.y + self.size.y then break end
+    local background_start, background_value
+    local function flush_background(col_index)
+      if not background_start then return end
+      local color = background_value == false and style.selection
+        or rgb(background_value, background)
+      renderer.draw_rect(
+        origin_x + (background_start - 1) * self.cell_width,
+        y,
+        (col_index - background_start) * self.cell_width,
+        self.cell_height,
+        color
+      )
+      background_start, background_value = nil, nil
+    end
     for col_index, cell in ipairs(row) do
       if cell then
+        local cell_background = cell.selected and false or cell.bg
+        if cell_background ~= background_value or cell_background == nil then
+          flush_background(col_index)
+          if cell_background ~= nil then
+            background_start, background_value = col_index, cell_background
+          end
+        end
+      else
+        flush_background(col_index)
+      end
+    end
+    flush_background(#row + 1)
+    for col_index, cell in ipairs(row) do
+      if cell and cell.text and cell.text ~= "" and not cell.invisible then
         local x = origin_x + (col_index - 1) * self.cell_width
-        if cell.bg then
-          renderer.draw_rect(x, y, self.cell_width, self.cell_height, rgb(cell.bg, background))
+        local color = rgb(cell.fg, style.text)
+        renderer.draw_text(cell_font(self, cell), cell.text, x, y, color)
+        if cell.underline and cell.underline ~= 0 then
+          renderer.draw_rect(x, y + self.cell_height - math.max(1, SCALE), self.cell_width, math.max(1, SCALE), color)
         end
-        if cell.selected then
-          renderer.draw_rect(x, y, self.cell_width, self.cell_height, style.selection)
-        end
-        if cell.text and cell.text ~= "" and not cell.invisible then
-          local color = rgb(cell.fg, style.text)
-          renderer.draw_text(cell_font(self, cell), cell.text, x, y, color)
-          if cell.bold then
-            renderer.draw_text(cell_font(self, cell), cell.text, x + math.max(1, SCALE), y, color)
-          end
-          if cell.underline and cell.underline ~= 0 then
-            renderer.draw_rect(x, y + self.cell_height - math.max(1, SCALE), self.cell_width, math.max(1, SCALE), color)
-          end
-          if cell.strikethrough then
-            renderer.draw_rect(x, y + math.floor(self.cell_height / 2), self.cell_width, math.max(1, SCALE), color)
-          end
+        if cell.strikethrough then
+          renderer.draw_rect(x, y + math.floor(self.cell_height / 2), self.cell_width, math.max(1, SCALE), color)
         end
       end
     end
