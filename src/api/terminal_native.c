@@ -1131,7 +1131,9 @@ static int f_terminal_snapshot(lua_State *L) {
     return 1;
   }
 
-  lua_createtable(L, 0, 8);
+  bool reuse = lua_istable(L, 2);
+  if (reuse) lua_pushvalue(L, 2);
+  else lua_createtable(L, 0, 9);
   set_integer_field(L, "cols", session->cols);
   set_integer_field(L, "row_count", session->rows);
   set_integer_field(L, "foreground", color_value(colors.foreground));
@@ -1154,28 +1156,52 @@ static int f_terminal_snapshot(lua_State *L) {
   push_cursor(L, session, &colors);
   lua_setfield(L, -2, "cursor");
 
-  lua_createtable(L, session->rows, 0);
-  if (ghostty_render_state_get(
-    session->render_state, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
-    &session->row_iterator
-  ) == GHOSTTY_SUCCESS) {
+  GhosttyRenderStateDirty dirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
+  ghostty_render_state_get(
+    session->render_state, GHOSTTY_RENDER_STATE_DATA_DIRTY, &dirty
+  );
+  if (reuse) lua_getfield(L, -1, "rows");
+  if (!reuse || !lua_istable(L, -1)) {
+    if (reuse) lua_pop(L, 1);
+    lua_createtable(L, session->rows, 0);
+  }
+  if ((!reuse || dirty != GHOSTTY_RENDER_STATE_DIRTY_FALSE) &&
+      ghostty_render_state_get(
+        session->render_state, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
+        &session->row_iterator
+      ) == GHOSTTY_SUCCESS) {
     int row_index = 1;
     while (ghostty_render_state_row_iterator_next(session->row_iterator)) {
-      lua_createtable(L, session->cols, 0);
-      if (ghostty_render_state_row_get(
-        session->row_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
-        &session->row_cells
-      ) == GHOSTTY_SUCCESS) {
-        int col_index = 1;
-        while (ghostty_render_state_row_cells_next(session->row_cells)) {
-          push_cell(L, session, &colors);
-          lua_rawseti(L, -2, col_index++);
+      bool row_dirty = true;
+      ghostty_render_state_row_get(
+        session->row_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY, &row_dirty
+      );
+      if (!reuse || dirty == GHOSTTY_RENDER_STATE_DIRTY_FULL || row_dirty) {
+        lua_createtable(L, session->cols, 0);
+        if (ghostty_render_state_row_get(
+          session->row_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
+          &session->row_cells
+        ) == GHOSTTY_SUCCESS) {
+          int col_index = 1;
+          while (ghostty_render_state_row_cells_next(session->row_cells)) {
+            push_cell(L, session, &colors);
+            lua_rawseti(L, -2, col_index++);
+          }
         }
+        lua_rawseti(L, -2, row_index);
       }
-      lua_rawseti(L, -2, row_index++);
+      bool clean = false;
+      ghostty_render_state_row_set(
+        session->row_iterator, GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY, &clean
+      );
+      row_index++;
     }
   }
   lua_setfield(L, -2, "rows");
+  GhosttyRenderStateDirty clean = GHOSTTY_RENDER_STATE_DIRTY_FALSE;
+  ghostty_render_state_set(
+    session->render_state, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &clean
+  );
   return 1;
 }
 

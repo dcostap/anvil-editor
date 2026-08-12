@@ -102,7 +102,7 @@ function TerminalView:update()
     local ok = self.session:resize(cols, rows, self.cell_width, self.cell_height)
     if ok then
       self.cols, self.rows = cols, rows
-      self.snapshot = self.session:snapshot()
+      self.snapshot = self.session:snapshot(self.snapshot)
       core.redraw = true
     end
   end
@@ -111,7 +111,7 @@ function TerminalView:update()
   local changed, running = self.session:update()
   self.running = running ~= false
   if changed or self.running ~= was_running then
-    self.snapshot = self.session:snapshot()
+    self.snapshot = self.session:snapshot(self.snapshot)
     core.redraw = true
   end
 end
@@ -241,7 +241,7 @@ function TerminalView:mouse_position(x, y)
 end
 
 function TerminalView:refresh_snapshot()
-  self.snapshot = self.session:snapshot()
+  self.snapshot = self.session:snapshot(self.snapshot)
   core.redraw = true
 end
 
@@ -303,7 +303,7 @@ function TerminalView:on_mouse_wheel(delta_y)
   end
   local delta = delta_y > 0 and -3 or 3
   if self.session:scroll(delta) then
-    self.snapshot = self.session:snapshot()
+    self.snapshot = self.session:snapshot(self.snapshot)
     core.redraw = true
     return true
   end
