@@ -74,6 +74,7 @@ typedef struct {
   uint32_t cell_height;
   bool closed;
   bool running;
+  uint64_t process_exit_seen_ms;
   LONG bell_count;
   char *clipboard_text;
   size_t clipboard_text_length;
@@ -89,6 +90,14 @@ typedef struct {
   size_t search_query_length;
   size_t search_row;
   size_t search_col;
+  char *search_scan_query;
+  size_t search_scan_query_length;
+  size_t search_scan_total_rows;
+  size_t search_scan_start_row;
+  size_t search_scan_step;
+  bool search_scan_active;
+  bool search_scan_reverse;
+  bool search_scan_continuing;
 } TerminalSession;
 
 static void push_status(lua_State *L, TerminalSession *session);
@@ -479,10 +488,6 @@ static void release_terminal_transport(TerminalSession *session) {
   if (!session || session->transport_released) return;
   session->transport_released = true;
   InterlockedExchange(&session->closing, 1);
-  if (session->reader_thread) CancelSynchronousIo(session->reader_thread);
-  if (session->writer_thread) CancelSynchronousIo(session->writer_thread);
-  close_handle(&session->input_write);
-  close_handle(&session->output_read);
   if (session->read_lock_initialized) {
     EnterCriticalSection(&session->read_lock);
     WakeAllConditionVariable(&session->read_ready);
@@ -493,6 +498,8 @@ static void release_terminal_transport(TerminalSession *session) {
     WakeAllConditionVariable(&session->write_ready);
     LeaveCriticalSection(&session->write_lock);
   }
+  if (session->reader_thread) CancelSynchronousIo(session->reader_thread);
+  if (session->writer_thread) CancelSynchronousIo(session->writer_thread);
   if (session->reader_thread) {
     WaitForSingleObject(session->reader_thread, INFINITE);
     close_handle(&session->reader_thread);
@@ -501,6 +508,8 @@ static void release_terminal_transport(TerminalSession *session) {
     WaitForSingleObject(session->writer_thread, INFINITE);
     close_handle(&session->writer_thread);
   }
+  close_handle(&session->input_write);
+  close_handle(&session->output_read);
   if (session->pseudoconsole) {
     ClosePseudoConsole(session->pseudoconsole);
     session->pseudoconsole = NULL;
@@ -548,6 +557,10 @@ static void close_session(TerminalSession *session) {
   if (session->search_query) {
     HeapFree(GetProcessHeap(), 0, session->search_query);
     session->search_query = NULL;
+  }
+  if (session->search_scan_query) {
+    HeapFree(GetProcessHeap(), 0, session->search_scan_query);
+    session->search_scan_query = NULL;
   }
   if (session->clipboard_text) {
     HeapFree(GetProcessHeap(), 0, session->clipboard_text);
@@ -822,16 +835,18 @@ static bool process_running(TerminalSession *session) {
 }
 
 static bool output_drained(TerminalSession *session) {
-  if (!session->reader_thread || WaitForSingleObject(session->reader_thread, 0) != WAIT_OBJECT_0) {
-    return false;
-  }
+  if (!session->read_lock_initialized || !session->output_read) return true;
   bool empty = true;
-  if (session->read_lock_initialized) {
-    EnterCriticalSection(&session->read_lock);
-    empty = session->read_queue_count == 0;
-    LeaveCriticalSection(&session->read_lock);
+  EnterCriticalSection(&session->read_lock);
+  empty = session->read_queue_count == 0;
+  LeaveCriticalSection(&session->read_lock);
+  if (!empty) return false;
+  DWORD available = 0;
+  if (PeekNamedPipe(session->output_read, NULL, 0, NULL, &available, NULL)) {
+    return available == 0;
   }
-  return empty;
+  DWORD error = GetLastError();
+  return error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED;
 }
 
 static void push_status(lua_State *L, TerminalSession *session) {
@@ -882,6 +897,12 @@ static int f_terminal_update(lua_State *L) {
     push_status(L, session);
     return 3;
   }
+  if (session->transport_released) {
+    lua_pushboolean(L, false);
+    lua_pushboolean(L, false);
+    push_status(L, session);
+    return 3;
+  }
 
   uint8_t buffer[65536];
   size_t total = 0;
@@ -914,7 +935,11 @@ static int f_terminal_update(lua_State *L) {
     }
   }
   session->running = process_running(session);
-  if (!session->running && output_drained(session)) {
+  if (!session->running && session->process_exit_seen_ms == 0) {
+    session->process_exit_seen_ms = GetTickCount64();
+  }
+  if (!session->running && GetTickCount64() - session->process_exit_seen_ms >= 100 &&
+      output_drained(session)) {
     if (session->job) close_handle(&session->job);
     close_handle(&session->process_thread);
     close_handle(&session->process);
@@ -984,7 +1009,8 @@ static int f_terminal_resize(lua_State *L) {
   uint16_t rows = (uint16_t)luaL_checkinteger(L, 3);
   uint32_t cell_width = (uint32_t)luaL_checkinteger(L, 4);
   uint32_t cell_height = (uint32_t)luaL_checkinteger(L, 5);
-  if (session->closed || cols == 0 || rows == 0 || cell_width == 0 || cell_height == 0) {
+  if (session->closed || session->transport_released || !session->pseudoconsole ||
+      cols == 0 || rows == 0 || cell_width == 0 || cell_height == 0) {
     lua_pushboolean(L, false);
     return 1;
   }
@@ -1477,11 +1503,36 @@ static int f_terminal_search(lua_State *L) {
     lua_pushboolean(L, false);
     return 1;
   }
-  size_t total_rows = 0;
-  ghostty_terminal_get(session->terminal, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total_rows);
-  bool continuing = session->search_query && session->search_query_length == query_length &&
-    memcmp(session->search_query, query, query_length) == 0;
-  size_t start_row = continuing ? session->search_row : (reverse ? total_rows - 1 : 0);
+  bool resume = session->search_scan_active && session->search_scan_reverse == reverse &&
+    session->search_scan_query_length == query_length &&
+    memcmp(session->search_scan_query, query, query_length) == 0;
+  if (!resume) {
+    char *scan_query = session->search_scan_query
+      ? (char *)HeapReAlloc(GetProcessHeap(), 0, session->search_scan_query, query_length)
+      : (char *)HeapAlloc(GetProcessHeap(), 0, query_length);
+    if (!scan_query) return luaL_error(L, "Could not allocate terminal search query");
+    memcpy(scan_query, query, query_length);
+    session->search_scan_query = scan_query;
+    session->search_scan_query_length = query_length;
+    session->search_scan_reverse = reverse;
+    session->search_scan_continuing = session->search_query &&
+      session->search_query_length == query_length &&
+      memcmp(session->search_query, query, query_length) == 0;
+    session->search_scan_total_rows = 0;
+    ghostty_terminal_get(
+      session->terminal, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS,
+      &session->search_scan_total_rows
+    );
+    session->search_scan_start_row = session->search_scan_continuing
+      ? session->search_row
+      : (reverse && session->search_scan_total_rows > 0
+          ? session->search_scan_total_rows - 1 : 0);
+    session->search_scan_step = 0;
+    session->search_scan_active = true;
+  }
+  size_t total_rows = session->search_scan_total_rows;
+  bool continuing = session->search_scan_continuing;
+  size_t start_row = session->search_scan_start_row;
   size_t row_capacity = (size_t)session->cols * 64;
   uint8_t *row_text = (uint8_t *)HeapAlloc(GetProcessHeap(), 0, row_capacity);
   uint16_t *byte_cols = (uint16_t *)HeapAlloc(
@@ -1494,7 +1545,9 @@ static int f_terminal_search(lua_State *L) {
   }
   bool found = false;
   size_t found_row = 0, found_col = 0, found_end_col = 0;
-  for (size_t step = 0; step < total_rows; step++) {
+  uint64_t scan_started = GetTickCount64();
+  for (; session->search_scan_step < total_rows; session->search_scan_step++) {
+    size_t step = session->search_scan_step;
     size_t row = reverse
       ? (start_row + total_rows - step) % total_rows
       : (start_row + step) % total_rows;
@@ -1530,7 +1583,7 @@ static int f_terminal_search(lua_State *L) {
     }
     size_t match_offset = 0;
     size_t begin = 0, end = length;
-    if (continuing && row == session->search_row) {
+    if (continuing && step == 0 && row == session->search_row) {
       size_t current_byte = 0;
       while (current_byte < length && byte_cols[current_byte] <= session->search_col) current_byte++;
       if (reverse) end = current_byte > 0 ? current_byte - 1 : 0;
@@ -1543,14 +1596,24 @@ static int f_terminal_search(lua_State *L) {
       found_end_col = byte_cols[match_offset + query_length - 1];
       break;
     }
-    continuing = false;
+    if (GetTickCount64() - scan_started >= 8) {
+      session->search_scan_step++;
+      HeapFree(GetProcessHeap(), 0, row_text);
+      HeapFree(GetProcessHeap(), 0, byte_cols);
+      lua_pushboolean(L, false);
+      lua_pushliteral(L, "pending");
+      return 2;
+    }
   }
   HeapFree(GetProcessHeap(), 0, row_text);
   HeapFree(GetProcessHeap(), 0, byte_cols);
   if (!found) {
+    session->search_scan_active = false;
     lua_pushboolean(L, false);
-    return 1;
+    lua_pushliteral(L, "not_found");
+    return 2;
   }
+  session->search_scan_active = false;
   char *saved = session->search_query
     ? (char *)HeapReAlloc(GetProcessHeap(), 0, session->search_query, query_length)
     : (char *)HeapAlloc(GetProcessHeap(), 0, query_length);

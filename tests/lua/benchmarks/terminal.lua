@@ -49,6 +49,15 @@ test.describe("Terminal native benchmark", function()
       if not changed then coroutine.yield(0.001) end
     end
     local elapsed_ms = (system.get_time() - started) * 1000
+    local search_calls, search_max_ms = 0, 0
+    local search_state = "pending"
+    while search_state == "pending" do
+      local search_started = system.get_time()
+      local _, state = session:search("ANVIL_TERMINAL_MISSING_QUERY", false)
+      search_max_ms = math.max(search_max_ms, (system.get_time() - search_started) * 1000)
+      search_calls = search_calls + 1
+      search_state = state
+    end
     session:close()
     test.ok(text:find("ANVIL_TERMINAL_BENCHMARK_TAIL", 1, true), text)
 
@@ -70,11 +79,17 @@ test.describe("Terminal native benchmark", function()
         p95 = percentile(snapshots, 0.95),
         max = percentile(snapshots, 1.00),
       },
+      no_match_search = { calls = search_calls, max_step_ms = search_max_ms },
       lua_heap_kib = {
         before = heap_before,
         after = collectgarbage("count"),
       },
     }
+    test.ok(report.update_ms.p95 < 5, "terminal native update p95 exceeded 5 ms")
+    test.ok(report.snapshot_ms.p95 < 10, "terminal snapshot p95 exceeded 10 ms")
+    test.ok(report.no_match_search.max_step_ms < 50,
+      "terminal search step exceeded the UI responsiveness limit")
+    test.ok(report.elapsed_ms < 30000, "terminal output benchmark exceeded 30 seconds")
     print("terminal-native-benchmark " .. common.serialize(report))
   end)
 end)

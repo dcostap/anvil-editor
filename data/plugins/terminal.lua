@@ -260,6 +260,10 @@ function TerminalView:update()
   TerminalView.super.update(self)
   if not self.session then return end
 
+  if self.search_pending then
+    self:search(self.search_pending.query, self.search_pending.reverse)
+  end
+
   local blink_phase = math.floor((system.get_time() - core.blink_start) /
     math.max(0.1, config.blink_period / 2))
   if not config.disable_blink and self.has_blinking_content and blink_phase ~= self.blink_phase then
@@ -563,7 +567,12 @@ end
 function TerminalView:search(query, reverse)
   if not self.session or not query or query == "" then return false end
   self.search_query = query
-  local found = self.session:search(query, reverse == true)
+  local found, state = self.session:search(query, reverse == true)
+  if state == "pending" then
+    self.search_pending = { query = query, reverse = reverse == true }
+    return true
+  end
+  self.search_pending = nil
   if found then self:refresh_snapshot() end
   return found == true
 end

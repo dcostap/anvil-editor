@@ -86,6 +86,11 @@ test.describe("Native terminal session", function()
       _, running, status = session:update()
       if running then coroutine.yield(0.01) end
     end
+    coroutine.yield(0.2)
+    local _, still_running, final_status = session:update()
+    test.equal(still_running, false)
+    test.equal(final_status.exit_code, 23)
+    test.ok(session:snapshot())
     session:close()
     test.equal(running, false)
     test.equal(status.exit_code, 23)
@@ -194,9 +199,10 @@ test.describe("Native terminal session", function()
     local session, start_error = terminal_native.new({
       cols = 100, rows = 12, cell_width = 8, cell_height = 16,
       cwd = system.getcwd(),
-      shell = [[powershell.exe -NoLogo -NoProfile -Command "$chunk='x'*4096; 1..512 | ForEach-Object { [Console]::Write($chunk) }; [Console]::WriteLine('ANVIL_STRESS_TAIL')"]],
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$chunk='x'*4096; 1..1536 | ForEach-Object { [Console]::Write($chunk) }; [Console]::WriteLine('ANVIL_STRESS_TAIL')"]],
     })
     test.ok(session, start_error)
+    coroutine.yield(0.2)
     local text = wait_for_text(session, "ANVIL_STRESS_TAIL", 20)
     session:close()
     test.ok(text:find("ANVIL_STRESS_TAIL", 1, true), text)
@@ -208,7 +214,7 @@ test.describe("Native terminal session", function()
     local session, start_error = terminal_native.new({
       cols = 80, rows = 8, cell_width = 8, cell_height = 16,
       cwd = system.getcwd(),
-      shell = [[powershell.exe -NoLogo -NoProfile -Command "$e=[char]27; [Console]::Write($e+'[?1049h'+$e+'[2J'+$e+'[3;7H'+$e+'[1;34mANVIL_TUI_SCREEN'+$e+'[0m'); Start-Sleep -Milliseconds 300; [Console]::Write($e+'[?1049l'); [Console]::WriteLine('ANVIL_TUI_EXIT')"]],
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$e=[char]27; [Console]::WriteLine('ANVIL_PRIMARY_SCREEN'); [Console]::Write($e+'[?1049h'+$e+'[2J'+$e+'[3;7H'+$e+'[1;34mANVIL_TUI_SCREEN'+$e+'[0m'); Start-Sleep -Milliseconds 300; [Console]::Write($e+'[?1049l'); [Console]::WriteLine('ANVIL_TUI_EXIT')"]],
     })
     test.ok(session, start_error)
     local text = wait_for_text(session, "ANVIL_TUI_SCREEN", 5)
@@ -216,6 +222,8 @@ test.describe("Native terminal session", function()
     text = wait_for_text(session, "ANVIL_TUI_EXIT", 5)
     session:close()
     test.ok(text:find("ANVIL_TUI_EXIT", 1, true), text)
+    test.ok(text:find("ANVIL_PRIMARY_SCREEN", 1, true), text)
+    test.equal(text:find("ANVIL_TUI_SCREEN", 1, true), nil)
   end)
 
   test.it("answers an interactive shell prompt", function()
