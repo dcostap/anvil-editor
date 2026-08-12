@@ -5343,6 +5343,7 @@ function DocView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
     self.scroll.y = math.max(0, self.scroll.y or 0)
     self.scroll.to.y = math.max(0, self.scroll.to.y or 0)
     local _, oy = self:get_content_offset()
+    local _, position_row = self:get_position_line_render_row(line, col)
     local ly, lh = self:get_position_highlight_geometry(line, col, false)
     -- The highlight may be taller or shorter than a normal editor row (for
     -- example, Markdown headings reserve leading block spacing).  Context is
@@ -5353,12 +5354,25 @@ function DocView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
     local target_row_height = self:get_visual_row_height(target_row)
     local target_row_y = oy + style.padding.y
       + self:get_visual_row_y_offset(target_row)
-    -- Preserve any trailing layout space as part of the target row rather
-    -- than treating it as one of the normal context rows below the caret.
-    local target_bottom = math.max(
-      ly + lh,
-      target_row_y + target_row_height
-    )
+    local target_bottom
+    if position_row then
+      -- A rendered line can expose several caret rows.  Current Line
+      -- Highlight may intentionally cover the complete layout, but scrolling
+      -- must follow the row that contains the caret.  Otherwise a tall image
+      -- below a revealed source row pulls the viewport to the image bottom.
+      target_row_y = ly
+      target_row_height = math.max(
+        1, position_row.height or context_lh
+      )
+      target_bottom = target_row_y + target_row_height
+    else
+      -- Preserve any trailing layout space as part of the target row rather
+      -- than treating it as one of the normal context rows below the caret.
+      target_bottom = math.max(
+        ly + lh,
+        target_row_y + target_row_height
+      )
+    end
     local scroll_h = self:get_horizontal_scrollbar_height()
 
     local pad = self:get_visible_scroll_context_lines()

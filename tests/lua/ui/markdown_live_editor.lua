@@ -4119,6 +4119,45 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("scrolls to the raw image source row instead of the image bottom", function()
+    local image_path = USERDIR .. PATHSEP
+      .. "markdown-live-raw-source-scroll-" .. system.get_process_id() .. ".png"
+    local fp = test.not_nil(io.open(image_path, "wb"))
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path)
+      or image_path:match("[^" .. PATHSEP .. "]+$")
+    local source = "![[" .. image_url .. "]]"
+    local view, doc = make_view(
+      source .. "\nfollowing line", USERDIR .. PATHSEP .. "raw-source-scroll-note.md"
+    )
+    view.size.x, view.size.y = 420, 220
+    view:set_wrapping_enabled(true)
+    doc:set_selection(1, 5)
+
+    local old_load_image = canvas.load_image
+    local old_active = core.active_view
+    canvas.load_image = function()
+      return {
+        get_size = function() return 1295, 1600 end,
+        scaled = function(self) return self end,
+      }
+    end
+    local ok, err = pcall(function()
+      refresh(view)
+      core.active_view = view
+      view:scroll_to_make_visible(1, 5, true)
+      test.ok(
+        view.scroll.to.y < view:get_line_height() * 2,
+        "raw image source scrolling must not target the image bottom"
+      )
+    end)
+    core.active_view = old_active
+    canvas.load_image = old_load_image
+    os.remove(image_path)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("selects only the suffix caret row with Shift+Home below an inline image", function()
     with_inline_image_text_fixture(function(view, doc, fixture)
       local old_active = core.active_view
