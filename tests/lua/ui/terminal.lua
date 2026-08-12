@@ -194,7 +194,7 @@ test.describe("Terminal View", function()
     test.same({ true, false }, session.focus_events)
   end)
 
-  test.it("draws adjacent terminal cells as styled text runs", function()
+  test.it("draws native terminal text runs with their exact columns", function()
     local view = terminal.open()
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 400
@@ -203,12 +203,15 @@ test.describe("Terminal View", function()
       foreground = 0xffffff,
       rows = {
         {
-          { text = "a", fg = 0xffffff },
-          { text = "b", fg = 0xffffff },
-          { text = "c", fg = 0xff0000 },
-          { text = "界", fg = 0xff0000, columns = 2 },
-          false,
-          { text = "d", fg = 0x00ff00 },
+          text_runs = {
+            { text = "ab", col = 0, columns = 2, fg = 0xffffff },
+            { text = "c界", col = 2, columns = 3, fg = 0xff0000 },
+            { text = "d", col = 6, columns = 1, fg = 0x00ff00 },
+          },
+          backgrounds = {
+            { col = 1, columns = 2, color = 0x112233 },
+            { col = 4, columns = 1, selected = true },
+          },
         },
       },
       cursor = { visible = false },
@@ -220,5 +223,13 @@ test.describe("Terminal View", function()
     test.equal(calls.text[1][2], "ab")
     test.equal(calls.text[2][2], "c界")
     test.equal(calls.text[3][2], "d")
+    test.equal(calls.text[2][3], 6 + 2 * view.cell_width)
+    test.equal(calls.text[2][7], 3 * view.cell_width)
+    test.equal(calls.text[3][3], 6 + 6 * view.cell_width)
+    local color_span = calls.rect[#calls.rect - 1]
+    local selection_span = calls.rect[#calls.rect]
+    test.equal(color_span[1], 6 + view.cell_width)
+    test.equal(color_span[3], 2 * view.cell_width)
+    test.equal(selection_span[1], 6 + 4 * view.cell_width)
   end)
 end)

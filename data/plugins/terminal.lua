@@ -48,6 +48,18 @@ local function perf_scope_end(scope)
   if perf and perf.scope_end then perf.scope_end(scope) end
 end
 
+local function perf_detail(name, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.add_detail then
+    perf.add_detail(name, amount)
+  end
+end
+
+local function perf_is_recording()
+  local perf = package.loaded["core.perf"]
+  return perf and perf.is_recording and perf.is_recording()
+end
+
 local function project_path()
   local project = core.root_project and core.root_project()
   return project and project.path or system.getcwd()
@@ -126,10 +138,20 @@ function TerminalView:update()
   end
 
   local was_running = self.running
+  local record_perf = perf_is_recording()
+  local update_started = record_perf and system.get_time()
   local changed, running = self.session:update()
+  if record_perf then
+    perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
+  end
   self.running = running ~= false
   if changed or self.running ~= was_running then
+    local snapshot_started = record_perf and system.get_time()
     self.snapshot = self.session:snapshot(self.snapshot)
+    if record_perf then
+      perf_detail("terminal_snapshot_ms", (system.get_time() - snapshot_started) * 1000)
+      perf_detail("terminal_snapshot_calls", 1)
+    end
     core.redraw = true
   end
 end
@@ -157,93 +179,51 @@ function TerminalView:draw()
   for row_index, row in ipairs(snapshot.rows or {}) do
     local y = origin_y + (row_index - 1) * self.cell_height
     if y >= self.position.y + self.size.y then break end
-    local background_start, background_value
-    local function flush_background(col_index)
-      if not background_start then return end
-      local color = background_value == false and style.selection
-        or rgb(self, background_value, background)
+    for _, span in ipairs(row.backgrounds or {}) do
+      local color = span.selected and style.selection
+        or rgb(self, span.color, background)
       renderer.draw_rect(
-        origin_x + (background_start - 1) * self.cell_width,
+        origin_x + span.col * self.cell_width,
         y,
-        (col_index - background_start) * self.cell_width,
+        span.columns * self.cell_width,
         self.cell_height,
         color
       )
-      background_start, background_value = nil, nil
     end
-    for col_index, cell in ipairs(row) do
-      if cell then
-        local cell_background = cell.selected and false or cell.bg
-        if cell_background ~= background_value or cell_background == nil then
-          flush_background(col_index)
-          if cell_background ~= nil then
-            background_start, background_value = col_index, cell_background
-          end
-        end
-      else
-        flush_background(col_index)
-      end
-    end
-    flush_background(#row + 1)
   end
   perf_scope_end(phase_scope)
 
   phase_scope = perf_scope_begin("text_runs")
-  local parts = {}
-  local function same_text_style(a, b)
-    return a and b and a.fg == b.fg and a.bold == b.bold
-      and a.italic == b.italic and a.underline == b.underline
-      and a.strikethrough == b.strikethrough
-  end
   for row_index, row in ipairs(snapshot.rows or {}) do
     local y = origin_y + (row_index - 1) * self.cell_height
     if y >= self.position.y + self.size.y then break end
-    local run_start, run_end, run_style, part_count
-    local function flush_text_run()
-      if not run_start then return end
-      local text = table.concat(parts, "", 1, part_count)
-      local x = origin_x + (run_start - 1) * self.cell_width
-      local width = (run_end - run_start) * self.cell_width
-      local color = rgb(self, run_style.fg, style.text)
-      local font = cell_font(self, run_style)
+    for _, run in ipairs(row.text_runs or {}) do
+      local x = origin_x + run.col * self.cell_width
+      local width = run.columns * self.cell_width
+      local color = rgb(self, run.fg, style.text)
+      local font = cell_font(self, run)
       if renderer.draw_text_known_bounds then
         renderer.draw_text_known_bounds(
-          font, text, x, y,
+          font, run.text, x, y,
           math.floor(x), math.floor(y), math.ceil(width), math.ceil(self.cell_height),
           color
         )
       else
-        renderer.draw_text(font, text, x, y, color)
+        renderer.draw_text(font, run.text, x, y, color)
       end
-      if run_style.underline and run_style.underline ~= 0 then
+      if run.underline and run.underline ~= 0 then
         renderer.draw_rect(
           x, y + self.cell_height - math.max(1, SCALE),
           width, math.max(1, SCALE), color
         )
       end
-      if run_style.strikethrough then
+      if run.strikethrough then
         renderer.draw_rect(
           x, y + math.floor(self.cell_height / 2),
           width, math.max(1, SCALE), color
         )
       end
-      for index = 1, part_count do parts[index] = nil end
-      run_start, run_end, run_style, part_count = nil, nil, nil, 0
     end
-    for col_index, cell in ipairs(row) do
-      if cell and cell.text and cell.text ~= "" and not cell.invisible then
-        if not run_start or col_index ~= run_end or not same_text_style(run_style, cell) then
-          flush_text_run()
-          run_start, run_end, run_style, part_count = col_index, col_index, cell, 0
-        end
-        part_count = part_count + 1
-        parts[part_count] = cell.text
-        run_end = col_index + (cell.columns or 1)
-      elseif not run_start or col_index >= run_end then
-        flush_text_run()
-      end
-    end
-    flush_text_run()
   end
   perf_scope_end(phase_scope)
 

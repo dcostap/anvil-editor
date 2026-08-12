@@ -40,6 +40,8 @@ typedef struct {
   uint8_t *write_queue;
   size_t write_queue_head;
   size_t write_queue_count;
+  uint8_t *snapshot_text;
+  size_t snapshot_text_capacity;
   bool write_lock_initialized;
   volatile LONG write_failed;
   bool mouse_button_pressed;
@@ -367,6 +369,11 @@ static void close_session(TerminalSession *session) {
   if (session->write_queue) {
     HeapFree(GetProcessHeap(), 0, session->write_queue);
     session->write_queue = NULL;
+  }
+  if (session->snapshot_text) {
+    HeapFree(GetProcessHeap(), 0, session->snapshot_text);
+    session->snapshot_text = NULL;
+    session->snapshot_text_capacity = 0;
   }
 }
 
@@ -1147,9 +1154,46 @@ static void push_cursor(lua_State *L, TerminalSession *session, GhosttyRenderSta
   lua_setfield(L, -2, "style");
 }
 
-static void push_cell(
-  lua_State *L, TerminalSession *session, GhosttyRenderStateColors *colors
+typedef struct {
+  uint8_t utf8[128];
+  size_t text_length;
+  uint32_t foreground;
+  uint32_t background;
+  int underline;
+  uint8_t columns;
+  bool has_text;
+  bool has_background;
+  bool selected;
+  bool bold;
+  bool italic;
+  bool invisible;
+  bool strikethrough;
+} TerminalRenderCell;
+
+typedef struct {
+  uint8_t *text;
+  size_t text_length;
+  int start_col;
+  int end_col;
+  uint32_t foreground;
+  int underline;
+  bool active;
+  bool bold;
+  bool italic;
+  bool strikethrough;
+} TerminalTextRun;
+
+typedef struct {
+  int start_col;
+  uint32_t color;
+  bool active;
+  bool selected;
+} TerminalBackgroundSpan;
+
+static void read_render_cell(
+  TerminalSession *session, GhosttyRenderStateColors *colors, TerminalRenderCell *cell
 ) {
+  memset(cell, 0, sizeof(*cell));
   uint8_t utf8[128];
   GhosttyBuffer grapheme = { .ptr = utf8, .cap = sizeof(utf8), .len = 0 };
   GhosttyColorRgb foreground = colors->foreground;
@@ -1176,38 +1220,142 @@ static void push_cell(
     ghostty_cell_get(raw_cell, GHOSTTY_CELL_DATA_WIDE, &wide);
   }
 
-  bool has_text = text_result == GHOSTTY_SUCCESS && grapheme.len > 0;
-  bool has_background = bg_result == GHOSTTY_SUCCESS;
-  if (!has_text && !has_background) {
-    lua_pushboolean(L, false);
-    return;
-  }
+  cell->has_text = text_result == GHOSTTY_SUCCESS && grapheme.len > 0;
+  cell->has_background = bg_result == GHOSTTY_SUCCESS;
   if (fg_result != GHOSTTY_SUCCESS) foreground = colors->foreground;
   if (bg_result != GHOSTTY_SUCCESS) background = colors->background;
   if (style.inverse) {
     GhosttyColorRgb swap = foreground;
     foreground = background;
     background = swap;
-    has_background = true;
+    cell->has_background = true;
   }
-
-  lua_createtable(L, 0, 9);
-  if (has_text) {
-    lua_pushlstring(L, (const char *)utf8, grapheme.len);
-    lua_setfield(L, -2, "text");
+  if (cell->has_text) {
+    memcpy(cell->utf8, utf8, grapheme.len);
+    cell->text_length = grapheme.len;
   }
-  set_integer_field(L, "fg", color_value(foreground));
-  if (has_background) set_integer_field(L, "bg", color_value(background));
-  if (style.bold) set_boolean_field(L, "bold", true);
-  if (style.italic) set_boolean_field(L, "italic", true);
-  if (style.invisible) set_boolean_field(L, "invisible", true);
-  if (style.strikethrough) set_boolean_field(L, "strikethrough", true);
-  if (style.underline) set_integer_field(L, "underline", style.underline);
-  if (wide == GHOSTTY_CELL_WIDE_WIDE) set_integer_field(L, "columns", 2);
-  bool selected = false;
+  cell->foreground = color_value(foreground);
+  cell->background = color_value(background);
+  cell->bold = style.bold;
+  cell->italic = style.italic;
+  cell->invisible = style.invisible;
+  cell->strikethrough = style.strikethrough;
+  cell->underline = style.underline;
+  cell->columns = wide == GHOSTTY_CELL_WIDE_WIDE ? 2 : 1;
   if (ghostty_render_state_row_cells_get(
-    session->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &selected
-  ) == GHOSTTY_SUCCESS && selected) set_boolean_field(L, "selected", true);
+    session->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &cell->selected
+  ) != GHOSTTY_SUCCESS) cell->selected = false;
+}
+
+static bool same_text_run(const TerminalTextRun *run, const TerminalRenderCell *cell) {
+  return run->foreground == cell->foreground && run->bold == cell->bold &&
+    run->italic == cell->italic && run->underline == cell->underline &&
+    run->strikethrough == cell->strikethrough;
+}
+
+static void flush_text_run(
+  lua_State *L, int runs_index, int *run_count, TerminalTextRun *run
+) {
+  if (!run->active) return;
+  lua_createtable(L, 0, 8);
+  lua_pushlstring(L, (const char *)run->text, run->text_length);
+  lua_setfield(L, -2, "text");
+  set_integer_field(L, "col", run->start_col);
+  set_integer_field(L, "columns", run->end_col - run->start_col);
+  set_integer_field(L, "fg", run->foreground);
+  if (run->bold) set_boolean_field(L, "bold", true);
+  if (run->italic) set_boolean_field(L, "italic", true);
+  if (run->underline) set_integer_field(L, "underline", run->underline);
+  if (run->strikethrough) set_boolean_field(L, "strikethrough", true);
+  lua_rawseti(L, runs_index, ++*run_count);
+  run->active = false;
+  run->text_length = 0;
+}
+
+static void flush_background_span(
+  lua_State *L, int backgrounds_index, int *span_count,
+  TerminalBackgroundSpan *span, int end_col
+) {
+  if (!span->active) return;
+  lua_createtable(L, 0, 4);
+  set_integer_field(L, "col", span->start_col);
+  set_integer_field(L, "columns", end_col - span->start_col);
+  if (span->selected) set_boolean_field(L, "selected", true);
+  else set_integer_field(L, "color", span->color);
+  lua_rawseti(L, backgrounds_index, ++*span_count);
+  span->active = false;
+}
+
+static void push_render_row(
+  lua_State *L, TerminalSession *session, GhosttyRenderStateColors *colors
+) {
+  lua_createtable(L, 0, 2);
+  int row_index = lua_absindex(L, -1);
+  lua_createtable(L, 8, 0);
+  int runs_index = lua_absindex(L, -1);
+  lua_createtable(L, 8, 0);
+  int backgrounds_index = lua_absindex(L, -1);
+
+  TerminalTextRun run = { .text = session->snapshot_text };
+  TerminalBackgroundSpan span = {0};
+  int run_count = 0;
+  int span_count = 0;
+  int col = 0;
+  while (ghostty_render_state_row_cells_next(session->row_cells)) {
+    TerminalRenderCell cell;
+    read_render_cell(session, colors, &cell);
+
+    bool draw_background = cell.selected || cell.has_background;
+    uint32_t background_color = cell.background;
+    if (!draw_background || (span.active &&
+        (span.selected != cell.selected || (!cell.selected && span.color != background_color)))) {
+      flush_background_span(L, backgrounds_index, &span_count, &span, col);
+    }
+    if (draw_background && !span.active) {
+      span.active = true;
+      span.selected = cell.selected;
+      span.color = background_color;
+      span.start_col = col;
+    }
+
+    bool draw_text = cell.has_text && !cell.invisible;
+    if (draw_text) {
+      if (!run.active || col != run.end_col || !same_text_run(&run, &cell)) {
+        flush_text_run(L, runs_index, &run_count, &run);
+        run.active = true;
+        run.start_col = col;
+        run.end_col = col;
+        run.foreground = cell.foreground;
+        run.bold = cell.bold;
+        run.italic = cell.italic;
+        run.underline = cell.underline;
+        run.strikethrough = cell.strikethrough;
+      }
+      memcpy(run.text + run.text_length, cell.utf8, cell.text_length);
+      run.text_length += cell.text_length;
+      run.end_col = col + cell.columns;
+    } else if (run.active && col >= run.end_col) {
+      flush_text_run(L, runs_index, &run_count, &run);
+    }
+    col++;
+  }
+  flush_text_run(L, runs_index, &run_count, &run);
+  flush_background_span(L, backgrounds_index, &span_count, &span, col);
+
+  lua_setfield(L, row_index, "backgrounds");
+  lua_setfield(L, row_index, "text_runs");
+}
+
+static bool ensure_snapshot_text(TerminalSession *session) {
+  size_t capacity = (size_t)session->cols * sizeof(((TerminalRenderCell *)0)->utf8);
+  if (session->snapshot_text_capacity >= capacity) return true;
+  uint8_t *text = session->snapshot_text
+    ? (uint8_t *)HeapReAlloc(GetProcessHeap(), 0, session->snapshot_text, capacity)
+    : (uint8_t *)HeapAlloc(GetProcessHeap(), 0, capacity);
+  if (!text) return false;
+  session->snapshot_text = text;
+  session->snapshot_text_capacity = capacity;
+  return true;
 }
 
 static int f_terminal_snapshot(lua_State *L) {
@@ -1262,6 +1410,9 @@ static int f_terminal_snapshot(lua_State *L) {
         session->render_state, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
         &session->row_iterator
       ) == GHOSTTY_SUCCESS) {
+    if (!ensure_snapshot_text(session)) {
+      return luaL_error(L, "Could not allocate a terminal text row");
+    }
     int row_index = 1;
     while (ghostty_render_state_row_iterator_next(session->row_iterator)) {
       bool row_dirty = true;
@@ -1269,17 +1420,12 @@ static int f_terminal_snapshot(lua_State *L) {
         session->row_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY, &row_dirty
       );
       if (!reuse || dirty == GHOSTTY_RENDER_STATE_DIRTY_FULL || row_dirty) {
-        lua_createtable(L, session->cols, 0);
         if (ghostty_render_state_row_get(
           session->row_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
           &session->row_cells
         ) == GHOSTTY_SUCCESS) {
-          int col_index = 1;
-          while (ghostty_render_state_row_cells_next(session->row_cells)) {
-            push_cell(L, session, &colors);
-            lua_rawseti(L, -2, col_index++);
-          }
-        }
+          push_render_row(L, session, &colors);
+        } else lua_createtable(L, 0, 0);
         lua_rawseti(L, -2, row_index);
       }
       bool clean = false;
@@ -1288,6 +1434,11 @@ static int f_terminal_snapshot(lua_State *L) {
       );
       row_index++;
     }
+  }
+  int existing_rows = (int)lua_rawlen(L, -1);
+  for (int row_index = session->rows + 1; row_index <= existing_rows; row_index++) {
+    lua_pushnil(L);
+    lua_rawseti(L, -2, row_index);
   }
   lua_setfield(L, -2, "rows");
   GhosttyRenderStateDirty clean = GHOSTTY_RENDER_STATE_DIRTY_FALSE;
