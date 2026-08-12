@@ -40,6 +40,9 @@ local function fake_native()
       mouse_events = {},
       focus_events = {},
       resizes = {},
+      scrolls = {},
+      gesture_events = {},
+      searches = {},
       closed = false,
     }
     function session:update() return false, true end
@@ -80,7 +83,20 @@ local function fake_native()
       self.resizes[#self.resizes + 1] = { cols, rows, cell_width, cell_height }
       return true
     end
-    function session:scroll() return true end
+    function session:scroll(kind, value)
+      self.scrolls[#self.scrolls + 1] = { kind, value }
+      return true
+    end
+    function session:selection_gesture(kind, col, row, pixel_x, pixel_y, clicks, rectangle)
+      self.gesture_events[#self.gesture_events + 1] = {
+        kind, col, row, pixel_x, pixel_y, clicks, rectangle,
+      }
+      return true, kind == "drag" and "down" or "none"
+    end
+    function session:search(query, reverse)
+      self.searches[#self.searches + 1] = { query, reverse }
+      return query == "needle"
+    end
     function session:close() self.closed = true end
     sessions[#sessions + 1] = session
     return session
@@ -211,11 +227,47 @@ test.describe("Terminal View", function()
     view:on_mouse_pressed("left", 10 + 6 + view.cell_width, 20 + 6 + view.cell_height)
     view:on_mouse_moved(10 + 6 + view.cell_width * 3, 20 + 6 + view.cell_height * 2)
     view:on_mouse_released("left", 0, 0)
-    test.same({ 1, 1, 3, 2, false }, session.selections[#session.selections])
+    test.equal(session.gesture_events[1][1], "press")
+    test.equal(session.gesture_events[2][1], "drag")
+    test.equal(session.gesture_events[2][2], 3)
+    test.equal(session.gesture_events[2][3], 2)
     test.ok(command.perform("terminal:copy"))
     test.equal(system.get_clipboard(), "selected output")
 
     system.set_clipboard(previous or "")
+  end)
+
+  test.it("uses word and line selection gestures for repeated clicks", function(context)
+    local view = terminal.open()
+    view.position.x, view.position.y = 0, 0
+    local session = context.sessions[1]
+    view:on_mouse_pressed("left", 20, 30, 2)
+    view:on_mouse_released("left", 20, 30)
+    view:on_mouse_pressed("left", 20, 30, 3)
+    view:on_mouse_released("left", 20, 30)
+    test.equal(session.gesture_events[1][6], 2)
+    test.equal(session.gesture_events[3][6], 3)
+  end)
+
+  test.it("maps terminal scrollback state to its scrollbar", function(context)
+    local view = terminal.open()
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 400
+    view.snapshot.scrollbar = { total = 100, offset = 40, len = 20 }
+    view:update_scrollbar()
+    test.equal(view:get_scrollable_size(), 100 * view.cell_height)
+    test.equal(view.v_scrollbar.percent, 0.5)
+    view:scroll_to_percent(0.25)
+    test.same({ "row", 20 }, context.sessions[1].scrolls[#context.sessions[1].scrolls])
+  end)
+
+  test.it("searches terminal scrollback through commands", function(context)
+    local view = terminal.open()
+    view.search_query = "needle"
+    test.ok(command.perform("terminal:search-next"))
+    test.ok(command.perform("terminal:search-previous"))
+    test.same({ "needle", false }, context.sessions[1].searches[1])
+    test.same({ "needle", true }, context.sessions[1].searches[2])
   end)
 
   test.it("reports mouse input when the terminal enables mouse tracking", function(context)
@@ -276,8 +328,8 @@ test.describe("Terminal View", function()
     test.equal(calls.text[2][3], 6 + 2 * view.cell_width)
     test.equal(calls.text[2][7], 3 * view.cell_width)
     test.equal(calls.text[3][3], 6 + 6 * view.cell_width)
-    local color_span = calls.rect[#calls.rect - 1]
-    local selection_span = calls.rect[#calls.rect]
+    local color_span = calls.rect[2]
+    local selection_span = calls.rect[3]
     test.equal(color_span[1], 6 + view.cell_width)
     test.equal(color_span[3], 2 * view.cell_width)
     test.equal(selection_span[1], 6 + 4 * view.cell_width)

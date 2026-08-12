@@ -91,6 +91,7 @@ function TerminalView:new(options)
   options = options or {}
   self.context = "workspace"
   self.terminal_view = true
+  self.scrollable = true
   self.cursor = "ibeam"
   self.font = style.terminal_font or style.code_font
   self.cell_width = math.max(1, math.ceil(self.font:get_width("M")))
@@ -179,9 +180,51 @@ function TerminalView:cell_geometry()
     math.max(1, math.floor(height / self.cell_height))
 end
 
+function TerminalView:get_scrollable_size()
+  local scrollbar = self.snapshot and self.snapshot.scrollbar
+  return scrollbar and math.max(self.size.y, scrollbar.total * self.cell_height)
+    or self.size.y
+end
+
+function TerminalView:update_scrollbar()
+  local scrollbar = self.snapshot and self.snapshot.scrollbar
+  local total = scrollbar and scrollbar.total or self.rows
+  local visible = scrollbar and scrollbar.len or self.rows
+  local offset = scrollbar and scrollbar.offset or 0
+  self.v_scrollbar:set_size(
+    self.position.x, self.position.y, self.size.x, self.size.y,
+    math.max(self.size.y, total * self.cell_height)
+  )
+  local range = math.max(0, total - visible)
+  self.v_scrollbar:set_percent(range > 0 and offset / range or 1)
+  self.v_scrollbar:update()
+end
+
+function TerminalView:scroll_to_percent(percent)
+  local scrollbar = self.snapshot and self.snapshot.scrollbar
+  if not (scrollbar and self.session) then return false end
+  local range = math.max(0, scrollbar.total - scrollbar.len)
+  local row = math.floor(math.max(0, math.min(1, percent)) * range + 0.5)
+  if not self.session:scroll("row", row) then return false end
+  self:refresh_snapshot()
+  return true
+end
+
 function TerminalView:update()
   TerminalView.super.update(self)
   if not self.session then return end
+
+  if self.selection_start and self.selection_autoscroll then
+    local x, y = core.root_panel.mouse.x, core.root_panel.mouse.y
+    local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
+    if self.session:scroll("delta", self.selection_autoscroll == "up" and -1 or 1) then
+      local _, autoscroll = self.session:selection_gesture(
+        "drag", col, row, pixel_x, pixel_y, 1, keymap.modkeys.alt == true
+      )
+      self.selection_autoscroll = autoscroll ~= "none" and autoscroll or nil
+      self:refresh_snapshot()
+    end
+  end
 
   local focused = core.active_view == self
   if focused ~= self.focused then
@@ -313,11 +356,13 @@ function TerminalView:draw()
     end
   end
   perf_scope_end(phase_scope)
+  self:draw_scrollbar()
   perf_scope_end(draw_scope)
 end
 
 function TerminalView:on_text_input(text)
   if not self.session or self.running == false then return false end
+  self.session:scroll("bottom")
   return self.session:write(text) == true
 end
 
@@ -343,6 +388,24 @@ function TerminalView:paste(text, allow_unsafe)
   return true
 end
 
+function TerminalView:search(query, reverse)
+  if not self.session or not query or query == "" then return false end
+  self.search_query = query
+  local found = self.session:search(query, reverse == true)
+  if found then self:refresh_snapshot() end
+  return found == true
+end
+
+function TerminalView:prompt_search()
+  core.command_view:enter("Terminal Search", {
+    text = self.search_query or "",
+    select_text = true,
+    show_suggestions = false,
+    submit = function(text) self:search(text, false) end,
+  })
+  return true
+end
+
 local function key_modifiers(event)
   if event and event.modifiers then return { raw = event.modifiers } end
   return {
@@ -355,6 +418,16 @@ end
 
 function TerminalView:on_key_pressed(key, event)
   if not self.session or self.running == false then return false end
+  if key == "pageup" and keymap.modkeys.shift then
+    return self.session:scroll("delta", -math.max(1, self.rows - 1))
+  elseif key == "pagedown" and keymap.modkeys.shift then
+    return self.session:scroll("delta", math.max(1, self.rows - 1))
+  elseif key == "home" and keymap.modkeys.shift then
+    return self.session:scroll("top")
+  elseif key == "end" and keymap.modkeys.shift then
+    return self.session:scroll("bottom")
+  end
+  self.session:scroll("bottom")
   local action = event and event["repeat"] and "repeat" or "press"
   return self.session:key(key, key_modifiers(event), action, event) == true
 end
@@ -387,8 +460,13 @@ function TerminalView:refresh_snapshot()
   core.redraw = true
 end
 
-function TerminalView:on_mouse_pressed(button, x, y)
+function TerminalView:on_mouse_pressed(button, x, y, clicks)
   if not self.session then return false end
+  local scrollbar = self.v_scrollbar:on_mouse_pressed(button, x, y, clicks)
+  if scrollbar then
+    if scrollbar ~= true then self:scroll_to_percent(scrollbar) end
+    return true
+  end
   core.set_active_view(self)
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
   local tracking = self.snapshot and self.snapshot.mouse_tracking
@@ -397,21 +475,30 @@ function TerminalView:on_mouse_pressed(button, x, y)
     self.session:clear_selection()
     self.session:mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
   elseif button == "left" then
-    self.selection_start = { col, row }
-    self.session:select(col, row, col, row, keymap.modkeys.alt == true)
+    self.selection_start = true
+    self.session:selection_gesture(
+      "press", col, row, pixel_x, pixel_y, clicks or 1,
+      keymap.modkeys.alt == true
+    )
     self:refresh_snapshot()
   end
   return true
 end
 
-function TerminalView:on_mouse_moved(x, y)
+function TerminalView:on_mouse_moved(x, y, dx, dy)
   if not self.session then return false end
+  local scrollbar = self.v_scrollbar:on_mouse_moved(x, y, dx or 0, dy or 0)
+  if scrollbar then
+    if scrollbar ~= true then self:scroll_to_percent(scrollbar) end
+    return true
+  end
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
   if self.selection_start then
-    self.session:select(
-      self.selection_start[1], self.selection_start[2], col, row,
+    local _, autoscroll = self.session:selection_gesture(
+      "drag", col, row, pixel_x, pixel_y, 1,
       keymap.modkeys.alt == true
     )
+    self.selection_autoscroll = autoscroll ~= "none" and autoscroll or nil
     self:refresh_snapshot()
     return true
   end
@@ -426,7 +513,14 @@ function TerminalView:on_mouse_released(button, x, y)
   if not self.session then return false end
   local _, _, pixel_x, pixel_y = self:mouse_position(x, y)
   if self.selection_start and button == "left" then
+    local col, row = self:mouse_position(x, y)
+    self.session:selection_gesture("release", col, row, 0, 0, 1, false)
     self.selection_start = nil
+    self.selection_autoscroll = nil
+    return true
+  end
+  if self.v_scrollbar.dragging then
+    self.v_scrollbar:on_mouse_released(button, x, y)
     return true
   end
   if self.snapshot and self.snapshot.mouse_tracking then
@@ -447,7 +541,7 @@ function TerminalView:on_mouse_wheel(delta_y)
     return true
   end
   local delta = delta_y > 0 and -3 or 3
-  if self.session:scroll(delta) then
+  if self.session:scroll("delta", delta) then
     self.snapshot = self.session:snapshot(self.snapshot)
     core.redraw = true
     return true
@@ -505,11 +599,17 @@ end, {
     return true
   end,
   ["terminal:restart"] = function(view) return view:restart() end,
+  ["terminal:search"] = function(view) return view:prompt_search() end,
+  ["terminal:search-next"] = function(view) return view:search(view.search_query, false) end,
+  ["terminal:search-previous"] = function(view) return view:search(view.search_query, true) end,
 })
 
 keymap.add({
   ["ctrl+shift+c"] = "terminal:copy",
   ["ctrl+shift+v"] = "terminal:paste",
+  ["ctrl+shift+f"] = "terminal:search",
+  ["f3"] = "terminal:search-next",
+  ["shift+f3"] = "terminal:search-previous",
 })
 
 return M
