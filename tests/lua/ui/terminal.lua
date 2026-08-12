@@ -140,6 +140,34 @@ test.describe("Terminal View", function()
     test.ok(resize[4] > 0)
   end)
 
+  test.it("restarts an exited terminal with the same launch options", function(context)
+    local view = terminal.open({ cwd = "C:/terminal-test", shell = "cmd.exe" })
+    context.sessions[1].update = function() return false, false, { exit_code = 7 } end
+    view:update()
+
+    test.equal(view:get_name(), "Terminal (exit 7)")
+    test.ok(command.perform("terminal:restart"))
+    test.equal(#context.sessions, 2)
+    test.equal(context.sessions[2].options.cwd, "C:/terminal-test")
+    test.equal(context.sessions[2].options.shell, "cmd.exe")
+    test.ok(context.sessions[1].closed)
+    test.ok(view.running)
+  end)
+
+  test.it("shows terminal transport failures once", function(context)
+    local view = terminal.open()
+    context.sessions[1].update = function()
+      return false, true, { error = "ConPTY input failed" }
+    end
+    local previous_error = core.error
+    local errors = {}
+    core.error = function(message) errors[#errors + 1] = message end
+    view:update()
+    view:update()
+    core.error = previous_error
+    test.same({ "ConPTY input failed" }, errors)
+  end)
+
   test.it("pastes clipboard text through the terminal encoder", function(context)
     local previous = system.get_clipboard()
     system.set_clipboard("terminal paste")

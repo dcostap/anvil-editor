@@ -1,6 +1,8 @@
 -- mod-version:3
 -- First integrated Terminal View prototype.
 local command = require "core.command"
+local common = require "core.common"
+local config = require "core.config"
 local core = require "core"
 local keymap = require "core.keymap"
 local panes = require "core.panes"
@@ -12,6 +14,15 @@ local native_override
 local views = {}
 
 local PADDING = 6
+
+---@class config.plugins.terminal
+local terminal_config = config.plugins.terminal
+
+local function document_path()
+  local view = core.active_view or core.last_active_view
+  local path = view and view.doc and view.doc.abs_filename
+  return path and common.dirname(path) or nil
+end
 
 local function terminal_native()
   if native_override then return native_override end
@@ -60,7 +71,11 @@ local function perf_is_recording()
   return perf and perf.is_recording and perf.is_recording()
 end
 
-local function project_path()
+local function project_path(mode)
+  if mode == "document" then
+    local path = document_path()
+    if path then return path end
+  end
   local project = core.root_project and core.root_project()
   return project and project.path or system.getcwd()
 end
@@ -81,6 +96,10 @@ function TerminalView:new(options)
   self.cell_height = math.max(1, math.ceil(self.font:get_height()))
   self.cols, self.rows = 80, 24
   self.color_cache = {}
+  self.launch_options = {
+    cwd = options.cwd or project_path(options.cwd_mode or terminal_config.cwd_mode),
+    shell = options.shell or terminal_config.shell,
+  }
 
   local native, load_error = terminal_native()
   if not native then error(load_error) end
@@ -89,21 +108,51 @@ function TerminalView:new(options)
     rows = self.rows,
     cell_width = self.cell_width,
     cell_height = self.cell_height,
-    cwd = options.cwd or project_path(),
-    shell = options.shell,
+    cwd = self.launch_options.cwd,
+    shell = self.launch_options.shell,
   })
   if not session then error(start_error or "Could not start the terminal.") end
   self.session = session
   self.snapshot = session:snapshot()
   self.running = true
   views[#views + 1] = self
-  core.log_quiet("Terminal View started: cwd=%s cols=%d rows=%d", options.cwd or project_path(), self.cols, self.rows)
+  core.log_quiet("Terminal View started: cwd=%s cols=%d rows=%d", self.launch_options.cwd, self.cols, self.rows)
 end
 
 function TerminalView:get_name()
   local title = self.snapshot and self.snapshot.title
   if title and title ~= "" then return title end
-  return self.running == false and "Terminal (exited)" or "Terminal"
+  if self.running == false then
+    return self.exit_code ~= nil and string.format("Terminal (exit %d)", self.exit_code)
+      or "Terminal (exited)"
+  end
+  return "Terminal"
+end
+
+function TerminalView:start_session()
+  local native, load_error = terminal_native()
+  if not native then return false, load_error end
+  local session, start_error = native.new({
+    cols = self.cols, rows = self.rows,
+    cell_width = self.cell_width, cell_height = self.cell_height,
+    cwd = self.launch_options.cwd, shell = self.launch_options.shell,
+  })
+  if not session then return false, start_error or "Could not start the terminal." end
+  self.session = session
+  self.snapshot = session:snapshot()
+  self.running = true
+  self.exit_code = nil
+  self.reported_error = nil
+  core.redraw = true
+  return true
+end
+
+function TerminalView:restart()
+  if self.session then self.session:close() end
+  self.session = nil
+  local ok, err = self:start_session()
+  if not ok then core.error("Could not restart terminal: %s", tostring(err)) end
+  return ok
 end
 
 function TerminalView:supports_text_input()
@@ -140,11 +189,16 @@ function TerminalView:update()
   local was_running = self.running
   local record_perf = perf_is_recording()
   local update_started = record_perf and system.get_time()
-  local changed, running = self.session:update()
+  local changed, running, status = self.session:update()
   if record_perf then
     perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
   end
   self.running = running ~= false
+  self.exit_code = status and status.exit_code or self.exit_code
+  if status and status.error and status.error ~= self.reported_error then
+    self.reported_error = status.error
+    core.error(status.error)
+  end
   if changed or self.running ~= was_running then
     local snapshot_started = record_perf and system.get_time()
     self.snapshot = self.session:snapshot(self.snapshot)
@@ -421,7 +475,7 @@ command.add(nil, {
 
 command.add(function()
   local view = core.active_view
-  return view and view.terminal_view == true and view.running ~= false, view
+  return view and view.terminal_view == true, view
 end, {
   ["terminal:paste"] = function(view)
     return view:paste(system.get_clipboard())
@@ -432,6 +486,7 @@ end, {
     system.set_clipboard(text)
     return true
   end,
+  ["terminal:restart"] = function(view) return view:restart() end,
 })
 
 keymap.add({

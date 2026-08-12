@@ -44,6 +44,12 @@ typedef struct {
   size_t snapshot_text_capacity;
   bool write_lock_initialized;
   volatile LONG write_failed;
+  volatile LONG input_rejected;
+  volatile LONG read_failed;
+  DWORD read_error;
+  DWORD write_error;
+  DWORD exit_code;
+  bool exit_code_known;
   bool mouse_button_pressed;
   GhosttyTerminal terminal;
   GhosttyRenderState render_state;
@@ -61,13 +67,23 @@ typedef struct {
   bool running;
 } TerminalSession;
 
+static void push_status(lua_State *L, TerminalSession *session);
+
 static DWORD WINAPI terminal_reader_main(void *userdata) {
   TerminalSession *session = (TerminalSession *)userdata;
   uint8_t buffer[65536];
 
   while (InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
     DWORD available = 0;
-    if (!PeekNamedPipe(session->output_read, NULL, 0, NULL, &available, NULL)) break;
+    if (!PeekNamedPipe(session->output_read, NULL, 0, NULL, &available, NULL)) {
+      DWORD error = GetLastError();
+      if (InterlockedCompareExchange(&session->closing, 0, 0) == 0 &&
+          error != ERROR_BROKEN_PIPE && error != ERROR_PIPE_NOT_CONNECTED) {
+        session->read_error = error;
+        InterlockedExchange(&session->read_failed, 1);
+      }
+      break;
+    }
     if (available == 0) {
       Sleep(2);
       continue;
@@ -131,6 +147,7 @@ static DWORD WINAPI terminal_writer_main(void *userdata) {
       if (!WriteFile(
         session->input_write, buffer + offset, (DWORD)(amount - offset), &written, NULL
       ) || written == 0) {
+        session->write_error = GetLastError();
         InterlockedExchange(&session->write_failed, 1);
         return 0;
       }
@@ -209,6 +226,7 @@ static bool write_all(TerminalSession *session, const uint8_t *data, size_t leng
       length > TERMINAL_WRITE_QUEUE_CAPACITY) return false;
   EnterCriticalSection(&session->write_lock);
   if (length > TERMINAL_WRITE_QUEUE_CAPACITY - session->write_queue_count) {
+    InterlockedExchange(&session->input_rejected, 1);
     LeaveCriticalSection(&session->write_lock);
     return false;
   }
@@ -591,7 +609,50 @@ static bool process_running(TerminalSession *session) {
   if (!session->process || session->closed) return false;
   DWORD exit_code = 0;
   if (!GetExitCodeProcess(session->process, &exit_code)) return false;
-  return exit_code == STILL_ACTIVE;
+  if (exit_code == STILL_ACTIVE) return true;
+  session->exit_code = exit_code;
+  session->exit_code_known = true;
+  return false;
+}
+
+static void push_status(lua_State *L, TerminalSession *session) {
+  bool read_failed = InterlockedCompareExchange(&session->read_failed, 0, 0) != 0;
+  bool write_failed = InterlockedCompareExchange(&session->write_failed, 0, 0) != 0;
+  bool input_rejected = InterlockedCompareExchange(&session->input_rejected, 0, 0) != 0;
+  if (!session->exit_code_known && !read_failed && !write_failed && !input_rejected) {
+    lua_pushnil(L);
+    return;
+  }
+  lua_createtable(L, 0, 2);
+  if (session->exit_code_known) {
+    lua_pushinteger(L, session->exit_code);
+    lua_setfield(L, -2, "exit_code");
+  }
+  if (input_rejected) {
+    lua_pushliteral(L, "Terminal input queue is full");
+    lua_setfield(L, -2, "error");
+  } else if (read_failed || write_failed) {
+    DWORD error = read_failed ? session->read_error : session->write_error;
+    const char *operation = read_failed ? "output" : "input";
+    char *message = NULL;
+    FormatMessageA(
+      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS,
+      NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+      (char *)&message, 0, NULL
+    );
+    if (message) {
+      size_t length = strlen(message);
+      while (length > 0 && (message[length - 1] == '\r' || message[length - 1] == '\n')) {
+        message[--length] = '\0';
+      }
+      lua_pushfstring(L, "ConPTY %s failed: %s", operation, message);
+      LocalFree(message);
+    } else {
+      lua_pushfstring(L, "ConPTY %s failed: Windows error %d", operation, (int)error);
+    }
+    lua_setfield(L, -2, "error");
+  }
 }
 
 static int f_terminal_update(lua_State *L) {
@@ -599,7 +660,8 @@ static int f_terminal_update(lua_State *L) {
   if (session->closed) {
     lua_pushboolean(L, false);
     lua_pushboolean(L, false);
-    return 2;
+    push_status(L, session);
+    return 3;
   }
 
   uint8_t buffer[65536];
@@ -635,7 +697,8 @@ static int f_terminal_update(lua_State *L) {
   session->running = process_running(session);
   lua_pushboolean(L, changed);
   lua_pushboolean(L, session->running);
-  return 2;
+  push_status(L, session);
+  return 3;
 }
 
 static int f_terminal_write(lua_State *L) {

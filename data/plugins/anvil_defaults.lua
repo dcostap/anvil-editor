@@ -104,6 +104,10 @@ plugin_defaults("command_slots", {
   strip_ansi = true,
   powershell_candidates = { "pwsh.exe", "powershell.exe" },
 })
+plugin_defaults("terminal", {
+  shell = nil,
+  cwd_mode = "project",
+})
 plugin_defaults("diffview", {
   log_times = false,
   plain_text = false,
