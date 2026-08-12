@@ -17,6 +17,7 @@
 
 #define TERMINAL_READ_BUDGET (128u * 1024u)
 #define TERMINAL_READ_QUEUE_CAPACITY (4u * 1024u * 1024u)
+#define TERMINAL_WRITE_QUEUE_CAPACITY (4u * 1024u * 1024u)
 
 typedef struct {
   HPCON pseudoconsole;
@@ -26,6 +27,7 @@ typedef struct {
   HANDLE process_thread;
   HANDLE job;
   HANDLE reader_thread;
+  HANDLE writer_thread;
   CRITICAL_SECTION read_lock;
   CONDITION_VARIABLE read_ready;
   uint8_t *read_queue;
@@ -33,6 +35,13 @@ typedef struct {
   size_t read_queue_count;
   volatile LONG closing;
   bool read_lock_initialized;
+  CRITICAL_SECTION write_lock;
+  CONDITION_VARIABLE write_ready;
+  uint8_t *write_queue;
+  size_t write_queue_head;
+  size_t write_queue_count;
+  bool write_lock_initialized;
+  volatile LONG write_failed;
   bool mouse_button_pressed;
   GhosttyTerminal terminal;
   GhosttyRenderState render_state;
@@ -90,16 +99,62 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
   return 0;
 }
 
-static bool start_terminal_reader(TerminalSession *session) {
+static DWORD WINAPI terminal_writer_main(void *userdata) {
+  TerminalSession *session = (TerminalSession *)userdata;
+  uint8_t buffer[65536];
+
+  while (InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
+    size_t amount = 0;
+    EnterCriticalSection(&session->write_lock);
+    while (session->write_queue_count == 0 &&
+           InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
+      SleepConditionVariableCS(&session->write_ready, &session->write_lock, INFINITE);
+    }
+    if (session->write_queue_count > 0) {
+      amount = session->write_queue_count;
+      if (amount > sizeof(buffer)) amount = sizeof(buffer);
+      size_t contiguous = TERMINAL_WRITE_QUEUE_CAPACITY - session->write_queue_head;
+      if (amount > contiguous) amount = contiguous;
+      memcpy(buffer, session->write_queue + session->write_queue_head, amount);
+      session->write_queue_head = (session->write_queue_head + amount) %
+        TERMINAL_WRITE_QUEUE_CAPACITY;
+      session->write_queue_count -= amount;
+    }
+    LeaveCriticalSection(&session->write_lock);
+    if (amount == 0) continue;
+
+    size_t offset = 0;
+    while (offset < amount && InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
+      DWORD written = 0;
+      if (!WriteFile(
+        session->input_write, buffer + offset, (DWORD)(amount - offset), &written, NULL
+      ) || written == 0) {
+        InterlockedExchange(&session->write_failed, 1);
+        return 0;
+      }
+      offset += written;
+    }
+  }
+  return 0;
+}
+
+static bool start_terminal_io(TerminalSession *session) {
   session->read_queue = (uint8_t *)HeapAlloc(
     GetProcessHeap(), 0, TERMINAL_READ_QUEUE_CAPACITY
   );
-  if (!session->read_queue) return false;
+  session->write_queue = (uint8_t *)HeapAlloc(
+    GetProcessHeap(), 0, TERMINAL_WRITE_QUEUE_CAPACITY
+  );
+  if (!session->read_queue || !session->write_queue) return false;
   InitializeCriticalSection(&session->read_lock);
   session->read_lock_initialized = true;
   InitializeConditionVariable(&session->read_ready);
+  InitializeCriticalSection(&session->write_lock);
+  session->write_lock_initialized = true;
+  InitializeConditionVariable(&session->write_ready);
   session->reader_thread = CreateThread(NULL, 0, terminal_reader_main, session, 0, NULL);
-  return session->reader_thread != NULL;
+  session->writer_thread = CreateThread(NULL, 0, terminal_writer_main, session, 0, NULL);
+  return session->reader_thread != NULL && session->writer_thread != NULL;
 }
 
 static TerminalSession *check_session(lua_State *L, int index) {
@@ -147,16 +202,27 @@ static void push_windows_error(lua_State *L, const char *prefix, DWORD code) {
 }
 
 static bool write_all(TerminalSession *session, const uint8_t *data, size_t length) {
-  if (!session || session->closed || !session->input_write) return false;
-  while (length > 0) {
-    DWORD chunk = length > UINT32_MAX ? UINT32_MAX : (DWORD)length;
-    DWORD written = 0;
-    if (!WriteFile(session->input_write, data, chunk, &written, NULL) || written == 0) {
-      return false;
-    }
-    data += written;
-    length -= written;
+  if (!session || session->closed || !session->input_write || !session->write_lock_initialized ||
+      InterlockedCompareExchange(&session->write_failed, 0, 0) != 0 ||
+      length > TERMINAL_WRITE_QUEUE_CAPACITY) return false;
+  EnterCriticalSection(&session->write_lock);
+  if (length > TERMINAL_WRITE_QUEUE_CAPACITY - session->write_queue_count) {
+    LeaveCriticalSection(&session->write_lock);
+    return false;
   }
+  size_t offset = 0;
+  while (offset < length) {
+    size_t tail = (session->write_queue_head + session->write_queue_count) %
+      TERMINAL_WRITE_QUEUE_CAPACITY;
+    size_t contiguous = TERMINAL_WRITE_QUEUE_CAPACITY - tail;
+    size_t amount = length - offset;
+    if (amount > contiguous) amount = contiguous;
+    memcpy(session->write_queue + tail, data + offset, amount);
+    session->write_queue_count += amount;
+    offset += amount;
+  }
+  WakeConditionVariable(&session->write_ready);
+  LeaveCriticalSection(&session->write_lock);
   return true;
 }
 
@@ -246,17 +312,27 @@ static void close_session(TerminalSession *session) {
   session->running = false;
   InterlockedExchange(&session->closing, 1);
 
-  close_handle(&session->input_write);
   if (session->reader_thread) CancelSynchronousIo(session->reader_thread);
+  if (session->writer_thread) CancelSynchronousIo(session->writer_thread);
+  close_handle(&session->input_write);
   close_handle(&session->output_read);
   if (session->read_lock_initialized) {
     EnterCriticalSection(&session->read_lock);
     WakeAllConditionVariable(&session->read_ready);
     LeaveCriticalSection(&session->read_lock);
   }
+  if (session->write_lock_initialized) {
+    EnterCriticalSection(&session->write_lock);
+    WakeAllConditionVariable(&session->write_ready);
+    LeaveCriticalSection(&session->write_lock);
+  }
   if (session->reader_thread) {
     WaitForSingleObject(session->reader_thread, INFINITE);
     close_handle(&session->reader_thread);
+  }
+  if (session->writer_thread) {
+    WaitForSingleObject(session->writer_thread, INFINITE);
+    close_handle(&session->writer_thread);
   }
 
   if (session->pseudoconsole) {
@@ -283,6 +359,14 @@ static void close_session(TerminalSession *session) {
   if (session->read_queue) {
     HeapFree(GetProcessHeap(), 0, session->read_queue);
     session->read_queue = NULL;
+  }
+  if (session->write_lock_initialized) {
+    DeleteCriticalSection(&session->write_lock);
+    session->write_lock_initialized = false;
+  }
+  if (session->write_queue) {
+    HeapFree(GetProcessHeap(), 0, session->write_queue);
+    session->write_queue = NULL;
   }
 }
 
@@ -478,11 +562,11 @@ static int f_terminal_new(lua_State *L) {
   }
   lua_pop(L, 2);
 
-  if (!start_terminal_reader(session)) {
+  if (!start_terminal_io(session)) {
     close_session(session);
     lua_pop(L, 1);
     lua_pushnil(L);
-    lua_pushliteral(L, "Could not start the ConPTY reader");
+    lua_pushliteral(L, "Could not start ConPTY input and output workers");
     return 2;
   }
 
