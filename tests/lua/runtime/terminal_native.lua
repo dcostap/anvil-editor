@@ -11,6 +11,20 @@ local function snapshot_text(snapshot)
   return table.concat(parts)
 end
 
+
+local function wait_for_text(session, expected, timeout)
+  local deadline = system.get_time() + (timeout or 8)
+  local text = ""
+  local snapshot
+  while system.get_time() < deadline and not text:find(expected, 1, true) do
+    session:update()
+    snapshot = session:snapshot(snapshot)
+    text = snapshot_text(snapshot)
+    if not text:find(expected, 1, true) then coroutine.yield(0.005) end
+  end
+  return text, snapshot
+end
+
 test.describe("Native terminal session", function()
   test.it("runs a ConPTY command and parses its VT output", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
@@ -172,5 +186,69 @@ test.describe("Native terminal session", function()
     test.equal(events[1].count, 1)
     test.equal(events[2].type, "clipboard")
     test.equal(events[2].text, "test")
+  end)
+
+  test.it("drains multi-megabyte output without losing the tail", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 100, rows = 12, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$chunk='x'*4096; 1..512 | ForEach-Object { [Console]::Write($chunk) }; [Console]::WriteLine('ANVIL_STRESS_TAIL')"]],
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "ANVIL_STRESS_TAIL", 20)
+    session:close()
+    test.ok(text:find("ANVIL_STRESS_TAIL", 1, true), text)
+  end)
+
+  test.it("handles alternate-screen TUI output", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$e=[char]27; [Console]::Write($e+'[?1049h'+$e+'[2J'+$e+'[3;7H'+$e+'[1;34mANVIL_TUI_SCREEN'+$e+'[0m'); Start-Sleep -Milliseconds 300; [Console]::Write($e+'[?1049l'); [Console]::WriteLine('ANVIL_TUI_EXIT')"]],
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "ANVIL_TUI_SCREEN", 5)
+    test.ok(text:find("ANVIL_TUI_SCREEN", 1, true), text)
+    text = wait_for_text(session, "ANVIL_TUI_EXIT", 5)
+    session:close()
+    test.ok(text:find("ANVIL_TUI_EXIT", 1, true), text)
+  end)
+
+  test.it("answers an interactive shell prompt", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$answer=Read-Host 'ANVIL_INTERACTIVE_PROMPT'; Write-Output ('ANVIL_INTERACTIVE_REPLY='+$answer)"]],
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "ANVIL_INTERACTIVE_PROMPT", 5)
+    test.ok(text:find("ANVIL_INTERACTIVE_PROMPT", 1, true), text)
+    test.ok(session:write("terminal reply\r"))
+    text = wait_for_text(session, "ANVIL_INTERACTIVE_REPLY=terminal reply", 5)
+    session:close()
+    test.ok(text:find("ANVIL_INTERACTIVE_REPLY=terminal reply", 1, true), text)
+  end)
+
+  test.it("repeatedly starts and closes native sessions", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    for index = 1, 8 do
+      local marker = "ANVIL_CYCLE_" .. index
+      local session, start_error = terminal_native.new({
+        cols = 40, rows = 4, cell_width = 8, cell_height = 16,
+        cwd = system.getcwd(),
+        shell = string.format('cmd.exe /d /s /c "echo %s"', marker),
+      })
+      test.ok(session, start_error)
+      local text = wait_for_text(session, marker, 5)
+      session:close()
+      test.ok(text:find(marker, 1, true), text)
+    end
   end)
 end)

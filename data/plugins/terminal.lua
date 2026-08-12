@@ -1,5 +1,5 @@
 -- mod-version:3
--- First integrated Terminal View prototype.
+-- Integrated Windows Terminal View.
 local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
@@ -18,6 +18,27 @@ local PADDING = 6
 
 ---@class config.plugins.terminal
 local terminal_config = config.plugins.terminal
+terminal_config.config_spec = {
+  name = "Terminal",
+  {
+    label = "Shell Command",
+    description = "Command that starts new terminal sessions. Empty uses PowerShell.",
+    path = "shell",
+    type = "string",
+    default = "",
+  },
+  {
+    label = "Starting Directory",
+    description = "Directory used when a command does not specify one.",
+    path = "cwd_mode",
+    type = "selection",
+    default = "project",
+    values = {
+      { "Project", "project" },
+      { "Active Document", "document" },
+    },
+  },
+}
 
 local function document_path()
   for _, view in ipairs({ core.active_view, core.last_active_view }) do
@@ -28,7 +49,7 @@ end
 
 local function terminal_native()
   if native_override then return native_override end
-  if PLATFORM ~= "Windows" then return nil, "The Terminal View prototype requires Windows." end
+  if PLATFORM ~= "Windows" then return nil, "The Terminal View requires Windows." end
   local ok, native = pcall(require, "terminal_native")
   if not ok then return nil, tostring(native) end
   return native

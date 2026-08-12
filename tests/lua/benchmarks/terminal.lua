@@ -1,0 +1,80 @@
+local common = require "core.common"
+local test = require "core.test"
+
+local function snapshot_text(snapshot)
+  local parts = {}
+  for _, row in ipairs(snapshot.rows or {}) do
+    for _, run in ipairs(row.text_runs or {}) do parts[#parts + 1] = run.text end
+    parts[#parts + 1] = "\n"
+  end
+  return table.concat(parts)
+end
+
+local function percentile(values, fraction)
+  table.sort(values)
+  return values[math.max(1, math.min(#values, math.ceil(#values * fraction)))] or 0
+end
+
+test.describe("Terminal native benchmark", function()
+  test.it("records sustained output update and snapshot costs", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    collectgarbage("collect")
+    local heap_before = collectgarbage("count")
+    local session, start_error = terminal_native.new({
+      cols = 120, rows = 40, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "1..20000 | ForEach-Object { Write-Output ('{0:D6} terminal benchmark output with colors and unicode [36m界[0m' -f $_) }; Write-Output 'ANVIL_TERMINAL_BENCHMARK_TAIL'"]],
+    })
+    test.ok(session, start_error)
+
+    local updates, snapshots = {}, {}
+    local update_calls, snapshot_calls = 0, 0
+    local text, snapshot = "", nil
+    local started = system.get_time()
+    local deadline = started + 30
+    while system.get_time() < deadline and
+        not text:find("ANVIL_TERMINAL_BENCHMARK_TAIL", 1, true) do
+      local update_started = system.get_time()
+      local changed = session:update()
+      updates[#updates + 1] = (system.get_time() - update_started) * 1000
+      update_calls = update_calls + 1
+      if changed then
+        local snapshot_started = system.get_time()
+        snapshot = session:snapshot(snapshot)
+        snapshots[#snapshots + 1] = (system.get_time() - snapshot_started) * 1000
+        snapshot_calls = snapshot_calls + 1
+        text = snapshot_text(snapshot)
+      end
+      if not changed then coroutine.yield(0.001) end
+    end
+    local elapsed_ms = (system.get_time() - started) * 1000
+    session:close()
+    test.ok(text:find("ANVIL_TERMINAL_BENCHMARK_TAIL", 1, true), text)
+
+    collectgarbage("collect")
+    local report = {
+      benchmark = "terminal-native-output",
+      recorded_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+      output_lines = 20000,
+      elapsed_ms = elapsed_ms,
+      update_calls = update_calls,
+      snapshot_calls = snapshot_calls,
+      update_ms = {
+        median = percentile(updates, 0.50),
+        p95 = percentile(updates, 0.95),
+        max = percentile(updates, 1.00),
+      },
+      snapshot_ms = {
+        median = percentile(snapshots, 0.50),
+        p95 = percentile(snapshots, 0.95),
+        max = percentile(snapshots, 1.00),
+      },
+      lua_heap_kib = {
+        before = heap_before,
+        after = collectgarbage("count"),
+      },
+    }
+    print("terminal-native-benchmark " .. common.serialize(report))
+  end)
+end)
