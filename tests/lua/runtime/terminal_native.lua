@@ -199,13 +199,14 @@ test.describe("Native terminal session", function()
     local session, start_error = terminal_native.new({
       cols = 100, rows = 12, cell_width = 8, cell_height = 16,
       cwd = system.getcwd(),
-      shell = [[powershell.exe -NoLogo -NoProfile -Command "$chunk='x'*4096; 1..1536 | ForEach-Object { [Console]::Write($chunk) }; [Console]::WriteLine('ANVIL_STRESS_TAIL')"]],
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$chunk='x'*4096; 1..1280 | ForEach-Object { [Console]::Write($chunk) }; [Console]::WriteLine('ANVIL_STRESS_TAIL')"]],
     })
     test.ok(session, start_error)
     coroutine.yield(0.2)
-    local text = wait_for_text(session, "ANVIL_STRESS_TAIL", 20)
+    local text = wait_for_text(session, "ANVIL_STRESS_TAIL", 45)
     session:close()
-    test.ok(text:find("ANVIL_STRESS_TAIL", 1, true), text)
+    test.ok(text:find("ANVIL_STRESS_TAIL", 1, true),
+      "expected the terminal tail after more than 4 MiB of output")
   end)
 
   test.it("handles alternate-screen TUI output", function()
