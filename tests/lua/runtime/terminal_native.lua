@@ -193,20 +193,56 @@ test.describe("Native terminal session", function()
     test.equal(events[2].text, "test")
   end)
 
+  test.it("coalesces terminal desktop notifications without losing their count", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$e=[char]27; $b=[char]7; [Console]::Write($e+']9;first'+$b+$e+']9;second'+$b)"]],
+    })
+    test.ok(session, start_error)
+    local notification
+    local deadline = system.get_time() + 5
+    while system.get_time() < deadline and not notification do
+      session:update()
+      for _, event in ipairs(session:snapshot().events or {}) do
+        if event.type == "notification" then notification = event end
+      end
+      if not notification then coroutine.yield(0.01) end
+    end
+    session:close()
+    test.ok(notification)
+    test.equal(notification.count, 2)
+    test.equal(notification.body, "second")
+  end)
+
   test.it("drains multi-megabyte output without losing the tail", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"
     local session, start_error = terminal_native.new({
       cols = 100, rows = 12, cell_width = 8, cell_height = 16,
       cwd = system.getcwd(),
-      shell = [[powershell.exe -NoLogo -NoProfile -Command "$chunk='x'*4096; 1..1280 | ForEach-Object { [Console]::Write($chunk) }; [Console]::WriteLine('ANVIL_STRESS_TAIL')"]],
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$chunk='x'*4096; $b=[char]7; 1..1280 | ForEach-Object { [Console]::Write($chunk+$b) }; [Console]::WriteLine('ANVIL_STRESS_TAIL')"]],
     })
     test.ok(session, start_error)
     coroutine.yield(0.2)
-    local text = wait_for_text(session, "ANVIL_STRESS_TAIL", 45)
+    local text, snapshot, bell_count = "", nil, 0
+    local deadline = system.get_time() + 45
+    while system.get_time() < deadline and
+        (not text:find("ANVIL_STRESS_TAIL", 1, true) or bell_count < 1280) do
+      session:update()
+      snapshot = session:snapshot(snapshot)
+      text = snapshot_text(snapshot)
+      for _, event in ipairs(snapshot.events or {}) do
+        if event.type == "bell" then bell_count = bell_count + (event.count or 1) end
+      end
+      coroutine.yield(0.001)
+    end
     session:close()
     test.ok(text:find("ANVIL_STRESS_TAIL", 1, true),
       "expected the terminal tail after more than 4 MiB of output")
+    test.equal(bell_count, 1280)
   end)
 
   test.it("handles alternate-screen TUI output", function()
@@ -259,6 +295,29 @@ test.describe("Native terminal session", function()
       session:close()
       test.ok(text:find(marker, 1, true), text)
     end
+  end)
+
+  test.it("kills an active process tree when its session closes", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local marker = system.getcwd() .. "/terminal-active-close-marker"
+    os.remove(marker)
+    local quoted_marker = marker:gsub("'", "''")
+    local shell = string.format(
+      [[powershell.exe -NoLogo -NoProfile -Command "$path='%s'; $job=Start-Job -ScriptBlock { param($p) Start-Sleep -Seconds 2; Set-Content -LiteralPath $p -Value escaped } -ArgumentList $path; Write-Output 'ANVIL_ACTIVE_READY'; Wait-Job $job"]],
+      quoted_marker
+    )
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(), shell = shell,
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "ANVIL_ACTIVE_READY", 5)
+    test.ok(text:find("ANVIL_ACTIVE_READY", 1, true), text)
+    session:close()
+    coroutine.yield(3)
+    test.equal(system.get_file_info(marker), nil)
+    os.remove(marker)
   end)
 
   test.it("runs a command through the default WSL distribution", function()

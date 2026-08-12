@@ -417,3 +417,18 @@ test('lua-ui', lua_test_shell,
     timeout: 180,
     is_parallel: false,
 )
+
+test('terminal-native-perf', lua_test_shell,
+    args: [
+        lua_test_runner,
+        anvil_build_root,
+        anvil_source_root,
+        anvil_exe.full_path(),
+        'tests/lua/benchmarks/terminal.lua',
+        'terminal-native-perf',
+    ],
+    env: anvil_test_env,
+    depends: anvil_exe,
+    timeout: 60,
+    is_parallel: false,
+)
