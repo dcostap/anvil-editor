@@ -412,4 +412,33 @@ test.describe("Terminal View", function()
     test.equal(view.bell_count, 1)
     test.equal(view.pending_clipboard.text, "terminal clipboard")
   end)
+
+  test.it("renders real ConPTY output through Terminal View", function(context)
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = terminal.open({
+      cwd = system.getcwd(),
+      shell = 'cmd.exe /d /s /c "echo ANVIL_TERMINAL_VIEW_INTEGRATION"',
+    })
+    test.ok(view)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 400
+    local deadline = system.get_time() + 5
+    local found = false
+    while system.get_time() < deadline and not found do
+      view:update()
+      for _, row in ipairs(view.snapshot.rows or {}) do
+        for _, run in ipairs(row.text_runs or {}) do
+          if run.text:find("ANVIL_TERMINAL_VIEW_INTEGRATION", 1, true) then
+            found = true
+          end
+        end
+      end
+      if not found then coroutine.yield(0.01) end
+    end
+    test.ok(found)
+    local calls = draw_calls(function() view:draw() end)
+    test.ok(#calls.text > 0)
+    terminal._set_native_for_tests(context.native)
+  end)
 end)

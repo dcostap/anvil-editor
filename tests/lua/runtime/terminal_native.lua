@@ -259,4 +259,34 @@ test.describe("Native terminal session", function()
       test.ok(text:find(marker, 1, true), text)
     end
   end)
+
+  test.it("runs a command through the default WSL distribution", function()
+    test.skip_if(PLATFORM ~= "Windows", "WSL is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[wsl.exe -e sh -lc "printf ANVIL_WSL_TERMINAL"]],
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "ANVIL_WSL_TERMINAL", 15)
+    session:close()
+    test.ok(text:find("ANVIL_WSL_TERMINAL", 1, true), text)
+  end)
+
+  test.it("runs the Windows OpenSSH client", function()
+    test.skip_if(PLATFORM ~= "Windows", "OpenSSH test is Windows-specific")
+    local windir = os.getenv("WINDIR") or "C:/Windows"
+    local ssh = windir .. "/System32/OpenSSH/ssh.exe"
+    test.skip_if(not system.get_file_info(ssh), "Windows OpenSSH is unavailable")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(), shell = string.format('"%s" -V', ssh),
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "OpenSSH", 5)
+    session:close()
+    test.ok(text:find("OpenSSH", 1, true), text)
+  end)
 end)
