@@ -33,12 +33,15 @@ typedef struct {
   size_t read_queue_count;
   volatile LONG closing;
   bool read_lock_initialized;
+  bool mouse_button_pressed;
   GhosttyTerminal terminal;
   GhosttyRenderState render_state;
   GhosttyRenderStateRowIterator row_iterator;
   GhosttyRenderStateRowCells row_cells;
   GhosttyKeyEncoder key_encoder;
   GhosttyKeyEvent key_event;
+  GhosttyMouseEncoder mouse_encoder;
+  GhosttyMouseEvent mouse_event;
   uint16_t cols;
   uint16_t rows;
   uint32_t cell_width;
@@ -203,6 +206,14 @@ static bool terminal_device_attributes(
 }
 
 static void free_terminal_objects(TerminalSession *session) {
+  if (session->mouse_event) {
+    ghostty_mouse_event_free(session->mouse_event);
+    session->mouse_event = NULL;
+  }
+  if (session->mouse_encoder) {
+    ghostty_mouse_encoder_free(session->mouse_encoder);
+    session->mouse_encoder = NULL;
+  }
   if (session->key_event) {
     ghostty_key_event_free(session->key_event);
     session->key_event = NULL;
@@ -284,6 +295,8 @@ static bool initialize_terminal(TerminalSession *session) {
   if (ghostty_render_state_row_cells_new(NULL, &session->row_cells) != GHOSTTY_SUCCESS) return false;
   if (ghostty_key_encoder_new(NULL, &session->key_encoder) != GHOSTTY_SUCCESS) return false;
   if (ghostty_key_event_new(NULL, &session->key_event) != GHOSTTY_SUCCESS) return false;
+  if (ghostty_mouse_encoder_new(NULL, &session->mouse_encoder) != GHOSTTY_SUCCESS) return false;
+  if (ghostty_mouse_event_new(NULL, &session->mouse_event) != GHOSTTY_SUCCESS) return false;
 
   ghostty_terminal_set(session->terminal, GHOSTTY_TERMINAL_OPT_USERDATA, session);
   ghostty_terminal_set(
@@ -843,6 +856,146 @@ static int f_terminal_scroll(lua_State *L) {
   return 1;
 }
 
+static bool viewport_ref(
+  TerminalSession *session, uint16_t x, uint32_t y, GhosttyGridRef *out_ref
+) {
+  GhosttyPoint point = {
+    .tag = GHOSTTY_POINT_TAG_VIEWPORT,
+    .value = { .coordinate = { .x = x, .y = y } },
+  };
+  return ghostty_terminal_grid_ref(session->terminal, point, out_ref) == GHOSTTY_SUCCESS;
+}
+
+static int f_terminal_select(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  uint16_t start_x = (uint16_t)luaL_checkinteger(L, 2);
+  uint32_t start_y = (uint32_t)luaL_checkinteger(L, 3);
+  uint16_t end_x = (uint16_t)luaL_checkinteger(L, 4);
+  uint32_t end_y = (uint32_t)luaL_checkinteger(L, 5);
+  GhosttySelection selection = GHOSTTY_INIT_SIZED(GhosttySelection);
+  selection.rectangle = lua_toboolean(L, 6) != 0;
+  bool ok = viewport_ref(session, start_x, start_y, &selection.start) &&
+    viewport_ref(session, end_x, end_y, &selection.end) &&
+    ghostty_terminal_set(
+      session->terminal, GHOSTTY_TERMINAL_OPT_SELECTION, &selection
+    ) == GHOSTTY_SUCCESS &&
+    ghostty_render_state_update(session->render_state, session->terminal) == GHOSTTY_SUCCESS;
+  lua_pushboolean(L, ok);
+  return 1;
+}
+
+static int f_terminal_clear_selection(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  GhosttyResult result = ghostty_terminal_set(
+    session->terminal, GHOSTTY_TERMINAL_OPT_SELECTION, NULL
+  );
+  if (result == GHOSTTY_SUCCESS) {
+    ghostty_render_state_update(session->render_state, session->terminal);
+  }
+  lua_pushboolean(L, result == GHOSTTY_SUCCESS);
+  return 1;
+}
+
+static int f_terminal_selected_text(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  GhosttyTerminalSelectionFormatOptions options =
+    GHOSTTY_INIT_SIZED(GhosttyTerminalSelectionFormatOptions);
+  options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
+  options.unwrap = true;
+  options.trim = true;
+
+  size_t length = 0;
+  GhosttyResult result = ghostty_terminal_selection_format_buf(
+    session->terminal, options, NULL, 0, &length
+  );
+  if (result == GHOSTTY_NO_VALUE) {
+    lua_pushnil(L);
+    return 1;
+  }
+  if (result != GHOSTTY_OUT_OF_SPACE || length == 0) {
+    lua_pushliteral(L, "");
+    return 1;
+  }
+
+  uint8_t *buffer = (uint8_t *)HeapAlloc(GetProcessHeap(), 0, length);
+  if (!buffer) {
+    lua_pushnil(L);
+    return 1;
+  }
+  result = ghostty_terminal_selection_format_buf(
+    session->terminal, options, buffer, length, &length
+  );
+  if (result == GHOSTTY_SUCCESS) lua_pushlstring(L, (const char *)buffer, length);
+  else lua_pushnil(L);
+  HeapFree(GetProcessHeap(), 0, buffer);
+  return 1;
+}
+
+static GhosttyMouseButton mouse_button_from_name(const char *name) {
+  if (strcmp(name, "left") == 0) return GHOSTTY_MOUSE_BUTTON_LEFT;
+  if (strcmp(name, "right") == 0) return GHOSTTY_MOUSE_BUTTON_RIGHT;
+  if (strcmp(name, "middle") == 0) return GHOSTTY_MOUSE_BUTTON_MIDDLE;
+  if (strcmp(name, "four") == 0) return GHOSTTY_MOUSE_BUTTON_FOUR;
+  if (strcmp(name, "five") == 0) return GHOSTTY_MOUSE_BUTTON_FIVE;
+  return GHOSTTY_MOUSE_BUTTON_UNKNOWN;
+}
+
+static int f_terminal_mouse(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  const char *action_name = luaL_checkstring(L, 2);
+  const char *button_name = luaL_optstring(L, 3, "");
+  float x = (float)luaL_checknumber(L, 4);
+  float y = (float)luaL_checknumber(L, 5);
+  luaL_checktype(L, 6, LUA_TTABLE);
+
+  GhosttyMouseAction action = GHOSTTY_MOUSE_ACTION_MOTION;
+  if (strcmp(action_name, "press") == 0) action = GHOSTTY_MOUSE_ACTION_PRESS;
+  else if (strcmp(action_name, "release") == 0) action = GHOSTTY_MOUSE_ACTION_RELEASE;
+  GhosttyMouseButton button = mouse_button_from_name(button_name);
+
+  GhosttyMods mods = 0;
+  if (table_bool(L, 6, "shift")) mods |= GHOSTTY_MODS_SHIFT;
+  if (table_bool(L, 6, "ctrl")) mods |= GHOSTTY_MODS_CTRL;
+  if (table_bool(L, 6, "alt")) mods |= GHOSTTY_MODS_ALT;
+  if (table_bool(L, 6, "super")) mods |= GHOSTTY_MODS_SUPER;
+
+  GhosttyMouseEncoderSize size = GHOSTTY_INIT_SIZED(GhosttyMouseEncoderSize);
+  size.screen_width = session->cols * session->cell_width;
+  size.screen_height = session->rows * session->cell_height;
+  size.cell_width = session->cell_width;
+  size.cell_height = session->cell_height;
+  ghostty_mouse_encoder_setopt_from_terminal(session->mouse_encoder, session->terminal);
+  bool wheel = button == GHOSTTY_MOUSE_BUTTON_FOUR || button == GHOSTTY_MOUSE_BUTTON_FIVE;
+  if (!wheel && action == GHOSTTY_MOUSE_ACTION_PRESS) session->mouse_button_pressed = true;
+  if (!wheel && action == GHOSTTY_MOUSE_ACTION_RELEASE) session->mouse_button_pressed = false;
+  ghostty_mouse_encoder_setopt(
+    session->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size
+  );
+  ghostty_mouse_encoder_setopt(
+    session->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
+    &session->mouse_button_pressed
+  );
+  ghostty_mouse_event_set_action(session->mouse_event, action);
+  if (button == GHOSTTY_MOUSE_BUTTON_UNKNOWN) ghostty_mouse_event_clear_button(session->mouse_event);
+  else ghostty_mouse_event_set_button(session->mouse_event, button);
+  ghostty_mouse_event_set_mods(session->mouse_event, mods);
+  ghostty_mouse_event_set_position(
+    session->mouse_event, (GhosttyMousePosition){ .x = x, .y = y }
+  );
+
+  char encoded[128];
+  size_t written = 0;
+  GhosttyResult result = ghostty_mouse_encoder_encode(
+    session->mouse_encoder, session->mouse_event, encoded, sizeof(encoded), &written
+  );
+  bool ok = result == GHOSTTY_SUCCESS && (written == 0 || write_all(
+    session, (const uint8_t *)encoded, written
+  ));
+  lua_pushboolean(L, ok);
+  lua_pushboolean(L, written > 0);
+  return 2;
+}
+
 static uint32_t color_value(GhosttyColorRgb color) {
   return ((uint32_t)color.r << 16) | ((uint32_t)color.g << 8) | color.b;
 }
@@ -937,6 +1090,10 @@ static void push_cell(
   if (style.invisible) set_boolean_field(L, "invisible", true);
   if (style.strikethrough) set_boolean_field(L, "strikethrough", true);
   if (style.underline) set_integer_field(L, "underline", style.underline);
+  bool selected = false;
+  if (ghostty_render_state_row_cells_get(
+    session->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &selected
+  ) == GHOSTTY_SUCCESS && selected) set_boolean_field(L, "selected", true);
 }
 
 static int f_terminal_snapshot(lua_State *L) {
@@ -958,6 +1115,11 @@ static int f_terminal_snapshot(lua_State *L) {
   set_integer_field(L, "foreground", color_value(colors.foreground));
   set_integer_field(L, "background", color_value(colors.background));
   set_boolean_field(L, "running", session->running);
+  bool mouse_tracking = false;
+  ghostty_terminal_get(
+    session->terminal, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &mouse_tracking
+  );
+  set_boolean_field(L, "mouse_tracking", mouse_tracking);
 
   GhosttyString title = {0};
   if (ghostty_terminal_get(
@@ -1012,6 +1174,10 @@ static const luaL_Reg terminal_methods[] = {
   { "resize", f_terminal_resize },
   { "key", f_terminal_key },
   { "scroll", f_terminal_scroll },
+  { "select", f_terminal_select },
+  { "clear_selection", f_terminal_clear_selection },
+  { "selected_text", f_terminal_selected_text },
+  { "mouse", f_terminal_mouse },
   { "snapshot", f_terminal_snapshot },
   { "close", f_terminal_close },
   { "__gc", f_terminal_gc },

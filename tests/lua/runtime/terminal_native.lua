@@ -31,12 +31,14 @@ test.describe("Native terminal session", function()
       text = table.concat(parts)
       if not text:find("ANVIL_TERMINAL_TEST", 1, true) then coroutine.yield(0.01) end
     end
-    session:close()
-
     test.ok(
       text:find("ANVIL_TERMINAL_TEST", 1, true),
       string.format("changed=%d snapshot=%q", changed_count, text)
     )
+    test.ok(session:select(0, 0, 79, 23, false))
+    local selected = session:selected_text()
+    session:close()
+    test.ok(selected:find("ANVIL_TERMINAL_TEST", 1, true), selected)
   end)
 
   test.it("sends text and encoded keys to the default PowerShell", function()

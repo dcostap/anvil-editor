@@ -133,6 +133,9 @@ function TerminalView:draw()
         if cell.bg then
           renderer.draw_rect(x, y, self.cell_width, self.cell_height, rgb(cell.bg, background))
         end
+        if cell.selected then
+          renderer.draw_rect(x, y, self.cell_width, self.cell_height, style.selection)
+        end
         if cell.text and cell.text ~= "" and not cell.invisible then
           local color = rgb(cell.fg, style.text)
           renderer.draw_text(cell_font(self, cell), cell.text, x, y, color)
@@ -214,13 +217,84 @@ function TerminalView:on_key_released(key, event)
   return self.session:key(key, key_modifiers(event), "release", event) == true
 end
 
-function TerminalView:on_mouse_pressed(button)
-  if button == "left" then core.set_active_view(self) end
+local function mouse_modifiers()
+  return {
+    shift = keymap.modkeys.shift == true,
+    ctrl = keymap.modkeys.ctrl == true,
+    alt = keymap.modkeys.alt == true or keymap.modkeys.altgr == true,
+    super = keymap.modkeys.super == true,
+  }
+end
+
+function TerminalView:mouse_position(x, y)
+  local local_x = x - self.position.x - PADDING
+  local local_y = y - self.position.y - PADDING
+  local col = math.max(0, math.min(self.cols - 1, math.floor(local_x / self.cell_width)))
+  local row = math.max(0, math.min(self.rows - 1, math.floor(local_y / self.cell_height)))
+  return col, row, math.max(0, local_x), math.max(0, local_y)
+end
+
+function TerminalView:refresh_snapshot()
+  self.snapshot = self.session:snapshot()
+  core.redraw = true
+end
+
+function TerminalView:on_mouse_pressed(button, x, y)
+  core.set_active_view(self)
+  local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
+  local tracking = self.snapshot and self.snapshot.mouse_tracking
+  if tracking and not keymap.modkeys.shift then
+    self.mouse_button = button
+    self.session:clear_selection()
+    self.session:mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
+  elseif button == "left" then
+    self.selection_start = { col, row }
+    self.session:select(col, row, col, row, keymap.modkeys.alt == true)
+    self:refresh_snapshot()
+  end
   return true
+end
+
+function TerminalView:on_mouse_moved(x, y)
+  local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
+  if self.selection_start then
+    self.session:select(
+      self.selection_start[1], self.selection_start[2], col, row,
+      keymap.modkeys.alt == true
+    )
+    self:refresh_snapshot()
+    return true
+  end
+  if self.snapshot and self.snapshot.mouse_tracking then
+    self.session:mouse("motion", self.mouse_button, pixel_x, pixel_y, mouse_modifiers())
+    return true
+  end
+  return false
+end
+
+function TerminalView:on_mouse_released(button, x, y)
+  local _, _, pixel_x, pixel_y = self:mouse_position(x, y)
+  if self.selection_start and button == "left" then
+    self.selection_start = nil
+    return true
+  end
+  if self.snapshot and self.snapshot.mouse_tracking then
+    self.session:mouse("release", button, pixel_x, pixel_y, mouse_modifiers())
+    self.mouse_button = nil
+    return true
+  end
+  return false
 end
 
 function TerminalView:on_mouse_wheel(delta_y)
   if not self.session then return false end
+  if self.snapshot and self.snapshot.mouse_tracking and not keymap.modkeys.shift then
+    local x, y = core.root_panel.mouse.x, core.root_panel.mouse.y
+    local _, _, pixel_x, pixel_y = self:mouse_position(x, y)
+    local button = delta_y > 0 and "four" or "five"
+    self.session:mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
+    return true
+  end
   local delta = delta_y > 0 and -3 or 3
   if self.session:scroll(delta) then
     self.snapshot = self.session:snapshot()
@@ -272,9 +346,16 @@ end, {
   ["terminal:paste"] = function(view)
     return view:paste(system.get_clipboard())
   end,
+  ["terminal:copy"] = function(view)
+    local text = view.session:selected_text()
+    if not text or text == "" then return false end
+    system.set_clipboard(text)
+    return true
+  end,
 })
 
 keymap.add({
+  ["ctrl+shift+c"] = "terminal:copy",
   ["ctrl+shift+v"] = "terminal:paste",
 })
 

@@ -15,6 +15,8 @@ local function fake_native()
       writes = {},
       keys = {},
       pastes = {},
+      selections = {},
+      mouse_events = {},
       resizes = {},
       closed = false,
     }
@@ -37,6 +39,16 @@ local function fake_native()
     function session:paste(text, allow_unsafe)
       self.pastes[#self.pastes + 1] = { text, allow_unsafe }
       return true
+    end
+    function session:select(...)
+      self.selections[#self.selections + 1] = { ... }
+      return true
+    end
+    function session:clear_selection() self.selection_cleared = true; return true end
+    function session:selected_text() return self.selection_text end
+    function session:mouse(...)
+      self.mouse_events[#self.mouse_events + 1] = { ... }
+      return true, true
     end
     function session:resize(cols, rows, cell_width, cell_height)
       self.resizes[#self.resizes + 1] = { cols, rows, cell_width, cell_height }
@@ -116,5 +128,38 @@ test.describe("Terminal View", function()
     test.same({ "terminal paste", false }, context.sessions[1].pastes[1])
 
     system.set_clipboard(previous or "")
+  end)
+
+  test.it("selects visible cells and copies the selected terminal text", function(context)
+    local previous = system.get_clipboard()
+    local view = terminal.open()
+    view.position.x, view.position.y = 10, 20
+    local session = context.sessions[1]
+    session.selection_text = "selected output"
+
+    view:on_mouse_pressed("left", 10 + 6 + view.cell_width, 20 + 6 + view.cell_height)
+    view:on_mouse_moved(10 + 6 + view.cell_width * 3, 20 + 6 + view.cell_height * 2)
+    view:on_mouse_released("left", 0, 0)
+    test.same({ 1, 1, 3, 2, false }, session.selections[#session.selections])
+    test.ok(command.perform("terminal:copy"))
+    test.equal(system.get_clipboard(), "selected output")
+
+    system.set_clipboard(previous or "")
+  end)
+
+  test.it("reports mouse input when the terminal enables mouse tracking", function(context)
+    local view = terminal.open()
+    view.position.x, view.position.y = 0, 0
+    view.snapshot.mouse_tracking = true
+    local session = context.sessions[1]
+
+    view:on_mouse_pressed("left", 20, 30)
+    view:on_mouse_moved(24, 34)
+    view:on_mouse_released("left", 24, 34)
+
+    test.equal(session.mouse_events[1][1], "press")
+    test.equal(session.mouse_events[2][1], "motion")
+    test.equal(session.mouse_events[3][1], "release")
+    test.ok(session.selection_cleared)
   end)
 end)
