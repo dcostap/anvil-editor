@@ -5,6 +5,22 @@ local test = require "core.test"
 
 local terminal = require "plugins.terminal"
 
+local function draw_calls(fn)
+  local previous_text = renderer.draw_text
+  local previous_known = renderer.draw_text_known_bounds
+  local previous_rect = renderer.draw_rect
+  local calls = { text = {}, rect = {} }
+  renderer.draw_text = function(...) calls.text[#calls.text + 1] = { ... } end
+  renderer.draw_text_known_bounds = function(...) calls.text[#calls.text + 1] = { ... } end
+  renderer.draw_rect = function(...) calls.rect[#calls.rect + 1] = { ... } end
+  local ok, err = pcall(fn, calls)
+  renderer.draw_text = previous_text
+  renderer.draw_text_known_bounds = previous_known
+  renderer.draw_rect = previous_rect
+  if not ok then error(err) end
+  return calls
+end
+
 local function fake_native()
   local sessions = {}
   local native = {}
@@ -176,5 +192,33 @@ test.describe("Terminal View", function()
     view:update()
 
     test.same({ true, false }, session.focus_events)
+  end)
+
+  test.it("draws adjacent terminal cells as styled text runs", function()
+    local view = terminal.open()
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 400
+    view.snapshot = {
+      background = 0,
+      foreground = 0xffffff,
+      rows = {
+        {
+          { text = "a", fg = 0xffffff },
+          { text = "b", fg = 0xffffff },
+          { text = "c", fg = 0xff0000 },
+          { text = "界", fg = 0xff0000, columns = 2 },
+          false,
+          { text = "d", fg = 0x00ff00 },
+        },
+      },
+      cursor = { visible = false },
+    }
+
+    local calls = draw_calls(function() view:draw() end)
+
+    test.equal(#calls.text, 3)
+    test.equal(calls.text[1][2], "ab")
+    test.equal(calls.text[2][2], "c界")
+    test.equal(calls.text[3][2], "d")
   end)
 end)

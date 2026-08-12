@@ -21,14 +21,31 @@ local function terminal_native()
   return native
 end
 
-local function rgb(value, fallback)
+local function rgb(view, value, fallback, alpha)
   if type(value) ~= "number" then return fallback end
-  return {
+  alpha = alpha or 255
+  local key = value * 256 + alpha
+  local color = view.color_cache[key]
+  if color then return color end
+  color = {
     math.floor(value / 0x10000) % 0x100,
     math.floor(value / 0x100) % 0x100,
     value % 0x100,
-    255,
+    alpha,
   }
+  view.color_cache[key] = color
+  return color
+end
+
+local function perf_scope_begin(name, capture_heap)
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name, capture_heap) or nil
+end
+
+local function perf_scope_end(scope)
+  if not scope then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(scope) end
 end
 
 local function project_path()
@@ -51,6 +68,7 @@ function TerminalView:new(options)
   self.cell_width = math.max(1, math.ceil(self.font:get_width("M")))
   self.cell_height = math.max(1, math.ceil(self.font:get_height()))
   self.cols, self.rows = 80, 24
+  self.color_cache = {}
 
   local native, load_error = terminal_native()
   if not native then error(load_error) end
@@ -124,13 +142,18 @@ local function cell_font(view, cell)
 end
 
 function TerminalView:draw()
+  local draw_scope = perf_scope_begin("terminal", true)
   local snapshot = self.snapshot
-  local background = rgb(snapshot and snapshot.background, style.background)
+  local background = rgb(self, snapshot and snapshot.background, style.background)
   self:draw_background(background)
-  if not snapshot then return end
+  if not snapshot then
+    perf_scope_end(draw_scope)
+    return
+  end
 
   local origin_x = self.position.x + PADDING
   local origin_y = self.position.y + PADDING
+  local phase_scope = perf_scope_begin("backgrounds")
   for row_index, row in ipairs(snapshot.rows or {}) do
     local y = origin_y + (row_index - 1) * self.cell_height
     if y >= self.position.y + self.size.y then break end
@@ -138,7 +161,7 @@ function TerminalView:draw()
     local function flush_background(col_index)
       if not background_start then return end
       local color = background_value == false and style.selection
-        or rgb(background_value, background)
+        or rgb(self, background_value, background)
       renderer.draw_rect(
         origin_x + (background_start - 1) * self.cell_width,
         y,
@@ -162,35 +185,88 @@ function TerminalView:draw()
       end
     end
     flush_background(#row + 1)
+  end
+  perf_scope_end(phase_scope)
+
+  phase_scope = perf_scope_begin("text_runs")
+  local parts = {}
+  local function same_text_style(a, b)
+    return a and b and a.fg == b.fg and a.bold == b.bold
+      and a.italic == b.italic and a.underline == b.underline
+      and a.strikethrough == b.strikethrough
+  end
+  for row_index, row in ipairs(snapshot.rows or {}) do
+    local y = origin_y + (row_index - 1) * self.cell_height
+    if y >= self.position.y + self.size.y then break end
+    local run_start, run_end, run_style, part_count
+    local function flush_text_run()
+      if not run_start then return end
+      local text = table.concat(parts, "", 1, part_count)
+      local x = origin_x + (run_start - 1) * self.cell_width
+      local width = (run_end - run_start) * self.cell_width
+      local color = rgb(self, run_style.fg, style.text)
+      local font = cell_font(self, run_style)
+      if renderer.draw_text_known_bounds then
+        renderer.draw_text_known_bounds(
+          font, text, x, y,
+          math.floor(x), math.floor(y), math.ceil(width), math.ceil(self.cell_height),
+          color
+        )
+      else
+        renderer.draw_text(font, text, x, y, color)
+      end
+      if run_style.underline and run_style.underline ~= 0 then
+        renderer.draw_rect(
+          x, y + self.cell_height - math.max(1, SCALE),
+          width, math.max(1, SCALE), color
+        )
+      end
+      if run_style.strikethrough then
+        renderer.draw_rect(
+          x, y + math.floor(self.cell_height / 2),
+          width, math.max(1, SCALE), color
+        )
+      end
+      for index = 1, part_count do parts[index] = nil end
+      run_start, run_end, run_style, part_count = nil, nil, nil, 0
+    end
     for col_index, cell in ipairs(row) do
       if cell and cell.text and cell.text ~= "" and not cell.invisible then
-        local x = origin_x + (col_index - 1) * self.cell_width
-        local color = rgb(cell.fg, style.text)
-        renderer.draw_text(cell_font(self, cell), cell.text, x, y, color)
-        if cell.underline and cell.underline ~= 0 then
-          renderer.draw_rect(x, y + self.cell_height - math.max(1, SCALE), self.cell_width, math.max(1, SCALE), color)
+        if not run_start or col_index ~= run_end or not same_text_style(run_style, cell) then
+          flush_text_run()
+          run_start, run_end, run_style, part_count = col_index, col_index, cell, 0
         end
-        if cell.strikethrough then
-          renderer.draw_rect(x, y + math.floor(self.cell_height / 2), self.cell_width, math.max(1, SCALE), color)
-        end
+        part_count = part_count + 1
+        parts[part_count] = cell.text
+        run_end = col_index + (cell.columns or 1)
+      elseif not run_start or col_index >= run_end then
+        flush_text_run()
       end
     end
+    flush_text_run()
   end
+  perf_scope_end(phase_scope)
 
+  phase_scope = perf_scope_begin("cursor")
   local cursor = snapshot.cursor
   if cursor and cursor.visible and self.running ~= false then
     local x = origin_x + (cursor.x or 0) * self.cell_width
     local y = origin_y + (cursor.y or 0) * self.cell_height
-    local color = rgb(cursor.color or snapshot.foreground, style.caret)
+    local value = cursor.color or snapshot.foreground
+    local color = rgb(self, value, style.caret)
     if cursor.style == "bar" then
       renderer.draw_rect(x, y, math.max(1, style.caret_width or SCALE), self.cell_height, color)
     elseif cursor.style == "underline" then
       renderer.draw_rect(x, y + self.cell_height - math.max(2, 2 * SCALE), self.cell_width, math.max(2, 2 * SCALE), color)
     else
-      color[4] = 110
-      renderer.draw_rect(x, y, self.cell_width, self.cell_height, color)
+      renderer.draw_rect(
+        x, y, self.cell_width, self.cell_height,
+        rgb(self, value, style.caret, 110)
+      )
     end
   end
+  perf_scope_end(phase_scope)
+  perf_scope_end(draw_scope)
 end
 
 function TerminalView:on_text_input(text)

@@ -1155,6 +1155,8 @@ static void push_cell(
   GhosttyColorRgb foreground = colors->foreground;
   GhosttyColorRgb background = colors->background;
   GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
+  GhosttyCell raw_cell = 0;
+  GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
 
   GhosttyResult text_result = ghostty_render_state_row_cells_get(
     session->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, &grapheme
@@ -1168,6 +1170,11 @@ static void push_cell(
   ghostty_render_state_row_cells_get(
     session->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style
   );
+  if (ghostty_render_state_row_cells_get(
+    session->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw_cell
+  ) == GHOSTTY_SUCCESS && raw_cell) {
+    ghostty_cell_get(raw_cell, GHOSTTY_CELL_DATA_WIDE, &wide);
+  }
 
   bool has_text = text_result == GHOSTTY_SUCCESS && grapheme.len > 0;
   bool has_background = bg_result == GHOSTTY_SUCCESS;
@@ -1196,6 +1203,7 @@ static void push_cell(
   if (style.invisible) set_boolean_field(L, "invisible", true);
   if (style.strikethrough) set_boolean_field(L, "strikethrough", true);
   if (style.underline) set_integer_field(L, "underline", style.underline);
+  if (wide == GHOSTTY_CELL_WIDE_WIDE) set_integer_field(L, "columns", 2);
   bool selected = false;
   if (ghostty_render_state_row_cells_get(
     session->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &selected
