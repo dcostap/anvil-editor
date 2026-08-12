@@ -186,6 +186,14 @@ function TerminalView:get_scrollable_size()
     or self.size.y
 end
 
+function TerminalView:on_touch_moved(x, y, dx, dy)
+  if not self.session or dy == 0 then return false end
+  local rows = math.max(1, math.floor(math.abs(dy) / self.cell_height + 0.5))
+  if not self.session:scroll("delta", dy > 0 and -rows or rows) then return false end
+  self:refresh_snapshot()
+  return true
+end
+
 function TerminalView:update_scrollbar()
   local scrollbar = self.snapshot and self.snapshot.scrollbar
   local total = scrollbar and scrollbar.total or self.rows
@@ -418,16 +426,24 @@ end
 
 function TerminalView:on_key_pressed(key, event)
   if not self.session or self.running == false then return false end
-  if key == "pageup" and keymap.modkeys.shift then
-    return self.session:scroll("delta", -math.max(1, self.rows - 1))
-  elseif key == "pagedown" and keymap.modkeys.shift then
-    return self.session:scroll("delta", math.max(1, self.rows - 1))
-  elseif key == "home" and keymap.modkeys.shift then
-    return self.session:scroll("top")
-  elseif key == "end" and keymap.modkeys.shift then
-    return self.session:scroll("bottom")
+  local function scroll(kind, value)
+    if not self.session:scroll(kind, value) then return false end
+    self:refresh_snapshot()
+    return true
   end
-  self.session:scroll("bottom")
+  if key == "pageup" and keymap.modkeys.shift then
+    return scroll("delta", -math.max(1, self.rows - 1))
+  elseif key == "pagedown" and keymap.modkeys.shift then
+    return scroll("delta", math.max(1, self.rows - 1))
+  elseif key == "home" and keymap.modkeys.shift then
+    return scroll("top")
+  elseif key == "end" and keymap.modkeys.shift then
+    return scroll("bottom")
+  end
+  if not ({ lshift = true, rshift = true, lctrl = true, rctrl = true,
+    lalt = true, ralt = true, lgui = true, rgui = true })[key] then
+    self.session:scroll("bottom")
+  end
   local action = event and event["repeat"] and "repeat" or "press"
   return self.session:key(key, key_modifiers(event), action, event) == true
 end
@@ -471,6 +487,9 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
   local tracking = self.snapshot and self.snapshot.mouse_tracking
   if tracking and not keymap.modkeys.shift then
+    self.selection_start = nil
+    self.selection_autoscroll = nil
+    self.session:reset_selection_gesture()
     self.mouse_button = button
     self.session:clear_selection()
     self.session:mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
@@ -607,7 +626,7 @@ end, {
 keymap.add({
   ["ctrl+shift+c"] = "terminal:copy",
   ["ctrl+shift+v"] = "terminal:paste",
-  ["ctrl+shift+f"] = "terminal:search",
+  ["ctrl+shift+f"] = { "terminal:search", "fuzzy-searcher:open-grep" },
   ["f3"] = "terminal:search-next",
   ["shift+f3"] = "terminal:search-previous",
 })

@@ -70,6 +70,7 @@ local function fake_native()
       return true
     end
     function session:clear_selection() self.selection_cleared = true; return true end
+    function session:reset_selection_gesture() self.gesture_reset = true; return true end
     function session:selected_text() return self.selection_text end
     function session:mouse(...)
       self.mouse_events[#self.mouse_events + 1] = { ... }

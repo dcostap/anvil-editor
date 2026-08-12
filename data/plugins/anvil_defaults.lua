@@ -341,6 +341,9 @@ if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
 keymap.add_direct({
+  ["ctrl+shift+f"] = { "terminal:search", "fuzzy-searcher:open-grep" },
+})
+keymap.add_direct({
   ["ctrl+shift+d"] = "doc:go-to-line",
   ["ctrl+shift+D"] = "doc:go-to-line",
 })

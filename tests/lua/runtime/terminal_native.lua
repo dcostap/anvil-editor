@@ -123,4 +123,30 @@ test.describe("Native terminal session", function()
 
     test.ok(text:find("ANVIL_TERMINAL_INPUT", 1, true), text)
   end)
+
+  test.it("searches repeated matches in terminal output", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = 'cmd.exe /d /s /c "echo needle needle"',
+    })
+    test.ok(session, start_error)
+    local deadline = system.get_time() + 5
+    local text = ""
+    while system.get_time() < deadline and not text:find("needle needle", 1, true) do
+      session:update()
+      text = snapshot_text(session:snapshot())
+      if not text:find("needle needle", 1, true) then coroutine.yield(0.01) end
+    end
+    test.ok(text:find("needle needle", 1, true), text)
+    test.ok(session:search("needle", false))
+    local first = session:selected_text()
+    test.ok(session:search("needle", false))
+    local second = session:selected_text()
+    session:close()
+    test.equal(first, "needle")
+    test.equal(second, "needle")
+  end)
 end)
