@@ -3,6 +3,7 @@
 #define _WIN32_WINNT 0x0A00
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -18,6 +19,7 @@
 #define TERMINAL_READ_BUDGET (128u * 1024u)
 #define TERMINAL_READ_QUEUE_CAPACITY (4u * 1024u * 1024u)
 #define TERMINAL_WRITE_QUEUE_CAPACITY (4u * 1024u * 1024u)
+#define TERMINAL_CLIPBOARD_MAX_BYTES (1024u * 1024u)
 
 typedef struct {
   HPCON pseudoconsole;
@@ -74,6 +76,7 @@ typedef struct {
   char *clipboard_text;
   size_t clipboard_text_length;
   bool clipboard_pending;
+  bool clipboard_clear;
   char *search_query;
   size_t search_query_length;
   size_t search_row;
@@ -305,6 +308,14 @@ static GhosttyClipboardWriteResult terminal_clipboard_write(
   if (!write || write->location != GHOSTTY_CLIPBOARD_LOCATION_STANDARD) {
     return GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED;
   }
+  if (write->contents_len == 0) {
+    if (session->clipboard_text) HeapFree(GetProcessHeap(), 0, session->clipboard_text);
+    session->clipboard_text = NULL;
+    session->clipboard_text_length = 0;
+    session->clipboard_clear = true;
+    session->clipboard_pending = true;
+    return GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
+  }
   const GhosttyClipboardContent *plain = NULL;
   for (size_t index = 0; index < write->contents_len; index++) {
     GhosttyString mime = write->contents[index].mime;
@@ -314,6 +325,9 @@ static GhosttyClipboardWriteResult terminal_clipboard_write(
     }
   }
   if (!plain) return GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED;
+  if (plain->data.len > TERMINAL_CLIPBOARD_MAX_BYTES) {
+    return GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED;
+  }
   char *text = (char *)HeapAlloc(
     GetProcessHeap(), 0, plain->data.len ? plain->data.len : 1
   );
@@ -322,6 +336,7 @@ static GhosttyClipboardWriteResult terminal_clipboard_write(
   if (session->clipboard_text) HeapFree(GetProcessHeap(), 0, session->clipboard_text);
   session->clipboard_text = text;
   session->clipboard_text_length = plain->data.len;
+  session->clipboard_clear = false;
   session->clipboard_pending = true;
   return GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
 }
@@ -1601,6 +1616,44 @@ static int f_terminal_hyperlink(lua_State *L) {
   return 1;
 }
 
+static int f_terminal_open_hyperlink(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  uint16_t col = (uint16_t)luaL_checkinteger(L, 2);
+  uint32_t row = (uint32_t)luaL_checkinteger(L, 3);
+  GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+  if (!viewport_ref(session, col, row, &ref)) {
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  size_t length = 0;
+  if (ghostty_grid_ref_hyperlink_uri(&ref, NULL, 0, &length) != GHOSTTY_OUT_OF_SPACE ||
+      length == 0 || length > 32768) {
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  char *uri = (char *)HeapAlloc(GetProcessHeap(), 0, length + 1);
+  if (!uri) return luaL_error(L, "Could not allocate terminal hyperlink");
+  GhosttyResult result = ghostty_grid_ref_hyperlink_uri(
+    &ref, (uint8_t *)uri, length, &length
+  );
+  uri[length] = '\0';
+  bool allowed = result == GHOSTTY_SUCCESS &&
+    (strncmp(uri, "https://", 8) == 0 || strncmp(uri, "http://", 7) == 0 ||
+     strncmp(uri, "file://", 7) == 0 || strncmp(uri, "mailto:", 7) == 0);
+  bool opened = false;
+  if (allowed) {
+    wchar_t *wide = utf8_to_wide(uri);
+    if (wide) {
+      HINSTANCE launch = ShellExecuteW(NULL, L"open", wide, NULL, NULL, SW_SHOWNORMAL);
+      opened = (INT_PTR)launch > 32;
+      HeapFree(GetProcessHeap(), 0, wide);
+    }
+  }
+  HeapFree(GetProcessHeap(), 0, uri);
+  lua_pushboolean(L, opened);
+  return 1;
+}
+
 static int f_terminal_focus(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
   bool focused = lua_toboolean(L, 2) != 0;
@@ -1945,21 +1998,27 @@ static int f_terminal_snapshot(lua_State *L) {
     lua_pushlstring(L, (const char *)title.ptr, title.len);
     lua_setfield(L, -2, "title");
   }
-  lua_createtable(L, session->bell_count + (session->clipboard_pending ? 1 : 0), 0);
+  lua_createtable(L, (session->bell_count > 0 ? 1 : 0) +
+    (session->clipboard_pending ? 1 : 0), 0);
   int event_count = 0;
-  while (session->bell_count > 0) {
-    lua_createtable(L, 0, 1);
+  if (session->bell_count > 0) {
+    lua_createtable(L, 0, 2);
     lua_pushliteral(L, "bell");
     lua_setfield(L, -2, "type");
+    set_integer_field(L, "count", session->bell_count);
     lua_rawseti(L, -2, ++event_count);
-    session->bell_count--;
+    session->bell_count = 0;
   }
   if (session->clipboard_pending) {
     lua_createtable(L, 0, 2);
     lua_pushliteral(L, "clipboard");
     lua_setfield(L, -2, "type");
-    lua_pushlstring(L, session->clipboard_text, session->clipboard_text_length);
+    lua_pushlstring(
+      L, session->clipboard_text ? session->clipboard_text : "",
+      session->clipboard_text_length
+    );
     lua_setfield(L, -2, "text");
+    if (session->clipboard_clear) set_boolean_field(L, "clear", true);
     lua_rawseti(L, -2, ++event_count);
     session->clipboard_pending = false;
   }
@@ -2055,6 +2114,7 @@ static const luaL_Reg terminal_methods[] = {
   { "search", f_terminal_search },
   { "mouse", f_terminal_mouse },
   { "hyperlink", f_terminal_hyperlink },
+  { "open_hyperlink", f_terminal_open_hyperlink },
   { "focus", f_terminal_focus },
   { "snapshot", f_terminal_snapshot },
   { "close", f_terminal_close },

@@ -100,6 +100,7 @@ local function fake_native()
       return query == "needle"
     end
     function session:hyperlink() return self.hyperlink_uri end
+    function session:open_hyperlink() return self.hyperlink_uri ~= nil end
     function session:close() self.closed = true end
     sessions[#sessions + 1] = session
     return session
@@ -370,6 +371,6 @@ test.describe("Terminal View", function()
     view:handle_events()
     core.nag_view.show = previous_show
     test.equal(view.bell_count, 1)
-    test.equal(view.pending_clipboard, "terminal clipboard")
+    test.equal(view.pending_clipboard.text, "terminal clipboard")
   end)
 end)

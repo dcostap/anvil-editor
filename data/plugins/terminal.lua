@@ -222,6 +222,13 @@ function TerminalView:update()
   TerminalView.super.update(self)
   if not self.session then return end
 
+  local blink_phase = math.floor((system.get_time() - core.blink_start) /
+    math.max(0.1, config.blink_period / 2))
+  if not config.disable_blink and self.has_blinking_content and blink_phase ~= self.blink_phase then
+    self.blink_phase = blink_phase
+    core.redraw = true
+  end
+
   if self.selection_start and self.selection_autoscroll then
     local x, y = core.root_panel.mouse.x, core.root_panel.mouse.y
     local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
@@ -278,11 +285,13 @@ end
 function TerminalView:handle_events()
   for _, event in ipairs((self.snapshot and self.snapshot.events) or {}) do
     if event.type == "bell" then
-      self.bell_count = (self.bell_count or 0) + 1
+      self.bell_count = (self.bell_count or 0) + (event.count or 1)
       self.bell_until = system.get_time() + 0.15
       core.redraw = true
-    elseif event.type == "clipboard" and event.text then
-      self.pending_clipboard = event.text
+    elseif event.type == "clipboard" and event.text ~= nil then
+      self.pending_clipboard = { text = event.text, clear = event.clear == true }
+      if self.clipboard_prompt_open then goto continue end
+      self.clipboard_prompt_open = true
       core.nag_view:show(
         "Terminal Clipboard Request",
         "A terminal program wants to replace the clipboard. Allow it?",
@@ -291,11 +300,16 @@ function TerminalView:handle_events()
           { text = "Deny", default_no = true },
         },
         function(item)
-          if item.text == "Allow" then system.set_clipboard(event.text) end
+          local pending = self.pending_clipboard
+          if item.text == "Allow" and pending and self.session then
+            system.set_clipboard(pending.text)
+          end
           self.pending_clipboard = nil
+          self.clipboard_prompt_open = false
         end
       )
     end
+    ::continue::
   end
   if self.snapshot then self.snapshot.events = {} end
 end
@@ -342,10 +356,15 @@ function TerminalView:draw()
   perf_scope_end(phase_scope)
 
   phase_scope = perf_scope_begin("text_runs")
+  self.has_blinking_content = snapshot.cursor and snapshot.cursor.blinking or false
+  local blink_on = config.disable_blink or
+    (system.get_time() - core.blink_start) % config.blink_period < config.blink_period / 2
   for row_index, row in ipairs(snapshot.rows or {}) do
     local y = origin_y + (row_index - 1) * self.cell_height
     if y >= self.position.y + self.size.y then break end
     for _, run in ipairs(row.text_runs or {}) do
+      if run.blink then self.has_blinking_content = true end
+      if run.blink and not blink_on then goto continue_run end
       local x = origin_x + run.col * self.cell_width
       local width = run.columns * self.cell_width
       local color = rgb(self, run.fg, style.text)
@@ -364,7 +383,22 @@ function TerminalView:draw()
         local underline_color = rgb(self, run.underline_color, color)
         local thickness = math.max(1, SCALE)
         local underline_y = y + self.cell_height - thickness
-        renderer.draw_rect(x, underline_y, width, thickness, underline_color)
+        if run.underline == 3 then
+          local step = math.max(2, 2 * SCALE)
+          for offset = 0, width - 1, step do
+            renderer.draw_rect(x + offset, underline_y - ((offset / step) % 2) * thickness,
+              math.min(step, width - offset), thickness, underline_color)
+          end
+        elseif run.underline == 4 or run.underline == 5 then
+          local mark = run.underline == 4 and thickness or math.max(3, 3 * SCALE)
+          local gap = run.underline == 4 and math.max(2, 2 * SCALE) or math.max(2, 2 * SCALE)
+          for offset = 0, width - 1, mark + gap do
+            renderer.draw_rect(x + offset, underline_y, math.min(mark, width - offset),
+              thickness, underline_color)
+          end
+        else
+          renderer.draw_rect(x, underline_y, width, thickness, underline_color)
+        end
         if run.underline == 2 then
           renderer.draw_rect(x, underline_y - 2 * thickness, width, thickness, underline_color)
         end
@@ -378,14 +412,14 @@ function TerminalView:draw()
       if run.overline then
         renderer.draw_rect(x, y, width, math.max(1, SCALE), color)
       end
+      ::continue_run::
     end
   end
   perf_scope_end(phase_scope)
 
   phase_scope = perf_scope_begin("cursor")
   local cursor = snapshot.cursor
-  local cursor_on = not (cursor and cursor.blinking)
-    or (system.get_time() - core.blink_start) % config.blink_period < config.blink_period / 2
+  local cursor_on = not (cursor and cursor.blinking) or blink_on
   if cursor and cursor.visible and cursor_on and self.running ~= false then
     local x = origin_x + (cursor.x or 0) * self.cell_width
     local y = origin_y + (cursor.y or 0) * self.cell_height
@@ -415,6 +449,7 @@ end
 
 function TerminalView:on_text_input(text)
   if not self.session or self.running == false then return false end
+  core.blink_reset()
   self.session:scroll("bottom")
   return self.session:write(text) == true
 end
@@ -485,6 +520,7 @@ function TerminalView:on_key_pressed(key, event)
   elseif key == "end" and keymap.modkeys.shift then
     return scroll("bottom")
   end
+  core.blink_reset()
   if not ({ lshift = true, rshift = true, lctrl = true, rctrl = true,
     lalt = true, ralt = true, lgui = true, rgui = true })[key] then
     self.session:scroll("bottom")
@@ -540,8 +576,7 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
     self.session:mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
   elseif button == "left" then
     if keymap.modkeys.ctrl then
-      local uri = self.session:hyperlink(col, row)
-      if uri then return common.open_in_system(uri) end
+      return self.session:open_hyperlink(col, row) == true
     end
     self.selection_start = true
     self.session:selection_gesture(
@@ -618,6 +653,7 @@ function TerminalView:on_mouse_wheel(delta_y)
 end
 
 function TerminalView:try_close(do_close)
+  self.pending_clipboard = nil
   if self.session then
     self.session:close()
     self.session = nil
