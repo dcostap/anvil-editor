@@ -149,4 +149,28 @@ test.describe("Native terminal session", function()
     test.equal(first, "needle")
     test.equal(second, "needle")
   end)
+
+  test.it("reports bounded terminal bell and clipboard effects", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$e=[char]27; $b=[char]7; [Console]::Write($b); [Console]::Write($e + ']52;c;dGVzdA==' + $b)"]],
+    })
+    test.ok(session, start_error)
+    local events = {}
+    local deadline = system.get_time() + 5
+    while system.get_time() < deadline and #events < 2 do
+      session:update()
+      local snapshot = session:snapshot()
+      for _, event in ipairs(snapshot.events or {}) do events[#events + 1] = event end
+      if #events < 2 then coroutine.yield(0.01) end
+    end
+    session:close()
+    test.equal(events[1].type, "bell")
+    test.equal(events[1].count, 1)
+    test.equal(events[2].type, "clipboard")
+    test.equal(events[2].text, "test")
+  end)
 end)

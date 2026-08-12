@@ -193,7 +193,7 @@ static const char *get_key_name(const SDL_Event *e, char *buf) {
 }
 
 static void push_key_event_info(lua_State *L, const SDL_KeyboardEvent *event) {
-  lua_createtable(L, 0, 5);
+  lua_createtable(L, 0, 11);
   lua_pushinteger(L, event->key);
   lua_setfield(L, -2, "keycode");
   lua_pushinteger(L, event->scancode);
@@ -202,6 +202,17 @@ static void push_key_event_info(lua_State *L, const SDL_KeyboardEvent *event) {
   lua_setfield(L, -2, "modifiers");
   lua_pushboolean(L, event->repeat);
   lua_setfield(L, -2, "repeat");
+  lua_pushboolean(L, (event->mod & SDL_KMOD_SHIFT) != 0);
+  lua_setfield(L, -2, "shift");
+  lua_pushboolean(L, (event->mod & SDL_KMOD_CTRL) != 0);
+  lua_setfield(L, -2, "ctrl");
+  lua_pushboolean(L, (event->mod & SDL_KMOD_ALT) != 0);
+  lua_setfield(L, -2, "alt");
+  lua_pushboolean(L, (event->mod & SDL_KMOD_GUI) != 0);
+  lua_setfield(L, -2, "super");
+  lua_pushboolean(L, (event->mod & SDL_KMOD_MODE) != 0 ||
+    ((event->mod & SDL_KMOD_RALT) != 0 && (event->mod & SDL_KMOD_CTRL) != 0));
+  lua_setfield(L, -2, "altgr");
 }
 
 #ifdef _WIN32
@@ -917,6 +928,16 @@ static int f_set_text_input_rect(lua_State *L) {
   rect.h = luaL_checknumber(L, 5);
   SDL_SetTextInputArea(window_renderer->cache.window, &rect, 0);
   return 0;
+}
+
+static int f_flash_window(lua_State *L) {
+  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  const char *operation = luaL_optstring(L, 2, "briefly");
+  SDL_FlashOperation flash = strcmp(operation, "until_focused") == 0
+    ? SDL_FLASH_UNTIL_FOCUSED
+    : strcmp(operation, "cancel") == 0 ? SDL_FLASH_CANCEL : SDL_FLASH_BRIEFLY;
+  lua_pushboolean(L, SDL_FlashWindow(window_renderer->cache.window, flash));
+  return 1;
 }
 
 static int f_clear_ime(lua_State *L) {
@@ -1876,6 +1897,7 @@ static const luaL_Reg lib[] = {
   { "set_window_size",       f_set_window_size       },
   { "set_window_visible",    f_set_window_visible    },
   { "set_text_input_rect",   f_set_text_input_rect   },
+  { "flash_window",         f_flash_window          },
   { "clear_ime",             f_clear_ime             },
   { "window_has_focus",      f_window_has_focus      },
   { "window_focus_diagnostics", f_window_focus_diagnostics },

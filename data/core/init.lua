@@ -1895,7 +1895,19 @@ function core.on_event(type, ...)
       local key = (...)
       core.log_quiet("Fuzzy input event: keypressed active=%s supports_text_input=%s key=%s", tostring(active_type), tostring(active and active:supports_text_input()), tostring(key))
     end
-    did_keymap = keymap.on_key_pressed(...)
+    local key, event = ...
+    local pre_keymap = active and active.on_key_pressed_before_keymap
+    if pre_keymap then
+      did_keymap = core.root_panel:on_key_pressed_before_keymap(key, event) == true
+    end
+    local modifier_key = key == "left ctrl" or key == "right ctrl"
+      or key == "left shift" or key == "right shift"
+      or key == "left alt" or key == "right alt"
+      or key == "left gui" or key == "right gui"
+      or key == "left windows" or key == "right windows"
+    if not did_keymap and (not (event and event.altgr) or modifier_key) then
+      did_keymap = keymap.on_key_pressed(...)
+    end
     if not did_keymap then
       did_keymap = core.root_panel:on_key_pressed(...) == true
     end

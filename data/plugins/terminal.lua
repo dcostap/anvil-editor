@@ -4,6 +4,7 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local core = require "core"
+local ime = require "core.ime"
 local keymap = require "core.keymap"
 local panes = require "core.panes"
 local style = require "core.style"
@@ -79,6 +80,16 @@ local function project_path(mode)
   end
   local project = core.root_project and core.root_project()
   return project and project.path or system.getcwd()
+end
+
+local function terminal_pwd(snapshot)
+  local pwd = snapshot and snapshot.pwd
+  if type(pwd) ~= "string" or pwd == "" then return nil end
+  if pwd:match("^file://") then
+    pwd = pwd:gsub("^file://localhost/?", ""):gsub("^file:///?", "")
+    pwd = pwd:gsub("%%(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end)
+  end
+  return pwd ~= "" and pwd or nil
 end
 
 ---@class plugins.terminal.view : core.view
@@ -287,6 +298,9 @@ function TerminalView:handle_events()
     if event.type == "bell" then
       self.bell_count = (self.bell_count or 0) + (event.count or 1)
       self.bell_until = system.get_time() + 0.15
+      if core.active_view ~= self and system.flash_window then
+        system.flash_window(core.window, "briefly")
+      end
       core.redraw = true
     elseif event.type == "clipboard" and event.text ~= nil then
       self.pending_clipboard = { text = event.text, clear = event.clear == true }
@@ -308,6 +322,13 @@ function TerminalView:handle_events()
           self.clipboard_prompt_open = false
         end
       )
+    elseif event.type == "notification" then
+      self.notification_count = (self.notification_count or 0) + 1
+      local title = event.title ~= "" and event.title or "Terminal"
+      core.log("%s: %s", title, event.body or "")
+      if core.active_view ~= self and system.flash_window then
+        system.flash_window(core.window, "until_focused")
+      end
     end
     ::continue::
   end
@@ -443,15 +464,48 @@ function TerminalView:draw()
     end
   end
   perf_scope_end(phase_scope)
+
+  if self.composition and self.composition.text ~= "" then
+    local cursor = snapshot.cursor or {}
+    local x = origin_x + (cursor.x or 0) * self.cell_width
+    local y = origin_y + (cursor.y or 0) * self.cell_height
+    local text = self.composition.text
+    local width = math.max(self.cell_width, self.font:get_width(text))
+    renderer.draw_rect(x, y, width, self.cell_height, style.background2 or background)
+    renderer.draw_text(self.font, text, x, y, style.text)
+    local before = text:sub(1, self.composition.start)
+    local selected = text:sub(
+      self.composition.start + 1,
+      self.composition.start + self.composition.length
+    )
+    local selection_x = x + self.font:get_width(before)
+    local selection_width = math.max(1, self.font:get_width(selected))
+    renderer.draw_rect(
+      selection_x, y + self.cell_height - math.max(1, SCALE),
+      selection_width, math.max(1, SCALE), style.caret
+    )
+    ime.set_location(x, y, width, self.cell_height)
+  end
   self:draw_scrollbar()
   perf_scope_end(draw_scope)
 end
 
 function TerminalView:on_text_input(text)
   if not self.session or self.running == false then return false end
+  self.composition = nil
   core.blink_reset()
   self.session:scroll("bottom")
   return self.session:write(text) == true
+end
+
+function TerminalView:on_ime_text_editing(text, start, length)
+  if not text or text == "" then
+    self.composition = nil
+  else
+    self.composition = { text = text, start = start or 0, length = length or 0 }
+  end
+  core.redraw = true
+  return true
 end
 
 function TerminalView:paste(text, allow_unsafe)
@@ -506,6 +560,7 @@ end
 
 function TerminalView:on_key_pressed(key, event)
   if not self.session or self.running == false then return false end
+  if event and event.altgr then return false end
   local function scroll(kind, value)
     if not self.session:scroll(kind, value) then return false end
     self:refresh_snapshot()
@@ -529,8 +584,21 @@ function TerminalView:on_key_pressed(key, event)
   return self.session:key(key, key_modifiers(event), action, event) == true
 end
 
+function TerminalView:on_key_pressed_before_keymap(key, event)
+  if not self.session or self.running == false or not event then return false end
+  if event.altgr then return false end
+  local control = event.ctrl or event.alt
+  if not control then return false end
+  if event.ctrl and event.shift and (key == "c" or key == "v" or key == "f" or key == "p") then
+    return false
+  end
+  if event.ctrl and (key == "tab" or key == "f3") then return false end
+  return self:on_key_pressed(key, event) == true
+end
+
 function TerminalView:on_key_released(key, event)
   if not self.session or self.running == false then return false end
+  if event and event.altgr then return false end
   return self.session:key(key, key_modifiers(event), "release", event) == true
 end
 
@@ -686,6 +754,12 @@ M.TerminalView = TerminalView
 
 command.add(nil, {
   ["terminal:open"] = function() return M.open() ~= nil end,
+  ["terminal:open-project-directory"] = function()
+    return M.open({ cwd = project_path("project") }) ~= nil
+  end,
+  ["terminal:open-document-directory"] = function()
+    return M.open({ cwd = project_path("document") }) ~= nil
+  end,
 })
 
 command.add(function()
@@ -703,6 +777,15 @@ end, {
     return true
   end,
   ["terminal:restart"] = function(view) return view:restart() end,
+  ["terminal:clear"] = function(view)
+    if not view.session:clear() then return false end
+    view:refresh_snapshot()
+    return true
+  end,
+  ["terminal:open-current-directory"] = function(view)
+    local cwd = terminal_pwd(view.snapshot) or view.launch_options.cwd
+    return M.open({ cwd = cwd, shell = view.launch_options.shell }) ~= nil
+  end,
   ["terminal:search"] = function(view) return view:prompt_search() end,
   ["terminal:search-next"] = function(view) return view:search(view.search_query, false) end,
   ["terminal:search-previous"] = function(view) return view:search(view.search_query, true) end,
@@ -714,6 +797,7 @@ keymap.add({
   ["ctrl+shift+f"] = { "terminal:search", "fuzzy-searcher:open-grep" },
   ["f3"] = "terminal:search-next",
   ["shift+f3"] = "terminal:search-previous",
+  ["ctrl+shift+k"] = "terminal:clear",
 })
 
 return M

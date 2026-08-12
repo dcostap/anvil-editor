@@ -20,6 +20,7 @@
 #define TERMINAL_READ_QUEUE_CAPACITY (4u * 1024u * 1024u)
 #define TERMINAL_WRITE_QUEUE_CAPACITY (4u * 1024u * 1024u)
 #define TERMINAL_CLIPBOARD_MAX_BYTES (1024u * 1024u)
+#define TERMINAL_NOTIFICATION_MAX_BYTES (64u * 1024u)
 
 typedef struct {
   HPCON pseudoconsole;
@@ -77,6 +78,11 @@ typedef struct {
   size_t clipboard_text_length;
   bool clipboard_pending;
   bool clipboard_clear;
+  char *notification_title;
+  size_t notification_title_length;
+  char *notification_body;
+  size_t notification_body_length;
+  bool notification_pending;
   char *search_query;
   size_t search_query_length;
   size_t search_row;
@@ -341,6 +347,40 @@ static GhosttyClipboardWriteResult terminal_clipboard_write(
   return GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
 }
 
+static void terminal_desktop_notification(
+  GhosttyTerminal terminal, void *userdata,
+  const GhosttyTerminalDesktopNotification *notification
+) {
+  (void)terminal;
+  TerminalSession *session = (TerminalSession *)userdata;
+  if (!notification || notification->title.len > TERMINAL_NOTIFICATION_MAX_BYTES ||
+      notification->body.len > TERMINAL_NOTIFICATION_MAX_BYTES) return;
+  char *title = (char *)HeapAlloc(
+    GetProcessHeap(), 0, notification->title.len ? notification->title.len : 1
+  );
+  char *body = (char *)HeapAlloc(
+    GetProcessHeap(), 0, notification->body.len ? notification->body.len : 1
+  );
+  if (!title || !body) {
+    if (title) HeapFree(GetProcessHeap(), 0, title);
+    if (body) HeapFree(GetProcessHeap(), 0, body);
+    return;
+  }
+  if (notification->title.len) {
+    memcpy(title, notification->title.ptr, notification->title.len);
+  }
+  if (notification->body.len) memcpy(body, notification->body.ptr, notification->body.len);
+  if (session->notification_title) {
+    HeapFree(GetProcessHeap(), 0, session->notification_title);
+  }
+  if (session->notification_body) HeapFree(GetProcessHeap(), 0, session->notification_body);
+  session->notification_title = title;
+  session->notification_title_length = notification->title.len;
+  session->notification_body = body;
+  session->notification_body_length = notification->body.len;
+  session->notification_pending = true;
+}
+
 static bool terminal_size(
   GhosttyTerminal terminal, void *userdata, GhosttySizeReportSize *out_size
 ) {
@@ -508,6 +548,14 @@ static void close_session(TerminalSession *session) {
     HeapFree(GetProcessHeap(), 0, session->clipboard_text);
     session->clipboard_text = NULL;
   }
+  if (session->notification_title) {
+    HeapFree(GetProcessHeap(), 0, session->notification_title);
+    session->notification_title = NULL;
+  }
+  if (session->notification_body) {
+    HeapFree(GetProcessHeap(), 0, session->notification_body);
+    session->notification_body = NULL;
+  }
 }
 
 static bool initialize_terminal(TerminalSession *session) {
@@ -552,6 +600,10 @@ static bool initialize_terminal(TerminalSession *session) {
   ghostty_terminal_set(
     session->terminal, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
     (const void *)terminal_clipboard_write
+  );
+  ghostty_terminal_set(
+    session->terminal, GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
+    (const void *)terminal_desktop_notification
   );
   ghostty_terminal_resize(
     session->terminal, session->cols, session->rows,
@@ -947,6 +999,18 @@ static int f_terminal_resize(lua_State *L) {
   session->rows = rows;
   session->cell_width = cell_width;
   session->cell_height = cell_height;
+  ghostty_render_state_update(session->render_state, session->terminal);
+  lua_pushboolean(L, true);
+  return 1;
+}
+
+static int f_terminal_clear(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  if (session->closed) {
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  ghostty_terminal_reset(session->terminal);
   ghostty_render_state_update(session->render_state, session->terminal);
   lua_pushboolean(L, true);
   return 1;
@@ -1998,8 +2062,15 @@ static int f_terminal_snapshot(lua_State *L) {
     lua_pushlstring(L, (const char *)title.ptr, title.len);
     lua_setfield(L, -2, "title");
   }
+  GhosttyString pwd = {0};
+  if (ghostty_terminal_get(
+    session->terminal, GHOSTTY_TERMINAL_DATA_PWD, &pwd
+  ) == GHOSTTY_SUCCESS && pwd.ptr && pwd.len > 0) {
+    lua_pushlstring(L, (const char *)pwd.ptr, pwd.len);
+    lua_setfield(L, -2, "pwd");
+  }
   lua_createtable(L, (session->bell_count > 0 ? 1 : 0) +
-    (session->clipboard_pending ? 1 : 0), 0);
+    (session->clipboard_pending ? 1 : 0) + (session->notification_pending ? 1 : 0), 0);
   int event_count = 0;
   if (session->bell_count > 0) {
     lua_createtable(L, 0, 2);
@@ -2021,6 +2092,19 @@ static int f_terminal_snapshot(lua_State *L) {
     if (session->clipboard_clear) set_boolean_field(L, "clear", true);
     lua_rawseti(L, -2, ++event_count);
     session->clipboard_pending = false;
+  }
+  if (session->notification_pending) {
+    lua_createtable(L, 0, 3);
+    lua_pushliteral(L, "notification");
+    lua_setfield(L, -2, "type");
+    lua_pushlstring(
+      L, session->notification_title, session->notification_title_length
+    );
+    lua_setfield(L, -2, "title");
+    lua_pushlstring(L, session->notification_body, session->notification_body_length);
+    lua_setfield(L, -2, "body");
+    lua_rawseti(L, -2, ++event_count);
+    session->notification_pending = false;
   }
   lua_setfield(L, -2, "events");
   GhosttyTerminalScrollbar scrollbar = {0};
@@ -2104,6 +2188,7 @@ static const luaL_Reg terminal_methods[] = {
   { "write", f_terminal_write },
   { "paste", f_terminal_paste },
   { "resize", f_terminal_resize },
+  { "clear", f_terminal_clear },
   { "key", f_terminal_key },
   { "scroll", f_terminal_scroll },
   { "selection_gesture", f_terminal_selection_gesture },

@@ -842,6 +842,13 @@ function RootPanel:on_key_pressed(...)
   return call_view_method(core.active_view, core.active_view.on_key_pressed, ...)
 end
 
+---Forward keys which the focused view owns before normal keymap commands.
+function RootPanel:on_key_pressed_before_keymap(...)
+  return call_view_method(
+    core.active_view, core.active_view.on_key_pressed_before_keymap, ...
+  )
+end
+
 
 ---Forward key releases to the focused view.
 function RootPanel:on_key_released(...)

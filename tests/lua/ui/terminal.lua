@@ -58,6 +58,7 @@ local function fake_native()
       }
     end
     function session:write(text) self.writes[#self.writes + 1] = text; return true end
+    function session:clear() self.cleared = true; return true end
     function session:key(key, mods, action, event)
       self.keys[#self.keys + 1] = { key, mods, action, event }
       return true
@@ -151,6 +152,34 @@ test.describe("Terminal View", function()
     test.equal(session.keys[2][3], "release")
   end)
 
+  test.it("owns shell control keys before global editor shortcuts", function(context)
+    local view = terminal.open()
+    local event = { ctrl = true, modifiers = 0, scancode = 19 }
+    test.ok(core.on_event("keypressed", "p", event))
+    test.equal(context.sessions[1].keys[#context.sessions[1].keys][1], "p")
+    local key_count = #context.sessions[1].keys
+    core.on_event("keypressed", "q", {
+      ctrl = true, alt = true, altgr = true, modifiers = 0, scancode = 20,
+    })
+    test.equal(#context.sessions[1].keys, key_count)
+    test.equal(view:on_key_pressed_before_keymap("f", {
+      ctrl = true, shift = true, modifiers = 0,
+    }), false)
+  end)
+
+  test.it("draws IME composition without sending partial text", function(context)
+    local view = terminal.open()
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 400
+    view:on_ime_text_editing("日本", 3, 3)
+    local calls = draw_calls(function() view:draw() end)
+    test.equal(calls.text[#calls.text][2], "日本")
+    test.equal(#context.sessions[1].writes, 0)
+    view:on_text_input("日本")
+    test.same({ "日本" }, context.sessions[1].writes)
+    test.equal(view.composition, nil)
+  end)
+
   test.it("resizes the terminal from its visible cell geometry", function(context)
     local view = terminal.open()
     view.position.x, view.position.y = 0, 0
@@ -163,6 +192,12 @@ test.describe("Terminal View", function()
     test.ok(resize[2] > 0)
     test.ok(resize[3] > 0)
     test.ok(resize[4] > 0)
+  end)
+
+  test.it("clears the terminal through its native state", function(context)
+    terminal.open()
+    test.ok(command.perform("terminal:clear"))
+    test.ok(context.sessions[1].cleared)
   end)
 
   test.it("restarts an exited terminal with the same launch options", function(context)

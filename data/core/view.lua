@@ -392,6 +392,15 @@ function View:on_key_pressed(key, event)
   -- no-op
 end
 
+---Handle a key before Anvil resolves normal keymap commands.
+---Use this only when the focused view must own a platform key combination.
+---@param key string Normalized key name
+---@param event table? Raw platform key data
+---@return boolean? consumed True when the view consumed the key
+function View:on_key_pressed_before_keymap(key, event)
+  return false
+end
+
 
 ---Handle a key release after Anvil updates its modifier state.
 ---@param key string Normalized key name
