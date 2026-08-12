@@ -70,6 +70,10 @@ typedef struct {
   uint32_t cell_height;
   bool closed;
   bool running;
+  LONG bell_count;
+  char *clipboard_text;
+  size_t clipboard_text_length;
+  bool clipboard_pending;
   char *search_query;
   size_t search_query_length;
   size_t search_row;
@@ -287,6 +291,41 @@ static void terminal_write_pty(
   write_all((TerminalSession *)userdata, data, length);
 }
 
+static void terminal_bell(GhosttyTerminal terminal, void *userdata) {
+  (void)terminal;
+  TerminalSession *session = (TerminalSession *)userdata;
+  session->bell_count++;
+}
+
+static GhosttyClipboardWriteResult terminal_clipboard_write(
+  GhosttyTerminal terminal, void *userdata, const GhosttyClipboardWrite *write
+) {
+  (void)terminal;
+  TerminalSession *session = (TerminalSession *)userdata;
+  if (!write || write->location != GHOSTTY_CLIPBOARD_LOCATION_STANDARD) {
+    return GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED;
+  }
+  const GhosttyClipboardContent *plain = NULL;
+  for (size_t index = 0; index < write->contents_len; index++) {
+    GhosttyString mime = write->contents[index].mime;
+    if (mime.len == 10 && memcmp(mime.ptr, "text/plain", 10) == 0) {
+      plain = &write->contents[index];
+      break;
+    }
+  }
+  if (!plain) return GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED;
+  char *text = (char *)HeapAlloc(
+    GetProcessHeap(), 0, plain->data.len ? plain->data.len : 1
+  );
+  if (!text) return GHOSTTY_CLIPBOARD_WRITE_RESULT_IO_ERROR;
+  if (plain->data.len) memcpy(text, plain->data.ptr, plain->data.len);
+  if (session->clipboard_text) HeapFree(GetProcessHeap(), 0, session->clipboard_text);
+  session->clipboard_text = text;
+  session->clipboard_text_length = plain->data.len;
+  session->clipboard_pending = true;
+  return GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
+}
+
 static bool terminal_size(
   GhosttyTerminal terminal, void *userdata, GhosttySizeReportSize *out_size
 ) {
@@ -450,6 +489,10 @@ static void close_session(TerminalSession *session) {
     HeapFree(GetProcessHeap(), 0, session->search_query);
     session->search_query = NULL;
   }
+  if (session->clipboard_text) {
+    HeapFree(GetProcessHeap(), 0, session->clipboard_text);
+    session->clipboard_text = NULL;
+  }
 }
 
 static bool initialize_terminal(TerminalSession *session) {
@@ -487,6 +530,13 @@ static bool initialize_terminal(TerminalSession *session) {
   ghostty_terminal_set(
     session->terminal, GHOSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES,
     (const void *)terminal_device_attributes
+  );
+  ghostty_terminal_set(
+    session->terminal, GHOSTTY_TERMINAL_OPT_BELL, (const void *)terminal_bell
+  );
+  ghostty_terminal_set(
+    session->terminal, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
+    (const void *)terminal_clipboard_write
   );
   ghostty_terminal_resize(
     session->terminal, session->cols, session->rows,
@@ -1527,6 +1577,30 @@ static int f_terminal_mouse(lua_State *L) {
   return 2;
 }
 
+static int f_terminal_hyperlink(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  uint16_t col = (uint16_t)luaL_checkinteger(L, 2);
+  uint32_t row = (uint32_t)luaL_checkinteger(L, 3);
+  GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+  if (!viewport_ref(session, col, row, &ref)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  size_t length = 0;
+  GhosttyResult result = ghostty_grid_ref_hyperlink_uri(&ref, NULL, 0, &length);
+  if (result != GHOSTTY_OUT_OF_SPACE || length == 0) {
+    lua_pushnil(L);
+    return 1;
+  }
+  uint8_t *buffer = (uint8_t *)HeapAlloc(GetProcessHeap(), 0, length);
+  if (!buffer) return luaL_error(L, "Could not allocate terminal hyperlink");
+  result = ghostty_grid_ref_hyperlink_uri(&ref, buffer, length, &length);
+  if (result == GHOSTTY_SUCCESS) lua_pushlstring(L, (const char *)buffer, length);
+  else lua_pushnil(L);
+  HeapFree(GetProcessHeap(), 0, buffer);
+  return 1;
+}
+
 static int f_terminal_focus(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
   bool focused = lua_toboolean(L, 2) != 0;
@@ -1566,6 +1640,7 @@ static void set_boolean_field(lua_State *L, const char *name, bool value) {
 static void push_cursor(lua_State *L, TerminalSession *session, GhosttyRenderStateColors *colors) {
   bool visible = false;
   bool in_viewport = false;
+  bool blinking = false;
   uint16_t x = 0;
   uint16_t y = 0;
   GhosttyRenderStateCursorVisualStyle style = GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK;
@@ -1580,9 +1655,13 @@ static void push_cursor(lua_State *L, TerminalSession *session, GhosttyRenderSta
   ghostty_render_state_get(
     session->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE, &style
   );
+  ghostty_render_state_get(
+    session->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING, &blinking
+  );
 
   lua_createtable(L, 0, 5);
   set_boolean_field(L, "visible", visible && in_viewport);
+  set_boolean_field(L, "blinking", blinking);
   set_integer_field(L, "x", x);
   set_integer_field(L, "y", y);
   set_integer_field(L, "color", color_value(colors->cursor_has_value ? colors->cursor : colors->foreground));
@@ -1606,8 +1685,13 @@ typedef struct {
   bool selected;
   bool bold;
   bool italic;
+  bool faint;
+  bool blink;
+  bool overline;
   bool invisible;
   bool strikethrough;
+  bool underline_color_has_value;
+  uint32_t underline_color;
 } TerminalRenderCell;
 
 typedef struct {
@@ -1620,7 +1704,12 @@ typedef struct {
   bool active;
   bool bold;
   bool italic;
+  bool faint;
+  bool blink;
+  bool overline;
   bool strikethrough;
+  bool underline_color_has_value;
+  uint32_t underline_color;
 } TerminalTextRun;
 
 typedef struct {
@@ -1678,9 +1767,19 @@ static void read_render_cell(
   cell->background = color_value(background);
   cell->bold = style.bold;
   cell->italic = style.italic;
+  cell->faint = style.faint;
+  cell->blink = style.blink;
+  cell->overline = style.overline;
   cell->invisible = style.invisible;
   cell->strikethrough = style.strikethrough;
   cell->underline = style.underline;
+  if (style.underline_color.tag == GHOSTTY_STYLE_COLOR_RGB) {
+    cell->underline_color_has_value = true;
+    cell->underline_color = color_value(style.underline_color.value.rgb);
+  } else if (style.underline_color.tag == GHOSTTY_STYLE_COLOR_PALETTE) {
+    cell->underline_color_has_value = true;
+    cell->underline_color = color_value(colors->palette[style.underline_color.value.palette]);
+  }
   cell->columns = wide == GHOSTTY_CELL_WIDE_WIDE ? 2 : 1;
   if (ghostty_render_state_row_cells_get(
     session->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &cell->selected
@@ -1690,7 +1789,10 @@ static void read_render_cell(
 static bool same_text_run(const TerminalTextRun *run, const TerminalRenderCell *cell) {
   return run->foreground == cell->foreground && run->bold == cell->bold &&
     run->italic == cell->italic && run->underline == cell->underline &&
-    run->strikethrough == cell->strikethrough;
+    run->strikethrough == cell->strikethrough && run->faint == cell->faint &&
+    run->blink == cell->blink && run->overline == cell->overline &&
+    run->underline_color_has_value == cell->underline_color_has_value &&
+    (!run->underline_color_has_value || run->underline_color == cell->underline_color);
 }
 
 static void flush_text_run(
@@ -1705,8 +1807,14 @@ static void flush_text_run(
   set_integer_field(L, "fg", run->foreground);
   if (run->bold) set_boolean_field(L, "bold", true);
   if (run->italic) set_boolean_field(L, "italic", true);
+  if (run->faint) set_boolean_field(L, "faint", true);
+  if (run->blink) set_boolean_field(L, "blink", true);
+  if (run->overline) set_boolean_field(L, "overline", true);
   if (run->underline) set_integer_field(L, "underline", run->underline);
   if (run->strikethrough) set_boolean_field(L, "strikethrough", true);
+  if (run->underline_color_has_value) {
+    set_integer_field(L, "underline_color", run->underline_color);
+  }
   lua_rawseti(L, runs_index, ++*run_count);
   run->active = false;
   run->text_length = 0;
@@ -1768,8 +1876,13 @@ static void push_render_row(
         run.foreground = cell.foreground;
         run.bold = cell.bold;
         run.italic = cell.italic;
+        run.faint = cell.faint;
+        run.blink = cell.blink;
+        run.overline = cell.overline;
         run.underline = cell.underline;
         run.strikethrough = cell.strikethrough;
+        run.underline_color_has_value = cell.underline_color_has_value;
+        run.underline_color = cell.underline_color;
       }
       memcpy(run.text + run.text_length, cell.utf8, cell.text_length);
       run.text_length += cell.text_length;
@@ -1832,6 +1945,25 @@ static int f_terminal_snapshot(lua_State *L) {
     lua_pushlstring(L, (const char *)title.ptr, title.len);
     lua_setfield(L, -2, "title");
   }
+  lua_createtable(L, session->bell_count + (session->clipboard_pending ? 1 : 0), 0);
+  int event_count = 0;
+  while (session->bell_count > 0) {
+    lua_createtable(L, 0, 1);
+    lua_pushliteral(L, "bell");
+    lua_setfield(L, -2, "type");
+    lua_rawseti(L, -2, ++event_count);
+    session->bell_count--;
+  }
+  if (session->clipboard_pending) {
+    lua_createtable(L, 0, 2);
+    lua_pushliteral(L, "clipboard");
+    lua_setfield(L, -2, "type");
+    lua_pushlstring(L, session->clipboard_text, session->clipboard_text_length);
+    lua_setfield(L, -2, "text");
+    lua_rawseti(L, -2, ++event_count);
+    session->clipboard_pending = false;
+  }
+  lua_setfield(L, -2, "events");
   GhosttyTerminalScrollbar scrollbar = {0};
   if (ghostty_terminal_get(
     session->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &scrollbar
@@ -1922,6 +2054,7 @@ static const luaL_Reg terminal_methods[] = {
   { "selected_text", f_terminal_selected_text },
   { "search", f_terminal_search },
   { "mouse", f_terminal_mouse },
+  { "hyperlink", f_terminal_hyperlink },
   { "focus", f_terminal_focus },
   { "snapshot", f_terminal_snapshot },
   { "close", f_terminal_close },

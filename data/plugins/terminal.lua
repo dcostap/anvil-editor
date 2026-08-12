@@ -266,12 +266,38 @@ function TerminalView:update()
   if changed or self.running ~= was_running then
     local snapshot_started = record_perf and system.get_time()
     self.snapshot = self.session:snapshot(self.snapshot)
+    self:handle_events()
     if record_perf then
       perf_detail("terminal_snapshot_ms", (system.get_time() - snapshot_started) * 1000)
       perf_detail("terminal_snapshot_calls", 1)
     end
     core.redraw = true
   end
+end
+
+function TerminalView:handle_events()
+  for _, event in ipairs((self.snapshot and self.snapshot.events) or {}) do
+    if event.type == "bell" then
+      self.bell_count = (self.bell_count or 0) + 1
+      self.bell_until = system.get_time() + 0.15
+      core.redraw = true
+    elseif event.type == "clipboard" and event.text then
+      self.pending_clipboard = event.text
+      core.nag_view:show(
+        "Terminal Clipboard Request",
+        "A terminal program wants to replace the clipboard. Allow it?",
+        {
+          { text = "Allow", default_yes = false },
+          { text = "Deny", default_no = true },
+        },
+        function(item)
+          if item.text == "Allow" then system.set_clipboard(event.text) end
+          self.pending_clipboard = nil
+        end
+      )
+    end
+  end
+  if self.snapshot then self.snapshot.events = {} end
 end
 
 local function cell_font(view, cell)
@@ -285,6 +311,10 @@ function TerminalView:draw()
   local draw_scope = perf_scope_begin("terminal", true)
   local snapshot = self.snapshot
   local background = rgb(self, snapshot and snapshot.background, style.background)
+  if self.bell_until and system.get_time() < self.bell_until then
+    background = style.line_highlight or background
+    core.redraw = true
+  end
   self:draw_background(background)
   if not snapshot then
     perf_scope_end(draw_scope)
@@ -319,6 +349,7 @@ function TerminalView:draw()
       local x = origin_x + run.col * self.cell_width
       local width = run.columns * self.cell_width
       local color = rgb(self, run.fg, style.text)
+      if run.faint then color = rgb(self, run.fg, style.text, 140) end
       local font = cell_font(self, run)
       if renderer.draw_text_known_bounds then
         renderer.draw_text_known_bounds(
@@ -330,10 +361,13 @@ function TerminalView:draw()
         renderer.draw_text(font, run.text, x, y, color)
       end
       if run.underline and run.underline ~= 0 then
-        renderer.draw_rect(
-          x, y + self.cell_height - math.max(1, SCALE),
-          width, math.max(1, SCALE), color
-        )
+        local underline_color = rgb(self, run.underline_color, color)
+        local thickness = math.max(1, SCALE)
+        local underline_y = y + self.cell_height - thickness
+        renderer.draw_rect(x, underline_y, width, thickness, underline_color)
+        if run.underline == 2 then
+          renderer.draw_rect(x, underline_y - 2 * thickness, width, thickness, underline_color)
+        end
       end
       if run.strikethrough then
         renderer.draw_rect(
@@ -341,13 +375,18 @@ function TerminalView:draw()
           width, math.max(1, SCALE), color
         )
       end
+      if run.overline then
+        renderer.draw_rect(x, y, width, math.max(1, SCALE), color)
+      end
     end
   end
   perf_scope_end(phase_scope)
 
   phase_scope = perf_scope_begin("cursor")
   local cursor = snapshot.cursor
-  if cursor and cursor.visible and self.running ~= false then
+  local cursor_on = not (cursor and cursor.blinking)
+    or (system.get_time() - core.blink_start) % config.blink_period < config.blink_period / 2
+  if cursor and cursor.visible and cursor_on and self.running ~= false then
     local x = origin_x + (cursor.x or 0) * self.cell_width
     local y = origin_y + (cursor.y or 0) * self.cell_height
     local value = cursor.color or snapshot.foreground
@@ -356,6 +395,12 @@ function TerminalView:draw()
       renderer.draw_rect(x, y, math.max(1, style.caret_width or SCALE), self.cell_height, color)
     elseif cursor.style == "underline" then
       renderer.draw_rect(x, y + self.cell_height - math.max(2, 2 * SCALE), self.cell_width, math.max(2, 2 * SCALE), color)
+    elseif cursor.style == "hollow" then
+      local thickness = math.max(1, SCALE)
+      renderer.draw_rect(x, y, self.cell_width, thickness, color)
+      renderer.draw_rect(x, y + self.cell_height - thickness, self.cell_width, thickness, color)
+      renderer.draw_rect(x, y, thickness, self.cell_height, color)
+      renderer.draw_rect(x + self.cell_width - thickness, y, thickness, self.cell_height, color)
     else
       renderer.draw_rect(
         x, y, self.cell_width, self.cell_height,
@@ -494,6 +539,10 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
     self.session:clear_selection()
     self.session:mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
   elseif button == "left" then
+    if keymap.modkeys.ctrl then
+      local uri = self.session:hyperlink(col, row)
+      if uri then return common.open_in_system(uri) end
+    end
     self.selection_start = true
     self.session:selection_gesture(
       "press", col, row, pixel_x, pixel_y, clicks or 1,

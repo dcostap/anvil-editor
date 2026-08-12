@@ -54,6 +54,7 @@ local function fake_native()
         foreground = 0xffffff,
         background = 0x000000,
         cursor = { visible = true, x = 0, y = 0, style = "block" },
+        events = {},
       }
     end
     function session:write(text) self.writes[#self.writes + 1] = text; return true end
@@ -98,6 +99,7 @@ local function fake_native()
       self.searches[#self.searches + 1] = { query, reverse }
       return query == "needle"
     end
+    function session:hyperlink() return self.hyperlink_uri end
     function session:close() self.closed = true end
     sessions[#sessions + 1] = session
     return session
@@ -334,5 +336,40 @@ test.describe("Terminal View", function()
     test.equal(color_span[1], 6 + view.cell_width)
     test.equal(color_span[3], 2 * view.cell_width)
     test.equal(selection_span[1], 6 + 4 * view.cell_width)
+  end)
+
+  test.it("draws hollow cursors and extended text decorations", function()
+    local view = terminal.open()
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 400
+    view.snapshot = {
+      background = 0, foreground = 0xffffff,
+      rows = {{
+        text_runs = {{
+          text = "x", col = 0, columns = 1, fg = 0xffffff,
+          faint = true, overline = true, underline = 2,
+          underline_color = 0xff0000,
+        }},
+        backgrounds = {},
+      }},
+      cursor = { visible = true, x = 2, y = 0, style = "hollow" },
+    }
+    local calls = draw_calls(function() view:draw() end)
+    test.ok(#calls.rect >= 7)
+    test.equal(calls.text[1][9][4], 140)
+  end)
+
+  test.it("handles terminal bells and clipboard requests", function(context)
+    local view = terminal.open()
+    view.snapshot.events = {
+      { type = "bell" },
+      { type = "clipboard", text = "terminal clipboard" },
+    }
+    local previous_show = core.nag_view.show
+    core.nag_view.show = function() end
+    view:handle_events()
+    core.nag_view.show = previous_show
+    test.equal(view.bell_count, 1)
+    test.equal(view.pending_clipboard, "terminal clipboard")
   end)
 end)
