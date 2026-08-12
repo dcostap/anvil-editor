@@ -1,0 +1,6 @@
+[wrap-git]
+url = https://github.com/ghostty-org/ghostty.git
+revision = f64f4aca2c29b554d111b36c3d946a9bddd159ff
+depth = 1
+clone-recursive = false
+patch_directory = ghostty

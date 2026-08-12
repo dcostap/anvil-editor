@@ -280,6 +280,10 @@ _Avoid_: Command preset, command macro
 A read-only Document View showing the text output from a command run.
 _Avoid_: Command buffer, terminal buffer, output buffer
 
+**Terminal View**:
+An interactive Pane View connected to a running shell or terminal application.
+_Avoid_: Terminal panel, terminal buffer, console
+
 **Command Output History**:
 The per-Command Slot sequence of Command Output View contents from command runs, navigated within that slot.
 _Avoid_: terminal scrollback, output buffer history

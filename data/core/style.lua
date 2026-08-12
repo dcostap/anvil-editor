@@ -44,6 +44,7 @@ style.big_font = style.font:copy(46 * SCALE)
 style.icon_font = renderer.font.load(DATADIR .. "/fonts/icons.ttf", 16 * SCALE, {antialiasing="grayscale", hinting="full"})
 style.icon_big_font = style.icon_font:copy(23 * SCALE)
 style.code_font = renderer.font.load(DATADIR .. "/fonts/JetBrainsMono-Regular.ttf", 15 * SCALE)
+style.terminal_font = style.code_font
 -- Reusable proportional typography roles. Markdown Live Preview, navigation
 -- trees, and other prose-oriented surfaces may share these faces without
 -- making the fonts belong to any one feature.

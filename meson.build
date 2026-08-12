@@ -348,6 +348,11 @@ if not get_option('source-only')
     tree_sitter_markdown_dep = tree_sitter_markdown_subproject.get_variable('tree_sitter_markdown_dep')
     tree_sitter_markdown_inline_dep = tree_sitter_markdown_subproject.get_variable('tree_sitter_markdown_inline_dep')
     anvil_deps = [lua_dep, sdl_dep, sdl_image, freetype_dep, harfbuzz_anvil_dep, pcre2_dep, uchardet_dep, tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, libm, libdl, librt]
+
+    if host_machine.system() == 'windows'
+        ghostty_vt_dep = subproject('ghostty').get_variable('ghostty_vt_dep')
+        anvil_deps += ghostty_vt_dep
+    endif
 endif
 
 lua_compat_needed = lua_dep.version() < '5.3.0'

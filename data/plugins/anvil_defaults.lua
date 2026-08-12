@@ -28,6 +28,7 @@ local core_plugins = {
   selection_surround = true,
   smart_indent_rules = true,
   theme_editor = true,
+  terminal = true,
   untitled_recovery = true,
   untitled_tabs = true,
 }
@@ -269,6 +270,7 @@ local function load_text_font(primary_path, options, fallback_options)
 end
 style.font = load_text_font(font_path)
 style.code_font = load_text_font(code_font_path)
+style.terminal_font = style.code_font:copy(font_size, { ligatures = false })
 -- Reusable proportional typography roles. Live Preview prose and compact
 -- navigation surfaces use these roles; source and diff text retain code_font.
 style.prose_font = load_text_font(prose_font_path)
@@ -299,6 +301,7 @@ config.force_scrollbar_status = "contracted"
 require_core_plugin "custom_nagview"
 require_core_plugin "filetree"
 require_core_plugin "project_paths_view"
+require_core_plugin "terminal"
 -- Use hard tabs for indentation, displayed at 4 columns.
 config.indent_size = 4
 config.tab_type = "hard"

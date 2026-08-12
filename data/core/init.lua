@@ -1896,8 +1896,12 @@ function core.on_event(type, ...)
       core.log_quiet("Fuzzy input event: keypressed active=%s supports_text_input=%s key=%s", tostring(active_type), tostring(active and active:supports_text_input()), tostring(key))
     end
     did_keymap = keymap.on_key_pressed(...)
+    if not did_keymap then
+      did_keymap = core.root_panel:on_key_pressed(...) == true
+    end
   elseif type == "keyreleased" then
     keymap.on_key_released(...)
+    core.root_panel:on_key_released(...)
   elseif type == "mousemoved" then
     core.root_panel:on_mouse_moved(...)
   elseif type == "mousepressed" then

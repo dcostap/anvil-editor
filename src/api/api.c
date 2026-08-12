@@ -17,6 +17,13 @@ int luaopen_treesitter(lua_State *L);
 int luaopen_fuzzy(lua_State *L);
 int luaopen_worker_pool_native(lua_State *L);
 
+#ifdef _WIN32
+  int luaopen_terminal_native(lua_State *L);
+  #define LUA_TERMINAL { "terminal_native", luaopen_terminal_native },
+#else
+  #define LUA_TERMINAL
+#endif
+
 #ifdef ANVIL_NET
   int luaopen_net(lua_State* L);
   #define LUA_NET { "net",  luaopen_net  },
@@ -82,6 +89,7 @@ static const luaL_Reg libs[] = {
   { "tokenizer",  luaopen_tokenizer  },
   { "fuzzy",      luaopen_fuzzy      },
   { "worker_pool_native", luaopen_worker_pool_native },
+  LUA_TERMINAL
   LUA_NET
   LUA_REPL
   LUA53_COMPATIBILITY
@@ -90,6 +98,7 @@ static const luaL_Reg libs[] = {
 
 #undef LUA53_COMPATIBILITY
 #undef LUABIT_COMPATIBILITY
+#undef LUA_TERMINAL
 
 void api_load_libs(lua_State *L) {
   for (int i = 0; libs[i].name; i++) {

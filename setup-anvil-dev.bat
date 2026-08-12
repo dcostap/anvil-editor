@@ -28,7 +28,7 @@ call :KillAnvil
 if errorlevel 1 exit /b 1
 
 echo === Building Anvil ===
-"%BASH%" -lc "%MSYS_ENV% cd %REPO_BASH% && ./scripts/build.sh -f -P && ./scripts/ensure-luajit-cli.sh"
+"%BASH%" -lc "%MSYS_ENV% cd %REPO_BASH% && zig_dir=$(./scripts/ensure-zig.sh) && export PATH=$zig_dir:$PATH && ./scripts/build.sh -f -P && ./scripts/ensure-luajit-cli.sh"
 if errorlevel 1 exit /b 1
 
 echo.

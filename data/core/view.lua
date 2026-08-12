@@ -384,6 +384,22 @@ function View:on_text_input(text)
 end
 
 
+---Handle a key press that no Anvil command consumed.
+---@param key string Normalized key name
+---@return boolean? consumed True when the view consumed the key
+function View:on_key_pressed(key)
+  -- no-op
+end
+
+
+---Handle a key release after Anvil updates its modifier state.
+---@param key string Normalized key name
+---@return boolean? consumed True when the view consumed the key
+function View:on_key_released(key)
+  -- no-op
+end
+
+
 ---Handle IME (Input Method Editor) text composition events.
 ---Override for IME support in text editors. Called during composition.
 ---@param text string Composition text being edited

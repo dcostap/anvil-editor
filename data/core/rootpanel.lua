@@ -837,6 +837,18 @@ function RootPanel:on_text_input(...)
 end
 
 
+---Forward unhandled key presses to the focused view.
+function RootPanel:on_key_pressed(...)
+  return call_view_method(core.active_view, core.active_view.on_key_pressed, ...)
+end
+
+
+---Forward key releases to the focused view.
+function RootPanel:on_key_released(...)
+  return call_view_method(core.active_view, core.active_view.on_key_released, ...)
+end
+
+
 ---Handle touch press events (touchscreen/trackpad).
 ---Tracks which view is being touched for subsequent touch events.
 function RootPanel:on_touch_pressed(x, y, ...)
