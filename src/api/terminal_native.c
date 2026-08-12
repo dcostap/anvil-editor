@@ -13,7 +13,8 @@
 
 #include "api.h"
 
-#define TERMINAL_READ_BUDGET (1024u * 1024u)
+#define TERMINAL_READ_BUDGET (128u * 1024u)
+#define TERMINAL_READ_QUEUE_CAPACITY (4u * 1024u * 1024u)
 
 typedef struct {
   HPCON pseudoconsole;
@@ -22,6 +23,14 @@ typedef struct {
   HANDLE process;
   HANDLE process_thread;
   HANDLE job;
+  HANDLE reader_thread;
+  CRITICAL_SECTION read_lock;
+  CONDITION_VARIABLE read_ready;
+  uint8_t *read_queue;
+  size_t read_queue_head;
+  size_t read_queue_count;
+  volatile LONG closing;
+  bool read_lock_initialized;
   GhosttyTerminal terminal;
   GhosttyRenderState render_state;
   GhosttyRenderStateRowIterator row_iterator;
@@ -35,6 +44,58 @@ typedef struct {
   bool closed;
   bool running;
 } TerminalSession;
+
+static DWORD WINAPI terminal_reader_main(void *userdata) {
+  TerminalSession *session = (TerminalSession *)userdata;
+  uint8_t buffer[65536];
+
+  while (InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
+    DWORD available = 0;
+    if (!PeekNamedPipe(session->output_read, NULL, 0, NULL, &available, NULL)) break;
+    if (available == 0) {
+      Sleep(2);
+      continue;
+    }
+    DWORD read = 0;
+    DWORD wanted = available > sizeof(buffer) ? sizeof(buffer) : available;
+    if (!ReadFile(session->output_read, buffer, wanted, &read, NULL) || read == 0) break;
+
+    size_t offset = 0;
+    EnterCriticalSection(&session->read_lock);
+    while (offset < read && InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
+      while (session->read_queue_count == TERMINAL_READ_QUEUE_CAPACITY &&
+             InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
+        SleepConditionVariableCS(&session->read_ready, &session->read_lock, INFINITE);
+      }
+      if (InterlockedCompareExchange(&session->closing, 0, 0) != 0) break;
+
+      size_t tail = (session->read_queue_head + session->read_queue_count) %
+        TERMINAL_READ_QUEUE_CAPACITY;
+      size_t available = TERMINAL_READ_QUEUE_CAPACITY - session->read_queue_count;
+      size_t contiguous = TERMINAL_READ_QUEUE_CAPACITY - tail;
+      size_t amount = read - offset;
+      if (amount > available) amount = available;
+      if (amount > contiguous) amount = contiguous;
+      memcpy(session->read_queue + tail, buffer + offset, amount);
+      session->read_queue_count += amount;
+      offset += amount;
+    }
+    LeaveCriticalSection(&session->read_lock);
+  }
+  return 0;
+}
+
+static bool start_terminal_reader(TerminalSession *session) {
+  session->read_queue = (uint8_t *)HeapAlloc(
+    GetProcessHeap(), 0, TERMINAL_READ_QUEUE_CAPACITY
+  );
+  if (!session->read_queue) return false;
+  InitializeCriticalSection(&session->read_lock);
+  session->read_lock_initialized = true;
+  InitializeConditionVariable(&session->read_ready);
+  session->reader_thread = CreateThread(NULL, 0, terminal_reader_main, session, 0, NULL);
+  return session->reader_thread != NULL;
+}
 
 static TerminalSession *check_session(lua_State *L, int index) {
   return (TerminalSession *)luaL_checkudata(L, index, API_TYPE_TERMINAL_SESSION);
@@ -170,9 +231,20 @@ static void close_session(TerminalSession *session) {
   if (!session || session->closed) return;
   session->closed = true;
   session->running = false;
+  InterlockedExchange(&session->closing, 1);
 
   close_handle(&session->input_write);
+  if (session->reader_thread) CancelSynchronousIo(session->reader_thread);
   close_handle(&session->output_read);
+  if (session->read_lock_initialized) {
+    EnterCriticalSection(&session->read_lock);
+    WakeAllConditionVariable(&session->read_ready);
+    LeaveCriticalSection(&session->read_lock);
+  }
+  if (session->reader_thread) {
+    WaitForSingleObject(session->reader_thread, INFINITE);
+    close_handle(&session->reader_thread);
+  }
 
   if (session->pseudoconsole) {
     ClosePseudoConsole(session->pseudoconsole);
@@ -191,6 +263,14 @@ static void close_session(TerminalSession *session) {
   close_handle(&session->process_thread);
   close_handle(&session->process);
   free_terminal_objects(session);
+  if (session->read_lock_initialized) {
+    DeleteCriticalSection(&session->read_lock);
+    session->read_lock_initialized = false;
+  }
+  if (session->read_queue) {
+    HeapFree(GetProcessHeap(), 0, session->read_queue);
+    session->read_queue = NULL;
+  }
 }
 
 static bool initialize_terminal(TerminalSession *session) {
@@ -383,6 +463,14 @@ static int f_terminal_new(lua_State *L) {
   }
   lua_pop(L, 2);
 
+  if (!start_terminal_reader(session)) {
+    close_session(session);
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    lua_pushliteral(L, "Could not start the ConPTY reader");
+    return 2;
+  }
+
   if (!initialize_terminal(session)) {
     close_session(session);
     lua_pop(L, 1);
@@ -412,14 +500,24 @@ static int f_terminal_update(lua_State *L) {
   size_t total = 0;
   bool changed = false;
   while (total < TERMINAL_READ_BUDGET) {
-    DWORD available = 0;
-    if (!PeekNamedPipe(session->output_read, NULL, 0, NULL, &available, NULL)) break;
-    if (available == 0) break;
-    DWORD wanted = available > sizeof(buffer) ? sizeof(buffer) : available;
-    DWORD read = 0;
-    if (!ReadFile(session->output_read, buffer, wanted, &read, NULL) || read == 0) break;
-    ghostty_terminal_vt_write(session->terminal, buffer, read);
-    total += read;
+    size_t amount = 0;
+    EnterCriticalSection(&session->read_lock);
+    if (session->read_queue_count > 0) {
+      amount = session->read_queue_count;
+      if (amount > sizeof(buffer)) amount = sizeof(buffer);
+      if (amount > TERMINAL_READ_BUDGET - total) amount = TERMINAL_READ_BUDGET - total;
+      size_t contiguous = TERMINAL_READ_QUEUE_CAPACITY - session->read_queue_head;
+      if (amount > contiguous) amount = contiguous;
+      memcpy(buffer, session->read_queue + session->read_queue_head, amount);
+      session->read_queue_head = (session->read_queue_head + amount) %
+        TERMINAL_READ_QUEUE_CAPACITY;
+      session->read_queue_count -= amount;
+      WakeConditionVariable(&session->read_ready);
+    }
+    LeaveCriticalSection(&session->read_lock);
+    if (amount == 0) break;
+    ghostty_terminal_vt_write(session->terminal, buffer, amount);
+    total += amount;
     changed = true;
   }
 
