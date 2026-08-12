@@ -77,6 +77,27 @@ test.describe("Native terminal session", function()
     test.equal(status.exit_code, 23)
   end)
 
+  test.it("reports exit code 259 instead of treating it as active", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 24, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = 'powershell.exe -NoLogo -NoProfile -Command "exit 259"',
+    })
+    test.ok(session, start_error)
+    local running, status = true, nil
+    local deadline = system.get_time() + 5
+    while system.get_time() < deadline and running do
+      local _
+      _, running, status = session:update()
+      if running then coroutine.yield(0.01) end
+    end
+    session:close()
+    test.equal(running, false)
+    test.equal(status.exit_code, 259)
+  end)
+
   test.it("sends text and encoded keys to the default PowerShell", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"

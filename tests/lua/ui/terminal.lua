@@ -26,6 +26,11 @@ local function fake_native()
   local native = {}
 
   function native.new(options)
+    if native.next_error then
+      local error = native.next_error
+      native.next_error = nil
+      return nil, error
+    end
     local session = {
       options = options,
       writes = {},
@@ -152,6 +157,23 @@ test.describe("Terminal View", function()
     test.equal(context.sessions[2].options.shell, "cmd.exe")
     test.ok(context.sessions[1].closed)
     test.ok(view.running)
+    test.same({ true }, context.sessions[2].focus_events)
+  end)
+
+  test.it("keeps the exited session when restart fails", function(context)
+    local view = terminal.open()
+    local previous = context.sessions[1]
+    previous.update = function() return false, false, { exit_code = 2 } end
+    view:update()
+    context.native.next_error = "missing shell"
+    local previous_error = core.error
+    core.error = function() end
+    local restarted = view:restart()
+    core.error = previous_error
+    test.equal(restarted, false)
+    test.ok(view.session == previous)
+    test.equal(view:get_name(), "Terminal (exit 2)")
+    test.equal(previous.closed, false)
   end)
 
   test.it("shows terminal transport failures once", function(context)

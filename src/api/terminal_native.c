@@ -43,6 +43,7 @@ typedef struct {
   uint8_t *snapshot_text;
   size_t snapshot_text_capacity;
   bool write_lock_initialized;
+  bool transport_released;
   volatile LONG write_failed;
   volatile LONG input_rejected;
   volatile LONG read_failed;
@@ -90,7 +91,15 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
     }
     DWORD read = 0;
     DWORD wanted = available > sizeof(buffer) ? sizeof(buffer) : available;
-    if (!ReadFile(session->output_read, buffer, wanted, &read, NULL) || read == 0) break;
+    if (!ReadFile(session->output_read, buffer, wanted, &read, NULL) || read == 0) {
+      DWORD error = GetLastError();
+      if (InterlockedCompareExchange(&session->closing, 0, 0) == 0 &&
+          error != ERROR_BROKEN_PIPE && error != ERROR_PIPE_NOT_CONNECTED) {
+        session->read_error = error;
+        InterlockedExchange(&session->read_failed, 1);
+      }
+      break;
+    }
 
     size_t offset = 0;
     EnterCriticalSection(&session->read_lock);
@@ -147,8 +156,15 @@ static DWORD WINAPI terminal_writer_main(void *userdata) {
       if (!WriteFile(
         session->input_write, buffer + offset, (DWORD)(amount - offset), &written, NULL
       ) || written == 0) {
-        session->write_error = GetLastError();
-        InterlockedExchange(&session->write_failed, 1);
+        DWORD error = GetLastError();
+        EnterCriticalSection(&session->write_lock);
+        if (InterlockedCompareExchange(&session->closing, 0, 0) == 0 &&
+            error != ERROR_OPERATION_ABORTED && error != ERROR_BROKEN_PIPE &&
+            error != ERROR_PIPE_NOT_CONNECTED) {
+          session->write_error = error;
+          InterlockedExchange(&session->write_failed, 1);
+        }
+        LeaveCriticalSection(&session->write_lock);
         return 0;
       }
       offset += written;
@@ -221,10 +237,20 @@ static void push_windows_error(lua_State *L, const char *prefix, DWORD code) {
 }
 
 static bool write_all(TerminalSession *session, const uint8_t *data, size_t length) {
-  if (!session || session->closed || !session->input_write || !session->write_lock_initialized ||
-      InterlockedCompareExchange(&session->write_failed, 0, 0) != 0 ||
-      length > TERMINAL_WRITE_QUEUE_CAPACITY) return false;
+  if (!session || session->closed || !session->input_write || !session->write_lock_initialized) {
+    return false;
+  }
+  if (length > TERMINAL_WRITE_QUEUE_CAPACITY) {
+    InterlockedExchange(&session->input_rejected, 1);
+    return false;
+  }
   EnterCriticalSection(&session->write_lock);
+  if (InterlockedCompareExchange(&session->write_failed, 0, 0) != 0 ||
+      InterlockedCompareExchange(&session->closing, 0, 0) != 0 ||
+      !session->input_write) {
+    LeaveCriticalSection(&session->write_lock);
+    return false;
+  }
   if (length > TERMINAL_WRITE_QUEUE_CAPACITY - session->write_queue_count) {
     InterlockedExchange(&session->input_rejected, 1);
     LeaveCriticalSection(&session->write_lock);
@@ -326,12 +352,10 @@ static void free_terminal_objects(TerminalSession *session) {
   }
 }
 
-static void close_session(TerminalSession *session) {
-  if (!session || session->closed) return;
-  session->closed = true;
-  session->running = false;
+static void release_terminal_transport(TerminalSession *session) {
+  if (!session || session->transport_released) return;
+  session->transport_released = true;
   InterlockedExchange(&session->closing, 1);
-
   if (session->reader_thread) CancelSynchronousIo(session->reader_thread);
   if (session->writer_thread) CancelSynchronousIo(session->writer_thread);
   close_handle(&session->input_write);
@@ -354,24 +378,10 @@ static void close_session(TerminalSession *session) {
     WaitForSingleObject(session->writer_thread, INFINITE);
     close_handle(&session->writer_thread);
   }
-
   if (session->pseudoconsole) {
     ClosePseudoConsole(session->pseudoconsole);
     session->pseudoconsole = NULL;
   }
-
-  if (session->job) {
-    close_handle(&session->job);
-  } else if (session->process) {
-    DWORD exit_code = 0;
-    if (GetExitCodeProcess(session->process, &exit_code) && exit_code == STILL_ACTIVE) {
-      TerminateProcess(session->process, 1);
-    }
-  }
-
-  close_handle(&session->process_thread);
-  close_handle(&session->process);
-  free_terminal_objects(session);
   if (session->read_lock_initialized) {
     DeleteCriticalSection(&session->read_lock);
     session->read_lock_initialized = false;
@@ -388,6 +398,25 @@ static void close_session(TerminalSession *session) {
     HeapFree(GetProcessHeap(), 0, session->write_queue);
     session->write_queue = NULL;
   }
+}
+
+static void close_session(TerminalSession *session) {
+  if (!session || session->closed) return;
+  session->closed = true;
+  session->running = false;
+  if (session->job) {
+    close_handle(&session->job);
+  } else if (session->process) {
+    DWORD exit_code = 0;
+    if (GetExitCodeProcess(session->process, &exit_code) && exit_code == STILL_ACTIVE) {
+      TerminateProcess(session->process, 1);
+    }
+  }
+  release_terminal_transport(session);
+
+  close_handle(&session->process_thread);
+  close_handle(&session->process);
+  free_terminal_objects(session);
   if (session->snapshot_text) {
     HeapFree(GetProcessHeap(), 0, session->snapshot_text);
     session->snapshot_text = NULL;
@@ -487,7 +516,7 @@ static bool create_shell_process(
 
   bool created = updated && CreateProcessW(
     NULL, command, NULL, NULL, FALSE,
-    EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+    EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
     NULL, cwd, &startup.StartupInfo, &process
   ) != FALSE;
   *error_out = created ? ERROR_SUCCESS : GetLastError();
@@ -500,8 +529,23 @@ static bool create_shell_process(
   if (!created) return false;
   session->process = process.hProcess;
   session->process_thread = process.hThread;
+  if (!create_kill_job(session)) {
+    *error_out = GetLastError();
+    TerminateProcess(session->process, 1);
+    WaitForSingleObject(session->process, INFINITE);
+    close_handle(&session->process_thread);
+    close_handle(&session->process);
+    return false;
+  }
+  if (ResumeThread(session->process_thread) == (DWORD)-1) {
+    *error_out = GetLastError();
+    close_handle(&session->job);
+    WaitForSingleObject(session->process, INFINITE);
+    close_handle(&session->process_thread);
+    close_handle(&session->process);
+    return false;
+  }
   session->running = true;
-  create_kill_job(session);
   return true;
 }
 
@@ -607,12 +651,27 @@ static int f_terminal_new(lua_State *L) {
 
 static bool process_running(TerminalSession *session) {
   if (!session->process || session->closed) return false;
+  DWORD wait = WaitForSingleObject(session->process, 0);
+  if (wait == WAIT_TIMEOUT) return true;
+  if (wait != WAIT_OBJECT_0) return false;
   DWORD exit_code = 0;
   if (!GetExitCodeProcess(session->process, &exit_code)) return false;
-  if (exit_code == STILL_ACTIVE) return true;
   session->exit_code = exit_code;
   session->exit_code_known = true;
   return false;
+}
+
+static bool output_drained(TerminalSession *session) {
+  if (!session->reader_thread || WaitForSingleObject(session->reader_thread, 0) != WAIT_OBJECT_0) {
+    return false;
+  }
+  bool empty = true;
+  if (session->read_lock_initialized) {
+    EnterCriticalSection(&session->read_lock);
+    empty = session->read_queue_count == 0;
+    LeaveCriticalSection(&session->read_lock);
+  }
+  return empty;
 }
 
 static void push_status(lua_State *L, TerminalSession *session) {
@@ -628,10 +687,7 @@ static void push_status(lua_State *L, TerminalSession *session) {
     lua_pushinteger(L, session->exit_code);
     lua_setfield(L, -2, "exit_code");
   }
-  if (input_rejected) {
-    lua_pushliteral(L, "Terminal input queue is full");
-    lua_setfield(L, -2, "error");
-  } else if (read_failed || write_failed) {
+  if (read_failed || write_failed) {
     DWORD error = read_failed ? session->read_error : session->write_error;
     const char *operation = read_failed ? "output" : "input";
     char *message = NULL;
@@ -651,6 +707,9 @@ static void push_status(lua_State *L, TerminalSession *session) {
     } else {
       lua_pushfstring(L, "ConPTY %s failed: Windows error %d", operation, (int)error);
     }
+    lua_setfield(L, -2, "error");
+  } else if (input_rejected) {
+    lua_pushliteral(L, "Terminal input queue is full");
     lua_setfield(L, -2, "error");
   }
 }
@@ -695,6 +754,12 @@ static int f_terminal_update(lua_State *L) {
     }
   }
   session->running = process_running(session);
+  if (!session->running && output_drained(session)) {
+    if (session->job) close_handle(&session->job);
+    close_handle(&session->process_thread);
+    close_handle(&session->process);
+    release_terminal_transport(session);
+  }
   lua_pushboolean(L, changed);
   lua_pushboolean(L, session->running);
   push_status(L, session);

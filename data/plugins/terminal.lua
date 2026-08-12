@@ -19,9 +19,10 @@ local PADDING = 6
 local terminal_config = config.plugins.terminal
 
 local function document_path()
-  local view = core.active_view or core.last_active_view
-  local path = view and view.doc and view.doc.abs_filename
-  return path and common.dirname(path) or nil
+  for _, view in ipairs({ core.active_view, core.last_active_view }) do
+    local path = view and view.doc and view.doc.abs_filename
+    if path then return common.dirname(path) end
+  end
 end
 
 local function terminal_native()
@@ -121,15 +122,15 @@ end
 
 function TerminalView:get_name()
   local title = self.snapshot and self.snapshot.title
-  if title and title ~= "" then return title end
   if self.running == false then
-    return self.exit_code ~= nil and string.format("Terminal (exit %d)", self.exit_code)
-      or "Terminal (exited)"
+    local status = self.exit_code ~= nil and string.format("exit %d", self.exit_code) or "exited"
+    return title and title ~= "" and string.format("%s (%s)", title, status)
+      or string.format("Terminal (%s)", status)
   end
-  return "Terminal"
+  return title and title ~= "" and title or "Terminal"
 end
 
-function TerminalView:start_session()
+function TerminalView:create_session()
   local native, load_error = terminal_native()
   if not native then return false, load_error end
   local session, start_error = native.new({
@@ -138,21 +139,33 @@ function TerminalView:start_session()
     cwd = self.launch_options.cwd, shell = self.launch_options.shell,
   })
   if not session then return false, start_error or "Could not start the terminal." end
+  return session
+end
+
+function TerminalView:adopt_session(session)
   self.session = session
   self.snapshot = session:snapshot()
   self.running = true
   self.exit_code = nil
   self.reported_error = nil
+  self.focused = nil
+  if core.active_view == self then
+    self.focused = true
+    session:focus(true)
+  end
   core.redraw = true
-  return true
 end
 
 function TerminalView:restart()
-  if self.session then self.session:close() end
-  self.session = nil
-  local ok, err = self:start_session()
-  if not ok then core.error("Could not restart terminal: %s", tostring(err)) end
-  return ok
+  local replacement, err = self:create_session()
+  if not replacement then
+    core.error("Could not restart terminal: %s", tostring(err))
+    return false
+  end
+  local previous = self.session
+  self:adopt_session(replacement)
+  if previous then previous:close() end
+  return true
 end
 
 function TerminalView:supports_text_input()
@@ -369,11 +382,13 @@ function TerminalView:mouse_position(x, y)
 end
 
 function TerminalView:refresh_snapshot()
+  if not self.session then return end
   self.snapshot = self.session:snapshot(self.snapshot)
   core.redraw = true
 end
 
 function TerminalView:on_mouse_pressed(button, x, y)
+  if not self.session then return false end
   core.set_active_view(self)
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
   local tracking = self.snapshot and self.snapshot.mouse_tracking
@@ -390,6 +405,7 @@ function TerminalView:on_mouse_pressed(button, x, y)
 end
 
 function TerminalView:on_mouse_moved(x, y)
+  if not self.session then return false end
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
   if self.selection_start then
     self.session:select(
@@ -407,6 +423,7 @@ function TerminalView:on_mouse_moved(x, y)
 end
 
 function TerminalView:on_mouse_released(button, x, y)
+  if not self.session then return false end
   local _, _, pixel_x, pixel_y = self:mouse_position(x, y)
   if self.selection_start and button == "left" then
     self.selection_start = nil
@@ -481,6 +498,7 @@ end, {
     return view:paste(system.get_clipboard())
   end,
   ["terminal:copy"] = function(view)
+    if not view.session then return false end
     local text = view.session:selected_text()
     if not text or text == "" then return false end
     system.set_clipboard(text)
