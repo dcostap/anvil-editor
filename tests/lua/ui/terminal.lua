@@ -1,5 +1,6 @@
 local command = require "core.command"
 local core = require "core"
+local keymap = require "core.keymap"
 local panes = require "core.panes"
 local test = require "core.test"
 
@@ -184,6 +185,28 @@ test.describe("Terminal View", function()
     test.equal(view:on_key_pressed_before_keymap("f", {
       ctrl = true, shift = true, modifiers = 0,
     }), false)
+  end)
+
+  test.it("sends Shift Home and End to terminal applications", function(context)
+    local view = terminal.open()
+    local session = context.sessions[1]
+    keymap.modkeys.shift = true
+    test.ok(view:on_key_pressed("home", { shift = true, modifiers = 1 }))
+    test.ok(view:on_key_pressed("end", { shift = true, modifiers = 1 }))
+    keymap.modkeys.shift = false
+
+    test.equal(session.keys[#session.keys - 1][1], "home")
+    test.equal(session.keys[#session.keys][1], "end")
+    test.equal(#session.scrolls, 2)
+
+    test.ok(view:on_key_pressed_before_keymap("home", {
+      ctrl = true, shift = true, modifiers = 3,
+    }))
+    test.ok(view:on_key_pressed_before_keymap("end", {
+      ctrl = true, shift = true, modifiers = 3,
+    }))
+    test.equal(session.scrolls[#session.scrolls - 1][1], "top")
+    test.equal(session.scrolls[#session.scrolls][1], "bottom")
   end)
 
   test.it("draws IME composition without sending partial text", function(context)

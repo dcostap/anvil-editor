@@ -611,13 +611,13 @@ function TerminalView:on_key_pressed(key, event)
     self:refresh_snapshot()
     return true
   end
-  if key == "pageup" and keymap.modkeys.shift then
+  if key == "pageup" and event and event.shift then
     return scroll("delta", -math.max(1, self.rows - 1))
-  elseif key == "pagedown" and keymap.modkeys.shift then
+  elseif key == "pagedown" and event and event.shift then
     return scroll("delta", math.max(1, self.rows - 1))
-  elseif key == "home" and keymap.modkeys.shift then
+  elseif key == "home" and event and event.ctrl and event.shift then
     return scroll("top")
-  elseif key == "end" and keymap.modkeys.shift then
+  elseif key == "end" and event and event.ctrl and event.shift then
     return scroll("bottom")
   end
   core.blink_reset()
