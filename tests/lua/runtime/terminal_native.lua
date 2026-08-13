@@ -1,3 +1,4 @@
+local core = require "core"
 local test = require "core.test"
 
 local function snapshot_text(snapshot)
@@ -67,6 +68,33 @@ test.describe("Native terminal session", function()
     test.equal(#resized_snapshot.rows, 4)
     session:close()
     test.ok(selected:find("ANVIL_TERMINAL_TEST", 1, true), selected)
+  end)
+
+  test.it("wakes the editor when delayed terminal output arrives", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "Start-Sleep -Milliseconds 150; Write-Output 'ANVIL_DELAYED_OUTPUT'"]],
+    })
+    test.ok(session, start_error)
+
+    local woke = false
+    local previous_on_event = core.on_event
+    core.on_event = function(event_type, ...)
+      if event_type == "terminaloutput" then woke = true end
+      return previous_on_event(event_type, ...)
+    end
+    local deadline = system.get_time() + 2
+    while system.get_time() < deadline and not woke do
+      coroutine.yield(0.01)
+    end
+    core.on_event = previous_on_event
+    local text = wait_for_text(session, "ANVIL_DELAYED_OUTPUT", 2)
+    session:close()
+    test.ok(woke, "terminal output did not wake the editor event loop")
+    test.ok(text:find("ANVIL_DELAYED_OUTPUT", 1, true), text)
   end)
 
   test.it("reports the child exit code", function()

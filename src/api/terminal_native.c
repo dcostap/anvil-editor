@@ -16,12 +16,14 @@
 #include <ghostty/vt.h>
 
 #include "api.h"
+#include "../custom_events.h"
 
 #define TERMINAL_READ_BUDGET (128u * 1024u)
 #define TERMINAL_READ_QUEUE_CAPACITY (4u * 1024u * 1024u)
 #define TERMINAL_WRITE_QUEUE_CAPACITY (4u * 1024u * 1024u)
 #define TERMINAL_CLIPBOARD_MAX_BYTES (1024u * 1024u)
 #define TERMINAL_NOTIFICATION_MAX_BYTES (64u * 1024u)
+#define TERMINAL_OUTPUT_EVENT "terminaloutput"
 
 typedef struct {
   HPCON pseudoconsole;
@@ -51,6 +53,7 @@ typedef struct {
   volatile LONG write_failed;
   volatile LONG input_rejected;
   volatile LONG read_failed;
+  volatile LONG output_event_pending;
   DWORD read_error;
   DWORD write_error;
   DWORD exit_code;
@@ -102,6 +105,14 @@ typedef struct {
 
 static void push_status(lua_State *L, TerminalSession *session);
 
+static void wake_for_terminal_output(TerminalSession *session) {
+  if (InterlockedCompareExchange(&session->output_event_pending, 1, 0) != 0) return;
+  CustomEvent event = {0};
+  if (!push_custom_event(TERMINAL_OUTPUT_EVENT, &event)) {
+    InterlockedExchange(&session->output_event_pending, 0);
+  }
+}
+
 static DWORD WINAPI terminal_reader_main(void *userdata) {
   TerminalSession *session = (TerminalSession *)userdata;
   uint8_t buffer[65536];
@@ -135,6 +146,7 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
 
     size_t offset = 0;
     EnterCriticalSection(&session->read_lock);
+    bool queue_was_empty = session->read_queue_count == 0;
     while (offset < read && InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
       while (session->read_queue_count == TERMINAL_READ_QUEUE_CAPACITY &&
              InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
@@ -154,6 +166,7 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
       offset += amount;
     }
     LeaveCriticalSection(&session->read_lock);
+    if (queue_was_empty && offset > 0) wake_for_terminal_output(session);
   }
   return 0;
 }
@@ -934,6 +947,12 @@ static int f_terminal_update(lua_State *L) {
       changed = false;
     }
   }
+  bool output_remains = false;
+  EnterCriticalSection(&session->read_lock);
+  InterlockedExchange(&session->output_event_pending, 0);
+  output_remains = session->read_queue_count > 0;
+  LeaveCriticalSection(&session->read_lock);
+  if (output_remains) wake_for_terminal_output(session);
   session->running = process_running(session);
   if (!session->running && session->process_exit_seen_ms == 0) {
     session->process_exit_seen_ms = GetTickCount64();
@@ -2309,7 +2328,16 @@ static const luaL_Reg terminal_module[] = {
   { NULL, NULL },
 };
 
+static int terminal_output_event_callback(lua_State *L, SDL_Event *event) {
+  (void)event;
+  lua_pushliteral(L, TERMINAL_OUTPUT_EVENT);
+  return 1;
+}
+
 int luaopen_terminal_native(lua_State *L) {
+  if (!register_custom_event(TERMINAL_OUTPUT_EVENT, terminal_output_event_callback)) {
+    return luaL_error(L, "Could not register terminal output event: %s", SDL_GetError());
+  }
   luaL_newmetatable(L, API_TYPE_TERMINAL_SESSION);
   luaL_setfuncs(L, terminal_methods, 0);
   lua_pushvalue(L, -1);
