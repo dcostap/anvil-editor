@@ -193,7 +193,7 @@ static const char *get_key_name(const SDL_Event *e, char *buf) {
 }
 
 static void push_key_event_info(lua_State *L, const SDL_KeyboardEvent *event) {
-  lua_createtable(L, 0, 11);
+  lua_createtable(L, 0, 14);
   lua_pushinteger(L, event->key);
   lua_setfield(L, -2, "keycode");
   lua_pushinteger(L, event->scancode);
@@ -213,6 +213,29 @@ static void push_key_event_info(lua_State *L, const SDL_KeyboardEvent *event) {
   lua_pushboolean(L, (event->mod & SDL_KMOD_MODE) != 0 ||
     (event->mod & SDL_KMOD_RALT) != 0);
   lua_setfield(L, -2, "altgr");
+
+  SDL_Keymod layout_mods = event->mod &
+    (SDL_KMOD_SHIFT | SDL_KMOD_CAPS | SDL_KMOD_NUM | SDL_KMOD_MODE |
+      SDL_KMOD_LEVEL5 | SDL_KMOD_RALT);
+  SDL_Keycode layout_key = SDL_GetKeyFromScancode(event->scancode, layout_mods, false);
+  SDL_Keycode unshifted_key = SDL_GetKeyFromScancode(event->scancode, 0, false);
+  if (!(layout_key & SDLK_SCANCODE_MASK) && layout_key >= 0x20 && layout_key <= 0x10ffff) {
+    lua_pushstring(L, SDL_GetKeyName(layout_key));
+    lua_setfield(L, -2, "text");
+  }
+  if (!(unshifted_key & SDLK_SCANCODE_MASK) &&
+      unshifted_key >= 0x20 && unshifted_key <= 0x10ffff) {
+    lua_pushinteger(L, unshifted_key);
+    lua_setfield(L, -2, "unshifted_codepoint");
+  }
+  SDL_Keymod consumed = 0;
+  if (layout_key != unshifted_key) {
+    consumed = layout_mods &
+      (SDL_KMOD_SHIFT | SDL_KMOD_CAPS | SDL_KMOD_MODE | SDL_KMOD_LEVEL5 |
+        SDL_KMOD_RALT);
+  }
+  lua_pushinteger(L, consumed);
+  lua_setfield(L, -2, "consumed_modifiers");
 }
 
 #ifdef _WIN32

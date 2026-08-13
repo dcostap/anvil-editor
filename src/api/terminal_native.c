@@ -1225,11 +1225,32 @@ static int f_terminal_key(lua_State *L) {
   uint32_t codepoint = 0;
   bool printable = false;
   GhosttyKey key = key_from_name(name, &codepoint, &printable);
+  const char *event_text = printable ? name : NULL;
+  size_t event_text_length = printable ? strlen(name) : 0;
+  uint32_t unshifted_codepoint = codepoint;
+  GhosttyMods consumed_mods = 0;
   if (lua_istable(L, 5)) {
     lua_getfield(L, 5, "scancode");
     if (lua_isnumber(L, -1)) {
       GhosttyKey physical = key_from_scancode(lua_tointeger(L, -1));
       if (physical != GHOSTTY_KEY_UNIDENTIFIED) key = physical;
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, 5, "text");
+    if (lua_isstring(L, -1)) event_text = lua_tolstring(L, -1, &event_text_length);
+    lua_pop(L, 1);
+    lua_getfield(L, 5, "unshifted_codepoint");
+    if (lua_isnumber(L, -1)) unshifted_codepoint = (uint32_t)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 5, "consumed_modifiers");
+    if (lua_isnumber(L, -1)) {
+      SDL_Keymod consumed = (SDL_Keymod)lua_tointeger(L, -1);
+      if (consumed & SDL_KMOD_SHIFT) consumed_mods |= GHOSTTY_MODS_SHIFT;
+      if (consumed & SDL_KMOD_CTRL) consumed_mods |= GHOSTTY_MODS_CTRL;
+      if (consumed & (SDL_KMOD_ALT | SDL_KMOD_MODE)) consumed_mods |= GHOSTTY_MODS_ALT;
+      if (consumed & SDL_KMOD_GUI) consumed_mods |= GHOSTTY_MODS_SUPER;
+      if (consumed & SDL_KMOD_CAPS) consumed_mods |= GHOSTTY_MODS_CAPS_LOCK;
+      if (consumed & SDL_KMOD_NUM) consumed_mods |= GHOSTTY_MODS_NUM_LOCK;
     }
     lua_pop(L, 1);
   }
@@ -1247,10 +1268,10 @@ static int f_terminal_key(lua_State *L) {
   ghostty_key_event_set_action(session->key_event, action);
   ghostty_key_event_set_key(session->key_event, key);
   ghostty_key_event_set_mods(session->key_event, mods);
-  ghostty_key_event_set_consumed_mods(session->key_event, 0);
+  ghostty_key_event_set_consumed_mods(session->key_event, consumed_mods);
   ghostty_key_event_set_composing(session->key_event, false);
-  ghostty_key_event_set_utf8(session->key_event, NULL, 0);
-  ghostty_key_event_set_unshifted_codepoint(session->key_event, codepoint);
+  ghostty_key_event_set_utf8(session->key_event, event_text, event_text_length);
+  ghostty_key_event_set_unshifted_codepoint(session->key_event, unshifted_codepoint);
 
   char encoded[128];
   size_t written = 0;

@@ -529,6 +529,11 @@ function TerminalView:on_text_input(text)
   self.composition = nil
   core.blink_reset()
   self.session:scroll("bottom")
+  if self.encoded_text_input then
+    local encoded = self.encoded_text_input
+    self.encoded_text_input = nil
+    if text == encoded then return true end
+  end
   return self.session:write(text) == true
 end
 
@@ -599,6 +604,7 @@ end
 
 function TerminalView:on_key_pressed(key, event)
   if not self.session or self.running == false then return false end
+  self.encoded_text_input = nil
   if event and event.altgr and (#key == 1 or key == "space") then return false end
   local function scroll(kind, value)
     if not self.session:scroll(kind, value) then return false end
@@ -620,7 +626,11 @@ function TerminalView:on_key_pressed(key, event)
     self.session:scroll("bottom")
   end
   local action = event and event["repeat"] and "repeat" or "press"
-  return self.session:key(key, key_modifiers(event), action, event) == true
+  local encoded = self.session:key(key, key_modifiers(event), action, event) == true
+  if encoded and event and type(event.text) == "string" and event.text ~= "" then
+    self.encoded_text_input = event.text
+  end
+  return encoded
 end
 
 function TerminalView:on_key_pressed_before_keymap(key, event)

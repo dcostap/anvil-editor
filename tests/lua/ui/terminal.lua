@@ -152,6 +152,21 @@ test.describe("Terminal View", function()
     test.equal(session.keys[2][3], "release")
   end)
 
+  test.it("does not send shifted layout text twice after encoding its key", function(context)
+    local view = terminal.open()
+    local event = {
+      shift = true,
+      modifiers = 1,
+      scancode = 36,
+      text = "/",
+      unshifted_codepoint = string.byte("7"),
+      consumed_modifiers = 1,
+    }
+    test.ok(view:on_key_pressed("/", event))
+    test.ok(view:on_text_input("/"))
+    test.equal(#context.sessions[1].writes, 0)
+  end)
+
   test.it("owns shell control keys before global editor shortcuts", function(context)
     local view = terminal.open()
     local event = { ctrl = true, modifiers = 0, scancode = 19 }

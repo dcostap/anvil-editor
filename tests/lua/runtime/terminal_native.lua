@@ -143,6 +143,28 @@ test.describe("Native terminal session", function()
     test.ok(text:find("ANVIL_TERMINAL_INPUT", 1, true), text)
   end)
 
+  test.it("reports shifted layout text through the Kitty keyboard protocol", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class AnvilConsoleMode { [DllImport(\"kernel32.dll\")] public static extern IntPtr GetStdHandle(int n); [DllImport(\"kernel32.dll\")] public static extern bool GetConsoleMode(IntPtr h, out uint m); [DllImport(\"kernel32.dll\")] public static extern bool SetConsoleMode(IntPtr h, uint m); }'; $h=[AnvilConsoleMode]::GetStdHandle(-10); $m=0; [AnvilConsoleMode]::GetConsoleMode($h,[ref]$m)|Out-Null; [AnvilConsoleMode]::SetConsoleMode($h,($m -band (-bnot 7)) -bor 0x200)|Out-Null; $e=[char]27; [Console]::Write($e+'[>31uANVIL_KITTY_READY'); $s=[Console]::OpenStandardInput(); $bytes=New-Object 'System.Collections.Generic.List[byte]'; do { $v=$s.ReadByte(); if ($v -lt 0) { break }; $bytes.Add([byte]$v) } while ($v -ne 117); [Console]::WriteLine('ANVIL_KITTY_KEYS='+(($bytes | ForEach-Object { $_.ToString('X2') }) -join '-'))"]],
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "ANVIL_KITTY_READY", 5)
+    test.ok(text:find("ANVIL_KITTY_READY", 1, true), text)
+    test.ok(session:key("/", { shift = true }, "press", {
+      scancode = 36,
+      text = "/",
+      unshifted_codepoint = string.byte("7"),
+      consumed_modifiers = 1,
+    }))
+    text = wait_for_text(session, "ANVIL_KITTY_KEYS=", 5)
+    session:close()
+    test.ok(text:find("ANVIL_KITTY_KEYS=1B-5B-35-35-3A-34-37-3B-32-3B-34-37-75", 1, true), text)
+  end)
+
   test.it("searches repeated matches in terminal output", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"
