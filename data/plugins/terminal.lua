@@ -132,7 +132,8 @@ function TerminalView:new(options)
   self.scrollable = true
   self.cursor = "ibeam"
   self.font = style.terminal_font or style.code_font
-  self.cell_width = math.max(1, math.ceil(self.font:get_width("M")))
+  self.cell_width = math.max(1, self.font:get_width("M"))
+  self.native_cell_width = math.max(1, math.ceil(self.cell_width))
   self.cell_height = math.max(1, math.ceil(self.font:get_height()))
   self.cols, self.rows = 80, 24
   self.color_cache = {}
@@ -146,7 +147,7 @@ function TerminalView:new(options)
   local session, start_error = native.new({
     cols = self.cols,
     rows = self.rows,
-    cell_width = self.cell_width,
+    cell_width = self.native_cell_width,
     cell_height = self.cell_height,
     cwd = self.launch_options.cwd,
     shell = self.launch_options.shell,
@@ -174,7 +175,7 @@ function TerminalView:create_session()
   if not native then return false, load_error end
   local session, start_error = native.new({
     cols = self.cols, rows = self.rows,
-    cell_width = self.cell_width, cell_height = self.cell_height,
+    cell_width = self.native_cell_width, cell_height = self.cell_height,
     cwd = self.launch_options.cwd, shell = self.launch_options.shell,
   })
   if not session then return false, start_error or "Could not start the terminal." end
@@ -291,7 +292,7 @@ function TerminalView:update()
 
   local cols, rows = self:cell_geometry()
   if cols ~= self.cols or rows ~= self.rows then
-    local ok = self.session:resize(cols, rows, self.cell_width, self.cell_height)
+    local ok = self.session:resize(cols, rows, self.native_cell_width, self.cell_height)
     if ok then
       self.cols, self.rows = cols, rows
       self.snapshot = self.session:snapshot(self.snapshot)

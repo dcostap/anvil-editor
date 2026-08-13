@@ -2,6 +2,7 @@ local command = require "core.command"
 local core = require "core"
 local keymap = require "core.keymap"
 local panes = require "core.panes"
+local style = require "core.style"
 local test = require "core.test"
 
 local terminal = require "plugins.terminal"
@@ -135,6 +136,13 @@ test.describe("Terminal View", function()
     test.ok(view and view.terminal_view)
     test.equal(panes.pane_for_view(view), "right")
     test.equal(#context.sessions, 1)
+  end)
+
+  test.it("uses the exact font advance for terminal cells", function()
+    local view = terminal.open()
+    local advance = style.terminal_font:get_width("M")
+    test.equal(view.cell_width, advance)
+    test.equal(view.native_cell_width, math.max(1, math.ceil(advance)))
   end)
 
   test.it("sends text and unhandled keys to the focused terminal", function(context)
@@ -407,7 +415,7 @@ test.describe("Terminal View", function()
     test.equal(calls.text[2][2], "c界")
     test.equal(calls.text[3][2], "d")
     test.equal(calls.text[2][3], 6 + 2 * view.cell_width)
-    test.equal(calls.text[2][7], 3 * view.cell_width)
+    test.equal(calls.text[2][7], math.ceil(3 * view.cell_width))
     test.equal(calls.text[3][3], 6 + 6 * view.cell_width)
     local color_span = calls.rect[2]
     local selection_span = calls.rect[3]
