@@ -789,7 +789,9 @@ function FileTreeView:new(opts)
   FileTreeView.super.new(self, buffer)
   self:add_visual_row_provider("filetree-project-path-separators", PROJECT_PATH_SEPARATOR_PROVIDER)
   self.target_size = filetree_config.size
-  self.visible = filetree_config.visible
+  self.visible = true
+  self.navigation_scope_kind = "file-tree"
+  file_context.exclude_content_view(self)
   self.root_dir = common.normalize_path(opts.root or core.root_project().path)
   self.current_dir = self.root_dir
   self.original_entries = {}
@@ -847,7 +849,8 @@ function FileTreeView:get_state()
   return {
     root = self.root_dir,
     current_dir = self.current_dir,
-    selection_state = self:get_selection_state(),
+    expanded_paths = self:capture_expanded_paths(),
+    selection_paths = self:capture_selection_paths(),
     scroll = { x = self.scroll.x, y = self.scroll.y },
   }
 end
@@ -856,11 +859,14 @@ function FileTreeView.from_state(state)
   if type(state) ~= "table" or type(state.root) ~= "string"
       or not system.get_file_info(state.root) then return nil end
   local view = FileTreeView { root = state.root }
-  if state.current_dir and system.get_file_info(state.current_dir) then
+  local current_info = state.current_dir and system.get_file_info(state.current_dir)
+  if current_info and current_info.type == "dir"
+      and in_project(state.current_dir, view.root_dir) then
     view.current_dir = common.normalize_path(state.current_dir)
     view:refresh(false, false)
   end
-  if state.selection_state then view:set_selection_state(state.selection_state) end
+  view:restore_expanded_paths(state.expanded_paths)
+  if state.selection_paths then view:restore_selection_paths(state.selection_paths) end
   if state.scroll then
     view.scroll.x, view.scroll.to.x = state.scroll.x or 0, state.scroll.x or 0
     view.scroll.y, view.scroll.to.y = state.scroll.y or 0, state.scroll.y or 0
@@ -869,8 +875,11 @@ function FileTreeView.from_state(state)
 end
 
 function FileTreeView:on_close()
+  self.filesystem_watch_running = false
   if self.git_status_controller then self.git_status_controller:close() end
-  if self.filesystem_watch and self.filesystem_watch.__gc then self.filesystem_watch:__gc() end
+  local filesystem_watch = self.filesystem_watch
+  self.filesystem_watch = nil
+  if filesystem_watch and filesystem_watch.__gc then filesystem_watch:__gc() end
   FileTreeView.super.on_close(self)
 end
 
@@ -905,8 +914,7 @@ function FileTreeView:get_inline_file_render(line, context)
 end
 
 function FileTreeView:git_root()
-  local root = core.root_project and core.root_project()
-  return root and root.path or self.current_dir
+  return self.root_dir or self.current_dir
 end
 
 function FileTreeView:schedule_git_status_refresh(reason, force)
@@ -984,8 +992,12 @@ function FileTreeView:sync_path(path, reason)
   if type(path) ~= "string" or path == "" then return false end
   local expanded = common.home_expand(path)
   path = common.normalize_path(system.absolute_path(expanded) or expanded)
-  local resolved = project_paths.resolve(path)
-  if not resolved or resolved.flags.browsable == false then return false end
+  if not in_project(path, self.root_dir) then
+    local root = core.root_project and core.root_project()
+    local resolved = root and common.path_equals(self.root_dir, root.path)
+      and project_paths.resolve(path)
+    if not resolved or resolved.flags.browsable == false then return false end
+  end
   return self:queue_filesystem_sync(path, reason or "notification")
 end
 
@@ -1064,7 +1076,7 @@ function FileTreeView:start_filesystem_watch()
   self.filesystem_watch_running = true
   local view = self
   core.add_thread(function()
-    while true do
+    while view.filesystem_watch_running and view.filesystem_watch do
       local ok, err = pcall(function()
         view.filesystem_watch:check(function(changed_dir)
           view:handle_filesystem_watch_change(changed_dir)
@@ -1401,6 +1413,8 @@ local function project_path_root_item(entry)
 end
 
 function FileTreeView:append_project_path_sections(out)
+  local root = core.root_project and core.root_project()
+  if not root or not common.path_equals(self.root_dir, root.path) then return end
   local entries_by_role = { vendored = {}, external = {} }
   for _, entry in ipairs(project_paths.entries({ include_root = false })) do
     if entries_by_role[entry.role] then
@@ -2119,8 +2133,13 @@ function FileTreeView:build_entries(include_hidden)
         goto continue
       end
     end
-    local resolved = project_paths.resolve(abs)
-    if not (resolved and resolved.flags.browsable ~= false) then
+    local project = core.root_project and core.root_project()
+    local root_tree = project and common.path_equals(self.root_dir, project.path)
+    local resolved = root_tree and project_paths.resolve(abs) or nil
+    local browsable = root_tree
+      and resolved and resolved.flags.browsable ~= false
+      or (not root_tree and in_project(abs, self.root_dir))
+    if not browsable then
       errors[row.line] = "path escapes Project Paths"
       goto continue
     end
@@ -2782,9 +2801,9 @@ function FileTreeView:open_selected_files()
   return true
 end
 
-function FileTreeView:open_item(target)
+function FileTreeView:open_item()
   self:sync_meta()
-  if target ~= "right" and self:open_selected_files() then return true end
+  if self:open_selected_files() then return true end
 
   local line = self.buffer:get_selection(true)
   local entry, err = self:entry_for_line(line)
@@ -2808,11 +2827,9 @@ function FileTreeView:open_item(target)
   else
     if info and info.type == "file" then
       local pane = panes.pane_for_view(self)
-      local placement = target == "right" and "split" or "current"
       return core.open_file(entry.abs, {
         pane = pane,
-        placement = placement,
-        direction = target == "right" and "right" or nil,
+        placement = "current",
         focus = true,
         reason = "filetree-open",
       }) ~= nil
@@ -2832,8 +2849,8 @@ function FileTreeView:get_point_of_interest_at(line)
     line2 = line,
     col2 = math.max(2, #text + 1),
     text_bounds = true,
-    activate = function(_, _, opts)
-      return self:open_item(opts and opts.pane == "right" and "right" or nil)
+    activate = function()
+      return self:open_item()
     end,
   }
 end
@@ -3279,11 +3296,14 @@ local function focus_file(view, filename)
   filename = filename and common.normalize_path(filename)
   local root = core.root_project and core.root_project()
   local resolved = filename and project_paths.resolve(filename)
-  if not filename or not root or not resolved or resolved.flags.browsable == false then return end
+  local in_root = filename and in_project(filename, view.root_dir)
+  local in_project_section = filename and root and common.path_equals(view.root_dir, root.path)
+    and resolved and resolved.entry.role ~= "root" and resolved.flags.browsable ~= false
+  if not filename or not (in_root or in_project_section) then return false end
 
   local refreshed = false
-  if resolved.entry.role == "root" and not in_project(filename, view.current_dir) then
-    view.current_dir = root.path
+  if in_root and not in_project(filename, view.current_dir) then
+    view.current_dir = view.root_dir
   end
   if view.rendered_dir ~= view.current_dir and not common.path_equals(view.rendered_dir, view.current_dir) then
     view:refresh(false, true, { filename })
@@ -3300,6 +3320,7 @@ local function focus_file(view, filename)
     entry = find_entry(view, filename)
   end
   if entry then return focus_entry(view, entry, filename) end
+  return false
 end
 
 local function target_state(target, source_view)
@@ -3319,9 +3340,6 @@ function M.new(target, opts)
   local root, selected, err = target_state(target, opts.source_view)
   if not root then return nil, err end
   local view = FileTreeView { root = root, select_path = selected }
-  view.visible = true
-  view.navigation_scope_kind = "file-tree"
-  file_context.exclude_content_view(view)
   if selected then focus_file(view, selected) end
   return view
 end
@@ -3332,9 +3350,6 @@ function M.open(target, opts)
   if not root then return nil, err end
   return panes.place(function()
     local view = FileTreeView { root = root, select_path = selected }
-    view.visible = true
-    view.navigation_scope_kind = "file-tree"
-    file_context.exclude_content_view(view)
     if selected then focus_file(view, selected) end
     return view
   end, opts)
@@ -3366,8 +3381,25 @@ local function show_filetree(target)
     end
   end
   if view then
-    panes.present(view, { pane = panes.pane_for_view(view), focus = true })
-    if target then focus_file(view, target) end
+    local pane = panes.pane_for_view(view)
+    local current = pane and pane.current_view
+    if current and current ~= view and current.can_suspend and current:can_suspend() == false then
+      return M.open(target, {
+        pane = pane,
+        placement = "current",
+        focus = true,
+        reason = "filetree-command-replacement",
+      })
+    end
+    if target and not focus_file(view, target) then
+      return M.open(target, {
+        pane = pane or panes.active(),
+        placement = "current",
+        focus = true,
+        reason = "filetree-command-target",
+      })
+    end
+    panes.present(view, { pane = pane, focus = true })
     return view
   end
   return M.open(target, { placement = "current", focus = true, reason = "filetree-command" })
@@ -3411,7 +3443,6 @@ end, {
   end,
   ["filetree:apply"] = function(view) view:apply_edits() end,
   ["filetree:open"] = function(view) view:open_item() end,
-  ["filetree:open-right"] = function(view) view:open_item("right") end,
   ["filetree:up-dir"] = function(view) view:up_dir() end,
   ["filetree:project-root"] = function(view)
     view.current_dir = view.root_dir
@@ -3425,7 +3456,6 @@ end, {
 keymap.add {
   ["ctrl+\\"] = "filetree:toggle",
   ["alt+2"] = "filetree:focus-and-show",
-  ["ctrl+return"] = "filetree:open-right",
   ["ctrl+s"] = "filetree:apply",
   ["f5"] = "filetree:refresh",
   ["alt+home"] = "filetree:project-root",

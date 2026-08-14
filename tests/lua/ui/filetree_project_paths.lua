@@ -130,6 +130,15 @@ test.describe("File Tree Project Path Roles", function()
     test.ok(filetree.line_meta[missing_root].project_path_missing)
   end)
 
+  test.it("does not append Root Project sections to a scoped File Tree", function(context)
+    setup_project_paths(context)
+    local scoped = assert(require("plugins.filetree").new(context.external))
+    for _, meta in ipairs(scoped.line_meta) do
+      test.not_ok(type(meta) == "table" and meta.project_path_root)
+    end
+    scoped:on_close()
+  end)
+
   test.it("expands Project Directory roots and resolves children to absolute paths", function(context)
     local filetree = setup_project_paths(context)
     local external_root = find_line(filetree, "jdk-src/")

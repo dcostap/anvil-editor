@@ -379,11 +379,13 @@ end
 ---@return string?
 function fuzzy_searcher.git_kind_for_file(file)
   local filetree = package.loaded["plugins.filetree"]
-  if not (filetree and filetree.get_git_info_for_entry) then return nil end
+  if not (filetree and filetree.instances) then return nil end
   local abs = fullpath(file)
   if not abs then return nil end
-  local info = filetree:get_git_info_for_entry({ abs = abs, type = "file" })
-  return info and info.kind or nil
+  for _, view in ipairs(filetree.instances()) do
+    local info = view:get_git_info_for_entry({ abs = abs, type = "file" })
+    if info then return info.kind end
+  end
 end
 
 local function file_result_key(path)
@@ -5609,6 +5611,7 @@ return {
     everything_project_result_is_recent_duplicate = everything_project_result_is_recent_duplicate,
     recent_project_key_set = recent_project_key_set,
     format_recent_file_age = fuzzy_searcher.format_recent_file_age,
+    git_kind_for_file = fuzzy_searcher.git_kind_for_file,
     draw_recent_file_metadata = fuzzy_searcher.draw_recent_file_metadata,
     draw_file_result_row = draw_file_result_row,
     split_mode_prefix = split_mode_prefix,

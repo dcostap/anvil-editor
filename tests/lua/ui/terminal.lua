@@ -58,7 +58,11 @@ local function fake_native()
       self.update_calls = (self.update_calls or 0) + 1
       local changed = self.next_changed or false
       self.next_changed = false
-      return changed, not self.closed
+      local running = self.next_running
+      self.next_running = nil
+      local status = self.next_status
+      self.next_status = nil
+      return changed, running == nil and not self.closed or running, status
     end
     function session:snapshot()
       return {
@@ -177,6 +181,18 @@ test.describe("Terminal View", function()
     core.root_panel:update()
     test.ok((session.update_calls or 0) > before)
     test.not_ok(session.closed)
+  end)
+
+  test.it("allows Pane history to discard an exited Terminal", function(context)
+    local view = terminal.open()
+    local session = view.session
+    session.next_running = false
+    session.next_status = { exit_code = 0 }
+    view:update_suspended()
+
+    test.not_ok(view.running)
+    test.ok(view:can_discard_from_history())
+    test.equal(view.exit_code, 0)
   end)
 
   test.it("closes all retained terminal sessions only when Pane close commits", function(context)

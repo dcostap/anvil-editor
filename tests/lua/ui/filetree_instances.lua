@@ -1,9 +1,12 @@
 local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
+local file_context = require "core.file_context"
 local panes = require "core.panes"
 local View = require "core.view"
 local test = require "core.test"
 local filetree = require "plugins.filetree"
+local fuzzy_searcher = require "plugins.fuzzy_searcher"
 
 local function write_file(path, text)
   local handle = assert(io.open(path, "wb"))
@@ -54,6 +57,13 @@ test.describe("File Tree instances", function()
     test.not_equal(one.selection_state, two.selection_state)
   end)
 
+  test.it("selects an absolute file outside Project Paths", function()
+    local view = assert(filetree.new(file))
+    local line = view.buffer:get_selection(true)
+    local entry = view:entry_for_line(line)
+    test.ok(entry and common.path_equals(entry.abs, file))
+  end)
+
   test.it("uses the Root Project when no target is given", function()
     local view = assert(filetree.new())
     test.equal(view.root_dir, common.normalize_path(core.root_project().path))
@@ -95,13 +105,72 @@ test.describe("File Tree instances", function()
     test.equal(tree.root_dir, common.normalize_path(root))
   end)
 
-  test.it("restores Workspace state and drops a missing root", function()
+  test.it("restores Workspace expansion, selection, and instance setup", function()
     local tree = assert(filetree.new(root))
+    local _, _, initial = tree:build_entries(false)
+    local folder_entry
+    for _, entry in pairs(initial.by_line) do
+      if common.path_equals(entry.abs, folder) then folder_entry = entry; break end
+    end
+    test.not_nil(folder_entry)
+    tree:expand_folder(folder_entry.line, folder_entry, false)
+    local _, _, snapshot = tree:build_entries(false)
+    local selected
+    for _, entry in pairs(snapshot.by_line) do
+      if common.path_equals(entry.abs, file) then selected = entry; break end
+    end
+    test.not_nil(selected)
+    tree.buffer:set_selection(selected.line, 1)
     local state = tree:get_state()
     local restored = filetree.from_state(state)
     test.not_nil(restored)
     test.equal(restored.root_dir, tree.root_dir)
+    local _, _, restored_snapshot = restored:build_entries(false)
+    local restored_folder
+    for _, entry in pairs(restored_snapshot.by_line) do
+      if common.path_equals(entry.abs, folder) then restored_folder = entry; break end
+    end
+    test.ok(restored_folder and restored.line_meta[restored_folder.line].expanded)
+    local restored_selected = restored:entry_for_line(restored.buffer:get_selection(true))
+    test.ok(restored_selected and common.path_equals(restored_selected.abs, file))
+    test.ok(restored.visible)
+    test.not_ok(file_context.is_content_view(restored))
+  end)
+
+  test.it("drops Workspace state whose root is missing", function()
+    local tree = assert(filetree.new(root))
+    local state = tree:get_state()
     common.rm(root, true)
     test.is_nil(filetree.from_state(state))
+  end)
+
+  test.it("stops its filesystem watcher when closed", function()
+    local tree = assert(filetree.new(root))
+    test.ok(tree.filesystem_watch_running)
+    tree:on_close()
+    test.not_ok(tree.filesystem_watch_running)
+    test.is_nil(tree.filesystem_watch)
+  end)
+
+  test.it("does not suspend a non-suspendable View to restore a File Tree", function()
+    local tree = assert(filetree.new(root))
+    local pane = panes.create { factory = function() return tree end }
+    local blocker = View()
+    function blocker:can_suspend() return false end
+    function blocker:can_close() self.close_requested = true end
+    panes.present(blocker, { pane = pane })
+
+    test.ok(command.perform("filetree:focus"))
+    test.equal(pane.current_view, blocker)
+    test.ok(blocker.close_requested)
+  end)
+
+  test.it("provides File Tree Git state to fuzzy file results", function()
+    local tree = assert(filetree.new(root))
+    panes.create { factory = function() return tree end }
+    function tree:get_git_info_for_entry(entry)
+      if common.path_equals(entry.abs, file) then return { kind = "modified" } end
+    end
+    test.equal(fuzzy_searcher._test.git_kind_for_file(file), "modified")
   end)
 end)

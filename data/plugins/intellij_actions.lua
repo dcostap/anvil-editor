@@ -1416,7 +1416,7 @@ keymap.add({
   ["alt+x"] = "root:switch-to-next-tab",
   ["ctrl+l"] = "filetree:focus-current-file",
   ["ctrl+shift+l"] = "user:reveal-active-file-in-explorer",
-  ["ctrl+alt+t"] = "user:open-terminal-at-active-file",
+  ["ctrl+alt+t"] = "terminal:open",
   ["ctrl+up"] = "user:move-caret-previous-paragraph",
   ["ctrl+down"] = "user:move-caret-next-paragraph",
   ["ctrl+alt+up"] = "poi:previous",

@@ -241,9 +241,12 @@ end
 
 local function selected_filetree_directory()
   local ok, filetree = pcall(require, "plugins.filetree")
-  if not (ok and core.active_view == filetree) then return nil, "select a folder in the File Tree first" end
-  local line = filetree.buffer:get_selection(true)
-  local entry, err = filetree:entry_for_line(line)
+  local view = ok and core.active_view
+  if not (view and view.extends and view:extends(filetree.View)) then
+    return nil, "select a folder in the File Tree first"
+  end
+  local line = view.buffer:get_selection(true)
+  local entry, err = view:entry_for_line(line)
   if not entry then return nil, err or "no File Tree entry selected" end
   if entry.type ~= "dir" then return nil, "selected File Tree row is not a folder" end
   return entry.abs

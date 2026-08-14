@@ -245,7 +245,7 @@ static const char *init_code =
   "    fp:close()\n"
   "    error_path = system.absolute_path(error_path)\n"
   "  end\n"
-  "  if not os.getenv('ANVIL_HEADLESS_TEST') then\n"
+  "  if not RUNNING_LUA_TESTS and not os.getenv('ANVIL_HEADLESS_TEST') then\n"
   "    system.show_fatal_error('Anvil internal error',\n"
   "      'An internal error occurred in a critical part of the application.\\n\\n'..\n"
   "      'Error: '..tostring(err)..'\\n\\n'..\n"
@@ -275,6 +275,9 @@ static bool init_lua_state(AppState *app) {
 
   lua_pushboolean(app->L, app->has_restarted);
   lua_setglobal(app->L, "RESTARTED");
+
+  lua_pushboolean(app->L, app->running_lua_tests);
+  lua_setglobal(app->L, "RUNNING_LUA_TESTS");
 
   char exename[2048];
   get_exe_filename(exename, sizeof(exename));
@@ -454,7 +457,7 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
     lua_pop(app->L, 1);
     fprintf(stderr, "Error in core.run_step: %s\n", errmsg);
 
-    if (!SDL_getenv("ANVIL_HEADLESS_TEST")) {
+    if (!app->running_lua_tests && !SDL_getenv("ANVIL_HEADLESS_TEST")) {
       lua_getglobal(app->L, "system");
       lua_getfield(app->L, -1, "show_fatal_error");
       lua_remove(app->L, -2); /* remove 'system' table */

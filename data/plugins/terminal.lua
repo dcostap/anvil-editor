@@ -203,7 +203,7 @@ function TerminalView.from_state(state)
 end
 
 function TerminalView:can_discard_from_history()
-  return self.session == nil
+  return self.session == nil or self.running == false
 end
 
 function TerminalView:create_session()
