@@ -3,7 +3,7 @@ local core = require "core"
 local config = require "core.config"
 local command = require "core.command"
 local style = require "core.style"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local common = require "core.common"
 
 ---Configuration options for `autorestart` plugin.
@@ -26,8 +26,8 @@ config.plugins.autorestart.config_spec = {
     }
   }
 
-local save = Doc.save
-Doc.save = function(self, ...)
+local save = Buffer.save
+Buffer.save = function(self, ...)
   local res = save(self, ...)
   local user = USERDIR .. PATHSEP .. "init.lua"
   local project = core.root_project().path .. PATHSEP .. ".anvil_project.lua"

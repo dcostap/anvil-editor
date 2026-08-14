@@ -14,26 +14,26 @@ local function track(context, kind, value)
   return value
 end
 
-local function remove_doc(doc)
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+local function remove_buffer(buffer)
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
 end
 
 local function open_editor(context, text)
-  local doc = track(context, "docs", core.open_doc())
-  if text and text ~= "" then doc:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_doc(doc))
+  local buffer = track(context, "buffers", core.open_buffer())
+  if text and text ~= "" then buffer:text_input(text) end
+  local view = track(context, "views", core.root_panel:open_buffer(buffer))
   core.set_active_view(view)
   view.position.x, view.position.y = 10, 20
   view.size.x, view.size.y = 1000, 240
   view.scroll.x, view.scroll.to.x = 0, 0
   view.scroll.y, view.scroll.to.y = 0, 0
-  return view, doc
+  return view, buffer
 end
 
 local function save_centered_config(context)
@@ -85,14 +85,14 @@ test.describe("centered editor", function()
       local node = root:get_node_for_view(view)
       if node then node:remove_view(root, view) end
     end
-    for _, doc in ipairs(context.docs or {}) do
-      if doc:is_dirty() then doc:clean() end
-      remove_doc(doc)
+    for _, buffer in ipairs(context.buffers or {}) do
+      if buffer:is_dirty() then buffer:clean() end
+      remove_buffer(buffer)
     end
   end)
 
-  test.it("uses the real Document View right edge for unwrapped centered drawing", function(context)
-    local view, doc = open_editor(context, string.rep("x", 1000) .. "\n")
+  test.it("uses the real Text View right edge for unwrapped centered drawing", function(context)
+    local view, buffer = open_editor(context, string.rep("x", 1000) .. "\n")
     view.wrapping_enabled = false
     view.wrapped_settings = nil
 
@@ -108,8 +108,8 @@ test.describe("centered editor", function()
     local _, col2 = view:get_visible_cols_range(1, 0)
     local gw = view:get_gutter_width()
     local char_width = view:get_font():get_width("W")
-    local expected_col2 = math.min(#doc.lines[1], math.floor((expected_width - gw) / char_width) * 2)
-    local lane_col2 = math.min(#doc.lines[1], math.floor((lane_width - gw) / char_width) * 2)
+    local expected_col2 = math.min(#buffer.lines[1], math.floor((expected_width - gw) / char_width) * 2)
+    local lane_col2 = math.min(#buffer.lines[1], math.floor((lane_width - gw) / char_width) * 2)
 
     test.equal(col2, expected_col2)
     test.ok(col2 > lane_col2, "expected visible-column estimation to include the right-side drawing area")
@@ -117,9 +117,9 @@ test.describe("centered editor", function()
 
   test.it("uses the Markdown Live Preview width for centering", function(context)
     local standard_view = open_editor(context, "standard\n")
-    local markdown_view, markdown_doc = open_editor(context, "markdown\n")
-    markdown_doc.filename = "centered-width.md"
-    markdown_doc.abs_filename = "centered-width.md"
+    local markdown_view, markdown_buffer = open_editor(context, "markdown\n")
+    markdown_buffer.filename = "centered-width.md"
+    markdown_buffer.abs_filename = "centered-width.md"
     test.equal(markdown.live_render.refresh_view(markdown_view), true)
 
     standard_view.size.x = 150
@@ -137,7 +137,7 @@ test.describe("centered editor", function()
     test.equal(select(2, centered_editor.get_lane_rect(markdown_view)), markdown_view.size.x)
   end)
 
-  test.it("allows unwrapped right-side drawn text to receive document mouse commands", function(context)
+  test.it("allows unwrapped right-side drawn text to receive buffer mouse commands", function(context)
     local view = open_editor(context, string.rep("x", 1000) .. "\n")
     local lane_x, lane_width = centered_editor.get_lane_rect(view)
     local y = view.position.y + style.padding.y + view:get_line_height() / 2
@@ -149,18 +149,18 @@ test.describe("centered editor", function()
 
     view.wrapping_enabled = false
     view.wrapped_settings = nil
-    test.ok(command.is_valid("doc:set-cursor", right_of_lane_x, y), "expected unwrapped right-side text area to be interactive")
-    test.equal(command.is_valid("doc:set-cursor", left_margin_x, y), false)
+    test.ok(command.is_valid("text:set-cursor", right_of_lane_x, y), "expected unwrapped right-side text area to be interactive")
+    test.equal(command.is_valid("text:set-cursor", left_margin_x, y), false)
 
     view.wrapping_enabled = true
-    test.equal(command.is_valid("doc:set-cursor", right_of_lane_x, y), false)
+    test.equal(command.is_valid("text:set-cursor", right_of_lane_x, y), false)
   end)
 
   test.it("limits sticky-line hover and clicks to the centered drawing lane", function(context)
-    local view, doc = open_editor(context, "# Heading\nbody\n")
+    local view, buffer = open_editor(context, "# Heading\nbody\n")
     view.wrapping_enabled = true
     local lane_x, lane_width = centered_editor.get_lane_rect(view)
-    local data = sticky_scroll.managed_docviews[view]
+    local data = sticky_scroll.managed_textviews[view]
     data.enabled = true
     data.sticky_lines = { 1 }
     data.reference_line = nil
@@ -175,9 +175,9 @@ test.describe("centered editor", function()
     view:on_mouse_moved(outside_x, y, 0, 0)
     test.equal(data.hovered_sticky_scroll_line, nil)
 
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
     view:on_mouse_pressed("left", outside_x, y, 1)
-    local line, col = doc:get_selection()
+    local line, col = buffer:get_selection()
     test.equal(line, 2)
     test.equal(col, 1)
   end)

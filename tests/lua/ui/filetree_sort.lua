@@ -16,15 +16,15 @@ local function write_file(path, content)
 end
 
 local function find_filetree_line(view, wanted)
-  for i, line in ipairs(view.doc.lines) do
+  for i, line in ipairs(view.buffer.lines) do
     if line_without_newline(line) == wanted then return i end
   end
 end
 
 local function assert_filetree_lines(view, expected)
-  test.equal(#view.doc.lines, #expected)
+  test.equal(#view.buffer.lines, #expected)
   for i, wanted in ipairs(expected) do
-    test.equal(line_without_newline(view.doc.lines[i]), wanted)
+    test.equal(line_without_newline(view.buffer.lines[i]), wanted)
   end
 end
 
@@ -149,19 +149,19 @@ test.describe("File Tree Sorting", function()
     local selected_line = find_filetree_line(filetree, "aaa-old.txt")
     test.not_nil(selected_line, "expected old file row before sorting")
     filetree:with_selection_state(function()
-      filetree.doc:set_selection(selected_line, 2)
+      filetree.buffer:set_selection(selected_line, 2)
     end)
 
     test.ok(command.perform("filetree:sort-by-date-modified"))
 
     local moved_old_dir_line = find_filetree_line(filetree, "aaa-old-dir/")
     test.not_nil(moved_old_dir_line, "expected old directory row after sorting")
-    test.equal(line_without_newline(filetree.doc.lines[moved_old_dir_line + 1]), "\tother.txt")
-    test.equal(line_without_newline(filetree.doc.lines[moved_old_dir_line + 2]), "\tchild.txt")
+    test.equal(line_without_newline(filetree.buffer.lines[moved_old_dir_line + 1]), "\tother.txt")
+    test.equal(line_without_newline(filetree.buffer.lines[moved_old_dir_line + 2]), "\tchild.txt")
 
     local moved_selected_line = find_filetree_line(filetree, "aaa-old.txt")
     test.not_nil(moved_selected_line, "expected selected file row after sorting")
-    local line, col = filetree.doc:get_selection()
+    local line, col = filetree.buffer:get_selection()
     test.equal(line, moved_selected_line)
     test.equal(col, 2)
   end)
@@ -170,14 +170,14 @@ test.describe("File Tree Sorting", function()
     local filetree = setup_tree(context)
 
     filetree:with_selection_state(function()
-      filetree.doc:insert(1, 1, "renamed-")
+      filetree.buffer:insert(1, 1, "renamed-")
     end)
-    test.equal(line_without_newline(filetree.doc.lines[1]), "renamed-aaa-old-dir/")
+    test.equal(line_without_newline(filetree.buffer.lines[1]), "renamed-aaa-old-dir/")
     test.ok(filetree.has_possible_edits, "expected edited File Tree to track unapplied edits")
 
     test.ok(command.perform("filetree:sort-by-date-modified"))
 
     test.equal(filetree:get_sort_mode(), "name")
-    test.equal(line_without_newline(filetree.doc.lines[1]), "renamed-aaa-old-dir/")
+    test.equal(line_without_newline(filetree.buffer.lines[1]), "renamed-aaa-old-dir/")
   end)
 end)

@@ -2,7 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local style = require "core.style"
 
----Shared rendering helpers for Global Prompt Bar and DocView Prompt Bar rows.
+---Shared rendering helpers for Global Prompt Bar and TextView Prompt Bar rows.
 local prompt_bar_renderer = {}
 
 local function resolve_font(font)

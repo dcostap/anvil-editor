@@ -1,6 +1,6 @@
 local config = require "core.config"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -8,18 +8,18 @@ local LineWrapping = require "core.linewrapping"
 require "plugins.selectionhighlight"
 
 local function make_wrapped_view(text)
-  local doc = Doc(nil, nil, true)
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
+  local buffer = Buffer(nil, nil, true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
 
-  local view = DocView(doc)
+  local view = TextView(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 320, 240
   view.scroll.x, view.scroll.to.x = 0, 0
   view.scroll.y, view.scroll.to.y = 0, 0
   view.wrapping_enabled = true
-  LineWrapping.update_docview_breaks(view)
-  return view, doc
+  LineWrapping.update_textview_breaks(view)
+  return view, buffer
 end
 
 test.describe("selection highlight", function()
@@ -49,10 +49,10 @@ test.describe("selection highlight", function()
     cfg.wrapping_indent = 0
     cfg.require_tokenization = false
 
-    local view, doc = make_wrapped_view("old xxxxx old")
+    local view, buffer = make_wrapped_view("old xxxxx old")
     cfg.width_override = view:get_font():get_width("xxxxxxxx")
-    LineWrapping.update_docview_breaks(view)
-    doc:set_selection(1, 1, 1, 4)
+    LineWrapping.update_textview_breaks(view)
+    buffer:set_selection(1, 1, 1, 4)
 
     local rects = {}
     local old_rect = renderer.draw_rect

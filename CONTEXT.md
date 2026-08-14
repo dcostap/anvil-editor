@@ -80,6 +80,10 @@ _Avoid_: file history, tab history, global history
 In-memory text that can be untitled, file-backed, editable, or read-only.
 _Avoid_: Document, Doc
 
+**Untitled Buffer**:
+An editable Buffer that is not linked to a filesystem file.
+_Avoid_: scratch buffer, unnamed file
+
 **Language Mode**:
 The language Anvil uses to interpret a Buffer for syntax highlighting and other language-aware behavior. It is normally detected from the file name or content, but a Buffer may have an explicit Language Mode override.
 _Avoid_: File type, syntax mode
@@ -216,6 +220,14 @@ _Avoid_: Pane View, app, pane content
 The View that a Pane currently shows.
 _Avoid_: Selected View, Active View, Open View
 
+**View Suspension**:
+The retention of a non-current View through Pane Navigation History without closing it. An Untitled Editor cannot be suspended.
+_Avoid_: hidden tab, background tab
+
+**Untitled Editor**:
+An Editor showing an Untitled Buffer. It must close instead of entering View Suspension when another View replaces it.
+_Avoid_: scratch Editor, unnamed Editor
+
 **Focused View**:
 The Current View whose focus scope receives input, including input received by one of its Surface Focus Targets.
 _Avoid_: Focused active view, globally active view
@@ -247,6 +259,10 @@ _Avoid_: filetree sorting
 **Global Prompt Bar**:
 The bottom-anchored, full-width prompt used for app-wide actions such as opening files, opening projects, renaming, and command entry.
 _Avoid_: Command prompt, command bar
+
+**Pane Command Bar**:
+A bottom-anchored prompt scoped to one Pane. It opens internal Views or runs shell commands without requiring a Terminal View.
+_Avoid_: terminal input, Global Prompt Bar, command palette
 
 **Fuzzy Searcher**:
 The floating picker used for fuzzy navigation and search modes, such as files, projects, grep, symbols, and commands.

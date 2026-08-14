@@ -2,8 +2,8 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local core = require "core"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local markdown = require "core.markdown"
 local markdown_completion = require "core.markdown.completion"
 local fence_highlight = require "core.markdown.fence_highlight"
@@ -39,19 +39,19 @@ local function wait_until(predicate, timeout)
 end
 
 local function make_view(text, filename)
-  local doc = Doc(filename or "note.md", filename or "note.md", true)
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
-  local view = DocView(doc)
+  local buffer = Buffer(filename or "note.md", filename or "note.md", true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  local view = Editor(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 500, 200
   view:set_wrapping_enabled(false)
-  return view, doc
+  return view, buffer
 end
 
 local function refresh(view)
   local result = markdown.live_render.refresh_view(view)
-  local instance = markdown_model.peek(view.doc)
+  local instance = markdown_model.peek(view.buffer)
   if instance then
     local deadline = system.get_time() + 5
     while instance.status ~= "ready" and system.get_time() < deadline do
@@ -81,9 +81,9 @@ local function with_inline_image_text_fixture(callback)
   local prefix, image_source, suffix = "aaaa ", "![[" .. image_url .. "]]", " Testing this change"
   local source = prefix .. image_source .. suffix
   local image_end = #prefix + #image_source + 1
-  local view, doc = make_view(source .. "\nnext", USERDIR .. PATHSEP .. "caret-rows-note.md")
+  local view, buffer = make_view(source .. "\nnext", USERDIR .. PATHSEP .. "caret-rows-note.md")
   view:set_wrapping_enabled(true)
-  doc:set_selection(2, 1)
+  buffer:set_selection(2, 1)
 
   local old_load_image = canvas.load_image
   canvas.load_image = function()
@@ -94,7 +94,7 @@ local function with_inline_image_text_fixture(callback)
   end
   local ok, err = pcall(function()
     refresh(view)
-    callback(view, doc, {
+    callback(view, buffer, {
       source = source,
       image_end = image_end,
       suffix = suffix,
@@ -157,7 +157,7 @@ test.describe("Markdown Live Preview", function()
     config.markdown_live_interactive_tables = context.old_markdown_live_interactive_tables
   end)
 
-  test.it("attaches only to Markdown DocViews", function()
+  test.it("attaches only to Markdown Editors", function()
     local md = make_view("# Title", "note.md")
     local txt = make_view("# Title", "note.txt")
     test.equal(refresh(md), true)
@@ -167,9 +167,9 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("hides gutter line numbers in Live Preview", function()
-    local view, doc = make_view("one\ntwo\nthree\nfour", "sparse-gutter.md")
-    doc:set_selections(1, 2, 1, 1, 1)
-    doc:set_selections(2, 4, 1, 4, 1, nil, 0)
+    local view, buffer = make_view("one\ntwo\nthree\nfour", "sparse-gutter.md")
+    buffer:set_selections(1, 2, 1, 1, 1)
+    buffer:set_selections(2, 4, 1, 4, 1, nil, 0)
     refresh(view)
 
     local old_show_line_numbers = config.show_line_numbers
@@ -199,10 +199,10 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("toggles and persists view-local Source Mode without moving editor state", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "# Title\n[[folder/with/a/very/long/target/name/that/keeps/going/for/horizontal/scrolling/example|A]]\nplain", "note.md"
     )
-    doc:set_selection(3, 1)
+    buffer:set_selection(3, 1)
     refresh(view)
     view.scroll.x, view.scroll.to.x = 7, 7
     view.scroll.y, view.scroll.to.y = 11, 11
@@ -225,7 +225,7 @@ test.describe("Markdown Live Preview", function()
     )
     local feature_state = test.not_nil(view:get_state().owned_features)
 
-    local split = DocView(doc)
+    local split = Editor(buffer)
     split.size.x, split.size.y = 500, 200
     split:set_wrapping_enabled(false)
     refresh(split)
@@ -244,7 +244,7 @@ test.describe("Markdown Live Preview", function()
   test.it("keeps formatted source presentation while the first semantic snapshot is pending", function()
     local view = make_view("# Title\n**bold**", "note.md")
     markdown.live_render.refresh_view(view)
-    local instance = test.not_nil(markdown_model.peek(view.doc))
+    local instance = test.not_nil(markdown_model.peek(view.buffer))
     test.equal(instance.status, "pending")
     test.equal(visible_render_text(view, 1), "Title")
     test.equal(visible_render_text(view, 2), "bold")
@@ -256,12 +256,12 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("keeps an edited formatted paragraph rendered while semantics are pending", function()
-    local view, doc = make_view("Before **bold** after\nplain", "pending-edit.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("Before **bold** after\nplain", "pending-edit.md")
+    buffer:set_selection(2, 1)
     refresh(view)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
 
-    doc:set_selection(1, #doc.lines[1])
+    buffer:set_selection(1, #buffer.lines[1])
     test.equal(visible_render_text(view, 1), "Before bold after")
     view:on_text_input("!")
     test.equal(instance.status, "pending")
@@ -294,18 +294,18 @@ test.describe("Markdown Live Preview", function()
       return table.concat(lines, "\n") .. "\n"
     end
     write(fixture("Old", 10))
-    local doc = Doc("markdown-live-external-reload.md", path)
-    local view = DocView(doc)
+    local buffer = Buffer("markdown-live-external-reload.md", path)
+    local view = Editor(buffer)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 300, 200
     view:set_wrapping_enabled(true)
-    doc:set_selection(#doc.lines, 1)
+    buffer:set_selection(#buffer.lines, 1)
     refresh(view)
     local old_stable_row = view:get_visual_row(100, 1)
 
     write(fixture("New", 2))
-    doc:load(path)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    buffer:load(path)
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.equal(view:get_visual_row(100, 1), old_stable_row)
     local line1 = test.not_nil(view:get_line_render(1))
     local line2 = test.not_nil(view:get_line_render(2))
@@ -333,8 +333,8 @@ test.describe("Markdown Live Preview", function()
       fp:close()
     end
     write("before\nsame body\nafter\n")
-    local doc = Doc("markdown-live-reload-context.md", path)
-    local view = DocView(doc)
+    local buffer = Buffer("markdown-live-reload-context.md", path)
+    local view = Editor(buffer)
     refresh(view)
     local markdown_decoration
     for _, entry in ipairs(view:decoration_provider_entries()) do
@@ -345,12 +345,12 @@ test.describe("Markdown Live Preview", function()
     end
 
     write("```lua\nsame body\n```\n")
-    doc:load(path)
+    buffer:load(path)
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     local render = test.not_nil(view:get_line_render(2))
     test.equal(render.source_text, "same body")
-    test.equal(render.markdown_document_revision, doc.text_revision)
+    test.equal(render.markdown_buffer_revision, buffer.text_revision)
     test.not_nil(render.x_offset)
     test.equal(
       test.not_nil(markdown_decoration):line_background(view, 2),
@@ -358,8 +358,8 @@ test.describe("Markdown Live Preview", function()
     )
     test.equal(markdown_decoration:line_background(view, 4), nil)
 
-    doc:insert(2, #(doc.lines[2] or ""), "!")
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    buffer:insert(2, #(buffer.lines[2] or ""), "!")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(test.not_nil(view:get_line_render(2)).source_text, "same body!")
     test.equal(
       markdown_decoration:line_background(view, 2),
@@ -370,157 +370,157 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("presents a newly completed highlight without a raw-source frame", function()
-    local view, doc = make_view("mark\nplain", "pending-highlight.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("mark\nplain", "pending-highlight.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
-    doc:apply_edits({
+    buffer:apply_edits({
       { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "==" },
       { line1 = 1, col1 = 5, line2 = 1, col2 = 5, text = "==" },
     }, { type = "highlight", merge_cursors = false })
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 1), "mark")
     local pending = test.not_nil(view:get_line_render(1))
     test.equal(pending.source_text, "==mark==")
-    test.equal(pending.markdown_document_revision, doc.text_revision)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    test.equal(pending.markdown_buffer_revision, buffer.text_revision)
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 1), "mark")
   end)
 
   test.it("presents a newly completed Markdown link without a raw-source frame", function()
-    local view, doc = make_view("Alias\nplain", "pending-link.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("Alias\nplain", "pending-link.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
-    doc:apply_edits({
+    buffer:apply_edits({
       { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "[" },
       { line1 = 1, col1 = 6, line2 = 1, col2 = 6, text = "](Target.md)" },
     }, { type = "link", merge_cursors = false })
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 1), "Alias")
     local pending = test.not_nil(view:get_line_render(1))
     test.equal(pending.source_text, "[Alias](Target.md)")
     for _, fragment in ipairs(pending.fragments or {}) do
       test.equal(fragment.on_mouse_pressed, nil)
     end
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 1), "Alias")
   end)
 
   test.it("reprojects references before a removed definition while pending", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "[Alias][ref]\n\n[ref]: Target.md\nplain",
       "pending-reference-definition.md"
     )
-    doc:set_selection(4, 1)
+    buffer:set_selection(4, 1)
     refresh(view)
     test.ok(wait_until(function()
       return visible_render_text(view, 1) == "Alias"
     end, 5))
     test.equal(visible_render_text(view, 1), "Alias")
 
-    doc:remove(3, 1, 3, #doc.lines[3])
+    buffer:remove(3, 1, 3, #buffer.lines[3])
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 1), "[Alias][ref]")
     local pending = test.not_nil(view:get_line_render(1))
-    test.equal(pending.markdown_document_revision, doc.text_revision)
+    test.equal(pending.markdown_buffer_revision, buffer.text_revision)
     for _, fragment in ipairs(pending.fragments or {}) do
       test.equal(fragment.on_mouse_pressed, nil)
     end
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 1), "[Alias][ref]")
   end)
 
   test.it("hides a newly completed inline comment while semantics are pending", function()
-    local view, doc = make_view("before hidden after\nplain", "pending-comment.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("before hidden after\nplain", "pending-comment.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
-    doc:apply_edits({
+    buffer:apply_edits({
       { line1 = 1, col1 = 8, line2 = 1, col2 = 8, text = "%%" },
       { line1 = 1, col1 = 14, line2 = 1, col2 = 14, text = "%%" },
     }, { type = "comment", merge_cursors = false })
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 1), "before  after")
     local pending = test.not_nil(view:get_line_render(1))
     test.equal(pending.source_text, "before %%hidden%% after")
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 1), "before  after")
   end)
 
   test.it("presents a newly created blockquote without a raw-source frame", function()
-    local view, doc = make_view("body\nplain", "pending-blockquote.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("body\nplain", "pending-blockquote.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
-    doc:insert(1, 1, "> ")
+    buffer:insert(1, 1, "> ")
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 1), "│ body")
     local pending = test.not_nil(view:get_line_render(1))
     test.equal(pending.source_text, "> body")
-    test.equal(pending.markdown_document_revision, doc.text_revision)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    test.equal(pending.markdown_buffer_revision, buffer.text_revision)
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 1), "│ body")
   end)
 
   test.it("presents a newly created callout without a raw-source frame", function()
-    local view, doc = make_view("Title\nplain", "pending-callout.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("Title\nplain", "pending-callout.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
-    doc:insert(1, 1, "> [!note]+ ")
+    buffer:insert(1, 1, "> [!note]+ ")
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.ok(visible_render_text(view, 1):find("Title", 1, true) ~= nil)
     local pending = test.not_nil(view:get_line_render(1))
     test.equal(pending.source_text, "> [!note]+ Title")
-    test.equal(pending.markdown_document_revision, doc.text_revision)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    test.equal(pending.markdown_buffer_revision, buffer.text_revision)
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.ok(visible_render_text(view, 1):find("Title", 1, true) ~= nil)
   end)
 
   test.it("presents a newly completed thematic break without a raw-source frame", function()
-    local view, doc = make_view("body\n\n**\nplain", "pending-rule.md")
-    doc:set_selection(4, 1)
+    local view, buffer = make_view("body\n\n**\nplain", "pending-rule.md")
+    buffer:set_selection(4, 1)
     refresh(view)
 
-    doc:insert(3, 3, "*")
+    buffer:insert(3, 3, "*")
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     local pending = test.not_nil(view:get_line_render(3))
     test.equal(visible_render_text(view, 3), "────────────────")
     test.equal(pending.source_text, "***")
-    test.equal(pending.markdown_document_revision, doc.text_revision)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    test.equal(pending.markdown_buffer_revision, buffer.text_revision)
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 3), "────────────────")
   end)
 
   test.it("reprojects a newly created Setext heading while semantics are pending", function()
-    local view, doc = make_view("Title\n\nplain", "pending-setext.md")
-    doc:set_selection(3, 1)
+    local view, buffer = make_view("Title\n\nplain", "pending-setext.md")
+    buffer:set_selection(3, 1)
     refresh(view)
 
-    doc:insert(2, 1, "=")
+    buffer:insert(2, 1, "=")
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     local pending_title = test.not_nil(view:get_line_render(1))
     test.ok(pending_title.markdown_provenance ~= "retained")
     test.equal(visible_render_text(view, 1), "Title")
     test.equal(visible_render_text(view, 2), "")
     local pending_font = test.not_nil(pending_title.fragments[1].font)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     local current_title = test.not_nil(view:get_line_render(1))
     test.equal(current_title.markdown_provenance, "current")
@@ -528,24 +528,24 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("captures current presentation before an edit even after selection invalidation", function()
-    local view, doc = make_view("Before **bold** after\nplain", "pending-pre-edit.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("Before **bold** after\nplain", "pending-pre-edit.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     test.equal(visible_render_text(view, 1), "Before bold after")
 
-    doc:set_selection(1, #doc.lines[1])
+    buffer:set_selection(1, #buffer.lines[1])
     view:on_text_input("!")
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 1), "Before bold after!")
   end)
 
   test.it("keeps revealed inline syntax stable while typing inside it", function()
-    local view, doc = make_view("Before **bold** after\nplain", "pending-inline-edit.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("Before **bold** after\nplain", "pending-inline-edit.md")
+    buffer:set_selection(2, 1)
     refresh(view)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
 
-    doc:set_selection(1, 11)
+    buffer:set_selection(1, 11)
     test.equal(visible_render_text(view, 1), "Before **bold** after")
     view:on_text_input("X")
     test.equal(instance.status, "pending")
@@ -553,16 +553,16 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("retains rendered paragraphs and shifted resident rows while inserting a line", function()
-    local view, doc = make_view("Before **bold** after\n# Following\nplain", "pending-line-split.md")
-    doc:set_selection(3, 1)
+    local view, buffer = make_view("Before **bold** after\n# Following\nplain", "pending-line-split.md")
+    buffer:set_selection(3, 1)
     refresh(view)
     test.equal(visible_render_text(view, 1), "Before bold after")
     test.equal(visible_render_text(view, 2), "Following")
 
-    doc:set_selection(1, #doc.lines[1])
+    buffer:set_selection(1, #buffer.lines[1])
     test.equal(visible_render_text(view, 1), "Before bold after")
     view:on_text_input("\n")
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 1), "Before bold after")
     test.equal(visible_render_text(view, 2), "")
     test.equal(visible_render_text(view, 3), "Following")
@@ -570,19 +570,19 @@ test.describe("Markdown Live Preview", function()
 
   test.it("keeps a plain heading raw while its title is selected", function()
     local source = "## Resultados"
-    local view, doc = make_view("body\n" .. source .. "\nplain", "heading-selection.md")
-    doc:set_selection(3, 1)
+    local view, buffer = make_view("body\n" .. source .. "\nplain", "heading-selection.md")
+    buffer:set_selection(3, 1)
     refresh(view)
 
-    doc:set_selection(2, 4, 2, #source + 1)
+    buffer:set_selection(2, 4, 2, #source + 1)
     test.equal(visible_render_text(view, 2), source)
   end)
 
   test.it("adopts published heading and inline semantic identities", function()
-    local view, doc = make_view("# **Title**\nText with ***bold***.\nplain", "note.md")
-    doc:set_selection(3, 1)
+    local view, buffer = make_view("# **Title**\nText with ***bold***.\nplain", "note.md")
+    buffer:set_selection(3, 1)
     refresh(view)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
 
     local heading = test.not_nil(view:get_line_render(1))
@@ -603,7 +603,7 @@ test.describe("Markdown Live Preview", function()
 
     local heading_id = heading.semantic_id
     local generation_before = instance.generation
-    doc:insert(2, #doc.lines[2], "!")
+    buffer:insert(2, #buffer.lines[2], "!")
     test.equal(test.not_nil(view:get_line_render(1)).semantic_id, heading_id)
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.ok(instance.generation > generation_before)
@@ -612,20 +612,20 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("re-adopts suffix semantics after structural edits rendered while pending", function()
-    local view, doc = make_view("# A\nbody\n# B\nplain", "note.md")
-    doc:set_selection(4, 1)
+    local view, buffer = make_view("# A\nbody\n# B\nplain", "note.md")
+    buffer:set_selection(4, 1)
     refresh(view)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.not_nil(view:get_line_render(3).semantic_id)
 
     local previous_generation = instance.generation
-    doc:insert(1, 1, "inserted\n")
+    buffer:insert(1, 1, "inserted\n")
     local pending = test.not_nil(view:get_line_render(4))
     test.equal(pending.source_text, "# B")
-    test.equal(pending.markdown_document_revision, doc.text_revision)
+    test.equal(pending.markdown_buffer_revision, buffer.text_revision)
     test.ok(pending.markdown_provenance ~= "current")
-    local split = DocView(doc)
+    local split = Editor(buffer)
     split.size.x, split.size.y = 500, 200
     split:set_wrapping_enabled(false)
     markdown.live_render.refresh_view(split)
@@ -643,10 +643,10 @@ test.describe("Markdown Live Preview", function()
   test.it("invalidates raw-block-dependent suffix rendering and wrapping", function()
     local target = string.rep("folder/", 24) .. "name"
     local source = "```\n# [[" .. target .. "|Alias]] after\n```\nplain"
-    local view, doc = make_view(source, "note.md")
+    local view, buffer = make_view(source, "note.md")
     view.size.x = 500
     view:set_wrapping_enabled(true)
-    doc:set_selection(4, 1)
+    buffer:set_selection(4, 1)
     refresh(view)
     test.equal(visible_render_text(view, 2), "# [[" .. target .. "|Alias]] after")
     local function break_signature()
@@ -659,23 +659,23 @@ test.describe("Markdown Live Preview", function()
       return table.concat(cols, ",")
     end
     local raw_breaks = break_signature()
-    doc:remove(1, 1, 1, 4)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    buffer:remove(1, 1, 1, 4)
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     local heading = test.not_nil(view:get_line_render(2))
     test.equal(heading.raw_passthrough, nil)
     test.ok(#(heading.fragments or {}) > 0)
     local rendered_breaks = break_signature()
     test.ok(rendered_breaks ~= raw_breaks, raw_breaks .. " -> " .. rendered_breaks)
-    doc:raw_insert(1, 1, "```", doc.undo_stack, system.get_time())
+    buffer:raw_insert(1, 1, "```", buffer.undo_stack, system.get_time())
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 2), "# [[" .. target .. "|Alias]] after")
     test.equal(break_signature(), raw_breaks)
   end)
 
   test.it("renders core emphasis families directly from semantic nodes", function()
-    local view, doc = make_view("**bold** *italic* ***both*** ~~strike~~\nplain", "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("**bold** *italic* ***both*** ~~strike~~\nplain", "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local render_line = test.not_nil(view:get_line_render(1))
     local identities = {}
@@ -689,8 +689,8 @@ test.describe("Markdown Live Preview", function()
 
   test.it("composes nested semantic formatting instead of suppressing inner styles", function()
     local source = "==mark **bold** and *italic*== plus **outer *inner***\nplain"
-    local view, doc = make_view(source, "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view(source, "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local seen = {}
     for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
@@ -705,8 +705,8 @@ test.describe("Markdown Live Preview", function()
 
   test.it("preserves enclosing formatting across escapes and comments", function()
     local source = "**bold \\* literal** and **before %%hide%% after**\nplain"
-    local view, doc = make_view(source, "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view(source, "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local seen = {}
     for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
@@ -724,13 +724,13 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("refreshes every cached line of a multiline comment when delimiters change", function()
-    local view, doc = make_view("%%hide\nstill hidden%%\nplain", "note.md")
-    doc:set_selection(3, 1)
+    local view, buffer = make_view("%%hide\nstill hidden%%\nplain", "note.md")
+    buffer:set_selection(3, 1)
     refresh(view)
     test.equal(view:get_col_x_offset(2, #"still hidden%%" + 1), 0)
-    doc:remove(1, 1, 1, 2)
+    buffer:remove(1, 1, 1, 2)
     test.equal(visible_render_text(view, 2), "still hidden%%")
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(
       view:get_col_x_offset(2, #"still hidden%%" + 1),
@@ -739,74 +739,74 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("refreshes multiline comments when ordinary edits form delimiters", function()
-    local view, doc = make_view("before %x%\nsecret\n%%\nplain", "note.md")
-    doc:set_selection(4, 1)
+    local view, buffer = make_view("before %x%\nsecret\n%%\nplain", "note.md")
+    buffer:set_selection(4, 1)
     refresh(view)
     test.equal(view:get_col_x_offset(2, #"secret" + 1), live_body_font(view):get_width("secret"))
-    doc:remove(1, 9, 1, 10)
+    buffer:remove(1, 9, 1, 10)
     test.equal(visible_render_text(view, 2), "")
     test.equal(view:get_col_x_offset(2, #"secret" + 1), 0)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(view:get_col_x_offset(2, #"secret" + 1), 0)
   end)
 
   test.it("lets a newly formed comment own fence-looking lines while pending", function()
-    local view, doc = make_view("%x%\n```\n# hidden\n```\n%%\nplain", "pending-comment-fence.md")
-    doc:set_selection(6, 1)
+    local view, buffer = make_view("%x%\n```\n# hidden\n```\n%%\nplain", "pending-comment-fence.md")
+    buffer:set_selection(6, 1)
     refresh(view)
 
-    doc:remove(1, 2, 1, 3)
+    buffer:remove(1, 2, 1, 3)
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 2), "")
     test.equal(visible_render_text(view, 3), "")
     test.equal(visible_render_text(view, 4), "")
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 3), "")
   end)
 
   test.it("does not form provisional comments inside fenced code", function()
-    local view, doc = make_view("```\nprint('%x%')\n```\nplain", "pending-fence-comment.md")
-    doc:set_selection(4, 1)
+    local view, buffer = make_view("```\nprint('%x%')\n```\nplain", "pending-fence-comment.md")
+    buffer:set_selection(4, 1)
     refresh(view)
 
-    doc:remove(2, 9, 2, 10)
+    buffer:remove(2, 9, 2, 10)
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 2), "print('%%')")
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 2), "print('%%')")
   end)
 
   test.it("does not extend provisional comments from inline code spans", function()
-    local view, doc = make_view("`value %x%` after\nplain", "pending-code-comment.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("`value %x%` after\nplain", "pending-code-comment.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
-    doc:remove(1, 9, 1, 10)
+    buffer:remove(1, 9, 1, 10)
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 1), "value %% after")
     test.equal(visible_render_text(view, 2), "plain")
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 2), "plain")
   end)
 
   test.it("does not form provisional comments inside display math", function()
-    local view, doc = make_view("$$\nvalue %x%\n$$\nplain", "pending-math-comment.md")
-    doc:set_selection(4, 1)
+    local view, buffer = make_view("$$\nvalue %x%\n$$\nplain", "pending-math-comment.md")
+    buffer:set_selection(4, 1)
     refresh(view)
 
-    doc:remove(2, 8, 2, 9)
+    buffer:remove(2, 8, 2, 9)
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 2), "value %%")
     test.equal(visible_render_text(view, 4), "plain")
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 4), "plain")
   end)
@@ -814,18 +814,18 @@ test.describe("Markdown Live Preview", function()
   test.it("keeps a wrapped suffix rendered while typing after a literal percentage", function()
     local paragraph = string.rep("wrapped prose ", 20)
       .. "realmente estaba el 99% hecho"
-    local view, doc = make_view(
+    local view, buffer = make_view(
       paragraph .. "\n## Following heading\n**following bold text**\nplain",
       "literal-percentage.md"
     )
     view.size.x = 360
     view:set_wrapping_enabled(true)
-    doc:set_selection(4, 1)
+    buffer:set_selection(4, 1)
     refresh(view)
-    doc:set_selection(1, #doc.lines[1])
+    buffer:set_selection(1, #buffer.lines[1])
 
     view:on_text_input("!")
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 2), "Following heading")
     test.equal(visible_render_text(view, 3), "following bold text")
 
@@ -835,40 +835,40 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("invalidates comment-dependent suffix rendering when a delimiter is broken", function()
-    local view, doc = make_view("before %%hidden\nsecret\nend%%\n# after", "note.md")
-    doc:set_selection(4, 1)
+    local view, buffer = make_view("before %%hidden\nsecret\nend%%\n# after", "note.md")
+    buffer:set_selection(4, 1)
     refresh(view)
     test.equal(view:get_col_x_offset(2, #"secret" + 1), 0)
 
-    doc:insert(1, 9, "x")
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    buffer:insert(1, 9, "x")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 2), "secret")
   end)
 
   test.it("keeps a fenced suffix rendered while editing only the info string", function()
-    local view, doc = make_view("```lua\n# code\n```\n## Following heading\nplain", "note.md")
-    doc:set_selection(5, 1)
+    local view, buffer = make_view("```lua\n# code\n```\n## Following heading\nplain", "note.md")
+    buffer:set_selection(5, 1)
     refresh(view)
-    doc:set_selection(1, #doc.lines[1])
+    buffer:set_selection(1, #buffer.lines[1])
 
     view:on_text_input("x")
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 4), "Following heading")
   end)
 
   test.it("invalidates fence-dependent suffix rendering when an opener is broken", function()
-    local view, doc = make_view("```\n# code\n```\n# after", "note.md")
-    doc:set_selection(4, 1)
+    local view, buffer = make_view("```\n# code\n```\n# after", "note.md")
+    buffer:set_selection(4, 1)
     refresh(view)
 
-    doc:insert(1, 1, "x")
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    buffer:insert(1, 1, "x")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(visible_render_text(view, 2), "code")
   end)
 
   test.it("applies semantic comments and escapes inside headings", function()
-    local view, doc = make_view("# visible %%hidden%% \\*literal*\nplain", "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("# visible %%hidden%% \\*literal*\nplain", "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local visible = {}
     for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
@@ -878,17 +878,17 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("expands active headings to editable rendered Markdown syntax", function()
-    local view, doc = make_view("## Title ##", "note.md")
+    local view, buffer = make_view("## Title ##", "note.md")
     refresh(view)
-    doc:set_selection(1, 5)
+    buffer:set_selection(1, 5)
     test.equal(visible_render_text(view, 1), "## Title ##")
   end)
 
   test.it("reveals every multi-cursor line without expanding lines between them", function()
-    local view, doc = make_view("## One\n## Two\n## Three", "note.md")
+    local view, buffer = make_view("## One\n## Two\n## Three", "note.md")
     refresh(view)
-    doc:set_selections(1, 1, 4, 1, 4)
-    doc:set_selections(2, 3, 4, 3, 4, nil, 0)
+    buffer:set_selections(1, 1, 4, 1, 4)
+    buffer:set_selections(2, 3, 4, 3, 4, nil, 0)
 
     test.equal(visible_render_text(view, 1), "## One")
     test.equal(visible_render_text(view, 2), "Two")
@@ -896,9 +896,9 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("freezes rendered layout for the lifetime of IME composition", function()
-    local view, doc = make_view("## Title\nbody", "note.md")
+    local view, buffer = make_view("## Title\nbody", "note.md")
     refresh(view)
-    doc:set_selection(1, 4)
+    buffer:set_selection(1, 4)
     view:on_ime_text_editing("x", 0, 0)
     test.not_nil(view.__line_render_interaction_state)
     test.equal(view.__line_render_interaction_state.reason, "ime-composition")
@@ -907,8 +907,8 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("does not live-render Markdown syntax inside code blocks", function()
-    local view, doc = make_view("```\n# Not Heading\n**not bold**\n``` not closing\n# Still Not Heading\n```\n# Heading\n", "note.md")
-    doc:set_selection(7, 1)
+    local view, buffer = make_view("```\n# Not Heading\n**not bold**\n``` not closing\n# Still Not Heading\n```\n# Heading\n", "note.md")
+    buffer:set_selection(7, 1)
     refresh(view)
     test.equal(visible_render_text(view, 2), "# Not Heading")
     test.equal(visible_render_text(view, 3), "**not bold**")
@@ -917,8 +917,8 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("renders emphasis inside heading content", function()
-    local view, doc = make_view("## A **bold** and *italic* Heading\nbody", "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("## A **bold** and *italic* Heading\nbody", "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local render_line = view:get_line_render(1)
     test.not_nil(render_line)
@@ -933,9 +933,9 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("keeps an inline construct rendered when the caret is elsewhere on its line", function()
-    local view, doc = make_view("See [[Note|Alias]]", "note.md")
+    local view, buffer = make_view("See [[Note|Alias]]", "note.md")
     refresh(view)
-    doc:set_selection(1, 1)
+    buffer:set_selection(1, 1)
     test.equal(visible_render_text(view, 1), "See Alias")
     test.equal(
       view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1),
@@ -945,19 +945,19 @@ test.describe("Markdown Live Preview", function()
 
   test.it("reveals emphasis syntax only while the caret is within that construct", function()
     local source = "before **bold** after *italic* tail\nplain"
-    local view, doc = make_view(source, "localized-emphasis.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view(source, "localized-emphasis.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local inactive_width = view:get_col_x_offset(1, #(source:match("[^\n]+")) + 1)
 
-    doc:set_selection(1, 2)
+    buffer:set_selection(1, 2)
     test.equal(visible_render_text(view, 1), "before bold after italic tail")
     test.equal(view:get_col_x_offset(1, #(source:match("[^\n]+")) + 1), inactive_width)
 
-    doc:set_selection(1, 11)
+    buffer:set_selection(1, 11)
     test.equal(visible_render_text(view, 1), "before **bold** after italic tail")
 
-    doc:set_selection(1, 18)
+    buffer:set_selection(1, 18)
     test.equal(visible_render_text(view, 1), "before bold after italic tail")
   end)
 
@@ -974,23 +974,23 @@ test.describe("Markdown Live Preview", function()
     local lines = {}
     for _, case in ipairs(cases) do lines[#lines + 1] = case.source end
     lines[#lines + 1] = "plain"
-    local view, doc = make_view(table.concat(lines, "\n"), "right-edge-inline.md")
-    doc:set_selection(#lines, 1)
+    local view, buffer = make_view(table.concat(lines, "\n"), "right-edge-inline.md")
+    buffer:set_selection(#lines, 1)
     refresh(view)
 
     for line, case in ipairs(cases) do
       test.equal(visible_render_text(view, line), case.inactive)
-      doc:set_selection(line, #case.source + 1)
+      buffer:set_selection(line, #case.source + 1)
       test.equal(visible_render_text(view, line), case.source)
     end
   end)
 
   test.it("reveals only constructs intersected by a nonempty selection", function()
-    local view, doc = make_view("- before **bold** after *italic*\nplain", "localized-selection.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("- before **bold** after *italic*\nplain", "localized-selection.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
-    doc:set_selection(1, 3, 1, 9)
+    buffer:set_selection(1, 3, 1, 9)
     test.equal(visible_render_text(view, 1), "before bold after italic")
     local body_bullet
     for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
@@ -998,7 +998,7 @@ test.describe("Markdown Live Preview", function()
     end
     test.not_nil(test.not_nil(body_bullet).widget)
 
-    doc:set_selection(1, 12, 1, 16)
+    buffer:set_selection(1, 12, 1, 16)
     test.equal(visible_render_text(view, 1), "before **bold** after italic")
     local bold_bullet
     for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
@@ -1006,13 +1006,13 @@ test.describe("Markdown Live Preview", function()
     end
     test.not_nil(test.not_nil(bold_bullet).widget)
 
-    doc:set_selection(1, 1, 1, 2)
+    buffer:set_selection(1, 1, 1, 2)
     test.equal(visible_render_text(view, 1), "- before bold after italic")
   end)
 
   test.it("expands active-line emphasis syntax before caret movement crosses spans", function()
-    local view, doc = make_view("This is **bold** and **more**\nnext", "note.md")
-    doc:set_selection(1, 11)
+    local view, buffer = make_view("This is **bold** and **more**\nnext", "note.md")
+    buffer:set_selection(1, 11)
     refresh(view)
     local render_line = view:get_line_render(1)
     test.not_nil(render_line)
@@ -1025,8 +1025,8 @@ test.describe("Markdown Live Preview", function()
 
   test.it("reveals only the caret's link construct on a mixed line", function()
     local source = "See [[One|First]] and [[Two|Second]]\nplain"
-    local view, doc = make_view(source, "note.md")
-    doc:set_selection(1, 9)
+    local view, buffer = make_view(source, "note.md")
+    buffer:set_selection(1, 9)
     refresh(view)
     local visible = {}
     for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(1))) do
@@ -1040,13 +1040,13 @@ test.describe("Markdown Live Preview", function()
     local prefix, suffix = "See ", " now"
     local target = "folder/target"
     local source = prefix .. "[" .. label .. "](" .. target .. ")" .. suffix
-    local document_text = source .. "\nnext"
-    local expected_document_text = document_text .. "\n"
-    local view, doc = make_view(document_text, "utf8-link-boundaries.md")
+    local buffer_text = source .. "\nnext"
+    local expected_buffer_text = buffer_text .. "\n"
+    local view, buffer = make_view(buffer_text, "utf8-link-boundaries.md")
     local label_col1 = test.not_nil(source:find(label, 1, true))
     local link_col1 = test.not_nil(source:find("[", 1, true))
     local link_col2 = test.not_nil(source:find(")", link_col1, true)) + 1
-    local original_revision = doc.text_revision
+    local original_revision = buffer.text_revision
     local old_active = core.active_view
     core.active_view = view
 
@@ -1065,13 +1065,13 @@ test.describe("Markdown Live Preview", function()
     end
 
     local ok, err = pcall(function()
-      doc:set_selection(1, label_col1)
+      buffer:set_selection(1, label_col1)
       refresh(view)
-      test.equal(table.concat(doc.lines), expected_document_text)
-      test.equal(#doc.lines, 2)
-      test.equal(doc.lines[1], source .. "\n")
-      test.equal(doc.lines[2], "next\n")
-      test.equal(doc.text_revision, original_revision)
+      test.equal(table.concat(buffer.lines), expected_buffer_text)
+      test.equal(#buffer.lines, 2)
+      test.equal(buffer.lines[1], source .. "\n")
+      test.equal(buffer.lines[2], "next\n")
+      test.equal(buffer.text_revision, original_revision)
       test.equal(test.not_nil(view:get_line_render(1)).source_text, source)
       test.equal(test.not_nil(view:get_line_render(2)).source_text, "next")
 
@@ -1083,10 +1083,10 @@ test.describe("Markdown Live Preview", function()
       test.equal(active_link.text_source_col2, nil)
       local active_shape = fragment_shape(active_fragments)
 
-      doc:set_selection(1, link_col2)
+      buffer:set_selection(1, link_col2)
       local right_line, right_fragments, right_link = snapshot()
-      test.equal(doc:get_selection(), 1)
-      local _, right_col = doc:get_selection()
+      test.equal(buffer:get_selection(), 1)
+      local _, right_col = buffer:get_selection()
       test.equal(right_col, link_col2)
       test.equal(right_line.source_text, source)
       test.equal(visible_render_text(view, 1), source)
@@ -1094,7 +1094,7 @@ test.describe("Markdown Live Preview", function()
       test.equal(right_link.source_col1, label_col1)
       test.equal(right_link.source_col2, label_col1 + #label)
 
-      doc:set_selection(2, 1)
+      buffer:set_selection(2, 1)
       local inactive_line, _, inactive_link = snapshot()
       test.equal(inactive_line.source_text, source)
       test.equal(visible_render_text(view, 1), prefix .. label .. suffix)
@@ -1103,7 +1103,7 @@ test.describe("Markdown Live Preview", function()
       test.equal(inactive_link.text_source_col1, label_col1)
       test.equal(inactive_link.text_source_col2, label_col1 + #label)
 
-      doc:set_selection(1, label_col1)
+      buffer:set_selection(1, label_col1)
       local reentered_line, reentered_fragments, reentered_link = snapshot()
       test.equal(reentered_line.source_text, source)
       test.equal(visible_render_text(view, 1), source)
@@ -1111,11 +1111,11 @@ test.describe("Markdown Live Preview", function()
       test.equal(reentered_link.source_col1, label_col1)
       test.equal(reentered_link.source_col2, label_col1 + #label)
 
-      local line, col = doc:get_selection()
+      local line, col = buffer:get_selection()
       test.equal(line, 1)
       test.equal(col, label_col1)
-      test.equal(table.concat(doc.lines), expected_document_text)
-      test.equal(doc.text_revision, original_revision)
+      test.equal(table.concat(buffer.lines), expected_buffer_text)
+      test.equal(buffer.text_revision, original_revision)
     end)
     core.active_view = old_active
     if not ok then error(err, 0) end
@@ -1125,7 +1125,7 @@ test.describe("Markdown Live Preview", function()
     local label = "éλ漢"
     local target = ("folder/segment/"):rep(4) .. "target"
     local source = "See [" .. label .. "](" .. target .. ") after"
-    local view, doc = make_view(source .. "\nnext\n", "wrapped-utf8-link.md")
+    local view, buffer = make_view(source .. "\nnext\n", "wrapped-utf8-link.md")
     view.size.x = 170
     view:set_wrapping_enabled(true)
     local label_col1 = test.not_nil(source:find(label, 1, true))
@@ -1133,7 +1133,7 @@ test.describe("Markdown Live Preview", function()
     core.active_view = view
 
     local ok, err = pcall(function()
-      doc:set_selection(1, label_col1)
+      buffer:set_selection(1, label_col1)
       refresh(view)
       local render_line = test.not_nil(view:get_line_render(1))
       test.equal(render_line.source_text, source)
@@ -1208,17 +1208,17 @@ test.describe("Markdown Live Preview", function()
   test.it("captures visible presentation before a structural edit when render caches are cold", function()
     local lines = { "# Heading", "", "Before **bold** after", "", "## Following" }
     for i = 1, 80 do lines[#lines + 1] = "plain line " .. i end
-    local view, doc = make_view(table.concat(lines, "\n"), "cold-structural-presentation.md")
+    local view, buffer = make_view(table.concat(lines, "\n"), "cold-structural-presentation.md")
     view.size.y = 1200
     view:set_wrapping_enabled(false)
-    doc:set_selection(3, #doc.lines[3])
+    buffer:set_selection(3, #buffer.lines[3])
     refresh(view)
     view:invalidate_line_render("cold-structural-regression")
     view:invalidate_visual_metrics("cold-structural-regression")
 
     view:on_text_input("\n")
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.not_nil(view:get_line_render(1), "a cold visible heading flashed as raw source")
     test.not_nil(view:get_line_render(6), "a shifted visible heading flashed as raw source")
   end)
@@ -1227,64 +1227,64 @@ test.describe("Markdown Live Preview", function()
     local lines = { "start" }
     for line = 2, 199 do lines[line] = "prose line " .. line end
     lines[200] = "# Ending heading"
-    local view, doc = make_view(table.concat(lines, "\n"), "pending-offscreen.md")
+    local view, buffer = make_view(table.concat(lines, "\n"), "pending-offscreen.md")
     view.size.y = live_body_font(view):get_height() * 4
-    doc:set_selection(1, 6)
+    buffer:set_selection(1, 6)
     refresh(view)
 
     view:on_text_input("!")
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     view:invalidate_line_render("pending-offscreen-projection")
     test.equal(visible_render_text(view, 200), "Ending heading")
     local pending = test.not_nil(view:get_line_render(200))
     test.equal(pending.source_text, "# Ending heading")
-    test.equal(pending.markdown_document_revision, doc.text_revision)
+    test.equal(pending.markdown_buffer_revision, buffer.text_revision)
   end)
 
   test.it("keeps multi-cursor list rows represented while semantics are pending", function()
-    local view, doc = make_view("- first\n- second\nplain", "pending-multicursor-list.md")
-    doc:set_selection(1, #doc.lines[1])
-    doc:add_selection(2, #doc.lines[2])
+    local view, buffer = make_view("- first\n- second\nplain", "pending-multicursor-list.md")
+    buffer:set_selection(1, #buffer.lines[1])
+    buffer:add_selection(2, #buffer.lines[2])
     refresh(view)
     local old_active = core.active_view
     core.active_view = view
-    command.perform("doc:newline")
+    command.perform("text:newline")
     core.active_view = old_active
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     for line = 1, 4 do
       test.not_nil(view:get_line_render(line), "list row %d disappeared while parsing" .. line)
     end
   end)
 
   test.it("keeps a new Markdown list marker rendered while semantics are pending", function()
-    local view, doc = make_view("- item\nplain", "pending-list-marker.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("- item\nplain", "pending-list-marker.md")
+    buffer:set_selection(2, 1)
     refresh(view)
-    doc:set_selection(1, #doc.lines[1])
+    buffer:set_selection(1, #buffer.lines[1])
     local old_active = core.active_view
     core.active_view = view
-    command.perform("doc:newline")
+    command.perform("text:newline")
     core.active_view = old_active
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     local marker = test.not_nil(view:get_line_render(2)).fragments[1]
     test.ok(marker.unordered_list_marker, "new list marker lost its semantic marker")
     test.not_nil(marker.widget, "new list marker lost its bullet widget")
   end)
 
   test.it("keeps a split Markdown list suffix rendered while semantics are pending", function()
-    local view, doc = make_view("- first item\nplain", "pending-split-list.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("- first item\nplain", "pending-split-list.md")
+    buffer:set_selection(2, 1)
     refresh(view)
-    doc:set_selection(1, 6)
+    buffer:set_selection(1, 6)
     local old_active = core.active_view
     core.active_view = view
-    command.perform("doc:newline")
+    command.perform("text:newline")
     core.active_view = old_active
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     local marker
     for _, fragment in ipairs(test.not_nil(view:get_line_render(2)).fragments or {}) do
       if fragment.unordered_list_marker then marker = fragment break end
@@ -1299,16 +1299,16 @@ test.describe("Markdown Live Preview", function()
       { source = "3) item", field = "ordered_list_marker" },
     }
     for _, item in ipairs(cases) do
-      local view, doc = make_view(item.source .. "\nplain", "pending-list-marker-types.md")
-      doc:set_selection(2, 1)
+      local view, buffer = make_view(item.source .. "\nplain", "pending-list-marker-types.md")
+      buffer:set_selection(2, 1)
       refresh(view)
-      doc:set_selection(1, #doc.lines[1])
+      buffer:set_selection(1, #buffer.lines[1])
       local old_active = core.active_view
       core.active_view = view
-      command.perform("doc:newline")
+      command.perform("text:newline")
       core.active_view = old_active
 
-      test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+      test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
       local marker
       for _, fragment in ipairs(test.not_nil(view:get_line_render(2)).fragments or {}) do
         if fragment[item.field] then marker = fragment break end
@@ -1322,11 +1322,11 @@ test.describe("Markdown Live Preview", function()
     for index = 1, 1000 do
       source_lines[#source_lines + 1] = "background paragraph line " .. index
     end
-    local view, doc = make_view(
+    local view, buffer = make_view(
       table.concat(source_lines, "\n"), "pending-rapid-list-editing.md"
     )
     view.size.y = 400
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
     refresh(view)
     local old_active = core.active_view
     core.active_view = view
@@ -1359,20 +1359,20 @@ test.describe("Markdown Live Preview", function()
         end
       end
 
-      doc:set_selection(1, 7)
+      buffer:set_selection(1, 7)
       type_text("first", 2)
-      test.equal(command.perform("doc:newline"), true)
+      test.equal(command.perform("text:newline"), true)
       assert_rows("first Enter", 3)
       coroutine.yield(0.01)
       assert_rows("frame after first Enter", 3)
 
       type_text("more", 3)
-      test.equal(command.perform("doc:newline"), true)
+      test.equal(command.perform("text:newline"), true)
       assert_rows("second Enter", 4)
       coroutine.yield(0.01)
       assert_rows("frame after second Enter", 4)
 
-      test.equal(command.perform("doc:indent"), true)
+      test.equal(command.perform("text:indent"), true)
       assert_rows("indent at new task content start", 4)
       coroutine.yield(0.01)
       assert_rows("frame after indent", 4)
@@ -1396,13 +1396,13 @@ test.describe("Markdown Live Preview", function()
       source_lines[#source_lines + 1] = "background paragraph line " .. index
     end
     local source = table.concat(source_lines, "\n")
-    local view, doc = make_view(source, "pending-nested-task-enter.md")
+    local view, buffer = make_view(source, "pending-nested-task-enter.md")
     view.size.y = view:get_line_height() * 2
     view:set_wrapping_enabled(true)
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
     refresh(view)
-    doc:set_selection(5, #doc.lines[5])
-    view:scroll_to_make_visible(5, #doc.lines[5])
+    buffer:set_selection(5, #buffer.lines[5])
+    view:scroll_to_make_visible(5, #buffer.lines[5])
     local old_active = core.active_view
     core.active_view = view
 
@@ -1471,9 +1471,9 @@ test.describe("Markdown Live Preview", function()
 
       assert_presented("before Enter")
       local nested_checkbox_x = checkbox_x(3)
-      test.equal(command.perform("doc:newline"), true)
+      test.equal(command.perform("text:newline"), true)
       assert_presented("immediate after Enter")
-      local cursor_line, cursor_col = doc:get_selection()
+      local cursor_line, cursor_col = buffer:get_selection()
       view:scroll_to_make_visible(cursor_line, cursor_col)
       view:get_h_scrollable_size()
       view.draw_overlay = function() end
@@ -1504,7 +1504,7 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("does not reveal neighboring task markers when completing an empty task", function()
-    local view, doc = make_view(table.concat({
+    local view, buffer = make_view(table.concat({
       "- [ ] informar FechaSuAlbaran. Obligado",
       "- [ ] informar SuAlbaranNo Obligado",
       "- [ ]",
@@ -1513,7 +1513,7 @@ test.describe("Markdown Live Preview", function()
       "select CodigoEmpresa from CabeceraAlbaranProveedor",
       "```",
     }, "\n"), "task-reveal-isolation.md")
-    doc:set_selection(3, 6)
+    buffer:set_selection(3, 6)
     refresh(view)
     local old_active = core.active_view
     core.active_view = view
@@ -1522,7 +1522,7 @@ test.describe("Markdown Live Preview", function()
       for char in ("- [ ]"):gmatch(".") do
         test.equal(view:on_text_input(char), true)
       end
-      local instance = test.not_nil(markdown_model.peek(doc))
+      local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_status(instance, "ready"), instance.reason)
 
       for line = 1, 2 do
@@ -1546,7 +1546,7 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("keeps a following heading's pending metric stable during an incomplete list marker", function()
-    local view, doc = make_view(table.concat({
+    local view, buffer = make_view(table.concat({
       "- [ ] informar FechaSuAlbaran. Obligado",
       "- [ ] informar SuAlbaranNo Obligado",
       "- [ ]",
@@ -1556,7 +1556,7 @@ test.describe("Markdown Live Preview", function()
       "```",
     }, "\n"), "task-heading-metric-stability.md")
     view:set_wrapping_enabled(true)
-    doc:set_selection(3, 6)
+    buffer:set_selection(3, 6)
     refresh(view)
     local old_active = core.active_view
     core.active_view = view
@@ -1570,9 +1570,9 @@ test.describe("Markdown Live Preview", function()
     end
 
     local ok, err = pcall(function()
-      doc:set_selection(3, 1, 3, 6)
-      test.equal(command.perform("doc:backspace"), true)
-      local instance = test.not_nil(markdown_model.peek(doc))
+      buffer:set_selection(3, 1, 3, 6)
+      test.equal(command.perform("text:backspace"), true)
+      local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_status(instance, "ready"), instance.reason)
 
       local expected_height = test.not_nil(heading_provider_height())
@@ -1589,11 +1589,11 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("aligns Markdown continuation text with task content", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "- [ ] task\n  continuation\nplain",
       "list-continuation-alignment.md"
     )
-    doc:set_selection(3, 1)
+    buffer:set_selection(3, 1)
     refresh(view)
 
     local task_x = view:get_col_x_offset(1, 7)
@@ -1605,24 +1605,24 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("keeps a formatted row stable when one edit crosses rendered fragments", function()
-    local view, doc = make_view("Before **bold** after\nplain", "pending-cross-fragment.md")
+    local view, buffer = make_view("Before **bold** after\nplain", "pending-cross-fragment.md")
     view:set_wrapping_enabled(true)
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
     refresh(view)
-    doc:set_selection(1, 11, 1, 17)
+    buffer:set_selection(1, 11, 1, 17)
     view:on_text_input("replacement")
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.not_nil(view:get_line_render(1), "the edited row flashed as raw source")
   end)
 
   test.it("keeps ordinary prose presented through typing, line edits, paste, and undo", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "First paragraph with ordinary words.\nSecond paragraph stays visible.\nplain",
       "pending-prose-editing.md"
     )
     view:set_wrapping_enabled(true)
-    doc:set_selection(3, 1)
+    buffer:set_selection(3, 1)
     refresh(view)
     local old_active = core.active_view
     core.active_view = view
@@ -1642,37 +1642,37 @@ test.describe("Markdown Live Preview", function()
         end
       end
       local function publish()
-        local instance = test.not_nil(markdown_model.peek(doc))
+        local instance = test.not_nil(markdown_model.peek(buffer))
         test.ok(wait_status(instance, "ready"), instance.reason)
       end
 
-      doc:set_selection(1, 6)
+      buffer:set_selection(1, 6)
       test.equal(view:on_text_input(" edited"), true)
       assert_presented("typing")
       publish()
 
-      doc:set_selection(1, 13)
-      test.equal(command.perform("doc:newline"), true)
+      buffer:set_selection(1, 13)
+      test.equal(command.perform("text:newline"), true)
       assert_presented("Enter")
       publish()
 
-      local line, _ = doc:get_selection()
-      doc:set_selection(line, 1)
-      test.equal(command.perform("doc:backspace"), true)
+      local line, _ = buffer:get_selection()
+      buffer:set_selection(line, 1)
+      test.equal(command.perform("text:backspace"), true)
       assert_presented("Backspace")
       publish()
 
-      doc:set_selection(2, 8)
+      buffer:set_selection(2, 8)
       local pasted = {}
       for index = 1, 10 do pasted[index] = "pasted prose " .. index end
       test.equal(view:on_text_input(table.concat(pasted, "\n")), true)
       assert_presented("paste")
       publish()
 
-      test.equal(command.perform("doc:undo"), true)
+      test.equal(command.perform("text:undo"), true)
       assert_presented("undo")
       publish()
-      test.equal(command.perform("doc:redo"), true)
+      test.equal(command.perform("text:redo"), true)
       assert_presented("redo")
     end)
     core.active_view = old_active
@@ -1680,17 +1680,17 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("keeps a paragraph rendered when deleting its following blank line", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "A paragraph that must remain in the Live Preview font.\n\nFollowing paragraph.\n",
       "paragraph-line-join.md"
     )
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
     refresh(view)
     test.not_nil(view:get_line_render(1))
 
-    doc:remove(1, #doc.lines[1], 2, 1)
+    buffer:remove(1, #buffer.lines[1], 2, 1)
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.not_nil(
       view:get_line_render(1),
       "the retained paragraph flashed as raw source after joining the blank line"
@@ -1701,29 +1701,29 @@ test.describe("Markdown Live Preview", function()
     local lines = { "- [ ] item", "- [ ] " }
     for line = 3, 12 do lines[line] = "plain " .. line end
     lines[13] = "### Unrelated heading"
-    local view, doc = make_view(table.concat(lines, "\n"), "local-context-retention.md")
+    local view, buffer = make_view(table.concat(lines, "\n"), "local-context-retention.md")
     view.size.y = 1200
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
     refresh(view)
     test.equal(visible_render_text(view, 13), "Unrelated heading")
 
-    doc:remove(2, 1, 2, #doc.lines[2])
+    buffer:remove(2, 1, 2, #buffer.lines[2])
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     local heading = test.not_nil(view:get_line_render(13))
     test.equal(visible_render_text(view, 13), "Unrelated heading")
     test.equal(heading.markdown_provenance, "retained")
   end)
 
   test.it("does not retain prose formatting when a new fence changes its context", function()
-    local view, doc = make_view("before\n*italic*\nafter\n", "new-fence-context.md")
-    doc:set_selection(1, 1)
+    local view, buffer = make_view("before\n*italic*\nafter\n", "new-fence-context.md")
+    buffer:set_selection(1, 1)
     refresh(view)
     test.equal(visible_render_text(view, 2), "italic")
 
-    doc:insert(2, 1, "```lua\n")
+    buffer:insert(2, 1, "```lua\n")
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(
       visible_render_text(view, 3), "*italic*",
       "the newly fenced row retained its old prose semantics"
@@ -1731,64 +1731,64 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("does not retain prose formatting when a new math block changes its context", function()
-    local view, doc = make_view("before\n*value*\n$$\nafter", "new-math-context.md")
-    doc:set_selection(4, 1)
+    local view, buffer = make_view("before\n*value*\n$$\nafter", "new-math-context.md")
+    buffer:set_selection(4, 1)
     refresh(view)
     test.equal(visible_render_text(view, 2), "value")
 
-    doc:insert(2, 1, "$$\n")
+    buffer:insert(2, 1, "$$\n")
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(
       visible_render_text(view, 3), "*value*",
       "the newly math-owned row retained its old prose semantics"
     )
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 3), "*value*")
   end)
 
   test.it("does not retain prose formatting when frontmatter is created", function()
-    local view, doc = make_view("key: *value*\n---\n# Heading", "new-frontmatter.md")
-    doc:set_selection(3, 1)
+    local view, buffer = make_view("key: *value*\n---\n# Heading", "new-frontmatter.md")
+    buffer:set_selection(3, 1)
     refresh(view)
     test.equal(visible_render_text(view, 1), "key: value")
 
-    doc:insert(1, 1, "---\n")
+    buffer:insert(1, 1, "---\n")
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(
       visible_render_text(view, 2), "key: *value*",
       "the newly frontmatter-owned row retained prose formatting"
     )
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(visible_render_text(view, 2), "key: *value*")
   end)
 
   test.it("does not retain prose formatting when an HTML block is created", function()
-    local view, doc = make_view("before\n*value*\n</div>\nafter", "new-html-block.md")
-    doc:set_selection(4, 1)
+    local view, buffer = make_view("before\n*value*\n</div>\nafter", "new-html-block.md")
+    buffer:set_selection(4, 1)
     refresh(view)
     test.equal(visible_render_text(view, 2), "value")
 
-    doc:insert(2, 1, "<div>\n")
+    buffer:insert(2, 1, "<div>\n")
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(
       visible_render_text(view, 3), "*value*",
       "the newly HTML-owned row retained prose formatting"
     )
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
   end)
 
   test.it("keeps fenced-code background ownership after a structural edit above it", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "before\n\n```lua\nprint('ok')\n```\nafter",
       "shifted-fence-background.md"
     )
-    doc:set_selection(6, 1)
+    buffer:set_selection(6, 1)
     refresh(view)
 
     local markdown_decoration
@@ -1806,9 +1806,9 @@ test.describe("Markdown Live Preview", function()
     local code_x_offset = test.not_nil(view:get_line_render(4)).x_offset
     view:invalidate_line_render("cold-shifted-fence")
 
-    doc:insert(1, 1, "inserted\n")
+    buffer:insert(1, 1, "inserted\n")
 
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     test.equal(
       markdown_decoration:line_background(view, 5),
       style.markdown_live_code_background,
@@ -1831,19 +1831,19 @@ test.describe("Markdown Live Preview", function()
 
   test.it("reveals a Wikilink at the caret position after its closing brackets", function()
     local source = "[[APPi-Sage]]"
-    local view, doc = make_view(source .. "\nplain", "right-edge-link.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view(source .. "\nplain", "right-edge-link.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
-    doc:set_selection(1, #source + 1)
+    buffer:set_selection(1, #source + 1)
 
     test.equal(visible_render_text(view, 1), source)
   end)
 
   test.it("keeps heading markers hidden when revealing a nested inline construct", function()
     local source = "# Head **bold** tail\nplain"
-    local view, doc = make_view(source, "note.md")
-    doc:set_selection(1, 11)
+    local view, buffer = make_view(source, "note.md")
+    buffer:set_selection(1, 11)
     refresh(view)
     local visible = {}
     for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
@@ -1854,8 +1854,8 @@ test.describe("Markdown Live Preview", function()
 
   test.it("renders semantic code, highlight, strikethrough, and escapes", function()
     local source = "`code` ==mark== ~~gone~~ and \\*literal*\nother"
-    local view, doc = make_view(source, "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view(source, "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local render_line = test.not_nil(view:get_line_render(1))
     local seen = {}
@@ -1872,8 +1872,8 @@ test.describe("Markdown Live Preview", function()
 
   test.it("keeps fenced and heading-looking lines hidden inside comments", function()
     local source = "%%\n```\n# hidden heading\n```\n%%\nplain"
-    local view, doc = make_view(source, "note.md")
-    doc:set_selection(6, 1)
+    local view, buffer = make_view(source, "note.md")
+    buffer:set_selection(6, 1)
     refresh(view)
     test.equal(view:get_col_x_offset(2, #"```" + 1), 0)
     test.equal(view:get_col_x_offset(3, #"# hidden heading" + 1), 0)
@@ -1882,8 +1882,8 @@ test.describe("Markdown Live Preview", function()
 
   test.it("composes active comment markers with enclosing formatting", function()
     local source = "**before %%hide%% after**\nplain"
-    local view, doc = make_view(source, "note.md")
-    doc:set_selection(1, 13)
+    local view, buffer = make_view(source, "note.md")
+    buffer:set_selection(1, 13)
     refresh(view)
     local marker, content
     for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
@@ -1896,20 +1896,20 @@ test.describe("Markdown Live Preview", function()
 
   test.it("reveals and re-hides every line of a multiline comment construct", function()
     local source = "%%one\nmiddle\nend%%\nplain"
-    local view, doc = make_view(source, "note.md")
-    doc:set_selection(1, 3)
+    local view, buffer = make_view(source, "note.md")
+    buffer:set_selection(1, 3)
     refresh(view)
     test.equal(
       view:get_col_x_offset(2, #"middle" + 1), live_body_font(view):get_width("middle")
     )
-    doc:set_selection(4, 1)
+    buffer:set_selection(4, 1)
     test.equal(view:get_col_x_offset(2, #"middle" + 1), 0)
   end)
 
   test.it("hides multiline comments until a touched line reveals source", function()
     local source = "before %%hidden\nstill hidden%% after\nother"
-    local view, doc = make_view(source, "note.md")
-    doc:set_selection(3, 1)
+    local view, buffer = make_view(source, "note.md")
+    buffer:set_selection(3, 1)
     refresh(view)
     local function visible_text(line)
       local out = {}
@@ -1920,7 +1920,7 @@ test.describe("Markdown Live Preview", function()
     end
     test.equal(visible_text(1), "before ")
     test.equal(visible_text(2), " after")
-    doc:set_selection(1, 10)
+    buffer:set_selection(1, 10)
     test.equal(
       view:get_col_x_offset(1, #"before %%hidden" + 1),
       live_body_font(view):get_width("before %%hidden")
@@ -1928,9 +1928,9 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("removes the line-number lane only while presenting Live Preview", function()
-    local view, doc = make_view("# Heading\nbody", "live-preview-gutter.md")
+    local view, buffer = make_view("# Heading\nbody", "live-preview-gutter.md")
     view.show_line_numbers = true
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
     refresh(view)
 
     local live_gutter = view:get_gutter_width()
@@ -1945,16 +1945,16 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("hides closing ATX heading markers", function()
-    local view, doc = make_view("# Title #\nbody", "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("# Title #\nbody", "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     test.equal(view:get_col_x_offset(1, #"# Title #" + 1), view:get_col_x_offset(1, #"# Title" + 1))
     test.ok(view:get_col_x_offset(1, #"# Title #" + 1) < view:get_font():get_width("# Title #"))
   end)
 
   test.it("composes enclosing formatting with decoded links", function()
-    local view, doc = make_view("**[Label](target.md)**\nplain", "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("**[Label](target.md)**\nplain", "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local link
     for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
@@ -1967,8 +1967,8 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("renders decoded semantic links inside headings", function()
-    local view, doc = make_view("# [Label](target.md)\nplain", "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("# [Label](target.md)\nplain", "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local visible = {}
     for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
@@ -1979,8 +1979,8 @@ test.describe("Markdown Live Preview", function()
 
   test.it("keeps visible raw source around links overlapping comments", function()
     local source = "[visible %%hidden%% tail](target.md)\nplain"
-    local view, doc = make_view(source, "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view(source, "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local visible = {}
     for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(1))) do
@@ -1991,8 +1991,8 @@ test.describe("Markdown Live Preview", function()
 
   test.it("preserves empty semantic Markdown labels as full targets", function()
     local source = "[](folder/target.md)\nplain"
-    local view, doc = make_view(source, "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view(source, "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     test.equal(
       view:get_col_x_offset(1, #"[](folder/target.md)" + 1),
@@ -2002,8 +2002,8 @@ test.describe("Markdown Live Preview", function()
 
   test.it("does not take the image-only path through comments", function()
     local source = "![Alt %%hidden%% tail](foo.png)\nplain"
-    local view, doc = make_view(source, "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view(source, "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local visible = {}
     for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(1))) do
@@ -2013,15 +2013,15 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("renders wikilink aliases when inactive and raw syntax when active", function()
-    local view, doc = make_view("See [[Note|Alias]]\nother", "note.md")
-    doc:set_selection(1, 1)
+    local view, buffer = make_view("See [[Note|Alias]]\nother", "note.md")
+    buffer:set_selection(1, 1)
     refresh(view)
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
 
     local alias_width = live_body_font(view):get_width("See Alias")
     test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), alias_width)
 
-    doc:set_selection(1, 7)
+    buffer:set_selection(1, 7)
     local raw_width = live_body_font(view):get_width("See [[Note|Alias]]")
     test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), raw_width)
   end)
@@ -2037,8 +2037,8 @@ test.describe("Markdown Live Preview", function()
     local old_projects = core.projects
     core.projects = { Project(root) }
     local index = markdown.vault_index.get_index(root):rebuild("ui-open-link")
-    local view, doc = make_view("[[Target#Heading]]\nplain", source_path)
-    doc:set_selection(1, 5)
+    local view, buffer = make_view("[[Target#Heading]]\nplain", source_path)
+    buffer:set_selection(1, 5)
     refresh(view)
     test.equal(index.status, "ready")
     local old_active, old_open_file = core.active_view, core.open_file
@@ -2058,14 +2058,14 @@ test.describe("Markdown Live Preview", function()
       test.equal(scrolled, 1)
 
       opened = nil
-      doc:set_selection(2, 1)
+      buffer:set_selection(2, 1)
       local x, y = view:get_line_screen_position(1)
       view:on_mouse_pressed("left", x + 2, y + 2, 1)
       test.equal(opened, common.normalize_path(target_path))
 
       os.remove(target_path)
       opened = nil
-      doc:set_selection(1, 5)
+      buffer:set_selection(1, 5)
       test.equal(command.perform("markdown-live-preview:open-link"), true)
       test.equal(opened, nil)
       test.ok(common.mkdirp(target_path))
@@ -2093,8 +2093,8 @@ test.describe("Markdown Live Preview", function()
     local old_projects = core.projects
     core.projects = { Project(root) }
     markdown.vault_index.get_index(root):rebuild("ui-open-unsupported-link")
-    local view, doc = make_view("[[NO CONSUMOS .msg]]\n", source_path)
-    doc:set_selection(1, 5)
+    local view, buffer = make_view("[[NO CONSUMOS .msg]]\n", source_path)
+    buffer:set_selection(1, 5)
     refresh(view)
     local old_active = core.active_view
     local old_open_in_system = common.open_in_system
@@ -2127,8 +2127,8 @@ test.describe("Markdown Live Preview", function()
     local old_projects = core.projects
     core.projects = { Project(root) }
     markdown.vault_index.get_index(root):rebuild("ui-link-poi")
-    local view, doc = make_view("prefix [[Target#Heading]] and `[[Target]]`\n", source_path)
-    doc:set_selection(1, 1)
+    local view, buffer = make_view("prefix [[Target#Heading]] and `[[Target]]`\n", source_path)
+    buffer:set_selection(1, 1)
     refresh(view)
     local points = view:get_points_of_interest()
     test.equal(#points, 1)
@@ -2173,9 +2173,9 @@ test.describe("Markdown Live Preview", function()
       local function offer(text, line)
         offer_index = offer_index + 1
         local source_path = root .. PATHSEP .. "Source" .. offer_index .. ".md"
-        local view, doc = make_view(text, source_path)
-        local content = (doc.lines[line] or ""):gsub("\n$", "")
-        doc:set_selection(line, #content + 1)
+        local view, buffer = make_view(text, source_path)
+        local content = (buffer.lines[line] or ""):gsub("\n$", "")
+        buffer:set_selection(line, #content + 1)
         refresh(view)
         local deadline = system.get_time() + 5
         while system.get_time() < deadline do
@@ -2186,7 +2186,7 @@ test.describe("Markdown Live Preview", function()
         core.active_view = view
         offered = nil
         test.equal(command.perform("markdown-live-preview:complete-link"), true)
-        return view, doc, test.not_nil(offered, "completion was not offered for " .. text)
+        return view, buffer, test.not_nil(offered, "completion was not offered for " .. text)
       end
       local function item_for(symbols, target)
         for _, item in pairs(symbols.items) do
@@ -2194,23 +2194,23 @@ test.describe("Markdown Live Preview", function()
         end
       end
 
-      local note_view, note_doc, symbols = offer("[[No", 1)
+      local note_view, note_buffer, symbols = offer("[[No", 1)
       local provider = test.not_nil(autocomplete.providers["markdown-live-links"])
       local automatic_symbols, automatic_opts = provider(note_view, { text = "o" })
       test.not_nil(item_for(test.not_nil(automatic_symbols), "Note"))
       test.equal(automatic_opts.force_open, true)
       local note = test.not_nil(item_for(symbols, "Note"))
       test.equal(note.onselect(1, { data = note.data }), true)
-      test.equal(note_doc.lines[1], "[[Note]]\n")
+      test.equal(note_buffer.lines[1], "[[Note]]\n")
 
-      local ignored_view, ignored_doc
-      ignored_view, ignored_doc, symbols = offer("# Local Heading\n[[#Lo", 2)
+      local ignored_view, ignored_buffer
+      ignored_view, ignored_buffer, symbols = offer("# Local Heading\n[[#Lo", 2)
       test.not_nil(item_for(symbols, "#Local Heading"))
-      ignored_view, ignored_doc, symbols = offer("[[##Gl", 1)
+      ignored_view, ignored_buffer, symbols = offer("[[##Gl", 1)
       test.not_nil(item_for(symbols, "Note#Global Heading"))
-      ignored_view, ignored_doc, symbols = offer("text ^local-block\n[[^loc", 2)
+      ignored_view, ignored_buffer, symbols = offer("text ^local-block\n[[^loc", 2)
       test.not_nil(item_for(symbols, "^local-block"))
-      ignored_view, ignored_doc, symbols = offer("[[^^glob", 1)
+      ignored_view, ignored_buffer, symbols = offer("[[^^glob", 1)
       test.not_nil(item_for(symbols, "Note#^global-block"))
     end)
     autocomplete.complete = old_complete
@@ -2239,10 +2239,10 @@ test.describe("Markdown Live Preview", function()
     core.open_file = function(path) opened = path return {} end
     core.command_view.enter = function(_, label, opts) picker = { label = label, opts = opts } end
     local ok, err = pcall(function()
-      local missing_view, missing_doc = make_view(
+      local missing_view, missing_buffer = make_view(
         "[[folder/New]]\nplain", root .. PATHSEP .. "notes" .. PATHSEP .. "MissingSource.md"
       )
-      missing_doc:set_selection(1, 5)
+      missing_buffer:set_selection(1, 5)
       refresh(missing_view)
       core.active_view = missing_view
       test.equal(command.perform("markdown-live-preview:create-link-target"), true)
@@ -2251,19 +2251,19 @@ test.describe("Markdown Live Preview", function()
       ))
 
       opened = nil
-      local root_view, root_doc = make_view("[[NewRoot]]\nplain", root .. PATHSEP .. "notes" .. PATHSEP .. "RootSource.md")
-      root_doc:set_selection(1, 4)
+      local root_view, root_buffer = make_view("[[NewRoot]]\nplain", root .. PATHSEP .. "notes" .. PATHSEP .. "RootSource.md")
+      root_buffer:set_selection(1, 4)
       refresh(root_view)
       core.active_view = root_view
       test.equal(command.perform("markdown-live-preview:create-link-target"), true)
       test.equal(opened, common.normalize_path(root .. PATHSEP .. "NewRoot.md"))
 
       opened = nil
-      local query_view, query_doc = make_view(
+      local query_view, query_buffer = make_view(
         "[[folder/Query.md?download]]\nplain",
         root .. PATHSEP .. "notes" .. PATHSEP .. "QuerySource.md"
       )
-      query_doc:set_selection(1, 5)
+      query_buffer:set_selection(1, 5)
       refresh(query_view)
       core.active_view = query_view
       test.equal(command.perform("markdown-live-preview:create-link-target"), true)
@@ -2272,18 +2272,18 @@ test.describe("Markdown Live Preview", function()
       ))
 
       opened = nil
-      local outside_view, outside_doc = make_view(
+      local outside_view, outside_buffer = make_view(
         "[[../../../../../../Outside]]\nplain",
         root .. PATHSEP .. "notes" .. PATHSEP .. "OutsideSource.md"
       )
-      outside_doc:set_selection(1, 5)
+      outside_buffer:set_selection(1, 5)
       refresh(outside_view)
       core.active_view = outside_view
       test.equal(command.perform("markdown-live-preview:create-link-target"), true)
       test.equal(opened, nil)
 
-      local ambiguous_view, ambiguous_doc = make_view("[[Note]]\nplain", root .. PATHSEP .. "AmbiguousSource.md")
-      ambiguous_doc:set_selection(1, 4)
+      local ambiguous_view, ambiguous_buffer = make_view("[[Note]]\nplain", root .. PATHSEP .. "AmbiguousSource.md")
+      ambiguous_buffer:set_selection(1, 4)
       refresh(ambiguous_view)
       core.active_view = ambiguous_view
       test.equal(command.perform("markdown-live-preview:open-link"), true)
@@ -2337,8 +2337,8 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("keeps an empty task marker as a checkbox after semantic rendering", function()
-    local view, doc = make_view("- [ ] \nafter", "empty-task-render.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("- [ ] \nafter", "empty-task-render.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
     local checkbox
@@ -2350,8 +2350,8 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("renders task markers as consistent checkbox widgets without list bullets", function()
-    local view, doc = make_view("- item\n- [ ] todo\n- [x] done\n> quote\nplain", "blocks.md")
-    doc:set_selection(5, 1)
+    local view, buffer = make_view("- item\n- [ ] todo\n- [x] done\n> quote\nplain", "blocks.md")
+    buffer:set_selection(5, 1)
     refresh(view)
     local function fragments(line)
       local render_line = view:get_line_render(line)
@@ -2390,12 +2390,12 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("preserves list hierarchy across plain and task markers", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       " - [ ] parent task\n - parent plain\n\t - child plain\n\t - [ ] child task\nplain",
       "list-hierarchy.md"
     )
-    doc.get_indent_info = function() return false, 1 end
-    doc:set_selection(5, 1)
+    buffer.get_indent_info = function() return false, 1 end
+    buffer:set_selection(5, 1)
     refresh(view)
 
     local parent_task_x = view:get_col_x_offset(1, 8)
@@ -2413,24 +2413,24 @@ test.describe("Markdown Live Preview", function()
 
   test.it("keeps formatted list content and source mappings through indentation", function()
     local source = "- See [[Target|Alias]] now"
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "- Parent\n" .. source .. "\nplain",
       "pending-list-indent-link.md"
     )
-    doc:set_selection(3, 1)
+    buffer:set_selection(3, 1)
     refresh(view)
 
     local before_body_x = view:get_col_x_offset(2, 3)
     test.equal(visible_render_text(view, 2), "See Alias now")
 
-    doc:set_selection(2, 3)
+    buffer:set_selection(2, 3)
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("doc:indent"), true)
-      test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+      test.equal(command.perform("text:indent"), true)
+      test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
 
-      local indented = doc.lines[2]:gsub("\n$", "")
+      local indented = buffer.lines[2]:gsub("\n$", "")
       local indent = test.not_nil(indented:match("^([\t ]+)%- See"))
       test.equal(indented:sub(#indent + 1), source)
       test.equal(
@@ -2442,7 +2442,7 @@ test.describe("Markdown Live Preview", function()
         pending.markdown_provenance ~= "unavailable",
         "list indentation used the unavailable source presentation"
       )
-      test.equal(pending.markdown_document_revision, doc.text_revision)
+      test.equal(pending.markdown_buffer_revision, buffer.text_revision)
       for _, fragment in ipairs(pending.fragments or {}) do
         test.equal(fragment.on_mouse_pressed, nil)
         if fragment.widget then test.equal(fragment.widget.on_mouse_pressed, nil) end
@@ -2453,12 +2453,12 @@ test.describe("Markdown Live Preview", function()
       local end_x = view:get_col_x_offset(2, end_col)
       test.equal(view:get_x_offset_col(2, end_x), end_col)
 
-      local instance = test.not_nil(markdown_model.peek(doc))
+      local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_status(instance, "ready"), instance.reason)
       test.equal(visible_render_text(view, 2), "See Alias now")
       local published = test.not_nil(view:get_line_render(2))
       test.equal(published.markdown_provenance, "current")
-      test.equal(published.markdown_semantic_revision, doc.text_revision)
+      test.equal(published.markdown_semantic_revision, buffer.text_revision)
       local published_end_x = view:get_col_x_offset(2, end_col)
       test.equal(view:get_x_offset_col(2, published_end_x), end_col)
     end)
@@ -2469,20 +2469,20 @@ test.describe("Markdown Live Preview", function()
   test.it("keeps a first nested task stable when it cannot be indented further", function()
     local old_tab_type, old_indent_size = config.tab_type, config.indent_size
     config.tab_type, config.indent_size = "soft", 4
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "- [ ] parent\n    - [ ] \n    - [ ] sibling\nplain",
       "pending-task-indent.md"
     )
-    doc:set_selection(4, 1)
+    buffer:set_selection(4, 1)
     refresh(view)
 
-    doc:set_selection(2, 11)
+    buffer:set_selection(2, 11)
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("doc:indent"), true)
-      test.equal(doc.lines[2], "    - [ ] \n")
-      test.equal(test.not_nil(markdown_model.peek(doc)).status, "ready")
+      test.equal(command.perform("text:indent"), true)
+      test.equal(buffer.lines[2], "    - [ ] \n")
+      test.equal(test.not_nil(markdown_model.peek(buffer)).status, "ready")
 
       local function task_checkbox()
         for _, fragment in ipairs(
@@ -2502,8 +2502,8 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("toggles task checkboxes without moving the caret", function()
-    local view, doc = make_view("- [ ] todo\nplain", "task-toggle.md")
-    doc:set_selection(2, 3)
+    local view, buffer = make_view("- [ ] todo\nplain", "task-toggle.md")
+    buffer:set_selection(2, 3)
     refresh(view)
     local checkbox
     for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
@@ -2516,7 +2516,7 @@ test.describe("Markdown Live Preview", function()
     local checkbox_x = line_x
       + view:get_line_render_col_x_offset(view:get_line_render(1), checkbox.source_col1) + 2
     test.equal(view:on_mouse_pressed("left", checkbox_x, line_y + 2, 1), true)
-    test.equal(doc.lines[1], "- [x] todo\n")
+    test.equal(buffer.lines[1], "- [x] todo\n")
     test.same(view:get_selection_state(), selection)
     local immediate_checkbox
     for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
@@ -2528,11 +2528,11 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("reveals the complete task-list prefix when the caret enters its checkbox", function()
-    local view, doc = make_view(" - [ ] todo\nplain", "task-reveal.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view(" - [ ] todo\nplain", "task-reveal.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
-    doc:set_selection(1, 4)
+    buffer:set_selection(1, 4)
     local task_source, checkbox
     for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
       if fragment.markdown_task_source_marker then task_source = fragment end
@@ -2546,21 +2546,21 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("reveals the complete task-list prefix on the second Home", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "- [ ] parent\n    - [ ] test\nplain",
       "task-prefix-home.md"
     )
-    doc:set_selection(3, 1)
+    buffer:set_selection(3, 1)
     refresh(view)
 
-    doc:set_selection(2, #doc.lines[2])
+    buffer:set_selection(2, #buffer.lines[2])
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("doc:move-to-start-of-indentation"), true)
-      test.same({ doc:get_selection() }, { 2, 11, 2, 11 })
-      test.equal(command.perform("doc:move-to-start-of-indentation"), true)
-      test.same({ doc:get_selection() }, { 2, 5, 2, 5 })
+      test.equal(command.perform("text:move-to-start-of-indentation"), true)
+      test.same({ buffer:get_selection() }, { 2, 11, 2, 11 })
+      test.equal(command.perform("text:move-to-start-of-indentation"), true)
+      test.same({ buffer:get_selection() }, { 2, 5, 2, 5 })
 
       local prefix, checkbox
       for _, fragment in ipairs(test.not_nil(view:get_line_render(2)).fragments or {}) do
@@ -2580,11 +2580,11 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("reveals a marker-only task after moving left from implicit content", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "- [ ] parent\n    - [ ]\n    - [ ] sibling\nplain",
       "empty-task-caret-edge.md"
     )
-    doc:set_selection(4, 1)
+    buffer:set_selection(4, 1)
     refresh(view)
 
     local inactive = test.not_nil(view:get_line_render(2))
@@ -2597,7 +2597,7 @@ test.describe("Markdown Live Preview", function()
       inactive, inactive_checkbox.source_col1
     ) + (inactive_checkbox.draw_x_offset or 0)
 
-    doc:set_selection(2, 10)
+    buffer:set_selection(2, 10)
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
@@ -2608,8 +2608,8 @@ test.describe("Markdown Live Preview", function()
       end
       test.not_nil(implicit_checkbox)
 
-      test.equal(command.perform("doc:move-to-previous-char"), true)
-      test.same({ doc:get_selection() }, { 2, 10, 2, 10 })
+      test.equal(command.perform("text:move-to-previous-char"), true)
+      test.same({ buffer:get_selection() }, { 2, 10, 2, 10 })
       local active = test.not_nil(view:get_line_render(2))
       local checkbox, task_source
       for _, fragment in ipairs(active.fragments or {}) do
@@ -2658,11 +2658,11 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("does not draw a bracket frame through a marker-only task checkbox", function()
-    local view, doc = make_view("- [ ]\nplain", "task-checkbox-bracket-frame.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("- [ ]\nplain", "task-checkbox-bracket-frame.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
-    doc:set_selection(1, 6)
+    buffer:set_selection(1, 6)
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
@@ -2697,19 +2697,19 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("moves down onto implicit task content without revealing its prefix", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "- [ ] parent\n    - [ ] test\n    - [ ]\nplain",
       "empty-task-vertical-affinity.md"
     )
-    doc:set_selection(4, 1)
+    buffer:set_selection(4, 1)
     refresh(view)
 
-    doc:set_selection(2, 15)
+    buffer:set_selection(2, 15)
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("doc:move-to-next-line"), true)
-      test.same({ doc:get_selection() }, { 3, 10, 3, 10 })
+      test.equal(command.perform("text:move-to-next-line"), true)
+      test.same({ buffer:get_selection() }, { 3, 10, 3, 10 })
 
       local checkbox, task_source
       for _, fragment in ipairs(test.not_nil(view:get_line_render(3)).fragments or {}) do
@@ -2719,18 +2719,18 @@ test.describe("Markdown Live Preview", function()
       test.not_nil(checkbox)
       test.equal(task_source, nil)
 
-      test.equal(command.perform("doc:move-to-previous-char"), true)
-      test.same({ doc:get_selection() }, { 3, 10, 3, 10 })
+      test.equal(command.perform("text:move-to-previous-char"), true)
+      test.same({ buffer:get_selection() }, { 3, 10, 3, 10 })
       local revealed_source
       for _, fragment in ipairs(test.not_nil(view:get_line_render(3)).fragments or {}) do
         if fragment.markdown_task_source_marker then revealed_source = fragment break end
       end
       test.equal(test.not_nil(revealed_source).text, "- [ ]")
 
-      test.equal(command.perform("doc:move-to-previous-char"), true)
-      test.same({ doc:get_selection() }, { 3, 9, 3, 9 })
-      test.equal(command.perform("doc:move-to-next-char"), true)
-      test.same({ doc:get_selection() }, { 3, 10, 3, 10 })
+      test.equal(command.perform("text:move-to-previous-char"), true)
+      test.same({ buffer:get_selection() }, { 3, 9, 3, 9 })
+      test.equal(command.perform("text:move-to-next-char"), true)
+      test.same({ buffer:get_selection() }, { 3, 10, 3, 10 })
       local right_source
       for _, fragment in ipairs(test.not_nil(view:get_line_render(3)).fragments or {}) do
         if fragment.markdown_task_source_marker then right_source = fragment break end
@@ -2742,21 +2742,21 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("moves Home directly from implicit task content to the prefix start", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "- [ ] parent\n    - [ ] test\n    - [ ]\nplain",
       "empty-task-home-affinity.md"
     )
-    doc:set_selection(4, 1)
+    buffer:set_selection(4, 1)
     refresh(view)
 
-    doc:set_selection(2, 15)
+    buffer:set_selection(2, 15)
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("doc:move-to-next-line"), true)
-      test.same({ doc:get_selection() }, { 3, 10, 3, 10 })
-      test.equal(command.perform("doc:move-to-start-of-indentation"), true)
-      test.same({ doc:get_selection() }, { 3, 5, 3, 5 })
+      test.equal(command.perform("text:move-to-next-line"), true)
+      test.same({ buffer:get_selection() }, { 3, 10, 3, 10 })
+      test.equal(command.perform("text:move-to-start-of-indentation"), true)
+      test.same({ buffer:get_selection() }, { 3, 5, 3, 5 })
 
       local prefix
       for _, fragment in ipairs(test.not_nil(view:get_line_render(3)).fragments or {}) do
@@ -2769,19 +2769,19 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("renders a checkbox while constructing a marker-only task", function()
-    local view, doc = make_view("\nplain", "construct-task-prefix.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("\nplain", "construct-task-prefix.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
-    doc:set_selection(1, 1)
+    buffer:set_selection(1, 1)
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
       for _, input in ipairs({ "-", " ", "[", " ", "]" }) do
         test.equal(view:on_text_input(input), true)
       end
-      test.equal(doc.lines[1], "- [ ]\n")
-      local instance = test.not_nil(markdown_model.peek(doc))
+      test.equal(buffer.lines[1], "- [ ]\n")
+      local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_status(instance, "ready"), instance.reason)
 
       local prefix, checkbox
@@ -2797,20 +2797,20 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("keeps a marker-only task rendered after backspacing from the next line", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "- [ ] text\n- [ ]\n\nplain",
       "empty-task-backspace-affinity.md"
     )
-    doc:set_selection(4, 1)
+    buffer:set_selection(4, 1)
     refresh(view)
 
-    doc:set_selection(3, 1)
+    buffer:set_selection(3, 1)
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("doc:backspace"), true)
-      test.same({ doc:get_selection() }, { 2, 6, 2, 6 })
-      local instance = test.not_nil(markdown_model.peek(doc))
+      test.equal(command.perform("text:backspace"), true)
+      test.same({ buffer:get_selection() }, { 2, 6, 2, 6 })
+      local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_status(instance, "ready"), instance.reason)
 
       local prefix, checkbox
@@ -2826,19 +2826,19 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("inserts the implicit task gap before typing on a marker-only item", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "- [ ] parent\n    - [ ]\n    - [ ] sibling\nplain",
       "empty-task-implicit-gap.md"
     )
-    doc:set_selection(4, 1)
+    buffer:set_selection(4, 1)
     refresh(view)
 
-    doc:set_selection(2, 10)
+    buffer:set_selection(2, 10)
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
       test.equal(view:on_text_input("a"), true)
-      test.equal(doc.lines[2], "    - [ ] a\n")
+      test.equal(buffer.lines[2], "    - [ ] a\n")
 
       local function task_checkbox()
         for _, fragment in ipairs(
@@ -2849,7 +2849,7 @@ test.describe("Markdown Live Preview", function()
       end
 
       test.not_nil(task_checkbox())
-      local instance = test.not_nil(markdown_model.peek(doc))
+      local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_status(instance, "ready"), instance.reason)
       test.not_nil(task_checkbox())
     end)
@@ -2858,8 +2858,8 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("does not draw a generic hover box around task checkboxes", function()
-    local view, doc = make_view("- [ ] task\nplain", "task-hover.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("- [ ] task\nplain", "task-hover.md")
+    buffer:set_selection(2, 1)
     refresh(view)
 
     local checkbox
@@ -2900,10 +2900,10 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("selects and reveals the task-list prefix when dragging into it", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "- [ ] task body\n  continuation\nplain", "task-drag-selection.md"
     )
-    doc:set_selection(3, 1)
+    buffer:set_selection(3, 1)
     refresh(view)
 
     local start_x, start_y = view:get_line_screen_position(1, 8)
@@ -2911,15 +2911,15 @@ test.describe("Markdown Live Preview", function()
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("doc:set-cursor", start_x, start_y + 2), true)
+      test.equal(command.perform("text:set-cursor", start_x, start_y + 2), true)
       view:on_mouse_moved(
         finish_x, finish_y + 2, finish_x - start_x, finish_y - start_y
       )
       view:on_mouse_released("left", finish_x, finish_y + 2)
 
-      local line1, col1, line2, col2 = doc:get_selection(true)
+      local line1, col1, line2, col2 = buffer:get_selection(true)
       test.same({ line1, col1, line2, col2 }, { 1, 1, 1, 8 })
-      test.equal(doc.lines[1], "- [ ] task body\n")
+      test.equal(buffer.lines[1], "- [ ] task body\n")
 
       local marker_source
       for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
@@ -2935,8 +2935,8 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("presents ordered markers, hard breaks, and indented code without replacing source content", function()
-    local view, doc = make_view("    local code\nplain\n\n1. first\n   2. nested\n\nline  \nnext\nplain", "remaining-blocks.md")
-    doc:set_selection(9, 1)
+    local view, buffer = make_view("    local code\nplain\n\n1. first\n   2. nested\n\nline  \nnext\nplain", "remaining-blocks.md")
+    buffer:set_selection(9, 1)
     refresh(view)
     local ordered = test.not_nil(view:get_line_render(4))
     test.equal(ordered.fragments[1].text, "1.")
@@ -2953,17 +2953,17 @@ test.describe("Markdown Live Preview", function()
     end
     test.equal(test.not_nil(break_fragment).text, " ↵")
     test.equal(view:get_line_render(1), nil)
-    doc:set_selection(7, 6)
+    buffer:set_selection(7, 6)
     test.equal(visible_render_text(view, 7), "line  ")
   end)
 
   test.it("numbers and spaces ordered list markers and reveals their source at the caret", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "1. first\n1. second\n   1. nested\n   1. nested second\n"
         .. "      continuation\n   1. nested third\n1. third\nplain\n1. restarted",
       "ordered-list-spacing.md"
     )
-    doc:set_selection(8, 1)
+    buffer:set_selection(8, 1)
     refresh(view)
 
     local inactive = test.not_nil(view:get_line_render(2))
@@ -2985,7 +2985,7 @@ test.describe("Markdown Live Preview", function()
     test.equal(visible_render_text(view, 7):match("(%d+[.)])"), "3.")
     test.equal(visible_render_text(view, 9):match("(%d+[.)])"), "1.")
 
-    doc:set_selection(2, 2)
+    buffer:set_selection(2, 2)
     local active = test.not_nil(view:get_line_render(2))
     local source_marker
     for _, fragment in ipairs(active.fragments or {}) do
@@ -2997,8 +2997,8 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("resolves and presents full, collapsed, and shortcut reference links", function()
-    local view, doc = make_view("[Anvil docs][docs]\n[docs][]\n[docs]\n\n[docs]: Guide.md \"Guide\"\nText[^note]\n[^note]: Footnote body\nplain", "references.md")
-    doc:set_selection(8, 1)
+    local view, buffer = make_view("[Anvil buffers][buffers]\n[buffers][]\n[buffers]\n\n[buffers]: Guide.md \"Guide\"\nText[^note]\n[^note]: Footnote body\nplain", "references.md")
+    buffer:set_selection(8, 1)
     refresh(view)
     view:get_line_render(1)
     local reference_deadline = system.get_time() + 5
@@ -3011,7 +3011,7 @@ test.describe("Markdown Live Preview", function()
       if ready then break end
       coroutine.yield(0.01)
     end
-    local expected = { "Anvil docs", "docs", "docs" }
+    local expected = { "Anvil buffers", "buffers", "buffers" }
     for line = 1, 3 do
       local rendered = test.not_nil(view:get_line_render(line))
       local reference
@@ -3021,10 +3021,10 @@ test.describe("Markdown Live Preview", function()
       reference = test.not_nil(reference)
       test.equal(reference.text, expected[line])
       test.equal(reference.link.raw_target, "Guide.md")
-      test.equal(reference.link.reference_label, "docs")
+      test.equal(reference.link.reference_label, "buffers")
     end
     local definition = test.not_nil(view:get_line_render(5))
-    test.equal(definition.fragments[1].reference_definition, "docs")
+    test.equal(definition.fragments[1].reference_definition, "buffers")
     local footnote_reference = test.not_nil(view:get_line_render(6))
     local footnote
     for _, fragment in ipairs(footnote_reference.fragments) do
@@ -3037,19 +3037,19 @@ test.describe("Markdown Live Preview", function()
       if fragment.footnote_definition then definition_fragment = fragment break end
     end
     test.equal(test.not_nil(definition_fragment).footnote_definition, "note")
-    doc:set_selection(1, 4)
+    buffer:set_selection(1, 4)
     local active_reference = test.not_nil(view:get_line_render(1))
     local active_link
     for _, fragment in ipairs(active_reference.fragments) do
       if fragment.link and fragment.link.kind == "reference" then active_link = fragment break end
     end
     active_link = test.not_nil(active_link)
-    test.equal(active_link.text, "Anvil docs")
+    test.equal(active_link.text, "Anvil buffers")
   end)
 
   test.it("recognizes semantic Obsidian tags without treating numeric or word-bound hashes as tags", function()
-    local view, doc = make_view("text #project/anvil #123 C#code \\#escaped\nplain", "tags.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("text #project/anvil #123 C#code \\#escaped\nplain", "tags.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local rendered = test.not_nil(view:get_line_render(1))
     local tags = {}
@@ -3059,7 +3059,7 @@ test.describe("Markdown Live Preview", function()
     test.equal(#tags, 1)
     test.equal(tags[1].text, "#project/anvil")
     test.equal(tags[1].tag, "project/anvil")
-    doc:set_selection(1, 8)
+    buffer:set_selection(1, 8)
     local active = view:get_line_render(1)
     for _, fragment in ipairs(active and active.fragments or {}) do
       test.equal(fragment.tag, nil)
@@ -3067,8 +3067,8 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("styles semantic frontmatter as source-preserving structured content", function()
-    local view, doc = make_view("---\naliases: [Example]\ntags:\n  - project/anvil\n---\n# Body", "properties.md")
-    doc:set_selection(6, 2)
+    local view, buffer = make_view("---\naliases: [Example]\ntags:\n  - project/anvil\n---\n# Body", "properties.md")
+    buffer:set_selection(6, 2)
     refresh(view)
     local opening = test.not_nil(view:get_line_render(1))
     test.equal(opening.fragments[1].text, "---")
@@ -3085,13 +3085,13 @@ test.describe("Markdown Live Preview", function()
     markdown_decoration = test.not_nil(markdown_decoration)
     test.equal(markdown_decoration:line_background(view, 6), nil)
 
-    doc:set_selection(2, 3)
+    buffer:set_selection(2, 3)
     test.equal(visible_render_text(view, 2), "aliases: [Example]")
   end)
 
   test.it("presents semantic callout headers, bodies, and unknown-type fallbacks", function()
-    local view, doc = make_view("> [!note]+ Custom title\n> body [[Target]]\n\n> [!mystery]\n> fallback\n\nplain", "callouts.md")
-    doc:set_selection(7, 1)
+    local view, buffer = make_view("> [!note]+ Custom title\n> body [[Target]]\n\n> [!mystery]\n> fallback\n\nplain", "callouts.md")
+    buffer:set_selection(7, 1)
     refresh(view)
     local header = test.not_nil(view:get_line_render(1))
     local callout_fragment
@@ -3128,16 +3128,16 @@ test.describe("Markdown Live Preview", function()
     markdown_decoration = test.not_nil(markdown_decoration)
     test.equal(markdown_decoration:line_background(view, 7), nil)
 
-    doc:set_selection(1, 5)
+    buffer:set_selection(1, 5)
     test.equal(visible_render_text(view, 1), "> [!note]+ Custom title")
   end)
 
   test.it("normalizes callout aliases case-insensitively and gives unknown types note appearance", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "> [!TLDR] Summary\n\n> [!Important] Important\n\n> [!CITE] Citation\n\n> [!custom-kind] Custom\n\nplain",
       "callout-types.md"
     )
-    doc:set_selection(9, 1)
+    buffer:set_selection(9, 1)
     refresh(view)
 
     local function callout_fragment(line)
@@ -3162,10 +3162,10 @@ test.describe("Markdown Live Preview", function()
   test.it("uses inset callout card descriptors and aligns wrapped body text with titles", function()
     local header_source = "> [!warning] Long custom title that wraps across several visual rows"
     local body_source = "> Body text that wraps across several visual rows as well"
-    local view, doc = make_view(header_source .. "\n" .. body_source .. "\nplain", "callout-card.md")
+    local view, buffer = make_view(header_source .. "\n" .. body_source .. "\nplain", "callout-card.md")
     view.size.x = 220
     view:set_wrapping_enabled(true)
-    doc:set_selection(3, 1)
+    buffer:set_selection(3, 1)
     refresh(view)
 
     local header = test.not_nil(view:get_line_render(1))
@@ -3194,12 +3194,12 @@ test.describe("Markdown Live Preview", function()
 
   test.it("keeps revealed callout source inside the card and styles its marker", function()
     local source = ">[!note] NOTE: A long title whose revealed source wraps across visual rows"
-    local view, doc = make_view(source .. "\nplain", "callout-source-reveal.md")
+    local view, buffer = make_view(source .. "\nplain", "callout-source-reveal.md")
     view.size.x = 220
     view:set_wrapping_enabled(true)
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
     refresh(view)
-    doc:set_selection(1, 5)
+    buffer:set_selection(1, 5)
 
     local render = test.not_nil(view:get_line_render(1))
     local marker
@@ -3226,11 +3226,11 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("folds only callout bodies and updates defaults when fold signs change", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "> [!note]- Folded title\n> hidden body\n> second body line\n\nplain",
       "foldable-callout.md"
     )
-    doc:set_selection(5, 1)
+    buffer:set_selection(5, 1)
     refresh(view)
 
     local fold
@@ -3261,10 +3261,10 @@ test.describe("Markdown Live Preview", function()
 
     test.equal(view:on_mouse_pressed("left", control_x, line_y + view:get_line_height() / 2, 1), true)
     test.equal(fold.collapsed, true)
-    doc:apply_edits({
+    buffer:apply_edits({
       { line1 = 1, col1 = 10, line2 = 1, col2 = 11, text = "+" },
     }, { type = "callout-fold-sign", merge_cursors = false })
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     local updated
     for _, candidate in ipairs(view.fold_regions) do
@@ -3272,7 +3272,7 @@ test.describe("Markdown Live Preview", function()
     end
     test.equal(test.not_nil(updated).collapsed, false)
 
-    doc:apply_edits({
+    buffer:apply_edits({
       { line1 = 1, col1 = 10, line2 = 1, col2 = 11, text = "" },
     }, { type = "callout-fold-sign", merge_cursors = false })
     test.ok(wait_status(instance, "ready"), instance.reason)
@@ -3280,7 +3280,7 @@ test.describe("Markdown Live Preview", function()
       test.ok(candidate.kind ~= "markdown-callout")
     end
 
-    doc:apply_edits({
+    buffer:apply_edits({
       { line1 = 1, col1 = 10, line2 = 1, col2 = 10, text = "-" },
     }, { type = "callout-fold-sign", merge_cursors = false })
     test.ok(wait_status(instance, "ready"), instance.reason)
@@ -3292,11 +3292,11 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("retains independent nested callout fold state", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "> [!question]+ Outer\n> > [!note]- Inner\n> > hidden inner body\n> outer body\n\nplain",
       "nested-callout-folds.md"
     )
-    doc:set_selection(6, 1)
+    buffer:set_selection(6, 1)
     refresh(view)
 
     local outer, inner
@@ -3321,11 +3321,11 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("preserves callout fold state across body edits and expands for hidden carets", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "> [!tip]+ Stable\n> body text\n> more body\n\nplain",
       "callout-fold-state.md"
     )
-    doc:set_selection(5, 1)
+    buffer:set_selection(5, 1)
     refresh(view)
     local fold
     for _, candidate in ipairs(view.fold_regions) do
@@ -3334,8 +3334,8 @@ test.describe("Markdown Live Preview", function()
     fold = test.not_nil(fold)
     test.equal(view:collapse_fold_region(fold, "test-state"), true)
 
-    doc:insert(2, #doc.lines[2], " updated")
-    local instance = test.not_nil(markdown_model.peek(doc))
+    buffer:insert(2, #buffer.lines[2], " updated")
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     local reconciled
     for _, candidate in ipairs(view.fold_regions) do
@@ -3344,17 +3344,17 @@ test.describe("Markdown Live Preview", function()
     reconciled = test.not_nil(reconciled)
     test.equal(reconciled.collapsed, true)
 
-    doc:set_selection(2, 3)
+    buffer:set_selection(2, 3)
     test.equal(reconciled.collapsed, false)
     test.equal(view:is_line_hidden_by_fold(2), nil)
   end)
 
   test.it("keeps callout fold state while Source Mode exposes all source", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "> [!warning]- Hidden\n> body\n\nplain",
       "callout-source-mode.md"
     )
-    doc:set_selection(4, 1)
+    buffer:set_selection(4, 1)
     refresh(view)
     local fold
     for _, candidate in ipairs(view.fold_regions) do
@@ -3377,11 +3377,11 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("composes links, tasks, and fenced code inside callout cards", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "> [!success] Content\n> - [ ] Task [[Target]]\n> ```lua\n> print('ok')\n> ```\n\nplain",
       "callout-content.md"
     )
-    doc:set_selection(7, 1)
+    buffer:set_selection(7, 1)
     refresh(view)
 
     local task = test.not_nil(view:get_line_render(2))
@@ -3409,18 +3409,18 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("presents semantic thematic breaks and reveals their source when active", function()
-    local view, doc = make_view("before\n\n---\n\nafter", "rule.md")
-    doc:set_selection(5, 1)
+    local view, buffer = make_view("before\n\n---\n\nafter", "rule.md")
+    buffer:set_selection(5, 1)
     refresh(view)
     local rule = test.not_nil(view:get_line_render(3))
     test.not_nil(rule.fragments[1].text)
-    doc:set_selection(3, 2)
+    buffer:set_selection(3, 2)
     test.equal(visible_render_text(view, 3), "---")
   end)
 
   test.it("keeps inactive fence padding and reveals the whole fence while editing it", function()
-    local view, doc = make_view("```lua\nprint('ok')\n```\nplain", "fence.md")
-    doc:set_selection(4, 1)
+    local view, buffer = make_view("```lua\nprint('ok')\n```\nplain", "fence.md")
+    buffer:set_selection(4, 1)
     refresh(view)
     view:invalidate_line_render("fence-ready")
     local opening = test.not_nil(view:get_line_render(1))
@@ -3429,14 +3429,14 @@ test.describe("Markdown Live Preview", function()
     local closing = test.not_nil(view:get_line_render(3))
     test.equal(closing.fragments[1].hidden, true)
 
-    doc:set_selection(2, 4)
+    buffer:set_selection(2, 4)
     test.equal(view:get_line_render(1), nil)
     test.equal(view:get_line_render(3), nil)
   end)
 
   test.it("insets fenced code content without moving revealed fence delimiters", function()
-    local view, doc = make_view("```lua\nprint('ok')\n```\nplain", "fence-padding.md")
-    doc:set_selection(4, 1)
+    local view, buffer = make_view("```lua\nprint('ok')\n```\nplain", "fence-padding.md")
+    buffer:set_selection(4, 1)
     refresh(view)
 
     local content_inset = view:get_col_x_offset(2, 1)
@@ -3458,46 +3458,46 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err) end
     test.equal(first_text_x, 100 + content_inset)
 
-    doc:set_selection(2, 4)
+    buffer:set_selection(2, 4)
     test.equal(view:get_col_x_offset(1, 1), 0)
     test.equal(view:get_col_x_offset(2, 1), content_inset)
     test.equal(view:get_col_x_offset(3, 1), 0)
   end)
 
   test.it("reveals fence delimiters when a selection crosses the whole block", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "before\n```lua\nprint('ok')\n```\nafter\n", "fence-crossing-selection.md"
     )
-    doc:set_selection(1, 1)
+    buffer:set_selection(1, 1)
     refresh(view)
     test.equal(test.not_nil(view:get_line_render(2)).fragments[1].hidden, true)
     test.equal(test.not_nil(view:get_line_render(4)).fragments[1].hidden, true)
 
-    doc:set_selection(1, 1, 5, 1)
+    buffer:set_selection(1, 1, 5, 1)
 
     test.equal(view:get_line_render(2), nil)
     test.equal(view:get_line_render(4), nil)
   end)
 
   test.it("presents Setext headings through the semantic heading path", function()
-    local view, doc = make_view("Setext title\n============\nplain", "setext.md")
-    doc:set_selection(3, 1)
+    local view, buffer = make_view("Setext title\n============\nplain", "setext.md")
+    buffer:set_selection(3, 1)
     refresh(view)
 
     local rendered = test.not_nil(view:get_line_render(1))
     test.not_nil(rendered.fragments[1].text)
     local marker = test.not_nil(view:get_line_render(2))
     test.equal(marker.fragments[1].hidden, true)
-    doc:set_selection(2, 3)
+    buffer:set_selection(2, 3)
     test.equal(visible_render_text(view, 2), "============")
   end)
 
   test.it("keeps source visible for a tab-indented fence-like block", function()
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "- item\n\t```\n\tselect first_row\nfrom second_row\n\t```\nplain",
       "tab-indented-fence.md"
     )
-    doc:set_selection(6, 1)
+    buffer:set_selection(6, 1)
     refresh(view)
     local rendered = view:get_line_render(3)
     if rendered then
@@ -3515,8 +3515,8 @@ test.describe("Markdown Live Preview", function()
 
   test.it("presents inactive GFM tables as an aligned compact grid", function()
     config.markdown_live_interactive_tables = true
-    local view, doc = make_view("| Name | Value |\n| :--- | ---: |\n| one | two |\n\nplain", "table.md")
-    doc:set_selection(5, 1)
+    local view, buffer = make_view("| Name | Value |\n| :--- | ---: |\n| one | two |\n\nplain", "table.md")
+    buffer:set_selection(5, 1)
     refresh(view)
     local header = test.not_nil(view:get_line_render(1))
     local header_cells = 0
@@ -3540,13 +3540,13 @@ test.describe("Markdown Live Preview", function()
     test.equal(row_cells, 2)
     local delimiter = test.not_nil(view:get_line_render(2))
     test.not_nil(delimiter.fragments[1].widget)
-    doc:insert(3, 3, "a much longer value ")
-    local instance = test.not_nil(markdown_model.peek(doc))
+    buffer:insert(3, 3, "a much longer value ")
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.equal(instance.status, "pending")
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.ok(visible_render_text(view, 3):find("a much longer value", 1, true))
 
-    doc:set_selection(3, 4)
+    buffer:set_selection(3, 4)
     local active_row = test.not_nil(view:get_line_render(3))
     local active_cells = 0
     for _, fragment in ipairs(active_row.fragments or {}) do
@@ -3557,7 +3557,7 @@ test.describe("Markdown Live Preview", function()
 
   test.it("wraps long table cells inside aligned variable-height rows", function()
     config.markdown_live_interactive_tables = true
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "| Command | Action |\n| --- | --- |\n"
         .. "| `/rp_campaign_status` | Show scene, turn, configuration, and Git state |\n"
         .. "| `/rp_recap` | Recap the story without advancing it |\n\nplain",
@@ -3565,7 +3565,7 @@ test.describe("Markdown Live Preview", function()
     )
     view.size.x = 380
     view:set_wrapping_enabled(true)
-    doc:set_selection(6, 1)
+    buffer:set_selection(6, 1)
     refresh(view)
 
     local row = test.not_nil(view:get_line_render(3))
@@ -3604,11 +3604,11 @@ test.describe("Markdown Live Preview", function()
 
   test.it("keeps empty table-cell source mappings valid", function()
     config.markdown_live_interactive_tables = true
-    local view, doc = make_view(
+    local view, buffer = make_view(
       "| A | B |\n| --- | --- |\n|   | value |\n\nplain",
       "empty-table-cell.md"
     )
-    doc:set_selection(5, 1)
+    buffer:set_selection(5, 1)
     refresh(view)
     local row = test.not_nil(view:get_line_render(3))
     local empty
@@ -3623,47 +3623,47 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("edits canonical GFM table rows and columns through commands", function()
-    local view, doc = make_view("| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\nplain", "table-commands.md")
+    local view, buffer = make_view("| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\nplain", "table-commands.md")
     local old_active = core.active_view
     core.active_view = view
     local function reparse()
-      markdown_model.get(doc):submit("table-command-test")
+      markdown_model.get(buffer):submit("table-command-test")
       refresh(view)
     end
     local ok, err = pcall(function()
-      doc:set_selection(3, 3)
+      buffer:set_selection(3, 3)
       refresh(view)
       test.equal(command.perform("markdown-live-preview:table-insert-row-below"), true)
-      test.equal(doc.lines[4], "|  |  |\n")
-      doc:undo(); reparse()
+      test.equal(buffer.lines[4], "|  |  |\n")
+      buffer:undo(); reparse()
 
-      doc:set_selection(3, 3)
+      buffer:set_selection(3, 3)
       test.equal(command.perform("markdown-live-preview:table-delete-row"), true)
-      test.equal(doc.lines[3], "| 3 | 4 |\n")
-      doc:undo(); reparse()
+      test.equal(buffer.lines[3], "| 3 | 4 |\n")
+      buffer:undo(); reparse()
 
-      doc:set_selection(3, 3)
+      buffer:set_selection(3, 3)
       test.equal(command.perform("markdown-live-preview:table-move-row-down"), true)
-      test.equal(doc.lines[3], "| 3 | 4 |\n")
-      test.equal(doc.lines[4], "| 1 | 2 |\n")
-      doc:undo(); reparse()
+      test.equal(buffer.lines[3], "| 3 | 4 |\n")
+      test.equal(buffer.lines[4], "| 1 | 2 |\n")
+      buffer:undo(); reparse()
 
-      doc:set_selection(3, 3)
+      buffer:set_selection(3, 3)
       test.equal(command.perform("markdown-live-preview:table-insert-column-right"), true)
-      test.equal(doc.lines[1], "| A |  | B |\n")
-      test.equal(doc.lines[3], "| 1 |  | 2 |\n")
-      doc:undo(); reparse()
+      test.equal(buffer.lines[1], "| A |  | B |\n")
+      test.equal(buffer.lines[3], "| 1 |  | 2 |\n")
+      buffer:undo(); reparse()
 
-      doc:set_selection(3, 3)
+      buffer:set_selection(3, 3)
       test.equal(command.perform("markdown-live-preview:table-delete-column"), true)
-      test.equal(doc.lines[1], "| B |\n")
-      test.equal(doc.lines[3], "| 2 |\n")
-      doc:undo(); reparse()
+      test.equal(buffer.lines[1], "| B |\n")
+      test.equal(buffer.lines[3], "| 2 |\n")
+      buffer:undo(); reparse()
 
-      doc:set_selection(3, 3)
+      buffer:set_selection(3, 3)
       test.equal(command.perform("markdown-live-preview:table-move-column-right"), true)
-      test.equal(doc.lines[1], "| B | A |\n")
-      test.equal(doc.lines[3], "| 2 | 1 |\n")
+      test.equal(buffer.lines[1], "| B | A |\n")
+      test.equal(buffer.lines[3], "| 2 | 1 |\n")
     end)
     core.active_view = old_active
     if not ok then error(err, 0) end
@@ -3682,8 +3682,8 @@ test.describe("Markdown Live Preview", function()
     local old_projects = core.projects
     core.projects = { Project(root) }
     local index = markdown.vault_index.get_index(root):rebuild("embed-ui-test")
-    local view, doc = make_view("![[Target]]\n![[Target#Child]]\n![[Target#^block-id]]\nplain", source)
-    doc:set_selection(4, 1)
+    local view, buffer = make_view("![[Target]]\n![[Target#Child]]\n![[Target#^block-id]]\nplain", source)
+    buffer:set_selection(4, 1)
     refresh(view)
     local render_provider
     for _, entry in ipairs(view:line_render_provider_entries()) do
@@ -3711,8 +3711,8 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("presents inline and display math as styled editable source", function()
-    local view, doc = make_view("Inline $x^2 + y^2$ text\n\n$$\na + b\n$$\nplain", "math.md")
-    doc:set_selection(6, 1)
+    local view, buffer = make_view("Inline $x^2 + y^2$ text\n\n$$\na + b\n$$\nplain", "math.md")
+    buffer:set_selection(6, 1)
     refresh(view)
     local inline = test.not_nil(view:get_line_render(1))
     local inline_math
@@ -3729,13 +3729,13 @@ test.describe("Markdown Live Preview", function()
       end
       test.equal(found, true)
     end
-    doc:set_selection(1, 10)
+    buffer:set_selection(1, 10)
     test.equal(visible_render_text(view, 1), "Inline $x^2 + y^2$ text")
   end)
 
   test.it("presents non-image attachment links and embeds as source-preserving chips", function()
-    local view, doc = make_view("![[manual.pdf]] [[song.mp3|Audio]] [clip](movie.mp4)\nplain", "attachments.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("![[manual.pdf]] [[song.mp3|Audio]] [clip](movie.mp4)\nplain", "attachments.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local rendered = test.not_nil(view:get_line_render(1))
     local chips = {}
@@ -3753,7 +3753,7 @@ test.describe("Markdown Live Preview", function()
       test.equal(chip.cursor, "hand")
     end
 
-    doc:set_selection(1, 4)
+    buffer:set_selection(1, 4)
     local active = view:get_line_render(1)
     local remaining_chips = 0
     for _, fragment in ipairs(active and active.fragments or {}) do
@@ -3772,8 +3772,8 @@ test.describe("Markdown Live Preview", function()
     local old_get_clipboard = system.get_clipboard
     local old_get_clipboard_data = system.get_clipboard_data
     core.projects = { Project(root) }
-    local view, doc = make_view("start ", root .. PATHSEP .. "Source.md")
-    doc:set_selection(1, 7)
+    local view, buffer = make_view("start ", root .. PATHSEP .. "Source.md")
+    buffer:set_selection(1, 7)
     refresh(view)
     core.active_view = view
     system.get_clipboard = function() return "" end
@@ -3781,9 +3781,9 @@ test.describe("Markdown Live Preview", function()
       if mime == "image/png" then return "png clipboard bytes" end
     end
     local ok, err = pcall(function()
-      test.equal(command.perform("doc:paste"), true)
-      test.ok(doc.lines[1]:match("^start !%[%[attachments/pasted%-image[^]]*%.png%]%]\n$"))
-      local relative = doc.lines[1]:match("!%[%[(.-)%]%]")
+      test.equal(command.perform("text:paste"), true)
+      test.ok(buffer.lines[1]:match("^start !%[%[attachments/pasted%-image[^]]*%.png%]%]\n$"))
+      local relative = buffer.lines[1]:match("!%[%[(.-)%]%]")
       test.equal(system.get_file_info(root .. PATHSEP .. relative).type, "file")
     end)
     system.get_clipboard = old_get_clipboard
@@ -3811,36 +3811,36 @@ test.describe("Markdown Live Preview", function()
     core.projects = { Project(root) }
     config.markdown_live_attachment_folder = "media"
     config.markdown_live_attachment_link_format = "wikilink"
-    local view, doc = make_view("start ", root .. PATHSEP .. "notes" .. PATHSEP .. "Source.md")
-    doc:set_selection(1, 7)
+    local view, buffer = make_view("start ", root .. PATHSEP .. "notes" .. PATHSEP .. "Source.md")
+    buffer:set_selection(1, 7)
     refresh(view)
     local ok, err = pcall(function()
       local inserted, result = markdown.attachments.import_file(view, image_source)
       test.equal(inserted, true)
       test.equal(result.copied, true)
-      test.equal(doc.lines[1], "start ![[media/photo.png]]\n")
+      test.equal(buffer.lines[1], "start ![[media/photo.png]]\n")
       test.equal(system.get_file_info(root .. PATHSEP .. "media" .. PATHSEP .. "photo.png").type, "file")
 
-      doc:set_selection(1, #doc.lines[1])
+      buffer:set_selection(1, #buffer.lines[1])
       inserted, result = markdown.attachments.import_file(view, image_source)
       test.equal(inserted, true)
       test.ok(result.path:match("photo%-1%.png$"))
 
       local x, y = view:get_line_screen_position(1)
       test.equal(view:on_file_dropped(image_source, x + 2, y + 2), true)
-      test.ok(doc.lines[1]:find("![[media/photo-2.png]]", 1, true) ~= nil)
+      test.ok(buffer.lines[1]:find("![[media/photo-2.png]]", 1, true) ~= nil)
 
       config.markdown_live_attachment_link_format = "markdown"
-      doc:set_selection(1, #doc.lines[1])
+      buffer:set_selection(1, #buffer.lines[1])
       inserted, result = markdown.attachments.import_file(view, pdf_path)
       test.equal(inserted, true)
       test.equal(result.copied, false)
       test.equal(result.text, "[file](../file.pdf)")
-      test.ok(doc.lines[1]:find(result.text, 1, true) ~= nil)
-      doc:undo()
-      test.equal(doc.lines[1]:find("[file](../file.pdf)", 1, true), nil)
-      doc:redo()
-      test.ok(doc.lines[1]:find("[file](../file.pdf)", 1, true) ~= nil)
+      test.ok(buffer.lines[1]:find(result.text, 1, true) ~= nil)
+      buffer:undo()
+      test.equal(buffer.lines[1]:find("[file](../file.pdf)", 1, true), nil)
+      buffer:redo()
+      test.ok(buffer.lines[1]:find("[file](../file.pdf)", 1, true) ~= nil)
     end)
     config.markdown_live_attachment_folder = old_folder
     config.markdown_live_attachment_link_format = old_format
@@ -3858,10 +3858,10 @@ test.describe("Markdown Live Preview", function()
     local old_trust = config.markdown_live_trusted_remote_image_projects
     core.projects = { Project(root) }
     config.markdown_live_trusted_remote_image_projects = {}
-    local view, doc = make_view("![Remote](https://example.com/image.png)\nplain", source_path)
-    local split = DocView(doc)
+    local view, buffer = make_view("![Remote](https://example.com/image.png)\nplain", source_path)
+    local split = Editor(buffer)
     markdown.live_render.refresh_view(split)
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
     refresh(view)
     local blocked
     for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
@@ -3869,7 +3869,7 @@ test.describe("Markdown Live Preview", function()
     end
     blocked = test.not_nil(blocked)
     test.equal(blocked.text, "[remote image blocked: Remote]")
-    doc:set_selection(1, 15)
+    buffer:set_selection(1, 15)
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
@@ -3899,8 +3899,8 @@ test.describe("Markdown Live Preview", function()
     fp:close()
 
     local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
-    local view, doc = make_view("![Alt](" .. image_url .. ")\nother", USERDIR .. PATHSEP .. "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("![Alt](" .. image_url .. ")\nother", USERDIR .. PATHSEP .. "note.md")
+    buffer:set_selection(2, 1)
     local old_load_image = canvas.load_image
     local old_draw_canvas = renderer.draw_canvas
     local old_draw_text = renderer.draw_text
@@ -3930,21 +3930,21 @@ test.describe("Markdown Live Preview", function()
     test.not_nil(test.not_nil(image_fragment_result).semantic_id)
     local inactive_height = view:get_visual_row_height(1)
     test.ok(inactive_height > 32)
-    doc:set_selection(1, 1)
+    buffer:set_selection(1, 1)
     test.ok(view:get_visual_row_height(1) > inactive_height)
     local active_render_line = test.not_nil(view:get_line_render(1))
     local rendered_line, source_row = view:get_position_line_render_row(1, 1)
     test.equal(rendered_line, active_render_line)
     test.not_nil(source_row)
     test.equal(source_row.source_col1, 1)
-    test.equal(source_row.source_col2, #doc.lines[1])
+    test.equal(source_row.source_col2, #buffer.lines[1])
     test.ok(
       active_render_line.layout_height > source_row.height,
       "the revealed image source must occupy its own row above the image"
     )
     view:draw_line_text(1, 0, 0)
     test.equal(table.concat(drawn_text), "![Alt](" .. image_url .. ")")
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
     test.equal(view:get_visual_row_height(1), inactive_height)
     test.equal(view:get_x_offset_col(1, 1), 1)
     view:draw_line_text(1, 0, 0)
@@ -3959,12 +3959,12 @@ test.describe("Markdown Live Preview", function()
 
   test.it("reveals raw source when the caret enters an unavailable image embed", function()
     local source = "![[missing-image-" .. system.get_process_id() .. ".png]]"
-    local view, doc = make_view(source .. "\nother", USERDIR .. PATHSEP .. "missing-image-note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view(source .. "\nother", USERDIR .. PATHSEP .. "missing-image-note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     test.match(visible_render_text(view, 1), "[image unavailable:", nil, true)
 
-    doc:set_selection(1, 5)
+    buffer:set_selection(1, 5)
     test.equal(visible_render_text(view, 1), source)
   end)
 
@@ -3976,8 +3976,8 @@ test.describe("Markdown Live Preview", function()
     fp:close()
     local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
     local source = "![Alt](" .. image_url .. ")"
-    local view, doc = make_view(source .. "\nother", USERDIR .. PATHSEP .. "note.md")
-    doc:set_selection(1, #source + 1)
+    local view, buffer = make_view(source .. "\nother", USERDIR .. PATHSEP .. "note.md")
+    buffer:set_selection(1, #source + 1)
     local old_load_image = canvas.load_image
     canvas.load_image = function()
       return {
@@ -3993,10 +3993,10 @@ test.describe("Markdown Live Preview", function()
       if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
     end
     local wiki_source = "![[" .. image_url .. "]]"
-    local wiki_view, wiki_doc = make_view(
+    local wiki_view, wiki_buffer = make_view(
       wiki_source .. "\nother", USERDIR .. PATHSEP .. "wiki-note.md"
     )
-    wiki_doc:set_selection(1, #wiki_source + 1)
+    wiki_buffer:set_selection(1, #wiki_source + 1)
     refresh(wiki_view)
     local wiki_visible = {}
     for _, fragment in ipairs(wiki_view:iter_line_render_fragments(
@@ -4011,29 +4011,29 @@ test.describe("Markdown Live Preview", function()
     test.equal(table.concat(wiki_visible), wiki_source)
   end)
 
-  test.it("moves up from the following Document line into text below an inline image", function()
-    with_inline_image_text_fixture(function(view, doc, fixture)
+  test.it("moves up from the following Buffer line into text below an inline image", function()
+    with_inline_image_text_fixture(function(view, buffer, fixture)
       local old_active = core.active_view
       core.active_view = view
-      doc:set_selection(2, 1)
-      command.perform("doc:move-to-previous-line")
-      local line, col = doc:get_selection()
+      buffer:set_selection(2, 1)
+      command.perform("text:move-to-previous-line")
+      local line, col = buffer:get_selection()
       test.equal(line, 1)
       test.equal(col, fixture.image_end)
 
-      command.perform("doc:move-to-previous-line")
-      line, col = doc:get_selection()
+      command.perform("text:move-to-previous-line")
+      line, col = buffer:get_selection()
       test.equal(line, 1)
       test.equal(col, 1)
 
-      command.perform("doc:move-to-next-line")
-      line, col = doc:get_selection()
+      command.perform("text:move-to-next-line")
+      line, col = buffer:get_selection()
       test.equal(line, 1)
       test.equal(col, fixture.image_end)
 
-      command.perform("doc:move-to-next-line")
+      command.perform("text:move-to-next-line")
       core.active_view = old_active
-      line, col = doc:get_selection()
+      line, col = buffer:get_selection()
       test.equal(line, 2)
       test.equal(col, 1)
     end)
@@ -4053,13 +4053,13 @@ test.describe("Markdown Live Preview", function()
     local trailing = {}
     for i = 1, 80 do trailing[i] = "following line " .. i end
     local source = prefix .. image_source .. suffix
-    local view, doc = make_view(
+    local view, buffer = make_view(
       source .. "\n" .. table.concat(trailing, "\n"),
       USERDIR .. PATHSEP .. "tall-caret-scroll-note.md"
     )
     view.size.x, view.size.y = 420, 220
     view:set_wrapping_enabled(true)
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
 
     local old_load_image = canvas.load_image
     local old_active = core.active_view
@@ -4083,7 +4083,7 @@ test.describe("Markdown Live Preview", function()
       local target_col = math.floor(
         ((target.source_col1 or 1) + (target.source_col2 or target.source_col1 or 1)) / 2
       )
-      doc:set_selection(1, target_col)
+      buffer:set_selection(1, target_col)
       render_line = test.not_nil(view:get_line_render(1))
       target = test.not_nil(test.not_nil(render_line.position_rows)[target_index])
       view:get_visual_row_metric_cache()
@@ -4096,8 +4096,8 @@ test.describe("Markdown Live Preview", function()
       view.scroll.y, view.scroll.to.y = initial_scroll, initial_scroll
       core.active_view = view
 
-      test.equal(command.perform("doc:move-to-previous-line"), true)
-      local line, col = doc:get_selection()
+      test.equal(command.perform("text:move-to-previous-line"), true)
+      local line, col = buffer:get_selection()
       test.equal(line, 1)
       view:get_line_screen_position(line, col)
 
@@ -4128,12 +4128,12 @@ test.describe("Markdown Live Preview", function()
     local image_url = common.basename and common.basename(image_path)
       or image_path:match("[^" .. PATHSEP .. "]+$")
     local source = "![[" .. image_url .. "]]"
-    local view, doc = make_view(
+    local view, buffer = make_view(
       source .. "\nfollowing line", USERDIR .. PATHSEP .. "raw-source-scroll-note.md"
     )
     view.size.x, view.size.y = 420, 220
     view:set_wrapping_enabled(true)
-    doc:set_selection(1, 5)
+    buffer:set_selection(1, 5)
 
     local old_load_image = canvas.load_image
     local old_active = core.active_view
@@ -4159,14 +4159,14 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("selects only the suffix caret row with Shift+Home below an inline image", function()
-    with_inline_image_text_fixture(function(view, doc, fixture)
+    with_inline_image_text_fixture(function(view, buffer, fixture)
       local old_active = core.active_view
       core.active_view = view
-      doc:set_selection(1, #fixture.source + 1)
-      command.perform("doc:select-to-start-of-indentation")
+      buffer:set_selection(1, #fixture.source + 1)
+      command.perform("text:select-to-start-of-indentation")
       core.active_view = old_active
 
-      local line1, col1, line2, col2 = doc:get_selection()
+      local line1, col1, line2, col2 = buffer:get_selection()
       test.same({ line1, col1, line2, col2 }, {
         1, fixture.image_end, 1, #fixture.source + 1,
       })
@@ -4174,21 +4174,21 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("keeps inline-image caret-row navigation when soft wrapping is disabled", function()
-    with_inline_image_text_fixture(function(view, doc, fixture)
+    with_inline_image_text_fixture(function(view, buffer, fixture)
       local old_active = core.active_view
       core.active_view = view
       view:set_wrapping_enabled(false)
 
-      doc:set_selection(2, 1)
-      command.perform("doc:move-to-previous-line")
-      local line, col = doc:get_selection()
+      buffer:set_selection(2, 1)
+      command.perform("text:move-to-previous-line")
+      local line, col = buffer:get_selection()
       test.equal(line, 1)
       test.equal(col, fixture.image_end)
 
-      doc:set_selection(1, #fixture.source + 1)
-      command.perform("doc:select-to-start-of-indentation")
+      buffer:set_selection(1, #fixture.source + 1)
+      command.perform("text:select-to-start-of-indentation")
       core.active_view = old_active
-      local line1, col1, line2, col2 = doc:get_selection()
+      local line1, col1, line2, col2 = buffer:get_selection()
       test.same({ line1, col1, line2, col2 }, {
         1, fixture.image_end, 1, #fixture.source + 1,
       })
@@ -4196,15 +4196,15 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("soft-wraps suffix text as it is typed below an inline image", function()
-    with_inline_image_text_fixture(function(view, doc, fixture)
+    with_inline_image_text_fixture(function(view, buffer, fixture)
       local old_active = core.active_view
       core.active_view = view
       view.size.x = 180
       view:update_wrap_cache()
-      doc:set_selection(1, #fixture.source + 1)
+      buffer:set_selection(1, #fixture.source + 1)
       view:on_text_input(" with enough additional words to wrap onto several rows")
 
-      test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+      test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
       local pending = test.not_nil(view:get_line_render(1))
       for _, fragment in ipairs(pending.fragments or {}) do
         test.equal(fragment.on_mouse_pressed, nil)
@@ -4213,9 +4213,9 @@ test.describe("Markdown Live Preview", function()
         end
       end
 
-      command.perform("doc:move-to-previous-line")
+      command.perform("text:move-to-previous-line")
       core.active_view = old_active
-      local line, col = doc:get_selection()
+      local line, col = buffer:get_selection()
       test.equal(line, 1)
       test.ok(col > fixture.image_end, "expected Up to remain within wrapped suffix text")
     end)
@@ -4233,8 +4233,8 @@ test.describe("Markdown Live Preview", function()
     end
     local old_projects = core.projects
     core.projects = { Project(root) }
-    local view, doc = make_view("![[not-yet-indexed.png]]\nnext", root .. PATHSEP .. "Source.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("![[not-yet-indexed.png]]\nnext", root .. PATHSEP .. "Source.md")
+    buffer:set_selection(2, 1)
     local ok, err = pcall(function()
       refresh(view)
       test.equal(view.__markdown_live_owner.link_index.status, "indexing")
@@ -4292,11 +4292,11 @@ test.describe("Markdown Live Preview", function()
     end
 
     local ok, err = pcall(function()
-      local doc
-      view, doc = make_view(
+      local buffer
+      view, buffer = make_view(
         "![[Pasted image.png]]\nnext", root .. PATHSEP .. "Source.md"
       )
-      doc:set_selection(2, 1)
+      buffer:set_selection(2, 1)
       refresh(view)
       local index = view.__markdown_live_owner.link_index
       test.equal(index.status, "indexing")
@@ -4333,8 +4333,8 @@ test.describe("Markdown Live Preview", function()
     fp:write("png")
     fp:close()
 
-    local view, doc = make_view("![[diagram.png]]\nother", root .. PATHSEP .. "Planificación Fabricación.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("![[diagram.png]]\nother", root .. PATHSEP .. "Planificación Fabricación.md")
+    buffer:set_selection(2, 1)
     local old_load_image = canvas.load_image
     canvas.load_image = function(path)
       test.equal(path, image_path)
@@ -4381,9 +4381,9 @@ test.describe("Markdown Live Preview", function()
     end
 
     local ok, err = pcall(function()
-      local doc
-      view, doc = make_view("![[Pasted image.png]]\nother", source)
-      doc:set_selection(2, 1)
+      local buffer
+      view, buffer = make_view("![[Pasted image.png]]\nother", source)
+      buffer:set_selection(2, 1)
       refresh(view)
       local rendered = test.not_nil(view:get_line_render(1))
       local image_fragment
@@ -4436,9 +4436,9 @@ test.describe("Markdown Live Preview", function()
     end
 
     local ok, err = pcall(function()
-      local doc
-      view, doc = make_view("![[Pasted image.png]]\nnext", source_path)
-      doc:set_selection(2, 1)
+      local buffer
+      view, buffer = make_view("![[Pasted image.png]]\nnext", source_path)
+      buffer:set_selection(2, 1)
       refresh(view)
       test.not_nil(rendered_image())
       canvas.load_image = old_load_image
@@ -4501,8 +4501,8 @@ test.describe("Markdown Live Preview", function()
     fp:write("png")
     fp:close()
     local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
-    local view, doc = make_view("![[" .. image_url .. "]]\nother", USERDIR .. PATHSEP .. "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("![[" .. image_url .. "]]\nother", USERDIR .. PATHSEP .. "note.md")
+    buffer:set_selection(2, 1)
     local old_load_image = canvas.load_image
     canvas.load_image = function()
       return {
@@ -4591,8 +4591,8 @@ test.describe("Markdown Live Preview", function()
     fp:write("png")
     fp:close()
     local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
-    local view, doc = make_view("![[" .. image_url .. "]]\nother", USERDIR .. PATHSEP .. "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("![[" .. image_url .. "]]\nother", USERDIR .. PATHSEP .. "note.md")
+    buffer:set_selection(2, 1)
     local old_load_image = canvas.load_image
     local old_open = common.open_in_system
     local opened_path
@@ -4611,7 +4611,7 @@ test.describe("Markdown Live Preview", function()
     local x, y = view:get_line_screen_position(1)
     test.ok(view:on_mouse_pressed("left", x + 10, y + 10, 1))
     test.equal(opened_path, image_path)
-    local line = doc:get_selection()
+    local line = buffer:get_selection()
     test.equal(line, 1)
 
     common.open_in_system = old_open
@@ -4622,17 +4622,17 @@ test.describe("Markdown Live Preview", function()
   test.it("honors disabled live image rendering", function()
     local old = config.markdown_live_render_images
     config.markdown_live_render_images = false
-    local view, doc = make_view("![Alt](image.png)\nother", "note.md")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("![Alt](image.png)\nother", "note.md")
+    buffer:set_selection(2, 1)
     refresh(view)
     local link_width = live_body_font(view):get_width("Alt")
     test.equal(view:get_col_x_offset(1, #"![Alt](image.png)" + 1), link_width)
     config.markdown_live_render_images = old
   end)
 
-  test.it("owns lifecycle independently for split views of one Document", function()
-    local first, doc = make_view("# Title", "note.md")
-    local second = DocView(doc)
+  test.it("owns lifecycle independently for split views of one Buffer", function()
+    local first, buffer = make_view("# Title", "note.md")
+    local second = Editor(buffer)
     second.position.x, second.position.y = 0, 0
     second.size.x, second.size.y = 500, 200
     refresh(first)
@@ -4647,21 +4647,21 @@ test.describe("Markdown Live Preview", function()
     test.equal(first.__markdown_live_attached, nil)
     test.not_nil(second.__markdown_live_owner)
 
-    doc:set_filename("note.txt", "note.txt")
+    buffer:set_filename("note.txt", "note.txt")
     test.equal(first.__markdown_live_attached, nil)
     test.equal(second.__markdown_live_attached, nil)
   end)
 
-  test.it("releases owned lifecycle state when its Document closes", function()
-    local view, doc = make_view("# Title", "note.md")
+  test.it("releases owned lifecycle state when its Buffer closes", function()
+    local view, buffer = make_view("# Title", "note.md")
     refresh(view)
     test.not_nil(view.__markdown_live_owner)
-    doc:on_close()
+    buffer:on_close()
     test.equal(view.__markdown_live_owner, nil)
     test.equal(view.__markdown_live_attached, nil)
   end)
 
-  test.it("rebinds link resolution when a Document moves between Projects", function()
+  test.it("rebinds link resolution when a Buffer moves between Projects", function()
     local root1 = USERDIR .. PATHSEP .. "markdown-live-index-one-" .. system.get_process_id()
     local root2 = USERDIR .. PATHSEP .. "markdown-live-index-two-" .. system.get_process_id()
     test.ok(common.mkdirp(root1))
@@ -4671,11 +4671,11 @@ test.describe("Markdown Live Preview", function()
     local ok, err = pcall(function()
       local path1 = root1 .. PATHSEP .. "Source.md"
       local path2 = root2 .. PATHSEP .. "Source.md"
-      local view, doc = make_view("[[Target]]\nplain", path1)
-      doc:set_selection(2, 1)
+      local view, buffer = make_view("[[Target]]\nplain", path1)
+      buffer:set_selection(2, 1)
       refresh(view)
       test.equal(view.__markdown_live_owner.link_index.root, common.normalize_path(root1))
-      doc:set_filename(path2, path2)
+      buffer:set_filename(path2, path2)
       test.equal(view.__markdown_live_owner.link_index.root, common.normalize_path(root2))
     end)
     core.projects = old_projects
@@ -4684,19 +4684,19 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("automatically follows direct Document filename and syntax changes", function()
-    local view, doc = make_view("# Title", "note.md")
+  test.it("automatically follows direct Buffer filename and syntax changes", function()
+    local view, buffer = make_view("# Title", "note.md")
     refresh(view)
     test.equal(view.__markdown_live_attached, true)
 
-    doc:set_filename("note.txt", "note.txt")
+    buffer:set_filename("note.txt", "note.txt")
     test.equal(view.__markdown_live_attached, nil)
 
-    doc:set_filename("note.md", "note.md")
+    buffer:set_filename("note.md", "note.md")
     test.equal(view.__markdown_live_attached, true)
 
     view.__markdown_live_image_cache = { ["image.png"] = { path = "old/image.png" } }
-    doc:set_filename("moved/note.md", "moved/note.md")
+    buffer:set_filename("moved/note.md", "moved/note.md")
     test.equal(view.__markdown_live_attached, true)
     test.equal(view.__markdown_live_image_cache, nil)
   end)

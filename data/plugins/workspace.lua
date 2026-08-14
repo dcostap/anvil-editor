@@ -16,22 +16,22 @@ local function invalid_workspace_filename(filename)
 end
 
 local function view_has_invalid_named_file(view)
-  local doc = view and view.doc
-  return doc
-     and not doc.intellij_untitled
-     and (invalid_workspace_filename(doc.filename) or invalid_workspace_filename(doc.abs_filename))
+  local buffer = view and view.buffer
+  return buffer
+     and not buffer.intellij_untitled
+     and (invalid_workspace_filename(buffer.filename) or invalid_workspace_filename(buffer.abs_filename))
 end
 
-local function close_unattached_view_doc(view)
-  local doc = view and view.doc
-  if not doc then return end
-  for _, open_doc in ipairs(core.docs or {}) do
-    if open_doc == doc then
-      if #core.get_views_referencing_doc(doc) == 0 then
-        for i = #core.docs, 1, -1 do
-          if core.docs[i] == doc then
-            table.remove(core.docs, i)
-            doc:on_close()
+local function close_unattached_view_buffer(view)
+  local buffer = view and view.buffer
+  if not buffer then return end
+  for _, open_buffer in ipairs(core.buffers or {}) do
+    if open_buffer == buffer then
+      if #core.get_views_referencing_buffer(buffer) == 0 then
+        for i = #core.buffers, 1, -1 do
+          if core.buffers[i] == buffer then
+            table.remove(core.buffers, i)
+            buffer:on_close()
             break
           end
         end
@@ -188,10 +188,10 @@ local function save_view(view)
     return nil
   end
   if view_has_invalid_named_file(view) then
-    if core.log_quiet then core.log_quiet("Workspace: skipped view with invalid document filename %q", view.doc.filename or view.doc.abs_filename) end
+    if core.log_quiet then core.log_quiet("Workspace: skipped view with invalid buffer filename %q", view.buffer.filename or view.buffer.abs_filename) end
     return nil
   end
-  if state and state.filename and view.doc and view.doc.new_file and not view.doc.intellij_untitled then
+  if state and state.filename and view.buffer and view.buffer.new_file and not view.buffer.intellij_untitled then
     if core.log_quiet then core.log_quiet("Workspace: skipped missing named file view %q", state.filename) end
     return nil
   end
@@ -206,7 +206,7 @@ end
 
 
 local function load_view(t)
-  t.module = t.module or (t.type == "doc" and "core.docview")
+  t.module = t.module or (t.type == "buffer" and "core.editor")
   if t.module then
     local View = require(t.module)
     -- compatibility with old state data
@@ -225,13 +225,13 @@ local function load_view(t)
     end
     local view = View and View.from_state(t.state)
     if view_has_invalid_named_file(view) then
-      if core.log_quiet then core.log_quiet("Workspace: dropped invalid named file restored from saved state %q", view.doc.filename or view.doc.abs_filename) end
-      close_unattached_view_doc(view)
+      if core.log_quiet then core.log_quiet("Workspace: dropped invalid named file restored from saved state %q", view.buffer.filename or view.buffer.abs_filename) end
+      close_unattached_view_buffer(view)
       return nil
     end
-    if view and view.doc and view.doc.filename and view.doc.new_file and not view.doc.intellij_untitled then
-      if core.log_quiet then core.log_quiet("Workspace: skipped missing named file from saved state %q", view.doc.filename) end
-      close_unattached_view_doc(view)
+    if view and view.buffer and view.buffer.filename and view.buffer.new_file and not view.buffer.intellij_untitled then
+      if core.log_quiet then core.log_quiet("Workspace: skipped missing named file from saved state %q", view.buffer.filename) end
+      close_unattached_view_buffer(view)
       return nil
     end
     return view
@@ -309,7 +309,7 @@ end
 
 local function left_pane_workspace_is_empty()
   local left_pane = core.root_panel and core.root_panel:get_left_pane()
-  return left_pane and left_pane:is_empty() and #core.docs == 0
+  return left_pane and left_pane:is_empty() and #core.buffers == 0
 end
 
 local function maybe_show_empty_project_file_tree()
@@ -375,7 +375,7 @@ end
 local run = core.run
 
 function core.run(...)
-  if #core.docs == 0 then
+  if #core.buffers == 0 then
     core.try(load_workspace)
 
     local set_project = core.set_project

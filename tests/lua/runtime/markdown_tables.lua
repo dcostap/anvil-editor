@@ -1,16 +1,16 @@
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local tables = require "core.markdown.tables"
 local test = require "core.test"
 
 local function make_view(text)
-  local doc = Doc("tables.md", "tables.md", true)
-  doc:insert(1, 1, text)
-  return { doc = doc }, doc
+  local buffer = Buffer("tables.md", "tables.md", true)
+  buffer:insert(1, 1, text)
+  return { buffer = buffer }, buffer
 end
 
 test.describe("Markdown table source lookup", function()
-  test.it("returns stable table bounds and refreshes after a document edit", function()
-    local view, doc = make_view(
+  test.it("returns stable table bounds and refreshes after a buffer edit", function()
+    local view, buffer = make_view(
       "| Name | Value |\n"
       .. "| --- | --- |\n"
       .. "| one | 1 |\n"
@@ -25,7 +25,7 @@ test.describe("Markdown table source lookup", function()
     test.equal(delimiter1, nil)
     test.equal(delimiter2, nil)
 
-    doc:insert(3, 1, "| inserted | 3 |\n")
+    buffer:insert(3, 1, "| inserted | 3 |\n")
     local updated1, updated2 = tables.source_bounds(view, 3)
     test.equal(updated1, 1)
     test.equal(updated2, 5)

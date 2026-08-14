@@ -13,31 +13,31 @@ local function track(context, kind, value)
   return value
 end
 
-local function remove_doc(doc)
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+local function remove_buffer(buffer)
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
 end
 
 local function open_editor(context, text)
-  local doc = track(context, "docs", core.open_doc())
-  if text and text ~= "" then doc:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_doc(doc))
+  local buffer = track(context, "buffers", core.open_buffer())
+  if text and text ~= "" then buffer:text_input(text) end
+  local view = track(context, "views", core.root_panel:open_buffer(buffer))
   core.set_active_view(view)
-  return view, doc
+  return view, buffer
 end
 
-local function text(doc)
-  return table.concat(doc.lines)
+local function text(buffer)
+  return table.concat(buffer.lines)
 end
 
-local function count_doc_changes(doc)
+local function count_buffer_changes(buffer)
   local changes = 0
-  function doc:on_text_change()
+  function buffer:on_text_change()
     changes = changes + 1
   end
   return function() return changes end
@@ -55,53 +55,53 @@ test.describe("transform plugin batch behavior", function()
       local node = root:get_node_for_view(view)
       if node then node:remove_view(root, view) end
     end
-    for _, doc in ipairs(context.docs or {}) do
-      if doc:is_dirty() then doc:clean() end
-      remove_doc(doc)
+    for _, buffer in ipairs(context.buffers or {}) do
+      if buffer:is_dirty() then buffer:clean() end
+      remove_buffer(buffer)
     end
   end)
 
-  test.it("quote transforms the selected text in one document change", function(context)
-    local view, doc = open_editor(context, "a\tb")
+  test.it("quote transforms the selected text in one buffer change", function(context)
+    local view, buffer = open_editor(context, "a\tb")
     view:with_selection_state(function()
-      doc:set_selection(1, 1, 1, 4)
+      buffer:set_selection(1, 1, 1, 4)
     end)
-    local changes = count_doc_changes(doc)
+    local changes = count_buffer_changes(buffer)
 
     test.ok(command.perform("quote:quote"))
 
-    test.equal(text(doc), '"a\\tb"\n')
+    test.equal(text(buffer), '"a\\tb"\n')
     test.equal(changes(), 1)
   end)
 
-  test.it("reflow transforms selected text through Doc:replace in one document change", function(context)
+  test.it("reflow transforms selected text through Buffer:replace in one buffer change", function(context)
     context.old_line_limit = config.line_limit
     config.line_limit = 12
-    local view, doc = open_editor(context, "alpha beta gamma delta")
+    local view, buffer = open_editor(context, "alpha beta gamma delta")
     view:with_selection_state(function()
-      doc:set_selection(1, 1, 1, math.huge)
+      buffer:set_selection(1, 1, 1, math.huge)
     end)
-    local changes = count_doc_changes(doc)
+    local changes = count_buffer_changes(buffer)
 
     test.ok(command.perform("reflow:reflow"))
 
-    test.equal(text(doc), "alpha beta\ngamma delta\n")
+    test.equal(text(buffer), "alpha beta\ngamma delta\n")
     test.equal(changes(), 1)
   end)
 
-  test.it("tabularize transforms selected lines through Doc:replace in one document change", function(context)
-    local view, doc = open_editor(context, "a=1\nbb=22")
+  test.it("tabularize transforms selected lines through Buffer:replace in one buffer change", function(context)
+    local view, buffer = open_editor(context, "a=1\nbb=22")
     view:with_selection_state(function()
-      doc:set_selection(1, 1, 2, math.huge)
+      buffer:set_selection(1, 1, 2, math.huge)
     end)
-    local changes = count_doc_changes(doc)
+    local changes = count_buffer_changes(buffer)
 
     test.ok(command.perform("tabularize:tabularize"))
     test.equal(core.active_view, core.global_prompt_bar)
     core.global_prompt_bar:set_text("=")
     core.global_prompt_bar:submit()
 
-    test.equal(text(doc), "a =1\nbb=22\n")
+    test.equal(text(buffer), "a =1\nbb=22\n")
     test.equal(changes(), 1)
   end)
 end)

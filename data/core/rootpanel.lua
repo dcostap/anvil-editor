@@ -4,7 +4,7 @@ local config = require "core.config"
 local style = require "core.style"
 local Node = require "core.node"
 local View = require "core.view"
-local DocView = require "core.docview"
+local Editor = require "core.editor"
 local file_context = require "core.file_context"
 
 ---@class core.rootpanel.overlay.to
@@ -51,7 +51,7 @@ local file_context = require "core.file_context"
 ---@field app_overlay core.rootpanel.appoverlay?
 ---@field overlapping_view core.view?
 ---@field touched_view core.view?
----@field defer_open_docs table[]
+---@field defer_open_buffers table[]
 ---@field first_dnd_processed boolean
 ---@field first_update_done boolean
 local RootPanel = View:extend()
@@ -148,7 +148,7 @@ function RootPanel:new()
   self.grab = nil -- = {view = nil, button = nil}
   self.overlapping_view = nil
   self.touched_view = nil
-  self.defer_open_docs = {}
+  self.defer_open_buffers = {}
   self.first_dnd_processed = false
   self.first_update_done = false
 end
@@ -384,24 +384,23 @@ function RootPanel:get_left_pane()
 end
 
 
----Open a document in one explicit layout node.
----If document is already open, switches to that view instead.
----Creates a new DocView and adds it as a tab in the target node.
----@param doc core.doc Document to open
----@param opts? table Options. opts.source_view copies scroll/selection from another DocView; opts.node targets a specific leaf node.
----@return core.docview view The view displaying the document
-function RootPanel:open_doc_in_node(doc, opts)
+---Open a buffer in one explicit layout node.
+---If buffer is already open, switches to that view instead.
+---Creates a new TextView and adds it as a tab in the target node.
+---@param buffer core.buffer Buffer to open
+---@param opts? table Options. opts.source_view copies scroll/selection from another TextView; opts.node targets a specific leaf node.
+---@return core.textview view The view displaying the buffer
+function RootPanel:open_buffer_in_node(buffer, opts)
   opts = opts or {}
   local node = opts.node or self:get_active_node_default()
   for i, view in ipairs(node.views) do
-    if view.doc == doc then
-      file_context.mark_editor_view(view)
+    if view.buffer == buffer then
       node:set_active_view(node.views[i])
       return view
     end
   end
-  local view = file_context.mark_editor_view(DocView(doc))
-  if opts.source_view and opts.source_view.doc == doc and opts.source_view.get_selection_state then
+  local view = Editor(buffer)
+  if opts.source_view and opts.source_view.buffer == buffer and opts.source_view.get_selection_state then
     view:set_selection_state(opts.source_view:get_selection_state())
     view.scroll.x = opts.source_view.scroll.x or 0
     view.scroll.to.x = opts.source_view.scroll.to.x or opts.source_view.scroll.x or 0
@@ -410,13 +409,13 @@ function RootPanel:open_doc_in_node(doc, opts)
   end
   node:add_view(view)
   self.root_node:update_layout()
-  local line = view.selection_state and view.selection_state.selections[1] or view.doc:get_selection()
+  local line = view.selection_state and view.selection_state.selections[1] or view.buffer:get_selection()
   view:scroll_to_line(line, true, true)
   return view
 end
 
-function RootPanel:open_doc(doc, opts)
-  return require("core.panes").open_doc(doc, opts)
+function RootPanel:open_buffer(buffer, opts)
+  return require("core.panes").open_buffer(buffer, opts)
 end
 
 
@@ -427,11 +426,11 @@ function RootPanel:close_all_views(keep_view)
   self.root_node:close_all_views(keep_view)
 end
 
----Close all document views in the node tree.
+---Close all Text Views in the node tree.
 ---Used when closing a project or switching workspaces.
 ---@param keep_active boolean If true, keeps the currently active view open
-function RootPanel:close_all_docviews(keep_active)
-  self.root_node:close_all_docviews(keep_active)
+function RootPanel:close_all_textviews(keep_active)
+  self.root_node:close_all_textviews(keep_active)
 end
 
 
@@ -757,7 +756,7 @@ function RootPanel:on_file_dropped(filename, x, y)
       system.exec(string.format("%q %q", EXEFILE, filename))
     else
       -- change project directory
-      core.confirm_close_docs(core.docs, function(dirpath)
+      core.confirm_close_buffers(core.buffers, function(dirpath)
         core.open_folder_project(dirpath)
       end, system.absolute_path(filename))
       self.first_dnd_processed = true
@@ -778,18 +777,18 @@ function RootPanel:on_file_dropped(filename, x, y)
     log_file_drop("rejected-unsupported-type", filename, x, y, "type=" .. tostring(info.type))
     return true
   end
-  -- defer opening docs in case nagview is visible (which will cause a locked node error)
+  -- defer opening buffers in case nagview is visible (which will cause a locked node error)
   log_file_drop("deferred-file", filename, x, y, "size=" .. tostring(info.size))
-  table.insert(self.defer_open_docs, { filename, x, y })
+  table.insert(self.defer_open_buffers, { filename, x, y })
   return true
 end
 
 
 ---Process deferred file drops (files dropped while nagview was active).
 ---Called during update() to safely open files when nagview is dismissed.
-function RootPanel:process_defer_open_docs()
+function RootPanel:process_defer_open_buffers()
   if core.active_view == core.nag_view then return end
-  for _, drop in ipairs(self.defer_open_docs) do
+  for _, drop in ipairs(self.defer_open_buffers) do
     -- file dragged into editor, try to open it
     local filename, x, y = table.unpack(drop)
     local info, info_err = system.get_file_info(filename)
@@ -798,16 +797,16 @@ function RootPanel:process_defer_open_docs()
         or (info_err and ("error=" .. quote_drop_text(info_err)) or nil)
       log_file_drop("deferred-rejected", filename, x, y, detail)
     else
-      local ok, doc = core.try(core.open_doc, filename)
+      local ok, buffer = core.try(core.open_buffer, filename)
       if ok then
         local node = core.root_panel.root_node:get_child_overlapping_point(x, y)
         node:set_active_view(node.active_view)
-        core.root_panel:open_doc(doc)
+        core.root_panel:open_buffer(buffer)
         log_file_drop("opened-file", filename, x, y, "size=" .. tostring(info.size))
       end
     end
   end
-  self.defer_open_docs = {}
+  self.defer_open_buffers = {}
 end
 
 
@@ -919,7 +918,7 @@ end
 ---Handle window focus lost events.
 ---Forces redraw so cursors can be hidden when window is inactive.
 function RootPanel:on_focus_lost(...)
-  -- We force a redraw so documents can redraw without the cursor.
+  -- Force a redraw so Text Views can redraw without the cursor.
   core.redraw = true
 end
 
@@ -975,8 +974,8 @@ function RootPanel:update()
   self:interpolate_drag_overlay(self.drag_overlay_tab)
   perf_elapsed("rootpanel_drag_overlay_ms", phase_start)
   phase_start = perf_active and system.get_time()
-  self:process_defer_open_docs()
-  perf_elapsed("rootpanel_defer_open_docs_ms", phase_start)
+  self:process_defer_open_buffers()
+  perf_elapsed("rootpanel_defer_open_buffers_ms", phase_start)
   self.first_update_done = true
   perf_elapsed("rootpanel_update_ms", update_start)
 end

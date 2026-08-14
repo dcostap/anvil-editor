@@ -11,7 +11,7 @@ param(
   [switch]$NoAnalyze,
   [switch]$NoKillExisting,
   [switch]$NoStatsFlush,
-  [switch]$NoDocViewStats,
+  [switch]$NoTextViewStats,
   [switch]$ForceContinuousRedraw,
   [string]$FrameStatsFile = "$env:TEMP\anvil_frame_pacing_stats.csv",
   [string]$D3DStatsFile = "$env:TEMP\anvil_d3d11_stats.csv"
@@ -54,10 +54,10 @@ if ($NoStatsFlush) {
   $env:ANVIL_FRAME_PACING_STATS_FLUSH = "1"
   $env:ANVIL_D3D11_STATS_FLUSH = "1"
 }
-if ($NoDocViewStats) {
-  Remove-Item Env:ANVIL_DOCVIEW_STATS -ErrorAction SilentlyContinue
+if ($NoTextViewStats) {
+  Remove-Item Env:ANVIL_TEXTVIEW_STATS -ErrorAction SilentlyContinue
 } else {
-  $env:ANVIL_DOCVIEW_STATS = "1"
+  $env:ANVIL_TEXTVIEW_STATS = "1"
 }
 if ($ForceContinuousRedraw) {
   $env:ANVIL_PERF_CADENCE_ONLY = "1"

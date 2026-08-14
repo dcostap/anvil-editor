@@ -13,7 +13,7 @@ local core = require "core"
 local common = require "core.common"
 local command = require "core.command"
 local config = require "core.config"
-local DocView = require "core.docview"
+local Editor = require "core.editor"
 local View = require "core.view"
 local linewrapping = require "core.linewrapping"
 local perf = require "core.perf"
@@ -31,7 +31,7 @@ end
 local SCROLL_SETTLE_EPSILON = 1e-8
 
 local benchmark = {
-  scenario = env_string("ANVIL_PERF_BENCHMARK_SCENARIO", "wrapped-document-steady"),
+  scenario = env_string("ANVIL_PERF_BENCHMARK_SCENARIO", "wrapped-buffer-steady"),
   mode = env_string("ANVIL_PERF_BENCHMARK_MODE", "metrics"),
   fixture = env_string("ANVIL_PERF_BENCHMARK_FILE"),
   tab_dir = env_string("ANVIL_PERF_BENCHMARK_TAB_DIR"),
@@ -187,9 +187,9 @@ local function write_metrics()
   return write_atomic(benchmark.metrics_file, table.concat(lines, "\n") .. "\n")
 end
 
-local function active_docview()
+local function active_textview()
   local view = core.active_view
-  if view and view:is(DocView) and view.doc then return view end
+  if view and view:is(Editor) and view.buffer then return view end
 end
 
 local function activate_view(view)
@@ -199,13 +199,13 @@ local function activate_view(view)
 end
 
 local function open_file(path)
-  local doc = assert(core.open_doc(path))
-  return activate_view(core.root_panel:open_doc(doc))
+  local buffer = assert(core.open_buffer(path))
+  return activate_view(core.root_panel:open_buffer(buffer))
 end
 
 local function set_position(view, line)
-  line = math.max(1, math.min(#view.doc.lines, line))
-  view.doc:set_selection(line, 1)
+  line = math.max(1, math.min(#view.buffer.lines, line))
+  view.buffer:set_selection(line, 1)
   view:scroll_to_line(line, true)
 end
 
@@ -218,7 +218,7 @@ local function setup_tabs(primary)
   )
   for i = 1, benchmark.tab_count do
     local path = benchmark.tab_dir .. PATHSEP .. string.format("benchmark-tab-%03d.lua", i)
-    node:add_view(DocView(assert(core.open_doc(path))))
+    node:add_view(Editor(assert(core.open_buffer(path))))
   end
   node:set_active_view(primary)
 end
@@ -324,19 +324,19 @@ local function setup_scenario()
   end
   benchmark.view = view
 
-  if benchmark.scenario:find("wrapped%-document", 1, false) then
+  if benchmark.scenario:find("wrapped%-buffer", 1, false) then
     view:set_wrapping_enabled(true)
-    linewrapping.update_docview_breaks(view)
+    linewrapping.update_textview_breaks(view)
   elseif benchmark.scenario == "markdown-long-link-caret-repeat" then
     assert(view.__markdown_live_attached, "Markdown Live Preview did not attach")
     view:set_wrapping_enabled(true)
-    view.doc:set_selection(1, 1000)
-    linewrapping.update_docview_breaks(view)
+    view.buffer:set_selection(1, 1000)
+    linewrapping.update_textview_breaks(view)
   elseif benchmark.scenario == "caret-repeat" then
     view:set_wrapping_enabled(false)
   elseif benchmark.scenario:find("specimen%-", 1, false) then
     view:set_wrapping_enabled(true)
-    linewrapping.update_docview_breaks(view)
+    linewrapping.update_textview_breaks(view)
   end
 
   collectgarbage("collect")
@@ -346,12 +346,12 @@ end
 local function scenario_is_ready()
   local view = benchmark.view
   if not view then return false end
-  if not view.doc then return true end
+  if not view.buffer then return true end
   if view.__markdown_live_attached then
     local markdown_model = require "core.markdown.model"
-    local instance = markdown_model.peek(view.doc)
+    local instance = markdown_model.peek(view.buffer)
     if not (instance and instance.status == "ready"
-      and instance.published_revision == view.doc.text_revision)
+      and instance.published_revision == view.buffer.text_revision)
     then
       return false
     end
@@ -360,18 +360,18 @@ local function scenario_is_ready()
 end
 
 local function perform_action()
-  local view = benchmark.view or active_docview()
+  local view = benchmark.view or active_textview()
   if not view then return end
   local started = system.get_time()
-  if benchmark.scenario == "wrapped-document-scroll"
+  if benchmark.scenario == "wrapped-buffer-scroll"
       or benchmark.scenario == "specimen-scroll"
   then
     local line = benchmark.start_line + benchmark.action_count * benchmark.scroll_lines
-    if line > #view.doc.lines then line = benchmark.start_line end
+    if line > #view.buffer.lines then line = benchmark.start_line end
     set_position(view, line)
     benchmark.action_count = benchmark.action_count + 1
   elseif benchmark.scenario == "specimen-soak" then
-    local span = math.max(1, #view.doc.lines - benchmark.start_line)
+    local span = math.max(1, #view.buffer.lines - benchmark.start_line)
     local offset = benchmark.action_count % (span * 2)
     if offset > span then offset = span * 2 - offset end
     set_position(view, benchmark.start_line + offset)
@@ -381,11 +381,11 @@ local function perform_action()
       or benchmark.scenario == "specimen-caret-repeat"
   then
     if benchmark.scenario == "markdown-long-link-caret-repeat" then
-      local line = view.doc:get_selection()
-      if line ~= 1 then view.doc:set_selection(1, 1000) end
+      local line = view.buffer:get_selection()
+      if line ~= 1 then view.buffer:set_selection(1, 1000) end
     end
-    if not command.perform("doc:move-to-next-line") then
-      error("doc:move-to-next-line was unavailable")
+    if not command.perform("text:move-to-next-line") then
+      error("text:move-to-next-line was unavailable")
     end
     benchmark.action_count = benchmark.action_count + 1
   end
@@ -448,8 +448,8 @@ local function finish_success()
   local elapsed = math.max(0.000001, benchmark.measure_end - benchmark.measure_start)
   local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
   local selection_line, selection_col = 0, 0
-  if benchmark.view and benchmark.view.doc then
-    selection_line, selection_col = benchmark.view.doc:get_selection()
+  if benchmark.view and benchmark.view.buffer then
+    selection_line, selection_col = benchmark.view.buffer:get_selection()
   end
   local metrics_ok, metrics_err = write_metrics()
   local result_ok, result_err = write_result {
@@ -475,11 +475,11 @@ local function finish_success()
     metrics_file = benchmark.metrics_file,
     lifecycle_file = benchmark.lifecycle_file,
     heartbeat_file = benchmark.heartbeat_file,
-    doc_lines = benchmark.view and benchmark.view.doc and #benchmark.view.doc.lines or 0,
-    wrapped_rows = benchmark.view and benchmark.view.doc
+    buffer_lines = benchmark.view and benchmark.view.buffer and #benchmark.view.buffer.lines or 0,
+    wrapped_rows = benchmark.view and benchmark.view.buffer
       and linewrapping.get_total_wrapped_lines(benchmark.view) or 0,
-    text_revision = benchmark.view and benchmark.view.doc
-      and benchmark.view.doc.text_revision or 0,
+    text_revision = benchmark.view and benchmark.view.buffer
+      and benchmark.view.buffer.text_revision or 0,
     selection_line = selection_line,
     selection_col = selection_col,
     scroll_x = benchmark.view and benchmark.view.scroll and benchmark.view.scroll.x or 0,

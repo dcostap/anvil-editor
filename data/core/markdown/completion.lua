@@ -34,7 +34,7 @@ end
 function completion.context(view)
   local line, col = primary_caret(view)
   if not line then return nil end
-  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
   local col1 = open_wikilink_start(text, col)
   if not col1 then return nil end
   local partial = text:sub(col1 + 2, col - 1)
@@ -70,7 +70,7 @@ function completion.apply(view, target)
     last_selection = 1,
   })
   view:with_selection_state(function()
-    view.doc:text_input("[[" .. target .. "]]", false)
+    view.buffer:text_input("[[" .. target .. "]]", false)
   end)
   core.log_quiet("Markdown link completion inserted %s", target)
   return true
@@ -79,7 +79,7 @@ end
 function completion.symbols(view)
   local context = completion.context(view)
   if not context then return nil, "caret is not in an incomplete Wikilink" end
-  local path = view.doc.abs_filename or view.doc.filename
+  local path = view.buffer.abs_filename or view.buffer.filename
   local index = path and vault_index.index_for_path(path)
   if not index then return nil, "index unavailable" end
   if index.status ~= "ready" then

@@ -6,8 +6,8 @@ local keymap = require "core.keymap"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local panes = require "core.panes"
 local file_context = require "core.file_context"
 
@@ -26,23 +26,23 @@ local function remove_file(path)
   pcall(os.remove, path)
 end
 
-local function close_file_views_and_docs(path)
+local function close_file_views_and_buffers(path)
   for _, view in ipairs(core.root_panel.root_node:get_children()) do
-    local view_path = view.path or (view.doc and view.doc.abs_filename)
+    local view_path = view.path or (view.buffer and view.buffer.abs_filename)
     if view_path == path then
       local node = core.root_panel.root_node:get_node_for_view(view)
       if node then
-        if view:extends(DocView) and view.doc:is_dirty() then view.doc:clean() end
+        if view:extends(TextView) and view.buffer:is_dirty() then view.buffer:clean() end
         node:remove_view(core.root_panel.root_node, view)
       end
     end
   end
-  for i = #core.docs, 1, -1 do
-    local doc = core.docs[i]
-    if doc.abs_filename == path then
-      if doc:is_dirty() then doc:clean() end
-      table.remove(core.docs, i)
-      doc:on_close()
+  for i = #core.buffers, 1, -1 do
+    local buffer = core.buffers[i]
+    if buffer.abs_filename == path then
+      if buffer:is_dirty() then buffer:clean() end
+      table.remove(core.buffers, i)
+      buffer:on_close()
     end
   end
 end
@@ -108,9 +108,9 @@ test.describe("Fuzzy Searcher preview", function()
     if core.fuzzy_searcher_active_view then
       core.fuzzy_searcher_active_view:close()
     end
-    for _, doc in ipairs(context.docs or {}) do doc:on_close() end
+    for _, buffer in ipairs(context.buffers or {}) do buffer:on_close() end
     for _, path in ipairs(context.files or {}) do
-      close_file_views_and_docs(path)
+      close_file_views_and_buffers(path)
       remove_file(path)
     end
   end)
@@ -140,7 +140,7 @@ test.describe("Fuzzy Searcher preview", function()
     picker:confirm(false)
 
     local view = core.active_view
-    test.ok(view and view.doc and view.doc.abs_filename == path, "expected accepted grep result to open its file")
+    test.ok(view and view.buffer and view.buffer.abs_filename == path, "expected accepted grep result to open its file")
     test.same(selection_state(view), { 1, 7, 1, 13 })
   end)
 
@@ -158,19 +158,19 @@ test.describe("Fuzzy Searcher preview", function()
     test.ok(ph > 0)
   end)
 
-  test.it("focuses a selected document-backed result's file in the File Tree", function(context)
-    local path = assert(core.root_project()).path .. PATHSEP .. "fuzzy-focus-document-result-test.txt"
+  test.it("focuses a selected buffer-backed result's file in the File Tree", function(context)
+    local path = assert(core.root_project()).path .. PATHSEP .. "fuzzy-focus-buffer-result-test.txt"
     context.files = { path }
-    write_file(path, "document target\n")
+    write_file(path, "buffer target\n")
 
-    local doc = Doc()
-    doc:set_filename(path, path)
-    context.docs = { doc }
-    fuzzy_searcher.open_static_results("Document results", {
+    local buffer = Buffer()
+    buffer:set_filename(path, path)
+    context.buffers = { buffer }
+    fuzzy_searcher.open_static_results("Buffer results", {
       {
         kind = "symbol",
-        label = "document target",
-        doc = doc,
+        label = "buffer target",
+        buffer = buffer,
         line = 1,
         col = 1,
       }
@@ -179,11 +179,11 @@ test.describe("Fuzzy Searcher preview", function()
     test.ok(command.perform("fuzzy-searcher:focus-selected-in-tree"), "expected focus command to run")
 
     local filetree = require "plugins.filetree"
-    local line = filetree.doc:get_selection()
+    local line = filetree.buffer:get_selection()
     local entry = filetree:entry_for_line(line)
     test.is_nil(core.fuzzy_searcher_active_view, "expected picker to close after focusing its relevant file")
     test.equal(core.active_view, filetree)
-    test.ok(entry and common.path_equals(entry.abs, path), "expected File Tree selection on the result's Document file")
+    test.ok(entry and common.path_equals(entry.abs, path), "expected File Tree selection on the result's Buffer file")
   end)
 
   test.it("focuses a Right Pane Editor when accepting a file for the Right Pane", function(context)
@@ -205,7 +205,7 @@ test.describe("Fuzzy Searcher preview", function()
     test.ok(command.perform("poi:activate-right"))
 
     local view = core.active_view
-    test.ok(view and view.doc and view.doc.abs_filename == path, "expected side-accepted file to become active")
+    test.ok(view and view.buffer and view.buffer.abs_filename == path, "expected side-accepted file to become active")
     test.equal(panes.pane_for_view(view), "right")
     test.ok(file_context.is_editor_view(view), "expected accepted file to be focused as a Right Pane Editor")
   end)
@@ -265,13 +265,13 @@ test.describe("Fuzzy Searcher preview", function()
     test.ok(command.perform("poi:activate"))
 
     local view = core.active_view
-    test.ok(view and view.doc and view.doc.abs_filename == path, "expected accepted grep result to open its file")
+    test.ok(view and view.buffer and view.buffer.abs_filename == path, "expected accepted grep result to open its file")
     test.same(selection_state(view), { 1, 1, 1, 1 })
   end)
 
-  test.it("keeps preview documents lightweight and unwrapped", function(context)
+  test.it("keeps preview Buffers lightweight and unwrapped", function(context)
     config.plugins.linewrapping.enable_by_default = true
-    local path = temp_file_path("fuzzy-preview-lightweight-doc-test.txt")
+    local path = temp_file_path("fuzzy-preview-lightweight-buffer-test.txt")
     context.files = { path }
     write_file(path, "preview only\n")
 
@@ -288,14 +288,14 @@ test.describe("Fuzzy Searcher preview", function()
 
     local preview = picker:update_preview_view()
 
-    test.ok(preview and preview.doc, "expected a DocView preview")
-    test.equal(preview.doc.disable_language_services, true)
-    test.equal(preview.doc.disable_treesitter, true)
-    test.equal(preview.doc.disable_gitdiff_highlight, true)
+    test.ok(preview and preview.buffer, "expected a TextView preview")
+    test.equal(preview.buffer.disable_language_services, true)
+    test.equal(preview.buffer.disable_treesitter, true)
+    test.equal(preview.buffer.disable_gitdiff_highlight, true)
     test.equal(preview:is_wrapping_enabled(), false)
   end)
 
-  test.it("horizontally reveals off-screen content matches in the DocView preview", function(context)
+  test.it("horizontally reveals off-screen content matches in the TextView preview", function(context)
     config.plugins.linewrapping.enable_by_default = false
 
     local prefix = string.rep("x", 120)
@@ -324,7 +324,7 @@ test.describe("Fuzzy Searcher preview", function()
 
     local preview = picker:update_preview_view()
 
-    test.ok(preview and preview.doc, "expected a DocView preview")
+    test.ok(preview and preview.buffer, "expected a TextView preview")
     local x1, x2 = range_x(preview, 1, col1, col2)
     test.ok(preview.scroll.x > 0, "expected preview to scroll horizontally to the content match")
     test.ok(x1 >= preview.scroll.x, "expected preview match start to be visible")

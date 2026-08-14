@@ -6,7 +6,7 @@ local core = require "core"
 -- capabilities instead of hard-coding Tree-sitter or a future LSP client.
 -- Precedence rules:
 --   * Providers with higher `priority` are tried first.
---   * Tree-sitter registers as a syntactic/current-document fallback provider.
+--   * Tree-sitter registers as a syntactic/current-buffer fallback provider.
 --   * Future LSP providers should use a higher priority for semantic outline,
 --     definition/reference, navigation, diagnostics, and similar features.
 --   * Tree-sitter highlighting remains the base syntax token provider; future
@@ -79,13 +79,13 @@ local function provider_allowed(provider, opts)
   return true
 end
 
-function intelligence.providers_for(feature, doc, opts)
+function intelligence.providers_for(feature, buffer, opts)
   local result = {}
   for _, id in ipairs(provider_order) do
     local provider = providers[id]
     if provider_allowed(provider, opts)
       and has_feature(provider, feature)
-      and (not provider.is_available or provider.is_available(doc, feature))
+      and (not provider.is_available or provider.is_available(buffer, feature))
     then
       result[#result + 1] = provider
     end
@@ -135,15 +135,15 @@ local function options_from_last_arg(args)
   return type(last) == "table" and last or nil
 end
 
-local function first_value(feature, empty_value, doc, ...)
+local function first_value(feature, empty_value, buffer, ...)
   local args = { n = select("#", ...), ... }
   local opts = options_from_last_arg(args)
   local saw_provider = false
   local last_reason = "no-provider"
   local last_status = "unavailable"
-  for _, provider in ipairs(intelligence.providers_for(feature, doc, opts)) do
+  for _, provider in ipairs(intelligence.providers_for(feature, buffer, opts)) do
     saw_provider = true
-    local value, reason, status = normalize_result(provider[feature](doc, table.unpack(args, 1, args.n)))
+    local value, reason, status = normalize_result(provider[feature](buffer, table.unpack(args, 1, args.n)))
     if should_use_value(value, status) then
       return value, reason, provider.id, status or "fresh"
     end
@@ -153,15 +153,15 @@ local function first_value(feature, empty_value, doc, ...)
   return empty_value, saw_provider and last_reason or "no-provider", nil, saw_provider and last_status or "unavailable"
 end
 
-local function first_bool(feature, doc, ...)
+local function first_bool(feature, buffer, ...)
   local args = { n = select("#", ...), ... }
   local opts = options_from_last_arg(args)
   local saw_provider = false
   local last_reason = "no-provider"
   local last_status = "unavailable"
-  for _, provider in ipairs(intelligence.providers_for(feature, doc, opts)) do
+  for _, provider in ipairs(intelligence.providers_for(feature, buffer, opts)) do
     saw_provider = true
-    local ok, reason, status = normalize_result(provider[feature](doc, table.unpack(args, 1, args.n)))
+    local ok, reason, status = normalize_result(provider[feature](buffer, table.unpack(args, 1, args.n)))
     if ok then return true, nil, provider.id, status or "fresh" end
     last_reason = reason or last_reason
     last_status = status or last_status
@@ -169,116 +169,116 @@ local function first_bool(feature, doc, ...)
   return false, saw_provider and last_reason or "no-provider", nil, saw_provider and last_status or "unavailable"
 end
 
-function intelligence.render_tokens(doc, line_idx, opts)
-  return first_value("render_tokens", nil, doc, line_idx, opts)
+function intelligence.render_tokens(buffer, line_idx, opts)
+  return first_value("render_tokens", nil, buffer, line_idx, opts)
 end
 
-function intelligence.invalidate_render_cache(doc, first_line, last_line)
-  for _, provider in ipairs(intelligence.providers_for("invalidate_render_cache", doc)) do
-    provider.invalidate_render_cache(doc, first_line, last_line)
+function intelligence.invalidate_render_cache(buffer, first_line, last_line)
+  for _, provider in ipairs(intelligence.providers_for("invalidate_render_cache", buffer)) do
+    provider.invalidate_render_cache(buffer, first_line, last_line)
   end
 end
 
-function intelligence.document_outline(doc, opts)
-  return first_value("document_outline", {}, doc, opts)
+function intelligence.buffer_outline(buffer, opts)
+  return first_value("buffer_outline", {}, buffer, opts)
 end
 
-function intelligence.current_document_outline(opts)
+function intelligence.current_buffer_outline(opts)
   local view = core.active_view
-  return intelligence.document_outline(view and view.doc, opts)
+  return intelligence.buffer_outline(view and view.buffer, opts)
 end
 
-function intelligence.node_ranges(doc, line1, col1, line2, col2, opts)
-  return first_value("node_ranges", {}, doc, line1, col1, line2, col2, opts)
+function intelligence.node_ranges(buffer, line1, col1, line2, col2, opts)
+  return first_value("node_ranges", {}, buffer, line1, col1, line2, col2, opts)
 end
 
-function intelligence.fold_target(doc, line1, col1, line2, col2, opts)
-  return first_value("fold_target", nil, doc, line1, col1, line2, col2, opts)
+function intelligence.fold_target(buffer, line1, col1, line2, col2, opts)
+  return first_value("fold_target", nil, buffer, line1, col1, line2, col2, opts)
 end
 
 function intelligence.current_node_ranges(opts)
   local view = core.active_view
-  return intelligence.node_ranges(view and view.doc, nil, nil, nil, nil, opts)
+  return intelligence.node_ranges(view and view.buffer, nil, nil, nil, nil, opts)
 end
 
-function intelligence.expand_selection(doc)
-  return first_bool("expand_selection", doc)
+function intelligence.expand_selection(buffer)
+  return first_bool("expand_selection", buffer)
 end
 
-function intelligence.shrink_selection(doc)
-  return first_bool("shrink_selection", doc)
+function intelligence.shrink_selection(buffer)
+  return first_bool("shrink_selection", buffer)
 end
 
-function intelligence.enclosing_symbol(doc, line1, col1, line2, col2, opts)
-  return first_value("enclosing_symbol", nil, doc, line1, col1, line2, col2, opts)
+function intelligence.enclosing_symbol(buffer, line1, col1, line2, col2, opts)
+  return first_value("enclosing_symbol", nil, buffer, line1, col1, line2, col2, opts)
 end
 
-function intelligence.next_symbol(doc, line, col, opts)
-  return first_value("next_symbol", nil, doc, line, col, opts)
+function intelligence.next_symbol(buffer, line, col, opts)
+  return first_value("next_symbol", nil, buffer, line, col, opts)
 end
 
-function intelligence.previous_symbol(doc, line, col, opts)
-  return first_value("previous_symbol", nil, doc, line, col, opts)
+function intelligence.previous_symbol(buffer, line, col, opts)
+  return first_value("previous_symbol", nil, buffer, line, col, opts)
 end
 
-function intelligence.goto_enclosing_symbol(doc)
-  return first_bool("goto_enclosing_symbol", doc)
+function intelligence.goto_enclosing_symbol(buffer)
+  return first_bool("goto_enclosing_symbol", buffer)
 end
 
-function intelligence.goto_next_symbol(doc)
-  return first_bool("goto_next_symbol", doc)
+function intelligence.goto_next_symbol(buffer)
+  return first_bool("goto_next_symbol", buffer)
 end
 
-function intelligence.goto_previous_symbol(doc)
-  return first_bool("goto_previous_symbol", doc)
+function intelligence.goto_previous_symbol(buffer)
+  return first_bool("goto_previous_symbol", buffer)
 end
 
-function intelligence.local_definition(doc, line1, col1, line2, col2, opts)
-  return first_value("local_definition", nil, doc, line1, col1, line2, col2, opts)
+function intelligence.local_definition(buffer, line1, col1, line2, col2, opts)
+  return first_value("local_definition", nil, buffer, line1, col1, line2, col2, opts)
 end
 
-function intelligence.local_declaration(doc, line1, col1, line2, col2, opts)
-  return first_value("local_declaration", nil, doc, line1, col1, line2, col2, opts)
+function intelligence.local_declaration(buffer, line1, col1, line2, col2, opts)
+  return first_value("local_declaration", nil, buffer, line1, col1, line2, col2, opts)
 end
 
-function intelligence.local_references(doc, line1, col1, line2, col2, opts)
-  return first_value("local_references", {}, doc, line1, col1, line2, col2, opts)
+function intelligence.local_references(buffer, line1, col1, line2, col2, opts)
+  return first_value("local_references", {}, buffer, line1, col1, line2, col2, opts)
 end
 
-function intelligence.definitions(doc, line1, col1, line2, col2, opts)
-  return first_value("definitions", {}, doc, line1, col1, line2, col2, opts)
+function intelligence.definitions(buffer, line1, col1, line2, col2, opts)
+  return first_value("definitions", {}, buffer, line1, col1, line2, col2, opts)
 end
 
-function intelligence.declarations(doc, line1, col1, line2, col2, opts)
-  return first_value("declarations", {}, doc, line1, col1, line2, col2, opts)
+function intelligence.declarations(buffer, line1, col1, line2, col2, opts)
+  return first_value("declarations", {}, buffer, line1, col1, line2, col2, opts)
 end
 
-function intelligence.references(doc, line1, col1, line2, col2, opts)
-  return first_value("references", {}, doc, line1, col1, line2, col2, opts)
+function intelligence.references(buffer, line1, col1, line2, col2, opts)
+  return first_value("references", {}, buffer, line1, col1, line2, col2, opts)
 end
 
-function intelligence.diagnostics(doc, opts)
-  return first_value("diagnostics", {}, doc, opts)
+function intelligence.diagnostics(buffer, opts)
+  return first_value("diagnostics", {}, buffer, opts)
 end
 
-function intelligence.indent_for_line(doc, line, context, opts)
-  return first_value("indent_for_line", nil, doc, line, context or {}, opts)
+function intelligence.indent_for_line(buffer, line, context, opts)
+  return first_value("indent_for_line", nil, buffer, line, context or {}, opts)
 end
 
-function intelligence.newline_continuation(doc, line, context, opts)
-  return first_value("newline_continuation", nil, doc, line, context or {}, opts)
+function intelligence.newline_continuation(buffer, line, context, opts)
+  return first_value("newline_continuation", nil, buffer, line, context or {}, opts)
 end
 
-function intelligence.goto_local_definition(doc)
-  return first_bool("goto_local_definition", doc)
+function intelligence.goto_local_definition(buffer)
+  return first_bool("goto_local_definition", buffer)
 end
 
-function intelligence.goto_local_declaration(doc)
-  return first_bool("goto_local_declaration", doc)
+function intelligence.goto_local_declaration(buffer)
+  return first_bool("goto_local_declaration", buffer)
 end
 
-function intelligence.select_local_references(doc)
-  return first_bool("select_local_references", doc)
+function intelligence.select_local_references(buffer)
+  return first_bool("select_local_references", buffer)
 end
 
 return intelligence

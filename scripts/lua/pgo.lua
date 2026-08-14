@@ -153,12 +153,12 @@ end
 ---Opens a file and stress scrolling while waiting for tokenization to finish.
 ---@param abs_path string
 local function file_stress(abs_path)
-  ---@type core.docview
-  local dv = core.root_panel:open_doc(core.open_doc(abs_path))
+  ---@type core.textview
+  local dv = core.root_panel:open_buffer(core.open_buffer(abs_path))
 
   coroutine.yield()
 
-  local total_lines = #dv.doc.lines
+  local total_lines = #dv.buffer.lines
 
   dv:scroll_to_make_visible(total_lines, 1)
 
@@ -168,22 +168,22 @@ local function file_stress(abs_path)
     coroutine.yield()
   end
 
-  dv.doc:set_selection(total_lines, 1)
+  dv.buffer:set_selection(total_lines, 1)
 
-  while dv.doc.highlighter.running do
+  while dv.buffer.highlighter.running do
     core.log(
       "Parsing Lines: %d%%",
-      math.ceil((dv.doc.highlighter.first_invalid_line / total_lines) * 100)
+      math.ceil((dv.buffer.highlighter.first_invalid_line / total_lines) * 100)
     )
 
     -- stress scrolling while tokenizing
     if dv.scroll.y == dv.scroll.to.y then
-      if dv.doc:get_selection() ~= 1 then
+      if dv.buffer:get_selection() ~= 1 then
         dv:scroll_to_make_visible(1, 1)
-        dv.doc:set_selection(1, 1)
+        dv.buffer:set_selection(1, 1)
       else
         dv:scroll_to_make_visible(total_lines, 1)
-        dv.doc:set_selection(total_lines, 1)
+        dv.buffer:set_selection(total_lines, 1)
       end
     end
     coroutine.yield()
@@ -194,7 +194,7 @@ local function file_stress(abs_path)
 end
 
 ---Helper for input_stress
----@param dv core.docview
+---@param dv core.textview
 ---@param text string
 local function input_text(dv, text)
   for c=1, #text do
@@ -210,12 +210,12 @@ end
 local function input_stress(abs_path)
   config.scroll_context_lines = 0
 
-   ---@type core.docview
-  local dv = core.root_panel:open_doc(core.open_doc(abs_path))
+   ---@type core.textview
+  local dv = core.root_panel:open_buffer(core.open_buffer(abs_path))
 
   coroutine.yield()
 
-  local total_lines = #dv.doc.lines
+  local total_lines = #dv.buffer.lines
 
   for l=1, total_lines do
     dv:scroll_to_make_visible(total_lines, l)
@@ -226,19 +226,19 @@ local function input_stress(abs_path)
       coroutine.yield()
     end
 
-    dv.doc:set_selection(l, 1)
+    dv.buffer:set_selection(l, 1)
     input_text(dv, "<a href=\"#\">hello world!</a>")
 
-    dv.doc:set_selection(l, math.floor(#dv.doc.lines[l] / 2))
+    dv.buffer:set_selection(l, math.floor(#dv.buffer.lines[l] / 2))
     input_text(dv, "<style>.hello-world{background-color: #fff}</style>")
 
-    dv.doc:set_selection(l, #dv.doc.lines[l] - 1)
+    dv.buffer:set_selection(l, #dv.buffer.lines[l] - 1)
     input_text(dv, "<script>alert('hello world');</script>")
 
     coroutine.yield()
   end
 
-  dv.doc:clear_undo_redo()
+  dv.buffer:clear_undo_redo()
   command.perform "root:close"
 end
 
@@ -393,7 +393,7 @@ local function generate_html_stress(path, blocks)
       <script>
         // Script block #%d
         (function() {
-          let el = document.querySelector(".block%d");
+          let el = buffer.querySelector(".block%d");
           if (el) {
             el.innerHTML += "<p>Script-enhanced content #%d</p>";
           }
@@ -408,7 +408,7 @@ local function generate_html_stress(path, blocks)
   f:close()
 end
 
----Generate markdown text to stress the tokenizer without depending on repo docs.
+---Generate markdown text to stress the tokenizer without depending on repo buffers.
 ---@param path string
 ---@param blocks integer
 local function generate_markdown_stress(path, blocks)
@@ -626,7 +626,7 @@ core.add_background_thread(function()
     html_file
   }) do
     if file ~= "none" then
-      core.root_panel:open_doc(core.open_doc(file))
+      core.root_panel:open_buffer(core.open_buffer(file))
       coroutine.yield()
     end
     for _=1, 3 do

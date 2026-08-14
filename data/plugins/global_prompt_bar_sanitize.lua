@@ -25,26 +25,26 @@ local function clean(text)
   return tostring(text or ""):gsub("\r", "")
 end
 
-local function clean_doc(doc)
-  if not doc or not doc.lines then return end
-  for i, line in ipairs(doc.lines) do
+local function clean_buffer(buffer)
+  if not buffer or not buffer.lines then return end
+  for i, line in ipairs(buffer.lines) do
     if type(line) == "string" and line:find("\r", 1, true) then
-      doc.lines[i] = line:gsub("\r", "")
+      buffer.lines[i] = line:gsub("\r", "")
     end
   end
 end
 
-local function patch_prompt_doc(doc)
-  if not doc or doc.__local_global_prompt_bar_cr_patched then return end
-  doc.__local_global_prompt_bar_cr_patched = true
+local function patch_prompt_buffer(buffer)
+  if not buffer or buffer.__local_global_prompt_bar_cr_patched then return end
+  buffer.__local_global_prompt_bar_cr_patched = true
 
-  local insert = doc.insert
-  function doc:insert(line, col, text, ...)
+  local insert = buffer.insert
+  function buffer:insert(line, col, text, ...)
     return insert(self, line, col, clean(text), ...)
   end
 
-  local text_input = doc.text_input
-  function doc:text_input(text, ...)
+  local text_input = buffer.text_input
+  function buffer:text_input(text, ...)
     return text_input(self, clean(text), ...)
   end
 end
@@ -73,7 +73,7 @@ if not GlobalPromptBar.__local_sanitize_cr_patched_v2 then
   local new = GlobalPromptBar.new
   function GlobalPromptBar:new(...)
     local res = new(self, ...)
-    patch_prompt_doc(self.doc)
+    patch_prompt_buffer(self.buffer)
     return res
   end
 
@@ -88,19 +88,19 @@ if not GlobalPromptBar.__local_sanitize_cr_patched_v2 then
 
   local get_text = GlobalPromptBar.get_text
   function GlobalPromptBar:get_text(...)
-    clean_doc(self.doc)
+    clean_buffer(self.buffer)
     return clean(get_text(self, ...))
   end
 
   local set_text = GlobalPromptBar.set_text
   function GlobalPromptBar:set_text(text, ...)
-    patch_prompt_doc(self.doc)
+    patch_prompt_buffer(self.buffer)
     return set_text(self, clean(text), ...)
   end
 
   local on_text_input = GlobalPromptBar.on_text_input
   function GlobalPromptBar:on_text_input(text, ...)
-    patch_prompt_doc(self.doc)
+    patch_prompt_buffer(self.buffer)
     return on_text_input(self, clean(text), ...)
   end
 end
@@ -108,6 +108,6 @@ end
 -- Patch the already-created Global Prompt Bar too; it exists before user
 -- plugins are loaded.
 if core.global_prompt_bar then
-  patch_prompt_doc(core.global_prompt_bar.doc)
-  clean_doc(core.global_prompt_bar.doc)
+  patch_prompt_buffer(core.global_prompt_bar.buffer)
+  clean_buffer(core.global_prompt_bar.buffer)
 end

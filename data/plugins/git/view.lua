@@ -6,8 +6,8 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local View = require "core.view"
 local GitModel = require "plugins.git.model"
 local path_tree = require "plugins.path_tree"
@@ -18,51 +18,51 @@ local function reject_read_only_edit()
   return false
 end
 
-local function make_pane_doc(name)
-  local doc = Doc(nil, nil, true)
-  doc.git_view_pane_read_only = true
-  doc.git_view_pane_name = name
-  doc.apply_edits = reject_read_only_edit
-  doc.text_input = reject_read_only_edit
-  doc.ime_text_editing = reject_read_only_edit
-  doc.insert = reject_read_only_edit
-  doc.remove = reject_read_only_edit
-  doc.replace = reject_read_only_edit
-  doc.replace_cursor = reject_read_only_edit
-  doc.save = reject_read_only_edit
-  doc.is_dirty = function() return false end
-  doc.get_name = function(self) return self.git_view_pane_name or "Git Pane" end
-  return doc
+local function make_pane_buffer(name)
+  local buffer = Buffer(nil, nil, true)
+  buffer.git_view_pane_read_only = true
+  buffer.git_view_pane_name = name
+  buffer.apply_edits = reject_read_only_edit
+  buffer.text_input = reject_read_only_edit
+  buffer.ime_text_editing = reject_read_only_edit
+  buffer.insert = reject_read_only_edit
+  buffer.remove = reject_read_only_edit
+  buffer.replace = reject_read_only_edit
+  buffer.replace_cursor = reject_read_only_edit
+  buffer.save = reject_read_only_edit
+  buffer.is_dirty = function() return false end
+  buffer.get_name = function(self) return self.git_view_pane_name or "Git Pane" end
+  return buffer
 end
 
-local function set_doc_lines(view, lines)
-  local doc = view.doc
+local function set_buffer_lines(view, lines)
+  local buffer = view.buffer
   local text = table.concat(lines or {}, "\n")
   if text ~= "" then text = text .. "\n" end
-  if doc.git_view_pane_text == text then return end
-  local old_line_count = #doc.lines
-  doc.git_view_pane_text = text
-  doc.lines = {}
+  if buffer.git_view_pane_text == text then return end
+  local old_line_count = #buffer.lines
+  buffer.git_view_pane_text = text
+  buffer.lines = {}
   if text == "" then
-    doc.lines[1] = "\n"
+    buffer.lines[1] = "\n"
   else
-    for line in text:gmatch("[^\n]*\n") do doc.lines[#doc.lines + 1] = line end
+    for line in text:gmatch("[^\n]*\n") do buffer.lines[#buffer.lines + 1] = line end
   end
-  if view.invalidate_path_tree_document then
-    view:invalidate_path_tree_document(old_line_count)
+  if view.invalidate_path_tree_buffer then
+    view:invalidate_path_tree_buffer(old_line_count)
   else
-    if doc.highlighter then doc.highlighter:soft_reset() end
-    doc:clear_cache(1, math.max(old_line_count, #doc.lines))
-    doc.text_revision = (doc.text_revision or 0) + 1
-    doc:sanitize_selection()
-    view:invalidate_line_render("git-pane-document")
-    view:invalidate_visual_metrics("git-pane-document")
+    if buffer.highlighter then buffer.highlighter:soft_reset() end
+    buffer:clear_cache(1, math.max(old_line_count, #buffer.lines))
+    buffer.text_revision = (buffer.text_revision or 0) + 1
+    buffer:sanitize_selection()
+    view:invalidate_line_render("git-pane-buffer")
+    view:invalidate_visual_metrics("git-pane-buffer")
   end
-  doc:clear_undo_redo()
-  doc:clean()
-  local current_line = doc:get_selection()
-  local line = math.max(1, math.min(#doc.lines, current_line or 1))
-  doc:set_selection(line, 1, line, 1)
+  buffer:clear_undo_redo()
+  buffer:clean()
+  local current_line = buffer:get_selection()
+  local line = math.max(1, math.min(#buffer.lines, current_line or 1))
+  buffer:set_selection(line, 1, line, 1)
   if view.scroll_to_make_visible then view:scroll_to_make_visible(line, 1, true) end
 end
 
@@ -107,8 +107,8 @@ function GitView:pane_view(name)
   self.pane_views = self.pane_views or {}
   local view = self.pane_views[name]
   if not view then
-    local ViewType = (name == "file-list" or name == "details") and path_tree.View or DocView
-    view = ViewType(make_pane_doc("Git " .. name))
+    local ViewType = (name == "file-list" or name == "details") and path_tree.View or TextView
+    view = ViewType(make_pane_buffer("Git " .. name))
     view.font = "prose_font"
     view:set_wrapping_enabled(false)
     view.git_owner_view = self
@@ -116,7 +116,7 @@ function GitView:pane_view(name)
     view.get_point_of_interest_at = function(v, line)
       return self:point_of_interest_for_pane(v, line)
     end
-    if ViewType == DocView then
+    if ViewType == TextView then
       view.get_gutter_width = function() return 0 end
       view.draw_line_gutter = function(v) return v:get_line_height() end
     end
@@ -161,7 +161,7 @@ end
 
 function GitView:set_pane_lines(name, lines)
   local view = self:pane_view(name)
-  set_doc_lines(view, lines)
+  set_buffer_lines(view, lines)
   return view
 end
 
@@ -198,7 +198,7 @@ function GitView:set_refresh_pending(callback)
 end
 
 function GitView:get_focus_view()
-  self:update_pane_docs()
+  self:update_pane_buffers()
   local active = core.active_view
   if active and active.git_owner_view == self then return active end
   if self.focused_pane_name and self.pane_views and self.pane_views[self.focused_pane_name] then
@@ -207,17 +207,17 @@ function GitView:get_focus_view()
   local tab = self.model and self:model_tab()
   if self.focus_pane == "diff" and tab and tab.kind == "commit_diff" then
     if tab.loading_file or tab.file_error or (tab.left_text == nil and tab.right_text == nil) then
-      self.focused_diff_doc_view = nil
+      self.focused_diff_buffer_view = nil
       return self:pane_view("file-list")
     end
     local diff = self:ensure_diff_view(tab)
-    if core.active_view and (core.active_view == diff.doc_view_a or core.active_view == diff.doc_view_b) then
+    if core.active_view and (core.active_view == diff.buffer_view_a or core.active_view == diff.buffer_view_b) then
       return core.active_view
     end
-    if self.focused_diff_doc_view == diff.doc_view_a or self.focused_diff_doc_view == diff.doc_view_b then
-      return self.focused_diff_doc_view
+    if self.focused_diff_buffer_view == diff.buffer_view_a or self.focused_diff_buffer_view == diff.buffer_view_b then
+      return self.focused_diff_buffer_view
     end
-    self.focused_diff_doc_view = nil
+    self.focused_diff_buffer_view = nil
     return diff and diff.get_focus_view and diff:get_focus_view() or self:pane_view("file-list")
   end
   if tab and tab.kind == "file_history" then return self:pane_view("history-list") end
@@ -422,22 +422,22 @@ end
 
 function GitView:on_mouse_pressed(button, x, y, clicks)
   self:activate_model_tab(function() core.redraw = true end)
-  self:update_pane_docs()
+  self:update_pane_buffers()
   local pane = self:pane_at_point(x, y)
   if pane then
     self.focused_pane_name = pane.git_pane
-    self.focus_pane = "doc"
+    self.focus_pane = "buffer"
     core.set_active_view(pane)
     local content_click = false
-    if button == "left" and pane.doc and pane.resolve_screen_position then
-      local cmd = clicks == 2 and "doc:set-cursor-word" or clicks and clicks >= 3 and "doc:set-cursor-line" or "doc:set-cursor"
+    if button == "left" and pane.buffer and pane.resolve_screen_position then
+      local cmd = clicks == 2 and "text:set-cursor-word" or clicks and clicks >= 3 and "text:set-cursor-line" or "text:set-cursor"
       content_click = command.perform(cmd, x, y, clicks)
     end
     self.mouse_pane = pane
     if not content_click then pane:on_mouse_pressed(button, x, y, clicks) end
     self:sync_selection_from_pane()
     local toggled_details_folder = clicks and clicks > 1 and pane.git_pane == "details"
-      and self:toggle_details_tree_folder(pane, pane.doc:get_selection())
+      and self:toggle_details_tree_folder(pane, pane.buffer:get_selection())
     if clicks and clicks > 1 and not toggled_details_folder and self.activate_selected then
       local active_tab = self.model:selected_tab()
       local diff_tab = self:activate_selected(function() core.redraw = true end)
@@ -476,7 +476,7 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
       if not self:focus_diff_pane() then return true end
       if selected_tab.diff_view and selected_tab.diff_view.on_mouse_pressed then
         local result = selected_tab.diff_view:on_mouse_pressed(button, x, y, clicks)
-        if core.active_view and core.active_view.git_owner_view == self then self.focused_diff_doc_view = core.active_view end
+        if core.active_view and core.active_view.git_owner_view == self then self.focused_diff_buffer_view = core.active_view end
         return result == true
       end
       return true
@@ -484,7 +484,7 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     if button ~= "left" then return true end
     if x < self.position.x then return true end
     self.focus_pane = "list"
-    self.focused_diff_doc_view = nil
+    self.focused_diff_buffer_view = nil
     local list = self:pane_view("file-list")
     local line = math.floor((y - self:commit_list_y() + (list.scroll.y or 0)) / self:row_height()) + 1
     local index = selected_tab.file_line_to_index and selected_tab.file_line_to_index[line]
@@ -615,10 +615,10 @@ end
 
 local function sync_inactive_pane_line(view, line)
   if core.active_view == view then return end
-  line = math.max(1, math.min(#view.doc.lines, tonumber(line) or 1))
-  local current_line, current_col = view.doc:get_selection()
+  line = math.max(1, math.min(#view.buffer.lines, tonumber(line) or 1))
+  local current_line, current_col = view.buffer:get_selection()
   if current_line ~= line then
-    view.doc:set_selection(line, math.max(1, math.min(current_col or 1, #view.doc.lines[line])))
+    view.buffer:set_selection(line, math.max(1, math.min(current_col or 1, #view.buffer.lines[line])))
   end
 end
 
@@ -648,7 +648,7 @@ end
 function GitView:sync_selection_from_pane()
   local active = core.active_view
   if not (active and active.git_owner_view == self and active.git_pane) then return end
-  local line = active.doc and active.doc:get_selection() or 1
+  local line = active.buffer and active.buffer:get_selection() or 1
   local tab = self:model_tab()
   if active.git_pane == "log-list" then
     local log_tab = self.model:log_tab()
@@ -677,10 +677,10 @@ function GitView:activate_selected(callback)
   self:sync_selection_from_pane()
   local active = core.active_view
   local details_commit, details_row, details_record = self:details_tree_item(
-    active, active and active.doc and active.doc:get_selection() or 1
+    active, active and active.buffer and active.buffer:get_selection() or 1
   )
   if details_row and details_row.type == "dir" then
-    self:toggle_details_tree_folder(active, active.doc:get_selection())
+    self:toggle_details_tree_folder(active, active.buffer:get_selection())
     return nil
   end
   local details_path = details_record and changed_file_path(details_record)
@@ -689,7 +689,7 @@ function GitView:activate_selected(callback)
   if tab.kind == "commit_diff" then
     local active = core.active_view
     if active and active.git_owner_view == self and active.git_pane == "file-list" then
-      local line = active.doc and active.doc:get_selection() or 1
+      local line = active.buffer and active.buffer:get_selection() or 1
       if active.git_file_line_to_index and not active.git_file_line_to_index[line] then
         if active.toggle_path_tree_folder and active:toggle_path_tree_folder(line) then
           tab.file_tree_collapsed = active.path_tree.collapsed
@@ -747,7 +747,7 @@ function GitView:point_of_interest_for_pane(view, line)
   else
     return nil
   end
-  local text = (view.doc:get_utf8_line(line) or ""):gsub("\n$", "")
+  local text = (view.buffer:get_utf8_line(line) or ""):gsub("\n$", "")
   return {
     kind = kind,
     line = line,
@@ -765,7 +765,7 @@ function GitView:point_of_interest_for_pane(view, line)
   }
 end
 
-function GitView:update_pane_docs()
+function GitView:update_pane_buffers()
   local tab = self:model_tab()
   if not tab then return end
   if tab.kind == "file_history" then
@@ -868,7 +868,7 @@ function GitView:update_pane_docs()
 end
 
 function GitView:update()
-  self:update_pane_docs()
+  self:update_pane_buffers()
   self:sync_selection_from_pane()
   for _, view in pairs(self.pane_views or {}) do view:update() end
   GitView.super.update(self)
@@ -882,9 +882,9 @@ function GitView:select_relative(delta)
     if #tab.commits == 0 then return nil end
     local index = common.clamp((tab.selected_commit or 1) + delta, 1, #tab.commits)
     local commit = self.model:select_log_index(index, function() core.redraw = true end)
-    self:update_pane_docs()
+    self:update_pane_buffers()
     local list = self:pane_view("log-list")
-    list.doc:set_selection(index, 1, index, 1)
+    list.buffer:set_selection(index, 1, index, 1)
     local row_y = (index - 1) * self:row_height()
     local visible = self.size.y - (self:commit_list_y() - self.position.y) - style.padding.y
     self.scroll.to.y = common.clamp(self.scroll.to.y, math.max(0, row_y - visible + self:row_height()), row_y)
@@ -897,9 +897,9 @@ function GitView:select_relative(delta)
     tab.selected_commit = index
     tab.selected_commit_hash = tab.commits[index] and tab.commits[index].hash or nil
     self.model:load_selected_commit_changed_files(function() core.redraw = true end)
-    self:update_pane_docs()
+    self:update_pane_buffers()
     local list = self:pane_view("history-list")
-    list.doc:set_selection(index, 1, index, 1)
+    list.buffer:set_selection(index, 1, index, 1)
     local row_y = (index - 1) * self:row_height()
     local visible = self:history_visible_height()
     tab.scroll = common.clamp(tab.scroll or 0, math.max(0, row_y - visible + self:row_height()), row_y)
@@ -911,7 +911,7 @@ function GitView:select_relative(delta)
     local line = tab.file_index_to_line and tab.file_index_to_line[index]
     if not line then
       local list = self:pane_view("file-list")
-      line = list.doc and list.doc:get_selection() or nil
+      line = list.buffer and list.buffer:get_selection() or nil
     end
     local direction = delta < 0 and -1 or 1
     local remaining = math.abs(delta)
@@ -924,12 +924,12 @@ function GitView:select_relative(delta)
     end
     if not line then index = index + delta end
     local file = self.model:select_diff_file(tab, index, function() core.redraw = true end)
-    self:update_pane_docs()
+    self:update_pane_buffers()
     local list = self:pane_view("file-list")
     local line = list.git_file_index_to_line and list.git_file_index_to_line[tab.selected_file]
       or list.git_file_index_to_visible_line and list.git_file_index_to_visible_line[tab.selected_file]
       or tab.selected_file or 1
-    list.doc:set_selection(line, 1, line, 1)
+    list.buffer:set_selection(line, 1, line, 1)
     list:scroll_to_make_visible(line, 1, true)
     tab.file_scroll = list.scroll.y
     core.redraw = true
@@ -1037,10 +1037,10 @@ end
 
 function GitView:ensure_diff_view(tab)
   if tab.diff_view and tab.diff_view_seen_generation == tab.diff_generation then
-    if tab.diff_view.doc_view_a then tab.diff_view.doc_view_a.git_owner_view = self end
-    if tab.diff_view.doc_view_b then tab.diff_view.doc_view_b.git_owner_view = self end
-    if self.focused_diff_doc_view ~= tab.diff_view.doc_view_a and self.focused_diff_doc_view ~= tab.diff_view.doc_view_b then
-      self.focused_diff_doc_view = nil
+    if tab.diff_view.buffer_view_a then tab.diff_view.buffer_view_a.git_owner_view = self end
+    if tab.diff_view.buffer_view_b then tab.diff_view.buffer_view_b.git_owner_view = self end
+    if self.focused_diff_buffer_view ~= tab.diff_view.buffer_view_a and self.focused_diff_buffer_view ~= tab.diff_view.buffer_view_b then
+      self.focused_diff_buffer_view = nil
     end
     return tab.diff_view
   end
@@ -1069,10 +1069,10 @@ function GitView:ensure_diff_view(tab)
   }, true)
   tab.diff_view = view
   tab.diff_view_seen_generation = tab.diff_generation
-  if view.doc_view_a then view.doc_view_a.git_owner_view = self end
-  if view.doc_view_b then view.doc_view_b.git_owner_view = self end
-  if self.focused_diff_doc_view ~= view.doc_view_a and self.focused_diff_doc_view ~= view.doc_view_b then
-    self.focused_diff_doc_view = nil
+  if view.buffer_view_a then view.buffer_view_a.git_owner_view = self end
+  if view.buffer_view_b then view.buffer_view_b.git_owner_view = self end
+  if self.focused_diff_buffer_view ~= view.buffer_view_a and self.focused_diff_buffer_view ~= view.buffer_view_b then
+    self.focused_diff_buffer_view = nil
   end
   return view
 end
@@ -1101,16 +1101,16 @@ function GitView:focus_diff_pane(side)
   local view = self:ensure_diff_view(tab)
   local focus
   if side == "right" or side == "b" or side == 2 then
-    focus = view and view.doc_view_b
+    focus = view and view.buffer_view_b
   elseif side == "left" or side == "a" or side == 1 then
-    focus = view and view.doc_view_a
+    focus = view and view.buffer_view_a
   else
-    focus = self.focused_diff_doc_view or view and view.get_focus_view and view:get_focus_view()
+    focus = self.focused_diff_buffer_view or view and view.get_focus_view and view:get_focus_view()
   end
   if not focus then return false end
   self.focused_pane_name = nil
   self.focus_pane = "diff"
-  self.focused_diff_doc_view = focus
+  self.focused_diff_buffer_view = focus
   focus.git_owner_view = self
   return with_tool_window_event_window(self.tool_window, function()
     core.set_active_view(focus)
@@ -1127,10 +1127,10 @@ function GitView:can_focus_next_pane()
 end
 
 function GitView:focus_pane_view(name)
-  self:update_pane_docs()
+  self:update_pane_buffers()
   local view = self:pane_view(name)
   self.focused_pane_name = name
-  self.focus_pane = "doc"
+  self.focus_pane = "buffer"
   view.git_owner_view = self
   return with_tool_window_event_window(self.tool_window, function()
     core.set_active_view(view)
@@ -1153,9 +1153,9 @@ function GitView:focus_next_pane()
       return self:focus_pane_view("file-list")
     elseif active == list then
       return self:focus_diff_pane("left")
-    elseif active == diff.doc_view_a then
+    elseif active == diff.buffer_view_a then
       return self:focus_diff_pane("right")
-    elseif active == diff.doc_view_b then
+    elseif active == diff.buffer_view_b then
       return self:focus_pane_view("file-list")
     end
     return self:focus_pane_view("file-list")

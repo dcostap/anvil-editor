@@ -1,5 +1,7 @@
 # Line Wrapping Core Refactor Plan
 
+`PANE_VIEW_BUFFER_REDESIGN_PLAN.md` controls Pane placement, View lifecycle, and Buffer or Text View names. Interpret this plan through that model.
+
 ## Goal
 
 Make soft line wrapping a first-class `DocView` capability instead of a method-patching plugin, with no user-visible regressions and with simpler ownership of wrapping state, navigation, drawing, and performance diagnostics.

@@ -31,6 +31,7 @@ local function read_file(path)
 end
 
 local function setup_project(context)
+  context.original_active_view = core.active_view
   context.original_projects = core.projects
   context.original_cwd = system.getcwd()
   context.temp_root = USERDIR
@@ -65,6 +66,12 @@ end
 
 test.describe("Project Paths View", function()
   test.after_each(function(context)
+    if context.view then
+      local root = core.root_panel and core.root_panel.root_node
+      local node = root and root:get_node_for_view(context.view)
+      if node then node:remove_view(root, context.view) end
+    end
+    if context.original_active_view then core.set_active_view(context.original_active_view) end
     project_paths.configure_project {}
     project_paths.load_workspace_state(nil)
     if context.save_workspace_was_stubbed then core.save_workspace = context.original_save_workspace end
@@ -90,7 +97,7 @@ test.describe("Project Paths View", function()
     test.equal(vendored_entry.role, "vendored")
     test.equal(excluded_entry.role, "excluded")
 
-    local text = table.concat(view.doc.lines)
+    local text = table.concat(view.buffer.lines)
     test.ok(text:find("project config", 1, true), "expected project config storage column")
     test.ok(text:find("automatic", 1, true), "expected automatic root storage")
   end)
@@ -98,7 +105,7 @@ test.describe("Project Paths View", function()
   test.it("renames labels and changes display paths without touching files", function(context)
     local view = setup_project(context)
     local line = assert(find_row(view, "jdk-src"))
-    view.doc:set_selection(line, 1)
+    view.buffer:set_selection(line, 1)
 
     test.ok(view:rename_selected("jdk"))
     local display = project_paths.display_path(join_path(context.external, "String.java"))
@@ -109,14 +116,14 @@ test.describe("Project Paths View", function()
   test.it("changes roles and removes only Project Path Role entries", function(context)
     local view = setup_project(context)
     local line = assert(find_row(view, "library1"))
-    view.doc:set_selection(line, 1)
+    view.buffer:set_selection(line, 1)
 
     test.ok(view:change_selected_role("external"))
     local resolved = project_paths.resolve(context.vendor)
     test.equal(resolved.entry.role, "external")
 
     line = assert(find_row(view, "library1"))
-    view.doc:set_selection(line, 1)
+    view.buffer:set_selection(line, 1)
     test.ok(view:remove_selected())
     resolved = project_paths.resolve(context.vendor)
     test.equal(resolved.entry.role, "root")
@@ -132,7 +139,7 @@ test.describe("Project Paths View", function()
     view:refresh()
 
     local line = assert(find_row(view, "local-lib"))
-    view.doc:set_selection(line, 1)
+    view.buffer:set_selection(line, 1)
     test.ok(view:change_selected_storage("project"))
     local moved = project_paths.resolve(local_dir).entry
     test.equal(moved.source, "project")
@@ -144,7 +151,7 @@ test.describe("Project Paths View", function()
 
     view:refresh()
     line = assert(find_row(view, "local-lib"))
-    view.doc:set_selection(line, 1)
+    view.buffer:set_selection(line, 1)
     test.ok(view:change_selected_storage("workspace"))
     moved = project_paths.resolve(local_dir).entry
     test.equal(moved.source, "workspace")

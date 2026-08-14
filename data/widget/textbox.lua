@@ -1,13 +1,13 @@
 --
--- TextBox widget re-using code from pragtical's DocView.
+-- TextBox widget re-using code from pragtical's TextView.
 --
 
 local core = require "core"
 local style = require "core.style"
-local translate = require "core.doc.translate"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
-local Highlighter = require "core.doc.highlighter"
+local translate = require "core.buffer.translate"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
+local Highlighter = require "core.buffer.highlighter"
 local View = require "core.view"
 local Widget = require "widget"
 
@@ -46,33 +46,33 @@ end
 local SingleLineHighlighter = Highlighter:extend()
 
 function SingleLineHighlighter:get_line(idx)
-  return {text=self.doc.lines[1], tokens={"normal", self.doc.lines[1]}}
+  return {text=self.buffer.lines[1], tokens={"normal", self.buffer.lines[1]}}
 end
 
 function SingleLineHighlighter:start() end
 
----@class widget.textbox.SingleLineDoc : core.doc
----@overload fun():widget.textbox.SingleLineDoc
----@field super core.doc
-local SingleLineDoc = Doc:extend()
+---@class widget.textbox.SingleLineBuffer : core.buffer
+---@overload fun():widget.textbox.SingleLineBuffer
+---@field super core.buffer
+local SingleLineBuffer = Buffer:extend()
 
-function SingleLineDoc:reset()
-  SingleLineDoc.super.reset(self)
+function SingleLineBuffer:reset()
+  SingleLineBuffer.super.reset(self)
   self.highlighter = SingleLineHighlighter(self)
   self:reset_syntax()
 end
 
-function SingleLineDoc:insert(line, col, text)
-  SingleLineDoc.super.insert(self, line, col, text:gsub("\n", ""))
+function SingleLineBuffer:insert(line, col, text)
+  SingleLineBuffer.super.insert(self, line, col, text:gsub("\n", ""))
 end
 
----@class widget.textbox.TextView : core.docview
+---@class widget.textbox.TextView : core.textview
 ---@overload fun(parent:widget,subparent:widget):widget.textbox.TextView
----@field super core.docview
-local TextView = DocView:extend()
+---@field super core.textview
+local TextView = TextView:extend()
 
 function TextView:new(parent, subparent)
-  TextView.super.new(self, SingleLineDoc())
+  TextView.super.new(self, SingleLineBuffer())
   self.parent = parent
   self.subparent = subparent
   self.gutter_width = 0
@@ -95,14 +95,14 @@ function TextView:get_scrollable_size()
 end
 
 function TextView:get_text()
-  return self.doc:get_text(1, 1, 1, math.huge)
+  return self.buffer:get_text(1, 1, 1, math.huge)
 end
 
 function TextView:set_text(text, select)
-  self.doc:remove(1, 1, math.huge, math.huge)
-  self.doc:text_input(text)
+  self.buffer:remove(1, 1, math.huge, math.huge)
+  self.buffer:text_input(text)
   if select then
-    self.doc:set_selection(math.huge, math.huge, 1, 1)
+    self.buffer:set_selection(math.huge, math.huge, 1, 1)
   end
 end
 
@@ -127,7 +127,7 @@ end
 
 function TextView:draw_line_text(line, x, y)
   if self.subparent.password then
-    local text = self.doc.lines[line] or ""
+    local text = self.buffer.lines[line] or ""
     local ty = y + self:get_line_text_y_offset()
     renderer.draw_text(
       self:get_font(),
@@ -145,14 +145,14 @@ function TextView:draw_line_text(line, x, y)
 
   TextView.super.draw_line_text(self, line, x, y)
   local placeholder = self.subparent.placeholder or ""
-  if placeholder ~= "" and #self.doc.lines[line] < 2 then
+  if placeholder ~= "" and #self.buffer.lines[line] < 2 then
     renderer.draw_text(self:get_font(), placeholder, x, y, style.dim)
   end
 end
 
 function TextView:get_col_x_offset(line, col)
   if self.subparent.password then
-    local text = self.doc.lines[line] or ""
+    local text = self.buffer.lines[line] or ""
     return self:get_font():get_width(PASSWORD_CHAR)
       * password_chars_before_col(text, col)
   end
@@ -161,7 +161,7 @@ end
 
 function TextView:get_x_offset_col(line, x)
   if self.subparent.password then
-    local text = password_visible_text(self.doc.lines[line] or "")
+    local text = password_visible_text(self.buffer.lines[line] or "")
     local char_width = self:get_font():get_width(PASSWORD_CHAR)
     if char_width <= 0 then return 1 end
     local offset = 0
@@ -181,7 +181,7 @@ end
 -- Overwrite this function just to disable the core.push_clip_rect
 function TextView:draw()
   self:draw_background(style.background)
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   self:get_font():set_tab_size(indent_size)
 
   local minline, maxline = self:get_visible_line_range()
@@ -232,20 +232,20 @@ function TextBox:new(parent, text, placeholder, options)
 
   local this = self
 
-  function self.textview.doc:on_text_change()
+  function self.textview.buffer:on_text_change()
     this:on_change(this:get_text())
   end
 
   -- more granular listening of text changing events
-  local doc_raw_insert = self.textview.doc.raw_insert
-  function self.textview.doc:raw_insert(...)
-    doc_raw_insert(self, ...)
+  local buffer_raw_insert = self.textview.buffer.raw_insert
+  function self.textview.buffer:raw_insert(...)
+    buffer_raw_insert(self, ...)
     this:on_text_change("insert", ...)
   end
 
-  local doc_raw_remove = self.textview.doc.raw_remove
-  function self.textview.doc:raw_remove(...)
-    doc_raw_remove(self, ...)
+  local buffer_raw_remove = self.textview.buffer.raw_remove
+  function self.textview.buffer:raw_remove(...)
+    buffer_raw_remove(self, ...)
     this:on_text_change("remove", ...)
   end
 end
@@ -294,13 +294,13 @@ function TextBox:on_mouse_pressed(button, x, y, clicks)
     self.textview:on_mouse_pressed(button, x, y, clicks)
     local line, col = self.textview:resolve_screen_position(x, y)
     self.drag_select = { line = line, col = col }
-    self.textview.doc:set_selection(line, col, line, col)
+    self.textview.buffer:set_selection(line, col, line, col)
     if clicks == 2 then
-      local line1, col1 = translate.start_of_word(self.textview.doc, line, col)
-      local line2, col2 = translate.end_of_word(self.textview.doc, line1, col1)
-      self.textview.doc:set_selection(line2, col2, line1, col1)
+      local line1, col1 = translate.start_of_word(self.textview.buffer, line, col)
+      local line2, col2 = translate.end_of_word(self.textview.buffer, line1, col1)
+      self.textview.buffer:set_selection(line2, col2, line1, col1)
     elseif clicks == 3 then
-      self.textview.doc:set_selection(1, 1, 1, math.huge)
+      self.textview.buffer:set_selection(1, 1, 1, math.huge)
     end
     if core.active_view ~= self.textview then
       self.textview:on_mouse_released(button, x, y)
@@ -322,7 +322,7 @@ end
 function TextBox:on_mouse_moved(x, y, dx, dy)
   if self.drag_select then
     local line, col = self.textview:resolve_screen_position(x, y)
-    self.textview.doc:set_selection(
+    self.textview.buffer:set_selection(
       self.drag_select.line, self.drag_select.col, line, col
     )
   end
@@ -355,9 +355,9 @@ end
 
 ---Event fired on any text change event.
 ---@param action string Can be "insert" or "remove",
----insert arguments (see Doc:raw_insert):
+---insert arguments (see Buffer:raw_insert):
 ---  line, col, text, undo_stack, time
----remove arguments (see Doc:raw_remove):
+---remove arguments (see Buffer:raw_remove):
 ---  line1, col1, line2, col2, undo_stack, time
 ---@diagnostic disable-next-line
 function TextBox:on_text_change(action, ...) end

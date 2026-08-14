@@ -69,7 +69,7 @@ end
 
 
 ---Get line height for text rendering.
----Duplicated from DocView for independence.
+---Duplicated from TextView for independence.
 ---@return integer height Line height in pixels
 function NagView:get_line_height()
   return math.floor(style.font:get_height() * config.line_height)
@@ -77,7 +77,7 @@ end
 
 
 ---Get vertical offset to center text within line height.
----Duplicated from DocView for independence.
+---Duplicated from TextView for independence.
 ---@return number offset Y offset in pixels
 function NagView:get_line_text_y_offset()
   local lh = self:get_line_height()

@@ -139,9 +139,9 @@ function M.point_at_caret(view, opts)
   if not view then return nil end
   local point = provider_point_at_caret(view, opts, true)
   if point then return point end
-  if not view.doc then return provider_point_at_caret(view, opts, false) end
+  if not view.buffer then return provider_point_at_caret(view, opts, false) end
   return with_selection_state(view, function()
-    local line, col = view.doc:get_selection()
+    local line, col = view.buffer:get_selection()
     if type(view.get_point_of_interest_at) == "function" then
       local poi = view:get_point_of_interest_at(line, col, opts)
       if poi and (not opts.activatable or M.is_activatable(view, poi)) then return poi end
@@ -159,7 +159,7 @@ function M.point_at_caret(view, opts)
 end
 
 local function provider_view(view)
-  if view and not view.doc and type(view.get_focus_view) == "function" then
+  if view and not view.buffer and type(view.get_focus_view) == "function" then
     local focus = view:get_focus_view()
     if focus then return focus end
   end
@@ -170,13 +170,13 @@ function M.next(view, direction, opts)
   opts = opts or {}
   view = provider_view(view)
   direction = normalize_direction(direction)
-  if not view or not view.doc then return nil, "no-provider" end
+  if not view or not view.buffer then return nil, "no-provider" end
   return with_selection_state(view, function()
     local points, unavailable = M.points_for_view(view, opts)
     if not points then return nil, unavailable or "no-provider" end
     if #points == 0 then return nil, "empty" end
 
-    local line, col = view.doc:get_selection()
+    local line, col = view.buffer:get_selection()
     local selected
     if direction > 0 then
       for _, poi in ipairs(points) do
@@ -214,9 +214,9 @@ function M.navigate(view, direction, opts)
   local poi, status = M.next(view, direction, opts)
   if not poi then return show_navigation_feedback(status, direction) end
   return with_selection_state(view, function()
-    local _, current_col = view.doc:get_selection()
+    local _, current_col = view.buffer:get_selection()
     local col = poi.preserve_col and current_col or poi.col
-    view.doc:set_selection(poi.line, col, poi.line, col)
+    view.buffer:set_selection(poi.line, col, poi.line, col)
     if poi.scroll_to_line and type(view.scroll_to_line) == "function" then
       view:scroll_to_line(poi.line, false, true)
     elseif type(view.scroll_to_make_visible) == "function" then

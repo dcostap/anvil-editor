@@ -170,7 +170,7 @@ static AnvilTSSnapshot *new_snapshot_from_single_line(const char *text) {
 }
 
 static bool wait_poll_until_done(
-  AnvilTSDocumentState *state,
+  AnvilTSBufferState *state,
   uint64_t generation,
   AnvilTSPollResult *last,
   uint32_t timeout_ms
@@ -178,7 +178,7 @@ static bool wait_poll_until_done(
   uint64_t start = SDL_GetTicks();
   AnvilTSPollResult result = {0};
   for (;;) {
-    result = anvil_ts_document_state_poll(state, generation);
+    result = anvil_ts_buffer_state_poll(state, generation);
     if (result.changed || result.status == ANVIL_TS_STATE_READY ||
         result.status == ANVIL_TS_STATE_CANCELED || result.status == ANVIL_TS_STATE_FAILED) {
       if (last) *last = result;
@@ -539,49 +539,49 @@ static int test_snapshot_basics(void) {
 }
 
 static int test_async_parse_reaches_ready(void) {
-  AnvilTSDocumentState *state = anvil_ts_document_state_new(checked_c_registry_language(), 5000);
+  AnvilTSBufferState *state = anvil_ts_buffer_state_new(checked_c_registry_language(), 5000);
   CHECK(state != NULL);
   AnvilTSSnapshot *snapshot = new_snapshot_from_single_line("int main(void) { return 0; }\n");
   CHECK(snapshot != NULL);
-  CHECK(anvil_ts_document_state_schedule_parse(state, snapshot, 1, NULL));
+  CHECK(anvil_ts_buffer_state_schedule_parse(state, snapshot, 1, NULL));
 
   AnvilTSPollResult result;
   CHECK(wait_poll_until_done(state, 1, &result, 3000));
   CHECK(result.status == ANVIL_TS_STATE_READY);
   CHECK(result.changed);
-  CHECK(anvil_ts_document_state_has_tree(state));
-  CHECK(anvil_ts_document_state_tree_generation(state) == 1);
-  anvil_ts_document_state_close(state);
-  anvil_ts_document_state_release(state);
+  CHECK(anvil_ts_buffer_state_has_tree(state));
+  CHECK(anvil_ts_buffer_state_tree_generation(state) == 1);
+  anvil_ts_buffer_state_close(state);
+  anvil_ts_buffer_state_release(state);
   return 0;
 }
 
 static int test_async_cancel(void) {
-  AnvilTSDocumentState *state = anvil_ts_document_state_new(checked_c_registry_language(), 5000);
+  AnvilTSBufferState *state = anvil_ts_buffer_state_new(checked_c_registry_language(), 5000);
   CHECK(state != NULL);
   AnvilTSSnapshot *snapshot = new_snapshot_from_single_line("int cancel_me(void) { return 0; }\n");
   CHECK(snapshot != NULL);
-  CHECK(anvil_ts_document_state_schedule_parse(state, snapshot, 2, NULL));
-  anvil_ts_document_state_cancel(state);
+  CHECK(anvil_ts_buffer_state_schedule_parse(state, snapshot, 2, NULL));
+  anvil_ts_buffer_state_cancel(state);
 
   AnvilTSPollResult result;
   CHECK(wait_poll_until_done(state, 2, &result, 3000));
   CHECK(result.status == ANVIL_TS_STATE_CANCELED || result.status == ANVIL_TS_STATE_READY);
-  anvil_ts_document_state_close(state);
-  anvil_ts_document_state_release(state);
+  anvil_ts_buffer_state_close(state);
+  anvil_ts_buffer_state_release(state);
   return 0;
 }
 
 static int test_stale_generation_discard(void) {
-  AnvilTSDocumentState *state = anvil_ts_document_state_new(checked_c_registry_language(), 5000);
+  AnvilTSBufferState *state = anvil_ts_buffer_state_new(checked_c_registry_language(), 5000);
   CHECK(state != NULL);
-  CHECK(anvil_ts_document_state_schedule_parse(
+  CHECK(anvil_ts_buffer_state_schedule_parse(
     state,
     new_snapshot_from_single_line("int stale(void) { return 1; }\n"),
     10,
     NULL
   ));
-  CHECK(anvil_ts_document_state_schedule_parse(
+  CHECK(anvil_ts_buffer_state_schedule_parse(
     state,
     new_snapshot_from_single_line("int current(void) { return 2; }\n"),
     11,
@@ -592,23 +592,23 @@ static int test_stale_generation_discard(void) {
   AnvilTSPollResult result = {0};
   uint64_t start = SDL_GetTicks();
   while (SDL_GetTicks() - start < 3000) {
-    result = anvil_ts_document_state_poll(state, 11);
+    result = anvil_ts_buffer_state_poll(state, 11);
     saw_stale = saw_stale || result.discarded_stale;
     if (result.status == ANVIL_TS_STATE_READY && result.changed) break;
     SDL_Delay(1);
   }
   CHECK(result.status == ANVIL_TS_STATE_READY);
-  CHECK(anvil_ts_document_state_tree_generation(state) == 11);
+  CHECK(anvil_ts_buffer_state_tree_generation(state) == 11);
   CHECK(saw_stale || result.discarded_stale);
-  anvil_ts_document_state_close(state);
-  anvil_ts_document_state_release(state);
+  anvil_ts_buffer_state_close(state);
+  anvil_ts_buffer_state_release(state);
   return 0;
 }
 
 static int test_incremental_poll_reports_changed_ranges(void) {
-  AnvilTSDocumentState *state = anvil_ts_document_state_new(checked_c_registry_language(), 5000);
+  AnvilTSBufferState *state = anvil_ts_buffer_state_new(checked_c_registry_language(), 5000);
   CHECK(state != NULL);
-  CHECK(anvil_ts_document_state_schedule_parse(
+  CHECK(anvil_ts_buffer_state_schedule_parse(
     state,
     new_snapshot_from_single_line("int value = 1;\n"),
     12,
@@ -625,7 +625,7 @@ static int test_incremental_poll_reports_changed_ranges(void) {
   edit.input_edit.start_point = (TSPoint) { .row = 0, .column = 12 };
   edit.input_edit.old_end_point = (TSPoint) { .row = 0, .column = 13 };
   edit.input_edit.new_end_point = (TSPoint) { .row = 0, .column = 17 };
-  CHECK(anvil_ts_document_state_schedule_parse_with_edit(
+  CHECK(anvil_ts_buffer_state_schedule_parse_with_edit(
     state,
     new_snapshot_from_single_line("int value = foo();\n"),
     13,
@@ -638,39 +638,39 @@ static int test_incremental_poll_reports_changed_ranges(void) {
   CHECK(result.changed_ranges_available);
   CHECK(result.changed_range_count > 0);
   free(result.changed_ranges);
-  anvil_ts_document_state_close(state);
-  anvil_ts_document_state_release(state);
+  anvil_ts_buffer_state_close(state);
+  anvil_ts_buffer_state_release(state);
   return 0;
 }
 
 static int test_close_while_queued_or_running(void) {
-  AnvilTSDocumentState *state = anvil_ts_document_state_new(checked_c_registry_language(), 5000);
+  AnvilTSBufferState *state = anvil_ts_buffer_state_new(checked_c_registry_language(), 5000);
   CHECK(state != NULL);
-  CHECK(anvil_ts_document_state_schedule_parse(
+  CHECK(anvil_ts_buffer_state_schedule_parse(
     state,
     new_snapshot_from_single_line("int closed(void) { return 0; }\n"),
     20,
     NULL
   ));
-  anvil_ts_document_state_close(state);
-  anvil_ts_document_state_close(state);
+  anvil_ts_buffer_state_close(state);
+  anvil_ts_buffer_state_close(state);
   SDL_Delay(10);
-  anvil_ts_document_state_release(state);
+  anvil_ts_buffer_state_release(state);
   return 0;
 }
 
 static int test_service_shutdown_cleanup(void) {
-  AnvilTSDocumentState *state = anvil_ts_document_state_new(checked_c_registry_language(), 5000);
+  AnvilTSBufferState *state = anvil_ts_buffer_state_new(checked_c_registry_language(), 5000);
   CHECK(state != NULL);
-  CHECK(anvil_ts_document_state_schedule_parse(
+  CHECK(anvil_ts_buffer_state_schedule_parse(
     state,
     new_snapshot_from_single_line("int shutdown_cleanup(void) { return 0; }\n"),
     30,
     NULL
   ));
   anvil_ts_service_shutdown();
-  anvil_ts_document_state_close(state);
-  anvil_ts_document_state_release(state);
+  anvil_ts_buffer_state_close(state);
+  anvil_ts_buffer_state_release(state);
   return 0;
 }
 
@@ -689,9 +689,9 @@ static bool count_service_capture(const AnvilTSQueryCapture *capture, void *payl
 
 static int test_service_query_predicates_and_directives(void) {
   const char *source = "int ABC = 1; int value = 2;\n";
-  AnvilTSDocumentState *state = anvil_ts_document_state_new(checked_c_registry_language(), 5000);
+  AnvilTSBufferState *state = anvil_ts_buffer_state_new(checked_c_registry_language(), 5000);
   CHECK(state != NULL);
-  CHECK(anvil_ts_document_state_schedule_parse(state, new_snapshot_from_single_line(source), 40, NULL));
+  CHECK(anvil_ts_buffer_state_schedule_parse(state, new_snapshot_from_single_line(source), 40, NULL));
   AnvilTSPollResult result;
   CHECK(wait_poll_until_done(state, 40, &result, 3000));
   CHECK(result.status == ANVIL_TS_STATE_READY);
@@ -717,7 +717,7 @@ static int test_service_query_predicates_and_directives(void) {
   CaptureStats stats = {0};
   bool exceeded = false;
   char *error = NULL;
-  CHECK(anvil_ts_document_state_query_captures(
+  CHECK(anvil_ts_buffer_state_query_captures(
     state,
     query,
     0,
@@ -737,8 +737,8 @@ static int test_service_query_predicates_and_directives(void) {
   CHECK(stats.priority_constants >= 1);
 
   ts_query_delete(query);
-  anvil_ts_document_state_close(state);
-  anvil_ts_document_state_release(state);
+  anvil_ts_buffer_state_close(state);
+  anvil_ts_buffer_state_release(state);
   return 0;
 }
 

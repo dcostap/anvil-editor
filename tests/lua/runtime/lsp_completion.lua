@@ -1,7 +1,7 @@
 local command = require "core.command"
 local common = require "core.common"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local autocomplete = require "plugins.autocomplete"
 local completion = require "core.lsp.completion"
 local documents = require "core.lsp.documents"
@@ -21,22 +21,22 @@ local function mkdir(path)
   return path
 end
 
-local function set_text(doc, text)
-  doc.lines = {}
+local function set_text(buffer, text)
+  buffer.lines = {}
   for line in (text .. "\n"):gmatch("(.-\n)") do
-    doc.lines[#doc.lines + 1] = line
+    buffer.lines[#buffer.lines + 1] = line
   end
-  if #doc.lines == 0 then doc.lines[1] = "\n" end
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+  if #buffer.lines == 0 then buffer.lines[1] = "\n" end
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
-local function new_doc(path, text)
-  local doc = Doc()
-  set_text(doc, text or "")
-  doc:set_filename(path, path)
-  return doc
+local function new_buffer(path, text)
+  local buffer = Buffer()
+  set_text(buffer, text or "")
+  buffer:set_filename(path, path)
+  return buffer
 end
 
 local function fake_client(opts)
@@ -98,8 +98,8 @@ test.describe("core.lsp.completion", function()
     autocomplete.close()
     completion.clear()
     core.active_view = context.original_active_view
-    if context.docs then
-      for _, doc in ipairs(context.docs) do pcall(function() doc:on_close() end) end
+    if context.buffers then
+      for _, buffer in ipairs(context.buffers) do pcall(function() buffer:on_close() end) end
     end
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)
@@ -107,36 +107,36 @@ test.describe("core.lsp.completion", function()
     end
   end)
 
-  local function track_doc(context, doc)
-    context.docs = context.docs or {}
-    context.docs[#context.docs + 1] = doc
-    return doc
+  local function track_buffer(context, buffer)
+    context.buffers = context.buffers or {}
+    context.buffers[#context.buffers + 1] = buffer
+    return buffer
   end
 
   local function attach(context, opts)
-    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), opts and opts.text or "foo"))
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), opts and opts.text or "foo"))
     local client = fake_client(opts)
-    documents.attach(client, doc, { language_id = "cpp" })
-    return doc, client
+    documents.attach(client, buffer, { language_id = "cpp" })
+    return buffer, client
   end
 
   test.test("maps CompletionItem array responses", function(context)
-    local doc, client = attach(context)
-    local items, incomplete = completion.map_items(client, doc, {
-      { label = "printf", kind = 3, detail = "int printf", documentation = "docs" },
+    local buffer, client = attach(context)
+    local items, incomplete = completion.map_items(client, buffer, {
+      { label = "printf", kind = 3, detail = "int printf", documentation = "buffers" },
       { label = "value", kind = 6 },
     })
     test.not_ok(incomplete)
     test.equal(#items, 2)
     test.equal(items[1].label, "printf")
     test.equal(items[1].info, "int printf")
-    test.equal(items[1].desc, "docs")
+    test.equal(items[1].desc, "buffers")
     test.equal(items[2].info, "variable")
   end)
 
   test.test("maps CompletionList responses", function(context)
-    local doc, client = attach(context)
-    local items, incomplete = completion.map_items(client, doc, {
+    local buffer, client = attach(context)
+    local items, incomplete = completion.map_items(client, buffer, {
       isIncomplete = true,
       items = { { label = "member", insertText = "member()", kind = 2 } },
     })
@@ -148,8 +148,8 @@ test.describe("core.lsp.completion", function()
   end)
 
   test.test("function-like completions display base labels without changing insertion text", function(context)
-    local doc, client = attach(context)
-    local items = completion.map_items(client, doc, {
+    local buffer, client = attach(context)
+    local items = completion.map_items(client, buffer, {
       {
         label = "printf",
         kind = 3,
@@ -171,10 +171,10 @@ test.describe("core.lsp.completion", function()
   end)
 
   test.test("general autocomplete trigger schedules textDocument/completion and opens autocomplete on response", function(context)
-    local doc, client = attach(context, { text = "pri" })
-    local view = DocView(doc)
+    local buffer, client = attach(context, { text = "pri" })
+    local view = Editor(buffer)
     core.active_view = view
-    doc:set_selection(1, 4)
+    buffer:set_selection(1, 4)
 
     test.ok(command.perform("autocomplete:trigger", view))
     test.equal(#client.requests, 1)
@@ -187,47 +187,47 @@ test.describe("core.lsp.completion", function()
   end)
 
   test.test("fresh cached completion result is reused without another request", function(context)
-    local doc, client = attach(context, { text = "pri" })
-    doc:set_selection(1, 4)
-    completion.request(doc, { show = false })
+    local buffer, client = attach(context, { text = "pri" })
+    buffer:set_selection(1, 4)
+    completion.request(buffer, { show = false })
     complete_request(client, 1, { { label = "printf" } })
 
-    local items, _reason, status = completion.request(doc, { show = false })
+    local items, _reason, status = completion.request(buffer, { show = false })
     test.equal(status, "fresh")
     test.equal(#items, 1)
     test.equal(#client.requests, 1)
   end)
 
   test.test("stale version completion responses are discarded", function(context)
-    local doc, client = attach(context, { text = "pri" })
-    doc:set_selection(1, 4)
-    completion.request(doc, { show = false })
-    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "x" } })
-    documents.flush(client, doc)
+    local buffer, client = attach(context, { text = "pri" })
+    buffer:set_selection(1, 4)
+    completion.request(buffer, { show = false })
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "x" } })
+    documents.flush(client, buffer)
     complete_request(client, 1, { { label = "printf" } })
 
-    completion.request(doc, { show = false })
+    completion.request(buffer, { show = false })
     test.equal(#client.requests, 2)
   end)
 
   test.test("superseded completion response is cancelled and discarded", function(context)
-    local doc, client = attach(context, { text = "abc def" })
-    doc:set_selection(1, 4)
-    completion.request(doc, { show = false })
-    doc:set_selection(1, 8)
-    completion.request(doc, { show = false })
+    local buffer, client = attach(context, { text = "abc def" })
+    buffer:set_selection(1, 4)
+    completion.request(buffer, { show = false })
+    buffer:set_selection(1, 8)
+    completion.request(buffer, { show = false })
     test.equal(#client.requests, 2)
     test.equal(client.sent[#client.sent].method, "$/cancelRequest")
 
     complete_request(client, 1, { { label = "old" } })
-    local items, _reason, status = completion.request(doc, { show = false })
+    local items, _reason, status = completion.request(buffer, { show = false })
     test.not_equal(status, "fresh")
     test.is_nil(items)
   end)
 
   test.test("textEdit completion applies server range and leaves cursor at insertion end", function(context)
-    local doc, client = attach(context, { text = "pri" })
-    local items = completion.map_items(client, doc, {
+    local buffer, client = attach(context, { text = "pri" })
+    local items = completion.map_items(client, buffer, {
       {
         label = "printf",
         textEdit = {
@@ -237,25 +237,25 @@ test.describe("core.lsp.completion", function()
       },
     })
     test.ok(items[1].onselect())
-    test.equal(doc:get_text(1, 1, 1, 7), "printf")
-    test.same({ doc:get_selection() }, { 1, 7, 1, 7 })
+    test.equal(buffer:get_text(1, 1, 1, 7), "printf")
+    test.same({ buffer:get_selection() }, { 1, 7, 1, 7 })
   end)
 
   test.test("insertText completion replaces current partial conservatively", function(context)
-    local doc, client = attach(context, { text = "pri" })
-    local view = DocView(doc)
+    local buffer, client = attach(context, { text = "pri" })
+    local view = Editor(buffer)
     core.active_view = view
-    doc:set_selection(1, 4)
-    local items = completion.map_items(client, doc, { { label = "printf", insertText = "printf" } })
+    buffer:set_selection(1, 4)
+    local items = completion.map_items(client, buffer, { { label = "printf", insertText = "printf" } })
     test.ok(items[1].onselect())
-    test.equal(doc:get_text(1, 1, 1, 7), "printf")
+    test.equal(buffer:get_text(1, 1, 1, 7), "printf")
   end)
 
   test.test("no completion server leaves existing behavior untouched", function(context)
-    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "pri"))
-    local view = DocView(doc)
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), "pri"))
+    local view = Editor(buffer)
     core.active_view = view
-    doc:set_selection(1, 4)
+    buffer:set_selection(1, 4)
 
     test.ok(command.perform("autocomplete:trigger", view))
     test.not_ok(autocomplete.is_open())

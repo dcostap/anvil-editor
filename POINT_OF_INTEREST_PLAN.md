@@ -1,5 +1,7 @@
 # Point of Interest Navigation Plan
 
+`PANE_VIEW_BUFFER_REDESIGN_PLAN.md` controls Pane placement, View lifecycle, and Buffer or Text View names. Interpret this plan through that model.
+
 ## Goal
 
 Introduce a first-party **Point of Interest / POI** navigation model that generalizes the current Git/diff-region navigation and extends it to Command Output Views.

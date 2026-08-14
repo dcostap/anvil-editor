@@ -721,7 +721,7 @@ function Model:resolve_historical_rev(rev)
   return rev
 end
 
-function Model:selected_historical_document()
+function Model:selected_historical_buffer()
   local tab = self:selected_tab()
   if not tab or tab.kind ~= "commit_diff" then
     return nil, { kind = "no_diff_tab", message = "No commit diff tab is active" }

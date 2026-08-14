@@ -1,7 +1,7 @@
 local config = require "core.config"
 local core = require "core"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
@@ -10,19 +10,19 @@ local test = require "core.test"
 local worker_pool = require "core.worker_pool"
 
 local function make_view(text)
-  local doc = Doc("wrapped-heading-spacing.md", "wrapped-heading-spacing.md", true)
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
-  local view = DocView(doc)
+  local buffer = Buffer("wrapped-heading-spacing.md", "wrapped-heading-spacing.md", true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  local view = Editor(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 150, 200
   view:set_wrapping_enabled(true)
-  return view, doc
+  return view, buffer
 end
 
 local function refresh(view)
   markdown.live_render.refresh_view(view)
-  local instance = markdown_model.peek(view.doc)
+  local instance = markdown_model.peek(view.buffer)
   if not instance then return end
   local deadline = system.get_time() + 5
   while instance.status ~= "ready" and system.get_time() < deadline do
@@ -45,8 +45,8 @@ test.describe("Markdown wrapped heading spacing", function()
 
   test.it("keeps heading spacing above the first row instead of below the final row", function()
     local source = "# This rendered heading wraps across several visual rows in a narrow editor"
-    local view, doc = make_view(source .. "\nbody")
-    doc:set_selection(1, #source + 1)
+    local view, buffer = make_view(source .. "\nbody")
+    buffer:set_selection(1, #source + 1)
     refresh(view)
 
     local first_row, _, row_count = linewrapping.get_line_idx_col_count(view, 1)

@@ -3,11 +3,11 @@
 
 local core = require "core"
 local command = require "core.command"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
 local markdown_live = require "core.markdown.live_render"
-local translate = require "core.doc.translate"
+local translate = require "core.buffer.translate"
 
 local delimiters = {
   ["("] = { close = ")", block = true },
@@ -52,7 +52,7 @@ local function common_indent(lines)
   return result or leading_whitespace(lines[1] or "")
 end
 
-local function block_action(doc, idx, line1, col1, line2, col2, swapped, opener, closer)
+local function block_action(buffer, idx, line1, col1, line2, col2, swapped, opener, closer)
   if line1 >= line2 then return nil end
 
   local content_line2 = line2
@@ -60,8 +60,8 @@ local function block_action(doc, idx, line1, col1, line2, col2, swapped, opener,
   if ends_at_next_line then content_line2 = content_line2 - 1 end
   if content_line2 < line1 then return nil end
 
-  local first_body = line_body(doc.lines[line1])
-  local last_body = line_body(doc.lines[content_line2])
+  local first_body = line_body(buffer.lines[line1])
+  local last_body = line_body(buffer.lines[content_line2])
   local first_nonspace = content_bounds(first_body)
   local _, last_nonspace = content_bounds(last_body)
   if first_nonspace and col1 > first_nonspace then return nil end
@@ -69,11 +69,11 @@ local function block_action(doc, idx, line1, col1, line2, col2, swapped, opener,
 
   local bodies = {}
   for line = line1, content_line2 do
-    bodies[#bodies + 1] = line_body(doc.lines[line])
+    bodies[#bodies + 1] = line_body(buffer.lines[line])
   end
 
   local base = common_indent(bodies)
-  local inner = doc:get_indent_string(1)
+  local inner = buffer:get_indent_string(1)
   local replacement_lines = { base .. opener }
   local selected_start
   local selected_end
@@ -93,7 +93,7 @@ local function block_action(doc, idx, line1, col1, line2, col2, swapped, opener,
   end
 
   replacement_lines[#replacement_lines + 1] = base .. closer
-  local has_following_line = content_line2 < #doc.lines
+  local has_following_line = content_line2 < #buffer.lines
   local replacement = table.concat(replacement_lines, "\n") .. (has_following_line and "\n" or "")
   if not selected_start then
     selected_start = #replacement_lines[1] + 1
@@ -104,7 +104,7 @@ local function block_action(doc, idx, line1, col1, line2, col2, swapped, opener,
   if has_following_line then
     edit_line2, edit_col2 = content_line2 + 1, 1
   else
-    edit_line2, edit_col2 = content_line2, #doc.lines[content_line2]
+    edit_line2, edit_col2 = content_line2, #buffer.lines[content_line2]
   end
 
   return {
@@ -121,13 +121,13 @@ local function block_action(doc, idx, line1, col1, line2, col2, swapped, opener,
   }
 end
 
-local function surround_action(doc, idx, line1, col1, line2, col2, swapped, opener, delimiter)
+local function surround_action(buffer, idx, line1, col1, line2, col2, swapped, opener, delimiter)
   if delimiter.block then
-    local action = block_action(doc, idx, line1, col1, line2, col2, swapped, opener, delimiter.close)
+    local action = block_action(buffer, idx, line1, col1, line2, col2, swapped, opener, delimiter.close)
     if action then return action end
   end
 
-  local selected = doc:get_text(line1, col1, line2, col2)
+  local selected = buffer:get_text(line1, col1, line2, col2)
   local prefix = delimiter.spaced and (opener .. " ") or opener
   local suffix = delimiter.spaced and (" " .. delimiter.close) or delimiter.close
   local selection_start = #prefix
@@ -146,10 +146,10 @@ local function surround_action(doc, idx, line1, col1, line2, col2, swapped, open
   }
 end
 
-local function collapsed_action(doc, idx, line, col, opener)
+local function collapsed_action(buffer, idx, line, col, opener)
   local line2, col2 = line, col
-  if doc.overwrite and col < #doc:get_utf8_line(line) then
-    line2, col2 = translate.next_char(doc, line, col)
+  if buffer.overwrite and col < #buffer:get_utf8_line(line) then
+    line2, col2 = translate.next_char(buffer, line, col)
   end
   return {
     edit = {
@@ -166,76 +166,76 @@ local function collapsed_action(doc, idx, line, col, opener)
 end
 
 local function apply_surround(view, opener, delimiter)
-  local doc = view.doc
+  local buffer = view.buffer
   local actions = {}
   local edits = {}
   local has_selection = false
 
-  for idx, line1, col1, line2, col2, swapped in doc:get_selections(true, true) do
+  for idx, line1, col1, line2, col2, swapped in buffer:get_selections(true, true) do
     local action
     if line1 ~= line2 or col1 ~= col2 then
       has_selection = true
-      action = surround_action(doc, idx, line1, col1, line2, col2, swapped, opener, delimiter)
+      action = surround_action(buffer, idx, line1, col1, line2, col2, swapped, opener, delimiter)
     else
-      action = collapsed_action(doc, idx, line1, col1, opener)
+      action = collapsed_action(buffer, idx, line1, col1, opener)
     end
     actions[idx] = action
     edits[#edits + 1] = action.edit
   end
   if not has_selection then return nil end
 
-  local normalized = doc:plan_edits(edits)
+  local normalized = buffer:plan_edits(edits)
   for i = 2, #normalized do
     local previous, current = normalized[i - 1], normalized[i]
     if previous.end_offset > current.start_offset
     or (previous.start_offset == previous.end_offset
       and current.start_offset == current.end_offset
       and previous.start_offset == current.start_offset) then
-      core.log_quiet("Selection surround skipped for %s because selections overlap", doc:get_name())
+      core.log_quiet("Selection surround skipped for %s because selections overlap", buffer:get_name())
       return nil
     end
   end
 
   local ranges = {}
   for idx, action in pairs(actions) do ranges[idx] = { action.first, action.second } end
-  local selections, last_selection = doc:selection_ranges_after_edits(
+  local selections, last_selection = buffer:selection_ranges_after_edits(
     normalized,
     ranges,
-    doc.last_selection,
+    buffer.last_selection,
     { normalized = true }
   )
 
-  local result = doc:apply_edits(edits, {
+  local result = buffer:apply_edits(edits, {
     type = "insert",
     selections = selections,
     last_selection = last_selection,
     merge_cursors = false,
   })
-  linewrapping.notify_doc_text_input(doc, result)
+  linewrapping.notify_buffer_text_input(buffer, result)
   if result and result.changed then
-    core.log_quiet("Selection surround %s in %s across %d selection(s)", opener, doc:get_name(), #edits)
+    core.log_quiet("Selection surround %s in %s across %d selection(s)", opener, buffer:get_name(), #edits)
   end
   return result
 end
 
-local original_on_text_input = DocView.__selection_surround_original_on_text_input or DocView.on_text_input
-DocView.__selection_surround_original_on_text_input = original_on_text_input
+local original_on_text_input = TextView.__selection_surround_original_on_text_input or TextView.on_text_input
+TextView.__selection_surround_original_on_text_input = original_on_text_input
 
-function DocView:on_text_input(text)
+function TextView:on_text_input(text)
   local delimiter = delimiters[text]
-  if not delimiter or not self.doc or not self.doc:has_any_selection() then
+  if not delimiter or not self.buffer or not self.buffer:has_any_selection() then
     return original_on_text_input(self, text)
   end
   if not self:can_edit("text input", { warn = true, text = text }) then return false end
-  self.doc:clear_search_selections()
+  self.buffer:clear_search_selections()
   return apply_surround(self, text, delimiter) or original_on_text_input(self, text)
 end
 
 local function selected_markdown_view()
   local view = core.active_view
-  if view and view:extends(DocView)
-    and markdown_live.is_markdown_doc(view.doc)
-    and view.doc:has_any_selection()
+  if view and view:extends(TextView)
+    and markdown_live.is_markdown_buffer(view.buffer)
+    and view.buffer:has_any_selection()
   then
     return true, view
   end
@@ -244,7 +244,7 @@ end
 
 local function surround_markdown_selection(view, opener, closer)
   if not view:can_edit("format Markdown selection", { warn = true }) then return end
-  view.doc:clear_search_selections()
+  view.buffer:clear_search_selections()
   apply_surround(view, opener, { close = closer })
 end
 

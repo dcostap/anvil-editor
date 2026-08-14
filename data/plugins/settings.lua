@@ -7,7 +7,7 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local tokenizer = require "core.tokenizer"
 local View = require "core.view"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 
 -- check if widget is installed before proceeding
 local widget_found, Widget = pcall(require, "widget")
@@ -100,7 +100,7 @@ settings.type = {
 ---@class settings.option
 ---Title displayed to the user eg: "My Option"
 ---@field public label string
----Description of the option eg: "Modifies the document indentation"
+---Description of the option eg: "Modifies the buffer indentation"
 ---@field public description string
 ---Config path in the config table, eg: section.myoption, myoption, etc...
 ---@field public path string
@@ -514,14 +514,14 @@ settings.add("User Interface",
     },
     {
       label = "Hide Tabs",
-      description = "Always hide tabs even if multiple documents are open.",
+      description = "Always hide tabs even if multiple Buffers are open.",
       path = "hide_tabs",
       type = settings.type.TOGGLE,
       default = false
     },
     {
       label = "Always Show Tabs",
-      description = "Shows tabs even if a single document is opened.",
+      description = "Shows tabs even if a single buffer is opened.",
       path = "always_show_tabs",
       type = settings.type.TOGGLE,
       default = true
@@ -567,7 +567,7 @@ settings.add("User Interface",
         local globally = mode == "global"
         local views = core.root_panel.root_node:get_children()
         for _, view in ipairs(views) do
-          if globally or view:extends(DocView) then
+          if globally or view:extends(TextView) then
             view.h_scrollbar:set_forced_status(value)
             view.v_scrollbar:set_forced_status(value)
           else
@@ -579,19 +579,19 @@ settings.add("User Interface",
     },
     {
       label = "Force Scrollbar Status Mode",
-      description = "Choose between applying globally or document views only.",
+      description = "Choose between applying globally or Text Views only.",
       path = "force_scrollbar_status_mode",
       type = settings.type.SELECTION,
       default = "global",
       values = {
-        {"Documents", "docview"},
+        {"Text Views", "textview"},
         {"Globally", "global"}
       },
       on_apply = function(value)
         local globally = value == "global"
         local views = core.root_panel.root_node:get_children()
         for _, view in ipairs(views) do
-          if globally or view:extends(DocView) then
+          if globally or view:extends(TextView) then
             view.h_scrollbar:set_forced_status(config.force_scrollbar_status)
             view.v_scrollbar:set_forced_status(config.force_scrollbar_status)
           else
@@ -716,7 +716,7 @@ settings.add("Editor",
     },
     {
       label = "Context Lines",
-      description = "Minimum number of lines to keep visible above and below the cursor when scrolling the document.",
+      description = "Minimum number of lines to keep visible above and below the cursor when scrolling the buffer.",
       path = "scroll_context_lines",
       type = settings.type.NUMBER,
       default = 1,
@@ -725,7 +725,7 @@ settings.add("Editor",
     },
     {
       label = "Show Line Numbers",
-      description = "Show or hide a document line numbers.",
+      description = "Show or hide a buffer line numbers.",
       path = "show_line_numbers",
       type = settings.type.TOGGLE,
       default = true,
@@ -774,7 +774,7 @@ settings.add("Editor",
     },
     {
       label = "Symbol Pattern",
-      description = "A lua pattern used to match symbols in the document.",
+      description = "A lua pattern used to match symbols in the buffer.",
       path = "symbol_pattern",
       type = settings.type.STRING,
       default = "[%a_][%w_]*"
@@ -794,7 +794,7 @@ settings.add("Editor",
     },
     {
       label = "Scroll Past the End",
-      description = "Allow scrolling beyond the document ending.",
+      description = "Allow scrolling beyond the buffer ending.",
       path = "scroll_past_end",
       type = settings.type.TOGGLE,
       default = true
@@ -860,9 +860,9 @@ settings.add("Development",
       on_apply = function(enabled)
         tokenizer.set_use_native(enabled)
         tokenizer.clear_native_cache()
-        for _, doc in ipairs(core.docs) do
-          doc.highlighter:soft_reset()
-          doc:clear_cache(1, #doc.lines - 1)
+        for _, buffer in ipairs(core.buffers) do
+          buffer.highlighter:soft_reset()
+          buffer:clear_cache(1, #buffer.lines - 1)
         end
         core.redraw = true
       end

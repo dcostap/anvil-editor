@@ -1,7 +1,7 @@
 local common = require "core.common"
 local core = require "core"
 local command = require "core.command"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 local Project = require "core.project"
 local test = require "core.test"
 
@@ -24,16 +24,16 @@ local function read_file(path)
   return content
 end
 
-local function remove_doc(doc)
+local function remove_buffer(buffer)
   local root = core.root_panel.root_node
-  for _, view in ipairs(core.get_views_referencing_doc(doc)) do
+  for _, view in ipairs(core.get_views_referencing_buffer(buffer)) do
     local node = root:get_node_for_view(view)
     if node then node:remove_view(root, view) end
   end
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
@@ -46,7 +46,7 @@ test.describe("Save As command", function()
     context.original_nag_view = core.nag_view
     context.original_cwd = system.getcwd()
     context.temp_root = USERDIR
-      .. PATHSEP .. "doc-save-as-tests-"
+      .. PATHSEP .. "buffer-save-as-tests-"
       .. system.get_process_id() .. "-"
       .. math.floor(system.get_time() * 1000000)
     test.ok(common.mkdirp(context.temp_root))
@@ -59,13 +59,13 @@ test.describe("Save As command", function()
       core.global_prompt_bar:exit(false)
     end
     if context.temp_root then
-      for i = #core.docs, 1, -1 do
-        local doc = core.docs[i]
-        if doc.abs_filename and common.path_belongs_to(doc.abs_filename, context.temp_root) then
-          if doc:is_dirty() then doc:clean() end
-          remove_doc(doc)
-        elseif doc.new_file and not doc.filename then
-          remove_doc(doc)
+      for i = #core.buffers, 1, -1 do
+        local buffer = core.buffers[i]
+        if buffer.abs_filename and common.path_belongs_to(buffer.abs_filename, context.temp_root) then
+          if buffer:is_dirty() then buffer:clean() end
+          remove_buffer(buffer)
+        elseif buffer.new_file and not buffer.filename then
+          remove_buffer(buffer)
         end
       end
       if context.original_cwd then pcall(system.chdir, context.original_cwd) end
@@ -84,9 +84,9 @@ test.describe("Save As command", function()
     local target = join_path(context.temp_root, "existing.txt")
     write_file(target, "old content\n")
 
-    local doc = core.open_doc()
-    doc:insert(1, 1, "new content")
-    local view = core.root_panel:open_doc(doc)
+    local buffer = core.open_buffer()
+    buffer:insert(1, 1, "new content")
+    local view = core.root_panel:open_buffer(buffer)
     core.set_active_view(view)
 
     core.nag_view = {
@@ -98,7 +98,7 @@ test.describe("Save As command", function()
       end
     }
 
-    test.ok(command.perform("doc:save", view))
+    test.ok(command.perform("text:save", view))
     test.equal(core.active_view, core.global_prompt_bar)
     core.global_prompt_bar:set_text("existing.txt")
     core.global_prompt_bar:submit()
@@ -106,7 +106,7 @@ test.describe("Save As command", function()
     test.equal(context.nag_title, "Overwrite Existing File")
     test.ok(context.nag_message:find("existing.txt", 1, true), context.nag_message)
     test.equal(read_file(target), "old content\n")
-    test.equal(doc.filename, nil)
+    test.equal(buffer.filename, nil)
 
     local old_add_thread = core.add_thread
     local pending_thread
@@ -124,6 +124,6 @@ test.describe("Save As command", function()
     core.global_prompt_bar:submit()
     context.nag_callback({ text = "Overwrite" })
     test.equal(read_file(target):gsub("\r\n", "\n"), "new content\n")
-    test.equal(doc.filename, "existing.txt")
+    test.equal(buffer.filename, "existing.txt")
   end)
 end)

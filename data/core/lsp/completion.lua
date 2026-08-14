@@ -135,18 +135,18 @@ local function lsp_text_edit(item)
   if edit.insert then return { range = edit.insert, newText = edit.newText } end
 end
 
-local function replace_partial(doc, text)
+local function replace_partial(buffer, text)
   local ok, autocomplete = pcall(require, "plugins.autocomplete")
   local partial, line1, col1, line2, col2
   if ok and autocomplete and autocomplete.get_partial_symbol then
     partial, line1, col1, line2, col2 = autocomplete.get_partial_symbol()
   else
-    line2, col2 = doc:get_selection()
+    line2, col2 = buffer:get_selection()
     line1, col1 = line2, col2
   end
   local edits = {}
   local final_by_idx = {}
-  for idx in doc:get_selections(true) do
+  for idx in buffer:get_selections(true) do
     edits[#edits + 1] = {
       line1 = line1,
       col1 = col1,
@@ -158,20 +158,20 @@ local function replace_partial(doc, text)
     final_by_idx[idx] = "end"
   end
   if #edits == 0 then return false end
-  doc:apply_edits(edits, {
+  buffer:apply_edits(edits, {
     type = "insert",
-    selections = doc:selections_after_edits(edits, final_by_idx),
-    last_selection = doc.last_selection,
+    selections = buffer:selections_after_edits(edits, final_by_idx),
+    last_selection = buffer.last_selection,
     merge_cursors = false,
   })
   return true
 end
 
-local function apply_text_edit(doc, client, edit)
+local function apply_text_edit(buffer, client, edit)
   if not edit or not edit.range then return false end
-  local range = position.range_lsp_to_doc(doc, edit.range, client.position_encoding or "utf-16")
-  local selection_idx = doc.last_selection or 1
-  local doc_edit = {
+  local range = position.range_lsp_to_buffer(buffer, edit.range, client.position_encoding or "utf-16")
+  local selection_idx = buffer.last_selection or 1
+  local buffer_edit = {
     line1 = range.line1,
     col1 = range.col1,
     line2 = range.line2,
@@ -180,20 +180,20 @@ local function apply_text_edit(doc, client, edit)
     idx = selection_idx,
   }
   local final_by_idx = { [selection_idx] = "end" }
-  doc:apply_edits({ doc_edit }, {
+  buffer:apply_edits({ buffer_edit }, {
     type = "insert",
-    selections = doc:selections_after_edits({ doc_edit }, final_by_idx, doc.last_selection),
-    last_selection = doc.last_selection,
+    selections = buffer:selections_after_edits({ buffer_edit }, final_by_idx, buffer.last_selection),
+    last_selection = buffer.last_selection,
     merge_cursors = false,
   })
   return true
 end
 
-local function make_onselect(doc, client, raw)
+local function make_onselect(buffer, client, raw)
   return function()
     local edit = lsp_text_edit(raw)
-    if edit then return apply_text_edit(doc, client, edit) end
-    return replace_partial(doc, item_text(raw))
+    if edit then return apply_text_edit(buffer, client, edit) end
+    return replace_partial(buffer, item_text(raw))
   end
 end
 
@@ -206,7 +206,7 @@ local function normalize_completion_items(result)
   return result, false
 end
 
-function completion.map_items(client, doc, result)
+function completion.map_items(client, buffer, result)
   local raw_items, incomplete = normalize_completion_items(result)
   local mapped = {}
   for _, raw in ipairs(raw_items) do
@@ -227,7 +227,7 @@ function completion.map_items(client, doc, result)
         sort_text = raw.sortText,
         filter_text = raw.filterText,
         raw = raw,
-        onselect = make_onselect(doc, client, raw),
+        onselect = make_onselect(buffer, client, raw),
       }
     end
   end
@@ -261,9 +261,9 @@ function completion.symbols_from_items(items, opts)
   return symbols
 end
 
-function completion.available_clients(doc)
+function completion.available_clients(buffer)
   local out = {}
-  for _, state in ipairs(documents.states_for_doc(doc)) do
+  for _, state in ipairs(documents.states_for_buffer(buffer)) do
     local client = state.client
     if state.opened and not state.disabled_reason and completion_capability(client) then
       out[#out + 1] = { client = client, state = state }
@@ -275,14 +275,14 @@ function completion.available_clients(doc)
   return out
 end
 
-function completion.has_available_client(doc)
-  return #completion.available_clients(doc) > 0
+function completion.has_available_client(buffer)
+  return #completion.available_clients(buffer) > 0
 end
 
-function completion.is_trigger_character(doc, text)
+function completion.is_trigger_character(buffer, text)
   if type(text) ~= "string" or text == "" then return false end
   local char = text:sub(-1)
-  for _, match in ipairs(completion.available_clients(doc)) do
+  for _, match in ipairs(completion.available_clients(buffer)) do
     local capability = completion_capability(match.client)
     for _, trigger in ipairs(capability and capability.triggerCharacters or {}) do
       if trigger == char then return true end
@@ -306,12 +306,12 @@ function completion.latest(client, uri, key, version)
   return by_version and by_version[version] or nil
 end
 
-function completion.request(doc, opts)
+function completion.request(buffer, opts)
   opts = opts or {}
-  local matches = completion.available_clients(doc)
+  local matches = completion.available_clients(buffer)
   if #matches == 0 then return nil, "unavailable" end
   local line, col = opts.line, opts.col
-  if not line or not col then line, col = doc:get_selection() end
+  if not line or not col then line, col = buffer:get_selection() end
   local key = request_key(line, col, opts)
   local first_reason = "pending"
   for _, match in ipairs(matches) do
@@ -324,13 +324,13 @@ function completion.request(doc, opts)
       if opts.show ~= false then show_items(entry.items, { name = "lsp-completion" }) end
       return entry.items, nil, "fresh"
     end
-    local ok, reason = completion.schedule(client, state, doc, line, col, opts)
+    local ok, reason = completion.schedule(client, state, buffer, line, col, opts)
     if ok == nil then first_reason = reason or "unavailable" else first_reason = "pending" end
   end
   return nil, first_reason, first_reason == "unavailable" and "unavailable" or "pending"
 end
 
-function completion.schedule(client, state, doc, line, col, opts)
+function completion.schedule(client, state, buffer, line, col, opts)
   opts = opts or {}
   if type(client.send_request) ~= "function" then return nil, "client has no request API" end
   cancel_inflight(client, state.uri, "superseded completion request")
@@ -342,7 +342,7 @@ function completion.schedule(client, state, doc, line, col, opts)
   local requested_generation = client_generation(client)
   local params = {
     textDocument = { uri = state.uri },
-    position = position.doc_to_lsp(doc, line, col, client.position_encoding or "utf-16"),
+    position = position.buffer_to_lsp(buffer, line, col, client.position_encoding or "utf-16"),
   }
   if opts.trigger_character then
     params.context = {
@@ -372,7 +372,7 @@ function completion.schedule(client, state, doc, line, col, opts)
       quiet_log("LSP completion dropped stale version response for %s", state.uri)
       return
     end
-    local mapped, incomplete = completion.map_items(client, doc, result)
+    local mapped, incomplete = completion.map_items(client, buffer, result)
     local by_key = bucket_for(cache, client, state.uri)
     by_key[key] = by_key[key] or {}
     by_key[key][requested_version] = {
@@ -399,10 +399,10 @@ function completion.schedule(client, state, doc, line, col, opts)
   return true
 end
 
-function completion.start_current_document(view, opts)
+function completion.start_current_buffer(view, opts)
   view = view or core.active_view
-  if not view or not view.doc then return nil, "no active document" end
-  return completion.request(view.doc, opts)
+  if not view or not view.buffer then return nil, "no active buffer" end
+  return completion.request(view.buffer, opts)
 end
 
 function completion.clear_client(client)

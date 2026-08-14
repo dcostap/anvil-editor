@@ -68,7 +68,7 @@ config.mouse_wheel_scroll = 70 * SCALE
 ---@type boolean
 config.animate_drag_scroll = false
 
----Enables/disables scrolling past the end of a document.
+---Enables/disables scrolling past the end of a buffer.
 ---
 ---Defaults to true.
 ---@type boolean
@@ -79,7 +79,7 @@ config.scroll_past_end = true
 ---| "contracted" # A thinner scrollbar is shown at all times.
 ---| false # The scrollbar expands when the cursor hovers over it.
 
----Controls whether the DocView scrollbar is always shown or hidden.
+---Controls whether the TextView scrollbar is always shown or hidden.
 ---This option does not affect other View's scrollbars.
 ---
 ---Defaults to false.
@@ -137,7 +137,7 @@ config.non_word_chars = " \t\n/\\()\"':,.;<>~!@#$%^&*|+=[]{}`?-"
 ---@type number
 config.undo_merge_timeout = 0.3
 
----The maximum number of undo steps per-document.
+---The maximum number of undo steps per-buffer.
 ---
 ---The default is 10000.
 ---@type number
@@ -155,7 +155,7 @@ config.max_visible_commands = 10
 ---@type integer
 config.max_visited_files = 20
 
----Always hide tabs even if multiple documents are open.
+---Always hide tabs even if multiple Buffers are open.
 ---
 ---The default is false.
 ---@type boolean
@@ -191,7 +191,7 @@ config.select_add_next_no_case = false
 config.line_height = 1.2
 
 ---Minimum number of lines to keep visible above and below the cursor
----when scrolling the document.
+---when scrolling the buffer.
 ---
 ---The default is 1
 ---@type integer

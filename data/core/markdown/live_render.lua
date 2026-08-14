@@ -1,7 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
-local DocView = require "core.docview"
+local Editor = require "core.editor"
 local attachments = require "core.markdown.attachments"
 local callouts = require "core.markdown.callouts"
 local images = require "core.markdown.images"
@@ -35,10 +35,10 @@ local function extension(path)
   return (path or ""):match("%.([^.\\/]+)$") and (path or ""):match("%.([^.\\/]+)$"):lower() or nil
 end
 
-function live.is_markdown_doc(doc)
-  if not doc then return false end
-  if MARKDOWN_EXTENSIONS[extension(doc.abs_filename or doc.filename or "") or ""] then return true end
-  local syntax_name = doc.syntax and doc.syntax.name
+function live.is_markdown_buffer(buffer)
+  if not buffer then return false end
+  if MARKDOWN_EXTENSIONS[extension(buffer.abs_filename or buffer.filename or "") or ""] then return true end
+  local syntax_name = buffer.syntax and buffer.syntax.name
   return type(syntax_name) == "string" and syntax_name:lower():find("markdown", 1, true) ~= nil
 end
 
@@ -75,7 +75,7 @@ end
 
 local function current_selection_state(view)
   if view.get_line_render_selection_state then return view:get_line_render_selection_state() end
-  return view.selection_state or { selections = view.doc.selections }
+  return view.selection_state or { selections = view.buffer.selections }
 end
 
 local function heading_for_line(line_text, line)
@@ -103,9 +103,9 @@ local function heading_for_line(line_text, line)
 end
 
 local function current_semantic_model(view)
-  local instance = markdown_model.peek(view.doc)
+  local instance = markdown_model.peek(view.buffer)
   if instance and instance.status == "ready"
-    and instance.published_revision == view.doc.text_revision
+    and instance.published_revision == view.buffer.text_revision
   then
     return instance
   end
@@ -116,7 +116,7 @@ local function render_semantic_model(view, line)
   if instance then return instance end
   local owner = view.__markdown_live_owner
   if owner and owner.semantic_pending_line and line >= owner.semantic_pending_line then return nil end
-  instance = markdown_model.peek(view.doc)
+  instance = markdown_model.peek(view.buffer)
   if instance and instance.can_render_published_line
     and instance:can_render_published_line(line)
   then
@@ -179,7 +179,7 @@ local function list_marker_for_line(view, line)
     if node.type == "list" or node.type == "list_item" then
       local marker = node.attributes and node.attributes.list
       if marker and marker.line1 == line then
-        local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+        local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
         local raw = text:sub(marker.col1, marker.col2 - 1)
         local _, token_end = raw:find("%S+")
         return marker, node, marker.col1 + (token_end or #raw)
@@ -219,7 +219,7 @@ local function task_marker_for_line(view, line)
     local source_checked
     if not marker then
       marker, source_checked = source_task_marker(
-        view.doc.lines[line] or "", attributes.list
+        view.buffer.lines[line] or "", attributes.list
       )
     end
     if marker and marker.line1 == line then
@@ -239,8 +239,8 @@ end
 local function has_task_source_affinity(view, line, col)
   local affinity = view.__markdown_task_source_affinity
   if not affinity then return false end
-  if affinity.text_revision ~= (view.doc.text_revision or 0)
-    or affinity.selection_key ~= linewrapping.selection_state_key(view.doc)
+  if affinity.text_revision ~= (view.buffer.text_revision or 0)
+    or affinity.selection_key ~= linewrapping.selection_state_key(view.buffer)
   then
     view.__markdown_task_source_affinity = nil
     return false
@@ -286,8 +286,8 @@ end
 
 local function reveal_units_for_line(view, line, state)
   state = state or current_selection_state(view)
-  local selections = state and state.selections or view.doc.selections or {}
-  local line_length = source_line_length(view.doc.lines[line] or "")
+  local selections = state and state.selections or view.buffer.selections or {}
+  local line_length = source_line_length(view.buffer.lines[line] or "")
   local units = {}
   for i = 1, #selections, 4 do
     local line1, col1 = selections[i], selections[i + 1]
@@ -362,7 +362,7 @@ local function reveal_units_for_line(view, line, state)
           units[#units + 1] = { type = "line", col1 = 1, col2 = line_length + 1, whole_line = true }
         end
       else
-        local cursor_length = source_line_length(view.doc.lines[line1] or "")
+        local cursor_length = source_line_length(view.buffer.lines[line1] or "")
         local best, best_size, best_contains, has_localized_reveal
         for _, node in ipairs(semantic_line(view, line1) or {}) do
           if REVEAL_TYPES[node.type] then
@@ -445,7 +445,7 @@ local function semantic_heading_for_line(view, line_text, line)
       if suppressed then return nil end
       local heading = heading_for_line(line_text, line)
       if not heading and node.source.line2 > node.source.line1 then
-        local underline = (view.doc.lines[line + 1] or ""):gsub("\n$", "")
+        local underline = (view.buffer.lines[line + 1] or ""):gsub("\n$", "")
         local indent, marks = underline:match("^( *)(=+)[ \t]*$")
         local level = 1
         if not marks then
@@ -927,14 +927,14 @@ local function image_fragment(view, span, opts)
   if not (link and (link.kind == "image" or link.kind == "embed") and is_image_target(link.path)) then return nil end
   view.__markdown_live_image_cache = view.__markdown_live_image_cache or {}
   view.__markdown_live_image_references = view.__markdown_live_image_references or {}
-  local project = core.current_project(view.doc.abs_filename)
+  local project = core.current_project(view.buffer.abs_filename)
   local owner = view.__markdown_live_owner
   local resolution = resolve_live_link(view, link)
   local image_source = resolution.status == "resolved" and resolution.kind == "attachment"
     and resolution.path or link.path
   local asset_opts = {
     alt = link.alias or link.alt,
-    source_path = view.doc.abs_filename,
+    source_path = view.buffer.abs_filename,
     project_root = project and project.path,
     download_remote = remote_image_allowed(view, image_source, project),
     retry_generation = owner and owner.link_index and owner.link_index.generation or 0,
@@ -1006,7 +1006,7 @@ local function image_fragment(view, span, opts)
         cursor = "hand",
         on_mouse_pressed = function(_, owner, hit, button)
           if button ~= "left" then return false end
-          owner.doc:set_selection(hit.line, 1)
+          owner.buffer:set_selection(hit.line, 1)
           return common.open_in_system(hit.fragment.image_path)
         end,
         draw = function(_, fragment, x, y, row_height)
@@ -1056,9 +1056,9 @@ local function image_fragment(view, span, opts)
   }
 end
 
-local function semantic_range_text_from_doc(view, range)
+local function semantic_range_text_from_buffer(view, range)
   if not range or range.line1 ~= range.line2 then return nil end
-  local text = (view.doc.lines[range.line1] or ""):gsub("\n$", "")
+  local text = (view.buffer.lines[range.line1] or ""):gsub("\n$", "")
   return text:sub(range.col1, range.col2 - 1)
 end
 
@@ -1072,14 +1072,14 @@ local function prepare_reference_definitions(view, instance)
   if not instance or instance.status ~= "ready" then return {} end
   local cache = view.__markdown_live_reference_cache
   if cache and cache.generation == instance.generation then return cache.definitions end
-  local nodes, reason = instance:nodes_for_lines(1, #view.doc.lines, { limit = 8192 })
+  local nodes, reason = instance:nodes_for_lines(1, #view.buffer.lines, { limit = 8192 })
   local definitions = {}
   if reason ~= "limit" then
     for _, node in ipairs(nodes or {}) do
       if node.type == "link_reference" then
         local attributes = node.attributes or {}
-        local label = semantic_range_text_from_doc(view, attributes.reference_label)
-        local destination = semantic_range_text_from_doc(view, attributes.reference_destination)
+        local label = semantic_range_text_from_buffer(view, attributes.reference_label)
+        local destination = semantic_range_text_from_buffer(view, attributes.reference_destination)
         local key = normalize_reference_label(label)
         if key ~= "" and destination and destination ~= "" and not definitions[key] then
           if destination:sub(1, 1) == "<" and destination:sub(-1) == ">" then
@@ -1094,7 +1094,7 @@ local function prepare_reference_definitions(view, instance)
       end
     end
   else
-    core.log_quiet("Markdown reference definitions exceeded capture bound for %s", view.doc:get_name())
+    core.log_quiet("Markdown reference definitions exceeded capture bound for %s", view.buffer:get_name())
   end
   cache = { generation = instance.generation, definitions = definitions }
   view.__markdown_live_reference_cache = cache
@@ -1125,8 +1125,8 @@ end
 
 local function reference_link_from_node(view, line_text, line, node)
   local attributes = node.attributes or {}
-  local label_source = semantic_range_text_from_doc(view, attributes.reference_label)
-  local text_source = semantic_range_text_from_doc(view, attributes.link_text)
+  local label_source = semantic_range_text_from_buffer(view, attributes.reference_label)
+  local text_source = semantic_range_text_from_buffer(view, attributes.link_text)
   local display = (text_source or label_source or ""):gsub("^%[", ""):gsub("%]$", "")
   local key = normalize_reference_label(label_source or text_source)
   if key:sub(1, 1) == "^" then return nil end
@@ -1312,7 +1312,7 @@ resolve_live_link = function(view, link)
   if not common.is_absolute_path(target) and target:match("^[%a][%w+.-]*:") then
     return { status = "external", target = target, path = target }
   elseif index and index:can_resolve() then
-    return index:resolve(link, view.doc.abs_filename)
+    return index:resolve(link, view.buffer.abs_filename)
   end
   if owner then owner.link_resolution_pending = true end
   return { status = "pending", target = target, reason = "indexing" }
@@ -1572,7 +1572,7 @@ local callout_runtime = {}
 function callout_runtime.line_ranges(view, callout, line)
   local cached = callout.line_ranges[line]
   if cached ~= nil then return cached ~= false and cached or nil end
-  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
   cached = callouts.line_ranges(text, callout.nesting_depth, line)
   if not cached then
     callout.line_ranges[line] = false
@@ -1593,13 +1593,13 @@ function callout_runtime.from_quote(view, node)
   if cache.records[key] ~= nil then
     return cache.records[key] ~= false and cache.records[key] or nil
   end
-  local text = (view.doc.lines[node.source.line1] or ""):gsub("\n$", "")
+  local text = (view.buffer.lines[node.source.line1] or ""):gsub("\n$", "")
   local callout = callouts.parse_header(text, node.source.col1)
   if not callout then cache.records[key] = false return nil end
   local line2 = node.source.line2
   if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
   while line2 > node.source.line1 do
-    local end_text = (view.doc.lines[line2] or ""):gsub("\n$", "")
+    local end_text = (view.buffer.lines[line2] or ""):gsub("\n$", "")
     if callouts.line_ranges(end_text, callout.nesting_depth, line2) then break end
     line2 = line2 - 1
   end
@@ -1607,13 +1607,13 @@ function callout_runtime.from_quote(view, node)
   callout.block_range = {
     line1 = callout.line1, col1 = node.source.col1,
     line2 = line2, col2 = line2 == node.source.line2 and node.source.col2
-      or #(view.doc.lines[line2] or "") + 1,
+      or #(view.buffer.lines[line2] or "") + 1,
   }
   callout.semantic_id = tostring(node.id) .. ":callout"
   callout.quote_node_id = node.id
   callout.line_ranges = {}
   for line = callout.line1, callout.line2 do
-    local line_text = (view.doc.lines[line] or ""):gsub("\n$", "")
+    local line_text = (view.buffer.lines[line] or ""):gsub("\n$", "")
     callout.line_ranges[line] = callouts.line_ranges(
       line_text, callout.nesting_depth, line
     ) or false
@@ -1708,13 +1708,13 @@ function callout_runtime.reconcile_folds(view, reason)
   end
   local instance = current_semantic_model(view)
   if not instance then return end
-  local nodes, query_reason = instance:nodes_for_lines(1, #view.doc.lines, {
+  local nodes, query_reason = instance:nodes_for_lines(1, #view.buffer.lines, {
     limit = 100000,
   })
   if not nodes or query_reason == "limit" then
     core.log_quiet(
       "Markdown Callout fold reconciliation skipped for %s: %s",
-      view.doc:get_name(), tostring(query_reason or "semantic query unavailable")
+      view.buffer:get_name(), tostring(query_reason or "semantic query unavailable")
     )
     return
   end
@@ -1762,7 +1762,7 @@ function callout_runtime.reconcile_folds(view, reason)
         line1 = callout.line1,
         col1 = callout.block_range.col1,
         line2 = callout.line2,
-        col2 = #(view.doc.lines[callout.line2] or "") + 1,
+        col2 = #(view.buffer.lines[callout.line2] or "") + 1,
         collapsed = state.collapsed,
         show_widget = false,
         allow_nested = true,
@@ -1809,7 +1809,7 @@ function callout_runtime.reconcile_folds(view, reason)
   end
   core.log_quiet(
     "Markdown Callout folds reconciled for %s: %d foldable callout(s), reason=%s",
-    view.doc:get_name(), (function()
+    view.buffer:get_name(), (function()
       local count = 0
       for _ in pairs(wanted) do count = count + 1 end
       return count
@@ -1846,7 +1846,7 @@ end
 local function table_for_line(view, line)
   local nodes, semantic_generation = semantic_line(view, line)
   local cache_key = table.concat({
-    tostring(view.doc.text_revision or 0),
+    tostring(view.buffer.text_revision or 0),
     tostring(semantic_generation or 0),
     tostring(view.__line_render_invalidation_generation or 0),
   }, ":")
@@ -2102,7 +2102,7 @@ end
 
 local function table_layout(view, table_node, allow_pending)
   local instance = render_semantic_model(view, table_node.source.line1)
-  if not instance and allow_pending then instance = markdown_model.peek(view.doc) end
+  if not instance and allow_pending then instance = markdown_model.peek(view.buffer) end
   if not instance then return nil end
   local font = markdown_live_body_font(view)
   local available_width = table_available_width(view)
@@ -2111,7 +2111,7 @@ local function table_layout(view, table_node, allow_pending)
   local line1 = table_node.source.line1
   if line2 - line1 + 1 > TABLE_MAX_PRESENTATION_ROWS then
     core.log_quiet("Markdown table presentation kept raw beyond %d rows at %s:%d",
-      TABLE_MAX_PRESENTATION_ROWS, view.doc:get_name(), line1)
+      TABLE_MAX_PRESENTATION_ROWS, view.buffer:get_name(), line1)
     return nil
   end
   local theme_generation = core.color_theme_generation or 0
@@ -2155,19 +2155,19 @@ local function table_layout(view, table_node, allow_pending)
 
   local rows, columns, canonical = {}, nil, true
   for line = line1, line2 do
-    local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+    local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
     local row = table_source_row(text)
     if not row or #row.cells == 0 or #row.cells > TABLE_MAX_PRESENTATION_COLUMNS then
       layouts[table_node.id] = false
       core.log_quiet("Markdown table presentation fell back to source at %s:%d",
-        view.doc:get_name(), line)
+        view.buffer:get_name(), line)
       return nil
     end
     columns = columns or #row.cells
     if #row.cells ~= columns then
       layouts[table_node.id] = false
       core.log_quiet("Markdown table presentation found inconsistent columns at %s:%d",
-        view.doc:get_name(), line)
+        view.buffer:get_name(), line)
       return nil
     end
     row.line, row.text = line, text
@@ -2222,7 +2222,7 @@ local function table_layout(view, table_node, allow_pending)
     minimums[column] = math.max(
       pad * 2 + inline_style_font(view, "strong"):get_width(header_text),
       -- Below this floor dense grids become columns of individually wrapped
-      -- glyphs. Keep a readable cell width and let Document View expose the
+      -- glyphs. Keep a readable cell width and let Text View expose the
       -- table's horizontal overflow instead of crushing every column.
       pad * 2 + font:get_width("MMMMMMMM")
     )
@@ -2572,7 +2572,7 @@ local function table_row_fragments(view, table_node, line, allow_pending)
           if button ~= "left" then return false end
           core.log_quiet(
             "Markdown table Hover Insertion Control: insert %s after %s at %s:%d",
-            kind, tostring(after), owner.doc:get_name(), line
+            kind, tostring(after), owner.buffer:get_name(), line
           )
           return action(owner)
         end,
@@ -2588,7 +2588,7 @@ local function table_row_fragments(view, table_node, line, allow_pending)
         bounds.x2 - control_size / 2,
         math.max(0, (row_height - control_size) / 2),
         function(owner)
-          owner.doc:set_selection(
+          owner.buffer:set_selection(
             line, row_presentations[target_column].source_col1
           )
           return markdown_tables.insert_column(owner, "right")
@@ -2604,7 +2604,7 @@ local function table_row_fragments(view, table_node, line, allow_pending)
       (first_bounds.x1 + first_bounds.x2 - control_size) / 2,
       math.max(0, row_height - control_size - math.max(1, SCALE * 2)),
       function(owner)
-        owner.doc:set_selection(line, first_presentation.source_col1)
+        owner.buffer:set_selection(line, first_presentation.source_col1)
         return markdown_tables.insert_row(owner, "below")
       end
     )
@@ -2704,7 +2704,7 @@ local function semantic_footnote_fragments(view, line_text, line, reveal_units)
   for _, node in ipairs(semantic_line(view, line) or {}) do
     if node.type == "link_reference" and node.source.line1 == line and node.source.line2 == line then
       local attributes = node.attributes or {}
-      local label = semantic_range_text_from_doc(view, attributes.reference_label or attributes.link_text)
+      local label = semantic_range_text_from_buffer(view, attributes.reference_label or attributes.link_text)
       local key = normalize_reference_label(label)
       if key:sub(1, 1) == "^" then
         local definition = line_text:sub(node.source.col2, node.source.col2) == ":"
@@ -2760,7 +2760,7 @@ local function markdown_list_visual_indent_width(prefix)
 end
 
 local function ordered_list_display_marker(view, line, ordered)
-  local revision = view.doc.text_revision or view.doc:get_change_id()
+  local revision = view.buffer.text_revision or view.buffer:get_change_id()
   local cache = view.__markdown_live_ordered_marker_cache
   if not cache or cache.revision ~= revision then
     cache = { revision = revision, lines = {} }
@@ -2772,7 +2772,7 @@ local function ordered_list_display_marker(view, line, ordered)
         end
       end
     end
-    for source_line, source in ipairs(view.doc.lines) do
+    for source_line, source in ipairs(view.buffer.lines) do
       local text = source:gsub("\n$", "")
       if not text:match("^%s*$") then
         local indent, number, delimiter = text:match("^([ \t]*)(%d+)([.)])%s+")
@@ -3072,7 +3072,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
     if node.type == "link_reference" and attributes.reference_label
       and attributes.reference_destination and node.source.line1 == line
     then
-      local label = semantic_range_text_from_doc(view, attributes.reference_label) or ""
+      local label = semantic_range_text_from_buffer(view, attributes.reference_label) or ""
       local normalized_label = normalize_reference_label(label)
       local footnote = normalized_label:sub(1, 1) == "^"
       fragments[#fragments + 1] = {
@@ -3089,7 +3089,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         fragments[#fragments + 1] = {
           source_col1 = attributes.reference_destination.col1,
           source_col2 = attributes.reference_destination.col2,
-          text = semantic_range_text_from_doc(view, attributes.reference_destination),
+          text = semantic_range_text_from_buffer(view, attributes.reference_destination),
           color = style.markdown_live_link,
           underline = true,
           semantic_id = node.id .. ":definition-destination",
@@ -3143,11 +3143,11 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       local function toggle_task(_, owner, _, button)
         if button ~= "left" then return false end
         local selection = owner:get_selection_state()
-        local source = (owner.doc.lines[line] or ""):sub(task.col1, task.col2 - 1)
+        local source = (owner.buffer.lines[line] or ""):sub(task.col1, task.col2 - 1)
         local currently_checked = source:match("^%[[xX]%]$") ~= nil
         owner:with_selection_state(function()
-          owner.doc:set_selection(line, task.col1, line, task.col2)
-          owner.doc:text_input(currently_checked and "[ ]" or "[x]")
+          owner.buffer:set_selection(line, task.col1, line, task.col2)
+          owner.buffer:text_input(currently_checked and "[ ]" or "[x]")
           owner:set_selection_state(selection)
         end)
         return true
@@ -3514,13 +3514,13 @@ local function apply_task_completion_presentation(view, line_text, line, render_
   if content_col == task.col2 and task.col2 == #line_text + 1 then
     render_line.markdown_task_implicit_gap = true
     render_line.on_text_input = function(owner, input)
-      local line1, col1, line2, col2 = owner.doc:get_selection()
+      local line1, col1, line2, col2 = owner.buffer:get_selection()
       if line1 ~= line or line2 ~= line
         or col1 ~= task.col2 or col2 ~= task.col2
       then
         return false
       end
-      owner.doc:text_input(input:match("^[\t ]") and input or " " .. input)
+      owner.buffer:text_input(input:match("^[\t ]") and input or " " .. input)
       return true
     end
   end
@@ -3612,7 +3612,7 @@ local function layout_inline_image_rows(view, line_text, render_line)
       row.highlight_height = render_line.layout_height
     end
   end
-  -- Measuring the text segments above populates DocView's normalized-fragment
+  -- Measuring the text segments above populates Editor's normalized-fragment
   -- cache before the image's final block offsets are assigned. Rebuild those
   -- copies so drawing and hit testing use the positioned image rather than
   -- vertically centering it across the whole multi-row layout.
@@ -3652,7 +3652,7 @@ local function line_in_semantic_math(view, line)
     if node.type == "math"
       and line >= node.source.line1 and line <= node.source.line2
       and not semantic_math_overlaps_link_destination(
-        node, nodes, view.doc.lines[line] or "", line
+        node, nodes, view.buffer.lines[line] or "", line
       )
     then
       return true
@@ -4053,7 +4053,7 @@ local pending_metric_invariant = {}
 
 function pending_metric_invariant.warn(view, state, line, pending_height,
                                        fallback_height, reason)
-  local revision = view.doc.text_revision
+  local revision = view.buffer.text_revision
   state.pending_metric_invariant_violations =
     (state.pending_metric_invariant_violations or 0) + 1
   state.last_pending_metric_invariant_violation = {
@@ -4068,7 +4068,7 @@ function pending_metric_invariant.warn(view, state, line, pending_height,
   core.warn(
     "Markdown Live Preview repaired duplicate metric ownership in %s "
       .. "revision=%d line=%d pending=%s fallback=%s checkpoint=%s",
-    view.doc:get_name(), revision, line, tostring(pending_height),
+    view.buffer:get_name(), revision, line, tostring(pending_height),
     tostring(fallback_height), tostring(reason)
   )
 end
@@ -4121,9 +4121,9 @@ end
 local function publish_pending_table_row(view, line, render_line)
   local state = view.__markdown_live_owner
   if not (state and render_line) then return false end
-  local current = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local current = (view.buffer.lines[line] or ""):gsub("\n$", "")
   pending_metric_invariant.store(state, line, {
-    revision = view.doc.text_revision,
+    revision = view.buffer.text_revision,
     source_text = current,
     render_line = render_line,
     height = render_line.layout_height
@@ -4134,7 +4134,7 @@ local function publish_pending_table_row(view, line, render_line)
 end
 
 interactive_table_render_line = function(view, table_node, line, allow_pending)
-  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
   local fragments, layout, position_rows, interactive_row_height =
     table_row_fragments(view, table_node, line, allow_pending)
   if not (fragments and layout) then return nil end
@@ -4156,10 +4156,10 @@ interactive_table_render_line = function(view, table_node, line, allow_pending)
     adjusted.source = {}
     for key, value in pairs(table_node.source or {}) do adjusted.source[key] = value end
     adjusted.id = "interactive-table:pending:" .. tostring(line1)
-      .. ":" .. tostring(owner.doc.text_revision) .. ":" .. tostring(line2)
+      .. ":" .. tostring(owner.buffer.text_revision) .. ":" .. tostring(line2)
     adjusted.source.line1 = line1
     adjusted.source.line2 = line2
-    adjusted.source.col2 = #(owner.doc.lines[line2] or "")
+    adjusted.source.col2 = #(owner.buffer.lines[line2] or "")
     local published = false
     for row_line = line1, line2 do
       local rebuilt = interactive_table_render_line(owner, adjusted, row_line, true)
@@ -4247,7 +4247,7 @@ pending_visual_projection.rebase_image_consumers = function(view, ranges)
   for _, record in pairs(cache) do
     for reference_id, old_line in pairs(record.consumers or {}) do
       local new_line = pending_projection.map_unchanged_line(ranges, old_line)
-      if new_line and view.doc.lines[new_line] then
+      if new_line and view.buffer.lines[new_line] then
         record.consumers[reference_id] = new_line
       else
         record.consumers[reference_id] = nil
@@ -4261,7 +4261,7 @@ end
 
 pending_visual_projection.provisional_frontmatter_for_line = function(view, line)
   local _, _, _, frontmatter = pending_projection.source_topology(
-    view.doc.lines, line
+    view.buffer.lines, line
   )
   return frontmatter and frontmatter[line] == true or false
 end
@@ -4298,11 +4298,11 @@ local function pending_capture_visible_range(view, owner)
   if owner.pending_visible_line1 and owner.pending_visible_line2 then
     return owner.pending_visible_line1, owner.pending_visible_line2
   end
-  local line = select(1, view.doc:get_selection()) or 1
+  local line = select(1, view.buffer:get_selection()) or 1
   local row_height = math.max(1, view:get_line_height())
   local rows = math.max(8, math.ceil((view.size.y or row_height) / row_height) + 8)
   local line1 = math.max(1, line - rows)
-  local line2 = math.min(#view.doc.lines, line + rows)
+  local line2 = math.min(#view.buffer.lines, line + rows)
   core.log_quiet(
     "Markdown Live Preview approximated pre-edit viewport at lines %d-%d",
     line1, line2
@@ -4317,7 +4317,7 @@ local function capture_pre_edit_renders(view, change)
   local lines = {}
   local transaction = change and change.transaction
   owner.pre_edit_transaction = transaction
-  owner.pre_edit_revision = view.doc.text_revision + 1
+  owner.pre_edit_revision = view.buffer.text_revision + 1
   if view.get_visible_line_range then
     owner.pending_visible_line1, owner.pending_visible_line2 =
       pending_capture_visible_range(view, owner)
@@ -4379,7 +4379,7 @@ local function capture_pre_edit_renders(view, change)
     local visible_span = math.max(1, visible_line2 - visible_line1 + 1)
     local context = math.min(structural_shift, visible_span)
     local capture_line1 = math.max(1, visible_line1 - context)
-    local capture_line2 = math.min(#view.doc.lines, visible_line2 + context)
+    local capture_line2 = math.min(#view.buffer.lines, visible_line2 + context)
     for line = capture_line1, capture_line2 do lines[line] = true end
     visible_line1, visible_line2 = capture_line1, capture_line2
   end
@@ -4389,7 +4389,7 @@ local function capture_pre_edit_renders(view, change)
     old_topology_limit = math.max(old_topology_limit, line)
   end
   local _, old_comments, old_math, old_frontmatter =
-    pending_projection.source_topology(view.doc.lines, old_topology_limit)
+    pending_projection.source_topology(view.buffer.lines, old_topology_limit)
   local metric_cache = view.__visual_metric_cache
   local metrics_current = metric_cache
     and metric_cache.signature == view:get_visual_metric_signature()
@@ -4397,7 +4397,7 @@ local function capture_pre_edit_renders(view, change)
   local captured = 0
   for line in pairs(lines) do
     local render = cached_render_line(view, line)
-    local source_text = (view.doc.lines[line] or ""):gsub("\n$", "")
+    local source_text = (view.buffer.lines[line] or ""):gsub("\n$", "")
     local indented_node
     if not (owner.pending_indented_lines and owner.pending_indented_lines[line]) then
       indented_node = indented_code_for_line(view, line)
@@ -4405,7 +4405,7 @@ local function capture_pre_edit_renders(view, change)
     local frontmatter_node, frontmatter_end_line =
       frontmatter_for_line(view, line)
     local pending = owner.pending_lines and owner.pending_lines[line]
-    if pending and (pending.revision ~= view.doc.text_revision
+    if pending and (pending.revision ~= view.buffer.text_revision
       or pending.source_text ~= source_text)
     then
       pending = nil
@@ -4484,7 +4484,7 @@ end
 
 function pending_visual_projection.context_is_safe(view, line, render_line)
   local owner = view.__markdown_live_owner
-  if owner and owner.link_targets_changed_revision == view.doc.text_revision then
+  if owner and owner.link_targets_changed_revision == view.buffer.text_revision then
     -- A resolved attachment/image/embed can change when a reference
     -- definition changes. The retained fragment does not carry enough source
     -- context to prove that its old target is still valid, so do not carry
@@ -4505,7 +4505,7 @@ function pending_visual_projection.context_is_safe(view, line, render_line)
     end
   end
   local topology = owner and owner.provisional_topology
-  if not topology or topology.revision ~= view.doc.text_revision then return true end
+  if not topology or topology.revision ~= view.buffer.text_revision then return true end
   return not (topology.fenced[line] or topology.comments[line]
     or topology.math[line] or topology.frontmatter[line]
     or topology.html[line])
@@ -4526,7 +4526,7 @@ function pending_visual_projection.find_capture(view, pre_edit_lines, source)
     end
   end
   -- The pre-edit capture is deliberately bounded to the old viewport. The
-  -- transaction hook still runs before DocView drops its old line cache, so a
+  -- transaction hook still runs before Editor drops its old line cache, so a
   -- resident rendered visual can be adopted here even when that bounded
   -- capture missed its logical line.
   for _, cached in pairs(view.__line_render_cache
@@ -4568,7 +4568,7 @@ local function pending_entry(view, render_line, source_text, height, row_heights
     )
   end
   return {
-    revision = view.doc.text_revision,
+    revision = view.buffer.text_revision,
     source_text = source_text,
     render_line = render_line,
     height = metric_height,
@@ -4587,12 +4587,12 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
   local next_lines, next_metrics = {}, { heights = {} }
   local context_changed, global_context =
     pending_projection.transaction_changes_block_context(
-    view.doc, transaction, pre_edit_lines
+    view.buffer, transaction, pre_edit_lines
   )
   local context_line1, context_line2
   if context_changed then
     if global_context then
-      context_line1, context_line2 = 1, #view.doc.lines
+      context_line1, context_line2 = 1, #view.buffer.lines
     else
       for _, range in ipairs(ranges) do
         local line1 = math.min(
@@ -4605,7 +4605,7 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
         )
         context_line1 = math.min(context_line1 or line1, math.max(1, line1 - 1))
         context_line2 = math.max(
-          context_line2 or line2, math.min(#view.doc.lines, line2 + 1)
+          context_line2 or line2, math.min(#view.buffer.lines, line2 + 1)
         )
       end
     end
@@ -4622,7 +4622,7 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
     then
       return
     end
-    local source = (view.doc.lines[new_line] or ""):gsub("\n$", "")
+    local source = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
     if render_line and render_line.source_text == source then
       local retained_height = height or retained_metric_height(previous_metrics, old_line)
       local entry = pending_entry(
@@ -4655,7 +4655,7 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
 
   local function publish(line, render, captured, provenance)
     if not render then return false end
-    local source = (view.doc.lines[line] or ""):gsub("\n$", "")
+    local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
     if captured and pending_projection.block_signature(captured.source_text or "")
       ~= pending_projection.block_signature(source)
     then
@@ -4687,7 +4687,7 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
     local captured = pre_edit_lines[edit.line1]
     local old_render = captured and captured.render_line or cached_render_line(view, edit.line1)
     local transformed = old_render and clone_render_line(old_render)
-    local new_source = (view.doc.lines[range.new_line1 or edit.line1] or "")
+    local new_source = (view.buffer.lines[range.new_line1 or edit.line1] or "")
       :gsub("\n$", "")
     if transformed and pending_projection.block_signature(transformed.source_text or "")
       ~= pending_projection.block_signature(new_source)
@@ -4703,7 +4703,7 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
     if split and #split == new_line2 - new_line1 + 1 then
       for index, render in ipairs(split) do
         local line = new_line1 + index - 1
-        local source = (view.doc.lines[line] or ""):gsub("\n$", "")
+        local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
         local visual_capture = pending_visual_projection.find_capture(
           view, pre_edit_lines, source
         )
@@ -4730,7 +4730,7 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
     local fallback = pre_edit_lines[old_line1] or pre_edit_lines[old_line2]
     for new_line = new_line1, new_line2 do
       if not next_lines[new_line] then
-        local source = (view.doc.lines[new_line] or ""):gsub("\n$", "")
+        local source = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
         local exact
         for old_line = old_line1, old_line2 do
           local captured = pre_edit_lines[old_line]
@@ -4803,7 +4803,7 @@ local function capture_pending_renders(view, transaction)
   local function retain_indented(old_line, source_text)
     local new_line = pending_projection.map_unchanged_line(ranges, old_line)
     if not new_line then return end
-    local current = (view.doc.lines[new_line] or ""):gsub("\n$", "")
+    local current = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
     if source_text ~= current then return end
     pending_indented[new_line] = true
     pending_indented_sources[new_line] = current
@@ -4813,7 +4813,7 @@ local function capture_pending_renders(view, transaction)
     for old_line = line1, line2 do
       local new_line = pending_projection.map_unchanged_line(ranges, old_line)
       if new_line then
-        local current = (view.doc.lines[new_line] or ""):gsub("\n$", "")
+        local current = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
         pending_indented[new_line] = true
         pending_indented_sources[new_line] = current
       end
@@ -4836,7 +4836,7 @@ local function capture_pending_renders(view, transaction)
   -- raw-block owners, which have a stricter provisional topology.
   local function current_indented_context_is_safe(line)
     local topology = owner.provisional_topology
-    if not topology or topology.revision ~= view.doc.text_revision then return true end
+    if not topology or topology.revision ~= view.buffer.text_revision then return true end
     return not (topology.fenced[line] or topology.comments[line]
       or topology.math[line] or topology.frontmatter[line]
       or topology.html[line])
@@ -4846,7 +4846,7 @@ local function capture_pending_renders(view, transaction)
     local new_line2 = range.new_line2 or new_line1
     for new_line = new_line1, new_line2 do
       if not pending_indented[new_line] and current_indented_context_is_safe(new_line) then
-        local source = (view.doc.lines[new_line] or ""):gsub("\n$", "")
+        local source = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
         for _, captured in pairs(pre_edit_lines) do
           if captured.indented and captured.source_text == source then
             pending_indented[new_line] = true
@@ -4917,7 +4917,7 @@ local function capture_pending_renders(view, transaction)
       end
       copy.block_range.line1 = line1
       copy.block_range.line2 = line2
-      copy.block_range.col2 = #(view.doc.lines[line2] or "") + 1
+      copy.block_range.col2 = #(view.buffer.lines[line2] or "") + 1
     end
     for _, range_name in ipairs({ "marker_range", "title_range", "fold_range" }) do
       if record[range_name] then
@@ -4940,7 +4940,7 @@ local function capture_pending_renders(view, transaction)
       shifted.line2 = extend_to
       if shifted.block_range then
         shifted.block_range.line2 = extend_to
-        shifted.block_range.col2 = #(view.doc.lines[extend_to] or "") + 1
+        shifted.block_range.col2 = #(view.buffer.lines[extend_to] or "") + 1
       end
     end
     for old_line = record.line1, record.line2 do
@@ -4971,7 +4971,7 @@ local function capture_pending_renders(view, transaction)
     local new_line1 = range.new_line1 or range.old_line1 or 1
     local new_line2 = range.new_line2 or new_line1
     for new_line = new_line1, new_line2 do
-      local source = (view.doc.lines[new_line] or ""):gsub("\n$", "")
+      local source = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
       for _, captured in pairs(pre_edit_lines) do
         local record = captured.callout_record
           or captured.render_line and captured.render_line.callout_record
@@ -4984,7 +4984,7 @@ local function capture_pending_renders(view, transaction)
   end
   owner.pending_callouts = pending_callouts
   pending_metric_invariant.enforce(view, "pending-projection")
-  owner.pending_context_revision = context_changed and view.doc.text_revision or nil
+  owner.pending_context_revision = context_changed and view.buffer.text_revision or nil
   owner.pending_context_line1 = context_line1
   owner.pending_context_line2 = context_line2
   owner.last_pending_projection_ms = (system.get_time() - projection_started) * 1000
@@ -4996,7 +4996,7 @@ local function capture_pending_renders(view, transaction)
   local capture = owner.pre_edit_capture
   core.log_quiet(
     "Markdown Live Preview projection revision=%d visible=%s-%s captured=%d retained=%d capture_ms=%.2f projection_ms=%.2f",
-    view.doc.text_revision,
+    view.buffer.text_revision,
     tostring(capture and capture.line1), tostring(capture and capture.line2),
     capture and capture.captured or 0, retained,
     owner.last_pre_edit_capture_ms or 0, owner.last_pending_projection_ms or 0
@@ -5009,8 +5009,8 @@ local current_provisional_topology
 local function pending_render(view, line)
   local owner = view.__markdown_live_owner
   local entry = owner and owner.pending_lines and owner.pending_lines[line]
-  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
-  if entry and entry.revision == view.doc.text_revision and entry.source_text == text then
+  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  if entry and entry.revision == view.buffer.text_revision and entry.source_text == text then
     if entry.render_line and entry.render_line.table_row
     and entry.table_geometry ~= table_geometry_signature(view)
     then
@@ -5030,7 +5030,7 @@ local function pending_render(view, line)
       and current_provisional_topology(view, line)
       or owner and owner.provisional_topology
     local code
-    if topology and topology.revision == view.doc.text_revision
+    if topology and topology.revision == view.buffer.text_revision
       and line <= (topology.line_limit or 0)
     then
       code = topology.fenced[line] == true
@@ -5044,14 +5044,14 @@ local function pending_render(view, line)
       view, render, text, nil, nil, render.markdown_pending_provenance
     )
   end
-  if owner and owner.pending_context_revision == view.doc.text_revision
+  if owner and owner.pending_context_revision == view.buffer.text_revision
     and line >= (owner.pending_context_line1 or line)
     and line <= (owner.pending_context_line2 or line)
   then
     return current_entry()
   end
   if owner and owner.pre_edit_transaction
-    and owner.pre_edit_revision == view.doc.text_revision
+    and owner.pre_edit_revision == view.buffer.text_revision
   then
     return current_entry()
   end
@@ -5066,9 +5066,9 @@ local clipboard_paste_provider = attachments.paste_provider()
 function poi_provider:points_of_interest(view)
   local instance = current_semantic_model(view)
   if not instance then return {} end
-  local nodes, reason = instance:inline_nodes_for_lines(1, #view.doc.lines, { limit = 32768 })
+  local nodes, reason = instance:inline_nodes_for_lines(1, #view.buffer.lines, { limit = 32768 })
   if reason == "limit" then
-    core.log_quiet("Markdown link POIs exceeded the 32768-capture bound for %s", view.doc:get_name())
+    core.log_quiet("Markdown link POIs exceeded the 32768-capture bound for %s", view.buffer:get_name())
     return {}
   end
   local points, seen = {}, {}
@@ -5078,7 +5078,7 @@ function poi_provider:points_of_interest(view)
       and node.source.line1 == node.source.line2 and not seen[node.id]
     then
       local line = node.source.line1
-      local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+      local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
       local link = node.type == "link_reference"
         and reference_link_from_node(view, text, line, node)
         or markdown_links.from_semantic_node(text, line, node)
@@ -5138,17 +5138,17 @@ end
 current_provisional_topology = function(view, line)
   local owner = view.__markdown_live_owner
   local topology = owner and owner.provisional_topology
-  if not topology or topology.revision ~= view.doc.text_revision then return nil end
+  if not topology or topology.revision ~= view.buffer.text_revision then return nil end
   if line and line > (topology.line_limit or 0) then
     local old_limit = topology.line_limit or 0
     local line_limit = math.min(
-      #view.doc.lines,
+      #view.buffer.lines,
       math.max(line, old_limit + 256)
     )
     local fenced, comments, math, frontmatter, html, fence_delimiters =
-      pending_projection.source_topology(view.doc.lines, line_limit)
+      pending_projection.source_topology(view.buffer.lines, line_limit)
     topology = {
-      revision = view.doc.text_revision,
+      revision = view.buffer.text_revision,
       line_limit = line_limit,
       fenced = fenced,
       comments = comments,
@@ -5169,8 +5169,8 @@ end
 local function fenced_code_delimiter_kind(view, fenced, line)
   if line == fenced.source.line1 then return "open" end
   if line ~= fenced.effective_line2 then return nil end
-  local opening = (view.doc.lines[fenced.source.line1] or ""):gsub("\n$", "")
-  local closing = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local opening = (view.buffer.lines[fenced.source.line1] or ""):gsub("\n$", "")
+  local closing = (view.buffer.lines[line] or ""):gsub("\n$", "")
   local marker, count = fence_marker(opening)
   return marker and closes_fence(closing, marker, count) and "close" or nil
 end
@@ -5305,11 +5305,11 @@ function decoration_provider:line_background(view, line)
   local owner = view.__markdown_live_owner
   local model = owner and owner.semantic_model
   local semantics_pending = model and (
-    model.status == "pending" or model.published_revision ~= view.doc.text_revision
+    model.status == "pending" or model.published_revision ~= view.buffer.text_revision
   )
   if semantics_pending then
     local provisional = current_provisional_topology(view, line)
-    if provisional and provisional.revision == view.doc.text_revision then
+    if provisional and provisional.revision == view.buffer.text_revision then
       if provisional.comments[line] then return nil end
       if provisional.fenced[line] then return style.markdown_live_code_background end
       if provisional.frontmatter[line] then
@@ -5325,7 +5325,7 @@ function decoration_provider:line_background(view, line)
     end
   end
   local topology = current_provisional_topology(view, line)
-  if not (topology and topology.revision == view.doc.text_revision)
+  if not (topology and topology.revision == view.buffer.text_revision)
     and line_in_semantic_comment(view, line)
   then
     return nil
@@ -5337,7 +5337,7 @@ function decoration_provider:line_background(view, line)
   end
   if owner and owner.pending_indented_lines
     and owner.pending_indented_lines[line]
-    and (not topology or topology.revision ~= view.doc.text_revision
+    and (not topology or topology.revision ~= view.buffer.text_revision
       or not (topology.fenced[line] or topology.comments[line]
         or topology.math[line] or topology.frontmatter[line]
         or topology.html[line]))
@@ -5347,12 +5347,12 @@ function decoration_provider:line_background(view, line)
   end
   if not current_semantic_model(view) and owner then
     local provisional = current_provisional_topology(view, line)
-    if provisional and provisional.revision == view.doc.text_revision then
+    if provisional and provisional.revision == view.buffer.text_revision then
       if provisional.fenced[line] then return style.markdown_live_code_background end
     elseif owner.fence_service and owner.fence_service:contains_line(line) then
       -- The fence service transaction-maps unchanged block ownership before
       -- the semantic worker publishes. Unlike a retained render fragment,
-      -- this membership belongs to the current Document revision.
+      -- this membership belongs to the current Buffer revision.
       return style.markdown_live_code_background
     end
   end
@@ -5375,9 +5375,9 @@ function decoration_provider:line_number_gutter_visible(view)
 end
 
 local function provider_generation_state(view)
-  -- Wrapped-row topology is tracked by DocView's metric signature. It is not
+  -- Wrapped-row topology is tracked by Editor's metric signature. It is not
   -- a Markdown presentation change: coupling it to this generation made a
-  -- local wrap splice look like a document-wide metric invalidation.
+  -- local wrap splice look like a buffer-wide metric invalidation.
   local presentation_generation = view:get_presentation_layout_generation()
   local theme_generation = core.color_theme_generation or 0
   local body_font = style.prose_font
@@ -5483,7 +5483,7 @@ function provider:horizontal_extent(view)
   if not instance then return cached_table_horizontal_extent(view) end
   local owner = view.__markdown_live_owner
   local key = table.concat({
-    tostring(instance.generation), tostring(view.doc.text_revision),
+    tostring(instance.generation), tostring(view.buffer.text_revision),
     tostring(self:generation(view)),
   }, ":")
   local cached = owner and owner.table_horizontal_extent
@@ -5495,7 +5495,7 @@ function provider:horizontal_extent(view)
   end
 
   local width = 0
-  local nodes, reason = instance:nodes_for_lines(1, #view.doc.lines, {
+  local nodes, reason = instance:nodes_for_lines(1, #view.buffer.lines, {
     limit = 100000,
   })
   local seen = {}
@@ -5513,7 +5513,7 @@ function provider:horizontal_extent(view)
     width = math.max(width, cached_table_horizontal_extent(view))
     core.log_quiet(
       "Markdown table horizontal extent used partial semantic results for %s",
-      view.doc:get_name()
+      view.buffer:get_name()
     )
   end
   if owner then
@@ -5537,7 +5537,7 @@ function provider:line_generation(view, line)
   if owner and not pending and owner.semantic_pending_line
     and line >= owner.semantic_pending_line
   then
-    semantic_state = ":semantic-pending:" .. tostring(view.doc.text_revision)
+    semantic_state = ":semantic-pending:" .. tostring(view.buffer.text_revision)
   elseif owner and owner.semantic_adoption_line
     and line >= owner.semantic_adoption_line
   then
@@ -5586,9 +5586,9 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     owner.pending_indented_sources = {}
     owner.pending_frontmatter_lines = {}
     owner.pending_callouts = {}
-    owner.pending_context_revision = view.doc.text_revision
+    owner.pending_context_revision = view.buffer.text_revision
     owner.pending_context_line1 = 1
-    owner.pending_context_line2 = #view.doc.lines
+    owner.pending_context_line2 = #view.buffer.lines
     owner.semantic_pending_line = 1
     owner.semantic_pending_wrap_line = 1
     owner.pre_edit_lines = nil
@@ -5597,33 +5597,33 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     owner.pre_edit_capture = nil
     owner.pending_visible_line1, owner.pending_visible_line2 =
       pending_capture_visible_range(view, owner)
-    owner.reload_projection_revision = view.doc.text_revision
+    owner.reload_projection_revision = view.buffer.text_revision
     core.log_quiet(
       "Markdown Live Preview reset pending presentation for loaded revision %d",
-      view.doc.text_revision
+      view.buffer.text_revision
     )
   elseif owner and owner.reload_projection_revision then
-    owner.reload_projection_revision = view.doc.text_revision
+    owner.reload_projection_revision = view.buffer.text_revision
   end
   local pre_edit_lines = owner and owner.pre_edit_lines
   if owner then
     owner.link_targets_changed_revision =
       pending_projection.transaction_changes_link_targets(
-        view.doc, transaction, pre_edit_lines
-      ) and view.doc.text_revision or nil
+        view.buffer, transaction, pre_edit_lines
+      ) and view.buffer.text_revision or nil
   end
   local raw_context_changed = pending_projection.transaction_changes_raw_context(
-    view.doc, transaction, pre_edit_lines
+    view.buffer, transaction, pre_edit_lines
   )
   local block_context_changed, global_context_changed =
     pending_projection.transaction_changes_block_context(
-    view.doc, transaction, pre_edit_lines
+    view.buffer, transaction, pre_edit_lines
   )
   local frontmatter_changed = pending_projection.transaction_changes_frontmatter(
-    view.doc, transaction, pre_edit_lines
+    view.buffer, transaction, pre_edit_lines
   )
   local html_changed = pending_projection.transaction_changes_html(
-    view.doc, transaction, pre_edit_lines
+    view.buffer, transaction, pre_edit_lines
   )
   local line_structure_changed = false
   for _, edit in ipairs(transaction and transaction.edits or {}) do
@@ -5657,11 +5657,11 @@ function provider:on_text_transaction(view, transaction, line1, line2)
         )
       end
     end
-    topology_limit = math.min(#view.doc.lines, topology_limit)
+    topology_limit = math.min(#view.buffer.lines, topology_limit)
     local fenced, comments, math, frontmatter, html, fence_delimiters =
-      pending_projection.source_topology(view.doc.lines, topology_limit)
+      pending_projection.source_topology(view.buffer.lines, topology_limit)
     owner.provisional_topology = {
-      revision = view.doc.text_revision,
+      revision = view.buffer.text_revision,
       line_limit = topology_limit,
       fenced = fenced,
       comments = comments,
@@ -5689,10 +5689,10 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     end
     if not opening_changed then
       for cached_line, captured in pairs(pre_edit_lines or {}) do
-        local source = (view.doc.lines[cached_line] or ""):gsub("\n$", "")
+        local source = (view.buffer.lines[cached_line] or ""):gsub("\n$", "")
         if captured.fenced and captured.render_line and captured.source_text == source then
           cached_fence_lines[cached_line] = {
-            revision = view.doc.text_revision,
+            revision = view.buffer.text_revision,
             source_text = source,
             render_line = clone_render_line(captured.render_line),
             height = captured.height,
@@ -5705,10 +5705,10 @@ function provider:on_text_transaction(view, transaction, line1, line2)
       ) do
         if owner.fence_service:contains_line(cached_line) then
           local render = cached.render_line ~= false and cached.render_line or nil
-          local source = (view.doc.lines[cached_line] or ""):gsub("\n$", "")
+          local source = (view.buffer.lines[cached_line] or ""):gsub("\n$", "")
           if render and render.source_text == source then
             cached_fence_lines[cached_line] = {
-              revision = view.doc.text_revision,
+              revision = view.buffer.text_revision,
               source_text = source,
               render_line = clone_render_line(render),
               height = render_line_metric_height(view, render),
@@ -5742,11 +5742,11 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     if source_line1 then
       local pending_node = {
         id = "interactive-table:transaction:" .. tostring(source_line1)
-          .. ":" .. tostring(view.doc.text_revision),
+          .. ":" .. tostring(view.buffer.text_revision),
         source = {
           line1 = source_line1, col1 = 1,
           line2 = source_line2,
-          col2 = #(view.doc.lines[source_line2] or ""),
+          col2 = #(view.buffer.lines[source_line2] or ""),
         },
       }
       local published = 0
@@ -5760,7 +5760,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
       end
       core.log_quiet(
         "Markdown Interactive Table Editing retained %d rendered row(s) through revision %d",
-        published, view.doc.text_revision
+        published, view.buffer.text_revision
       )
     end
   end
@@ -5770,7 +5770,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
   -- example, pressing Enter on an empty Markdown list item exits the list),
   -- so a zero net line delta does not prove that block structure is stable.
   local list_structure_changed = pending_projection.transaction_changes_list_structure(
-    view.doc, transaction, pre_edit_lines
+    view.buffer, transaction, pre_edit_lines
   )
   structural_change = structural_change or list_structure_changed
   if topology_changed and owner then
@@ -5815,7 +5815,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     local affected_line2 = math.max(table_line2 or -math.huge, fence_line2 or -math.huge)
     core.log_quiet(
       "Markdown Live Preview transaction revision=%d type=%s structural=false raw_context=false changed=%s-%s provider=%s-%s pending=%d",
-      view.doc.text_revision, tostring(transaction and transaction.type),
+      view.buffer.text_revision, tostring(transaction and transaction.type),
       tostring(line1), tostring(line2),
       tostring(affected_line1 ~= math.huge and affected_line1 or nil),
       tostring(affected_line2 ~= -math.huge and affected_line2 or nil),
@@ -5831,7 +5831,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
   end
   -- Setext markers own the previous line. Only reference definitions can
   -- change presentation before that; do not turn every local block edit into
-  -- a whole-Document invalidation.
+  -- a whole-Buffer invalidation.
   local context_line1 = global_context_changed and 1
     or block_context_changed and math.max(1, line1 - 1)
     or line1
@@ -5853,7 +5853,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
   for _ in pairs(owner and owner.pending_lines or {}) do pending_count = pending_count + 1 end
   core.log_quiet(
     "Markdown Live Preview transaction revision=%d type=%s structural=%s raw_context=%s changed=%s-%s provider=%s-%s pending=%d pending_from=%s",
-    view.doc.text_revision, tostring(transaction and transaction.type),
+    view.buffer.text_revision, tostring(transaction and transaction.type),
     tostring(structural_change), tostring(raw_context_changed),
     tostring(line1), tostring(line2),
     tostring(affected_line1), tostring(affected_line2), pending_count,
@@ -5961,8 +5961,8 @@ local function heading_render_line(view, text, heading, reveal_units)
 end
 
 local function block_spacing_after(view, line)
-  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
-  local next_text = (view.doc.lines[line + 1] or ""):gsub("\n$", "")
+  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  local next_text = (view.buffer.lines[line + 1] or ""):gsub("\n$", "")
   if text:match("^%s*$") or next_text == "" or next_text:match("^%s*$") then
     return 0
   end
@@ -6012,7 +6012,7 @@ local function compute_line_height(view, line, entry)
   then
     return view:get_line_height()
   end
-  -- Resolve the presentation once through DocView's line cache. Metrics and
+  -- Resolve the presentation once through Editor's line cache. Metrics and
   -- drawing now consume the same fragment/widget/layout plan instead of
   -- independently rebuilding headings, images, tables, and inline spans.
   local render_line = view:get_line_render(line)
@@ -6125,13 +6125,13 @@ local sparse_metric_node_types = {
 }
 
 ---Describe the small set of unwrapped lines whose Markdown presentation can
----differ from the body-row height. DocView can initialize every ordinary
+---differ from the body-row height. Editor can initialize every ordinary
 ---prose row from the default and ask line_height only for these exceptions.
 function provider:sparse_line_metrics(view)
   if view_in_source_mode(view) or view.wrapped_settings then return nil end
   local instance = current_semantic_model(view)
   if not instance then return nil end
-  local nodes, reason = instance:nodes_for_lines(1, #view.doc.lines, {
+  local nodes, reason = instance:nodes_for_lines(1, #view.buffer.lines, {
     limit = 100000,
   })
   if not nodes or reason == "limit" then return nil end
@@ -6139,7 +6139,7 @@ function provider:sparse_line_metrics(view)
   for _, node in ipairs(nodes) do
     if sparse_metric_node_types[node.type] then
       local line1 = math.max(1, node.source.line1 or 1)
-      local line2 = math.min(#view.doc.lines, node.source.line2 or line1)
+      local line2 = math.min(#view.buffer.lines, node.source.line2 or line1)
       for line = line1, line2 do lines[line] = true end
     end
   end
@@ -6155,7 +6155,7 @@ end
 local function record_raw_fallback(view, line, reason)
   local owner = view.__markdown_live_owner
   if not owner then return end
-  local revision = view.doc.text_revision
+  local revision = view.buffer.text_revision
   local record = owner.raw_fallback_record
   if not record or record.revision ~= revision then
     record = { revision = revision, lines = {}, count = 0, line1 = line, line2 = line }
@@ -6167,7 +6167,7 @@ local function record_raw_fallback(view, line, reason)
   record.line1 = math.min(record.line1, line)
   record.line2 = math.max(record.line2, line)
   if record.count == 1 or record.count == 10 or record.count % 50 == 0 then
-    local instance = markdown_model.peek(view.doc)
+    local instance = markdown_model.peek(view.buffer)
     core.log_quiet(
       "Markdown Live Preview RAW FALLBACK revision=%d line=%d reason=%s count=%d range=%d-%d model=%s published_revision=%s pending_from=%s pending=%s",
       revision, line, tostring(reason), record.count, record.line1, record.line2,
@@ -6205,18 +6205,18 @@ local function build_render_line(view, line, _context)
       owner.semantic_pending_line ~= nil
       or semantic_model and (
         semantic_model.status == "pending"
-        or semantic_model.published_revision ~= view.doc.text_revision
+        or semantic_model.published_revision ~= view.buffer.text_revision
       )
     )
     if semantic_pending
       and (not owner.semantic_pending_line or line >= owner.semantic_pending_line)
     then
-      local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+      local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
       local pending_list = pending_list_marker_render(view, nil, text)
       if pending_list then return pending_list end
       local provisional = current_provisional_topology(view, line)
       local code
-      if provisional and provisional.revision == view.doc.text_revision then
+      if provisional and provisional.revision == view.buffer.text_revision then
         code = provisional.fenced[line] == true
       else
         code = owner.fence_service and owner.fence_service:contains_line(line)
@@ -6238,7 +6238,7 @@ local function build_render_line(view, line, _context)
     end
   end
   if fenced then
-    local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+    local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
     local delimiter_kind = fenced_code_delimiter_kind(view, fenced, line)
     if delimiter_kind then
       if not fenced_code_is_active(view, fenced) then
@@ -6264,7 +6264,7 @@ local function build_render_line(view, line, _context)
     return { raw_passthrough = true }
   end
 
-  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
   local reveal_units = reveal_units_for_line(view, line)
   local setext_marker = semantic_setext_marker_for_line(view, text, line)
   if setext_marker then
@@ -6324,7 +6324,7 @@ function provider:render_line(view, line, context)
   local render_line = build_render_line(view, line, context)
   if not render_line or render_line.raw_passthrough then return render_line end
 
-  local revision = view.doc.text_revision or 0
+  local revision = view.buffer.text_revision or 0
   local semantic = render_semantic_model(view, line)
   local pending = pending_render(view, line)
   local provenance
@@ -6342,8 +6342,8 @@ function provider:render_line(view, line, context)
     provenance = "unavailable"
   end
   render_line.markdown_provenance = provenance
-  render_line.markdown_document_revision = revision
-  local snapshot = semantic or markdown_model.peek(view.doc)
+  render_line.markdown_buffer_revision = revision
+  local snapshot = semantic or markdown_model.peek(view.buffer)
   render_line.markdown_semantic_revision = snapshot and snapshot.published_revision or nil
 
   if provenance == "unavailable" then
@@ -6364,10 +6364,10 @@ function provider:render_line(view, line, context)
     end
   end
 
-  local source = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
   if render_line.source_text ~= source then
     core.log_quiet(
-      "Markdown Live Preview rejected mismatched render provenance=%s line=%d document_revision=%d semantic_revision=%s",
+      "Markdown Live Preview rejected mismatched render provenance=%s line=%d buffer_revision=%d semantic_revision=%s",
       provenance, line, revision,
       tostring(render_line.markdown_semantic_revision)
     )
@@ -6383,7 +6383,7 @@ function provider:render_line(view, line, context)
       and owner.pending_indented_lines[line] == true
     local safe = current_source_render(view, line, nil, source, code == true)
     safe.markdown_provenance = "unavailable"
-    safe.markdown_document_revision = revision
+    safe.markdown_buffer_revision = revision
     safe.markdown_semantic_revision = render_line.markdown_semantic_revision
     return safe
   end
@@ -6417,7 +6417,7 @@ local function apply_source_mode(view, enabled, reason)
   core.log_quiet(
     "Markdown Live Preview switched %s for %s: %s",
     enabled and "to Source Mode" or "to Live Preview",
-    view.doc:get_name(), tostring(reason or "request")
+    view.buffer:get_name(), tostring(reason or "request")
   )
   return true
 end
@@ -6460,13 +6460,13 @@ local function invalidate_metadata_caches(view, event)
 end
 
 local function ensure_owner(view)
-  if not (view and view.extends and view:extends(DocView) and view.doc) then return false end
+  if not (view and view.extends and view:extends(Editor) and view.buffer) then return false end
   local owner = view.__markdown_live_owner
-  if owner and owner.doc == view.doc then return true end
-  if owner then view:remove_owned_feature(PROVIDER_ID, "document-replaced") end
+  if owner and owner.buffer == view.buffer then return true end
+  if owner then view:remove_owned_feature(PROVIDER_ID, "buffer-replaced") end
   owner_serial = owner_serial + 1
   owner = {
-    doc = view.doc,
+    buffer = view.buffer,
     listener_id = "markdown-live-render:" .. tostring(owner_serial),
     get_state = function(self)
       return self.source_mode and { source_mode = true } or nil
@@ -6475,11 +6475,11 @@ local function ensure_owner(view)
       apply_source_mode(owner_view, state and state.source_mode == true, "workspace-restore")
     end,
     on_release = function(self, owner_view, reason)
-      if self.doc and self.doc.remove_metadata_listener then
-        self.doc:remove_metadata_listener(self.listener_id)
+      if self.buffer and self.buffer.remove_metadata_listener then
+        self.buffer:remove_metadata_listener(self.listener_id)
       end
-      if self.doc and self.doc.remove_text_change_listener then
-        self.doc:remove_text_change_listener(self.text_listener_id)
+      if self.buffer and self.buffer.remove_text_change_listener then
+        self.buffer:remove_text_change_listener(self.text_listener_id)
       end
       live.detach(owner_view)
       if owner_view.__markdown_live_owner == self then owner_view.__markdown_live_owner = nil end
@@ -6491,8 +6491,8 @@ local function ensure_owner(view)
   view.__markdown_live_owner = owner
   owner.text_listener_id = owner.listener_id .. ":pre-edit"
   view:add_owned_feature(PROVIDER_ID, owner)
-  if owner.doc.add_text_change_listener then
-    owner.doc:add_text_change_listener(owner.text_listener_id, {
+  if owner.buffer.add_text_change_listener then
+    owner.buffer:add_text_change_listener(owner.text_listener_id, {
       before_change = function(_, change)
         if view.__markdown_live_owner == owner and view.__markdown_live_attached then
           capture_pre_edit_renders(view, change)
@@ -6500,18 +6500,18 @@ local function ensure_owner(view)
       end,
     })
   end
-  if owner.doc.add_metadata_listener then
-    owner.doc:add_metadata_listener(owner.listener_id, function(_, event)
+  if owner.buffer.add_metadata_listener then
+    owner.buffer:add_metadata_listener(owner.listener_id, function(_, event)
       if view.__markdown_live_owner ~= owner then return end
       if event and event.kind == "close" then
-        live.release(view, "doc-close")
+        live.release(view, "buffer-close")
       else
         invalidate_metadata_caches(view, event)
         live.refresh_view(view)
       end
     end)
   end
-  core.log_quiet("Markdown Live Preview now owns lifecycle for %s", owner.doc:get_name())
+  core.log_quiet("Markdown Live Preview now owns lifecycle for %s", owner.buffer:get_name())
   return true
 end
 
@@ -6529,10 +6529,10 @@ local function invalidate_semantic_publication(view, instance, reason)
   local pending_wrap_line = owner and owner.semantic_pending_wrap_line
   if owner then
     local raw = owner.raw_fallback_record
-    if raw and raw.revision == view.doc.text_revision and raw.count > 0 then
+    if raw and raw.revision == view.buffer.text_revision and raw.count > 0 then
       core.log_quiet(
         "Markdown Live Preview publication revision=%d generation=%d recovered_raw_lines=%d range=%d-%d pending_from=%s pending_wrap_from=%s",
-        view.doc.text_revision, instance.generation, raw.count, raw.line1, raw.line2,
+        view.buffer.text_revision, instance.generation, raw.count, raw.line1, raw.line2,
         tostring(pending_line), tostring(pending_wrap_line)
       )
     end
@@ -6570,7 +6570,7 @@ local function invalidate_semantic_publication(view, instance, reason)
   local range_expand_started = system.get_time()
   local ranges
   if reason == "published" and pending_wrap_line then
-    ranges = { { line1 = pending_wrap_line, line2 = #view.doc.lines } }
+    ranges = { { line1 = pending_wrap_line, line2 = #view.buffer.lines } }
   elseif reason == "published" then
     ranges = instance.changed_ranges
   end
@@ -6619,8 +6619,8 @@ local function invalidate_semantic_publication(view, instance, reason)
     and publication_lines > 128
   if ranges and #ranges > 0 and not deferred_wrapped_invalidation then
     for _, range in ipairs(ranges) do
-      local line1 = common.clamp(range.line1 or 1, 1, #view.doc.lines)
-      local line2 = common.clamp(range.line2 or line1, line1, #view.doc.lines)
+      local line1 = common.clamp(range.line1 or 1, 1, #view.buffer.lines)
+      local line2 = common.clamp(range.line2 or line1, line1, #view.buffer.lines)
       local phase_started = system.get_time()
       prune_image_references(view, line1, line2)
       prune_images_ms = prune_images_ms + elapsed_ms(phase_started)
@@ -6680,9 +6680,9 @@ local function invalidate_semantic_publication(view, instance, reason)
     perf.record_markdown_view_publication({
       time = system.get_time(),
       elapsed_ms = total_ms,
-      path = view.doc.abs_filename or view.doc.filename or view.doc:get_name(),
+      path = view.buffer.abs_filename or view.buffer.filename or view.buffer:get_name(),
       bytes = instance.published_byte_len or 0,
-      lines = instance.published_line_count or #view.doc.lines,
+      lines = instance.published_line_count or #view.buffer.lines,
       reason = reason,
       generation = instance.generation,
       wrapped = view.wrapped_settings ~= nil,
@@ -6707,7 +6707,7 @@ end
 local function bind_fence_service(view, instance)
   local owner = view.__markdown_live_owner
   if not owner then return end
-  local service = fence_highlight.get(view.doc)
+  local service = fence_highlight.get(view.buffer)
   if owner.fence_service and owner.fence_service ~= service then
     owner.fence_service:remove_listener(owner.fence_listener_id)
   end
@@ -6716,8 +6716,8 @@ local function bind_fence_service(view, instance)
   service:reconcile(instance)
   service:add_listener(owner.fence_listener_id, function(_, line1, line2)
     if view.__markdown_live_owner ~= owner or not view.__markdown_live_attached then return end
-    line1 = common.clamp(line1 or 1, 1, #view.doc.lines)
-    line2 = common.clamp(line2 or line1, line1, #view.doc.lines)
+    line1 = common.clamp(line1 or 1, 1, #view.buffer.lines)
+    line2 = common.clamp(line2 or line1, line1, #view.buffer.lines)
     owner.fence_invalidation_line1 = math.min(
       owner.fence_invalidation_line1 or line1, line1
     )
@@ -6764,7 +6764,7 @@ end
 local function bind_semantic_model(view)
   local owner = view.__markdown_live_owner
   if not owner then return end
-  local instance = markdown_model.get(view.doc)
+  local instance = markdown_model.get(view.buffer)
   if not instance then return end
   local listener_id = owner.listener_id .. ":semantic"
   if owner.semantic_model and owner.semantic_model ~= instance then
@@ -6798,7 +6798,7 @@ end
 
 local function bind_link_index(view)
   local owner = view.__markdown_live_owner
-  local path = view.doc.abs_filename or view.doc.filename
+  local path = view.buffer.abs_filename or view.buffer.filename
   if not (owner and path) then return end
   local index = vault_index.index_for_path(path)
   local listener_id = owner.listener_id .. ":links"
@@ -6820,12 +6820,12 @@ local function bind_link_index(view)
       core.log_quiet("Markdown Live Preview deferred link refresh until vault publication")
       return
     end
-    if reason == "document-updated" and detail == view.doc
-      and owner.link_targets_changed_revision ~= view.doc.text_revision
+    if reason == "buffer-updated" and detail == view.buffer
+      and owner.link_targets_changed_revision ~= view.buffer.text_revision
     then
       core.log_quiet(
         "Markdown Live Preview skipped self-overlay link refresh for ordinary edit revision=%d",
-        view.doc.text_revision
+        view.buffer.text_revision
       )
       return
     end
@@ -6846,7 +6846,7 @@ local function bind_link_index(view)
     )
     -- Vault changes can alter link resolution, embed previews, and image
     -- targets, but ordinary prose and code rows do not depend on the vault.
-    -- Invalidating the entire Document here made every heading keystroke
+    -- Invalidating the entire Buffer here made every heading keystroke
     -- synchronously reconstruct wrapping for large notes.
     local ranges = {}
     local line1, line2
@@ -6854,7 +6854,7 @@ local function bind_link_index(view)
       if line1 then ranges[#ranges + 1] = { line1 = line1, line2 = line2 } end
       line1, line2 = nil, nil
     end
-    for line, source in ipairs(view.doc.lines or {}) do
+    for line, source in ipairs(view.buffer.lines or {}) do
       local dependent = source:find("[", 1, true) ~= nil
         or source:find("](", 1, true) ~= nil
         or source:find("<http", 1, true) ~= nil
@@ -6900,7 +6900,7 @@ local function bind_link_index(view)
     )
     core.redraw = true
   end)
-  index:track_doc(view.doc)
+  index:track_buffer(view.buffer)
   index:ensure("live-preview")
 end
 
@@ -6995,7 +6995,7 @@ local function invalidate_selection_lines(view, new_state, old_state)
           end
         end
         for line = math.min(line1, line2), math.max(line1, line2) do
-          local line_length = source_line_length(view.doc.lines[line] or "")
+          local line_length = source_line_length(view.buffer.lines[line] or "")
           if not fenced_code_for_line(view, line)
             and selection_touches_line(line, line_length, line1, col1, line2, col2)
           then
@@ -7104,7 +7104,7 @@ function provider:on_selection_interaction_end(view, new_state, old_state)
 end
 
 function live.attach(view)
-  if not (view and view.extends and view:extends(DocView)) then return false end
+  if not (view and view.extends and view:extends(Editor)) then return false end
   if view.__markdown_live_attached then return false end
   view:add_visual_metric_provider(PROVIDER_ID, provider)
   view:add_decoration_provider(PROVIDER_ID, decoration_provider)
@@ -7153,7 +7153,7 @@ function live.attach(view)
   bind_semantic_model(view)
   bind_link_index(view)
   link_completion.ensure_provider()
-  core.log_quiet("Markdown Live Preview attached to %s", view.doc and view.doc:get_name() or tostring(view))
+  core.log_quiet("Markdown Live Preview attached to %s", view.buffer and view.buffer:get_name() or tostring(view))
   return true
 end
 
@@ -7176,7 +7176,7 @@ function live.detach(view)
   view:remove_selection_listener(PROVIDER_ID)
   view.__markdown_task_source_affinity = nil
   view.__markdown_live_attached = nil
-  core.log_quiet("Markdown Live Preview detached from %s", view.doc and view.doc:get_name() or tostring(view))
+  core.log_quiet("Markdown Live Preview detached from %s", view.buffer and view.buffer:get_name() or tostring(view))
   return true
 end
 
@@ -7186,12 +7186,12 @@ function live.release(view, reason)
 end
 
 function live.link_at_caret(view)
-  if not (view and view.doc and current_semantic_model(view)) then return nil end
+  if not (view and view.buffer and current_semantic_model(view)) then return nil end
   local state = current_selection_state(view)
   local line = state and state.selections and state.selections[1]
   local col = state and state.selections and state.selections[2]
   if not (line and col) then return nil end
-  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
   local best, best_size
   for _, span in ipairs(semantic_link_spans(view, text, line)) do
     if col >= span.col1 and col < span.col2 then
@@ -7216,7 +7216,7 @@ local function open_link_resolution(resolution)
   end
   if resolution.status ~= "resolved" then return false end
   local info = resolution.path and system.get_file_info(resolution.path)
-  if (not info or info.type ~= "file") and not (resolution.entry and resolution.entry.doc) then
+  if (not info or info.type ~= "file") and not (resolution.entry and resolution.entry.buffer) then
     core.log_quiet("Markdown link target disappeared before activation: %s", tostring(resolution.path))
     return false
   end
@@ -7308,7 +7308,7 @@ function live.allow_remote_image_once(view)
 end
 
 function live.set_project_remote_image_trust(view, trusted)
-  local project = view and view.doc and core.current_project(view.doc.abs_filename)
+  local project = view and view.buffer and core.current_project(view.buffer.abs_filename)
   if not project then return false, "Project unavailable" end
   local key = common.path_compare_key(common.normalize_path(project.path))
   config.markdown_live_trusted_remote_image_projects =
@@ -7330,7 +7330,7 @@ function live.set_project_remote_image_trust(view, trusted)
 end
 
 function live.remote_image_allowed(view, url)
-  local project = view and view.doc and core.current_project(view.doc.abs_filename)
+  local project = view and view.buffer and core.current_project(view.buffer.abs_filename)
   return remote_image_allowed(view, url, project)
 end
 
@@ -7353,8 +7353,8 @@ function live.create_link_target(view)
     or link_path:sub(1, 1) == "."
   local path = link_path:gsub("[/\\]", PATHSEP)
   if not extension(path) then path = path .. ".md" end
-  local base = source_relative and view.doc.abs_filename
-    and common.dirname(view.doc.abs_filename) or index.root
+  local base = source_relative and view.buffer.abs_filename
+    and common.dirname(view.buffer.abs_filename) or index.root
   local normalized, abs = pcall(common.normalize_path, base .. PATHSEP .. path)
   if not normalized or not abs or not common.path_belongs_to(abs, index.root) then
     return false, "outside Project"
@@ -7380,7 +7380,7 @@ function live.is_live_mode(view)
 end
 
 function live.set_source_mode(view, enabled, reason)
-  if not (view and view.doc and live.is_markdown_doc(view.doc)) then return false end
+  if not (view and view.buffer and live.is_markdown_buffer(view.buffer)) then return false end
   ensure_owner(view)
   live.refresh_view(view)
   return apply_source_mode(view, enabled, reason or "command")
@@ -7391,9 +7391,9 @@ function live.toggle_source_mode(view, reason)
 end
 
 function live.refresh_view(view)
-  if not (view and view.doc) then return false end
+  if not (view and view.buffer) then return false end
   ensure_owner(view)
-  if config.markdown_live_editor and live.is_markdown_doc(view.doc) then
+  if config.markdown_live_editor and live.is_markdown_buffer(view.buffer) then
     if view.__markdown_live_attached then
       bind_link_index(view)
       return false
@@ -7415,14 +7415,6 @@ end
 function live.install()
   if live.__installed then return end
   live.__installed = true
-  local file_context = require "core.file_context"
-  local old_mark_editor_view = file_context.mark_editor_view
-  file_context.mark_editor_view = function(view)
-    view = old_mark_editor_view(view)
-    live.refresh_view(view)
-    return view
-  end
-
   local old_set_active_view = core.set_active_view
   core.set_active_view = function(view)
     local result = old_set_active_view(view)

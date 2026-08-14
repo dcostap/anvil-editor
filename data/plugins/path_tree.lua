@@ -1,9 +1,9 @@
 -- mod-version:3
--- Reusable hierarchy and DocView presentation for arbitrary file path sets.
+-- Reusable hierarchy and TextView presentation for arbitrary file path sets.
 
 local common = require "core.common"
 local config = require "core.config"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 local Object = require "core.object"
 local style = require "core.style"
 local file_icons = require "core.file_icons"
@@ -249,7 +249,7 @@ function Tree:lines()
   return lines
 end
 
-function Tree:document_lines()
+function Tree:buffer_lines()
   local lines = self:lines()
   for i, line in ipairs(lines) do lines[i] = line .. "\n" end
   if #lines == 0 then lines[1] = "\n" end
@@ -412,11 +412,11 @@ local INLINE_FILE_ICON_PROVIDER = {
   end,
 }
 
-local PathTreeView = DocView:extend()
+local PathTreeView = TextView:extend()
 PathTreeView.show_line_numbers = false
 
-function PathTreeView:new(doc)
-  PathTreeView.super.new(self, doc)
+function PathTreeView:new(buffer)
+  PathTreeView.super.new(self, buffer)
   self.font = "prose_font"
   self:add_line_render_provider("path-tree-inline-file-icons", INLINE_FILE_ICON_PROVIDER)
   self:set_wrapping_enabled(false)
@@ -446,14 +446,14 @@ function PathTreeView:get_inline_file_render(line, context)
   )
 end
 
-function PathTreeView:invalidate_path_tree_document(old_line_count)
-  local line_count = math.max(1, tonumber(old_line_count) or 0, #self.doc.lines)
-  if self.doc.highlighter then self.doc.highlighter:soft_reset() end
-  self.doc:clear_cache(1, line_count)
-  self.doc.text_revision = (self.doc.text_revision or 0) + 1
-  self.doc:sanitize_selection()
-  self:invalidate_line_render("path-tree-document")
-  self:invalidate_visual_metrics("path-tree-document")
+function PathTreeView:invalidate_path_tree_buffer(old_line_count)
+  local line_count = math.max(1, tonumber(old_line_count) or 0, #self.buffer.lines)
+  if self.buffer.highlighter then self.buffer.highlighter:soft_reset() end
+  self.buffer:clear_cache(1, line_count)
+  self.buffer.text_revision = (self.buffer.text_revision or 0) + 1
+  self.buffer:sanitize_selection()
+  self:invalidate_line_render("path-tree-buffer")
+  self:invalidate_visual_metrics("path-tree-buffer")
 end
 
 function PathTreeView:set_path_tree(tree, line_offset)
@@ -462,36 +462,36 @@ function PathTreeView:set_path_tree(tree, line_offset)
   self.path_tree_embedded = line_offset ~= nil
   self.path_tree_line_count = tree and #tree.rows or 0
   if tree and line_offset == nil then
-    local old_line_count = #self.doc.lines
-    self.doc.lines = tree:document_lines()
-    self:invalidate_path_tree_document(old_line_count)
-    self.doc:clear_undo_redo()
-    self.doc:clean()
-    local line = math.max(1, math.min(#self.doc.lines, self.doc:get_selection() or 1))
-    self.doc:set_selection(line, 1, line, 1)
+    local old_line_count = #self.buffer.lines
+    self.buffer.lines = tree:buffer_lines()
+    self:invalidate_path_tree_buffer(old_line_count)
+    self.buffer:clear_undo_redo()
+    self.buffer:clean()
+    local line = math.max(1, math.min(#self.buffer.lines, self.buffer:get_selection() or 1))
+    self.buffer:set_selection(line, 1, line, 1)
   end
   return self
 end
 
 function PathTreeView:refresh_path_tree_lines()
   if not self.path_tree then return false end
-  local old_line_count = #self.doc.lines
-  local replacement = self.path_tree:document_lines()
+  local old_line_count = #self.buffer.lines
+  local replacement = self.path_tree:buffer_lines()
   if #self.path_tree.rows == 0 then replacement = {} end
   if self.path_tree_embedded then
     local first = self.path_tree_line_offset + 1
     local old_count = self.path_tree_line_count or 0
-    for _ = 1, old_count do table.remove(self.doc.lines, first) end
-    for i = #replacement, 1, -1 do table.insert(self.doc.lines, first, replacement[i]) end
-    if #self.doc.lines == 0 then self.doc.lines[1] = "\n" end
+    for _ = 1, old_count do table.remove(self.buffer.lines, first) end
+    for i = #replacement, 1, -1 do table.insert(self.buffer.lines, first, replacement[i]) end
+    if #self.buffer.lines == 0 then self.buffer.lines[1] = "\n" end
   else
-    self.doc.lines = #replacement > 0 and replacement or { "\n" }
+    self.buffer.lines = #replacement > 0 and replacement or { "\n" }
   end
   self.path_tree_line_count = #self.path_tree.rows
-  self:invalidate_path_tree_document(old_line_count)
-  self.doc:clear_undo_redo()
-  self.doc:clean()
-  if self.doc.git_view_pane_text ~= nil then self.doc.git_view_pane_text = table.concat(self.doc.lines) end
+  self:invalidate_path_tree_buffer(old_line_count)
+  self.buffer:clear_undo_redo()
+  self.buffer:clean()
+  if self.buffer.git_view_pane_text ~= nil then self.buffer.git_view_pane_text = table.concat(self.buffer.lines) end
   return true
 end
 
@@ -502,7 +502,7 @@ function PathTreeView:toggle_path_tree_folder(line)
   local new_line = self.path_tree:line_for_path(row.path, "dir")
   if new_line then
     new_line = new_line + self.path_tree_line_offset
-    self.doc:set_selection(new_line, 1, new_line, 1)
+    self.buffer:set_selection(new_line, 1, new_line, 1)
     self:scroll_to_make_visible(new_line, 1, true)
   end
   return true
@@ -538,7 +538,7 @@ function PathTreeView:draw_line_text(line, x, y)
   end
   local row = self:path_tree_row(line)
   if row then
-    local text = (self.doc:get_utf8_line(line) or ""):gsub("\n$", "")
+    local text = (self.buffer:get_utf8_line(line) or ""):gsub("\n$", "")
     if path_tree.draw_row_text(self, text, x, y, row.kind, row.type == "dir") then
       return self:get_line_height()
     end

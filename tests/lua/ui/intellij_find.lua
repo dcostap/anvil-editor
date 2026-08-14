@@ -14,31 +14,31 @@ local function track(context, kind, value)
   return value
 end
 
-local function remove_doc(doc)
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+local function remove_buffer(buffer)
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
 end
 
 local function open_editor(context, text)
-  local doc = track(context, "docs", core.open_doc())
-  if text and text ~= "" then doc:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_doc(doc))
+  local buffer = track(context, "buffers", core.open_buffer())
+  if text and text ~= "" then buffer:text_input(text) end
+  local view = track(context, "views", core.root_panel:open_buffer(buffer))
   core.set_active_view(view)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 360, 180
   view.scroll.x, view.scroll.to.x = 0, 0
   view.scroll.y, view.scroll.to.y = 0, 0
-  return view, doc
+  return view, buffer
 end
 
 local function selection_range(view)
   return view:with_selection_state(function()
-    local line1, col1, line2, col2 = view.doc:get_selection(true)
+    local line1, col1, line2, col2 = view.buffer:get_selection(true)
     return { line1, col1, line2, col2 }
   end)
 end
@@ -58,7 +58,7 @@ local function type_into_active_view(text)
   core.root_panel:on_text_input(text)
 end
 
-test.describe("DocView Prompt Bar find", function()
+test.describe("TextView Prompt Bar find", function()
   test.after_each(function(context)
     if core.active_view and core.active_view.local_find_input then
       command.perform("user:find-close")
@@ -69,9 +69,9 @@ test.describe("DocView Prompt Bar find", function()
       local node = root:get_node_for_view(view)
       if node then node:remove_view(root, view) end
     end
-    for _, doc in ipairs(context.docs or {}) do
-      if doc:is_dirty() then doc:clean() end
-      remove_doc(doc)
+    for _, buffer in ipairs(context.buffers or {}) do
+      if buffer:is_dirty() then buffer:clean() end
+      remove_buffer(buffer)
     end
   end)
 
@@ -79,11 +79,11 @@ test.describe("DocView Prompt Bar find", function()
     local prefix = {}
     for i = 1, 12 do prefix[#prefix + 1] = "i before\n" end
     local origin_line = #prefix + 1
-    local view, doc = open_editor(
+    local view, buffer = open_editor(
       context,
       table.concat(prefix) .. "cursor input middle\n" .. "cursor input last\n"
     )
-    doc:set_selection(origin_line, 1, origin_line, 1)
+    buffer:set_selection(origin_line, 1, origin_line, 1)
 
     test.ok(command.perform("find-replace:find"))
     core.root_panel:on_text_input("i")
@@ -93,8 +93,8 @@ test.describe("DocView Prompt Bar find", function()
   end)
 
   test.it("opens on the currently selected match when the caret is at the selection end", function(context)
-    local view, doc = open_editor(context, "input first\ninput second\n")
-    doc:set_selection(1, 6, 1, 1)
+    local view, buffer = open_editor(context, "input first\ninput second\n")
+    buffer:set_selection(1, 6, 1, 1)
 
     test.ok(command.perform("find-replace:find"))
 
@@ -106,8 +106,8 @@ test.describe("DocView Prompt Bar find", function()
     for i = 1, 30 do lines[i] = "line " .. i end
     lines[1] = "NEEDLE first"
     lines[12] = "NEEDLE bottom edge"
-    local view, doc = open_editor(context, table.concat(lines, "\n"))
-    doc:set_selection(1, 1, 1, 1)
+    local view, buffer = open_editor(context, table.concat(lines, "\n"))
+    buffer:set_selection(1, 1, 1, 1)
 
     test.ok(command.perform("find-replace:find"))
     type_into_active_view("NEEDLE")
@@ -127,9 +127,9 @@ test.describe("DocView Prompt Bar find", function()
   end)
 
   test.it("replace all batches local find matches into one text change", function(context)
-    local view, doc = open_editor(context, "alpha beta alpha\nalpha\n")
+    local view, buffer = open_editor(context, "alpha beta alpha\nalpha\n")
     local changes = 0
-    function doc:on_text_change()
+    function buffer:on_text_change()
       changes = changes + 1
     end
 
@@ -147,7 +147,7 @@ test.describe("DocView Prompt Bar find", function()
     test.ok(command.perform("user:find-replace-all-confirm"))
     MessageBox.warning = warning
 
-    test.equal(table.concat(doc.lines), "omega beta omega\nomega\n\n")
+    test.equal(table.concat(buffer.lines), "omega beta omega\nomega\n\n")
     test.equal(changes, 1)
   end)
 
@@ -167,7 +167,7 @@ test.describe("DocView Prompt Bar find", function()
     wrapping.wrapping_indent = 0
     wrapping.require_tokenization = false
     view:set_wrapping_enabled(true)
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
 
     local rects = {}
     local old_draw_rect = renderer.draw_rect

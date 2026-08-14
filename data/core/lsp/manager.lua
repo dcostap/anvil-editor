@@ -52,8 +52,8 @@ local function quiet_log(...)
   if core and core.log_quiet then core.log_quiet(...) end
 end
 
-local function doc_path(doc)
-  local path = doc and (doc.abs_filename or doc.filename)
+local function buffer_path(buffer)
+  local path = buffer and (buffer.abs_filename or buffer.filename)
   if not path or path == "" then return nil end
   if not common.is_absolute_path(path) and system.absolute_path then
     path = system.absolute_path(path)
@@ -61,7 +61,7 @@ local function doc_path(doc)
   return common.normalize_path(path)
 end
 
-local function doc_dir(path)
+local function buffer_dir(path)
   return path and common.dirname(path) or nil
 end
 
@@ -126,8 +126,8 @@ end
 local function cwd_for(selection, path)
   local definition = selection.definition
   if definition.cwd_policy == "fixed" and definition.fixed_cwd then return definition.fixed_cwd end
-  if definition.cwd_policy == "document" then return doc_dir(path) end
-  return selection.root and selection.root.root or doc_dir(path)
+  if definition.cwd_policy == "buffer" then return buffer_dir(path) end
+  return selection.root and selection.root.root or buffer_dir(path)
 end
 
 local function workspace_folders_for_selection(selection)
@@ -165,14 +165,14 @@ local function client_options(selection, path)
   }
 end
 
-local function attach_document(entry, doc)
-  if not entry or not entry.client or not doc then return nil, "missing client or document" end
+local function attach_buffer(entry, buffer)
+  if not entry or not entry.client or not buffer then return nil, "missing client or buffer" end
   if entry.client.state ~= "ready" then
-    entry.pending_docs[doc] = true
+    entry.pending_buffers[buffer] = true
     return false, "pending"
   end
-  if documents.state(entry.client, doc) then return true end
-  local state, err = documents.attach(entry.client, doc, {
+  if documents.state(entry.client, buffer) then return true end
+  local state, err = documents.attach(entry.client, buffer, {
     language_id = entry.definition.language_id,
     debounce_seconds = sync_options.debounce_seconds,
     max_file_bytes = sync_options.max_file_bytes,
@@ -180,19 +180,19 @@ local function attach_document(entry, doc)
     did_save_after_open = entry.definition.did_save_after_open,
   })
   if not state then
-    quiet_log("LSP manager failed to attach %s to %s: %s", tostring(doc_path(doc)), entry.identity.key, tostring(err))
+    quiet_log("LSP manager failed to attach %s to %s: %s", tostring(buffer_path(buffer)), entry.identity.key, tostring(err))
     return nil, err
   end
-  entry.docs[doc] = true
+  entry.buffers[buffer] = true
   quiet_log("LSP manager attached %s to %s", tostring(state.uri), entry.identity.key)
   return state
 end
 
-local function attach_pending_docs(entry)
+local function attach_pending_buffers(entry)
   if not entry or not entry.client or entry.client.state ~= "ready" then return end
-  for doc in pairs(entry.pending_docs) do
-    entry.pending_docs[doc] = nil
-    attach_document(entry, doc)
+  for buffer in pairs(entry.pending_buffers) do
+    entry.pending_buffers[buffer] = nil
+    attach_buffer(entry, buffer)
   end
 end
 
@@ -321,7 +321,7 @@ local function create_entry(selection, path, opts)
   local options = client_options(selection, path)
   quiet_log("LSP manager starting %s executable=%s root=%s%s cwd=%s", selection.definition.id,
     tostring(selection.executable or (type(command) == "table" and command[1]) or command),
-    tostring(selection.root and selection.root.root or doc_dir(path)),
+    tostring(selection.root and selection.root.root or buffer_dir(path)),
     selection.root and selection.root.source and (" (" .. selection.root.source .. ")") or "",
     tostring(options.cwd))
   local c, err, partial = client_mod.start(command, options)
@@ -346,8 +346,8 @@ local function create_entry(selection, path, opts)
     definition = selection.definition,
     root = selection.root,
     identity = selection.identity,
-    docs = setmetatable({}, { __mode = "k" }),
-    pending_docs = setmetatable({}, { __mode = "k" }),
+    buffers = setmetatable({}, { __mode = "k" }),
+    pending_buffers = setmetatable({}, { __mode = "k" }),
     started_at = system.get_time(),
     last_error = err,
     limited_index_reason = selection.definition.id == "clangd"
@@ -383,7 +383,7 @@ local function project_fallback_roots(path)
   return roots
 end
 
-local function select_options_for_doc(path, opts)
+local function select_options_for_buffer(path, opts)
   opts = opts or {}
   local select_options = copy_table(opts.select_options or opts)
   local fallback_roots = copy_array(select_options.fallback_roots)
@@ -397,10 +397,10 @@ local function select_options_for_doc(path, opts)
   return select_options
 end
 
-local function selected_servers_for_doc(doc, opts)
-  local path = doc_path(doc)
-  if not path then return nil, "document has no filename" end
-  local select_options = select_options_for_doc(path, opts)
+local function selected_servers_for_buffer(buffer, opts)
+  local path = buffer_path(buffer)
+  if not path then return nil, "buffer has no filename" end
+  local select_options = select_options_for_buffer(path, opts)
   local selected, err = config.select_for_path(merged_server_definitions(), path, select_options)
   if not selected then return nil, err end
   return selected, nil, path
@@ -427,9 +427,9 @@ function manager.entry_for_identity(identity_or_key)
   return key and clients_by_key[key] or nil
 end
 
-function manager.client_for_doc(doc)
+function manager.client_for_buffer(buffer)
   for _, entry in pairs(clients_by_key) do
-    if documents.state(entry.client, doc) or entry.pending_docs[doc] then return entry.client, entry end
+    if documents.state(entry.client, buffer) or entry.pending_buffers[buffer] then return entry.client, entry end
   end
 end
 
@@ -450,10 +450,10 @@ function manager.set_enabled(enabled, opts)
 
   if enabled then
     auto_start = not running_tests()
-    if opts.attach_open_docs ~= false then
-      for _, doc in ipairs(core.docs or {}) do
-        if doc and not doc.disable_language_services then
-          manager.ensure_doc(doc, { auto = true })
+    if opts.attach_open_buffers ~= false then
+      for _, buffer in ipairs(core.buffers or {}) do
+        if buffer and not buffer.disable_language_services then
+          manager.ensure_buffer(buffer, { auto = true })
         end
       end
     end
@@ -476,19 +476,19 @@ function manager.disable(opts)
   return manager.set_enabled(false, opts)
 end
 
-function manager.ensure_doc(doc, opts)
+function manager.ensure_buffer(buffer, opts)
   opts = opts or {}
   if not manager.is_enabled() then
-    quiet_log("LSP manager skipped document: LSP disabled")
+    quiet_log("LSP manager skipped buffer: LSP disabled")
     return nil, "LSP disabled"
   end
-  if opts.auto and documents.is_content_ready and not documents.is_content_ready(doc) then
-    quiet_log("LSP manager deferred auto-start for %s until document contents are loaded", tostring(doc_path(doc)))
-    return nil, "document contents not loaded"
+  if opts.auto and documents.is_content_ready and not documents.is_content_ready(buffer) then
+    quiet_log("LSP manager deferred auto-start for %s until buffer contents are loaded", tostring(buffer_path(buffer)))
+    return nil, "buffer contents not loaded"
   end
-  local selected, err, path = selected_servers_for_doc(doc, opts)
+  local selected, err, path = selected_servers_for_buffer(buffer, opts)
   if not selected then
-    quiet_log("LSP manager skipped document: %s", tostring(err))
+    quiet_log("LSP manager skipped buffer: %s", tostring(err))
     return nil, err
   end
   local attached = {}
@@ -508,7 +508,7 @@ function manager.ensure_doc(doc, opts)
         quiet_log("LSP manager reusing %s for %s", selection.identity.key, tostring(path))
       end
       if entry then
-        attach_document(entry, doc)
+        attach_buffer(entry, buffer)
         attached[#attached + 1] = entry
       end
     end
@@ -517,15 +517,15 @@ function manager.ensure_doc(doc, opts)
   return attached
 end
 
-function manager.start_current_document(view)
+function manager.start_current_buffer(view)
   view = view or core.active_view
-  if not view or not view.doc then return nil, "no active document" end
-  return manager.ensure_doc(view.doc)
+  if not view or not view.buffer then return nil, "no active buffer" end
+  return manager.ensure_buffer(view.buffer)
 end
 
-function manager.on_doc_metadata_changed(doc)
-  if doc and doc.disable_language_services then return end
-  if auto_start and manager.is_enabled() then manager.ensure_doc(doc, { auto = true }) end
+function manager.on_buffer_metadata_changed(buffer)
+  if buffer and buffer.disable_language_services then return end
+  if auto_start and manager.is_enabled() then manager.ensure_buffer(buffer, { auto = true }) end
 end
 
 function manager.update()
@@ -539,7 +539,7 @@ function manager.update()
         quiet_log("LSP manager pump failed for %s: %s", key, tostring(err))
         if c._fail then c:_fail(err or "pump failed") end
       end
-      if c.state == "ready" then attach_pending_docs(entry) end
+      if c.state == "ready" then attach_pending_buffers(entry) end
     elseif c and c.failed then
       local detail = client_failure_detail(c)
       entry.last_error = detail
@@ -568,8 +568,8 @@ function manager.stop_entry(entry, opts)
   if type(entry) == "string" then entry = clients_by_key[entry] end
   if not entry then return true end
   clients_by_key[entry.key] = nil
-  for doc in pairs(entry.docs) do documents.detach(entry.client, doc) end
-  for doc in pairs(entry.pending_docs) do entry.pending_docs[doc] = nil end
+  for buffer in pairs(entry.buffers) do documents.detach(entry.client, buffer) end
+  for buffer in pairs(entry.pending_buffers) do entry.pending_buffers[buffer] = nil end
   completion.clear_client(entry.client)
   diagnostics.clear_client(entry.client)
   hover.clear_client(entry.client)
@@ -586,8 +586,8 @@ function manager.shutdown_all(opts)
   return true
 end
 
-function manager.restart_doc(doc, opts)
-  local selected, err = selected_servers_for_doc(doc, opts)
+function manager.restart_buffer(buffer, opts)
+  local selected, err = selected_servers_for_buffer(buffer, opts)
   if selected then
     for _, selection in ipairs(selected) do
       if selection.identity then manager.stop_entry(selection.identity.key, opts) end
@@ -595,13 +595,13 @@ function manager.restart_doc(doc, opts)
   elseif err then
     quiet_log("LSP manager restart skipped: %s", tostring(err))
   end
-  return manager.ensure_doc(doc, opts)
+  return manager.ensure_buffer(buffer, opts)
 end
 
-function manager.restart_current_document(view)
+function manager.restart_current_buffer(view)
   view = view or core.active_view
-  if not view or not view.doc then return nil, "no active document" end
-  return manager.restart_doc(view.doc)
+  if not view or not view.buffer then return nil, "no active buffer" end
+  return manager.restart_buffer(view.buffer)
 end
 
 function manager.active_progress_status()
@@ -657,9 +657,9 @@ function manager.reset_for_tests()
   auto_start = false
 end
 
-if documents.register_doc_metadata_changed_handler then
-  documents.register_doc_metadata_changed_handler("manager", function(doc, reason)
-    manager.on_doc_metadata_changed(doc, reason)
+if documents.register_buffer_metadata_changed_handler then
+  documents.register_buffer_metadata_changed_handler("manager", function(buffer, reason)
+    manager.on_buffer_metadata_changed(buffer, reason)
   end)
 end
 

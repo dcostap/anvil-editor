@@ -114,12 +114,12 @@ local function dump_logs_to_file()
 end
 
 command.add(nil, {
-  ["log:open-as-doc"] = function()
-    local doc = core.open_doc("logs.txt")
-    core.root_panel:open_doc(doc)
-    doc:insert(1, 1, core.get_log())
-    doc.new_file = false
-    doc:clean()
+  ["log:open-as-buffer"] = function()
+    local buffer = core.open_buffer("logs.txt")
+    core.root_panel:open_buffer(buffer)
+    buffer:insert(1, 1, core.get_log())
+    buffer.new_file = false
+    buffer:clean()
   end,
   ["log:copy-to-clipboard"] = function()
     system.set_clipboard(core.get_log())

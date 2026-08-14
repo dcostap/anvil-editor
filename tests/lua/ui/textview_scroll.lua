@@ -12,26 +12,26 @@ local function track(context, kind, value)
   return value
 end
 
-local function remove_doc(doc)
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+local function remove_buffer(buffer)
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
 end
 
 local function open_editor(context, text)
-  local doc = track(context, "docs", core.open_doc())
-  if text and text ~= "" then doc:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_doc(doc))
+  local buffer = track(context, "buffers", core.open_buffer())
+  if text and text ~= "" then buffer:text_input(text) end
+  local view = track(context, "views", core.root_panel:open_buffer(buffer))
   core.set_active_view(view)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 220, 180
   view.scroll.x, view.scroll.to.x = 0, 0
   view.scroll.y, view.scroll.to.y = 0, 0
-  return view, doc
+  return view, buffer
 end
 
 local function visible_text_right(view)
@@ -65,13 +65,15 @@ local function disable_wrapping(view)
   view.scroll.x, view.scroll.to.x = 0, 0
 end
 
-test.describe("DocView selection scrolling", function()
+test.describe("TextView selection scrolling", function()
   test.before_each(function(context)
+    if command.is_valid("user:find-close") then command.perform("user:find-close") end
     context.scroll_past_end = config.scroll_past_end
     context.scroll_context_lines = config.scroll_context_lines
   end)
 
   test.after_each(function(context)
+    if command.is_valid("user:find-close") then command.perform("user:find-close") end
     config.scroll_past_end = context.scroll_past_end
     config.scroll_context_lines = context.scroll_context_lines
     local root = core.root_panel.root_node
@@ -79,9 +81,9 @@ test.describe("DocView selection scrolling", function()
       local node = root:get_node_for_view(view)
       if node then node:remove_view(root, view) end
     end
-    for _, doc in ipairs(context.docs or {}) do
-      if doc:is_dirty() then doc:clean() end
-      remove_doc(doc)
+    for _, buffer in ipairs(context.buffers or {}) do
+      if buffer:is_dirty() then buffer:clean() end
+      remove_buffer(buffer)
     end
   end)
 
@@ -89,9 +91,9 @@ test.describe("DocView selection scrolling", function()
     config.scroll_past_end = true
     config.scroll_context_lines = 3
 
-    local view, doc = open_editor(context, numbered_lines(20))
+    local view, buffer = open_editor(context, numbered_lines(20))
     local lh = view:get_line_height()
-    test.ok(lh * #doc.lines + style.padding.y * 2 > view.size.y, "expected test document to overflow vertically")
+    test.ok(lh * #buffer.lines + style.padding.y * 2 > view.size.y, "expected test buffer to overflow vertically")
 
     view.scroll.to.y = view.size.y * 10
     view:clamp_scroll_position()
@@ -100,11 +102,11 @@ test.describe("DocView selection scrolling", function()
 
     test.equal(view.scroll.y, view:get_scrollable_size() - view.size.y)
     test.equal(view.v_scrollbar.percent, 1)
-    local _, last_y = view:get_line_screen_position(#doc.lines)
+    local _, last_y = view:get_line_screen_position(#buffer.lines)
     test.equal(last_y + lh, view.position.y + view.size.y - config.scroll_context_lines * lh)
   end)
 
-  test.it("does not add bottom overscroll when a fitting document is already past the context boundary", function(context)
+  test.it("does not add bottom overscroll when a fitting buffer is already past the context boundary", function(context)
     config.scroll_past_end = true
     config.scroll_context_lines = 1
 
@@ -115,7 +117,7 @@ test.describe("DocView selection scrolling", function()
     test.equal(view.scroll.to.y, 0)
   end)
 
-  test.it("does not end-scroll short documents when existing blank space satisfies context", function(context)
+  test.it("does not end-scroll short Buffers when existing blank space satisfies context", function(context)
     config.scroll_past_end = true
     config.scroll_context_lines = 28
 
@@ -129,7 +131,7 @@ test.describe("DocView selection scrolling", function()
     test.equal(view.scroll.y, 0)
   end)
 
-  test.it("allows fitting documents to end-scroll when the caret enters bottom context", function(context)
+  test.it("allows fitting Buffers to end-scroll when the caret enters bottom context", function(context)
     config.scroll_past_end = true
     config.scroll_context_lines = 28
 
@@ -141,19 +143,19 @@ test.describe("DocView selection scrolling", function()
 
     local effective_context = view:get_visible_scroll_context_lines()
     local _, cursor_y = view:get_line_screen_position(29)
-    test.ok(view.scroll.y > 0, "expected a fitting document near the bottom context to scroll")
+    test.ok(view.scroll.y > 0, "expected a fitting buffer near the bottom context to scroll")
     test.equal(cursor_y + lh, view.position.y + view.size.y - effective_context * lh)
   end)
 
-  test.it("keeps mouse-originated clicks near the document end from forcing bottom context scrolling", function(context)
+  test.it("keeps mouse-originated clicks near the buffer end from forcing bottom context scrolling", function(context)
     config.scroll_past_end = true
     config.scroll_context_lines = 3
 
-    local view, doc = open_editor(context, numbered_lines(20))
+    local view, buffer = open_editor(context, numbered_lines(20))
     view:update_scrollbar()
     local lh = view:get_line_height()
     local scroll_h = view:get_horizontal_scrollbar_height()
-    local target_line = #doc.lines - 1
+    local target_line = #buffer.lines - 1
     local start_scroll = style.padding.y + (target_line - 1) * lh - (view.size.y - scroll_h - 2 * lh)
     test.ok(start_scroll > 0, "expected the target line to require an initial scroll offset")
 
@@ -167,7 +169,7 @@ test.describe("DocView selection scrolling", function()
   test.it("shows a horizontal scrollbar for unwrapped text that overflows right", function(context)
     local view = open_editor(context, string.rep("x", 120))
     disable_wrapping(view)
-    local line_width = view:get_gutter_width() + view:get_col_x_offset(1, #view.doc.lines[1] + 1)
+    local line_width = view:get_gutter_width() + view:get_col_x_offset(1, #view.buffer.lines[1] + 1)
     test.ok(line_width > view.size.x, "expected test line to overflow horizontally")
 
     test.ok(wait_until(function()
@@ -196,7 +198,7 @@ test.describe("DocView selection scrolling", function()
     for i = 1, 200 do
       lines[i] = i == 150 and string.rep("m", 120) or ("line " .. i)
     end
-    local view, doc = open_editor(context, table.concat(lines, "\n"))
+    local view, buffer = open_editor(context, table.concat(lines, "\n"))
     disable_wrapping(view)
 
     local original_get_col_x_offset = view.get_col_x_offset
@@ -210,16 +212,16 @@ test.describe("DocView selection scrolling", function()
     test.ok(wait_until(function()
       view:get_h_scrollable_size()
       return calls >= #lines
-    end, 1), "expected initial horizontal extent calculation to inspect the document")
+    end, 1), "expected initial horizontal extent calculation to inspect the buffer")
 
     calls = 0
-    doc:set_selection(1, 1, 1, 1)
-    doc:text_input("x")
+    buffer:set_selection(1, 1, 1, 1)
+    buffer:text_input("x")
     test.ok(wait_until(function()
       return view:get_h_scrollable_size() > view.size.x
     end, 1), "expected the horizontal extent to be rebuilt after the edit")
 
-    test.ok(calls < 20, "expected horizontal extent cache to avoid a full document rescan after a small edit")
+    test.ok(calls < 20, "expected horizontal extent cache to avoid a full buffer rescan after a small edit")
   end)
 
   test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)
@@ -250,7 +252,7 @@ test.describe("DocView selection scrolling", function()
     test.equal(view.scroll.to.x, 0)
   end)
 
-  test.it("DocView Prompt Bar find navigation horizontally reveals long-line matches", function(context)
+  test.it("TextView Prompt Bar find navigation horizontally reveals long-line matches", function(context)
     local prefix = string.rep("x", 120)
     local view = open_editor(context, prefix .. "NEEDLE\n")
     disable_wrapping(view)
@@ -261,7 +263,7 @@ test.describe("DocView selection scrolling", function()
     core.root_panel:on_text_input("NEEDLE")
 
     local x1, x2 = range_x(view, 1, col1, col2)
-    test.ok(view.scroll.to.x > 0, "expected local find to horizontally scroll the owning Document View")
+    test.ok(view.scroll.to.x > 0, "expected local find to horizontally scroll the owning Text View")
     test.ok(x1 >= view.scroll.to.x, "expected local find match start to be visible")
     test.ok(x2 <= (view.scroll.to.x + (visible_text_right(view) - view.scroll.x)) + 1, "expected local find match end to be visible")
   end)

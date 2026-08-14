@@ -5,16 +5,16 @@ local config = require "core.config"
 local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
 local intelligence = require "core.language_intelligence"
-local encodings = require "core.doc.encodings"
-local translate = require "core.doc.translate"
+local encodings = require "core.buffer.encodings"
+local translate = require "core.buffer.translate"
 local style = require "core.style"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local tokenizer = require "core.tokenizer"
 
 
-local function doc()
-  return core.active_view.doc
+local function buffer()
+  return core.active_view.buffer
 end
 
 local function can_edit(dv, reason, opts)
@@ -25,13 +25,13 @@ local function can_edit(dv, reason, opts)
 end
 
 
-local function doc_multiline_selections(sort)
-  local iter, state, idx, line1, col1, line2, col2 = doc():get_selections(sort)
+local function buffer_multiline_selections(sort)
+  local iter, state, idx, line1, col1, line2, col2 = buffer():get_selections(sort)
   return function()
     idx, line1, col1, line2, col2 = iter(state, idx)
     if idx and line2 > line1 and col2 == 1 then
       line2 = line2 - 1
-      col2 = #doc().lines[line2]
+      col2 = #buffer().lines[line2]
     end
     return idx, line1, col1, line2, col2
   end
@@ -53,15 +53,15 @@ local function sort_line_actions(actions)
 end
 
 local function append_line_if_last_line(line)
-  if line >= #doc().lines then
+  if line >= #buffer().lines then
     if not can_edit(core.active_view, "extend selection") then return false end
-    doc():insert(line, math.huge, "\n")
+    buffer():insert(line, math.huge, "\n")
   end
   return true
 end
 
-local function merge_overlapping_removals(target_doc, edits)
-  local normalized = target_doc:plan_edits(edits)
+local function merge_overlapping_removals(target_buffer, edits)
+  local normalized = target_buffer:plan_edits(edits)
   local merged = {}
   for _, edit in ipairs(normalized) do
     local previous = merged[#merged]
@@ -89,30 +89,30 @@ local prompt_save_as
 local save_as_prompt_text
 
 local function save(filename, target)
-  local target_doc = target and target.doc or target or doc()
+  local target_buffer = target and target.buffer or target or buffer()
   local abs_filename
   if filename then
     filename = core.normalize_to_project_dir(filename)
     abs_filename = core.project_absolute_path(filename)
   end
-  local ok, err = pcall(target_doc.save, target_doc, filename, abs_filename)
+  local ok, err = pcall(target_buffer.save, target_buffer, filename, abs_filename)
   if ok then
-    local saved_filename = target_doc.filename
+    local saved_filename = target_buffer.filename
     core.log("Saved \"%s\"", saved_filename)
   else
     core.error(err)
     if tostring(err):find("file changed on disk", 1, true) then return end
-    core.nag_view:show("Saving failed", string.format("Couldn't save file \"%s\". Do you want to save to another location?", target_doc.filename), {
+    core.nag_view:show("Saving failed", string.format("Couldn't save file \"%s\". Do you want to save to another location?", target_buffer.filename), {
       { text = "Yes", default_yes = true },
       { text = "No", default_no = true }
     }, function(item)
       if item.text == "Yes" then
         core.add_thread(function()
           -- we need to run this in a thread because of the odd way the nagview is.
-          if target and target.doc then
+          if target and target.buffer then
             prompt_save_as(target, save_as_prompt_text(target))
           else
-            command.perform("doc:save-as")
+            command.perform("text:save-as")
           end
         end)
       end
@@ -120,20 +120,20 @@ local function save(filename, target)
   end
 end
 
-local function save_existing(doc)
-  if not doc.filename then return end
-  local ok, err = pcall(doc.save, doc)
+local function save_existing(buffer)
+  if not buffer.filename then return end
+  local ok, err = pcall(buffer.save, buffer)
   if not ok and not tostring(err):find("file changed on disk", 1, true) then
-    core.error("Couldn't save file \"%s\": %s", doc.filename, err)
+    core.error("Couldn't save file \"%s\": %s", buffer.filename, err)
   end
 end
 
 function save_as_prompt_text(dv)
-  local last_doc = core.last_active_view and core.last_active_view.doc
-  if dv.doc.filename then
-    return dv.doc.filename
-  elseif last_doc and last_doc.filename then
-    local dirname = core.last_active_view.doc.abs_filename:match("(.*)[/\\].+$")
+  local last_buffer = core.last_active_view and core.last_active_view.buffer
+  if dv.buffer.filename then
+    return dv.buffer.filename
+  elseif last_buffer and last_buffer.filename then
+    local dirname = core.last_active_view.buffer.abs_filename:match("(.*)[/\\].+$")
     local text = core.normalize_to_project_dir(dirname) .. PATHSEP
     if common.path_equals(text, core.root_project().path) then text = "" end
     return text
@@ -150,7 +150,7 @@ function prompt_save_as(dv, text)
       local save_filename = common.home_expand(prompt_filename)
       local normalized = core.normalize_to_project_dir(save_filename)
       local abs_filename = core.project_absolute_path(normalized)
-      if not dv.doc.filename and system.get_file_info(abs_filename) then
+      if not dv.buffer.filename and system.get_file_info(abs_filename) then
         core.nag_view:show(
           "Overwrite Existing File",
           string.format("%s already exists. Overwrite it?", normalized),
@@ -181,58 +181,58 @@ end
 
 local function cut_or_copy(dv, delete)
   if delete and not can_edit(dv, "cut") then return end
-  local target_doc = dv.doc
+  local target_buffer = dv.buffer
   local full_text = ""
   local text = ""
   local copied_ranges = {}
   core.cursor_clipboard = {}
   core.cursor_clipboard_whole_line = {}
-  for idx, line1, col1, line2, col2 in target_doc:get_selections(true, true) do
+  for idx, line1, col1, line2, col2 in target_buffer:get_selections(true, true) do
     if line1 ~= line2 or col1 ~= col2 then
-      text = target_doc:get_text(line1, col1, line2, col2)
+      text = target_buffer:get_text(line1, col1, line2, col2)
       full_text = full_text == "" and text or (text .. " " .. full_text)
       core.cursor_clipboard_whole_line[idx] = false
       copied_ranges[#copied_ranges + 1] = { line1, col1, line2, col2 }
     else -- Cut/copy whole line
       -- Remove newline from the text. It will be added as needed on paste.
-      text = string.sub(target_doc.lines[line1], 1, -2)
+      text = string.sub(target_buffer.lines[line1], 1, -2)
       full_text = full_text == "" and text .. "\n" or (text .. "\n" .. full_text)
       core.cursor_clipboard_whole_line[idx] = true
-      copied_ranges[#copied_ranges + 1] = { line1, 1, line1, #target_doc.lines[line1] }
+      copied_ranges[#copied_ranges + 1] = { line1, 1, line1, #target_buffer.lines[line1] }
     end
     core.cursor_clipboard[idx] = text
   end
   if delete then
     local edits = {}
-    for idx, line1, col1, line2, col2 in target_doc:get_selections(true, true) do
+    for idx, line1, col1, line2, col2 in target_buffer:get_selections(true, true) do
       if line1 ~= line2 or col1 ~= col2 then
         edits[#edits + 1] = {
           line1 = line1, col1 = col1, line2 = line2, col2 = col2,
           text = "", idx = idx,
         }
-      elseif line1 < #target_doc.lines then
+      elseif line1 < #target_buffer.lines then
         edits[#edits + 1] = {
           line1 = line1, col1 = 1, line2 = line1 + 1, col2 = 1,
           text = "", idx = idx,
         }
-      elseif #target_doc.lines == 1 then
+      elseif #target_buffer.lines == 1 then
         edits[#edits + 1] = {
-          line1 = line1, col1 = 1, line2 = line1, col2 = #target_doc.lines[line1],
+          line1 = line1, col1 = 1, line2 = line1, col2 = #target_buffer.lines[line1],
           text = "", idx = idx,
         }
       else
         edits[#edits + 1] = {
-          line1 = line1 - 1, col1 = #target_doc.lines[line1 - 1],
-          line2 = line1, col2 = #target_doc.lines[line1],
+          line1 = line1 - 1, col1 = #target_buffer.lines[line1 - 1],
+          line2 = line1, col2 = #target_buffer.lines[line1],
           text = "", idx = idx,
         }
       end
     end
     if #edits > 0 then
-      edits = merge_overlapping_removals(target_doc, edits)
-      target_doc:apply_edits(edits, {
+      edits = merge_overlapping_removals(target_buffer, edits)
+      target_buffer:apply_edits(edits, {
         type = "remove",
-        last_selection = target_doc.last_selection,
+        last_selection = target_buffer.last_selection,
         merge_cursors = true,
       })
     end
@@ -244,31 +244,31 @@ local function cut_or_copy(dv, delete)
   end
 end
 
-local function set_primary_selection(doc)
+local function set_primary_selection(buffer)
   -- Doesn't work on Windows, so avoid spending time getting the text
   if PLATFORM ~= "Windows" then
-    system.set_primary_selection(doc:get_selection_text())
+    system.set_primary_selection(buffer:get_selection_text())
   end
 end
 
 local function split_cursor(dv, direction)
   local new_cursors = {}
   local dv_translate = direction < 0
-    and DocView.translate.previous_line
-    or DocView.translate.next_line
-  for _, line1, col1 in dv.doc:get_selections() do
-    if line1 + direction >= 1 and line1 + direction <= #dv.doc.lines then
-      table.insert(new_cursors, { dv_translate(dv.doc, line1, col1, dv) })
+    and TextView.translate.previous_line
+    or TextView.translate.next_line
+  for _, line1, col1 in dv.buffer:get_selections() do
+    if line1 + direction >= 1 and line1 + direction <= #dv.buffer.lines then
+      table.insert(new_cursors, { dv_translate(dv.buffer, line1, col1, dv) })
     end
   end
-  -- add selections in the order that will leave the "last" added one as doc.last_selection
+  -- add selections in the order that will leave the "last" added one as buffer.last_selection
   local start, stop = 1, #new_cursors
   if direction < 0 then
     start, stop = #new_cursors, 1
   end
   for i = start, stop, direction do
     local v = new_cursors[i]
-    dv.doc:add_selection(v[1], v[2])
+    dv.buffer:add_selection(v[1], v[2])
   end
   core.blink_reset()
 end
@@ -283,19 +283,19 @@ end
 local function set_cursor(dv, x, y, snap_type)
   if dv.begin_line_render_interaction then dv:begin_line_render_interaction("mouse-selection") end
   local line, col = dv:resolve_screen_position(x, y)
-  dv.doc:set_selection(line, col, line, col)
+  dv.buffer:set_selection(line, col, line, col)
   if snap_type == "word" or snap_type == "lines" then
-    command.perform("doc:select-" .. snap_type)
+    command.perform("text:select-" .. snap_type)
   end
   apply_resolved_wrap_affinity(dv)
   dv.mouse_selecting = { line, col, snap_type }
   core.blink_reset()
 end
 
-local function set_encoding(doc, charset)
-  doc.encoding = charset
-  if doc.bom then
-    doc.bom = encoding.get_charset_bom(charset)
+local function set_encoding(buffer, charset)
+  buffer.encoding = charset
+  if buffer.bom then
+    buffer.bom = encoding.get_charset_bom(charset)
   end
 end
 
@@ -305,7 +305,7 @@ local function line_comment(comment, line1, col1, line2, col2)
   local uncomment = true
   local start_offset = math.huge
   for line = line1, line2 do
-    local text = doc().lines[line]
+    local text = buffer().lines[line]
     local s = text:find("%S")
     if s then
       local cs, ce = text:find(start_comment, s, true)
@@ -316,10 +316,10 @@ local function line_comment(comment, line1, col1, line2, col2)
     end
   end
 
-  local end_line = col2 == #doc().lines[line2]
+  local end_line = col2 == #buffer().lines[line2]
   local edits = {}
   for line = line1, line2 do
-    local text = doc().lines[line]
+    local text = buffer().lines[line]
     local s = text:find("%S")
     if s and uncomment then
       if end_comment and text:sub(#text - #end_comment, #text - 1) == end_comment then
@@ -337,7 +337,7 @@ local function line_comment(comment, line1, col1, line2, col2)
     end
   end
   if #edits > 0 then
-    doc():apply_edits(edits, {
+    buffer():apply_edits(edits, {
       type = uncomment and "remove" or "insert",
       merge_cursors = false,
     })
@@ -352,25 +352,25 @@ end
 
 local function block_comment(comment, line1, col1, line2, col2)
   -- automatically skip spaces
-  local word_start = doc():get_text(line1, col1, line1, math.huge):find("%S")
-  local word_end = doc():get_text(line2, 1, line2, col2):find("%s*$")
+  local word_start = buffer():get_text(line1, col1, line1, math.huge):find("%S")
+  local word_end = buffer():get_text(line2, 1, line2, col2):find("%s*$")
   col1 = col1 + (word_start and (word_start - 1) or 0)
   col2 = word_end and word_end or col2
 
-  local block_start = doc():get_text(line1, col1, line1, col1 + #comment[1])
-  local block_end = doc():get_text(line2, col2 - #comment[2], line2, col2)
+  local block_start = buffer():get_text(line1, col1, line1, col1 + #comment[1])
+  local block_end = buffer():get_text(line2, col2 - #comment[2], line2, col2)
 
   if block_start == comment[1] and block_end == comment[2] then
     -- remove up to 1 whitespace after the comment
     local start_len, stop_len = #comment[1], #comment[2]
-    if doc():get_text(line1, col1 + #comment[1], line1, col1 + #comment[1] + 1):find("%s$") then
+    if buffer():get_text(line1, col1 + #comment[1], line1, col1 + #comment[1] + 1):find("%s$") then
       start_len = start_len + 1
     end
-    if doc():get_text(line2, col2 - #comment[2] - 1, line2, col2):find("^%s") then
+    if buffer():get_text(line2, col2 - #comment[2] - 1, line2, col2):find("^%s") then
       stop_len = stop_len + 1
     end
 
-    doc():apply_edits({
+    buffer():apply_edits({
       { line1 = line1, col1 = col1, line2 = line1, col2 = col1 + start_len, text = "" },
       { line1 = line2, col1 = col2 - stop_len, line2 = line2, col2 = col2, text = "" },
     }, { type = "remove", merge_cursors = false })
@@ -381,11 +381,11 @@ local function block_comment(comment, line1, col1, line2, col2)
     local prefix = comment[1] .. " "
     local suffix = " " .. comment[2]
     if line1 == line2 and col1 == col2 then
-      doc():apply_edits({
+      buffer():apply_edits({
         { line1 = line1, col1 = col1, line2 = line1, col2 = col1, text = prefix .. suffix },
       }, { type = "insert", merge_cursors = false })
     else
-      doc():apply_edits({
+      buffer():apply_edits({
         { line1 = line1, col1 = col1, line2 = line1, col2 = col1, text = prefix },
         { line1 = line2, col1 = col2, line2 = line2, col2 = col2, text = suffix },
       }, { type = "insert", merge_cursors = false })
@@ -422,13 +422,13 @@ local function indent_visual_width(text, tab_size)
   return width, #indent + 1
 end
 
-local function one_indent_string(doc)
-  local text = doc:get_indent_string(1)
+local function one_indent_string(buffer)
+  local text = buffer:get_indent_string(1)
   return text
 end
 
-local function syntax_newline_continuation(doc, line, col, line_text)
-  local continuation = intelligence.newline_continuation(doc, line + 1, {
+local function syntax_newline_continuation(buffer, line, col, line_text)
+  local continuation = intelligence.newline_continuation(buffer, line + 1, {
     event = "newline",
     line = line,
     col = col,
@@ -438,8 +438,8 @@ local function syntax_newline_continuation(doc, line, col, line_text)
   return type(continuation) == "string" and continuation or nil
 end
 
-local function syntax_newline_indent(doc, line, col, base_indent, full_indent, line_text)
-  local indent = intelligence.indent_for_line(doc, line + 1, {
+local function syntax_newline_indent(buffer, line, col, base_indent, full_indent, line_text)
+  local indent = intelligence.indent_for_line(buffer, line + 1, {
     event = "newline",
     line = line,
     col = col,
@@ -452,13 +452,13 @@ local function syntax_newline_indent(doc, line, col, base_indent, full_indent, l
   return base_indent
 end
 
-local function syntax_line_indent(doc, line, col, line_text)
-  local indent = intelligence.indent_for_line(doc, line, {
+local function syntax_line_indent(buffer, line, col, line_text)
+  local indent = intelligence.indent_for_line(buffer, line, {
     event = "line",
     line = line,
     col = col,
     current_line_text = line_text,
-    previous_line_text = line > 1 and doc.lines[line - 1] or "",
+    previous_line_text = line > 1 and buffer.lines[line - 1] or "",
   })
   return type(indent) == "string" and indent or nil
 end
@@ -468,8 +468,8 @@ local function line_end_col(text)
   return nl or (#tostring(text or "") + 1)
 end
 
-local function markdown_empty_list_item(doc, line, col, line_text)
-  local syntax_name = tostring(doc and doc.syntax and doc.syntax.name or ""):lower()
+local function markdown_empty_list_item(buffer, line, col, line_text)
+  local syntax_name = tostring(buffer and buffer.syntax and buffer.syntax.name or ""):lower()
   if not syntax_name:find("markdown", 1, true) then return false end
   local end_col = line_end_col(line_text)
   if col ~= end_col then return false end
@@ -482,8 +482,8 @@ local function markdown_empty_list_item(doc, line, col, line_text)
     or content:match("^%s*%d+%)%s+%[[ xX]%]%s*$")
 end
 
-local function markdown_list_content_start(doc, line, line_text, allow_empty)
-  local syntax_name = tostring(doc and doc.syntax and doc.syntax.name or ""):lower()
+local function markdown_list_content_start(buffer, line, line_text, allow_empty)
+  local syntax_name = tostring(buffer and buffer.syntax and buffer.syntax.name or ""):lower()
   if not syntax_name:find("markdown", 1, true) then return nil end
   local end_col = line_end_col(line_text)
   local content = tostring(line_text or ""):sub(1, end_col - 1)
@@ -527,20 +527,20 @@ local function markdown_indent_width(indent)
   return width
 end
 
-local function markdown_list_indent_width(doc, line, line_text)
+local function markdown_list_indent_width(buffer, line, line_text)
   local content_start, indent_length = markdown_list_content_start(
-    doc, line, line_text, true
+    buffer, line, line_text, true
   )
   if not content_start then return nil end
   return markdown_indent_width(tostring(line_text or ""):sub(1, indent_length))
 end
 
-local function markdown_list_can_indent(doc, line, line_text)
-  local indent_width = markdown_list_indent_width(doc, line, line_text)
+local function markdown_list_can_indent(buffer, line, line_text)
+  local indent_width = markdown_list_indent_width(buffer, line, line_text)
   if indent_width == nil then return false end
   for previous_line = line - 1, 1, -1 do
     local previous_width = markdown_list_indent_width(
-      doc, previous_line, doc.lines[previous_line] or ""
+      buffer, previous_line, buffer.lines[previous_line] or ""
     )
     if previous_width ~= nil then
       if previous_width == indent_width then return true end
@@ -568,9 +568,9 @@ end
 local function marker_only_task_selection_positions(dv)
   local positions = {}
   local count = 0
-  for _, line1, col1, line2, col2 in dv.doc:get_selections(false) do
+  for _, line1, col1, line2, col2 in dv.buffer:get_selections(false) do
     local end_col = line1 == line2 and markdown_marker_only_task_end_col(
-      dv.doc.lines[line1]
+      dv.buffer.lines[line1]
     )
     if end_col and col1 == end_col and col2 == end_col then
       positions[linewrapping.position_key(line1, col1)] = true
@@ -592,8 +592,8 @@ end
 local function has_markdown_task_source_affinity(dv)
   local affinity = dv.__markdown_task_source_affinity
   if affinity and (
-    affinity.text_revision ~= (dv.doc.text_revision or 0)
-    or affinity.selection_key ~= linewrapping.selection_state_key(dv.doc)
+    affinity.text_revision ~= (dv.buffer.text_revision or 0)
+    or affinity.selection_key ~= linewrapping.selection_state_key(dv.buffer)
   ) then
     clear_markdown_task_source_affinity(dv)
     affinity = nil
@@ -605,8 +605,8 @@ local function set_markdown_task_source_affinity(dv)
   local positions = marker_only_task_selection_positions(dv)
   if not positions then return false end
   dv.__markdown_task_source_affinity = {
-    text_revision = dv.doc.text_revision or 0,
-    selection_key = linewrapping.selection_state_key(dv.doc),
+    text_revision = dv.buffer.text_revision or 0,
+    selection_key = linewrapping.selection_state_key(dv.buffer),
     positions = positions,
   }
   dv:invalidate_line_render("markdown-task-source-affinity")
@@ -618,8 +618,8 @@ local function reveal_markdown_task_source_from_implicit_content(dv)
   return set_markdown_task_source_affinity(dv)
 end
 
-local function markdown_list_join_info(doc, line, line_text)
-  local content_start = markdown_list_content_start(doc, line, line_text)
+local function markdown_list_join_info(buffer, line, line_text)
+  local content_start = markdown_list_content_start(buffer, line, line_text)
   if not content_start then return nil end
   local end_col = line_end_col(line_text)
   local content = tostring(line_text or ""):sub(1, end_col - 1)
@@ -640,9 +640,9 @@ local function markdown_list_join_info(doc, line, line_text)
   end
 end
 
-local function markdown_list_join_content_col(doc, line, line_text, next_line_text)
-  local current = markdown_list_join_info(doc, line, line_text)
-  local following = markdown_list_join_info(doc, line + 1, next_line_text)
+local function markdown_list_join_content_col(buffer, line, line_text, next_line_text)
+  local current = markdown_list_join_info(buffer, line, line_text)
+  local following = markdown_list_join_info(buffer, line + 1, next_line_text)
   if not current or not following
     or current.kind ~= following.kind
     or current.marker ~= following.marker
@@ -653,8 +653,8 @@ local function markdown_list_join_content_col(doc, line, line_text, next_line_te
   return following.content_start
 end
 
-local function markdown_list_marker_delete_end(doc, line, line_text, col)
-  local syntax_name = tostring(doc and doc.syntax and doc.syntax.name or ""):lower()
+local function markdown_list_marker_delete_end(buffer, line, line_text, col)
+  local syntax_name = tostring(buffer and buffer.syntax and buffer.syntax.name or ""):lower()
   if not syntax_name:find("markdown", 1, true) then return nil end
   local end_col = line_end_col(line_text)
   local content = tostring(line_text or ""):sub(1, end_col - 1)
@@ -671,17 +671,17 @@ local function markdown_list_marker_delete_end(doc, line, line_text, col)
   end
 end
 
-local function markdown_join_lines_text(doc, line1, line2)
+local function markdown_join_lines_text(buffer, line1, line2)
   local result = ""
   for line = line1, line2 do
-    local raw = doc.lines[line] or ""
+    local raw = buffer.lines[line] or ""
     local current = raw:gsub("\n$", "")
     if line == line1 then
       result = current
     else
-      local previous_raw = doc.lines[line - 1] or ""
+      local previous_raw = buffer.lines[line - 1] or ""
       local next_content_col = markdown_list_join_content_col(
-        doc, line - 1, previous_raw, raw
+        buffer, line - 1, previous_raw, raw
       )
       if next_content_col then
         local separator = result:sub(-1):match("[ \t]") and "" or " "
@@ -699,9 +699,9 @@ local function markdown_join_lines_text(doc, line1, line2)
   return result
 end
 
-local function token_at(doc, line, col)
+local function token_at(buffer, line, col)
   local column = 0
-  for _, token_type, token_text in doc.highlighter:each_token(line) do
+  for _, token_type, token_text in buffer.highlighter:each_token(line) do
     column = column + #token_text
     if column >= col then return token_type end
   end
@@ -712,8 +712,8 @@ local function token_is_code(token_type)
   return token_type ~= "comment" and token_type ~= "string"
 end
 
-local function position_is_code(doc, line, col)
-  return token_is_code(token_at(doc, line, col))
+local function position_is_code(buffer, line, col)
+  return token_is_code(token_at(buffer, line, col))
 end
 
 local function previous_non_space_on_line(text, col)
@@ -738,18 +738,18 @@ local function position_is_inside_range(line, col, line1, col1, line2, col2)
      and (line < line2 or line == line2 and col < col2)
 end
 
-local function opening_delimiter_is_unmatched(doc, line, col, opener, closer, skip_line1, skip_col1, skip_line2, skip_col2)
+local function opening_delimiter_is_unmatched(buffer, line, col, opener, closer, skip_line1, skip_col1, skip_line2, skip_col2)
   local depth = 1
-  local _, indent_size = doc:get_indent_info()
-  local opener_indent_width = indent_visual_width(doc.lines[line], indent_size)
-  for l = line, #doc.lines do
-    local text = doc.lines[l]
+  local _, indent_size = buffer:get_indent_info()
+  local opener_indent_width = indent_visual_width(buffer.lines[line], indent_size)
+  for l = line, #buffer.lines do
+    local text = buffer.lines[l]
     local start_col = l == line and col + 1 or 1
     for i = start_col, #text do
       local ch = text:sub(i, i)
       if not position_is_inside_range(l, i, skip_line1, skip_col1, skip_line2, skip_col2)
       and (ch == opener or ch == closer)
-      and position_is_code(doc, l, i) then
+      and position_is_code(buffer, l, i) then
         if ch == opener then
           depth = depth + 1
         else
@@ -758,7 +758,7 @@ local function opening_delimiter_is_unmatched(doc, line, col, opener, closer, sk
             if i == first_content_col and closer_indent_width < opener_indent_width then
               core.log_quiet(
                 "Smart newline kept outer closer in %s at %d:%d for nested opener at %d:%d",
-                doc:get_name(), l, i, line, col
+                buffer:get_name(), l, i, line, col
               )
               return true
             end
@@ -772,8 +772,8 @@ local function opening_delimiter_is_unmatched(doc, line, col, opener, closer, sk
   return true
 end
 
-local function edits_are_non_overlapping(doc, edits)
-  local normalized = doc:plan_edits(edits)
+local function edits_are_non_overlapping(buffer, edits)
+  local normalized = buffer:plan_edits(edits)
   for i = 2, #normalized do
     local prev, cur = normalized[i - 1], normalized[i]
     if prev.end_offset > cur.start_offset
@@ -784,11 +784,11 @@ local function edits_are_non_overlapping(doc, edits)
   return true, normalized
 end
 
-local function smart_newline_edit(doc, line1, col1, line2, col2)
+local function smart_newline_edit(buffer, line1, col1, line2, col2)
   local has_selection = line1 ~= line2 or col1 ~= col2
-  local virtual_text = doc.lines[line1] or ""
+  local virtual_text = buffer.lines[line1] or ""
   if has_selection then
-    virtual_text = virtual_text:sub(1, col1 - 1) .. (doc.lines[line2] or ""):sub(col2)
+    virtual_text = virtual_text:sub(1, col1 - 1) .. (buffer.lines[line2] or ""):sub(col2)
   end
 
   local function real_position(virtual_col, affinity)
@@ -800,15 +800,15 @@ local function smart_newline_edit(doc, line1, col1, line2, col2)
   local opener, opener_col = previous_non_space_on_line(virtual_text, col1)
   local opener_real_line, opener_real_col = real_position(opener_col or col1, "start")
   local closer = opener and smart_newline_pairs[opener]
-  if not closer or not position_is_code(doc, opener_real_line, opener_real_col) then return nil end
+  if not closer or not position_is_code(buffer, opener_real_line, opener_real_col) then return nil end
 
   local base_indent = leading_indent(virtual_text)
-  local inner_indent = base_indent .. one_indent_string(doc)
+  local inner_indent = base_indent .. one_indent_string(buffer)
   local next_char, next_col = next_non_space_on_line(virtual_text, col1)
   local next_real_line, next_real_col
   if next_col then next_real_line, next_real_col = real_position(next_col, "end") end
 
-  if next_char == closer and position_is_code(doc, next_real_line, next_real_col) then
+  if next_char == closer and position_is_code(buffer, next_real_line, next_real_col) then
     local insert_text = "\n" .. inner_indent .. "\n" .. base_indent
     local edit_start_line, edit_start_col = real_position(opener_col + 1, "start")
     return {
@@ -826,7 +826,7 @@ local function smart_newline_edit(doc, line1, col1, line2, col2)
 
   local edit_start_line, edit_start_col = real_position(opener_col + 1, "start")
   local edit_end_line, edit_end_col = real_position(line_end_col(virtual_text), "end")
-  if opening_delimiter_is_unmatched(doc, opener_real_line, opener_real_col, opener, closer, line1, col1, line2, col2) then
+  if opening_delimiter_is_unmatched(buffer, opener_real_line, opener_real_col, opener, closer, line1, col1, line2, col2) then
     local insert_text = "\n" .. inner_indent .. "\n" .. base_indent .. closer
     return {
       line1 = edit_start_line,
@@ -880,10 +880,10 @@ local function remove_indent_prefix(line, indent)
   return line
 end
 
-local function smart_paste_text(doc, line, col, text)
+local function smart_paste_text(buffer, line, col, text)
   text = tostring(text or "")
   if not text:find("\n", 1, true) then return text end
-  local line_text = doc.lines[line] or ""
+  local line_text = buffer.lines[line] or ""
   local before = line_text:sub(1, col - 1)
   local target_indent = before:match("^[\t ]*$") and before or leading_whitespace(line_text)
   if target_indent == "" then return text end
@@ -917,7 +917,7 @@ local function smart_paste_text(doc, line, col, text)
   return table.concat(parts, "\n")
 end
 
-local function paste_all_normal_clipboards(doc)
+local function paste_all_normal_clipboards(buffer)
   local payloads = {}
   for cb_idx in ipairs(core.cursor_clipboard_whole_line) do
     payloads[#payloads + 1] = tostring(core.cursor_clipboard[cb_idx] or ""):gsub("\r", "")
@@ -925,7 +925,7 @@ local function paste_all_normal_clipboards(doc)
   if #payloads == 0 then return end
 
   local edits, final_by_idx = {}, {}
-  for idx, line1, col1, line2, col2 in doc:get_selections(true) do
+  for idx, line1, col1, line2, col2 in buffer:get_selections(true) do
     local text, final_offsets = "", {}
     for _, payload in ipairs(payloads) do
       text = text .. payload
@@ -935,23 +935,23 @@ local function paste_all_normal_clipboards(doc)
     final_by_idx[idx] = final_offsets
   end
   if #edits == 0 then return end
-  return doc:apply_edits(edits, {
+  return buffer:apply_edits(edits, {
     type = "insert",
-    selections = doc:selections_after_edits(edits, final_by_idx),
-    last_selection = doc.last_selection,
+    selections = buffer:selections_after_edits(edits, final_by_idx),
+    last_selection = buffer.last_selection,
     merge_cursors = false,
   })
 end
 
-local function paste_whole_lines_by_selection(doc, text_for_idx)
+local function paste_whole_lines_by_selection(buffer, text_for_idx)
   local starts, offset = {}, 0
-  for line, line_text in ipairs(doc.lines) do
+  for line, line_text in ipairs(buffer.lines) do
     starts[line] = offset
     offset = offset + #line_text
   end
 
   local actions = {}
-  for idx, line1, col1, line2, col2 in doc:get_selections(true) do
+  for idx, line1, col1, line2, col2 in buffer:get_selections(true) do
     local text = tostring(text_for_idx(idx) or ""):gsub("\r", "") .. "\n"
     actions[#actions + 1] = {
       idx = idx,
@@ -982,7 +982,7 @@ local function paste_whole_lines_by_selection(doc, text_for_idx)
   -- Whole-line paste inserts at the start of each caret line, so otherwise
   -- disjoint selections on the same line have intersecting edit ranges. Build
   -- one exact replacement for each intersecting cluster instead of replaying
-  -- mutations against a temporary Document.
+  -- mutations against a temporary Buffer.
   local clusters = {}
   for _, action in ipairs(actions) do
     local cluster = clusters[#clusters]
@@ -1009,7 +1009,7 @@ local function paste_whole_lines_by_selection(doc, text_for_idx)
 
   local edits = {}
   for _, cluster in ipairs(clusters) do
-    local source = doc:get_text(cluster.line1, 1, cluster.line2, cluster.col2)
+    local source = buffer:get_text(cluster.line1, 1, cluster.line2, cluster.col2)
     local buffer = source
     for _, action in ipairs(cluster.actions) do
       action.current_line_start = action.line_start_offset - cluster.start_offset
@@ -1062,7 +1062,7 @@ local function paste_whole_lines_by_selection(doc, text_for_idx)
     }
   end
 
-  local selections = { table.unpack(doc.selections) }
+  local selections = { table.unpack(buffer.selections) }
   local line_delta = 0
   for _, cluster in ipairs(clusters) do
     local new_start_line = cluster.line1 + line_delta
@@ -1081,32 +1081,32 @@ local function paste_whole_lines_by_selection(doc, text_for_idx)
     line_delta = line_delta + newline_count(cluster.text) - newline_count(cluster.source)
   end
 
-  return doc:apply_edits(edits, {
+  return buffer:apply_edits(edits, {
     type = "insert",
     selections = selections,
-    last_selection = doc.last_selection,
+    last_selection = buffer.last_selection,
     merge_cursors = false,
   })
 end
 
-local function paste_all_whole_line_clipboards(doc)
+local function paste_all_whole_line_clipboards(buffer)
   local payloads = {}
   for cb_idx in ipairs(core.cursor_clipboard_whole_line) do
     payloads[#payloads + 1] = tostring(core.cursor_clipboard[cb_idx] or "")
   end
   if #payloads == 0 then return end
   local text = table.concat(payloads, "\n")
-  return paste_whole_lines_by_selection(doc, function() return text end)
+  return paste_whole_lines_by_selection(buffer, function() return text end)
 end
 
-local function paste_matching_whole_lines(doc, text_by_idx)
-  return paste_whole_lines_by_selection(doc, function(idx) return text_by_idx[idx] end)
+local function paste_matching_whole_lines(buffer, text_by_idx)
+  return paste_whole_lines_by_selection(buffer, function(idx) return text_by_idx[idx] end)
 end
 
-local function previous_indent_stop_start_col(doc, line, col, indent_size)
+local function previous_indent_stop_start_col(buffer, line, col, indent_size)
   if col <= 1 then return nil end
   indent_size = math.max(1, tonumber(indent_size) or 1)
-  local text = doc.lines[line] or ""
+  local text = buffer.lines[line] or ""
   local leading = text:match("^[\t ]*") or ""
   if col > #leading + 1 then return nil end
 
@@ -1188,34 +1188,34 @@ local function coalesce_duplicate_replacements(edits)
 end
 
 local commands = {
-  ["doc:select-none"] = function(dv)
-    local l1, c1 = dv.doc:get_selection_idx(dv.doc.last_selection)
+  ["text:select-none"] = function(dv)
+    local l1, c1 = dv.buffer:get_selection_idx(dv.buffer.last_selection)
     if not l1 then
-      l1, c1 = dv.doc:get_selection_idx(1)
+      l1, c1 = dv.buffer:get_selection_idx(1)
     end
-    dv.doc:set_selection(l1, c1)
-    dv.doc:clear_search_selections()
+    dv.buffer:set_selection(l1, c1)
+    dv.buffer:clear_search_selections()
   end,
 
-  ["doc:cut"] = function(dv)
+  ["text:cut"] = function(dv)
     cut_or_copy(dv, true)
   end,
 
-  ["doc:copy"] = function(dv)
+  ["text:copy"] = function(dv)
     cut_or_copy(dv, false)
   end,
 
-  ["doc:undo"] = function(dv)
+  ["text:undo"] = function(dv)
     if not can_edit(dv, "undo") then return end
-    dv.doc:undo()
+    dv.buffer:undo()
   end,
 
-  ["doc:redo"] = function(dv)
+  ["text:redo"] = function(dv)
     if not can_edit(dv, "redo") then return end
-    dv.doc:redo()
+    dv.buffer:redo()
   end,
 
-  ["doc:paste"] = function(dv)
+  ["text:paste"] = function(dv)
     if not can_edit(dv, "paste") then return end
     if dv.paste_from_provider and dv:paste_from_provider() then return end
     local clipboard = system.get_clipboard()
@@ -1227,8 +1227,8 @@ local commands = {
       core.cursor_clipboard = {}
       core.cursor_clipboard_whole_line = {}
       local text = clipboard:gsub("\r", "")
-      dv.doc:text_input_by_selection(function(_, line1, col1)
-        return smart_paste_text(dv.doc, line1, col1, text)
+      dv.buffer:text_input_by_selection(function(_, line1, col1)
+        return smart_paste_text(dv.buffer, line1, col1, text)
       end, nil, { type = "insert" })
       return
     end
@@ -1241,27 +1241,27 @@ local commands = {
         break
       end
     end
-    if #core.cursor_clipboard_whole_line == (#dv.doc.selections/4) then
+    if #core.cursor_clipboard_whole_line == (#dv.buffer.selections/4) then
     -- If we have the same number of clipboards and selections,
     -- paste each clipboard into its corresponding selection
       if only_whole_lines then
-        paste_matching_whole_lines(dv.doc, core.cursor_clipboard)
+        paste_matching_whole_lines(dv.buffer, core.cursor_clipboard)
       else
-        dv.doc:text_input_by_selection(function(idx, line1, col1)
-          return smart_paste_text(dv.doc, line1, col1, tostring(core.cursor_clipboard[idx] or ""):gsub("\r", ""))
+        dv.buffer:text_input_by_selection(function(idx, line1, col1)
+          return smart_paste_text(dv.buffer, line1, col1, tostring(core.cursor_clipboard[idx] or ""):gsub("\r", ""))
         end, nil, { type = "insert" })
       end
     else
       -- Paste every clipboard and add a selection at the end of each one
       if not only_whole_lines then
-        paste_all_normal_clipboards(dv.doc)
+        paste_all_normal_clipboards(dv.buffer)
         return
       end
-      paste_all_whole_line_clipboards(dv.doc)
+      paste_all_whole_line_clipboards(dv.buffer)
     end
   end,
 
-  ["doc:paste-primary-selection"] = function(dv, x, y)
+  ["text:paste-primary-selection"] = function(dv, x, y)
     if not can_edit(dv, "paste") then return end
     if type(x) == "number" and type(y) == "number" then
       set_cursor(dv, x, y, "set")
@@ -1269,12 +1269,12 @@ local commands = {
       dv.mouse_selecting = nil
     end
     local text = tostring(system.get_primary_selection() or ""):gsub("\r", "")
-    dv.doc:text_input_by_selection(function(_, line1, col1)
-      return smart_paste_text(dv.doc, line1, col1, text)
+    dv.buffer:text_input_by_selection(function(_, line1, col1)
+      return smart_paste_text(dv.buffer, line1, col1, text)
     end, nil, { type = "insert" })
   end,
 
-  ["doc:newline"] = function(dv)
+  ["text:newline"] = function(dv)
     if not can_edit(dv, "newline") then return end
     local text_by_idx = {}
     local edits = {}
@@ -1300,21 +1300,21 @@ local commands = {
     end
 
     local function projected_last_selection()
-      local last = dv.doc.last_selection or 1
+      local last = dv.buffer.last_selection or 1
       return original_to_projected[last] or 1
     end
 
     local function projected_selections_after(normalized, finals)
       local projection = {
-        lines = dv.doc.lines,
+        lines = dv.buffer.lines,
         selections = projected_selections,
         last_selection = projected_last_selection(),
       }
-      return Doc.selections_after_edits(projection, normalized, finals, projection.last_selection, { normalized = true })
+      return Buffer.selections_after_edits(projection, normalized, finals, projection.last_selection, { normalized = true })
     end
 
     local selection_items = {}
-    for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+    for idx, line1, col1, line2, col2 in dv.buffer:get_selections(true, true) do
       selection_items[#selection_items + 1] = {
         idx = idx,
         line1 = line1,
@@ -1329,7 +1329,7 @@ local commands = {
       local idx, line1, col1, line2, col2 = item.idx, item.line1, item.col1, item.line2, item.col2
       local line = line1
       local col = col1
-      local line_text = dv.doc.lines[line] or ""
+      local line_text = dv.buffer.lines[line] or ""
       local indent = line_text:match("^[\t ]*") or ""
       local full_indent = indent
       if col <= #indent then
@@ -1346,13 +1346,13 @@ local commands = {
 
       if whitespace_only_line and whitespace_line_owner[line] then
         original_to_projected[idx] = whitespace_line_owner[line]
-        core.log_quiet("Newline coalesced duplicate whitespace-only caret in %s at line %d", dv.doc:get_name(), line)
+        core.log_quiet("Newline coalesced duplicate whitespace-only caret in %s at line %d", dv.buffer:get_name(), line)
       else
         local projected_idx = project_selection(idx, line1, col1, line2, col2)
         local insert_indent = indent
         if not whitespace_only_line then
-          insert_indent = syntax_newline_continuation(dv.doc, line, col, line_text)
-            or syntax_newline_indent(dv.doc, line, col, indent, full_indent, line_text)
+          insert_indent = syntax_newline_continuation(dv.buffer, line, col, line_text)
+            or syntax_newline_indent(dv.buffer, line, col, indent, full_indent, line_text)
         end
         local text = "\n" .. insert_indent
         text_by_idx[projected_idx] = text
@@ -1360,12 +1360,12 @@ local commands = {
 
         local content_start = not whitespace_only_line
           and line1 == line2 and col1 == col2
-          and markdown_list_content_start(dv.doc, line, line_text)
-        local previous_line = line > 1 and (dv.doc.lines[line - 1] or "") or nil
+          and markdown_list_content_start(dv.buffer, line, line_text)
+        local previous_line = line > 1 and (dv.buffer.lines[line - 1] or "") or nil
         local exits_split_list_boundary = content_start == col1
           and previous_line ~= nil
           and markdown_empty_list_item(
-            dv.doc, line - 1, line_end_col(previous_line), previous_line
+            dv.buffer, line - 1, line_end_col(previous_line), previous_line
           )
 
         if exits_split_list_boundary then
@@ -1373,7 +1373,7 @@ local commands = {
           final_by_idx[projected_idx] = "start"
           core.log_quiet(
             "Markdown newline exited split list boundary in %s at %d:%d",
-            dv.doc:get_name(), line1, col1
+            dv.buffer:get_name(), line1, col1
           )
           edits[#edits + 1] = {
             line1 = line,
@@ -1393,11 +1393,11 @@ local commands = {
           }
         elseif not whitespace_only_line
         and line1 == line2 and col1 == col2
-        and markdown_empty_list_item(dv.doc, line, col, line_text)
+        and markdown_empty_list_item(dv.buffer, line, col, line_text)
         then
           has_empty_list_item = true
           final_by_idx[projected_idx] = "start"
-          core.log_quiet("Markdown newline exited empty list item in %s at %d:%d", dv.doc:get_name(), line1, col1)
+          core.log_quiet("Markdown newline exited empty list item in %s at %d:%d", dv.buffer:get_name(), line1, col1)
           edits[#edits + 1] = {
             line1 = line,
             col1 = 1,
@@ -1429,11 +1429,11 @@ local commands = {
           edits[#edits + 1] = edit
           normal_edits[#normal_edits + 1] = edit
         else
-          local smart_edit = smart_newline_edit(dv.doc, line1, col1, line2, col2)
+          local smart_edit = smart_newline_edit(dv.buffer, line1, col1, line2, col2)
           if smart_edit then
             has_smart_newline = true
             final_by_idx[projected_idx] = smart_edit.caret_offset
-            core.log_quiet("Smart newline %s in %s at %d:%d", smart_edit.reason, dv.doc:get_name(), line1, col1)
+            core.log_quiet("Smart newline %s in %s at %d:%d", smart_edit.reason, dv.buffer:get_name(), line1, col1)
             edits[#edits + 1] = {
               line1 = smart_edit.line1,
               col1 = smart_edit.col1,
@@ -1466,37 +1466,37 @@ local commands = {
     end
 
     if has_whitespace_cleanup or has_smart_newline or has_empty_list_item then
-      local non_overlapping, normalized = edits_are_non_overlapping(dv.doc, edits)
+      local non_overlapping, normalized = edits_are_non_overlapping(dv.buffer, edits)
       if not non_overlapping then
         if has_smart_newline then
-          core.log_quiet("Smart newline skipped for %s because selections overlap", dv.doc:get_name())
+          core.log_quiet("Smart newline skipped for %s because selections overlap", dv.buffer:get_name())
         end
         edits = normal_edits
         final_by_idx = normal_final_by_idx
-        non_overlapping, normalized = edits_are_non_overlapping(dv.doc, edits)
+        non_overlapping, normalized = edits_are_non_overlapping(dv.buffer, edits)
         if not non_overlapping then
-          dv.doc:text_input_by_selection(original_normal_text_by_idx, nil, { type = "insert" })
+          dv.buffer:text_input_by_selection(original_normal_text_by_idx, nil, { type = "insert" })
           return
         end
       end
       local selections, last_selection = projected_selections_after(normalized, final_by_idx)
-      dv.doc:apply_edits(edits, {
+      dv.buffer:apply_edits(edits, {
         type = "insert",
         selections = selections,
         last_selection = last_selection,
         merge_cursors = false,
       })
     else
-      dv.doc:text_input_by_selection(text_by_idx, nil, { type = "insert" })
+      dv.buffer:text_input_by_selection(text_by_idx, nil, { type = "insert" })
     end
   end,
 
-  ["doc:newline-below"] = function(dv)
+  ["text:newline-below"] = function(dv)
     if not can_edit(dv, "newline") then return end
     local edits = {}
     local entries = {}
-    for idx, line in dv.doc:get_selections(false) do
-      local indent = dv.doc.lines[line]:match("^[\t ]*")
+    for idx, line in dv.buffer:get_selections(false) do
+      local indent = dv.buffer.lines[line]:match("^[\t ]*")
       edits[#edits + 1] = { line1 = line, col1 = math.huge, line2 = line, col2 = math.huge, text = "\n" .. indent, idx = idx }
       entries[#entries + 1] = { idx = idx, line = line, col = #indent + 1 }
     end
@@ -1514,20 +1514,20 @@ local commands = {
       selections[#selections + 1] = entry.col
       cumulative_line_delta = cumulative_line_delta + 1
     end
-    dv.doc:apply_edits(edits, {
+    dv.buffer:apply_edits(edits, {
       type = "insert",
       selections = selections,
-      last_selection = dv.doc.last_selection,
+      last_selection = dv.buffer.last_selection,
       merge_cursors = false,
     })
   end,
 
-  ["doc:newline-above"] = function(dv)
+  ["text:newline-above"] = function(dv)
     if not can_edit(dv, "newline") then return end
     local edits = {}
     local entries = {}
-    for idx, line in dv.doc:get_selections(false) do
-      local indent = dv.doc.lines[line]:match("^[\t ]*")
+    for idx, line in dv.buffer:get_selections(false) do
+      local indent = dv.buffer.lines[line]:match("^[\t ]*")
       edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = 1, text = indent .. "\n", idx = idx }
       entries[#entries + 1] = { idx = idx, line = line, col = #indent + 1 }
     end
@@ -1545,18 +1545,18 @@ local commands = {
       selections[#selections + 1] = entry.col
       cumulative_line_delta = cumulative_line_delta + 1
     end
-    dv.doc:apply_edits(edits, {
+    dv.buffer:apply_edits(edits, {
       type = "insert",
       selections = selections,
-      last_selection = dv.doc.last_selection,
+      last_selection = dv.buffer.last_selection,
       merge_cursors = false,
     })
   end,
 
-  ["doc:delete"] = function(dv)
+  ["text:delete"] = function(dv)
     if not can_edit(dv, "delete") then return end
     local selections = {}
-    for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+    for idx, line1, col1, line2, col2 in dv.buffer:get_selections(true, true) do
       selections[#selections + 1] = {
         idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2,
       }
@@ -1564,14 +1564,14 @@ local commands = {
     local list_join_edits, list_join_finals = {}, {}
     for _, selection in ipairs(selections) do
       if selection.line1 == selection.line2 and selection.col1 == selection.col2
-        and selection.line1 < #dv.doc.lines
+        and selection.line1 < #dv.buffer.lines
       then
-        local line_text = dv.doc.lines[selection.line1] or ""
+        local line_text = dv.buffer.lines[selection.line1] or ""
         local end_col = line_end_col(line_text)
         if selection.col1 == end_col then
-          local next_line_text = dv.doc.lines[selection.line1 + 1] or ""
+          local next_line_text = dv.buffer.lines[selection.line1 + 1] or ""
           local next_content_col = markdown_list_join_content_col(
-            dv.doc, selection.line1, line_text, next_line_text
+            dv.buffer, selection.line1, line_text, next_line_text
           )
           if next_content_col then
             local before = line_text:sub(1, end_col - 1)
@@ -1590,24 +1590,24 @@ local commands = {
       end
     end
     if #list_join_edits == #selections and #list_join_edits > 0 then
-      local after, last_selection = dv.doc:selections_after_edits(
-        list_join_edits, list_join_finals, dv.doc.last_selection
+      local after, last_selection = dv.buffer:selections_after_edits(
+        list_join_edits, list_join_finals, dv.buffer.last_selection
       )
-      dv.doc:apply_edits(list_join_edits, {
+      dv.buffer:apply_edits(list_join_edits, {
         type = "remove",
         selections = after,
         last_selection = last_selection,
         merge_cursors = true,
       })
-      core.log_quiet("Markdown delete joined adjacent list items in %s", dv.doc:get_name())
+      core.log_quiet("Markdown delete joined adjacent list items in %s", dv.buffer:get_name())
       return
     end
     local list_marker_edits, list_marker_finals = {}, {}
     for _, selection in ipairs(selections) do
       if selection.line1 == selection.line2 and selection.col1 == selection.col2 then
-        local line_text = dv.doc.lines[selection.line1] or ""
+        local line_text = dv.buffer.lines[selection.line1] or ""
         local delete_end = markdown_list_marker_delete_end(
-          dv.doc, selection.line1, line_text, selection.col1
+          dv.buffer, selection.line1, line_text, selection.col1
         )
         if delete_end then
           list_marker_edits[#list_marker_edits + 1] = {
@@ -1623,65 +1623,65 @@ local commands = {
       end
     end
     if #list_marker_edits == #selections and #list_marker_edits > 0 then
-      local after, last_selection = dv.doc:selections_after_edits(
-        list_marker_edits, list_marker_finals, dv.doc.last_selection
+      local after, last_selection = dv.buffer:selections_after_edits(
+        list_marker_edits, list_marker_finals, dv.buffer.last_selection
       )
-      dv.doc:apply_edits(list_marker_edits, {
+      dv.buffer:apply_edits(list_marker_edits, {
         type = "remove",
         selections = after,
         last_selection = last_selection,
         merge_cursors = true,
       })
-      core.log_quiet("Markdown delete removed list markers in %s", dv.doc:get_name())
+      core.log_quiet("Markdown delete removed list markers in %s", dv.buffer:get_name())
       return
     end
     local fallback = false
-    for _, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
-      if line1 == line2 and col1 == col2 and dv.doc.lines[line1]:find("^%s*$", col1) then
+    for _, line1, col1, line2, col2 in dv.buffer:get_selections(true, true) do
+      if line1 == line2 and col1 == col2 and dv.buffer.lines[line1]:find("^%s*$", col1) then
         fallback = true
         break
       end
     end
     if fallback then
       local edits, final_by_idx = {}, {}
-      for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+      for idx, line1, col1, line2, col2 in dv.buffer:get_selections(true, true) do
         local start_line, start_col, end_line, end_col = line1, col1, line2, col2
         if line1 == line2 and col1 == col2 then
-          if dv.doc.lines[line1]:find("^%s*$", col1) and line1 < #dv.doc.lines then
+          if dv.buffer.lines[line1]:find("^%s*$", col1) and line1 < #dv.buffer.lines then
             end_line, end_col = line1 + 1, 1
           else
-            local l2, c2 = dv.doc:position_offset(line1, col1, translate.next_char)
+            local l2, c2 = dv.buffer:position_offset(line1, col1, translate.next_char)
             start_line, start_col, end_line, end_col = sort_positions(line1, col1, l2, c2)
           end
         end
         edits[#edits + 1] = { line1 = start_line, col1 = start_col, line2 = end_line, col2 = end_col, text = "", idx = idx }
         final_by_idx[idx] = "start"
       end
-      dv.doc:apply_edits(edits, {
+      dv.buffer:apply_edits(edits, {
         type = "remove",
-        selections = dv.doc:selections_after_edits(edits, final_by_idx),
-        last_selection = dv.doc.last_selection,
+        selections = dv.buffer:selections_after_edits(edits, final_by_idx),
+        last_selection = dv.buffer.last_selection,
         merge_cursors = true,
       })
     else
-      dv.doc:delete_to(translate.next_char)
+      dv.buffer:delete_to(translate.next_char)
     end
   end,
 
-  ["doc:backspace"] = function(dv)
+  ["text:backspace"] = function(dv)
     if not can_edit(dv, "backspace") then return end
     local list_actions = {}
     local selection_count, list_action_count = 0, 0
-    for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+    for idx, line1, col1, line2, col2 in dv.buffer:get_selections(true, true) do
       selection_count = selection_count + 1
       if line1 == line2 and col1 == col2 then
-        local line_text = dv.doc.lines[line1] or ""
+        local line_text = dv.buffer.lines[line1] or ""
         local content_start, indent_length, task_start = markdown_list_content_start(
-          dv.doc, line1, line_text
+          dv.buffer, line1, line_text
         )
         indent_length = indent_length or #(line_text:match("^[\t ]*") or "")
         local empty_list_item = markdown_empty_list_item(
-          dv.doc, line1, col1, line_text
+          dv.buffer, line1, col1, line_text
         )
         local action
         if empty_list_item then
@@ -1715,16 +1715,16 @@ local commands = {
             text = "",
             idx = item.idx,
           }
-          local selections, last_selection = dv.doc:selections_after_edits(
-            { edit }, { [item.idx] = "start" }, dv.doc.last_selection
+          local selections, last_selection = dv.buffer:selections_after_edits(
+            { edit }, { [item.idx] = "start" }, dv.buffer.last_selection
           )
-          dv.doc:apply_edits({ edit }, {
+          dv.buffer:apply_edits({ edit }, {
             type = "remove",
             selections = selections,
             last_selection = last_selection,
             merge_cursors = false,
           })
-          core.log_quiet("Markdown backspace removed empty list marker in %s at %d:%d", dv.doc:get_name(), item.line1, item.col1)
+          core.log_quiet("Markdown backspace removed empty list marker in %s at %d:%d", dv.buffer:get_name(), item.line1, item.col1)
         elseif item.action == "remove_task" or item.action == "remove_marker" then
           local edit = {
             line1 = item.line1,
@@ -1734,10 +1734,10 @@ local commands = {
             text = "",
             idx = item.idx,
           }
-          local selections, last_selection = dv.doc:selections_after_edits(
-            { edit }, { [item.idx] = "start" }, dv.doc.last_selection
+          local selections, last_selection = dv.buffer:selections_after_edits(
+            { edit }, { [item.idx] = "start" }, dv.buffer.last_selection
           )
-          dv.doc:apply_edits({ edit }, {
+          dv.buffer:apply_edits({ edit }, {
             type = "remove",
             selections = selections,
             last_selection = last_selection,
@@ -1746,99 +1746,99 @@ local commands = {
           core.log_quiet(
             "Markdown backspace removed %s in %s at %d:%d",
             item.action == "remove_task" and "task marker" or "list marker",
-            dv.doc:get_name(), item.line1, item.col1
+            dv.buffer:get_name(), item.line1, item.col1
           )
         else
-          local line1, col1, line2, col2 = dv.doc:indent_text(
+          local line1, col1, line2, col2 = dv.buffer:indent_text(
             true, item.line1, item.col1, item.line2, item.col2
           )
           local content_col = math.max(1, item.col1 - item.indent_length)
-          dv.doc:set_selections(item.idx, line1, content_col, line2, content_col)
-          core.log_quiet("Markdown backspace outdented list item in %s at %d:%d", dv.doc:get_name(), item.line1, item.col1)
+          dv.buffer:set_selections(item.idx, line1, content_col, line2, content_col)
+          core.log_quiet("Markdown backspace outdented list item in %s at %d:%d", dv.buffer:get_name(), item.line1, item.col1)
         end
       end
       return
     end
-    local _, indent_size = dv.doc:get_indent_info()
+    local _, indent_size = dv.buffer:get_indent_info()
     local fallback = false
-    for _, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+    for _, line1, col1, line2, col2 in dv.buffer:get_selections(true, true) do
       if line1 == line2 and col1 == col2
-      and previous_indent_stop_start_col(dv.doc, line1, col1, indent_size) then
+      and previous_indent_stop_start_col(dv.buffer, line1, col1, indent_size) then
         fallback = true
         break
       end
     end
     if fallback then
       local edits, final_by_idx = {}, {}
-      for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+      for idx, line1, col1, line2, col2 in dv.buffer:get_selections(true, true) do
         local start_line, start_col, end_line, end_col = line1, col1, line2, col2
         if line1 == line2 and col1 == col2 then
-          local stop_col = previous_indent_stop_start_col(dv.doc, line1, col1, indent_size)
+          local stop_col = previous_indent_stop_start_col(dv.buffer, line1, col1, indent_size)
           if stop_col then
             start_line, start_col, end_line, end_col = line1, stop_col, line1, col1
           else
-            local l2, c2 = dv.doc:position_offset(line1, col1, translate.previous_char)
+            local l2, c2 = dv.buffer:position_offset(line1, col1, translate.previous_char)
             start_line, start_col, end_line, end_col = sort_positions(line1, col1, l2, c2)
           end
         end
         edits[#edits + 1] = { line1 = start_line, col1 = start_col, line2 = end_line, col2 = end_col, text = "", idx = idx }
         final_by_idx[idx] = "start"
       end
-      local non_overlapping, normalized = edits_are_non_overlapping(dv.doc, edits)
+      local non_overlapping, normalized = edits_are_non_overlapping(dv.buffer, edits)
       if not non_overlapping then
         edits = coalesce_overlapping_same_line_removes(edits)
         final_by_idx = {}
         for _, edit in ipairs(edits) do final_by_idx[edit.idx] = "start" end
-        non_overlapping, normalized = edits_are_non_overlapping(dv.doc, edits)
+        non_overlapping, normalized = edits_are_non_overlapping(dv.buffer, edits)
         if not non_overlapping then
-          dv.doc:delete_to(translate.previous_char)
+          dv.buffer:delete_to(translate.previous_char)
           return
         end
       end
-      dv.doc:apply_edits(edits, {
+      dv.buffer:apply_edits(edits, {
         type = "remove",
-        selections = dv.doc:selections_after_edits(normalized, final_by_idx, dv.doc.last_selection, { normalized = true }),
-        last_selection = dv.doc.last_selection,
+        selections = dv.buffer:selections_after_edits(normalized, final_by_idx, dv.buffer.last_selection, { normalized = true }),
+        last_selection = dv.buffer.last_selection,
         merge_cursors = true,
       })
     else
-      dv.doc:delete_to(translate.previous_char)
+      dv.buffer:delete_to(translate.previous_char)
     end
   end,
 
-  ["doc:select-all"] = function(dv)
-    dv.doc:set_selection(1, 1, math.huge, math.huge)
-    set_primary_selection(dv.doc)
-    -- avoid triggering DocView:scroll_to_make_visible
+  ["text:select-all"] = function(dv)
+    dv.buffer:set_selection(1, 1, math.huge, math.huge)
+    set_primary_selection(dv.buffer)
+    -- avoid triggering TextView:scroll_to_make_visible
     dv.last_line1 = 1
     dv.last_col1 = 1
-    dv.last_line2 = #dv.doc.lines
-    dv.last_col2 = #dv.doc.lines[#dv.doc.lines]
+    dv.last_line2 = #dv.buffer.lines
+    dv.last_col2 = #dv.buffer.lines[#dv.buffer.lines]
   end,
 
-  ["doc:select-lines"] = function(dv)
-    for idx, line1, _, line2 in dv.doc:get_selections(true) do
+  ["text:select-lines"] = function(dv)
+    for idx, line1, _, line2 in dv.buffer:get_selections(true) do
       if not append_line_if_last_line(line2) then return end
-      dv.doc:set_selections(idx, line2 + 1, 1, line1, 1)
+      dv.buffer:set_selections(idx, line2 + 1, 1, line1, 1)
     end
-    set_primary_selection(dv.doc)
+    set_primary_selection(dv.buffer)
   end,
 
-  ["doc:select-word"] = function(dv)
-    for idx, line1, col1 in dv.doc:get_selections(true) do
-      local line1, col1 = translate.start_of_word(dv.doc, line1, col1)
-      local line2, col2 = translate.end_of_word(dv.doc, line1, col1)
-      dv.doc:set_selections(idx, line2, col2, line1, col1)
+  ["text:select-word"] = function(dv)
+    for idx, line1, col1 in dv.buffer:get_selections(true) do
+      local line1, col1 = translate.start_of_word(dv.buffer, line1, col1)
+      local line2, col2 = translate.end_of_word(dv.buffer, line1, col1)
+      dv.buffer:set_selections(idx, line2, col2, line1, col1)
     end
-    set_primary_selection(dv.doc)
+    set_primary_selection(dv.buffer)
   end,
 
-  ["doc:join-lines"] = function(dv)
+  ["text:join-lines"] = function(dv)
     if not can_edit(dv, "join lines") then return end
     local actions = {}
-    for idx, line1, col1, line2, col2 in dv.doc:get_selections(true) do
+    for idx, line1, col1, line2, col2 in dv.buffer:get_selections(true) do
       if line1 == line2 then line2 = line2 + 1 end
-      if line2 <= #dv.doc.lines then
+      if line2 <= #dv.buffer.lines then
         actions[#actions + 1] = { line1 = line1, line2 = line2, indices = { idx } }
       end
     end
@@ -1856,19 +1856,19 @@ local commands = {
 
     local edits = {}
     for _, action in ipairs(merged) do
-      action.text = markdown_join_lines_text(dv.doc, action.line1, action.line2)
+      action.text = markdown_join_lines_text(dv.buffer, action.line1, action.line2)
       edits[#edits + 1] = {
         line1 = action.line1,
         col1 = 1,
         line2 = action.line2,
-        col2 = #dv.doc.lines[action.line2],
+        col2 = #dv.buffer.lines[action.line2],
         text = action.text,
         idx = 0,
       }
     end
     if #edits == 0 then return end
 
-    local selections = dv.doc:selections_after_edits(edits)
+    local selections = dv.buffer:selections_after_edits(edits)
     local removed_before = 0
     for _, action in ipairs(merged) do
       local line = action.line1 - removed_before
@@ -1881,24 +1881,24 @@ local commands = {
       end
       removed_before = removed_before + action.line2 - action.line1
     end
-    dv.doc:apply_edits(edits, { type = "replace", selections = selections, last_selection = dv.doc.last_selection, merge_cursors = false })
+    dv.buffer:apply_edits(edits, { type = "replace", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
   end,
 
-  ["doc:indent"] = function(dv)
+  ["text:indent"] = function(dv)
     if not can_edit(dv, "indent") then return end
     local list_indent_edits, list_indent_lines = {}, {}
     local selection_count, list_indent_count = 0, 0
-    for _, line1, col1, line2, col2 in doc_multiline_selections(true) do
+    for _, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       selection_count = selection_count + 1
       if line1 == line2 and col1 == col2 then
-        local line_text = dv.doc.lines[line1] or ""
+        local line_text = dv.buffer.lines[line1] or ""
         local content_start, indent_length = markdown_list_content_start(
-          dv.doc, line1, line_text, true
+          dv.buffer, line1, line_text, true
         )
         local prefix_start = (indent_length or 0) + 1
         if content_start and col1 >= prefix_start and col1 <= content_start then
           list_indent_count = list_indent_count + 1
-          if markdown_list_can_indent(dv.doc, line1, line_text)
+          if markdown_list_can_indent(dv.buffer, line1, line_text)
             and not list_indent_lines[line1]
           then
             local indent_end = line_text:find("[^\t ]")
@@ -1906,7 +1906,7 @@ local commands = {
             -- A literal tab before a Markdown marker is parsed as indented
             -- code by the semantic grammar. Use the interoperable four-space
             -- nesting step and expand the existing prefix to spaces even when
-            -- the Document otherwise prefers tabs.
+            -- the Buffer otherwise prefers tabs.
             local indent = markdown_space_indent(line_text, indent_end) .. "    "
             list_indent_lines[line1] = true
             list_indent_edits[#list_indent_edits + 1] = {
@@ -1923,10 +1923,10 @@ local commands = {
     end
     if selection_count > 0 and list_indent_count == selection_count then
       if #list_indent_edits > 0 then
-        local selections, last_selection = dv.doc:selections_after_edits(
-          list_indent_edits, nil, dv.doc.last_selection
+        local selections, last_selection = dv.buffer:selections_after_edits(
+          list_indent_edits, nil, dv.buffer.last_selection
         )
-        dv.doc:apply_edits(list_indent_edits, {
+        dv.buffer:apply_edits(list_indent_edits, {
           type = "insert",
           selections = selections,
           last_selection = last_selection,
@@ -1935,19 +1935,19 @@ local commands = {
       end
       core.log_quiet(
         "Markdown indent moved %d eligible list item(s) at their content start in %s",
-        #list_indent_edits, dv.doc:get_name()
+        #list_indent_edits, dv.buffer:get_name()
       )
       return
     end
     local repair_edits, final_by_idx = {}, {}
     local selection_count, repairable_count = 0, 0
-    for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
+    for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       selection_count = selection_count + 1
-      local line_text = dv.doc.lines[line1] or ""
+      local line_text = dv.buffer.lines[line1] or ""
       local leading = line_text:match("^[\t ]*") or ""
       local collapsed = line1 == line2 and col1 == col2
       local in_leading = collapsed and col1 <= #leading + 1
-      local expected = in_leading and syntax_line_indent(dv.doc, line1, col1, line_text) or nil
+      local expected = in_leading and syntax_line_indent(dv.buffer, line1, col1, line_text) or nil
       if expected and expected ~= leading then
         repairable_count = repairable_count + 1
         repair_edits[#repair_edits + 1] = {
@@ -1966,7 +1966,7 @@ local commands = {
       repair_edits, original_to_coalesced = coalesce_duplicate_replacements(repair_edits)
       final_by_idx = {}
       for _, edit in ipairs(repair_edits) do final_by_idx[edit.idx] = "end" end
-      local non_overlapping = edits_are_non_overlapping(dv.doc, repair_edits)
+      local non_overlapping = edits_are_non_overlapping(dv.buffer, repair_edits)
       if non_overlapping then
         local selections = {}
         for _, edit in ipairs(repair_edits) do
@@ -1975,38 +1975,38 @@ local commands = {
           selections[#selections + 1] = edit.line1
           selections[#selections + 1] = #edit.text + 1
         end
-        dv.doc:apply_edits(repair_edits, {
+        dv.buffer:apply_edits(repair_edits, {
           type = "replace",
           selections = selections,
-          last_selection = original_to_coalesced[dv.doc.last_selection or 1] or math.min(dv.doc.last_selection or 1, math.max(1, #selections / 4)),
+          last_selection = original_to_coalesced[dv.buffer.last_selection or 1] or math.min(dv.buffer.last_selection or 1, math.max(1, #selections / 4)),
           merge_cursors = false,
         })
         return
       end
     end
 
-    for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
-      local l1, c1, l2, c2 = dv.doc:indent_text(false, line1, col1, line2, col2)
+    for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
+      local l1, c1, l2, c2 = dv.buffer:indent_text(false, line1, col1, line2, col2)
       if l1 then
-        dv.doc:set_selections(idx, l1, c1, l2, c2)
+        dv.buffer:set_selections(idx, l1, c1, l2, c2)
       end
     end
   end,
 
-  ["doc:unindent"] = function(dv)
+  ["text:unindent"] = function(dv)
     if not can_edit(dv, "unindent") then return end
-    for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
-      local l1, c1, l2, c2 = dv.doc:indent_text(true, line1, col1, line2, col2)
+    for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
+      local l1, c1, l2, c2 = dv.buffer:indent_text(true, line1, col1, line2, col2)
       if l1 then
-        dv.doc:set_selections(idx, l1, c1, l2, c2)
+        dv.buffer:set_selections(idx, l1, c1, l2, c2)
       end
     end
   end,
 
-  ["doc:duplicate-lines"] = function(dv)
+  ["text:duplicate-lines"] = function(dv)
     if not can_edit(dv, "duplicate lines") then return end
     local actions = {}
-    for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
+    for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       actions[#actions + 1] = { idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2 }
     end
     sort_line_actions(actions)
@@ -2025,20 +2025,20 @@ local commands = {
     local edits = {}
     for _, block in ipairs(blocks) do
       block.n = block.line2 - block.line1 + 1
-      if block.line2 < #dv.doc.lines then
-        block.text = doc():get_text(block.line1, 1, block.line2 + 1, 1)
+      if block.line2 < #dv.buffer.lines then
+        block.text = buffer():get_text(block.line1, 1, block.line2 + 1, 1)
         edits[#edits + 1] = { line1 = block.line2 + 1, col1 = 1, line2 = block.line2 + 1, col2 = 1, text = block.text }
       else
-        block.text = doc():get_text(block.line1, 1, block.line2, #dv.doc.lines[block.line2])
+        block.text = buffer():get_text(block.line1, 1, block.line2, #dv.buffer.lines[block.line2])
         edits[#edits + 1] = {
-          line1 = block.line2, col1 = #dv.doc.lines[block.line2],
-          line2 = block.line2, col2 = #dv.doc.lines[block.line2],
+          line1 = block.line2, col1 = #dv.buffer.lines[block.line2],
+          line2 = block.line2, col2 = #dv.buffer.lines[block.line2],
           text = "\n" .. block.text,
         }
       end
     end
 
-    local selections = { table.unpack(dv.doc.selections) }
+    local selections = { table.unpack(dv.buffer.selections) }
     for _, block in ipairs(blocks) do
       local inserted_before = 0
       for _, other in ipairs(blocks) do
@@ -2053,14 +2053,14 @@ local commands = {
       end
     end
     if #edits > 0 then
-      dv.doc:apply_edits(edits, { type = "insert", selections = selections, last_selection = dv.doc.last_selection, merge_cursors = false })
+      dv.buffer:apply_edits(edits, { type = "insert", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
     end
   end,
 
-  ["doc:delete-lines"] = function(dv)
+  ["text:delete-lines"] = function(dv)
     if not can_edit(dv, "delete lines") then return end
     local actions = {}
-    for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
+    for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       actions[#actions + 1] = { idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2 }
     end
     sort_line_actions(actions)
@@ -2082,26 +2082,26 @@ local commands = {
 
     local edits = {}
     for _, block in ipairs(blocks) do
-      if block.line2 < #dv.doc.lines then
+      if block.line2 < #dv.buffer.lines then
         edits[#edits + 1] = { line1 = block.line1, col1 = 1, line2 = block.line2 + 1, col2 = 1, text = "", idx = 0 }
       elseif block.line1 > 1 then
         edits[#edits + 1] = {
-          line1 = block.line1 - 1, col1 = #dv.doc.lines[block.line1 - 1],
-          line2 = block.line2, col2 = #dv.doc.lines[block.line2], text = "", idx = 0,
+          line1 = block.line1 - 1, col1 = #dv.buffer.lines[block.line1 - 1],
+          line2 = block.line2, col2 = #dv.buffer.lines[block.line2], text = "", idx = 0,
         }
       else
         edits[#edits + 1] = {
           line1 = 1, col1 = 1,
-          line2 = block.line2, col2 = #dv.doc.lines[block.line2], text = "", idx = 0,
+          line2 = block.line2, col2 = #dv.buffer.lines[block.line2], text = "", idx = 0,
         }
       end
     end
     if #edits == 0 then return end
 
-    local selections = dv.doc:selections_after_edits(edits)
+    local selections = dv.buffer:selections_after_edits(edits)
     local removed_before = 0
     for _, block in ipairs(blocks) do
-      local target_line = block.line2 < #dv.doc.lines
+      local target_line = block.line2 < #dv.buffer.lines
         and block.line1 - removed_before
         or math.max(1, block.line1 - removed_before - 1)
       for _, member in ipairs(block.members) do
@@ -2113,13 +2113,13 @@ local commands = {
       end
       removed_before = removed_before + block.line2 - block.line1 + 1
     end
-    dv.doc:apply_edits(edits, { type = "remove", selections = selections, last_selection = dv.doc.last_selection, merge_cursors = true })
+    dv.buffer:apply_edits(edits, { type = "remove", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = true })
   end,
 
-  ["doc:move-lines-up"] = function(dv)
+  ["text:move-lines-up"] = function(dv)
     if not can_edit(dv, "move lines") then return end
     local actions = {}
-    for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
+    for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       actions[#actions + 1] = {
         idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2,
       }
@@ -2137,14 +2137,14 @@ local commands = {
     end
 
     local edits = {}
-    local selections = { table.unpack(dv.doc.selections) }
+    local selections = { table.unpack(dv.buffer.selections) }
     for _, block in ipairs(blocks) do
       local delta = block.line1 > 1 and -1 or 0
       if delta ~= 0 then
         local parts = {}
-        for line = block.line1, block.line2 do parts[#parts + 1] = dv.doc.lines[line] end
-        local replacement = table.concat(parts) .. dv.doc.lines[block.line1 - 1]
-        if block.line2 < #dv.doc.lines then
+        for line = block.line1, block.line2 do parts[#parts + 1] = dv.buffer.lines[line] end
+        local replacement = table.concat(parts) .. dv.buffer.lines[block.line1 - 1]
+        if block.line2 < #dv.buffer.lines then
           edits[#edits + 1] = {
             line1 = block.line1 - 1, col1 = 1, line2 = block.line2 + 1, col2 = 1,
             text = replacement,
@@ -2152,7 +2152,7 @@ local commands = {
         else
           edits[#edits + 1] = {
             line1 = block.line1 - 1, col1 = 1,
-            line2 = block.line2, col2 = #dv.doc.lines[block.line2],
+            line2 = block.line2, col2 = #dv.buffer.lines[block.line2],
             text = replacement:gsub("\n$", ""),
           }
         end
@@ -2166,16 +2166,16 @@ local commands = {
       end
     end
     if #edits > 0 then
-      dv.doc:apply_edits(edits, { type = "batch", selections = selections, last_selection = dv.doc.last_selection, merge_cursors = false })
+      dv.buffer:apply_edits(edits, { type = "batch", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
     else
-      dv.doc:set_selection_list(selections, dv.doc.last_selection)
+      dv.buffer:set_selection_list(selections, dv.buffer.last_selection)
     end
   end,
 
-  ["doc:move-lines-down"] = function(dv)
+  ["text:move-lines-down"] = function(dv)
     if not can_edit(dv, "move lines") then return end
     local actions = {}
-    for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
+    for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       actions[#actions + 1] = {
         idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2,
       }
@@ -2193,14 +2193,14 @@ local commands = {
     end
 
     local edits = {}
-    local selections = { table.unpack(dv.doc.selections) }
+    local selections = { table.unpack(dv.buffer.selections) }
     for _, block in ipairs(blocks) do
-      local delta = block.line2 < #dv.doc.lines and 1 or 0
+      local delta = block.line2 < #dv.buffer.lines and 1 or 0
       if delta ~= 0 then
         local parts = {}
-        for line = block.line1, block.line2 do parts[#parts + 1] = dv.doc.lines[line] end
-        local replacement = dv.doc.lines[block.line2 + 1] .. table.concat(parts)
-        if block.line2 + 1 < #dv.doc.lines then
+        for line = block.line1, block.line2 do parts[#parts + 1] = dv.buffer.lines[line] end
+        local replacement = dv.buffer.lines[block.line2 + 1] .. table.concat(parts)
+        if block.line2 + 1 < #dv.buffer.lines then
           edits[#edits + 1] = {
             line1 = block.line1, col1 = 1, line2 = block.line2 + 2, col2 = 1,
             text = replacement,
@@ -2208,7 +2208,7 @@ local commands = {
         else
           edits[#edits + 1] = {
             line1 = block.line1, col1 = 1,
-            line2 = block.line2 + 1, col2 = #dv.doc.lines[block.line2 + 1],
+            line2 = block.line2 + 1, col2 = #dv.buffer.lines[block.line2 + 1],
             text = replacement:gsub("\n$", ""),
           }
         end
@@ -2222,22 +2222,22 @@ local commands = {
       end
     end
     if #edits > 0 then
-      dv.doc:apply_edits(edits, { type = "batch", selections = selections, last_selection = dv.doc.last_selection, merge_cursors = false })
+      dv.buffer:apply_edits(edits, { type = "batch", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
     else
-      dv.doc:set_selection_list(selections, dv.doc.last_selection)
+      dv.buffer:set_selection_list(selections, dv.buffer.last_selection)
     end
   end,
 
-  ["doc:toggle-block-comments"] = function(dv)
+  ["text:toggle-block-comments"] = function(dv)
     if not can_edit(dv, "toggle comments") then return end
-    for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
-      local current_syntax = dv.doc.syntax
+    for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
+      local current_syntax = dv.buffer.syntax
       if line1 > 1 then
         -- Use the previous line state, as it will be the state
         -- of the beginning of the current line
-        local state = dv.doc.highlighter:get_line(line1 - 1).state
+        local state = dv.buffer.highlighter:get_line(line1 - 1).state
         if state then
-          local syntaxes = tokenizer.extract_subsyntaxes(dv.doc.syntax, state)
+          local syntaxes = tokenizer.extract_subsyntaxes(dv.buffer.syntax, state)
           -- Go through all the syntaxes until the first with `block_comment` defined
           for _, s in pairs(syntaxes) do
             if s.block_comment then
@@ -2249,30 +2249,30 @@ local commands = {
       end
       local comment = current_syntax.block_comment
       if not comment then
-        if dv.doc.syntax.comment then
-          command.perform "doc:toggle-line-comments"
+        if dv.buffer.syntax.comment then
+          command.perform "text:toggle-line-comments"
         end
         return
       end
       -- if nothing is selected, toggle the whole line
       if line1 == line2 and col1 == col2 then
         col1 = 1
-        col2 = #dv.doc.lines[line2]
+        col2 = #dv.buffer.lines[line2]
       end
-      dv.doc:set_selections(idx, block_comment(comment, line1, col1, line2, col2))
+      dv.buffer:set_selections(idx, block_comment(comment, line1, col1, line2, col2))
     end
   end,
 
-  ["doc:toggle-line-comments"] = function(dv)
+  ["text:toggle-line-comments"] = function(dv)
     if not can_edit(dv, "toggle comments") then return end
-    for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
-      local current_syntax = dv.doc.syntax
+    for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
+      local current_syntax = dv.buffer.syntax
       if line1 > 1 then
         -- Use the previous line state, as it will be the state
         -- of the beginning of the current line
-        local state = dv.doc.highlighter:get_line(line1 - 1).state
+        local state = dv.buffer.highlighter:get_line(line1 - 1).state
         if state then
-          local syntaxes = tokenizer.extract_subsyntaxes(dv.doc.syntax, state)
+          local syntaxes = tokenizer.extract_subsyntaxes(dv.buffer.syntax, state)
           -- Go through all the syntaxes until the first with comments defined
           for _, s in pairs(syntaxes) do
             if s.comment or s.block_comment then
@@ -2284,28 +2284,28 @@ local commands = {
       end
       local comment = current_syntax.comment or current_syntax.block_comment
       if comment then
-        dv.doc:set_selections(idx, line_comment(comment, line1, col1, line2, col2))
+        dv.buffer:set_selections(idx, line_comment(comment, line1, col1, line2, col2))
       end
     end
   end,
 
-  ["doc:upper-case"] = function(dv)
+  ["text:upper-case"] = function(dv)
     if not can_edit(dv, "change case") then return end
-    dv.doc:replace(string.uupper)
+    dv.buffer:replace(string.uupper)
   end,
 
-  ["doc:lower-case"] = function(dv)
+  ["text:lower-case"] = function(dv)
     if not can_edit(dv, "change case") then return end
-    dv.doc:replace(string.ulower)
+    dv.buffer:replace(string.ulower)
   end,
 
-  ["doc:go-to-line"] = function(dv)
+  ["text:go-to-line"] = function(dv)
     local items
     local function init_items()
       if items then return end
       items = {}
       local mt = { __tostring = function(x) return x.text end }
-      for i, line in ipairs(dv.doc.lines) do
+      for i, line in ipairs(dv.buffer.lines) do
         local item = { text = line:sub(1, -2), line = i, info = "line: " .. i }
         table.insert(items, setmetatable(item, mt))
       end
@@ -2321,7 +2321,7 @@ local commands = {
         if dv.select_and_reveal then
           dv:select_and_reveal(line, 1, line, 1, { reason = "go-to-line" })
         else
-          dv.doc:set_selection(line, 1)
+          dv.buffer:set_selection(line, 1)
           dv:scroll_to_line(line, true)
         end
       end,
@@ -2335,12 +2335,12 @@ local commands = {
         y = common.round(y + (h - font:get_height()) / 2)
         local tx = x
         local last_token = nil
-        local tokens = dv.doc.highlighter:get_line(item.line).tokens
+        local tokens = dv.buffer.highlighter:get_line(item.line).tokens
         local tokens_count = #tokens
         if tokens_count > 0 and string.sub(tokens[tokens_count], -1) == "\n" then
           last_token = tokens_count - 1
         end
-        for tidx, type, text in dv.doc.highlighter:each_token(item.line) do
+        for tidx, type, text in dv.buffer.highlighter:each_token(item.line) do
           color = style.syntax[type] or style.syntax["normal"]
           -- do not render newline, fixes issue #1164
           if tidx == last_token then text = text:sub(1, -2) end
@@ -2351,59 +2351,59 @@ local commands = {
     })
   end,
 
-  ["doc:toggle-line-ending"] = function(dv)
+  ["text:toggle-line-ending"] = function(dv)
     if not can_edit(dv, "toggle line ending") then return end
-    dv.doc.crlf = not dv.doc.crlf
+    dv.buffer.crlf = not dv.buffer.crlf
   end,
 
-  ["doc:change-encoding"] = function(dv)
+  ["text:change-encoding"] = function(dv)
     if not can_edit(dv, "change encoding") then return end
     encodings.select_encoding("Select Output Encoding", function(charset)
       if not can_edit(dv, "change encoding") then return end
-      set_encoding(dv.doc, charset)
-      save_existing(dv.doc)
+      set_encoding(dv.buffer, charset)
+      save_existing(dv.buffer)
     end)
   end,
 
-  ["doc:reload-with-encoding"] = function(dv)
+  ["text:reload-with-encoding"] = function(dv)
     if not can_edit(dv, "reload") then return end
     encodings.select_encoding("Reload With Encoding", function(charset)
       if not can_edit(dv, "reload") then return end
-      set_encoding(dv.doc, charset)
-      dv.doc:reload()
+      set_encoding(dv.buffer, charset)
+      dv.buffer:reload()
     end)
   end,
 
-  ["doc:toggle-overwrite"] = function(dv)
-    dv.doc.overwrite = not dv.doc.overwrite
+  ["text:toggle-overwrite"] = function(dv)
+    dv.buffer.overwrite = not dv.buffer.overwrite
     core.blink_reset() -- to show the cursor has changed edit modes
   end,
 
-  ["doc:save-as"] = function(dv)
+  ["text:save-as"] = function(dv)
     if not can_edit(dv, "save as") then return end
     prompt_save_as(dv, save_as_prompt_text(dv))
   end,
 
-  ["doc:save"] = function(dv)
+  ["text:save"] = function(dv)
     if not can_edit(dv, "save") then return end
-    if dv.doc.filename then
+    if dv.buffer.filename then
       save(nil, dv)
     else
-      command.perform("doc:save-as")
+      command.perform("text:save-as")
     end
   end,
 
-  ["doc:reload"] = function(dv)
+  ["text:reload"] = function(dv)
     if not can_edit(dv, "reload") then return end
-    dv.doc:reload()
+    dv.buffer:reload()
   end,
 
   ["file:rename"] = function(dv)
     if not can_edit(dv, "rename file") then return end
-    local old_filename = dv.doc.filename
-    local old_abs_filename = dv.doc.abs_filename
+    local old_filename = dv.buffer.filename
+    local old_abs_filename = dv.buffer.abs_filename
     if not old_filename then
-      core.error("Cannot rename unsaved doc")
+      core.error("Cannot rename unsaved buffer")
       return
     end
     core.global_prompt_bar:enter("Rename", {
@@ -2415,7 +2415,7 @@ local commands = {
         local new_filename = core.normalize_to_project_dir(expanded_filename)
         local new_abs_filename = core.project_absolute_path(new_filename)
         save(expanded_filename, dv)
-        if not common.path_equals(dv.doc.abs_filename, new_abs_filename) then return end
+        if not common.path_equals(dv.buffer.abs_filename, new_abs_filename) then return end
         core.log("Renamed \"%s\" to \"%s\"", old_filename, filename)
         if not common.path_equals(new_abs_filename, old_abs_filename) then
           os.remove(old_abs_filename or old_filename)
@@ -2429,100 +2429,100 @@ local commands = {
 
   ["file:delete"] = function(dv)
     if not can_edit(dv, "delete file") then return end
-    local filename = dv.doc.abs_filename
+    local filename = dv.buffer.abs_filename
     if not filename then
-      core.error("Cannot remove unsaved doc")
+      core.error("Cannot remove unsaved buffer")
       return
     end
-    for i,docview in ipairs(core.get_views_referencing_doc(dv.doc)) do
-      local node = core.root_panel.root_node:get_node_for_view(docview)
-      node:close_view(core.root_panel.root_node, docview)
+    for i,textview in ipairs(core.get_views_referencing_buffer(dv.buffer)) do
+      local node = core.root_panel.root_node:get_node_for_view(textview)
+      node:close_view(core.root_panel.root_node, textview)
     end
     os.remove(filename)
     core.log("Removed \"%s\"", filename)
   end,
 
-  ["doc:select-to-cursor"] = function(dv, x, y, clicks)
-    local line1, col1 = select(3, doc():get_selection())
+  ["text:select-to-cursor"] = function(dv, x, y, clicks)
+    local line1, col1 = select(3, buffer():get_selection())
     local line2, col2 = dv:resolve_screen_position(x, y)
     dv.mouse_selecting = { line1, col1, nil }
-    dv.doc:set_selection(line2, col2, line1, col1)
+    dv.buffer:set_selection(line2, col2, line1, col1)
     apply_resolved_wrap_affinity(dv)
-    set_primary_selection(dv.doc)
+    set_primary_selection(dv.buffer)
   end,
 
-  ["doc:create-cursor-previous-line"] = function(dv)
+  ["text:create-cursor-previous-line"] = function(dv)
     split_cursor(dv, -1)
-    dv.doc:merge_cursors()
+    dv.buffer:merge_cursors()
   end,
 
-  ["doc:create-cursor-next-line"] = function(dv)
+  ["text:create-cursor-next-line"] = function(dv)
     split_cursor(dv, 1)
-    dv.doc:merge_cursors()
+    dv.buffer:merge_cursors()
   end
 }
 
 command.add(function(x, y)
-  if x == nil or y == nil or not core.active_view:extends(DocView) then return false end
+  if x == nil or y == nil or not core.active_view:extends(TextView) then return false end
   local dv = core.active_view
   local x1,y1,x2,y2 = dv.position.x, dv.position.y, dv.position.x + dv.size.x, dv.position.y + dv.size.y
   return x >= x1 + dv:get_gutter_width() and x < x2 and y >= y1 and y < y2, dv, x, y
 end, {
-  ["doc:set-cursor"] = function(dv, x, y)
+  ["text:set-cursor"] = function(dv, x, y)
     set_cursor(dv, x, y, "set")
   end,
 
-  ["doc:set-cursor-word"] = function(dv, x, y)
+  ["text:set-cursor-word"] = function(dv, x, y)
     set_cursor(dv, x, y, "word")
   end,
 
-  ["doc:set-cursor-line"] = function(dv, x, y, clicks)
+  ["text:set-cursor-line"] = function(dv, x, y, clicks)
     set_cursor(dv, x, y, "lines")
   end,
 
-  ["doc:split-cursor"] = function(dv, x, y, clicks)
+  ["text:split-cursor"] = function(dv, x, y, clicks)
     if dv.begin_line_render_interaction then dv:begin_line_render_interaction("mouse-selection") end
     local line, col = dv:resolve_screen_position(x, y)
     local removal_target = nil
-    for idx, line1, col1 in dv.doc:get_selections(true) do
-      if line1 == line and col1 == col and #doc().selections > 4 then
+    for idx, line1, col1 in dv.buffer:get_selections(true) do
+      if line1 == line and col1 == col and #buffer().selections > 4 then
         removal_target = idx
       end
     end
     if removal_target then
-      dv.doc:remove_selection(removal_target)
+      dv.buffer:remove_selection(removal_target)
     else
-      dv.doc:add_selection(line, col, line, col)
+      dv.buffer:add_selection(line, col, line, col)
     end
     apply_resolved_wrap_affinity(dv)
     dv.mouse_selecting = { line, col, "set" }
   end
 })
 
-local function active_bom_document(view)
+local function active_bom_buffer(view)
   view = view or core.active_view
-  if not (view and view.extends and view:extends(DocView)) then return nil end
-  local doc = view.doc
-  local bom = encoding.get_charset_bom(doc.encoding or "none")
+  if not (view and view.extends and view:extends(TextView)) then return nil end
+  local buffer = view.buffer
+  local bom = encoding.get_charset_bom(buffer.encoding or "none")
   if not bom then return nil end
-  return doc, bom
+  return buffer, bom
 end
 
-command.add_toggle("doc:toggle-bom", {
+command.add_toggle("text:toggle-bom", {
   predicate = function()
-    return active_bom_document() ~= nil
+    return active_bom_buffer() ~= nil
   end,
   get = function(view)
-    local doc = active_bom_document(view)
-    return doc and doc.bom ~= nil
+    local buffer = active_bom_buffer(view)
+    return buffer and buffer.bom ~= nil
   end,
   set = function(enabled, view)
     view = view or core.active_view
     if not can_edit(view, "toggle BOM") then return end
-    local doc, bom = active_bom_document(view)
-    if not doc then return end
-    doc.bom = enabled and bom or nil
-    save_existing(doc)
+    local buffer, bom = active_bom_buffer(view)
+    if not buffer then return end
+    buffer.bom = enabled and bom or nil
+    save_existing(buffer)
   end,
 })
 
@@ -2533,39 +2533,39 @@ local translations = {
   ["next-word-end"] = translate,
   ["previous-block-start"] = translate,
   ["next-block-end"] = translate,
-  ["start-of-doc"] = translate,
-  ["end-of-doc"] = translate,
+  ["start-of-buffer"] = translate,
+  ["end-of-buffer"] = translate,
   ["start-of-line"] = translate,
   ["end-of-line"] = translate,
   ["start-of-word"] = translate,
   ["start-of-indentation"] = translate,
   ["end-of-word"] = translate,
-  ["previous-line"] = DocView.translate,
-  ["next-line"] = DocView.translate,
-  ["previous-page"] = DocView.translate,
-  ["next-page"] = DocView.translate,
+  ["previous-line"] = TextView.translate,
+  ["next-line"] = TextView.translate,
+  ["previous-page"] = TextView.translate,
+  ["next-page"] = TextView.translate,
 }
 
 for name, obj in pairs(translations) do
-  commands["doc:move-to-" .. name] = function(dv)
-    dv.doc:move_to(obj[name:gsub("-", "_")], dv)
+  commands["text:move-to-" .. name] = function(dv)
+    dv.buffer:move_to(obj[name:gsub("-", "_")], dv)
   end
-  commands["doc:select-to-" .. name] = function(dv)
-    dv.doc:select_to(obj[name:gsub("-", "_")], dv)
-    set_primary_selection(dv.doc)
+  commands["text:select-to-" .. name] = function(dv)
+    dv.buffer:select_to(obj[name:gsub("-", "_")], dv)
+    set_primary_selection(dv.buffer)
   end
-  commands["doc:delete-to-" .. name] = function(dv)
+  commands["text:delete-to-" .. name] = function(dv)
     if not can_edit(dv, "delete") then return end
-    dv.doc:delete_to(obj[name:gsub("-", "_")], dv)
+    dv.buffer:delete_to(obj[name:gsub("-", "_")], dv)
   end
 end
 
 local function move_char_batch(dv, move_fn, collapse_to_end)
   clear_markdown_task_source_affinity(dv)
-  local doc = dv.doc
+  local buffer = dv.buffer
   local selections = {}
-  local last_selection = doc.last_selection
-  for _, line1, col1, line2, col2 in doc:get_selections(true) do
+  local last_selection = buffer.last_selection
+  for _, line1, col1, line2, col2 in buffer:get_selections(true) do
     local line, col
     if line1 ~= line2 or col1 ~= col2 then
       if collapse_to_end then
@@ -2574,37 +2574,37 @@ local function move_char_batch(dv, move_fn, collapse_to_end)
         line, col = line1, col1
       end
     else
-      line, col = move_fn(doc, line1, col1, dv)
+      line, col = move_fn(buffer, line1, col1, dv)
     end
     selections[#selections + 1] = line
     selections[#selections + 1] = col
     selections[#selections + 1] = line
     selections[#selections + 1] = col
   end
-  doc:set_selection_list(selections, last_selection, { merge_cursors = true, sanitized = true })
+  buffer:set_selection_list(selections, last_selection, { merge_cursors = true, sanitized = true })
 end
 
-commands["doc:move-to-previous-char"] = function(dv)
+commands["text:move-to-previous-char"] = function(dv)
   if reveal_markdown_task_source_from_implicit_content(dv) then return end
   move_char_batch(dv, translate.previous_char, false)
 end
 
-commands["doc:move-to-next-char"] = function(dv)
+commands["text:move-to-next-char"] = function(dv)
   move_char_batch(dv, translate.next_char, true)
   set_markdown_task_source_affinity(dv)
 end
 
 local function move_line_batch(dv, line_offset)
-  local doc = dv.doc
-  local old = doc.selections
+  local buffer = dv.buffer
+  local old = buffer.selections
   local selections = {}
-  local last_selection = doc.last_selection
-  local last_line = #doc.lines
+  local last_selection = buffer.last_selection
+  local last_line = #buffer.lines
   local x_by_line_col = {}
   local col_by_line_x = {}
   local last_x_offset = dv.last_x_offset
   local has_relevant_syntax_fonts = false
-  local syntax_name = tostring(doc.syntax and doc.syntax.name or ""):lower()
+  local syntax_name = tostring(buffer.syntax and buffer.syntax.name or ""):lower()
   local is_markdown = syntax_name:find("markdown", 1, true) ~= nil
   for name in pairs(style.syntax_fonts) do
     if is_markdown or not tostring(name):match("^markdown_") then
@@ -2648,7 +2648,7 @@ local function move_line_batch(dv, line_offset)
     if has_relevant_syntax_fonts then return false end
     local simple = simple_line_cache[line]
     if simple == nil then
-      simple = not not doc.lines[line] and not doc.lines[line]:find("[\t\128-\255]")
+      simple = not not buffer.lines[line] and not buffer.lines[line]:find("[\t\128-\255]")
       simple_line_cache[line] = simple
     end
     return simple
@@ -2681,12 +2681,12 @@ local function move_line_batch(dv, line_offset)
     if line_offset < 0 and line <= 1 then
       target_line, target_col = 1, 1
     elseif line_offset > 0 and line >= last_line then
-      target_line, target_col = last_line, #doc.lines[last_line]
+      target_line, target_col = last_line, #buffer.lines[last_line]
     else
       target_line = dv.fold_aware_line_move and dv:fold_aware_line_move(line, line_offset) or line + line_offset
       if is_simple_line(line) and is_simple_line(target_line) then
         local x = (col - 1) * dv:get_font():get_width(" ")
-        target_col = common.clamp(col, 1, #doc.lines[target_line])
+        target_col = common.clamp(col, 1, #buffer.lines[target_line])
         last_x_offset.offset = x
         last_x_offset.line = target_line
         last_x_offset.col = target_col
@@ -2697,7 +2697,7 @@ local function move_line_batch(dv, line_offset)
         else
           x = get_cached_x(line, col)
         end
-        target_col = common.clamp(get_cached_col(target_line, x), 1, #doc.lines[target_line])
+        target_col = common.clamp(get_cached_col(target_line, x), 1, #buffer.lines[target_line])
         last_x_offset.offset = x
         last_x_offset.line = target_line
         last_x_offset.col = target_col
@@ -2708,23 +2708,23 @@ local function move_line_batch(dv, line_offset)
     add_cursor(old_idx, target_line, target_col)
   end
 
-  doc:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
+  buffer:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
 end
 
-commands["doc:move-to-previous-line"] = function(dv)
+commands["text:move-to-previous-line"] = function(dv)
   move_line_batch(dv, -1)
 end
 
-commands["doc:move-to-next-line"] = function(dv)
+commands["text:move-to-next-line"] = function(dv)
   move_line_batch(dv, 1)
 end
 
 local function move_collapsed_carets_batch(dv, move_fn)
-  local doc = dv.doc
-  local old = doc.selections
+  local buffer = dv.buffer
+  local old = buffer.selections
   local selections = {}
   local seen = {}
-  local last_selection = doc.last_selection
+  local last_selection = buffer.last_selection
   local mapped_last_selection = nil
 
   local function add_cursor(old_idx, line, col)
@@ -2749,49 +2749,49 @@ local function move_collapsed_carets_batch(dv, move_fn)
 
   for i = 1, #old, 4 do
     local old_idx = (i - 1) / 4 + 1
-    local line, col = move_fn(doc, old[i], old[i + 1])
+    local line, col = move_fn(buffer, old[i], old[i + 1])
     add_cursor(old_idx, line, col)
   end
 
-  doc:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
+  buffer:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
 end
 
-local function move_to_end_of_line(doc, line)
-  return line, #doc.lines[line]
+local function move_to_end_of_line(buffer, line)
+  return line, #buffer.lines[line]
 end
 
-local function move_to_markdown_list_content(doc, line, col)
+local function move_to_markdown_list_content(buffer, line, col)
   local list_content_col = markdown_list_content_start(
-    doc, line, doc.lines[line], true
+    buffer, line, buffer.lines[line], true
   )
   if list_content_col and col > list_content_col then
     return line, list_content_col
   end
 end
 
-local function move_to_start_of_line(doc, line, col)
-  local target_line, target_col = move_to_markdown_list_content(doc, line, col)
+local function move_to_start_of_line(buffer, line, col)
+  local target_line, target_col = move_to_markdown_list_content(buffer, line, col)
   if target_line then return target_line, target_col end
-  return translate.start_of_line(doc, line, col)
+  return translate.start_of_line(buffer, line, col)
 end
 
-local function move_to_start_of_indentation(doc, line, col)
-  local target_line, target_col = move_to_markdown_list_content(doc, line, col)
+local function move_to_start_of_indentation(buffer, line, col)
+  local target_line, target_col = move_to_markdown_list_content(buffer, line, col)
   if target_line then return target_line, target_col end
-  local _, indent_end = doc.lines[line]:find("^[\t ]*")
+  local _, indent_end = buffer.lines[line]:find("^[\t ]*")
   local indent_col = indent_end + 1
   return line, col > indent_col and indent_col or (col == 1 and indent_col or 1)
 end
 
-commands["doc:move-to-end-of-line"] = function(dv)
+commands["text:move-to-end-of-line"] = function(dv)
   move_collapsed_carets_batch(dv, move_to_end_of_line)
 end
 
-commands["doc:move-to-start-of-line"] = function(dv)
+commands["text:move-to-start-of-line"] = function(dv)
   move_collapsed_carets_batch(dv, move_to_start_of_line)
 end
 
-commands["doc:move-to-start-of-indentation"] = function(dv)
+commands["text:move-to-start-of-indentation"] = function(dv)
   move_collapsed_carets_batch(dv, move_to_start_of_indentation)
 end
 
@@ -2817,39 +2817,39 @@ local function add_selection_endpoint(selections, seen, old_idx, last_selection,
 end
 
 local function select_char_batch(dv, move_fn)
-  local doc = dv.doc
-  local old = doc.selections
+  local buffer = dv.buffer
+  local old = buffer.selections
   local selections = {}
   local seen = {}
-  local last_selection = doc.last_selection
+  local last_selection = buffer.last_selection
   local mapped_last_selection = nil
 
   for i = 1, #old, 4 do
     local old_idx = (i - 1) / 4 + 1
-    local line, col = move_fn(doc, old[i], old[i + 1], dv)
+    local line, col = move_fn(buffer, old[i], old[i + 1], dv)
     mapped_last_selection = add_selection_endpoint(
       selections, seen, old_idx, last_selection, mapped_last_selection,
       line, col, old[i + 2], old[i + 3]
     )
   end
 
-  doc:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
-  set_primary_selection(doc)
+  buffer:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
+  set_primary_selection(buffer)
 end
 
 local function select_line_batch(dv, line_offset)
-  local doc = dv.doc
-  local old = doc.selections
+  local buffer = dv.buffer
+  local old = buffer.selections
   local selections = {}
   local seen = {}
-  local last_selection = doc.last_selection
+  local last_selection = buffer.last_selection
   local mapped_last_selection = nil
-  local last_line = #doc.lines
+  local last_line = #buffer.lines
   local x_by_line_col = {}
   local col_by_line_x = {}
   local last_x_offset = dv.last_x_offset
   local has_relevant_syntax_fonts = false
-  local syntax_name = tostring(doc.syntax and doc.syntax.name or ""):lower()
+  local syntax_name = tostring(buffer.syntax and buffer.syntax.name or ""):lower()
   local is_markdown = syntax_name:find("markdown", 1, true) ~= nil
   for name in pairs(style.syntax_fonts) do
     if is_markdown or not tostring(name):match("^markdown_") then
@@ -2891,7 +2891,7 @@ local function select_line_batch(dv, line_offset)
     if has_relevant_syntax_fonts then return false end
     local simple = simple_line_cache[line]
     if simple == nil then
-      simple = not not doc.lines[line] and not doc.lines[line]:find("[\t\128-\255]")
+      simple = not not buffer.lines[line] and not buffer.lines[line]:find("[\t\128-\255]")
       simple_line_cache[line] = simple
     end
     return simple
@@ -2904,12 +2904,12 @@ local function select_line_batch(dv, line_offset)
     if line_offset < 0 and line <= 1 then
       target_line, target_col = 1, 1
     elseif line_offset > 0 and line >= last_line then
-      target_line, target_col = last_line, #doc.lines[last_line]
+      target_line, target_col = last_line, #buffer.lines[last_line]
     else
       target_line = dv.fold_aware_line_move and dv:fold_aware_line_move(line, line_offset) or line + line_offset
       if is_simple_line(line) and is_simple_line(target_line) then
         local x = (col - 1) * dv:get_font():get_width(" ")
-        target_col = common.clamp(col, 1, #doc.lines[target_line])
+        target_col = common.clamp(col, 1, #buffer.lines[target_line])
         last_x_offset.offset = x
         last_x_offset.line = target_line
         last_x_offset.col = target_col
@@ -2920,7 +2920,7 @@ local function select_line_batch(dv, line_offset)
         else
           x = get_cached_x(line, col)
         end
-        target_col = common.clamp(get_cached_col(target_line, x), 1, #doc.lines[target_line])
+        target_col = common.clamp(get_cached_col(target_line, x), 1, #buffer.lines[target_line])
         last_x_offset.offset = x
         last_x_offset.line = target_line
         last_x_offset.col = target_col
@@ -2934,51 +2934,51 @@ local function select_line_batch(dv, line_offset)
     )
   end
 
-  doc:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
-  set_primary_selection(doc)
+  buffer:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
+  set_primary_selection(buffer)
 end
 
-commands["doc:select-to-previous-char"] = function(dv)
+commands["text:select-to-previous-char"] = function(dv)
   select_char_batch(dv, translate.previous_char)
 end
 
-commands["doc:select-to-next-char"] = function(dv)
+commands["text:select-to-next-char"] = function(dv)
   select_char_batch(dv, translate.next_char)
 end
 
-commands["doc:select-to-previous-line"] = function(dv)
+commands["text:select-to-previous-line"] = function(dv)
   select_line_batch(dv, -1)
 end
 
-commands["doc:select-to-next-line"] = function(dv)
+commands["text:select-to-next-line"] = function(dv)
   select_line_batch(dv, 1)
 end
 
 local unwrapped_navigation_commands = {}
 for _, name in ipairs({
-  "doc:move-to-previous-line",
-  "doc:move-to-next-line",
-  "doc:select-to-previous-line",
-  "doc:select-to-next-line",
-  "doc:move-to-next-char",
-  "doc:select-to-next-char",
-  "doc:move-to-next-word-end",
-  "doc:select-to-next-word-end",
-  "doc:move-to-end-of-word",
-  "doc:select-to-end-of-word",
-  "doc:move-to-next-block-end",
-  "doc:select-to-next-block-end",
-  "doc:move-to-end-of-doc",
-  "doc:select-to-end-of-doc",
-  "doc:move-to-start-of-line",
-  "doc:select-to-start-of-line",
-  "doc:delete-to-start-of-line",
-  "doc:move-to-start-of-indentation",
-  "doc:select-to-start-of-indentation",
-  "doc:delete-to-start-of-indentation",
-  "doc:move-to-end-of-line",
-  "doc:select-to-end-of-line",
-  "doc:delete-to-end-of-line",
+  "text:move-to-previous-line",
+  "text:move-to-next-line",
+  "text:select-to-previous-line",
+  "text:select-to-next-line",
+  "text:move-to-next-char",
+  "text:select-to-next-char",
+  "text:move-to-next-word-end",
+  "text:select-to-next-word-end",
+  "text:move-to-end-of-word",
+  "text:select-to-end-of-word",
+  "text:move-to-next-block-end",
+  "text:select-to-next-block-end",
+  "text:move-to-end-of-buffer",
+  "text:select-to-end-of-buffer",
+  "text:move-to-start-of-line",
+  "text:select-to-start-of-line",
+  "text:delete-to-start-of-line",
+  "text:move-to-start-of-indentation",
+  "text:select-to-start-of-indentation",
+  "text:delete-to-start-of-indentation",
+  "text:move-to-end-of-line",
+  "text:select-to-end-of-line",
+  "text:delete-to-end-of-line",
 }) do
   unwrapped_navigation_commands[name] = commands[name]
 end
@@ -3004,15 +3004,15 @@ local function wrapped_move_to(dv, name, move_fn, ...)
   end
   local selections = {}
   local affinity_positions = {}
-  for _, line1, col1 in dv.doc:get_selections(false) do
-    local line, col, line_end = move_fn(dv.doc, line1, col1, ...)
+  for _, line1, col1 in dv.buffer:get_selections(false) do
+    local line, col, line_end = move_fn(dv.buffer, line1, col1, ...)
     selections[#selections + 1] = line
     selections[#selections + 1] = col
     selections[#selections + 1] = line
     selections[#selections + 1] = col
     add_line_end_affinity(affinity_positions, line, col, line_end)
   end
-  dv.doc:set_selection_list(selections, dv.doc.last_selection, { merge_cursors = true })
+  dv.buffer:set_selection_list(selections, dv.buffer.last_selection, { merge_cursors = true })
   linewrapping.set_wrapped_line_end_affinity(dv, affinity_positions)
   if dv.apply_pending_line_render_position_row_affinity then
     dv:apply_pending_line_render_position_row_affinity()
@@ -3031,20 +3031,20 @@ local function wrapped_select_to(dv, name, move_fn, ...)
   end
   local selections = {}
   local affinity_positions = {}
-  for _, line1, col1, line2, col2 in dv.doc:get_selections(false) do
-    local line, col, line_end = move_fn(dv.doc, line1, col1, ...)
+  for _, line1, col1, line2, col2 in dv.buffer:get_selections(false) do
+    local line, col, line_end = move_fn(dv.buffer, line1, col1, ...)
     selections[#selections + 1] = line
     selections[#selections + 1] = col
     selections[#selections + 1] = line2
     selections[#selections + 1] = col2
     add_line_end_affinity(affinity_positions, line, col, line_end)
   end
-  dv.doc:set_selection_list(selections, dv.doc.last_selection, { merge_cursors = true })
+  dv.buffer:set_selection_list(selections, dv.buffer.last_selection, { merge_cursors = true })
   linewrapping.set_wrapped_line_end_affinity(dv, affinity_positions)
   if dv.apply_pending_line_render_position_row_affinity then
     dv:apply_pending_line_render_position_row_affinity()
   end
-  set_primary_selection(dv.doc)
+  set_primary_selection(dv.buffer)
 end
 
 local function wrapped_delete_to(dv, name, move_fn, ...)
@@ -3056,20 +3056,20 @@ local function wrapped_delete_to(dv, name, move_fn, ...)
     return perform_unwrapped_navigation(name, dv, ...)
   end
   local args = { n = select("#", ...), ... }
-  return dv.doc:delete_to(function(target_doc, line, col)
-    return move_fn(target_doc, line, col, table.unpack(args, 1, args.n))
+  return dv.buffer:delete_to(function(target_buffer, line, col)
+    return move_fn(target_buffer, line, col, table.unpack(args, 1, args.n))
   end, dv)
 end
 
 local function wrapped_forward_endpoint_command(dv, name, ...)
   if not dv.wrapped_settings then return perform_unwrapped_navigation(name, dv, ...) end
-  local old_selections = linewrapping.copy_selection_list(dv.doc.selections)
+  local old_selections = linewrapping.copy_selection_list(dv.buffer.selections)
   local result = perform_unwrapped_navigation(name, dv, ...)
   linewrapping.set_wrapped_line_end_affinity(dv, linewrapping.collect_forward_endpoint_affinity(dv, old_selections))
   return result
 end
 
-local function move_to_wrapped_previous_line(doc, line, col, dv)
+local function move_to_wrapped_previous_line(buffer, line, col, dv)
   if dv and dv.move_within_line_render_position_rows then
     local target_line, target_col = dv:move_within_line_render_position_rows(
       line, col, -1
@@ -3095,7 +3095,7 @@ local function move_to_wrapped_previous_line(doc, line, col, dv)
     local target_fold = dv:get_collapsed_fold_at_line(target_line)
     if dv:is_line_hidden_by_fold(target_line) or (current_fold and current_fold.line1 == line and target_line == line) then
       target_line = dv:fold_aware_line_move(line, -1)
-      target_col = current_fold and current_fold.line1 == line and 1 or common.clamp(target_col, 1, #doc.lines[target_line])
+      target_col = current_fold and current_fold.line1 == line and 1 or common.clamp(target_col, 1, #buffer.lines[target_line])
     elseif target_fold and target_fold.line1 == target_line then
       target_col = 1
     end
@@ -3111,7 +3111,7 @@ local function move_to_wrapped_previous_line(doc, line, col, dv)
   return target_line, target_col, target_line_end
 end
 
-local function move_to_wrapped_next_line(doc, line, col, dv)
+local function move_to_wrapped_next_line(buffer, line, col, dv)
   if dv and dv.move_within_line_render_position_rows then
     local target_line, target_col = dv:move_within_line_render_position_rows(
       line, col, 1
@@ -3135,7 +3135,7 @@ local function move_to_wrapped_next_line(doc, line, col, dv)
     local target_fold = dv:get_collapsed_fold_at_line(target_line)
     if dv:is_line_hidden_by_fold(target_line) or (current_fold and current_fold.line1 == line and target_line == line) then
       target_line = dv:fold_aware_line_move(line, 1)
-      target_col = current_fold and current_fold.line1 == line and 1 or common.clamp(target_col, 1, #doc.lines[target_line])
+      target_col = current_fold and current_fold.line1 == line and 1 or common.clamp(target_col, 1, #buffer.lines[target_line])
     elseif target_fold and target_fold.line1 == target_line then
       target_col = 1
     end
@@ -3151,7 +3151,7 @@ local function move_to_wrapped_next_line(doc, line, col, dv)
   return target_line, target_col, target_line_end
 end
 
-local function move_to_wrapped_end_of_line(doc, line, col, dv)
+local function move_to_wrapped_end_of_line(buffer, line, col, dv)
   if dv and dv.get_line_render_position_row_bounds then
     local _, row_end, row_index = dv:get_line_render_position_row_bounds(line, col)
     if row_end and col ~= row_end then
@@ -3161,10 +3161,10 @@ local function move_to_wrapped_end_of_line(doc, line, col, dv)
       return line, row_end, false
     end
   end
-  return linewrapping.wrapped_end_of_line_position(dv, doc, line, col, translate.end_of_line)
+  return linewrapping.wrapped_end_of_line_position(dv, buffer, line, col, translate.end_of_line)
 end
 
-local function move_to_wrapped_start_of_line(doc, line, col, dv, logical_start)
+local function move_to_wrapped_start_of_line(buffer, line, col, dv, logical_start)
   if dv and dv.get_line_render_position_row_bounds then
     local row_start, _, row_index = dv:get_line_render_position_row_bounds(line, col)
     if row_start and col ~= row_start then
@@ -3175,11 +3175,11 @@ local function move_to_wrapped_start_of_line(doc, line, col, dv, logical_start)
     end
   end
   return linewrapping.wrapped_start_of_line_position(
-    dv, doc, line, col, logical_start or translate.start_of_line
+    dv, buffer, line, col, logical_start or translate.start_of_line
   )
 end
 
-local function move_to_wrapped_start_of_indentation(doc, line, col, dv, logical_start)
+local function move_to_wrapped_start_of_indentation(buffer, line, col, dv, logical_start)
   if dv and dv.get_line_render_position_row_bounds then
     local row_start, _, row_index = dv:get_line_render_position_row_bounds(line, col)
     if row_start and row_start ~= 1 and col ~= row_start then
@@ -3190,38 +3190,38 @@ local function move_to_wrapped_start_of_indentation(doc, line, col, dv, logical_
     end
   end
   return linewrapping.wrapped_start_of_indentation_position(
-    dv, doc, line, col, logical_start or translate.start_of_indentation
+    dv, buffer, line, col, logical_start or translate.start_of_indentation
   )
 end
 
-commands["doc:move-to-previous-line"] = function(dv)
+commands["text:move-to-previous-line"] = function(dv)
   return wrapped_move_to(
-    dv, "doc:move-to-previous-line", move_to_wrapped_previous_line, dv
+    dv, "text:move-to-previous-line", move_to_wrapped_previous_line, dv
   )
 end
-commands["doc:move-to-next-line"] = function(dv)
+commands["text:move-to-next-line"] = function(dv)
   return wrapped_move_to(
-    dv, "doc:move-to-next-line", move_to_wrapped_next_line, dv
+    dv, "text:move-to-next-line", move_to_wrapped_next_line, dv
   )
 end
-commands["doc:select-to-previous-line"] = function(dv)
-  return wrapped_select_to(dv, "doc:select-to-previous-line", move_to_wrapped_previous_line, dv)
+commands["text:select-to-previous-line"] = function(dv)
+  return wrapped_select_to(dv, "text:select-to-previous-line", move_to_wrapped_previous_line, dv)
 end
-commands["doc:select-to-next-line"] = function(dv)
-  return wrapped_select_to(dv, "doc:select-to-next-line", move_to_wrapped_next_line, dv)
+commands["text:select-to-next-line"] = function(dv)
+  return wrapped_select_to(dv, "text:select-to-next-line", move_to_wrapped_next_line, dv)
 end
 
 for _, name in ipairs({
-  "doc:move-to-next-char",
-  "doc:select-to-next-char",
-  "doc:move-to-next-word-end",
-  "doc:select-to-next-word-end",
-  "doc:move-to-end-of-word",
-  "doc:select-to-end-of-word",
-  "doc:move-to-next-block-end",
-  "doc:select-to-next-block-end",
-  "doc:move-to-end-of-doc",
-  "doc:select-to-end-of-doc",
+  "text:move-to-next-char",
+  "text:select-to-next-char",
+  "text:move-to-next-word-end",
+  "text:select-to-next-word-end",
+  "text:move-to-end-of-word",
+  "text:select-to-end-of-word",
+  "text:move-to-next-block-end",
+  "text:select-to-next-block-end",
+  "text:move-to-end-of-buffer",
+  "text:select-to-end-of-buffer",
 }) do
   local command_name = name
   commands[command_name] = function(dv, ...)
@@ -3229,63 +3229,63 @@ for _, name in ipairs({
   end
 end
 
-commands["doc:move-to-start-of-line"] = function(dv)
+commands["text:move-to-start-of-line"] = function(dv)
   return wrapped_move_to(
-    dv, "doc:move-to-start-of-line",
+    dv, "text:move-to-start-of-line",
     move_to_wrapped_start_of_line, dv, move_to_start_of_line
   )
 end
-commands["doc:select-to-start-of-line"] = function(dv)
-  return wrapped_select_to(dv, "doc:select-to-start-of-line", move_to_wrapped_start_of_line, dv)
+commands["text:select-to-start-of-line"] = function(dv)
+  return wrapped_select_to(dv, "text:select-to-start-of-line", move_to_wrapped_start_of_line, dv)
 end
-commands["doc:delete-to-start-of-line"] = function(dv)
-  return wrapped_delete_to(dv, "doc:delete-to-start-of-line", move_to_wrapped_start_of_line, dv)
+commands["text:delete-to-start-of-line"] = function(dv)
+  return wrapped_delete_to(dv, "text:delete-to-start-of-line", move_to_wrapped_start_of_line, dv)
 end
-commands["doc:move-to-start-of-indentation"] = function(dv)
+commands["text:move-to-start-of-indentation"] = function(dv)
   return wrapped_move_to(
-    dv, "doc:move-to-start-of-indentation",
+    dv, "text:move-to-start-of-indentation",
     move_to_wrapped_start_of_indentation, dv, move_to_start_of_indentation
   )
 end
-commands["doc:select-to-start-of-indentation"] = function(dv)
-  return wrapped_select_to(dv, "doc:select-to-start-of-indentation", move_to_wrapped_start_of_indentation, dv)
+commands["text:select-to-start-of-indentation"] = function(dv)
+  return wrapped_select_to(dv, "text:select-to-start-of-indentation", move_to_wrapped_start_of_indentation, dv)
 end
-commands["doc:delete-to-start-of-indentation"] = function(dv)
-  return wrapped_delete_to(dv, "doc:delete-to-start-of-indentation", move_to_wrapped_start_of_indentation, dv)
+commands["text:delete-to-start-of-indentation"] = function(dv)
+  return wrapped_delete_to(dv, "text:delete-to-start-of-indentation", move_to_wrapped_start_of_indentation, dv)
 end
-commands["doc:move-to-end-of-line"] = function(dv)
-  return wrapped_move_to(dv, "doc:move-to-end-of-line", move_to_wrapped_end_of_line, dv)
+commands["text:move-to-end-of-line"] = function(dv)
+  return wrapped_move_to(dv, "text:move-to-end-of-line", move_to_wrapped_end_of_line, dv)
 end
-commands["doc:select-to-end-of-line"] = function(dv)
-  return wrapped_select_to(dv, "doc:select-to-end-of-line", move_to_wrapped_end_of_line, dv)
+commands["text:select-to-end-of-line"] = function(dv)
+  return wrapped_select_to(dv, "text:select-to-end-of-line", move_to_wrapped_end_of_line, dv)
 end
-commands["doc:delete-to-end-of-line"] = function(dv)
-  return wrapped_delete_to(dv, "doc:delete-to-end-of-line", move_to_wrapped_end_of_line, dv)
+commands["text:delete-to-end-of-line"] = function(dv)
+  return wrapped_delete_to(dv, "text:delete-to-end-of-line", move_to_wrapped_end_of_line, dv)
 end
 
-commands["doc:fold-at-caret"] = function(dv)
+commands["text:fold-at-caret"] = function(dv)
   local fold, err = dv:fold_at_caret()
   if not fold and err then core.log_quiet("Fold at caret skipped: %s", tostring(err)) end
 end
 
-commands["doc:unfold-at-caret"] = function(dv)
+commands["text:unfold-at-caret"] = function(dv)
   dv:unfold_at_caret("command")
 end
 
-commands["doc:unfold-all"] = function(dv)
+commands["text:unfold-all"] = function(dv)
   dv:unfold_all("command")
 end
 
-command.add("core.docview", commands)
+command.add("core.textview", commands)
 
 command.add_toggle("line-wrapping:toggle", {
   get = function(view)
     view = view or core.active_view
-    return view and view.doc and view.extends and view:extends(DocView) and view:is_wrapping_enabled()
+    return view and view.buffer and view.extends and view:extends(TextView) and view:is_wrapping_enabled()
   end,
   set = function(enabled, view)
     view = view or core.active_view
-    if view and view.doc and view.extends and view:extends(DocView) then
+    if view and view.buffer and view.extends and view:extends(TextView) then
       view:set_wrapping_enabled(enabled)
     end
   end,
@@ -3296,10 +3296,10 @@ keymap.add {
 }
 
 keymap.add_direct {
-  ["ctrl+-"] = "doc:fold-at-caret",
-  ["ctrl+shift+-"] = "doc:fold-at-caret",
-  ["ctrl+="] = "doc:unfold-at-caret",
-  ["ctrl+shift+="] = "doc:unfold-at-caret",
-  ["ctrl+plus"] = "doc:unfold-at-caret",
-  ["ctrl+shift+plus"] = "doc:unfold-at-caret",
+  ["ctrl+-"] = "text:fold-at-caret",
+  ["ctrl+shift+-"] = "text:fold-at-caret",
+  ["ctrl+="] = "text:unfold-at-caret",
+  ["ctrl+shift+="] = "text:unfold-at-caret",
+  ["ctrl+plus"] = "text:unfold-at-caret",
+  ["ctrl+shift+plus"] = "text:unfold-at-caret",
 }

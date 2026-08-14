@@ -18,7 +18,7 @@
 #endif
 
 #define API_TYPE_TREESITTER_QUERY "TreeSitterQuery"
-#define API_TYPE_TREESITTER_STATE "TreeSitterDocumentState"
+#define API_TYPE_TREESITTER_STATE "TreeSitterBufferState"
 #define API_TYPE_MARKDOWN_TREE "MarkdownTree"
 
 typedef struct {
@@ -27,7 +27,7 @@ typedef struct {
 } AnvilTSQueryUserdata;
 
 typedef struct {
-  AnvilTSDocumentState *state;
+  AnvilTSBufferState *state;
 } AnvilTSStateUserdata;
 
 typedef struct {
@@ -264,7 +264,7 @@ static int f_ack_complete_event(lua_State *L) {
   return 0;
 }
 
-static int f_new_document_state(lua_State *L) {
+static int f_new_buffer_state(lua_State *L) {
   const char *language_id = luaL_checkstring(L, 1);
   const AnvilTSLanguage *language = anvil_ts_language_by_id(language_id);
   if (!language || !anvil_ts_language_is_compatible(language)) {
@@ -274,7 +274,7 @@ static int f_new_document_state(lua_State *L) {
   }
 
   uint32_t parse_timeout_ms = option_uint32(L, 2, "parse_timeout_ms", 750);
-  AnvilTSDocumentState *state = anvil_ts_document_state_new(language, parse_timeout_ms);
+  AnvilTSBufferState *state = anvil_ts_buffer_state_new(language, parse_timeout_ms);
   if (!state) {
     lua_pushnil(L);
     lua_pushstring(L, "failed to create Tree-sitter document state");
@@ -337,7 +337,7 @@ static AnvilTSSnapshot *snapshot_from_lua_lines(lua_State *L, int idx, char **er
 static int state_language_id(lua_State *L) {
   AnvilTSStateUserdata *userdata = check_state(L, 1);
   luaL_argcheck(L, userdata->state != NULL, 1, "closed Tree-sitter document state");
-  lua_pushstring(L, anvil_ts_document_state_language_id(userdata->state));
+  lua_pushstring(L, anvil_ts_buffer_state_language_id(userdata->state));
   return 1;
 }
 
@@ -350,12 +350,12 @@ static int state_status(lua_State *L) {
   }
   AnvilTSStateStatus status = ANVIL_TS_STATE_FAILED;
   char *reason = NULL;
-  if (!anvil_ts_document_state_status_snapshot(userdata->state, &status, &reason)) {
+  if (!anvil_ts_buffer_state_status_snapshot(userdata->state, &status, &reason)) {
     lua_pushstring(L, "failed");
     lua_pushstring(L, "failed to read Tree-sitter document state status");
     return 2;
   }
-  lua_pushstring(L, anvil_ts_document_state_status_string(status));
+  lua_pushstring(L, anvil_ts_buffer_state_status_string(status));
   if (reason) lua_pushstring(L, reason); else lua_pushnil(L);
   free(reason);
   return 2;
@@ -363,19 +363,19 @@ static int state_status(lua_State *L) {
 
 static int state_generation(lua_State *L) {
   AnvilTSStateUserdata *userdata = check_state(L, 1);
-  lua_pushinteger(L, userdata->state ? (lua_Integer) anvil_ts_document_state_generation(userdata->state) : 0);
+  lua_pushinteger(L, userdata->state ? (lua_Integer) anvil_ts_buffer_state_generation(userdata->state) : 0);
   return 1;
 }
 
 static int state_tree_generation(lua_State *L) {
   AnvilTSStateUserdata *userdata = check_state(L, 1);
-  lua_pushinteger(L, userdata->state ? (lua_Integer) anvil_ts_document_state_tree_generation(userdata->state) : 0);
+  lua_pushinteger(L, userdata->state ? (lua_Integer) anvil_ts_buffer_state_tree_generation(userdata->state) : 0);
   return 1;
 }
 
 static int state_has_tree(lua_State *L) {
   AnvilTSStateUserdata *userdata = check_state(L, 1);
-  lua_pushboolean(L, userdata->state && anvil_ts_document_state_has_tree(userdata->state));
+  lua_pushboolean(L, userdata->state && anvil_ts_buffer_state_has_tree(userdata->state));
   return 1;
 }
 
@@ -405,7 +405,7 @@ static int state_schedule_parse(lua_State *L) {
     return 2;
   }
 
-  if (!anvil_ts_document_state_schedule_parse_with_edit(userdata->state, snapshot, generation, edit_ptr, &error)) {
+  if (!anvil_ts_buffer_state_schedule_parse_with_edit(userdata->state, snapshot, generation, edit_ptr, &error)) {
     anvil_ts_snapshot_free(snapshot);
     lua_pushnil(L);
     lua_pushstring(L, error ? error : "failed to schedule Tree-sitter parse");
@@ -420,8 +420,8 @@ static int state_poll(lua_State *L) {
   AnvilTSStateUserdata *userdata = check_state(L, 1);
   luaL_argcheck(L, userdata->state != NULL, 1, "closed Tree-sitter document state");
   uint64_t generation = (uint64_t) luaL_checkinteger(L, 2);
-  AnvilTSPollResult result = anvil_ts_document_state_poll(userdata->state, generation);
-  lua_pushstring(L, anvil_ts_document_state_status_string(result.status));
+  AnvilTSPollResult result = anvil_ts_buffer_state_poll(userdata->state, generation);
+  lua_pushstring(L, anvil_ts_buffer_state_status_string(result.status));
   lua_pushboolean(L, result.changed);
   lua_pushboolean(L, result.discarded_stale);
   if (result.changed_ranges_available) {
@@ -936,7 +936,7 @@ static int state_node_ranges(lua_State *L) {
   LuaNodeRangeCollectContext context;
   memset(&context, 0, sizeof(context));
   char *error = NULL;
-  bool ok = anvil_ts_document_state_node_ranges(
+  bool ok = anvil_ts_buffer_state_node_ranges(
     state_userdata->state,
     byte_start,
     byte_end,
@@ -978,7 +978,7 @@ static int state_query_captures(lua_State *L) {
   memset(&context, 0, sizeof(context));
   bool exceeded_match_limit = false;
   char *error = NULL;
-  bool ok = anvil_ts_document_state_query_captures(
+  bool ok = anvil_ts_buffer_state_query_captures(
     state_userdata->state,
     query_userdata->query,
     byte_start,
@@ -1164,21 +1164,21 @@ static int markdown_tree_gc(lua_State *L) {
 
 static int state_cancel(lua_State *L) {
   AnvilTSStateUserdata *userdata = check_state(L, 1);
-  if (userdata->state) anvil_ts_document_state_cancel(userdata->state);
+  if (userdata->state) anvil_ts_buffer_state_cancel(userdata->state);
   return 0;
 }
 
 static int state_close(lua_State *L) {
   AnvilTSStateUserdata *userdata = check_state(L, 1);
-  if (userdata->state) anvil_ts_document_state_close(userdata->state);
+  if (userdata->state) anvil_ts_buffer_state_close(userdata->state);
   return 0;
 }
 
 static int state_gc(lua_State *L) {
   AnvilTSStateUserdata *userdata = check_state(L, 1);
   if (userdata->state) {
-    anvil_ts_document_state_close(userdata->state);
-    anvil_ts_document_state_release(userdata->state);
+    anvil_ts_buffer_state_close(userdata->state);
+    anvil_ts_buffer_state_release(userdata->state);
     userdata->state = NULL;
   }
   return 0;
@@ -1278,7 +1278,7 @@ static const luaL_Reg lib[] = {
   { "parse_markdown", f_parse_markdown },
   { "register_complete_event", f_register_complete_event },
   { "ack_complete_event", f_ack_complete_event },
-  { "new_document_state", f_new_document_state },
+  { "new_buffer_state", f_new_buffer_state },
   { NULL, NULL }
 };
 

@@ -18,21 +18,21 @@ local function write_file(path, content)
 end
 
 local function find_filetree_line(view, wanted)
-  for i, line in ipairs(view.doc.lines) do
+  for i, line in ipairs(view.buffer.lines) do
     if line_without_newline(line) == wanted then return i end
   end
 end
 
-local function remove_doc(doc)
+local function remove_buffer(buffer)
   local root = core.root_panel.root_node
-  for _, view in ipairs(core.get_views_referencing_doc(doc)) do
+  for _, view in ipairs(core.get_views_referencing_buffer(buffer)) do
     local node = root:get_node_for_view(view)
     if node then node:remove_view(root, view) end
   end
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
@@ -97,11 +97,11 @@ test.describe("File Tree New File integration", function()
       context.filetree:refresh(false, false)
     end
     if context.temp_root then
-      for i = #core.docs, 1, -1 do
-        local doc = core.docs[i]
-        if doc.abs_filename and common.path_belongs_to(doc.abs_filename, context.temp_root) then
-          if doc:is_dirty() then doc:clean() end
-          remove_doc(doc)
+      for i = #core.buffers, 1, -1 do
+        local buffer = core.buffers[i]
+        if buffer.abs_filename and common.path_belongs_to(buffer.abs_filename, context.temp_root) then
+          if buffer:is_dirty() then buffer:clean() end
+          remove_buffer(buffer)
         end
       end
       if system.get_file_info(context.temp_root) then
@@ -116,7 +116,7 @@ test.describe("File Tree New File integration", function()
     local folder_line = find_filetree_line(filetree, "test/")
     test.not_nil(folder_line, "expected folder row in File Tree")
 
-    filetree.doc:set_selection(folder_line, 1)
+    filetree.buffer:set_selection(folder_line, 1)
     core.set_active_view(filetree)
     test.ok(command.perform("user:new-file-with-path"))
 
@@ -126,8 +126,8 @@ test.describe("File Tree New File integration", function()
   test.it("falls back to the nearest existing parent for a draft File Tree folder", function(context)
     local filetree = setup_tree(context)
 
-    filetree.doc:insert(1, 1, "draft/\n")
-    filetree.doc:set_selection(1, 1)
+    filetree.buffer:insert(1, 1, "draft/\n")
+    filetree.buffer:set_selection(1, 1)
     core.set_active_view(filetree)
     test.ok(command.perform("user:new-file-with-path"))
 
@@ -139,7 +139,7 @@ test.describe("File Tree New File integration", function()
     local folder_line = find_filetree_line(filetree, "test/")
     test.not_nil(folder_line, "expected folder row in File Tree")
 
-    filetree.doc:set_selection(folder_line, 1)
+    filetree.buffer:set_selection(folder_line, 1)
     core.set_active_view(filetree)
     test.ok(command.perform("user:new-file-with-path"))
 
@@ -160,7 +160,7 @@ test.describe("File Tree New File integration", function()
     local folder_line = find_filetree_line(filetree, "test/")
     test.not_nil(folder_line, "expected folder row in File Tree")
 
-    filetree.doc:set_selection(folder_line, 1)
+    filetree.buffer:set_selection(folder_line, 1)
     core.set_active_view(filetree)
     test.ok(command.perform("user:new-file-with-path"))
 
@@ -184,11 +184,11 @@ test.describe("File Tree New File integration", function()
     local folder_line = find_filetree_line(filetree, "test/")
     test.not_nil(folder_line, "expected folder row in File Tree")
 
-    filetree.doc:set_selection(folder_line, 1)
+    filetree.buffer:set_selection(folder_line, 1)
     core.set_active_view(filetree)
     test.ok(command.perform("user:new-file-with-path"))
 
-    local doc_count = #core.docs
+    local buffer_count = #core.buffers
     local prompt_text = core.global_prompt_bar:get_text()
     core.global_prompt_bar:set_text(prompt_text .. "created-folder/   ")
     core.global_prompt_bar:submit()
@@ -197,7 +197,7 @@ test.describe("File Tree New File integration", function()
     local info = system.get_file_info(created)
     test.not_nil(info, "expected New File prompt to create the folder on disk")
     test.equal(info.type, "dir")
-    test.equal(#core.docs, doc_count, "expected folder creation not to open a Document")
+    test.equal(#core.buffers, buffer_count, "expected folder creation not to open a Buffer")
     test.not_nil(find_filetree_line(filetree, "\tcreated-folder/"), "expected File Tree to refresh and reveal the new folder")
   end)
 
@@ -206,7 +206,7 @@ test.describe("File Tree New File integration", function()
     local folder_line = find_filetree_line(filetree, "test/")
     test.not_nil(folder_line, "expected folder row in File Tree")
 
-    filetree.doc:set_selection(folder_line, 1)
+    filetree.buffer:set_selection(folder_line, 1)
     core.set_active_view(filetree)
     test.ok(command.perform("user:new-file-with-path"))
 

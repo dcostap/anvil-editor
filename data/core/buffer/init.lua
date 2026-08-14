@@ -13,10 +13,10 @@ local linewrapping = require "core.linewrapping"
 if config.safe_write == nil then config.safe_write = true end
 local tokenizer = require "core.tokenizer"
 
----@class core.doc : core.object
-local Doc = Object:extend()
+---@class core.buffer : core.object
+local Buffer = Object:extend()
 
-function Doc:__tostring() return "Doc" end
+function Buffer:__tostring() return "Buffer" end
 
 local function split_lines(text)
   local res = {}
@@ -32,7 +32,7 @@ local snapshot_registered_selection_states
 local restore_registered_selection_states
 
 
-function Doc:new(filename, abs_filename, new_file)
+function Buffer:new(filename, abs_filename, new_file)
   self.new_file = new_file
   self.encoding = nil
   self.bom = nil
@@ -51,7 +51,7 @@ function Doc:new(filename, abs_filename, new_file)
 end
 
 
-function Doc:reset()
+function Buffer:reset()
   self.lines = { "\n" }
   self.selections = { 1, 1, 1, 1 }
   self.search_selections = {}
@@ -67,7 +67,7 @@ function Doc:reset()
 end
 
 
-function Doc:clear_undo_redo()
+function Buffer:clear_undo_redo()
   self.clean_change_id = 1
   self.undo_stack = { idx = 1 }
   self.redo_stack = { idx = 1 }
@@ -77,7 +77,7 @@ end
 ---Always returns a valid utf8 line even if the file contains binary data.
 ---@param idx integer
 ---@return string
-function Doc:get_utf8_line(idx)
+function Buffer:get_utf8_line(idx)
   if self.binary and self.clean_lines[idx] then
     return self.clean_lines[idx]
   end
@@ -85,15 +85,15 @@ function Doc:get_utf8_line(idx)
 end
 
 
-local function metadata_snapshot(doc)
+local function metadata_snapshot(buffer)
   return {
-    filename = doc.filename,
-    abs_filename = doc.abs_filename,
-    syntax = doc.syntax,
+    filename = buffer.filename,
+    abs_filename = buffer.abs_filename,
+    syntax = buffer.syntax,
   }
 end
 
-function Doc:set_syntax(syn, reason, opts)
+function Buffer:set_syntax(syn, reason, opts)
   opts = opts or {}
   if self.syntax == syn then return false end
   local old = metadata_snapshot(self)
@@ -112,7 +112,7 @@ function Doc:set_syntax(syn, reason, opts)
   return true
 end
 
-function Doc:reset_syntax(opts)
+function Buffer:reset_syntax(opts)
   opts = opts or {}
   local header = self:get_text(1, 1, self:position_offset(1, 1, 128))
   local path = self.abs_filename
@@ -120,7 +120,7 @@ function Doc:reset_syntax(opts)
     path = core.root_project().path .. PATHSEP .. self.filename
   end
   if path then path = common.normalize_path(path) end
-  local override = language_mode.override_for_document(self, path)
+  local override = language_mode.override_for_buffer(self, path)
   local syn
   if override then
     syn = language_mode.resolve(override)
@@ -133,17 +133,17 @@ function Doc:reset_syntax(opts)
 end
 
 
-function Doc:set_language_mode(mode, opts)
-  return language_mode.set_document_mode(self, mode, opts)
+function Buffer:set_language_mode(mode, opts)
+  return language_mode.set_buffer_mode(self, mode, opts)
 end
 
 
-function Doc:set_filename(filename, abs_filename)
+function Buffer:set_filename(filename, abs_filename)
   local old = metadata_snapshot(self)
-  local old_path = language_mode.document_path(self)
+  local old_path = language_mode.buffer_path(self)
   self.filename = filename
   self.abs_filename = abs_filename
-  language_mode.on_document_path_changed(self, old_path, language_mode.document_path(self))
+  language_mode.on_buffer_path_changed(self, old_path, language_mode.buffer_path(self))
   local syntax_changed = self:reset_syntax({ notify = false })
   local filename_changed = old.filename ~= self.filename or old.abs_filename ~= self.abs_filename
   if filename_changed or syntax_changed then
@@ -159,7 +159,7 @@ function Doc:set_filename(filename, abs_filename)
 end
 
 
-function Doc:needs_encoding_conversion()
+function Buffer:needs_encoding_conversion()
   local charset = self.encoding
   if charset and charset ~= "UTF-8" and charset ~= "ASCII" then
     return true
@@ -169,7 +169,7 @@ end
 
 local copy_file, prompt_stale_backup
 
-function Doc:load(filename)
+function Buffer:load(filename)
   if prompt_stale_backup then prompt_stale_backup(filename) end
   local old_text = table.concat(self.lines or {})
   local old_line_count = #(self.lines or {})
@@ -248,7 +248,7 @@ function Doc:load(filename)
 end
 
 
-function Doc:reload()
+function Buffer:reload()
   if self.filename then
     self:load(self.abs_filename)
     self:clean()
@@ -362,12 +362,12 @@ prompt_stale_backup = function(filename)
         local ok, err = pcall(copy_file, backup, filename)
         if ok then
           os.remove(backup)
-          for _, doc in ipairs(core.docs or {}) do
-            if common.path_equals(doc.abs_filename, filename) then
-              local loaded, load_err = pcall(doc.load, doc, filename)
+          for _, buffer in ipairs(core.buffers or {}) do
+            if common.path_equals(buffer.abs_filename, filename) then
+              local loaded, load_err = pcall(buffer.load, buffer, filename)
               if loaded then
-                doc:clean()
-                sanitize_registered_selection_states(doc)
+                buffer:clean()
+                sanitize_registered_selection_states(buffer)
               else
                 core.error("Couldn't reload restored backup %s: %s", filename, load_err)
               end
@@ -436,7 +436,7 @@ local function write_file_safely(filename, writer)
   end
 end
 
-function Doc.write_text_safely(filename, text)
+function Buffer.write_text_safely(filename, text)
   assert(type(filename) == "string" and filename ~= "", "safe-write filename is required")
   assert(type(text) == "string", "safe-write text is required")
   write_file_safely(filename, function(fp) check_io(fp:write(text)) end)
@@ -444,13 +444,13 @@ function Doc.write_text_safely(filename, text)
 end
 
 
-function Doc:save(filename, abs_filename)
+function Buffer:save(filename, abs_filename)
   if not filename then
     assert(self.filename, "no filename set to default to")
     filename = self.filename
     abs_filename = self.abs_filename
   else
-    assert(self.filename or abs_filename, "calling save on unnamed doc without absolute path")
+    assert(self.filename or abs_filename, "calling save on unnamed buffer without absolute path")
     abs_filename = abs_filename or core.project_absolute_path(filename)
   end
 
@@ -490,12 +490,12 @@ function Doc:save(filename, abs_filename)
 end
 
 
-function Doc:get_name()
+function Buffer:get_name()
   return self.display_name or self.filename or "unsaved"
 end
 
 
-function Doc:is_dirty()
+function Buffer:is_dirty()
   if self.new_file then
     if self.filename then return true end
     return #self.lines > 1 or #self:get_utf8_line(1) > 1
@@ -505,12 +505,12 @@ function Doc:is_dirty()
 end
 
 
-function Doc:clean()
+function Buffer:clean()
   self.clean_change_id = self:get_change_id()
 end
 
 
-function Doc:get_indent_info()
+function Buffer:get_indent_info()
   if not self.indent_info then return config.tab_type, config.indent_size, false end
   return self.indent_info.type or config.tab_type,
          self.indent_info.size or config.indent_size,
@@ -518,7 +518,7 @@ function Doc:get_indent_info()
 end
 
 
-function Doc:get_change_id()
+function Buffer:get_change_id()
   return self.undo_stack.idx
 end
 
@@ -536,9 +536,9 @@ end
 local function sync_unbound_selection_mutation(self)
   self.selection_revision = (self.selection_revision or 0) + 1
   if self.bound_selection_view or self.__selection_text_adjusting then return end
-  local ok, DocView = pcall(require, "core.docview")
-  if ok and DocView.sync_doc_mirror_owner_state then
-    DocView.sync_doc_mirror_owner_state(self)
+  local ok, TextView = pcall(require, "core.textview")
+  if ok and TextView.sync_buffer_mirror_owner_state then
+    TextView.sync_buffer_mirror_owner_state(self)
   end
 end
 
@@ -572,64 +572,64 @@ local function perf_time_add(key, start_time)
 end
 
 reset_registered_selection_states = function(self)
-  local ok, DocView = pcall(require, "core.docview")
-  if ok and DocView.reset_registered_selection_states then
-    DocView.reset_registered_selection_states(self)
+  local ok, TextView = pcall(require, "core.textview")
+  if ok and TextView.reset_registered_selection_states then
+    TextView.reset_registered_selection_states(self)
   end
 end
 
 sanitize_registered_selection_states = function(self)
-  local ok, DocView = pcall(require, "core.docview")
-  if ok and DocView.sanitize_registered_selection_states then
-    DocView.sanitize_registered_selection_states(self)
+  local ok, TextView = pcall(require, "core.textview")
+  if ok and TextView.sanitize_registered_selection_states then
+    TextView.sanitize_registered_selection_states(self)
   end
 end
 
 snapshot_registered_selection_states = function(self)
-  local ok, DocView = pcall(require, "core.docview")
-  if ok and DocView.snapshot_registered_selection_states then
-    return DocView.snapshot_registered_selection_states(self)
+  local ok, TextView = pcall(require, "core.textview")
+  if ok and TextView.snapshot_registered_selection_states then
+    return TextView.snapshot_registered_selection_states(self)
   end
   return nil
 end
 
 restore_registered_selection_states = function(self, snapshots)
-  local ok, DocView = pcall(require, "core.docview")
-  if ok and DocView.restore_registered_selection_states then
-    DocView.restore_registered_selection_states(self, snapshots)
+  local ok, TextView = pcall(require, "core.textview")
+  if ok and TextView.restore_registered_selection_states then
+    TextView.restore_registered_selection_states(self, snapshots)
   end
 end
 
 local function adjust_registered_selection_states(self, kind, ...)
-  local ok, DocView = pcall(require, "core.docview")
-  if ok and DocView.adjust_registered_selection_states then
-    DocView.adjust_registered_selection_states(self, kind, self.bound_selection_view, ...)
+  local ok, TextView = pcall(require, "core.textview")
+  if ok and TextView.adjust_registered_selection_states then
+    TextView.adjust_registered_selection_states(self, kind, self.bound_selection_view, ...)
   end
 end
 
 local function adjust_registered_selection_states_for_batch(self, mapper, transaction)
-  local ok, DocView = pcall(require, "core.docview")
-  if ok and DocView.adjust_registered_selection_states_for_batch then
-    DocView.adjust_registered_selection_states_for_batch(self, self.bound_selection_view, mapper, transaction)
+  local ok, TextView = pcall(require, "core.textview")
+  if ok and TextView.adjust_registered_selection_states_for_batch then
+    TextView.adjust_registered_selection_states_for_batch(self, self.bound_selection_view, mapper, transaction)
   end
 end
 
 local function current_selection_owner_id(self)
   if self.bound_selection_owner_id then return self.bound_selection_owner_id end
   if self.bound_selection_session_id then return self.bound_selection_session_id end
-  local ok, DocView = pcall(require, "core.docview")
-  if ok and DocView.get_doc_mirror_owner_id then
-    return DocView.get_doc_mirror_owner_id(self)
+  local ok, TextView = pcall(require, "core.textview")
+  if ok and TextView.get_buffer_mirror_owner_id then
+    return TextView.get_buffer_mirror_owner_id(self)
   end
-  if ok and DocView.get_doc_mirror_owner_session_id then
-    return DocView.get_doc_mirror_owner_session_id(self)
+  if ok and TextView.get_buffer_mirror_owner_session_id then
+    return TextView.get_buffer_mirror_owner_session_id(self)
   end
 end
 
-local function registered_docview_count(self)
-  local ok, DocView = pcall(require, "core.docview")
-  if ok and DocView.count_registered_docviews then
-    return DocView.count_registered_docviews(self)
+local function registered_textview_count(self)
+  local ok, TextView = pcall(require, "core.textview")
+  if ok and TextView.count_registered_textviews then
+    return TextView.count_registered_textviews(self)
   end
   return 0
 end
@@ -639,7 +639,7 @@ local function can_restore_selection_undo(self, cmd)
   if owner then
     return owner == current_selection_owner_id(self)
   end
-  return registered_docview_count(self) <= 1
+  return registered_textview_count(self) <= 1
 end
 
 local function state_selection_iterator(invariant, idx)
@@ -694,7 +694,7 @@ local function merge_state_cursors(state, idx)
   state.last_selection = common.clamp(math.floor(tonumber(state.last_selection) or 1), 1, selection_state_count(state))
 end
 
-function Doc:adjust_selection_state_for_insert(state, line, col, lines, len)
+function Buffer:adjust_selection_state_for_insert(state, line, col, lines, len)
   sanitize_selection_state(self, state)
   for idx, cline1, ccol1, cline2, ccol2 in each_state_selection(state, true, true) do
     if cline1 < line then break end
@@ -705,7 +705,7 @@ function Doc:adjust_selection_state_for_insert(state, line, col, lines, len)
   sanitize_selection_state(self, state)
 end
 
-function Doc:adjust_selection_state_for_remove(state, line1, col1, line2, col2)
+function Buffer:adjust_selection_state_for_remove(state, line1, col1, line2, col2)
   if type(state.selections) ~= "table" or #state.selections < 4 then
     local line, col = self:sanitize_position(1, 1)
     state.selections = { line, col, line, col }
@@ -746,7 +746,7 @@ end
 -- Cursors will always be iterated in order from top to bottom. Through normal operation
 -- curors can never swap positions; only merge or split, or change their position in cursor
 -- order.
-function Doc:get_selection(sort)
+function Buffer:get_selection(sort)
   local line1, col1, line2, col2, swap = self:get_selection_idx(self.last_selection, sort)
   if not line1 then
     line1, col1, line2, col2, swap = self:get_selection_idx(1, sort)
@@ -759,7 +759,7 @@ end
 ---@param idx integer @the index of the selection to retrieve
 ---@param sort? boolean @whether to sort the selection returned
 ---@return integer,integer,integer,integer,boolean? @line1, col1, line2, col2, was the selection sorted
-function Doc:get_selection_idx(idx, sort)
+function Buffer:get_selection_idx(idx, sort)
   local line1, col1, line2, col2 = self.selections[idx*4-3], self.selections[idx*4-2], self.selections[idx*4-1], self.selections[idx*4]
   if line1 and sort then
     return sort_positions(line1, col1, line2, col2)
@@ -768,7 +768,7 @@ function Doc:get_selection_idx(idx, sort)
   end
 end
 
-function Doc:get_selection_text(limit)
+function Buffer:get_selection_text(limit)
   limit = limit or math.huge
   local result = {}
   for idx, line1, col1, line2, col2 in self:get_selections() do
@@ -781,42 +781,42 @@ function Doc:get_selection_text(limit)
   return table.concat(result, "\n")
 end
 
-function Doc:has_selection()
+function Buffer:has_selection()
   local line1, col1, line2, col2 = self:get_selection(false)
   return line1 ~= line2 or col1 ~= col2
 end
 
-function Doc:has_any_selection()
+function Buffer:has_any_selection()
   for idx, line1, col1, line2, col2 in self:get_selections() do
     if line1 ~= line2 or col1 ~= col2 then return true end
   end
   return false
 end
 
-function Doc:sanitize_selection()
+function Buffer:sanitize_selection()
   local perf_t = perf_start()
-  perf_add("doc_sanitize_selection_calls", 1)
+  perf_add("buffer_sanitize_selection_calls", 1)
   for idx, line1, col1, line2, col2 in self:get_selections() do
     self:set_selections(idx, line1, col1, line2, col2)
   end
-  perf_time_add("doc_sanitize_selection_ms", perf_t)
+  perf_time_add("buffer_sanitize_selection_ms", perf_t)
 end
 
-function Doc:set_selections(idx, line1, col1, line2, col2, swap, rm)
+function Buffer:set_selections(idx, line1, col1, line2, col2, swap, rm)
   local perf_t = perf_start()
-  perf_add("doc_set_selections_calls", 1)
+  perf_add("buffer_set_selections_calls", 1)
   assert(not line2 == not col2, "expected 3 or 5 arguments")
   if swap then line1, col1, line2, col2 = line2, col2, line1, col1 end
   line1, col1 = self:sanitize_position(line1, col1)
   line2, col2 = self:sanitize_position(line2 or line1, col2 or col1)
   common.splice(self.selections, (idx - 1)*4 + 1, rm == nil and 4 or rm, { line1, col1, line2, col2 })
   sync_unbound_selection_mutation(self)
-  perf_time_add("doc_set_selections_ms", perf_t)
+  perf_time_add("buffer_set_selections_ms", perf_t)
 end
 
-function Doc:add_selection(line1, col1, line2, col2, swap)
+function Buffer:add_selection(line1, col1, line2, col2, swap)
   local perf_t = perf_start()
-  perf_add("doc_add_selection_calls", 1)
+  perf_add("buffer_add_selection_calls", 1)
   local l1, c1 = sort_positions(line1, col1, line2 or line1, col2 or col1)
   local target = #self.selections / 4 + 1
   for idx, tl1, tc1 in self:get_selections(true) do
@@ -828,12 +828,12 @@ function Doc:add_selection(line1, col1, line2, col2, swap)
   self:set_selections(target, line1, col1, line2, col2, swap, 0)
   self.last_selection = target
   sync_unbound_selection_mutation(self)
-  perf_time_add("doc_add_selection_ms", perf_t)
+  perf_time_add("buffer_add_selection_ms", perf_t)
 end
 
 
-function Doc:remove_selection(idx)
-  perf_add("doc_remove_selection_calls", 1)
+function Buffer:remove_selection(idx)
+  perf_add("buffer_remove_selection_calls", 1)
   if self.last_selection >= idx then
     self.last_selection = self.last_selection - 1
   end
@@ -847,16 +847,16 @@ function Doc:remove_selection(idx)
 end
 
 
-function Doc:set_selection(line1, col1, line2, col2, swap)
+function Buffer:set_selection(line1, col1, line2, col2, swap)
   self.selections = {}
   self:set_selections(1, line1, col1, line2, col2, swap)
   self.last_selection = 1
   sync_unbound_selection_mutation(self)
 end
 
-function Doc:set_selection_list(selections, last_selection, opts)
+function Buffer:set_selection_list(selections, last_selection, opts)
   local perf_t = perf_start()
-  perf_add("doc_set_selection_list_calls", 1)
+  perf_add("buffer_set_selection_list_calls", 1)
   opts = opts or {}
   selections = selections or {}
   local usable_count = #selections - (#selections % 4)
@@ -903,12 +903,12 @@ function Doc:set_selection_list(selections, last_selection, opts)
   else
     sync_unbound_selection_mutation(self)
   end
-  perf_time_add("doc_set_selection_list_ms", perf_t)
+  perf_time_add("buffer_set_selection_list_ms", perf_t)
 end
 
-function Doc:merge_cursors(idx)
+function Buffer:merge_cursors(idx)
   local perf_t = perf_start()
-  perf_add("doc_merge_cursors_calls", 1)
+  perf_add("buffer_merge_cursors_calls", 1)
   if idx then
     local table_index = (idx - 1) * 4 + 1
     for i = table_index, table_index, -4 do
@@ -966,13 +966,13 @@ function Doc:merge_cursors(idx)
   end
   self.last_selection = common.clamp(math.floor(tonumber(self.last_selection) or 1), 1, selection_state_count(self))
   sync_unbound_selection_mutation(self)
-  perf_time_add("doc_merge_cursors_ms", perf_t)
+  perf_time_add("buffer_merge_cursors_ms", perf_t)
 end
 
 local function selection_iterator(invariant, idx)
   local target = invariant[3] and (idx*4 - 7) or (idx*4 + 1)
   if target > #invariant[1] or target <= 0 or (type(invariant[3]) == "number" and invariant[3] ~= idx - 1) then return end
-  perf_frame_add("doc_get_selections_iters", 1)
+  perf_frame_add("buffer_get_selections_iters", 1)
   if invariant[2] then
     return idx+(invariant[3] and -1 or 1), sort_positions(table.unpack(invariant[1], target, target+4))
   else
@@ -982,16 +982,16 @@ end
 
 -- If idx_reverse is true, it'll reverse iterate. If nil, or false, regular iterate.
 -- If a number, runs for exactly that iteration.
-function Doc:get_selections(sort_intra, idx_reverse)
-  perf_add("doc_get_selections_calls", 1)
-  if sort_intra then perf_detail_add("doc_get_selections_sorted_calls", 1) end
-  if idx_reverse then perf_detail_add("doc_get_selections_reverse_or_idx_calls", 1) end
+function Buffer:get_selections(sort_intra, idx_reverse)
+  perf_add("buffer_get_selections_calls", 1)
+  if sort_intra then perf_detail_add("buffer_get_selections_sorted_calls", 1) end
+  if idx_reverse then perf_detail_add("buffer_get_selections_reverse_or_idx_calls", 1) end
   return selection_iterator, { self.selections, sort_intra, idx_reverse },
     idx_reverse == true and ((#self.selections / 4) + 1) or ((idx_reverse or -1)+1)
 end
 -- End of cursor seciton.
 
-function Doc:sanitize_position(line, col)
+function Buffer:sanitize_position(line, col)
   local nlines = #self.lines
   if line > nlines then
     return nlines, #self:get_utf8_line(nlines)
@@ -1028,7 +1028,7 @@ local function position_offset_linecol(self, line, col, lineoffset, coloffset)
 end
 
 
-function Doc:position_offset(line, col, ...)
+function Buffer:position_offset(line, col, ...)
   if type(...) ~= "number" then
     return position_offset_func(self, line, col, ...)
   elseif select("#", ...) == 1 then
@@ -1041,17 +1041,17 @@ function Doc:position_offset(line, col, ...)
 end
 
 
----Returns the content of the doc between two positions. </br>
+---Returns the content of the buffer between two positions. </br>
 ---The positions will be sanitized and sorted. </br>
 ---The character at the "end" position is not included by default.
----@see core.doc.sanitize_position
+---@see core.buffer.sanitize_position
 ---@param line1 integer
 ---@param col1 integer
 ---@param line2 integer
 ---@param col2 integer
 ---@param inclusive boolean? Whether or not to return the character at the last position
 ---@return string
-function Doc:get_text(line1, col1, line2, col2, inclusive)
+function Buffer:get_text(line1, col1, line2, col2, inclusive)
   line1, col1 = self:sanitize_position(line1, col1)
   line2, col2 = self:sanitize_position(line2, col2)
   line1, col1, line2, col2 = sort_positions(line1, col1, line2, col2)
@@ -1068,7 +1068,7 @@ function Doc:get_text(line1, col1, line2, col2, inclusive)
 end
 
 
-function Doc:get_char(line, col)
+function Buffer:get_char(line, col)
   line, col = self:sanitize_position(line, col)
   return self:get_utf8_line(line):sub(col, col)
 end
@@ -1201,7 +1201,7 @@ local function update_clean_lines(self, line1, line2)
 end
 
 
-function Doc:clear_cache(l, n)
+function Buffer:clear_cache(l, n)
   for _, cache in pairs(self.cache) do
     local lines = l + n
     for ln=l-1, lines do
@@ -1214,11 +1214,11 @@ function Doc:clear_cache(l, n)
   end
 end
 
-function Doc:normalize_edit_text(text, edit, opts)
+function Buffer:normalize_edit_text(text, edit, opts)
   return tostring(text or "")
 end
 
-function Doc:can_apply_edits(edits, opts)
+function Buffer:can_apply_edits(edits, opts)
   return true
 end
 
@@ -1322,9 +1322,9 @@ local function finalize_lines(out)
   return out
 end
 
-function Doc:apply_edits(edits, opts)
+function Buffer:apply_edits(edits, opts)
   local perf_t = perf_start()
-  perf_add("doc_apply_edits_calls", 1)
+  perf_add("buffer_apply_edits_calls", 1)
   opts = opts or {}
   local time = opts.time or system.get_time()
   local owner_id = opts.owner_id or current_selection_owner_id(self)
@@ -1353,7 +1353,7 @@ function Doc:apply_edits(edits, opts)
     transaction.rejected = true
     transaction.reason = "edits must be a table"
     if opts.strict then error(transaction.reason) end
-    perf_time_add("doc_apply_edits_ms", perf_t)
+    perf_time_add("buffer_apply_edits_ms", perf_t)
     return transaction
   end
 
@@ -1388,17 +1388,17 @@ function Doc:apply_edits(edits, opts)
       transaction.reason = "overlapping edits"
       core.log_quiet("Rejected batch edit for %s: %s", self:get_name(), transaction.reason)
       if opts.strict then error(transaction.reason) end
-      perf_time_add("doc_apply_edits_ms", perf_t)
+      perf_time_add("buffer_apply_edits_ms", perf_t)
       return transaction
     end
   end
 
   if not self:can_apply_edits(normalized, opts) then
     transaction.rejected = true
-    transaction.reason = "document rejected edits"
+    transaction.reason = "buffer rejected edits"
     core.log_quiet("Rejected batch edit for %s: %s", self:get_name(), transaction.reason)
     if opts.strict then error(transaction.reason) end
-    perf_time_add("doc_apply_edits_ms", perf_t)
+    perf_time_add("buffer_apply_edits_ms", perf_t)
     return transaction
   end
 
@@ -1544,12 +1544,12 @@ function Doc:apply_edits(edits, opts)
     sync_unbound_selection_mutation(self)
   end
 
-  perf_time_add("doc_apply_edits_ms", perf_t)
+  perf_time_add("buffer_apply_edits_ms", perf_t)
   return transaction
 end
 
 
-function Doc:raw_insert(line, col, text, undo_stack, time)
+function Buffer:raw_insert(line, col, text, undo_stack, time)
   self:notify_text_change_listeners("before", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text })
   local linewrapping_old_lines = #self.lines
   local old_starts = line_starts_for(self.lines)
@@ -1588,7 +1588,7 @@ function Doc:raw_insert(line, col, text, undo_stack, time)
   self.highlighter:insert_notify(line, #lines - 1)
   self:clear_cache(line, #lines - 1)
   self:sanitize_selection()
-  linewrapping.notify_doc_raw_insert(self, line, linewrapping_old_lines)
+  linewrapping.notify_buffer_raw_insert(self, line, linewrapping_old_lines)
   self.text_revision = (self.text_revision or 0) + 1
   self:on_text_transaction({
     applied = true,
@@ -1616,7 +1616,7 @@ function Doc:raw_insert(line, col, text, undo_stack, time)
 end
 
 
-function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
+function Buffer:raw_remove(line1, col1, line2, col2, undo_stack, time)
   self:notify_text_change_listeners("before", { type = "raw_remove", kind = "raw_remove", line1 = line1, col1 = col1, line2 = line2, col2 = col2 })
   local linewrapping_old_lines = #self.lines
   -- push undo
@@ -1656,7 +1656,7 @@ function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
   self.highlighter:remove_notify(line1, line_removal)
   self:clear_cache(line1, line_removal)
   self:sanitize_selection()
-  linewrapping.notify_doc_raw_remove(self, line1, line2, linewrapping_old_lines)
+  linewrapping.notify_buffer_raw_remove(self, line1, line2, linewrapping_old_lines)
   self.text_revision = (self.text_revision or 0) + 1
   self:on_text_transaction({
     applied = true,
@@ -1684,7 +1684,7 @@ function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
 end
 
 
-function Doc:insert(line, col, text)
+function Buffer:insert(line, col, text)
   line, col = self:sanitize_position(line, col)
   return self:apply_edits({
     { line1 = line, col1 = col, line2 = line, col2 = col, text = text },
@@ -1695,7 +1695,7 @@ function Doc:insert(line, col, text)
 end
 
 
-function Doc:remove(line1, col1, line2, col2)
+function Buffer:remove(line1, col1, line2, col2)
   line1, col1 = self:sanitize_position(line1, col1)
   line2, col2 = self:sanitize_position(line2, col2)
   line1, col1, line2, col2 = sort_positions(line1, col1, line2, col2)
@@ -1708,12 +1708,12 @@ function Doc:remove(line1, col1, line2, col2)
 end
 
 
-function Doc:undo()
+function Buffer:undo()
   pop_undo(self, self.undo_stack, self.redo_stack, false)
 end
 
 
-function Doc:redo()
+function Buffer:redo()
   pop_undo(self, self.redo_stack, self.undo_stack, false)
 end
 
@@ -1824,11 +1824,11 @@ local function final_selections_after_edits(self, normalized, final_by_idx, last
   return new_selections, last_selection or self.last_selection
 end
 
-function Doc:plan_edits(edits, opts)
+function Buffer:plan_edits(edits, opts)
   return plan_normalized_edits(self, edits, opts)
 end
 
-function Doc:selections_after_edits(edits, final_by_idx, last_selection, opts)
+function Buffer:selections_after_edits(edits, final_by_idx, last_selection, opts)
   opts = opts or {}
   local normalized = opts.normalized and edits or plan_normalized_edits(self, edits, opts)
   return final_selections_after_edits(self, normalized, final_by_idx, last_selection)
@@ -1932,14 +1932,14 @@ local function selection_ranges_after_edits(self, normalized, ranges_by_idx, las
   return new_selections, last_selection or self.last_selection
 end
 
-function Doc:selection_ranges_after_edits(edits, ranges_by_idx, last_selection, opts)
+function Buffer:selection_ranges_after_edits(edits, ranges_by_idx, last_selection, opts)
   opts = opts or {}
   local normalized = opts.normalized and edits or plan_normalized_edits(self, edits, opts)
   return selection_ranges_after_edits(self, normalized, ranges_by_idx, last_selection)
 end
 
 
-function Doc:text_input_by_selection(text_by_idx, idx, opts)
+function Buffer:text_input_by_selection(text_by_idx, idx, opts)
   opts = opts or {}
   local edits = {}
   local final_by_idx = {}
@@ -1985,17 +1985,17 @@ function Doc:text_input_by_selection(text_by_idx, idx, opts)
     last_selection = new_last_selection,
     merge_cursors = opts.merge_cursors or false,
   })
-  linewrapping.notify_doc_text_input(self, result)
+  linewrapping.notify_buffer_text_input(self, result)
   return result
 end
 
-function Doc:text_input(text, idx)
+function Buffer:text_input(text, idx)
   text = tostring(text or "")
   return self:text_input_by_selection(function() return text end, idx, { type = "insert" })
 end
 
 
-function Doc:ime_text_editing_by_selection(text_for_selection, idx)
+function Buffer:ime_text_editing_by_selection(text_for_selection, idx)
   assert(type(text_for_selection) == "function", "IME text provider must be a function")
   local edits = {}
   local ranges_by_idx = {}
@@ -2019,13 +2019,13 @@ function Doc:ime_text_editing_by_selection(text_for_selection, idx)
 end
 
 
-function Doc:ime_text_editing(text, start, length, idx)
+function Buffer:ime_text_editing(text, start, length, idx)
   text = tostring(text or "")
   return self:ime_text_editing_by_selection(function() return text end, idx)
 end
 
 
-function Doc:replace_cursor(idx, line1, col1, line2, col2, fn)
+function Buffer:replace_cursor(idx, line1, col1, line2, col2, fn)
   local old_text = self:get_text(line1, col1, line2, col2)
   local new_text, res = fn(old_text)
   if old_text ~= new_text then
@@ -2046,7 +2046,7 @@ function Doc:replace_cursor(idx, line1, col1, line2, col2, fn)
   return res
 end
 
-function Doc:replace(fn)
+function Buffer:replace(fn)
   local has_selection, results, edits, final_by_idx = false, { }, {}, {}
   for idx, line1, col1, line2, col2 in self:get_selections(true) do
     if line1 ~= line2 or col1 ~= col2 then
@@ -2087,7 +2087,7 @@ function Doc:replace(fn)
 end
 
 
-function Doc:delete_to_cursor(idx, ...)
+function Buffer:delete_to_cursor(idx, ...)
   local edits = {}
   local final_by_idx = {}
   local final_positions = {}
@@ -2136,28 +2136,28 @@ function Doc:delete_to_cursor(idx, ...)
   end
   return tx
 end
-function Doc:delete_to(...) return self:delete_to_cursor(nil, ...) end
+function Buffer:delete_to(...) return self:delete_to_cursor(nil, ...) end
 
-function Doc:move_to_cursor(idx, ...)
+function Buffer:move_to_cursor(idx, ...)
   for sidx, line, col in self:get_selections(false, idx) do
     self:set_selections(sidx, self:position_offset(line, col, ...))
   end
   self:merge_cursors(idx)
 end
-function Doc:move_to(...) return self:move_to_cursor(nil, ...) end
+function Buffer:move_to(...) return self:move_to_cursor(nil, ...) end
 
 
-function Doc:select_to_cursor(idx, ...)
+function Buffer:select_to_cursor(idx, ...)
   for sidx, line, col, line2, col2 in self:get_selections(false, idx) do
     line, col = self:position_offset(line, col, ...)
     self:set_selections(sidx, line, col, line2, col2)
   end
   self:merge_cursors(idx)
 end
-function Doc:select_to(...) return self:select_to_cursor(nil, ...) end
+function Buffer:select_to(...) return self:select_to_cursor(nil, ...) end
 
 
-function Doc:get_indent_string(col)
+function Buffer:get_indent_string(col)
   local indent_type, indent_size = self:get_indent_info()
   if indent_type == "hard" then
     return "\t", "\t"
@@ -2168,7 +2168,7 @@ end
 
 -- returns the size of the original indent, and the indent
 -- in your config format, rounded either up or down
-function Doc:get_line_indent(line, rnd_up)
+function Buffer:get_line_indent(line, rnd_up)
   local _, e = line:find("^[ \t]+")
   local indent_type, indent_size = self:get_indent_info()
   local soft_tab = string.rep(" ", indent_size)
@@ -2193,7 +2193,7 @@ end
 --   inserts the appropriate whitespace, as if you typed them normally.
 -- * if you are unindenting, the cursor will jump to the start of the line,
 --   and remove the appropriate amount of spaces (or a tab).
-function Doc:indent_text(unindent, line1, col1, line2, col2)
+function Buffer:indent_text(unindent, line1, col1, line2, col2)
   local _, se = self.lines[line1]:find("^[ \t]+")
   local text, text_stop = self:get_indent_string(
     unindent and (se and se + 1 or 1) or col1
@@ -2240,62 +2240,62 @@ end
 
 local text_transaction_handlers = {}
 
-local function metadata_listeners(doc)
-  doc.metadata_listeners = doc.metadata_listeners or {}
-  return doc.metadata_listeners
+local function metadata_listeners(buffer)
+  buffer.metadata_listeners = buffer.metadata_listeners or {}
+  return buffer.metadata_listeners
 end
 
----Register a per-document filename/syntax/lifecycle observer.
+---Register a per-buffer filename/syntax/lifecycle observer.
 ---@param id string
 ---@param listener function
-function Doc:add_metadata_listener(id, listener)
+function Buffer:add_metadata_listener(id, listener)
   assert(type(id) == "string" and id ~= "", "metadata listener id must be a non-empty string")
   assert(type(listener) == "function", "metadata listener must be a function")
   metadata_listeners(self)[id] = listener
 end
 
-function Doc:remove_metadata_listener(id)
+function Buffer:remove_metadata_listener(id)
   if not self.metadata_listeners or not self.metadata_listeners[id] then return false end
   self.metadata_listeners[id] = nil
   return true
 end
 
-function Doc:notify_metadata_listeners(event)
+function Buffer:notify_metadata_listeners(event)
   local listeners = self.metadata_listeners
   if not listeners then return end
   for id, listener in pairs(listeners) do
     local ok, err = pcall(listener, self, event or {})
     if not ok and core and core.log_quiet then
       core.log_quiet(
-        "Doc metadata listener %s failed for %s: %s",
+        "Buffer metadata listener %s failed for %s: %s",
         tostring(id), self:get_name(), tostring(err)
       )
     end
   end
 end
 
-local function text_change_listeners(doc)
-  doc.text_change_listeners = doc.text_change_listeners or {}
-  return doc.text_change_listeners
+local function text_change_listeners(buffer)
+  buffer.text_change_listeners = buffer.text_change_listeners or {}
+  return buffer.text_change_listeners
 end
 
----Register a per-document text change observer.
+---Register a per-buffer text change observer.
 ---Listeners may be functions, or tables with before_change/after_change callbacks.
 ---@param id string
 ---@param listener function|table
-function Doc:add_text_change_listener(id, listener)
+function Buffer:add_text_change_listener(id, listener)
   assert(type(id) == "string" and id ~= "", "text change listener id must be a non-empty string")
   assert(type(listener) == "function" or type(listener) == "table", "text change listener must be a function or table")
   text_change_listeners(self)[id] = listener
 end
 
-function Doc:remove_text_change_listener(id)
+function Buffer:remove_text_change_listener(id)
   if not self.text_change_listeners or not self.text_change_listeners[id] then return false end
   self.text_change_listeners[id] = nil
   return true
 end
 
-function Doc:notify_text_change_listeners(phase, change)
+function Buffer:notify_text_change_listeners(phase, change)
   local listeners = self.text_change_listeners
   if not listeners then return end
   for id, listener in pairs(listeners) do
@@ -2303,62 +2303,62 @@ function Doc:notify_text_change_listeners(phase, change)
     if fn then
       local ok, err = pcall(fn, self, change or {})
       if not ok and core and core.log_quiet then
-        core.log_quiet("Doc text change listener %s failed for %s: %s", tostring(id), self:get_name(), tostring(err))
+        core.log_quiet("Buffer text change listener %s failed for %s: %s", tostring(id), self:get_name(), tostring(err))
       end
     end
   end
 end
 
----Register a batch-aware document transaction observer.
----Handlers are called from Doc:on_text_transaction after text has been applied.
+---Register a batch-aware buffer transaction observer.
+---Handlers are called from Buffer:on_text_transaction after text has been applied.
 ---@param id string
 ---@param fn function
-function Doc.register_text_transaction_handler(id, fn)
+function Buffer.register_text_transaction_handler(id, fn)
   assert(type(id) == "string" and id ~= "", "text transaction handler id must be a non-empty string")
   assert(type(fn) == "function", "text transaction handler must be a function")
   text_transaction_handlers[id] = fn
 end
 
-function Doc.unregister_text_transaction_handler(id)
+function Buffer.unregister_text_transaction_handler(id)
   text_transaction_handlers[id] = nil
 end
 
--- Internal transaction hook for batch-aware document change observers.
-function Doc:on_text_transaction(transaction)
+-- Internal transaction hook for batch-aware buffer change observers.
+function Buffer:on_text_transaction(transaction)
   if not (transaction and transaction.linewrapping_already_notified) then
-    linewrapping.notify_doc_text_transaction(self, transaction)
+    linewrapping.notify_buffer_text_transaction(self, transaction)
   end
   for id, handler in pairs(text_transaction_handlers) do
     local ok, err = pcall(handler, self, transaction)
     if not ok and core and core.log_quiet then
-      core.log_quiet("Doc text transaction handler %s failed for %s: %s", tostring(id), self:get_name(), tostring(err))
+      core.log_quiet("Buffer text transaction handler %s failed for %s: %s", tostring(id), self:get_name(), tostring(err))
     end
   end
 end
 
--- For plugins to add custom actions of document change
-function Doc:on_text_change(type, transaction)
+-- For plugins to add custom actions of buffer change
+function Buffer:on_text_change(type, transaction)
 end
 
--- For plugins to get notified when a document is closed
-function Doc:on_close()
+-- For plugins to get notified when a buffer is closed
+function Buffer:on_close()
   self:notify_metadata_listeners({
     kind = "close",
-    reason = "doc-close",
+    reason = "buffer-close",
     old = metadata_snapshot(self),
   })
   self.metadata_listeners = nil
-  linewrapping.notify_doc_close(self)
+  linewrapping.notify_buffer_close(self)
   -- this shouldn't be needed but we do it to better hint the gc to collect
-  self.highlighter.doc = nil
+  self.highlighter.buffer = nil
   self.highlighter.lines = nil
 
-  core.log_quiet("Closed doc \"%s\"", self:get_name())
+  core.log_quiet("Closed buffer \"%s\"", self:get_name())
 end
 
 ---Get the lua pattern used to match symbols taking into account current subsyntax.
 ---@return string
-function Doc:get_symbol_pattern()
+function Buffer:get_symbol_pattern()
   local line = self:get_selection(true)
   local current_syntax = self.syntax
   if current_syntax and line > 1 then
@@ -2385,7 +2385,7 @@ end
 ---cases will fallback to `config.non_word_chars` when not found.
 ---@param symbol boolean Indicates if non word characters are for a symbol
 ---@return string
-function Doc:get_non_word_chars(symbol)
+function Buffer:get_non_word_chars(symbol)
   local non_word_chars = symbol and "symbol_non_word_chars" or "non_word_chars"
   local line = self:get_selection(true)
   local current_syntax = self.syntax
@@ -2406,22 +2406,22 @@ function Doc:get_non_word_chars(symbol)
 end
 
 
-function Doc:add_search_selection(line1, col1, line2, col2)
+function Buffer:add_search_selection(line1, col1, line2, col2)
   line1, col1, line2, col2 = sort_positions(line1, col1, line2, col2)
   local idx = string.format("%d:%d-%d:%d", line1, col1, line2, col2)
   self.search_selections[idx] = true
 end
 
-function Doc:is_search_selection(line1, col1, line2, col2)
+function Buffer:is_search_selection(line1, col1, line2, col2)
   line1, col1, line2, col2 = sort_positions(line1, col1, line2, col2)
   local idx = string.format("%d:%d-%d:%d", line1, col1, line2, col2)
   if self.search_selections[idx] then return true end
   return false
 end
 
-function Doc:clear_search_selections()
+function Buffer:clear_search_selections()
   self.search_selections = {}
 end
 
 
-return Doc
+return Buffer

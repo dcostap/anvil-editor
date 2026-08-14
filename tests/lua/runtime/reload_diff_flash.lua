@@ -23,7 +23,7 @@ test.describe("reload diff flash", function()
     test.same(line.inline, { { col1 = 1, col2 = 6, tag = "insert" } })
   end)
 
-  test.test("anchors pure deletions in the reloaded document", function()
+  test.test("anchors pure deletions in the reloaded buffer", function()
     local m = model({ "alpha\n", "bravo\n", "omega\n" }, { "alpha\n", "omega\n" })
     local line = m.lines[2]
     test.not_nil(line)

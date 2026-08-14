@@ -4,7 +4,7 @@ local command = require "core.command"
 local config = require "core.config"
 local style = require "core.style"
 local project_paths = require "core.project_paths"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 local GlobalPromptBar = require "core.global_prompt_bar"
 local LogView = require "core.logview"
 local ImageView = require "core.imageview"
@@ -19,7 +19,7 @@ local Object = require "core.object"
 ---@alias core.statusbar.position '"left"' | '"right"'
 
 
----Status Bar with customizable items displaying document info and system status.
+---Status Bar with customizable items displaying buffer info and system status.
 ---Access the global instance via `core.status_bar`.
 ---@class core.statusbar : core.view
 ---@field super core.view
@@ -167,7 +167,7 @@ function StatusBarItem:hide() self.visible = false end
 function StatusBarItem:show() self.visible = true end
 
 ---Set the condition to evaluate whether this item should be displayed.
----String: treated as module name (e.g. "core.docview"), checked against active view.
+---String: treated as module name (e.g. "core.textview"), checked against active view.
 ---Table: treated as class, checked against active view with `extends()`.
 ---Function: called each update, should return boolean.
 ---Nil: always displays the item.
@@ -180,10 +180,10 @@ end
 StatusBar.Item = StatusBarItem
 
 
----Check if active view is a Document View (but not the Global Prompt Bar).
+---Check if active view is a Text View (but not the Global Prompt Bar).
 ---@return boolean
-local function predicate_docview()
-  return  core.active_view:is(DocView)
+local function predicate_textview()
+  return core.active_view:extends(TextView)
     and not core.active_view:is(GlobalPromptBar)
 end
 
@@ -192,7 +192,7 @@ local function plural_suffix(n)
 end
 
 local selection_counts_cache = {
-  doc = nil,
+  buffer = nil,
   key = nil,
   carets = 0,
   chars = 0,
@@ -210,11 +210,11 @@ local function perf_stat_add(key, amount)
   if perf and perf.add_detail then perf.add_detail(key, amount or 1) end
 end
 
-local function get_doc_selection_counts(doc)
+local function get_buffer_selection_counts(buffer)
   local perf_t = core.perf_frame_stats and system.get_time()
-  local carets = math.floor(#doc.selections / 4)
-  local key = tostring(doc:get_change_id()) .. ":" .. tostring(doc.selection_revision or 0) .. ":" .. tostring(#doc.selections)
-  if selection_counts_cache.doc == doc and selection_counts_cache.key == key then
+  local carets = math.floor(#buffer.selections / 4)
+  local key = tostring(buffer:get_change_id()) .. ":" .. tostring(buffer.selection_revision or 0) .. ":" .. tostring(#buffer.selections)
+  if selection_counts_cache.buffer == buffer and selection_counts_cache.key == key then
     perf_stat_add("statusbar_selection_cache_hits", 1)
     if perf_t then perf_stat_add("statusbar_selection_ms", (system.get_time() - perf_t) * 1000) end
     return
@@ -232,16 +232,16 @@ local function get_doc_selection_counts(doc)
   local estimated_bytes = 0
   local estimated_lines = 0
 
-  for _, line1, col1, line2, col2 in doc:get_selections(true) do
+  for _, line1, col1, line2, col2 in buffer:get_selections(true) do
     if line1 ~= line2 or col1 ~= col2 then
       estimated_lines = estimated_lines + line2 - line1 + 1
       if count_chars then
         if line1 == line2 then
           estimated_bytes = estimated_bytes + math.max(0, col2 - col1)
         else
-          estimated_bytes = estimated_bytes + #doc.lines[line1] - col1 + 1 + col2 - 1
+          estimated_bytes = estimated_bytes + #buffer.lines[line1] - col1 + 1 + col2 - 1
           for line = line1 + 1, line2 - 1 do
-            estimated_bytes = estimated_bytes + #doc.lines[line]
+            estimated_bytes = estimated_bytes + #buffer.lines[line]
             if estimated_bytes > max_sync_selection_count_bytes then break end
           end
         end
@@ -253,7 +253,7 @@ local function get_doc_selection_counts(doc)
         end
       end
       if count_chars then
-        chars = chars + doc:get_text(line1, col1, line2, col2):ulen(nil, nil, true) - (line2 - line1)
+        chars = chars + buffer:get_text(line1, col1, line2, col2):ulen(nil, nil, true) - (line2 - line1)
       end
       for line = line1, line2 do
         if not seen_lines[line] then
@@ -264,7 +264,7 @@ local function get_doc_selection_counts(doc)
     end
   end
 
-  selection_counts_cache.doc = doc
+  selection_counts_cache.buffer = buffer
   selection_counts_cache.key = key
   selection_counts_cache.carets = carets
   selection_counts_cache.chars = count_chars and chars or 0
@@ -321,25 +321,25 @@ function StatusBar:new()
   self.hide_messages = false
   self.visible = true
 
-  self:register_docview_items()
+  self:register_textview_items()
   self:register_command_items()
   self:register_imageview_items()
 end
 
----Register default status bar items for document views.
+---Register default status bar items for Text Views.
 ---Shows file, position, selections, indentation, encoding, line ending, etc.
-function StatusBar:register_docview_items()
-  if self:get_item("doc:file") then return end
+function StatusBar:register_textview_items()
+  if self:get_item("text:file") then return end
 
   self:add_item({
-    predicate = predicate_docview,
-    name = "doc:file",
+    predicate = predicate_textview,
+    name = "text:file",
     alignment = StatusBar.Item.LEFT,
     get_item = function()
       local dv = core.active_view
       local filename
-      if dv.doc.abs_filename then
-        local display = project_paths.display_path(dv.doc.abs_filename, { kind = "file" })
+      if dv.buffer.abs_filename then
+        local display = project_paths.display_path(dv.buffer.abs_filename, { kind = "file" })
         if display and display.text then
           if display.prefix_span then
             local label = display.text:sub(display.prefix_span[1], display.prefix_span[2])
@@ -351,10 +351,10 @@ function StatusBar:register_docview_items()
         end
       end
       if not filename then
-        local doc_name = dv.doc.intellij_untitled_name or dv.doc:get_name()
+        local buffer_name = dv.buffer.intellij_untitled_name or dv.buffer:get_name()
         filename = {
-          dv.doc.filename and style.text or style.dim,
-          common.home_encode(doc_name)
+          dv.buffer.filename and style.text or style.dim,
+          common.home_encode(buffer_name)
         }
       end
       return {
@@ -364,20 +364,20 @@ function StatusBar:register_docview_items()
   })
 
   self:add_item({
-    predicate = predicate_docview,
-    name = "doc:position",
+    predicate = predicate_textview,
+    name = "text:position",
     alignment = StatusBar.Item.LEFT,
     get_item = {},
     on_draw = function(x, y, h, _, calc_only)
       local dv = core.active_view
-      local line, col = dv.doc:sanitize_position(dv.doc:get_selection())
-      local line_text = dv.doc:get_utf8_line(line)
+      local line, col = dv.buffer:sanitize_position(dv.buffer:get_selection())
+      local line_text = dv.buffer:get_utf8_line(line)
       local byte_col = col
       if config.caret_column_mode == "char" then
         col = line_text:ulen(1, byte_col, true)
       end
-      local tab_type, indent_size = dv.doc:get_indent_info()
-      -- Calculating tabs when the doc is using the "hard" indent type.
+      local tab_type, indent_size = dv.buffer:get_indent_info()
+      -- Calculating tabs when the buffer is using the "hard" indent type.
       local ntabs = 0
       if tab_type == "hard" then
         local last_idx = 0
@@ -420,31 +420,31 @@ function StatusBar:register_docview_items()
       end
       return w
     end,
-    command = "doc:go-to-line",
+    command = "text:go-to-line",
     tooltip = "line : column"
   })
 
   self:add_item({
-    predicate = predicate_docview,
-    name = "doc:carets",
+    predicate = predicate_textview,
+    name = "text:carets",
     alignment = StatusBar.Item.LEFT,
     position = 3,
     get_item = {},
     on_draw = function(x, y, h, _, calc_only)
-      local carets = get_doc_selection_counts(core.active_view.doc)
+      local carets = get_buffer_selection_counts(core.active_view.buffer)
       local label = string.format(" caret%s", plural_suffix(carets))
       return draw_reserved_count_label(carets, label, " carets", x, y, h, calc_only)
     end
   })
 
   self:add_item({
-    predicate = predicate_docview,
-    name = "doc:selected-chars",
+    predicate = predicate_textview,
+    name = "text:selected-chars",
     alignment = StatusBar.Item.LEFT,
     position = 4,
     get_item = {},
     on_draw = function(x, y, h, _, calc_only)
-      local _, chars, _, chars_pending = get_doc_selection_counts(core.active_view.doc)
+      local _, chars, _, chars_pending = get_buffer_selection_counts(core.active_view.buffer)
       if chars_pending or chars <= 0 then
         return draw_reserved_status_text("", "9999 chars selected", x, y, h, calc_only)
       end
@@ -454,13 +454,13 @@ function StatusBar:register_docview_items()
   })
 
   self:add_item({
-    predicate = predicate_docview,
-    name = "doc:selected-lines",
+    predicate = predicate_textview,
+    name = "text:selected-lines",
     alignment = StatusBar.Item.LEFT,
     position = 5,
     get_item = {},
     on_draw = function(x, y, h, _, calc_only)
-      local _, _, selected_lines = get_doc_selection_counts(core.active_view.doc)
+      local _, _, selected_lines = get_buffer_selection_counts(core.active_view.buffer)
       if selected_lines <= 0 then
         return draw_reserved_status_text("", "9999 lines selected", x, y, h, calc_only)
       end
@@ -470,14 +470,14 @@ function StatusBar:register_docview_items()
   })
 
   self:add_item({
-    predicate = predicate_docview,
-    name = "doc:position-percent",
+    predicate = predicate_textview,
+    name = "text:position-percent",
     alignment = StatusBar.Item.LEFT,
     get_item = function()
       local dv = core.active_view
-      local line = dv.doc:get_selection()
+      local line = dv.buffer:get_selection()
       return {
-        string.format("%.f%%", line / #dv.doc.lines * 100)
+        string.format("%.f%%", line / #dv.buffer.lines * 100)
       }
     end,
     tooltip = "caret position"
@@ -485,12 +485,12 @@ function StatusBar:register_docview_items()
 
 
   self:add_item({
-    predicate = predicate_docview,
-    name = "doc:indentation",
+    predicate = predicate_textview,
+    name = "text:indentation",
     alignment = StatusBar.Item.RIGHT,
     get_item = function()
       local dv = core.active_view
-      local indent_type, indent_size, indent_confirmed = dv.doc:get_indent_info()
+      local indent_type, indent_size, indent_confirmed = dv.buffer:get_indent_info()
       local indent_label = (indent_type == "hard") and "tabs: " or "spaces: "
       return {
         style.text, indent_label, indent_size,
@@ -508,50 +508,50 @@ function StatusBar:register_docview_items()
   })
 
   self:add_item({
-    predicate = predicate_docview,
-    name = "doc:lines",
+    predicate = predicate_textview,
+    name = "text:lines",
     alignment = StatusBar.Item.RIGHT,
     get_item = function()
       local dv = core.active_view
       return {
-        style.text, #dv.doc.lines, " lines",
+        style.text, #dv.buffer.lines, " lines",
       }
     end,
     separator = self.separator2
   })
 
   self:add_item({
-    predicate = predicate_docview,
-    name = "doc:encoding",
+    predicate = predicate_textview,
+    name = "text:encoding",
     alignment = StatusBar.Item.RIGHT,
     get_item = function()
       local dv, bom = core.active_view, ""
-      if dv.doc.bom then bom = " (BOM)" end
+      if dv.buffer.bom then bom = " (BOM)" end
       return {
-        style.text, (dv.doc.encoding or "none"), bom
+        style.text, (dv.buffer.encoding or "none"), bom
       }
     end,
     command = function(button)
       if button == "left" then
-        command.perform "doc:change-encoding"
+        command.perform "text:change-encoding"
       elseif button == "right" then
-        command.perform "doc:reload-with-encoding"
+        command.perform "text:reload-with-encoding"
       end
     end,
     tooltip = "encoding"
   })
 
   self:add_item({
-    predicate = predicate_docview,
-    name = "doc:line-ending",
+    predicate = predicate_textview,
+    name = "text:line-ending",
     alignment = StatusBar.Item.RIGHT,
     get_item = function()
       local dv = core.active_view
       return {
-        style.text, dv.doc.crlf and "CRLF" or "LF"
+        style.text, dv.buffer.crlf and "CRLF" or "LF"
       }
     end,
-    command = "doc:toggle-line-ending"
+    command = "text:toggle-line-ending"
   })
 
 end

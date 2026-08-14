@@ -21,17 +21,17 @@ local user_scale = tonumber(
   os.getenv("ANVIL_SCALE_RESTART") or os.getenv("ANVIL_SCALE")
 )
 
-local function capture_active_docview_caret_y()
-  local DocView = package.loaded["core.docview"]
+local function capture_active_textview_caret_y()
+  local TextView = package.loaded["core.textview"]
   local view = core.active_view
-  if not DocView or not view or not view.extends or not view:extends(DocView) then return nil end
-  local line, col = view.doc:get_selection()
+  if not TextView or not view or not view.extends or not view:extends(TextView) then return nil end
+  local line, col = view.buffer:get_selection()
   local y = view:get_position_highlight_geometry(line, col)
   return { view = view, line = line, col = col, y = y }
 end
 
-local function restore_active_docview_caret_y(anchor)
-  if not anchor or not anchor.view or not anchor.view.doc then return end
+local function restore_active_textview_caret_y(anchor)
+  if not anchor or not anchor.view or not anchor.view.buffer then return end
   local view = anchor.view
   local y = view:get_position_highlight_geometry(anchor.line, anchor.col)
   local target = (view.scroll.to.y or view.scroll.y or 0) + (y - anchor.y)
@@ -50,7 +50,7 @@ function scale.set(scale)
 
   scale = common.clamp(scale, 0.7, 6)
 
-  local active_caret_y = capture_active_docview_caret_y()
+  local active_caret_y = capture_active_textview_caret_y()
 
   -- save scroll positions
   local v_scrolls = {}
@@ -122,7 +122,7 @@ function scale.set(scale)
     view.scroll.to.x = view.scroll.x
   end
 
-  restore_active_docview_caret_y(active_caret_y)
+  restore_active_textview_caret_y(active_caret_y)
 
   core.redraw = true
 end
@@ -133,7 +133,7 @@ function scale.set_code(scale)
 
   scale = common.clamp(scale, 0.7, 6)
 
-  local active_caret_y = capture_active_docview_caret_y()
+  local active_caret_y = capture_active_textview_caret_y()
 
   local s = scale / current_code_scale
   current_code_scale = scale
@@ -143,7 +143,7 @@ function scale.set_code(scale)
     style.syntax_fonts[name]:set_size(s * font:get_size())
   end
 
-  restore_active_docview_caret_y(active_caret_y)
+  restore_active_textview_caret_y(active_caret_y)
 
   core.redraw = true
 end

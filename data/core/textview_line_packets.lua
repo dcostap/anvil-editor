@@ -8,7 +8,7 @@ local line_packets = {}
 local CONTENT = renderer.display_packet and renderer.display_packet.CONTENT or 0
 local FOREGROUND_GUIDES = renderer.display_packet
   and renderer.display_packet.FOREGROUND_GUIDES or 1
-local state = core.__docview_line_packet_state
+local state = core.__textview_line_packet_state
 if not state then
   state = {
     contributors = {},
@@ -17,7 +17,7 @@ if not state then
     contributor_configs = {},
     logged_missing_api = false,
   }
-  core.__docview_line_packet_state = state
+  core.__textview_line_packet_state = state
 end
 local contributors = state.contributors
 local tracked_views = state.tracked_views
@@ -71,7 +71,7 @@ end
 local function fallback(view, reason)
   local cache = stats_for(view)
   cache.fallbacks[reason] = (cache.fallbacks[reason] or 0) + 1
-  perf_add("docview_line_packet_fallback_" .. tostring(reason), 1)
+  perf_add("textview_line_packet_fallback_" .. tostring(reason), 1)
   return nil, reason
 end
 
@@ -87,7 +87,7 @@ local function discard_entry(cache, line, reason)
   if entry.packet then entry.packet:release() end
   entry.packet = nil
   if reason == "eviction" then cache.evictions = cache.evictions + 1 end
-  if reason == "eviction" then perf_add("docview_line_packet_evictions", 1) end
+  if reason == "eviction" then perf_add("textview_line_packet_evictions", 1) end
 end
 
 function line_packets.clear(view)
@@ -131,9 +131,9 @@ function line_packets.invalidate_range(view, line1, line2)
   end
 end
 
-function line_packets.invalidate_document(doc, line1, line2)
+function line_packets.invalidate_buffer(buffer, line1, line2)
   for view in pairs(tracked_views) do
-    if view.doc == doc then line_packets.invalidate_range(view, line1, line2) end
+    if view.buffer == buffer then line_packets.invalidate_range(view, line1, line2) end
   end
 end
 
@@ -201,9 +201,9 @@ local function markdown_live_mode(view)
     and live_render.is_live_mode(view)
 end
 
-local function standard_docview(view)
-  local DocView = package.loaded["core.docview"]
-  return type(DocView) ~= "table" or getmetatable(view) == DocView
+local function standard_textview(view)
+  local Editor = package.loaded["core.editor"]
+  return type(Editor) ~= "table" or getmetatable(view) == Editor
 end
 
 local function eligible(view, line)
@@ -214,15 +214,15 @@ local function eligible(view, line)
   if not (renderer.display_packet and renderer.display_packet.new) then
     if not state.logged_missing_api then
       state.logged_missing_api = true
-      core.log_quiet("Document View line packets unavailable: native renderer API missing")
+      core.log_quiet("Text View line packets unavailable: native renderer API missing")
     end
     return false, "native_api_missing"
   end
-  if not standard_docview(view) then return false, "nonstandard_docview" end
+  if not standard_textview(view) then return false, "nonstandard_textview" end
   if view.has_visual_metric_providers and view:has_visual_metric_providers() then
     return false, "variable_visual_metrics"
   end
-  if not (view.doc and view.doc.lines[line]) then return false, "missing_line" end
+  if not (view.buffer and view.buffer.lines[line]) then return false, "missing_line" end
   if markdown_live_mode(view) then return false, "markdown_live" end
   if view:get_line_render(line) then return false, "custom_render_line" end
   if view:decoration_text_color(line) then return false, "decoration_text_color" end
@@ -362,7 +362,7 @@ local function wrapped_row_signature(
 end
 
 local function packet_base_signature(view, line, screen_x)
-  local highlighter = view.doc.highlighter
+  local highlighter = view.buffer.highlighter
   local clip = core.clip_rect_stack and core.clip_rect_stack[#core.clip_rect_stack]
   local clip_x = clip and clip[1] or nil
   local clip_width = clip and clip[3] or nil
@@ -403,7 +403,7 @@ local function make_key(
   row_signature, base_signature
 )
   return {
-    text = view.doc.lines[line],
+    text = view.buffer.lines[line],
     first_idx = first_idx,
     built_first = built_first,
     built_last = built_last,
@@ -420,7 +420,7 @@ local function key_matches(
   row_signature, base_signature
 )
   return key
-    and key.text == view.doc.lines[line]
+    and key.text == view.buffer.lines[line]
     and key.first_idx == first_idx
     and key.built_first == built_first
     and key.built_last == built_last
@@ -440,12 +440,12 @@ local function compile_syntax(
   local begin_width = view.wrapped_line_offsets
     and view.wrapped_line_offsets[line] or 0
   local line_height = view:get_line_height()
-  local _, indent_size = view.doc:get_indent_info()
+  local _, indent_size = view.buffer:get_indent_info()
   indent_size = indent_size or 2
   local row_idx = built_first
   local _, row_start_col = linewrapping.get_idx_line_col(view, row_idx)
   local row_next_line, row_end_col = linewrapping.get_idx_line_col(view, row_idx + 1)
-  if row_next_line ~= line then row_end_col = #view.doc.lines[line] end
+  if row_next_line ~= line then row_end_col = #view.buffer.lines[line] end
   local tx = row_start_col ~= 1 and begin_width or 0
   local token_start_col = 1
 
@@ -454,7 +454,7 @@ local function compile_syntax(
     if row_idx > built_last then return false end
     _, row_start_col = linewrapping.get_idx_line_col(view, row_idx)
     row_next_line, row_end_col = linewrapping.get_idx_line_col(view, row_idx + 1)
-    if row_next_line ~= line then row_end_col = #view.doc.lines[line] end
+    if row_next_line ~= line then row_end_col = #view.buffer.lines[line] end
     tx = row_start_col ~= 1 and begin_width or 0
     return true
   end
@@ -540,7 +540,7 @@ local function build_entry(view, line, screen_x, screen_y)
     row_signature, base_signature
   ) then
     cache.hits = cache.hits + 1
-    perf_add("docview_line_packet_hits", 1)
+    perf_add("textview_line_packet_hits", 1)
     touch_entry(cache, existing)
     return existing
   end
@@ -557,10 +557,10 @@ local function build_entry(view, line, screen_x, screen_y)
     end
   end
   cache.misses = cache.misses + 1
-  perf_add("docview_line_packet_misses", 1)
+  perf_add("textview_line_packet_misses", 1)
   if existing then discard_entry(cache, line) end
 
-  local highlighter_line = view.doc.highlighter:get_line(line)
+  local highlighter_line = view.buffer.highlighter:get_line(line)
   local tokens = highlighter_line.tokens
 
   local started = system.get_time()
@@ -611,15 +611,15 @@ local function build_entry(view, line, screen_x, screen_y)
   else
     entry.oversized = true
     core.log_quiet(
-      "Document View line packet bypasses retention for %s:%d (%d bytes)",
-      view.doc:get_name(), line, entry.bytes
+      "Text View line packet bypasses retention for %s:%d (%d bytes)",
+      view.buffer:get_name(), line, entry.bytes
     )
   end
   cache.builds = cache.builds + 1
   local build_ms = (system.get_time() - started) * 1000
   cache.build_ms = cache.build_ms + build_ms
-  perf_add("docview_line_packet_builds", 1)
-  perf_add("docview_line_packet_build_ms", build_ms)
+  perf_add("textview_line_packet_builds", 1)
+  perf_add("textview_line_packet_build_ms", build_ms)
   return entry
 end
 
@@ -635,8 +635,8 @@ local function prepare(view, line, x, y)
   if not success then
     stats_for(view).last_build_error = tostring(entry_or_error)
     core.log_quiet(
-      "Document View line packet build failed for %s:%d: %s",
-      view.doc:get_name(), line, tostring(entry_or_error)
+      "Text View line packet build failed for %s:%d: %s",
+      view.buffer:get_name(), line, tostring(entry_or_error)
     )
     return fallback(view, "build_error")
   end
@@ -716,13 +716,13 @@ function line_packets.draw_content(view, line, x, y)
   end
   local replay_ms = (system.get_time() - started) * 1000
   stats_for(view).replay_ms = stats_for(view).replay_ms + replay_ms
-  perf_add("docview_line_packet_replay_ms", replay_ms)
-  perf_max("docview_line_packet_resident_packets", stats_for(view).resident_packets)
-  perf_max("docview_line_packet_resident_bytes", stats_for(view).resident_bytes)
+  perf_add("textview_line_packet_replay_ms", replay_ms)
+  perf_max("textview_line_packet_resident_packets", stats_for(view).resident_packets)
+  perf_max("textview_line_packet_resident_bytes", stats_for(view).resident_bytes)
   if not ok then
     if reason == "frame_failed" then
       stats_for(view).frame_failures = (stats_for(view).frame_failures or 0) + 1
-      perf_add("docview_line_packet_frame_failures", 1)
+      perf_add("textview_line_packet_frame_failures", 1)
       core.redraw = true
       store_last_content(view, line, x, y, entry, true)
       return view:get_line_height() * entry.count
@@ -778,7 +778,7 @@ function line_packets.draw_foreground_guides(view, line, x, y, last)
   if not ok and reason == "frame_failed" then
     local cache = stats_for(view)
     cache.frame_failures = (cache.frame_failures or 0) + 1
-    perf_add("docview_line_packet_frame_failures", 1)
+    perf_add("textview_line_packet_frame_failures", 1)
     core.redraw = true
     return true
   end

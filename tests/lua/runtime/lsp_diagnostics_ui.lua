@@ -1,6 +1,6 @@
 local command = require "core.command"
 local common = require "core.common"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local test = require "core.test"
 local diagnostics = require "core.lsp.diagnostics"
 local documents = require "core.lsp.documents"
@@ -18,22 +18,22 @@ local function mkdir(path)
   return path
 end
 
-local function set_text(doc, text)
-  doc.lines = {}
+local function set_text(buffer, text)
+  buffer.lines = {}
   for line in (text .. "\n"):gmatch("(.-\n)") do
-    doc.lines[#doc.lines + 1] = line
+    buffer.lines[#buffer.lines + 1] = line
   end
-  if #doc.lines == 0 then doc.lines[1] = "\n" end
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+  if #buffer.lines == 0 then buffer.lines[1] = "\n" end
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
-local function new_doc(path, text)
-  local doc = Doc()
-  set_text(doc, text or "")
-  doc:set_filename(path, path)
-  return doc
+local function new_buffer(path, text)
+  local buffer = Buffer()
+  set_text(buffer, text or "")
+  buffer:set_filename(path, path)
+  return buffer
 end
 
 local function fake_client(id)
@@ -52,9 +52,9 @@ local function fake_client(id)
   }
 end
 
-local function fake_view(doc)
+local function fake_view(buffer)
   return {
-    doc = doc,
+    buffer = buffer,
     scrolled = {},
     with_selection_state = function(_self, fn, ...)
       return fn(...)
@@ -78,8 +78,8 @@ local function publish(client, params)
   handler(params)
 end
 
-local function selection4(doc)
-  local line1, col1, line2, col2 = doc:get_selection(true)
+local function selection4(buffer)
+  local line1, col1, line2, col2 = buffer:get_selection(true)
   return { line1, col1, line2, col2 }
 end
 
@@ -95,8 +95,8 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
 
   test.after_each(function(context)
     core.active_view = context.original_active_view
-    if context.docs then
-      for _, doc in ipairs(context.docs) do pcall(function() doc:on_close() end) end
+    if context.buffers then
+      for _, buffer in ipairs(context.buffers) do pcall(function() buffer:on_close() end) end
     end
     if context.clients then
       for _, client in ipairs(context.clients) do diagnostics.clear_client(client) end
@@ -107,10 +107,10 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
     end
   end)
 
-  local function track_doc(context, doc)
-    context.docs = context.docs or {}
-    context.docs[#context.docs + 1] = doc
-    return doc
+  local function track_buffer(context, buffer)
+    context.buffers = context.buffers or {}
+    context.buffers[#context.buffers + 1] = buffer
+    return buffer
   end
 
   local function track_client(context, client)
@@ -121,95 +121,95 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
 
   local function setup(context)
     local path = join_path(temp_root, "main.cpp")
-    local doc = track_doc(context, new_doc(path, "first\nsecond\nthird"))
+    local buffer = track_buffer(context, new_buffer(path, "first\nsecond\nthird"))
     local client = track_client(context, fake_client())
-    documents.attach(client, doc, { language_id = "cpp" })
+    documents.attach(client, buffer, { language_id = "cpp" })
     diagnostics.attach_client(client)
-    return doc, client, uri.path_to_uri(path)
+    return buffer, client, uri.path_to_uri(path)
   end
 
-  test.test("next and previous diagnostic commands navigate same-document current diagnostics", function(context)
-    local doc, client, document_uri = setup(context)
-    local view = fake_view(doc)
+  test.test("next and previous diagnostic commands navigate same-buffer current diagnostics", function(context)
+    local buffer, client, buffer_uri = setup(context)
+    local view = fake_view(buffer)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(1, 0, 1, 6), message = "second" },
         { range = lsp_range(2, 0, 2, 5), message = "third" },
       },
     })
 
-    doc:set_selection(1, 1)
+    buffer:set_selection(1, 1)
     test.ok(command.perform("lsp:next-diagnostic", view))
-    test.same(selection4(doc), { 2, 1, 2, 7 })
+    test.same(selection4(buffer), { 2, 1, 2, 7 })
     test.equal(view.scrolled[1].line, 2)
 
     test.ok(command.perform("lsp:next-diagnostic", view))
-    test.same(selection4(doc), { 3, 1, 3, 6 })
+    test.same(selection4(buffer), { 3, 1, 3, 6 })
 
     test.ok(command.perform("lsp:previous-diagnostic", view))
-    test.same(selection4(doc), { 2, 1, 2, 7 })
+    test.same(selection4(buffer), { 2, 1, 2, 7 })
   end)
 
   test.test("no-diagnostic command is a no-op", function(context)
-    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "first"))
-    local view = fake_view(doc)
-    doc:set_selection(1, 2)
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), "first"))
+    local view = fake_view(buffer)
+    buffer:set_selection(1, 2)
 
     test.ok(command.perform("lsp:next-diagnostic", view))
-    test.same(selection4(doc), { 1, 2, 1, 2 })
+    test.same(selection4(buffer), { 1, 2, 1, 2 })
     test.equal(#view.scrolled, 0)
   end)
 
   test.test("stale diagnostics are hidden from navigation immediately after local edits", function(context)
-    local doc, client, document_uri = setup(context)
-    local view = fake_view(doc)
+    local buffer, client, buffer_uri = setup(context)
+    local view = fake_view(buffer)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = { { range = lsp_range(0, 0, 0, 5), message = "old" } },
     })
-    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "new " } })
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "new " } })
 
-    doc:set_selection(1, 1)
+    buffer:set_selection(1, 1)
     test.ok(command.perform("lsp:next-diagnostic", view))
-    test.same(selection4(doc), { 1, 1, 1, 1 })
+    test.same(selection4(buffer), { 1, 1, 1, 1 })
 
-    documents.flush(client, doc)
+    documents.flush(client, buffer)
     test.ok(command.perform("lsp:next-diagnostic", view))
-    test.same(selection4(doc), { 1, 1, 1, 1 })
+    test.same(selection4(buffer), { 1, 1, 1, 1 })
   end)
 
-  test.test("cross-file diagnostics are ignored by current-document navigation", function(context)
-    local doc, client = setup(context)
-    local view = fake_view(doc)
+  test.test("cross-file diagnostics are ignored by current-buffer navigation", function(context)
+    local buffer, client = setup(context)
+    local view = fake_view(buffer)
     local other_uri = uri.path_to_uri(join_path(temp_root, "other.cpp"))
     publish(client, {
       textDocument = { uri = other_uri, version = nil },
       diagnostics = { { range = lsp_range(0, 0, 0, 5), message = "other" } },
     })
 
-    doc:set_selection(1, 1)
+    buffer:set_selection(1, 1)
     test.ok(command.perform("lsp:next-diagnostic", view))
-    test.same(selection4(doc), { 1, 1, 1, 1 })
+    test.same(selection4(buffer), { 1, 1, 1, 1 })
   end)
 
   test.test("summary reports current diagnostics only", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 0, 0, 5), severity = 1, message = "one" },
         { range = lsp_range(1, 0, 1, 6), severity = 2, message = "two" },
       },
     })
-    local summary, counts = diagnostics.summary(doc)
+    local summary, counts = diagnostics.summary(buffer)
     test.equal(summary, "2 current LSP diagnostics")
     test.equal(counts[1], 1)
     test.equal(counts[2], 1)
 
-    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "new " } })
-    documents.flush(client, doc)
-    summary = diagnostics.summary(doc)
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "new " } })
+    documents.flush(client, buffer)
+    summary = diagnostics.summary(buffer)
     test.equal(summary, "No current LSP diagnostics")
   end)
 end)

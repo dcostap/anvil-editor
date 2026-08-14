@@ -9,7 +9,7 @@ local tool_window = require "core.tool_window"
 local RootPanel = require "core.rootpanel"
 local GitView = require "plugins.git.view"
 local backend = require "plugins.git.backend"
-local historical_document = require "plugins.git.historical_document"
+local historical_buffer = require "plugins.git.historical_buffer"
 local model = require "plugins.git.model"
 local panes = require "core.panes"
 
@@ -297,7 +297,7 @@ function git_view.sync_tab_views(tw, focus_active)
     local view = git_view.ensure_tab_view(tw, tab, false, target_node)
     if preserve_focus and preserve_view and tab.id == tw.git_model.active_tab and view then
       view.focus_pane = preserve_view.focus_pane
-      view.focused_diff_doc_view = nil
+      view.focused_diff_buffer_view = nil
     end
   end
   local tab = tw.git_model:selected_tab()
@@ -350,19 +350,19 @@ end
 local function active_file_view()
   local view = core.active_view
   if view and view.get_focus_view then view = view:get_focus_view() or view end
-  local doc = view and view.doc
-  if not doc or doc.new_file or not doc.abs_filename or not common.is_absolute_path(doc.abs_filename) then return nil end
-  return view, doc
+  local buffer = view and view.buffer
+  if not buffer or buffer.new_file or not buffer.abs_filename or not common.is_absolute_path(buffer.abs_filename) then return nil end
+  return view, buffer
 end
 
 local function active_file_path()
-  local view, doc = active_file_view()
-  return doc and doc.abs_filename
+  local view, buffer = active_file_view()
+  return buffer and buffer.abs_filename
 end
 
 local function active_selection_line_range()
-  local view, doc = active_file_view()
-  if not doc or not doc.has_any_selection or not doc:has_any_selection() then return nil end
+  local view, buffer = active_file_view()
+  if not buffer or not buffer.has_any_selection or not buffer:has_any_selection() then return nil end
   local function normalized_range(line1, col1, line2, col2)
     if line1 == line2 and col1 == col2 then return nil end
     if line2 < line1 or (line1 == line2 and col2 < col1) then
@@ -372,13 +372,13 @@ local function active_selection_line_range()
     if line2 >= line1 then return line1, line2 end
   end
 
-  local line1, col1, line2, col2 = doc:get_selection(true)
+  local line1, col1, line2, col2 = buffer:get_selection(true)
   local start_line, end_line = normalized_range(line1, col1, line2, col2)
-  if start_line then return doc.abs_filename, start_line, end_line end
+  if start_line then return buffer.abs_filename, start_line, end_line end
 
-  for _, sline1, scol1, sline2, scol2 in doc:get_selections(true) do
+  for _, sline1, scol1, sline2, scol2 in buffer:get_selections(true) do
     start_line, end_line = normalized_range(sline1, scol1, sline2, scol2)
-    if start_line then return doc.abs_filename, start_line, end_line end
+    if start_line then return buffer.abs_filename, start_line, end_line end
   end
 end
 
@@ -481,7 +481,7 @@ command.add(nil, {
   ["git:show-file-history"] = function()
     local filename = active_file_path()
     if not filename then
-      core.log_quiet("Git View: file history skipped; active view has no file-backed document")
+      core.log_quiet("Git View: file history skipped; active view has no file-backed buffer")
       return
     end
     backend.repo_for_path_async(filename, function(repo, err)
@@ -513,9 +513,9 @@ command.add(nil, {
       core.log_quiet("Git View: selection history skipped; active file has no selection")
       return
     end
-    local _, doc = active_file_view()
-    if doc and doc.is_dirty and doc:is_dirty() then
-      core.log_quiet("Git View: selection history skipped; document has unsaved edits")
+    local _, buffer = active_file_view()
+    if buffer and buffer.is_dirty and buffer:is_dirty() then
+      core.log_quiet("Git View: selection history skipped; buffer has unsaved edits")
       return
     end
     backend.repo_for_path_async(filename, function(repo, err)
@@ -549,28 +549,28 @@ command.add(nil, {
     end)
   end,
 
-  ["git:open-selected-historical-document"] = function()
+  ["git:open-selected-historical-buffer"] = function()
     local view = active_git_view()
     if not view then
-      core.log_quiet("Git View: historical document open skipped; Git View is not open")
+      core.log_quiet("Git View: historical buffer open skipped; Git View is not open")
       return
     end
     if view.activate_model_tab then view:activate_model_tab(function() core.redraw = true end) end
-    local request, request_err = view.model:selected_historical_document()
+    local request, request_err = view.model:selected_historical_buffer()
     if not request then
-      core.log_quiet("Git View: historical document open skipped: %s", request_err.message or request_err.kind)
+      core.log_quiet("Git View: historical buffer open skipped: %s", request_err.message or request_err.kind)
       return
     end
-    if historical_document.activate_existing(request.repo, request.rev, request.relpath) then
+    if historical_buffer.activate_existing(request.repo, request.rev, request.relpath) then
       core.redraw = true
       return
     end
     view.model.backend.file_at(request.repo, request.rev, request.relpath, {}, function(text, err)
       if err then
-        core.log_quiet("Git View: historical document load failed: %s", err.message or err.kind)
+        core.log_quiet("Git View: historical buffer load failed: %s", err.message or err.kind)
         return
       end
-      historical_document.open(request.repo, request.rev, request.relpath, text or "")
+      historical_buffer.open(request.repo, request.rev, request.relpath, text or "")
       core.redraw = true
     end)
   end,

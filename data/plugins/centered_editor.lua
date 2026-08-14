@@ -1,11 +1,12 @@
 -- mod-version:3 priority:200
--- Center normal editor DocViews inside a capped-width editing lane.
+-- Center normal editor TextViews inside a capped-width editing lane.
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
 local style = require "core.style"
 local linewrapping = require "core.linewrapping"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
+local Editor = require "core.editor"
 
 local centered_editor = config.plugins.centered_editor
 
@@ -44,12 +45,12 @@ local pack = table.pack or function(...)
 end
 local unpack = table.unpack or unpack
 
-local originals = DocView.__centered_editor_originals
+local originals = TextView.__centered_editor_originals
 if originals then
   -- Restore previous centered-editor wrappers before rebuilding them.  This
   -- keeps config/plugin reloads from stacking wrappers on top of wrappers.
-  for name, fn in pairs(originals.docview) do
-    DocView[name] = fn
+  for name, fn in pairs(originals.textview) do
+    TextView[name] = fn
   end
   for name, cmd in pairs(originals.commands) do
     if command.map[name] then
@@ -59,8 +60,8 @@ if originals then
   end
   linewrapping.unregister_width_provider("centered_editor")
 else
-  originals = { docview = {}, commands = {} }
-  DocView.__centered_editor_originals = originals
+  originals = { textview = {}, commands = {} }
+  TextView.__centered_editor_originals = originals
 end
 
 local function settings()
@@ -107,7 +108,7 @@ function M.should_center(view)
     perf_frame_add("centered_editor_should_center_disabled", 1)
     return false
   end
-  if not view or getmetatable(view) ~= DocView or not view.doc then
+  if not view or getmetatable(view) ~= Editor or not view.buffer then
     perf_frame_add("centered_editor_should_center_non_editor", 1)
     return false
   end
@@ -249,22 +250,22 @@ function M.with_editor_geometry(view, fn, ...)
   return with_geometry(view, M.get_editor_rect, fn, ...)
 end
 
-local function save_docview_method(name)
-  originals.docview[name] = DocView[name]
+local function save_textview_method(name)
+  originals.textview[name] = TextView[name]
 end
 
-save_docview_method("get_presentation_viewport_width")
-function DocView:get_presentation_viewport_width(...)
+save_textview_method("get_presentation_viewport_width")
+function TextView:get_presentation_viewport_width(...)
   if self.__centered_editor_in_geometry then return self.size.x end
   if M.should_center(self) then
     local _, width = M.get_editor_rect(self)
     return width
   end
-  return originals.docview.get_presentation_viewport_width(self, ...)
+  return originals.textview.get_presentation_viewport_width(self, ...)
 end
 
-save_docview_method("get_presentation_layout_generation")
-function DocView:get_presentation_layout_generation()
+save_textview_method("get_presentation_layout_generation")
+function TextView:get_presentation_layout_generation()
   local cfg = settings()
   if cfg.pane_views_only and self.__centered_editor_pane_membership == nil then
     local node = root_node_for_view(self)
@@ -314,46 +315,46 @@ function DocView:get_presentation_layout_generation()
   return state.generation
 end
 
-save_docview_method("get_content_offset")
-function DocView:get_content_offset(...)
+save_textview_method("get_content_offset")
+function TextView:get_content_offset(...)
   if not M.should_center(self)
   or self.__centered_editor_in_geometry
   or self.__centered_editor_in_lane_geometry then
-    return originals.docview.get_content_offset(self, ...)
+    return originals.textview.get_content_offset(self, ...)
   end
   local lane_x = M.get_lane_rect(self)
-  local _, y = originals.docview.get_content_offset(self, ...)
+  local _, y = originals.textview.get_content_offset(self, ...)
   return math.floor(lane_x - self.scroll.x + 0.5), y
 end
 
-save_docview_method("get_visible_cols_range")
-function DocView:get_visible_cols_range(...)
+save_textview_method("get_visible_cols_range")
+function TextView:get_visible_cols_range(...)
   return M.with_editor_geometry(self, function(...)
-    return originals.docview.get_visible_cols_range(self, ...)
+    return originals.textview.get_visible_cols_range(self, ...)
   end, ...)
 end
 
-save_docview_method("draw")
-function DocView:draw(...)
+save_textview_method("draw")
+function TextView:draw(...)
   if not M.should_center(self) then
-    return originals.docview.draw(self, ...)
+    return originals.textview.draw(self, ...)
   end
 
   local scope = perf_scope_begin("centered_editor")
 
   -- Paint the whole tab background first; the existing draw chain then uses
-  -- centered geometry for the document origin while preserving the full
+  -- centered geometry for the buffer origin while preserving the full
   -- drawable width unless line wrapping is active.
   self:draw_background(style.background)
   local result = M.with_editor_geometry(self, function(...)
-    return originals.docview.draw(self, ...)
+    return originals.textview.draw(self, ...)
   end, ...)
   perf_scope_end(scope)
   return result
 end
 
-save_docview_method("on_mouse_moved")
-function DocView:on_mouse_moved(x, y, ...)
+save_textview_method("on_mouse_moved")
+function TextView:on_mouse_moved(x, y, ...)
   if M.should_center(self) and type(x) == "number" and type(y) == "number" then
     local in_vertical = y >= self.position.y and y < self.position.y + self.size.y
     if in_vertical
@@ -369,35 +370,35 @@ function DocView:on_mouse_moved(x, y, ...)
     end
   end
   return M.with_editor_geometry(self, function(x, y, ...)
-    return originals.docview.on_mouse_moved(self, x, y, ...)
+    return originals.textview.on_mouse_moved(self, x, y, ...)
   end, x, y, ...)
 end
 
-save_docview_method("on_mouse_pressed")
-function DocView:on_mouse_pressed(button, x, y, clicks, ...)
+save_textview_method("on_mouse_pressed")
+function TextView:on_mouse_pressed(button, x, y, clicks, ...)
   return M.with_editor_geometry(self, function(button, x, y, clicks, ...)
-    return originals.docview.on_mouse_pressed(self, button, x, y, clicks, ...)
+    return originals.textview.on_mouse_pressed(self, button, x, y, clicks, ...)
   end, button, x, y, clicks, ...)
 end
 
-save_docview_method("on_mouse_released")
-function DocView:on_mouse_released(...)
+save_textview_method("on_mouse_released")
+function TextView:on_mouse_released(...)
   return M.with_editor_geometry(self, function(...)
-    return originals.docview.on_mouse_released(self, ...)
+    return originals.textview.on_mouse_released(self, ...)
   end, ...)
 end
 
-save_docview_method("scroll_to_make_visible")
-function DocView:scroll_to_make_visible(...)
+save_textview_method("scroll_to_make_visible")
+function TextView:scroll_to_make_visible(...)
   return M.with_editor_geometry(self, function(...)
-    return originals.docview.scroll_to_make_visible(self, ...)
+    return originals.textview.scroll_to_make_visible(self, ...)
   end, ...)
 end
 
-save_docview_method("scroll_to_line")
-function DocView:scroll_to_line(...)
+save_textview_method("scroll_to_line")
+function TextView:scroll_to_line(...)
   return M.with_editor_geometry(self, function(...)
-    return originals.docview.scroll_to_line(self, ...)
+    return originals.textview.scroll_to_line(self, ...)
   end, ...)
 end
 
@@ -413,12 +414,12 @@ command.add_toggle("centered-editor:toggle", {
 })
 
 local mouse_commands = {
-  "doc:set-cursor",
-  "doc:set-cursor-word",
-  "doc:set-cursor-line",
-  "doc:split-cursor",
-  "doc:select-to-cursor",
-  "doc:paste-primary-selection",
+  "text:set-cursor",
+  "text:set-cursor-word",
+  "text:set-cursor-line",
+  "text:split-cursor",
+  "text:select-to-cursor",
+  "text:paste-primary-selection",
 }
 
 local function patch_mouse_command(name)
@@ -450,12 +451,12 @@ end
 
 -- Wrap to the centered lane instead of the full tab width when no explicit
 -- user line-wrapping width override is configured.
-linewrapping.register_width_provider("centered_editor", function(docview)
+linewrapping.register_width_provider("centered_editor", function(textview)
   if config.plugins.linewrapping.width_override ~= nil then return nil end
-  if not M.should_center(docview) then return nil end
-  local scrollbar_width = docview.v_scrollbar.expanded_size or style.expanded_scrollbar_size
-  local _, lane_width = M.get_lane_rect(docview)
-  return math.max(0, lane_width - docview:get_gutter_width() - scrollbar_width)
+  if not M.should_center(textview) then return nil end
+  local scrollbar_width = textview.v_scrollbar.expanded_size or style.expanded_scrollbar_size
+  local _, lane_width = M.get_lane_rect(textview)
+  return math.max(0, lane_width - textview:get_gutter_width() - scrollbar_width)
 end)
 
 core.centered_editor = M

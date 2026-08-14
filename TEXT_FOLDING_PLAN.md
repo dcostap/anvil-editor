@@ -1,5 +1,7 @@
 # Text Folding Regions Plan
 
+`PANE_VIEW_BUFFER_REDESIGN_PLAN.md` controls Pane placement, View lifecycle, and Buffer or Text View names. Interpret this plan through that model.
+
 ## Goal
 
 Implement proper text folding as a core Document View feature. A folded region should hide real Document text behind a visible Fold Widget Row that shows how many lines are hidden. Hidden text remains normal document content for selection, copy, cut, replace, undo/redo, search, diagnostics, language navigation, and diff viewers.

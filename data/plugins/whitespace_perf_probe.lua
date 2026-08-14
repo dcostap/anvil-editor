@@ -5,7 +5,7 @@ local core = require "core"
 local config = require "core.config"
 local common = require "core.common"
 local command = require "core.command"
-local DocView = require "core.docview"
+local Editor = require "core.editor"
 
 local function is_truthy_value(value)
   if not value or value == "" then return false end
@@ -73,10 +73,10 @@ local function write_result(fields)
   fp:close()
 end
 
-local function active_docview()
+local function active_textview()
   local view = core.active_view
-  if view and view:is(DocView) and view.doc and #view.doc.lines > 0 then
-    if probe.file == "" or common.path_equals(view.doc.abs_filename, probe.file) then
+  if view and view:extends(Editor) and view.buffer and #view.buffer.lines > 0 then
+    if probe.file == "" or common.path_equals(view.buffer.abs_filename, probe.file) then
       return view
     end
     -- In single-instance or restored-session edge cases the file can already be
@@ -95,14 +95,14 @@ end
 
 local function open_target_file()
   if probe.file == "" then return nil end
-  local ok, doc = pcall(core.open_doc, probe.file)
+  local ok, buffer = pcall(core.open_buffer, probe.file)
   if not ok then
-    core.log_quiet("Whitespace perf probe: refusing target file %q: %s", probe.file, tostring(doc))
+    core.log_quiet("Whitespace perf probe: refusing target file %q: %s", probe.file, tostring(buffer))
     probe.file = ""
     return nil
   end
-  if not doc then return nil end
-  return activate_view(core.root_panel:open_doc(doc))
+  if not buffer then return nil end
+  return activate_view(core.root_panel:open_buffer(buffer))
 end
 
 local function stabilize_ui(dv)
@@ -113,8 +113,8 @@ local function stabilize_ui(dv)
     core.status_bar:display_messages(false)
     core.status_bar.message = nil
   end
-  if dv and dv.doc then
-    dv.doc:set_selection(math.max(1, math.min(#dv.doc.lines, probe.start_line)), 1)
+  if dv and dv.buffer then
+    dv.buffer:set_selection(math.max(1, math.min(#dv.buffer.lines, probe.start_line)), 1)
     dv:scroll_to_line(probe.start_line, true)
   end
   pcall(function() require "plugins.drawwhitespace" end)
@@ -134,7 +134,7 @@ core.add_thread(function()
   local dv = open_target_file()
 
   repeat
-    dv = active_docview() or open_target_file()
+    dv = active_textview() or open_target_file()
     core.redraw = true
     coroutine.yield(0.05)
   until dv
@@ -152,7 +152,7 @@ core.add_thread(function()
     "Whitespace perf probe: warmup %.2fs, measuring %.2fs on %s",
     probe.warmup,
     probe.duration,
-    probe.file ~= "" and probe.file or tostring(dv.doc.abs_filename or "")
+    probe.file ~= "" and probe.file or tostring(dv.buffer.abs_filename or "")
   )
 
   force_redraw_until(system.get_time() + probe.warmup)
@@ -166,7 +166,7 @@ core.add_thread(function()
 
   write_result {
     done = 1,
-    file = probe.file ~= "" and probe.file or tostring(dv.doc.abs_filename or ""),
+    file = probe.file ~= "" and probe.file or tostring(dv.buffer.abs_filename or ""),
     start_time = string.format("%.6f", start_time),
     end_time = string.format("%.6f", end_time),
     duration = string.format("%.3f", end_time - start_time),

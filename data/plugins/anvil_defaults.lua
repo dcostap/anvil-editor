@@ -71,7 +71,7 @@ plugin_defaults("autosave_fast", {
 plugin_defaults("untitled_recovery", {
   delay = 0.25,
   large_delay = 1.0,
-  large_doc_threshold = 1024 * 1024,
+  large_buffer_threshold = 1024 * 1024,
 })
 plugin_defaults("autocomplete", {
   min_len = 3,
@@ -344,8 +344,8 @@ keymap.add_direct({
   ["ctrl+shift+f"] = { "terminal:search", "fuzzy-searcher:open-grep" },
 })
 keymap.add_direct({
-  ["ctrl+shift+d"] = "doc:go-to-line",
-  ["ctrl+shift+D"] = "doc:go-to-line",
+  ["ctrl+shift+d"] = "text:go-to-line",
+  ["ctrl+shift+D"] = "text:go-to-line",
 })
 -- Enable Markdown Live Preview by default while preserving an explicit
 -- USERDIR/project-module override loaded before first-party defaults.

@@ -1,4 +1,4 @@
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local fence_highlight = require "core.markdown.fence_highlight"
 local markdown_model = require "core.markdown.model"
 local test = require "core.test"
@@ -16,11 +16,11 @@ local function wait_status(instance, wanted, timeout)
   return instance.status == wanted
 end
 
-local function make_doc(text)
-  local doc = Doc("fence-service.md", "fence-service.md", true)
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
-  return doc
+local function make_buffer(text)
+  local buffer = Buffer("fence-service.md", "fence-service.md", true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  return buffer
 end
 
 local function wait_entry(service, node, line, timeout)
@@ -42,13 +42,13 @@ local function types_by_text(entry)
 end
 
 test.describe("Markdown fenced-code highlighting", function()
-  test.it("shares lazy Document-scoped token work", function()
-    local doc = make_doc("```js\nconst value = 1\n```\n")
-    local model = markdown_model.get(doc)
+  test.it("shares lazy Buffer-scoped token work", function()
+    local buffer = make_buffer("```js\nconst value = 1\n```\n")
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local node = test.not_nil(model:fenced_node_for_line(2))
-    local service = fence_highlight.get(doc)
-    test.equal(fence_highlight.get(doc), service)
+    local service = fence_highlight.get(buffer)
+    test.equal(fence_highlight.get(buffer), service)
     service:reconcile(model)
 
     local listener = {}
@@ -78,15 +78,15 @@ test.describe("Markdown fenced-code highlighting", function()
     service:remove_listener(second_listener)
     test.equal(service:get_diagnostics().cached_lines, 0)
     service:close("test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 
   test.it("immediately hides a stale multiline suffix after a body edit", function()
-    local doc = make_doc("```lua\n--[[\ninside\n]]\n```\n")
-    local model = markdown_model.get(doc)
+    local buffer = make_buffer("```lua\n--[[\ninside\n]]\n```\n")
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local node = test.not_nil(model:fenced_node_for_line(3))
-    local service = fence_highlight.get(doc)
+    local service = fence_highlight.get(buffer)
     service:reconcile(model)
     local listener = {}
     service:add_listener(listener, function() end)
@@ -95,7 +95,7 @@ test.describe("Markdown fenced-code highlighting", function()
     local before = test.not_nil(wait_entry(service, node, 3))
     test.equal(types_by_text(before).inside, "comment")
 
-    doc:remove(2, 1, 2, 5)
+    buffer:remove(2, 1, 2, 5)
     test.is_nil(service:peek_line_tokens(node, 3))
     test.is_nil(service:line_tokens(node, 3, 100))
     local after = test.not_nil(wait_entry(service, node, 3))
@@ -103,15 +103,15 @@ test.describe("Markdown fenced-code highlighting", function()
 
     service:remove_listener(listener)
     service:close("test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 
   test.it("invalidates warm tokens when the tokenizer backend changes", function()
-    local doc = make_doc("```js\nconst value = 1\n```\n")
-    local model = markdown_model.get(doc)
+    local buffer = make_buffer("```js\nconst value = 1\n```\n")
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local node = test.not_nil(model:fenced_node_for_line(2))
-    local service = fence_highlight.get(doc)
+    local service = fence_highlight.get(buffer)
     service:reconcile(model)
     local listener = {}
     service:add_listener(listener, function() end)
@@ -130,17 +130,17 @@ test.describe("Markdown fenced-code highlighting", function()
 
     service:remove_listener(listener)
     service:close("test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 
   test.it("retains shifted blocks and reuses a converged suffix", function()
-    local doc = make_doc(
+    local buffer = make_buffer(
       "intro\n```lua\nlocal a = 1\nlocal b = 2\nlocal c = 3\nlocal d = 4\n```\n"
     )
-    local model = markdown_model.get(doc)
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local node = test.not_nil(model:fenced_node_for_line(6))
-    local service = fence_highlight.get(doc)
+    local service = fence_highlight.get(buffer)
     service:reconcile(model)
     local listener = {}
     service:add_listener(listener, function() end)
@@ -148,7 +148,7 @@ test.describe("Markdown fenced-code highlighting", function()
     test.not_nil(wait_entry(service, node, 6))
     local tokenized = service:get_diagnostics().lines_tokenized
 
-    doc:insert(1, 1, "# heading\n")
+    buffer:insert(1, 1, "# heading\n")
     test.not_nil(service:peek_line_tokens(node, 7))
     test.equal(service:get_diagnostics().lines_tokenized, tokenized)
     test.ok(wait_status(model, "ready"), model.reason)
@@ -156,8 +156,8 @@ test.describe("Markdown fenced-code highlighting", function()
     node = test.not_nil(model:fenced_node_for_line(7))
     test.not_nil(service:line_tokens(node, 7, 100))
 
-    doc:remove(5, 7, 5, 8)
-    doc:insert(5, 7, "renamed")
+    buffer:remove(5, 7, 5, 8)
+    buffer:insert(5, 7, "renamed")
     test.is_nil(service:peek_line_tokens(node, 7))
     test.is_nil(service:line_tokens(node, 7, 100))
     test.not_nil(wait_entry(service, node, 7))
@@ -166,15 +166,15 @@ test.describe("Markdown fenced-code highlighting", function()
 
     service:remove_listener(listener)
     service:close("test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 
   test.it("keeps warm body tokens when only trailing info metadata changes", function()
-    local doc = make_doc("```lua title=before\nlocal value = 1\n```\n")
-    local model = markdown_model.get(doc)
+    local buffer = make_buffer("```lua title=before\nlocal value = 1\n```\n")
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local node = test.not_nil(model:fenced_node_for_line(2))
-    local service = fence_highlight.get(doc)
+    local service = fence_highlight.get(buffer)
     service:reconcile(model)
     local listener = {}
     service:add_listener(listener, function() end)
@@ -182,8 +182,8 @@ test.describe("Markdown fenced-code highlighting", function()
     test.not_nil(wait_entry(service, node, 2))
     local tokenized = service:get_diagnostics().lines_tokenized
 
-    doc:remove(1, 14, 1, 20)
-    doc:insert(1, 14, "after")
+    buffer:remove(1, 14, 1, 20)
+    buffer:insert(1, 14, "after")
     test.is_nil(service:peek_line_tokens(node, 2))
     test.ok(wait_status(model, "ready"), model.reason)
     service:reconcile(model)
@@ -193,56 +193,56 @@ test.describe("Markdown fenced-code highlighting", function()
 
     service:remove_listener(listener)
     service:close("test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 
-  test.it("cancels queued work when the Document closes", function()
+  test.it("cancels queued work when the Buffer closes", function()
     local lines = { "```lua" }
     for index = 1, 1000 do lines[#lines + 1] = "local value" .. index .. " = " .. index end
     lines[#lines + 1] = "```"
-    local doc = make_doc(table.concat(lines, "\n") .. "\n")
-    local model = markdown_model.get(doc)
+    local buffer = make_buffer(table.concat(lines, "\n") .. "\n")
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local node = test.not_nil(model:fenced_node_for_line(1001))
-    local service = fence_highlight.get(doc)
+    local service = fence_highlight.get(buffer)
     service:reconcile(model)
     local listener = {}
     service:add_listener(listener, function() end)
     test.is_nil(service:line_tokens(node, 1001, 100))
 
-    doc:on_close()
+    buffer:on_close()
     test.equal(service:get_diagnostics().closed, true)
     for _ = 1, 3 do coroutine.yield(0) end
     test.equal(service:get_diagnostics().cached_lines, 0)
   end)
 
   test.it("maps structural unsafe bounds to shifted suffix lines", function()
-    local doc = make_doc("```lua\n--[[\ninside\n]]\n```\n")
-    local model = markdown_model.get(doc)
+    local buffer = make_buffer("```lua\n--[[\ninside\n]]\n```\n")
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local node = test.not_nil(model:fenced_node_for_line(3))
-    local service = fence_highlight.get(doc)
+    local service = fence_highlight.get(buffer)
     service:reconcile(model)
     local listener = {}
     service:add_listener(listener, function() end)
     test.is_nil(service:line_tokens(node, 3, 100))
     test.not_nil(wait_entry(service, node, 3))
 
-    doc:insert(2, 1, "one\ntwo\nthree\nfour\nfive\nsix\n")
+    buffer:insert(2, 1, "one\ntwo\nthree\nfour\nfive\nsix\n")
     test.equal(service:is_line_unsafe(9), true)
     test.is_nil(service:peek_line_tokens(node, 9))
 
     service:remove_listener(listener)
     service:close("test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 
   test.it("drops all states for a changed same-line-count snapshot", function()
-    local doc = make_doc("```lua\nlocal start = 1\ninside\n]]\n```\n")
-    local model = markdown_model.get(doc)
+    local buffer = make_buffer("```lua\nlocal start = 1\ninside\n]]\n```\n")
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local node = test.not_nil(model:fenced_node_for_line(3))
-    local service = fence_highlight.get(doc)
+    local service = fence_highlight.get(buffer)
     service:reconcile(model)
     local listener = {}
     service:add_listener(listener, function() end)
@@ -254,7 +254,7 @@ test.describe("Markdown fenced-code highlighting", function()
     local file = test.not_nil(io.open(path, "wb"))
     file:write("```lua\n--[[\ninside\n]]\n```\n")
     file:close()
-    doc:load(path)
+    buffer:load(path)
     test.is_nil(service:peek_line_tokens(node, 3))
     test.equal(service:is_line_unsafe(3), false)
     test.equal(service:contains_line(3), false)
@@ -269,7 +269,7 @@ test.describe("Markdown fenced-code highlighting", function()
     os.remove(path)
     service:remove_listener(listener)
     service:close("test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 
   test.it("does not retain zombie fence membership after a full reload", function()
@@ -291,12 +291,12 @@ test.describe("Markdown fenced-code highlighting", function()
     file:write(source)
     file:close()
 
-    local doc = Doc("fence-multi-reload.md", path)
-    local model = markdown_model.get(doc)
+    local buffer = Buffer("fence-multi-reload.md", path)
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local first = test.not_nil(model:fenced_node_for_line(3))
     local second = test.not_nil(model:fenced_node_for_line(7))
-    local service = fence_highlight.get(doc)
+    local service = fence_highlight.get(buffer)
     service:reconcile(model)
     local listener = {}
     local transaction_invalidation
@@ -314,7 +314,7 @@ test.describe("Markdown fenced-code highlighting", function()
     file = test.not_nil(io.open(path, "wb"))
     file:write(source)
     file:close()
-    doc:load(path)
+    buffer:load(path)
 
     test.equal(service:get_diagnostics().cached_lines, 0)
     test.equal(service:contains_line(1), false)
@@ -324,13 +324,13 @@ test.describe("Markdown fenced-code highlighting", function()
     service:reconcile(model)
     test.equal(service:contains_line(1), false)
 
-    doc:insert(1, 1, "x")
+    buffer:insert(1, 1, "x")
     test.is_nil(transaction_invalidation)
 
     os.remove(path)
     service:remove_listener(listener)
     service:close("test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 
   test.it("cancels pre-reload fence work at the snapshot generation boundary", function()
@@ -339,11 +339,11 @@ test.describe("Markdown fenced-code highlighting", function()
       lines[#lines + 1] = "local value" .. index .. " = " .. index
     end
     lines[#lines + 1] = "```"
-    local doc = make_doc(table.concat(lines, "\n") .. "\n")
-    local model = markdown_model.get(doc)
+    local buffer = make_buffer(table.concat(lines, "\n") .. "\n")
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local node = test.not_nil(model:fenced_node_for_line(601))
-    local service = fence_highlight.get(doc)
+    local service = fence_highlight.get(buffer)
     service:reconcile(model)
     local listener = {}
     service:add_listener(listener, function() end)
@@ -355,14 +355,14 @@ test.describe("Markdown fenced-code highlighting", function()
     local file = test.not_nil(io.open(path, "wb"))
     file:write("plain replacement\n")
     file:close()
-    doc:load(path)
+    buffer:load(path)
 
     local diagnostics = service:get_diagnostics()
     test.ok(diagnostics.generation > previous_generation)
     test.equal(diagnostics.cached_lines, 0)
     test.equal(diagnostics.blocks, 0)
     test.equal(diagnostics.pending_work, false)
-    doc:insert(1, 1, "edited ")
+    buffer:insert(1, 1, "edited ")
     test.ok(wait_status(model, "ready"), model.reason)
     test.equal(service:reconcile(model), true)
     for _ = 1, 3 do coroutine.yield(0) end
@@ -371,18 +371,18 @@ test.describe("Markdown fenced-code highlighting", function()
     os.remove(path)
     service:remove_listener(listener)
     service:close("test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 
   test.it("bounds render tokens and replays evicted lines from checkpoints", function()
     local lines = { "```lua" }
     for index = 1, 12 do lines[#lines + 1] = "local value" .. index .. " = " .. index end
     lines[#lines + 1] = "```"
-    local doc = make_doc(table.concat(lines, "\n") .. "\n")
-    local model = markdown_model.get(doc)
+    local buffer = make_buffer(table.concat(lines, "\n") .. "\n")
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local node = test.not_nil(model:fenced_node_for_line(13))
-    local service = fence_highlight.get(doc)
+    local service = fence_highlight.get(buffer)
     service:reconcile(model)
     service:set_cache_limits({
       render_lines = 2,
@@ -407,18 +407,18 @@ test.describe("Markdown fenced-code highlighting", function()
 
     service:remove_listener(listener)
     service:close("test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 
   test.it("preserves deeper demand when an earlier evicted line is also requested", function()
     local lines = { "```lua" }
     for index = 1, 100 do lines[#lines + 1] = "local value" .. index .. " = " .. index end
     lines[#lines + 1] = "```"
-    local doc = make_doc(table.concat(lines, "\n") .. "\n")
-    local model = markdown_model.get(doc)
+    local buffer = make_buffer(table.concat(lines, "\n") .. "\n")
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local node = test.not_nil(model:fenced_node_for_line(101))
-    local service = fence_highlight.get(doc)
+    local service = fence_highlight.get(buffer)
     service:reconcile(model)
     service:set_cache_limits({ render_lines = 30, checkpoints = 4 })
     local keeper = {}
@@ -443,15 +443,15 @@ test.describe("Markdown fenced-code highlighting", function()
     service:remove_listener(listener)
     service:remove_listener(keeper)
     service:close("test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 
   test.it("falls back to plain for one line larger than the cache budget", function()
-    local doc = make_doc("```lua\nlocal oversized_value = 123456789\n```\n")
-    local model = markdown_model.get(doc)
+    local buffer = make_buffer("```lua\nlocal oversized_value = 123456789\n```\n")
+    local model = markdown_model.get(buffer)
     test.ok(wait_status(model, "ready"), model.reason)
     local node = test.not_nil(model:fenced_node_for_line(2))
-    local service = fence_highlight.get(doc)
+    local service = fence_highlight.get(buffer)
     service:reconcile(model)
     service:set_cache_limits({ source_bytes = 8, token_pairs = 2 })
     local listener = {}
@@ -472,6 +472,6 @@ test.describe("Markdown fenced-code highlighting", function()
 
     service:remove_listener(listener)
     service:close("test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 end)

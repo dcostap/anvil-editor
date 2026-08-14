@@ -865,10 +865,10 @@ function Node:close_all_views(keep_view)
   end
 end
 
----Close all document views (views with context="workspace").
+---Close all Text Views (views with context="workspace").
 ---Used when closing a project. May collapse empty nodes.
 ---@param keep_active boolean If true, keep the active view open
-function Node:close_all_docviews(keep_active)
+function Node:close_all_textviews(keep_active)
   local node_active_view = self.active_view
   local lost_active_view = false
   if self.type == "leaf" then
@@ -878,7 +878,7 @@ function Node:close_all_docviews(keep_active)
       if not view.__pane_permanent
       and (view.context == "workspace" or view.context == "session")
       and (not keep_active or view ~= self.active_view) then
-        if view.release_owned_features then view:release_owned_features("close-all-docviews") end
+        if view.release_owned_features then view:release_owned_features("close-all-textviews") end
         table.remove(self.views, i)
         if view == node_active_view then
           lost_active_view = true
@@ -899,8 +899,8 @@ function Node:close_all_docviews(keep_active)
       self:set_active_view(self.views[1])
     end
   else
-    self.a:close_all_docviews(keep_active)
-    self.b:close_all_docviews(keep_active)
+    self.a:close_all_textviews(keep_active)
+    self.b:close_all_textviews(keep_active)
     if self.a:is_empty() and not self.a.pane_id then
       self:consume(self.b)
     elseif self.b:is_empty() and not self.b.pane_id then

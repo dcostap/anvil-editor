@@ -995,7 +995,7 @@ end)
 ipc:register_method("core.open_file", function(file)
   if system.get_file_info(file) then
     system.raise_window(core.window)
-    core.root_panel:open_doc(core.open_doc(file))
+    core.root_panel:open_buffer(core.open_buffer(file))
   end
 end, {{name = "file", type = "string"}})
 
@@ -1010,7 +1010,7 @@ ipc:register_method("core.change_directory", function(directory)
   if system.get_file_info(directory) then
     system.raise_window(core.window)
     if common.path_equals(directory, core.root_project().path) then return end
-    core.confirm_close_docs(core.docs, function(dirpath)
+    core.confirm_close_buffers(core.buffers, function(dirpath)
       core.open_project_in_same_window(dirpath)
     end, directory)
   end
@@ -1036,11 +1036,11 @@ function RootPanel:on_mouse_moved(x, y, dx, dy)
     and
     not rootpanel_tab_dragging
   then
-    ---@type core.doc
-    local doc = core.active_view.doc
-    if doc and doc.abs_filename then
+    ---@type core.buffer
+    local buffer = core.active_view.buffer
+    if buffer and buffer.abs_filename then
       rootpanel_tab_dragging = true
-      ipc:signal(nil, "core.tab_drag_start", doc.abs_filename)
+      ipc:signal(nil, "core.tab_drag_start", buffer.abs_filename)
       rootpanel_dragged_node = self.dragged_node
     end
   elseif rootpanel_dragged_node then
@@ -1059,7 +1059,7 @@ function RootPanel:on_mouse_moved(x, y, dx, dy)
       "core.tab_drag_received",
       rootpanel_waiting_drop_file
     )
-    core.root_panel:open_doc(core.open_doc(rootpanel_waiting_drop_file))
+    core.root_panel:open_buffer(core.open_buffer(rootpanel_waiting_drop_file))
     rootpanel_waiting_drop_file = ""
     rootpanel_waiting_drop_instance = ""
   end

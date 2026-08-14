@@ -82,7 +82,7 @@ function pending_render.current_source(
     end
     return render
   end
-  if topology and topology.revision == view.doc.text_revision
+  if topology and topology.revision == view.buffer.text_revision
     and topology.fence_delimiters and topology.fence_delimiters[line]
   then
     if reveal_code_delimiter then
@@ -101,7 +101,7 @@ function pending_render.current_source(
       },
     }
   end
-  if topology and topology.revision == view.doc.text_revision
+  if topology and topology.revision == view.buffer.text_revision
     and topology.frontmatter[line]
   then
     return frontmatter_source_render()
@@ -111,14 +111,14 @@ function pending_render.current_source(
   then
     return frontmatter_source_render()
   end
-  if topology and topology.revision == view.doc.text_revision
+  if topology and topology.revision == view.buffer.text_revision
     and topology.html[line]
   then
     local render = source_fallback(view, previous, current_text, true)
     render.markdown_pending_provenance = "unavailable"
     return render
   end
-  if topology and topology.revision == view.doc.text_revision
+  if topology and topology.revision == view.buffer.text_revision
     and topology.comments[line]
   then
     return {
@@ -134,7 +134,7 @@ function pending_render.current_source(
     }
   end
 
-  if topology and topology.revision == view.doc.text_revision
+  if topology and topology.revision == view.buffer.text_revision
     and topology.math[line]
   then
     local render = source_fallback(view, previous, current_text, false)
@@ -178,7 +178,7 @@ function pending_render.current_source(
   end
 
   if not code then
-    local next_text = line and (view.doc.lines[line + 1] or ""):gsub("\n$", "") or ""
+    local next_text = line and (view.buffer.lines[line + 1] or ""):gsub("\n$", "") or ""
     local next_compact = next_text:gsub("%s", "")
     local setext_level = next_compact:match("^=+$") and 1
       or next_compact:match("^%-+$") and 2 or nil
@@ -209,7 +209,7 @@ function pending_render.current_source(
     local compact = current_text:gsub("%s", "")
     local setext_marker = compact:match("^=+$") or compact:match("^%-+$")
     local previous_text = line and line > 1
-      and (view.doc.lines[line - 1] or ""):gsub("\n$", "") or ""
+      and (view.buffer.lines[line - 1] or ""):gsub("\n$", "") or ""
     if setext_marker and #compact >= 1 and previous_text ~= "" then
       return {
         source_text = current_text,

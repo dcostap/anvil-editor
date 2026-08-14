@@ -1,8 +1,8 @@
 local core = require "core"
 local command = require "core.command"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
-local file_context = require "core.file_context"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
+local Editor = require "core.editor"
 local poi = require "core.poi"
 local test = require "core.test"
 
@@ -20,12 +20,10 @@ local function wait_until(predicate, timeout, message)
 end
 
 local function make_editor(text)
-  local doc = Doc()
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
-  local view = DocView(doc)
-  file_context.mark_editor_view(view)
-  return view
+  local buffer = Buffer()
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  return Editor(buffer)
 end
 
 test.describe("Point of Interest navigation", function()
@@ -37,18 +35,18 @@ test.describe("Point of Interest navigation", function()
     poi.remove_activation_provider("test-focused-activation")
     poi.remove_activation_provider("test-fallback-activation")
     for _, view in ipairs(context.diffviews or {}) do
-      view.doc_view_a.doc:on_close()
-      view.doc_view_b.doc:on_close()
+      view.buffer_view_a.buffer:on_close()
+      view.buffer_view_b.buffer:on_close()
     end
-    for _, doc in ipairs(context.docs or {}) do
-      doc:on_close()
+    for _, buffer in ipairs(context.buffers or {}) do
+      buffer:on_close()
     end
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
   test.it("navigates an Editor's Git-change provider without wrapping", function()
     local view = make_editor("one\ntwo\nthree\nfour\n")
-    gitdiff._set_state_for_tests(view.doc, {
+    gitdiff._set_state_for_tests(view.buffer, {
       is_in_repo = true,
       ranges = {
         { type = "modification", current_start = 2, current_end = 3 },
@@ -58,29 +56,29 @@ test.describe("Point of Interest navigation", function()
     })
     core.set_active_view(view)
 
-    view.doc:set_selection(1, 3)
+    view.buffer:set_selection(1, 3)
     test.ok(command.perform("poi:next"))
-    test.same(view.doc.selections, { 2, 3, 2, 3 })
+    test.same(view.buffer.selections, { 2, 3, 2, 3 })
 
     test.ok(command.perform("poi:next"))
-    test.same(view.doc.selections, { 4, 3, 4, 3 })
+    test.same(view.buffer.selections, { 4, 3, 4, 3 })
 
     test.ok(command.perform("poi:next"))
-    test.same(view.doc.selections, { 4, 3, 4, 3 })
+    test.same(view.buffer.selections, { 4, 3, 4, 3 })
 
     test.ok(command.perform("poi:previous"))
-    test.same(view.doc.selections, { 2, 3, 2, 3 })
+    test.same(view.buffer.selections, { 2, 3, 2, 3 })
 
     test.ok(command.perform("poi:previous"))
-    test.same(view.doc.selections, { 2, 3, 2, 3 })
+    test.same(view.buffer.selections, { 2, 3, 2, 3 })
   end)
 
   test.it("does not expose language navigation commands without a symbol at the caret", function(context)
-    local doc = Doc()
-    doc:insert(1, 1, "!!!")
-    doc:set_selection(1, 1)
-    local view = DocView(doc)
-    context.docs = { doc }
+    local buffer = Buffer()
+    buffer:insert(1, 1, "!!!")
+    buffer:set_selection(1, 1)
+    local view = TextView(buffer)
+    context.buffers = { buffer }
     core.set_active_view(view)
 
     test.not_ok(command.is_valid("language:show-references"))
@@ -88,12 +86,11 @@ test.describe("Point of Interest navigation", function()
   end)
 
   test.it("uses language declaration as the Editor's fallback activation", function(context)
-    local doc = Doc()
-    doc:insert(1, 1, "target")
-    doc:set_selection(1, 3)
-    local view = DocView(doc)
-    file_context.mark_editor_view(view)
-    context.docs = { doc }
+    local buffer = Buffer()
+    buffer:insert(1, 1, "target")
+    buffer:set_selection(1, 3)
+    local view = Editor(buffer)
+    context.buffers = { buffer }
     core.set_active_view(view)
 
     test.ok(command.is_valid("poi:activate"))
@@ -102,7 +99,7 @@ test.describe("Point of Interest navigation", function()
   test.it("lets a focused context override the view's ordinary activation", function(context)
     local activated
     local view = make_editor("target")
-    context.docs = { view.doc }
+    context.buffers = { view.buffer }
     view.get_point_of_interest_at = function()
       return {
         line = 1, col = 1, line2 = 1, col2 = 2, text_bounds = true,
@@ -127,7 +124,7 @@ test.describe("Point of Interest navigation", function()
   test.it("uses a fallback activation provider when a view has no POI collection", function(context)
     local activated = false
     local view = make_editor("!!!")
-    context.docs = { view.doc }
+    context.buffers = { view.buffer }
     view.get_points_of_interest = false
     poi.add_activation_provider("test-fallback-activation", {
       priority = -1000,
@@ -155,12 +152,12 @@ test.describe("Point of Interest navigation", function()
     context.diffviews = { view }
     wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
 
-    local left = view.doc_view_a
+    local left = view.buffer_view_a
     core.set_active_view(left)
-    left.doc:set_selection(4, 3)
+    left.buffer:set_selection(4, 3)
 
     test.ok(command.perform("poi:previous"))
-    test.same(left.doc.selections, { 2, 1, 2, 1 })
+    test.same(left.buffer.selections, { 2, 1, 2, 1 })
   end)
 
   test.it("keeps DiffView panes scroll-synchronized when navigating POIs", function(context)
@@ -179,16 +176,16 @@ test.describe("Point of Interest navigation", function()
     context.diffviews = { view }
     wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
 
-    local left, right = view.doc_view_a, view.doc_view_b
+    local left, right = view.buffer_view_a, view.buffer_view_b
     left.position.x, left.position.y = 0, 0
     right.position.x, right.position.y = 400, 0
     left.size.x, left.size.y = 300, 80
     right.size.x, right.size.y = 300, 80
     core.set_active_view(view)
-    left.doc:set_selection(1, 1)
+    left.buffer:set_selection(1, 1)
 
     test.ok(command.perform("poi:next"))
-    test.same(left.doc.selections, { 90, 1, 90, 1 })
+    test.same(left.buffer.selections, { 90, 1, 90, 1 })
     test.equal(left.scroll.to.y, right.scroll.to.y)
   end)
 end)

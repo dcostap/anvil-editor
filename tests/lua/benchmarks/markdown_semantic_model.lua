@@ -1,4 +1,4 @@
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local markdown_model = require "core.markdown.model"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
@@ -53,12 +53,12 @@ local function run_case(target_bytes)
   print(string.format("markdown-semantic-benchmark starting target_bytes=%d", target_bytes))
   io.stdout:flush()
   local source, line_count = fixture(target_bytes)
-  local doc = Doc("markdown-benchmark.md", "markdown-benchmark.md", true)
-  doc:insert(1, 1, source)
-  doc:clear_undo_redo()
+  local buffer = Buffer("markdown-benchmark.md", "markdown-benchmark.md", true)
+  buffer:insert(1, 1, source)
+  buffer:clear_undo_redo()
 
   local started = system.get_time()
-  local instance = markdown_model.get(doc)
+  local instance = markdown_model.get(buffer)
   test.ok(wait_ready(instance, 15), instance.reason)
   local full_ms = (system.get_time() - started) * 1000
   local full_native_ms = instance.diagnostics.last_parse_ms
@@ -76,7 +76,7 @@ local function run_case(target_bytes)
   local batch_query_ms = (system.get_time() - batch_started) * 1000
 
   started = system.get_time()
-  doc:insert(middle, 4, "edited ")
+  buffer:insert(middle, 4, "edited ")
   test.ok(wait_ready(instance, 15), instance.reason)
   local incremental_ms = (system.get_time() - started) * 1000
   local incremental_native_ms = instance.diagnostics.last_parse_ms
@@ -92,23 +92,23 @@ local function run_case(target_bytes)
     summary.metrics.usage_query_ms, query_ms, #nodes, batch_query_ms, #batch_nodes
   ))
   io.stdout:flush()
-  markdown_model.close(doc, "benchmark")
+  markdown_model.close(buffer, "benchmark")
 end
 
 local function run_operation_case(target_bytes)
   local source = operation_fixture(target_bytes)
-  local doc = Doc("markdown-operation-benchmark.md", "markdown-operation-benchmark.md", true)
-  doc:insert(1, 1, source)
-  doc:clear_undo_redo()
-  local instance = markdown_model.get(doc)
+  local buffer = Buffer("markdown-operation-benchmark.md", "markdown-operation-benchmark.md", true)
+  buffer:insert(1, 1, source)
+  buffer:clear_undo_redo()
+  local instance = markdown_model.get(buffer)
   test.ok(wait_ready(instance, 15), instance.reason)
 
   local function middle_line(matcher)
-    local middle = math.max(1, math.floor(#doc.lines / 2))
+    local middle = math.max(1, math.floor(#buffer.lines / 2))
     if not matcher then return middle end
-    for distance = 0, #doc.lines do
+    for distance = 0, #buffer.lines do
       for _, line in ipairs({ middle - distance, middle + distance }) do
-        local text = line >= 1 and line <= #doc.lines and doc.lines[line] or nil
+        local text = line >= 1 and line <= #buffer.lines and buffer.lines[line] or nil
         if text and text:match(matcher) then return line end
       end
     end
@@ -133,17 +133,17 @@ local function run_operation_case(target_bytes)
   end
 
   measure_operation("character-insert", function()
-    doc:insert(middle_line(), 10, "x")
+    buffer:insert(middle_line(), 10, "x")
   end)
   measure_operation("newline-insert", function()
-    doc:insert(middle_line("^Ordinary"), 24, "\n")
+    buffer:insert(middle_line("^Ordinary"), 24, "\n")
   end)
   measure_operation("list-indent", function()
-    doc:insert(middle_line("^%- "), 1, "    ")
+    buffer:insert(middle_line("^%- "), 1, "    ")
   end)
   measure_operation("delimiter-create", function()
     local line = middle_line("^Ordinary")
-    doc:apply_edits({
+    buffer:apply_edits({
       { line1 = line, col1 = 10, line2 = line, col2 = 10, text = "**" },
       { line1 = line, col1 = 19, line2 = line, col2 = 19, text = "**" },
     }, { type = "benchmark-delimiter-create", merge_cursors = false })
@@ -151,10 +151,10 @@ local function run_operation_case(target_bytes)
   measure_operation("ten-line-paste", function()
     local paste = {}
     for index = 1, 10 do paste[index] = "pasted representative line " .. index end
-    doc:insert(middle_line(), 15, table.concat(paste, "\n"))
+    buffer:insert(middle_line(), 15, table.concat(paste, "\n"))
   end)
 
-  markdown_model.close(doc, "benchmark")
+  markdown_model.close(buffer, "benchmark")
 end
 
 test.describe("Markdown semantic-model benchmark", function()

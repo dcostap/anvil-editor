@@ -82,8 +82,8 @@ local function serve_lifecycle(position_encoding, opts)
   local capabilities = initialize.params and initialize.params.capabilities or {}
   local workspace = capabilities.workspace or {}
   local window = capabilities.window or {}
-  local text_document = capabilities.textDocument or {}
-  local completion = text_document.completion
+  local text_buffer = capabilities.textDocument or {}
+  local completion = text_buffer.completion
   local allowed_completion = type(completion) == "table"
     and type(completion.completionItem) == "table"
     and completion.completionItem.labelDetailsSupport == true
@@ -92,9 +92,9 @@ local function serve_lifecycle(position_encoding, opts)
   local bad_capabilities = {}
   if workspace.configuration then bad_capabilities[#bad_capabilities + 1] = "workspace.configuration" end
   if workspace.applyEdit then bad_capabilities[#bad_capabilities + 1] = "workspace.applyEdit" end
-  if text_document.semanticTokens ~= nil then bad_capabilities[#bad_capabilities + 1] = "textDocument.semanticTokens" end
+  if text_buffer.semanticTokens ~= nil then bad_capabilities[#bad_capabilities + 1] = "textDocument.semanticTokens" end
   if completion ~= nil and not allowed_completion then bad_capabilities[#bad_capabilities + 1] = "textDocument.completion" end
-  if text_document.diagnostic ~= nil then bad_capabilities[#bad_capabilities + 1] = "textDocument.diagnostic" end
+  if text_buffer.diagnostic ~= nil then bad_capabilities[#bad_capabilities + 1] = "textDocument.diagnostic" end
   if #bad_capabilities > 0 then
     write_stderr("truthful-capabilities=bad " .. table.concat(bad_capabilities, ",") .. "\n")
   else
@@ -152,14 +152,14 @@ elseif mode == "manager_integration" then
   while true do
     local message = assert(read_message())
     if message.kind == "notification" and message.method == "textDocument/didOpen" then
-      local text_document = message.params and message.params.textDocument or {}
-      local text = tostring(text_document.text or "")
-      write_stderr("didOpen=" .. tostring(text_document.uri) .. "\n")
+      local text_buffer = message.params and message.params.textDocument or {}
+      local text = tostring(text_buffer.text or "")
+      write_stderr("didOpen=" .. tostring(text_buffer.uri) .. "\n")
       write_stderr("didOpenTextLength=" .. tostring(#text) .. "\n")
       write_stderr("didOpenText=" .. text:gsub("\r", "\\r"):gsub("\n", "\\n") .. "\n")
       if os.getenv("ANVIL_LSP_FAKE_SERVER_PUBLISH_DIAGNOSTICS") == "1" then
         send(jsonrpc.notification("textDocument/publishDiagnostics", {
-          textDocument = { uri = text_document.uri, version = text_document.version },
+          textDocument = { uri = text_buffer.uri, version = text_buffer.version },
           diagnostics = {
             {
               range = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 4 } },
@@ -171,8 +171,8 @@ elseif mode == "manager_integration" then
         }))
       end
     elseif message.kind == "notification" and message.method == "textDocument/didChange" then
-      local text_document = message.params and message.params.textDocument or {}
-      write_stderr("didChange=" .. tostring(text_document.version) .. "\n")
+      local text_buffer = message.params and message.params.textDocument or {}
+      write_stderr("didChange=" .. tostring(text_buffer.version) .. "\n")
     elseif message.kind == "request" and message.method == "shutdown" then
       send(jsonrpc.response(message.id, lsp_json.null))
     elseif message.kind == "notification" and message.method == "exit" then

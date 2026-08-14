@@ -10,8 +10,8 @@ local process = require "core.process"
 local storage = require "core.storage"
 local style = require "core.style"
 local Tabs = require "core.tabs"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local View = require "core.view"
 local file_context = require "core.file_context"
 local panes = require "core.panes"
@@ -430,28 +430,28 @@ function M._build_powershell_payload(command_text, cwd, token)
   })
 end
 
-local CommandOutputDoc = Doc:extend()
+local CommandOutputBuffer = Buffer:extend()
 
-function CommandOutputDoc:__tostring() return "CommandOutputDoc" end
+function CommandOutputBuffer:__tostring() return "CommandOutputBuffer" end
 
-function CommandOutputDoc:new()
-  CommandOutputDoc.super.new(self)
+function CommandOutputBuffer:new()
+  CommandOutputBuffer.super.new(self)
   self.output_text = ""
   self:clean()
 end
 
-function CommandOutputDoc:is_dirty()
+function CommandOutputBuffer:is_dirty()
   return false
 end
 
-function CommandOutputDoc:save()
+function CommandOutputBuffer:save()
   return true
 end
 
-function CommandOutputDoc:reload()
+function CommandOutputBuffer:reload()
 end
 
-function CommandOutputDoc:_with_internal_mutation(fn)
+function CommandOutputBuffer:_with_internal_mutation(fn)
   self.__command_output_mutating = true
   local ok, a, b, c = pcall(fn)
   self.__command_output_mutating = false
@@ -459,45 +459,45 @@ function CommandOutputDoc:_with_internal_mutation(fn)
   return a, b, c
 end
 
-function CommandOutputDoc:insert(line, col, text)
+function CommandOutputBuffer:insert(line, col, text)
   if not self.__command_output_mutating then return end
-  return CommandOutputDoc.super.insert(self, line, col, text)
+  return CommandOutputBuffer.super.insert(self, line, col, text)
 end
 
-function CommandOutputDoc:remove(line1, col1, line2, col2)
+function CommandOutputBuffer:remove(line1, col1, line2, col2)
   if not self.__command_output_mutating then return end
-  return CommandOutputDoc.super.remove(self, line1, col1, line2, col2)
+  return CommandOutputBuffer.super.remove(self, line1, col1, line2, col2)
 end
 
-function CommandOutputDoc:can_apply_edits(edits, opts)
+function CommandOutputBuffer:can_apply_edits(edits, opts)
   return self.__command_output_mutating == true
 end
 
-function CommandOutputDoc:text_input()
+function CommandOutputBuffer:text_input()
 end
 
-function CommandOutputDoc:ime_text_editing()
+function CommandOutputBuffer:ime_text_editing()
 end
 
-function CommandOutputDoc:undo()
+function CommandOutputBuffer:undo()
 end
 
-function CommandOutputDoc:redo()
+function CommandOutputBuffer:redo()
 end
 
-function CommandOutputDoc:delete_to_cursor()
+function CommandOutputBuffer:delete_to_cursor()
 end
 
-function CommandOutputDoc:delete_to()
+function CommandOutputBuffer:delete_to()
 end
 
-function CommandOutputDoc:replace()
+function CommandOutputBuffer:replace()
 end
 
-function CommandOutputDoc:indent_text()
+function CommandOutputBuffer:indent_text()
 end
 
-function CommandOutputDoc:_display_text()
+function CommandOutputBuffer:_display_text()
   local text = self.output_text or ""
   if text == "" or text:sub(-1) ~= "\n" then
     text = text .. "\n"
@@ -505,7 +505,7 @@ function CommandOutputDoc:_display_text()
   return text
 end
 
-function CommandOutputDoc:_replace_display_text(selection_mode)
+function CommandOutputBuffer:_replace_display_text(selection_mode)
   local old_last_line = #self.lines
   local old_selections = { table.unpack(self.selections or {}) }
   local old_last_selection = self.last_selection or 1
@@ -517,7 +517,7 @@ function CommandOutputDoc:_replace_display_text(selection_mode)
     ulen = {},
   }
   self.highlighter:soft_reset()
-  CommandOutputDoc.super.insert(self, 1, 1, self:_display_text())
+  CommandOutputBuffer.super.insert(self, 1, 1, self:_display_text())
 
   if selection_mode == "preserve" and #old_selections >= 4 then
     self.selections = {}
@@ -539,14 +539,14 @@ function CommandOutputDoc:_replace_display_text(selection_mode)
   self:clean()
 end
 
-function CommandOutputDoc:set_text(text)
+function CommandOutputBuffer:set_text(text)
   self.output_text = tostring(text or "")
   self:_with_internal_mutation(function()
     self:_replace_display_text("end")
   end)
 end
 
-function CommandOutputDoc:append(text)
+function CommandOutputBuffer:append(text)
   if not text or text == "" then return end
   self.output_text = (self.output_text or "") .. text
   self:_with_internal_mutation(function()
@@ -554,12 +554,12 @@ function CommandOutputDoc:append(text)
   end)
 end
 
-local CommandOutputView = DocView:extend()
+local CommandOutputView = TextView:extend()
 
 function CommandOutputView:__tostring() return "CommandOutputView" end
 
 function CommandOutputView:new(slot)
-  CommandOutputView.super.new(self, CommandOutputDoc())
+  CommandOutputView.super.new(self, CommandOutputBuffer())
   self.slot = slot
   self.command_output_view = true
   self.poi_cache = nil
@@ -604,7 +604,7 @@ function CommandOutputView:show_entry(entry, opts)
 
   self.displayed_entry = entry
   self.poi_cache = nil
-  self.doc:set_text(entry and entry.text or "")
+  self.buffer:set_text(entry and entry.text or "")
 
   if entry and entry.selection_state then
     self:set_selection_state(entry.selection_state)
@@ -613,10 +613,10 @@ function CommandOutputView:show_entry(entry, opts)
     self.scroll.y = entry.scroll_y or entry.scroll_to_y or 0
     self.scroll.to.y = entry.scroll_to_y or entry.scroll_y or 0
   elseif opts.follow_end then
-    self.doc:set_selection(#self.doc.lines, 1)
-    self:scroll_to_make_visible(#self.doc.lines, math.huge, true)
+    self.buffer:set_selection(#self.buffer.lines, 1)
+    self:scroll_to_make_visible(#self.buffer.lines, math.huge, true)
   else
-    self.doc:set_selection(1, 1)
+    self.buffer:set_selection(1, 1)
     self.scroll.x, self.scroll.to.x = 0, 0
     self.scroll.y, self.scroll.to.y = 0, 0
   end
@@ -627,22 +627,22 @@ function CommandOutputView:clear_for_run(command_text, cwd)
   local header = string.format("PS %s> %s\n\n", tostring(cwd or ""), tostring(command_text or ""))
   self.displayed_entry = nil
   self.poi_cache = nil
-  self.doc:set_text(header)
-  self:scroll_to_make_visible(#self.doc.lines, math.huge, true)
+  self.buffer:set_text(header)
+  self:scroll_to_make_visible(#self.buffer.lines, math.huge, true)
 end
 
 function CommandOutputView:append_text(text)
   local old_scroll_x, old_scroll_to_x = self.scroll.x, self.scroll.to.x
   local old_scroll_y, old_scroll_to_y = self.scroll.y, self.scroll.to.y
-  local old_last_line = #self.doc.lines
-  local line1, col1, line2, col2 = self.doc:get_selection()
+  local old_last_line = #self.buffer.lines
+  local line1, col1, line2, col2 = self.buffer:get_selection()
   local follow_output = line1 == old_last_line and line2 == old_last_line
 
-  self.doc:append(text)
+  self.buffer:append(text)
   self.poi_cache = nil
 
   if follow_output then
-    self:scroll_to_make_visible(#self.doc.lines, col1, false)
+    self:scroll_to_make_visible(#self.buffer.lines, col1, false)
     self.scroll.x, self.scroll.to.x = old_scroll_x, old_scroll_to_x
   else
     self.scroll.x, self.scroll.to.x = old_scroll_x, old_scroll_to_x
@@ -653,7 +653,7 @@ end
 
 function CommandOutputView:cache_key_for_pois()
   local entry = self.displayed_entry
-  return entry or self.doc.output_text or ""
+  return entry or self.buffer.output_text or ""
 end
 
 local function build_poi_line_index(points)
@@ -670,7 +670,7 @@ local function build_poi_line_index(points)
 end
 
 function CommandOutputView:get_points_of_interest(opts)
-  local text = self.doc.output_text or ""
+  local text = self.buffer.output_text or ""
   local key = self:cache_key_for_pois()
   local root = root_project_path()
   local cache = self.poi_cache
@@ -996,7 +996,7 @@ function CommandOutputPanel:try_close(do_close)
   do_close()
 end
 
-M.CommandOutputDoc = CommandOutputDoc
+M.CommandOutputBuffer = CommandOutputBuffer
 M.CommandOutputView = CommandOutputView
 M.CommandOutputPanel = CommandOutputPanel
 
@@ -1496,34 +1496,34 @@ end
 
 local function install_readonly_command_guards()
   local blocked = {
-    "doc:cut",
-    "doc:undo",
-    "doc:redo",
-    "doc:paste",
-    "doc:paste-primary-selection",
-    "doc:newline",
-    "doc:newline-below",
-    "doc:newline-above",
-    "doc:delete",
-    "doc:backspace",
-    "doc:join-lines",
-    "doc:indent",
-    "doc:unindent",
-    "doc:duplicate-lines",
-    "doc:delete-lines",
-    "doc:move-lines-up",
-    "doc:move-lines-down",
-    "doc:toggle-block-comments",
-    "doc:toggle-line-comments",
-    "doc:upper-case",
-    "doc:lower-case",
-    "doc:toggle-line-ending",
-    "doc:change-encoding",
-    "doc:reload-with-encoding",
-    "doc:toggle-overwrite",
-    "doc:save-as",
-    "doc:save",
-    "doc:reload",
+    "text:cut",
+    "text:undo",
+    "text:redo",
+    "text:paste",
+    "text:paste-primary-selection",
+    "text:newline",
+    "text:newline-below",
+    "text:newline-above",
+    "text:delete",
+    "text:backspace",
+    "text:join-lines",
+    "text:indent",
+    "text:unindent",
+    "text:duplicate-lines",
+    "text:delete-lines",
+    "text:move-lines-up",
+    "text:move-lines-down",
+    "text:toggle-block-comments",
+    "text:toggle-line-comments",
+    "text:upper-case",
+    "text:lower-case",
+    "text:toggle-line-ending",
+    "text:change-encoding",
+    "text:reload-with-encoding",
+    "text:toggle-overwrite",
+    "text:save-as",
+    "text:save",
+    "text:reload",
     "file:rename",
     "file:delete",
   }
@@ -1534,8 +1534,8 @@ local function install_readonly_command_guards()
     "next-word-end",
     "previous-block-start",
     "next-block-end",
-    "start-of-doc",
-    "end-of-doc",
+    "start-of-buffer",
+    "end-of-buffer",
     "start-of-line",
     "end-of-line",
     "start-of-word",
@@ -1547,7 +1547,7 @@ local function install_readonly_command_guards()
     "next-page",
   }
   for _, name in ipairs(translations) do
-    blocked[#blocked + 1] = "doc:delete-to-" .. name
+    blocked[#blocked + 1] = "text:delete-to-" .. name
   end
   for _, name in ipairs(blocked) do
     wrap_command_to_block_output_view(name)

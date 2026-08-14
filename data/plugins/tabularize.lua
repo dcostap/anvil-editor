@@ -1,7 +1,7 @@
 -- mod-version:3
 local core = require "core"
 local command = require "core.command"
-local translate = require "core.doc.translate"
+local translate = require "core.buffer.translate"
 
 
 local function gmatch_to_array(text, ptn)
@@ -40,7 +40,7 @@ local function tabularize_lines(lines, delim)
 end
 
 
-command.add("core.docview", {
+command.add("core.textview", {
   ["tabularize:tabularize"] = function(dv)
     if dv.can_edit and not dv:can_edit("tabularize", { warn = true }) then return end
     core.global_prompt_bar:enter("Tabularize On Delimiter", {
@@ -48,13 +48,13 @@ command.add("core.docview", {
         if dv.can_edit and not dv:can_edit("tabularize", { warn = true }) then return end
         if delim == "" then delim = " " end
 
-        local doc = dv.doc
-        local line1, col1, line2, col2, swap = doc:get_selection(true)
-        line1, col1 = doc:position_offset(line1, col1, translate.start_of_line)
-        line2, col2 = doc:position_offset(line2, col2, translate.end_of_line)
-        doc:set_selection(line1, col1, line2, col2, swap)
+        local buffer = dv.buffer
+        local line1, col1, line2, col2, swap = buffer:get_selection(true)
+        line1, col1 = buffer:position_offset(line1, col1, translate.start_of_line)
+        line2, col2 = buffer:position_offset(line2, col2, translate.end_of_line)
+        buffer:set_selection(line1, col1, line2, col2, swap)
 
-        doc:replace(function(text)
+        buffer:replace(function(text)
           local lines = gmatch_to_array(text, "[^\n]*\n?")
           tabularize_lines(lines, delim)
           return table.concat(lines)

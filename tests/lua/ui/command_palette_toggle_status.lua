@@ -2,26 +2,26 @@ local core = require "core"
 local test = require "core.test"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 
-local function remove_doc(doc)
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+local function remove_buffer(buffer)
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
 end
 
 local function open_editor(context, text)
-  local doc = core.open_doc()
-  if text and text ~= "" then doc:text_input(text) end
-  local view = core.root_panel:open_doc(doc)
-  context.docs = context.docs or {}
+  local buffer = core.open_buffer()
+  if text and text ~= "" then buffer:text_input(text) end
+  local view = core.root_panel:open_buffer(buffer)
+  context.buffers = context.buffers or {}
   context.views = context.views or {}
-  table.insert(context.docs, doc)
+  table.insert(context.buffers, buffer)
   table.insert(context.views, view)
   core.set_active_view(view)
-  return view, doc
+  return view, buffer
 end
 
 local function cleanup_editor_views(context)
@@ -30,9 +30,9 @@ local function cleanup_editor_views(context)
     local node = root:get_node_for_view(view)
     if node then node:remove_view(root, view) end
   end
-  for _, doc in ipairs(context.docs or {}) do
-    if doc:is_dirty() then doc:clean() end
-    remove_doc(doc)
+  for _, buffer in ipairs(context.buffers or {}) do
+    if buffer:is_dirty() then buffer:clean() end
+    remove_buffer(buffer)
   end
 end
 

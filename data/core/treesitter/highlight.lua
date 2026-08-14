@@ -44,16 +44,16 @@ local function specificity(name)
   return count
 end
 
-local function ensure_line_starts(doc, ts)
-  local change_id = doc.get_change_id and doc:get_change_id() or 0
+local function ensure_line_starts(buffer, ts)
+  local change_id = buffer.get_change_id and buffer:get_change_id() or 0
   if ts.line_starts and ts.line_starts_change_id == change_id then return ts.line_starts end
   local starts = {}
   local offset = 0
-  for i = 1, #doc.lines do
+  for i = 1, #buffer.lines do
     starts[i] = offset
-    offset = offset + #doc.lines[i]
+    offset = offset + #buffer.lines[i]
   end
-  starts[#doc.lines + 1] = offset
+  starts[#buffer.lines + 1] = offset
   ts.line_starts = starts
   ts.line_starts_change_id = change_id
   return starts
@@ -183,14 +183,14 @@ function highlight.resolve_line_tokens(text, line_start, line_end, captures)
   return tokens
 end
 
-function highlight.populate_range(doc, first_line, last_line)
-  local ts = doc and doc.treesitter
+function highlight.populate_range(buffer, first_line, last_line)
+  local ts = buffer and buffer.treesitter
   if not tree_is_renderable(ts) then return nil, "not-renderable" end
   first_line = math.max(1, math.floor(tonumber(first_line) or 1))
-  last_line = math.min(#doc.lines, math.max(first_line, math.floor(tonumber(last_line) or first_line)))
-  local starts = ensure_line_starts(doc, ts)
+  last_line = math.min(#buffer.lines, math.max(first_line, math.floor(tonumber(last_line) or first_line)))
+  local starts = ensure_line_starts(buffer, ts)
   local byte_start = starts[first_line]
-  local byte_end = starts[last_line] + #(doc.lines[last_line] or "")
+  local byte_end = starts[last_line] + #(buffer.lines[last_line] or "")
   if not byte_start then return nil, "no-line-start" end
   local captures, err = ts.native:query_captures(ts.queries.highlights, byte_start, byte_end, {
     match_limit = ts.language and ts.language.query_match_limit or DEFAULT_MATCH_LIMIT,
@@ -201,10 +201,10 @@ function highlight.populate_range(doc, first_line, last_line)
   if not captures then
     ts.highlight_failures = (ts.highlight_failures or 0) + 1
     log_quiet("Tree-sitter: highlight range query failed for %s lines=%d-%d: %s",
-      tostring(doc:get_name()), first_line, last_line, tostring(err))
+      tostring(buffer:get_name()), first_line, last_line, tostring(err))
     if ts.highlight_failures >= MAX_FAILURES then
       ts.highlight_disabled_reason = err or "highlight query failed repeatedly"
-      log_quiet("Tree-sitter: disabled highlighting for %s: %s", tostring(doc:get_name()), tostring(ts.highlight_disabled_reason))
+      log_quiet("Tree-sitter: disabled highlighting for %s: %s", tostring(buffer:get_name()), tostring(ts.highlight_disabled_reason))
     end
     return nil, err or "query-failed"
   end
@@ -223,7 +223,7 @@ function highlight.populate_range(doc, first_line, last_line)
   local cache = ts.highlight_cache or {}
   ts.highlight_cache = cache
   for line_idx = first_line, last_line do
-    local line = doc.lines[line_idx] or ""
+    local line = buffer.lines[line_idx] or ""
     local key = table.concat({ tostring(line_idx), line }, "\0")
     local cached = cache[line_idx]
     if not (cached and cached.key == key) then
@@ -237,10 +237,10 @@ function highlight.populate_range(doc, first_line, last_line)
   return true
 end
 
-function highlight.line_tokens(doc, idx)
-  local ts = doc and doc.treesitter
+function highlight.line_tokens(buffer, idx)
+  local ts = buffer and buffer.treesitter
   if not tree_is_renderable(ts) then return nil, "not-renderable" end
-  local line = doc.lines[idx]
+  local line = buffer.lines[idx]
   if not line then return nil, "no-line" end
 
   local cache = ts.highlight_cache or {}
@@ -249,14 +249,14 @@ function highlight.line_tokens(doc, idx)
   local cached = cache[idx]
   if cached and cached.key == key then return cached.tokens, nil, "treesitter" end
 
-  local ok, err = highlight.populate_range(doc, idx, math.min(#doc.lines, idx + 63))
+  local ok, err = highlight.populate_range(buffer, idx, math.min(#buffer.lines, idx + 63))
   if not ok then return nil, err end
   cached = ts.highlight_cache and ts.highlight_cache[idx]
   return cached and cached.tokens or { "normal", line }, nil, "treesitter"
 end
 
-function highlight.invalidate_doc(doc, first_line, last_line)
-  local ts = doc and doc.treesitter
+function highlight.invalidate_buffer(buffer, first_line, last_line)
+  local ts = buffer and buffer.treesitter
   if not ts then return end
   ts.highlight_cache = ts.highlight_cache or {}
   if not first_line then

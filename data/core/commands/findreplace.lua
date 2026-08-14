@@ -1,9 +1,9 @@
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
-local search = require "core.doc.search"
+local search = require "core.buffer.search"
 local keymap = require "core.keymap"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 local GlobalPromptBar = require "core.global_prompt_bar"
 
 local last_view, last_fn, last_text, last_sel
@@ -13,9 +13,9 @@ local find_regex = config.find_regex or false
 local found_expression
 local FIND_NAV_VISIBLE_MARGIN_LINES = 4
 
-local function doc()
-  local is_DocView = core.active_view:is(DocView) and not core.active_view:is(GlobalPromptBar)
-  return is_DocView and core.active_view.doc or (last_view and last_view.doc)
+local function buffer()
+  local is_TextView = core.active_view:extends(TextView) and not core.active_view:is(GlobalPromptBar)
+  return is_TextView and core.active_view.buffer or (last_view and last_view.buffer)
 end
 
 local function get_find_tooltip()
@@ -38,11 +38,11 @@ end
 
 local function update_preview(sel, search_fn, text)
   return with_last_view(function()
-    local ok, line1, col1, line2, col2 = pcall(search_fn, last_view.doc,
+    local ok, line1, col1, line2, col2 = pcall(search_fn, last_view.buffer,
       sel[1], sel[2], text, case_sensitive, find_regex)
     if ok and line1 and text ~= "" then
       if last_view.expand_folds_covering_range then last_view:expand_folds_covering_range(line1, col1, line2, col2, "core-find") end
-      last_view.doc:set_selection(line2, col2, line1, col1)
+      last_view.buffer:set_selection(line2, col2, line1, col1)
       last_view:scroll_to_line(line2, true, false, { visible_margin_lines = FIND_NAV_VISIBLE_MARGIN_LINES })
       last_view:scroll_to_make_visible(line1, col1, false, {
         line2 = line2,
@@ -51,7 +51,7 @@ local function update_preview(sel, search_fn, text)
       })
       found_expression = true
     else
-      last_view.doc:set_selection(table.unpack(sel))
+      last_view.buffer:set_selection(table.unpack(sel))
       found_expression = false
     end
   end)
@@ -72,8 +72,8 @@ end
 
 local function find(label, search_fn)
   last_view, last_sel = core.active_view,
-    { core.active_view.doc:get_selection() }
-  local text = last_view.doc:get_text(table.unpack(last_sel))
+    { core.active_view.buffer:get_selection() }
+  local text = last_view.buffer:get_text(table.unpack(last_sel))
   found_expression = false
 
   core.status_bar:show_tooltip(get_find_tooltip())
@@ -90,7 +90,7 @@ local function find(label, search_fn)
       else
         core.error("Couldn't find %q", text)
         with_last_view(function()
-          last_view.doc:set_selection(table.unpack(last_sel))
+          last_view.buffer:set_selection(table.unpack(last_sel))
           last_view:scroll_to_make_visible(table.unpack(last_sel))
         end)
       end
@@ -104,7 +104,7 @@ local function find(label, search_fn)
       core.status_bar:remove_tooltip()
       if explicit then
         with_last_view(function()
-          last_view.doc:set_selection(table.unpack(last_sel))
+          last_view.buffer:set_selection(table.unpack(last_sel))
           last_view:scroll_to_make_visible(table.unpack(last_sel))
         end)
       end
@@ -131,7 +131,7 @@ local function replace(kind, default, fn)
           core.status_bar:remove_tooltip()
           insert_unique(core.previous_replace, new)
           local results = with_last_view(function()
-            return doc():replace(function(text)
+            return buffer():replace(function(text)
               return fn(text, old, new)
             end)
           end)
@@ -155,15 +155,15 @@ local function replace(kind, default, fn)
 end
 
 local function has_selection()
-  return core.active_view:is(DocView) and core.active_view.doc:has_selection()
+  return core.active_view:extends(TextView) and core.active_view.buffer:has_selection()
 end
 
 local function has_unique_selection()
-  if not doc() then return false end
+  if not buffer() then return false end
   local text = nil
-  for idx, line1, col1, line2, col2 in doc():get_selections(true, true) do
+  for idx, line1, col1, line2, col2 in buffer():get_selections(true, true) do
     if line1 == line2 and col1 == col2 then return false end
-    local selection = doc():get_text(line1, col1, line2, col2)
+    local selection = buffer():get_text(line1, col1, line2, col2)
     if text ~= nil and text ~= selection then return false end
     text = selection
   end
@@ -178,7 +178,7 @@ local function is_in_selection(line, col, l1, c1, l2, c2)
 end
 
 local function is_in_any_selection(line, col)
-  for idx, l1, c1, l2, c2 in doc():get_selections(true, false) do
+  for idx, l1, c1, l2, c2 in buffer():get_selections(true, false) do
     if is_in_selection(line, col, l1, c1, l2, c2) then return true end
   end
   return false
@@ -186,20 +186,20 @@ end
 
 local function select_add_next(all)
   local il1, ic1
-  for _, l1, c1, l2, c2 in doc():get_selections(true, true) do
+  for _, l1, c1, l2, c2 in buffer():get_selections(true, true) do
     if not il1 then
       il1, ic1 = l1, c1
     end
-    local text = doc():get_text(l1, c1, l2, c2)
+    local text = buffer():get_text(l1, c1, l2, c2)
     repeat
       l1, c1, l2, c2 = search.find(
-        doc(), l2, c2, text,
+        buffer(), l2, c2, text,
         { wrap = true, no_case = config.select_add_next_no_case }
       )
       if l1 == il1 and c1 == ic1 then break end
       if l2 and not is_in_any_selection(l2, c2) then
         if core.active_view and core.active_view.expand_folds_covering_range then core.active_view:expand_folds_covering_range(l1, c1, l2, c2, "select-add-next") end
-        doc():add_selection(l2, c2, l1, c1)
+        buffer():add_selection(l2, c2, l1, c1)
         if not all then
           core.active_view:scroll_to_make_visible(l1, c1, nil, {
             line2 = l2,
@@ -214,16 +214,16 @@ local function select_add_next(all)
 end
 
 local function select_next(reverse)
-  local l1, c1, l2, c2 = doc():get_selection(true)
-  local text = doc():get_text(l1, c1, l2, c2)
+  local l1, c1, l2, c2 = buffer():get_selection(true)
+  local text = buffer():get_text(l1, c1, l2, c2)
   if reverse then
-    l1, c1, l2, c2 = search.find(doc(), l1, c1, text, { wrap = true, reverse = true })
+    l1, c1, l2, c2 = search.find(buffer(), l1, c1, text, { wrap = true, reverse = true })
   else
-    l1, c1, l2, c2 = search.find(doc(), l2, c2, text, { wrap = true })
+    l1, c1, l2, c2 = search.find(buffer(), l2, c2, text, { wrap = true })
   end
   if l2 then
     if core.active_view and core.active_view.expand_folds_covering_range then core.active_view:expand_folds_covering_range(l1, c1, l2, c2, "select-next") end
-    doc():set_selection(l2, c2, l1, c1)
+    buffer():set_selection(l2, c2, l1, c1)
     core.active_view:scroll_to_make_visible(l1, c1, nil, {
       line2 = l2,
       col2 = c2,
@@ -233,11 +233,11 @@ end
 
 ---@param in_selection? boolean whether to replace in the selections only, or in the whole file.
 local function find_replace(in_selection)
-  local l1, c1, l2, c2 = doc():get_selection()
+  local l1, c1, l2, c2 = buffer():get_selection()
   local selected_text = ""
   if not in_selection then
-    selected_text = doc():get_text(l1, c1, l2, c2)
-    doc():set_selection(l2, c2, l2, c2)
+    selected_text = buffer():get_text(l1, c1, l2, c2)
+    buffer():set_selection(l2, c2, l2, c2)
   end
   replace("Text", l1 == l2 and selected_text or "", function(text, old, new)
     if not find_regex then
@@ -255,11 +255,11 @@ command.add(has_unique_selection, {
   ["find-replace:select-add-all"] = function() select_add_next(true) end
 })
 
-command.add("core.docview!", {
+command.add("core.textview!", {
   ["find-replace:find"] = function()
-    find("Find Text", function(doc, line, col, text, case_sensitive, find_regex, find_reverse)
+    find("Find Text", function(buffer, line, col, text, case_sensitive, find_regex, find_reverse)
       local opt = { wrap = true, no_case = not case_sensitive, regex = find_regex, reverse = find_reverse }
-      return search.find(doc, line, col, text, opt)
+      return search.find(buffer, line, col, text, opt)
     end)
   end,
 
@@ -273,13 +273,13 @@ command.add("core.docview!", {
 
   ["find-replace:replace-symbol"] = function()
     local first = ""
-    if doc():has_selection() then
-      local text = doc():get_text(doc():get_selection())
-      first = text:match(doc():get_symbol_pattern()) or ""
+    if buffer():has_selection() then
+      local text = buffer():get_text(buffer():get_selection())
+      first = text:match(buffer():get_symbol_pattern()) or ""
     end
     replace("Symbol", first, function(text, old, new)
       local n = 0
-      local res = text:gsub(doc():get_symbol_pattern(), function(sym)
+      local res = text:gsub(buffer():get_symbol_pattern(), function(sym)
         if old == sym then
           n = n + 1
           return new
@@ -295,7 +295,7 @@ local function valid_for_finding()
   if core.active_view:is(GlobalPromptBar) and last_view then
     return true, last_view
   end
-  return core.active_view:is(DocView), core.active_view
+  return core.active_view:extends(TextView), core.active_view
 end
 
 command.add(valid_for_finding, {
@@ -303,11 +303,11 @@ command.add(valid_for_finding, {
     if not last_fn then
       core.error("No find to continue from")
     else
-      local sl1, sc1, sl2, sc2 = dv.doc:get_selection(true)
-      local line1, col1, line2, col2 = last_fn(dv.doc, sl2, sc2, last_text, case_sensitive, find_regex, false)
+      local sl1, sc1, sl2, sc2 = dv.buffer:get_selection(true)
+      local line1, col1, line2, col2 = last_fn(dv.buffer, sl2, sc2, last_text, case_sensitive, find_regex, false)
       if line1 then
         if dv.expand_folds_covering_range then dv:expand_folds_covering_range(line1, col1, line2, col2, "core-find") end
-        dv.doc:set_selection(line2, col2, line1, col1)
+        dv.buffer:set_selection(line2, col2, line1, col1)
         dv:scroll_to_line(line2, true, false, { visible_margin_lines = FIND_NAV_VISIBLE_MARGIN_LINES })
         dv:scroll_to_make_visible(line1, col1, false, {
           line2 = line2,
@@ -324,11 +324,11 @@ command.add(valid_for_finding, {
     if not last_fn then
       core.error("No find to continue from")
     else
-      local sl1, sc1, sl2, sc2 = dv.doc:get_selection(true)
-      local line1, col1, line2, col2 = last_fn(dv.doc, sl1, sc1, last_text, case_sensitive, find_regex, true)
+      local sl1, sc1, sl2, sc2 = dv.buffer:get_selection(true)
+      local line1, col1, line2, col2 = last_fn(dv.buffer, sl1, sc1, last_text, case_sensitive, find_regex, true)
       if line1 then
         if dv.expand_folds_covering_range then dv:expand_folds_covering_range(line1, col1, line2, col2, "core-find") end
-        dv.doc:set_selection(line2, col2, line1, col1)
+        dv.buffer:set_selection(line2, col2, line1, col1)
         dv:scroll_to_line(line2, true, false, { visible_margin_lines = FIND_NAV_VISIBLE_MARGIN_LINES })
         dv:scroll_to_make_visible(line1, col1, false, {
           line2 = line2,

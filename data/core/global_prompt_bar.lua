@@ -3,46 +3,46 @@ local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
 local prompt_bar_renderer = require "core.prompt_bar_renderer"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local View = require "core.view"
 local RootPanel = require "core.rootpanel"
 
 
----Single-line document that prevents newline insertion.
+---Single-line buffer that prevents newline insertion.
 ---Used internally by the Global Prompt Bar for single-line input.
----@class core.global_prompt_bar.input : core.doc
+---@class core.global_prompt_bar.input : core.buffer
 ---@overload fun():core.global_prompt_bar.input
----@field super core.doc
-local SingleLineDoc = Doc:extend()
+---@field super core.buffer
+local SingleLineBuffer = Buffer:extend()
 
-function SingleLineDoc:__tostring() return "SingleLineDoc" end
+function SingleLineBuffer:__tostring() return "SingleLineBuffer" end
 
 ---Insert text, stripping any newlines to maintain single-line constraint.
 ---@param line integer Line number
 ---@param col integer Column number
 ---@param text string Text to insert (newlines will be removed)
-function SingleLineDoc:normalize_edit_text(text, edit, opts)
+function SingleLineBuffer:normalize_edit_text(text, edit, opts)
   return tostring(text or ""):gsub("[\r\n]", "")
 end
 
-function SingleLineDoc:insert(line, col, text)
-  SingleLineDoc.super.insert(self, line, col, self:normalize_edit_text(text))
+function SingleLineBuffer:insert(line, col, text)
+  SingleLineBuffer.super.insert(self, line, col, self:normalize_edit_text(text))
 end
 
 
 ---Global Prompt Bar: bottom-anchored full-width prompt for app-wide actions.
 ---Provides autocomplete, suggestions, and app-wide prompt execution.
----@class core.global_prompt_bar : core.docview
+---@class core.global_prompt_bar : core.textview
 ---@overload fun():core.global_prompt_bar
----@field super core.docview
+---@field super core.textview
 ---@field suggestion_idx integer Currently selected suggestion index
 ---@field suggestions table[] List of suggestion items
 ---@field suggestions_height number Animated height of suggestions box
 ---@field suggestions_offset number Scroll offset for suggestions list
 ---@field suggestions_first integer First visible suggestion index
 ---@field suggestions_last integer Last visible suggestion index
----@field last_change_id integer Last document change ID (for detecting updates)
+---@field last_change_id integer Last buffer change ID (for detecting updates)
 ---@field last_text string Last input text (for typeahead)
 ---@field gutter_width number Width of label gutter
 ---@field gutter_text_brightness number Label brightness animation value
@@ -52,7 +52,7 @@ end
 ---@field label string Label text displayed in gutter
 ---@field mouse_position table Mouse coordinates {x, y}
 ---@field save_suggestion string? Saved suggestion for cycling
-local GlobalPromptBar = DocView:extend()
+local GlobalPromptBar = TextView:extend()
 
 function GlobalPromptBar:__tostring() return "GlobalPromptBar" end
 
@@ -89,7 +89,7 @@ local default_state = {
 
 ---Constructor - initializes the Global Prompt Bar.
 function GlobalPromptBar:new()
-  GlobalPromptBar.super.new(self, SingleLineDoc())
+  GlobalPromptBar.super.new(self, SingleLineBuffer())
   self.suggestion_idx = 1
   self.suggestions = {}
   self.suggestions_height = 0
@@ -166,7 +166,7 @@ end
 ---Get the current input text.
 ---@return string text The entire input text
 function GlobalPromptBar:get_text()
-  return self.doc:get_text(1, 1, 1, math.huge)
+  return self.buffer:get_text(1, 1, 1, math.huge)
 end
 
 
@@ -175,10 +175,10 @@ end
 ---@param select boolean? If true, select all text
 function GlobalPromptBar:set_text(text, select)
   self.last_text = text
-  self.doc:remove(1, 1, math.huge, math.huge)
-  self.doc:text_input(text)
+  self.buffer:remove(1, 1, math.huge, math.huge)
+  self.buffer:text_input(text)
   if select then
-    self.doc:set_selection(math.huge, math.huge, 1, 1)
+    self.buffer:set_selection(math.huge, math.huge, 1, 1)
   end
 end
 
@@ -200,7 +200,7 @@ function GlobalPromptBar:move_suggestion_idx(dir)
     local n = self.suggestion_idx + dir
     self.suggestion_idx = overflow_suggestion_idx(n, #self.suggestions)
     self:complete()
-    self.last_change_id = self.doc:get_change_id()
+    self.last_change_id = self.buffer:get_change_id()
   else
     local current_suggestion = #self.suggestions > 0 and self.suggestions[self.suggestion_idx].text
     local text = self:get_text()
@@ -216,7 +216,7 @@ function GlobalPromptBar:move_suggestion_idx(dir)
       self.save_suggestion = text
       self:complete()
     end
-    self.last_change_id = self.doc:get_change_id()
+    self.last_change_id = self.buffer:get_change_id()
     self.state.suggest(self:get_text())
   end
 end
@@ -304,7 +304,7 @@ function GlobalPromptBar:exit(submitted, inexplicit)
   core.root_panel:hide_app_overlay(self)
   local cancel = self.state.cancel
   self.state = default_state
-  self.doc:reset()
+  self.buffer:reset()
   self.suggestions = {}
   if not submitted then cancel(not inexplicit) end
   self.save_suggestion = nil
@@ -359,7 +359,7 @@ function GlobalPromptBar:update()
   end
 
   -- update suggestions if text has changed
-  if self.last_change_id ~= self.doc:get_change_id() then
+  if self.last_change_id ~= self.buffer:get_change_id() then
     self:update_suggestions()
     if self.state.typeahead and self.suggestions[self.suggestion_idx] then
       local current_text = self:get_text()
@@ -367,11 +367,11 @@ function GlobalPromptBar:update()
       if #self.last_text < #current_text and
          string.find(suggested_text, current_text, 1, true) == 1 then
         self:set_text(suggested_text)
-        self.doc:set_selection(1, #current_text + 1, 1, math.huge)
+        self.buffer:set_selection(1, #current_text + 1, 1, math.huge)
       end
       self.last_text = current_text
     end
-    self.last_change_id = self.doc:get_change_id()
+    self.last_change_id = self.buffer:get_change_id()
   end
 
   -- update gutter text color brightness
@@ -540,7 +540,7 @@ function GlobalPromptBar:on_mouse_moved(x, y, ...)
       if y >= sy then
         self.suggestion_idx=i
         self:complete()
-        self.last_change_id = self.doc:get_change_id()
+        self.last_change_id = self.buffer:get_change_id()
         break
       end
     end

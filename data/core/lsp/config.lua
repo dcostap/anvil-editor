@@ -215,8 +215,8 @@ function lsp_config.normalize_server_definition(definition)
   if not env then return nil, err end
 
   local cwd_policy = definition.cwd_policy or definition.cwd or lsp_config.DEFAULT_CWD_POLICY
-  if cwd_policy ~= "root" and cwd_policy ~= "document" and cwd_policy ~= "fixed" then
-    return nil, "cwd_policy must be 'root', 'document', or 'fixed'"
+  if cwd_policy ~= "root" and cwd_policy ~= "buffer" and cwd_policy ~= "fixed" then
+    return nil, "cwd_policy must be 'root', 'buffer', or 'fixed'"
   end
   local request_timeout = tonumber(definition.request_timeout or lsp_config.DEFAULT_REQUEST_TIMEOUT)
   if not request_timeout or request_timeout <= 0 then
@@ -332,16 +332,16 @@ end
 function lsp_config.find_root(path, definition, options)
   options = options or {}
   local normalized = assert(lsp_config.normalize_server_definition(definition))
-  local doc_path = common.normalize_path(path)
-  local doc_dir = system.get_file_info(doc_path) and system.get_file_info(doc_path).type == "dir"
-    and doc_path or dirname(doc_path)
-  if not doc_dir then return nil, "document path has no directory" end
+  local buffer_path = common.normalize_path(path)
+  local buffer_dir = system.get_file_info(buffer_path) and system.get_file_info(buffer_path).type == "dir"
+    and buffer_path or dirname(buffer_path)
+  if not buffer_dir then return nil, "buffer path has no directory" end
 
   local boundaries = options.root_boundaries or options.fallback_roots or {}
   if options.prefer_fallback_roots then
     for _, fallback in ipairs(options.fallback_roots or {}) do
       local root = common.normalize_path(fallback)
-      if common.path_equals(doc_dir, root) or common.path_belongs_to(doc_dir, root) then
+      if common.path_equals(buffer_dir, root) or common.path_belongs_to(buffer_dir, root) then
         return {
           root = root,
           marker = nil,
@@ -353,7 +353,7 @@ function lsp_config.find_root(path, definition, options)
   end
 
   local dirs = {}
-  for _, dir in ipairs(ancestors_from(doc_dir)) do
+  for _, dir in ipairs(ancestors_from(buffer_dir)) do
     if within_root_boundaries(dir, boundaries) then
       dirs[#dirs + 1] = dir
     end
@@ -373,7 +373,7 @@ function lsp_config.find_root(path, definition, options)
 
   for _, fallback in ipairs(options.fallback_roots or {}) do
     local root = common.normalize_path(fallback)
-    if common.path_equals(doc_dir, root) or common.path_belongs_to(doc_dir, root) then
+    if common.path_equals(buffer_dir, root) or common.path_belongs_to(buffer_dir, root) then
       return {
         root = root,
         marker = nil,
@@ -384,10 +384,10 @@ function lsp_config.find_root(path, definition, options)
   end
 
   return {
-    root = doc_dir,
+    root = buffer_dir,
     marker = nil,
-    source = "document_dir",
-    root_uri = uri.path_to_uri(doc_dir),
+    source = "buffer_dir",
+    root_uri = uri.path_to_uri(buffer_dir),
   }
 end
 

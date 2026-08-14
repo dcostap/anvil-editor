@@ -313,38 +313,38 @@ local diagnostic_frame_keys = {
   "worker_pool_slowest_callback_name",
   "treesitter_project_metadata_cache_hits",
   "treesitter_project_metadata_cache_misses",
-  "docview_update_ms",
-  "docview_update_cache_ms",
-  "docview_update_selection_ms",
-  "docview_scroll_to_make_visible_ms",
-  "docview_update_blink_ms",
-  "docview_update_active_focus_ms",
-  "docview_update_ime_ms",
-  "docview_update_super_ms",
-  "docview_visual_metric_cache_calls",
-  "docview_visual_metric_cache_hits",
-  "docview_visual_metric_cache_lookup_ms",
-  "docview_visual_metric_signature_ms",
-  "docview_visual_metric_signature_cache_hits",
-  "docview_visual_metric_signature_computations",
-  "docview_visual_metric_signature_changes",
-  "docview_visual_metric_full_rebuilds",
-  "docview_visual_metric_full_rebuild_rows",
-  "docview_visual_metric_full_rebuild_ms",
-  "docview_visual_metric_dirty_passes",
-  "docview_visual_metric_dirty_rows",
-  "docview_visual_metric_row_splices",
-  "docview_visual_metric_row_splice_rows",
-  "docview_line_render_cache_calls",
-  "docview_line_render_cache_hits",
-  "docview_line_render_cache_misses",
-  "docview_line_render_cold_misses",
-  "docview_line_render_signature_misses",
-  "docview_line_render_cache_lookup_ms",
-  "docview_line_render_build_ms",
-  "docview_fragment_normalization_calls",
-  "docview_fragment_normalization_cache_hits",
-  "docview_fragment_normalization_builds",
+  "textview_update_ms",
+  "textview_update_cache_ms",
+  "textview_update_selection_ms",
+  "textview_scroll_to_make_visible_ms",
+  "textview_update_blink_ms",
+  "textview_update_active_focus_ms",
+  "textview_update_ime_ms",
+  "textview_update_super_ms",
+  "textview_visual_metric_cache_calls",
+  "textview_visual_metric_cache_hits",
+  "textview_visual_metric_cache_lookup_ms",
+  "textview_visual_metric_signature_ms",
+  "textview_visual_metric_signature_cache_hits",
+  "textview_visual_metric_signature_computations",
+  "textview_visual_metric_signature_changes",
+  "textview_visual_metric_full_rebuilds",
+  "textview_visual_metric_full_rebuild_rows",
+  "textview_visual_metric_full_rebuild_ms",
+  "textview_visual_metric_dirty_passes",
+  "textview_visual_metric_dirty_rows",
+  "textview_visual_metric_row_splices",
+  "textview_visual_metric_row_splice_rows",
+  "textview_line_render_cache_calls",
+  "textview_line_render_cache_hits",
+  "textview_line_render_cache_misses",
+  "textview_line_render_cold_misses",
+  "textview_line_render_signature_misses",
+  "textview_line_render_cache_lookup_ms",
+  "textview_line_render_build_ms",
+  "textview_fragment_normalization_calls",
+  "textview_fragment_normalization_cache_hits",
+  "textview_fragment_normalization_builds",
   "markdown_live_provider_generation_requests",
   "markdown_live_provider_generation_cache_hits",
   "markdown_live_provider_generation_calls",
@@ -402,11 +402,11 @@ local diagnostic_frame_keys = {
   "ime_set_location_ms",
   "ime_set_location_changed",
   "ime_set_location_system_ms",
-  "linewrapping_update_docview_breaks_calls",
-  "linewrapping_update_docview_breaks_ms",
-  "linewrapping_update_docview_breaks_width_changed",
-  "linewrapping_update_docview_breaks_text_changed",
-  "linewrapping_update_docview_breaks_line_count_changed",
+  "linewrapping_update_textview_breaks_calls",
+  "linewrapping_update_textview_breaks_ms",
+  "linewrapping_update_textview_breaks_width_changed",
+  "linewrapping_update_textview_breaks_text_changed",
+  "linewrapping_update_textview_breaks_line_count_changed",
   "linewrapping_reconstruct_line_render_invalidation_calls",
   "linewrapping_reconstruct_breaks_calls",
   "linewrapping_reconstruct_breaks_ms",
@@ -431,15 +431,15 @@ local diagnostic_frame_keys = {
   "linewrapping_draw_line_text_segments",
   "linewrapping_draw_line_text_bytes",
   "linewrapping_draw_line_text_known_bounds_segments",
-  "docview_line_packet_hits",
-  "docview_line_packet_misses",
-  "docview_line_packet_builds",
-  "docview_line_packet_build_ms",
-  "docview_line_packet_replay_ms",
-  "docview_line_packet_evictions",
-  "docview_line_packet_resident_packets",
-  "docview_line_packet_resident_bytes",
-  "docview_line_packet_frame_failures",
+  "textview_line_packet_hits",
+  "textview_line_packet_misses",
+  "textview_line_packet_builds",
+  "textview_line_packet_build_ms",
+  "textview_line_packet_replay_ms",
+  "textview_line_packet_evictions",
+  "textview_line_packet_resident_packets",
+  "textview_line_packet_resident_bytes",
+  "textview_line_packet_frame_failures",
   "core_root_panel_update_ms",
   "core_tool_window_update_ms",
   "rootpanel_update_ms",
@@ -448,7 +448,7 @@ local diagnostic_frame_keys = {
   "rootpanel_node_update_ms",
   "rootpanel_final_layout_ms",
   "rootpanel_drag_overlay_ms",
-  "rootpanel_defer_open_docs_ms",
+  "rootpanel_defer_open_buffers_ms",
   "node_update_layout_calls",
   "node_update_layout_leaf_calls",
   "node_update_layout_split_calls",
@@ -466,8 +466,8 @@ local diagnostic_frame_keys = {
 local function write_frame_header(file)
   file:write(table.concat({
     "time", "did_redraw", "fps", "target_fps", "active_present_paced",
-    "pending_events", "queue_depth", "run_mode", "window_has_focus", "active_view_is_docview", "active_view_name",
-    "selection_count", "search_selection_count", "docview_caret_draw_calls", "docview_selection_rect_calls",
+    "pending_events", "queue_depth", "run_mode", "window_has_focus", "active_view_is_textview", "active_view_name",
+    "selection_count", "search_selection_count", "textview_caret_draw_calls", "textview_selection_rect_calls",
     "event_count", "event_ms", "event_types", "slowest_event_type", "slowest_event_ms", "update_ms", "pre_draw_ms",
     "frame_ms", "draw_emit_ms", "renderer_end_ms",
     "present_ms", "run_threads_ms", "run_threads_runs", "run_threads_slowest_ms", "run_threads_slowest_loc", "core_step_ms", "gc_ms", "sleep_requested_ms", "sleep_actual_ms", "total_ms",
@@ -476,17 +476,17 @@ local function write_frame_header(file)
     "display_packet_replays", "display_packet_commands_replayed", "display_packet_text_commands_replayed", "display_packet_rect_commands_replayed", "display_packet_source_bytes", "display_packet_frame_bytes_copied", "display_packet_replay_ms", "display_packet_frame_allocation_failures", "rencache_frame_failed",
     "text_width_calls", "text_width_bytes", "text_width_chars", "text_width_shaped_runs", "text_width_unshaped_runs", "text_width_shape_probe_bytes", "text_width_hb_shapes", "text_width_shaped_cache_hits", "text_width_shaped_cache_misses", "text_width_hb_shape_ms",
     "text_render_calls", "text_render_bytes", "text_render_chars", "text_render_shaped_runs", "text_render_unshaped_runs", "text_render_shape_probe_bytes", "text_render_hb_shapes", "text_render_shaped_cache_hits", "text_render_shaped_cache_misses", "text_render_glyphs", "text_render_whitespace_chars", "text_render_chars_after_clip", "text_render_top_clip_breaks", "text_render_hb_shape_ms",
-    "docview_draw_ms", "docview_prepare_ms", "docview_prepare_highlight_ms", "docview_prepare_caret_ms", "docview_prepare_selection_ms", "docview_prepare_merge_ms", "docview_gutter_ms", "docview_body_ms", "docview_text_ms", "docview_overlay_ms",
-    "docview_highlighter_get_line_ms", "docview_token_loop_ms", "docview_renderer_draw_text_ms",
+    "textview_draw_ms", "textview_prepare_ms", "textview_prepare_highlight_ms", "textview_prepare_caret_ms", "textview_prepare_selection_ms", "textview_prepare_merge_ms", "textview_gutter_ms", "textview_body_ms", "textview_text_ms", "textview_overlay_ms",
+    "textview_highlighter_get_line_ms", "textview_token_loop_ms", "textview_renderer_draw_text_ms",
     "lsp_render_tokens_calls", "lsp_render_tokens_ms", "lsp_render_tokens_matching_ms", "lsp_render_tokens_capability_ms", "lsp_render_tokens_latest_ms",
     "lsp_render_tokens_cache_hits", "lsp_render_tokens_cache_misses", "lsp_render_tokens_line_offsets_ms", "lsp_render_tokens_line_offsets_lines",
     "lsp_render_tokens_scan_ms", "lsp_render_tokens_scan_tokens", "lsp_render_tokens_spans", "lsp_render_tokens_base_ms", "lsp_render_tokens_overlay_ms", "lsp_render_tokens_schedule_calls",
-    "docview_visible_lines", "docview_text_lines", "docview_tokens", "docview_draw_text_calls",
-    "docview_prepare_highlight_iters", "docview_prepare_caret_scan_count", "docview_visible_carets", "docview_prepare_selection_iters", "docview_visible_selection_ranges", "docview_selection_cache_lines", "docview_selection_cache_ranges", "docview_selection_cache_merged_ranges",
-    "doc_get_selections_calls", "doc_get_selections_iters", "doc_set_selections_calls", "doc_set_selections_ms", "doc_add_selection_calls", "doc_add_selection_ms", "doc_merge_cursors_calls", "doc_merge_cursors_ms", "doc_sanitize_selection_calls", "doc_sanitize_selection_ms", "doc_apply_edits_calls", "doc_apply_edits_ms",
+    "textview_visible_lines", "textview_text_lines", "textview_tokens", "textview_draw_text_calls",
+    "textview_prepare_highlight_iters", "textview_prepare_caret_scan_count", "textview_visible_carets", "textview_prepare_selection_iters", "textview_visible_selection_ranges", "textview_selection_cache_lines", "textview_selection_cache_ranges", "textview_selection_cache_merged_ranges",
+    "buffer_get_selections_calls", "buffer_get_selections_iters", "buffer_set_selections_calls", "buffer_set_selections_ms", "buffer_add_selection_calls", "buffer_add_selection_ms", "buffer_merge_cursors_calls", "buffer_merge_cursors_ms", "buffer_sanitize_selection_calls", "buffer_sanitize_selection_ms", "buffer_apply_edits_calls", "buffer_apply_edits_ms",
     "command_calls", "command_total_ms", "command_predicate_ms", "command_body_ms", "slowest_command_ms", "slowest_command_name",
     "statusbar_selection_ms", "statusbar_selection_cache_hits", "statusbar_selection_cache_misses",
-    "docview_line_hint_calls", "docview_line_hint_drawn", "docview_line_hint_ms", "docview_line_hint_get_ms", "docview_line_hint_normalize_ms", "docview_line_hint_layout_ms", "docview_line_hint_measure_ms", "docview_line_hint_truncate_ms", "docview_line_hint_draw_ms", "docview_line_hint_draw_text_calls", "docview_line_hint_draw_text_ms", "docview_line_hint_skip_no_hint", "docview_line_hint_skip_no_space", "docview_line_hint_skip_truncated",
+    "textview_line_hint_calls", "textview_line_hint_drawn", "textview_line_hint_ms", "textview_line_hint_get_ms", "textview_line_hint_normalize_ms", "textview_line_hint_layout_ms", "textview_line_hint_measure_ms", "textview_line_hint_truncate_ms", "textview_line_hint_draw_ms", "textview_line_hint_draw_text_calls", "textview_line_hint_draw_text_ms", "textview_line_hint_skip_no_hint", "textview_line_hint_skip_no_space", "textview_line_hint_skip_truncated",
     "filetree_line_hint_calls", "filetree_line_hint_ms", "filetree_line_hint_get_file_info_calls", "filetree_line_hint_get_file_info_ms", "filetree_line_hint_format_ms", "filetree_line_hint_git_ms", "filetree_line_hint_segments", "filetree_line_hint_cache_hits", "filetree_line_hint_cache_misses", "filetree_line_hint_folder_count_hits", "filetree_line_hint_folder_count_pending", "filetree_line_hint_entry_calls", "filetree_line_hint_entry_ms", "filetree_entry_snapshot_hits", "filetree_entry_snapshot_builds", "filetree_entry_snapshot_rows", "filetree_entry_snapshot_build_ms", "filetree_folder_row_background_calls", "filetree_folder_row_background_rects", "filetree_folder_row_background_ms", "filetree_line_is_dir_calls", "filetree_line_is_dir_ms", "filetree_draw_line_body_calls", "filetree_draw_line_body_ms", "filetree_draw_line_text_calls", "filetree_draw_line_text_ms", "filetree_draw_line_text_git_ms", "filetree_draw_line_text_colored_calls", "filetree_draw_line_text_plain_calls",
     "over_budget" .. (#diagnostic_frame_keys > 0 and "," .. table.concat(diagnostic_frame_keys, ",") or "")
   }, ",") .. "\n")
@@ -522,20 +522,20 @@ local aggregate_detail_keys = {
   "worker_pool_slowest_callback_ms",
   "treesitter_project_metadata_cache_hits",
   "treesitter_project_metadata_cache_misses",
-  "docview_line_hint_calls",
-  "docview_line_hint_drawn",
-  "docview_line_hint_ms",
-  "docview_line_hint_get_ms",
-  "docview_line_hint_normalize_ms",
-  "docview_line_hint_layout_ms",
-  "docview_line_hint_measure_ms",
-  "docview_line_hint_truncate_ms",
-  "docview_line_hint_draw_ms",
-  "docview_line_hint_draw_text_calls",
-  "docview_line_hint_draw_text_ms",
-  "docview_line_hint_skip_no_hint",
-  "docview_line_hint_skip_no_space",
-  "docview_line_hint_skip_truncated",
+  "textview_line_hint_calls",
+  "textview_line_hint_drawn",
+  "textview_line_hint_ms",
+  "textview_line_hint_get_ms",
+  "textview_line_hint_normalize_ms",
+  "textview_line_hint_layout_ms",
+  "textview_line_hint_measure_ms",
+  "textview_line_hint_truncate_ms",
+  "textview_line_hint_draw_ms",
+  "textview_line_hint_draw_text_calls",
+  "textview_line_hint_draw_text_ms",
+  "textview_line_hint_skip_no_hint",
+  "textview_line_hint_skip_no_space",
+  "textview_line_hint_skip_truncated",
   "filetree_line_hint_calls",
   "filetree_line_hint_ms",
   "filetree_line_hint_get_file_info_calls",
@@ -565,15 +565,15 @@ local aggregate_detail_keys = {
   "filetree_draw_line_text_git_ms",
   "filetree_draw_line_text_colored_calls",
   "filetree_draw_line_text_plain_calls",
-  "docview_line_packet_hits",
-  "docview_line_packet_misses",
-  "docview_line_packet_builds",
-  "docview_line_packet_build_ms",
-  "docview_line_packet_replay_ms",
-  "docview_line_packet_evictions",
-  "docview_line_packet_resident_packets",
-  "docview_line_packet_resident_bytes",
-  "docview_line_packet_frame_failures",
+  "textview_line_packet_hits",
+  "textview_line_packet_misses",
+  "textview_line_packet_builds",
+  "textview_line_packet_build_ms",
+  "textview_line_packet_replay_ms",
+  "textview_line_packet_evictions",
+  "textview_line_packet_resident_packets",
+  "textview_line_packet_resident_bytes",
+  "textview_line_packet_frame_failures",
 }
 
 local renderer_detail_keys = {
@@ -730,9 +730,9 @@ function perf.on_frame(snapshot)
         node_scroll_tabs_to_visible_ms = snapshot.node_scroll_tabs_to_visible_ms or 0,
         node_active_view_update_ms = snapshot.node_active_view_update_ms or 0,
         node_tab_hover_update_ms = snapshot.node_tab_hover_update_ms or 0,
-        docview_update_ms = snapshot.docview_update_ms or 0,
-        linewrapping_update_docview_breaks_ms = snapshot.linewrapping_update_docview_breaks_ms or 0,
-        linewrapping_update_docview_breaks_calls = snapshot.linewrapping_update_docview_breaks_calls or 0,
+        textview_update_ms = snapshot.textview_update_ms or 0,
+        linewrapping_update_textview_breaks_ms = snapshot.linewrapping_update_textview_breaks_ms or 0,
+        linewrapping_update_textview_breaks_calls = snapshot.linewrapping_update_textview_breaks_calls or 0,
         event_count = snapshot.event_count or 0,
         event_types = snapshot.event_types or "",
         pending_events = snapshot.pending_events,
@@ -790,25 +790,25 @@ function perf.on_frame(snapshot)
         d3d11_flush_quads_ms = snapshot.d3d11_flush_quads_ms or 0,
         d3d11_dwm_flush_ms = snapshot.d3d11_dwm_flush_ms or 0,
         d3d11_clear_state_ms = snapshot.d3d11_clear_state_ms or 0,
-        docview_draw_ms = snapshot.docview_draw_ms or 0,
-        docview_prepare_ms = snapshot.docview_prepare_ms or 0,
-        docview_prepare_caret_ms = snapshot.docview_prepare_caret_ms or 0,
-        docview_prepare_selection_ms = snapshot.docview_prepare_selection_ms or 0,
-        docview_gutter_ms = snapshot.docview_gutter_ms or 0,
-        docview_body_ms = snapshot.docview_body_ms or 0,
-        docview_text_ms = snapshot.docview_text_ms or 0,
-        docview_overlay_ms = snapshot.docview_overlay_ms or 0,
-        docview_draw_text_calls = snapshot.docview_draw_text_calls or 0,
+        textview_draw_ms = snapshot.textview_draw_ms or 0,
+        textview_prepare_ms = snapshot.textview_prepare_ms or 0,
+        textview_prepare_caret_ms = snapshot.textview_prepare_caret_ms or 0,
+        textview_prepare_selection_ms = snapshot.textview_prepare_selection_ms or 0,
+        textview_gutter_ms = snapshot.textview_gutter_ms or 0,
+        textview_body_ms = snapshot.textview_body_ms or 0,
+        textview_text_ms = snapshot.textview_text_ms or 0,
+        textview_overlay_ms = snapshot.textview_overlay_ms or 0,
+        textview_draw_text_calls = snapshot.textview_draw_text_calls or 0,
         lsp_render_tokens_calls = snapshot.lsp_render_tokens_calls or 0,
         lsp_render_tokens_ms = snapshot.lsp_render_tokens_ms or 0,
         lsp_render_tokens_line_offsets_ms = snapshot.lsp_render_tokens_line_offsets_ms or 0,
         lsp_render_tokens_scan_ms = snapshot.lsp_render_tokens_scan_ms or 0,
         lsp_render_tokens_cache_hits = snapshot.lsp_render_tokens_cache_hits or 0,
         lsp_render_tokens_cache_misses = snapshot.lsp_render_tokens_cache_misses or 0,
-        doc_get_selections_calls = snapshot.doc_get_selections_calls or 0,
-        doc_get_selections_iters = snapshot.doc_get_selections_iters or 0,
-        doc_set_selections_calls = snapshot.doc_set_selections_calls or 0,
-        doc_set_selections_ms = snapshot.doc_set_selections_ms or 0,
+        buffer_get_selections_calls = snapshot.buffer_get_selections_calls or 0,
+        buffer_get_selections_iters = snapshot.buffer_get_selections_iters or 0,
+        buffer_set_selections_calls = snapshot.buffer_set_selections_calls or 0,
+        buffer_set_selections_ms = snapshot.buffer_set_selections_ms or 0,
         command_calls = snapshot.command_calls or 0,
         command_total_ms = snapshot.command_total_ms or 0,
         command_predicate_ms = snapshot.command_predicate_ms or 0,
@@ -843,12 +843,12 @@ function perf.on_frame(snapshot)
     tostring(snapshot.queue_depth or 0),
     csv_escape(snapshot.run_mode or ""),
     snapshot.window_has_focus and "1" or "0",
-    snapshot.active_view_is_docview and "1" or "0",
+    snapshot.active_view_is_textview and "1" or "0",
     csv_escape(snapshot.active_view_name or ""),
     tostring(snapshot.selection_count or 0),
     tostring(snapshot.search_selection_count or 0),
-    tostring(snapshot.docview_caret_draw_calls or 0),
-    tostring(snapshot.docview_selection_rect_calls or 0),
+    tostring(snapshot.textview_caret_draw_calls or 0),
+    tostring(snapshot.textview_selection_rect_calls or 0),
     tostring(snapshot.event_count or 0),
     string.format("%.3f", snapshot.event_ms or 0),
     csv_escape(snapshot.event_types or ""),
@@ -915,19 +915,19 @@ function perf.on_frame(snapshot)
     tostring(renderer_stats.text_render_chars_after_clip or 0),
     tostring(renderer_stats.text_render_top_clip_breaks or 0),
     string.format("%.3f", renderer_stats.text_render_hb_shape_ms or 0),
-    string.format("%.3f", snapshot.docview_draw_ms or 0),
-    string.format("%.3f", snapshot.docview_prepare_ms or 0),
-    string.format("%.3f", snapshot.docview_prepare_highlight_ms or 0),
-    string.format("%.3f", snapshot.docview_prepare_caret_ms or 0),
-    string.format("%.3f", snapshot.docview_prepare_selection_ms or 0),
-    string.format("%.3f", snapshot.docview_prepare_merge_ms or 0),
-    string.format("%.3f", snapshot.docview_gutter_ms or 0),
-    string.format("%.3f", snapshot.docview_body_ms or 0),
-    string.format("%.3f", snapshot.docview_text_ms or 0),
-    string.format("%.3f", snapshot.docview_overlay_ms or 0),
-    string.format("%.3f", snapshot.docview_highlighter_get_line_ms or 0),
-    string.format("%.3f", snapshot.docview_token_loop_ms or 0),
-    string.format("%.3f", snapshot.docview_renderer_draw_text_ms or 0),
+    string.format("%.3f", snapshot.textview_draw_ms or 0),
+    string.format("%.3f", snapshot.textview_prepare_ms or 0),
+    string.format("%.3f", snapshot.textview_prepare_highlight_ms or 0),
+    string.format("%.3f", snapshot.textview_prepare_caret_ms or 0),
+    string.format("%.3f", snapshot.textview_prepare_selection_ms or 0),
+    string.format("%.3f", snapshot.textview_prepare_merge_ms or 0),
+    string.format("%.3f", snapshot.textview_gutter_ms or 0),
+    string.format("%.3f", snapshot.textview_body_ms or 0),
+    string.format("%.3f", snapshot.textview_text_ms or 0),
+    string.format("%.3f", snapshot.textview_overlay_ms or 0),
+    string.format("%.3f", snapshot.textview_highlighter_get_line_ms or 0),
+    string.format("%.3f", snapshot.textview_token_loop_ms or 0),
+    string.format("%.3f", snapshot.textview_renderer_draw_text_ms or 0),
     tostring(snapshot_value(snapshot, "lsp_render_tokens_calls")),
     string.format("%.3f", snapshot.lsp_render_tokens_ms or 0),
     string.format("%.3f", snapshot.lsp_render_tokens_matching_ms or 0),
@@ -943,30 +943,30 @@ function perf.on_frame(snapshot)
     string.format("%.3f", snapshot.lsp_render_tokens_base_ms or 0),
     string.format("%.3f", snapshot.lsp_render_tokens_overlay_ms or 0),
     tostring(snapshot_value(snapshot, "lsp_render_tokens_schedule_calls")),
-    tostring(snapshot_value(snapshot, "docview_visible_lines")),
-    tostring(snapshot_value(snapshot, "docview_text_lines")),
-    tostring(snapshot_value(snapshot, "docview_tokens")),
-    tostring(snapshot_value(snapshot, "docview_draw_text_calls")),
-    tostring(snapshot_value(snapshot, "docview_prepare_highlight_iters")),
-    tostring(snapshot_value(snapshot, "docview_prepare_caret_scan_count")),
-    tostring(snapshot_value(snapshot, "docview_visible_carets")),
-    tostring(snapshot_value(snapshot, "docview_prepare_selection_iters")),
-    tostring(snapshot_value(snapshot, "docview_visible_selection_ranges")),
-    tostring(snapshot_value(snapshot, "docview_selection_cache_lines")),
-    tostring(snapshot_value(snapshot, "docview_selection_cache_ranges")),
-    tostring(snapshot_value(snapshot, "docview_selection_cache_merged_ranges")),
-    tostring(snapshot_value(snapshot, "doc_get_selections_calls")),
-    tostring(snapshot_value(snapshot, "doc_get_selections_iters")),
-    tostring(snapshot_value(snapshot, "doc_set_selections_calls")),
-    string.format("%.3f", snapshot.doc_set_selections_ms or 0),
-    tostring(snapshot_value(snapshot, "doc_add_selection_calls")),
-    string.format("%.3f", snapshot.doc_add_selection_ms or 0),
-    tostring(snapshot_value(snapshot, "doc_merge_cursors_calls")),
-    string.format("%.3f", snapshot.doc_merge_cursors_ms or 0),
-    tostring(snapshot_value(snapshot, "doc_sanitize_selection_calls")),
-    string.format("%.3f", snapshot.doc_sanitize_selection_ms or 0),
-    tostring(snapshot_value(snapshot, "doc_apply_edits_calls")),
-    string.format("%.3f", snapshot.doc_apply_edits_ms or 0),
+    tostring(snapshot_value(snapshot, "textview_visible_lines")),
+    tostring(snapshot_value(snapshot, "textview_text_lines")),
+    tostring(snapshot_value(snapshot, "textview_tokens")),
+    tostring(snapshot_value(snapshot, "textview_draw_text_calls")),
+    tostring(snapshot_value(snapshot, "textview_prepare_highlight_iters")),
+    tostring(snapshot_value(snapshot, "textview_prepare_caret_scan_count")),
+    tostring(snapshot_value(snapshot, "textview_visible_carets")),
+    tostring(snapshot_value(snapshot, "textview_prepare_selection_iters")),
+    tostring(snapshot_value(snapshot, "textview_visible_selection_ranges")),
+    tostring(snapshot_value(snapshot, "textview_selection_cache_lines")),
+    tostring(snapshot_value(snapshot, "textview_selection_cache_ranges")),
+    tostring(snapshot_value(snapshot, "textview_selection_cache_merged_ranges")),
+    tostring(snapshot_value(snapshot, "buffer_get_selections_calls")),
+    tostring(snapshot_value(snapshot, "buffer_get_selections_iters")),
+    tostring(snapshot_value(snapshot, "buffer_set_selections_calls")),
+    string.format("%.3f", snapshot.buffer_set_selections_ms or 0),
+    tostring(snapshot_value(snapshot, "buffer_add_selection_calls")),
+    string.format("%.3f", snapshot.buffer_add_selection_ms or 0),
+    tostring(snapshot_value(snapshot, "buffer_merge_cursors_calls")),
+    string.format("%.3f", snapshot.buffer_merge_cursors_ms or 0),
+    tostring(snapshot_value(snapshot, "buffer_sanitize_selection_calls")),
+    string.format("%.3f", snapshot.buffer_sanitize_selection_ms or 0),
+    tostring(snapshot_value(snapshot, "buffer_apply_edits_calls")),
+    string.format("%.3f", snapshot.buffer_apply_edits_ms or 0),
     tostring(snapshot_value(snapshot, "command_calls")),
     string.format("%.3f", snapshot.command_total_ms or 0),
     string.format("%.3f", snapshot.command_predicate_ms or 0),
@@ -976,20 +976,20 @@ function perf.on_frame(snapshot)
     string.format("%.3f", snapshot.statusbar_selection_ms or 0),
     tostring(snapshot_value(snapshot, "statusbar_selection_cache_hits")),
     tostring(snapshot_value(snapshot, "statusbar_selection_cache_misses")),
-    tostring(snapshot_value(snapshot, "docview_line_hint_calls")),
-    tostring(snapshot_value(snapshot, "docview_line_hint_drawn")),
-    string.format("%.3f", snapshot.docview_line_hint_ms or 0),
-    string.format("%.3f", snapshot.docview_line_hint_get_ms or 0),
-    string.format("%.3f", snapshot.docview_line_hint_normalize_ms or 0),
-    string.format("%.3f", snapshot.docview_line_hint_layout_ms or 0),
-    string.format("%.3f", snapshot.docview_line_hint_measure_ms or 0),
-    string.format("%.3f", snapshot.docview_line_hint_truncate_ms or 0),
-    string.format("%.3f", snapshot.docview_line_hint_draw_ms or 0),
-    tostring(snapshot_value(snapshot, "docview_line_hint_draw_text_calls")),
-    string.format("%.3f", snapshot.docview_line_hint_draw_text_ms or 0),
-    tostring(snapshot_value(snapshot, "docview_line_hint_skip_no_hint")),
-    tostring(snapshot_value(snapshot, "docview_line_hint_skip_no_space")),
-    tostring(snapshot_value(snapshot, "docview_line_hint_skip_truncated")),
+    tostring(snapshot_value(snapshot, "textview_line_hint_calls")),
+    tostring(snapshot_value(snapshot, "textview_line_hint_drawn")),
+    string.format("%.3f", snapshot.textview_line_hint_ms or 0),
+    string.format("%.3f", snapshot.textview_line_hint_get_ms or 0),
+    string.format("%.3f", snapshot.textview_line_hint_normalize_ms or 0),
+    string.format("%.3f", snapshot.textview_line_hint_layout_ms or 0),
+    string.format("%.3f", snapshot.textview_line_hint_measure_ms or 0),
+    string.format("%.3f", snapshot.textview_line_hint_truncate_ms or 0),
+    string.format("%.3f", snapshot.textview_line_hint_draw_ms or 0),
+    tostring(snapshot_value(snapshot, "textview_line_hint_draw_text_calls")),
+    string.format("%.3f", snapshot.textview_line_hint_draw_text_ms or 0),
+    tostring(snapshot_value(snapshot, "textview_line_hint_skip_no_hint")),
+    tostring(snapshot_value(snapshot, "textview_line_hint_skip_no_space")),
+    tostring(snapshot_value(snapshot, "textview_line_hint_skip_truncated")),
     tostring(snapshot_value(snapshot, "filetree_line_hint_calls")),
     string.format("%.3f", snapshot.filetree_line_hint_ms or 0),
     tostring(snapshot_value(snapshot, "filetree_line_hint_get_file_info_calls")),
@@ -1057,9 +1057,9 @@ end
 
 local function capture_recording_context()
   local view = core.active_view
-  local doc = view and view.doc
+  local buffer = view and view.buffer
   local bytes = 0
-  for _, line in ipairs(doc and doc.lines or {}) do bytes = bytes + #line end
+  for _, line in ipairs(buffer and buffer.lines or {}) do bytes = bytes + #line end
   local function count_entries(tbl)
     local count = 0
     for _ in pairs(tbl or {}) do count = count + 1 end
@@ -1067,10 +1067,10 @@ local function capture_recording_context()
   end
   return {
     view_name = context_text(view),
-    document_name = context_text(doc and doc:get_name()),
-    document_path = context_text(doc and (doc.abs_filename or doc.filename)),
-    document_lines = doc and #doc.lines or 0,
-    document_bytes = bytes,
+    buffer_name = context_text(buffer and buffer:get_name()),
+    buffer_path = context_text(buffer and (buffer.abs_filename or buffer.filename)),
+    buffer_lines = buffer and #buffer.lines or 0,
+    buffer_bytes = bytes,
     view_x = view and view.position and view.position.x or 0,
     view_y = view and view.position and view.position.y or 0,
     view_width = view and view.size and view.size.x or 0,
@@ -1095,9 +1095,9 @@ local function write_summary(path)
   ))
   local context = record.context or {}
   file:write(string.format(
-    "Context: view=%s document=%s path=%s lines=%d bytes=%d\n",
-    context.view_name or "", context.document_name or "", context.document_path or "",
-    context.document_lines or 0, context.document_bytes or 0
+    "Context: view=%s buffer=%s path=%s lines=%d bytes=%d\n",
+    context.view_name or "", context.buffer_name or "", context.buffer_path or "",
+    context.buffer_lines or 0, context.buffer_bytes or 0
   ))
   file:write(string.format(
     "Context geometry: x=%.1f y=%.1f width=%.1f height=%.1f wrapping=%s wrapped_layout=%s markdown_live_preview=%s metric_providers=%d line_render_providers=%d\n",
@@ -1146,7 +1146,7 @@ local function write_summary(path)
   ))
 
   file:write("Slow redraw frames (top by total_ms; thresholds total>25ms/frame>20ms/present>18ms):\n")
-  file:write("time,total,run_threads,run_threads_runs,run_threads_slowest,run_threads_loc,worker_pool_drain,worker_pool_messages,worker_pool_dispatch,worker_pool_callback,worker_pool_slowest_callback,worker_pool_slowest_callback_name,core,gc,event_count,event,event_types,slowest_event,slowest_event_ms,command_calls,command_total,slowest_command,slowest_command_name,update,pre_draw,frame,draw_emit,renderer_end,present,draw_calls,docview_draw,docview_prepare,docview_prepare_caret,docview_prepare_selection,docview_gutter,docview_body,docview_text,docview_overlay,docview_text_calls,lsp_tokens_ms,lsp_offsets_ms,lsp_scan_ms,lsp_calls,lsp_hits,lsp_misses,doc_get_selections_calls,doc_get_selections_iters,doc_set_selections_calls,doc_set_selections_ms,statusbar_selection,pending_events,queue_depth\n")
+  file:write("time,total,run_threads,run_threads_runs,run_threads_slowest,run_threads_loc,worker_pool_drain,worker_pool_messages,worker_pool_dispatch,worker_pool_callback,worker_pool_slowest_callback,worker_pool_slowest_callback_name,core,gc,event_count,event,event_types,slowest_event,slowest_event_ms,command_calls,command_total,slowest_command,slowest_command_name,update,pre_draw,frame,draw_emit,renderer_end,present,draw_calls,textview_draw,textview_prepare,textview_prepare_caret,textview_prepare_selection,textview_gutter,textview_body,textview_text,textview_overlay,textview_text_calls,lsp_tokens_ms,lsp_offsets_ms,lsp_scan_ms,lsp_calls,lsp_hits,lsp_misses,buffer_get_selections_calls,buffer_get_selections_iters,buffer_set_selections_calls,buffer_set_selections_ms,statusbar_selection,pending_events,queue_depth\n")
   for _, row in ipairs(record.slow_frames or {}) do
     file:write(string.format(
       "%.6f,%.3f,%.3f,%d,%.3f,%s,%.3f,%d,%.3f,%.3f,%.3f,%s,%.3f,%.3f,%d,%.3f,%s,%s,%.3f,%d,%.3f,%.3f,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%.3f,%.3f,%d,%d\n",
@@ -1159,20 +1159,20 @@ local function write_summary(path)
       csv_escape(row.event_types), csv_escape(row.slowest_event_type), row.slowest_event_ms,
       row.command_calls, row.command_total_ms, row.slowest_command_ms, csv_escape(row.slowest_command_name),
       row.update_ms, row.pre_draw_ms, row.frame_ms, row.draw_emit_ms,
-      row.renderer_end_ms, row.present_ms, row.draw_calls, row.docview_draw_ms,
-      row.docview_prepare_ms, row.docview_prepare_caret_ms, row.docview_prepare_selection_ms,
-      row.docview_gutter_ms, row.docview_body_ms, row.docview_text_ms, row.docview_overlay_ms,
-      row.docview_draw_text_calls, row.lsp_render_tokens_ms, row.lsp_render_tokens_line_offsets_ms,
+      row.renderer_end_ms, row.present_ms, row.draw_calls, row.textview_draw_ms,
+      row.textview_prepare_ms, row.textview_prepare_caret_ms, row.textview_prepare_selection_ms,
+      row.textview_gutter_ms, row.textview_body_ms, row.textview_text_ms, row.textview_overlay_ms,
+      row.textview_draw_text_calls, row.lsp_render_tokens_ms, row.lsp_render_tokens_line_offsets_ms,
       row.lsp_render_tokens_scan_ms, row.lsp_render_tokens_calls, row.lsp_render_tokens_cache_hits,
-      row.lsp_render_tokens_cache_misses, row.doc_get_selections_calls, row.doc_get_selections_iters,
-      row.doc_set_selections_calls, row.doc_set_selections_ms,
+      row.lsp_render_tokens_cache_misses, row.buffer_get_selections_calls, row.buffer_get_selections_iters,
+      row.buffer_set_selections_calls, row.buffer_set_selections_ms,
       row.statusbar_selection_ms, row.pending_events and 1 or 0, row.queue_depth
     ))
   end
   file:write("\n")
 
   file:write("Slow UI update iterations (top by update/rootpanel time; thresholds ui_update>10ms/update>10ms):\n")
-  file:write("time,did_redraw,total,update,core_root_panel,rootpanel,initial_layout,node_update,final_layout,node_update_inclusive,node_update_calls,node_layout_inclusive,node_layout_calls,scroll_tabs,active_view_update,tab_hover,docview_update,linewrap_update,linewrap_update_calls,event_count,event_types,pending_events,queue_depth\n")
+  file:write("time,did_redraw,total,update,core_root_panel,rootpanel,initial_layout,node_update,final_layout,node_update_inclusive,node_update_calls,node_layout_inclusive,node_layout_calls,scroll_tabs,active_view_update,tab_hover,textview_update,linewrap_update,linewrap_update_calls,event_count,event_types,pending_events,queue_depth\n")
   for _, row in ipairs(record.slow_updates or {}) do
     file:write(string.format(
       "%.6f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%s,%d,%d\n",
@@ -1181,8 +1181,8 @@ local function write_summary(path)
       row.rootpanel_initial_layout_ms, row.rootpanel_node_update_ms, row.rootpanel_final_layout_ms,
       row.node_update_ms, row.node_update_calls, row.node_update_layout_ms, row.node_update_layout_calls,
       row.node_scroll_tabs_to_visible_ms, row.node_active_view_update_ms, row.node_tab_hover_update_ms,
-      row.docview_update_ms, row.linewrapping_update_docview_breaks_ms,
-      row.linewrapping_update_docview_breaks_calls, row.event_count, csv_escape(row.event_types),
+      row.textview_update_ms, row.linewrapping_update_textview_breaks_ms,
+      row.linewrapping_update_textview_breaks_calls, row.event_count, csv_escape(row.event_types),
       row.pending_events and 1 or 0, row.queue_depth
     ))
   end
@@ -1196,33 +1196,33 @@ local function write_summary(path)
   local redraw_denom = math.max(0, record.frame_count or 0)
   local update_denom = math.max(0, record.update_iteration_count or 0)
   local run_denom = math.max(0, record.iteration_count or 0)
-  file:write("DocView/FileTree drilldown totals:\n")
+  file:write("TextView/FileTree drilldown totals:\n")
   file:write(string.format("  Denominators: redraw=%d, ui_update=%d, run_loop=%d\n", redraw_denom, update_denom, run_denom))
   file:write("  Cache/Markdown/centered-layout diagnostics:\n")
-  drill_metric("visual metric cache calls", "docview_visual_metric_cache_calls", run_denom, "run_loop")
-  drill_metric("visual metric cache hits", "docview_visual_metric_cache_hits", run_denom, "run_loop")
-  drill_metric("visual metric cache lookup ms", "docview_visual_metric_cache_lookup_ms", run_denom, "run_loop")
-  drill_metric("visual metric signature ms", "docview_visual_metric_signature_ms", run_denom, "run_loop")
-  drill_metric("visual metric signature cache hits", "docview_visual_metric_signature_cache_hits", run_denom, "run_loop")
-  drill_metric("visual metric signature computations", "docview_visual_metric_signature_computations", run_denom, "run_loop")
-  drill_metric("visual metric signature changes", "docview_visual_metric_signature_changes", run_denom, "run_loop")
-  drill_metric("visual metric full rebuilds", "docview_visual_metric_full_rebuilds", run_denom, "run_loop")
-  drill_metric("visual metric full rebuild rows", "docview_visual_metric_full_rebuild_rows", run_denom, "run_loop")
-  drill_metric("visual metric full rebuild ms", "docview_visual_metric_full_rebuild_ms", run_denom, "run_loop")
-  drill_metric("visual metric dirty passes", "docview_visual_metric_dirty_passes", run_denom, "run_loop")
-  drill_metric("visual metric dirty rows", "docview_visual_metric_dirty_rows", run_denom, "run_loop")
-  drill_metric("visual metric row splices", "docview_visual_metric_row_splices", run_denom, "run_loop")
-  drill_metric("visual metric row splice rows", "docview_visual_metric_row_splice_rows", run_denom, "run_loop")
-  drill_metric("line render cache calls", "docview_line_render_cache_calls", run_denom, "run_loop")
-  drill_metric("line render cache hits", "docview_line_render_cache_hits", run_denom, "run_loop")
-  drill_metric("line render cache misses", "docview_line_render_cache_misses", run_denom, "run_loop")
-  drill_metric("line render cold misses", "docview_line_render_cold_misses", run_denom, "run_loop")
-  drill_metric("line render signature misses", "docview_line_render_signature_misses", run_denom, "run_loop")
-  drill_metric("line render cache lookup ms", "docview_line_render_cache_lookup_ms", run_denom, "run_loop")
-  drill_metric("line render build ms", "docview_line_render_build_ms", run_denom, "run_loop")
-  drill_metric("fragment normalization calls", "docview_fragment_normalization_calls", run_denom, "run_loop")
-  drill_metric("fragment normalization cache hits", "docview_fragment_normalization_cache_hits", run_denom, "run_loop")
-  drill_metric("fragment normalization builds", "docview_fragment_normalization_builds", run_denom, "run_loop")
+  drill_metric("visual metric cache calls", "textview_visual_metric_cache_calls", run_denom, "run_loop")
+  drill_metric("visual metric cache hits", "textview_visual_metric_cache_hits", run_denom, "run_loop")
+  drill_metric("visual metric cache lookup ms", "textview_visual_metric_cache_lookup_ms", run_denom, "run_loop")
+  drill_metric("visual metric signature ms", "textview_visual_metric_signature_ms", run_denom, "run_loop")
+  drill_metric("visual metric signature cache hits", "textview_visual_metric_signature_cache_hits", run_denom, "run_loop")
+  drill_metric("visual metric signature computations", "textview_visual_metric_signature_computations", run_denom, "run_loop")
+  drill_metric("visual metric signature changes", "textview_visual_metric_signature_changes", run_denom, "run_loop")
+  drill_metric("visual metric full rebuilds", "textview_visual_metric_full_rebuilds", run_denom, "run_loop")
+  drill_metric("visual metric full rebuild rows", "textview_visual_metric_full_rebuild_rows", run_denom, "run_loop")
+  drill_metric("visual metric full rebuild ms", "textview_visual_metric_full_rebuild_ms", run_denom, "run_loop")
+  drill_metric("visual metric dirty passes", "textview_visual_metric_dirty_passes", run_denom, "run_loop")
+  drill_metric("visual metric dirty rows", "textview_visual_metric_dirty_rows", run_denom, "run_loop")
+  drill_metric("visual metric row splices", "textview_visual_metric_row_splices", run_denom, "run_loop")
+  drill_metric("visual metric row splice rows", "textview_visual_metric_row_splice_rows", run_denom, "run_loop")
+  drill_metric("line render cache calls", "textview_line_render_cache_calls", run_denom, "run_loop")
+  drill_metric("line render cache hits", "textview_line_render_cache_hits", run_denom, "run_loop")
+  drill_metric("line render cache misses", "textview_line_render_cache_misses", run_denom, "run_loop")
+  drill_metric("line render cold misses", "textview_line_render_cold_misses", run_denom, "run_loop")
+  drill_metric("line render signature misses", "textview_line_render_signature_misses", run_denom, "run_loop")
+  drill_metric("line render cache lookup ms", "textview_line_render_cache_lookup_ms", run_denom, "run_loop")
+  drill_metric("line render build ms", "textview_line_render_build_ms", run_denom, "run_loop")
+  drill_metric("fragment normalization calls", "textview_fragment_normalization_calls", run_denom, "run_loop")
+  drill_metric("fragment normalization cache hits", "textview_fragment_normalization_cache_hits", run_denom, "run_loop")
+  drill_metric("fragment normalization builds", "textview_fragment_normalization_builds", run_denom, "run_loop")
   drill_metric("Markdown provider generation requests", "markdown_live_provider_generation_requests", run_denom, "run_loop")
   drill_metric("Markdown provider generation cache hits", "markdown_live_provider_generation_cache_hits", run_denom, "run_loop")
   drill_metric("Markdown provider generations", "markdown_live_provider_generation_calls", run_denom, "run_loop")
@@ -1266,14 +1266,14 @@ local function write_summary(path)
   drill_metric("centered geometry entries", "centered_editor_with_geometry_entries", run_denom, "run_loop")
   drill_metric("centered nested bypasses", "centered_editor_with_geometry_nested_bypasses", run_denom, "run_loop")
   file:write("  Draw/redraw metrics:\n")
-  drill_metric("docview line hint calls", "docview_line_hint_calls", redraw_denom, "redraw")
-  drill_metric("docview line hint drawn", "docview_line_hint_drawn", redraw_denom, "redraw")
-  drill_metric("docview line hint total ms", "docview_line_hint_ms", redraw_denom, "redraw")
-  drill_metric("docview line hint get ms", "docview_line_hint_get_ms", redraw_denom, "redraw")
-  drill_metric("docview line hint layout ms", "docview_line_hint_layout_ms", redraw_denom, "redraw")
-  drill_metric("docview line hint measure ms", "docview_line_hint_measure_ms", redraw_denom, "redraw")
-  drill_metric("docview line hint truncate ms", "docview_line_hint_truncate_ms", redraw_denom, "redraw")
-  drill_metric("docview line hint draw ms", "docview_line_hint_draw_ms", redraw_denom, "redraw")
+  drill_metric("textview line hint calls", "textview_line_hint_calls", redraw_denom, "redraw")
+  drill_metric("textview line hint drawn", "textview_line_hint_drawn", redraw_denom, "redraw")
+  drill_metric("textview line hint total ms", "textview_line_hint_ms", redraw_denom, "redraw")
+  drill_metric("textview line hint get ms", "textview_line_hint_get_ms", redraw_denom, "redraw")
+  drill_metric("textview line hint layout ms", "textview_line_hint_layout_ms", redraw_denom, "redraw")
+  drill_metric("textview line hint measure ms", "textview_line_hint_measure_ms", redraw_denom, "redraw")
+  drill_metric("textview line hint truncate ms", "textview_line_hint_truncate_ms", redraw_denom, "redraw")
+  drill_metric("textview line hint draw ms", "textview_line_hint_draw_ms", redraw_denom, "redraw")
   drill_metric("linewrap draw_text calls", "linewrapping_draw_line_text_calls", redraw_denom, "redraw")
   drill_metric("linewrap draw_text ms", "linewrapping_draw_line_text_ms", redraw_denom, "redraw")
   drill_metric("linewrap draw_text rows", "linewrapping_draw_line_text_rows", redraw_denom, "redraw")
@@ -1299,23 +1299,23 @@ local function write_summary(path)
   drill_metric("filetree draw_line_text ms", "filetree_draw_line_text_ms", redraw_denom, "redraw")
 
   file:write("  UI update metrics:\n")
-  drill_metric("docview update total ms", "docview_update_ms", update_denom, "update")
-  drill_metric("docview update cache ms", "docview_update_cache_ms", update_denom, "update")
-  drill_metric("docview update selection ms", "docview_update_selection_ms", update_denom, "update")
-  drill_metric("docview scroll-to-visible ms", "docview_scroll_to_make_visible_ms", update_denom, "update")
-  drill_metric("docview update blink ms", "docview_update_blink_ms", update_denom, "update")
-  drill_metric("docview active focus ms", "docview_update_active_focus_ms", update_denom, "update")
-  drill_metric("docview update IME ms", "docview_update_ime_ms", update_denom, "update")
-  drill_metric("docview super update ms", "docview_update_super_ms", update_denom, "update")
+  drill_metric("textview update total ms", "textview_update_ms", update_denom, "update")
+  drill_metric("textview update cache ms", "textview_update_cache_ms", update_denom, "update")
+  drill_metric("textview update selection ms", "textview_update_selection_ms", update_denom, "update")
+  drill_metric("textview scroll-to-visible ms", "textview_scroll_to_make_visible_ms", update_denom, "update")
+  drill_metric("textview update blink ms", "textview_update_blink_ms", update_denom, "update")
+  drill_metric("textview active focus ms", "textview_update_active_focus_ms", update_denom, "update")
+  drill_metric("textview update IME ms", "textview_update_ime_ms", update_denom, "update")
+  drill_metric("textview super update ms", "textview_update_super_ms", update_denom, "update")
   drill_metric("IME set_location calls", "ime_set_location_calls", update_denom, "update")
   drill_metric("IME set_location ms", "ime_set_location_ms", update_denom, "update")
   drill_metric("IME changed calls", "ime_set_location_changed", update_denom, "update")
   drill_metric("IME system rect ms", "ime_set_location_system_ms", update_denom, "update")
-  drill_metric("linewrap update_docview calls", "linewrapping_update_docview_breaks_calls", update_denom, "update")
-  drill_metric("linewrap update_docview ms", "linewrapping_update_docview_breaks_ms", update_denom, "update")
-  drill_metric("linewrap width-changed calls", "linewrapping_update_docview_breaks_width_changed", update_denom, "update")
-  drill_metric("linewrap text-changed calls", "linewrapping_update_docview_breaks_text_changed", update_denom, "update")
-  drill_metric("linewrap line-count-changed calls", "linewrapping_update_docview_breaks_line_count_changed", update_denom, "update")
+  drill_metric("linewrap update_textview calls", "linewrapping_update_textview_breaks_calls", update_denom, "update")
+  drill_metric("linewrap update_textview ms", "linewrapping_update_textview_breaks_ms", update_denom, "update")
+  drill_metric("linewrap width-changed calls", "linewrapping_update_textview_breaks_width_changed", update_denom, "update")
+  drill_metric("linewrap text-changed calls", "linewrapping_update_textview_breaks_text_changed", update_denom, "update")
+  drill_metric("linewrap line-count-changed calls", "linewrapping_update_textview_breaks_line_count_changed", update_denom, "update")
   drill_metric("linewrap line-render invalidation reconstructs", "linewrapping_reconstruct_line_render_invalidation_calls", update_denom, "update")
   drill_metric("linewrap reconstruct calls", "linewrapping_reconstruct_breaks_calls", update_denom, "update")
   drill_metric("linewrap reconstruct ms", "linewrapping_reconstruct_breaks_ms", update_denom, "update")
@@ -1342,7 +1342,7 @@ local function write_summary(path)
   drill_metric("rootpanel node update ms", "rootpanel_node_update_ms", update_denom, "update")
   drill_metric("rootpanel final layout ms", "rootpanel_final_layout_ms", update_denom, "update")
   drill_metric("rootpanel drag overlay ms", "rootpanel_drag_overlay_ms", update_denom, "update")
-  drill_metric("rootpanel defer open docs ms", "rootpanel_defer_open_docs_ms", update_denom, "update")
+  drill_metric("rootpanel defer open buffers ms", "rootpanel_defer_open_buffers_ms", update_denom, "update")
   drill_metric("node layout calls", "node_update_layout_calls", update_denom, "update")
   drill_metric("node layout leaf calls", "node_update_layout_leaf_calls", update_denom, "update")
   drill_metric("node layout split calls", "node_update_layout_split_calls", update_denom, "update")
@@ -1458,7 +1458,7 @@ local function write_summary(path)
   for _, row in ipairs(sorted_counts(record.detail_counts)) do
     if row.key:find("^markdown_live_provider_geometry:")
       or row.key:find("^centered_editor_geometry:")
-      or row.key:find("^docview_visual_metric_signature_transition:")
+      or row.key:find("^textview_visual_metric_signature_transition:")
     then
       mode_count = mode_count + 1
       file:write(string.format("%12.3f %s\n", row.count, row.key))

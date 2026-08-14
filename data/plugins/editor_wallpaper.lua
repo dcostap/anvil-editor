@@ -4,7 +4,7 @@
 local core = require "core"
 local style = require "core.style"
 local common = require "core.common"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 local GlobalPromptBar = require "core.global_prompt_bar"
 
 local bundled_path = DATADIR .. PATHSEP .. "plugins" .. PATHSEP .. "editor_wallpaper" .. PATHSEP .. "wallpaper.jpg"
@@ -86,11 +86,11 @@ if not core.__editor_wallpaper_patched then
     return view_draw_background(self, color)
   end
 
-  local docview_draw_line_highlight = DocView.draw_line_highlight
-  function DocView:draw_line_highlight(x, y, height)
+  local textview_draw_line_highlight = TextView.draw_line_highlight
+  function TextView:draw_line_highlight(x, y, height)
     local old_line_highlight = style.line_highlight
     style.line_highlight = wallpaper.line_highlight
-    local ok, a, b, c, d, e = pcall(docview_draw_line_highlight, self, x, y, height)
+    local ok, a, b, c, d, e = pcall(textview_draw_line_highlight, self, x, y, height)
     style.line_highlight = old_line_highlight
     if not ok then error(a) end
     return a, b, c, d, e

@@ -29,18 +29,18 @@ end
 
 install_statusbar_item()
 
-local function is_doc_view(value)
-  return type(value) == "table" and value.doc ~= nil
+local function is_buffer_view(value)
+  return type(value) == "table" and value.buffer ~= nil
 end
 
 local function active_or_arg_view(view)
-  if is_doc_view(view) then return view end
-  if is_doc_view(core.active_view) then return core.active_view end
+  if is_buffer_view(view) then return view end
+  if is_buffer_view(core.active_view) then return core.active_view end
 end
 
-local function doc_view_predicate(view)
-  local docview = active_or_arg_view(view)
-  return docview ~= nil, docview
+local function buffer_view_predicate(view)
+  local textview = active_or_arg_view(view)
+  return textview ~= nil, textview
 end
 
 command.add_toggle("lsp:toggle", {
@@ -57,15 +57,15 @@ command.add(nil, {
   end,
 })
 
-command.add(doc_view_predicate, {
-  ["lsp:start-current-document"] = function(view)
-    local ok, err = manager.start_current_document(view)
+command.add(buffer_view_predicate, {
+  ["lsp:start-current-buffer"] = function(view)
+    local ok, err = manager.start_current_buffer(view)
     if core.log then
       core.log(ok and "LSP start scheduled" or "LSP start skipped: %s", err or "unavailable")
     end
   end,
-  ["lsp:restart-current-document"] = function(view)
-    local ok, err = manager.restart_current_document(view)
+  ["lsp:restart-current-buffer"] = function(view)
+    local ok, err = manager.restart_current_buffer(view)
     if core.log then
       core.log(ok and "LSP restart scheduled" or "LSP restart skipped: %s", err or "unavailable")
     end

@@ -108,10 +108,10 @@ test.describe("core.lsp.config", function()
     write_file(join_path(project, "compile_commands.json"), "{}")
     write_file(join_path(src, ".clangd"), "CompileFlags: {}")
     mkdir(join_path(deep, ".git"))
-    local doc = join_path(deep, "main.cpp")
-    write_file(doc, "int main() {}")
+    local buffer = join_path(deep, "main.cpp")
+    write_file(buffer, "int main() {}")
 
-    local root = test.not_nil(lsp_config.find_root(doc, fake_server_definition(), {
+    local root = test.not_nil(lsp_config.find_root(buffer, fake_server_definition(), {
       fallback_roots = { temp_root },
     }))
     test.equal(root.root, common.normalize_path(project))
@@ -120,21 +120,21 @@ test.describe("core.lsp.config", function()
     test.equal(root.root_uri, uri.path_to_uri(project))
   end)
 
-  test.test("falls back to containing project root then document directory", function()
+  test.test("falls back to containing project root then buffer directory", function()
     local project = mkdir(join_path(temp_root, "project"))
     local src = mkdir(join_path(project, "src"))
-    local doc = join_path(src, "main.cpp")
-    write_file(doc, "int main() {}")
+    local buffer = join_path(src, "main.cpp")
+    write_file(buffer, "int main() {}")
 
-    local root = test.not_nil(lsp_config.find_root(doc, fake_server_definition(), {
+    local root = test.not_nil(lsp_config.find_root(buffer, fake_server_definition(), {
       fallback_roots = { project },
     }))
     test.equal(root.root, common.normalize_path(project))
     test.equal(root.source, "fallback_root")
 
-    root = test.not_nil(lsp_config.find_root(doc, fake_server_definition({ root_markers = {} })))
+    root = test.not_nil(lsp_config.find_root(buffer, fake_server_definition({ root_markers = {} })))
     test.equal(root.root, common.normalize_path(src))
-    test.equal(root.source, "document_dir")
+    test.equal(root.source, "buffer_dir")
   end)
 
   test.test("reports missing executables without crashing", function()
@@ -148,10 +148,10 @@ test.describe("core.lsp.config", function()
   test.test("selects available fake server with root and identity", function()
     local project = mkdir(join_path(temp_root, "project"))
     write_file(join_path(project, ".clangd"), "CompileFlags: {}")
-    local doc = join_path(project, "main.cpp")
-    write_file(doc, "int main() {}")
+    local buffer = join_path(project, "main.cpp")
+    write_file(buffer, "int main() {}")
 
-    local selected = test.not_nil(lsp_config.select_for_path({ fake_server_definition() }, doc, {
+    local selected = test.not_nil(lsp_config.select_for_path({ fake_server_definition() }, buffer, {
       settings_generation = 3,
     }))
     test.equal(#selected, 1)
@@ -184,9 +184,9 @@ test.describe("core.lsp.config", function()
     test.not_ok(lsp_config.workspace_executable_config_allowed(def.trust_policy, { trusted = true }))
 
     local project = mkdir(join_path(temp_root, "project"))
-    local doc = join_path(project, "main.cpp")
-    write_file(doc, "int main() {}")
-    local selected = test.not_nil(lsp_config.select_for_path({ def }, doc, { trusted = true }))
+    local buffer = join_path(project, "main.cpp")
+    write_file(buffer, "int main() {}")
+    local selected = test.not_nil(lsp_config.select_for_path({ def }, buffer, { trusted = true }))
     test.equal(#selected, 0)
   end)
 
@@ -203,10 +203,10 @@ test.describe("core.lsp.config", function()
     local project = mkdir(join_path(temp_root, "odin-project"))
     local src = mkdir(join_path(project, "src"))
     write_file(join_path(project, "ols.json"), "{}")
-    local doc = join_path(src, "main.odin")
-    write_file(doc, "package main\n")
+    local buffer = join_path(src, "main.odin")
+    write_file(buffer, "package main\n")
 
-    local selected = test.not_nil(lsp_config.select_for_path(lsp_config.DEFAULT_SERVER_DEFINITIONS, doc, {
+    local selected = test.not_nil(lsp_config.select_for_path(lsp_config.DEFAULT_SERVER_DEFINITIONS, buffer, {
       executable = { path_entries = { temp_root } },
     }))
     test.equal(#selected, 1)

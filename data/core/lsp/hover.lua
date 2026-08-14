@@ -92,7 +92,7 @@ function hover.normalize_contents(contents)
   return table.concat(parts, "\n\n")
 end
 
-function hover.map_result(client, doc, result)
+function hover.map_result(client, buffer, result)
   if result == nil or lsp_json.is_null(result) then
     return { text = "", empty = true }
   end
@@ -107,15 +107,15 @@ function hover.map_result(client, doc, result)
     raw = result,
   }
   if result.range then
-    mapped.range = position.range_lsp_to_doc(doc, result.range, client.position_encoding or "utf-16")
+    mapped.range = position.range_lsp_to_buffer(buffer, result.range, client.position_encoding or "utf-16")
     mapped.lsp_range = result.range
   end
   return mapped
 end
 
-function hover.available_clients(doc)
+function hover.available_clients(buffer)
   local out = {}
-  for _, state in ipairs(documents.states_for_doc(doc)) do
+  for _, state in ipairs(documents.states_for_buffer(buffer)) do
     local client = state.client
     if state.opened and not state.disabled_reason and hover_capability(client) then
       out[#out + 1] = { client = client, state = state }
@@ -142,12 +142,12 @@ function hover.latest(client, uri, key, version)
   return by_version and by_version[version] or nil
 end
 
-function hover.request(doc, opts)
+function hover.request(buffer, opts)
   opts = opts or {}
-  local matches = hover.available_clients(doc)
+  local matches = hover.available_clients(buffer)
   if #matches == 0 then return nil, "unavailable", "unavailable" end
   local line, col = opts.line, opts.col
-  if not line or not col then line, col = doc:get_selection() end
+  if not line or not col then line, col = buffer:get_selection() end
   local key = request_key(line, col)
   local first_reason = "pending"
   for _, match in ipairs(matches) do
@@ -159,13 +159,13 @@ function hover.request(doc, opts)
       if opts.show ~= false then hover.show(entry.hover) end
       return entry.hover, nil, "fresh"
     end
-    local ok, reason = hover.schedule(client, state, doc, line, col, opts)
+    local ok, reason = hover.schedule(client, state, buffer, line, col, opts)
     if ok == nil then first_reason = reason or "unavailable" else first_reason = "pending" end
   end
   return nil, first_reason, first_reason == "unavailable" and "unavailable" or "pending"
 end
 
-function hover.schedule(client, state, doc, line, col, opts)
+function hover.schedule(client, state, buffer, line, col, opts)
   opts = opts or {}
   if type(client.send_request) ~= "function" then return nil, "client has no request API" end
   cancel_inflight(client, state.uri, "superseded hover request")
@@ -177,7 +177,7 @@ function hover.schedule(client, state, doc, line, col, opts)
   local requested_generation = client_generation(client)
   local params = {
     textDocument = { uri = state.uri },
-    position = position.doc_to_lsp(doc, line, col, client.position_encoding or "utf-16"),
+    position = position.buffer_to_lsp(buffer, line, col, client.position_encoding or "utf-16"),
   }
   local id, err = client:send_request("textDocument/hover", params, function(result, error_obj)
     local current = pending[key]
@@ -199,7 +199,7 @@ function hover.schedule(client, state, doc, line, col, opts)
       quiet_log("LSP hover dropped stale version response for %s", state.uri)
       return
     end
-    local mapped = hover.map_result(client, doc, result)
+    local mapped = hover.map_result(client, buffer, result)
     local by_key = bucket_for(cache, client, state.uri)
     by_key[key] = by_key[key] or {}
     by_key[key][requested_version] = {
@@ -226,8 +226,8 @@ end
 
 function hover.start_current_position(view, opts)
   view = view or core.active_view
-  if not view or not view.doc then return nil, "no active document", "unavailable" end
-  return hover.request(view.doc, opts)
+  if not view or not view.buffer then return nil, "no active buffer", "unavailable" end
+  return hover.request(view.buffer, opts)
 end
 
 function hover.clear_client(client)

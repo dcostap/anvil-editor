@@ -1,6 +1,6 @@
 local core = require "core"
 local common = require "core.common"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local documents = require "core.lsp.documents"
 local position = require "core.lsp.position"
 local range_marker = require "core.range_marker"
@@ -32,13 +32,13 @@ function diagnostic_markers.set_removal_grace_seconds(seconds)
   return old
 end
 
-local function doc_change_id(doc)
-  if doc and doc.get_change_id then return doc:get_change_id() end
+local function buffer_change_id(buffer)
+  if buffer and buffer.get_change_id then return buffer:get_change_id() end
   return nil
 end
 
-local function doc_uri(doc)
-  local path = doc and (doc.abs_filename or doc.filename)
+local function buffer_uri(buffer)
+  local path = buffer and (buffer.abs_filename or buffer.filename)
   if not path or path == "" then return nil end
   if not common.is_absolute_path(path) and system.absolute_path then
     path = system.absolute_path(path)
@@ -62,12 +62,12 @@ local function marker_store(client)
   return store
 end
 
-local function entry_for(client, document_uri)
+local function entry_for(client, buffer_uri)
   local store = marker_store(client)
-  local entry = store.by_uri[document_uri]
+  local entry = store.by_uri[buffer_uri]
   if not entry then
-    entry = { uri = document_uri, markers = {}, server_id = store.server_id }
-    store.by_uri[document_uri] = entry
+    entry = { uri = buffer_uri, markers = {}, server_id = store.server_id }
+    store.by_uri[buffer_uri] = entry
   end
   return entry
 end
@@ -98,20 +98,20 @@ local function now()
 end
 
 local function is_authoritative_publish(state, version)
-  if not state or not state.doc then return false end
-  local change_id = doc_change_id(state.doc)
+  if not state or not state.buffer then return false end
+  local change_id = buffer_change_id(state.buffer)
   if version ~= nil and version ~= state.lsp_version then return false end
   return change_id ~= nil and change_id == state.last_synced_change_id
 end
 
-local function convert_range(item, doc, client)
+local function convert_range(item, buffer, client)
   if not item or not item.lsp_range then return nil end
   local encoding = item.position_encoding or client.position_encoding or "utf-16"
-  return position.range_lsp_to_doc(doc, item.lsp_range, encoding)
+  return position.range_lsp_to_buffer(buffer, item.lsp_range, encoding)
 end
 
-local function new_marker(entry, doc, item, range)
-  local marker = range_marker.new(doc, {
+local function new_marker(entry, buffer, item, range)
+  local marker = range_marker.new(buffer, {
     line1 = range.line1,
     col1 = range.col1,
     line2 = range.line2,
@@ -231,16 +231,16 @@ sweep_expired_removals = function(time)
   return removed
 end
 
-local function reconcile_authoritative(client, document_uri, items, version)
-  local state = documents.state(client, document_uri)
-  local doc = state and state.doc
-  if not doc then return false end
-  local entry = entry_for(client, document_uri)
+local function reconcile_authoritative(client, buffer_uri, items, version)
+  local state = documents.state(client, buffer_uri)
+  local buffer = state and state.buffer
+  if not buffer then return false end
+  local entry = entry_for(client, buffer_uri)
   local used = {}
   local changed = prune_invalid_markers(entry) > 0
 
   for _, item in ipairs(items or {}) do
-    local range = convert_range(item, doc, client)
+    local range = convert_range(item, buffer, client)
     if range then
       local best_index, best_distance
       local fallback_index, fallback_distance
@@ -276,7 +276,7 @@ local function reconcile_authoritative(client, document_uri, items, version)
         marker.data.uri = item.uri
         marker:set_range(range.line1, range.col1, range.line2, range.col2)
       else
-        marker = new_marker(entry, doc, item, range)
+        marker = new_marker(entry, buffer, item, range)
         used[#entry.markers] = true
       end
       item.visual_marker = marker
@@ -300,34 +300,34 @@ local function reconcile_authoritative(client, document_uri, items, version)
     if core and core.log_quiet then
       core.log_quiet(
         "Reconciled LSP diagnostic markers for %s: markers=%d version=%s",
-        tostring(document_uri), #entry.markers, tostring(version)
+        tostring(buffer_uri), #entry.markers, tostring(version)
       )
     end
   end
   return changed
 end
 
-function diagnostic_markers.on_publish(client, document_uri, version, items)
-  local state = documents.state(client, document_uri)
+function diagnostic_markers.on_publish(client, buffer_uri, version, items)
+  local state = documents.state(client, buffer_uri)
   if not is_authoritative_publish(state, version) then
     if core and core.log_quiet then
       core.log_quiet(
         "Keeping tracked LSP diagnostic markers for stale/non-authoritative publish %s version=%s",
-        tostring(document_uri), tostring(version)
+        tostring(buffer_uri), tostring(version)
       )
     end
     return false, "stale-publish"
   end
-  return reconcile_authoritative(client, document_uri, items, version)
+  return reconcile_authoritative(client, buffer_uri, items, version)
 end
 
-function diagnostic_markers.mark_doc_stale(doc, _transaction)
-  if not doc then return 0 end
-  local document_uri = doc_uri(doc)
-  if not document_uri then return 0 end
+function diagnostic_markers.mark_buffer_stale(buffer, _transaction)
+  if not buffer then return 0 end
+  local buffer_uri = buffer_uri(buffer)
+  if not buffer_uri then return 0 end
   local count = 0
   for _, store in pairs(stores) do
-    local entry = store.by_uri[document_uri]
+    local entry = store.by_uri[buffer_uri]
     if entry then
       for _, marker in ipairs(entry.markers) do
         if marker:is_valid() then
@@ -348,22 +348,22 @@ function diagnostic_markers.mark_doc_stale(doc, _transaction)
   if count > 0 then
     bump_generation()
     if core and core.log_quiet then
-      core.log_quiet("Marked %d LSP diagnostic marker(s) stale-tracked for %s", count, doc:get_name())
+      core.log_quiet("Marked %d LSP diagnostic marker(s) stale-tracked for %s", count, buffer:get_name())
     end
   end
   return count
 end
 
-function diagnostic_markers.clear_uri(client, document_uri)
+function diagnostic_markers.clear_uri(client, buffer_uri)
   local store = stores[client]
   if not store then return 0 end
-  local entry = store.by_uri[document_uri]
+  local entry = store.by_uri[buffer_uri]
   if not entry then return 0 end
   local count = #entry.markers
   for i = #entry.markers, 1, -1 do
     remove_entry_marker(entry, i, "clear-uri")
   end
-  store.by_uri[document_uri] = nil
+  store.by_uri[buffer_uri] = nil
   if count > 0 then bump_generation() end
   return count
 end
@@ -372,19 +372,19 @@ function diagnostic_markers.clear_client(client)
   local store = stores[client]
   if not store then return 0 end
   local count = 0
-  for document_uri in pairs(store.by_uri) do
-    count = count + diagnostic_markers.clear_uri(client, document_uri)
+  for buffer_uri in pairs(store.by_uri) do
+    count = count + diagnostic_markers.clear_uri(client, buffer_uri)
   end
   stores[client] = nil
   return count
 end
 
-function diagnostic_markers.clear_doc(doc)
-  local document_uri = doc_uri(doc)
-  if not document_uri then return 0 end
+function diagnostic_markers.clear_buffer(buffer)
+  local buffer_uri = buffer_uri(buffer)
+  if not buffer_uri then return 0 end
   local count = 0
   for client in pairs(stores) do
-    count = count + diagnostic_markers.clear_uri(client, document_uri)
+    count = count + diagnostic_markers.clear_uri(client, buffer_uri)
   end
   return count
 end
@@ -395,13 +395,13 @@ local function compare_items(a, b)
   return tostring(a.diagnostic and a.diagnostic.message or "") < tostring(b.diagnostic and b.diagnostic.message or "")
 end
 
-function diagnostic_markers.visual_document_items(doc, opts)
+function diagnostic_markers.visual_buffer_items(buffer, opts)
   opts = opts or {}
-  local document_uri = doc_uri(doc)
-  if not document_uri then return {} end
+  local buffer_uri = buffer_uri(buffer)
+  if not buffer_uri then return {} end
   local out = {}
   for _, store in pairs(stores) do
-    local entry = store.by_uri[document_uri]
+    local entry = store.by_uri[buffer_uri]
     if entry then
       local removed = sweep_entry(entry, now())
       if removed > 0 then bump_generation() end
@@ -431,8 +431,8 @@ function diagnostic_markers.visual_document_items(doc, opts)
   return out
 end
 
-if Doc.register_text_transaction_handler then
-  Doc.register_text_transaction_handler("lsp_diagnostic_markers", diagnostic_markers.mark_doc_stale)
+if Buffer.register_text_transaction_handler then
+  Buffer.register_text_transaction_handler("lsp_diagnostic_markers", diagnostic_markers.mark_buffer_stale)
 end
 
 return diagnostic_markers

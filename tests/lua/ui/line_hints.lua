@@ -15,7 +15,7 @@ local function write_file(path, content)
 end
 
 local function find_filetree_line(view, wanted)
-  for i, line in ipairs(view.doc.lines) do
+  for i, line in ipairs(view.buffer.lines) do
     if line_without_newline(line) == wanted then return i end
   end
 end

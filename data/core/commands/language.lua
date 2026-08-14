@@ -20,13 +20,13 @@ local function navigation_timeout(opts)
   return tonumber(lsp_cfg and lsp_cfg.navigation_timeout) or DEFAULT_NAVIGATION_TIMEOUT
 end
 
-local function is_doc_view(value)
-  return type(value) == "table" and value.doc ~= nil
+local function is_buffer_view(value)
+  return type(value) == "table" and value.buffer ~= nil
 end
 
-local function doc_view_predicate(value)
-  local view = is_doc_view(value) and value or core.active_view
-  return is_doc_view(view), view
+local function buffer_view_predicate(value)
+  local view = is_buffer_view(value) and value or core.active_view
+  return is_buffer_view(view), view
 end
 
 local function language_mode_suggestions(text)
@@ -43,18 +43,18 @@ local function language_mode_suggestions(text)
   return results
 end
 
-local function persist_language_mode(doc)
-  if doc.intellij_untitled then
+local function persist_language_mode(buffer)
+  if buffer.intellij_untitled then
     local ok, recovery = pcall(require, "plugins.untitled_recovery")
-    if ok and recovery.update_doc_metadata then recovery.update_doc_metadata(doc, "Language Mode change") end
+    if ok and recovery.update_buffer_metadata then recovery.update_buffer_metadata(buffer, "Language Mode change") end
   end
   if core.save_workspace then core.save_workspace() end
 end
 
 local function set_language_mode_command(view)
-  local doc = view.doc
+  local buffer = view.buffer
   core.global_prompt_bar:enter("Language Mode", {
-    text = doc.language_mode_override or "Automatic",
+    text = buffer.language_mode_override or "Automatic",
     select_text = true,
     suggest = language_mode_suggestions,
     validate = function(text, item)
@@ -62,12 +62,12 @@ local function set_language_mode_command(view)
     end,
     submit = function(text, item)
       item = item or language_mode.find_choice(text)
-      local changed, err = doc:set_language_mode(item and item.mode, { reason = "language-mode-command" })
+      local changed, err = buffer:set_language_mode(item and item.mode, { reason = "language-mode-command" })
       if err then
         core.warn("%s", err)
         return
       end
-      if changed then persist_language_mode(doc) end
+      if changed then persist_language_mode(buffer) end
     end,
   })
 end
@@ -80,14 +80,14 @@ local function visible_log(...)
   if core.log then core.log(...) end
 end
 
-local function symbol_text_at_doc_selection(doc)
-  if not doc then return "symbol" end
-  local line1, col1, line2, col2 = doc:get_selection(true)
-  local selected = doc:get_text(line1, col1, line2, col2)
-  if selected and selected:match("^" .. doc:get_symbol_pattern() .. "$") then return selected end
-  local line, col = doc:get_selection()
-  local text = doc.lines[line] or ""
-  local pattern = doc:get_symbol_pattern()
+local function symbol_text_at_buffer_selection(buffer)
+  if not buffer then return "symbol" end
+  local line1, col1, line2, col2 = buffer:get_selection(true)
+  local selected = buffer:get_text(line1, col1, line2, col2)
+  if selected and selected:match("^" .. buffer:get_symbol_pattern() .. "$") then return selected end
+  local line, col = buffer:get_selection()
+  local text = buffer.lines[line] or ""
+  local pattern = buffer:get_symbol_pattern()
   local best
   for s, value in text:gmatch("()(" .. pattern .. ")") do
     local e = s + #value
@@ -107,13 +107,13 @@ local function result_path(result)
   return normalize_path(result and (result.path or (result.uri and require("core.lsp.uri").uri_to_path(result.uri))))
 end
 
-local function result_doc_range(view, result)
-  local doc = view and view.doc
+local function result_buffer_range(view, result)
+  local buffer = view and view.buffer
   local range = result.selection_range or result.range
   if range then return range end
   local lsp_range = result.lsp_selection_range or result.lsp_range
-  if doc and lsp_range then
-    return lsp_position.range_lsp_to_doc(doc, lsp_range, result.position_encoding or "utf-16")
+  if buffer and lsp_range then
+    return lsp_position.range_lsp_to_buffer(buffer, lsp_range, result.position_encoding or "utf-16")
   end
 end
 
@@ -129,10 +129,10 @@ local function open_location(result, opts)
 
   if result.start_line then
     local view = opts.view or core.active_view
-    local doc = view and view.doc
-    if doc then
+    local buffer = view and view.buffer
+    if buffer then
       if opts.pane and panes.pane_for_view(view) ~= opts.pane then
-        view = panes.open_doc(doc, {
+        view = panes.open_buffer(buffer, {
           pane = opts.pane,
           source_view = opts.view,
           focus = true,
@@ -141,7 +141,7 @@ local function open_location(result, opts)
       if view.expand_folds_covering_range then
         view:expand_folds_covering_range(result.start_line, result.start_col, result.end_line, result.end_col, "language-location")
       end
-      doc:set_selection(result.start_line, result.start_col, result.end_line, result.end_col)
+      buffer:set_selection(result.start_line, result.start_col, result.end_line, result.end_col)
       if history then history.record_place(navigation_anchor, { reason = "language-location" }) end
       return true
     end
@@ -154,11 +154,11 @@ local function open_location(result, opts)
     source_view = opts.view,
     focus = true,
   })
-  if not view or not view.doc then return false, "failed to open target" end
-  local range = result_doc_range(view, result)
+  if not view or not view.buffer then return false, "failed to open target" end
+  local range = result_buffer_range(view, result)
   if range then
     if view.expand_folds_covering_range then view:expand_folds_covering_range(range.line1, range.col1, range.line2, range.col2, "language-location") end
-    view.doc:set_selection(range.line1, range.col1, range.line2, range.col2)
+    view.buffer:set_selection(range.line1, range.col1, range.line2, range.col2)
   elseif result.line and result.col then
     local line2, col2 = result.line2 or result.line, result.col2 or result.col
     if view.expand_folds_covering_range then
@@ -166,7 +166,7 @@ local function open_location(result, opts)
     elseif view.expand_folds_at_line then
       view:expand_folds_at_line(result.line, "language-location")
     end
-    view.doc:set_selection(result.line, result.col, line2, col2)
+    view.buffer:set_selection(result.line, result.col, line2, col2)
   end
   if history then history.record_place(navigation_anchor, { reason = "language-location" }) end
   return true
@@ -219,10 +219,10 @@ local function lsp_result_to_picker_item(result, symbol)
   }
 end
 
-local function tree_sitter_refs_to_picker_item(doc, item, symbol)
-  local path = item and item.path or doc and doc.abs_filename or doc and doc.filename
+local function tree_sitter_refs_to_picker_item(buffer, item, symbol)
+  local path = item and item.path or buffer and buffer.abs_filename or buffer and buffer.filename
   if not path or not item then return nil end
-  local text = item.line_text or ((doc and doc.lines and doc.lines[item.start_line] or "") or "")
+  local text = item.line_text or ((buffer and buffer.lines and buffer.lines[item.start_line] or "") or "")
   local root = core.root_project and core.root_project()
   local rel = item.relpath or path
   if root and root.path and common.path_belongs_to(path, root.path) then
@@ -252,8 +252,8 @@ local function show_locations_picker(title, status, items)
   return fuzzy.open_static_results(title, items or {}, { status = status or title })
 end
 
-local function doc_language_id(doc)
-  return doc and doc.treesitter and doc.treesitter.language_id
+local function buffer_language_id(buffer)
+  return buffer and buffer.treesitter and buffer.treesitter.language_id
 end
 
 local function tree_sitter_symbol_location(symbol)
@@ -278,7 +278,7 @@ local function tree_sitter_symbol_location(symbol)
   }
 end
 
-local function exact_workspace_symbol_locations(symbol_index, symbol, doc)
+local function exact_workspace_symbol_locations(symbol_index, symbol, buffer)
   local results, reason, status = symbol_index.workspace_symbols(symbol, {
     limit = 200,
     allow_stale = true,
@@ -286,7 +286,7 @@ local function exact_workspace_symbol_locations(symbol_index, symbol, doc)
   if status ~= "fresh" and status ~= "stale" then return nil, reason, nil, status end
 
   local exact = {}
-  local current_language = doc_language_id(doc)
+  local current_language = buffer_language_id(buffer)
   for _, candidate in ipairs(results or {}) do
     if candidate.name == symbol then
       local location = tree_sitter_symbol_location(candidate)
@@ -336,13 +336,13 @@ end
 function language.goto_declaration(view, opts)
   opts = opts or {}
   view = view or core.active_view
-  local doc = view and view.doc
-  if not doc then return false, "no active document" end
-  local symbol = symbol_text_at_doc_selection(doc)
+  local buffer = view and view.buffer
+  if not buffer then return false, "no active buffer" end
+  local symbol = symbol_text_at_buffer_selection(buffer)
   if not symbol then return false, "no symbol at caret" end
   local history = navigation_history()
   local navigation_anchor = history and history.capture_current_place()
-  local line, col = doc:get_selection()
+  local line, col = buffer:get_selection()
 
   local function show_no_declaration(reason)
     visible_log("No declaration found for %s", symbol)
@@ -369,7 +369,7 @@ function language.goto_declaration(view, opts)
       return
     end
     request_until_ready(function()
-      return exact_workspace_symbol_locations(symbol_index, symbol, doc)
+      return exact_workspace_symbol_locations(symbol_index, symbol, buffer)
     end, function(results)
       if #results > 0 then
         open_declaration_results(results)
@@ -382,7 +382,7 @@ function language.goto_declaration(view, opts)
   end
 
   local function try_local_declaration(reason)
-    local fallback, fallback_reason = intelligence.local_declaration(doc, line, col)
+    local fallback, fallback_reason = intelligence.local_declaration(buffer, line, col)
     if fallback then
       open_location(fallback, { view = view, navigation_anchor = navigation_anchor, pane = opts.pane })
     else
@@ -391,7 +391,7 @@ function language.goto_declaration(view, opts)
   end
 
   request_until_ready(function()
-    return intelligence.declarations(doc, line, col)
+    return intelligence.declarations(buffer, line, col)
   end, function(results)
     if #results > 0 then
       open_declaration_results(results)
@@ -412,18 +412,18 @@ local function set_reference_picker_results(picker, symbol, items, status)
   end
 end
 
-local function local_reference_items(doc, line, col, symbol)
+local function local_reference_items(buffer, line, col, symbol)
   local items = {}
-  local refs = intelligence.local_references(doc, line, col)
+  local refs = intelligence.local_references(buffer, line, col)
   for _, ref in ipairs(refs or {}) do
-    local item = tree_sitter_refs_to_picker_item(doc, ref, symbol)
+    local item = tree_sitter_refs_to_picker_item(buffer, ref, symbol)
     if item then items[#items + 1] = item end
   end
   return items
 end
 
-local function show_local_reference_fallback(picker, doc, line, col, symbol, reason)
-  local items = local_reference_items(doc, line, col, symbol)
+local function show_local_reference_fallback(picker, buffer, line, col, symbol, reason)
+  local items = local_reference_items(buffer, line, col, symbol)
   local status = #items > 0 and (#items == 1 and "1 local reference" or string.format("%d local references", #items))
     or "No references found"
   set_reference_picker_results(picker, symbol, items, status)
@@ -447,11 +447,11 @@ local function reference_picker_alive(picker)
   return true
 end
 
-local function show_tree_sitter_workspace_reference_fallback(picker, doc, line, col, symbol, reason)
+local function show_tree_sitter_workspace_reference_fallback(picker, buffer, line, col, symbol, reason)
   local ok, symbol_index = pcall(require, "core.treesitter.symbol_index")
   local workspace_usages = ok and symbol_index and (symbol_index.workspace_usages or symbol_index.workspace_references)
   if not workspace_usages then
-    show_local_reference_fallback(picker, doc, line, col, symbol, reason)
+    show_local_reference_fallback(picker, buffer, line, col, symbol, reason)
     return
   end
 
@@ -510,7 +510,7 @@ local function show_tree_sitter_workspace_reference_fallback(picker, doc, line, 
           tonumber(index.files_total) or 0
         ))
       elseif status == "unavailable" then
-        show_local_reference_fallback(picker, doc, line, col, symbol, workspace_reason or reason or "workspace-usages-unavailable")
+        show_local_reference_fallback(picker, buffer, line, col, symbol, workspace_reason or reason or "workspace-usages-unavailable")
         return
       end
       coroutine.yield(0.05)
@@ -535,20 +535,20 @@ local function show_tree_sitter_workspace_reference_fallback(picker, doc, line, 
       set_reference_picker_results(picker, symbol, {}, "Tree-sitter: no Project usages in indexed subset (index truncated)")
       return
     end
-    show_local_reference_fallback(picker, doc, line, col, symbol, reason or workspace_reason or "no-workspace-usages")
+    show_local_reference_fallback(picker, buffer, line, col, symbol, reason or workspace_reason or "no-workspace-usages")
   end)
 end
 
 function language.show_references(view)
   view = view or core.active_view
-  local doc = view and view.doc
-  if not doc then return false, "no active document" end
-  local symbol = symbol_text_at_doc_selection(doc)
+  local buffer = view and view.buffer
+  if not buffer then return false, "no active buffer" end
+  local symbol = symbol_text_at_buffer_selection(buffer)
   if not symbol then return false, "no symbol at caret" end
   local picker = show_locations_picker("References: " .. symbol, "Loading references…", {})
-  local line, col = doc:get_selection()
+  local line, col = buffer:get_selection()
   request_until_ready(function()
-    return intelligence.references(doc, line, col, nil, nil, { include_declaration = false })
+    return intelligence.references(buffer, line, col, nil, nil, { include_declaration = false })
   end, function(results)
     local items = {}
     for _, result in ipairs(results or {}) do
@@ -556,24 +556,24 @@ function language.show_references(view)
       if item then items[#items + 1] = item end
     end
     if #items == 0 then
-      show_tree_sitter_workspace_reference_fallback(picker, doc, line, col, symbol, "no-lsp-reference-results")
+      show_tree_sitter_workspace_reference_fallback(picker, buffer, line, col, symbol, "no-lsp-reference-results")
       return
     end
     local status = #items == 1 and "1 reference" or string.format("%d references", #items)
     set_reference_picker_results(picker, symbol, items, status)
   end, function(reason)
-    show_tree_sitter_workspace_reference_fallback(picker, doc, line, col, symbol, reason)
+    show_tree_sitter_workspace_reference_fallback(picker, buffer, line, col, symbol, reason)
   end)
   return true
 end
 
-local function symbol_doc_view_predicate(value)
-  local ok, view = doc_view_predicate(value)
+local function symbol_buffer_view_predicate(value)
+  local ok, view = buffer_view_predicate(value)
   if not ok or view.command_output_view then return false end
-  return symbol_text_at_doc_selection(view.doc) ~= nil, view
+  return symbol_text_at_buffer_selection(view.buffer) ~= nil, view
 end
 
-command.add(symbol_doc_view_predicate, {
+command.add(symbol_buffer_view_predicate, {
   ["language:go-to-declaration"] = function(view)
     return language.goto_declaration(view)
   end,
@@ -582,16 +582,16 @@ command.add(symbol_doc_view_predicate, {
   end,
 })
 
-command.add(doc_view_predicate, {
+command.add(buffer_view_predicate, {
   ["language:set-mode"] = set_language_mode_command,
 })
 
 poi.add_activation_provider("language-declaration", {
   priority = -100,
   point_at_caret = function(_, view)
-    local valid, doc_view = symbol_doc_view_predicate(view)
-    if not valid or doc_view.context == "application" or doc_view.doc.git_view_pane_read_only then return nil end
-    local line, col = doc_view.doc:get_selection()
+    local valid, buffer_view = symbol_buffer_view_predicate(view)
+    if not valid or buffer_view.context == "application" or buffer_view.buffer.git_view_pane_read_only then return nil end
+    local line, col = buffer_view.buffer:get_selection()
     return {
       kind = "declaration",
       line = line,
@@ -600,7 +600,7 @@ poi.add_activation_provider("language-declaration", {
       col2 = col + 1,
       text_bounds = true,
       activate = function(_, _, opts)
-        return language.goto_declaration(doc_view, opts)
+        return language.goto_declaration(buffer_view, opts)
       end,
     }
   end,

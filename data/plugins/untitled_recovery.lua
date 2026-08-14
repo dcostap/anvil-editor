@@ -1,11 +1,10 @@
 -- mod-version:3
--- Managed backing files for IntelliJ-style untitled Documents.
+-- Managed backing files for Untitled Buffers.
 
 local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
 
 local M = {}
 
@@ -19,21 +18,21 @@ local MANIFEST_BAK = "manifest.lua.bak"
 local id_counter = 0
 local pending_generation = 0
 local loop_running = false
-local dirty_docs = setmetatable({}, { __mode = "k" })
+local dirty_buffers = setmetatable({}, { __mode = "k" })
 
 local function log_quiet(fmt, ...)
   if core.log_quiet then core.log_quiet(fmt, ...) end
 end
 
-local function is_untitled_doc(doc)
-  return doc
-     and doc.intellij_untitled
-     and not doc.intellij_untitled_discarded
-     and doc.new_file
-     and not doc.filename
-     and not doc.abs_filename
+local function is_untitled_buffer(buffer)
+  return buffer
+     and buffer.intellij_untitled
+     and not buffer.intellij_untitled_discarded
+     and buffer.new_file
+     and not buffer.filename
+     and not buffer.abs_filename
 end
-M.is_untitled_doc = is_untitled_doc
+M.is_untitled_buffer = is_untitled_buffer
 
 local function normalize_project_path(path)
   path = tostring(path or "default")
@@ -86,7 +85,7 @@ local function project_paths(project_path)
     key = key,
     project = project_path,
     root = root,
-    docs = root .. PATHSEP .. "docs",
+    buffers = root .. PATHSEP .. "buffers",
     manifest = root .. PATHSEP .. MANIFEST,
     manifest_bak = root .. PATHSEP .. MANIFEST_BAK,
   }
@@ -111,7 +110,7 @@ local function sanitize_id(id)
   return id
 end
 
-local function new_doc_id()
+local function new_buffer_id()
   id_counter = id_counter + 1
   local pid = system.get_process_id and system.get_process_id() or 0
   local t = math.floor(system.get_time() * 1000000)
@@ -120,7 +119,7 @@ local function new_doc_id()
 end
 
 local function backing_rel_for_id(id)
-  return "docs" .. PATHSEP .. sanitize_id(id) .. ".txt"
+  return "buffers" .. PATHSEP .. sanitize_id(id) .. ".txt"
 end
 
 local function safe_relative_backing_abs(project_path, rel, id)
@@ -226,7 +225,7 @@ end
 M._safe_replace_bytes = M.safe_replace_bytes
 
 local function empty_manifest(paths)
-  return { version = 1, project_key = paths.key, project = paths.project, saved_at = 0, docs = {} }
+  return { version = 1, project_key = paths.key, project = paths.project, saved_at = 0, buffers = {} }
 end
 
 local function try_load_manifest_file(file, paths)
@@ -235,7 +234,7 @@ local function try_load_manifest_file(file, paths)
   local ok, data = pcall(fn)
   if not ok then return nil, data end
   if type(data) ~= "table" then return nil, "manifest did not return a table" end
-  if type(data.docs) ~= "table" then return nil, "manifest docs field is missing or invalid" end
+  if type(data.buffers) ~= "table" then return nil, "manifest buffers field is missing or invalid" end
   if data.project and not common.path_equals(data.project, paths.project) then
     return nil, string.format("manifest project mismatch: %s", tostring(data.project))
   end
@@ -290,9 +289,9 @@ function M.load_manifest(project_path)
 end
 
 local function manifest_entry(manifest, id)
-  if not (manifest and type(manifest.docs) == "table" and id) then return nil end
-  for _, doc in ipairs(manifest.docs) do
-    if doc.id == id then return doc end
+  if not (manifest and type(manifest.buffers) == "table" and id) then return nil end
+  for _, buffer in ipairs(manifest.buffers) do
+    if buffer.id == id then return buffer end
   end
 end
 
@@ -302,8 +301,8 @@ local function write_manifest_for(paths, manifest)
   manifest.project_key = paths.key
   manifest.project = paths.project
   manifest.saved_at = os.time()
-  manifest.docs = manifest.docs or {}
-  table.sort(manifest.docs, function(a, b) return tostring(a.id) < tostring(b.id) end)
+  manifest.buffers = manifest.buffers or {}
+  table.sort(manifest.buffers, function(a, b) return tostring(a.id) < tostring(b.id) end)
 
   local tmp = paths.manifest .. ".tmp"
   local body = "return " .. common.serialize(manifest, { pretty = true, sort = true })
@@ -316,7 +315,7 @@ local function write_manifest_for(paths, manifest)
     local fn, load_err = loadfile(tmp)
     if not fn then error(load_err) end
     local loaded_ok, loaded = pcall(fn)
-    if not loaded_ok or type(loaded) ~= "table" or type(loaded.docs) ~= "table" then
+    if not loaded_ok or type(loaded) ~= "table" or type(loaded.buffers) ~= "table" then
       error("manifest validation failed")
     end
     replace_existing_with_tmp(tmp, paths.manifest, paths.manifest_bak)
@@ -330,7 +329,7 @@ local function write_manifest_for(paths, manifest)
     core.error("Couldn't write untitled recovery manifest %s: %s", paths.manifest, err)
     return false, err
   end
-  log_quiet("Untitled recovery: wrote manifest for %s with %d document(s)", paths.project, #manifest.docs)
+  log_quiet("Untitled recovery: wrote manifest for %s with %d buffer(s)", paths.project, #manifest.buffers)
   return true
 end
 
@@ -338,12 +337,12 @@ function M.save_manifest(project_path, manifest)
   return write_manifest_for(project_paths(project_path), manifest)
 end
 
-local function doc_text_bytes(doc)
-  local text = table.concat(doc.lines or { "\n" })
-  if doc.crlf then text = text:gsub("\n", "\r\n") end
+local function buffer_text_bytes(buffer)
+  local text = table.concat(buffer.lines or { "\n" })
+  if buffer.crlf then text = text:gsub("\n", "\r\n") end
   return text
 end
-M.serialize_doc_text = doc_text_bytes
+M.serialize_buffer_text = buffer_text_bytes
 
 local function count_newlines(text)
   local _, count = tostring(text or ""):gsub("\n", "")
@@ -355,37 +354,37 @@ local function serialized_text_len(text, crlf)
   return #text + (crlf and count_newlines(text) or 0)
 end
 
-local function estimate_doc_bytes(doc)
-  if not doc then return 0 end
-  local cached = doc.intellij_untitled_estimated_bytes
+local function estimate_buffer_bytes(buffer)
+  if not buffer then return 0 end
+  local cached = buffer.intellij_untitled_estimated_bytes
   if cached then return cached end
   local total = 0
-  for _, line in ipairs(doc.lines or { "\n" }) do
-    total = total + serialized_text_len(line, doc.crlf)
+  for _, line in ipairs(buffer.lines or { "\n" }) do
+    total = total + serialized_text_len(line, buffer.crlf)
   end
-  doc.intellij_untitled_estimated_bytes = total
+  buffer.intellij_untitled_estimated_bytes = total
   return total
 end
 
-local function update_estimated_bytes_from_transaction(doc, transaction)
-  if not doc then return end
+local function update_estimated_bytes_from_transaction(buffer, transaction)
+  if not buffer then return end
   if type(transaction) ~= "table" or type(transaction.edits) ~= "table" then
-    doc.intellij_untitled_estimated_bytes = nil
+    buffer.intellij_untitled_estimated_bytes = nil
     return
   end
-  local total = doc.intellij_untitled_estimated_bytes
+  local total = buffer.intellij_untitled_estimated_bytes
   if not total then
     -- First edit after an uncached load/undo: pay one cheap line-length scan,
-    -- but avoid concatenating the whole document on every keystroke.
-    estimate_doc_bytes(doc)
+    -- but avoid concatenating the whole buffer on every keystroke.
+    estimate_buffer_bytes(buffer)
     return
   end
   for _, edit in ipairs(transaction.edits) do
     total = total
-      + serialized_text_len(edit.text, doc.crlf)
-      - serialized_text_len(edit.old_text, doc.crlf)
+      + serialized_text_len(edit.text, buffer.crlf)
+      - serialized_text_len(edit.old_text, buffer.crlf)
   end
-  doc.intellij_untitled_estimated_bytes = math.max(0, total)
+  buffer.intellij_untitled_estimated_bytes = math.max(0, total)
 end
 
 local function text_to_lines(text)
@@ -406,29 +405,29 @@ local function text_to_lines(text)
 end
 M._text_to_lines = text_to_lines
 
-local function load_text_into_doc(doc, text, crlf)
+local function load_text_into_buffer(buffer, text, crlf)
   local lines, detected_crlf = text_to_lines(text)
-  doc.lines = lines
-  doc.crlf = crlf ~= nil and crlf or detected_crlf
-  doc.intellij_untitled_estimated_bytes = nil
-  estimate_doc_bytes(doc)
-  doc:reset_syntax()
-  doc:clear_undo_redo()
+  buffer.lines = lines
+  buffer.crlf = crlf ~= nil and crlf or detected_crlf
+  buffer.intellij_untitled_estimated_bytes = nil
+  estimate_buffer_bytes(buffer)
+  buffer:reset_syntax()
+  buffer:clear_undo_redo()
 end
 
-local function update_manifest_entry(doc, fields)
-  local paths = project_paths(doc.intellij_untitled_project_path)
+local function update_manifest_entry(buffer, fields)
+  local paths = project_paths(buffer.intellij_untitled_project_path)
   local manifest = load_manifest_for(paths)
-  manifest.docs = manifest.docs or {}
-  local entry = manifest_entry(manifest, doc.intellij_untitled_id)
+  manifest.buffers = manifest.buffers or {}
+  local entry = manifest_entry(manifest, buffer.intellij_untitled_id)
   if not entry then
-    entry = { id = doc.intellij_untitled_id }
-    manifest.docs[#manifest.docs + 1] = entry
+    entry = { id = buffer.intellij_untitled_id }
+    manifest.buffers[#manifest.buffers + 1] = entry
   end
   for k, v in pairs(fields or {}) do entry[k] = v end
-  entry.name = entry.name or doc.intellij_untitled_name or "Untitled"
-  entry.backing = entry.backing or backing_rel_for_id(doc.intellij_untitled_id)
-  entry.crlf = doc.crlf or false
+  entry.name = entry.name or buffer.intellij_untitled_name or "Untitled"
+  entry.backing = entry.backing or backing_rel_for_id(buffer.intellij_untitled_id)
+  entry.crlf = buffer.crlf or false
   entry.updated_at = os.time()
   entry.created_at = entry.created_at or entry.updated_at
   entry.explicit_closed = false
@@ -436,146 +435,146 @@ local function update_manifest_entry(doc, fields)
   return entry
 end
 
-function M.ensure_doc_backing(doc, opts)
+function M.ensure_buffer_backing(buffer, opts)
   opts = opts or {}
-  if not is_untitled_doc(doc) then return nil end
-  doc.intellij_untitled_id = sanitize_id(opts.id or doc.intellij_untitled_id) or new_doc_id()
-  doc.intellij_untitled_name = opts.name or doc.intellij_untitled_name or "Untitled"
-  doc.intellij_untitled_project_path = opts.project or doc.intellij_untitled_project_path or current_project_path()
-  doc.intellij_untitled_backing_rel = opts.backing or doc.intellij_untitled_backing_rel or backing_rel_for_id(doc.intellij_untitled_id)
-  doc.intellij_untitled_backing_path, doc.intellij_untitled_backing_rel = backing_abs_for(doc.intellij_untitled_project_path, doc.intellij_untitled_id, doc.intellij_untitled_backing_rel)
-  local paths = project_paths(doc.intellij_untitled_project_path)
-  ensure_dir(paths.docs)
+  if not is_untitled_buffer(buffer) then return nil end
+  buffer.intellij_untitled_id = sanitize_id(opts.id or buffer.intellij_untitled_id) or new_buffer_id()
+  buffer.intellij_untitled_name = opts.name or buffer.intellij_untitled_name or "Untitled"
+  buffer.intellij_untitled_project_path = opts.project or buffer.intellij_untitled_project_path or current_project_path()
+  buffer.intellij_untitled_backing_rel = opts.backing or buffer.intellij_untitled_backing_rel or backing_rel_for_id(buffer.intellij_untitled_id)
+  buffer.intellij_untitled_backing_path, buffer.intellij_untitled_backing_rel = backing_abs_for(buffer.intellij_untitled_project_path, buffer.intellij_untitled_id, buffer.intellij_untitled_backing_rel)
+  local paths = project_paths(buffer.intellij_untitled_project_path)
+  ensure_dir(paths.buffers)
   if opts.update_manifest and not opts.no_manifest then
-    update_manifest_entry(doc, {
-      name = doc.intellij_untitled_name,
-      backing = doc.intellij_untitled_backing_rel,
-      crlf = doc.crlf or false,
-      language_mode = doc.language_mode_override or false,
-      last_snapshot_change_id = doc.intellij_untitled_last_snapshot_change_id,
+    update_manifest_entry(buffer, {
+      name = buffer.intellij_untitled_name,
+      backing = buffer.intellij_untitled_backing_rel,
+      crlf = buffer.crlf or false,
+      language_mode = buffer.language_mode_override or false,
+      last_snapshot_change_id = buffer.intellij_untitled_last_snapshot_change_id,
     })
-    log_quiet("Untitled recovery: ensured backing %s for %s", doc.intellij_untitled_backing_path, doc.intellij_untitled_name)
+    log_quiet("Untitled recovery: ensured backing %s for %s", buffer.intellij_untitled_backing_path, buffer.intellij_untitled_name)
   end
-  return doc.intellij_untitled_backing_path
+  return buffer.intellij_untitled_backing_path
 end
 
-function M.doc_backing_current(doc)
-  if not is_untitled_doc(doc) then return false end
-  if not doc.intellij_untitled_backing_path then return false end
-  if doc.intellij_untitled_backing_dirty then return false end
-  if not system.get_file_info(doc.intellij_untitled_backing_path) then return false end
-  local change_id = doc.get_change_id and doc:get_change_id() or nil
-  return doc.intellij_untitled_last_snapshot_change_id == change_id
+function M.buffer_backing_current(buffer)
+  if not is_untitled_buffer(buffer) then return false end
+  if not buffer.intellij_untitled_backing_path then return false end
+  if buffer.intellij_untitled_backing_dirty then return false end
+  if not system.get_file_info(buffer.intellij_untitled_backing_path) then return false end
+  local change_id = buffer.get_change_id and buffer:get_change_id() or nil
+  return buffer.intellij_untitled_last_snapshot_change_id == change_id
 end
 
-function M.state_for_doc(doc)
-  if not is_untitled_doc(doc) then return nil end
-  M.ensure_doc_backing(doc, { no_manifest = true })
+function M.state_for_buffer(buffer)
+  if not is_untitled_buffer(buffer) then return nil end
+  M.ensure_buffer_backing(buffer, { no_manifest = true })
   return {
     intellij_untitled = true,
-    intellij_untitled_name = doc.intellij_untitled_name,
-    intellij_untitled_id = doc.intellij_untitled_id,
-    intellij_untitled_backing = doc.intellij_untitled_backing_rel,
-    intellij_untitled_backing_current = M.doc_backing_current(doc),
-    intellij_untitled_change_id = doc.get_change_id and doc:get_change_id() or nil,
-    intellij_untitled_backing_saved_at = doc.intellij_untitled_backing_saved_at,
+    intellij_untitled_name = buffer.intellij_untitled_name,
+    intellij_untitled_id = buffer.intellij_untitled_id,
+    intellij_untitled_backing = buffer.intellij_untitled_backing_rel,
+    intellij_untitled_backing_current = M.buffer_backing_current(buffer),
+    intellij_untitled_change_id = buffer.get_change_id and buffer:get_change_id() or nil,
+    intellij_untitled_backing_saved_at = buffer.intellij_untitled_backing_saved_at,
     intellij_untitled_workspace_saved_at = system.get_time(),
-    language_mode = doc.language_mode_override,
+    language_mode = buffer.language_mode_override,
   }
 end
 
-function M.update_doc_metadata(doc, reason)
-  if not is_untitled_doc(doc) then return false end
-  M.ensure_doc_backing(doc, { no_manifest = true })
-  update_manifest_entry(doc, {
-    name = doc.intellij_untitled_name,
-    backing = doc.intellij_untitled_backing_rel,
-    crlf = doc.crlf or false,
-    encoding = doc.encoding,
-    language_mode = doc.language_mode_override or false,
-    last_snapshot_change_id = doc.intellij_untitled_last_snapshot_change_id,
+function M.update_buffer_metadata(buffer, reason)
+  if not is_untitled_buffer(buffer) then return false end
+  M.ensure_buffer_backing(buffer, { no_manifest = true })
+  update_manifest_entry(buffer, {
+    name = buffer.intellij_untitled_name,
+    backing = buffer.intellij_untitled_backing_rel,
+    crlf = buffer.crlf or false,
+    encoding = buffer.encoding,
+    language_mode = buffer.language_mode_override or false,
+    last_snapshot_change_id = buffer.intellij_untitled_last_snapshot_change_id,
   })
   log_quiet(
     "Untitled recovery: updated metadata for %s (%s)",
-    doc.intellij_untitled_name or doc.intellij_untitled_id,
+    buffer.intellij_untitled_name or buffer.intellij_untitled_id,
     reason or "metadata"
   )
   return true
 end
 
-function M.flush_doc(doc, reason, force)
-  if not is_untitled_doc(doc) then return false end
-  M.ensure_doc_backing(doc)
-  local change_id = doc.get_change_id and doc:get_change_id() or nil
-  if not doc.intellij_untitled_backing_dirty
-     and doc.intellij_untitled_last_snapshot_change_id == change_id
-     and system.get_file_info(doc.intellij_untitled_backing_path) then
-    log_quiet("Untitled recovery: skipped unchanged snapshot for %s", doc.intellij_untitled_name or doc.intellij_untitled_id)
+function M.flush_buffer(buffer, reason, force)
+  if not is_untitled_buffer(buffer) then return false end
+  M.ensure_buffer_backing(buffer)
+  local change_id = buffer.get_change_id and buffer:get_change_id() or nil
+  if not buffer.intellij_untitled_backing_dirty
+     and buffer.intellij_untitled_last_snapshot_change_id == change_id
+     and system.get_file_info(buffer.intellij_untitled_backing_path) then
+    log_quiet("Untitled recovery: skipped unchanged snapshot for %s", buffer.intellij_untitled_name or buffer.intellij_untitled_id)
     return false
   end
-  local bytes = doc_text_bytes(doc)
-  local ok, err = M.safe_replace_bytes(doc.intellij_untitled_backing_path, bytes)
+  local bytes = buffer_text_bytes(buffer)
+  local ok, err = M.safe_replace_bytes(buffer.intellij_untitled_backing_path, bytes)
   if not ok then
-    doc.intellij_untitled_backing_dirty = true
-    core.error("Untitled recovery failed for %s: %s", doc.intellij_untitled_name or "Untitled", err or "unknown error")
+    buffer.intellij_untitled_backing_dirty = true
+    core.error("Untitled recovery failed for %s: %s", buffer.intellij_untitled_name or "Untitled", err or "unknown error")
     return false, err
   end
-  doc.intellij_untitled_backing_dirty = false
-  dirty_docs[doc] = nil
-  doc.intellij_untitled_backing_saved_at = os.time()
-  doc.intellij_untitled_estimated_bytes = #bytes
-  doc.intellij_untitled_last_snapshot_change_id = change_id
-  update_manifest_entry(doc, {
-    name = doc.intellij_untitled_name,
-    backing = doc.intellij_untitled_backing_rel,
-    crlf = doc.crlf or false,
-    encoding = doc.encoding,
-    language_mode = doc.language_mode_override or false,
+  buffer.intellij_untitled_backing_dirty = false
+  dirty_buffers[buffer] = nil
+  buffer.intellij_untitled_backing_saved_at = os.time()
+  buffer.intellij_untitled_estimated_bytes = #bytes
+  buffer.intellij_untitled_last_snapshot_change_id = change_id
+  update_manifest_entry(buffer, {
+    name = buffer.intellij_untitled_name,
+    backing = buffer.intellij_untitled_backing_rel,
+    crlf = buffer.crlf or false,
+    encoding = buffer.encoding,
+    language_mode = buffer.language_mode_override or false,
     last_snapshot_change_id = change_id,
   })
-  log_quiet("Untitled recovery: flushed %s (%s)", doc.intellij_untitled_name or doc.intellij_untitled_id, reason or "snapshot")
+  log_quiet("Untitled recovery: flushed %s (%s)", buffer.intellij_untitled_name or buffer.intellij_untitled_id, reason or "snapshot")
   return true
 end
 
-local function untitled_doc_has_recovery_content(doc)
-  return doc.intellij_untitled_backing_path ~= nil
-      or doc:get_text(1, 1, math.huge, math.huge) ~= ""
+local function untitled_buffer_has_recovery_content(buffer)
+  return buffer.intellij_untitled_backing_path ~= nil
+      or buffer:get_text(1, 1, math.huge, math.huge) ~= ""
 end
 
 function M.flush_all(reason, force)
   local flushed = 0
   if force then
-    for _, doc in ipairs(core.docs or {}) do
-      if is_untitled_doc(doc) and untitled_doc_has_recovery_content(doc) then
-        local ok = M.flush_doc(doc, reason, force)
+    for _, buffer in ipairs(core.buffers or {}) do
+      if is_untitled_buffer(buffer) and untitled_buffer_has_recovery_content(buffer) then
+        local ok = M.flush_buffer(buffer, reason, force)
         if ok then flushed = flushed + 1 end
       end
     end
   else
-    for doc in pairs(dirty_docs) do
-      if is_untitled_doc(doc) then
-        local ok = M.flush_doc(doc, reason, false)
+    for buffer in pairs(dirty_buffers) do
+      if is_untitled_buffer(buffer) then
+        local ok = M.flush_buffer(buffer, reason, false)
         if ok then flushed = flushed + 1 end
       else
-        dirty_docs[doc] = nil
+        dirty_buffers[buffer] = nil
       end
     end
   end
-  if flushed > 0 then log_quiet("Untitled recovery: flushed %d document(s) (%s)", flushed, reason or "all") end
+  if flushed > 0 then log_quiet("Untitled recovery: flushed %d buffer(s) (%s)", flushed, reason or "all") end
   return flushed
 end
 
-local function pending_flush_delay(doc)
-  local max_size = doc and estimate_doc_bytes(doc) or 0
-  for pending_doc in pairs(dirty_docs) do
-    if is_untitled_doc(pending_doc) then
-      max_size = math.max(max_size, estimate_doc_bytes(pending_doc))
+local function pending_flush_delay(buffer)
+  local max_size = buffer and estimate_buffer_bytes(buffer) or 0
+  for pending_buffer in pairs(dirty_buffers) do
+    if is_untitled_buffer(pending_buffer) then
+      max_size = math.max(max_size, estimate_buffer_bytes(pending_buffer))
     end
   end
-  return max_size >= cfg.large_doc_threshold and cfg.large_delay or cfg.delay
+  return max_size >= cfg.large_buffer_threshold and cfg.large_delay or cfg.delay
 end
 
-local function schedule_flush(doc)
+local function schedule_flush(buffer)
   pending_generation = pending_generation + 1
   if loop_running then return end
   loop_running = true
@@ -583,7 +582,7 @@ local function schedule_flush(doc)
     local seen
     repeat
       seen = pending_generation
-      coroutine.yield(pending_flush_delay(doc))
+      coroutine.yield(pending_flush_delay(buffer))
     until seen == pending_generation
     M.flush_all("idle")
     loop_running = false
@@ -591,16 +590,16 @@ local function schedule_flush(doc)
   end)
 end
 
-function M.mark_dirty(doc, transaction)
-  if not is_untitled_doc(doc) then return end
-  M.ensure_doc_backing(doc)
-  update_estimated_bytes_from_transaction(doc, transaction)
-  doc.intellij_untitled_force_dirty = true
-  doc.intellij_untitled_backing_dirty = true
-  dirty_docs[doc] = true
-  doc.intellij_untitled_pending_change_id = doc.get_change_id and doc:get_change_id() or nil
-  log_quiet("Untitled recovery: queued snapshot for %s", doc.intellij_untitled_name or doc.intellij_untitled_id)
-  schedule_flush(doc)
+function M.mark_dirty(buffer, transaction)
+  if not is_untitled_buffer(buffer) then return end
+  M.ensure_buffer_backing(buffer)
+  update_estimated_bytes_from_transaction(buffer, transaction)
+  buffer.intellij_untitled_force_dirty = true
+  buffer.intellij_untitled_backing_dirty = true
+  dirty_buffers[buffer] = true
+  buffer.intellij_untitled_pending_change_id = buffer.get_change_id and buffer:get_change_id() or nil
+  log_quiet("Untitled recovery: queued snapshot for %s", buffer.intellij_untitled_name or buffer.intellij_untitled_id)
+  schedule_flush(buffer)
 end
 
 local function reconcile_backing(entry, paths)
@@ -635,10 +634,10 @@ local function reconcile_backing(entry, paths)
 end
 M.reconcile_backing = reconcile_backing
 
-local function persist_inline_recovery_doc(doc, text, reason)
+local function persist_inline_recovery_buffer(buffer, text, reason)
   local ok, storage = pcall(require, "core.storage")
   if not ok then return false end
-  local project_path = doc.intellij_untitled_project_path or current_project_path()
+  local project_path = buffer.intellij_untitled_project_path or current_project_path()
   local data = storage.load("untitled_recovery", project_path)
   if type(data) ~= "table" then data = {} end
   data.project = project_path
@@ -646,39 +645,39 @@ local function persist_inline_recovery_doc(doc, text, reason)
   data.documents = type(data.documents) == "table" and data.documents or {}
   local item
   for _, candidate in ipairs(data.documents) do
-    if candidate.id == doc.intellij_untitled_id then item = candidate; break end
+    if candidate.id == buffer.intellij_untitled_id then item = candidate; break end
   end
   if not item then
     item = {}
     data.documents[#data.documents + 1] = item
   end
-  item.id = doc.intellij_untitled_id
-  item.name = doc.intellij_untitled_name
-  item.text = text or doc:get_text(1, 1, math.huge, math.huge)
-  item.crlf = doc.crlf or false
+  item.id = buffer.intellij_untitled_id
+  item.name = buffer.intellij_untitled_name
+  item.text = text or buffer:get_text(1, 1, math.huge, math.huge)
+  item.crlf = buffer.crlf or false
   storage.save("untitled_recovery", project_path, data)
   log_quiet("Untitled recovery: wrote emergency inline recovery for %s (%s)", item.name or item.id, reason or "migration failure")
   return true
 end
 
-function M.attach_from_workspace_state(doc, state)
-  if not (doc and state and state.intellij_untitled) then return end
-  doc.intellij_untitled = true
-  doc.intellij_untitled_name = state.intellij_untitled_name or doc.intellij_untitled_name or "Untitled"
-  doc.intellij_untitled_id = sanitize_id(state.intellij_untitled_id or doc.intellij_untitled_id) or new_doc_id()
-  doc.intellij_untitled_project_path = current_project_path()
-  local paths = project_paths(doc.intellij_untitled_project_path)
+function M.attach_from_workspace_state(buffer, state)
+  if not (buffer and state and state.intellij_untitled) then return end
+  buffer.intellij_untitled = true
+  buffer.intellij_untitled_name = state.intellij_untitled_name or buffer.intellij_untitled_name or "Untitled"
+  buffer.intellij_untitled_id = sanitize_id(state.intellij_untitled_id or buffer.intellij_untitled_id) or new_buffer_id()
+  buffer.intellij_untitled_project_path = current_project_path()
+  local paths = project_paths(buffer.intellij_untitled_project_path)
   local manifest = load_manifest_for(paths)
-  local manifest_doc = manifest_entry(manifest, doc.intellij_untitled_id)
-  local restored_language_mode = state.language_mode or (manifest_doc and manifest_doc.language_mode)
+  local manifest_buffer = manifest_entry(manifest, buffer.intellij_untitled_id)
+  local restored_language_mode = state.language_mode or (manifest_buffer and manifest_buffer.language_mode)
   if type(restored_language_mode) == "string" then
-    doc:set_language_mode(restored_language_mode, { persist = false, reason = "untitled-workspace-restore" })
+    buffer:set_language_mode(restored_language_mode, { persist = false, reason = "untitled-workspace-restore" })
   end
-  doc.intellij_untitled_backing_rel = (manifest_doc and manifest_doc.backing) or state.intellij_untitled_backing or backing_rel_for_id(doc.intellij_untitled_id)
-  doc.intellij_untitled_backing_path, doc.intellij_untitled_backing_rel = backing_abs_for(doc.intellij_untitled_project_path, doc.intellij_untitled_id, doc.intellij_untitled_backing_rel)
-  M.ensure_doc_backing(doc, { no_manifest = true })
+  buffer.intellij_untitled_backing_rel = (manifest_buffer and manifest_buffer.backing) or state.intellij_untitled_backing or backing_rel_for_id(buffer.intellij_untitled_id)
+  buffer.intellij_untitled_backing_path, buffer.intellij_untitled_backing_rel = backing_abs_for(buffer.intellij_untitled_project_path, buffer.intellij_untitled_id, buffer.intellij_untitled_backing_rel)
+  M.ensure_buffer_backing(buffer, { no_manifest = true })
 
-  local entry = manifest_doc or { id = doc.intellij_untitled_id, backing = doc.intellij_untitled_backing_rel }
+  local entry = manifest_buffer or { id = buffer.intellij_untitled_id, backing = buffer.intellij_untitled_backing_rel }
   local backing = reconcile_backing(entry, paths)
 
   if type(state.text) == "string" and state.intellij_untitled_backing_current ~= true then
@@ -689,30 +688,30 @@ function M.attach_from_workspace_state(doc, state)
       inline_known_newer = state.intellij_untitled_workspace_saved_at > entry.updated_at
     end
 
-    if backing and manifest_doc and system.get_file_info(backing) and not inline_known_newer then
+    if backing and manifest_buffer and system.get_file_info(backing) and not inline_known_newer then
       local text = read_file(backing)
       if text then
-        load_text_into_doc(doc, text, entry.crlf)
-        doc.intellij_untitled_force_dirty = true
-        doc.intellij_untitled_backing_dirty = false
-        doc.intellij_untitled_backing_saved_at = entry.updated_at or os.time()
-        doc.intellij_untitled_last_snapshot_change_id = doc:get_change_id()
+        load_text_into_buffer(buffer, text, entry.crlf)
+        buffer.intellij_untitled_force_dirty = true
+        buffer.intellij_untitled_backing_dirty = false
+        buffer.intellij_untitled_backing_saved_at = entry.updated_at or os.time()
+        buffer.intellij_untitled_last_snapshot_change_id = buffer:get_change_id()
         log_quiet(
           "Untitled recovery: preferred manifest backing over stale/ambiguous inline workspace text for %s",
-          doc.intellij_untitled_name or doc.intellij_untitled_id
+          buffer.intellij_untitled_name or buffer.intellij_untitled_id
         )
         return true
       end
     end
 
-    doc.intellij_untitled_force_dirty = true
-    doc.intellij_untitled_backing_dirty = true
-    local flushed = M.flush_doc(doc, "inline workspace fallback migration", true)
+    buffer.intellij_untitled_force_dirty = true
+    buffer.intellij_untitled_backing_dirty = true
+    local flushed = M.flush_buffer(buffer, "inline workspace fallback migration", true)
     if flushed then
-      log_quiet("Untitled recovery: migrated inline workspace fallback for %s", doc.intellij_untitled_name or doc.intellij_untitled_id)
+      log_quiet("Untitled recovery: migrated inline workspace fallback for %s", buffer.intellij_untitled_name or buffer.intellij_untitled_id)
     else
-      persist_inline_recovery_doc(doc, state.text, "inline workspace fallback migration failure")
-      log_quiet("Untitled recovery: kept inline workspace text after failed stale-backing migration for %s", doc.intellij_untitled_name or doc.intellij_untitled_id)
+      persist_inline_recovery_buffer(buffer, state.text, "inline workspace fallback migration failure")
+      log_quiet("Untitled recovery: kept inline workspace text after failed stale-backing migration for %s", buffer.intellij_untitled_name or buffer.intellij_untitled_id)
     end
     return false
   end
@@ -720,80 +719,80 @@ function M.attach_from_workspace_state(doc, state)
   if backing and system.get_file_info(backing) then
     local text = read_file(backing)
     if text then
-      load_text_into_doc(doc, text, entry.crlf)
-      doc.intellij_untitled_force_dirty = true
-      doc.intellij_untitled_backing_dirty = false
-      doc.intellij_untitled_backing_saved_at = entry.updated_at or os.time()
-      doc.intellij_untitled_last_snapshot_change_id = doc:get_change_id()
-      update_manifest_entry(doc, {
-        name = doc.intellij_untitled_name,
-        backing = doc.intellij_untitled_backing_rel,
-        crlf = doc.crlf or false,
-        encoding = doc.encoding,
-        language_mode = doc.language_mode_override or false,
-        last_snapshot_change_id = doc.intellij_untitled_last_snapshot_change_id,
+      load_text_into_buffer(buffer, text, entry.crlf)
+      buffer.intellij_untitled_force_dirty = true
+      buffer.intellij_untitled_backing_dirty = false
+      buffer.intellij_untitled_backing_saved_at = entry.updated_at or os.time()
+      buffer.intellij_untitled_last_snapshot_change_id = buffer:get_change_id()
+      update_manifest_entry(buffer, {
+        name = buffer.intellij_untitled_name,
+        backing = buffer.intellij_untitled_backing_rel,
+        crlf = buffer.crlf or false,
+        encoding = buffer.encoding,
+        language_mode = buffer.language_mode_override or false,
+        last_snapshot_change_id = buffer.intellij_untitled_last_snapshot_change_id,
       })
-      log_quiet("Untitled recovery: attached workspace doc %s from backing", doc.intellij_untitled_name or doc.intellij_untitled_id)
+      log_quiet("Untitled recovery: attached workspace buffer %s from backing", buffer.intellij_untitled_name or buffer.intellij_untitled_id)
       return true
     end
   end
 
   if type(state.text) == "string" then
-    doc.intellij_untitled_force_dirty = true
-    doc.intellij_untitled_backing_dirty = true
-    local flushed = M.flush_doc(doc, "inline workspace migration", true)
+    buffer.intellij_untitled_force_dirty = true
+    buffer.intellij_untitled_backing_dirty = true
+    local flushed = M.flush_buffer(buffer, "inline workspace migration", true)
     if flushed then
-      log_quiet("Untitled recovery: migrated inline workspace text for %s", doc.intellij_untitled_name or doc.intellij_untitled_id)
+      log_quiet("Untitled recovery: migrated inline workspace text for %s", buffer.intellij_untitled_name or buffer.intellij_untitled_id)
     else
-      persist_inline_recovery_doc(doc, state.text, "inline workspace migration failure")
-      log_quiet("Untitled recovery: failed to migrate inline workspace text for %s", doc.intellij_untitled_name or doc.intellij_untitled_id)
+      persist_inline_recovery_buffer(buffer, state.text, "inline workspace migration failure")
+      log_quiet("Untitled recovery: failed to migrate inline workspace text for %s", buffer.intellij_untitled_name or buffer.intellij_untitled_id)
     end
     return flushed
   end
 end
 
-local function open_recovered_doc(entry, paths, backing, reason)
+local function open_recovered_buffer(entry, paths, backing, reason)
   local text = read_file(backing)
   if not text then return false end
-  local doc = core.open_doc()
-  doc.intellij_untitled = true
-  doc.intellij_untitled_name = entry.name or ("Untitled-" .. tostring(entry.id):sub(1, 8))
-  doc.intellij_untitled_id = sanitize_id(entry.id) or new_doc_id()
-  doc.intellij_untitled_project_path = paths.project
-  doc.intellij_untitled_backing_rel = entry.backing or backing_rel_for_id(doc.intellij_untitled_id)
-  doc.intellij_untitled_backing_path, doc.intellij_untitled_backing_rel = backing_abs_for(paths.project, doc.intellij_untitled_id, doc.intellij_untitled_backing_rel)
+  local buffer = core.open_buffer()
+  buffer.intellij_untitled = true
+  buffer.intellij_untitled_name = entry.name or ("Untitled-" .. tostring(entry.id):sub(1, 8))
+  buffer.intellij_untitled_id = sanitize_id(entry.id) or new_buffer_id()
+  buffer.intellij_untitled_project_path = paths.project
+  buffer.intellij_untitled_backing_rel = entry.backing or backing_rel_for_id(buffer.intellij_untitled_id)
+  buffer.intellij_untitled_backing_path, buffer.intellij_untitled_backing_rel = backing_abs_for(paths.project, buffer.intellij_untitled_id, buffer.intellij_untitled_backing_rel)
   if type(entry.language_mode) == "string" then
-    doc:set_language_mode(entry.language_mode, { persist = false, reason = "untitled-manifest-restore" })
+    buffer:set_language_mode(entry.language_mode, { persist = false, reason = "untitled-manifest-restore" })
   end
-  load_text_into_doc(doc, text, entry.crlf)
-  doc.intellij_untitled_force_dirty = true
-  doc.intellij_untitled_backing_dirty = false
-  doc.intellij_untitled_backing_saved_at = entry.updated_at or os.time()
-  doc.intellij_untitled_last_snapshot_change_id = doc:get_change_id()
-  if backing ~= doc.intellij_untitled_backing_path then
-    doc.intellij_untitled_backing_dirty = true
-    M.flush_doc(doc, reason or "reconcile", true)
+  load_text_into_buffer(buffer, text, entry.crlf)
+  buffer.intellij_untitled_force_dirty = true
+  buffer.intellij_untitled_backing_dirty = false
+  buffer.intellij_untitled_backing_saved_at = entry.updated_at or os.time()
+  buffer.intellij_untitled_last_snapshot_change_id = buffer:get_change_id()
+  if backing ~= buffer.intellij_untitled_backing_path then
+    buffer.intellij_untitled_backing_dirty = true
+    M.flush_buffer(buffer, reason or "reconcile", true)
   end
-  if core.root_panel and core.root_panel.open_doc then core.root_panel:open_doc(doc) end
-  log_quiet("Untitled recovery: restored %s from %s (%s)", doc.intellij_untitled_name, backing, reason or "manifest")
+  if core.root_panel and core.root_panel.open_buffer then core.root_panel:open_buffer(buffer) end
+  log_quiet("Untitled recovery: restored %s from %s (%s)", buffer.intellij_untitled_name, backing, reason or "manifest")
   return true
 end
 
-local function open_doc_exists(id)
-  for _, doc in ipairs(core.docs or {}) do
-    if is_untitled_doc(doc) and doc.intellij_untitled_id == id then return true end
+local function open_buffer_exists(id)
+  for _, buffer in ipairs(core.buffers or {}) do
+    if is_untitled_buffer(buffer) and buffer.intellij_untitled_id == id then return true end
   end
   return false
 end
 
-local function recover_manifest_docs(project_path)
+local function recover_manifest_buffers(project_path)
   local paths = project_paths(project_path)
   local manifest = load_manifest_for(paths)
   local restored = 0
-  for _, entry in ipairs(manifest.docs or {}) do
-    if entry and entry.id and not entry.explicit_closed and not open_doc_exists(entry.id) then
+  for _, entry in ipairs(manifest.buffers or {}) do
+    if entry and entry.id and not entry.explicit_closed and not open_buffer_exists(entry.id) then
       local backing = reconcile_backing(entry, paths)
-      if backing and open_recovered_doc(entry, paths, backing, "manifest") then restored = restored + 1 end
+      if backing and open_recovered_buffer(entry, paths, backing, "manifest") then restored = restored + 1 end
     end
   end
   return restored, manifest, paths
@@ -802,7 +801,7 @@ end
 local function scan_orphans(manifest, paths)
   local known = {}
   local known_paths = {}
-  for _, entry in ipairs(manifest.docs or {}) do
+  for _, entry in ipairs(manifest.buffers or {}) do
     known[entry.id] = true
     if entry.backing then
       local backing_path = safe_relative_backing_abs(paths.project, entry.backing, entry.id)
@@ -811,23 +810,23 @@ local function scan_orphans(manifest, paths)
       known_paths[backing_path .. ".tmp"] = true
     end
   end
-  for _, doc in ipairs(core.docs or {}) do
-    if is_untitled_doc(doc) and doc.intellij_untitled_id then
-      known[doc.intellij_untitled_id] = true
-      if doc.intellij_untitled_project_path == paths.project and doc.intellij_untitled_backing_path then
-        known_paths[doc.intellij_untitled_backing_path] = true
-        known_paths[doc.intellij_untitled_backing_path .. ".bak"] = true
-        known_paths[doc.intellij_untitled_backing_path .. ".tmp"] = true
+  for _, buffer in ipairs(core.buffers or {}) do
+    if is_untitled_buffer(buffer) and buffer.intellij_untitled_id then
+      known[buffer.intellij_untitled_id] = true
+      if buffer.intellij_untitled_project_path == paths.project and buffer.intellij_untitled_backing_path then
+        known_paths[buffer.intellij_untitled_backing_path] = true
+        known_paths[buffer.intellij_untitled_backing_path .. ".bak"] = true
+        known_paths[buffer.intellij_untitled_backing_path .. ".tmp"] = true
       end
     end
   end
   local candidates = {}
-  for _, item in ipairs(system.list_dir(paths.docs) or {}) do
+  for _, item in ipairs(system.list_dir(paths.buffers) or {}) do
     local id, kind = item:match("^(.+)%.txt$"), "primary"
     if not id then id, kind = item:match("^(.+)%.txt%.bak$"), "backup" end
     if not id then id, kind = item:match("^(.+)%.txt%.tmp$"), "temp" end
     id = sanitize_id(id)
-    local path = paths.docs .. PATHSEP .. item
+    local path = paths.buffers .. PATHSEP .. item
     if id and not known[id] and not known_paths[path] then
       local group = candidates[id] or { id = id }
       group[kind] = path
@@ -853,8 +852,8 @@ local function scan_orphans(manifest, paths)
         updated_at = os.time(),
         explicit_closed = false,
       }
-      if open_recovered_doc(entry, paths, path, "orphan") then
-        manifest.docs[#manifest.docs + 1] = entry
+      if open_recovered_buffer(entry, paths, path, "orphan") then
+        manifest.buffers[#manifest.buffers + 1] = entry
         known[entry.id] = true
         adopted = adopted + 1
       end
@@ -872,49 +871,49 @@ local function restore_old_inline_storage(project_path)
   local failed = false
   for _, item in ipairs(data.documents) do
     if type(item) == "table" and type(item.text) == "string" then
-      local existing_doc
-      for _, doc in ipairs(core.docs or {}) do
-        if is_untitled_doc(doc) and (doc.intellij_untitled_id == item.id
-           or (doc.intellij_untitled_name == item.name and doc:get_text(1, 1, math.huge, math.huge) == item.text)) then
-          existing_doc = doc
+      local existing_buffer
+      for _, buffer in ipairs(core.buffers or {}) do
+        if is_untitled_buffer(buffer) and (buffer.intellij_untitled_id == item.id
+           or (buffer.intellij_untitled_name == item.name and buffer:get_text(1, 1, math.huge, math.huge) == item.text)) then
+          existing_buffer = buffer
           break
         end
       end
 
-      if existing_doc then
-        local existing_text = existing_doc:get_text(1, 1, math.huge, math.huge)
+      if existing_buffer then
+        local existing_text = existing_buffer:get_text(1, 1, math.huge, math.huge)
         if existing_text ~= item.text then
-          -- Workspace/manifest recovery has already produced an open document for
-          -- this id.  Legacy inline blobs have no reliable per-document
+          -- Workspace/manifest recovery has already produced an open buffer for
+          -- this id.  Legacy inline blobs have no reliable per-buffer
           -- generation, so never let them overwrite newer open state; migrate the
-          -- open document's current content to a backing file and clear the stale
+          -- open buffer's current content to a backing file and clear the stale
           -- legacy blob once that succeeds.
           log_quiet(
             "Untitled recovery: ignored conflicting legacy inline text for already-open %s",
-            existing_doc.intellij_untitled_name or existing_doc.intellij_untitled_id
+            existing_buffer.intellij_untitled_name or existing_buffer.intellij_untitled_id
           )
         end
-        existing_doc.intellij_untitled_project_path = existing_doc.intellij_untitled_project_path or project_path
-        existing_doc.intellij_untitled_force_dirty = true
-        if not M.doc_backing_current(existing_doc) then
-          M.ensure_doc_backing(existing_doc)
-          existing_doc.intellij_untitled_backing_dirty = true
-          local flushed = M.flush_doc(existing_doc, "old inline recovery existing-doc migration", true)
-          if not flushed or not M.doc_backing_current(existing_doc) then failed = true end
+        existing_buffer.intellij_untitled_project_path = existing_buffer.intellij_untitled_project_path or project_path
+        existing_buffer.intellij_untitled_force_dirty = true
+        if not M.buffer_backing_current(existing_buffer) then
+          M.ensure_buffer_backing(existing_buffer)
+          existing_buffer.intellij_untitled_backing_dirty = true
+          local flushed = M.flush_buffer(existing_buffer, "old inline recovery existing-buffer migration", true)
+          if not flushed or not M.buffer_backing_current(existing_buffer) then failed = true end
         end
       else
-        local doc = core.open_doc()
-        doc.intellij_untitled = true
-        doc.intellij_untitled_name = item.name or "Untitled"
-        doc.intellij_untitled_id = sanitize_id(item.id) or new_doc_id()
-        doc.intellij_untitled_project_path = project_path
-        doc.crlf = item.crlf or false
-        load_text_into_doc(doc, item.text, item.crlf)
-        doc.intellij_untitled_force_dirty = true
-        M.ensure_doc_backing(doc)
-        local flushed = M.flush_doc(doc, "old inline recovery migration", true)
-        if flushed and M.doc_backing_current(doc) then
-          if core.root_panel and core.root_panel.open_doc then core.root_panel:open_doc(doc) end
+        local buffer = core.open_buffer()
+        buffer.intellij_untitled = true
+        buffer.intellij_untitled_name = item.name or "Untitled"
+        buffer.intellij_untitled_id = sanitize_id(item.id) or new_buffer_id()
+        buffer.intellij_untitled_project_path = project_path
+        buffer.crlf = item.crlf or false
+        load_text_into_buffer(buffer, item.text, item.crlf)
+        buffer.intellij_untitled_force_dirty = true
+        M.ensure_buffer_backing(buffer)
+        local flushed = M.flush_buffer(buffer, "old inline recovery migration", true)
+        if flushed and M.buffer_backing_current(buffer) then
+          if core.root_panel and core.root_panel.open_buffer then core.root_panel:open_buffer(buffer) end
           restored = restored + 1
         else
           failed = true
@@ -926,13 +925,13 @@ local function restore_old_inline_storage(project_path)
     storage.clear("untitled_recovery", project_path)
     log_quiet("Untitled recovery: cleared migrated legacy inline recovery for %s", project_path)
   end
-  if restored > 0 then log_quiet("Untitled recovery: migrated %d old inline recovery document(s)", restored) end
+  if restored > 0 then log_quiet("Untitled recovery: migrated %d old inline recovery buffer(s)", restored) end
   return restored
 end
 
 function M.restore_project(project_path)
   project_path = project_path or current_project_path()
-  local restored, manifest, paths = recover_manifest_docs(project_path)
+  local restored, manifest, paths = recover_manifest_buffers(project_path)
   local adopted = scan_orphans(manifest, paths)
   if adopted > 0 then write_manifest_for(paths, manifest) end
   local migrated = restore_old_inline_storage(project_path)
@@ -946,21 +945,21 @@ local function remove_manifest_entry(project_path, id)
   local paths = project_paths(project_path)
   local manifest = load_manifest_for(paths)
   local kept = {}
-  for _, entry in ipairs(manifest.docs or {}) do
+  for _, entry in ipairs(manifest.buffers or {}) do
     if entry.id ~= id then kept[#kept + 1] = entry end
   end
-  manifest.docs = kept
+  manifest.buffers = kept
   write_manifest_for(paths, manifest)
 end
 
 local function mark_manifest_explicit_closed(project_path, id, name, backing)
   local paths = project_paths(project_path)
   local manifest = load_manifest_for(paths)
-  manifest.docs = manifest.docs or {}
+  manifest.buffers = manifest.buffers or {}
   local entry = manifest_entry(manifest, id)
   if not entry then
     entry = { id = id }
-    manifest.docs[#manifest.docs + 1] = entry
+    manifest.buffers[#manifest.buffers + 1] = entry
   end
   entry.name = entry.name or name or "Untitled"
   entry.backing = entry.backing or backing or backing_rel_for_id(id)
@@ -1012,11 +1011,11 @@ local function quarantine_file(path, id)
   return true, moved_any
 end
 
-function M.handle_save_as_success(doc, old)
+function M.handle_save_as_success(buffer, old)
   old = old or {}
-  local path = old.backing_path or doc.intellij_untitled_backing_path
-  local id = old.id or doc.intellij_untitled_id
-  local project = old.project or doc.intellij_untitled_project_path or current_project_path()
+  local path = old.backing_path or buffer.intellij_untitled_backing_path
+  local id = old.id or buffer.intellij_untitled_id
+  local project = old.project or buffer.intellij_untitled_project_path or current_project_path()
   local cleaned = not path or delete_backing_family(path)
   if id then
     if cleaned then
@@ -1028,55 +1027,55 @@ function M.handle_save_as_success(doc, old)
   return cleaned
 end
 
-function M.handle_confirmed_discard(doc)
-  if not is_untitled_doc(doc) then return end
-  M.ensure_doc_backing(doc)
-  local id = doc.intellij_untitled_id
-  local path = doc.intellij_untitled_backing_path
-  local project = doc.intellij_untitled_project_path or current_project_path()
-  doc.intellij_untitled_discarded = true
-  doc.intellij_untitled_backing_dirty = false
-  dirty_docs[doc] = nil
+function M.handle_confirmed_discard(buffer)
+  if not is_untitled_buffer(buffer) then return end
+  M.ensure_buffer_backing(buffer)
+  local id = buffer.intellij_untitled_id
+  local path = buffer.intellij_untitled_backing_path
+  local project = buffer.intellij_untitled_project_path or current_project_path()
+  buffer.intellij_untitled_discarded = true
+  buffer.intellij_untitled_backing_dirty = false
+  dirty_buffers[buffer] = nil
   local quarantined = quarantine_file(path, id)
   if quarantined then
     remove_manifest_entry(project, id)
   else
-    mark_manifest_explicit_closed(project, id, doc.intellij_untitled_name, doc.intellij_untitled_backing_rel)
+    mark_manifest_explicit_closed(project, id, buffer.intellij_untitled_name, buffer.intellij_untitled_backing_rel)
   end
-  doc.intellij_untitled = nil
-  doc.intellij_untitled_name = nil
-  doc.intellij_untitled_id = nil
-  doc.intellij_untitled_backing_path = nil
-  doc.intellij_untitled_backing_rel = nil
-  doc.intellij_untitled_backing_saved_at = nil
-  doc.intellij_untitled_force_dirty = nil
-  doc.intellij_untitled_project_path = nil
+  buffer.intellij_untitled = nil
+  buffer.intellij_untitled_name = nil
+  buffer.intellij_untitled_id = nil
+  buffer.intellij_untitled_backing_path = nil
+  buffer.intellij_untitled_backing_rel = nil
+  buffer.intellij_untitled_backing_saved_at = nil
+  buffer.intellij_untitled_force_dirty = nil
+  buffer.intellij_untitled_project_path = nil
 end
 
 if not core.__untitled_recovery_patched then
   core.__untitled_recovery_patched = true
 
-  local doc_is_dirty = Doc.is_dirty
-  function Doc:is_dirty(...)
-    if is_untitled_doc(self) and self.intellij_untitled_force_dirty then return true end
-    return doc_is_dirty(self, ...)
+  local buffer_is_dirty = Buffer.is_dirty
+  function Buffer:is_dirty(...)
+    if is_untitled_buffer(self) and self.intellij_untitled_force_dirty then return true end
+    return buffer_is_dirty(self, ...)
   end
 
-  local on_text_change = Doc.on_text_change
-  function Doc:on_text_change(type, transaction, ...)
+  local on_text_change = Buffer.on_text_change
+  function Buffer:on_text_change(type, transaction, ...)
     local result = on_text_change(self, type, transaction, ...)
-    if is_untitled_doc(self) then M.mark_dirty(self, transaction) end
+    if is_untitled_buffer(self) then M.mark_dirty(self, transaction) end
     return result
   end
 
   local core_set_active_view = core.set_active_view
   function core.set_active_view(view)
     local previous = core.active_view
-    local previous_doc = previous and previous.doc
+    local previous_buffer = previous and previous.buffer
     local result = core_set_active_view(view)
-    local next_doc = core.active_view and core.active_view.doc
-    if previous_doc and previous_doc ~= next_doc and is_untitled_doc(previous_doc) and previous_doc.intellij_untitled_backing_dirty then
-      M.flush_doc(previous_doc, "document focus lost", true)
+    local next_buffer = core.active_view and core.active_view.buffer
+    if previous_buffer and previous_buffer ~= next_buffer and is_untitled_buffer(previous_buffer) and previous_buffer.intellij_untitled_backing_dirty then
+      M.flush_buffer(previous_buffer, "buffer focus lost", true)
     end
     return result
   end

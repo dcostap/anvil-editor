@@ -1,6 +1,6 @@
 local core = require "core"
 local common = require "core.common"
-local translate = require "core.doc.translate"
+local translate = require "core.buffer.translate"
 local model = require "core.markdown.model"
 
 local tables = {}
@@ -10,8 +10,8 @@ local source_indexes = setmetatable({}, { __mode = "k" })
 tables.MAX_PRESENTATION_ROWS = 256
 tables.MAX_PRESENTATION_COLUMNS = 64
 
-local function line_text(doc, line)
-  return (doc.lines[line] or ""):gsub("\n$", "")
+local function line_text(buffer, line)
+  return (buffer.lines[line] or ""):gsub("\n$", "")
 end
 
 local function effective_line2(node)
@@ -117,10 +117,10 @@ local function delimiter_row(row)
   return true
 end
 
-local function source_index(doc)
-  local revision = doc.text_revision or 0
-  local line_count = #doc.lines
-  local cached = source_indexes[doc]
+local function source_index(buffer)
+  local revision = buffer.text_revision or 0
+  local line_count = #buffer.lines
+  local cached = source_indexes[buffer]
   if cached and cached.revision == revision and cached.line_count == line_count then
     return cached
   end
@@ -128,10 +128,10 @@ local function source_index(doc)
   -- Parse each source line once.  Table discovery is queried from rendering,
   -- hit testing, selection handling, and metric calculation, so searching
   -- around the requested line (the old implementation) multiplies this work
-  -- by the number of visual rows in the document.
+  -- by the number of visual rows in the buffer.
   local rows = {}
   for line = 1, line_count do
-    local row = source_row(line_text(doc, line))
+    local row = source_row(line_text(buffer, line))
     if row then
       -- Keep the index compact. Full cell bounds are only needed by the
       -- presentation parser and by the uncommon empty-row extension path.
@@ -174,19 +174,19 @@ local function source_index(doc)
     revision = revision, line_count = line_count,
     rows = rows, by_line = by_line,
   }
-  source_indexes[doc] = cached
+  source_indexes[buffer] = cached
   return cached
 end
 
-local function source_table_bounds(doc, line)
-  local table_range = source_index(doc).by_line[line]
+local function source_table_bounds(buffer, line)
+  local table_range = source_index(buffer).by_line[line]
   if table_range then
     return table_range.line1, table_range.line2
   end
 end
 
-local function source_row_at(doc, line)
-  return source_row(line_text(doc, line))
+local function source_row_at(buffer, line)
+  return source_row(line_text(buffer, line))
 end
 
 ---Parse one Markdown table source row.
@@ -196,16 +196,16 @@ function tables.source_row(text)
   return source_row(tostring(text or ""))
 end
 
-local function source_line_in_fence_or_frontmatter(doc, target)
-  if line_text(doc, 1):match("^%s*%-%-%-%s*$") then
+local function source_line_in_fence_or_frontmatter(buffer, target)
+  if line_text(buffer, 1):match("^%s*%-%-%-%s*$") then
     for line = 2, target do
-      if line_text(doc, line):match("^%s*%-%-%-%s*$") then return false end
+      if line_text(buffer, line):match("^%s*%-%-%-%s*$") then return false end
     end
     return target > 1
   end
   local marker, count
   for line = 1, target do
-    local text = line_text(doc, line)
+    local text = line_text(buffer, line)
     if marker then
       if line == target then return true end
       local run = text:match("^%s*(" .. marker .. "+)")
@@ -222,8 +222,8 @@ local function source_line_in_fence_or_frontmatter(doc, target)
 end
 
 function tables.source_bounds(view, line)
-  if not (view and view.doc and line) then return nil end
-  return source_table_bounds(view.doc, line)
+  if not (view and view.buffer and line) then return nil end
+  return source_table_bounds(view.buffer, line)
 end
 
 local function source_row_is_empty(row)
@@ -239,12 +239,12 @@ end
 ---when a current semantic table owns the same header, so source lookalikes in
 ---fences and other raw blocks remain excluded.
 function tables.extend_semantic_table(view, line, table_node)
-  if not (view and view.doc and line) then return table_node end
-  local line1, source_line2 = source_table_bounds(view.doc, line)
+  if not (view and view.buffer and line) then return table_node end
+  local line1, source_line2 = source_table_bounds(view.buffer, line)
   if not line1 then return table_node end
-  local instance = model.peek(view.doc)
+  local instance = model.peek(view.buffer)
   if not (instance and instance.status == "ready"
-    and instance.published_revision == view.doc.text_revision)
+    and instance.published_revision == view.buffer.text_revision)
   then
     return table_node
   end
@@ -262,7 +262,7 @@ function tables.extend_semantic_table(view, line, table_node)
   if source_line2 <= semantic_line2 then return table_node end
   local has_empty_body_row = false
   for row_line = semantic_line2 + 1, source_line2 do
-    if source_row_is_empty(source_row_at(view.doc, row_line)) then
+    if source_row_is_empty(source_row_at(view.buffer, row_line)) then
       has_empty_body_row = true
       break
     end
@@ -273,21 +273,21 @@ function tables.extend_semantic_table(view, line, table_node)
   extended.source = {}
   for key, value in pairs(table_node.source or {}) do extended.source[key] = value end
   extended.id = table.concat({
-    tostring(table_node.id), "empty-row-extension", tostring(view.doc.text_revision),
+    tostring(table_node.id), "empty-row-extension", tostring(view.buffer.text_revision),
     tostring(source_line2),
   }, ":")
   extended.source.line2 = source_line2
-  extended.source.col2 = #line_text(view.doc, source_line2) + 1
+  extended.source.col2 = #line_text(view.buffer, source_line2) + 1
   return extended
 end
 
 local function context_at(view, line, col, require_canonical)
-  local instance = view and view.doc and model.peek(view.doc)
-  if not (view and view.doc) then return nil, "view is unavailable" end
-  if not line then line, col = view.doc:get_selection() end
-  if not col then col = select(2, view.doc:get_selection()) end
+  local instance = view and view.buffer and model.peek(view.buffer)
+  if not (view and view.buffer) then return nil, "view is unavailable" end
+  if not line then line, col = view.buffer:get_selection() end
+  if not col then col = select(2, view.buffer:get_selection()) end
   local semantic_current = instance and instance.status == "ready"
-    and instance.published_revision == view.doc.text_revision
+    and instance.published_revision == view.buffer.text_revision
   local nodes = semantic_current
     and instance:nodes_for_lines(line, line, { limit = 1024 }) or nil
   local table_node
@@ -301,13 +301,13 @@ local function context_at(view, line, col, require_canonical)
   if table_node then
     line1, line2 = table_node.source.line1, effective_line2(table_node)
   elseif view.__markdown_live_attached and not semantic_current
-    and not source_line_in_fence_or_frontmatter(view.doc, line)
+    and not source_line_in_fence_or_frontmatter(view.buffer, line)
   then
-    line1, line2 = source_table_bounds(view.doc, line)
+    line1, line2 = source_table_bounds(view.buffer, line)
     if line1 then
       table_node = {
         id = "interactive-table:" .. line1,
-        source = { line1 = line1, col1 = 1, line2 = line2, col2 = #line_text(view.doc, line2) + 1 },
+        source = { line1 = line1, col1 = 1, line2 = line2, col2 = #line_text(view.buffer, line2) + 1 },
       }
     end
   end
@@ -318,13 +318,13 @@ local function context_at(view, line, col, require_canonical)
   end
   local rows, columns = {}, nil
   for row_line = line1, line2 do
-    local row = source_row(line_text(view.doc, row_line))
+    local row = source_row(line_text(view.buffer, row_line))
     if not row then return nil, "table row is unavailable" end
     if require_canonical and not row.canonical then
       return nil, "table row is not canonical"
     end
     if columns and row.columns ~= columns then
-      core.log_quiet("Markdown table command declined inconsistent row at %s:%d", view.doc:get_name(), row_line)
+      core.log_quiet("Markdown table command declined inconsistent row at %s:%d", view.buffer:get_name(), row_line)
       return nil, "table columns are inconsistent"
     end
     columns = columns or row.columns
@@ -348,7 +348,7 @@ local function context_at(view, line, col, require_canonical)
   end
   if not grid_row then return nil, "caret row is unavailable" end
   return {
-    view = view, doc = view.doc, node = table_node,
+    view = view, buffer = view.buffer, node = table_node,
     line = line, col = col, line1 = line1, line2 = line2,
     delimiter_line = line1 + 1, rows = rows, editable_rows = editable_rows,
     columns = columns, column = column, grid_row = grid_row,
@@ -357,7 +357,7 @@ local function context_at(view, line, col, require_canonical)
 end
 
 function tables.context(view)
-  local line, col = view.doc:get_selection()
+  local line, col = view.buffer:get_selection()
   return context_at(view, line, col, true)
 end
 
@@ -366,7 +366,7 @@ function tables.interactive_context(view, line, col)
 end
 
 function tables.has_interactive_context(view)
-  if not (view and view.doc) then return false end
+  if not (view and view.buffer) then return false end
   local contexts = collect_interactive_contexts(view)
   return contexts ~= nil
 end
@@ -397,7 +397,7 @@ collect_interactive_contexts = function(view)
   local contexts = {}
   local first
   for selection_index, line, col, anchor_line, anchor_col in
-    view.doc:get_selections(false)
+    view.buffer:get_selections(false)
   do
     local context = context_at(view, line, col, false)
     local anchor = context_at(view, anchor_line, anchor_col, false)
@@ -431,30 +431,30 @@ local function refresh_structure(context, refresh, line1, line2)
   if not ok then
     core.log_quiet(
       "Markdown interactive table refresh failed for %s:%d: %s",
-      context.doc:get_name(), line1, tostring(err)
+      context.buffer:get_name(), line1, tostring(err)
     )
   end
 end
 
-local function insert_source_row(doc, line, text)
-  if line <= #doc.lines then
-    doc:insert(line, 1, text)
+local function insert_source_row(buffer, line, text)
+  if line <= #buffer.lines then
+    buffer:insert(line, 1, text)
     return line
   end
-  local last = #doc.lines
-  local current = doc.lines[last] or "\n"
+  local last = #buffer.lines
+  local current = buffer.lines[last] or "\n"
   local row = tostring(text or ""):gsub("\n$", "")
-  -- Document lines retain their newline terminator. Insert a newline plus the
+  -- Buffer lines retain their newline terminator. Insert a newline plus the
   -- new row immediately before the final terminator instead of asking
-  -- Doc:insert for an out-of-range line, which intentionally clamps.
-  doc:insert(last, #current, "\n" .. row)
+  -- Buffer:insert for an out-of-range line, which intentionally clamps.
+  buffer:insert(last, #current, "\n" .. row)
   return last + 1
 end
 
 local function append_body_row(context)
   local refresh = structure_refresher(context)
   local text = "|" .. string.rep("  |", context.columns) .. "\n"
-  local inserted_line = insert_source_row(context.doc, context.line2 + 1, text)
+  local inserted_line = insert_source_row(context.buffer, context.line2 + 1, text)
   local row = source_row(text:gsub("\n$", ""))
   row.line = inserted_line
   refresh_structure(context, refresh, context.line1, inserted_line)
@@ -477,7 +477,7 @@ function tables.navigate(view, direction)
       if column < 1 then row, column = row - 1, context.columns end
       if row < 1 then
         local line = math.max(1, context.line1 - 1)
-        local col = context.line1 > 1 and #context.doc.lines[line] or 1
+        local col = context.line1 > 1 and #context.buffer.lines[line] or 1
         targets[index] = { line, col, line, col }
       end
     elseif direction == "below" then
@@ -504,7 +504,7 @@ function tables.navigate(view, direction)
     end
   end
   if #selections == 0 then return false end
-  view.doc:set_selection_list(selections, math.min(view.doc.last_selection, #selections / 4), {
+  view.buffer:set_selection_list(selections, math.min(view.buffer.last_selection, #selections / 4), {
     merge_cursors = true,
   })
   return true
@@ -584,9 +584,9 @@ local function text_input_by_selection(view, text_for_context)
   if not contexts then return false end
   local by_index = {}
   for _, context in ipairs(contexts) do by_index[context.selection_index] = context end
-  view.doc:text_input_by_selection(function(index, line, col)
+  view.buffer:text_input_by_selection(function(index, line, col)
     local context = by_index[index]
-    local source = line_text(view.doc, line)
+    local source = line_text(view.buffer, line)
     local state = cell_lexical_state(
       source, context.cell.content_col1, math.min(col, context.cell.content_col2)
     )
@@ -606,7 +606,7 @@ function tables.ime_text_editing(view, text, start, length)
   for _, context in ipairs(contexts) do by_index[context.selection_index] = context end
   local function state_for(context, line, col)
     return cell_lexical_state(
-      line_text(view.doc, line), context.cell.content_col1,
+      line_text(view.buffer, line), context.cell.content_col1,
       math.min(col, context.cell.content_col2)
     )
   end
@@ -617,7 +617,7 @@ function tables.ime_text_editing(view, text, start, length)
   local through_selection = tables.normalize_cell_input(
     tostring(text or ""):sub(1, start + length), first_state
   )
-  view.doc:ime_text_editing_by_selection(function(index, line, col)
+  view.buffer:ime_text_editing_by_selection(function(index, line, col)
     local context = by_index[index]
     return tables.normalize_cell_input(text, state_for(context, line, col))
   end)
@@ -626,7 +626,7 @@ end
 
 function tables.paste(view)
   local clipboard = system.get_clipboard() or ""
-  local selection_count = #view.doc.selections / 4
+  local selection_count = #view.buffer.selections / 4
   if core.cursor_clipboard
   and core.cursor_clipboard.full == clipboard
   and #core.cursor_clipboard_whole_line == selection_count
@@ -641,7 +641,7 @@ end
 function tables.paste_primary(view, x, y)
   if type(x) == "number" and type(y) == "number" then
     local line, col = view:resolve_screen_position(x, y)
-    view.doc:set_selection(line, col)
+    view.buffer:set_selection(line, col)
     view.mouse_selecting = nil
   end
   return tables.text_input(view, system.get_primary_selection() or "")
@@ -703,9 +703,9 @@ function tables.move_char(view, direction, selecting)
   local selections = {}
   for _, context in ipairs(contexts) do
     local offset = (context.selection_index - 1) * 4
-    local caret_line, caret_col = view.doc.selections[offset + 1], view.doc.selections[offset + 2]
-    local anchor_line, anchor_col = view.doc.selections[offset + 3], view.doc.selections[offset + 4]
-    local text = line_text(view.doc, context.line)
+    local caret_line, caret_col = view.buffer.selections[offset + 1], view.buffer.selections[offset + 2]
+    local anchor_line, anchor_col = view.buffer.selections[offset + 3], view.buffer.selections[offset + 4]
+    local text = line_text(view.buffer, context.line)
     local has_selection = caret_line ~= anchor_line or caret_col ~= anchor_col
     local break_col1, break_col2
     if not has_selection then
@@ -721,9 +721,9 @@ function tables.move_char(view, direction, selecting)
     elseif break_col1 then
       line, col = context.line, direction < 0 and break_col1 or break_col2
     elseif direction < 0 then
-      line, col = translate.previous_char(view.doc, context.line, context.col)
+      line, col = translate.previous_char(view.buffer, context.line, context.col)
     else
-      line, col = translate.next_char(view.doc, context.line, context.col)
+      line, col = translate.next_char(view.buffer, context.line, context.col)
     end
     line = context.line
     col = common.clamp(col, context.cell.content_col1, context.cell.content_col2)
@@ -732,14 +732,14 @@ function tables.move_char(view, direction, selecting)
     selections[#selections + 1] = selecting and anchor_line or line
     selections[#selections + 1] = selecting and anchor_col or col
   end
-  view.doc:set_selection_list(selections, view.doc.last_selection, { merge_cursors = true })
+  view.buffer:set_selection_list(selections, view.buffer.last_selection, { merge_cursors = true })
   return true
 end
 
 function tables.delete_char(view, direction)
   local contexts = collect_interactive_contexts(view)
   if not contexts then return false end
-  if view.doc:has_any_selection() then
+  if view.buffer:has_any_selection() then
     return view:on_text_input("")
   end
   local edits, seen = {}, {}
@@ -749,14 +749,14 @@ function tables.delete_char(view, direction)
     if render and render.on_table_source_changed then
       refreshers[render.on_table_source_changed] = true
     end
-    local text = line_text(view.doc, context.line)
+    local text = line_text(view.buffer, context.line)
     local col1, col2 = adjacent_break(text, context.cell, context.col, direction)
     if not col1 then
       local _, target
       if direction < 0 then
-        _, target = translate.previous_char(view.doc, context.line, context.col)
+        _, target = translate.previous_char(view.buffer, context.line, context.col)
       else
-        _, target = translate.next_char(view.doc, context.line, context.col)
+        _, target = translate.next_char(view.buffer, context.line, context.col)
       end
       if direction < 0 then col1, col2 = target, context.col
       else col1, col2 = context.col, target end
@@ -775,7 +775,7 @@ function tables.delete_char(view, direction)
     end
   end
   if #edits > 0 then
-    view.doc:apply_edits(edits, { type = "delete", reason = "markdown-table-cell" })
+    view.buffer:apply_edits(edits, { type = "delete", reason = "markdown-table-cell" })
     for refresh in pairs(refreshers) do refresh(view) end
   end
   return true
@@ -790,8 +790,8 @@ function tables.move_vertical(view, direction, selecting)
   local selections = {}
   for _, context in ipairs(contexts) do
     local old_offset = (context.selection_index - 1) * 4
-    local old_line2 = view.doc.selections[old_offset + 3]
-    local old_col2 = view.doc.selections[old_offset + 4]
+    local old_line2 = view.buffer.selections[old_offset + 3]
+    local old_col2 = view.buffer.selections[old_offset + 4]
     local line, col = view:move_within_line_render_position_rows(
       context.line, context.col, direction
     )
@@ -807,8 +807,8 @@ function tables.move_vertical(view, direction, selecting)
         col = common.clamp(col, target_cell.content_col1, target_cell.content_col2)
       else
         line = direction < 0 and math.max(1, context.line1 - 1)
-          or math.min(#view.doc.lines, context.line2 + 1)
-        col = direction < 0 and context.line1 > 1 and #view.doc.lines[line] or 1
+          or math.min(#view.buffer.lines, context.line2 + 1)
+        col = direction < 0 and context.line1 > 1 and #view.buffer.lines[line] or 1
       end
     end
     selections[#selections + 1] = line
@@ -816,7 +816,7 @@ function tables.move_vertical(view, direction, selecting)
     selections[#selections + 1] = selecting and old_line2 or line
     selections[#selections + 1] = selecting and old_col2 or col
   end
-  view.doc:set_selection_list(selections, view.doc.last_selection, {
+  view.buffer:set_selection_list(selections, view.buffer.last_selection, {
     merge_cursors = true,
   })
   if view.apply_pending_line_render_position_row_affinity then
@@ -854,7 +854,7 @@ function tables.select_rectangle(view, anchor_line, anchor_col, line, col)
     end
   end
   if #selections == 0 then return false end
-  view.doc:set_selection_list(selections, last_selection, {
+  view.buffer:set_selection_list(selections, last_selection, {
     merge_cursors = false,
   })
   return true
@@ -865,12 +865,12 @@ local function apply_line_replacements(context, replacements, reason)
   local edits = {}
   for line, text in pairs(replacements) do
     edits[#edits + 1] = {
-      line1 = line, col1 = 1, line2 = line, col2 = #line_text(context.doc, line) + 1,
+      line1 = line, col1 = 1, line2 = line, col2 = #line_text(context.buffer, line) + 1,
       text = text,
     }
   end
   table.sort(edits, function(a, b) return a.line1 < b.line1 end)
-  context.doc:apply_edits(edits, { type = "markdown-table", reason = reason })
+  context.buffer:apply_edits(edits, { type = "markdown-table", reason = reason })
   refresh_structure(context, refresh, context.line1, context.line2)
   return true
 end
@@ -888,8 +888,8 @@ function tables.insert_row(view, side)
     insertion_line = context.line + 1
   end
   local row = "|" .. string.rep("  |", context.columns) .. "\n"
-  insertion_line = insert_source_row(context.doc, insertion_line, row)
-  context.doc:set_selection(insertion_line, 3)
+  insertion_line = insert_source_row(context.buffer, insertion_line, row)
+  context.buffer:set_selection(insertion_line, 3)
   refresh_structure(context, refresh, context.line1, context.line2 + 1)
   return true
 end
@@ -899,8 +899,8 @@ function tables.delete_row(view)
   if not context or context.line <= context.delimiter_line then return false end
   local refresh = structure_refresher(context)
   local line = context.line
-  context.doc:remove(line, 1, line + 1, 1)
-  context.doc:set_selection(math.min(line, #context.doc.lines), 1)
+  context.buffer:remove(line, 1, line + 1, 1)
+  context.buffer:set_selection(math.min(line, #context.buffer.lines), 1)
   refresh_structure(context, refresh, context.line1, context.line2 - 1)
   return true
 end
@@ -912,11 +912,11 @@ function tables.move_row(view, direction)
   local target = context.line + direction
   if target <= context.delimiter_line or target > context.line2 then return false end
   local first, second = math.min(context.line, target), math.max(context.line, target)
-  local first_text, second_text = context.doc.lines[first], context.doc.lines[second]
-  context.doc:apply_edits({
+  local first_text, second_text = context.buffer.lines[first], context.buffer.lines[second]
+  context.buffer:apply_edits({
     { line1 = first, col1 = 1, line2 = second + 1, col2 = 1, text = second_text .. first_text },
   }, { type = "markdown-table", reason = "move-row" })
-  context.doc:set_selection(target, context.col)
+  context.buffer:set_selection(target, context.col)
   refresh_structure(context, refresh, context.line1, context.line2)
   return true
 end
@@ -931,10 +931,10 @@ function tables.insert_column(view, side)
     replacements[row.line] = row.text:sub(1, insertion) .. value .. row.text:sub(insertion + 1)
   end
   apply_line_replacements(context, replacements, "insert-column")
-  local row = source_row(line_text(context.doc, context.line))
+  local row = source_row(line_text(context.buffer, context.line))
   local target_column = context.column + (side == "left" and 0 or 1)
   local cell = row and row.cells[target_column]
-  context.doc:set_selection(
+  context.buffer:set_selection(
     context.line, cell and cell.content_col1 or context.col
   )
   return true
@@ -949,7 +949,7 @@ function tables.delete_column(view)
     replacements[row.line] = row.text:sub(1, left) .. row.text:sub(right + 1)
   end
   apply_line_replacements(context, replacements, "delete-column")
-  context.doc:set_selection(context.line, math.max(1, context.rows[context.line - context.line1 + 1].pipes[context.column]))
+  context.buffer:set_selection(context.line, math.max(1, context.rows[context.line - context.line1 + 1].pipes[context.column]))
   return true
 end
 
@@ -975,7 +975,7 @@ function tables.move_column(view, direction)
     replacements[row.line] = table.concat(parts)
   end
   apply_line_replacements(context, replacements, "move-column")
-  context.doc:set_selection(context.line, context.rows[context.line - context.line1 + 1].pipes[target] + 2)
+  context.buffer:set_selection(context.line, context.rows[context.line - context.line1 + 1].pipes[target] + 2)
   return true
 end
 

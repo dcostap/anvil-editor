@@ -6,7 +6,7 @@ local style = require "core.style"
 
 local LineWrapping = {}
 
-local views_by_doc = setmetatable({}, { __mode = "k" })
+local views_by_buffer = setmetatable({}, { __mode = "k" })
 local width_providers = {}
 
 function LineWrapping.register_width_provider(id, fn)
@@ -19,145 +19,145 @@ function LineWrapping.unregister_width_provider(id)
   width_providers[id] = nil
 end
 
-local function configured_width_override(docview)
+local function configured_width_override(textview)
   local override = config.plugins.linewrapping.width_override
-  if type(override) == "function" then return override(docview) end
+  if type(override) == "function" then return override(textview) end
   return override
 end
 
-local function provided_wrap_width(docview)
+local function provided_wrap_width(textview)
   for id, provider in pairs(width_providers) do
-    local ok, width = pcall(provider, docview)
+    local ok, width = pcall(provider, textview)
     if ok and width ~= nil then return width end
     if not ok and core and core.log_quiet then
-      core.log_quiet("Line wrapping width provider %s failed for %s: %s", tostring(id), tostring(docview), tostring(width))
+      core.log_quiet("Line wrapping width provider %s failed for %s: %s", tostring(id), tostring(textview), tostring(width))
     end
   end
 end
 
-local function compact_views(doc, views)
+local function compact_views(buffer, views)
   local compacted = setmetatable({}, { __mode = "v" })
   for _, view in pairs(views) do
-    if view and view.doc == doc then
+    if view and view.buffer == buffer then
       compacted[#compacted + 1] = view
     end
   end
   if #compacted > 0 then
-    views_by_doc[doc] = compacted
+    views_by_buffer[buffer] = compacted
     return compacted
   end
-  views_by_doc[doc] = nil
+  views_by_buffer[buffer] = nil
 end
 
-function LineWrapping.register_docview(docview)
-  local doc = docview and docview.doc
-  if not doc then return end
-  local views = views_by_doc[doc]
+function LineWrapping.register_textview(textview)
+  local buffer = textview and textview.buffer
+  if not buffer then return end
+  local views = views_by_buffer[buffer]
   if views then
-    views = compact_views(doc, views)
+    views = compact_views(buffer, views)
   end
   if not views then
     views = setmetatable({}, { __mode = "v" })
-    views_by_doc[doc] = views
+    views_by_buffer[buffer] = views
   end
   for _, view in pairs(views) do
-    if view == docview then return end
+    if view == textview then return end
   end
-  views[#views + 1] = docview
+  views[#views + 1] = textview
 end
 
-function LineWrapping.unregister_docview(docview)
-  local doc = docview and docview.doc
-  local views = doc and views_by_doc[doc]
+function LineWrapping.unregister_textview(textview)
+  local buffer = textview and textview.buffer
+  local views = buffer and views_by_buffer[buffer]
   if not views then return end
   local compacted = setmetatable({}, { __mode = "v" })
   for _, view in pairs(views) do
-    if view and view ~= docview and view.doc == doc then
+    if view and view ~= textview and view.buffer == buffer then
       compacted[#compacted + 1] = view
     end
   end
-  views_by_doc[doc] = #compacted > 0 and compacted or nil
+  views_by_buffer[buffer] = #compacted > 0 and compacted or nil
 end
 
-local function each_wrapped_docview(doc, fn)
-  local views = views_by_doc[doc]
+local function each_wrapped_textview(buffer, fn)
+  local views = views_by_buffer[buffer]
   if not views then return end
-  views = compact_views(doc, views)
+  views = compact_views(buffer, views)
   if not views then return end
-  for _, docview in ipairs(views) do
-    if docview.wrapped_settings then
-      fn(docview)
+  for _, textview in ipairs(views) do
+    if textview.wrapped_settings then
+      fn(textview)
     end
   end
 end
 
-function LineWrapping.notify_doc_raw_insert(doc, line, old_lines)
-  each_wrapped_docview(doc, function(docview)
-    local lines = #doc.lines - old_lines
-    LineWrapping.update_breaks(docview, line, line, lines)
+function LineWrapping.notify_buffer_raw_insert(buffer, line, old_lines)
+  each_wrapped_textview(buffer, function(textview)
+    local lines = #buffer.lines - old_lines
+    LineWrapping.update_breaks(textview, line, line, lines)
   end)
 end
 
-function LineWrapping.notify_doc_raw_remove(doc, line1, line2, old_lines)
-  each_wrapped_docview(doc, function(docview)
-    local lines = #doc.lines - old_lines
-    LineWrapping.update_breaks(docview, line1, line2, lines)
+function LineWrapping.notify_buffer_raw_remove(buffer, line1, line2, old_lines)
+  each_wrapped_textview(buffer, function(textview)
+    local lines = #buffer.lines - old_lines
+    LineWrapping.update_breaks(textview, line1, line2, lines)
   end)
 end
 
-function LineWrapping.notify_doc_text_input(doc, result)
+function LineWrapping.notify_buffer_text_input(buffer, result)
   if not result or not result.changed then return end
-  each_wrapped_docview(doc, function(docview)
-    LineWrapping.set_wrapped_line_end_affinity(docview, LineWrapping.collect_soft_wrap_row_start_affinity(docview))
+  each_wrapped_textview(buffer, function(textview)
+    LineWrapping.set_wrapped_line_end_affinity(textview, LineWrapping.collect_soft_wrap_row_start_affinity(textview))
   end)
 end
 
-function LineWrapping.notify_doc_text_transaction(doc, transaction)
+function LineWrapping.notify_buffer_text_transaction(buffer, transaction)
   local ranges = transaction and transaction.changed_ranges
   if not ranges then return end
-  each_wrapped_docview(doc, function(docview)
+  each_wrapped_textview(buffer, function(textview)
     if transaction and transaction.type == "load" then
       -- A loaded snapshot is a revision boundary. Let transaction/render
       -- providers reset their state first, then prepare the new wrapped layout
       -- in slices and adopt it atomically. The previous committed rows remain
       -- readable until the replacement is complete.
-      docview.__wrap_reload_reconstruction_serial =
-        (docview.__wrap_reload_reconstruction_serial or 0) + 1
-      local serial = docview.__wrap_reload_reconstruction_serial
+      textview.__wrap_reload_reconstruction_serial =
+        (textview.__wrap_reload_reconstruction_serial or 0) + 1
+      local serial = textview.__wrap_reload_reconstruction_serial
       core.add_thread(function()
         coroutine.yield(0)
-        if docview.doc ~= doc
-          or docview.__wrap_reload_reconstruction_serial ~= serial
-          or not docview.wrapped_settings
+        if textview.buffer ~= buffer
+          or textview.__wrap_reload_reconstruction_serial ~= serial
+          or not textview.wrapped_settings
         then
           return
         end
-        local settings = docview.wrapped_settings
+        local settings = textview.wrapped_settings
         core.log_quiet(
           "Preparing wrapped layout after loaded snapshot for %s revision=%d",
-          doc:get_name(), doc.text_revision or 0
+          buffer:get_name(), buffer.text_revision or 0
         )
         LineWrapping.reconstruct_breaks_async(
-          docview, settings.font, settings.width, { budget_ms = 4 }
+          textview, settings.font, settings.width, { budget_ms = 4 }
         )
       end)
       return
     end
     if #ranges == 1 then
       local range = ranges[1]
-      if not LineWrapping.update_same_line_suffix_breaks(docview, range, transaction) then
-        LineWrapping.update_breaks(docview, range.old_line1, range.old_line2, range.line_delta or 0)
+      if not LineWrapping.update_same_line_suffix_breaks(textview, range, transaction) then
+        LineWrapping.update_breaks(textview, range.old_line1, range.old_line2, range.line_delta or 0)
       end
     elseif not LineWrapping.update_multiple_nonstructural_breaks(
-      docview, ranges
+      textview, ranges
     ) then
-      LineWrapping.reconstruct_breaks(docview, docview.wrapped_settings.font, docview.wrapped_settings.width)
+      LineWrapping.reconstruct_breaks(textview, textview.wrapped_settings.font, textview.wrapped_settings.width)
     end
   end)
 end
 
-function LineWrapping.notify_doc_close(doc)
-  views_by_doc[doc] = nil
+function LineWrapping.notify_buffer_close(buffer)
+  views_by_buffer[buffer] = nil
 end
 
 ---@class config.plugins.linewrapping
@@ -256,20 +256,20 @@ end
 -- not need syntax fonts, expose the whole line as a single normal token.
 local function spew_tokens(state, emitted)
   if emitted then return end
-  local text = state.text or state.doc:get_utf8_line(state.line)
+  local text = state.text or state.buffer:get_utf8_line(state.line)
   if state.scol and state.scol > 1 then text = text:sub(state.scol) end
   return math.huge, "normal", text
 end
 
-local function get_tokens(doc, line, scol, line_text, measurement)
+local function get_tokens(buffer, line, scol, line_text, measurement)
   local require_tokenization = measurement and measurement.require_tokenization
   if require_tokenization == nil then
     require_tokenization = config.plugins.linewrapping.require_tokenization
   end
   if require_tokenization then
-    return doc.highlighter:each_token(line, scol)
+    return buffer.highlighter:each_token(line, scol)
   end
-  return spew_tokens, { doc = doc, line = line, scol = scol, text = line_text }, nil
+  return spew_tokens, { buffer = buffer, line = line, scol = scol, text = line_text }, nil
 end
 
 local function append_plain_ascii_letter_splits(splits, start_col, byte_len, xoffset, cell_width, width, begin_width)
@@ -356,19 +356,19 @@ local function append_plain_ascii_word_splits(splits, text, start_col, byte_len,
   return xoffset, nil, nil
 end
 
-function LineWrapping.get_tokens(doc, line)
-  return get_tokens(doc, line)
+function LineWrapping.get_tokens(buffer, line)
+  return get_tokens(buffer, line)
 end
 
-local function new_measurement_context(doc, default_font, docview)
-  local _, indent_size = doc:get_indent_info()
+local function new_measurement_context(buffer, default_font, textview)
+  local _, indent_size = buffer:get_indent_info()
   local default_cell_width = default_font:get_width(" ")
   local syntax_fonts = {}
   for name, font in pairs(style.syntax_fonts) do syntax_fonts[name] = font end
   local has_line_render_providers = false
-  if docview and docview.get_line_render then
-    has_line_render_providers = not docview.has_line_render_providers
-      or docview:has_line_render_providers()
+  if textview and textview.get_line_render then
+    has_line_render_providers = not textview.has_line_render_providers
+      or textview:has_line_render_providers()
   end
   return {
     indent_size = indent_size or config.indent_size or 2,
@@ -457,8 +457,8 @@ end
 
 -- Computes the breaks for a given line, width and mode. Returns a list of byte
 -- columns where visual rows start, plus the continuation indent width.
-local function line_continuation_indent_width(doc, default_font, line, measurement)
-  for _, type, text in get_tokens(doc, line, nil, nil, measurement) do
+local function line_continuation_indent_width(buffer, default_font, line, measurement)
+  for _, type, text in get_tokens(buffer, line, nil, nil, measurement) do
     local font = measurement_syntax_font(measurement, type, default_font)
     return continuation_indent_width(font, text, measurement)
   end
@@ -471,10 +471,10 @@ local function clamp_continuation_indent_width(indent_width, wrap_width)
 end
 
 local function compute_rendered_line_breaks(
-  docview, render_line, default_font, line, width, mode, start_col,
+  textview, render_line, default_font, line, width, mode, start_col,
   initial_begin_width, measurement
 )
-  local text = docview.doc:get_utf8_line(line)
+  local text = textview.buffer:get_utf8_line(line)
   local visible_end = #text - (text:sub(-1) == "\n" and 1 or 0)
   local begin_width = initial_begin_width
   local continuation_font = render_line.continuation_indent_font or default_font
@@ -491,18 +491,18 @@ local function compute_rendered_line_breaks(
   local last_space_next_x
   local line_x_offset = render_line.x_offset or 0
   if render_line.continuation_indent_col then
-    begin_width = docview:get_line_render_col_x_offset(
+    begin_width = textview:get_line_render_col_x_offset(
       render_line, render_line.continuation_indent_col
     ) - line_x_offset
       + continuation_indent_width(continuation_font, "", measurement)
     begin_width = clamp_continuation_indent_width(begin_width, width)
   end
-  local rendered_x = docview.get_line_render_col_x_cursor
-    and docview:get_line_render_col_x_cursor(render_line)
-    or function(col) return docview:get_line_render_col_x_offset(render_line, col) end
+  local rendered_x = textview.get_line_render_col_x_cursor
+    and textview:get_line_render_col_x_cursor(render_line)
+    or function(col) return textview:get_line_render_col_x_offset(render_line, col) end
   row_start_x = rendered_x(row_start)
-  if docview.get_line_render_native_wrap then
-    local native_splits = docview:get_line_render_native_wrap(
+  if textview.get_line_render_native_wrap then
+    local native_splits = textview:get_line_render_native_wrap(
       render_line, width, mode, start_col, begin_width
     )
     if native_splits then return native_splits, begin_width, "rendered_native" end
@@ -544,8 +544,8 @@ end
 -- column, normally an existing cached visual-row start. Returns row starts for
 -- the suffix, including `start_col`, plus the line continuation indent width.
 function LineWrapping.compute_line_breaks_from_col(
-  doc, default_font, line, width, mode, start_col, initial_begin_width,
-  docview, measurement
+  buffer, default_font, line, width, mode, start_col, initial_begin_width,
+  textview, measurement
 )
   local perf_active = measurement and measurement.perf_active
   if perf_active == nil then
@@ -565,11 +565,11 @@ function LineWrapping.compute_line_breaks_from_col(
   start_col = math.max(1, start_col or 1)
   local begin_width = initial_begin_width
   if start_col > 1 and begin_width == nil then
-    begin_width = line_continuation_indent_width(doc, default_font, line, measurement)
+    begin_width = line_continuation_indent_width(buffer, default_font, line, measurement)
   end
   local xoffset, i, last_space, last_width = start_col > 1 and begin_width or 0, start_col, nil, 0
   local splits = { start_col }
-  local line_text = doc:get_utf8_line(line)
+  local line_text = buffer:get_utf8_line(line)
   local visible_end_col = #line_text
   if line_text:sub(-1) == "\n" then visible_end_col = visible_end_col - 1 end
   local function finish(result_splits, result_begin_width, branch)
@@ -603,10 +603,10 @@ function LineWrapping.compute_line_breaks_from_col(
     perf_frame_add("linewrapping_compute_line_breaks_ms", perf_elapsed_ms)
     return result_splits, result_begin_width
   end
-  local may_have_render_line = docview and docview.get_line_render
+  local may_have_render_line = textview and textview.get_line_render
     and (not measurement or measurement.has_line_render_providers)
   if may_have_render_line then
-    local render_line = docview:get_line_render(line)
+    local render_line = textview:get_line_render(line)
     if render_line and render_line.disable_wrapping then
       return finish({ start_col }, 0, "rendered_disabled")
     end
@@ -627,7 +627,7 @@ function LineWrapping.compute_line_breaks_from_col(
         perf_ascii = not perf_has_non_ascii
       end
       local rendered_splits, rendered_begin_width, rendered_branch = compute_rendered_line_breaks(
-        docview, render_line, default_font, line, width, mode,
+        textview, render_line, default_font, line, width, mode,
         start_col, begin_width, measurement
       )
       return finish(rendered_splits, rendered_begin_width, rendered_branch)
@@ -646,7 +646,7 @@ function LineWrapping.compute_line_breaks_from_col(
     end
   end
   for idx, type, text in get_tokens(
-    doc, line, start_col, line_text, measurement
+    buffer, line, start_col, line_text, measurement
   ) do
     if i > visible_end_col then break end
     if i + #text - 1 > visible_end_col then
@@ -666,7 +666,7 @@ function LineWrapping.compute_line_breaks_from_col(
       or measurement_cell_width(measurement, font)
     local tab_width = cell_width * (
       measurement and measurement.indent_size
-      or select(2, doc:get_indent_info()) or config.indent_size or 2
+      or select(2, buffer:get_indent_info()) or config.indent_size or 2
     )
     local ascii_cell_width = ascii_font and cell_width or nil
     local ascii_tab_width = ascii_font and tab_width or nil
@@ -793,23 +793,23 @@ function LineWrapping.compute_line_breaks_from_col(
 end
 
 function LineWrapping.compute_line_breaks(
-  doc, default_font, line, width, mode, docview, measurement
+  buffer, default_font, line, width, mode, textview, measurement
 )
   return LineWrapping.compute_line_breaks_from_col(
-    doc, default_font, line, width, mode, 1, nil, docview, measurement
+    buffer, default_font, line, width, mode, 1, nil, textview, measurement
   )
 end
 
-function LineWrapping.clear_wrap_cache(docview)
-  docview.__async_wrap_reconstruction = nil
-  docview.__wrap_layout_generation = (docview.__wrap_layout_generation or 0) + 1
-  docview.__composed_visual_row_cache = nil
-  docview.wrapped_lines = nil
-  docview.wrapped_line_to_idx = nil
-  docview.wrapped_line_offsets = nil
-  docview.wrapped_settings = nil
-  docview.wrapped_doc_line_count = nil
-  docview.wrapped_text_revision = nil
+function LineWrapping.clear_wrap_cache(textview)
+  textview.__async_wrap_reconstruction = nil
+  textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
+  textview.__composed_visual_row_cache = nil
+  textview.wrapped_lines = nil
+  textview.wrapped_line_to_idx = nil
+  textview.wrapped_line_offsets = nil
+  textview.wrapped_settings = nil
+  textview.wrapped_buffer_line_count = nil
+  textview.wrapped_text_revision = nil
 end
 
 local function font_native_value(font, method, fallback)
@@ -821,8 +821,8 @@ local function font_native_value(font, method, fallback)
   return table.concat(parts, ":")
 end
 
-local function wrap_settings_signature(docview, default_font, width)
-  local _, indent_size = docview.doc:get_indent_info()
+local function wrap_settings_signature(textview, default_font, width)
+  local _, indent_size = textview.buffer:get_indent_info()
   local require_tokenization = config.plugins.linewrapping.require_tokenization
   local names = {}
   if require_tokenization then
@@ -855,7 +855,7 @@ local function wrap_settings_signature(docview, default_font, width)
     continuation_indent_size = config.indent_size or 4,
     require_tokenization = require_tokenization,
     syntax_generation = require_tokenization
-      and (docview.doc.highlighter.packet_reset_generation or 0) or 0,
+      and (textview.buffer.highlighter.packet_reset_generation or 0) or 0,
     syntax_font_signature = syntax_font_signature,
     indent_size = indent_size,
   }
@@ -878,40 +878,40 @@ local function same_wrap_settings(a, b)
     and a.indent_size == b.indent_size
 end
 
-function LineWrapping.reconstruct_breaks(docview, default_font, width)
-  docview.__async_wrap_reconstruction = nil
-  docview.__wrap_layout_generation = (docview.__wrap_layout_generation or 0) + 1
-  docview.__composed_visual_row_cache = nil
+function LineWrapping.reconstruct_breaks(textview, default_font, width)
+  textview.__async_wrap_reconstruction = nil
+  textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
+  textview.__composed_visual_row_cache = nil
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
   local reconstructed_lines = 0
   if width ~= math.huge then
-    local doc = docview.doc
-    local measurement = new_measurement_context(doc, default_font, docview)
-    docview.wrapped_lines = {}
-    docview.wrapped_line_to_idx = {}
-    docview.wrapped_line_offsets = {}
-    docview.wrapped_settings = wrap_settings_signature(docview, default_font, width)
-    docview.wrapped_doc_line_count = #doc.lines
-    docview.wrapped_text_revision = doc.text_revision or 0
+    local buffer = textview.buffer
+    local measurement = new_measurement_context(buffer, default_font, textview)
+    textview.wrapped_lines = {}
+    textview.wrapped_line_to_idx = {}
+    textview.wrapped_line_offsets = {}
+    textview.wrapped_settings = wrap_settings_signature(textview, default_font, width)
+    textview.wrapped_buffer_line_count = #buffer.lines
+    textview.wrapped_text_revision = buffer.text_revision or 0
     local wrapped_row_count = 0
-    for i = 1, #doc.lines do
+    for i = 1, #buffer.lines do
       reconstructed_lines = reconstructed_lines + 1
       local breaks, offset = LineWrapping.compute_line_breaks(
-        doc, default_font, i, width, measurement.mode,
-        docview, measurement
+        buffer, default_font, i, width, measurement.mode,
+        textview, measurement
       )
-      docview.wrapped_line_offsets[i] = offset
-      docview.wrapped_line_to_idx[i] = wrapped_row_count + 1
+      textview.wrapped_line_offsets[i] = offset
+      textview.wrapped_line_to_idx[i] = wrapped_row_count + 1
       for _, col in ipairs(breaks) do
         wrapped_row_count = wrapped_row_count + 1
         local row_offset = wrapped_row_count * 2
-        docview.wrapped_lines[row_offset - 1] = i
-        docview.wrapped_lines[row_offset] = col
+        textview.wrapped_lines[row_offset - 1] = i
+        textview.wrapped_lines[row_offset] = col
       end
     end
   else
-    LineWrapping.clear_wrap_cache(docview)
+    LineWrapping.clear_wrap_cache(textview)
   end
   perf_frame_add("linewrapping_reconstruct_breaks_calls", 1)
   perf_frame_add("linewrapping_reconstruct_breaks_lines", reconstructed_lines)
@@ -920,20 +920,20 @@ end
 
 ---Rebuild a wrapped layout in bounded main-thread slices and atomically adopt
 ---it when complete. The existing layout remains readable while the new one is
----prepared, avoiding a whole-Document publication stall.
-function LineWrapping.reconstruct_breaks_async(docview, default_font, width, opts)
+---prepared, avoiding a whole-Buffer publication stall.
+function LineWrapping.reconstruct_breaks_async(textview, default_font, width, opts)
   opts = opts or {}
   if width == math.huge then
-    LineWrapping.clear_wrap_cache(docview)
+    LineWrapping.clear_wrap_cache(textview)
     if opts.on_complete then opts.on_complete(true) end
     return true
   end
-  local doc = docview.doc
-  local measurement = new_measurement_context(doc, default_font, docview)
+  local buffer = textview.buffer
+  local measurement = new_measurement_context(buffer, default_font, textview)
   local token = {
-    doc = doc,
-    revision = doc.text_revision or 0,
-    line_count = #doc.lines,
+    buffer = buffer,
+    revision = buffer.text_revision or 0,
+    line_count = #buffer.lines,
     next_line = 1,
     wrapped_lines = {},
     wrapped_line_to_idx = {},
@@ -941,32 +941,32 @@ function LineWrapping.reconstruct_breaks_async(docview, default_font, width, opt
     wrapped_row_count = 0,
     work_ms = 0,
     yields = 0,
-    settings = wrap_settings_signature(docview, default_font, width),
+    settings = wrap_settings_signature(textview, default_font, width),
     measurement = measurement,
     line_render_invalidation_generation =
-      docview.__line_render_invalidation_generation or 0,
+      textview.__line_render_invalidation_generation or 0,
     has_line_render_providers = measurement.has_line_render_providers,
   }
-  docview.__async_wrap_reconstruction = token
+  textview.__async_wrap_reconstruction = token
   perf_frame_add("linewrapping_async_reconstruct_calls", 1)
 
   local function base_current()
-    return docview.__async_wrap_reconstruction == token
-      and docview.doc == doc
-      and (doc.text_revision or 0) == token.revision
-      and #doc.lines == token.line_count
+    return textview.__async_wrap_reconstruction == token
+      and textview.buffer == buffer
+      and (buffer.text_revision or 0) == token.revision
+      and #buffer.lines == token.line_count
       and same_wrap_settings(
         token.settings,
-        wrap_settings_signature(docview, default_font, width)
+        wrap_settings_signature(textview, default_font, width)
       )
   end
 
   local function line_render_current()
-    return (docview.__line_render_invalidation_generation or 0)
+    return (textview.__line_render_invalidation_generation or 0)
         == token.line_render_invalidation_generation
       and (
-        not docview.has_line_render_providers
-        or docview:has_line_render_providers()
+        not textview.has_line_render_providers
+        or textview:has_line_render_providers()
       ) == token.has_line_render_providers
   end
 
@@ -977,26 +977,26 @@ function LineWrapping.reconstruct_breaks_async(docview, default_font, width, opt
 
   local function finish()
     if not current() then return false end
-    docview.wrapped_lines = token.wrapped_lines
-    docview.wrapped_line_to_idx = token.wrapped_line_to_idx
-    docview.wrapped_line_offsets = token.wrapped_line_offsets
-    docview.wrapped_settings = token.settings
-    docview.wrapped_doc_line_count = token.line_count
-    docview.wrapped_text_revision = token.revision
-    docview.__wrap_layout_generation = (docview.__wrap_layout_generation or 0) + 1
-    docview.__composed_visual_row_cache = nil
-    docview.__line_render_wrap_change = nil
-    docview.__async_wrap_reconstruction = nil
+    textview.wrapped_lines = token.wrapped_lines
+    textview.wrapped_line_to_idx = token.wrapped_line_to_idx
+    textview.wrapped_line_offsets = token.wrapped_line_offsets
+    textview.wrapped_settings = token.settings
+    textview.wrapped_buffer_line_count = token.line_count
+    textview.wrapped_text_revision = token.revision
+    textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
+    textview.__composed_visual_row_cache = nil
+    textview.__line_render_wrap_change = nil
+    textview.__async_wrap_reconstruction = nil
     perf_frame_add("linewrapping_async_reconstruct_commits", 1)
     core.log_quiet(
       "Committed sliced wrapped layout for %s: lines=%d rows=%d work_ms=%.3f yields=%d",
-      doc:get_name(), token.line_count, token.wrapped_row_count,
+      buffer:get_name(), token.line_count, token.wrapped_row_count,
       token.work_ms, token.yields
     )
     if opts.on_complete then
       local ok, err = pcall(opts.on_complete, true)
       if not ok then
-        core.log_quiet("Async wrapped-layout completion failed for %s: %s", doc:get_name(), tostring(err))
+        core.log_quiet("Async wrapped-layout completion failed for %s: %s", buffer:get_name(), tostring(err))
       end
     end
     core.redraw = true
@@ -1007,23 +1007,23 @@ function LineWrapping.reconstruct_breaks_async(docview, default_font, width, opt
   local function advance()
     if not current() then
       if base_current() and not line_render_current() then
-        docview.__async_wrap_reconstruction = nil
+        textview.__async_wrap_reconstruction = nil
         perf_frame_add("linewrapping_async_reconstruct_restarts", 1)
         core.log_quiet(
           "Restarting sliced wrapped layout after line-render invalidation for %s at line %d/%d",
-          doc:get_name(), token.next_line, token.line_count
+          buffer:get_name(), token.next_line, token.line_count
         )
         LineWrapping.reconstruct_breaks_async(
-          docview, default_font, width, opts
+          textview, default_font, width, opts
         )
         return "restarted"
       end
-      if docview.__async_wrap_reconstruction == token then
-        docview.__async_wrap_reconstruction = nil
+      if textview.__async_wrap_reconstruction == token then
+        textview.__async_wrap_reconstruction = nil
         perf_frame_add("linewrapping_async_reconstruct_cancelled", 1)
         core.log_quiet(
           "Cancelled stale sliced wrapped layout for %s at line %d/%d",
-          doc:get_name(), token.next_line, token.line_count
+          buffer:get_name(), token.next_line, token.line_count
         )
         if opts.on_complete then pcall(opts.on_complete, false) end
       end
@@ -1035,8 +1035,8 @@ function LineWrapping.reconstruct_breaks_async(docview, default_font, width, opt
     while token.next_line <= token.line_count do
       local line = token.next_line
       local breaks, offset = LineWrapping.compute_line_breaks(
-        doc, default_font, line, width, token.measurement.mode,
-        docview, token.measurement
+        buffer, default_font, line, width, token.measurement.mode,
+        textview, token.measurement
       )
       token.wrapped_line_offsets[line] = offset
       token.wrapped_line_to_idx[line] = token.wrapped_row_count + 1
@@ -1068,7 +1068,7 @@ function LineWrapping.reconstruct_breaks_async(docview, default_font, width, opt
   if status == "pending" then
     core.log_quiet(
       "Continuing wrapped layout in slices for %s: lines=%d budget_ms=%.1f",
-      doc:get_name(), token.line_count, budget_ms
+      buffer:get_name(), token.line_count, budget_ms
     )
     core.add_thread(function()
       while advance() == "pending" do coroutine.yield(0.005) end
@@ -1079,10 +1079,10 @@ end
 
 ---Synchronously finish a pending sliced reconstruction when a caller requires
 ---immediate geometry (primarily deterministic headless/UI test setup).
-function LineWrapping.complete_async_reconstruction(docview)
-  if not docview then return nil end
-  while docview.__async_wrap_reconstruction do
-    local token = docview.__async_wrap_reconstruction
+function LineWrapping.complete_async_reconstruction(textview)
+  if not textview then return nil end
+  while textview.__async_wrap_reconstruction do
+    local token = textview.__async_wrap_reconstruction
     if not token.advance then return false end
     local status = token.advance()
     if status == "complete" then return true end
@@ -1091,51 +1091,51 @@ function LineWrapping.complete_async_reconstruction(docview)
   return true
 end
 
-local function rebuild_line_to_idx_from(docview, line, offset)
+local function rebuild_line_to_idx_from(textview, line, offset)
   -- Every logical line contributes an initial visual-row entry at column 1.
   -- Use that invariant to rebuild the logical-line -> first visual-row map
   -- after the flat wrapped_lines array has been spliced.
-  while offset <= #docview.wrapped_lines do
-    if docview.wrapped_lines[offset + 1] == 1 then
-      docview.wrapped_line_to_idx[line] = ((offset - 1) / 2) + 1
+  while offset <= #textview.wrapped_lines do
+    if textview.wrapped_lines[offset + 1] == 1 then
+      textview.wrapped_line_to_idx[line] = ((offset - 1) / 2) + 1
       line = line + 1
     end
     offset = offset + 2
   end
-  while line <= #docview.wrapped_line_to_idx do
-    table.remove(docview.wrapped_line_to_idx)
+  while line <= #textview.wrapped_line_to_idx do
+    table.remove(textview.wrapped_line_to_idx)
   end
 end
 
----Update the distinct Document lines touched by a batch of non-structural
+---Update the distinct Buffer lines touched by a batch of non-structural
 ---edits. Unaffected Wrapped Visual Rows are copied without remeasurement.
 ---Returns false when the transaction or view needs the conservative full
 ---reconstruction path.
-function LineWrapping.update_multiple_nonstructural_breaks(docview, ranges)
-  if not (docview and ranges and #ranges > 1) then return false end
+function LineWrapping.update_multiple_nonstructural_breaks(textview, ranges)
+  if not (textview and ranges and #ranges > 1) then return false end
   if not (
-    docview.wrapped_settings
-    and docview.wrapped_lines
-    and docview.wrapped_line_to_idx
-    and docview.wrapped_line_offsets
+    textview.wrapped_settings
+    and textview.wrapped_lines
+    and textview.wrapped_line_to_idx
+    and textview.wrapped_line_offsets
   ) then
     return false
   end
-  if docview.has_line_render_providers
-  and docview:has_line_render_providers() then
+  if textview.has_line_render_providers
+  and textview:has_line_render_providers() then
     return false
   end
 
-  local doc = docview.doc
-  local line_count = #doc.lines
-  local revision = doc.text_revision or 0
-  if docview.wrapped_doc_line_count ~= line_count
-  or docview.wrapped_text_revision ~= revision - 1
+  local buffer = textview.buffer
+  local line_count = #buffer.lines
+  local revision = buffer.text_revision or 0
+  if textview.wrapped_buffer_line_count ~= line_count
+  or textview.wrapped_text_revision ~= revision - 1
   or not same_wrap_settings(
-    docview.wrapped_settings,
+    textview.wrapped_settings,
     wrap_settings_signature(
-      docview, docview.wrapped_settings.font,
-      docview.wrapped_settings.width
+      textview, textview.wrapped_settings.font,
+      textview.wrapped_settings.width
     )
   ) then
     return false
@@ -1171,21 +1171,21 @@ function LineWrapping.update_multiple_nonstructural_breaks(docview, ranges)
 
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
-  local old_wrapped_lines = docview.wrapped_lines
-  local old_line_to_idx = docview.wrapped_line_to_idx
+  local old_wrapped_lines = textview.wrapped_lines
+  local old_line_to_idx = textview.wrapped_line_to_idx
   local old_row_count = #old_wrapped_lines / 2
-  local old_wrap_generation = docview.__wrap_layout_generation or 0
+  local old_wrap_generation = textview.__wrap_layout_generation or 0
   local measurement = new_measurement_context(
-    doc, docview.wrapped_settings.font, docview
+    buffer, textview.wrapped_settings.font, textview
   )
   local replacement_breaks = {}
   local replacement_offsets = {}
 
   for _, line in ipairs(affected_lines) do
     local breaks, begin_width = LineWrapping.compute_line_breaks(
-      doc, docview.wrapped_settings.font, line,
-      docview.wrapped_settings.width, measurement.mode,
-      docview, measurement
+      buffer, textview.wrapped_settings.font, line,
+      textview.wrapped_settings.width, measurement.mode,
+      textview, measurement
     )
     replacement_breaks[line] = breaks
     replacement_offsets[line] = begin_width
@@ -1224,16 +1224,16 @@ function LineWrapping.update_multiple_nonstructural_breaks(docview, ranges)
   local old_idx1 = old_line_to_idx[first_line]
   local old_idx2 = (old_line_to_idx[last_line + 1] or (old_row_count + 1)) - 1
   for _, line in ipairs(affected_lines) do
-    docview.wrapped_line_offsets[line] = replacement_offsets[line]
+    textview.wrapped_line_offsets[line] = replacement_offsets[line]
   end
-  docview.__async_wrap_reconstruction = nil
-  docview.wrapped_lines = new_wrapped_lines
-  docview.wrapped_line_to_idx = new_line_to_idx
-  docview.wrapped_doc_line_count = line_count
-  docview.wrapped_text_revision = revision
-  docview.__wrap_layout_generation = old_wrap_generation + 1
-  docview.__composed_visual_row_cache = nil
-  docview.__line_render_wrap_change = {
+  textview.__async_wrap_reconstruction = nil
+  textview.wrapped_lines = new_wrapped_lines
+  textview.wrapped_line_to_idx = new_line_to_idx
+  textview.wrapped_buffer_line_count = line_count
+  textview.wrapped_text_revision = revision
+  textview.__wrap_layout_generation = old_wrap_generation + 1
+  textview.__composed_visual_row_cache = nil
+  textview.__line_render_wrap_change = {
     old_row_count = old_row_count,
     new_row_count = new_row_count,
     old_row1 = old_idx1,
@@ -1249,8 +1249,8 @@ function LineWrapping.update_multiple_nonstructural_breaks(docview, ranges)
   return true
 end
 
-function LineWrapping.update_same_line_suffix_breaks(docview, range, transaction)
-  if not (docview.wrapped_settings and docview.wrapped_lines and docview.wrapped_line_to_idx) then return false end
+function LineWrapping.update_same_line_suffix_breaks(textview, range, transaction)
+  if not (textview.wrapped_settings and textview.wrapped_lines and textview.wrapped_line_to_idx) then return false end
   -- Tokenized suffix iteration depends on tokenizer slicing by absolute byte
   -- column. Keep that more complex mode on the conservative full-line path.
   if config.plugins.linewrapping.require_tokenization then return false end
@@ -1269,44 +1269,44 @@ function LineWrapping.update_same_line_suffix_breaks(docview, range, transaction
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
   local line = range.new_line1
-  local first_idx = docview.wrapped_line_to_idx[line]
+  local first_idx = textview.wrapped_line_to_idx[line]
   if not first_idx then return false end
-  local total = LineWrapping.get_total_wrapped_lines(docview)
-  local next_first_idx = docview.wrapped_line_to_idx[line + 1] or (total + 1)
-  local old_wrap_generation = docview.__wrap_layout_generation or 0
+  local total = LineWrapping.get_total_wrapped_lines(textview)
+  local next_first_idx = textview.wrapped_line_to_idx[line + 1] or (total + 1)
+  local old_wrap_generation = textview.__wrap_layout_generation or 0
   if next_first_idx <= first_idx then return false end
 
   local affected_col = math.max(1, tonumber(edit.col1) or 1)
   local wrapping_indent = config.plugins.linewrapping.wrapping_indent
   if config.plugins.linewrapping.indent ~= false and wrapping_indent ~= "none" then
-    local _, indent_end = tostring(docview.doc.lines[line] or ""):find("^[ \t]*")
+    local _, indent_end = tostring(textview.buffer.lines[line] or ""):find("^[ \t]*")
     if affected_col <= (indent_end or 0) + 1 then return false end
   end
-  local affected_idx = LineWrapping.get_line_idx_col_count(docview, line, affected_col, false)
+  local affected_idx = LineWrapping.get_line_idx_col_count(textview, line, affected_col, false)
   -- Recompute from the previous cached visual row.  For word wrapping, the row
   -- containing the edit can depend on scanning from the previous row start.
   local restart_idx = math.max(first_idx, affected_idx - 1)
   local restart_offset = (restart_idx - 1) * 2 + 1
-  local restart_col = docview.wrapped_lines[restart_offset + 1]
+  local restart_col = textview.wrapped_lines[restart_offset + 1]
   if not restart_col then return false end
 
-  local begin_width = restart_col == 1 and nil or docview.wrapped_line_offsets[line]
+  local begin_width = restart_col == 1 and nil or textview.wrapped_line_offsets[line]
   local measurement = new_measurement_context(
-    docview.doc, docview.wrapped_settings.font, docview
+    textview.buffer, textview.wrapped_settings.font, textview
   )
   local splits, new_begin_width = LineWrapping.compute_line_breaks_from_col(
-    docview.doc,
-    docview.wrapped_settings.font,
+    textview.buffer,
+    textview.wrapped_settings.font,
     line,
-    docview.wrapped_settings.width,
+    textview.wrapped_settings.width,
     measurement.mode,
     restart_col,
     begin_width,
-    docview,
+    textview,
     measurement
   )
   if restart_col == 1 then
-    docview.wrapped_line_offsets[line] = new_begin_width
+    textview.wrapped_line_offsets[line] = new_begin_width
   end
 
   local new_pairs = {}
@@ -1317,26 +1317,26 @@ function LineWrapping.update_same_line_suffix_breaks(docview, range, transaction
   local old_suffix_rows = next_first_idx - restart_idx
   local new_suffix_rows = #new_pairs / 2
   local remove_count = old_suffix_rows * 2
-  common.splice(docview.wrapped_lines, restart_offset, remove_count, new_pairs)
+  common.splice(textview.wrapped_lines, restart_offset, remove_count, new_pairs)
   local row_delta = new_suffix_rows - old_suffix_rows
   if row_delta ~= 0 then
-    for logical_line = line + 1, #docview.wrapped_line_to_idx do
-      docview.wrapped_line_to_idx[logical_line] = docview.wrapped_line_to_idx[logical_line] + row_delta
+    for logical_line = line + 1, #textview.wrapped_line_to_idx do
+      textview.wrapped_line_to_idx[logical_line] = textview.wrapped_line_to_idx[logical_line] + row_delta
     end
   end
 
-  local new_total = LineWrapping.get_total_wrapped_lines(docview)
-  docview.wrapped_doc_line_count = #docview.doc.lines
-  docview.wrapped_text_revision = docview.doc.text_revision or 0
-  docview.__wrap_layout_generation = old_wrap_generation + 1
-  docview.__composed_visual_row_cache = nil
-  docview.__line_render_wrap_change = {
+  local new_total = LineWrapping.get_total_wrapped_lines(textview)
+  textview.wrapped_buffer_line_count = #textview.buffer.lines
+  textview.wrapped_text_revision = textview.buffer.text_revision or 0
+  textview.__wrap_layout_generation = old_wrap_generation + 1
+  textview.__composed_visual_row_cache = nil
+  textview.__line_render_wrap_change = {
     old_row_count = total,
     new_row_count = new_total,
     old_row1 = first_idx,
     old_row2 = next_first_idx - 1,
-    new_row1 = docview.wrapped_line_to_idx[line] or first_idx,
-    new_row2 = (docview.wrapped_line_to_idx[line + 1] or (new_total + 1)) - 1,
+    new_row1 = textview.wrapped_line_to_idx[line] or first_idx,
+    new_row2 = (textview.wrapped_line_to_idx[line + 1] or (new_total + 1)) - 1,
     old_wrap_generation = old_wrap_generation,
   }
 
@@ -1348,7 +1348,7 @@ function LineWrapping.update_same_line_suffix_breaks(docview, range, transaction
   return true
 end
 
-function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
+function LineWrapping.update_breaks(textview, old_line1, old_line2, net_lines)
   if perf_recording() then
     local caller = debug.getinfo(2, "Sl") or {}
     perf_detail(string.format(
@@ -1357,16 +1357,16 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
       tostring(math.max(0, (old_line2 or old_line1) - old_line1 + 1 + (net_lines or 0))),
       tostring(caller.short_src or caller.source or "unknown"),
       tostring(caller.currentline or 0),
-      tostring(docview.doc and docview.doc.text_revision or "none")
+      tostring(textview.buffer and textview.buffer.text_revision or "none")
     ), 1)
   end
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
   local perf_lines = 0
-  local old_row_count = LineWrapping.get_total_wrapped_lines(docview)
-  local old_wrap_generation = docview.__wrap_layout_generation or 0
-  local old_idx1 = docview.wrapped_line_to_idx[old_line1] or 1
-  local old_idx2 = (docview.wrapped_line_to_idx[old_line2 + 1] or ((#docview.wrapped_lines / 2) + 1)) - 1
+  local old_row_count = LineWrapping.get_total_wrapped_lines(textview)
+  local old_wrap_generation = textview.__wrap_layout_generation or 0
+  local old_idx1 = textview.wrapped_line_to_idx[old_line1] or 1
+  local old_idx2 = (textview.wrapped_line_to_idx[old_line2 + 1] or ((#textview.wrapped_lines / 2) + 1)) - 1
   local offset = (old_idx1 - 1) * 2 + 1
   local remove_count = math.max(0, old_idx2 - old_idx1 + 1) * 2
   local new_line1 = old_line1
@@ -1374,15 +1374,15 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   local new_pairs = {}
   local new_offsets = {}
   local measurement = new_measurement_context(
-    docview.doc, docview.wrapped_settings.font, docview
+    textview.buffer, textview.wrapped_settings.font, textview
   )
 
   for line = new_line1, new_line2 do
     perf_lines = perf_lines + 1
     local breaks, begin_width = LineWrapping.compute_line_breaks(
-      docview.doc, docview.wrapped_settings.font, line,
-      docview.wrapped_settings.width, measurement.mode,
-      docview, measurement
+      textview.buffer, textview.wrapped_settings.font, line,
+      textview.wrapped_settings.width, measurement.mode,
+      textview, measurement
     )
     new_offsets[#new_offsets + 1] = begin_width
     for _, b in ipairs(breaks) do
@@ -1396,13 +1396,13 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   -- unconditionally here made
   -- selection-only line-render invalidations (e.g. Markdown interactive
   -- table cell selection, hover changes) invalidate the whole visual metric
-  -- cache on the next lookup, forcing an expensive full-document metric
+  -- cache on the next lookup, forcing an expensive full-buffer metric
   -- rebuild on every mouse press/release.
   if net_lines == 0 then
     local identical = #new_pairs == remove_count
     if identical then
       for i = 1, remove_count do
-        if docview.wrapped_lines[offset + i - 1] ~= new_pairs[i] then
+        if textview.wrapped_lines[offset + i - 1] ~= new_pairs[i] then
           identical = false
           break
         end
@@ -1410,16 +1410,16 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
     end
     if identical then
       for line = old_line1, old_line2 do
-        if docview.wrapped_line_offsets[line] ~= new_offsets[line - old_line1 + 1] then
+        if textview.wrapped_line_offsets[line] ~= new_offsets[line - old_line1 + 1] then
           identical = false
           break
         end
       end
     end
     if identical then
-      docview.wrapped_doc_line_count = #docview.doc.lines
-      docview.wrapped_text_revision = docview.doc.text_revision or 0
-      docview.__line_render_wrap_change = nil
+      textview.wrapped_buffer_line_count = #textview.buffer.lines
+      textview.wrapped_text_revision = textview.buffer.text_revision or 0
+      textview.__line_render_wrap_change = nil
       perf_frame_add("linewrapping_update_breaks_calls", 1)
       perf_frame_add("linewrapping_update_breaks_unchanged_calls", 1)
       perf_frame_add("linewrapping_update_breaks_lines", perf_lines)
@@ -1428,111 +1428,111 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
     end
   end
 
-  common.splice(docview.wrapped_lines, offset, remove_count, new_pairs)
-  common.splice(docview.wrapped_line_offsets, old_line1, old_line2 - old_line1 + 1, new_offsets)
+  common.splice(textview.wrapped_lines, offset, remove_count, new_pairs)
+  common.splice(textview.wrapped_line_offsets, old_line1, old_line2 - old_line1 + 1, new_offsets)
 
   if net_lines ~= 0 then
-    for i = offset + #new_pairs, #docview.wrapped_lines, 2 do
-      docview.wrapped_lines[i] = docview.wrapped_lines[i] + net_lines
+    for i = offset + #new_pairs, #textview.wrapped_lines, 2 do
+      textview.wrapped_lines[i] = textview.wrapped_lines[i] + net_lines
     end
   end
 
-  rebuild_line_to_idx_from(docview, old_line1, (old_idx1 - 1) * 2 + 1)
-  docview.wrapped_doc_line_count = #docview.doc.lines
-  docview.wrapped_text_revision = docview.doc.text_revision or 0
-  docview.__wrap_layout_generation = (docview.__wrap_layout_generation or 0) + 1
-  docview.__composed_visual_row_cache = nil
-  local new_row_count = LineWrapping.get_total_wrapped_lines(docview)
-  docview.__line_render_wrap_change = {
+  rebuild_line_to_idx_from(textview, old_line1, (old_idx1 - 1) * 2 + 1)
+  textview.wrapped_buffer_line_count = #textview.buffer.lines
+  textview.wrapped_text_revision = textview.buffer.text_revision or 0
+  textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
+  textview.__composed_visual_row_cache = nil
+  local new_row_count = LineWrapping.get_total_wrapped_lines(textview)
+  textview.__line_render_wrap_change = {
     old_row_count = old_row_count,
     new_row_count = new_row_count,
     old_row1 = old_idx1,
     old_row2 = old_idx2,
-    new_row1 = docview.wrapped_line_to_idx[new_line1] or 1,
-    new_row2 = (docview.wrapped_line_to_idx[new_line2 + 1] or (new_row_count + 1)) - 1,
+    new_row1 = textview.wrapped_line_to_idx[new_line1] or 1,
+    new_row2 = (textview.wrapped_line_to_idx[new_line2 + 1] or (new_row_count + 1)) - 1,
     old_wrap_generation = old_wrap_generation,
   }
   perf_frame_add("linewrapping_update_breaks_calls", 1)
   perf_frame_add("linewrapping_update_breaks_lines", perf_lines)
   perf_elapsed("linewrapping_update_breaks_ms", perf_start)
-  return docview.__line_render_wrap_change
+  return textview.__line_render_wrap_change
 end
 
 function LineWrapping.guide_color()
   return config.plugins.linewrapping.guide_color or style.line_wrapping_guide
 end
 
-function LineWrapping.draw_guide(docview)
+function LineWrapping.draw_guide(textview)
   if config.plugins.linewrapping.guide
-  and file_context.is_editor_view(docview)
-  and docview.wrapped_settings.width ~= math.huge then
-    local x = docview:get_content_offset()
-    local gw = docview:get_gutter_width()
+  and file_context.is_editor_view(textview)
+  and textview.wrapped_settings.width ~= math.huge then
+    local x = textview:get_content_offset()
+    local gw = textview:get_gutter_width()
     local guide_width = math.max(1, math.floor(SCALE))
-    local guide_x = x + gw + docview.wrapped_settings.width
-    local scrollbar_width = docview.v_scrollbar.expanded_size or style.expanded_scrollbar_size
-    local content_left = docview.position.x + gw
-    local content_right = docview.position.x + docview.size.x - scrollbar_width
+    local guide_x = x + gw + textview.wrapped_settings.width
+    local scrollbar_width = textview.v_scrollbar.expanded_size or style.expanded_scrollbar_size
+    local content_left = textview.position.x + gw
+    local content_right = textview.position.x + textview.size.x - scrollbar_width
     if guide_x <= content_left or guide_x + guide_width >= content_right then return end
     renderer.draw_rect(
       guide_x,
-      docview.position.y,
+      textview.position.y,
       guide_width,
-      docview.size.y,
+      textview.size.y,
       LineWrapping.guide_color()
     )
   end
 end
 
-function LineWrapping.compute_wrap_width(docview)
-  local scrollbar_width = docview.v_scrollbar.expanded_size or style.expanded_scrollbar_size
-  return configured_width_override(docview)
-    or provided_wrap_width(docview)
-    or (docview.size.x - docview:get_gutter_width() - scrollbar_width)
+function LineWrapping.compute_wrap_width(textview)
+  local scrollbar_width = textview.v_scrollbar.expanded_size or style.expanded_scrollbar_size
+  return configured_width_override(textview)
+    or provided_wrap_width(textview)
+    or (textview.size.x - textview:get_gutter_width() - scrollbar_width)
 end
 
-function LineWrapping.update_docview_breaks(docview, width)
+function LineWrapping.update_textview_breaks(textview, width)
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
-  width = width or LineWrapping.compute_wrap_width(docview)
-  local settings = wrap_settings_signature(docview, docview:get_font(), width)
-  local stale_line_count = docview.wrapped_doc_line_count ~= #docview.doc.lines
-  local stale_text = docview.wrapped_text_revision ~= (docview.doc.text_revision or 0)
-  local settings_changed = not same_wrap_settings(docview.wrapped_settings, settings)
+  width = width or LineWrapping.compute_wrap_width(textview)
+  local settings = wrap_settings_signature(textview, textview:get_font(), width)
+  local stale_line_count = textview.wrapped_buffer_line_count ~= #textview.buffer.lines
+  local stale_text = textview.wrapped_text_revision ~= (textview.buffer.text_revision or 0)
+  local settings_changed = not same_wrap_settings(textview.wrapped_settings, settings)
   if stale_line_count or stale_text or settings_changed then
     if stale_line_count then
-      perf_frame_add("linewrapping_update_docview_breaks_line_count_changed", 1)
+      perf_frame_add("linewrapping_update_textview_breaks_line_count_changed", 1)
     elseif stale_text then
-      perf_frame_add("linewrapping_update_docview_breaks_text_changed", 1)
+      perf_frame_add("linewrapping_update_textview_breaks_text_changed", 1)
     else
-      perf_frame_add("linewrapping_update_docview_breaks_width_changed", 1)
+      perf_frame_add("linewrapping_update_textview_breaks_width_changed", 1)
     end
-    docview.scroll.to.x = 0
-    LineWrapping.reconstruct_breaks(docview, settings.font, width)
+    textview.scroll.to.x = 0
+    LineWrapping.reconstruct_breaks(textview, settings.font, width)
   end
-  perf_frame_add("linewrapping_update_docview_breaks_calls", 1)
-  perf_elapsed("linewrapping_update_docview_breaks_ms", perf_start)
+  perf_frame_add("linewrapping_update_textview_breaks_calls", 1)
+  perf_elapsed("linewrapping_update_textview_breaks_ms", perf_start)
 end
 
-function LineWrapping.get_idx_line_col(docview, idx)
-  local doc = docview.doc
-  if not docview.wrapped_settings then
-    if idx > #doc.lines then return #doc.lines, #doc.lines[#doc.lines] + 1 end
+function LineWrapping.get_idx_line_col(textview, idx)
+  local buffer = textview.buffer
+  if not textview.wrapped_settings then
+    if idx > #buffer.lines then return #buffer.lines, #buffer.lines[#buffer.lines] + 1 end
     return idx, 1
   end
   if idx < 1 then return 1, 1 end
   local offset = (idx - 1) * 2 + 1
-  if offset > #docview.wrapped_lines then return #doc.lines, #doc.lines[#doc.lines] + 1 end
-  return docview.wrapped_lines[offset], docview.wrapped_lines[offset + 1]
+  if offset > #textview.wrapped_lines then return #buffer.lines, #buffer.lines[#buffer.lines] + 1 end
+  return textview.wrapped_lines[offset], textview.wrapped_lines[offset + 1]
 end
 
-function LineWrapping.get_total_wrapped_lines(docview)
-  if not docview.wrapped_settings then return docview.doc and #docview.doc.lines end
-  return #docview.wrapped_lines / 2
+function LineWrapping.get_total_wrapped_lines(textview)
+  if not textview.wrapped_settings then return textview.buffer and #textview.buffer.lines end
+  return #textview.wrapped_lines / 2
 end
 
-local function selection_state_key(doc)
-  return table.concat(doc.selections, "\31") .. "\30" .. tostring(doc.last_selection)
+local function selection_state_key(buffer)
+  return table.concat(buffer.selections, "\31") .. "\30" .. tostring(buffer.last_selection)
 end
 LineWrapping.selection_state_key = selection_state_key
 
@@ -1540,75 +1540,75 @@ function LineWrapping.position_key(line, col)
   return tostring(line) .. ":" .. tostring(col)
 end
 
-function LineWrapping.clear_wrapped_line_end_affinity(docview)
-  docview.wrapped_line_end_affinity = nil
+function LineWrapping.clear_wrapped_line_end_affinity(textview)
+  textview.wrapped_line_end_affinity = nil
 end
 
-function LineWrapping.set_wrapped_line_end_affinity(docview, positions)
+function LineWrapping.set_wrapped_line_end_affinity(textview, positions)
   if positions and next(positions) then
-    docview.wrapped_line_end_affinity = {
-      selection_key = selection_state_key(docview.doc),
+    textview.wrapped_line_end_affinity = {
+      selection_key = selection_state_key(textview.buffer),
       positions = positions,
     }
   else
-    LineWrapping.clear_wrapped_line_end_affinity(docview)
+    LineWrapping.clear_wrapped_line_end_affinity(textview)
   end
 end
 
-function LineWrapping.has_wrapped_line_end_affinity(docview, line, col)
-  local state = docview and docview.wrapped_line_end_affinity
-  if not state or not line or not col or not docview.doc then return false end
-  if state.selection_key ~= selection_state_key(docview.doc) then
-    LineWrapping.clear_wrapped_line_end_affinity(docview)
+function LineWrapping.has_wrapped_line_end_affinity(textview, line, col)
+  local state = textview and textview.wrapped_line_end_affinity
+  if not state or not line or not col or not textview.buffer then return false end
+  if state.selection_key ~= selection_state_key(textview.buffer) then
+    LineWrapping.clear_wrapped_line_end_affinity(textview)
     return false
   end
   return state.positions[LineWrapping.position_key(line, col)] == true
 end
 
-function LineWrapping.apply_resolved_line_end_affinity(docview)
-  if not (docview and docview.wrapped_settings) then return end
-  local resolved = docview.wrapped_last_resolved_line_end
-  docview.wrapped_last_resolved_line_end = nil
+function LineWrapping.apply_resolved_line_end_affinity(textview)
+  if not (textview and textview.wrapped_settings) then return end
+  local resolved = textview.wrapped_last_resolved_line_end
+  textview.wrapped_last_resolved_line_end = nil
   if not resolved then
-    LineWrapping.clear_wrapped_line_end_affinity(docview)
+    LineWrapping.clear_wrapped_line_end_affinity(textview)
     return
   end
   local positions = {}
-  for _, line1, col1 in docview.doc:get_selections(false) do
+  for _, line1, col1 in textview.buffer:get_selections(false) do
     if line1 == resolved[1] and col1 == resolved[2] then
       positions[LineWrapping.position_key(line1, col1)] = true
     end
   end
-  LineWrapping.set_wrapped_line_end_affinity(docview, positions)
+  LineWrapping.set_wrapped_line_end_affinity(textview, positions)
 end
 
-function LineWrapping.get_idx_visual_end_col(docview, idx, line)
-  local nline, ncol = LineWrapping.get_idx_line_col(docview, idx + 1)
+function LineWrapping.get_idx_visual_end_col(textview, idx, line)
+  local nline, ncol = LineWrapping.get_idx_line_col(textview, idx + 1)
   if nline == line then return ncol, true end
-  return #docview.doc.lines[line], false
+  return #textview.buffer.lines[line], false
 end
 
-function LineWrapping.get_line_idx_col_count(docview, line, col, line_end)
+function LineWrapping.get_line_idx_col_count(textview, line, col, line_end)
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
-  local doc = docview.doc
-  if not docview.wrapped_settings then
+  local buffer = textview.buffer
+  if not textview.wrapped_settings then
     perf_frame_add("linewrapping_get_line_idx_col_count_calls", 1)
     perf_elapsed("linewrapping_get_line_idx_col_count_ms", perf_start)
-    return common.clamp(line, 1, #doc.lines), col, 1, 1
+    return common.clamp(line, 1, #buffer.lines), col, 1, 1
   end
-  if line > #doc.lines then return LineWrapping.get_line_idx_col_count(docview, #doc.lines, #doc.lines[#doc.lines] + 1) end
+  if line > #buffer.lines then return LineWrapping.get_line_idx_col_count(textview, #buffer.lines, #buffer.lines[#buffer.lines] + 1) end
   line = math.max(line, 1)
-  local first_idx = docview.wrapped_line_to_idx[line] or 1
-  local total = LineWrapping.get_total_wrapped_lines(docview)
-  local next_first_idx = docview.wrapped_line_to_idx[line + 1] or (total + 1)
+  local first_idx = textview.wrapped_line_to_idx[line] or 1
+  local total = LineWrapping.get_total_wrapped_lines(textview)
+  local next_first_idx = textview.wrapped_line_to_idx[line + 1] or (total + 1)
   local last_idx = math.max(first_idx, next_first_idx - 1)
   local idx, ncol, scol = first_idx, 1, 1
   if col then
     local lo, hi = first_idx, last_idx
     while lo <= hi do
       local mid = math.floor((lo + hi) / 2)
-      local start_col = docview.wrapped_lines[(mid - 1) * 2 + 2]
+      local start_col = textview.wrapped_lines[(mid - 1) * 2 + 2]
       if start_col < col or (start_col == col and not line_end) then
         idx = mid
         scol = start_col
@@ -1625,38 +1625,38 @@ function LineWrapping.get_line_idx_col_count(docview, line, col, line_end)
   return idx, ncol, count, scol
 end
 
-function LineWrapping.get_line_col_from_index_and_x(docview, idx, x)
+function LineWrapping.get_line_col_from_index_and_x(textview, idx, x)
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
-  local doc = docview.doc
-  local line, col = LineWrapping.get_idx_line_col(docview, idx)
+  local buffer = textview.buffer
+  local line, col = LineWrapping.get_idx_line_col(textview, idx)
   if idx < 1 then
     perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
     perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
     return 1, 1, false
   end
-  local row_end_col, soft_end = LineWrapping.get_idx_visual_end_col(docview, idx, line)
-  local render_line = docview.get_line_render and docview:get_line_render(line)
+  local row_end_col, soft_end = LineWrapping.get_idx_visual_end_col(textview, idx, line)
+  local render_line = textview.get_line_render and textview:get_line_render(line)
   local xoffset = (render_line and render_line.x_offset or 0)
-    + (col ~= 1 and docview.wrapped_line_offsets[line] or 0)
+    + (col ~= 1 and textview.wrapped_line_offsets[line] or 0)
   if x < xoffset then
     perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
     perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
     return line, col, false
   end
   if render_line then
-    local row_render_x = docview:get_line_render_col_x_offset(render_line, col)
+    local row_render_x = textview:get_line_render_col_x_offset(render_line, col)
     local target_x = row_render_x + math.max(0, x - xoffset)
-    local target_col = docview:get_line_render_x_offset_col(render_line, target_x)
+    local target_col = textview:get_line_render_x_offset_col(render_line, target_x)
     target_col = common.clamp(target_col, col, row_end_col)
     perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
     perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
     return line, target_col, soft_end and target_col == row_end_col
   end
-  local default_font = docview:get_font()
+  local default_font = textview:get_font()
   local last_i, last_w = col, 0
   local token_start_col = 1
-  for _, type, text in doc.highlighter:each_token(line) do
+  for _, type, text in buffer.highlighter:each_token(line) do
     local token_end_col = token_start_col + #text
     if token_end_col > col and token_start_col < row_end_col then
       local scan_start_col = math.max(token_start_col, col)
@@ -1705,40 +1705,40 @@ function LineWrapping.get_line_col_from_index_and_x(docview, idx, x)
   return line, row_end_col, soft_end
 end
 
-function LineWrapping.get_idx_line_length(docview, idx)
-  local doc = docview.doc
-  if not docview.wrapped_settings then
-    if idx > #doc.lines then return #doc.lines[#doc.lines] + 1 end
-    return #doc.lines[idx]
+function LineWrapping.get_idx_line_length(textview, idx)
+  local buffer = textview.buffer
+  if not textview.wrapped_settings then
+    if idx > #buffer.lines then return #buffer.lines[#buffer.lines] + 1 end
+    return #buffer.lines[idx]
   end
   local offset = (idx - 1) * 2 + 1
-  if docview.wrapped_lines[offset + 2] and docview.wrapped_lines[offset + 2] == docview.wrapped_lines[offset] then
-    return docview.wrapped_lines[offset + 3] - docview.wrapped_lines[offset + 1]
+  if textview.wrapped_lines[offset + 2] and textview.wrapped_lines[offset + 2] == textview.wrapped_lines[offset] then
+    return textview.wrapped_lines[offset + 3] - textview.wrapped_lines[offset + 1]
   end
-  return #doc.lines[docview.wrapped_lines[offset]] - docview.wrapped_lines[offset + 1] + 1
+  return #buffer.lines[textview.wrapped_lines[offset]] - textview.wrapped_lines[offset + 1] + 1
 end
 
-function LineWrapping.get_wrapped_line_count(docview, line)
-  if not docview.wrapped_settings then return 1 end
-  local total = #docview.wrapped_lines / 2
-  local first = docview.wrapped_line_to_idx[line] or total
-  local next_first = docview.wrapped_line_to_idx[line + 1] or (total + 1)
+function LineWrapping.get_wrapped_line_count(textview, line)
+  if not textview.wrapped_settings then return 1 end
+  local total = #textview.wrapped_lines / 2
+  local first = textview.wrapped_line_to_idx[line] or total
+  local next_first = textview.wrapped_line_to_idx[line + 1] or (total + 1)
   return math.max(1, next_first - first)
 end
 
-function LineWrapping.is_soft_wrap_row_start(docview, line, col)
-  if not docview.wrapped_settings or not line or not col then return false end
-  local first_idx = docview.wrapped_line_to_idx[line]
+function LineWrapping.is_soft_wrap_row_start(textview, line, col)
+  if not textview.wrapped_settings or not line or not col then return false end
+  local first_idx = textview.wrapped_line_to_idx[line]
   if not first_idx then return false end
-  local idx, _, _, row_start_col = LineWrapping.get_line_idx_col_count(docview, line, col, false)
+  local idx, _, _, row_start_col = LineWrapping.get_line_idx_col_count(textview, line, col, false)
   return idx > first_idx and row_start_col == col
 end
 
-function LineWrapping.collect_soft_wrap_row_start_affinity(docview)
+function LineWrapping.collect_soft_wrap_row_start_affinity(textview)
   local positions = {}
-  if not docview.wrapped_settings then return positions end
-  for _, line1, col1, line2, col2 in docview.doc:get_selections(false) do
-    if line1 == line2 and col1 == col2 and LineWrapping.is_soft_wrap_row_start(docview, line1, col1) then
+  if not textview.wrapped_settings then return positions end
+  for _, line1, col1, line2, col2 in textview.buffer:get_selections(false) do
+    if line1 == line2 and col1 == col2 and LineWrapping.is_soft_wrap_row_start(textview, line1, col1) then
       positions[LineWrapping.position_key(line1, col1)] = true
     end
   end
@@ -1777,11 +1777,11 @@ function LineWrapping.old_selection_advanced_to(old_selections, line, col)
   return false
 end
 
-function LineWrapping.collect_forward_endpoint_affinity(docview, old_selections)
+function LineWrapping.collect_forward_endpoint_affinity(textview, old_selections)
   local positions = {}
-  if not docview.wrapped_settings then return positions end
-  for _, line1, col1 in docview.doc:get_selections(false) do
-    if LineWrapping.is_soft_wrap_row_start(docview, line1, col1)
+  if not textview.wrapped_settings then return positions end
+  for _, line1, col1 in textview.buffer:get_selections(false) do
+    if LineWrapping.is_soft_wrap_row_start(textview, line1, col1)
     and LineWrapping.old_selection_advanced_to(old_selections, line1, col1) then
       positions[LineWrapping.position_key(line1, col1)] = true
     end
@@ -1789,20 +1789,20 @@ function LineWrapping.collect_forward_endpoint_affinity(docview, old_selections)
   return positions
 end
 
-function LineWrapping.wrapped_visual_line_position(docview, line, col, idx_delta)
+function LineWrapping.wrapped_visual_line_position(textview, line, col, idx_delta)
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
-  local line_end = LineWrapping.has_wrapped_line_end_affinity(docview, line, col)
-  local idx = LineWrapping.get_line_idx_col_count(docview, line, col, line_end)
-  local last_x_offset = docview.last_x_offset or {}
-  docview.last_x_offset = last_x_offset
+  local line_end = LineWrapping.has_wrapped_line_end_affinity(textview, line, col)
+  local idx = LineWrapping.get_line_idx_col_count(textview, line, col, line_end)
+  local last_x_offset = textview.last_x_offset or {}
+  textview.last_x_offset = last_x_offset
   local x
   if last_x_offset.line == line and last_x_offset.col == col and last_x_offset.line_end == line_end then
     x = last_x_offset.offset
   else
-    x = docview:get_col_x_offset(line, col, line_end)
+    x = textview:get_col_x_offset(line, col, line_end)
   end
-  local target_line, target_col, target_line_end = LineWrapping.get_line_col_from_index_and_x(docview, idx + idx_delta, x)
+  local target_line, target_col, target_line_end = LineWrapping.get_line_col_from_index_and_x(textview, idx + idx_delta, x)
   last_x_offset.offset = x
   last_x_offset.line = target_line
   last_x_offset.col = target_col
@@ -1812,36 +1812,36 @@ function LineWrapping.wrapped_visual_line_position(docview, line, col, idx_delta
   return target_line, target_col, target_line_end
 end
 
-function LineWrapping.wrapped_end_of_line_position(docview, doc, line, col, logical_end_of_line)
-  local line_end = LineWrapping.has_wrapped_line_end_affinity(docview, line, col)
-  local idx = LineWrapping.get_line_idx_col_count(docview, line, col, line_end)
-  local nline, ncol = LineWrapping.get_idx_line_col(docview, idx + 1)
+function LineWrapping.wrapped_end_of_line_position(textview, buffer, line, col, logical_end_of_line)
+  local line_end = LineWrapping.has_wrapped_line_end_affinity(textview, line, col)
+  local idx = LineWrapping.get_line_idx_col_count(textview, line, col, line_end)
+  local nline, ncol = LineWrapping.get_idx_line_col(textview, idx + 1)
   if nline ~= line then
-    local end_line, end_col = logical_end_of_line(doc, line, col)
-    end_line, end_col = doc:sanitize_position(end_line, end_col)
+    local end_line, end_col = logical_end_of_line(buffer, line, col)
+    end_line, end_col = buffer:sanitize_position(end_line, end_col)
     return end_line, end_col, false
   end
   if line_end and col == ncol then
-    local end_line, end_col = logical_end_of_line(doc, line, col)
-    end_line, end_col = doc:sanitize_position(end_line, end_col)
+    local end_line, end_col = logical_end_of_line(buffer, line, col)
+    end_line, end_col = buffer:sanitize_position(end_line, end_col)
     return end_line, end_col, false
   end
   return line, ncol, true
 end
 
-function LineWrapping.wrapped_start_of_line_position(docview, doc, line, col, logical_start_of_line)
-  local line_end = LineWrapping.has_wrapped_line_end_affinity(docview, line, col)
-  local _, _, _, scol = LineWrapping.get_line_idx_col_count(docview, line, col, line_end)
-  if col == scol then return logical_start_of_line(doc, line, col) end
+function LineWrapping.wrapped_start_of_line_position(textview, buffer, line, col, logical_start_of_line)
+  local line_end = LineWrapping.has_wrapped_line_end_affinity(textview, line, col)
+  local _, _, _, scol = LineWrapping.get_line_idx_col_count(textview, line, col, line_end)
+  if col == scol then return logical_start_of_line(buffer, line, col) end
   return line, scol
 end
 
-function LineWrapping.wrapped_start_of_indentation_position(docview, doc, line, col, logical_start_of_indentation)
-  local line_end = LineWrapping.has_wrapped_line_end_affinity(docview, line, col)
-  local _, _, _, scol = LineWrapping.get_line_idx_col_count(docview, line, col, line_end)
-  if col == scol then return logical_start_of_indentation(doc, line, col) end
+function LineWrapping.wrapped_start_of_indentation_position(textview, buffer, line, col, logical_start_of_indentation)
+  local line_end = LineWrapping.has_wrapped_line_end_affinity(textview, line, col)
+  local _, _, _, scol = LineWrapping.get_line_idx_col_count(textview, line, col, line_end)
+  if col == scol then return logical_start_of_indentation(buffer, line, col) end
   if scol ~= 1 then return line, scol end
-  return logical_start_of_indentation(doc, line, col)
+  return logical_start_of_indentation(buffer, line, col)
 end
 
 return LineWrapping

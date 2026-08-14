@@ -79,7 +79,7 @@ test.describe("File Tree entry snapshots", function()
     test.not_nil(original)
 
     filetree:with_selection_state(function()
-      filetree.doc:insert(original.line, 1, "renamed-")
+      filetree.buffer:insert(original.line, 1, "renamed-")
     end)
 
     local renamed = filetree:entry_for_line(original.line)
@@ -102,7 +102,7 @@ test.describe("File Tree entry snapshots", function()
     local root = setup_tree(context)
     local entry = find_entry("root.txt")
     test.not_nil(entry)
-    filetree.doc:set_selection(entry.line, 1)
+    filetree.buffer:set_selection(entry.line, 1)
     core.set_active_view(filetree)
     local opened
     local original_open_path = panes.open_path

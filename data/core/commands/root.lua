@@ -23,15 +23,15 @@ local t = {
   end,
 
   ["root:close-all"] = function()
-    core.confirm_close_docs(core.docs, core.root_panel.close_all_views, core.root_panel)
+    core.confirm_close_buffers(core.buffers, core.root_panel.close_all_views, core.root_panel)
   end,
 
   ["root:close-all-others"] = function()
-    local active_doc, docs = core.active_view and core.active_view.doc, {}
-    for _, doc in ipairs(core.docs) do
-      if doc ~= active_doc then table.insert(docs, doc) end
+    local active_buffer, buffers = core.active_view and core.active_view.buffer, {}
+    for _, buffer in ipairs(core.buffers) do
+      if buffer ~= active_buffer then table.insert(buffers, buffer) end
     end
-    core.confirm_close_docs(docs, core.root_panel.close_all_views, core.root_panel, core.active_view)
+    core.confirm_close_buffers(buffers, core.root_panel.close_all_views, core.root_panel, core.active_view)
   end,
 
   ["root:move-tab-left"] = function(node)

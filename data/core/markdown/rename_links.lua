@@ -1,6 +1,6 @@
 local core = require "core"
 local common = require "core.common"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 
 local rename_links = {}
 
@@ -47,9 +47,9 @@ function rename_links.apply(plan)
   local prepared = {}
   for _, file_plan in ipairs(plan.files) do
     local text, err
-    if file_plan.doc then
+    if file_plan.buffer then
       local ok
-      ok, text = pcall(file_plan.doc.get_text, file_plan.doc, 1, 1, math.huge, math.huge)
+      ok, text = pcall(file_plan.buffer.get_text, file_plan.buffer, 1, 1, math.huge, math.huge)
       if not ok then err, text = text, nil end
     else
       text, err = read_file(file_plan.path)
@@ -73,15 +73,15 @@ function rename_links.apply(plan)
       local record = applied_records[i]
       local file_plan = record.file_plan
       local ok
-      if file_plan.doc then
+      if file_plan.buffer then
         ok = pcall(function()
-          file_plan.doc:apply_edits({ {
+          file_plan.buffer:apply_edits({ {
             line1 = 1, col1 = 1, line2 = math.huge, col2 = math.huge,
             text = record.original,
           } }, { type = "markdown-link-rename-rollback" })
         end)
       else
-        ok = pcall(Doc.write_text_safely, file_plan.path, record.original)
+        ok = pcall(Buffer.write_text_safely, file_plan.path, record.original)
       end
       if ok then result.rolled_back[#result.rolled_back + 1] = file_plan.path end
     end
@@ -90,16 +90,16 @@ function rename_links.apply(plan)
   for _, record in ipairs(prepared) do
     local file_plan = record.file_plan
     local ok, err
-    if file_plan.doc then
+    if file_plan.buffer then
       ok, err = pcall(function()
-        file_plan.doc:apply_edits(file_plan.edits, {
+        file_plan.buffer:apply_edits(file_plan.edits, {
           type = "markdown-link-rename",
           old_path = plan.old_path,
           new_path = plan.new_path,
         })
       end)
     else
-      ok, err = pcall(Doc.write_text_safely, file_plan.path, record.updated)
+      ok, err = pcall(Buffer.write_text_safely, file_plan.path, record.updated)
     end
     if ok then
       result.applied[#result.applied + 1] = file_plan.path
@@ -116,7 +116,7 @@ function rename_links.apply(plan)
   if plan.index then
     for _, record in ipairs(prepared) do
       local file_plan = record.file_plan
-      if file_plan.doc then plan.index:update_doc(file_plan.doc)
+      if file_plan.buffer then plan.index:update_buffer(file_plan.buffer)
       else plan.index:update_path(file_plan.path, { cooperative = true }) end
     end
   end

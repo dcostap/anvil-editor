@@ -24,19 +24,19 @@ test.describe("core.language_intelligence async/cache statuses", function()
     register({
       id = "test-lsp-empty",
       priority = 1000,
-      document_outline = function()
+      buffer_outline = function()
         return {}, nil, "fresh"
       end,
     })
     register({
       id = "test-fallback-outline",
       priority = 1,
-      document_outline = function()
+      buffer_outline = function()
         return { { name = "fallback" } }
       end,
     })
 
-    local symbols, reason, provider_id, status = intelligence.document_outline({})
+    local symbols, reason, provider_id, status = intelligence.buffer_outline({})
     test.same(symbols, {})
     test.is_nil(reason)
     test.equal(provider_id, "test-lsp-empty")
@@ -47,19 +47,19 @@ test.describe("core.language_intelligence async/cache statuses", function()
     register({
       id = "test-legacy-empty",
       priority = 1000,
-      document_outline = function()
+      buffer_outline = function()
         return {}
       end,
     })
     register({
       id = "test-legacy-fallback",
       priority = 1,
-      document_outline = function()
+      buffer_outline = function()
         return { { name = "fallback" } }
       end,
     })
 
-    local symbols, _reason, provider_id, status = intelligence.document_outline({})
+    local symbols, _reason, provider_id, status = intelligence.buffer_outline({})
     test.equal(#symbols, 1)
     test.equal(symbols[1].name, "fallback")
     test.equal(provider_id, "test-legacy-fallback")
@@ -70,33 +70,33 @@ test.describe("core.language_intelligence async/cache statuses", function()
     register({
       id = "test-pending",
       priority = 1000,
-      document_outline = function()
+      buffer_outline = function()
         return nil, "refresh scheduled", "pending"
       end,
     })
     register({
       id = "test-error",
       priority = 900,
-      document_outline = function()
+      buffer_outline = function()
         return nil, "server failed", "error"
       end,
     })
     register({
       id = "test-unavailable",
       priority = 800,
-      document_outline = function()
+      buffer_outline = function()
         return nil, "unsupported", "unavailable"
       end,
     })
     register({
       id = "test-local-fallback",
       priority = 1,
-      document_outline = function()
+      buffer_outline = function()
         return { { name = "local" } }
       end,
     })
 
-    local symbols, _reason, provider_id, status = intelligence.document_outline({})
+    local symbols, _reason, provider_id, status = intelligence.buffer_outline({})
     test.equal(#symbols, 1)
     test.equal(symbols[1].name, "local")
     test.equal(provider_id, "test-local-fallback")
@@ -107,19 +107,19 @@ test.describe("core.language_intelligence async/cache statuses", function()
     register({
       id = "test-stale",
       priority = 1000,
-      document_outline = function()
+      buffer_outline = function()
         return { { name = "cached" } }, "refresh scheduled", "stale"
       end,
     })
     register({
       id = "test-stale-fallback",
       priority = 1,
-      document_outline = function()
+      buffer_outline = function()
         return { { name = "fallback" } }
       end,
     })
 
-    local symbols, reason, provider_id, status = intelligence.document_outline({})
+    local symbols, reason, provider_id, status = intelligence.buffer_outline({})
     test.equal(#symbols, 1)
     test.equal(symbols[1].name, "cached")
     test.equal(reason, "refresh scheduled")
@@ -132,19 +132,19 @@ test.describe("core.language_intelligence async/cache statuses", function()
       id = "lsp",
       priority = 1000,
       kind = "semantic-project",
-      document_outline = function()
+      buffer_outline = function()
         return nil, "initializing", "pending"
       end,
     })
     register({
       id = "test-local-only-filter",
       priority = 1,
-      document_outline = function()
+      buffer_outline = function()
         return { { name = "local" } }
       end,
     })
 
-    local symbols, reason, provider_id, status = intelligence.document_outline({}, { lsp_only = true })
+    local symbols, reason, provider_id, status = intelligence.buffer_outline({}, { lsp_only = true })
     test.same(symbols, {})
     test.equal(reason, "initializing")
     test.is_nil(provider_id)
@@ -199,23 +199,23 @@ test.describe("core.language_intelligence async/cache statuses", function()
       id = "test-unavailable-provider",
       priority = 1000,
       is_available = function() return false end,
-      document_outline = function()
+      buffer_outline = function()
         return { { name = "no" } }
       end,
     })
     register({
       id = "test-available-provider",
       priority = 100,
-      document_outline = function()
+      buffer_outline = function()
         return { { name = "yes" } }
       end,
     })
 
-    local providers = intelligence.providers_for("document_outline", {})
+    local providers = intelligence.providers_for("buffer_outline", {})
     for _, provider in ipairs(providers) do
       test.not_equal(provider.id, "test-unavailable-provider")
     end
-    local symbols = intelligence.document_outline({})
+    local symbols = intelligence.buffer_outline({})
     test.equal(symbols[1].name, "yes")
   end)
 end)

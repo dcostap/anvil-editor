@@ -1,5 +1,7 @@
 # Markdown Live Preview Rebuild Plan
 
+`PANE_VIEW_BUFFER_REDESIGN_PLAN.md` controls Pane placement, View lifecycle, and Buffer or Text View names. Interpret this plan through that model.
+
 ## Status
 
 This document replaces the original greenfield plan with a plan based on:

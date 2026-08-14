@@ -1,6 +1,6 @@
 local config = require "core.config"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
@@ -40,37 +40,37 @@ local function wait_ready(instance, timeout)
 end
 
 test.describe("Markdown live layout benchmark", function()
-  test.it("reports cold whole-Document metrics and long rendered-line wrapping", function()
+  test.it("reports cold whole-Buffer metrics and long rendered-line wrapping", function()
     local old_enabled = config.markdown_live_editor
     config.markdown_live_editor = true
 
-    local metric_doc = Doc("cold-metric-benchmark.md", "cold-metric-benchmark.md", true)
-    metric_doc:insert(1, 1, representative_source(100 * 1024))
-    metric_doc:clear_undo_redo()
-    local metric_view = DocView(metric_doc)
+    local metric_buffer = Buffer("cold-metric-benchmark.md", "cold-metric-benchmark.md", true)
+    metric_buffer:insert(1, 1, representative_source(100 * 1024))
+    metric_buffer:clear_undo_redo()
+    local metric_view = Editor(metric_buffer)
     metric_view.size.x, metric_view.size.y = 1200, 800
     metric_view:set_wrapping_enabled(false)
     markdown.live_render.refresh_view(metric_view)
-    local metric_model = test.not_nil(markdown_model.peek(metric_doc))
+    local metric_model = test.not_nil(markdown_model.peek(metric_buffer))
     test.ok(wait_ready(metric_model), metric_model.reason)
     local metric_started = system.get_time()
     local metric_cache = test.not_nil(metric_view:get_visual_row_metric_cache())
     local metric_ms = (system.get_time() - metric_started) * 1000
     local render_started = system.get_time()
-    for line = 1, math.min(60, #metric_doc.lines) do metric_view:get_line_render(line) end
+    for line = 1, math.min(60, #metric_buffer.lines) do metric_view:get_line_render(line) end
     local post_metric_render_ms = (system.get_time() - render_started) * 1000
 
-    local publication_doc = Doc(
+    local publication_buffer = Buffer(
       "publication-wrap-benchmark.md", "publication-wrap-benchmark.md", true
     )
-    publication_doc:insert(1, 1, representative_source(25 * 1024))
-    publication_doc:clear_undo_redo()
-    local publication_view = DocView(publication_doc)
+    publication_buffer:insert(1, 1, representative_source(25 * 1024))
+    publication_buffer:clear_undo_redo()
+    local publication_view = Editor(publication_buffer)
     publication_view.size.x, publication_view.size.y = 717, 800
     publication_view:set_wrapping_enabled(true)
     local publication_started = system.get_time()
     markdown.live_render.refresh_view(publication_view)
-    local publication_model = test.not_nil(markdown_model.peek(publication_doc))
+    local publication_model = test.not_nil(markdown_model.peek(publication_buffer))
     local publication_ready, publication_callback_drain_ms = wait_ready(publication_model)
     test.ok(publication_ready, publication_model.reason)
     linewrapping.complete_async_reconstruction(publication_view)
@@ -80,10 +80,10 @@ test.describe("Markdown live layout benchmark", function()
     for _, bytes in ipairs({ 1000, 2000, 4000 }) do
       local unit = "representative words for rendered wrapping "
       local text = unit:rep(math.ceil(bytes / #unit)):sub(1, bytes)
-      local doc = Doc("long-wrap-benchmark.md", "long-wrap-benchmark.md", true)
-      doc:insert(1, 1, text)
-      doc:clear_undo_redo()
-      local view = DocView(doc)
+      local buffer = Buffer("long-wrap-benchmark.md", "long-wrap-benchmark.md", true)
+      buffer:insert(1, 1, text)
+      buffer:clear_undo_redo()
+      local view = Editor(buffer)
       view.size.x, view.size.y = 500, 800
       view:set_wrapping_enabled(false)
       view:add_line_render_provider("long-wrap-benchmark", {
@@ -103,7 +103,7 @@ test.describe("Markdown live layout benchmark", function()
       })
       local started = system.get_time()
       local splits = linewrapping.compute_line_breaks_from_col(
-        doc, view:get_font(), 1, 500, "word", 1, 0, view
+        buffer, view:get_font(), 1, 500, "word", 1, 0, view
       )
       wrap_results[#wrap_results + 1] = {
         bytes = bytes,
@@ -114,14 +114,14 @@ test.describe("Markdown live layout benchmark", function()
     end
 
     local multi_text = ("A/0123456789"):rep(5000)
-    local multi_doc = Doc(
+    local multi_buffer = Buffer(
       "long-multi-fragment-wrap-benchmark.md",
       "long-multi-fragment-wrap-benchmark.md",
       true
     )
-    multi_doc:insert(1, 1, multi_text)
-    multi_doc:clear_undo_redo()
-    local multi_view = DocView(multi_doc)
+    multi_buffer:insert(1, 1, multi_text)
+    multi_buffer:clear_undo_redo()
+    local multi_view = Editor(multi_buffer)
     multi_view.size.x, multi_view.size.y = 500, 800
     multi_view:set_wrapping_enabled(false)
     local cut1, cut2 = 12, 32
@@ -148,21 +148,21 @@ test.describe("Markdown live layout benchmark", function()
     })
     local multi_started = system.get_time()
     local multi_splits = linewrapping.compute_line_breaks_from_col(
-      multi_doc, multi_view:get_font(), 1, 500, "word", 1, 0, multi_view
+      multi_buffer, multi_view:get_font(), 1, 500, "word", 1, 0, multi_view
     )
     local multi_wrap_ms = (system.get_time() - multi_started) * 1000
     multi_view:remove_line_render_provider("long-multi-fragment-wrap-benchmark")
 
     print(string.format(
       "Markdown cold metric benchmark: bytes=%d lines=%d metric_ms=%.3f post_metric_render_60_ms=%.3f total_height=%.1f provider_queries=%d sparse_skips=%d",
-      #table.concat(metric_doc.lines), #metric_doc.lines, metric_ms,
+      #table.concat(metric_buffer.lines), #metric_buffer.lines, metric_ms,
       post_metric_render_ms, metric_cache.total_height,
       metric_view:get_render_cache_diagnostics().metric_provider_queries,
       metric_view:get_render_cache_diagnostics().metric_sparse_skips
     ))
     print(string.format(
       "Markdown cold semantic publication benchmark: bytes=%d lines=%d callback_drain_ms=%.3f ready_and_committed_ms=%.3f",
-      #table.concat(publication_doc.lines), #publication_doc.lines,
+      #table.concat(publication_buffer.lines), #publication_buffer.lines,
       publication_callback_drain_ms, publication_wrap_ms
     ))
     for _, result in ipairs(wrap_results) do
@@ -178,11 +178,11 @@ test.describe("Markdown live layout benchmark", function()
     ))
     test.ok(#multi_splits > 1)
     io.stdout:flush()
-    test.equal(metric_cache.row_count, #metric_doc.lines)
+    test.equal(metric_cache.row_count, #metric_buffer.lines)
     markdown.live_render.release(metric_view, "benchmark")
-    markdown_model.close(metric_doc, "benchmark")
+    markdown_model.close(metric_buffer, "benchmark")
     markdown.live_render.release(publication_view, "benchmark")
-    markdown_model.close(publication_doc, "benchmark")
+    markdown_model.close(publication_buffer, "benchmark")
     config.markdown_live_editor = old_enabled
   end)
 end)

@@ -1,10 +1,10 @@
 ---Provides the base in-place search functionality for documents.
----@class core.doc.search
+---@class core.buffer.search
 local search = {}
 
 ---Options used when performing a search.
----@class core.doc.searchoptions
----If the end of document is reached start again from the start.
+---@class core.buffer.searchoptions
+---If the end of buffer is reached start again from the start.
 ---@field wrap? boolean
 ---Perform case insensitive matches (ignored with lua patterns).
 ---@field no_case? boolean
@@ -17,29 +17,29 @@ local search = {}
 ---Execute the search backward instead of forward.
 ---@field reverse? boolean
 
----@type core.doc.searchoptions
+---@type core.buffer.searchoptions
 local default_opt = {}
 
 ---Helper to initialize search.find() parameters to sane defaults.
----@param doc core.doc
+---@param buffer core.buffer
 ---@param line integer
 ---@param col integer
 ---@param text string
----@param opt core.doc.searchoptions
----@return core.doc doc
+---@param opt core.buffer.searchoptions
+---@return core.buffer buffer
 ---@return integer line
 ---@return integer col
 ---@return string text
----@return core.doc.searchoptions opt
-local function init_args(doc, line, col, text, opt)
+---@return core.buffer.searchoptions opt
+local function init_args(buffer, line, col, text, opt)
   opt = opt or default_opt
-  line, col = doc:sanitize_position(line, col)
+  line, col = buffer:sanitize_position(line, col)
 
   if opt.no_case and not opt.pattern and not opt.regex then
     text = text:lower()
   end
 
-  return doc, line, col, text, opt
+  return buffer, line, col, text, opt
 end
 
 ---This function is needed to uniform the behavior of
@@ -75,14 +75,14 @@ local function rfind(func, text, pattern, index, plain)
   return last_s, last_e
 end
 
----Perform a search on a document with the given options.
----@param doc core.doc
+---Perform a search on a buffer with the given options.
+---@param buffer core.buffer
 ---@param line integer
 ---@param col integer
 ---@param text string
----@param opt core.doc.searchoptions
-function search.find(doc, line, col, text, opt)
-  doc, line, col, text, opt = init_args(doc, line, col, text, opt)
+---@param opt core.buffer.searchoptions
+function search.find(buffer, line, col, text, opt)
+  buffer, line, col, text, opt = init_args(buffer, line, col, text, opt)
   local plain = not opt.pattern
   local pattern = text
   local search_func = string.find
@@ -90,12 +90,12 @@ function search.find(doc, line, col, text, opt)
     pattern = regex.compile(text, opt.no_case and "i" or "")
     search_func = regex_func
   end
-  local start, finish, step = line, #doc.lines, 1
+  local start, finish, step = line, #buffer.lines, 1
   if opt.reverse then
     start, finish, step = line, 1, -1
   end
   for line = start, finish, step do
-    local line_text = doc.lines[line]
+    local line_text = buffer.lines[line]
     local line_len = #line_text
     if opt.no_case and not opt.regex and not opt.pattern then
       line_text = line_text:lower()
@@ -124,7 +124,7 @@ function search.find(doc, line, col, text, opt)
     if s then
       if e >= s and (e ~= line_len or s ~= e) then
         local col2 = e == line_len and e or e + 1
-        doc:add_search_selection(line, s, line, col2)
+        buffer:add_search_selection(line, s, line, col2)
         return line, s, line, col2
       end
     end
@@ -134,9 +134,9 @@ function search.find(doc, line, col, text, opt)
   if opt.wrap then
     opt.wrap = false -- wrap a single time, otherwise this would never end :P
     if opt.reverse then
-      return search.find(doc, #doc.lines, #doc.lines[#doc.lines], text, opt)
+      return search.find(buffer, #buffer.lines, #buffer.lines[#buffer.lines], text, opt)
     else
-      return search.find(doc, 1, 1, text, opt)
+      return search.find(buffer, 1, 1, text, opt)
     end
   end
 end

@@ -6,7 +6,7 @@
 local core = require "core"
 local command = require "core.command"
 local keymap = require "core.keymap"
-local DocView = require "core.docview"
+local Editor = require "core.editor"
 local EmptyView = require "core.emptyview"
 local ImageView = require "core.imageview"
 local common = require "core.common"
@@ -256,7 +256,7 @@ function M.hide_right(focus_left)
 end
 
 local function copy_position(source, target)
-  if not (source and target and source.doc and source.doc == target.doc) then return end
+  if not (source and target and source.buffer and source.buffer == target.buffer) then return end
   if source.get_selection_state and target.set_selection_state then
     target:set_selection_state(source:get_selection_state())
   end
@@ -265,14 +265,14 @@ local function copy_position(source, target)
 end
 
 local function apply_location(view, opts)
-  if not (view and view.doc and opts and opts.line) then return end
+  if not (view and view.buffer and opts and opts.line) then return end
   local col = opts.col or 1
   local line2, col2 = opts.line2 or opts.line, opts.col2 or col
   local function select()
     if view.expand_folds_covering_range then
       view:expand_folds_covering_range(opts.line, col, line2, col2, "pane-open")
     end
-    view.doc:set_selection(opts.line, col, line2, col2)
+    view.buffer:set_selection(opts.line, col, line2, col2)
   end
   if view.with_selection_state then view:with_selection_state(select) else select() end
   if view.scroll_to_make_visible then view:scroll_to_make_visible(opts.line, col) end
@@ -364,7 +364,7 @@ local function retain_or_release_replaced_singleton(pane, view, reason)
   return false
 end
 
-function M.open_doc(doc, opts)
+function M.open_buffer(buffer, opts)
   opts = opts or {}
   local pane = M.resolve_target(opts)
   if pane == "right" then
@@ -378,18 +378,18 @@ function M.open_doc(doc, opts)
   local navigation_anchor
   for _, candidate in ipairs(M.open_views(pane)) do
     if candidate.__pane_singleton_editor then singleton = candidate end
-    if candidate.doc == doc and (not doc.abs_filename or not candidate.__pane_singleton_editor) then
+    if candidate.buffer == buffer and (not buffer.abs_filename or not candidate.__pane_singleton_editor) then
       view = candidate
       break
     end
   end
 
-  if doc.abs_filename and not view then
-    if singleton and singleton.doc == doc then
+  if buffer.abs_filename and not view then
+    if singleton and singleton.buffer == buffer then
       view = singleton
     else
       if singleton then
-        local dirty = singleton.doc and singleton.doc.is_dirty and singleton.doc:is_dirty()
+        local dirty = singleton.buffer and singleton.buffer.is_dirty and singleton.buffer:is_dirty()
         if dirty then
           singleton.__pane_singleton_editor = nil
         else
@@ -402,12 +402,12 @@ function M.open_doc(doc, opts)
           replaced_singleton = singleton
         end
       end
-      view = file_context.mark_editor_view(DocView(doc))
+      view = Editor(buffer)
       view.__pane_singleton_editor = true
       add_view_to_pane(pane, view)
     end
   elseif not view then
-    view = file_context.mark_editor_view(DocView(doc))
+    view = Editor(buffer)
     add_view_to_pane(pane, view)
   end
   if source then copy_position(source, view) end
@@ -424,12 +424,12 @@ end
 
 function M.restore_retired_editor(view, pane)
   pane = valid_pane(pane)
-  if not (view and view.__pane_retired_editor == pane and view.doc) then return false end
+  if not (view and view.__pane_retired_editor == pane and view.buffer) then return false end
   if M.contains_view(pane, view) then return false end
 
   local replaced = M.singleton_editor(pane)
   if replaced and replaced ~= view then
-    local dirty = replaced.doc and replaced.doc.is_dirty and replaced.doc:is_dirty()
+    local dirty = replaced.buffer and replaced.buffer.is_dirty and replaced.buffer:is_dirty()
     if dirty then
       replaced.__pane_singleton_editor = nil
       replaced = nil
@@ -491,8 +491,8 @@ function M.open_path(path, opts)
     end
     return M.open_view(view, { pane = pane, focus = opts.focus ~= false })
   end
-  local ok, doc = core.try(core.open_doc, path)
-  if ok and doc then return M.open_doc(doc, opts) end
+  local ok, buffer = core.try(core.open_buffer, path)
+  if ok and buffer then return M.open_buffer(buffer, opts) end
 end
 
 function M.move_view_to_pane(view, target_pane)
@@ -507,7 +507,7 @@ function M.move_view_to_pane(view, target_pane)
   local existing
   local target_singleton
   for _, candidate in ipairs(M.open_views(target_pane)) do
-    if candidate.doc == view.doc then existing = candidate end
+    if candidate.buffer == view.buffer then existing = candidate end
     if candidate.__pane_singleton_editor then target_singleton = candidate end
   end
 
@@ -528,8 +528,8 @@ function M.move_view_to_pane(view, target_pane)
     return existing
   end
 
-  if view.doc and view.doc.abs_filename and target_singleton then
-    local dirty = target_singleton.doc and target_singleton.doc.is_dirty and target_singleton.doc:is_dirty()
+  if view.buffer and view.buffer.abs_filename and target_singleton then
+    local dirty = target_singleton.buffer and target_singleton.buffer.is_dirty and target_singleton.buffer:is_dirty()
     if dirty then
       target_singleton.__pane_singleton_editor = nil
     else
@@ -540,7 +540,7 @@ function M.move_view_to_pane(view, target_pane)
   end
 
   detach_source(false)
-  if view.doc and view.doc.abs_filename then view.__pane_singleton_editor = true end
+  if view.buffer and view.buffer.abs_filename then view.__pane_singleton_editor = true end
   add_view_to_pane(target_pane, view)
   select_view(target_pane, view, true)
   return view
@@ -684,14 +684,14 @@ command.add(nil, {
   ["pane:open-current-file-opposite"] = function()
     local pane, owner = M.pane_for_view(core.active_view)
     local view = owner or core.active_view
-    if not (pane and view and file_context.is_editor_view(view) and view.doc) then return false end
-    M.open_doc(view.doc, { pane = M.opposite(pane), source_view = view, focus = true })
+    if not (pane and view and file_context.is_editor_view(view) and view.buffer) then return false end
+    M.open_buffer(view.buffer, { pane = M.opposite(pane), source_view = view, focus = true })
     return true
   end,
   ["pane:move-current-file-opposite"] = function()
     local pane, owner = M.pane_for_view(core.active_view)
     local view = owner or core.active_view
-    if not (pane and view and file_context.is_editor_view(view) and view.doc) then return false end
+    if not (pane and view and file_context.is_editor_view(view) and view.buffer) then return false end
     return M.move_view_to_pane(view, M.opposite(pane)) ~= nil
   end,
 })

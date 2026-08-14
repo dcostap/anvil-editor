@@ -1,8 +1,8 @@
 local test = require "core.test"
 local core = require "core"
 local common = require "core.common"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local StatusBar = require "core.statusbar"
@@ -31,7 +31,7 @@ local function styled_text_string(item)
   return table.concat(text)
 end
 
-test.describe("status bar document file item", function()
+test.describe("status bar buffer file item", function()
   test.before_each(function(context)
     context.original_projects = core.projects
     context.original_active_view = core.active_view
@@ -69,11 +69,11 @@ test.describe("status bar document file item", function()
   end)
 
   local function status_file_text(abs_filename)
-    local doc = Doc(nil, nil, true)
-    doc:set_filename(abs_filename, abs_filename)
-    core.active_view = DocView(doc)
+    local buffer = Buffer(nil, nil, true)
+    buffer:set_filename(abs_filename, abs_filename)
+    core.active_view = TextView(buffer)
     local status_bar = StatusBar()
-    return styled_text_string(status_bar:get_item("doc:file"):get_item())
+    return styled_text_string(status_bar:get_item("text:file"):get_item())
   end
 
   test.it("uses Project Path labels like fuzzy file results", function(context)
@@ -100,14 +100,14 @@ test.describe("status bar caret position item", function()
   end)
 
   test.it("renders safely when a restored caret is past the current line end", function()
-    local doc = Doc(nil, nil, true)
-    doc:set_selection_list({ 1, 20, 1, 20 }, 1, {
+    local buffer = Buffer(nil, nil, true)
+    buffer:set_selection_list({ 1, 20, 1, 20 }, 1, {
       sanitized = true,
       take_ownership = true,
     })
-    core.active_view = DocView(doc)
+    core.active_view = TextView(buffer)
 
-    local item = StatusBar():get_item("doc:position")
+    local item = StatusBar():get_item("text:position")
     local width = item.on_draw(0, 0, 20, false, true)
     test.ok(width > 0)
   end)

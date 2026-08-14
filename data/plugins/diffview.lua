@@ -5,8 +5,8 @@ local command = require "core.command"
 local common = require "core.common"
 local keymap = require "core.keymap"
 local style = require "core.style"
-local DocView = require "core.docview"
-local Doc = require "core.doc"
+local TextView = require "core.textview"
+local Buffer = require "core.buffer"
 local View = require "core.view"
 local panes = require "core.panes"
 local diff_model = require "plugins.diff.model"
@@ -82,23 +82,23 @@ local element_b_text = nil
 ---@type integer
 local diff_updater_idx = 0
 
-local function with_docview_selection(view, fn, ...)
+local function with_textview_selection(view, fn, ...)
   if view and view.with_selection_state then
     return view:with_selection_state(fn, ...)
   end
   return fn(...)
 end
 
-local function call_docview_method(view, method, ...)
-  return with_docview_selection(view, method, view, ...)
+local function call_textview_method(view, method, ...)
+  return with_textview_selection(view, method, view, ...)
 end
 
 local is_fold_widget_line
 
 ---@class plugins.diffview.view : core.view
 ---@field super core.view
----@field doc_view_a core.docview
----@field doc_view_b core.docview
+---@field buffer_view_a core.textview
+---@field buffer_view_b core.textview
 ---@field a_changes diff.changes[]
 ---@field b_changes diff.changes[]
 ---@field a_gaps table<integer,table<integer,integer>>
@@ -124,22 +124,22 @@ DiffView.type = {
 
 local function content_text(text, opts)
   opts = opts or {}
-  return { kind = "text", text = text or "", name = opts.name, editable = opts.editable, owns_doc = true, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
+  return { kind = "text", text = text or "", name = opts.name, editable = opts.editable, owns_buffer = true, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
 end
 
 local function content_file(path, opts)
   opts = opts or {}
-  return { kind = "file", filename = path, name = opts.name or (path and common.basename(path) or nil), editable = opts.editable, owns_doc = false, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
+  return { kind = "file", filename = path, name = opts.name or (path and common.basename(path) or nil), editable = opts.editable, owns_buffer = false, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
 end
 
-local function content_document(doc, opts)
+local function content_buffer(buffer, opts)
   opts = opts or {}
-  return { kind = "document", doc = doc, name = opts.name, editable = opts.editable, owns_doc = opts.owns_doc == true, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
+  return { kind = "buffer", buffer = buffer, name = opts.name, editable = opts.editable, owns_buffer = opts.owns_buffer == true, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
 end
 
 local function content_blank(opts)
   opts = opts or {}
-  return { kind = "blank", name = opts.name, editable = opts.editable ~= false, owns_doc = true, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
+  return { kind = "blank", name = opts.name, editable = opts.editable ~= false, owns_buffer = true, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
 end
 
 local function content_empty(opts)
@@ -207,17 +207,17 @@ local function validate_content(content, index)
       return nil, string.format("diff content %d text must be a string", index)
     end
   elseif kind == "blank" or kind == "empty" then
-    -- valid mutable blank-document content
+    -- valid mutable blank-buffer content
   elseif kind == "file" then
     if type(content.filename) ~= "string" or content.filename == "" then
       return nil, string.format("diff content %d file content requires a filename", index)
     end
-  elseif kind == "document" then
-    if not content.doc then
-      return nil, string.format("diff content %d document content requires a doc", index)
+  elseif kind == "buffer" then
+    if not content.buffer then
+      return nil, string.format("diff content %d buffer content requires a buffer", index)
     end
-    if not (content.doc.is and content.doc:is(Doc)) then
-      return nil, string.format("diff content %d document content requires a Doc", index)
+    if not (content.buffer.is and content.buffer:is(Buffer)) then
+      return nil, string.format("diff content %d buffer content requires a Buffer", index)
     end
   else
     return nil, string.format("unknown diff content kind '%s'", tostring(kind))
@@ -254,16 +254,16 @@ local function validate_request(request)
     local ok, err = validate_content(request.contents[i], i)
     if not ok then return nil, err end
   end
-  if request.contents[1].kind == "document" and request.contents[2].kind == "document"
-      and request.contents[1].doc == request.contents[2].doc then
-    return nil, "diff request cannot use the same document on both sides"
+  if request.contents[1].kind == "buffer" and request.contents[2].kind == "buffer"
+      and request.contents[1].buffer == request.contents[2].buffer then
+    return nil, "diff request cannot use the same buffer on both sides"
   end
   local function comparable_content_path(content)
     local path
     if content.kind == "file" then
       path = content.filename
-    elseif content.kind == "document" then
-      path = content.doc.abs_filename
+    elseif content.kind == "buffer" then
+      path = content.buffer.abs_filename
     end
     if path and not common.is_absolute_path(path) then
       local ok, abs = pcall(core.project_absolute_path, path)
@@ -306,14 +306,14 @@ local function content_read_only_reason(content)
   return content.read_only_reason or "This Diff View side is read-only"
 end
 
-local function prompt_dirty_docs(docs, callback)
+local function prompt_dirty_buffers(buffers, callback)
   local dirty = {}
-  for _, doc in ipairs(docs or {}) do
-    if doc and doc.is_dirty and doc:is_dirty() then dirty[#dirty + 1] = doc end
+  for _, buffer in ipairs(buffers or {}) do
+    if buffer and buffer.is_dirty and buffer:is_dirty() then dirty[#dirty + 1] = buffer end
   end
   if #dirty == 0 then callback(true); return end
   local names = {}
-  for _, doc in ipairs(dirty) do names[#names + 1] = doc:get_name() end
+  for _, buffer in ipairs(dirty) do names[#names + 1] = buffer:get_name() end
   core.nag_view:show(
     "Unsaved Diff Content",
     string.format("Discard unsaved diff content in %s?", table.concat(names, ", ")),
@@ -325,21 +325,21 @@ local function prompt_dirty_docs(docs, callback)
       callback(item and item.text == "Discard Changes")
     end
   )
-  core.log_quiet("Diff View close/replacement waiting for dirty owned docs: %s", table.concat(names, ", "))
+  core.log_quiet("Diff View close/replacement waiting for dirty owned buffers: %s", table.concat(names, ", "))
 end
 
-local function doc_for_content(content, title)
-  local doc_name = title_for_content(content, title)
-  if content.kind == "document" then return assert(content.doc), content.owns_doc == true end
-  if content.kind == "file" then return Doc(doc_name, content.filename), false end
-  local doc = Doc(nil, nil, true)
-  doc.display_name = doc_name
+local function buffer_for_content(content, title)
+  local buffer_name = title_for_content(content, title)
+  if content.kind == "buffer" then return assert(content.buffer), content.owns_buffer == true end
+  if content.kind == "file" then return Buffer(buffer_name, content.filename), false end
+  local buffer = Buffer(nil, nil, true)
+  buffer.display_name = buffer_name
   local text = (content.kind == "empty" or content.kind == "blank") and "" or (content.text or "")
-  if text ~= "" then doc:insert(1, 1, text) end
-  doc:clear_undo_redo()
-  doc:clean()
-  doc.new_file = false
-  return doc, true
+  if text ~= "" then buffer:insert(1, 1, text) end
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer.new_file = false
+  return buffer, true
 end
 
 function DiffView:assign_request()
@@ -372,29 +372,29 @@ function DiffView:new(a, b, compare_type, names)
   self.disposed = false
   self.request_assigned = false
 
-  local doc_a, owns_a = doc_for_content(self.request.contents[1], self.request.content_titles and self.request.content_titles[1])
-  local doc_b, owns_b = doc_for_content(self.request.contents[2], self.request.content_titles and self.request.content_titles[2])
-  self.side_docs = { doc_a, doc_b }
+  local buffer_a, owns_a = buffer_for_content(self.request.contents[1], self.request.content_titles and self.request.content_titles[1])
+  local buffer_b, owns_b = buffer_for_content(self.request.contents[2], self.request.content_titles and self.request.content_titles[2])
+  self.side_buffers = { buffer_a, buffer_b }
   self.side_owns = { owns_a, owns_b }
-  self.owned_docs = { [doc_a] = owns_a, [doc_b] = owns_b }
+  self.owned_buffers = { [buffer_a] = owns_a, [buffer_b] = owns_b }
 
-  self.doc_view_a = DocView(doc_a)
-  self.doc_view_b = DocView(doc_b)
+  self.buffer_view_a = TextView(buffer_a)
+  self.buffer_view_b = TextView(buffer_b)
   -- IntelliJ-style Diff Views put both line-number lanes in the center so the
   -- compared text starts at the outer edges instead of wasting two gutters.
-  self.doc_view_a.show_line_numbers = false
-  self.doc_view_b.show_line_numbers = false
-  self.doc_view_a.gutter_padding = 0
-  self.doc_view_b.gutter_padding = 0
-  self.doc_view_a.suppress_gitdiff_gutter = true
-  self.doc_view_b.suppress_gitdiff_gutter = true
+  self.buffer_view_a.show_line_numbers = false
+  self.buffer_view_b.show_line_numbers = false
+  self.buffer_view_a.gutter_padding = 0
+  self.buffer_view_b.gutter_padding = 0
+  self.buffer_view_a.suppress_gitdiff_gutter = true
+  self.buffer_view_b.suppress_gitdiff_gutter = true
   self.side_editable = {
     a = content_editable(self.request, self.request.contents[1]),
     b = content_editable(self.request, self.request.contents[2]),
   }
 
-  self.doc_view_a.diff_view_parent = self
-  self.doc_view_b.diff_view_parent = self
+  self.buffer_view_a.diff_view_parent = self
+  self.buffer_view_b.diff_view_parent = self
 
   if not self.request._defer_assignment then self:assign_request() end
 
@@ -414,7 +414,7 @@ function DiffView:new(a, b, compare_type, names)
 end
 
 function DiffView:get_focus_view()
-  return self.doc_view_a
+  return self.buffer_view_a
 end
 
 function DiffView:get_name()
@@ -457,7 +457,7 @@ function DiffView:update_diff()
   local generation = self.diff_generation
   local idx = core.add_thread(function()
     local computing_start = system.get_time()
-    local model = diff_model.compute(self.doc_view_a.doc.lines, self.doc_view_b.doc.lines, {
+    local model = diff_model.compute(self.buffer_view_a.buffer.lines, self.buffer_view_b.buffer.lines, {
       should_yield = function()
         if system.get_time() - computing_start >= 0.5 then
           computing_start = system.get_time()
@@ -481,8 +481,8 @@ function DiffView:update_diff()
 
     self.updater_idx = nil
 
-    self.doc_view_b.scroll.to.y = self.doc_view_a.scroll.y
-    self.doc_view_b.scroll.y = self.doc_view_a.scroll.y
+    self.buffer_view_b.scroll.to.y = self.buffer_view_a.scroll.y
+    self.buffer_view_b.scroll.y = self.buffer_view_a.scroll.y
 
     if config.plugins.diffview.log_times then
       core.log(
@@ -500,27 +500,27 @@ end
 function DiffView:on_mouse_pressed(button, x, y, clicks)
   if DiffView.super.on_mouse_pressed(self, button, x, y, clicks) then
     self.scroll.y = self.scroll.to.y
-    self.doc_view_a.scroll.to.y = self.scroll.y
-    self.doc_view_a.scroll.y = self.scroll.y
-    self.doc_view_b.scroll.to.y = self.scroll.y
-    self.doc_view_b.scroll.y = self.scroll.y
+    self.buffer_view_a.scroll.to.y = self.scroll.y
+    self.buffer_view_a.scroll.y = self.scroll.y
+    self.buffer_view_b.scroll.to.y = self.scroll.y
+    self.buffer_view_b.scroll.y = self.scroll.y
     return true
-  elseif call_docview_method(self.doc_view_a, self.doc_view_a.on_mouse_pressed, button, x, y, clicks) then
-    self.doc_view_a.scroll.y = self.doc_view_a.scroll.to.y
-    self.scroll.to.y = self.doc_view_a.scroll.y
-    self.scroll.y = self.doc_view_a.scroll.y
-    self.doc_view_b.scroll.to.y = self.doc_view_a.scroll.y
-    self.doc_view_b.scroll.y = self.doc_view_a.scroll.y
+  elseif call_textview_method(self.buffer_view_a, self.buffer_view_a.on_mouse_pressed, button, x, y, clicks) then
+    self.buffer_view_a.scroll.y = self.buffer_view_a.scroll.to.y
+    self.scroll.to.y = self.buffer_view_a.scroll.y
+    self.scroll.y = self.buffer_view_a.scroll.y
+    self.buffer_view_b.scroll.to.y = self.buffer_view_a.scroll.y
+    self.buffer_view_b.scroll.y = self.buffer_view_a.scroll.y
     return true
-  elseif call_docview_method(self.doc_view_b, self.doc_view_b.on_mouse_pressed, button, x, y, clicks) then
-    self.doc_view_b.scroll.y = self.doc_view_b.scroll.to.y
-    self.scroll.to.y = self.doc_view_b.scroll.y
-    self.scroll.y = self.doc_view_b.scroll.y
-    self.doc_view_a.scroll.to.y = self.doc_view_b.scroll.y
-    self.doc_view_a.scroll.y = self.doc_view_b.scroll.y
+  elseif call_textview_method(self.buffer_view_b, self.buffer_view_b.on_mouse_pressed, button, x, y, clicks) then
+    self.buffer_view_b.scroll.y = self.buffer_view_b.scroll.to.y
+    self.scroll.to.y = self.buffer_view_b.scroll.y
+    self.scroll.y = self.buffer_view_b.scroll.y
+    self.buffer_view_a.scroll.to.y = self.buffer_view_b.scroll.y
+    self.buffer_view_a.scroll.y = self.buffer_view_b.scroll.y
     return true
   end
-  for _, view in ipairs({self.doc_view_a, self.doc_view_b}) do
+  for _, view in ipairs({self.buffer_view_a, self.buffer_view_b}) do
     if
       x >= view.position.x
       and
@@ -534,8 +534,8 @@ end
 
 function DiffView:on_mouse_released(...)
   DiffView.super.on_mouse_released(self, ...)
-  call_docview_method(self.doc_view_a, self.doc_view_a.on_mouse_released, ...)
-  call_docview_method(self.doc_view_b, self.doc_view_b.on_mouse_released, ...)
+  call_textview_method(self.buffer_view_a, self.buffer_view_a.on_mouse_released, ...)
+  call_textview_method(self.buffer_view_b, self.buffer_view_b.on_mouse_released, ...)
 end
 
 function DiffView:on_mouse_moved(...)
@@ -546,37 +546,37 @@ function DiffView:on_mouse_moved(...)
   if DiffView.super.on_mouse_moved(self, ...) then
     if self.v_scrollbar.dragging then
       self.scroll.y = self.scroll.to.y
-      self.doc_view_a.scroll.to.y = self.scroll.y
-      self.doc_view_a.scroll.y = self.scroll.y
-      self.doc_view_b.scroll.to.y = self.scroll.y
-      self.doc_view_b.scroll.y = self.scroll.y
+      self.buffer_view_a.scroll.to.y = self.scroll.y
+      self.buffer_view_a.scroll.y = self.scroll.y
+      self.buffer_view_b.scroll.to.y = self.scroll.y
+      self.buffer_view_b.scroll.y = self.scroll.y
       return true
     end
   end
-  call_docview_method(self.doc_view_a, self.doc_view_a.on_mouse_moved, ...)
-  if self.doc_view_a:scrollbar_dragging() then
-    self.doc_view_a.scroll.y = self.doc_view_a.scroll.to.y
-    self.scroll.to.y = self.doc_view_a.scroll.y
-    self.scroll.y = self.doc_view_a.scroll.y
-    self.doc_view_b.scroll.y = self.doc_view_a.scroll.y
-    self.doc_view_b.scroll.to.y = self.doc_view_a.scroll.y
+  call_textview_method(self.buffer_view_a, self.buffer_view_a.on_mouse_moved, ...)
+  if self.buffer_view_a:scrollbar_dragging() then
+    self.buffer_view_a.scroll.y = self.buffer_view_a.scroll.to.y
+    self.scroll.to.y = self.buffer_view_a.scroll.y
+    self.scroll.y = self.buffer_view_a.scroll.y
+    self.buffer_view_b.scroll.y = self.buffer_view_a.scroll.y
+    self.buffer_view_b.scroll.to.y = self.buffer_view_a.scroll.y
     return true
   end
-  call_docview_method(self.doc_view_b, self.doc_view_b.on_mouse_moved, ...)
-  if self.doc_view_b:scrollbar_dragging() then
-    self.doc_view_b.scroll.y = self.doc_view_b.scroll.to.y
-    self.scroll.to.y = self.doc_view_b.scroll.y
-    self.scroll.y = self.doc_view_b.scroll.y
-    self.doc_view_a.scroll.y = self.doc_view_b.scroll.y
-    self.doc_view_a.scroll.to.y = self.doc_view_b.scroll.y
+  call_textview_method(self.buffer_view_b, self.buffer_view_b.on_mouse_moved, ...)
+  if self.buffer_view_b:scrollbar_dragging() then
+    self.buffer_view_b.scroll.y = self.buffer_view_b.scroll.to.y
+    self.scroll.to.y = self.buffer_view_b.scroll.y
+    self.scroll.y = self.buffer_view_b.scroll.y
+    self.buffer_view_a.scroll.y = self.buffer_view_b.scroll.y
+    self.buffer_view_a.scroll.to.y = self.buffer_view_b.scroll.y
     return true
   end
 end
 
 function DiffView:on_mouse_left()
   DiffView.super.on_mouse_left(self)
-  self.doc_view_a:on_mouse_left()
-  self.doc_view_b:on_mouse_left()
+  self.buffer_view_a:on_mouse_left()
+  self.buffer_view_b:on_mouse_left()
 end
 
 function DiffView:on_mouse_wheel(y, x)
@@ -585,53 +585,53 @@ function DiffView:on_mouse_wheel(y, x)
     y = 0
   end
   if y and y ~= 0 then
-    self.doc_view_a.scroll.to.y = self.doc_view_a.scroll.to.y + y * -config.mouse_wheel_scroll
-    self.doc_view_b.scroll.to.y = self.doc_view_b.scroll.to.y + y * -config.mouse_wheel_scroll
+    self.buffer_view_a.scroll.to.y = self.buffer_view_a.scroll.to.y + y * -config.mouse_wheel_scroll
+    self.buffer_view_b.scroll.to.y = self.buffer_view_b.scroll.to.y + y * -config.mouse_wheel_scroll
   end
   if x and x ~= 0 then
-    self.doc_view_a.scroll.to.x = self.doc_view_a.scroll.to.x + x * -config.mouse_wheel_scroll
-    self.doc_view_b.scroll.to.x = self.doc_view_b.scroll.to.x + x * -config.mouse_wheel_scroll
+    self.buffer_view_a.scroll.to.x = self.buffer_view_a.scroll.to.x + x * -config.mouse_wheel_scroll
+    self.buffer_view_b.scroll.to.x = self.buffer_view_b.scroll.to.x + x * -config.mouse_wheel_scroll
   end
 end
 
 function DiffView:on_scale_change(...)
-  self.doc_view_a:on_scale_change(...)
-  self.doc_view_b:on_scale_change(...)
+  self.buffer_view_a:on_scale_change(...)
+  self.buffer_view_b:on_scale_change(...)
 end
 
 function DiffView:on_touch_moved(...)
   DiffView.super.on_touch_moved(self, ...)
-  call_docview_method(self.doc_view_a, self.doc_view_a.on_touch_moved, ...)
-  call_docview_method(self.doc_view_b, self.doc_view_b.on_touch_moved, ...)
+  call_textview_method(self.buffer_view_a, self.buffer_view_a.on_touch_moved, ...)
+  call_textview_method(self.buffer_view_b, self.buffer_view_b.on_touch_moved, ...)
 end
 
-local function wrapped_total_visual_lines(doc_view)
-  if doc_view.get_total_visual_lines then return doc_view:get_total_visual_lines() end
-  if not doc_view.wrapped_settings or not doc_view.wrapped_lines then
-    return doc_view.doc and #doc_view.doc.lines or 0
+local function wrapped_total_visual_lines(buffer_view)
+  if buffer_view.get_total_visual_lines then return buffer_view:get_total_visual_lines() end
+  if not buffer_view.wrapped_settings or not buffer_view.wrapped_lines then
+    return buffer_view.buffer and #buffer_view.buffer.lines or 0
   end
-  return #doc_view.wrapped_lines / 2
+  return #buffer_view.wrapped_lines / 2
 end
 
-local function visual_rows_before_line(doc_view, line)
-  if doc_view.has_composed_visual_rows and doc_view:has_composed_visual_rows() then
-    return math.max(0, doc_view:get_visual_row(line, 1) - 1)
+local function visual_rows_before_line(buffer_view, line)
+  if buffer_view.has_composed_visual_rows and buffer_view:has_composed_visual_rows() then
+    return math.max(0, buffer_view:get_visual_row(line, 1) - 1)
   end
-  if not doc_view.wrapped_settings or not doc_view.wrapped_line_to_idx then
+  if not buffer_view.wrapped_settings or not buffer_view.wrapped_line_to_idx then
     return math.max(0, line - 1)
   end
-  local idx = doc_view.wrapped_line_to_idx[line]
+  local idx = buffer_view.wrapped_line_to_idx[line]
   if idx then return idx - 1 end
-  return math.max(0, math.min(wrapped_total_visual_lines(doc_view), line - 1))
+  return math.max(0, math.min(wrapped_total_visual_lines(buffer_view), line - 1))
 end
 
-local function visual_line_count(doc_view, line)
-  if doc_view.get_visual_row_count_for_line then return doc_view:get_visual_row_count_for_line(line) end
-  if not doc_view.wrapped_settings or not doc_view.wrapped_line_to_idx then return 1 end
-  local total = wrapped_total_visual_lines(doc_view)
-  local idx = doc_view.wrapped_line_to_idx[line]
+local function visual_line_count(buffer_view, line)
+  if buffer_view.get_visual_row_count_for_line then return buffer_view:get_visual_row_count_for_line(line) end
+  if not buffer_view.wrapped_settings or not buffer_view.wrapped_line_to_idx then return 1 end
+  local total = wrapped_total_visual_lines(buffer_view)
+  local idx = buffer_view.wrapped_line_to_idx[line]
   if not idx then return 1 end
-  local next_idx = doc_view.wrapped_line_to_idx[line + 1] or (total + 1)
+  local next_idx = buffer_view.wrapped_line_to_idx[line + 1] or (total + 1)
   return math.max(1, next_idx - idx)
 end
 
@@ -651,15 +651,15 @@ local function is_fold_hidden_line(folds, line)
   return fold and line > fold.hidden_start, fold
 end
 
-local function line_for_visual_row(doc_view, row)
-  local total = math.max(1, doc_view:get_scrollable_line_count())
+local function line_for_visual_row(buffer_view, row)
+  local total = math.max(1, buffer_view:get_scrollable_line_count())
   local visual_row = common.clamp(math.floor(tonumber(row) or 0) + 1, 1, total)
-  local line = doc_view:get_visual_row_line_col(visual_row)
-  return common.clamp(line or 1, 1, #doc_view.doc.lines)
+  local line = buffer_view:get_visual_row_line_col(visual_row)
+  return common.clamp(line or 1, 1, #buffer_view.buffer.lines)
 end
 
-local function install_core_gap_rows_for_docview(doc_view, gaps, trailing_gap)
-  if not doc_view or not doc_view.add_visual_row_provider then return end
+local function install_core_gap_rows_for_textview(buffer_view, gaps, trailing_gap)
+  if not buffer_view or not buffer_view.add_visual_row_provider then return end
   local before, after, any = {}, {}, false
   for line, gap in pairs(gaps or {}) do
     local cumulative = math.max(0, math.floor(tonumber(gap[2]) or 0))
@@ -667,33 +667,33 @@ local function install_core_gap_rows_for_docview(doc_view, gaps, trailing_gap)
   end
   trailing_gap = math.max(0, math.floor(tonumber(trailing_gap) or 0))
   if trailing_gap > 0 then
-    local last_visible = #doc_view.doc.lines
-    while last_visible > 1 and doc_view:get_visual_row_count_for_line(last_visible) == 0 do
+    local last_visible = #buffer_view.buffer.lines
+    while last_visible > 1 and buffer_view:get_visual_row_count_for_line(last_visible) == 0 do
       last_visible = last_visible - 1
     end
     after[last_visible], any = trailing_gap, true
   end
   if any then
-    doc_view:add_visual_row_provider("diff-gaps", { before = before, after = after }, { priority = 50 })
+    buffer_view:add_visual_row_provider("diff-gaps", { before = before, after = after }, { priority = 50 })
   else
-    doc_view:remove_visual_row_provider("diff-gaps")
+    buffer_view:remove_visual_row_provider("diff-gaps")
   end
 end
 
-local function gap_layout_signature(doc_view)
+local function gap_layout_signature(buffer_view)
   return table.concat({
-    tostring(doc_view.size and doc_view.size.x or 0),
-    tostring(doc_view.doc and doc_view.doc.text_revision or 0),
-    tostring(doc_view.__wrap_layout_generation or 0),
-    tostring(doc_view.fold_generation or 0),
-    tostring(doc_view.wrapping_enabled),
+    tostring(buffer_view.size and buffer_view.size.x or 0),
+    tostring(buffer_view.buffer and buffer_view.buffer.text_revision or 0),
+    tostring(buffer_view.__wrap_layout_generation or 0),
+    tostring(buffer_view.fold_generation or 0),
+    tostring(buffer_view.wrapping_enabled),
   }, ":")
 end
 
 function DiffView:refresh_core_gap_rows(force)
   local model = self.diff_model
   if not model then return end
-  local signature = gap_layout_signature(self.doc_view_a) .. "|" .. gap_layout_signature(self.doc_view_b)
+  local signature = gap_layout_signature(self.buffer_view_a) .. "|" .. gap_layout_signature(self.buffer_view_b)
   if not force and signature == self.__diff_gap_layout_signature then return end
 
   local a_gaps, b_gaps = {}, {}
@@ -713,44 +713,44 @@ function DiffView:refresh_core_gap_rows(force)
 
     if pair.a then
       a_gaps[pair.a] = { 0, a_gap_total }
-      a_height = a_height + self.doc_view_a:get_visual_row_count_for_line(pair.a)
+      a_height = a_height + self.buffer_view_a:get_visual_row_count_for_line(pair.a)
     end
     if pair.b then
       b_gaps[pair.b] = { 0, b_gap_total }
-      b_height = b_height + self.doc_view_b:get_visual_row_count_for_line(pair.b)
+      b_height = b_height + self.buffer_view_b:get_visual_row_count_for_line(pair.b)
     end
   end
 
   local a_trailing = math.max(0, b_height - a_height)
   local b_trailing = math.max(0, a_height - b_height)
   self.a_gaps, self.b_gaps = a_gaps, b_gaps
-  install_core_gap_rows_for_docview(self.doc_view_a, a_gaps, a_trailing)
-  install_core_gap_rows_for_docview(self.doc_view_b, b_gaps, b_trailing)
+  install_core_gap_rows_for_textview(self.buffer_view_a, a_gaps, a_trailing)
+  install_core_gap_rows_for_textview(self.buffer_view_b, b_gaps, b_trailing)
   -- Installing providers changes fold generations, so retain the post-install
   -- signature rather than triggering another identical rebuild next frame.
-  self.__diff_gap_layout_signature = gap_layout_signature(self.doc_view_a)
-    .. "|" .. gap_layout_signature(self.doc_view_b)
+  self.__diff_gap_layout_signature = gap_layout_signature(self.buffer_view_a)
+    .. "|" .. gap_layout_signature(self.buffer_view_b)
 end
 
-local function clear_core_diff_folds(doc_view)
-  if not doc_view or not doc_view.fold_regions then return end
-  for i = #doc_view.fold_regions, 1, -1 do
-    local fold = doc_view.fold_regions[i]
+local function clear_core_diff_folds(buffer_view)
+  if not buffer_view or not buffer_view.fold_regions then return end
+  for i = #buffer_view.fold_regions, 1, -1 do
+    local fold = buffer_view.fold_regions[i]
     if fold.kind == "diff-view" then
-      doc_view:remove_fold_region(fold, "diff-rebuild")
+      buffer_view:remove_fold_region(fold, "diff-rebuild")
     end
   end
 end
 
-local function install_core_diff_folds(doc_view, folds, side)
-  if not doc_view or not doc_view.add_fold_region then return end
+local function install_core_diff_folds(buffer_view, folds, side)
+  if not buffer_view or not buffer_view.add_fold_region then return end
   for _, fold in ipairs(folds or {}) do
-    local core_fold = doc_view:add_fold_region {
+    local core_fold = buffer_view:add_fold_region {
       id = "diff-" .. side .. "-" .. tostring(fold.index),
       line1 = fold.hidden_start,
       col1 = 1,
       line2 = fold.hidden_end,
-      col2 = #(doc_view.doc.lines[fold.hidden_end] or "") + 1,
+      col2 = #(buffer_view.buffer.lines[fold.hidden_end] or "") + 1,
       kind = "diff-view",
       metadata = { diff_fold = fold, side = side },
       placeholder = string.format("⋯ %d unchanged lines folded ⋯", fold.hidden_count),
@@ -810,8 +810,8 @@ end
 local function diff_fold_identity(view, block, opts)
   local a_start, a_end, hidden_count = fold_side_range(block, "a", opts)
   local b_start, b_end = fold_side_range(block, "b", opts)
-  local a_lines = view.doc_view_a and view.doc_view_a.doc and view.doc_view_a.doc.lines or {}
-  local b_lines = view.doc_view_b and view.doc_view_b.doc and view.doc_view_b.doc.lines or {}
+  local a_lines = view.buffer_view_a and view.buffer_view_a.buffer and view.buffer_view_a.buffer.lines or {}
+  local b_lines = view.buffer_view_b and view.buffer_view_b.buffer and view.buffer_view_b.buffer.lines or {}
   local parts = {
     "v2",
     diff_fold_count_bucket(hidden_count),
@@ -832,8 +832,8 @@ local function diff_fold_candidate(view, block, index, opts)
   local keep_start = block.has_prev_change and context or 0
   local keep_end = block.has_next_change and context or 0
   if (block.count or 0) < keep_start + keep_end + min_lines then return nil end
-  local a_lines = view.doc_view_a and view.doc_view_a.doc and view.doc_view_a.doc.lines or {}
-  local b_lines = view.doc_view_b and view.doc_view_b.doc and view.doc_view_b.doc.lines or {}
+  local a_lines = view.buffer_view_a and view.buffer_view_a.buffer and view.buffer_view_a.buffer.lines or {}
+  local b_lines = view.buffer_view_b and view.buffer_view_b.buffer and view.buffer_view_b.buffer.lines or {}
   return {
     index = index,
     block = block,
@@ -991,12 +991,12 @@ function DiffView:rebuild_diff_folds()
   local cache = self:fold_state_cache()
   local state_map = cache_state_map(cache, not self.folding_enabled)
   self.rebuilding_diff_folds = true
-  clear_core_diff_folds(self.doc_view_a)
-  clear_core_diff_folds(self.doc_view_b)
+  clear_core_diff_folds(self.buffer_view_a)
+  clear_core_diff_folds(self.buffer_view_b)
   self.diff_folds_a = build_diff_folds(self, candidates, identity_counts, "a", opts, state_map)
   self.diff_folds_b = build_diff_folds(self, candidates, identity_counts, "b", opts, state_map)
-  install_core_diff_folds(self.doc_view_a, self.diff_folds_a, "a")
-  install_core_diff_folds(self.doc_view_b, self.diff_folds_b, "b")
+  install_core_diff_folds(self.buffer_view_a, self.diff_folds_a, "a")
+  install_core_diff_folds(self.buffer_view_b, self.diff_folds_b, "b")
   self.rebuilding_diff_folds = false
   self:save_diff_fold_state()
 end
@@ -1054,51 +1054,51 @@ function DiffView:on_core_fold_event(is_a, event, core_fold, reason)
   if fold then self:expand_fold(fold) end
 end
 
-function DiffView:sync_scroll_from(doc_view, is_a)
-  local other = is_a and self.doc_view_b or self.doc_view_a
-  self.scroll.y, self.scroll.to.y = doc_view.scroll.y, doc_view.scroll.to.y
-  other.scroll.y, other.scroll.to.y = doc_view.scroll.y, doc_view.scroll.to.y
+function DiffView:sync_scroll_from(buffer_view, is_a)
+  local other = is_a and self.buffer_view_b or self.buffer_view_a
+  self.scroll.y, self.scroll.to.y = buffer_view.scroll.y, buffer_view.scroll.to.y
+  other.scroll.y, other.scroll.to.y = buffer_view.scroll.y, buffer_view.scroll.to.y
 end
 
-local function clamp_position_out_of_fold(doc_view, folds, old_line, line, col)
+local function clamp_position_out_of_fold(buffer_view, folds, old_line, line, col)
   if is_fold_widget_line(folds, line) then return line, 1 end
   local hidden, fold = is_fold_hidden_line(folds, line)
   if not hidden then return line, col end
-  if tonumber(line) and tonumber(old_line) and line >= old_line and fold.hidden_end < #doc_view.doc.lines then
+  if tonumber(line) and tonumber(old_line) and line >= old_line and fold.hidden_end < #buffer_view.buffer.lines then
     return fold.hidden_end + 1, 1
   end
   return fold.hidden_start, 1
 end
 
-function DiffView:clamp_selection_out_of_folds(doc_view, is_a, line1, col1, line2, col2)
+function DiffView:clamp_selection_out_of_folds(buffer_view, is_a, line1, col1, line2, col2)
   local folds = is_a and self.diff_folds_a or self.diff_folds_b
   if not folds or #folds == 0 then return line1, col1, line2, col2 end
-  local old_line = doc_view.doc:get_selection()
-  line1, col1 = clamp_position_out_of_fold(doc_view, folds, old_line, line1, col1)
-  if line2 then line2, col2 = clamp_position_out_of_fold(doc_view, folds, old_line, line2, col2) end
+  local old_line = buffer_view.buffer:get_selection()
+  line1, col1 = clamp_position_out_of_fold(buffer_view, folds, old_line, line1, col1)
+  if line2 then line2, col2 = clamp_position_out_of_fold(buffer_view, folds, old_line, line2, col2) end
   return line1, col1, line2, col2
 end
 
-function DiffView:sync_caret_from(doc_view, is_a)
+function DiffView:sync_caret_from(buffer_view, is_a)
   if self.syncing_diff_caret then return end
-  local other = is_a and self.doc_view_b or self.doc_view_a
+  local other = is_a and self.buffer_view_b or self.buffer_view_a
   if not other then return end
   local target_folds = is_a and self.diff_folds_b or self.diff_folds_a
-  local line, col = doc_view.doc:get_selection()
-  local row = visual_rows_before_line(doc_view, line)
+  local line, col = buffer_view.buffer:get_selection()
+  local row = visual_rows_before_line(buffer_view, line)
   local target_line = line_for_visual_row(other, row)
-  local target_col = math.max(1, math.min(col or 1, #(other.doc.lines[target_line] or "")))
-  target_line, target_col = clamp_position_out_of_fold(other, target_folds, other.doc:get_selection(), target_line, target_col)
+  local target_col = math.max(1, math.min(col or 1, #(other.buffer.lines[target_line] or "")))
+  target_line, target_col = clamp_position_out_of_fold(other, target_folds, other.buffer:get_selection(), target_line, target_col)
   self.syncing_diff_caret = true
-  other.doc:set_selection(target_line, target_col, target_line, target_col)
+  other.buffer:set_selection(target_line, target_col, target_line, target_col)
   self.syncing_diff_caret = false
 end
 
 function DiffView:get_scrollable_size()
   return math.max(
     self.size.y,
-    self.doc_view_a:get_scrollable_size(),
-    self.doc_view_b:get_scrollable_size()
+    self.buffer_view_a:get_scrollable_size(),
+    self.buffer_view_b:get_scrollable_size()
   )
 end
 
@@ -1166,15 +1166,15 @@ local function draw_curved_trapezium(x1, x2, start1, end1, start2, end2, color)
   renderer.draw_poly(points, color)
 end
 
-local function draw_gap_marker(doc_view, y, color)
+local function draw_gap_marker(buffer_view, y, color)
   color = alpha_color(color, 190)
   if not color then return end
-  local gw = doc_view:get_gutter_width()
+  local gw = buffer_view:get_gutter_width()
   local h = math.max(1, SCALE)
   renderer.draw_rect(
-    doc_view.position.x + gw,
+    buffer_view.position.x + gw,
     y - h / 2,
-    math.max(0, doc_view.size.x - gw),
+    math.max(0, buffer_view.size.x - gw),
     h,
     color
   )
@@ -1222,18 +1222,18 @@ local function cached_change_blocks(view, side, kind, tags, use_raw_tag)
   return cache[key]
 end
 
-local function line_range_y(doc_view, start_line, end_line)
-  local _, start_y = doc_view:get_line_screen_position(start_line)
-  local _, end_y = doc_view:get_line_screen_position(end_line)
-  local first_row = doc_view:get_visual_row(end_line, 1)
-  local row_count = visual_line_count(doc_view, end_line)
+local function line_range_y(buffer_view, start_line, end_line)
+  local _, start_y = buffer_view:get_line_screen_position(start_line)
+  local _, end_y = buffer_view:get_line_screen_position(end_line)
+  local first_row = buffer_view:get_visual_row(end_line, 1)
+  local row_count = visual_line_count(buffer_view, end_line)
   local end_row = first_row + row_count
   local end_height
-  if doc_view.get_visual_row_y_offset then
-    end_height = doc_view:get_visual_row_y_offset(end_row)
-      - doc_view:get_visual_row_y_offset(first_row)
+  if buffer_view.get_visual_row_y_offset then
+    end_height = buffer_view:get_visual_row_y_offset(end_row)
+      - buffer_view:get_visual_row_y_offset(first_row)
   else
-    end_height = row_count * doc_view:get_line_height()
+    end_height = row_count * buffer_view:get_line_height()
   end
   end_y = end_y + end_height
   return start_y, end_y
@@ -1317,8 +1317,8 @@ function DiffView:install_view_integrations()
   self.views_patched = true
 
   for _, side in ipairs {
-    { view = self.doc_view_a, is_a = true, id = "a" },
-    { view = self.doc_view_b, is_a = false, id = "b" },
+    { view = self.buffer_view_a, is_a = true, id = "a" },
+    { view = self.buffer_view_b, is_a = false, id = "b" },
   } do
     local provider_id = "diff-view"
     side.view:add_decoration_provider(provider_id, diff_decoration_provider(self, side.is_a), { priority = 50 })
@@ -1344,7 +1344,7 @@ function DiffView:install_view_integrations()
       end
       return true
     end)
-    side.view.doc:add_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self), {
+    side.view.buffer:add_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self), {
       after_change = function()
         self:update_diff()
       end,
@@ -1356,8 +1356,8 @@ function DiffView:dispose_integrations()
   if self.disposed then return end
   self.disposed = true
   for _, side in ipairs {
-    { view = self.doc_view_a, id = "a" },
-    { view = self.doc_view_b, id = "b" },
+    { view = self.buffer_view_a, id = "a" },
+    { view = self.buffer_view_b, id = "b" },
   } do
     side.view:remove_decoration_provider("diff-view")
     side.view:remove_poi_provider("diff-view")
@@ -1366,7 +1366,7 @@ function DiffView:dispose_integrations()
     side.view:remove_fold_listener("diff-view")
     side.view:remove_edit_guard("diff-view")
     side.view:remove_visual_row_provider("diff-gaps")
-    side.view.doc:remove_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self))
+    side.view.buffer:remove_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self))
   end
   self.diff_generation = (self.diff_generation or 0) + 1
   if self.request_assigned then
@@ -1379,34 +1379,34 @@ function DiffView:dispose_integrations()
   end
 end
 
-function DiffView:dirty_confirmation_side_docs(opts)
+function DiffView:dirty_confirmation_side_buffers(opts)
   opts = opts or {}
-  local docs = {}
-  for i, doc in ipairs(self.side_docs or {}) do
+  local buffers = {}
+  for i, buffer in ipairs(self.side_buffers or {}) do
     local content = self.request and self.request.contents and self.request.contents[i]
     local needs_confirmation = (self.side_owns and self.side_owns[i]) or (content and (content.kind == "file" or content.requires_dirty_confirmation))
-    if needs_confirmation and not (opts.keep and opts.keep[doc]) then
-      docs[#docs + 1] = doc
+    if needs_confirmation and not (opts.keep and opts.keep[buffer]) then
+      buffers[#buffers + 1] = buffer
     end
   end
-  return docs
+  return buffers
 end
 
-function DiffView:dispose_owned_docs(opts)
-  if self.owned_docs_disposed then return end
+function DiffView:dispose_owned_buffers(opts)
+  if self.owned_buffers_disposed then return end
   opts = opts or {}
-  self.owned_docs_disposed = true
-  for doc, owned in pairs(self.owned_docs or {}) do
-    if owned and not (opts.keep and opts.keep[doc]) and doc.on_close then doc:on_close() end
+  self.owned_buffers_disposed = true
+  for buffer, owned in pairs(self.owned_buffers or {}) do
+    if owned and not (opts.keep and opts.keep[buffer]) and buffer.on_close then buffer:on_close() end
   end
 end
 
 function DiffView:try_close(do_close)
-  prompt_dirty_docs(self:dirty_confirmation_side_docs(), function(confirmed)
+  prompt_dirty_buffers(self:dirty_confirmation_side_buffers(), function(confirmed)
     if not confirmed then return end
     return DiffView.super.try_close(self, function(...)
       self:dispose_integrations()
-      self:dispose_owned_docs()
+      self:dispose_owned_buffers()
       return do_close(...)
     end)
   end)
@@ -1420,24 +1420,24 @@ function DiffView:get_divider_width()
   local connector_min_width = 36 * SCALE
   if config.show_line_numbers == false then return connector_min_width end
   local number_width = math.max(
-    self.doc_view_a:get_line_number_gutter_width(),
-    self.doc_view_b:get_line_number_gutter_width()
+    self.buffer_view_a:get_line_number_gutter_width(),
+    self.buffer_view_b:get_line_number_gutter_width()
   )
   return math.max(connector_min_width, (number_width + style.padding.x * 1.5) * 2)
 end
 
-local function line_number_color(doc, line)
-  for _, line1, _, line2 in doc:get_selections(true) do
+local function line_number_color(buffer, line)
+  for _, line1, _, line2 in buffer:get_selections(true) do
     if line1 > line then break end
     if line >= line1 and line <= line2 then return style.line_number2 end
   end
   return style.line_number
 end
 
-local function draw_divider_side_line_numbers(doc_view, folds, x, width)
+local function draw_divider_side_line_numbers(buffer_view, folds, x, width)
   if config.show_line_numbers == false or width <= 0 then return end
-  local minline, maxline = doc_view:get_visible_line_range()
-  local font = doc_view:get_font()
+  local minline, maxline = buffer_view:get_visible_line_range()
+  local font = buffer_view:get_font()
   local fold_index = 1
   local fold = folds and folds[fold_index]
   local line = minline
@@ -1447,18 +1447,18 @@ local function draw_divider_side_line_numbers(doc_view, folds, x, width)
       fold = folds[fold_index]
     end
     if fold and line >= fold.hidden_start and line <= fold.hidden_end then
-      local _, y = doc_view:get_line_screen_position(fold.hidden_start)
-      local fold_height = doc_view:get_visual_row_height(
-        doc_view:get_visual_row(fold.hidden_start, 1, false)
+      local _, y = buffer_view:get_line_screen_position(fold.hidden_start)
+      local fold_height = buffer_view:get_visual_row_height(
+        buffer_view:get_visual_row(fold.hidden_start, 1, false)
       )
-      if y + fold_height >= doc_view.position.y and y <= doc_view.position.y + doc_view.size.y then
+      if y + fold_height >= buffer_view.position.y and y <= buffer_view.position.y + buffer_view.size.y then
         common.draw_text(font, style.line_number, "…", "right", x, y, width - style.padding.x, fold_height)
       end
       line = fold.hidden_end + 1
     else
-      local y, height = doc_view:get_position_highlight_geometry(line, 1, false)
-      if y + height >= doc_view.position.y and y <= doc_view.position.y + doc_view.size.y then
-        common.draw_text(font, line_number_color(doc_view.doc, line), line, "right", x, y, width - style.padding.x, height)
+      local y, height = buffer_view:get_position_highlight_geometry(line, 1, false)
+      if y + height >= buffer_view.position.y and y <= buffer_view.position.y + buffer_view.size.y then
+        common.draw_text(font, line_number_color(buffer_view.buffer, line), line, "right", x, y, width - style.padding.x, height)
       end
       line = line + 1
     end
@@ -1468,13 +1468,13 @@ end
 function DiffView:draw_divider_line_numbers(x1, x2)
   if config.show_line_numbers == false then return end
   local center = x1 + (x2 - x1) / 2
-  draw_divider_side_line_numbers(self.doc_view_a, self.diff_folds_a, x1, center - x1)
-  draw_divider_side_line_numbers(self.doc_view_b, self.diff_folds_b, center, x2 - center)
+  draw_divider_side_line_numbers(self.buffer_view_a, self.diff_folds_a, x1, center - x1)
+  draw_divider_side_line_numbers(self.buffer_view_b, self.diff_folds_b, center, x2 - center)
 end
 
 function DiffView:draw_divider_changes()
-  local left = self.doc_view_a
-  local right = self.doc_view_b
+  local left = self.buffer_view_a
+  local right = self.buffer_view_b
   local x1 = left.position.x + left.size.x
   local x2 = right.position.x
   if x2 <= x1 then return end
@@ -1523,8 +1523,8 @@ end
 
 function DiffView:draw_scrollbar()
   for _, side in ipairs {
-    {view = self.doc_view_a, blocks = cached_change_blocks(self, "a", "overview")},
-    {view = self.doc_view_b, blocks = cached_change_blocks(self, "b", "overview")},
+    {view = self.buffer_view_a, blocks = cached_change_blocks(self, "a", "overview")},
+    {view = self.buffer_view_b, blocks = cached_change_blocks(self, "b", "overview")},
   } do
     local view = side.view
     local scrollbar = view.v_scrollbar
@@ -1557,34 +1557,34 @@ function DiffView:draw_scrollbar()
     end
   end
 
-  redraw_thumb(self.doc_view_a.v_scrollbar)
-  redraw_thumb(self.doc_view_b.v_scrollbar)
+  redraw_thumb(self.buffer_view_a.v_scrollbar)
+  redraw_thumb(self.buffer_view_b.v_scrollbar)
 end
 
 function DiffView:update()
   DiffView.super.update(self)
   local divider_half = self:get_divider_width() / 2
 
-  self.doc_view_a.position.x = self.position.x
-  self.doc_view_a.position.y = self.position.y
-  self.doc_view_a.size.x = math.max(0, (self.size.x / 2) - divider_half)
-  self.doc_view_a.size.y = self.size.y
+  self.buffer_view_a.position.x = self.position.x
+  self.buffer_view_a.position.y = self.position.y
+  self.buffer_view_a.size.x = math.max(0, (self.size.x / 2) - divider_half)
+  self.buffer_view_a.size.y = self.size.y
 
-  self.doc_view_b.position.x = (self.position.x + self.size.x / 2) + divider_half
-  self.doc_view_b.position.y = self.position.y
-  self.doc_view_b.size.x = math.max(0, (self.size.x / 2) - divider_half)
-  self.doc_view_b.size.y = self.size.y
+  self.buffer_view_b.position.x = (self.position.x + self.size.x / 2) + divider_half
+  self.buffer_view_b.position.y = self.position.y
+  self.buffer_view_b.size.x = math.max(0, (self.size.x / 2) - divider_half)
+  self.buffer_view_b.size.y = self.size.y
 
-  call_docview_method(self.doc_view_a, self.doc_view_a.update)
-  call_docview_method(self.doc_view_b, self.doc_view_b.update)
+  call_textview_method(self.buffer_view_a, self.buffer_view_a.update)
+  call_textview_method(self.buffer_view_b, self.buffer_view_b.update)
   self:refresh_core_gap_rows(false)
 end
 
 function DiffView:draw()
   DiffView.super.draw(self)
   self:draw_background(style.background)
-  call_docview_method(self.doc_view_a, self.doc_view_a.draw)
-  call_docview_method(self.doc_view_b, self.doc_view_b.draw)
+  call_textview_method(self.buffer_view_a, self.buffer_view_a.draw)
+  call_textview_method(self.buffer_view_b, self.buffer_view_b.draw)
   self:draw_divider_changes()
   self:draw_scrollbar()
 end
@@ -1617,22 +1617,22 @@ end
 
 
 -- Register file compare commands
-command.add("core.docview", {
+command.add("core.textview", {
   ["diff-view:select-file-for-compare"] = function(dv)
-    if dv.doc and dv.doc.abs_filename then
-      element_a = dv.doc.abs_filename
+    if dv.buffer and dv.buffer.abs_filename then
+      element_a = dv.buffer.abs_filename
     end
   end
 })
 
 command.add(
   function()
-    return element_a and core.active_view and core.active_view:is(DocView),
+    return element_a and core.active_view and core.active_view:is(TextView),
     core.active_view
   end, {
   ["diff-view:compare-file-with-selected"] = function(dv)
-    if dv.doc and dv.doc.abs_filename then
-      element_b = dv.doc.abs_filename
+    if dv.buffer and dv.buffer.abs_filename then
+      element_b = dv.buffer.abs_filename
     end
     start_compare()
   end
@@ -1714,8 +1714,8 @@ local function navigate_diff_change(dv, direction)
   local points = poi.points_for_view(dv, { source = "diff-view" }) or {}
   if #points == 0 then return poi.navigate(dv, direction) end
   direction = direction and direction < 0 and -1 or 1
-  return with_docview_selection(dv, function()
-    local line = dv.doc:get_selection()
+  return with_textview_selection(dv, function()
+    local line = dv.buffer:get_selection()
     local selected
     if direction > 0 then
       for _, point in ipairs(points) do
@@ -1728,7 +1728,7 @@ local function navigate_diff_change(dv, direction)
       end
       selected = selected or points[#points]
     end
-    dv.doc:set_selection(selected.line, selected.col or 1, selected.line, selected.col or 1)
+    dv.buffer:set_selection(selected.line, selected.col or 1, selected.line, selected.col or 1)
     if selected.scroll_to_line and dv.scroll_to_line then
       dv:scroll_to_line(selected.line, false, true)
     elseif dv.scroll_to_make_visible then
@@ -1742,7 +1742,7 @@ end
 command.add(
   function()
     return core.active_view
-        and core.active_view:is(DocView)
+        and core.active_view:is(TextView)
         and core.active_view.diff_view_parent,
       core.active_view
   end, {
@@ -1775,29 +1775,29 @@ keymap.add({
 
 -- Register text compare commands
 local function text_select_compare_predicate()
-  local is_docview = core.active_view
-    and core.active_view:is(DocView)
-    and core.active_view.doc
-  local has_selection = is_docview and core.active_view.doc:has_any_selection()
-  return has_selection, has_selection and core.active_view.doc
+  local is_textview = core.active_view
+    and core.active_view:is(TextView)
+    and core.active_view.buffer
+  local has_selection = is_textview and core.active_view.buffer:has_any_selection()
+  return has_selection, has_selection and core.active_view.buffer
 end
 
 local function text_compare_with_predicate()
-  local is_docview = (element_a_text and core.active_view)
-    and (core.active_view:is(DocView) and core.active_view.doc)
-  local has_selection = is_docview and core.active_view.doc:has_any_selection()
-  return has_selection, has_selection and core.active_view.doc
+  local is_textview = (element_a_text and core.active_view)
+    and (core.active_view:is(TextView) and core.active_view.buffer)
+  local has_selection = is_textview and core.active_view.buffer:has_any_selection()
+  return has_selection, has_selection and core.active_view.buffer
 end
 
 command.add(text_select_compare_predicate, {
-  ["diff-view:select-text-for-compare"] = function(doc)
-    element_a_text = doc:get_selection_text()
+  ["diff-view:select-text-for-compare"] = function(buffer)
+    element_a_text = buffer:get_selection_text()
   end
 })
 
 command.add(text_compare_with_predicate, {
-  ["diff-view:compare-text-with-selected"] = function(doc)
-    element_b_text = doc:get_selection_text()
+  ["diff-view:compare-text-with-selected"] = function(buffer)
+    element_b_text = buffer:get_selection_text()
     start_compare_string()
   end
 })
@@ -1862,10 +1862,10 @@ end
 DiffRequestController = {}
 DiffRequestController.__index = DiffRequestController
 
-local function request_owned_doc_keep_set(request)
+local function request_owned_buffer_keep_set(request)
   local keep = {}
   for _, content in ipairs(request.contents or {}) do
-    if content.kind == "document" and content.owns_doc then keep[content.doc] = true end
+    if content.kind == "buffer" and content.owns_buffer then keep[content.buffer] = true end
   end
   return keep
 end
@@ -1917,11 +1917,11 @@ function DiffRequestController:reload(opts)
   end
   if old_view then
     old_view:dispose_integrations()
-    old_view:dispose_owned_docs({ keep = request_owned_doc_keep_set(request) })
+    old_view:dispose_owned_buffers({ keep = request_owned_buffer_keep_set(request) })
   end
   view:assign_request()
   if attached then
-    local focus_side = request.preferred_focus_side == "right" and view.doc_view_b or view.doc_view_a
+    local focus_side = request.preferred_focus_side == "right" and view.buffer_view_b or view.buffer_view_a
     core.set_active_view(focus_side or view)
   end
   return view
@@ -1931,13 +1931,13 @@ function DiffRequestController:adopt_current_side(side)
   local idx = side_index(side)
   local view = self.view
   if not (idx and view) then return end
-  local doc = idx == 1 and view.doc_view_a.doc or view.doc_view_b.doc
+  local buffer = idx == 1 and view.buffer_view_a.buffer or view.buffer_view_b.buffer
   local owns = view.side_owns and view.side_owns[idx]
   local title = view.request.content_titles and view.request.content_titles[idx]
   local old_content = view.request.contents and view.request.contents[idx]
-  local adopted = content_document(doc, {
-    name = title or doc:get_name(),
-    owns_doc = owns == true,
+  local adopted = content_buffer(buffer, {
+    name = title or buffer:get_name(),
+    owns_buffer = owns == true,
     editable = old_content and old_content.editable,
     read_only_reason = old_content and old_content.read_only_reason,
     syntax_hint = old_content and old_content.syntax_hint,
@@ -1958,12 +1958,12 @@ function DiffRequestController:replace_content(side, content, opts)
     return self:reload(opts)
   end
   local view = self.view
-  local doc = view and view.side_docs and view.side_docs[idx]
+  local buffer = view and view.side_buffers and view.side_buffers[idx]
   local old_content = view and view.request and view.request.contents and view.request.contents[idx]
   local owns = view and view.side_owns and view.side_owns[idx]
   local needs_confirmation = owns or (old_content and (old_content.kind == "file" or old_content.requires_dirty_confirmation))
-  if needs_confirmation and doc and doc:is_dirty() then
-    prompt_dirty_docs({ doc }, function(confirmed)
+  if needs_confirmation and buffer and buffer:is_dirty() then
+    prompt_dirty_buffers({ buffer }, function(confirmed)
       if confirmed then finish() end
     end)
     return nil, "pending-confirmation"
@@ -1986,7 +1986,7 @@ function DiffRequestController:dispose()
   self.disposed = true
   if self.view then
     self.view:dispose_integrations()
-    self.view:dispose_owned_docs()
+    self.view:dispose_owned_buffers()
     self.view = nil
   end
 end
@@ -2004,7 +2004,7 @@ diffview = {
 
 diffview.content.text = content_text
 diffview.content.file = content_file
-diffview.content.document = content_document
+diffview.content.buffer = content_buffer
 diffview.content.blank = content_blank
 diffview.content.empty = content_empty
 

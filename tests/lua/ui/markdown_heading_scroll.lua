@@ -1,8 +1,8 @@
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
 local test = require "core.test"
@@ -24,22 +24,22 @@ local function make_view()
   for line = 1, 60 do
     lines[line] = line == 36 and "### Customize callouts" or ""
   end
-  local doc = Doc("markdown-heading-scroll.md", "markdown-heading-scroll.md", true)
-  doc:insert(1, 1, table.concat(lines, "\n"))
-  doc:clear_undo_redo()
+  local buffer = Buffer("markdown-heading-scroll.md", "markdown-heading-scroll.md", true)
+  buffer:insert(1, 1, table.concat(lines, "\n"))
+  buffer:clear_undo_redo()
 
-  local view = DocView(doc)
+  local view = Editor(buffer)
   view.position.x, view.position.y = 0, 0
   -- Match the reported editor viewport closely enough to exercise its
-  -- context-boundary scrolling rather than the short-document case.
+  -- context-boundary scrolling rather than the short-buffer case.
   view.size.x, view.size.y = 1620, 523
   view:set_wrapping_enabled(true)
-  return view, doc
+  return view, buffer
 end
 
 local function refresh(view)
   markdown.live_render.refresh_view(view)
-  local instance = test.not_nil(markdown_model.peek(view.doc))
+  local instance = test.not_nil(markdown_model.peek(view.buffer))
   test.ok(wait_ready(instance), instance.reason)
 end
 
@@ -76,22 +76,22 @@ test.describe("Markdown heading navigation scrolling", function()
   end)
 
   test.it("keeps a rendered heading in the same navigation context as adjacent lines", function(context)
-    local view, doc = make_view()
+    local view, buffer = make_view()
     context.view = view
     refresh(view)
     core.set_active_view(view)
 
-    doc:set_selection(1, 1)
+    buffer:set_selection(1, 1)
     view:update()
     view.scroll.y, view.scroll.to.y = 0, 0
 
-    for _ = 2, 35 do move_and_update(view, "doc:move-to-next-line") end
+    for _ = 2, 35 do move_and_update(view, "text:move-to-next-line") end
     local before_heading_y = highlight_top(view, 35)
 
-    move_and_update(view, "doc:move-to-next-line")
+    move_and_update(view, "text:move-to-next-line")
     local heading_y = highlight_top(view, 36)
 
-    move_and_update(view, "doc:move-to-next-line")
+    move_and_update(view, "text:move-to-next-line")
     local after_heading_y = highlight_top(view, 37)
     local context_height = view:get_line_height()
 
@@ -110,9 +110,9 @@ test.describe("Markdown heading navigation scrolling", function()
       )
     )
 
-    move_and_update(view, "doc:move-to-previous-line")
+    move_and_update(view, "text:move-to-previous-line")
     local heading_up_y = highlight_top(view, 36)
-    move_and_update(view, "doc:move-to-previous-line")
+    move_and_update(view, "text:move-to-previous-line")
     local before_heading_up_y = highlight_top(view, 35)
 
     test.ok(

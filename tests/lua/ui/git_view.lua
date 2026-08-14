@@ -112,7 +112,7 @@ test.describe("Git View command", function()
     test.not_nil(first.git_view)
   end)
 
-  test.test("opening a Git Pane Tab focuses the visible list DocView", function(context)
+  test.test("opening a Git Pane Tab focuses the visible list TextView", function(context)
     local tw, view = open_fake_git_view(context.project)
     test.equal(core.active_view.git_owner_view, view)
     test.equal(core.active_view.git_pane, "log-list")
@@ -267,51 +267,51 @@ test.describe("Git View command", function()
     view.model.tabs[#view.model.tabs + 1] = tab
     local tab_view = git_view.ensure_tab_view(tw, tab, true)
 
-    tab_view:update_pane_docs()
+    tab_view:update_pane_buffers()
     local list = tab_view:pane_view("file-list")
     test.ok(list:extends(path_tree.View))
-    test.equal(list.doc.lines[1], "src/main/\n")
-    test.equal(list.doc.lines[2], "\tApp.kt\n")
-    test.equal(list.doc.lines[3], "\tUtil.kt\n")
-    test.equal(list.doc.lines[4], "README.md\n")
+    test.equal(list.buffer.lines[1], "src/main/\n")
+    test.equal(list.buffer.lines[2], "\tApp.kt\n")
+    test.equal(list.buffer.lines[3], "\tUtil.kt\n")
+    test.equal(list.buffer.lines[4], "README.md\n")
     test.equal(list.git_file_line_to_index[2], 1)
     test.equal(list.git_file_line_to_index[3], 3)
     test.equal(list.git_file_index_to_line[3], 3)
     test.equal(list.git_file_index_to_line[2], 4)
-    test.equal(list.doc:get_selection(), 3)
+    test.equal(list.buffer:get_selection(), 3)
     local hint = list:get_line_hint(2)
     test.equal(hint[1].text, "+2")
     test.equal(hint[2].text, " −44")
 
     core.active_view = list
-    list.doc:set_selection(1, 1)
+    list.buffer:set_selection(1, 1)
     tab_view:sync_selection_from_pane()
     test.equal(tab.selected_file, 3)
-    list.doc:set_selection(2, 1)
+    list.buffer:set_selection(2, 1)
     tab_view:sync_selection_from_pane()
     test.equal(tab.selected_file, 1)
 
-    list.doc:set_selection(1, 1)
+    list.buffer:set_selection(1, 1)
     test.equal(command.perform("git:activate-selected-row"), true)
-    test.equal(list.doc.lines[2], "README.md\n")
-    test.equal(list.doc.lines[3], nil)
+    test.equal(list.buffer.lines[2], "README.md\n")
+    test.equal(list.buffer.lines[3], nil)
     test.equal(tab.selected_file, 1)
     test.equal(command.perform("git:activate-selected-row"), true)
-    test.equal(list.doc.lines[2], "\tApp.kt\n")
-    test.equal(list.doc.lines[3], "\tUtil.kt\n")
+    test.equal(list.buffer.lines[2], "\tApp.kt\n")
+    test.equal(list.buffer.lines[3], "\tUtil.kt\n")
 
     tab_view:select_relative(1)
     test.equal(tab.selected_file, 3)
-    test.equal(list.doc:get_selection(), 3)
+    test.equal(list.buffer:get_selection(), 3)
     tab_view:select_relative(1)
     test.equal(tab.selected_file, 2)
-    test.equal(list.doc:get_selection(), 4)
+    test.equal(list.buffer:get_selection(), 4)
 
     view.model:log_tab().commits = {
       { hash = "tree", subject = "Tree", changed_files = tab.changed_files, changed_files_loaded = true },
     }
     view.model:log_tab().selected_commit = 1
-    view:update_pane_docs()
+    view:update_pane_buffers()
     local details = view:pane_view("details")
     test.ok(details:extends(path_tree.View))
     test.same(details.path_tree:lines(), list.path_tree:lines())
@@ -332,19 +332,19 @@ test.describe("Git View command", function()
     }
     view.model.tabs[#view.model.tabs + 1] = tab
     local tab_view = git_view.ensure_tab_view(tw, tab, true)
-    tab_view:update_pane_docs()
+    tab_view:update_pane_buffers()
     local list = tab_view:pane_view("file-list")
     core.active_view = list
-    list.doc:set_selection(1, 1)
+    list.buffer:set_selection(1, 1)
 
     test.equal(command.perform("git:activate-selected-row"), true)
     test.equal(tab.selected_file, 2)
-    test.equal(list.doc.lines[1], "src/main/\n")
-    test.equal(list.doc.lines[2], "README.md\n")
+    test.equal(list.buffer.lines[1], "src/main/\n")
+    test.equal(list.buffer.lines[2], "README.md\n")
 
     core.active_view = tab_view
-    tab_view:update_pane_docs()
-    test.equal(list.doc:get_selection(), 1)
+    tab_view:update_pane_buffers()
+    test.equal(list.buffer:get_selection(), 1)
   end)
 
   test.it("activates a changed file from Git Log details with that file preselected", function(context)
@@ -369,22 +369,22 @@ test.describe("Git View command", function()
     view.model.backend = backend
     view.model:log_tab().commits = { commit }
     view.model:log_tab().selected_commit = 1
-    view:update_pane_docs()
+    view:update_pane_buffers()
 
     local details = view:pane_view("details")
     local folder_line = details.path_tree_line_offset + details.path_tree:line_for_path("src", "dir")
     core.active_view = details
-    details.doc:set_selection(folder_line, 1)
+    details.buffer:set_selection(folder_line, 1)
     test.equal(view:activate_selected_point(function() core.redraw = true end), nil)
-    view:update_pane_docs()
+    view:update_pane_buffers()
     test.equal(details.path_tree:is_expanded("src"), false)
     test.equal(details.path_tree:line_for_record(3), nil)
     test.equal(view:activate_selected_point(function() core.redraw = true end), nil)
-    view:update_pane_docs()
+    view:update_pane_buffers()
     test.equal(details.path_tree:is_expanded("src"), true)
 
     local line = details.path_tree_line_offset + details.path_tree:line_for_record(3)
-    details.doc:set_selection(line, 1)
+    details.buffer:set_selection(line, 1)
     test.not_nil(details:get_point_of_interest_at(line))
 
     test.equal(command.perform("poi:activate"), true)
@@ -409,21 +409,21 @@ test.describe("Git View command", function()
     }
     view.model:log_tab().commits = { commit }
     view.model:log_tab().selected_commit = 1
-    view:update_pane_docs()
+    view:update_pane_buffers()
     local details = view:pane_view("details")
     local line = details.path_tree_line_offset + details.path_tree:line_for_record(1)
     local before = details:get_col_x_offset(line, 100)
-    local before_revision = details.doc.text_revision
+    local before_revision = details.buffer.text_revision
 
     commit.changed_files = {
       { status = "modified", old_path = "a/x.txt", new_path = "a/x.txt" },
       { status = "modified", old_path = long_name, new_path = long_name },
     }
-    view:update_pane_docs()
+    view:update_pane_buffers()
     local after = details:get_col_x_offset(line, 100)
 
     test.not_equal(before, after)
-    test.ok(details.doc.text_revision > before_revision)
+    test.ok(details.buffer.text_revision > before_revision)
   end)
 
   test.test("commit diff tabs can focus diff content and return to the Git list", function(context)
@@ -456,7 +456,7 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_pane, "file-list")
   end)
 
-  test.it("focused Git diff DocView becomes the active Git pane", function(context)
+  test.it("focused Git diff TextView becomes the active Git pane", function(context)
     local tw, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-caret",
@@ -478,22 +478,22 @@ test.describe("Git View command", function()
 
     test.equal(command.perform("git:focus-diff-pane"), true)
     local diff = tab.diff_view
-    local doc_view = diff.doc_view_a
-    test.equal(core.active_view, doc_view)
+    local buffer_view = diff.buffer_view_a
+    test.equal(core.active_view, buffer_view)
     test.equal(core.active_view.git_owner_view, tab_view)
   end)
 
-  test.it("keeps Git Log pane DocViews unwrapped", function(context)
+  test.it("keeps Git Log pane TextViews unwrapped", function(context)
     config.plugins.linewrapping.enable_by_default = true
     local tw, view = open_fake_git_view(context.project)
-    view:update_pane_docs()
+    view:update_pane_buffers()
     local list = view:pane_view("log-list")
     local details = view:pane_view("details")
     test.equal(list:is_wrapping_enabled(), false)
     test.equal(details:is_wrapping_enabled(), false)
   end)
 
-  test.test("pane focus cycle enters Log list and details DocViews", function(context)
+  test.test("pane focus cycle enters Log list and details TextViews", function(context)
     local tw, view = open_fake_git_view(context.project)
     core.active_view = view
 
@@ -504,9 +504,9 @@ test.describe("Git View command", function()
     test.equal(core.active_view:draw_line_gutter(1, 0, 0, 0), core.active_view:get_line_height())
     tw:activate_root()
     test.equal(core.active_view.git_pane, "log-list")
-    core.active_view.doc:set_selection(1, 2)
+    core.active_view.buffer:set_selection(1, 2)
     tw:activate_root()
-    test.equal(select(2, core.active_view.doc:get_selection()), 2)
+    test.equal(select(2, core.active_view.buffer:get_selection()), 2)
     test.equal(command.perform("git:focus-next-pane"), true)
     test.equal(core.active_view.git_pane, "details")
   end)
@@ -575,22 +575,22 @@ test.describe("Git View command", function()
     test.equal(diff.request.user_data.source, "git")
     test.equal(diff.request.user_data.read_only_reason, "Git commit diff is read-only")
     test.equal(diff.request.editable_policy, "read-only")
-    test.equal(core.active_view, diff.doc_view_a)
-    diff.doc_view_a.get_points_of_interest = function()
+    test.equal(core.active_view, diff.buffer_view_a)
+    diff.buffer_view_a.get_points_of_interest = function()
       return { { line = 2, col = 1, line_only_navigation = true, scroll_to_line = true } }
     end
-    diff.doc_view_a.doc:set_selection(1, 1)
+    diff.buffer_view_a.buffer:set_selection(1, 1)
     test.equal(command.perform("poi:next"), true)
-    local line = diff.doc_view_a.doc:get_selection()
+    local line = diff.buffer_view_a.buffer:get_selection()
     test.equal(line, 2)
 
     test.equal(command.perform("git:focus-next-pane"), true)
-    test.equal(core.active_view, diff.doc_view_b)
+    test.equal(core.active_view, diff.buffer_view_b)
     test.equal(command.perform("git:focus-next-pane"), true)
     test.equal(core.active_view.git_pane, "file-list")
 
     test.equal(command.perform("git:focus-next-pane"), true)
-    test.equal(core.active_view, diff.doc_view_a)
+    test.equal(core.active_view, diff.buffer_view_a)
     test.equal(command.perform("git:close-selected-tab"), true)
     test.ok(core.active_view ~= tab_view)
     test.ok(core.active_view.git_owner_view ~= tab_view)
@@ -615,7 +615,7 @@ test.describe("Git View command", function()
     test.equal(command.perform("git:select-next-row"), true)
     test.equal(view.model:selected_commit().hash, "b")
     local list = view:pane_view("log-list")
-    test.equal(list.doc:get_selection(), 2)
+    test.equal(list.buffer:get_selection(), 2)
     test.equal(command.perform("poi:activate"), true)
     test.equal(view.model:selected_tab().kind, "commit_diff")
     test.equal(#tw.root:get_active_node_default().views, 2)
@@ -672,7 +672,7 @@ test.describe("Git View command", function()
     }
     view.model.tabs[#view.model.tabs + 1] = tab
     local tab_view = git_view.ensure_tab_view(tw, tab, true)
-    tab_view:update_pane_docs()
+    tab_view:update_pane_buffers()
     local list = tab_view:pane_view("file-list")
     list.position.x, list.position.y = 0, 0
     list.size.x, list.size.y = 240, 80
@@ -898,7 +898,7 @@ test.describe("Git View command", function()
     test.not_nil(command.map["git:open-working-tree-diff"])
     test.not_nil(command.map["git:show-file-history"])
     test.not_nil(command.map["git:show-selection-history"])
-    test.not_nil(command.map["git:open-selected-historical-document"])
+    test.not_nil(command.map["git:open-selected-historical-buffer"])
     test.not_nil(command.map["git:close-selected-tab"])
     test.not_nil(command.map["git:select-next-row"])
     test.not_nil(command.map["git:select-previous-row"])

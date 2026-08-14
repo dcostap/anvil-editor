@@ -17,15 +17,15 @@ local function path_key(path)
   return path and common.path_compare_key(path) or nil
 end
 
----Returns the normalized file path represented by a Document.
----@param doc core.doc
+---Returns the normalized file path represented by a Buffer.
+---@param buffer core.buffer
 ---@return string?
-function language_mode.document_path(doc)
-  if not doc then return nil end
-  local path = doc.abs_filename
-  if not path and doc.filename then
+function language_mode.buffer_path(buffer)
+  if not buffer then return nil end
+  local path = buffer.abs_filename
+  if not path and buffer.filename then
     local project = core.root_project and core.root_project()
-    if project and project.path then path = project.path .. PATHSEP .. doc.filename end
+    if project and project.path then path = project.path .. PATHSEP .. buffer.filename end
   end
   return normalized_path(path)
 end
@@ -52,14 +52,14 @@ local function stored_override(path)
   return entry and entry.mode or nil
 end
 
----Returns the explicit mode for a Document, including its named-file Workspace association.
----@param doc core.doc
+---Returns the explicit mode for a Buffer, including its named-file Workspace association.
+---@param buffer core.buffer
 ---@param path? string
 ---@return string?
-function language_mode.override_for_document(doc, path)
-  if doc.language_mode_override then return doc.language_mode_override end
-  local mode = stored_override(path or language_mode.document_path(doc))
-  if mode then doc.language_mode_override = mode end
+function language_mode.override_for_buffer(buffer, path)
+  if buffer.language_mode_override then return buffer.language_mode_override end
+  local mode = stored_override(path or language_mode.buffer_path(buffer))
+  if mode then buffer.language_mode_override = mode end
   return mode
 end
 
@@ -73,12 +73,12 @@ local function set_path_override(path, mode)
   end
 end
 
----Moves a Document-owned override when its path changes, including untitled Save As.
----@param doc core.doc
+---Moves a Buffer-owned override when its path changes, including untitled Save As.
+---@param buffer core.buffer
 ---@param old_path? string
 ---@param new_path? string
-function language_mode.on_document_path_changed(doc, old_path, new_path)
-  local mode = doc and doc.language_mode_override
+function language_mode.on_buffer_path_changed(buffer, old_path, new_path)
+  local mode = buffer and buffer.language_mode_override
   if not mode then return end
   if old_path and (not new_path or path_key(old_path) ~= path_key(new_path)) then
     set_path_override(old_path, nil)
@@ -86,28 +86,28 @@ function language_mode.on_document_path_changed(doc, old_path, new_path)
   if new_path then set_path_override(new_path, mode) end
 end
 
----Sets or clears a Document's explicit Language Mode.
----@param doc core.doc
+---Sets or clears a Buffer's explicit Language Mode.
+---@param buffer core.buffer
 ---@param mode string|false|nil
 ---@param opts? { persist?:boolean, reason?:string }
 ---@return boolean changed
 ---@return string? error
-function language_mode.set_document_mode(doc, mode, opts)
+function language_mode.set_buffer_mode(buffer, mode, opts)
   opts = opts or {}
   local resolved, canonical_name, err = language_mode.resolve(mode)
   if err then return false, err end
 
-  local old_mode = doc.language_mode_override
+  local old_mode = buffer.language_mode_override
   local changed = old_mode ~= canonical_name
-  doc.language_mode_override = canonical_name
+  buffer.language_mode_override = canonical_name
   if opts.persist ~= false then
-    set_path_override(language_mode.document_path(doc), canonical_name)
+    set_path_override(language_mode.buffer_path(buffer), canonical_name)
   end
 
-  local syntax_changed = doc:reset_syntax({ reason = opts.reason or "language-mode" })
+  local syntax_changed = buffer:reset_syntax({ reason = opts.reason or "language-mode" })
   core.log_quiet(
     "Language Mode: %s %s -> %s (syntax_changed=%s)",
-    tostring(doc.get_name and doc:get_name() or doc),
+    tostring(buffer.get_name and buffer:get_name() or buffer),
     tostring(old_mode or "Automatic"),
     tostring(canonical_name or "Automatic"),
     tostring(syntax_changed)
@@ -170,9 +170,9 @@ function language_mode.save_workspace_state()
 end
 
 syntax.add_registry_listener(language_mode, function()
-  for _, doc in ipairs(core.docs or {}) do
-    if doc.language_mode_override and doc.reset_syntax then
-      doc:reset_syntax({ reason = "language-mode-registry-change" })
+  for _, buffer in ipairs(core.buffers or {}) do
+    if buffer.language_mode_override and buffer.reset_syntax then
+      buffer:reset_syntax({ reason = "language-mode-registry-change" })
     end
   end
 end)

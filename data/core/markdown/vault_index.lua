@@ -46,7 +46,7 @@ local ATTACHMENT_EXTENSIONS = {
 local indexes_by_root = {}
 local link_path_policies = {}
 local pending_renames = {}
-local doc_hooks_installed = false
+local buffer_hooks_installed = false
 
 local function trim(text)
   text = text or ""
@@ -204,9 +204,9 @@ function Index:new(root)
     note_keys_ci = {},
     attachment_keys = {},
     attachment_keys_ci = {},
-    doc_listeners = setmetatable({}, { __mode = "k" }),
-    doc_overlays = setmetatable({}, { __mode = "k" }),
-    doc_overlay_jobs = setmetatable({}, { __mode = "k" }),
+    buffer_listeners = setmetatable({}, { __mode = "k" }),
+    buffer_overlays = setmetatable({}, { __mode = "k" }),
+    buffer_overlay_jobs = setmetatable({}, { __mode = "k" }),
     consumers = {},
     watcher = nil,
     watcher_serial = 0,
@@ -214,15 +214,15 @@ function Index:new(root)
     pending_watch_dirs = {},
     pending_scan_dirs = {},
     subtree_scan_running = false,
-    doc_update_serials = setmetatable({}, { __mode = "k" }),
-    doc_overlay_serials = setmetatable({}, { __mode = "k" }),
+    buffer_update_serials = setmetatable({}, { __mode = "k" }),
+    buffer_overlay_serials = setmetatable({}, { __mode = "k" }),
     watch_dir_limit = MAX_NATIVE_WATCH_DIRS,
     watch_dir_count = 0,
     watcher_mode = "stopped",
     show_unsupported_files = obsidian_settings.showUnsupportedFiles == true,
     diagnostics = {
-      doc_updates = 0,
-      doc_updates_coalesced = 0,
+      buffer_updates = 0,
+      buffer_updates_coalesced = 0,
       degraded_rescans = 0,
       last_rebuild = nil,
     },
@@ -549,7 +549,7 @@ function Index:release(id)
   self.consumers[id] = nil
   if not next(self.consumers) then
     self:stop_watcher()
-    if not next(self.doc_listeners) and (self.manifest_job or self.vault_job) then
+    if not next(self.buffer_listeners) and (self.manifest_job or self.vault_job) then
       self.rebuild_serial = self.rebuild_serial + 1
       local pool = worker_pool.current_system()
       if pool then
@@ -682,7 +682,7 @@ function Index:rebuild_async(reason)
           if serial ~= self.rebuild_serial then close_unadopted_manifest(); release_vault_snapshot(snapshot); return end
           self.vault_job = nil
           local overlays = {}
-          for _, entry in pairs(self.notes_by_abs) do if entry.doc then overlays[#overlays + 1] = entry end end
+          for _, entry in pairs(self.notes_by_abs) do if entry.buffer then overlays[#overlays + 1] = entry end end
           self.notes_by_abs, self.attachments_by_abs = {}, {}
           self.note_keys, self.note_keys_ci = {}, {}
           self.attachment_keys, self.attachment_keys_ci = {}, {}
@@ -900,7 +900,7 @@ function Index:plan_note_rename(old_path, new_path)
   end
   for _, entry in ipairs(entries) do
     local source_path = common.path_equals(entry.abs_path, old_path) and new_path or entry.abs_path
-    local text = entry.doc and entry.doc:get_text(1, 1, math.huge, math.huge) or read_file(entry.abs_path)
+    local text = entry.buffer and entry.buffer:get_text(1, 1, math.huge, math.huge) or read_file(entry.abs_path)
     if text then
       local lines = parser.split_lines(text)
       local edits = {}
@@ -926,7 +926,7 @@ function Index:plan_note_rename(old_path, new_path)
         files[#files + 1] = {
           path = common.normalize_path(source_path),
           old_source_path = entry.abs_path,
-          doc = entry.doc,
+          buffer = entry.buffer,
           edits = edits,
         }
       end
@@ -1038,18 +1038,18 @@ function Index:update_path(path, opts)
   return self:note(path) ~= nil or self:attachment(path) ~= nil
 end
 
-function Index:update_doc(doc, opts)
+function Index:update_buffer(buffer, opts)
   opts = opts or {}
-  if not (doc and doc.abs_filename and is_markdown(doc.abs_filename)) then return false end
-  if not common.path_belongs_to(common.normalize_path(doc.abs_filename), self.root) then return false end
+  if not (buffer and buffer.abs_filename and is_markdown(buffer.abs_filename)) then return false end
+  if not common.path_belongs_to(common.normalize_path(buffer.abs_filename), self.root) then return false end
   local pool = worker_pool.current_system()
   if not pool then return false end
-  local text = doc:get_text(1, 1, math.huge, math.huge)
-  local serial = (self.doc_overlay_serials[doc] or 0) + 1
-  self.doc_overlay_serials[doc] = serial
-  local old_job = self.doc_overlay_jobs[doc]
+  local text = buffer:get_text(1, 1, math.huge, math.huge)
+  local serial = (self.buffer_overlay_serials[buffer] or 0) + 1
+  self.buffer_overlay_serials[buffer] = serial
+  local old_job = self.buffer_overlay_jobs[buffer]
   if old_job then pool:cancel(old_job) end
-  local path = common.normalize_path(doc.abs_filename)
+  local path = common.normalize_path(buffer.abs_filename)
   local handle, submit_error = pool:submit {
     kind = "markdown-vault-overlay",
     generation = serial,
@@ -1063,42 +1063,42 @@ function Index:update_doc(doc, opts)
       shallow_note_bytes = MAX_COOPERATIVE_NOTE_BYTES,
     },
     is_stale = function()
-      return not self.doc_listeners[doc] or self.doc_overlay_serials[doc] ~= serial
-        or not doc.abs_filename or not common.path_equals(doc.abs_filename, path)
+      return not self.buffer_listeners[buffer] or self.buffer_overlay_serials[buffer] ~= serial
+        or not buffer.abs_filename or not common.path_equals(buffer.abs_filename, path)
     end,
     on_stale = function(message)
       local snapshot = message.vault_snapshot or (message.payload and message.payload.vault_snapshot)
       if snapshot then release_vault_snapshot(snapshot) end
       core.log_quiet("Markdown vault stale overlay released: path=%s request=%d current=%s tracked=%s current_path=%s",
-        path, serial, tostring(self.doc_update_serials[doc]), tostring(self.doc_listeners[doc] ~= nil), tostring(doc.abs_filename))
+        path, serial, tostring(self.buffer_update_serials[buffer]), tostring(self.buffer_listeners[buffer] ~= nil), tostring(buffer.abs_filename))
     end,
     on_error = function(message)
-      if self.doc_overlay_serials[doc] == serial then self.doc_overlay_jobs[doc] = nil end
+      if self.buffer_overlay_serials[buffer] == serial then self.buffer_overlay_jobs[buffer] = nil end
       core.log_quiet("Markdown vault overlay failed for %s: %s", path, tostring(message.error or message))
     end,
     on_cancelled = function()
-      if self.doc_overlay_serials[doc] == serial then self.doc_overlay_jobs[doc] = nil end
+      if self.buffer_overlay_serials[buffer] == serial then self.buffer_overlay_jobs[buffer] = nil end
     end,
     on_result = function(message)
       local snapshot = message.vault_snapshot or (message.payload and message.payload.vault_snapshot)
       if not snapshot and message.type == "final" then return end
       if not snapshot then return end
-      self.doc_overlay_jobs[doc] = nil
+      self.buffer_overlay_jobs[buffer] = nil
       local entry = snapshot:note(path)
       if not entry then release_vault_snapshot(snapshot); return end
-      entry.doc = doc
+      entry.buffer = buffer
       local previous_entry = self.notes_by_abs[path_key(path)]
       local facts_changed = not previous_entry or previous_entry.fact_signature ~= entry.fact_signature
-      local previous_overlay = self.doc_overlays[doc]
-      self.doc_overlays[doc] = { snapshot = snapshot, path = path, serial = serial }
+      local previous_overlay = self.buffer_overlays[buffer]
+      self.buffer_overlays[buffer] = { snapshot = snapshot, path = path, serial = serial }
       self:add_note_entry(entry)
       if previous_overlay and previous_overlay.snapshot ~= snapshot then
         release_vault_snapshot(previous_overlay.snapshot)
       end
-      self.diagnostics.doc_updates = self.diagnostics.doc_updates + 1
+      self.diagnostics.buffer_updates = self.diagnostics.buffer_updates + 1
       if not opts.rebuilding and facts_changed then
         self.generation = self.generation + 1
-        self:notify("document-updated", doc)
+        self:notify("buffer-updated", buffer)
       end
       core.log_quiet("Markdown vault native overlay published: path=%s generation=%d bytes=%d shallow=%s",
         path, serial, #text, tostring(entry.shallow == true))
@@ -1108,72 +1108,72 @@ function Index:update_doc(doc, opts)
     core.log_quiet("Markdown vault overlay submission failed for %s: %s", path, tostring(submit_error))
     return false
   end
-  self.doc_overlay_jobs[doc] = handle
+  self.buffer_overlay_jobs[buffer] = handle
   return true
 end
 
-function Index:schedule_doc_update(doc)
-  local serial = (self.doc_update_serials[doc] or 0) + 1
+function Index:schedule_buffer_update(buffer)
+  local serial = (self.buffer_update_serials[buffer] or 0) + 1
   if serial > 1 then
-    self.diagnostics.doc_updates_coalesced = self.diagnostics.doc_updates_coalesced + 1
+    self.diagnostics.buffer_updates_coalesced = self.diagnostics.buffer_updates_coalesced + 1
   end
-  self.doc_update_serials[doc] = serial
+  self.buffer_update_serials[buffer] = serial
   core.add_thread(function()
     coroutine.yield(DOC_UPDATE_DEBOUNCE_SECONDS)
-    if self.doc_listeners[doc] and self.doc_update_serials[doc] == serial then
-      self:update_doc(doc, { cooperative = true })
+    if self.buffer_listeners[buffer] and self.buffer_update_serials[buffer] == serial then
+      self:update_buffer(buffer, { cooperative = true })
     end
   end)
   return true
 end
 
-function Index:track_doc(doc)
-  if not (doc and doc.add_text_change_listener) then return false end
-  if not (doc.abs_filename and common.path_belongs_to(common.normalize_path(doc.abs_filename), self.root)) then return false end
-  if self.doc_listeners[doc] then
-    self:schedule_doc_update(doc)
+function Index:track_buffer(buffer)
+  if not (buffer and buffer.add_text_change_listener) then return false end
+  if not (buffer.abs_filename and common.path_belongs_to(common.normalize_path(buffer.abs_filename), self.root)) then return false end
+  if self.buffer_listeners[buffer] then
+    self:schedule_buffer_update(buffer)
     return false
   end
   local id = "markdown-vault-index-" .. tostring(self)
-  doc:add_text_change_listener(id, {
+  buffer:add_text_change_listener(id, {
     after_change = function()
-      self:schedule_doc_update(doc)
+      self:schedule_buffer_update(buffer)
     end,
   })
-  if doc.add_metadata_listener then
-    doc:add_metadata_listener(id, function(_, event)
-      if event and event.kind == "close" then self:on_doc_closed(doc) end
+  if buffer.add_metadata_listener then
+    buffer:add_metadata_listener(id, function(_, event)
+      if event and event.kind == "close" then self:on_buffer_closed(buffer) end
     end)
   end
-  self.doc_listeners[doc] = id
-  self:update_doc(doc)
+  self.buffer_listeners[buffer] = id
+  self:update_buffer(buffer)
   return true
 end
 
-function Index:untrack_doc(doc)
-  local id = self.doc_listeners[doc]
+function Index:untrack_buffer(buffer)
+  local id = self.buffer_listeners[buffer]
   if not id then return false end
-  if doc and doc.remove_text_change_listener then doc:remove_text_change_listener(id) end
-  if doc and doc.remove_metadata_listener then doc:remove_metadata_listener(id) end
-  self.doc_update_serials[doc] = nil
-  self.doc_overlay_serials[doc] = nil
-  self.doc_listeners[doc] = nil
-  local job = self.doc_overlay_jobs[doc]
+  if buffer and buffer.remove_text_change_listener then buffer:remove_text_change_listener(id) end
+  if buffer and buffer.remove_metadata_listener then buffer:remove_metadata_listener(id) end
+  self.buffer_update_serials[buffer] = nil
+  self.buffer_overlay_serials[buffer] = nil
+  self.buffer_listeners[buffer] = nil
+  local job = self.buffer_overlay_jobs[buffer]
   local pool = worker_pool.current_system()
   if job and pool then pool:cancel(job) end
-  self.doc_overlay_jobs[doc] = nil
-  local overlay = self.doc_overlays[doc]
+  self.buffer_overlay_jobs[buffer] = nil
+  local overlay = self.buffer_overlays[buffer]
   if overlay then
     self:remove_path_entry(overlay.path)
     release_vault_snapshot(overlay.snapshot)
   end
-  self.doc_overlays[doc] = nil
+  self.buffer_overlays[buffer] = nil
   return true
 end
 
-function Index:on_doc_closed(doc)
-  local path = doc and doc.abs_filename
-  if not self:untrack_doc(doc) then return false end
+function Index:on_buffer_closed(buffer)
+  local path = buffer and buffer.abs_filename
+  if not self:untrack_buffer(buffer) then return false end
   if path then
     self:remove_path_entry(path)
     if file_exists(path) then
@@ -1181,8 +1181,8 @@ function Index:on_doc_closed(doc)
     end
   end
   self.generation = self.generation + 1
-  self:notify("document-closed", doc)
-  core.log_quiet("Markdown vault index released closed Document overlay %s", tostring(path))
+  self:notify("buffer-closed", buffer)
+  core.log_quiet("Markdown vault index released closed Buffer overlay %s", tostring(path))
   return true
 end
 
@@ -1377,28 +1377,28 @@ function vault_index.resolve(link_or_target, source_path)
   return vault_index.index_for_path(source_path):resolve(link_or_target, source_path)
 end
 
-function vault_index.track_doc(doc)
-  if not (doc and doc.abs_filename) then return false end
-  return vault_index.index_for_path(doc.abs_filename):track_doc(doc)
+function vault_index.track_buffer(buffer)
+  if not (buffer and buffer.abs_filename) then return false end
+  return vault_index.index_for_path(buffer.abs_filename):track_buffer(buffer)
 end
 
-function vault_index.on_doc_filename_changed(doc, old_abs_filename)
-  if old_abs_filename and doc and doc.abs_filename
-    and common.path_equals(old_abs_filename, doc.abs_filename)
+function vault_index.on_buffer_filename_changed(buffer, old_abs_filename)
+  if old_abs_filename and buffer and buffer.abs_filename
+    and common.path_equals(old_abs_filename, buffer.abs_filename)
   then
-    vault_index.track_doc(doc)
+    vault_index.track_buffer(buffer)
     return
   end
   if old_abs_filename then
     local old_index = vault_index.index_for_path(old_abs_filename)
-    if doc and doc.abs_filename and is_markdown(old_abs_filename) and is_markdown(doc.abs_filename)
-      and common.path_belongs_to(common.normalize_path(doc.abs_filename), old_index.root)
+    if buffer and buffer.abs_filename and is_markdown(old_abs_filename) and is_markdown(buffer.abs_filename)
+      and common.path_belongs_to(common.normalize_path(buffer.abs_filename), old_index.root)
     then
-      local plan = old_index:plan_note_rename(old_abs_filename, doc.abs_filename)
+      local plan = old_index:plan_note_rename(old_abs_filename, buffer.abs_filename)
       if plan and #plan.files > 0 then
-        pending_renames[path_key(doc.abs_filename)] = plan
+        pending_renames[path_key(buffer.abs_filename)] = plan
         core.log_quiet("Markdown rename found %d affected files for %s -> %s",
-          #plan.files, old_abs_filename, doc.abs_filename)
+          #plan.files, old_abs_filename, buffer.abs_filename)
         core.add_thread(function()
           coroutine.yield(0)
           local ok, maintenance = pcall(require, "core.markdown.rename_links")
@@ -1410,15 +1410,15 @@ function vault_index.on_doc_filename_changed(doc, old_abs_filename)
     if file_exists(old_abs_filename) then
       old_index:update_path(old_abs_filename, { cooperative = true })
     end
-    if not (doc and doc.abs_filename and common.path_belongs_to(common.normalize_path(doc.abs_filename), old_index.root)) then
-      old_index:untrack_doc(doc)
+    if not (buffer and buffer.abs_filename and common.path_belongs_to(common.normalize_path(buffer.abs_filename), old_index.root)) then
+      old_index:untrack_buffer(buffer)
     end
     if old_index.status == "indexing" then
-      old_index:rebuild_async("tracked-document-moved")
+      old_index:rebuild_async("tracked-buffer-moved")
     end
   end
-  if doc and doc.abs_filename then
-    vault_index.track_doc(doc)
+  if buffer and buffer.abs_filename then
+    vault_index.track_buffer(buffer)
   end
 end
 
@@ -1429,15 +1429,15 @@ function vault_index.pending_rename(path, consume)
   return plan
 end
 
-function vault_index.install_doc_hooks()
-  if doc_hooks_installed then return end
-  doc_hooks_installed = true
-  local Doc = require "core.doc"
-  local old_set_filename = Doc.set_filename
-  function Doc:set_filename(...)
+function vault_index.install_buffer_hooks()
+  if buffer_hooks_installed then return end
+  buffer_hooks_installed = true
+  local Buffer = require "core.buffer"
+  local old_set_filename = Buffer.set_filename
+  function Buffer:set_filename(...)
     local old_abs_filename = self.abs_filename
     local result = old_set_filename(self, ...)
-    vault_index.on_doc_filename_changed(self, old_abs_filename)
+    vault_index.on_buffer_filename_changed(self, old_abs_filename)
     return result
   end
 end
@@ -1446,6 +1446,6 @@ vault_index.Index = Index
 vault_index.is_markdown = is_markdown
 vault_index.is_attachment = is_attachment
 
-vault_index.install_doc_hooks()
+vault_index.install_buffer_hooks()
 
 return vault_index

@@ -1,23 +1,23 @@
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local test = require "core.test"
 local flash = require "plugins.reload_diff_flash"
 
 local function make_view(text)
-  local doc = Doc(nil, nil, true)
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
-  local view = DocView(doc)
+  local buffer = Buffer(nil, nil, true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  local view = TextView(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 400, 200
-  return view, doc
+  return view, buffer
 end
 
 test.describe("reload diff flash UI", function()
-  test.it("installs a temporary decoration provider on DocViews for the reloaded doc", function()
-    local view, doc = make_view("one\ntwo")
+  test.it("installs a temporary decoration provider on TextViews for the reloaded buffer", function()
+    local view, buffer = make_view("one\ntwo")
     local old_lines = { "one\n" }
-    local model = flash.flash(doc, old_lines, doc.lines, { duration = 0.05 })
+    local model = flash.flash(buffer, old_lines, buffer.lines, { duration = 0.05 })
     test.not_nil(model)
 
     local entry = view.decoration_providers and view.decoration_providers[flash._provider_id_for_test]

@@ -15,7 +15,7 @@ provider.kind = "semantic-project"
 provider.features = {
   render_tokens = true,
   invalidate_render_cache = true,
-  document_outline = true,
+  buffer_outline = true,
   definitions = true,
   declarations = true,
   references = true,
@@ -36,7 +36,7 @@ local semantic_line_cache = setmetatable({}, { __mode = "k" })
 local line_start_cache = setmetatable({}, { __mode = "k" })
 
 local function perf_stats()
-  return core.perf_frame_stats or core.docview_frame_stats
+  return core.perf_frame_stats or core.textview_frame_stats
 end
 
 local function perf_count(key, amount)
@@ -89,8 +89,8 @@ local function quiet_log(...)
   if core and core.log_quiet then core.log_quiet(...) end
 end
 
-local function doc_change_id(doc)
-  if doc and doc.get_change_id then return doc:get_change_id() end
+local function buffer_change_id(buffer)
+  if buffer and buffer.get_change_id then return buffer:get_change_id() end
   return nil
 end
 
@@ -102,14 +102,14 @@ local function client_capabilities(client)
   return client.capabilities or client.server_capabilities or {}
 end
 
-local function client_supports_document_symbols(client)
+local function client_supports_buffer_symbols(client)
   return capability_enabled(client_capabilities(client).documentSymbolProvider)
 end
 
 local function feature_supported(client, feature)
   local capabilities = client_capabilities(client)
-  if feature == "document_outline" then
-    return client_supports_document_symbols(client)
+  if feature == "buffer_outline" then
+    return client_supports_buffer_symbols(client)
   elseif feature == "definitions" then
     return capability_enabled(capabilities.definitionProvider)
   elseif feature == "declarations" then
@@ -126,10 +126,10 @@ local function feature_supported(client, feature)
   return false
 end
 
-function provider.is_available(doc, feature)
+function provider.is_available(buffer, feature)
   if not provider.features[feature] then return false end
   for client in pairs(clients) do
-    local state = documents.state(client, doc)
+    local state = documents.state(client, buffer)
     if state and state.opened and not state.disabled_reason and feature_supported(client, feature) then
       return true
     end
@@ -155,17 +155,17 @@ local function bucket_for(tbl, client, uri)
   return bucket
 end
 
-local function line_byte_offset(doc, line, col)
+local function line_byte_offset(buffer, line, col)
   local offset = 0
-  line = math.max(1, math.min(line or 1, #(doc.lines or { "\n" })))
+  line = math.max(1, math.min(line or 1, #(buffer.lines or { "\n" })))
   for i = 1, line - 1 do
-    offset = offset + #(doc.lines[i] or "")
+    offset = offset + #(buffer.lines[i] or "")
   end
   return offset + math.max(0, (col or 1) - 1)
 end
 
-local function range_to_doc(doc, lsp_range, encoding)
-  local converted = position.range_lsp_to_doc(doc, lsp_range, encoding)
+local function range_to_buffer(buffer, lsp_range, encoding)
+  local converted = position.range_lsp_to_buffer(buffer, lsp_range, encoding)
   converted.start = { line = converted.line1, col = converted.col1 }
   converted["end"] = { line = converted.line2, col = converted.col2 }
   return converted
@@ -176,9 +176,9 @@ local function symbol_kind_name(kind)
   return kind
 end
 
-local function make_symbol(doc, raw, range, selection_range, kind, name)
-  local start_byte = line_byte_offset(doc, range.line1, range.col1)
-  local end_byte = line_byte_offset(doc, range.line2, range.col2)
+local function make_symbol(buffer, raw, range, selection_range, kind, name)
+  local start_byte = line_byte_offset(buffer, range.line1, range.col1)
+  local end_byte = line_byte_offset(buffer, range.line2, range.col2)
   return {
     name = tostring(name or raw.name or ""),
     kind = symbol_kind_name(kind or raw.kind),
@@ -196,10 +196,10 @@ local function make_symbol(doc, raw, range, selection_range, kind, name)
   }
 end
 
-local function append_document_symbol(doc, raw, encoding, out, parent_index, depth)
-  local range = range_to_doc(doc, raw.range or raw.selectionRange, encoding)
-  local selection = raw.selectionRange and range_to_doc(doc, raw.selectionRange, encoding) or range
-  local symbol = make_symbol(doc, raw, range, selection, raw.kind, raw.name)
+local function append_buffer_symbol(buffer, raw, encoding, out, parent_index, depth)
+  local range = range_to_buffer(buffer, raw.range or raw.selectionRange, encoding)
+  local selection = raw.selectionRange and range_to_buffer(buffer, raw.selectionRange, encoding) or range
+  local symbol = make_symbol(buffer, raw, range, selection, raw.kind, raw.name)
   symbol.depth = depth or 0
   if parent_index then
     symbol.parent = parent_index
@@ -209,7 +209,7 @@ local function append_document_symbol(doc, raw, encoding, out, parent_index, dep
   out[#out + 1] = symbol
   symbol.index = #out
   for _, child in ipairs(type(raw.children) == "table" and raw.children or {}) do
-    append_document_symbol(doc, child, encoding, out, symbol.index, symbol.depth + 1)
+    append_buffer_symbol(buffer, child, encoding, out, symbol.index, symbol.depth + 1)
   end
 end
 
@@ -249,7 +249,7 @@ local function assign_flat_parents(symbols)
   end
 end
 
-function provider.map_document_symbols(doc, result, encoding, document_uri)
+function provider.map_buffer_symbols(buffer, result, encoding, buffer_uri)
   local out = {}
   result = type(result) == "table" and result or {}
   local hierarchical = false
@@ -260,16 +260,16 @@ function provider.map_document_symbols(doc, result, encoding, document_uri)
   if hierarchical then
     for _, item in ipairs(result) do
       if item.name and (item.range or item.selectionRange) then
-        append_document_symbol(doc, item, encoding or "utf-16", out, nil, 0)
+        append_buffer_symbol(buffer, item, encoding or "utf-16", out, nil, 0)
       end
     end
   else
     for _, item in ipairs(result) do
       local location = item.location or {}
       local item_uri = location.uri or item.uri
-      if (not document_uri or not item_uri or item_uri == document_uri) and item.name and location_range(item) then
-        local range = range_to_doc(doc, location_range(item), encoding or "utf-16")
-        out[#out + 1] = make_symbol(doc, item, range, range, item.kind, item.name)
+      if (not buffer_uri or not item_uri or item_uri == buffer_uri) and item.name and location_range(item) then
+        local range = range_to_buffer(buffer, location_range(item), encoding or "utf-16")
+        out[#out + 1] = make_symbol(buffer, item, range, range, item.kind, item.name)
       end
     end
     assign_flat_parents(out)
@@ -299,11 +299,11 @@ function provider.unregister_client(client)
   semantic_line_cache[client] = nil
 end
 
-local function matching_clients(doc, feature)
+local function matching_clients(buffer, feature)
   local out = {}
   for client in pairs(clients) do
-    local state = documents.state(client, doc)
-    if state and state.opened and not state.disabled_reason and feature_supported(client, feature or "document_outline") then
+    local state = documents.state(client, buffer)
+    if state and state.opened and not state.disabled_reason and feature_supported(client, feature or "buffer_outline") then
       out[#out + 1] = { client = client, state = state }
     end
   end
@@ -328,7 +328,7 @@ local function request_key(state)
   return tostring(state.lsp_version)
 end
 
-function provider.schedule_document_symbols(client, state, doc)
+function provider.schedule_buffer_symbols(client, state, buffer)
   local pending = bucket_for(inflight, client, state.uri)
   local key = request_key(state)
   if pending[key] then return false, "in-flight" end
@@ -354,7 +354,7 @@ function provider.schedule_document_symbols(client, state, doc)
       quiet_log("LSP documentSymbol dropped stale version response for %s", state.uri)
       return
     end
-    local symbols = provider.map_document_symbols(doc, result, client.position_encoding or "utf-16", state.uri)
+    local symbols = provider.map_buffer_symbols(buffer, result, client.position_encoding or "utf-16", state.uri)
     bucket_for(cache, client, state.uri)[requested_version] = {
       version = requested_version,
       symbols = symbols,
@@ -488,11 +488,11 @@ function provider.semantic_style(token_type, modifiers)
   return base
 end
 
-local function line_start_offsets(doc)
-  local lines = doc.lines or {}
+local function line_start_offsets(buffer)
+  local lines = buffer.lines or {}
   local line_count = #lines
-  local change_id = doc_change_id(doc)
-  local cached = change_id ~= nil and line_start_cache[doc] or nil
+  local change_id = buffer_change_id(buffer)
+  local cached = change_id ~= nil and line_start_cache[buffer] or nil
   if cached and cached.change_id == change_id and cached.line_count == line_count then
     return cached.offsets
   end
@@ -505,19 +505,19 @@ local function line_start_offsets(doc)
   end
   offsets[line_count + 1] = offset
   if change_id ~= nil then
-    line_start_cache[doc] = { change_id = change_id, line_count = line_count, offsets = offsets }
+    line_start_cache[buffer] = { change_id = change_id, line_count = line_count, offsets = offsets }
   end
   return offsets
 end
 
-function provider.decode_semantic_tokens(doc, data, legend, encoding)
+function provider.decode_semantic_tokens(buffer, data, legend, encoding)
   local out = {}
   if type(data) ~= "table" then return out end
   legend = legend or {}
   encoding = encoding or "utf-16"
   local current_line = 0
   local current_start = 0
-  local starts = line_start_offsets(doc)
+  local starts = line_start_offsets(buffer)
   for i = 1, #data, 5 do
     local delta_line = tonumber(data[i]) or 0
     local delta_start = tonumber(data[i + 1]) or 0
@@ -532,8 +532,8 @@ function provider.decode_semantic_tokens(doc, data, legend, encoding)
     end
     local token_type = (legend.tokenTypes or {})[token_type_index + 1]
     local modifiers = semantic_modifiers(modifier_bits, legend)
-    local line1, col1 = position.lsp_to_doc(doc, { line = current_line, character = current_start }, encoding)
-    local line2, col2 = position.lsp_to_doc(doc, { line = current_line, character = current_start + length }, encoding, "right")
+    local line1, col1 = position.lsp_to_buffer(buffer, { line = current_line, character = current_start }, encoding)
+    local line2, col2 = position.lsp_to_buffer(buffer, { line = current_line, character = current_start + length }, encoding, "right")
     if line1 == line2 and col2 > col1 then
       out[#out + 1] = {
         line1 = line1,
@@ -645,46 +645,46 @@ function provider.overlay_semantic_tokens(text, base_tokens, line_start, semanti
   return tokens
 end
 
-local function semantic_cache_bucket(client, document_uri, legend_key)
+local function semantic_cache_bucket(client, buffer_uri, legend_key)
   local by_uri = semantic_cache[client]
   if not by_uri then by_uri = {}; semantic_cache[client] = by_uri end
-  local by_legend = by_uri[document_uri]
-  if not by_legend then by_legend = {}; by_uri[document_uri] = by_legend end
+  local by_legend = by_uri[buffer_uri]
+  if not by_legend then by_legend = {}; by_uri[buffer_uri] = by_legend end
   local by_version = by_legend[legend_key]
   if not by_version then by_version = {}; by_legend[legend_key] = by_version end
   return by_version
 end
 
-local function semantic_latest(client, document_uri, legend_key, version)
+local function semantic_latest(client, buffer_uri, legend_key, version)
   local by_uri = semantic_cache[client]
-  local by_legend = by_uri and by_uri[document_uri]
+  local by_legend = by_uri and by_uri[buffer_uri]
   local by_version = by_legend and by_legend[legend_key]
   return by_version and by_version[version] or nil
 end
 
-local function semantic_line_cache_bucket(client, document_uri, legend_key)
+local function semantic_line_cache_bucket(client, buffer_uri, legend_key)
   local by_uri = semantic_line_cache[client]
   if not by_uri then by_uri = {}; semantic_line_cache[client] = by_uri end
-  local by_legend = by_uri[document_uri]
-  if not by_legend then by_legend = {}; by_uri[document_uri] = by_legend end
+  local by_legend = by_uri[buffer_uri]
+  if not by_legend then by_legend = {}; by_uri[buffer_uri] = by_legend end
   local by_line = by_legend[legend_key]
   if not by_line then by_line = {}; by_legend[legend_key] = by_line end
   return by_line
 end
 
-local function base_render_tokens(doc, line_idx)
+local function base_render_tokens(buffer, line_idx)
   local tokens = language_intelligence.without_provider("lsp", function()
-    return language_intelligence.render_tokens(doc, line_idx)
+    return language_intelligence.render_tokens(buffer, line_idx)
   end)
   if tokens then return tokens end
-  if doc and doc.highlighter and doc.highlighter.get_line then
-    local line = doc.highlighter:get_line(line_idx)
+  if buffer and buffer.highlighter and buffer.highlighter.get_line then
+    local line = buffer.highlighter:get_line(line_idx)
     return line and line.tokens or nil
   end
-  return { "normal", doc and doc.lines and doc.lines[line_idx] or "" }
+  return { "normal", buffer and buffer.lines and buffer.lines[line_idx] or "" }
 end
 
-function provider.schedule_semantic_tokens(client, state, doc)
+function provider.schedule_semantic_tokens(client, state, buffer)
   local _semantic, legend = semantic_capability(client)
   if not legend then return nil, "semantic tokens unsupported" end
   if type(client.send_request) ~= "function" then return nil, "client has no request API" end
@@ -716,15 +716,15 @@ function provider.schedule_semantic_tokens(client, state, doc)
       return
     end
     if current_state.last_synced_change_id ~= requested_change_id
-    or doc_change_id(current_state.doc) ~= current_state.last_synced_change_id then
+    or buffer_change_id(current_state.buffer) ~= current_state.last_synced_change_id then
       quiet_log("LSP semanticTokens/full dropped locally stale response for %s", state.uri)
       return
     end
     result = type(result) == "table" and result or {}
-    local decoded = provider.decode_semantic_tokens(doc, result.data or result, legend, client.position_encoding or "utf-16")
+    local decoded = provider.decode_semantic_tokens(buffer, result.data or result, legend, client.position_encoding or "utf-16")
     semantic_cache_bucket(client, state.uri, legend_key)[requested_version] = {
       version = requested_version,
-      doc_change_id = requested_change_id,
+      buffer_change_id = requested_change_id,
       legend_key = legend_key,
       legend = legend,
       tokens = decoded,
@@ -732,8 +732,8 @@ function provider.schedule_semantic_tokens(client, state, doc)
       generation = requested_generation,
     }
     semantic_line_cache[client] = nil
-    if doc.highlighter and doc.highlighter.invalidate_render_cache then
-      doc.highlighter:invalidate_render_cache()
+    if buffer.highlighter and buffer.highlighter.invalidate_render_cache then
+      buffer.highlighter:invalidate_render_cache()
     end
   end, { generation = requested_generation })
   if not ok then
@@ -743,7 +743,7 @@ function provider.schedule_semantic_tokens(client, state, doc)
   return true
 end
 
-function provider.render_tokens(doc, line_idx, opts)
+function provider.render_tokens(buffer, line_idx, opts)
   local total_start = perf_time()
   local function finish(...)
     perf_ms("lsp_render_tokens_ms", total_start)
@@ -753,7 +753,7 @@ function provider.render_tokens(doc, line_idx, opts)
   perf_count("lsp_render_tokens_calls")
   opts = opts or {}
   local matching_start = perf_time()
-  local matches = matching_clients(doc, "render_tokens")
+  local matches = matching_clients(buffer, "render_tokens")
   perf_ms("lsp_render_tokens_matching_ms", matching_start)
   if #matches == 0 then return finish(nil, "unavailable", "unavailable") end
   for _, item in ipairs(matches) do
@@ -765,14 +765,14 @@ function provider.render_tokens(doc, line_idx, opts)
     local latest_start = perf_time()
     local entry = semantic_latest(client, state.uri, legend_key, state.lsp_version)
     perf_ms("lsp_render_tokens_latest_ms", latest_start)
-    local current_change_id = doc_change_id(doc)
+    local current_change_id = buffer_change_id(buffer)
     local entry_current = entry
-      and entry.doc_change_id == state.last_synced_change_id
+      and entry.buffer_change_id == state.last_synced_change_id
       and current_change_id == state.last_synced_change_id
     if entry_current then
-      local text = doc:get_utf8_line(line_idx) or ""
+      local text = buffer:get_utf8_line(line_idx) or ""
       local line_cache = semantic_line_cache_bucket(client, state.uri, legend_key)
-      local line_key = table.concat({ tostring(state.lsp_version), tostring(entry.doc_change_id), tostring(line_idx), text }, "\0")
+      local line_key = table.concat({ tostring(state.lsp_version), tostring(entry.buffer_change_id), tostring(line_idx), text }, "\0")
       local cached = line_cache[line_idx]
       if cached and cached.key == line_key then
         perf_count("lsp_render_tokens_cache_hits")
@@ -780,8 +780,8 @@ function provider.render_tokens(doc, line_idx, opts)
       end
       perf_count("lsp_render_tokens_cache_misses")
       local offsets_start = perf_time()
-      local starts = line_start_offsets(doc)
-      perf_count("lsp_render_tokens_line_offsets_lines", #(doc.lines or {}))
+      local starts = line_start_offsets(buffer)
+      perf_count("lsp_render_tokens_line_offsets_lines", #(buffer.lines or {}))
       perf_ms("lsp_render_tokens_line_offsets_ms", offsets_start)
       local line_start = starts[line_idx] or 0
       local line_end = line_start + #text
@@ -800,7 +800,7 @@ function provider.render_tokens(doc, line_idx, opts)
       perf_count("lsp_render_tokens_spans", #spans)
       perf_ms("lsp_render_tokens_scan_ms", scan_start)
       local base_start = perf_time()
-      local base_tokens = base_render_tokens(doc, line_idx)
+      local base_tokens = base_render_tokens(buffer, line_idx)
       perf_ms("lsp_render_tokens_base_ms", base_start)
       local overlay_start = perf_time()
       local tokens = provider.overlay_semantic_tokens(text, base_tokens, line_start, spans)
@@ -811,14 +811,14 @@ function provider.render_tokens(doc, line_idx, opts)
       quiet_log("LSP semantic token cache is locally stale for %s", state.uri)
     end
     perf_count("lsp_render_tokens_schedule_calls")
-    provider.schedule_semantic_tokens(client, state, doc)
+    provider.schedule_semantic_tokens(client, state, buffer)
   end
   return finish(nil, "pending", "pending")
 end
 
-function provider.invalidate_render_cache(doc, first_line, last_line)
+function provider.invalidate_render_cache(buffer, first_line, last_line)
   for client in pairs(semantic_line_cache) do
-    local state = documents.state(client, doc)
+    local state = documents.state(client, buffer)
     if state and semantic_line_cache[client] then
       if not first_line then
         semantic_line_cache[client][state.uri] = nil
@@ -834,9 +834,9 @@ function provider.invalidate_render_cache(doc, first_line, last_line)
   end
 end
 
-function provider.document_outline(doc, opts)
+function provider.buffer_outline(buffer, opts)
   opts = opts or {}
-  local matches = matching_clients(doc, "document_outline")
+  local matches = matching_clients(buffer, "buffer_outline")
   if #matches == 0 then return nil, "unavailable", "unavailable" end
 
   local first_reason = "pending"
@@ -846,11 +846,11 @@ function provider.document_outline(doc, opts)
     if status == "fresh" then
       return entry.symbols, nil, "fresh"
     elseif status == "stale" then
-      provider.schedule_document_symbols(client, state, doc)
+      provider.schedule_buffer_symbols(client, state, buffer)
       return entry.symbols, "refresh scheduled", "stale"
     end
 
-    local ok, reason = provider.schedule_document_symbols(client, state, doc)
+    local ok, reason = provider.schedule_buffer_symbols(client, state, buffer)
     if ok == false then
       first_reason = reason or "pending"
     elseif ok == nil then
@@ -868,9 +868,9 @@ local NAV_METHODS = {
   references = "textDocument/references",
 }
 
-local function request_position(doc, line1, col1)
-  if (line1 == nil or col1 == nil) and doc and doc.get_selection then
-    line1, col1 = doc:get_selection()
+local function request_position(buffer, line1, col1)
+  if (line1 == nil or col1 == nil) and buffer and buffer.get_selection then
+    line1, col1 = buffer:get_selection()
   end
   return line1 or 1, col1 or 1
 end
@@ -884,8 +884,8 @@ local function navigation_position_key(feature, line, col, opts)
   return table.concat({ feature, tostring(line or 1), tostring(col or 1), suffix }, ":")
 end
 
-local function navigation_bucket(tbl, client, document_uri, key)
-  local by_uri = bucket_for(tbl, client, document_uri)
+local function navigation_bucket(tbl, client, buffer_uri, key)
+  local by_uri = bucket_for(tbl, client, buffer_uri)
   local bucket = by_uri[key]
   if not bucket then
     bucket = {}
@@ -894,8 +894,8 @@ local function navigation_bucket(tbl, client, document_uri, key)
   return bucket
 end
 
-local function latest_navigation_cache(client, document_uri, key, current_version)
-  local by_key = navigation_cache[client] and navigation_cache[client][document_uri]
+local function latest_navigation_cache(client, buffer_uri, key, current_version)
+  local by_key = navigation_cache[client] and navigation_cache[client][buffer_uri]
   local by_version = by_key and by_key[key]
   if not by_version then return nil end
   local latest
@@ -906,21 +906,21 @@ local function latest_navigation_cache(client, document_uri, key, current_versio
   return latest, latest and "stale" or nil
 end
 
-local function target_doc_for_uri(client, target_uri, current_doc, current_uri)
-  if target_uri == current_uri then return current_doc end
+local function target_buffer_for_uri(client, target_uri, current_buffer, current_uri)
+  if target_uri == current_uri then return current_buffer end
   local state = documents.state(client, target_uri)
-  return state and state.doc or nil
+  return state and state.buffer or nil
 end
 
-local function map_location(client, current_doc, current_uri, raw, feature)
+local function map_location(client, current_buffer, current_uri, raw, feature)
   if type(raw) ~= "table" then return nil end
   local target_uri = raw.uri or (raw.targetUri)
   local raw_range = raw.range or raw.targetRange
   local raw_selection = raw.selectionRange or raw.targetSelectionRange or raw_range
   if not target_uri or not raw_range then return nil end
-  local target_doc = target_doc_for_uri(client, target_uri, current_doc, current_uri)
-  local converted_range = target_doc and range_to_doc(target_doc, raw_range, client.position_encoding or "utf-16") or nil
-  local converted_selection = target_doc and raw_selection and range_to_doc(target_doc, raw_selection, client.position_encoding or "utf-16") or converted_range
+  local target_buffer = target_buffer_for_uri(client, target_uri, current_buffer, current_uri)
+  local converted_range = target_buffer and range_to_buffer(target_buffer, raw_range, client.position_encoding or "utf-16") or nil
+  local converted_selection = target_buffer and raw_selection and range_to_buffer(target_buffer, raw_selection, client.position_encoding or "utf-16") or converted_range
   local path = uri.uri_to_path(target_uri)
   if path then path = common.normalize_path(path) end
   return {
@@ -938,7 +938,7 @@ local function map_location(client, current_doc, current_uri, raw, feature)
   }
 end
 
-local function map_navigation_response(client, doc, state, result, feature)
+local function map_navigation_response(client, buffer, state, result, feature)
   if result == nil or lsp_json.is_null(result) then return {} end
   local items
   if type(result) == "table" and (result.uri or result.targetUri) then
@@ -950,7 +950,7 @@ local function map_navigation_response(client, doc, state, result, feature)
   end
   local out = {}
   for _, raw in ipairs(items) do
-    local mapped = map_location(client, doc, state.uri, raw, feature)
+    local mapped = map_location(client, buffer, state.uri, raw, feature)
     if mapped then out[#out + 1] = mapped end
   end
   return out
@@ -983,11 +983,11 @@ local function dedupe_locations(items)
   return out
 end
 
-function provider.map_locations(client, doc, state, result, feature)
-  return map_navigation_response(client, doc, state, result, feature or "location")
+function provider.map_locations(client, buffer, state, result, feature)
+  return map_navigation_response(client, buffer, state, result, feature or "location")
 end
 
-function provider.schedule_navigation_request(feature, client, state, doc, line, col, opts)
+function provider.schedule_navigation_request(feature, client, state, buffer, line, col, opts)
   local method = NAV_METHODS[feature]
   if not method then return nil, "unknown feature" end
   if type(client.send_request) ~= "function" then return nil, "client has no request API" end
@@ -999,7 +999,7 @@ function provider.schedule_navigation_request(feature, client, state, doc, line,
 
   local params = {
     textDocument = { uri = state.uri },
-    position = position.doc_to_lsp(doc, line, col, client.position_encoding or "utf-16"),
+    position = position.buffer_to_lsp(buffer, line, col, client.position_encoding or "utf-16"),
   }
   if feature == "references" then
     params.context = { includeDeclaration = opts.include_declaration ~= false }
@@ -1033,7 +1033,7 @@ function provider.schedule_navigation_request(feature, client, state, doc, line,
       quiet_log("LSP %s dropped stale version response for %s", method, state.uri)
       return
     end
-    local mapped = map_navigation_response(client, doc, state, result, feature)
+    local mapped = map_navigation_response(client, buffer, state, result, feature)
     navigation_bucket(navigation_cache, client, state.uri, pos_key)[requested_version] = {
       version = requested_version,
       results = mapped,
@@ -1051,11 +1051,11 @@ function provider.schedule_navigation_request(feature, client, state, doc, line,
   return true
 end
 
-local function navigation(feature, doc, line1, col1, line2, col2, opts)
+local function navigation(feature, buffer, line1, col1, line2, col2, opts)
   opts = opts or {}
-  local matches = matching_clients(doc, feature)
+  local matches = matching_clients(buffer, feature)
   if #matches == 0 then return nil, "unavailable", "unavailable" end
-  local line, col = request_position(doc, line1, col1)
+  local line, col = request_position(buffer, line1, col1)
   local pos_key = navigation_position_key(feature, line, col, opts)
   local results = {}
   local have_result = false
@@ -1070,11 +1070,11 @@ local function navigation(feature, doc, line1, col1, line2, col2, opts)
       have_result = true
       if status == "stale" then
         have_stale = true
-        provider.schedule_navigation_request(feature, client, state, doc, line, col, opts)
+        provider.schedule_navigation_request(feature, client, state, buffer, line, col, opts)
       end
       for _, result in ipairs(entry.results or {}) do results[#results + 1] = result end
     else
-      local ok, reason = provider.schedule_navigation_request(feature, client, state, doc, line, col, opts)
+      local ok, reason = provider.schedule_navigation_request(feature, client, state, buffer, line, col, opts)
       if ok == nil then
         first_reason = reason or first_reason
       else
@@ -1093,16 +1093,16 @@ local function navigation(feature, doc, line1, col1, line2, col2, opts)
   return nil, first_reason, first_reason == "unavailable" and "unavailable" or "pending"
 end
 
-function provider.definitions(doc, line1, col1, line2, col2, opts)
-  return navigation("definitions", doc, line1, col1, line2, col2, opts)
+function provider.definitions(buffer, line1, col1, line2, col2, opts)
+  return navigation("definitions", buffer, line1, col1, line2, col2, opts)
 end
 
-function provider.declarations(doc, line1, col1, line2, col2, opts)
-  return navigation("declarations", doc, line1, col1, line2, col2, opts)
+function provider.declarations(buffer, line1, col1, line2, col2, opts)
+  return navigation("declarations", buffer, line1, col1, line2, col2, opts)
 end
 
-function provider.references(doc, line1, col1, line2, col2, opts)
-  return navigation("references", doc, line1, col1, line2, col2, opts)
+function provider.references(buffer, line1, col1, line2, col2, opts)
+  return navigation("references", buffer, line1, col1, line2, col2, opts)
 end
 
 local function workspace_symbol_clients()

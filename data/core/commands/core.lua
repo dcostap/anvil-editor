@@ -28,8 +28,8 @@ end
 local function file_prompt_defaults()
   local view = core.active_view
   local default_text, root_dir = "", core.root_project().path
-  if view.doc and view.doc.abs_filename then
-    local dirname = common.dirname(view.doc.abs_filename)
+  if view.buffer and view.buffer.abs_filename then
+    local dirname = common.dirname(view.buffer.abs_filename)
     if dirname and common.path_belongs_to(dirname, root_dir) then
       dirname = core.normalize_to_project_dir(dirname)
       default_text = dirname == root_dir and "" or common.home_encode(dirname) .. PATHSEP
@@ -157,7 +157,7 @@ end
 local function change_project_directory()
   open_directory("Change Project Folder", false, function(abs_path)
     if common.path_equals(abs_path[1], core.root_project().path) then return end
-    core.confirm_close_docs(core.docs, function(dirpath)
+    core.confirm_close_buffers(core.buffers, function(dirpath)
       core.open_project_in_same_window(dirpath)
     end, abs_path[1])
   end)
@@ -166,7 +166,7 @@ end
 local function change_project_directory_with_system_file_picker()
   open_directory_with_system_file_picker("Change Project Folder", false, function(abs_path)
     if common.path_equals(abs_path[1], core.root_project().path) then return end
-    core.confirm_close_docs(core.docs, function(dirpath)
+    core.confirm_close_buffers(core.buffers, function(dirpath)
       core.open_project_in_same_window(dirpath)
     end, abs_path[1])
   end)
@@ -272,17 +272,17 @@ command.add(nil, {
   end,
 
   ["core:open-user-module"] = function()
-    local user_module_doc = core.open_doc(USERDIR .. "/init.lua")
-    if not user_module_doc then return end
-    core.root_panel:open_doc(user_module_doc)
+    local user_module_buffer = core.open_buffer(USERDIR .. "/init.lua")
+    if not user_module_buffer then return end
+    core.root_panel:open_buffer(user_module_buffer)
   end,
 
   ["core:open-project-module"] = function()
     if not system.get_file_info(".anvil_project.lua") then
       core.try(core.write_init_project_module, ".anvil_project.lua")
     end
-    local doc = core.open_doc(".anvil_project.lua")
-    core.root_panel:open_doc(doc)
+    local buffer = core.open_buffer(".anvil_project.lua")
+    core.root_panel:open_buffer(buffer)
   end,
 
   ["core:change-project-folder"] = function()

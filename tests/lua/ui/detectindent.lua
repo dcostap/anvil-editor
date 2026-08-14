@@ -1,16 +1,16 @@
 local config = require "core.config"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local detectindent = require "plugins.detectindent"
 local test = require "core.test"
 
-local function make_doc(text, syntax)
-  local doc = Doc("note.md", "note.md", true)
-  doc.lines = {}
+local function make_buffer(text, syntax)
+  local buffer = Buffer("note.md", "note.md", true)
+  buffer.lines = {}
   for line in (text .. "\n"):gmatch("(.-\n)") do
-    doc.lines[#doc.lines + 1] = line
+    buffer.lines[#buffer.lines + 1] = line
   end
-  doc.syntax = syntax
-  return doc
+  buffer.syntax = syntax
+  return buffer
 end
 
 test.describe("Indent detection", function()
@@ -23,7 +23,7 @@ test.describe("Indent detection", function()
         { pattern = { "`", "`" }, type = "string" },
       },
     }
-    local doc = make_doc(table.concat({
+    local buffer = make_buffer(table.concat({
       "\toutside one",
       "\toutside two",
       "```sql",
@@ -44,11 +44,11 @@ test.describe("Indent detection", function()
       "\toutside four",
     }, "\n"), markdown)
 
-    local indent_type, indent_size, score = detectindent.detect(doc)
+    local indent_type, indent_size, score = detectindent.detect(buffer)
 
     test.equal(indent_type, "hard")
     test.equal(indent_size, config.indent_size)
     test.equal(score, 4)
-    doc:on_close()
+    buffer:on_close()
   end)
 end)

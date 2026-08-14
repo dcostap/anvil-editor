@@ -1,15 +1,15 @@
 -- mod-version:3
 local common = require "core.common"
 local style = require "core.style"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 
 -- originally written by luveti
 
-local get_visible_cols_range = DocView.get_visible_cols_range
+local get_visible_cols_range = TextView.get_visible_cols_range
 if not get_visible_cols_range then
   ---Get an estimated range of visible columns. It is an estimate because fonts
   ---and their fallbacks may not be monospaced or may differ in size.
-  ---@param self core.docview
+  ---@param self core.textview
   ---@param line integer
   ---@param extra_cols integer Amount of columns to deduce on col1 and include on col2
   ---@return integer col1
@@ -24,7 +24,7 @@ if not get_visible_cols_range then
     local char_width = self:get_font():get_width("W")
     local non_visible_chars_left = math.floor(non_visible_x / char_width)
     local visible_chars_right = math.floor((self.size.x - gw) / char_width)
-    local line_len = #self.doc.lines[line]
+    local line_len = #self.buffer.lines[line]
 
     if non_visible_chars_left > line_len then return 0, 0 end
 
@@ -44,7 +44,7 @@ local function draw_box(x, y, w, h, color)
 end
 
 
-local draw_line_body = DocView.draw_line_body
+local draw_line_body = TextView.draw_line_body
 
 local function perf_scope_begin(name)
   if not core.perf_draw_scope_active then return nil end
@@ -68,22 +68,22 @@ local function perf_scope_end(token)
   if perf and perf.scope_end then perf.scope_end(token) end
 end
 
-function DocView:draw_line_body(line, x, y)
+function TextView:draw_line_body(line, x, y)
   local scope = perf_scope_begin("selection_highlight")
-  if self.doc.intellij_find_active then
+  if self.buffer.intellij_find_active then
     local result = draw_line_body(self, line, x, y)
     perf_scope_end(scope)
     return result
   end
 
-  local line1, col1, line2, col2 = self.doc:get_selection(true)
+  local line1, col1, line2, col2 = self.buffer:get_selection(true)
   if line1 == line2 and col1 ~= col2 then
-    local selection = self.doc:get_text(line1, col1, line2, col2)
+    local selection = self.buffer:get_text(line1, col1, line2, col2)
     if #selection > 1 and not selection:match("^%s+$") then
-      local selected_text = self.doc.lines[line1]:sub(col1, col2 - 1)
+      local selected_text = self.buffer.lines[line1]:sub(col1, col2 - 1)
       local search_selected_text = selected_text:lower()
       local vcol1, vcol2 = get_visible_cols_range(self, line, 300)
-      local current_line_text = self.doc.lines[line]:sub(vcol1, vcol2)
+      local current_line_text = self.buffer.lines[line]:sub(vcol1, vcol2)
       local search_current_line_text = current_line_text:lower()
       local last_col = 1
       if vcol1 == 0 or vcol2 == 1 then goto return_value end

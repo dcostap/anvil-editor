@@ -1,6 +1,6 @@
 local core = require "core"
 local common = require "core.common"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local documents = require "core.lsp.documents"
 local provider = require "core.lsp.provider"
 local test = require "core.test"
@@ -17,22 +17,22 @@ local function mkdir(path)
   return path
 end
 
-local function set_text(doc, text)
-  doc.lines = {}
+local function set_text(buffer, text)
+  buffer.lines = {}
   for line in (text .. "\n"):gmatch("(.-\n)") do
-    doc.lines[#doc.lines + 1] = line
+    buffer.lines[#buffer.lines + 1] = line
   end
-  if #doc.lines == 0 then doc.lines[1] = "\n" end
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+  if #buffer.lines == 0 then buffer.lines[1] = "\n" end
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
-local function new_doc(path, text)
-  local doc = Doc()
-  set_text(doc, text or "")
-  doc:set_filename(path, path)
-  return doc
+local function new_buffer(path, text)
+  local buffer = Buffer()
+  set_text(buffer, text or "")
+  buffer:set_filename(path, path)
+  return buffer
 end
 
 local function fake_client(opts)
@@ -96,8 +96,8 @@ test.describe("core.lsp.provider semantic tokens", function()
     core.render_frame_active = false
     core.perf_frame_stats = nil
     provider.clear()
-    if context.docs then
-      for _, doc in ipairs(context.docs) do pcall(function() doc:on_close() end) end
+    if context.buffers then
+      for _, buffer in ipairs(context.buffers) do pcall(function() buffer:on_close() end) end
     end
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)
@@ -105,23 +105,23 @@ test.describe("core.lsp.provider semantic tokens", function()
     end
   end)
 
-  local function track_doc(context, doc)
-    context.docs = context.docs or {}
-    context.docs[#context.docs + 1] = doc
-    return doc
+  local function track_buffer(context, buffer)
+    context.buffers = context.buffers or {}
+    context.buffers[#context.buffers + 1] = buffer
+    return buffer
   end
 
   local function attach(context, opts)
-    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), opts and opts.text or "int main = 1"))
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), opts and opts.text or "int main = 1"))
     local client = fake_client(opts)
-    documents.attach(client, doc, { language_id = "cpp" })
+    documents.attach(client, buffer, { language_id = "cpp" })
     provider.register_client(client)
-    return doc, client
+    return buffer, client
   end
 
-  test.test("decodes LSP integer stream using legend and document positions", function(context)
-    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "int main = 1"))
-    local tokens = provider.decode_semantic_tokens(doc, { 0, 4, 4, 0, 0 }, {
+  test.test("decodes LSP integer stream using legend and buffer positions", function(context)
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), "int main = 1"))
+    local tokens = provider.decode_semantic_tokens(buffer, { 0, 4, 4, 0, 0 }, {
       tokenTypes = { "function" },
       tokenModifiers = {},
     }, "utf-16")
@@ -192,54 +192,54 @@ test.describe("core.lsp.provider semantic tokens", function()
   end)
 
   test.test("pending semanticTokens/full request falls back to base rendering", function(context)
-    local doc, client = attach(context)
-    local line = doc.highlighter:get_render_line(1)
+    local buffer, client = attach(context)
+    local line = buffer.highlighter:get_render_line(1)
     test.not_equal(line.source, "lsp")
     test.equal(#client.requests, 1)
     test.equal(client.requests[1].method, "textDocument/semanticTokens/full")
   end)
 
   test.test("fresh semantic tokens overlay render tokens and are cached", function(context)
-    local doc, client = attach(context)
-    doc.highlighter:get_render_line(1)
+    local buffer, client = attach(context)
+    buffer.highlighter:get_render_line(1)
     complete_request(client, 1, { data = { 0, 4, 4, 0, 0 } })
 
-    local line = doc.highlighter:get_render_line(1)
+    local line = buffer.highlighter:get_render_line(1)
     test.equal(line.source, "lsp")
     test.ok(has_token(line.tokens, "function.call", "main"))
-    doc.highlighter:get_render_line(1)
+    buffer.highlighter:get_render_line(1)
     test.equal(#client.requests, 1)
   end)
 
   test.test("render line cache avoids duplicate semantic lookup only within a draw frame", function(context)
-    local doc, client = attach(context)
-    doc.highlighter:get_render_line(1)
+    local buffer, client = attach(context)
+    buffer.highlighter:get_render_line(1)
     complete_request(client, 1, { data = { 0, 4, 4, 0, 0 } })
 
     local stats = {}
     core.perf_frame_stats = stats
     core.render_frame_id = (core.render_frame_id or 0) + 1
     core.render_frame_active = true
-    local line1 = doc.highlighter:get_render_line(1)
-    local line2 = doc.highlighter:get_render_line(1)
+    local line1 = buffer.highlighter:get_render_line(1)
+    local line2 = buffer.highlighter:get_render_line(1)
     test.equal(line1.source, "lsp")
     test.equal(line2.source, "lsp")
     test.equal(stats.lsp_render_tokens_calls, 1)
 
     core.render_frame_id = core.render_frame_id + 1
-    local line3 = doc.highlighter:get_render_line(1)
+    local line3 = buffer.highlighter:get_render_line(1)
     test.equal(line3.source, "lsp")
     test.equal(stats.lsp_render_tokens_calls, 2)
   end)
 
   test.test("semantic token cache is not reused while local edits are pending", function(context)
-    local doc, client = attach(context)
-    doc.highlighter:get_render_line(1)
+    local buffer, client = attach(context)
+    buffer.highlighter:get_render_line(1)
     complete_request(client, 1, { data = { 0, 4, 4, 0, 0 } })
-    test.equal(doc.highlighter:get_render_line(1).source, "lsp")
+    test.equal(buffer.highlighter:get_render_line(1).source, "lsp")
 
-    doc:insert(1, 1, "x")
-    local line = doc.highlighter:get_render_line(1)
+    buffer:insert(1, 1, "x")
+    local line = buffer.highlighter:get_render_line(1)
 
     test.not_equal(line.source, "lsp")
     test.equal(#client.requests, 2)
@@ -247,35 +247,35 @@ test.describe("core.lsp.provider semantic tokens", function()
   end)
 
   test.test("stale version semantic token responses are discarded", function(context)
-    local doc, client = attach(context)
-    doc.highlighter:get_render_line(1)
-    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "x" } })
-    documents.flush(client, doc)
+    local buffer, client = attach(context)
+    buffer.highlighter:get_render_line(1)
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "x" } })
+    documents.flush(client, buffer)
     complete_request(client, 1, { data = { 0, 4, 4, 0, 0 } })
 
-    local line = doc.highlighter:get_render_line(1)
+    local line = buffer.highlighter:get_render_line(1)
     test.not_equal(line.source, "lsp")
     test.equal(#client.requests, 2)
   end)
 
   test.test("semantic token cache key includes legend", function(context)
-    local doc, client = attach(context)
-    doc.highlighter:get_render_line(1)
+    local buffer, client = attach(context)
+    buffer.highlighter:get_render_line(1)
     complete_request(client, 1, { data = { 0, 4, 4, 0, 0 } })
-    test.equal(doc.highlighter:get_render_line(1).source, "lsp")
+    test.equal(buffer.highlighter:get_render_line(1).source, "lsp")
 
     client.capabilities.semanticTokensProvider.legend = {
       tokenTypes = { "class" },
       tokenModifiers = {},
     }
-    local line = doc.highlighter:get_render_line(1)
+    local line = buffer.highlighter:get_render_line(1)
     test.not_equal(line.source, "lsp")
     test.equal(#client.requests, 2)
   end)
 
   test.test("readonly variable sample maps through legend to hierarchical Anvil style", function(context)
-    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "const value = 1"))
-    local tokens = provider.decode_semantic_tokens(doc, { 0, 6, 5, 0, 1 }, {
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), "const value = 1"))
+    local tokens = provider.decode_semantic_tokens(buffer, { 0, 6, 5, 0, 1 }, {
       tokenTypes = { "variable" },
       tokenModifiers = { "readonly" },
     }, "utf-16")
@@ -285,8 +285,8 @@ test.describe("core.lsp.provider semantic tokens", function()
   end)
 
   test.test("unsupported semantic token capability stays unavailable", function(context)
-    local doc, client = attach(context, { capabilities = {} })
-    local line = doc.highlighter:get_render_line(1)
+    local buffer, client = attach(context, { capabilities = {} })
+    local line = buffer.highlighter:get_render_line(1)
     test.not_equal(line.source, "lsp")
     test.equal(#client.requests, 0)
   end)

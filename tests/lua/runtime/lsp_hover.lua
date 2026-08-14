@@ -1,7 +1,7 @@
 local command = require "core.command"
 local common = require "core.common"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local documents = require "core.lsp.documents"
 local hover = require "core.lsp.hover"
 local json = require "core.lsp.json"
@@ -21,22 +21,22 @@ local function mkdir(path)
   return path
 end
 
-local function set_text(doc, text)
-  doc.lines = {}
+local function set_text(buffer, text)
+  buffer.lines = {}
   for line in (text .. "\n"):gmatch("(.-\n)") do
-    doc.lines[#doc.lines + 1] = line
+    buffer.lines[#buffer.lines + 1] = line
   end
-  if #doc.lines == 0 then doc.lines[1] = "\n" end
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+  if #buffer.lines == 0 then buffer.lines[1] = "\n" end
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
-local function new_doc(path, text)
-  local doc = Doc()
-  set_text(doc, text or "")
-  doc:set_filename(path, path)
-  return doc
+local function new_buffer(path, text)
+  local buffer = Buffer()
+  set_text(buffer, text or "")
+  buffer:set_filename(path, path)
+  return buffer
 end
 
 local function fake_client(opts)
@@ -110,8 +110,8 @@ test.describe("core.lsp.hover", function()
   test.after_each(function(context)
     hover.clear()
     core.active_view = context.original_active_view
-    if context.docs then
-      for _, doc in ipairs(context.docs) do pcall(function() doc:on_close() end) end
+    if context.buffers then
+      for _, buffer in ipairs(context.buffers) do pcall(function() buffer:on_close() end) end
     end
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)
@@ -119,36 +119,36 @@ test.describe("core.lsp.hover", function()
     end
   end)
 
-  local function track_doc(context, doc)
-    context.docs = context.docs or {}
-    context.docs[#context.docs + 1] = doc
-    return doc
+  local function track_buffer(context, buffer)
+    context.buffers = context.buffers or {}
+    context.buffers[#context.buffers + 1] = buffer
+    return buffer
   end
 
   local function attach(context, opts)
-    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), opts and opts.text or "hover_target"))
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), opts and opts.text or "hover_target"))
     local client = fake_client(opts)
-    documents.attach(client, doc, { language_id = "cpp" })
-    return doc, client
+    documents.attach(client, buffer, { language_id = "cpp" })
+    return buffer, client
   end
 
   test.test("normalizes Hover content forms", function(context)
-    local doc, client = attach(context)
-    test.equal(hover.map_result(client, doc, { contents = "plain" }).text, "plain")
-    test.equal(hover.map_result(client, doc, { contents = { kind = "markdown", value = "**md**" } }).text, "**md**")
-    test.equal(hover.map_result(client, doc, { contents = { language = "cpp", value = "int x;" } }).text, "```cpp\nint x;\n```")
-    test.equal(hover.map_result(client, doc, { contents = { "one", { language = "c", value = "two" } } }).text, "one\n\n```c\ntwo\n```")
+    local buffer, client = attach(context)
+    test.equal(hover.map_result(client, buffer, { contents = "plain" }).text, "plain")
+    test.equal(hover.map_result(client, buffer, { contents = { kind = "markdown", value = "**md**" } }).text, "**md**")
+    test.equal(hover.map_result(client, buffer, { contents = { language = "cpp", value = "int x;" } }).text, "```cpp\nint x;\n```")
+    test.equal(hover.map_result(client, buffer, { contents = { "one", { language = "c", value = "two" } } }).text, "one\n\n```c\ntwo\n```")
   end)
 
   test.test("maps nil and null hover results as empty", function(context)
-    local doc, client = attach(context)
-    test.ok(hover.map_result(client, doc, nil).empty)
-    test.ok(hover.map_result(client, doc, json.null).empty)
+    local buffer, client = attach(context)
+    test.ok(hover.map_result(client, buffer, nil).empty)
+    test.ok(hover.map_result(client, buffer, json.null).empty)
   end)
 
   test.test("converts hover range when present", function(context)
-    local doc, client = attach(context, { text = "abcd" })
-    local mapped = hover.map_result(client, doc, {
+    local buffer, client = attach(context, { text = "abcd" })
+    local mapped = hover.map_result(client, buffer, {
       contents = "range",
       range = lsp_range(0, 1, 0, 3),
     })
@@ -156,10 +156,10 @@ test.describe("core.lsp.hover", function()
   end)
 
   test.test("manual command schedules textDocument/hover and logs on response", function(context)
-    local doc, client = attach(context)
-    local view = DocView(doc)
+    local buffer, client = attach(context)
+    local view = TextView(buffer)
     core.active_view = view
-    doc:set_selection(1, 3)
+    buffer:set_selection(1, 3)
     local log_start = core.log_items[#core.log_items]
 
     test.ok(command.perform("lsp:hover-current-position", view))
@@ -168,56 +168,56 @@ test.describe("core.lsp.hover", function()
     test.equal(client.requests[1].params.position.line, 0)
     test.equal(client.requests[1].params.position.character, 2)
 
-    complete_request(client, 1, { contents = { kind = "markdown", value = "hover docs" } })
-    test.ok(saw_log_since(log_start, "LSP hover: hover docs"))
+    complete_request(client, 1, { contents = { kind = "markdown", value = "hover buffers" } })
+    test.ok(saw_log_since(log_start, "LSP hover: hover buffers"))
   end)
 
   test.test("fresh cached hover result is reused without another request", function(context)
-    local doc, client = attach(context)
-    doc:set_selection(1, 3)
-    hover.request(doc, { show = false })
+    local buffer, client = attach(context)
+    buffer:set_selection(1, 3)
+    hover.request(buffer, { show = false })
     complete_request(client, 1, { contents = "cached" })
 
-    local mapped, _reason, status = hover.request(doc, { show = false })
+    local mapped, _reason, status = hover.request(buffer, { show = false })
     test.equal(status, "fresh")
     test.equal(mapped.text, "cached")
     test.equal(#client.requests, 1)
   end)
 
   test.test("stale version hover responses are discarded", function(context)
-    local doc, client = attach(context)
-    doc:set_selection(1, 3)
-    hover.request(doc, { show = false })
-    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "x" } })
-    documents.flush(client, doc)
+    local buffer, client = attach(context)
+    buffer:set_selection(1, 3)
+    hover.request(buffer, { show = false })
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "x" } })
+    documents.flush(client, buffer)
     complete_request(client, 1, { contents = "old" })
 
-    hover.request(doc, { show = false })
+    hover.request(buffer, { show = false })
     test.equal(#client.requests, 2)
   end)
 
   test.test("superseded hover response is cancelled and discarded", function(context)
-    local doc, client = attach(context, { text = "abc def" })
-    doc:set_selection(1, 3)
-    hover.request(doc, { show = false })
-    doc:set_selection(1, 7)
-    hover.request(doc, { show = false })
+    local buffer, client = attach(context, { text = "abc def" })
+    buffer:set_selection(1, 3)
+    hover.request(buffer, { show = false })
+    buffer:set_selection(1, 7)
+    hover.request(buffer, { show = false })
     test.equal(#client.requests, 2)
     test.equal(client.sent[#client.sent].method, "$/cancelRequest")
 
     complete_request(client, 1, { contents = "old" })
-    doc:set_selection(1, 3)
-    local mapped, _reason, status = hover.request(doc, { show = false })
+    buffer:set_selection(1, 3)
+    local mapped, _reason, status = hover.request(buffer, { show = false })
     test.not_equal(status, "fresh")
     test.is_nil(mapped)
     test.equal(#client.requests, 3)
   end)
 
   test.test("no hover server is a quiet no-op", function(context)
-    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "hover_target"))
-    local view = DocView(doc)
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), "hover_target"))
+    local view = TextView(buffer)
     core.active_view = view
-    doc:set_selection(1, 3)
+    buffer:set_selection(1, 3)
 
     test.ok(command.perform("lsp:hover-current-position", view))
   end)

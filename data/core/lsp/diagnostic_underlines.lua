@@ -1,6 +1,6 @@
 local core = require "core"
 local style = require "core.style"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 local diagnostic_markers = require "core.lsp.diagnostic_markers"
 
 local diagnostic_underlines = {}
@@ -9,8 +9,8 @@ local SQUIGGLE_Y_OFFSET = 2
 
 local cache = setmetatable({}, { __mode = "k" })
 
-local function doc_change_id(doc)
-  if doc and doc.get_change_id then return doc:get_change_id() end
+local function buffer_change_id(buffer)
+  if buffer and buffer.get_change_id then return buffer:get_change_id() end
   return nil
 end
 
@@ -26,14 +26,14 @@ local function severity_color(severity)
   return style.line_hint
 end
 
-local function line_visual_end_col(doc, line)
-  local text = doc and doc.lines and doc.lines[line] or ""
+local function line_visual_end_col(buffer, line)
+  local text = buffer and buffer.lines and buffer.lines[line] or ""
   if text:sub(-1) == "\n" then return math.max(1, #text) end
   return #text + 1
 end
 
-local function clamp_col(doc, line, col)
-  return math.max(1, math.min(col or 1, line_visual_end_col(doc, line)))
+local function clamp_col(buffer, line, col)
+  return math.max(1, math.min(col or 1, line_visual_end_col(buffer, line)))
 end
 
 local function add_line_range(by_line, line, col1, col2, severity)
@@ -50,19 +50,19 @@ local function add_line_range(by_line, line, col1, col2, severity)
   }
 end
 
-local function build_line_ranges(doc)
+local function build_line_ranges(buffer)
   local by_line = {}
-  for _, item in ipairs(diagnostic_markers.visual_document_items(doc)) do
+  for _, item in ipairs(diagnostic_markers.visual_buffer_items(buffer)) do
     local diagnostic = item.diagnostic or {}
     local severity = tonumber(diagnostic.severity)
     if visible_severity(severity) and item.line1 then
       local line1 = math.max(1, item.line1)
-      local line2 = math.min(item.line2 or line1, #(doc.lines or {}))
+      local line2 = math.min(item.line2 or line1, #(buffer.lines or {}))
       for line = line1, line2 do
         local col1 = line == line1 and item.col1 or 1
-        local col2 = line == line2 and item.col2 or line_visual_end_col(doc, line)
-        col1 = clamp_col(doc, line, col1)
-        col2 = clamp_col(doc, line, col2)
+        local col2 = line == line2 and item.col2 or line_visual_end_col(buffer, line)
+        col1 = clamp_col(buffer, line, col1)
+        col2 = clamp_col(buffer, line, col2)
         if col2 < col1 then col1, col2 = col2, col1 end
         add_line_range(by_line, line, col1, col2, severity)
       end
@@ -71,24 +71,24 @@ local function build_line_ranges(doc)
   return by_line
 end
 
-local function cached_line_ranges(doc)
-  if not doc then return {} end
+local function cached_line_ranges(buffer)
+  if not buffer then return {} end
   local generation = diagnostic_markers.generation and diagnostic_markers.generation() or 0
-  local change_id = doc_change_id(doc)
-  local entry = cache[doc]
+  local change_id = buffer_change_id(buffer)
+  local entry = cache[buffer]
   if not entry or entry.generation ~= generation or entry.change_id ~= change_id then
     entry = {
       generation = generation,
       change_id = change_id,
-      by_line = build_line_ranges(doc),
+      by_line = build_line_ranges(buffer),
     }
-    cache[doc] = entry
+    cache[buffer] = entry
   end
   return entry.by_line
 end
 
-function diagnostic_underlines.ranges_for_line(doc, line)
-  return cached_line_ranges(doc)[line] or {}
+function diagnostic_underlines.ranges_for_line(buffer, line)
+  return cached_line_ranges(buffer)[line] or {}
 end
 
 local function squiggle_metrics(view, y, content_height, content_font_height)
@@ -205,7 +205,7 @@ local function wrapped_line_bounds(view, line, idx)
   local row_start = view.wrapped_lines[offset + 2] or 1
   local next_line = view.wrapped_lines[offset + 3]
   local next_start = view.wrapped_lines[offset + 4]
-  local row_end = next_line == line and next_start or line_visual_end_col(view.doc, line)
+  local row_end = next_line == line and next_start or line_visual_end_col(view.buffer, line)
   return row_start, row_end
 end
 
@@ -246,7 +246,7 @@ local function draw_wrapped_line(view, line, x, y, ranges)
 end
 
 function diagnostic_underlines.draw_line(view, line, x, y)
-  local ranges = diagnostic_underlines.ranges_for_line(view and view.doc, line)
+  local ranges = diagnostic_underlines.ranges_for_line(view and view.buffer, line)
   if #ranges == 0 then return false end
   if view.wrapped_settings and view.wrapped_lines and view.wrapped_line_to_idx then
     draw_wrapped_line(view, line, x, y, ranges)
@@ -257,11 +257,11 @@ function diagnostic_underlines.draw_line(view, line, x, y)
 end
 
 function diagnostic_underlines.install()
-  DocView.__lsp_diagnostic_underlines_module = diagnostic_underlines
-  if DocView.__lsp_diagnostic_underlines_installed then return false end
-  DocView.__lsp_diagnostic_underlines_installed = true
+  TextView.__lsp_diagnostic_underlines_module = diagnostic_underlines
+  if TextView.__lsp_diagnostic_underlines_installed then return false end
+  TextView.__lsp_diagnostic_underlines_installed = true
   if core and core.log_quiet then
-    core.log_quiet("LSP Diagnostic Underlines registered with Document View")
+    core.log_quiet("LSP Diagnostic Underlines registered with Text View")
   end
   return true
 end

@@ -23,11 +23,11 @@ local function wordwrap_text(text, limit)
 end
 
 
-command.add("core.docview", {
+command.add("core.textview", {
   ["reflow:reflow"] = function(dv)
     if dv.can_edit and not dv:can_edit("reflow", { warn = true }) then return end
-    local doc = dv.doc
-    doc:replace(function(text)
+    local buffer = dv.buffer
+    buffer:replace(function(text)
       local prefix_set = "[^%w\n%[%](){}`'\"]*"
 
       -- get line prefix and trailing whitespace

@@ -16,7 +16,7 @@ local command = {}
 ---
 ---If the predicate is a string, it is resolved into an `Object` via `require()`
 ---and checked against the active view with `Object:extends()`. </br>
----For example, `"core.docview"` will match any view that inherits from `DocView`. </br>
+---For example, `"core.textview"` will match any view that inherits from `TextView`. </br>
 ---A `!` can be appended to the predicate to strictly match the current view via `Object:is()`,
 ---instead of matching any view that inherits the predicate.
 ---
@@ -74,27 +74,27 @@ local function pack(...)
   return { n = select("#", ...), ... }
 end
 
-local function is_docview(value)
+local function is_textview(value)
   return type(value) == "table"
     and type(value.with_selection_state) == "function"
-    and value.doc ~= nil
+    and value.buffer ~= nil
 end
 
-local function active_docview()
+local function active_textview()
   local view = core.active_view
-  if is_docview(view) then return view end
+  if is_textview(view) then return view end
 end
 
 local function with_view_selection(view, fn, ...)
-  if is_docview(view) then
+  if is_textview(view) then
     return view:with_selection_state(fn, ...)
   end
   return fn(...)
 end
 
-local function first_docview_arg(args, n)
+local function first_textview_arg(args, n)
   for i = 1, n do
-    if is_docview(args[i]) then return args[i] end
+    if is_textview(args[i]) then return args[i] end
   end
 end
 
@@ -162,7 +162,7 @@ function command.generate_predicate(predicate)
   return function(...)
     local args = pack(...)
     return with_view_selection(
-      first_docview_arg(args, args.n) or active_docview(),
+      first_textview_arg(args, args.n) or active_textview(),
       raw_predicate,
       table.unpack(args, 1, args.n)
     )
@@ -329,7 +329,7 @@ local function perform(name, ...)
       args, n = pack(...), select("#", ...)
     end
     local body_start = perf_start()
-    local result = with_view_selection(first_docview_arg(args, n) or active_docview(), function()
+    local result = with_view_selection(first_textview_arg(args, n) or active_textview(), function()
       cmd.perform(table.unpack(args, 1, n))
       return true
     end)
@@ -364,7 +364,7 @@ end
 ---Inserts the default commands for Anvil into the map.
 function command.add_defaults()
   local reg = {
-    "core", "root", "command", "doc", "findreplace",
+    "core", "root", "command", "text", "findreplace",
     "files", "dialog", "log", "statusbar", "image", "markdown", "lsp", "language"
   }
   for _, name in ipairs(reg) do

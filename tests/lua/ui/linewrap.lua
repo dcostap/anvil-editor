@@ -2,7 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local command = require "core.command"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -15,26 +15,26 @@ local function track(context, kind, value)
   return value
 end
 
-local function remove_doc(doc)
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+local function remove_buffer(buffer)
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
 end
 
 local function open_editor(context, text)
-  local doc = track(context, "docs", core.open_doc())
-  if text and text ~= "" then doc:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_doc(doc))
+  local buffer = track(context, "buffers", core.open_buffer())
+  if text and text ~= "" then buffer:text_input(text) end
+  local view = track(context, "views", core.root_panel:open_buffer(buffer))
   core.set_active_view(view)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 320, 240
   view.scroll.x, view.scroll.to.x = 0, 0
   view.scroll.y, view.scroll.to.y = 0, 0
-  return view, doc
+  return view, buffer
 end
 
 local function configure_wrapping_for_test(context, view)
@@ -67,7 +67,7 @@ local function configure_wrapping_for_test(context, view)
   config.disable_blink = true
 
   view.wrapping_enabled = true
-  LineWrapping.update_docview_breaks(view)
+  LineWrapping.update_textview_breaks(view)
 end
 
 local function count_wrap_guides(view)
@@ -185,60 +185,60 @@ test.describe("line wrapping current line highlight", function()
       local node = root:get_node_for_view(view)
       if node then node:remove_view(root, view) end
     end
-    for _, doc in ipairs(context.docs or {}) do
-      if doc:is_dirty() then doc:clean() end
-      remove_doc(doc)
+    for _, buffer in ipairs(context.buffers or {}) do
+      if buffer:is_dirty() then buffer:clean() end
+      remove_buffer(buffer)
     end
   end)
 
-  test.it("rebuilds stale wrapped rows after document line count changes outside transactions", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40) .. "\n" .. string.rep("y", 40) .. "\n")
+  test.it("rebuilds stale wrapped rows after buffer line count changes outside transactions", function(context)
+    local view, buffer = open_editor(context, string.rep("x", 40) .. "\n" .. string.rep("y", 40) .. "\n")
     configure_wrapping_for_test(context, view)
-    test.equal(view.wrapped_doc_line_count, #doc.lines)
+    test.equal(view.wrapped_buffer_line_count, #buffer.lines)
 
-    doc.lines = { string.rep("z", 40) .. "\n" }
+    buffer.lines = { string.rep("z", 40) .. "\n" }
     view:update_wrap_cache()
 
-    test.equal(view.wrapped_doc_line_count, 1)
+    test.equal(view.wrapped_buffer_line_count, 1)
     for i = 1, #view.wrapped_lines, 2 do
-      test.ok(view.wrapped_lines[i] <= #doc.lines, "wrapped row points past document line count")
+      test.ok(view.wrapped_lines[i] <= #buffer.lines, "wrapped row points past buffer line count")
     end
     with_stubbed_renderer(function() view:draw_wrapped() end)
   end)
 
-  test.it("revalidates stale wrapped rows when the document shrinks between update and draw", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40) .. "\n" .. string.rep("y", 40) .. "\n")
+  test.it("revalidates stale wrapped rows when the buffer shrinks between update and draw", function(context)
+    local view, buffer = open_editor(context, string.rep("x", 40) .. "\n" .. string.rep("y", 40) .. "\n")
     configure_wrapping_for_test(context, view)
-    test.ok(view.wrapped_doc_line_count > 1)
+    test.ok(view.wrapped_buffer_line_count > 1)
 
-    doc.lines = { string.rep("z", 40) .. "\n" }
+    buffer.lines = { string.rep("z", 40) .. "\n" }
 
     with_stubbed_renderer(function() view:draw() end)
-    test.equal(view.wrapped_doc_line_count, #doc.lines)
+    test.equal(view.wrapped_buffer_line_count, #buffer.lines)
   end)
 
-  test.it("revalidates wrapped rows that point past the document despite current line-count metadata", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40) .. "\n" .. string.rep("y", 40) .. "\n")
+  test.it("revalidates wrapped rows that point past the buffer despite current line-count metadata", function(context)
+    local view, buffer = open_editor(context, string.rep("x", 40) .. "\n" .. string.rep("y", 40) .. "\n")
     configure_wrapping_for_test(context, view)
-    test.ok(view.wrapped_doc_line_count > 1)
+    test.ok(view.wrapped_buffer_line_count > 1)
 
-    doc.lines = { string.rep("z", 40) .. "\n" }
-    view.wrapped_doc_line_count = #doc.lines
+    buffer.lines = { string.rep("z", 40) .. "\n" }
+    view.wrapped_buffer_line_count = #buffer.lines
 
     with_stubbed_renderer(function() view:draw() end)
-    test.equal(view.wrapped_doc_line_count, #doc.lines)
-    test.ok(view.wrapped_lines[#view.wrapped_lines - 1] <= #doc.lines)
+    test.equal(view.wrapped_buffer_line_count, #buffer.lines)
+    test.ok(view.wrapped_lines[#view.wrapped_lines - 1] <= #buffer.lines)
   end)
 
   test.it("highlights only the wrapped visual line containing the caret", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40) .. "\n")
+    local view, buffer = open_editor(context, string.rep("x", 40) .. "\n")
     configure_wrapping_for_test(context, view)
 
     local first_x, first_y = view:get_line_screen_position(1)
     local _, second_visual_y = view:get_line_screen_position(1, 12)
     test.ok(second_visual_y > first_y, "expected the test caret column to be on a wrapped continuation line")
 
-    doc:set_selection(1, 12, 1, 12)
+    buffer:set_selection(1, 12, 1, 12)
 
     local highlights = collect_current_line_highlights(view, function()
       view:draw_line_body(1, first_x, first_y)
@@ -248,10 +248,10 @@ test.describe("line wrapping current line highlight", function()
     test.equal(highlights[1].y, second_visual_y)
   end)
 
-  test.it("draws a single current-line highlight during a full wrapped Document View draw", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40) .. "\n")
+  test.it("draws a single current-line highlight during a full wrapped Text View draw", function(context)
+    local view, buffer = open_editor(context, string.rep("x", 40) .. "\n")
     configure_wrapping_for_test(context, view)
-    doc:set_selection(1, 12, 1, 12)
+    buffer:set_selection(1, 12, 1, 12)
 
     local _, expected_y = view:get_line_screen_position(1, 12)
     local highlights = collect_current_line_highlights(view, function()
@@ -270,7 +270,7 @@ test.describe("line wrapping current line highlight", function()
     cfg.wrapping_indent = 6
     cfg.continuation_indicator = "↪"
     cfg.width_override = view:get_font():get_width(string.rep("x", 40))
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
 
     local _, _, row_count = LineWrapping.get_line_idx_col_count(view, 1)
     test.ok(row_count > 1, "expected a wrapped fixture")
@@ -298,13 +298,13 @@ test.describe("line wrapping current line highlight", function()
     end
   end)
 
-  test.it("keeps current-line highlight but hides caret when the DocView is inactive", function(context)
-    local view, doc = open_editor(context, "one\ntwo\n")
+  test.it("keeps current-line highlight but hides caret when the TextView is inactive", function(context)
+    local view, buffer = open_editor(context, "one\ntwo\n")
     context.highlight_current_line = config.highlight_current_line
     context.disable_blink = config.disable_blink
     config.highlight_current_line = true
     config.disable_blink = true
-    doc:set_selection(2, 1, 2, 1)
+    buffer:set_selection(2, 1, 2, 1)
 
     local original_active_view = core.active_view
     local original_window_has_focus = system.window_has_focus
@@ -329,10 +329,10 @@ test.describe("line wrapping current line highlight", function()
     test.equal(#carets, 0)
   end)
 
-  test.it("refreshes visible caret cache during a full wrapped Document View draw", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40) .. "\n")
+  test.it("refreshes visible caret cache during a full wrapped Text View draw", function(context)
+    local view, buffer = open_editor(context, string.rep("x", 40) .. "\n")
     configure_wrapping_for_test(context, view)
-    doc:set_selection(1, 20, 1, 20)
+    buffer:set_selection(1, 20, 1, 20)
     view.__visible_caret_cache = { { 1, 2, 1, 2 } }
 
     local carets = {}
@@ -360,7 +360,7 @@ test.describe("line wrapping current line highlight", function()
     config.scroll_past_end = true
     config.scroll_context_lines = 2
 
-    local view, doc = open_editor(context, string.rep("x", 200))
+    local view, buffer = open_editor(context, string.rep("x", 200))
     view.size.y = 120
     configure_wrapping_for_test(context, view)
     local lh = view:get_line_height()
@@ -372,8 +372,8 @@ test.describe("line wrapping current line highlight", function()
 
     test.equal(view.scroll.y, view:get_scrollable_size() - view.size.y)
     test.equal(view.v_scrollbar.percent, 1)
-    local last_line = #doc.lines
-    local _, last_y = view:get_line_screen_position(last_line, #doc.lines[last_line])
+    local last_line = #buffer.lines
+    local _, last_y = view:get_line_screen_position(last_line, #buffer.lines[last_line])
     test.equal(last_y + lh, view.position.y + view.size.y - config.scroll_context_lines * lh)
   end)
 end)
@@ -388,9 +388,9 @@ test.describe("line wrapping visual navigation", function()
       local node = root:get_node_for_view(view)
       if node then node:remove_view(root, view) end
     end
-    for _, doc in ipairs(context.docs or {}) do
-      if doc:is_dirty() then doc:clean() end
-      remove_doc(doc)
+    for _, buffer in ipairs(context.buffers or {}) do
+      if buffer:is_dirty() then buffer:clean() end
+      remove_buffer(buffer)
     end
   end)
 
@@ -398,7 +398,7 @@ test.describe("line wrapping visual navigation", function()
     local view = open_editor(context, "abc")
     configure_wrapping_for_test(context, view)
     config.plugins.linewrapping.width_override = view:get_font():get_width("abc")
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
 
     test.equal(view:get_total_visual_lines(), 1)
   end)
@@ -411,56 +411,56 @@ test.describe("line wrapping visual navigation", function()
   end)
 
   test.it("updates long plain ASCII line breaks after text input", function(context)
-    local view, doc = open_editor(context, string.rep("x", 80))
+    local view, buffer = open_editor(context, string.rep("x", 80))
     configure_wrapping_for_test(context, view)
     test.equal(view:get_total_visual_lines(), 10)
 
-    doc:set_selection(1, 41, 1, 41)
-    doc:text_input("y")
+    buffer:set_selection(1, 41, 1, 41)
+    buffer:text_input("y")
 
-    test.equal(doc.lines[1], string.rep("x", 40) .. "y" .. string.rep("x", 40) .. "\n")
+    test.equal(buffer.lines[1], string.rep("x", 40) .. "y" .. string.rep("x", 40) .. "\n")
     test.equal(view:get_total_visual_lines(), 11)
     test.equal(view.wrapped_line_to_idx[1], 1)
   end)
 
   test.it("updates long plain ASCII word-wrapped line breaks after text input", function(context)
-    local view, doc = open_editor(context, ("word "):rep(80))
+    local view, buffer = open_editor(context, ("word "):rep(80))
     configure_wrapping_for_test(context, view)
     config.plugins.linewrapping.mode = "word"
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
     local old_visual_lines = view:get_total_visual_lines()
 
-    doc:set_selection(1, 21, 1, 21)
-    doc:text_input("inserted ")
+    buffer:set_selection(1, 21, 1, 21)
+    buffer:text_input("inserted ")
 
-    test.equal(doc.lines[1]:sub(21, 29), "inserted ")
+    test.equal(buffer.lines[1]:sub(21, 29), "inserted ")
     test.ok(view:get_total_visual_lines() >= old_visual_lines)
     test.equal(view.wrapped_line_to_idx[1], 1)
   end)
 
   test.it("uses letter fast path for long no-space ASCII in word mode", function(context)
-    local view, doc = open_editor(context, string.rep("f", 80))
+    local view, buffer = open_editor(context, string.rep("f", 80))
     configure_wrapping_for_test(context, view)
     config.plugins.linewrapping.mode = "word"
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
     test.equal(view:get_total_visual_lines(), 10)
 
-    doc:set_selection(1, 41, 1, 41)
-    doc:text_input("f")
+    buffer:set_selection(1, 41, 1, 41)
+    buffer:text_input("f")
 
     test.equal(view:get_total_visual_lines(), 11)
     test.equal(view.wrapped_line_to_idx[1], 1)
   end)
 
   test.it("updates long no-space UTF-8 word-wrapped line breaks after text input", function(context)
-    local view, doc = open_editor(context, ("é"):rep(80))
+    local view, buffer = open_editor(context, ("é"):rep(80))
     configure_wrapping_for_test(context, view)
     config.plugins.linewrapping.mode = "word"
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
     local old_visual_lines = view:get_total_visual_lines()
 
-    doc:set_selection(1, 41, 1, 41)
-    doc:text_input("é")
+    buffer:set_selection(1, 41, 1, 41)
+    buffer:text_input("é")
 
     test.ok(view:get_total_visual_lines() >= old_visual_lines)
     test.equal(view.wrapped_line_to_idx[1], 1)
@@ -473,7 +473,7 @@ test.describe("line wrapping visual navigation", function()
     config.plugins.linewrapping.mode = "word"
     config.plugins.linewrapping.width_override = cell * 5
 
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
 
     test.same(view.wrapped_lines, { 1, 1, 1, 7, 1, 10 })
   end)
@@ -485,7 +485,7 @@ test.describe("line wrapping visual navigation", function()
     config.plugins.linewrapping.mode = "word"
     config.plugins.linewrapping.width_override = cell * 5
 
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
 
     test.equal(view:get_total_visual_lines(), 3)
   end)
@@ -498,7 +498,7 @@ test.describe("line wrapping visual navigation", function()
     config.plugins.linewrapping.require_tokenization = true
     config.plugins.linewrapping.width_override = cell * 5
 
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
 
     test.same(view.wrapped_lines, { 1, 1, 1, 7, 1, 10 })
   end)
@@ -506,14 +506,14 @@ test.describe("line wrapping visual navigation", function()
   test.it("keeps ligature-sensitive unwrapped runs aligned with caret positions", function(context)
     local prefix = "main :: proc()" .. string.rep(":", 40)
     local text = prefix .. "{"
-    local view, doc = open_editor(context, text)
+    local view, buffer = open_editor(context, text)
     view.wrapping_enabled = false
     view.wrapped_settings = nil
     view.__test_force_known_bounds = true
     view.size.x = 2000
 
-    local old_get_render_line = doc.highlighter.get_render_line
-    doc.highlighter.get_render_line = function()
+    local old_get_render_line = buffer.highlighter.get_render_line
+    buffer.highlighter.get_render_line = function()
       return {
         text = text .. "\n",
         tokens = { "normal", prefix, "keyword", "{", "normal", "\n" },
@@ -540,7 +540,7 @@ test.describe("line wrapping visual navigation", function()
 
     renderer.draw_text = old_draw_text
     renderer.draw_text_known_bounds = old_draw_text_known_bounds
-    doc.highlighter.get_render_line = old_get_render_line
+    buffer.highlighter.get_render_line = old_get_render_line
     if not ok then error(err, 0) end
 
     local caret_x = select(1, view:get_line_screen_position(1, #prefix + 1))
@@ -554,7 +554,7 @@ test.describe("line wrapping visual navigation", function()
     local letter_rows = view:get_total_visual_lines()
 
     config.plugins.linewrapping.mode = "word"
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
 
     test.ok(view:get_total_visual_lines() ~= letter_rows, "expected mode change to rebuild wrap cache")
   end)
@@ -563,7 +563,7 @@ test.describe("line wrapping visual navigation", function()
     local view = open_editor(context, "abc\nsecond")
     configure_wrapping_for_test(context, view)
     config.plugins.linewrapping.width_override = view:get_font():get_width("xxxxxxxx")
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
     local lh = view:get_line_height()
     view.scroll.y, view.scroll.to.y = style.padding.y + lh, style.padding.y + lh
 
@@ -572,98 +572,98 @@ test.describe("line wrapping visual navigation", function()
   end)
 
   test.it("moves up and down by wrapped visual rows", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40))
+    local view, buffer = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
-    doc:set_selection(1, 1, 1, 1)
+    buffer:set_selection(1, 1, 1, 1)
 
-    command.perform("doc:move-to-next-line")
-    local line, col = doc:get_selection()
+    command.perform("text:move-to-next-line")
+    local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
 
-    command.perform("doc:move-to-next-line")
-    line, col = doc:get_selection()
+    command.perform("text:move-to-next-line")
+    line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 17)
 
-    command.perform("doc:move-to-previous-line")
-    line, col = doc:get_selection()
+    command.perform("text:move-to-previous-line")
+    line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
   end)
 
   test.it("preserves desired horizontal x across short wrapped visual rows", function(context)
-    local view, doc = open_editor(context, "abcdefg hi abcdefg")
+    local view, buffer = open_editor(context, "abcdefg hi abcdefg")
     configure_wrapping_for_test(context, view)
     config.plugins.linewrapping.mode = "word"
     config.plugins.linewrapping.width_override = view:get_font():get_width("xxxxxxxx")
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
 
-    doc:set_selection(1, 7, 1, 7)
-    command.perform("doc:move-to-next-line")
-    local line, col = doc:get_selection()
+    buffer:set_selection(1, 7, 1, 7)
+    command.perform("text:move-to-next-line")
+    local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 12)
 
-    command.perform("doc:move-to-next-line")
-    line, col = doc:get_selection()
+    command.perform("text:move-to-next-line")
+    line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 18)
   end)
 
   test.it("moves home/end to visual row boundaries before actual line boundaries", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40))
+    local view, buffer = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
 
-    doc:set_selection(1, 12, 1, 12)
-    command.perform("doc:move-to-start-of-indentation")
-    local line, col = doc:get_selection()
+    buffer:set_selection(1, 12, 1, 12)
+    command.perform("text:move-to-start-of-indentation")
+    local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
 
-    command.perform("doc:move-to-start-of-indentation")
-    line, col = doc:get_selection()
+    command.perform("text:move-to-start-of-indentation")
+    line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 1)
 
-    doc:set_selection(1, 12, 1, 12)
-    command.perform("doc:move-to-end-of-line")
-    line, col = doc:get_selection()
+    buffer:set_selection(1, 12, 1, 12)
+    command.perform("text:move-to-end-of-line")
+    line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 17)
 
-    command.perform("doc:move-to-end-of-line")
-    line, col = doc:get_selection()
+    command.perform("text:move-to-end-of-line")
+    line, col = buffer:get_selection()
     test.equal(line, 1)
-    test.equal(col, #doc.lines[1])
+    test.equal(col, #buffer.lines[1])
   end)
 
   test.it("deletes to wrapped visual row boundaries", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40))
+    local view, buffer = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
 
-    doc:set_selection(1, 12, 1, 12)
-    command.perform("doc:delete-to-end-of-line")
-    test.equal(doc.lines[1], string.rep("x", 35) .. "\n")
-    local line, col = doc:get_selection()
+    buffer:set_selection(1, 12, 1, 12)
+    command.perform("text:delete-to-end-of-line")
+    test.equal(buffer.lines[1], string.rep("x", 35) .. "\n")
+    local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 12)
 
-    doc:set_selection(1, 10, 1, 10)
-    command.perform("doc:delete-to-start-of-line")
-    test.equal(doc.lines[1], string.rep("x", 34) .. "\n")
-    line, col = doc:get_selection()
+    buffer:set_selection(1, 10, 1, 10)
+    command.perform("text:delete-to-start-of-line")
+    test.equal(buffer.lines[1], string.rep("x", 34) .. "\n")
+    line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
   end)
 
   test.it("applies wrapped line-end affinity from mouse cursor commands", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40))
+    local view, buffer = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
 
     local x, y = view:get_line_screen_position(1, 9, true)
-    command.perform("doc:set-cursor", x, y + view:get_line_height() / 2, 1)
-    local line, col = doc:get_selection()
+    command.perform("text:set-cursor", x, y + view:get_line_height() / 2, 1)
+    local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
 
@@ -676,13 +676,13 @@ test.describe("line wrapping visual navigation", function()
   end)
 
   test.it("applies wrapped line-end affinity from mouse selection commands", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40))
+    local view, buffer = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
-    doc:set_selection(1, 1, 1, 1)
+    buffer:set_selection(1, 1, 1, 1)
 
     local x, y = view:get_line_screen_position(1, 9, true)
-    command.perform("doc:select-to-cursor", x, y + view:get_line_height() / 2, 1)
-    local line1, col1, line2, col2 = doc:get_selection()
+    command.perform("text:select-to-cursor", x, y + view:get_line_height() / 2, 1)
+    local line1, col1, line2, col2 = buffer:get_selection()
     test.equal(line1, 1)
     test.equal(col1, 9)
     test.equal(line2, 1)
@@ -697,15 +697,15 @@ test.describe("line wrapping visual navigation", function()
   end)
 
   test.it("splits cursors using wrapped visual row coordinates", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40))
+    local view, buffer = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
-    doc:set_selection(1, 1, 1, 1)
+    buffer:set_selection(1, 1, 1, 1)
 
     local x, y = view:get_line_screen_position(1, 9)
-    command.perform("doc:split-cursor", x, y + view:get_line_height() / 2, 1)
+    command.perform("text:split-cursor", x, y + view:get_line_height() / 2, 1)
 
-    test.equal(#doc.selections, 8)
-    test.same({ doc.selections[1], doc.selections[2], doc.selections[5], doc.selections[6] }, { 1, 1, 1, 9 })
+    test.equal(#buffer.selections, 8)
+    test.same({ buffer.selections[1], buffer.selections[2], buffer.selections[5], buffer.selections[6] }, { 1, 1, 1, 9 })
   end)
 
   test.it("toggle follows requested wrapping state even when no wrap cache exists", function(context)
@@ -722,33 +722,33 @@ test.describe("line wrapping visual navigation", function()
   end)
 
   test.it("keeps wrapped cache current through undo and redo", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40))
+    local view, buffer = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
     local initial_rows = view:get_total_visual_lines()
-    doc:clear_undo_redo()
+    buffer:clear_undo_redo()
 
-    doc:set_selection(1, 1, 1, 1)
-    doc:text_input(string.rep("y", 40))
+    buffer:set_selection(1, 1, 1, 1)
+    buffer:text_input(string.rep("y", 40))
     test.ok(view:get_total_visual_lines() > initial_rows, "expected insert to update wrapped row cache")
 
-    command.perform("doc:undo")
-    test.equal(doc.lines[1], string.rep("x", 40) .. "\n")
+    command.perform("text:undo")
+    test.equal(buffer.lines[1], string.rep("x", 40) .. "\n")
     test.equal(view:get_total_visual_lines(), initial_rows)
 
-    command.perform("doc:redo")
-    test.equal(doc.lines[1], string.rep("y", 40) .. string.rep("x", 40) .. "\n")
+    command.perform("text:redo")
+    test.equal(buffer.lines[1], string.rep("y", 40) .. string.rep("x", 40) .. "\n")
     test.ok(view:get_total_visual_lines() > initial_rows, "expected redo to update wrapped row cache")
   end)
 
   test.it("keeps typed caret at visual end when insertion fills a wrapped row", function(context)
-    local view, doc = open_editor(context, string.rep("x", 15))
+    local view, buffer = open_editor(context, string.rep("x", 15))
     configure_wrapping_for_test(context, view)
     local font = view:get_font()
     local first_row_x, first_row_y = view:get_line_screen_position(1, 1)
 
-    doc:set_selection(1, 8, 1, 8)
+    buffer:set_selection(1, 8, 1, 8)
     view:on_text_input("x")
-    local line, col = doc:get_selection()
+    local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
 
@@ -767,15 +767,15 @@ test.describe("line wrapping visual navigation", function()
   end)
 
   test.it("keeps next-character movement caret at visual end when crossing a wrap boundary", function(context)
-    local view, doc = open_editor(context, string.rep("x", 16))
+    local view, buffer = open_editor(context, string.rep("x", 16))
     configure_wrapping_for_test(context, view)
     local font = view:get_font()
     local first_row_x, first_row_y = view:get_line_screen_position(1, 1)
     local second_row_y = select(2, view:get_line_screen_position(1, 10))
 
-    doc:set_selection(1, 8, 1, 8)
-    command.perform("doc:move-to-next-char")
-    local line, col = doc:get_selection()
+    buffer:set_selection(1, 8, 1, 8)
+    command.perform("text:move-to-next-char")
+    local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
 
@@ -785,8 +785,8 @@ test.describe("line wrapping visual navigation", function()
     test.equal(drawn_caret.y, first_row_y)
     test.equal(drawn_caret.x, first_row_x + font:get_width("xxxxxxxx"))
 
-    command.perform("doc:move-to-next-char")
-    line, col = doc:get_selection()
+    command.perform("text:move-to-next-char")
+    line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 10)
 
@@ -796,14 +796,14 @@ test.describe("line wrapping visual navigation", function()
   end)
 
   test.it("keeps selection-extension caret at visual end when crossing a wrap boundary", function(context)
-    local view, doc = open_editor(context, string.rep("x", 16))
+    local view, buffer = open_editor(context, string.rep("x", 16))
     configure_wrapping_for_test(context, view)
     local font = view:get_font()
     local first_row_x, first_row_y = view:get_line_screen_position(1, 1)
 
-    doc:set_selection(1, 8, 1, 8)
-    command.perform("doc:select-to-next-char")
-    local line1, col1, line2, col2 = doc:get_selection()
+    buffer:set_selection(1, 8, 1, 8)
+    command.perform("text:select-to-next-char")
+    local line1, col1, line2, col2 = buffer:get_selection()
     test.equal(line1, 1)
     test.equal(col1, 9)
     test.equal(line2, 1)
@@ -817,14 +817,14 @@ test.describe("line wrapping visual navigation", function()
   end)
 
   test.it("keeps forward word endpoint caret at visual end when it lands on a wrap boundary", function(context)
-    local view, doc = open_editor(context, string.rep("x", 8) .. " y")
+    local view, buffer = open_editor(context, string.rep("x", 8) .. " y")
     configure_wrapping_for_test(context, view)
     local font = view:get_font()
     local first_row_x, first_row_y = view:get_line_screen_position(1, 1)
 
-    doc:set_selection(1, 1, 1, 1)
-    command.perform("doc:move-to-next-word-end")
-    local line, col = doc:get_selection()
+    buffer:set_selection(1, 1, 1, 1)
+    command.perform("text:move-to-next-word-end")
+    local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
 
@@ -836,10 +836,10 @@ test.describe("line wrapping visual navigation", function()
   end)
 
   test.it("draws the wrap guide before the visual-end caret so the caret is not cropped", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40))
+    local view, buffer = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
-    doc:set_selection(1, 12, 1, 12)
-    command.perform("doc:move-to-end-of-line")
+    buffer:set_selection(1, 12, 1, 12)
+    command.perform("text:move-to-end-of-line")
 
     local expected_x = select(1, view:get_line_screen_position(1, 17, true))
     local events = {}
@@ -886,15 +886,15 @@ test.describe("line wrapping visual navigation", function()
     local view = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
     config.plugins.linewrapping.width_override = nil
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
 
     test.equal(count_wrap_guides(view), 0)
   end)
 
-  test.it("hides the wrap guide in document-backed tool views", function(context)
-    local doc = track(context, "docs", core.open_doc())
-    doc:text_input(string.rep("x", 40))
-    local view = track(context, "views", DocView(doc))
+  test.it("hides the wrap guide in buffer-backed tool views", function(context)
+    local buffer = track(context, "buffers", core.open_buffer())
+    buffer:text_input(string.rep("x", 40))
+    local view = track(context, "views", TextView(buffer))
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 320, 240
     configure_wrapping_for_test(context, view)
@@ -903,15 +903,15 @@ test.describe("line wrapping visual navigation", function()
   end)
 
   test.it("draws visual-end caret on the previous wrapped row before right moves to the next row", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40))
+    local view, buffer = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
     local font = view:get_font()
     local _, second_row_y = view:get_line_screen_position(1, 12)
     local _, third_row_y = view:get_line_screen_position(1, 20)
 
-    doc:set_selection(1, 12, 1, 12)
-    command.perform("doc:move-to-end-of-line")
-    local line, col = doc:get_selection()
+    buffer:set_selection(1, 12, 1, 12)
+    command.perform("text:move-to-end-of-line")
+    local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 17)
 
@@ -928,8 +928,8 @@ test.describe("line wrapping visual navigation", function()
     test.equal(drawn_caret.y, second_row_y)
     test.equal(drawn_caret.x, select(1, view:get_line_screen_position(1, 9)) + font:get_width("xxxxxxxx"))
 
-    command.perform("doc:move-to-next-char")
-    line, col = doc:get_selection()
+    command.perform("text:move-to-next-char")
+    line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 18)
 
@@ -938,14 +938,14 @@ test.describe("line wrapping visual navigation", function()
     test.equal(x, select(1, view:get_line_screen_position(1, 17)) + font:get_width("x"))
   end)
 
-  test.it("keeps wrapped End affinity separate from document selection bounds", function(context)
-    local view, doc = open_editor(context, string.rep("x", 40))
+  test.it("keeps wrapped End affinity separate from buffer selection bounds", function(context)
+    local view, buffer = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
     local font = view:get_font()
 
-    doc:set_selection(1, 12, 1, 12)
-    command.perform("doc:select-to-end-of-line")
-    local line1, col1, line2, col2 = doc:get_selection()
+    buffer:set_selection(1, 12, 1, 12)
+    command.perform("text:select-to-end-of-line")
+    local line1, col1, line2, col2 = buffer:get_selection()
     test.equal(line1, 1)
     test.equal(col1, 17)
     test.equal(line2, 1)
@@ -956,14 +956,14 @@ test.describe("line wrapping visual navigation", function()
   end)
 
   test.it("moves vertically to the end of a shorter word-wrapped row", function(context)
-    local view, doc = open_editor(context, "a " .. string.rep("b", 18))
+    local view, buffer = open_editor(context, "a " .. string.rep("b", 18))
     configure_wrapping_for_test(context, view)
     config.plugins.linewrapping.mode = "word"
     LineWrapping.reconstruct_breaks(view, view:get_font(), config.plugins.linewrapping.width_override)
 
-    doc:set_selection(1, 8, 1, 8)
-    command.perform("doc:move-to-previous-line")
-    local line, col = doc:get_selection()
+    buffer:set_selection(1, 8, 1, 8)
+    command.perform("text:move-to-previous-line")
+    local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 3)
 
@@ -978,12 +978,12 @@ test.describe("line wrapping diff hunk gutter line numbers", function()
   test.after_each(function(context)
     restore_config(context)
     for _, diff in ipairs(context.diffviews or {}) do
-      diff.doc_view_a.wrapping_enabled = false
-      diff.doc_view_a.wrapped_settings = nil
-      diff.doc_view_b.wrapping_enabled = false
-      diff.doc_view_b.wrapped_settings = nil
-      diff.doc_view_a.doc:on_close()
-      diff.doc_view_b.doc:on_close()
+      diff.buffer_view_a.wrapping_enabled = false
+      diff.buffer_view_a.wrapped_settings = nil
+      diff.buffer_view_b.wrapping_enabled = false
+      diff.buffer_view_b.wrapped_settings = nil
+      diff.buffer_view_a.buffer:on_close()
+      diff.buffer_view_b.buffer:on_close()
     end
   end)
 
@@ -999,7 +999,7 @@ test.describe("line wrapping diff hunk gutter line numbers", function()
 
     wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
 
-    local left = view.doc_view_a
+    local left = view.buffer_view_a
     left.position.x, left.position.y = 0, 0
     left.size.x, left.size.y = 320, 240
     left.scroll.x, left.scroll.to.x = 0, 0
@@ -1034,7 +1034,7 @@ test.describe("line wrapping diff hunk gutter line numbers", function()
 
     wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
 
-    local left = view.doc_view_a
+    local left = view.buffer_view_a
     left.position.x, left.position.y = 0, 0
     left.size.x, left.size.y = 320, 240
     left.scroll.x, left.scroll.to.x = 0, 0
@@ -1074,7 +1074,7 @@ test.describe("line wrapping diff hunk gutter line numbers", function()
 
     wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
 
-    local left = view.doc_view_a
+    local left = view.buffer_view_a
     left.position.x, left.position.y = 0, 0
     left.size.x, left.size.y = 320, 240
     left.scroll.x, left.scroll.to.x = 0, 0
@@ -1082,7 +1082,7 @@ test.describe("line wrapping diff hunk gutter line numbers", function()
     configure_wrapping_for_test(context, left)
 
     local row_start_col = 9
-    left.doc:set_selection(1, row_start_col, 1, row_start_col)
+    left.buffer:set_selection(1, row_start_col, 1, row_start_col)
     LineWrapping.set_wrapped_line_end_affinity(left, {
       [LineWrapping.position_key(1, row_start_col)] = true,
     })

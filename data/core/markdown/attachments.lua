@@ -77,23 +77,23 @@ end
 
 function attachments.import_file(view, source, opts)
   opts = opts or {}
-  if not (view and view.doc and view.doc.abs_filename and is_file(source)) then
+  if not (view and view.buffer and view.buffer.abs_filename and is_file(source)) then
     return false, "source file unavailable"
   end
   if view.can_edit and not view:can_edit("markdown-attachment", { warn = true }) then
-    return false, "Document is not editable"
+    return false, "Buffer is not editable"
   end
-  local project = core.current_project(view.doc.abs_filename)
+  local project = core.current_project(view.buffer.abs_filename)
   if not project then return false, "Project unavailable" end
   local project_root = system.absolute_path(project.path) or common.normalize_path(project.path)
-  local source_note = system.absolute_path(view.doc.abs_filename)
-    or common.normalize_path(view.doc.abs_filename)
+  local source_note = system.absolute_path(view.buffer.abs_filename)
+    or common.normalize_path(view.buffer.abs_filename)
   local target = system.absolute_path(source) or common.normalize_path(source)
   local copied = false
 
   if opts.absolute then
     local text = serialized_link(file_uri(target), IMAGE_EXTENSIONS[extension(target) or ""] == true, "markdown")
-    view:with_selection_state(function() view.doc:text_input(text) end)
+    view:with_selection_state(function() view.buffer:text_input(text) end)
     return true, { path = target, text = text, copied = false, absolute = true }
   end
 
@@ -123,8 +123,8 @@ function attachments.import_file(view, source, opts)
   local relative_base = format == "markdown" and common.dirname(source_note) or project_root
   local rel = display_path(common.relative_path(relative_base, target))
   local text = serialized_link(rel, IMAGE_EXTENSIONS[extension(target) or ""] == true, format)
-  view:with_selection_state(function() view.doc:text_input(text) end)
-  vault_index.index_for_path(view.doc.abs_filename):update_path(target, { cooperative = true })
+  view:with_selection_state(function() view.buffer:text_input(text) end)
+  vault_index.index_for_path(view.buffer.abs_filename):update_path(target, { cooperative = true })
   core.log_quiet("Markdown attachment %s %s -> %s", copied and "copied" or "linked", source, target)
   return true, { path = target, text = text, copied = copied }
 end

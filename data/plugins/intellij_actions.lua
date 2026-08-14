@@ -5,9 +5,9 @@ local core = require "core"
 local keymap = require "core.keymap"
 local command = require "core.command"
 local common = require "core.common"
-local search = require "core.doc.search"
+local search = require "core.buffer.search"
 local config = require "core.config"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local Node = require "core.node"
 local file_context = require "core.file_context"
 local navigation_history = require "plugins.navigation_history"
@@ -17,33 +17,33 @@ local function can_edit(dv, reason)
 end
 
 local function clone_caret_intellij(dv, direction)
-  local DocView = require "core.docview"
-  local doc = dv.doc
-  local idx = doc.last_selection or 1
-  local line, col = doc:get_selection_idx(idx)
+  local TextView = require "core.textview"
+  local buffer = dv.buffer
+  local idx = buffer.last_selection or 1
+  local line, col = buffer:get_selection_idx(idx)
   if not line then return false end
-  if line + direction < 1 or line + direction > #doc.lines then return false end
+  if line + direction < 1 or line + direction > #buffer.lines then return false end
 
   local translate = direction < 0
-    and DocView.translate.previous_line
-    or DocView.translate.next_line
-  local target_line, target_col = translate(doc, line, col, dv)
+    and TextView.translate.previous_line
+    or TextView.translate.next_line
+  local target_line, target_col = translate(buffer, line, col, dv)
 
   local existing_idx
-  for i, l, c in doc:get_selections(true) do
+  for i, l, c in buffer:get_selections(true) do
     if i ~= idx and l == target_line and c == target_col then
       existing_idx = i
       break
     end
   end
 
-  if existing_idx and #doc.selections > 4 then
+  if existing_idx and #buffer.selections > 4 then
     -- IntelliJ-like toggle while walking through carets: move to the target
     -- by removing the caret we came from when the target already has a caret.
-    doc:remove_selection(idx)
-    doc.last_selection = existing_idx > idx and existing_idx - 1 or existing_idx
+    buffer:remove_selection(idx)
+    buffer.last_selection = existing_idx > idx and existing_idx - 1 or existing_idx
   else
-    doc:add_selection(target_line, target_col, target_line, target_col)
+    buffer:add_selection(target_line, target_col, target_line, target_col)
   end
   core.blink_reset()
   return true
@@ -54,27 +54,27 @@ local function selection_key(line, col)
 end
 
 local function clone_caret_until_edge_intellij(dv, direction)
-  local DocView = require "core.docview"
-  local doc = dv.doc
+  local TextView = require "core.textview"
+  local buffer = dv.buffer
   local changed = false
 
   dv:with_selection_state(function()
-    local idx = doc.last_selection or 1
-    local line, col = doc:get_selection_idx(idx)
+    local idx = buffer.last_selection or 1
+    local line, col = buffer:get_selection_idx(idx)
     if not line then return end
 
     local translate = direction < 0
-      and DocView.translate.previous_line
-      or DocView.translate.next_line
+      and TextView.translate.previous_line
+      or TextView.translate.next_line
     local existing = {}
-    for _, l, c in doc:get_selections(true) do
+    for _, l, c in buffer:get_selections(true) do
       existing[selection_key(l, c)] = true
     end
 
     local additions = {}
     local target_line, target_col = line, col
-    while target_line + direction >= 1 and target_line + direction <= #doc.lines do
-      target_line, target_col = translate(doc, target_line, target_col, dv)
+    while target_line + direction >= 1 and target_line + direction <= #buffer.lines do
+      target_line, target_col = translate(buffer, target_line, target_col, dv)
       local key = selection_key(target_line, target_col)
       if existing[key] then
         -- Existing-caret toggling is uncommon for the bulk edge command and is
@@ -92,7 +92,7 @@ local function clone_caret_until_edge_intellij(dv, direction)
     if #additions == 0 then return end
 
     local merged = {}
-    for _, l, c, l2, c2 in doc:get_selections() do
+    for _, l, c, l2, c2 in buffer:get_selections() do
       merged[#merged + 1] = { l, c, l2, c2 }
     end
     for _, pos in ipairs(additions) do
@@ -115,13 +115,13 @@ local function clone_caret_until_edge_intellij(dv, direction)
         last_selection = i
       end
     end
-    doc.selections = selections
-    doc.last_selection = last_selection
+    buffer.selections = selections
+    buffer.last_selection = last_selection
     changed = true
   end)
 
   if changed then
-    core.log_quiet("IntelliJ actions: cloned carets %s until document edge", direction < 0 and "above" or "below")
+    core.log_quiet("IntelliJ actions: cloned carets %s until buffer edge", direction < 0 and "above" or "below")
     core.blink_reset()
   end
 end
@@ -134,8 +134,8 @@ command.add(nil, {
 })
 
 command.add(function()
-  local DocView = require "core.docview"
-  return core.active_view and core.active_view:extends(DocView), core.active_view
+  local TextView = require "core.textview"
+  return core.active_view and core.active_view:extends(TextView), core.active_view
 end, {
   ["user:clone-caret-above-intellij"] = function(dv)
     clone_caret_intellij(dv, -1)
@@ -157,35 +157,35 @@ local add_next_occurrence_state = setmetatable({}, { __mode = "k" })
 local closed_tabs = {}
 local suppress_origin_clear = false
 
-local function selection_state_key(doc)
-  local view = doc and doc.bound_selection_view
-  if not view and doc then
-    local ok, DocView = pcall(require, "core.docview")
-    if ok and DocView.get_doc_mirror_owner_view then
-      view = DocView.get_doc_mirror_owner_view(doc)
+local function selection_state_key(buffer)
+  local view = buffer and buffer.bound_selection_view
+  if not view and buffer then
+    local ok, TextView = pcall(require, "core.textview")
+    if ok and TextView.get_buffer_mirror_owner_view then
+      view = TextView.get_buffer_mirror_owner_view(buffer)
     end
   end
-  return view or doc
+  return view or buffer
 end
 
-local function key_belongs_to_doc(key, doc)
-  return key == doc or (type(key) == "table" and key.doc == doc)
+local function key_belongs_to_buffer(key, buffer)
+  return key == buffer or (type(key) == "table" and key.buffer == buffer)
 end
 
-local function clear_selection_origin(doc, all_views)
+local function clear_selection_origin(buffer, all_views)
   if all_views then
     for key in pairs(selection_history) do
-      if key_belongs_to_doc(key, doc) then selection_history[key] = nil end
+      if key_belongs_to_buffer(key, buffer) then selection_history[key] = nil end
     end
     for key in pairs(selection_origin) do
-      if key_belongs_to_doc(key, doc) then selection_origin[key] = nil end
+      if key_belongs_to_buffer(key, buffer) then selection_origin[key] = nil end
     end
     for key in pairs(add_next_occurrence_state) do
-      if key_belongs_to_doc(key, doc) then add_next_occurrence_state[key] = nil end
+      if key_belongs_to_buffer(key, buffer) then add_next_occurrence_state[key] = nil end
     end
     return
   end
-  local key = selection_state_key(doc)
+  local key = selection_state_key(buffer)
   selection_history[key] = nil
   selection_origin[key] = nil
 end
@@ -198,86 +198,86 @@ local function with_origin_clear_suppressed(fn, ...)
   return a, b, c, d, e
 end
 
-local doc_set_selection = Doc.set_selection
-function Doc:set_selection(...)
+local buffer_set_selection = Buffer.set_selection
+function Buffer:set_selection(...)
   if not suppress_origin_clear then clear_selection_origin(self) end
-  return doc_set_selection(self, ...)
+  return buffer_set_selection(self, ...)
 end
 
-local doc_set_selections = Doc.set_selections
-function Doc:set_selections(...)
+local buffer_set_selections = Buffer.set_selections
+function Buffer:set_selections(...)
   if not suppress_origin_clear then clear_selection_origin(self) end
-  return doc_set_selections(self, ...)
+  return buffer_set_selections(self, ...)
 end
 
-local doc_set_selection_list = Doc.set_selection_list
-function Doc:set_selection_list(...)
+local buffer_set_selection_list = Buffer.set_selection_list
+function Buffer:set_selection_list(...)
   if not suppress_origin_clear then clear_selection_origin(self) end
-  return doc_set_selection_list(self, ...)
+  return buffer_set_selection_list(self, ...)
 end
 
-local function sync_selection_list_assignment(doc)
-  local bound_view = doc.bound_selection_view
+local function sync_selection_list_assignment(buffer)
+  local bound_view = buffer.bound_selection_view
   if bound_view and bound_view.selection_state then
-    bound_view.selection_state.selections = doc.selections
-    bound_view.selection_state.last_selection = doc.last_selection
-  elseif not doc.__selection_text_adjusting then
-    local ok, DocView = pcall(require, "core.docview")
-    if ok and DocView.sync_doc_mirror_owner_state then
-      DocView.sync_doc_mirror_owner_state(doc)
+    bound_view.selection_state.selections = buffer.selections
+    bound_view.selection_state.last_selection = buffer.last_selection
+  elseif not buffer.__selection_text_adjusting then
+    local ok, TextView = pcall(require, "core.textview")
+    if ok and TextView.sync_buffer_mirror_owner_state then
+      TextView.sync_buffer_mirror_owner_state(buffer)
     end
   end
 end
 
-local function set_selection_list(doc, selections, last_selection)
+local function set_selection_list(buffer, selections, last_selection)
   selections = selections or {}
   if #selections < 4 then
-    with_origin_clear_suppressed(doc_set_selection, doc, 1, 1, 1, 1)
+    with_origin_clear_suppressed(buffer_set_selection, buffer, 1, 1, 1, 1)
     return
   end
 
   local normalized = {}
   local usable_count = #selections - (#selections % 4)
   for i = 1, usable_count, 4 do
-    local line1, col1 = doc:sanitize_position(selections[i], selections[i + 1])
-    local line2, col2 = doc:sanitize_position(selections[i + 2], selections[i + 3])
+    local line1, col1 = buffer:sanitize_position(selections[i], selections[i + 1])
+    local line2, col2 = buffer:sanitize_position(selections[i + 2], selections[i + 3])
     normalized[#normalized + 1] = line1
     normalized[#normalized + 1] = col1
     normalized[#normalized + 1] = line2
     normalized[#normalized + 1] = col2
   end
 
-  doc.selections = normalized
-  doc.last_selection = common.clamp(
+  buffer.selections = normalized
+  buffer.last_selection = common.clamp(
     math.floor(tonumber(last_selection) or 1),
     1,
     math.max(1, math.floor(#normalized / 4))
   )
-  sync_selection_list_assignment(doc)
+  sync_selection_list_assignment(buffer)
 end
 
-local doc_insert = core.intellij_actions_original_doc_insert or Doc.insert
-local doc_remove = core.intellij_actions_original_doc_remove or Doc.remove
-core.intellij_actions_original_doc_insert = doc_insert
-core.intellij_actions_original_doc_remove = doc_remove
+local buffer_insert = core.intellij_actions_original_buffer_insert or Buffer.insert
+local buffer_remove = core.intellij_actions_original_buffer_remove or Buffer.remove
+core.intellij_actions_original_buffer_insert = buffer_insert
+core.intellij_actions_original_buffer_remove = buffer_remove
 
-function Doc:insert(...)
+function Buffer:insert(...)
   if not suppress_origin_clear then clear_selection_origin(self, true) end
-  return doc_insert(self, ...)
+  return buffer_insert(self, ...)
 end
 
-function Doc:remove(...)
+function Buffer:remove(...)
   if not suppress_origin_clear then clear_selection_origin(self, true) end
-  return doc_remove(self, ...)
+  return buffer_remove(self, ...)
 end
 
 local function active_file_path(view)
   local path = file_context.view_file_path(view)
   if path then return path end
-  -- FileTreeView: the view's doc is the filetree listing, not a file; extract
+  -- FileTreeView: the view's buffer is the filetree listing, not a file; extract
   -- the path from the filetree entry at the cursor line instead.
   if view and view.entry_for_line then
-    local line = view.doc and view.doc:get_selection(true)
+    local line = view.buffer and view.buffer:get_selection(true)
     if line then
       local entry = view:entry_for_line(line)
       if entry then return entry.abs end
@@ -289,7 +289,7 @@ local function is_file_bound_view(view)
   if not view then return false end
   local GlobalPromptBar = require "core.global_prompt_bar"
   if view:is(GlobalPromptBar) then return false end
-  -- FileTreeView: the view's doc is the filetree listing; treat it as file-bound
+  -- FileTreeView: the view's buffer is the filetree listing; treat it as file-bound
   -- so commands like reveal-in-explorer work from the filetree cursor.
   if view.entry_for_line then return true end
   return file_context.is_file_view(view)
@@ -317,8 +317,8 @@ end
 local function copy_absolute_filepath_with_line(dv)
   local path = active_file_or_error(dv)
   if not path then return end
-  local doc = dv and dv.doc
-  local line = doc and doc:get_selection(false) or 1
+  local buffer = dv and dv.buffer
+  local line = buffer and buffer:get_selection(false) or 1
   copy_text_to_clipboard("absolute filepath with line", string.format("%s:%d", path, line or 1))
 end
 
@@ -352,8 +352,8 @@ end
 local function open_file_as_raw_text(dv)
   local path = active_file_or_error(dv)
   if not path then return end
-  local doc = core.open_doc(path)
-  core.root_panel:open_doc(doc)
+  local buffer = core.open_buffer(path)
+  core.root_panel:open_buffer(buffer)
 end
 
 local function open_file_in_associated_program(dv)
@@ -498,9 +498,9 @@ local function selection_debug_repr(text)
   return text
 end
 
-local function build_text_index(doc)
+local function build_text_index(buffer)
   local starts, text, offset = {}, {}, 0
-  for i, line in ipairs(doc.lines) do
+  for i, line in ipairs(buffer.lines) do
     starts[i] = offset
     text[#text + 1] = line
     offset = offset + #line
@@ -512,25 +512,25 @@ local function pos_to_offset(starts, line, col)
   return starts[line] + col - 1
 end
 
-local function offset_to_pos(doc, starts, offset)
+local function offset_to_pos(buffer, starts, offset)
   offset = math.max(0, offset)
   for line = 1, #starts do
     local next_start = starts[line + 1]
     if not next_start or offset < next_start then
-      return doc:sanitize_position(line, offset - starts[line] + 1)
+      return buffer:sanitize_position(line, offset - starts[line] + 1)
     end
   end
-  return doc:sanitize_position(#doc.lines, math.huge)
+  return buffer:sanitize_position(#buffer.lines, math.huge)
 end
 
-local function monotonic_offset_to_pos(doc, starts)
+local function monotonic_offset_to_pos(buffer, starts)
   local line = 1
   return function(offset)
     offset = math.max(0, offset)
     while starts[line + 1] and offset >= starts[line + 1] do
       line = line + 1
     end
-    return doc:sanitize_position(line, offset - starts[line] + 1)
+    return buffer:sanitize_position(line, offset - starts[line] + 1)
   end
 end
 
@@ -596,17 +596,17 @@ local function is_word_end(text, offset, camel)
 end
 
 local function move_caret_camel_word_with_selection(dv, direction)
-  local doc = dv.doc
-  local text, starts = build_text_index(doc)
+  local buffer = dv.buffer
+  local text, starts = build_text_index(buffer)
   local selections = {}
 
-  for idx, l1, c1, l2, c2 in doc:get_selections(false) do
+  for idx, l1, c1, l2, c2 in buffer:get_selections(false) do
     local offset = pos_to_offset(starts, l1, c1)
-    local line = select(1, offset_to_pos(doc, starts, offset))
+    local line = select(1, offset_to_pos(buffer, starts, offset))
     local target = offset
 
     if direction > 0 then
-      local line_end = starts[line] + #(doc.lines[line] or "") - 1
+      local line_end = starts[line] + #(buffer.lines[line] or "") - 1
       for new_offset = offset + 1, math.min(#text, line_end) do
         if new_offset == line_end or is_word_end(text, new_offset, true) then
           target = new_offset
@@ -623,17 +623,17 @@ local function move_caret_camel_word_with_selection(dv, direction)
       end
     end
 
-    local nl, nc = offset_to_pos(doc, starts, target)
+    local nl, nc = offset_to_pos(buffer, starts, target)
     selections[#selections + 1] = { idx = idx, l1 = nl, c1 = nc, l2 = l2, c2 = c2 }
   end
 
   for _, sel in ipairs(selections) do
-    with_origin_clear_suppressed(doc_set_selections, doc, sel.idx, sel.l1, sel.c1, sel.l2, sel.c2)
+    with_origin_clear_suppressed(buffer_set_selections, buffer, sel.idx, sel.l1, sel.c1, sel.l2, sel.c2)
   end
 
-  local l, c = doc:get_selection(false)
+  local l, c = buffer:get_selection(false)
   if l and c then dv:scroll_to_make_visible(l, c) end
-  clear_selection_origin(doc)
+  clear_selection_origin(buffer)
 end
 
 local function smart_selection_blocks(text)
@@ -676,16 +676,16 @@ local function smart_selection_blocks(text)
   return blocks
 end
 
-local function set_selection_offsets(doc, starts, start_offset, end_offset, reason)
-  local caret_l, caret_c, anchor_l, anchor_c = doc:get_selection(false)
-  local old_l1, old_c1, old_l2, old_c2 = doc:get_selection(true)
+local function set_selection_offsets(buffer, starts, start_offset, end_offset, reason)
+  local caret_l, caret_c, anchor_l, anchor_c = buffer:get_selection(false)
+  local old_l1, old_c1, old_l2, old_c2 = buffer:get_selection(true)
   local old_start = pos_to_offset(starts, old_l1, old_c1)
   local old_end = pos_to_offset(starts, old_l2, old_c2)
   local caret_offset = pos_to_offset(starts, caret_l, caret_c)
-  local old_text = doc:get_text(old_l1, old_c1, old_l2, old_c2)
-  local l1, c1 = offset_to_pos(doc, starts, start_offset)
-  local l2, c2 = offset_to_pos(doc, starts, end_offset)
-  local new_text = doc:get_text(l1, c1, l2, c2)
+  local old_text = buffer:get_text(old_l1, old_c1, old_l2, old_c2)
+  local l1, c1 = offset_to_pos(buffer, starts, start_offset)
+  local l2, c2 = offset_to_pos(buffer, starts, end_offset)
+  local new_text = buffer:get_text(l1, c1, l2, c2)
   selection_debug_write(string.format(
     "reason=%s old=%d..%d (%d:%d-%d:%d) caret=%d (%d:%d) new=%d..%d (%d:%d-%d:%d) old_text=\"%s\" new_text=\"%s\"",
     tostring(reason or "unknown"), old_start, old_end, old_l1, old_c1, old_l2, old_c2,
@@ -700,20 +700,20 @@ local function set_selection_offsets(doc, starts, start_offset, end_offset, reas
   -- selection model allows and prevents expand from always jumping to start.
   local old_mid = old_start + (old_end - old_start) / 2
   if caret_offset <= old_mid then
-    with_origin_clear_suppressed(doc_set_selection, doc, l1, c1, l2, c2)
+    with_origin_clear_suppressed(buffer_set_selection, buffer, l1, c1, l2, c2)
   else
-    with_origin_clear_suppressed(doc_set_selection, doc, l2, c2, l1, c1)
+    with_origin_clear_suppressed(buffer_set_selection, buffer, l2, c2, l1, c1)
   end
   core.blink_reset()
 end
 
-local function push_selection_history(doc, start_offset, end_offset)
-  local key = selection_state_key(doc)
+local function push_selection_history(buffer, start_offset, end_offset)
+  local key = selection_state_key(buffer)
   local history = selection_history[key] or {}
   selection_history[key] = history
   if #history == 0 and not selection_origin[key] then
-    local caret_l, caret_c = doc:get_selection(false)
-    selection_origin[key] = pos_to_offset(select(2, build_text_index(doc)), caret_l, caret_c)
+    local caret_l, caret_c = buffer:get_selection(false)
+    selection_origin[key] = pos_to_offset(select(2, build_text_index(buffer)), caret_l, caret_c)
   end
   history[#history + 1] = { start_offset, end_offset }
 end
@@ -733,11 +733,11 @@ local function next_selection_candidate(sel_start, sel_end, candidates)
   end
 end
 
-local function select_next_candidate(doc, starts, sel_start, sel_end, candidates)
+local function select_next_candidate(buffer, starts, sel_start, sel_end, candidates)
   local cand = next_selection_candidate(sel_start, sel_end, candidates)
   if cand then
-    push_selection_history(doc, sel_start, sel_end)
-    set_selection_offsets(doc, starts, cand.start_offset, cand.end_offset, cand.reason)
+    push_selection_history(buffer, sel_start, sel_end)
+    set_selection_offsets(buffer, starts, cand.start_offset, cand.end_offset, cand.reason)
     return true
   end
   return false
@@ -776,38 +776,38 @@ local function block_opening_on_line(blocks, starts, line, line_text)
   return best
 end
 
-local function set_selection_offsets_idx(doc, starts, idx, caret_l, caret_c, l1, c1, l2, c2, start_offset, end_offset)
+local function set_selection_offsets_idx(buffer, starts, idx, caret_l, caret_c, l1, c1, l2, c2, start_offset, end_offset)
   local old_start = pos_to_offset(starts, l1, c1)
   local old_end = pos_to_offset(starts, l2, c2)
   local caret_offset = pos_to_offset(starts, caret_l, caret_c)
-  local nl1, nc1 = offset_to_pos(doc, starts, start_offset)
-  local nl2, nc2 = offset_to_pos(doc, starts, end_offset)
+  local nl1, nc1 = offset_to_pos(buffer, starts, start_offset)
+  local nl2, nc2 = offset_to_pos(buffer, starts, end_offset)
 
   local old_mid = old_start + (old_end - old_start) / 2
   if caret_offset <= old_mid then
-    with_origin_clear_suppressed(doc_set_selections, doc, idx, nl1, nc1, nl2, nc2)
+    with_origin_clear_suppressed(buffer_set_selections, buffer, idx, nl1, nc1, nl2, nc2)
   else
-    with_origin_clear_suppressed(doc_set_selections, doc, idx, nl2, nc2, nl1, nc1)
+    with_origin_clear_suppressed(buffer_set_selections, buffer, idx, nl2, nc2, nl1, nc1)
   end
 end
 
 local function expand_block_selection(dv)
-  local doc = dv.doc
-  local text, starts = build_text_index(doc)
+  local buffer = dv.buffer
+  local text, starts = build_text_index(buffer)
   local blocks = smart_selection_blocks(text)
 
-  if #doc.selections <= 4 then
-    local l1, c1, l2, c2 = doc:get_selection(true)
+  if #buffer.selections <= 4 then
+    local l1, c1, l2, c2 = buffer:get_selection(true)
     local sel_start, sel_end = pos_to_offset(starts, l1, c1), pos_to_offset(starts, l2, c2)
     local candidates = {}
     add_block_candidates(candidates, blocks, sel_start, sel_end)
-    select_next_candidate(doc, starts, sel_start, sel_end, candidates)
+    select_next_candidate(buffer, starts, sel_start, sel_end, candidates)
     return
   end
 
   local updates = {}
-  for idx, caret_l, caret_c, anchor_l, anchor_c in doc:get_selections(false) do
-    local l1, c1, l2, c2 = doc:get_selection_idx(idx, true)
+  for idx, caret_l, caret_c, anchor_l, anchor_c in buffer:get_selections(false) do
+    local l1, c1, l2, c2 = buffer:get_selection_idx(idx, true)
     local sel_start, sel_end = pos_to_offset(starts, l1, c1), pos_to_offset(starts, l2, c2)
     local candidates = {}
     add_block_candidates(candidates, blocks, sel_start, sel_end)
@@ -825,7 +825,7 @@ local function expand_block_selection(dv)
 
   for _, update in ipairs(updates) do
     set_selection_offsets_idx(
-      doc, starts, update.idx, update.caret_l, update.caret_c,
+      buffer, starts, update.idx, update.caret_l, update.caret_c,
       update.l1, update.c1, update.l2, update.c2,
       update.start_offset, update.end_offset
     )
@@ -851,26 +851,26 @@ local function move_caret_paragraph(dv, direction)
   -- paragraphs are separated only by truly empty lines; target is the start of
   -- the separator line after the current paragraph, or the start of the next
   -- paragraph when moving backward.
-  local doc = dv.doc
-  local line, col = doc:get_selection(false)
+  local buffer = dv.buffer
+  local line, col = buffer:get_selection(false)
   local current = line
   local target_line, target_col
 
   local function is_empty(idx)
-    return ((doc.lines[idx] or ""):match("^%s*$") ~= nil)
+    return ((buffer.lines[idx] or ""):match("^%s*$") ~= nil)
   end
 
   if direction > 0 then
     if is_empty(current) then
       current = current + 1
-      while current <= #doc.lines and is_empty(current) do
+      while current <= #buffer.lines and is_empty(current) do
         current = current + 1
       end
     end
 
-    target_line, target_col = #doc.lines, #(doc.lines[#doc.lines] or "") + 1
+    target_line, target_col = #buffer.lines, #(buffer.lines[#buffer.lines] or "") + 1
     current = current + 1
-    while current <= #doc.lines do
+    while current <= #buffer.lines do
       if is_empty(current) then
         target_line, target_col = current, 1
         break
@@ -901,7 +901,7 @@ local function move_caret_paragraph(dv, direction)
   end
 
   if target_line ~= line or target_col ~= col then record_navigation_place("paragraph") end
-  doc:set_selection(target_line, target_col, target_line, target_col)
+  buffer:set_selection(target_line, target_col, target_line, target_col)
   dv:scroll_to_make_visible(target_line, target_col)
 end
 
@@ -917,12 +917,12 @@ local function block_depth_at(text, offset)
   return depth
 end
 
-local function smart_selection_candidates(doc, text, starts, blocks, l1, c1, l2, c2)
+local function smart_selection_candidates(buffer, text, starts, blocks, l1, c1, l2, c2)
   local sel_start, sel_end = pos_to_offset(starts, l1, c1), pos_to_offset(starts, l2, c2)
   local candidates = {}
 
-  -- IntelliJ-ish granular growth: word -> line -> code paragraph -> bracket/quote blocks -> document.
-  local line_text = doc.lines[l1] or ""
+  -- IntelliJ-ish granular growth: word -> line -> code paragraph -> bracket/quote blocks -> buffer.
+  local line_text = buffer.lines[l1] or ""
   local line_start = starts[l1]
   local line_end = starts[l1 + 1] or (starts[l1] + #line_text)
 
@@ -954,22 +954,22 @@ local function smart_selection_candidates(doc, text, starts, blocks, l1, c1, l2,
   local block = innermost_enclosing_block(blocks, sel_start, sel_end)
   local block_content_start = block and (block.open + 1) or 0
   local block_content_end = block and block.close or #text
-  local block_start_line = select(1, offset_to_pos(doc, starts, block_content_start))
-  local block_end_line = select(1, offset_to_pos(doc, starts, block_content_end))
+  local block_start_line = select(1, offset_to_pos(buffer, starts, block_content_start))
+  local block_end_line = select(1, offset_to_pos(buffer, starts, block_content_end))
 
   local base_depth = block_depth_at(text, sel_start)
   local p1, p2 = l1, l2
   while p1 > block_start_line
-    and not is_code_paragraph_blank(doc.lines[p1 - 1])
+    and not is_code_paragraph_blank(buffer.lines[p1 - 1])
     and block_depth_at(text, starts[p1 - 1]) == base_depth do
     p1 = p1 - 1
   end
   while p2 < block_end_line
-    and not is_code_paragraph_blank(doc.lines[p2 + 1])
+    and not is_code_paragraph_blank(buffer.lines[p2 + 1])
     and block_depth_at(text, starts[p2 + 1]) == base_depth do
-    local next_block = block_opening_on_line(blocks, starts, p2 + 1, doc.lines[p2 + 1])
+    local next_block = block_opening_on_line(blocks, starts, p2 + 1, buffer.lines[p2 + 1])
     if next_block and next_block.open >= sel_end then
-      local close_line = select(1, offset_to_pos(doc, starts, next_block.close + 1))
+      local close_line = select(1, offset_to_pos(buffer, starts, next_block.close + 1))
       p2 = math.min(close_line, block_end_line)
       break
     end
@@ -977,10 +977,10 @@ local function smart_selection_candidates(doc, text, starts, blocks, l1, c1, l2,
   end
   if not opens_named_block then
     local paragraph_end
-    if is_code_paragraph_blank(doc.lines[p2]) then
+    if is_code_paragraph_blank(buffer.lines[p2]) then
       paragraph_end = starts[p2]
     else
-      paragraph_end = starts[p2 + 1] or (starts[p2] + #(doc.lines[p2] or ""))
+      paragraph_end = starts[p2 + 1] or (starts[p2] + #(buffer.lines[p2] or ""))
     end
     candidates[#candidates + 1] = {
       start_offset = math.max(starts[p1], block_content_start),
@@ -990,52 +990,52 @@ local function smart_selection_candidates(doc, text, starts, blocks, l1, c1, l2,
   end
 
   add_block_candidates(candidates, blocks, sel_start, sel_end)
-  candidates[#candidates + 1] = { start_offset = 0, end_offset = #text, reason = "document" }
+  candidates[#candidates + 1] = { start_offset = 0, end_offset = #text, reason = "buffer" }
   return candidates, sel_start, sel_end
 end
 
-local function push_multi_selection_history(doc)
-  local key = selection_state_key(doc)
+local function push_multi_selection_history(buffer)
+  local key = selection_state_key(buffer)
   local history = selection_history[key] or {}
   selection_history[key] = history
-  history[#history + 1] = { multi = true, selections = { table.unpack(doc.selections) }, last_selection = doc.last_selection }
+  history[#history + 1] = { multi = true, selections = { table.unpack(buffer.selections) }, last_selection = buffer.last_selection }
 end
 
-local function try_treesitter_expand_selection(doc)
+local function try_treesitter_expand_selection(buffer)
   local ok, treesitter = pcall(require, "core.treesitter")
   if not ok or not treesitter or not treesitter.expand_selection then return false end
-  local expanded, reason = treesitter.expand_selection(doc)
+  local expanded, reason = treesitter.expand_selection(buffer)
   if expanded then return true end
   if core.log_quiet then core.log_quiet("Tree-sitter smart selection expand fallback: %s", tostring(reason)) end
   return false
 end
 
-local function try_treesitter_shrink_selection(doc)
+local function try_treesitter_shrink_selection(buffer)
   local ok, treesitter = pcall(require, "core.treesitter")
   if not ok or not treesitter or not treesitter.shrink_selection then return false end
-  local shrunk, reason = treesitter.shrink_selection(doc)
+  local shrunk, reason = treesitter.shrink_selection(buffer)
   if shrunk then return true end
   if core.log_quiet then core.log_quiet("Tree-sitter smart selection shrink fallback: %s", tostring(reason)) end
   return false
 end
 
 local function extend_smart_selection(dv)
-  local doc = dv.doc
-  if try_treesitter_expand_selection(doc) then return end
-  local text, starts = build_text_index(doc)
+  local buffer = dv.buffer
+  if try_treesitter_expand_selection(buffer) then return end
+  local text, starts = build_text_index(buffer)
   local blocks = smart_selection_blocks(text)
 
-  if #doc.selections <= 4 then
-    local l1, c1, l2, c2 = doc:get_selection(true)
-    local candidates, sel_start, sel_end = smart_selection_candidates(doc, text, starts, blocks, l1, c1, l2, c2)
-    select_next_candidate(doc, starts, sel_start, sel_end, candidates)
+  if #buffer.selections <= 4 then
+    local l1, c1, l2, c2 = buffer:get_selection(true)
+    local candidates, sel_start, sel_end = smart_selection_candidates(buffer, text, starts, blocks, l1, c1, l2, c2)
+    select_next_candidate(buffer, starts, sel_start, sel_end, candidates)
     return
   end
 
   local updates = {}
-  for idx, caret_l, caret_c in doc:get_selections(false) do
-    local l1, c1, l2, c2 = doc:get_selection_idx(idx, true)
-    local candidates, sel_start, sel_end = smart_selection_candidates(doc, text, starts, blocks, l1, c1, l2, c2)
+  for idx, caret_l, caret_c in buffer:get_selections(false) do
+    local l1, c1, l2, c2 = buffer:get_selection_idx(idx, true)
+    local candidates, sel_start, sel_end = smart_selection_candidates(buffer, text, starts, blocks, l1, c1, l2, c2)
     local cand = next_selection_candidate(sel_start, sel_end, candidates)
     if cand then
       updates[#updates + 1] = {
@@ -1047,60 +1047,60 @@ local function extend_smart_selection(dv)
   end
 
   if #updates == 0 then return end
-  push_multi_selection_history(doc)
+  push_multi_selection_history(buffer)
   for _, update in ipairs(updates) do
-    set_selection_offsets_idx(doc, starts, update.idx, update.caret_l, update.caret_c,
+    set_selection_offsets_idx(buffer, starts, update.idx, update.caret_l, update.caret_c,
       update.l1, update.c1, update.l2, update.c2, update.start_offset, update.end_offset)
   end
   core.blink_reset()
 end
 
 local function shrink_smart_selection(dv)
-  local doc = dv.doc
-  if try_treesitter_shrink_selection(doc) then return end
-  local key = selection_state_key(doc)
+  local buffer = dv.buffer
+  if try_treesitter_shrink_selection(buffer) then return end
+  local key = selection_state_key(buffer)
   local history = selection_history[key]
   if not history or #history == 0 then return end
-  local text, starts = build_text_index(doc)
+  local text, starts = build_text_index(buffer)
   local prev = table.remove(history)
   if #history == 0 then selection_origin[key] = nil end
   if prev.multi then
-    set_selection_list(doc, prev.selections, prev.last_selection)
+    set_selection_list(buffer, prev.selections, prev.last_selection)
     core.blink_reset()
   else
-    set_selection_offsets(doc, starts, prev[1], prev[2], "shrink-history")
+    set_selection_offsets(buffer, starts, prev[1], prev[2], "shrink-history")
   end
 end
 
 local function restore_selection_origin_or_select_none(dv)
-  local doc = dv.doc
-  local key = selection_state_key(doc)
+  local buffer = dv.buffer
+  local key = selection_state_key(buffer)
   local origin = selection_origin[key]
   selection_history[key] = nil
   selection_origin[key] = nil
   if origin then
-    local _, starts = build_text_index(doc)
-    local line, col = offset_to_pos(doc, starts, origin)
-    with_origin_clear_suppressed(doc_set_selection, doc, line, col, line, col)
+    local _, starts = build_text_index(buffer)
+    local line, col = offset_to_pos(buffer, starts, origin)
+    with_origin_clear_suppressed(buffer_set_selection, buffer, line, col, line, col)
     core.blink_reset()
   else
-    command.perform("doc:select-none")
+    command.perform("text:select-none")
   end
 end
 
 local function duplicate_current_line(dv)
   if not can_edit(dv, "duplicate line") then return end
-  local doc = dv.doc
+  local buffer = dv.buffer
   local actions = {}
-  local last_selection = doc.last_selection or 1
+  local last_selection = buffer.last_selection or 1
 
-  for idx, l1, c1, l2, c2 in doc:get_selections(true) do
+  for idx, l1, c1, l2, c2 in buffer:get_selections(true) do
     local first_line, last_line = l1, l2
     if c2 == 1 and l2 > l1 then last_line = l2 - 1 end
 
     local lines = {}
     for line = first_line, last_line do
-      lines[#lines + 1] = doc.lines[line]
+      lines[#lines + 1] = buffer.lines[line]
     end
 
     actions[#actions + 1] = {
@@ -1118,13 +1118,13 @@ local function duplicate_current_line(dv)
 
   local edits = {}
   for _, action in ipairs(actions) do
-    if action.last_line >= #doc.lines then
-      -- Doc positions are clamped to existing characters.  Inserting at
+    if action.last_line >= #buffer.lines then
+      -- Buffer positions are clamped to existing characters.  Inserting at
       -- line_count + 1 on the final line lands before the final newline (or
       -- before the last character in a no-newline EOF), which appends the copy
       -- to the same visual line.  Insert at the final line's clamp point with
       -- an explicit separator instead.
-      local final_text = doc.lines[#doc.lines] or "\n"
+      local final_text = buffer.lines[#buffer.lines] or "\n"
       local col = math.max(1, #final_text)
       local text
       if final_text:find("\n$") then
@@ -1132,7 +1132,7 @@ local function duplicate_current_line(dv)
       else
         text = final_text:sub(-1) .. "\n" .. action.text:sub(1, -2)
       end
-      edits[#edits + 1] = { line1 = #doc.lines, col1 = col, line2 = #doc.lines, col2 = col, text = text, idx = action.idx }
+      edits[#edits + 1] = { line1 = #buffer.lines, col1 = col, line2 = #buffer.lines, col2 = col, text = text, idx = action.idx }
     else
       edits[#edits + 1] = { line1 = action.last_line + 1, col1 = 1, line2 = action.last_line + 1, col2 = 1, text = action.text, idx = action.idx }
     end
@@ -1157,7 +1157,7 @@ local function duplicate_current_line(dv)
   end
   if #edits > 0 then
     with_origin_clear_suppressed(function()
-      doc:apply_edits(edits, {
+      buffer:apply_edits(edits, {
         type = "insert",
         selections = new_selections,
         last_selection = math.min(last_selection, #actions),
@@ -1165,9 +1165,9 @@ local function duplicate_current_line(dv)
       })
     end)
   else
-    set_selection_list(doc, new_selections, math.min(last_selection, #actions))
+    set_selection_list(buffer, new_selections, math.min(last_selection, #actions))
   end
-  clear_selection_origin(doc)
+  clear_selection_origin(buffer)
 end
 
 local function move_to_matching_bracket_with_history(dv)
@@ -1190,18 +1190,18 @@ command.add(nil, {
 
 local function line_comment_at_start(dv)
   if not can_edit(dv, "toggle comments") then return end
-  local doc = dv.doc
-  local comment = (doc.syntax and doc.syntax.comment) or "//"
+  local buffer = dv.buffer
+  local comment = (buffer.syntax and buffer.syntax.comment) or "//"
   if type(comment) == "table" then comment = comment[1] end
   comment = tostring(comment or "//")
 
-  local l1, c1, l2, c2 = doc:get_selection(true)
+  local l1, c1, l2, c2 = buffer:get_selection(true)
   local first_line, last_line = l1, l2
   if c2 == 1 and l2 > l1 then last_line = l2 - 1 end
 
   local uncomment = true
   for line = first_line, last_line do
-    if doc.lines[line]:sub(1, #comment) ~= comment then
+    if buffer.lines[line]:sub(1, #comment) ~= comment then
       uncomment = false
       break
     end
@@ -1226,21 +1226,21 @@ local function line_comment_at_start(dv)
   local selections = { l1, adjust_col(l1, c1), l2, adjust_col(l2, c2) }
   if #edits > 0 then
     with_origin_clear_suppressed(function()
-      doc:apply_edits(edits, {
+      buffer:apply_edits(edits, {
         type = uncomment and "remove" or "insert",
         selections = selections,
-        last_selection = doc.last_selection,
+        last_selection = buffer.last_selection,
         merge_cursors = false,
       })
     end)
   else
-    doc:set_selection(table.unpack(selections))
+    buffer:set_selection(table.unpack(selections))
   end
-  clear_selection_origin(doc)
+  clear_selection_origin(buffer)
 end
 
-local function offset_in_any_selection(doc, starts, offset)
-  for _, l1, c1, l2, c2 in doc:get_selections(true) do
+local function offset_in_any_selection(buffer, starts, offset)
+  for _, l1, c1, l2, c2 in buffer:get_selections(true) do
     local s, e = pos_to_offset(starts, l1, c1), pos_to_offset(starts, l2, c2)
     if offset >= s and offset < e then return true end
   end
@@ -1248,14 +1248,14 @@ local function offset_in_any_selection(doc, starts, offset)
 end
 
 local function selection_text_for_occurrences(dv)
-  local doc = dv.doc
-  if not doc:has_selection() then
-    command.perform("doc:select-word")
+  local buffer = dv.buffer
+  if not buffer:has_selection() then
+    command.perform("text:select-word")
   end
 
   local text, compare_text
-  for _, l1, c1, l2, c2 in doc:get_selections(true) do
-    local selection = doc:get_text(l1, c1, l2, c2)
+  for _, l1, c1, l2, c2 in buffer:get_selections(true) do
+    local selection = buffer:get_text(l1, c1, l2, c2)
     local compare_selection = config.select_add_next_no_case and selection:lower() or selection
     if not text then
       text = selection
@@ -1267,9 +1267,9 @@ local function selection_text_for_occurrences(dv)
 end
 
 local function add_selection_for_next_occurrence(dv)
-  local doc = dv.doc
-  local key = selection_state_key(doc)
-  local had_selection = doc:has_selection()
+  local buffer = dv.buffer
+  local key = selection_state_key(buffer)
+  local had_selection = buffer:has_selection()
   local text = selection_text_for_occurrences(dv)
   if not text then return end
   if not had_selection then
@@ -1277,11 +1277,11 @@ local function add_selection_for_next_occurrence(dv)
     return
   end
 
-  local full_text, starts = build_text_index(doc)
+  local full_text, starts = build_text_index(buffer)
 
   -- Continue from the active/last-added selection, not from the bottom-most
   -- selection. After wrap-around, the active selection is above older ones.
-  local _, _, active_l2, active_c2 = doc:get_selection_idx(doc.last_selection, true)
+  local _, _, active_l2, active_c2 = buffer:get_selection_idx(buffer.last_selection, true)
   local last_end_offset = pos_to_offset(starts, active_l2, active_c2)
 
   local state = add_next_occurrence_state[key]
@@ -1295,7 +1295,7 @@ local function add_selection_for_next_occurrence(dv)
       local s, e = haystack:find(find_text, search_at, true)
       if not s then return nil, nil end
       local off = s - 1
-      if not offset_in_any_selection(doc, starts, off) then
+      if not offset_in_any_selection(buffer, starts, off) then
         return off, e
       end
       search_at = e + 1
@@ -1310,23 +1310,23 @@ local function add_selection_for_next_occurrence(dv)
     return
   end
 
-  local l1, c1 = offset_to_pos(doc, starts, found_start)
-  local l2, c2 = offset_to_pos(doc, starts, found_end)
-  doc:add_selection(l2, c2, l1, c1)
+  local l1, c1 = offset_to_pos(buffer, starts, found_start)
+  local l2, c2 = offset_to_pos(buffer, starts, found_end)
+  buffer:add_selection(l2, c2, l1, c1)
   dv:scroll_to_make_visible(l2, c2)
   add_next_occurrence_state[key] = nil
 end
 
 local function select_all_occurrences(dv)
-  local doc = dv.doc
+  local buffer = dv.buffer
   local text = selection_text_for_occurrences(dv)
   if not text then return end
 
-  local full_text, starts = build_text_index(doc)
+  local full_text, starts = build_text_index(buffer)
   local find_text = config.select_add_next_no_case and text:lower() or text
   local haystack = config.select_add_next_no_case and full_text:lower() or full_text
   local search_at = 1
-  local to_pos = monotonic_offset_to_pos(doc, starts)
+  local to_pos = monotonic_offset_to_pos(buffer, starts)
   local new_selections = {}
 
   while true do
@@ -1342,15 +1342,15 @@ local function select_all_occurrences(dv)
   end
 
   if #new_selections == 0 then return end
-  doc:set_selection_list(new_selections, 1, { sanitized = true })
-  add_next_occurrence_state[selection_state_key(doc)] = nil
+  buffer:set_selection_list(new_selections, 1, { sanitized = true })
+  add_next_occurrence_state[selection_state_key(buffer)] = nil
 end
 
 command.add(function()
-  local DocView = require "core.docview"
+  local TextView = require "core.textview"
   local GlobalPromptBar = require "core.global_prompt_bar"
   local view = core.active_view
-  return view and view:extends(DocView) and not view:is(GlobalPromptBar), view
+  return view and view:extends(TextView) and not view:is(GlobalPromptBar), view
 end, {
   ["user:extend-selection-smart"] = extend_smart_selection,
   ["user:shrink-selection-smart"] = shrink_smart_selection,
@@ -1408,8 +1408,8 @@ keymap.add({
   ["ctrl+alt+u"] = "user:select-previous-camel-hump",
   ["ctrl+alt+o"] = "user:select-next-camel-hump",
   ["ctrl+d"] = "user:duplicate-current-line",
-  ["ctrl+n"] = "doc:move-lines-up",
-  ["ctrl+m"] = "doc:move-lines-down",
+  ["ctrl+n"] = "text:move-lines-up",
+  ["ctrl+m"] = "text:move-lines-down",
   ["ctrl+shift+t"] = "user:reopen-last-closed-tab",
   ["ctrl+shift+w"] = "root:close-all-others",
   ["alt+z"] = "root:switch-to-previous-tab",

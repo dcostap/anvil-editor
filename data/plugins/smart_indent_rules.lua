@@ -206,8 +206,8 @@ local function extension(name)
   return tostring(name or ""):match("%.([^%.]+)$")
 end
 
-function smart_indent.rule_for_doc(doc)
-  local name = basename(doc and (doc.filename or doc.abs_filename or doc:get_name()) or "")
+function smart_indent.rule_for_buffer(buffer)
+  local name = basename(buffer and (buffer.filename or buffer.abs_filename or buffer:get_name()) or "")
   local lower_name = name:lower()
   local by_name = filename_to_rule[lower_name]
   if by_name then return by_name end
@@ -276,13 +276,13 @@ local function matches_any(text, patterns)
   return false
 end
 
-local function one_indent(doc)
-  local text = doc:get_indent_string(1)
+local function one_indent(buffer)
+  local text = buffer:get_indent_string(1)
   return text
 end
 
-function smart_indent.newline_continuation(doc, line, context)
-  local rule = smart_indent.rule_for_doc(doc)
+function smart_indent.newline_continuation(buffer, line, context)
+  local rule = smart_indent.rule_for_buffer(buffer)
   if not rule then return nil, "no-rule", "unavailable" end
   context = context or {}
   local before = tostring(context.before_text or ""):gsub("[\r\n]+$", "")
@@ -317,15 +317,15 @@ function smart_indent.newline_continuation(doc, line, context)
   return nil, "no-continuation", "unavailable"
 end
 
-function smart_indent.indent_for_line(doc, line, context)
-  local rule = smart_indent.rule_for_doc(doc)
+function smart_indent.indent_for_line(buffer, line, context)
+  local rule = smart_indent.rule_for_buffer(buffer)
   if not rule then return nil, "no-rule", "unavailable" end
   context = context or {}
   if context.event ~= "newline" and context.event ~= "line" then return nil, "unsupported-context", "unavailable" end
 
   local source_text = context.before_text or context.previous_line_text or ""
   if context.event == "line" and source_text == "" and line and line > 1 then
-    source_text = doc.lines[line - 1] or ""
+    source_text = buffer.lines[line - 1] or ""
   end
 
   local before = trim_right(code_before_line_comment(source_text, rule))
@@ -336,25 +336,25 @@ function smart_indent.indent_for_line(doc, line, context)
   local ok, pattern = matches_any(before, rule.indent_after)
   if ok then
     if core.log_quiet then
-      core.log_quiet("Smart indent: %s matched %s for %s", rule.id, tostring(pattern), doc:get_name())
+      core.log_quiet("Smart indent: %s matched %s for %s", rule.id, tostring(pattern), buffer:get_name())
     end
-    return base_indent .. one_indent(doc), nil, "fresh"
+    return base_indent .. one_indent(buffer), nil, "fresh"
   end
 
   local continued = matches_any(before, rule.continuation)
-  if continued then return base_indent .. one_indent(doc), nil, "fresh" end
+  if continued then return base_indent .. one_indent(buffer), nil, "fresh" end
   return nil, "no-match", "unavailable"
 end
 
 intelligence.register_provider({
   id = "smart-indent-rules",
-  kind = "syntactic-current-document",
+  kind = "syntactic-current-buffer",
   priority = 20,
   indent_for_line = smart_indent.indent_for_line,
   newline_continuation = smart_indent.newline_continuation,
-  is_available = function(doc, feature)
+  is_available = function(buffer, feature)
     return (feature == "indent_for_line" or feature == "newline_continuation")
-      and smart_indent.rule_for_doc(doc) ~= nil
+      and smart_indent.rule_for_buffer(buffer) ~= nil
   end,
 })
 

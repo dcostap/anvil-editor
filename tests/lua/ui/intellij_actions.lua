@@ -12,11 +12,11 @@ local function track(context, kind, value)
   return value
 end
 
-local function remove_doc(doc)
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+local function remove_buffer(buffer)
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
@@ -33,25 +33,25 @@ local function write_file(path, content)
 end
 
 local function open_editor(context, text)
-  local doc = track(context, "docs", core.open_doc())
-  if text and text ~= "" then doc:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_doc(doc))
+  local buffer = track(context, "buffers", core.open_buffer())
+  if text and text ~= "" then buffer:text_input(text) end
+  local view = track(context, "views", core.root_panel:open_buffer(buffer))
   core.set_active_view(view)
-  return view, doc
+  return view, buffer
 end
 
 local function set_view_selections(view, selections)
   view:with_selection_state(function()
-    view.doc:set_selection(selections[1], selections[2], selections[3], selections[4])
+    view.buffer:set_selection(selections[1], selections[2], selections[3], selections[4])
     for i = 5, #selections, 4 do
-      view.doc:set_selections((i - 1) / 4 + 1, selections[i], selections[i + 1], selections[i + 2], selections[i + 3], nil, 0)
+      view.buffer:set_selections((i - 1) / 4 + 1, selections[i], selections[i + 1], selections[i + 2], selections[i + 3], nil, 0)
     end
   end)
 end
 
 local function view_selections(view)
   return view:with_selection_state(function()
-    return { table.unpack(view.doc.selections) }
+    return { table.unpack(view.buffer.selections) }
   end)
 end
 
@@ -80,9 +80,9 @@ test.describe("IntelliJ actions batch behavior", function()
       local node = root:get_node_for_view(view)
       if node then node:remove_view(root, view) end
     end
-    for _, doc in ipairs(context.docs or {}) do
-      if doc:is_dirty() then doc:clean() end
-      remove_doc(doc)
+    for _, buffer in ipairs(context.buffers or {}) do
+      if buffer:is_dirty() then buffer:clean() end
+      remove_buffer(buffer)
     end
 
     if context.temp_root and system.get_file_info(context.temp_root) then
@@ -90,20 +90,20 @@ test.describe("IntelliJ actions batch behavior", function()
     end
   end)
 
-  test.it("duplicate current line handles multiple selections in one document change", function(context)
-    local view, doc = open_editor(context, "aa\nbb\ncc\ndd")
+  test.it("duplicate current line handles multiple selections in one buffer change", function(context)
+    local view, buffer = open_editor(context, "aa\nbb\ncc\ndd")
     set_view_selections(view, {
       1, 1, 1, 1,
       3, 1, 3, 1,
     })
     local changes = 0
-    function doc:on_text_change()
+    function buffer:on_text_change()
       changes = changes + 1
     end
 
     test.ok(command.perform("user:duplicate-current-line"))
 
-    test.equal(table.concat(doc.lines), "aa\naa\nbb\ncc\ncc\ndd\n")
+    test.equal(table.concat(buffer.lines), "aa\naa\nbb\ncc\ncc\ndd\n")
     test.equal(changes, 1)
     test.same(view_selections(view), {
       2, 1, 2, 1,
@@ -111,38 +111,38 @@ test.describe("IntelliJ actions batch behavior", function()
     })
   end)
 
-  test.it("line comment at start comments selected lines in one document change", function(context)
-    local view, doc = open_editor(context, "aa\nbb\ncc")
+  test.it("line comment at start comments selected lines in one buffer change", function(context)
+    local view, buffer = open_editor(context, "aa\nbb\ncc")
     set_view_selections(view, { 1, 2, 3, 3 })
     local changes = 0
-    function doc:on_text_change()
+    function buffer:on_text_change()
       changes = changes + 1
     end
 
     test.ok(command.perform("user:comment-with-line-comment-at-start"))
 
-    test.equal(table.concat(doc.lines), "//aa\n//bb\n//cc\n")
+    test.equal(table.concat(buffer.lines), "//aa\n//bb\n//cc\n")
     test.equal(changes, 1)
     test.same(view_selections(view), { 1, 4, 3, 5 })
   end)
 
-  test.it("line comment at start uncomments selected lines in one document change", function(context)
-    local view, doc = open_editor(context, "//aa\n//bb\n//cc")
+  test.it("line comment at start uncomments selected lines in one buffer change", function(context)
+    local view, buffer = open_editor(context, "//aa\n//bb\n//cc")
     set_view_selections(view, { 1, 4, 3, 5 })
     local changes = 0
-    function doc:on_text_change()
+    function buffer:on_text_change()
       changes = changes + 1
     end
 
     test.ok(command.perform("user:comment-with-line-comment-at-start"))
 
-    test.equal(table.concat(doc.lines), "aa\nbb\ncc\n")
+    test.equal(table.concat(buffer.lines), "aa\nbb\ncc\n")
     test.equal(changes, 1)
     test.same(view_selections(view), { 1, 2, 3, 3 })
   end)
 
   test.it("clone caret below until last line adds carets in one bulk selection update", function(context)
-    local view, doc = open_editor(context, "aa\nbb\ncc\ndd")
+    local view, buffer = open_editor(context, "aa\nbb\ncc\ndd")
     set_view_selections(view, { 2, 2, 2, 2 })
 
     test.ok(command.perform("user:clone-caret-below-until-last-line-intellij"))
@@ -172,11 +172,11 @@ test.describe("IntelliJ actions batch behavior", function()
   test.it("select all occurrences builds many selections without per-occurrence set_selections", function(context)
     local lines = {}
     for i = 1, 200 do lines[i] = "aa xx" end
-    local view, doc = open_editor(context, table.concat(lines, "\n"))
+    local view, buffer = open_editor(context, table.concat(lines, "\n"))
     set_view_selections(view, { 1, 1, 1, 3 })
 
-    local original_set_selections = doc.set_selections
-    doc.set_selections = function()
+    local original_set_selections = buffer.set_selections
+    buffer.set_selections = function()
       error("user:select-all-occurrences should use batched selection replacement")
     end
 
@@ -188,7 +188,7 @@ test.describe("IntelliJ actions batch behavior", function()
       test.same({ selections[#selections - 3], selections[#selections - 2], selections[#selections - 1], selections[#selections] }, { 200, 3, 200, 1 })
       test.equal(view.selection_state.last_selection, 1)
     end)
-    doc.set_selections = original_set_selections
+    buffer.set_selections = original_set_selections
     if not ok then error(err) end
   end)
 
@@ -212,14 +212,14 @@ test.describe("IntelliJ actions batch behavior", function()
     context.original_set_clipboard = system.set_clipboard
     system.set_clipboard = function(text) copied = text end
 
-    local external_doc = track(context, "docs", core.open_doc(external_file_path))
-    local external_view = track(context, "views", core.root_panel:open_doc(external_doc))
+    local external_buffer = track(context, "buffers", core.open_buffer(external_file_path))
+    local external_view = track(context, "views", core.root_panel:open_buffer(external_buffer))
     core.set_active_view(external_view)
     test.ok(command.perform("user:copy-project-path"))
     test.equal(copied, core.root_project().path)
 
-    local project_doc = track(context, "docs", core.open_doc(project_file_path))
-    local project_view = track(context, "views", core.root_panel:open_doc(project_doc))
+    local project_buffer = track(context, "buffers", core.open_buffer(project_file_path))
+    local project_view = track(context, "views", core.root_panel:open_buffer(project_buffer))
     core.set_active_view(project_view)
     test.ok(command.perform("user:copy-project-path"))
     test.equal(copied, core.root_project().path)
@@ -232,8 +232,8 @@ test.describe("IntelliJ actions batch behavior", function()
     local file_path = join_path(nested_dir, "main.lua")
     write_file(file_path, "return true\n")
 
-    local doc = track(context, "docs", core.open_doc(file_path))
-    local view = track(context, "views", core.root_panel:open_doc(doc))
+    local buffer = track(context, "buffers", core.open_buffer(file_path))
+    local view = track(context, "views", core.root_panel:open_buffer(buffer))
     core.set_active_view(view)
 
     local exec_commands = {}
@@ -278,8 +278,8 @@ test.describe("IntelliJ actions batch behavior", function()
     local file_path = join_path(context.temp_root, "main.lua")
     write_file(file_path, "return true\n")
 
-    local doc = track(context, "docs", core.open_doc(file_path))
-    local view = track(context, "views", core.root_panel:open_doc(doc))
+    local buffer = track(context, "buffers", core.open_buffer(file_path))
+    local view = track(context, "views", core.root_panel:open_buffer(buffer))
     core.set_active_view(view)
 
     local process = require "core.process"

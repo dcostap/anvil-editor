@@ -1,6 +1,6 @@
 local core = require "core"
 local common = require "core.common"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local lsp_json = require "core.lsp.json"
 local uri = require "core.lsp.uri"
 
@@ -11,8 +11,8 @@ local DEFAULT_DEBOUNCE_SECONDS = 0.2
 local DEFAULT_SNAPSHOT_LIMIT = 16
 
 local clients = setmetatable({}, { __mode = "k" })
-local doc_close_handlers = {}
-local doc_metadata_handlers = {}
+local buffer_close_handlers = {}
+local buffer_metadata_handlers = {}
 local content_loaded = setmetatable({}, { __mode = "k" })
 local content_loading = setmetatable({}, { __mode = "k" })
 local patched = false
@@ -25,8 +25,8 @@ local function now()
   return system.get_time()
 end
 
-local function doc_path(doc)
-  local path = doc.abs_filename or doc.filename
+local function buffer_path(buffer)
+  local path = buffer.abs_filename or buffer.filename
   if not path or path == "" then return nil end
   if not common.is_absolute_path(path) and system.absolute_path then
     path = system.absolute_path(path)
@@ -34,49 +34,49 @@ local function doc_path(doc)
   return common.normalize_path(path)
 end
 
-local function doc_uri(doc)
-  local path = doc_path(doc)
+local function buffer_uri(buffer)
+  local path = buffer_path(buffer)
   if not path then return nil end
   return uri.path_to_uri(path)
 end
 
-local function doc_text(doc)
-  return table.concat(doc.lines or {})
+local function buffer_text(buffer)
+  return table.concat(buffer.lines or {})
 end
 
-local function doc_change_id(doc)
-  if doc.get_change_id then return doc:get_change_id() end
+local function buffer_change_id(buffer)
+  if buffer.get_change_id then return buffer:get_change_id() end
   return nil
 end
 
 local function client_bucket(client)
   local bucket = clients[client]
   if not bucket then
-    bucket = { by_uri = {}, by_doc = setmetatable({}, { __mode = "k" }) }
+    bucket = { by_uri = {}, by_buffer = setmetatable({}, { __mode = "k" }) }
     clients[client] = bucket
   end
   return bucket
 end
 
-local function remove_doc_state(bucket, state)
+local function remove_buffer_state(bucket, state)
   if bucket.by_uri[state.uri] == state then
     bucket.by_uri[state.uri] = nil
   end
-  local list = bucket.by_doc[state.doc]
+  local list = bucket.by_buffer[state.buffer]
   if list then
     for i = #list, 1, -1 do
       if list[i] == state then table.remove(list, i) end
     end
-    if #list == 0 then bucket.by_doc[state.doc] = nil end
+    if #list == 0 then bucket.by_buffer[state.buffer] = nil end
   end
 end
 
-local function add_doc_state(bucket, state)
+local function add_buffer_state(bucket, state)
   bucket.by_uri[state.uri] = state
-  local list = bucket.by_doc[state.doc]
+  local list = bucket.by_buffer[state.buffer]
   if not list then
     list = {}
-    bucket.by_doc[state.doc] = list
+    bucket.by_buffer[state.buffer] = list
   end
   list[#list + 1] = state
 end
@@ -126,7 +126,7 @@ end
 local function push_snapshot(state, kind, text)
   state.snapshots[#state.snapshots + 1] = {
     kind = kind,
-    doc_change_id = doc_change_id(state.doc),
+    buffer_change_id = buffer_change_id(state.buffer),
     lsp_version = state.lsp_version,
     text_length = text and #text or nil,
     synced_at = now(),
@@ -148,7 +148,7 @@ local function send_did_open(state, text)
   if not ok then return nil, err end
   state.opened = true
   state.pending_full_sync = false
-  state.last_synced_change_id = doc_change_id(state.doc)
+  state.last_synced_change_id = buffer_change_id(state.buffer)
   push_snapshot(state, "open", text)
   return true
 end
@@ -165,7 +165,7 @@ local function send_did_change(state, text)
   if not ok then return nil, err end
   state.pending_full_sync = false
   state.pending_due_at = nil
-  state.last_synced_change_id = doc_change_id(state.doc)
+  state.last_synced_change_id = buffer_change_id(state.buffer)
   push_snapshot(state, "change", text)
   return true
 end
@@ -183,29 +183,29 @@ end
 
 local function disable_state(state, reason)
   if state.disabled_reason ~= reason then
-    quiet_log("LSP document sync disabled for %s: %s", tostring(state.uri), tostring(reason))
+    quiet_log("LSP buffer sync disabled for %s: %s", tostring(state.uri), tostring(reason))
   end
   state.disabled_reason = reason
   state.pending_full_sync = false
   state.pending_due_at = nil
 end
 
-function documents.attach(client, doc, opts)
+function documents.attach(client, buffer, opts)
   opts = opts or {}
-  local document_uri = opts.uri or doc_uri(doc)
-  if not document_uri then
-    quiet_log("LSP document sync skipped: document has no file URI")
-    return nil, "document has no file URI"
+  local buffer_uri = opts.uri or buffer_uri(buffer)
+  if not buffer_uri then
+    quiet_log("LSP buffer sync skipped: buffer has no file URI")
+    return nil, "buffer has no file URI"
   end
 
   local bucket = client_bucket(client)
-  local existing = bucket.by_uri[document_uri]
+  local existing = bucket.by_uri[buffer_uri]
   if existing then return existing end
 
   local state = {
     client = client,
-    doc = doc,
-    uri = document_uri,
+    buffer = buffer,
+    uri = buffer_uri,
     language_id = language_id(client, opts),
     lsp_version = 0,
     last_synced_change_id = nil,
@@ -226,14 +226,14 @@ function documents.attach(client, doc, opts)
     did_save_after_open = opts.did_save_after_open == true,
     options = opts,
   }
-  add_doc_state(bucket, state)
+  add_buffer_state(bucket, state)
 
   if not is_supported(client, opts) then
     disable_state(state, "unsupported")
     return state
   end
 
-  local text = doc_text(doc)
+  local text = buffer_text(buffer)
   if is_too_large(state, text) then
     disable_state(state, "too_large")
     return state
@@ -245,50 +245,50 @@ function documents.attach(client, doc, opts)
     return state
   end
   if state.did_save_after_open and state.supports_save then
-    local clean_saved_file = not doc.new_file and (not doc.is_dirty or not doc:is_dirty())
+    local clean_saved_file = not buffer.new_file and (not buffer.is_dirty or not buffer:is_dirty())
     if clean_saved_file then
-      ok, err = documents.did_save(client, doc)
+      ok, err = documents.did_save(client, buffer)
       if not ok then
         quiet_log("LSP didSave-after-open failed for %s: %s", tostring(state.uri), tostring(err))
       end
     else
-      quiet_log("LSP didSave-after-open skipped for dirty or new document %s", tostring(state.uri))
+      quiet_log("LSP didSave-after-open skipped for dirty or new buffer %s", tostring(state.uri))
     end
   end
   return state
 end
 
-function documents.detach(client, doc_or_uri)
+function documents.detach(client, buffer_or_uri)
   local bucket = clients[client]
   if not bucket then return true end
   local states = {}
-  if type(doc_or_uri) == "string" then
-    doc_or_uri = uri.normalize_file_uri(doc_or_uri)
-    local state = bucket.by_uri[doc_or_uri]
+  if type(buffer_or_uri) == "string" then
+    buffer_or_uri = uri.normalize_file_uri(buffer_or_uri)
+    local state = bucket.by_uri[buffer_or_uri]
     if state then states[1] = state end
   else
-    local list = bucket.by_doc[doc_or_uri]
+    local list = bucket.by_buffer[buffer_or_uri]
     if list then for i, state in ipairs(list) do states[i] = state end end
   end
   for _, state in ipairs(states) do
     send_did_close(state)
-    remove_doc_state(bucket, state)
+    remove_buffer_state(bucket, state)
   end
   return true
 end
 
-function documents.state(client, doc_or_uri)
+function documents.state(client, buffer_or_uri)
   local bucket = clients[client]
   if not bucket then return nil end
-  if type(doc_or_uri) == "string" then return bucket.by_uri[uri.normalize_file_uri(doc_or_uri)] end
-  local list = bucket.by_doc[doc_or_uri]
+  if type(buffer_or_uri) == "string" then return bucket.by_uri[uri.normalize_file_uri(buffer_or_uri)] end
+  local list = bucket.by_buffer[buffer_or_uri]
   return list and list[1] or nil
 end
 
-function documents.states_for_doc(doc)
+function documents.states_for_buffer(buffer)
   local out = {}
   for _, bucket in pairs(clients) do
-    local list = bucket.by_doc[doc]
+    local list = bucket.by_buffer[buffer]
     if list then
       for _, state in ipairs(list) do out[#out + 1] = state end
     end
@@ -296,9 +296,9 @@ function documents.states_for_doc(doc)
   return out
 end
 
-function documents.on_text_transaction(doc, _transaction)
-  local change_id = doc_change_id(doc)
-  for _, state in ipairs(documents.states_for_doc(doc)) do
+function documents.on_text_transaction(buffer, _transaction)
+  local change_id = buffer_change_id(buffer)
+  for _, state in ipairs(documents.states_for_buffer(buffer)) do
     if state.opened and not state.disabled_reason then
       state.pending_full_sync = true
       state.pending_change_id = change_id
@@ -310,7 +310,7 @@ end
 function documents.flush_state(state)
   if not state or state.disabled_reason or not state.opened then return true end
   if not state.pending_full_sync then return true end
-  local text = doc_text(state.doc)
+  local text = buffer_text(state.buffer)
   if is_too_large(state, text) then
     send_did_close(state)
     disable_state(state, "too_large")
@@ -319,9 +319,9 @@ function documents.flush_state(state)
   return send_did_change(state, text)
 end
 
-function documents.flush(client, doc_or_uri)
-  if doc_or_uri then
-    local state = documents.state(client, doc_or_uri)
+function documents.flush(client, buffer_or_uri)
+  if buffer_or_uri then
+    local state = documents.state(client, buffer_or_uri)
     return documents.flush_state(state)
   end
   local bucket = clients[client]
@@ -333,8 +333,8 @@ function documents.flush(client, doc_or_uri)
   return true
 end
 
-function documents.flush_before_request(client, doc_or_uri)
-  return documents.flush(client, doc_or_uri)
+function documents.flush_before_request(client, buffer_or_uri)
+  return documents.flush(client, buffer_or_uri)
 end
 
 function documents.update(time)
@@ -348,11 +348,11 @@ function documents.update(time)
   end
 end
 
-function documents.did_save(client, doc_or_uri)
-  local state = documents.state(client, doc_or_uri)
+function documents.did_save(client, buffer_or_uri)
+  local state = documents.state(client, buffer_or_uri)
   if not state or state.disabled_reason or not state.opened or not state.supports_save then return true end
   local params = { textDocument = { uri = state.uri } }
-  if state.include_save_text then params.text = doc_text(state.doc) end
+  if state.include_save_text then params.text = buffer_text(state.buffer) end
   push_snapshot(state, "save", params.text)
   return send_notification(client, "textDocument/didSave", params)
 end
@@ -375,111 +375,111 @@ end
 function documents.snapshot_for_change_id(state, change_id)
   if not state then return nil end
   for i = #state.snapshots, 1, -1 do
-    if state.snapshots[i].doc_change_id == change_id then return state.snapshots[i] end
+    if state.snapshots[i].buffer_change_id == change_id then return state.snapshots[i] end
   end
   return nil
 end
 
-function documents.is_content_ready(doc)
-  if not doc then return false end
-  if content_loading[doc] then return false end
-  if doc.new_file then return true end
-  local path = doc_path(doc)
+function documents.is_content_ready(buffer)
+  if not buffer then return false end
+  if content_loading[buffer] then return false end
+  if buffer.new_file then return true end
+  local path = buffer_path(buffer)
   if not path then return true end
   if not system.get_file_info(path) then return true end
-  return content_loaded[doc] == true
+  return content_loaded[buffer] == true
 end
 
-function documents.on_doc_metadata_changed(doc, reason)
-  for _, state in ipairs(documents.states_for_doc(doc)) do
-    local new_uri = doc_uri(doc)
+function documents.on_buffer_metadata_changed(buffer, reason)
+  for _, state in ipairs(documents.states_for_buffer(buffer)) do
+    local new_uri = buffer_uri(buffer)
     if new_uri and new_uri ~= state.uri then
       local client = state.client
       local opts = state.options
       documents.detach(client, state.uri)
-      documents.attach(client, doc, opts)
+      documents.attach(client, buffer, opts)
     end
   end
-  for id, handler in pairs(doc_metadata_handlers) do
-    local ok, err = pcall(handler, doc, reason)
+  for id, handler in pairs(buffer_metadata_handlers) do
+    local ok, err = pcall(handler, buffer, reason)
     if not ok then
-      quiet_log("LSP document metadata handler %s failed: %s", tostring(id), tostring(err))
+      quiet_log("LSP buffer metadata handler %s failed: %s", tostring(id), tostring(err))
     end
   end
 end
 
-function documents.register_doc_metadata_changed_handler(id, fn)
-  assert(type(id) == "string" and id ~= "", "doc metadata handler id must be a non-empty string")
-  assert(type(fn) == "function", "doc metadata handler must be a function")
-  doc_metadata_handlers[id] = fn
+function documents.register_buffer_metadata_changed_handler(id, fn)
+  assert(type(id) == "string" and id ~= "", "buffer metadata handler id must be a non-empty string")
+  assert(type(fn) == "function", "buffer metadata handler must be a function")
+  buffer_metadata_handlers[id] = fn
 end
 
-function documents.unregister_doc_metadata_changed_handler(id)
-  doc_metadata_handlers[id] = nil
+function documents.unregister_buffer_metadata_changed_handler(id)
+  buffer_metadata_handlers[id] = nil
 end
 
-function documents.register_doc_close_handler(id, fn)
-  assert(type(id) == "string" and id ~= "", "doc close handler id must be a non-empty string")
-  assert(type(fn) == "function", "doc close handler must be a function")
-  doc_close_handlers[id] = fn
+function documents.register_buffer_close_handler(id, fn)
+  assert(type(id) == "string" and id ~= "", "buffer close handler id must be a non-empty string")
+  assert(type(fn) == "function", "buffer close handler must be a function")
+  buffer_close_handlers[id] = fn
 end
 
-function documents.unregister_doc_close_handler(id)
-  doc_close_handlers[id] = nil
+function documents.unregister_buffer_close_handler(id)
+  buffer_close_handlers[id] = nil
 end
 
-function documents.on_doc_close(doc)
-  for _, state in ipairs(documents.states_for_doc(doc)) do
+function documents.on_buffer_close(buffer)
+  for _, state in ipairs(documents.states_for_buffer(buffer)) do
     documents.detach(state.client, state.uri)
   end
-  for id, handler in pairs(doc_close_handlers) do
-    local ok, err = pcall(handler, doc)
+  for id, handler in pairs(buffer_close_handlers) do
+    local ok, err = pcall(handler, buffer)
     if not ok then
-      quiet_log("LSP document close handler %s failed: %s", tostring(id), tostring(err))
+      quiet_log("LSP buffer close handler %s failed: %s", tostring(id), tostring(err))
     end
   end
 end
 
-local function patch_doc()
+local function patch_buffer()
   if patched then return end
   patched = true
 
-  local old_set_filename = Doc.set_filename
-  function Doc:set_filename(...)
+  local old_set_filename = Buffer.set_filename
+  function Buffer:set_filename(...)
     local result = old_set_filename(self, ...)
-    documents.on_doc_metadata_changed(self, "filename")
+    documents.on_buffer_metadata_changed(self, "filename")
     return result
   end
 
-  local old_load = Doc.load
-  function Doc:load(...)
+  local old_load = Buffer.load
+  function Buffer:load(...)
     content_loading[self] = true
     content_loaded[self] = false
     local result = { pcall(old_load, self, ...) }
     content_loading[self] = nil
     if not result[1] then error(result[2], 0) end
     content_loaded[self] = true
-    documents.on_doc_metadata_changed(self, "load")
+    documents.on_buffer_metadata_changed(self, "load")
     return table.unpack(result, 2)
   end
 
-  local old_reset_syntax = Doc.reset_syntax
-  function Doc:reset_syntax(...)
+  local old_reset_syntax = Buffer.reset_syntax
+  function Buffer:reset_syntax(...)
     local result = old_reset_syntax(self, ...)
-    if self.lines then documents.on_doc_metadata_changed(self, "syntax") end
+    if self.lines then documents.on_buffer_metadata_changed(self, "syntax") end
     return result
   end
 
-  local old_on_text_transaction = Doc.on_text_transaction
-  function Doc:on_text_transaction(transaction)
+  local old_on_text_transaction = Buffer.on_text_transaction
+  function Buffer:on_text_transaction(transaction)
     old_on_text_transaction(self, transaction)
     documents.on_text_transaction(self, transaction)
   end
 
-  local old_save = Doc.save
-  function Doc:save(...)
+  local old_save = Buffer.save
+  function Buffer:save(...)
     local result = { old_save(self, ...) }
-    for _, state in ipairs(documents.states_for_doc(self)) do
+    for _, state in ipairs(documents.states_for_buffer(self)) do
       local ok, err = documents.flush_state(state)
       if ok then
         ok, err = documents.did_save(state.client, self)
@@ -491,13 +491,13 @@ local function patch_doc()
     return table.unpack(result)
   end
 
-  local old_on_close = Doc.on_close
-  function Doc:on_close(...)
-    documents.on_doc_close(self)
+  local old_on_close = Buffer.on_close
+  function Buffer:on_close(...)
+    documents.on_buffer_close(self)
     return old_on_close(self, ...)
   end
 end
 
-patch_doc()
+patch_buffer()
 
 return documents

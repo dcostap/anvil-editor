@@ -1,19 +1,19 @@
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local linewrapping = require "core.linewrapping"
 local test = require "core.test"
 
 local function make_view(text, filename)
   filename = filename or "markdown-list-navigation.md"
-  local doc = Doc(filename, filename, true)
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
-  local view = DocView(doc)
+  local buffer = Buffer(filename, filename, true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  local view = Editor(buffer)
   view:set_wrapping_enabled(false)
-  return view, doc
+  return view, buffer
 end
 
 local function perform(view, name)
@@ -28,15 +28,15 @@ end
 test.describe("Markdown list navigation", function()
   test.it("moves Home to task-list content before the physical line start", function()
     for _, name in ipairs({
-      "doc:move-to-start-of-indentation",
-      "doc:move-to-start-of-line",
+      "text:move-to-start-of-indentation",
+      "text:move-to-start-of-line",
     }) do
-      local view, doc = make_view("- [ ] this is a list item")
-      doc:set_selection(1, 20)
+      local view, buffer = make_view("- [ ] this is a list item")
+      buffer:set_selection(1, 20)
 
       test.equal(perform(view, name), true)
 
-      local line, col = doc:get_selection()
+      local line, col = buffer:get_selection()
       test.same({ line, col }, { 1, 7 })
     end
   end)
@@ -49,45 +49,45 @@ test.describe("Markdown list navigation", function()
       { "12. [ ] ordered task", 9 },
     }
     for _, case in ipairs(cases) do
-      local view, doc = make_view(case[1])
-      doc:set_selection(1, #doc.lines[1])
+      local view, buffer = make_view(case[1])
+      buffer:set_selection(1, #buffer.lines[1])
 
-      test.equal(perform(view, "doc:move-to-start-of-indentation"), true)
+      test.equal(perform(view, "text:move-to-start-of-indentation"), true)
 
-      local line, col = doc:get_selection()
+      local line, col = buffer:get_selection()
       test.same({ line, col }, { 1, case[2] })
     end
   end)
 
   test.it("moves through list content, marker indentation, and physical line start", function()
-    local view, doc = make_view("  - [ ] nested task")
-    doc:set_selection(1, #doc.lines[1])
+    local view, buffer = make_view("  - [ ] nested task")
+    buffer:set_selection(1, #buffer.lines[1])
 
-    test.equal(perform(view, "doc:move-to-start-of-indentation"), true)
-    local line, col = doc:get_selection()
+    test.equal(perform(view, "text:move-to-start-of-indentation"), true)
+    local line, col = buffer:get_selection()
     test.same({ line, col }, { 1, 9 })
 
-    test.equal(perform(view, "doc:move-to-start-of-indentation"), true)
-    line, col = doc:get_selection()
+    test.equal(perform(view, "text:move-to-start-of-indentation"), true)
+    line, col = buffer:get_selection()
     test.same({ line, col }, { 1, 3 })
 
-    test.equal(perform(view, "doc:move-to-start-of-indentation"), true)
-    line, col = doc:get_selection()
+    test.equal(perform(view, "text:move-to-start-of-indentation"), true)
+    line, col = buffer:get_selection()
     test.same({ line, col }, { 1, 1 })
   end)
 
   test.it("does not treat list-looking source in another Language Mode as Markdown", function()
-    local view, doc = make_view("- [ ] source text", "list-navigation.lua")
-    doc:set_selection(1, #doc.lines[1])
+    local view, buffer = make_view("- [ ] source text", "list-navigation.lua")
+    buffer:set_selection(1, #buffer.lines[1])
 
-    test.equal(perform(view, "doc:move-to-start-of-indentation"), true)
+    test.equal(perform(view, "text:move-to-start-of-indentation"), true)
 
-    local line, col = doc:get_selection()
+    local line, col = buffer:get_selection()
     test.same({ line, col }, { 1, 1 })
   end)
 
   test.it("keeps the wrapped-row start as the first Home stop", function()
-    local view, doc = make_view("- [ ] abcdefghijklmnopqrstuvwxyz")
+    local view, buffer = make_view("- [ ] abcdefghijklmnopqrstuvwxyz")
     local cfg = config.plugins.linewrapping
     local old = {
       mode = cfg.mode,
@@ -103,18 +103,18 @@ test.describe("Markdown list navigation", function()
       cfg.wrapping_indent = 0
       cfg.require_tokenization = false
       view.wrapping_enabled = true
-      linewrapping.update_docview_breaks(view)
+      linewrapping.update_textview_breaks(view)
 
-      doc:set_selection(1, 20)
+      buffer:set_selection(1, 20)
       local _, _, _, wrapped_row_start = linewrapping.get_line_idx_col_count(view, 1, 20)
       test.ok(wrapped_row_start > 7, "the fixture caret should be on a continuation row")
 
-      test.equal(perform(view, "doc:move-to-start-of-indentation"), true)
-      local line, col = doc:get_selection()
+      test.equal(perform(view, "text:move-to-start-of-indentation"), true)
+      local line, col = buffer:get_selection()
       test.same({ line, col }, { 1, wrapped_row_start })
 
-      test.equal(perform(view, "doc:move-to-start-of-indentation"), true)
-      line, col = doc:get_selection()
+      test.equal(perform(view, "text:move-to-start-of-indentation"), true)
+      line, col = buffer:get_selection()
       test.same({ line, col }, { 1, 7 })
     end)
     cfg.mode = old.mode

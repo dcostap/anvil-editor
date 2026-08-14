@@ -1,6 +1,6 @@
 local config = require "core.config"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
@@ -9,7 +9,7 @@ local worker_pool = require "core.worker_pool"
 
 local function refresh(view)
   markdown.live_render.refresh_view(view)
-  local instance = test.not_nil(markdown_model.peek(view.doc))
+  local instance = test.not_nil(markdown_model.peek(view.buffer))
   local deadline = system.get_time() + 5
   while instance.status ~= "ready" and system.get_time() < deadline do
     local pool = worker_pool.current_system()
@@ -41,10 +41,10 @@ test.describe("Markdown long paste", function()
       end
     end
     local source = table.concat(lines, "\n")
-    local doc = Doc("data-image-paste.md", "data-image-paste.md", true)
-    doc:insert(1, 1, "old\nselected\nMarkdown\ntext\n")
-    doc:clear_undo_redo()
-    local view, peer = DocView(doc), DocView(doc)
+    local buffer = Buffer("data-image-paste.md", "data-image-paste.md", true)
+    buffer:insert(1, 1, "old\nselected\nMarkdown\ntext\n")
+    buffer:clear_undo_redo()
+    local view, peer = Editor(buffer), Editor(buffer)
     for _, current in ipairs({ view, peer }) do
       current.size.x, current.size.y = 500, 800
       current:set_wrapping_enabled(true)
@@ -52,22 +52,22 @@ test.describe("Markdown long paste", function()
       current:get_visual_row_metric_cache()
     end
     view:set_selection_state({
-      selections = { 1, 1, #doc.lines, #doc.lines[#doc.lines] + 1 },
+      selections = { 1, 1, #buffer.lines, #buffer.lines[#buffer.lines] + 1 },
       last_selection = 1,
     })
 
     local started = system.get_time()
-    view:with_selection_state(function() doc:text_input(source) end)
+    view:with_selection_state(function() buffer:text_input(source) end)
     local elapsed = system.get_time() - started
 
-    test.equal(#doc.lines, #lines)
-    test.equal((doc.lines[133] or ""):gsub("\n$", ""), data_image)
+    test.equal(#buffer.lines, #lines)
+    test.equal((buffer.lines[133] or ""):gsub("\n$", ""), data_image)
     test.ok(elapsed < 2, string.format(
       "long data-image replacement blocked the editor for %.3fs", elapsed
     ))
 
     markdown.live_render.release(view, "test")
     markdown.live_render.release(peer, "test")
-    markdown_model.close(doc, "test")
+    markdown_model.close(buffer, "test")
   end)
 end)

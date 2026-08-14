@@ -134,19 +134,19 @@ test.describe("Command Slots", function()
   end)
 
   test.it("keeps Command Output View text read-only while allowing internal appends", function()
-    local doc = command_slots.CommandOutputDoc()
-    doc:set_text("first\n")
-    local original = doc:get_text(1, 1, math.huge, math.huge)
+    local buffer = command_slots.CommandOutputBuffer()
+    buffer:set_text("first\n")
+    local original = buffer:get_text(1, 1, math.huge, math.huge)
 
-    doc:insert(1, 1, "typed ")
-    doc:remove(1, 1, 1, 3)
-    doc:text_input("typed")
-    doc:delete_to_cursor()
+    buffer:insert(1, 1, "typed ")
+    buffer:remove(1, 1, 1, 3)
+    buffer:text_input("typed")
+    buffer:delete_to_cursor()
 
-    test.equal(doc:get_text(1, 1, math.huge, math.huge), original)
-    doc:append("second\n")
-    test.equal(doc:get_text(1, 1, math.huge, math.huge), "first\nsecond\n")
-    test.not_ok(doc:is_dirty())
+    test.equal(buffer:get_text(1, 1, math.huge, math.huge), original)
+    buffer:append("second\n")
+    test.equal(buffer:get_text(1, 1, math.huge, math.huge), "first\nsecond\n")
+    test.not_ok(buffer:is_dirty())
   end)
 
   test.it("keeps Command Output View measurement caches valid after read-only text refreshes", function()
@@ -156,7 +156,7 @@ test.describe("Command Slots", function()
     local view = command_slots.slots[1].view
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 500, 200
-    view.doc:set_selection(1, 1, 1, 6)
+    view.buffer:set_selection(1, 1, 1, 6)
 
     local col1, col2 = view:get_visible_cols_range(1, 300)
     test.ok(col1 <= col2)
@@ -169,24 +169,24 @@ test.describe("Command Slots", function()
   end)
 
   test.it("only advances command output carets that were on the trailing blank line", function()
-    local doc = command_slots.CommandOutputDoc()
-    doc:set_text("first")
-    test.equal(doc:get_text(1, 1, math.huge, math.huge), "first\n")
-    test.same({ 2, 1, 2, 1 }, doc.selections)
+    local buffer = command_slots.CommandOutputBuffer()
+    buffer:set_text("first")
+    test.equal(buffer:get_text(1, 1, math.huge, math.huge), "first\n")
+    test.same({ 2, 1, 2, 1 }, buffer.selections)
 
-    doc:append(" second")
-    test.equal(doc:get_text(1, 1, math.huge, math.huge), "first second\n")
-    test.same({ 2, 1, 2, 1 }, doc.selections)
+    buffer:append(" second")
+    test.equal(buffer:get_text(1, 1, math.huge, math.huge), "first second\n")
+    test.same({ 2, 1, 2, 1 }, buffer.selections)
 
-    doc:append("\nthird\n")
-    test.equal(doc:get_text(1, 1, math.huge, math.huge), "first second\nthird\n")
-    test.same({ 3, 1, 3, 1 }, doc.selections)
+    buffer:append("\nthird\n")
+    test.equal(buffer:get_text(1, 1, math.huge, math.huge), "first second\nthird\n")
+    test.same({ 3, 1, 3, 1 }, buffer.selections)
 
-    doc:set_selection(1, 3, 1, 3)
-    doc:append("fourth\n")
-    test.equal(doc:get_text(1, 1, math.huge, math.huge), "first second\nthird\nfourth\n")
-    test.same({ 1, 3, 1, 3 }, doc.selections)
-    test.not_ok(doc:is_dirty())
+    buffer:set_selection(1, 3, 1, 3)
+    buffer:append("fourth\n")
+    test.equal(buffer:get_text(1, 1, math.huge, math.huge), "first second\nthird\nfourth\n")
+    test.same({ 1, 3, 1, 3 }, buffer.selections)
+    test.not_ok(buffer:is_dirty())
   end)
 
   test.it("extracts common real file location Points of Interest from output", function(context)
@@ -254,19 +254,19 @@ test.describe("Command Slots", function()
     local view = command_slots.CommandOutputView({ label = "T" })
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 500, 200
-    view.doc:set_text("header\nsrc/main.c:2:3: error: nope\n")
-    view.doc:set_selection(1, 1)
+    view.buffer:set_text("header\nsrc/main.c:2:3: error: nope\n")
+    view.buffer:set_selection(1, 1)
     core.set_active_view(view)
 
     test.ok(command.perform("poi:next"))
-    test.same(view.doc.selections, { 2, 1, 2, 1 })
+    test.same(view.buffer.selections, { 2, 1, 2, 1 })
     test.ok(command.perform("poi:activate"))
 
     local left_node = core.root_panel and core.root_panel:get_left_pane()
     local left = left_node and left_node.active_view
     context.cleanup_views = { left }
     test.equal(core.active_view, left)
-    test.ok(left and left.doc and common.path_equals(left.doc.abs_filename, target))
+    test.ok(left and left.buffer and common.path_equals(left.buffer.abs_filename, target))
     test.same(left:get_selection_state().selections, { 2, 3, 2, 3 })
   end)
 
@@ -279,20 +279,20 @@ test.describe("Command Slots", function()
     system.chdir(context.temp_root)
 
     local view = command_slots.CommandOutputView({ label = "T" })
-    view.doc:set_text("src/side.c:2:1: error: nope\n")
-    view.doc:set_selection(1, 1)
+    view.buffer:set_text("src/side.c:2:1: error: nope\n")
+    view.buffer:set_selection(1, 1)
     core.set_active_view(view)
 
     test.ok(command.perform("poi:activate-right"))
 
-    test.ok(core.active_view and core.active_view.doc and common.path_equals(core.active_view.doc.abs_filename, target))
+    test.ok(core.active_view and core.active_view.buffer and common.path_equals(core.active_view.buffer.abs_filename, target))
     test.equal(panes.pane_for_view(core.active_view), "right")
     context.cleanup_views = { core.active_view }
   end)
 
   test.it("does not expose language or legacy Git navigation commands in Command Output Views", function()
     local view = command_slots.CommandOutputView({ label = "T" })
-    view.doc:set_text("anything\n")
+    view.buffer:set_text("anything\n")
     core.set_active_view(view)
 
     test.not_ok(command.is_valid("language:show-references"))
@@ -309,7 +309,7 @@ test.describe("Command Slots", function()
     core.projects = { Project(context.temp_root) }
 
     local view = command_slots.CommandOutputView({ label = "T" })
-    view.doc:set_text("src/gone.c:1:1: error\n")
+    view.buffer:set_text("src/gone.c:1:1: error\n")
     local poi = view:get_points_of_interest()[1]
     test.ok(poi)
     test.ok(common.rm(target))
@@ -333,7 +333,7 @@ test.describe("Command Slots", function()
     local view = command_slots.CommandOutputView({ label = "T" })
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 500, 200
-    view.doc:set_text("src/main.c:1:1: ok\nmissing.c:1:1\n")
+    view.buffer:set_text("src/main.c:1:1: ok\nmissing.c:1:1\n")
 
     local rects = {}
     local old_draw_rect = renderer.draw_rect
@@ -360,7 +360,7 @@ test.describe("Command Slots", function()
     view.size.x, view.size.y = 320, 200
     view.scroll.x, view.scroll.to.x = 0, 0
     view.scroll.y, view.scroll.to.y = 0, 0
-    view.doc:set_text(string.rep("x", 16) .. " src/a.c:1:1: ok\n")
+    view.buffer:set_text(string.rep("x", 16) .. " src/a.c:1:1: ok\n")
 
     local wrapping = config.plugins.linewrapping
     wrapping.mode = "letter"
@@ -369,7 +369,7 @@ test.describe("Command Slots", function()
     wrapping.wrapping_indent = 0
     wrapping.require_tokenization = false
     view:set_wrapping_enabled(true)
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
 
     local poi = view:get_points_of_interest({ force_revalidate = true })[1]
     test.ok(poi, "expected a detected Text POI")
@@ -407,8 +407,8 @@ test.describe("Command Slots", function()
     local output = command_slots.slots[1].view
     panel:select_slot(1, { focus = false })
     output.poi_cache = nil
-    output.doc:set_text("header\nsrc/first.c:1:1\nsrc/second.c:2:1\n")
-    output.doc:set_selection(1, 1)
+    output.buffer:set_text("header\nsrc/first.c:1:1\nsrc/second.c:2:1\n")
+    output.buffer:set_selection(1, 1)
 
     local left_before = panes.show("left", { focus = true })
     test.ok(left_before)
@@ -416,14 +416,14 @@ test.describe("Command Slots", function()
     test.ok(command.perform("poi:right-next-activate"))
     local left_node = core.root_panel and core.root_panel:get_left_pane()
     test.equal(core.active_view, left_node and left_node.active_view)
-    test.ok(core.active_view and core.active_view.doc and common.path_equals(core.active_view.doc.abs_filename, first))
-    test.same(output.doc.selections, { 2, 1, 2, 1 })
+    test.ok(core.active_view and core.active_view.buffer and common.path_equals(core.active_view.buffer.abs_filename, first))
+    test.same(output.buffer.selections, { 2, 1, 2, 1 })
     context.cleanup_views = { left_node and left_node.active_view }
 
     core.set_active_view(output)
     test.ok(command.perform("poi:right-next-activate"))
     test.equal(core.active_view, output)
-    test.same(output.doc.selections, { 3, 1, 3, 1 })
+    test.same(output.buffer.selections, { 3, 1, 3, 1 })
     if left_node and left_node.active_view then
       context.cleanup_views[#context.cleanup_views + 1] = left_node.active_view
     end
@@ -441,8 +441,8 @@ test.describe("Command Slots", function()
     test.ok(command_slots.run_command(1, "echo"))
     local output = command_slots.slots[1].view
     output.poi_cache = nil
-    output.doc:set_text("header\nsrc/hidden.c:1:1\n")
-    output.doc:set_selection(1, 1)
+    output.buffer:set_text("header\nsrc/hidden.c:1:1\n")
+    output.buffer:set_selection(1, 1)
     panes.hide_right(false)
     local left_before = panes.show("left", { focus = true })
     test.ok(left_before)
@@ -451,29 +451,29 @@ test.describe("Command Slots", function()
     test.ok(command.perform("poi:right-next-activate"))
 
     test.equal(core.active_view, left_before)
-    test.same(output.doc.selections, { 1, 1, 1, 1 })
+    test.same(output.buffer.selections, { 1, 1, 1, 1 })
   end)
 
   test.it("preserves command output horizontal scroll while following appended output", function()
     local view = command_slots.CommandOutputView({ label = "T" })
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 120, 60
-    view.doc:set_text("first")
+    view.buffer:set_text("first")
     view.scroll.x, view.scroll.to.x = 80, 80
 
     view:append_text(" second\nthird\n")
 
     test.equal(view.scroll.x, 80)
     test.equal(view.scroll.to.x, 80)
-    test.same({ 3, 1, 3, 1 }, view.doc.selections)
+    test.same({ 3, 1, 3, 1 }, view.buffer.selections)
   end)
 
   test.it("does not scroll command output when the caret is not on the trailing blank line", function()
     local view = command_slots.CommandOutputView({ label = "T" })
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 120, 60
-    view.doc:set_text("one\ntwo")
-    view.doc:set_selection(1, 2, 1, 2)
+    view.buffer:set_text("one\ntwo")
+    view.buffer:set_selection(1, 2, 1, 2)
     view.scroll.x, view.scroll.to.x = 80, 80
     view.scroll.y, view.scroll.to.y = 40, 40
 
@@ -483,7 +483,7 @@ test.describe("Command Slots", function()
     test.equal(view.scroll.to.x, 80)
     test.equal(view.scroll.y, 40)
     test.equal(view.scroll.to.y, 40)
-    test.same({ 1, 2, 1, 2 }, view.doc.selections)
+    test.same({ 1, 2, 1, 2 }, view.buffer.selections)
   end)
 
   test.it("shows one tabbed Command Output panel without stealing Left Pane focus", function()
@@ -561,19 +561,19 @@ test.describe("Command Slots", function()
     local slot = command_slots.slots[1]
     core.set_active_view(slot.view)
 
-    test.contains(slot.view.doc:get_text(1, 1, math.huge, math.huge), "second")
+    test.contains(slot.view.buffer:get_text(1, 1, math.huge, math.huge), "second")
     test.ok(command.perform("command-slots:history-previous"))
-    test.contains(slot.view.doc:get_text(1, 1, math.huge, math.huge), "first")
+    test.contains(slot.view.buffer:get_text(1, 1, math.huge, math.huge), "first")
     test.equal(slot.output_history_index, 1)
 
     test.ok(command.perform("command-slots:history-next"))
-    test.contains(slot.view.doc:get_text(1, 1, math.huge, math.huge), "second")
+    test.contains(slot.view.buffer:get_text(1, 1, math.huge, math.huge), "second")
     test.equal(slot.output_history_index, 2)
 
     test.ok(command.perform("command-slots:history-previous"))
-    test.contains(slot.view.doc:get_text(1, 1, math.huge, math.huge), "first")
+    test.contains(slot.view.buffer:get_text(1, 1, math.huge, math.huge), "first")
     test.ok(command_slots.run_command(1, "Write-Output 'third'"))
-    test.contains(slot.view.doc:get_text(1, 1, math.huge, math.huge), "third")
+    test.contains(slot.view.buffer:get_text(1, 1, math.huge, math.huge), "third")
     test.equal(slot.output_history_index, #slot.output_history)
   end)
 
@@ -641,7 +641,7 @@ test.describe("Command Slots", function()
 
     test.ok(command_slots.run_command(1, "Write-Output 'replacement-second'"))
     test.ok(wait_until(function() return not slot.running end, 5), "replacement reader did not finish the second command")
-    test.contains(slot.view.doc:get_text(1, 1, math.huge, math.huge), "replacement-second")
+    test.contains(slot.view.buffer:get_text(1, 1, math.huge, math.huge), "replacement-second")
   end)
 
   test.it("strips ANSI control sequences from command output", function()

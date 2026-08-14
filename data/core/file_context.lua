@@ -9,26 +9,20 @@ core.file_context = M
 
 function M.view_file_path(view)
   if type(view) == "string" and view ~= "" then return common.normalize_path(view) end
-  local doc = view and view.doc
-  local path = doc and doc.abs_filename
+  local buffer = view and view.buffer
+  local path = buffer and buffer.abs_filename
   if not path and view and type(view.path) == "string" then path = view.path end
   if path and path ~= "" then return common.normalize_path(path) end
 end
 
 M.excluded_content_views = M.excluded_content_views or setmetatable({}, { __mode = "k" })
-M.editor_views = M.editor_views or setmetatable({}, { __mode = "k" })
-
 function M.exclude_content_view(view)
   if view then M.excluded_content_views[view] = true end
 end
 
-function M.mark_editor_view(view)
-  if view then M.editor_views[view] = true end
-  return view
-end
-
 function M.is_editor_view(view)
-  return not not (view and M.editor_views[view])
+  local Editor = require "core.editor"
+  return not not (view and view.extends and view:extends(Editor))
 end
 
 function M.is_file_view(view)
@@ -89,28 +83,28 @@ function core.set_active_view(view)
   return result
 end
 
-local function collect_other_dirty_docs(node, keep_view, dirty_docs, seen)
+local function collect_other_dirty_buffers(node, keep_view, dirty_buffers, seen)
   if not node then return end
   if node.type == "leaf" then
     for _, view in ipairs(node.views or {}) do
-      local doc = view ~= keep_view and view.doc
-      if doc and not seen[doc] and doc:is_dirty() then
-        seen[doc] = true
-        dirty_docs[#dirty_docs + 1] = doc
+      local buffer = view ~= keep_view and view.buffer
+      if buffer and not seen[buffer] and buffer:is_dirty() then
+        seen[buffer] = true
+        dirty_buffers[#dirty_buffers + 1] = buffer
       end
     end
   else
-    collect_other_dirty_docs(node.a, keep_view, dirty_docs, seen)
-    collect_other_dirty_docs(node.b, keep_view, dirty_docs, seen)
+    collect_other_dirty_buffers(node.a, keep_view, dirty_buffers, seen)
+    collect_other_dirty_buffers(node.b, keep_view, dirty_buffers, seen)
   end
 end
 
 command.add(nil, {
   ["root:close-all-others"] = function()
     local root = core.root_panel and core.root_panel.root_node
-    local dirty_docs = {}
-    collect_other_dirty_docs(root, core.active_view, dirty_docs, {})
-    core.confirm_close_docs(dirty_docs, core.root_panel.close_all_views, core.root_panel, core.active_view)
+    local dirty_buffers = {}
+    collect_other_dirty_buffers(root, core.active_view, dirty_buffers, {})
+    core.confirm_close_buffers(dirty_buffers, core.root_panel.close_all_views, core.root_panel, core.active_view)
   end,
 })
 

@@ -124,7 +124,7 @@ test.describe("Title Bar", function()
     titlebar.size.x, titlebar.size.y = 1800 * SCALE, 32 * SCALE
 
     local short = { get_name = function() return "a.lua" end }
-    local long = { get_name = function() return "a-significantly-longer-document-name.lua" end }
+    local long = { get_name = function() return "a-significantly-longer-buffer-name.lua" end }
     local node = Node()
     node.views = { short, long }
     node.active_view = short

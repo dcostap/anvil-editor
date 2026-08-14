@@ -4,7 +4,8 @@ local common = require "core.common"
 local test = require "core.test"
 local panes = require "core.panes"
 local file_context = require "core.file_context"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
+local Editor = require "core.editor"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
 local worker_pool = require "core.worker_pool"
@@ -45,22 +46,22 @@ local function track(context, kind, value)
   return value
 end
 
-local function remove_doc(doc)
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+local function remove_buffer(buffer)
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
 end
 
 local function open_editor(context, text)
-  local doc = track(context, "docs", core.open_doc())
-  if text and text ~= "" then doc:text_input(text) end
-  local view = track(context, "views", require("core.panes").open_doc(doc, { pane = "left" }))
+  local buffer = track(context, "buffers", core.open_buffer())
+  if text and text ~= "" then buffer:text_input(text) end
+  local view = track(context, "views", require("core.panes").open_buffer(buffer, { pane = "left" }))
   core.set_active_view(view)
-  return view, doc
+  return view, buffer
 end
 
 local function write_navigation_file(context, label, text)
@@ -77,43 +78,43 @@ end
 
 local function open_named_editor(context, label, text)
   local path = write_navigation_file(context, label, text)
-  local doc = track(context, "docs", core.open_doc(path))
-  local view = track(context, "views", require("core.panes").open_doc(doc, { pane = "left" }))
+  local buffer = track(context, "buffers", core.open_buffer(path))
+  local view = track(context, "views", require("core.panes").open_buffer(buffer, { pane = "left" }))
   core.set_active_view(view)
-  return view, doc, path
+  return view, buffer, path
 end
 
 local function track_active_editor(context)
   local view = core.active_view
   if view then track(context, "views", view) end
-  if view and view.doc then track(context, "docs", view.doc) end
+  if view and view.buffer then track(context, "buffers", view.buffer) end
   return view
 end
 
 local function open_side_editor(context, name, text)
-  local doc = track(context, "docs", core.open_doc())
-  if text and text ~= "" then doc:text_input(text) end
-  local view = track(context, "side_views", file_context.mark_editor_view(DocView(doc)))
+  local buffer = track(context, "buffers", core.open_buffer())
+  if text and text ~= "" then buffer:text_input(text) end
+  local view = track(context, "side_views", Editor(buffer))
   panes.register_view("right", name, view)
-  return view, doc
+  return view, buffer
 end
 
 local function set_caret(view, line, col)
   view:with_selection_state(function()
-    view.doc:set_selection(line, col, line, col)
+    view.buffer:set_selection(line, col, line, col)
   end)
 end
 
 local function caret(view)
   return view:with_selection_state(function()
-    local line, col = view.doc:get_selection()
+    local line, col = view.buffer:get_selection()
     return line, col
   end)
 end
 
 local function refresh_markdown(view)
   markdown.live_render.refresh_view(view)
-  local instance = test.not_nil(markdown_model.peek(view.doc))
+  local instance = test.not_nil(markdown_model.peek(view.buffer))
   local deadline = system.get_time() + 5
   while instance.status ~= "ready" and system.get_time() < deadline do
     local pool = worker_pool.current_system()
@@ -159,9 +160,9 @@ test.describe("IntelliJ-style navigation history", function()
     for _, key in ipairs(context.git_session_keys or {}) do
       if core.panes and core.panes.git_sessions then core.panes.git_sessions[key] = nil end
     end
-    for _, doc in ipairs(context.docs or {}) do
-      if doc:is_dirty() then doc:clean() end
-      remove_doc(doc)
+    for _, buffer in ipairs(context.buffers or {}) do
+      if buffer:is_dirty() then buffer:clean() end
+      remove_buffer(buffer)
     end
     for _, path in ipairs(context.navigation_files or {}) do
       os.remove(path)
@@ -187,18 +188,18 @@ test.describe("IntelliJ-style navigation history", function()
 
     test.ok(command.perform("navigation:back"))
     local restored = track_active_editor(context)
-    test.ok(common.path_equals(restored.doc.abs_filename, first_path))
+    test.ok(common.path_equals(restored.buffer.abs_filename, first_path))
     local line, col = caret(restored)
     test.equal(line, 3)
     test.equal(col, 2)
 
     test.ok(command.perform("navigation:forward"))
     local restored_second = track_active_editor(context)
-    test.ok(common.path_equals(restored_second.doc.abs_filename, second_path))
+    test.ok(common.path_equals(restored_second.buffer.abs_filename, second_path))
   end)
 
   test.it("returns to an already-rendered Markdown Editor without a raw fallback", function(context)
-    local first, first_doc, first_path = open_named_editor(
+    local first, first_buffer, first_path = open_named_editor(
       context,
       "rendered-first.md",
       "# First heading\n\nbody\n"
@@ -217,9 +218,9 @@ test.describe("IntelliJ-style navigation history", function()
 
     test.ok(command.perform("navigation:back"))
     local restored = track_active_editor(context)
-    test.ok(common.path_equals(restored.doc.abs_filename, first_path))
+    test.ok(common.path_equals(restored.buffer.abs_filename, first_path))
     test.equal(restored, first)
-    test.equal(restored.doc, first_doc)
+    test.equal(restored.buffer, first_buffer)
     test.not_nil(restored:get_line_render(1), "the rendered Markdown Editor flashed as source")
     local line, col = caret(restored)
     test.equal(line, 3)
@@ -229,7 +230,7 @@ test.describe("IntelliJ-style navigation history", function()
     test.equal(core.active_view, restored)
 
     test.ok(command.perform("navigation:forward"))
-    test.ok(common.path_equals(core.active_view.doc.abs_filename, second_path))
+    test.ok(common.path_equals(core.active_view.buffer.abs_filename, second_path))
     test.ok(command.perform("navigation:back"))
     test.equal(core.active_view, first)
     test.not_nil(first:get_line_render(1), "repeated file history navigation flashed as source")
@@ -284,8 +285,8 @@ test.describe("IntelliJ-style navigation history", function()
     target_file:close()
 
     markdown.vault_index.get_index(root):rebuild("ui-navigation-markdown-link")
-    local source_doc = track(context, "docs", core.open_doc(source_path))
-    local source = track(context, "views", panes.open_doc(source_doc, { pane = "left" }))
+    local source_buffer = track(context, "buffers", core.open_buffer(source_path))
+    local source = track(context, "views", panes.open_buffer(source_buffer, { pane = "left" }))
     core.set_active_view(source)
     set_caret(source, 107, 1)
     refresh_markdown(source)
@@ -295,11 +296,11 @@ test.describe("IntelliJ-style navigation history", function()
     local x, y = source:get_line_screen_position(1)
     test.ok(source:on_mouse_pressed("left", x + 2, y + 2, 1))
     local target = track_active_editor(context)
-    test.ok(common.path_equals(target.doc.abs_filename, target_path))
+    test.ok(common.path_equals(target.buffer.abs_filename, target_path))
 
     test.ok(command.perform("navigation:back"))
     local restored = track_active_editor(context)
-    test.ok(common.path_equals(restored.doc.abs_filename, source_path))
+    test.ok(common.path_equals(restored.buffer.abs_filename, source_path))
     local line = caret(restored)
     test.equal(line, 1)
   end)
@@ -312,7 +313,7 @@ test.describe("IntelliJ-style navigation history", function()
     local second = open_named_editor(context, "branch-second.txt", "second\n")
     test.ok(command.perform("navigation:back"))
     local restored_first = track_active_editor(context)
-    test.equal(restored_first.doc.abs_filename, first.doc.abs_filename)
+    test.equal(restored_first.buffer.abs_filename, first.buffer.abs_filename)
     test.ok(navigation_history.is_forward_available())
 
     local third = open_named_editor(context, "branch-third.txt", "third\n")
@@ -321,8 +322,8 @@ test.describe("IntelliJ-style navigation history", function()
 
     local back = navigation_history.back_places()
     test.equal(#back, 1)
-    test.equal(back[1].filename, first.doc.abs_filename)
-    test.ok(not common.path_equals(back[1].filename, second.doc.abs_filename))
+    test.equal(back[1].filename, first.buffer.abs_filename)
+    test.ok(not common.path_equals(back[1].filename, second.buffer.abs_filename))
   end)
 
   test.it("records the source singleton Editor when a Fuzzy Searcher result replaces it", function(context)
@@ -338,10 +339,10 @@ test.describe("IntelliJ-style navigation history", function()
     picker.selected = 1
     picker:confirm(false)
 
-    test.ok(common.path_equals(core.active_view.doc.abs_filename, target_path))
+    test.ok(common.path_equals(core.active_view.buffer.abs_filename, target_path))
     test.ok(command.perform("navigation:back"))
     local restored = track_active_editor(context)
-    test.ok(common.path_equals(restored.doc.abs_filename, first_path))
+    test.ok(common.path_equals(restored.buffer.abs_filename, first_path))
     local line, col = caret(restored)
     test.equal(line, 2)
     test.equal(col, 4)
@@ -356,7 +357,7 @@ test.describe("IntelliJ-style navigation history", function()
 
     local back = navigation_history.back_places()
     test.equal(#back, 1)
-    test.equal(back[1].doc, untitled.doc)
+    test.equal(back[1].buffer, untitled.buffer)
     test.equal(back[1].filename, nil)
 
     test.ok(command.perform("navigation:back"))
@@ -448,7 +449,7 @@ test.describe("IntelliJ-style navigation history", function()
 
     test.ok(command.perform("navigation:back"))
     test.equal(core.active_view, filetree)
-    test.equal(filetree.doc:get_selection(), first.line)
+    test.equal(filetree.buffer:get_selection(), first.line)
   end)
 
   test.it("restores the File Tree directory before restoring its selected path", function(context)
@@ -485,7 +486,7 @@ test.describe("IntelliJ-style navigation history", function()
 
     test.ok(command.perform("navigation:back"))
     test.ok(common.path_equals(filetree.current_dir, child_dir))
-    local restored = filetree:entry_for_line(filetree.doc:get_selection())
+    local restored = filetree:entry_for_line(filetree.buffer:get_selection())
     test.not_nil(restored)
     test.ok(common.path_equals(restored.abs, child_entry.abs))
   end)
@@ -579,7 +580,7 @@ test.describe("IntelliJ-style navigation history", function()
     test.ok(command.perform("navigation:back"))
     test.equal(core.active_view, view)
     test.equal(view.displayed_entry, nil)
-    test.equal(view.doc.output_text, "")
+    test.equal(view.buffer.output_text, "")
   end)
 
   test.it("navigates nested Git panes within one Project Git scope", function(context)
@@ -594,10 +595,10 @@ test.describe("IntelliJ-style navigation history", function()
       { hash = "first", short_hash = "first", subject = "First", parents = {} },
       { hash = "second", short_hash = "second", subject = "Second", parents = {} },
     }
-    log_view:update_pane_docs()
+    log_view:update_pane_buffers()
     log_view:focus_list_pane()
     test.equal(core.active_view.git_owner_view, log_view)
-    core.active_view.doc:set_selection(1, 1)
+    core.active_view.buffer:set_selection(1, 1)
     navigation_history.clear_history()
     test.ok(command.perform("git:select-next-row"))
     test.equal(log_view.model:selected_commit().hash, "second")
@@ -605,23 +606,23 @@ test.describe("IntelliJ-style navigation history", function()
     log_view.model:log_tab().commits = { commits[2], commits[1] }
     log_view.model:log_tab().selected_commit = 1
     log_view.model:log_tab().selected_commit_hash = "second"
-    log_view:update_pane_docs()
-    core.active_view.doc:set_selection(1, 1)
+    log_view:update_pane_buffers()
+    core.active_view.buffer:set_selection(1, 1)
     test.ok(command.perform("navigation:back"))
     test.equal(log_view.model:selected_commit().hash, "first")
-    test.equal(core.active_view.doc:get_selection(), 2)
+    test.equal(core.active_view.buffer:get_selection(), 2)
 
     local removed_commit_place = navigation_history.capture_current_place()
     log_view.model:select_log_index(1, function() end)
-    log_view:update_pane_docs()
-    core.active_view.doc:set_selection(1, 1)
+    log_view:update_pane_buffers()
+    core.active_view.buffer:set_selection(1, 1)
     navigation_history.clear_history()
     test.ok(navigation_history.record_place(removed_commit_place, {
       check_current = false,
       reason = "test-removed-git-anchor",
     }))
     log_view.model:log_tab().commits = { log_view.model:log_tab().commits[1] }
-    log_view:update_pane_docs()
+    log_view:update_pane_buffers()
     test.ok(not navigation_history.is_back_available())
 
     local history_tab = {
@@ -679,7 +680,7 @@ test.describe("IntelliJ-style navigation history", function()
     local first_file_place = navigation_history.capture_current_place()
 
     diff_owner.model:select_diff_file(tab, 2, function() end)
-    diff_owner:update_pane_docs()
+    diff_owner:update_pane_buffers()
     test.ok(diff_owner:focus_diff_pane("left"))
     navigation_history.clear_history()
     test.ok(navigation_history.record_place(first_file_place, {
@@ -702,7 +703,7 @@ test.describe("IntelliJ-style navigation history", function()
     fake_git_backend.file_at = context.original_fake_git_file_at
     context.original_fake_git_file_at = nil
     test.equal(core.active_view.git_owner_view, diff_owner)
-    test.equal(core.active_view, tab.diff_view.doc_view_a)
+    test.equal(core.active_view, tab.diff_view.buffer_view_a)
   end)
 
   test.it("restores the commit and changed-file row for Git details", function(context)
@@ -736,16 +737,16 @@ test.describe("IntelliJ-style navigation history", function()
     }
     log_view.model:log_tab().commits = { first, second }
     log_view.model:log_tab().selected_commit = 1
-    log_view:update_pane_docs()
+    log_view:update_pane_buffers()
     log_view:focus_pane_view("details")
     local details = core.active_view
     local first_line = details.path_tree_line_offset + details.path_tree:line_for_record(2)
-    details.doc:set_selection(first_line, 1)
+    details.buffer:set_selection(first_line, 1)
     local first_place = navigation_history.capture_current_place()
 
     log_view.model:select_log_index(2, function() end)
-    log_view:update_pane_docs()
-    details.doc:set_selection(details.path_tree_line_offset + 1, 1)
+    log_view:update_pane_buffers()
+    details.buffer:set_selection(details.path_tree_line_offset + 1, 1)
     navigation_history.clear_history()
     test.ok(navigation_history.record_place(first_place, {
       check_current = false,
@@ -755,11 +756,11 @@ test.describe("IntelliJ-style navigation history", function()
     test.ok(command.perform("navigation:back"))
     test.equal(log_view.model:selected_commit().hash, "details-first")
     test.equal(core.active_view.git_pane, "details")
-    local restored = core.active_view:path_tree_record_for_line(core.active_view.doc:get_selection())
+    local restored = core.active_view:path_tree_record_for_line(core.active_view.buffer:get_selection())
     test.equal(restored.new_path, "src/two.lua")
   end)
 
-  test.it("records editor mouse-style cursor jumps through document commands", function(context)
+  test.it("records editor mouse-style cursor jumps through buffer commands", function(context)
     local view = open_editor(context, "one\ntwo\nthree\nfour")
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 600
@@ -767,7 +768,7 @@ test.describe("IntelliJ-style navigation history", function()
     navigation_history.clear_history()
 
     local x, y = view:get_line_screen_position(3, 1)
-    test.ok(command.perform("doc:set-cursor", x + 1, y + math.floor(view:get_line_height() / 2)))
+    test.ok(command.perform("text:set-cursor", x + 1, y + math.floor(view:get_line_height() / 2)))
     local line = caret(view)
     test.equal(line, 3)
     test.ok(navigation_history.is_back_available())
@@ -785,7 +786,7 @@ test.describe("IntelliJ-style navigation history", function()
     navigation_history.clear_history()
 
     local x, y = view:get_line_screen_position(1, 13)
-    test.ok(command.perform("doc:set-cursor", x + 1, y + math.floor(view:get_line_height() / 2)))
+    test.ok(command.perform("text:set-cursor", x + 1, y + math.floor(view:get_line_height() / 2)))
     local line, col = caret(view)
     test.equal(line, 1)
     test.ok(col > 5)
@@ -839,9 +840,9 @@ test.describe("IntelliJ-style navigation history", function()
     set_caret(filetree, entries[1].line, 1)
     navigation_history.clear_history()
 
-    local doc = track(context, "docs", core.open_doc())
-    doc:text_input("right one\nright two")
-    local editor = panes.open_doc(doc, { pane = "right", focus = true })
+    local buffer = track(context, "buffers", core.open_buffer())
+    buffer:text_input("right one\nright two")
+    local editor = panes.open_buffer(buffer, { pane = "right", focus = true })
     set_caret(editor, 2, 4)
     panes.show("right", { view = filetree, focus = true })
 
@@ -855,9 +856,9 @@ test.describe("IntelliJ-style navigation history", function()
   test.it("restoring a hidden Right Pane place expands that pane", function(context)
     local panes = require "core.panes"
     local left = open_editor(context, "left")
-    local doc = track(context, "docs", core.open_doc())
-    doc:text_input("right one\nright two")
-    local right = panes.open_doc(doc, { pane = "right", focus = true })
+    local buffer = track(context, "buffers", core.open_buffer())
+    buffer:text_input("right one\nright two")
+    local right = panes.open_buffer(buffer, { pane = "right", focus = true })
     set_caret(right, 2, 3)
     local place = navigation_history.capture_place(right)
 

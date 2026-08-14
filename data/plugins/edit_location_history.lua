@@ -1,12 +1,12 @@
 -- mod-version:3
--- Debounced IntelliJ-like last edit location history for real editor docs.
+-- Debounced IntelliJ-like last edit location history for real editor buffers.
 
 local core = require "core"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local common = require "core.common"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 
 local M = {
   debounce_seconds = 1.0,
@@ -17,21 +17,21 @@ local M = {
 
 local locations = {}
 local current_index = 1 -- points one past the newest location when at the end
-local pending_docs = setmetatable({}, { __mode = "k" })
+local pending_buffers = setmetatable({}, { __mode = "k" })
 local pending_places = setmetatable({}, { __mode = "k" })
 local pending_last_edit_time = nil
 local flush_thread_running = false
 local suppress_recording = false
 local navigation_anchor = nil
 
-local original_insert = core.edit_location_history_original_insert or Doc.insert
-local original_remove = core.edit_location_history_original_remove or Doc.remove
+local original_insert = core.edit_location_history_original_insert or Buffer.insert
+local original_remove = core.edit_location_history_original_remove or Buffer.remove
 core.edit_location_history_original_insert = original_insert
 core.edit_location_history_original_remove = original_remove
 
 local function place_label(place)
   if not place then return "<nil>" end
-  local name = place.filename or tostring(place.doc)
+  local name = place.filename or tostring(place.buffer)
   return string.format("%s:%s:%s", name, tostring(place.line), tostring(place.col))
 end
 
@@ -57,44 +57,44 @@ local function dump_locations(reason)
   debug_log("%s index=%d locations=[%s]", reason, current_index, table.concat(parts, " | "))
 end
 
-local function doc_in_core_docs(doc)
-  for _, d in ipairs(core.docs or {}) do
-    if d == doc then return true end
+local function buffer_in_core_buffers(buffer)
+  for _, d in ipairs(core.buffers or {}) do
+    if d == buffer then return true end
   end
   return false
 end
 
-local function active_editor_for_doc(doc)
+local function active_editor_for_buffer(buffer)
   local view = core.active_view
-  if view and view.extends and view:extends(DocView) and view.doc == doc then
+  if view and view.extends and view:extends(TextView) and view.buffer == buffer then
     return view
   end
 end
 
-local function is_real_editor_doc(doc)
-  if not doc or not doc_in_core_docs(doc) then return false end
-  if doc == (core.global_prompt_bar and core.global_prompt_bar.doc) then return false end
+local function is_real_editor_buffer(buffer)
+  if not buffer or not buffer_in_core_buffers(buffer) then return false end
+  if buffer == (core.global_prompt_bar and core.global_prompt_bar.buffer) then return false end
 
-  local view = active_editor_for_doc(doc)
+  local view = active_editor_for_buffer(buffer)
   if view then
     if view == core.global_prompt_bar or view == core.nag_view then return false end
     if tostring(view) == "FileTreeView" then return false end
   end
 
-  -- Prefer real files, but allow still-open untitled editor documents as long
-  -- as they are normal core docs. Internal widget docs are filtered above by
-  -- not being in core.docs.
+  -- Prefer real files, but allow still-open Untitled Buffers as long
+  -- as they are normal core buffers. Internal widget buffers are filtered above by
+  -- not being in core.buffers.
   return true
 end
 
-local function make_place(doc)
-  if not is_real_editor_doc(doc) then return nil end
-  local view = active_editor_for_doc(doc)
-  local line, col = doc:get_selection(false)
+local function make_place(buffer)
+  if not is_real_editor_buffer(buffer) then return nil end
+  local view = active_editor_for_buffer(buffer)
+  local line, col = buffer:get_selection(false)
   if not line then return nil end
   return {
-    doc = doc,
-    filename = doc.abs_filename and common.normalize_path(doc.abs_filename) or nil,
+    buffer = buffer,
+    filename = buffer.abs_filename and common.normalize_path(buffer.abs_filename) or nil,
     line = line,
     col = col,
     scroll_x = view and view.scroll and view.scroll.to.x or 0,
@@ -104,23 +104,23 @@ end
 
 local function current_place()
   local view = core.active_view
-  local doc = view and view.doc
-  return make_place(doc)
+  local buffer = view and view.buffer
+  return make_place(buffer)
 end
 
-local function same_file_or_doc(a, b)
+local function same_file_or_buffer(a, b)
   if not a or not b then return false end
   if a.filename and b.filename then return common.path_equals(a.filename, b.filename) end
-  return a.doc and b.doc and a.doc == b.doc
+  return a.buffer and b.buffer and a.buffer == b.buffer
 end
 
 local function same_or_near_place(a, b)
-  return same_file_or_doc(a, b)
+  return same_file_or_buffer(a, b)
      and math.abs((a.line or 1) - (b.line or 1)) < M.merge_line_distance
 end
 
 local function exact_caret_place(a, b)
-  return same_file_or_doc(a, b)
+  return same_file_or_buffer(a, b)
      and (a.line or 1) == (b.line or 1)
      and (a.col or 1) == (b.col or 1)
 end
@@ -128,7 +128,7 @@ end
 local function place_valid(place)
   if not place then return false end
   if place.filename then return system.get_file_info(place.filename) ~= nil end
-  return place.doc and doc_in_core_docs(place.doc)
+  return place.buffer and buffer_in_core_buffers(place.buffer)
 end
 
 local function trim_invalid_locations()
@@ -162,20 +162,20 @@ end
 local function flush_pending()
   if not pending_last_edit_time then return end
   debug_log("flush pending")
-  local docs = {}
-  for doc in pairs(pending_docs) do docs[#docs + 1] = doc end
+  local buffers = {}
+  for buffer in pairs(pending_buffers) do buffers[#buffers + 1] = buffer end
   local places = pending_places
-  pending_docs = setmetatable({}, { __mode = "k" })
+  pending_buffers = setmetatable({}, { __mode = "k" })
   pending_places = setmetatable({}, { __mode = "k" })
   pending_last_edit_time = nil
 
-  table.sort(docs, function(a, b)
+  table.sort(buffers, function(a, b)
     return tostring(a.abs_filename or a) < tostring(b.abs_filename or b)
   end)
-  for _, doc in ipairs(docs) do
+  for _, buffer in ipairs(buffers) do
     -- Record the caret/edit site captured when the edit happened, not wherever
     -- the caret happens to be when the debounce timer flushes.
-    append_place(places[doc] or make_place(doc))
+    append_place(places[buffer] or make_place(buffer))
   end
 end
 
@@ -193,38 +193,38 @@ local function ensure_flush_thread()
   end)
 end
 
-local function mark_doc_edited(doc)
-  if suppress_recording then debug_log("skip mark suppressed %s", tostring(doc)); return end
-  if not is_real_editor_doc(doc) then debug_log("skip mark non-editor %s", tostring(doc)); return end
+local function mark_buffer_edited(buffer)
+  if suppress_recording then debug_log("skip mark suppressed %s", tostring(buffer)); return end
+  if not is_real_editor_buffer(buffer) then debug_log("skip mark non-editor %s", tostring(buffer)); return end
 
-  local place = make_place(doc)
+  local place = make_place(buffer)
   if not place then return end
-  local pending = pending_places[doc]
-  if pending and same_file_or_doc(pending, place)
+  local pending = pending_places[buffer]
+  if pending and same_file_or_buffer(pending, place)
      and math.abs((pending.line or 1) - (place.line or 1)) >= M.merge_line_distance
   then
     debug_log("far edit: flush pending %s before new %s", place_label(pending), place_label(place))
     append_place(pending)
-    pending_docs[doc] = nil
-    pending_places[doc] = nil
+    pending_buffers[buffer] = nil
+    pending_places[buffer] = nil
   end
 
   debug_log("mark edited %s", place_label(place))
-  pending_docs[doc] = true
-  pending_places[doc] = place
+  pending_buffers[buffer] = true
+  pending_places[buffer] = place
   pending_last_edit_time = system.get_time()
   ensure_flush_thread()
 end
 
-function Doc:insert(...)
+function Buffer:insert(...)
   local a, b, c, d, e, f = original_insert(self, ...)
-  mark_doc_edited(self)
+  mark_buffer_edited(self)
   return a, b, c, d, e, f
 end
 
-function Doc:remove(...)
+function Buffer:remove(...)
   local a, b, c, d, e, f = original_remove(self, ...)
-  mark_doc_edited(self)
+  mark_buffer_edited(self)
   return a, b, c, d, e, f
 end
 
@@ -233,16 +233,16 @@ local function restore_place(place)
   if not place_valid(place) then debug_log("restore invalid %s", place_label(place)); return false end
   suppress_recording = true
   local ok, err = pcall(function()
-    local doc = place.doc
+    local buffer = place.buffer
     local view
     if place.filename then
-      doc = core.open_doc(place.filename)
-      view = core.root_panel:open_doc(doc)
-    elseif doc then
-      view = core.root_panel:open_doc(doc)
+      buffer = core.open_buffer(place.filename)
+      view = core.root_panel:open_buffer(buffer)
+    elseif buffer then
+      view = core.root_panel:open_buffer(buffer)
     end
-    if not doc or not view then return end
-    doc:set_selection(place.line, place.col, place.line, place.col)
+    if not buffer or not view then return end
+    buffer:set_selection(place.line, place.col, place.line, place.col)
     if view.scroll then
       view.scroll.to.x, view.scroll.x = place.scroll_x or 0, place.scroll_x or 0
       view.scroll.to.y, view.scroll.y = place.scroll_y or 0, place.scroll_y or 0

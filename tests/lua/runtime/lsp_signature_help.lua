@@ -1,7 +1,7 @@
 local command = require "core.command"
 local common = require "core.common"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local documents = require "core.lsp.documents"
 local json = require "core.lsp.json"
 local signature_help = require "core.lsp.signature_help"
@@ -21,22 +21,22 @@ local function mkdir(path)
   return path
 end
 
-local function set_text(doc, text)
-  doc.lines = {}
+local function set_text(buffer, text)
+  buffer.lines = {}
   for line in (text .. "\n"):gmatch("(.-\n)") do
-    doc.lines[#doc.lines + 1] = line
+    buffer.lines[#buffer.lines + 1] = line
   end
-  if #doc.lines == 0 then doc.lines[1] = "\n" end
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+  if #buffer.lines == 0 then buffer.lines[1] = "\n" end
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
-local function new_doc(path, text)
-  local doc = Doc()
-  set_text(doc, text or "")
-  doc:set_filename(path, path)
-  return doc
+local function new_buffer(path, text)
+  local buffer = Buffer()
+  set_text(buffer, text or "")
+  buffer:set_filename(path, path)
+  return buffer
 end
 
 local function fake_client(opts)
@@ -101,8 +101,8 @@ test.describe("core.lsp.signature_help", function()
   test.after_each(function(context)
     signature_help.clear()
     core.active_view = context.original_active_view
-    if context.docs then
-      for _, doc in ipairs(context.docs) do pcall(function() doc:on_close() end) end
+    if context.buffers then
+      for _, buffer in ipairs(context.buffers) do pcall(function() buffer:on_close() end) end
     end
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)
@@ -110,28 +110,28 @@ test.describe("core.lsp.signature_help", function()
     end
   end)
 
-  local function track_doc(context, doc)
-    context.docs = context.docs or {}
-    context.docs[#context.docs + 1] = doc
-    return doc
+  local function track_buffer(context, buffer)
+    context.buffers = context.buffers or {}
+    context.buffers[#context.buffers + 1] = buffer
+    return buffer
   end
 
   local function attach(context, opts)
-    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), opts and opts.text or "fn(a, b)"))
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), opts and opts.text or "fn(a, b)"))
     local client = fake_client(opts)
-    documents.attach(client, doc, { language_id = "cpp" })
-    return doc, client
+    documents.attach(client, buffer, { language_id = "cpp" })
+    return buffer, client
   end
 
   test.test("normalizes SignatureHelp signatures parameters and active indices", function(context)
-    local doc, client = attach(context)
-    local mapped = signature_help.map_result(client, doc, {
+    local buffer, client = attach(context)
+    local mapped = signature_help.map_result(client, buffer, {
       activeSignature = 0,
       activeParameter = 1,
       signatures = {
         {
           label = "fn(int a, float b)",
-          documentation = { kind = "markdown", value = "docs" },
+          documentation = { kind = "markdown", value = "buffers" },
           parameters = {
             { label = { 3, 8 }, documentation = "first" },
             { label = "float b", documentation = { value = "second" } },
@@ -142,43 +142,43 @@ test.describe("core.lsp.signature_help", function()
     test.not_ok(mapped.empty)
     test.equal(mapped.active_signature, 1)
     test.equal(mapped.active_parameter, 2)
-    test.equal(mapped.signatures[1].documentation, "docs")
+    test.equal(mapped.signatures[1].documentation, "buffers")
     test.equal(mapped.signatures[1].parameters[1].label, "int a")
     test.equal(mapped.signatures[1].parameters[2].documentation, "second")
     test.ok(mapped.signatures[1].parameters[2].active)
   end)
 
   test.test("nil null and empty signature help results are empty", function(context)
-    local doc, client = attach(context)
-    test.ok(signature_help.map_result(client, doc, nil).empty)
-    test.ok(signature_help.map_result(client, doc, json.null).empty)
-    test.ok(signature_help.map_result(client, doc, { signatures = {} }).empty)
+    local buffer, client = attach(context)
+    test.ok(signature_help.map_result(client, buffer, nil).empty)
+    test.ok(signature_help.map_result(client, buffer, json.null).empty)
+    test.ok(signature_help.map_result(client, buffer, { signatures = {} }).empty)
   end)
 
   test.test("formats active signature and parameter for log UI", function(context)
-    local doc, client = attach(context)
-    local mapped = signature_help.map_result(client, doc, {
+    local buffer, client = attach(context)
+    local mapped = signature_help.map_result(client, buffer, {
       activeSignature = 0,
       activeParameter = 0,
       signatures = {
         {
           label = "fn(int a)",
-          documentation = "docs",
+          documentation = "buffers",
           parameters = { { label = "int a", documentation = "first" } },
         },
       },
     })
     local text = signature_help.format(mapped)
     test.contains(text, "fn(int a)")
-    test.contains(text, "docs")
+    test.contains(text, "buffers")
     test.contains(text, "Parameter: int a")
   end)
 
   test.test("manual command schedules textDocument/signatureHelp and logs on response", function(context)
-    local doc, client = attach(context)
-    local view = DocView(doc)
+    local buffer, client = attach(context)
+    local view = TextView(buffer)
     core.active_view = view
-    doc:set_selection(1, 4)
+    buffer:set_selection(1, 4)
     local log_start = #core.log_items
 
     test.ok(command.perform("lsp:signature-help-current-position", view))
@@ -197,59 +197,59 @@ test.describe("core.lsp.signature_help", function()
   end)
 
   test.test("explicit trigger context is represented when requested", function(context)
-    local doc, client = attach(context)
-    doc:set_selection(1, 4)
-    signature_help.request(doc, { show = false, trigger_character = "(", trigger_kind = 2 })
+    local buffer, client = attach(context)
+    buffer:set_selection(1, 4)
+    signature_help.request(buffer, { show = false, trigger_character = "(", trigger_kind = 2 })
     test.equal(client.requests[1].params.context.triggerKind, 2)
     test.equal(client.requests[1].params.context.triggerCharacter, "(")
   end)
 
   test.test("fresh cached signature help result is reused without another request", function(context)
-    local doc, client = attach(context)
-    doc:set_selection(1, 4)
-    signature_help.request(doc, { show = false })
+    local buffer, client = attach(context)
+    buffer:set_selection(1, 4)
+    signature_help.request(buffer, { show = false })
     complete_request(client, 1, { signatures = { { label = "cached()" } } })
 
-    local mapped, _reason, status = signature_help.request(doc, { show = false })
+    local mapped, _reason, status = signature_help.request(buffer, { show = false })
     test.equal(status, "fresh")
     test.equal(mapped.signatures[1].label, "cached()")
     test.equal(#client.requests, 1)
   end)
 
   test.test("stale version signature-help responses are discarded", function(context)
-    local doc, client = attach(context)
-    doc:set_selection(1, 4)
-    signature_help.request(doc, { show = false })
-    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "x" } })
-    documents.flush(client, doc)
+    local buffer, client = attach(context)
+    buffer:set_selection(1, 4)
+    signature_help.request(buffer, { show = false })
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "x" } })
+    documents.flush(client, buffer)
     complete_request(client, 1, { signatures = { { label = "old()" } } })
 
-    signature_help.request(doc, { show = false })
+    signature_help.request(buffer, { show = false })
     test.equal(#client.requests, 2)
   end)
 
   test.test("superseded signature-help response is cancelled and discarded", function(context)
-    local doc, client = attach(context, { text = "abc def" })
-    doc:set_selection(1, 3)
-    signature_help.request(doc, { show = false })
-    doc:set_selection(1, 7)
-    signature_help.request(doc, { show = false })
+    local buffer, client = attach(context, { text = "abc def" })
+    buffer:set_selection(1, 3)
+    signature_help.request(buffer, { show = false })
+    buffer:set_selection(1, 7)
+    signature_help.request(buffer, { show = false })
     test.equal(#client.requests, 2)
     test.equal(client.sent[#client.sent].method, "$/cancelRequest")
 
     complete_request(client, 1, { signatures = { { label = "old()" } } })
-    doc:set_selection(1, 3)
-    local mapped, _reason, status = signature_help.request(doc, { show = false })
+    buffer:set_selection(1, 3)
+    local mapped, _reason, status = signature_help.request(buffer, { show = false })
     test.not_equal(status, "fresh")
     test.is_nil(mapped)
     test.equal(#client.requests, 3)
   end)
 
   test.test("no signature-help server is a quiet no-op", function(context)
-    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "fn(a)"))
-    local view = DocView(doc)
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), "fn(a)"))
+    local view = TextView(buffer)
     core.active_view = view
-    doc:set_selection(1, 4)
+    buffer:set_selection(1, 4)
 
     test.ok(command.perform("lsp:signature-help-current-position", view))
   end)

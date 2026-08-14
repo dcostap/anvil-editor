@@ -1,25 +1,25 @@
 local core = require "core"
 local config = require "core.config"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local ime = require "core.ime"
 local style = require "core.style"
 local test = require "core.test"
 local LineWrapping = require "core.linewrapping"
 
 local function make_view(text)
-  local doc = Doc(nil, nil, true)
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
-  local view = DocView(doc)
+  local buffer = Buffer(nil, nil, true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  local view = TextView(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 320, 200
   view.scroll.x, view.scroll.to.x = 0, 0
   view.scroll.y, view.scroll.to.y = 0, 0
-  return view, doc
+  return view, buffer
 end
 
-test.describe("Document View IME geometry", function()
+test.describe("Text View IME geometry", function()
   test.before_each(function(context)
     context.active_view = core.active_view
     local wrapping = config.plugins.linewrapping
@@ -45,7 +45,7 @@ test.describe("Document View IME geometry", function()
     if context.old_set_location then ime.set_location = context.old_set_location end
   end)
 
-  test.it("draws composition underlines at their Document columns", function()
+  test.it("draws composition underlines at their Buffer columns", function()
     local view = make_view("abcdefghij")
     local rects = {}
     local old_draw_rect = renderer.draw_rect
@@ -63,7 +63,7 @@ test.describe("Document View IME geometry", function()
   end)
 
   test.it("anchors the system IME rectangle to a wrapped continuation row", function(context)
-    local view, doc = make_view(string.rep("x", 16) .. "AB")
+    local view, buffer = make_view(string.rep("x", 16) .. "AB")
     local wrapping = config.plugins.linewrapping
     wrapping.mode = "letter"
     wrapping.width_override = view:get_font():get_width(string.rep("x", 16))
@@ -71,8 +71,8 @@ test.describe("Document View IME geometry", function()
     wrapping.wrapping_indent = 0
     wrapping.require_tokenization = false
     view:set_wrapping_enabled(true)
-    LineWrapping.update_docview_breaks(view)
-    doc:set_selection(1, 19, 1, 17)
+    LineWrapping.update_textview_breaks(view)
+    buffer:set_selection(1, 19, 1, 17)
     view.ime_status = true
     core.active_view = view
 
@@ -96,7 +96,7 @@ test.describe("Document View IME geometry", function()
     wrapping.wrapping_indent = 0
     wrapping.require_tokenization = false
     view:set_wrapping_enabled(true)
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
 
     local rects = {}
     local old_draw_rect = renderer.draw_rect
@@ -112,7 +112,7 @@ test.describe("Document View IME geometry", function()
   end)
 
   test.it("gives the system IME a positive first-row rect for a wrapped composition", function(context)
-    local view, doc = make_view("xxxxxxxAB")
+    local view, buffer = make_view("xxxxxxxAB")
     local wrapping = config.plugins.linewrapping
     wrapping.mode = "letter"
     wrapping.width_override = view:get_font():get_width("xxxxxxxx")
@@ -120,8 +120,8 @@ test.describe("Document View IME geometry", function()
     wrapping.wrapping_indent = 0
     wrapping.require_tokenization = false
     view:set_wrapping_enabled(true)
-    LineWrapping.update_docview_breaks(view)
-    doc:set_selection(1, 10, 1, 8)
+    LineWrapping.update_textview_breaks(view)
+    buffer:set_selection(1, 10, 1, 8)
     view.ime_status = true
     core.active_view = view
 

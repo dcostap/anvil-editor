@@ -112,7 +112,7 @@ local function clamp_active(index, count)
   return index
 end
 
-function signature_help.map_result(_client, _doc, result)
+function signature_help.map_result(_client, _buffer, result)
   if result == nil or lsp_json.is_null(result) then return { signatures = {}, empty = true } end
   if type(result) ~= "table" then return { signatures = {}, empty = true } end
   local raw_signatures = type(result.signatures) == "table" and result.signatures or {}
@@ -164,9 +164,9 @@ function signature_help.format(mapped)
   return table.concat(parts, "\n")
 end
 
-function signature_help.available_clients(doc)
+function signature_help.available_clients(buffer)
   local out = {}
-  for _, state in ipairs(documents.states_for_doc(doc)) do
+  for _, state in ipairs(documents.states_for_buffer(buffer)) do
     local client = state.client
     if state.opened and not state.disabled_reason and capability(client) then
       out[#out + 1] = { client = client, state = state }
@@ -194,12 +194,12 @@ function signature_help.latest(client, uri, key, version)
   return by_version and by_version[version] or nil
 end
 
-function signature_help.request(doc, opts)
+function signature_help.request(buffer, opts)
   opts = opts or {}
-  local matches = signature_help.available_clients(doc)
+  local matches = signature_help.available_clients(buffer)
   if #matches == 0 then return nil, "unavailable", "unavailable" end
   local line, col = opts.line, opts.col
-  if not line or not col then line, col = doc:get_selection() end
+  if not line or not col then line, col = buffer:get_selection() end
   local key = request_key(line, col, opts)
   local first_reason = "pending"
   for _, match in ipairs(matches) do
@@ -211,7 +211,7 @@ function signature_help.request(doc, opts)
       if opts.show ~= false then signature_help.show(entry.signature_help) end
       return entry.signature_help, nil, "fresh"
     end
-    local ok, reason = signature_help.schedule(client, state, doc, line, col, opts)
+    local ok, reason = signature_help.schedule(client, state, buffer, line, col, opts)
     if ok == nil then first_reason = reason or "unavailable" else first_reason = "pending" end
   end
   return nil, first_reason, first_reason == "unavailable" and "unavailable" or "pending"
@@ -232,7 +232,7 @@ local function request_context(opts)
   return context
 end
 
-function signature_help.schedule(client, state, doc, line, col, opts)
+function signature_help.schedule(client, state, buffer, line, col, opts)
   opts = opts or {}
   if type(client.send_request) ~= "function" then return nil, "client has no request API" end
   cancel_inflight(client, state.uri, "superseded signature-help request")
@@ -244,7 +244,7 @@ function signature_help.schedule(client, state, doc, line, col, opts)
   local requested_generation = client_generation(client)
   local params = {
     textDocument = { uri = state.uri },
-    position = position.doc_to_lsp(doc, line, col, client.position_encoding or "utf-16"),
+    position = position.buffer_to_lsp(buffer, line, col, client.position_encoding or "utf-16"),
     context = request_context(opts),
   }
   local id, err = client:send_request("textDocument/signatureHelp", params, function(result, error_obj)
@@ -267,7 +267,7 @@ function signature_help.schedule(client, state, doc, line, col, opts)
       quiet_log("LSP signatureHelp dropped stale version response for %s", state.uri)
       return
     end
-    local mapped = signature_help.map_result(client, doc, result)
+    local mapped = signature_help.map_result(client, buffer, result)
     local by_key = bucket_for(cache, client, state.uri)
     by_key[key] = by_key[key] or {}
     by_key[key][requested_version] = {
@@ -294,8 +294,8 @@ end
 
 function signature_help.start_current_position(view, opts)
   view = view or core.active_view
-  if not view or not view.doc then return nil, "no active document", "unavailable" end
-  return signature_help.request(view.doc, opts)
+  if not view or not view.buffer then return nil, "no active buffer", "unavailable" end
+  return signature_help.request(view.buffer, opts)
 end
 
 function signature_help.clear_client(client)

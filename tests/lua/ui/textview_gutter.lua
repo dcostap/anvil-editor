@@ -1,7 +1,7 @@
 local common = require "core.common"
 local config = require "core.config"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local style = require "core.style"
 local test = require "core.test"
 local LineWrapping = require "core.linewrapping"
@@ -15,17 +15,17 @@ local function numbered_lines(count)
 end
 
 local function make_view(context, count)
-  local doc = Doc()
-  doc:insert(1, 1, numbered_lines(count))
-  doc:clear_undo_redo()
-  local view = DocView(doc)
-  context.docs[#context.docs + 1] = doc
+  local buffer = Buffer()
+  buffer:insert(1, 1, numbered_lines(count))
+  buffer:clear_undo_redo()
+  local view = TextView(buffer)
+  context.buffers[#context.buffers + 1] = buffer
   return view
 end
 
-test.describe("DocView gutter line numbers", function()
+test.describe("TextView gutter line numbers", function()
   test.before_each(function(context)
-    context.docs = {}
+    context.buffers = {}
     context.show_line_numbers = config.show_line_numbers
     context.gitdiff_gutter = config.plugins.gitdiff_highlight.gutter
     context.gitdiff_overview = config.plugins.gitdiff_highlight.overview
@@ -55,7 +55,7 @@ test.describe("DocView gutter line numbers", function()
     end
     if context.original_draw_rect then renderer.draw_rect = context.original_draw_rect end
     if context.original_common_draw_text then common.draw_text = context.original_common_draw_text end
-    for _, doc in ipairs(context.docs or {}) do doc:on_close() end
+    for _, buffer in ipairs(context.buffers or {}) do buffer:on_close() end
   end)
 
   test.it("reserves two digits so the gutter does not jump at ten lines", function(context)
@@ -66,7 +66,7 @@ test.describe("DocView gutter line numbers", function()
     test.equal(nine:get_gutter_width(), ten:get_gutter_width())
   end)
 
-  test.it("allows one Document View to hide line numbers without removing its gutter", function(context)
+  test.it("allows one Text View to hide line numbers without removing its gutter", function(context)
     local view = make_view(context, 3)
     view.show_line_numbers = false
     local draw_count = 0
@@ -83,7 +83,7 @@ test.describe("DocView gutter line numbers", function()
   test.it("keeps the git hunk marker lane stable from nine to ten lines", function(context)
     local function marker_x_for(line_count)
       local view = make_view(context, line_count)
-      gitdiff._set_state_for_tests(view.doc, {
+      gitdiff._set_state_for_tests(view.buffer, {
         is_in_repo = true,
         line_index = { [1] = "addition" },
         ranges = {},
@@ -105,7 +105,7 @@ test.describe("DocView gutter line numbers", function()
   test.it("keeps git hunk markers inside the gutter when line numbers are hidden", function(context)
     local view = make_view(context, 3)
     view.show_line_numbers = false
-    gitdiff._set_state_for_tests(view.doc, {
+    gitdiff._set_state_for_tests(view.buffer, {
       is_in_repo = true,
       line_index = { [1] = "modification" },
       ranges = {},
@@ -126,15 +126,15 @@ test.describe("DocView gutter line numbers", function()
     test.ok(marker, "expected a modified-line hunk marker")
     test.ok(marker.x >= 0, "expected the marker to start inside the gutter")
     test.ok(marker.x + marker.width <= gutter_width,
-      "expected the marker not to overlap document text")
+      "expected the marker not to overlap buffer text")
   end)
 
   test.it("spans git hunk gutter markers across all Wrapped Visual Rows", function(context)
-    local doc = Doc()
-    doc:insert(1, 1, string.rep("x", 24))
-    doc:clear_undo_redo()
-    context.docs[#context.docs + 1] = doc
-    local view = DocView(doc)
+    local buffer = Buffer()
+    buffer:insert(1, 1, string.rep("x", 24))
+    buffer:clear_undo_redo()
+    context.buffers[#context.buffers + 1] = buffer
+    local view = TextView(buffer)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 320, 200
     local wrapping = config.plugins.linewrapping
@@ -144,8 +144,8 @@ test.describe("DocView gutter line numbers", function()
     wrapping.wrapping_indent = 0
     wrapping.require_tokenization = false
     view:set_wrapping_enabled(true)
-    LineWrapping.update_docview_breaks(view)
-    gitdiff._set_state_for_tests(doc, {
+    LineWrapping.update_textview_breaks(view)
+    gitdiff._set_state_for_tests(buffer, {
       is_in_repo = true,
       line_index = { [1] = "addition" },
       ranges = {},
@@ -166,11 +166,11 @@ test.describe("DocView gutter line numbers", function()
   end)
 
   test.it("maps git overview markers through the visual-row scroll model", function(context)
-    local doc = Doc()
-    doc:insert(1, 1, string.rep("x", 24) .. "\nchanged\nend")
-    doc:clear_undo_redo()
-    context.docs[#context.docs + 1] = doc
-    local view = DocView(doc)
+    local buffer = Buffer()
+    buffer:insert(1, 1, string.rep("x", 24) .. "\nchanged\nend")
+    buffer:clear_undo_redo()
+    context.buffers[#context.buffers + 1] = buffer
+    local view = TextView(buffer)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 320, 200
     local wrapping = config.plugins.linewrapping
@@ -180,9 +180,9 @@ test.describe("DocView gutter line numbers", function()
     wrapping.wrapping_indent = 0
     wrapping.require_tokenization = false
     view:set_wrapping_enabled(true)
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
     config.plugins.gitdiff_highlight.overview = true
-    gitdiff._set_state_for_tests(doc, {
+    gitdiff._set_state_for_tests(buffer, {
       is_in_repo = true,
       line_index = { [2] = "addition" },
       ranges = { { type = "addition", current_start = 2, current_end = 3 } },

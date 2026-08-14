@@ -98,7 +98,7 @@ function anchors.find_block_ids_in_lines(lines, blocks)
   return result
 end
 
-function anchors.index_document(text_or_parse_result)
+function anchors.index_buffer(text_or_parse_result)
   local parsed = type(text_or_parse_result) == "table" and text_or_parse_result
     or parser.parse(text_or_parse_result or "")
   return {

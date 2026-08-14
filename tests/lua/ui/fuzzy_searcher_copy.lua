@@ -65,7 +65,7 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     style.fuzzy_searcher_copy_feedback = probe_color
 
     local picker = fuzzy_searcher.open_static_results("Results", {
-      { kind = "command", label = "doc:copy", command = "doc:copy", match_spans = { { 1, 3 } } },
+      { kind = "command", label = "text:copy", command = "text:copy", match_spans = { { 1, 3 } } },
     })
     test.ok(picker:copy_selected())
     picker:update()

@@ -35,14 +35,14 @@ terminal_config.config_spec = {
     default = "project",
     values = {
       { "Project", "project" },
-      { "Active Document", "document" },
+      { "Active Buffer", "buffer" },
     },
   },
 }
 
-local function document_path()
+local function buffer_path()
   for _, view in ipairs({ core.active_view, core.last_active_view }) do
-    local path = view and view.doc and view.doc.abs_filename
+    local path = view and view.buffer and view.buffer.abs_filename
     if path then return common.dirname(path) end
   end
 end
@@ -112,8 +112,8 @@ local function perf_is_recording()
 end
 
 local function project_path(mode)
-  if mode == "document" then
-    local path = document_path()
+  if mode == "buffer" then
+    local path = buffer_path()
     if path then return path end
   end
   local project = core.root_project and core.root_project()
@@ -836,8 +836,8 @@ command.add(nil, {
   ["terminal:open-project-directory"] = function()
     return M.open({ cwd = project_path("project") }) ~= nil
   end,
-  ["terminal:open-document-directory"] = function()
-    return M.open({ cwd = project_path("document") }) ~= nil
+  ["terminal:open-buffer-directory"] = function()
+    return M.open({ cwd = project_path("buffer") }) ~= nil
   end,
 })
 

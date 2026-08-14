@@ -19,26 +19,26 @@ local function write_file(path, content)
   file:close()
 end
 
-local function remove_doc(doc)
+local function remove_buffer(buffer)
   local root = core.root_panel.root_node
-  for _, view in ipairs(core.get_views_referencing_doc(doc)) do
+  for _, view in ipairs(core.get_views_referencing_buffer(buffer)) do
     local node = root:get_node_for_view(view)
     if node then node:remove_view(root, view) end
   end
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
 end
 
-local function wait_ready(doc, timeout)
+local function wait_ready(buffer, timeout)
   local deadline = system.get_time() + (timeout or 3)
   while system.get_time() < deadline do
-    treesitter.poll_doc(doc)
-    if doc.treesitter and doc.treesitter.status == "ready" then return true end
+    treesitter.poll_buffer(buffer)
+    if buffer.treesitter and buffer.treesitter.status == "ready" then return true end
     coroutine.yield(0.01)
   end
   return false
@@ -78,18 +78,23 @@ test.describe("language navigation", function()
 
   test.after_each(function(context)
     if context.temp_root then
-      for i = #core.docs, 1, -1 do
-        local doc = core.docs[i]
-        if doc.abs_filename and common.path_belongs_to(doc.abs_filename, context.temp_root) then
-          if doc:is_dirty() then doc:clean() end
-          remove_doc(doc)
+      for i = #core.buffers, 1, -1 do
+        local buffer = core.buffers[i]
+        if buffer.abs_filename and common.path_belongs_to(buffer.abs_filename, context.temp_root) then
+          if buffer:is_dirty() then buffer:clean() end
+          remove_buffer(buffer)
         end
       end
       if context.original_cwd then pcall(system.chdir, context.original_cwd) end
       symbol_index.reset_for_tests()
       coroutine.yield(0.05)
       if system.get_file_info(context.temp_root) then
-        local ok, err = common.rm(context.temp_root, true)
+        local ok, err
+        local deadline = system.get_time() + 1
+        repeat
+          ok, err = common.rm(context.temp_root, true)
+          if not ok and system.get_time() < deadline then coroutine.yield(0.05) end
+        until ok or system.get_time() >= deadline
         test.ok(ok, err)
       end
     end
@@ -122,28 +127,28 @@ target :: proc() {}
 
     local view = core.open_file(main_path)
     core.set_active_view(view)
-    test.ok(wait_ready(view.doc))
-    view.doc:insert(5, 1, "// local edit\n")
-    test.ok(view.doc:is_dirty())
+    test.ok(wait_ready(view.buffer))
+    view.buffer:insert(5, 1, "// local edit\n")
+    test.ok(view.buffer:is_dirty())
     view:with_selection_state(function()
-      view.doc:set_selection(4, 5)
+      view.buffer:set_selection(4, 5)
     end)
 
     test.ok(command.perform("language:go-to-declaration", view))
     test.ok(wait_until(function()
       local active = core.active_view
-      return active and active.doc and common.path_equals(active.doc.abs_filename, defs_path)
+      return active and active.buffer and common.path_equals(active.buffer.abs_filename, defs_path)
     end))
 
     local project_file_tabs = 0
     for _, item in ipairs(core.root_panel:get_left_pane().views) do
-      if item.doc and item.doc.abs_filename and common.path_belongs_to(item.doc.abs_filename, context.temp_root) then
+      if item.buffer and item.buffer.abs_filename and common.path_belongs_to(item.buffer.abs_filename, context.temp_root) then
         project_file_tabs = project_file_tabs + 1
       end
     end
     test.equal(project_file_tabs, 2, "dirty source Editor should remain as a dedicated Pane Tab")
-    local doc = core.active_view.doc
-    local line1, col1, line2, col2 = doc:get_selection(true)
+    local buffer = core.active_view.buffer
+    local line1, col1, line2, col2 = buffer:get_selection(true)
     test.equal(line1, 3)
     test.equal(col1, 1)
     test.equal(line2, 3)

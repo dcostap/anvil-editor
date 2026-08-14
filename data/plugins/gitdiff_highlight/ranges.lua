@@ -5,7 +5,7 @@
 --   current_start <= line < current_end
 --   base_start    <= line < base_end
 -- Deletions have current_start == current_end and are anchored at that current
--- document position.
+-- buffer position.
 local ranges = {}
 
 local default_options = {
@@ -255,12 +255,12 @@ function ranges.build(base_lines, current_lines, options)
   }
 end
 
----Split text to match core.doc's loaded line representation as closely as the
----plugin can without executing Doc:load(): CRLF is normalized to LF; every
+---Split text to match core.buffer's loaded line representation as closely as the
+---plugin can without executing Buffer:load(): CRLF is normalized to LF; every
 ---stored line has a trailing "\n"; empty text becomes {"\n"}.
 ---@param text string
 ---@return string[]
-function ranges.split_doc_lines(text)
+function ranges.split_buffer_lines(text)
   text = text or ""
   text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
   local out = {}
@@ -272,8 +272,8 @@ function ranges.split_doc_lines(text)
       pos = nl + 1
     else
       if pos <= #text then
-        -- Match Doc:load(): a file without a final newline is still stored as
-        -- a newline-terminated document line in memory.
+        -- Match Buffer:load(): a file without a final newline is still stored as
+        -- a newline-terminated buffer line in memory.
         out[#out + 1] = text:sub(pos) .. "\n"
       end
       break

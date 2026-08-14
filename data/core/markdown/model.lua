@@ -1,6 +1,6 @@
 local common = require "core.common"
 local core = require "core"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local queries = require "core.markdown.queries"
 local worker_pool = require "core.worker_pool"
 
@@ -8,7 +8,7 @@ local model = {}
 local Model = {}
 Model.__index = Model
 
-local models_by_doc = setmetatable({}, { __mode = "k" })
+local models_by_buffer = setmetatable({}, { __mode = "k" })
 local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
 local DEBOUNCE_SECONDS = 0.015
 local METADATA_LISTENER_ID = "markdown-semantic-model"
@@ -27,33 +27,33 @@ local function extension(path)
   return value and value:lower() or nil
 end
 
-function model.is_markdown_doc(doc)
-  if not doc then return false end
-  if MARKDOWN_EXTENSIONS[extension(doc.abs_filename or doc.filename or "") or ""] then return true end
-  local syntax_name = doc.syntax and doc.syntax.name
+function model.is_markdown_buffer(buffer)
+  if not buffer then return false end
+  if MARKDOWN_EXTENSIONS[extension(buffer.abs_filename or buffer.filename or "") or ""] then return true end
+  local syntax_name = buffer.syntax and buffer.syntax.name
   return type(syntax_name) == "string" and syntax_name:lower():find("markdown", 1, true) ~= nil
 end
 
-local function weak_doc(doc)
-  return setmetatable({ doc }, { __mode = "v" })
+local function weak_buffer(buffer)
+  return setmetatable({ buffer }, { __mode = "v" })
 end
 
-local function metadata_signature(doc)
-  local syntax_name = doc and doc.syntax and doc.syntax.name or ""
+local function metadata_signature(buffer)
+  local syntax_name = buffer and buffer.syntax and buffer.syntax.name or ""
   return table.concat({
-    tostring(doc and doc.filename or ""),
-    tostring(doc and doc.abs_filename or ""),
+    tostring(buffer and buffer.filename or ""),
+    tostring(buffer and buffer.abs_filename or ""),
     tostring(syntax_name),
   }, "\0")
 end
 
-local function source_text(doc)
-  return table.concat(doc and doc.lines or {})
+local function source_text(buffer)
+  return table.concat(buffer and buffer.lines or {})
 end
 
-function Model:new(doc)
+function Model:new(buffer)
   return setmetatable({
-    doc_ref = weak_doc(doc),
+    buffer_ref = weak_buffer(buffer),
     status = "cold",
     reason = "not parsed",
     generation = 0,
@@ -92,8 +92,8 @@ function Model:new(doc)
   }, self)
 end
 
-function Model:doc()
-  return self.doc_ref[1]
+function Model:buffer()
+  return self.buffer_ref[1]
 end
 
 function Model:add_listener(id, fn)
@@ -137,35 +137,35 @@ function Model:notify(reason)
 end
 
 function Model:is_current(revision, signature, generation)
-  local doc = self:doc()
-  return doc ~= nil
+  local buffer = self:buffer()
+  return buffer ~= nil
     and self.status ~= "closed"
     and self.status ~= "detached"
-    and models_by_doc[doc] == self
-    and model.is_markdown_doc(doc)
-    and doc.text_revision == revision
-    and metadata_signature(doc) == signature
+    and models_by_buffer[buffer] == self
+    and model.is_markdown_buffer(buffer)
+    and buffer.text_revision == revision
+    and metadata_signature(buffer) == signature
     and self.parse_generation == generation
 end
 
 function Model:on_metadata(event)
-  local doc = self:doc()
-  if not doc then return end
+  local buffer = self:buffer()
+  if not buffer then return end
   if event and event.kind == "close" then
-    self:close("doc-close")
-    models_by_doc[doc] = nil
+    self:close("buffer-close")
+    models_by_buffer[buffer] = nil
     return
   end
   self.debounce_serial = self.debounce_serial + 1
-  if not model.is_markdown_doc(doc) then
+  if not model.is_markdown_buffer(buffer) then
     self:cancel_request("metadata-detach")
     if self.result then self.result:close() end
     self.result = nil
     self.status = "detached"
-    self.reason = "Document is not Markdown"
+    self.reason = "Buffer is not Markdown"
     self.published_metadata = nil
     self:notify("detached")
-    core.log_quiet("Markdown model detached after Document metadata change")
+    core.log_quiet("Markdown model detached after Buffer metadata change")
     return
   end
   if self.status == "detached" then
@@ -269,11 +269,11 @@ function Model:publish(result, revision, signature, generation, changed_range)
     perf.frame_add("markdown_model_publication_state_ms", state_ms)
     perf.frame_add("markdown_model_publication_notify_ms", notify_ms)
     perf.frame_add("markdown_model_publication_listener_calls", notify_stats.count)
-    local doc = self:doc()
+    local buffer = self:buffer()
     perf.record_markdown_model_publication({
       time = system.get_time(),
       elapsed_ms = total_ms,
-      path = doc and (doc.abs_filename or doc.filename or doc:get_name()) or "",
+      path = buffer and (buffer.abs_filename or buffer.filename or buffer:get_name()) or "",
       bytes = summary.byte_len or 0,
       lines = summary.line_count or 0,
       generation = generation,
@@ -298,13 +298,13 @@ end
 
 function Model:submit(reason)
   if self.status == "closed" then return false, "closed" end
-  local doc = self:doc()
-  if not doc or not model.is_markdown_doc(doc) then
+  local buffer = self:buffer()
+  if not buffer or not model.is_markdown_buffer(buffer) then
     self:cancel_request("not-markdown")
     if self.result then self.result:close() end
     self.result = nil
     self.status = "detached"
-    self.reason = "Document is not Markdown"
+    self.reason = "Buffer is not Markdown"
     self:notify("detached")
     return false
   end
@@ -312,9 +312,9 @@ function Model:submit(reason)
   self:cancel_request("superseded")
   self.parse_generation = self.parse_generation + 1
   local generation = self.parse_generation
-  local revision = doc.text_revision
-  local signature = metadata_signature(doc)
-  local text = source_text(doc)
+  local revision = buffer.text_revision
+  local signature = metadata_signature(buffer)
+  local text = source_text(buffer)
   local changed_range = self.pending_changed_range
   if self.active_changed_range then
     changed_range = changed_range or {}
@@ -335,7 +335,7 @@ function Model:submit(reason)
   self.reason = reason or "parse requested"
   self.diagnostics.requests = self.diagnostics.requests + 1
   self.diagnostics.bytes_submitted = self.diagnostics.bytes_submitted + #text
-  self.diagnostics.lines_submitted = self.diagnostics.lines_submitted + #doc.lines
+  self.diagnostics.lines_submitted = self.diagnostics.lines_submitted + #buffer.lines
 
   local pool = worker_pool.system()
   local handle, err = pool:submit({
@@ -424,9 +424,9 @@ function Model:schedule(reason, transaction)
 end
 
 function Model:can_render_published_line(line)
-  local doc = self:doc()
-  if not (doc and self.result and self.published_metadata == metadata_signature(doc)) then return false end
-  if self.status == "ready" then return self.published_revision == doc.text_revision end
+  local buffer = self:buffer()
+  if not (buffer and self.result and self.published_metadata == metadata_signature(buffer)) then return false end
+  if self.status == "ready" then return self.published_revision == buffer.text_revision end
   if self.status ~= "pending" then return false end
   local pending, active = self.pending_changed_range, self.active_changed_range
   if not (pending or active) then return false end
@@ -447,11 +447,11 @@ function Model:can_render_published_line(line)
 end
 
 function Model:ensure()
-  local doc = self:doc()
-  if not doc then return false end
-  local signature = metadata_signature(doc)
+  local buffer = self:buffer()
+  if not buffer then return false end
+  local signature = metadata_signature(buffer)
   if self.status == "ready"
-    and self.published_revision == doc.text_revision
+    and self.published_revision == buffer.text_revision
     and self.published_metadata == signature
   then
     return true
@@ -612,8 +612,8 @@ function Model:fenced_node_for_line(line, opts)
 end
 
 function Model:close(reason)
-  local doc = self:doc()
-  if doc and doc.remove_metadata_listener then doc:remove_metadata_listener(METADATA_LISTENER_ID) end
+  local buffer = self:buffer()
+  if buffer and buffer.remove_metadata_listener then buffer:remove_metadata_listener(METADATA_LISTENER_ID) end
   self:cancel_request(reason or "close")
   self.debounce_serial = self.debounce_serial + 1
   self.parse_generation = self.parse_generation + 1
@@ -624,16 +624,16 @@ function Model:close(reason)
   self.reason = reason or "closed"
 end
 
-function model.get(doc, opts)
+function model.get(buffer, opts)
   opts = opts or {}
-  if not doc or not model.is_markdown_doc(doc) then return nil end
-  local current = models_by_doc[doc]
+  if not buffer or not model.is_markdown_buffer(buffer) then return nil end
+  local current = models_by_buffer[buffer]
   if not current then
-    current = Model:new(doc)
-    models_by_doc[doc] = current
-    if doc.add_metadata_listener then
-      doc:add_metadata_listener(METADATA_LISTENER_ID, function(_, event)
-        if models_by_doc[doc] == current then current:on_metadata(event) end
+    current = Model:new(buffer)
+    models_by_buffer[buffer] = current
+    if buffer.add_metadata_listener then
+      buffer:add_metadata_listener(METADATA_LISTENER_ID, function(_, event)
+        if models_by_buffer[buffer] == current then current:on_metadata(event) end
       end)
     end
   end
@@ -641,20 +641,20 @@ function model.get(doc, opts)
   return current
 end
 
-function model.peek(doc)
-  return models_by_doc[doc]
+function model.peek(buffer)
+  return models_by_buffer[buffer]
 end
 
-function model.close(doc, reason)
-  local current = models_by_doc[doc]
+function model.close(buffer, reason)
+  local current = models_by_buffer[buffer]
   if not current then return false end
   current:close(reason)
-  models_by_doc[doc] = nil
+  models_by_buffer[buffer] = nil
   return true
 end
 
-Doc.register_text_transaction_handler("markdown-semantic-model", function(doc, transaction)
-  local current = models_by_doc[doc]
+Buffer.register_text_transaction_handler("markdown-semantic-model", function(buffer, transaction)
+  local current = models_by_buffer[buffer]
   if current and transaction and transaction.changed then
     current:schedule("text-change", transaction)
   end

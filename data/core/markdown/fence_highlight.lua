@@ -1,5 +1,5 @@
 local core = require "core"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local syntax = require "core.syntax"
 local tokenizer = require "core.tokenizer"
 
@@ -7,7 +7,7 @@ local fence_highlight = {}
 local Service = {}
 Service.__index = Service
 
-local services_by_doc = setmetatable({}, { __mode = "k" })
+local services_by_buffer = setmetatable({}, { __mode = "k" })
 local METADATA_LISTENER_ID = "markdown-fence-highlight"
 local BATCH_LINES = 24
 local CHECKPOINT_INTERVAL = 64
@@ -42,9 +42,9 @@ local function closes_fence(text, marker, count)
   return run ~= nil and #indent <= 3 and #run >= count and rest ~= nil
 end
 
-local function range_text(doc, range)
-  if not (doc and range and range.line1 == range.line2) then return "" end
-  local line = without_newline(doc.lines[range.line1])
+local function range_text(buffer, range)
+  if not (buffer and range and range.line1 == range.line2) then return "" end
+  local line = without_newline(buffer.lines[range.line1])
   return line:sub(range.col1, range.col2 - 1)
 end
 
@@ -66,9 +66,9 @@ local function copy_table(source)
   return copy
 end
 
-function Service:new(doc)
+function Service:new(buffer)
   local instance = setmetatable({
-    doc_ref = weak_value(doc),
+    buffer_ref = weak_value(buffer),
     closed = false,
     generation = 1,
     model = nil,
@@ -115,17 +115,17 @@ function Service:new(doc)
   tokenizer.add_backend_listener(instance, function(generation, _, reason)
     if not instance.closed then instance:on_tokenizer_backend_changed(generation, reason) end
   end)
-  if doc.add_metadata_listener then
-    doc:add_metadata_listener(METADATA_LISTENER_ID, function(_, event)
-      if event and event.kind == "close" then instance:close("doc-close") end
+  if buffer.add_metadata_listener then
+    buffer:add_metadata_listener(METADATA_LISTENER_ID, function(_, event)
+      if event and event.kind == "close" then instance:close("buffer-close") end
     end)
   end
-  core.log_quiet("Markdown fence highlight service created for %s", doc:get_name())
+  core.log_quiet("Markdown fence highlight service created for %s", buffer:get_name())
   return instance
 end
 
-function Service:doc()
-  return self.doc_ref[1]
+function Service:buffer()
+  return self.buffer_ref[1]
 end
 
 function Service:add_listener(id, callback)
@@ -187,31 +187,31 @@ function Service:close(reason)
   if self.closed then return false end
   self.closed = true
   self.generation = self.generation + 1
-  local doc = self:doc()
-  if doc and doc.remove_metadata_listener then doc:remove_metadata_listener(METADATA_LISTENER_ID) end
+  local buffer = self:buffer()
+  if buffer and buffer.remove_metadata_listener then buffer:remove_metadata_listener(METADATA_LISTENER_ID) end
   syntax.remove_registry_listener(self)
   tokenizer.remove_backend_listener(self)
   self:release_heavy_caches(reason or "close")
   self.listeners = {}
   self.model = nil
-  if doc and services_by_doc[doc] == self then services_by_doc[doc] = nil end
+  if buffer and services_by_buffer[buffer] == self then services_by_buffer[buffer] = nil end
   core.log_quiet("Markdown fence highlight service closed: %s", reason or "close")
   return true
 end
 
 function Service:reconcile(model)
   if self.closed then return false end
-  local doc = self:doc()
+  local buffer = self:buffer()
   if self.awaiting_reload_revision then
-    if not (doc and model and model.status == "ready"
-      and model.published_revision == doc.text_revision
-      and doc.text_revision == self.awaiting_reload_revision)
+    if not (buffer and model and model.status == "ready"
+      and model.published_revision == buffer.text_revision
+      and buffer.text_revision == self.awaiting_reload_revision)
     then
       return false
     end
     core.log_quiet(
       "Markdown fence service adopted reload revision %d generation %s",
-      doc.text_revision, tostring(model.generation)
+      buffer.text_revision, tostring(model.generation)
     )
     self.awaiting_reload_revision = nil
   end
@@ -421,18 +421,18 @@ function Service:cancel_queued_work(reason)
 end
 
 function Service:reset_for_full_snapshot(transaction)
-  local doc = self:doc()
+  local buffer = self:buffer()
   local previous_generation = self.generation
   self:release_heavy_caches("full-snapshot")
   -- A reload is an epoch boundary even when no render-token entries happen to
   -- be resident. Advancing the generation unconditionally prevents an old
-  -- worker from publishing into the new Document revision.
+  -- worker from publishing into the new Buffer revision.
   if self.generation == previous_generation then
     self.generation = self.generation + 1
   end
   self.model = nil
   self.model_generation = nil
-  self.awaiting_reload_revision = doc and doc.text_revision or nil
+  self.awaiting_reload_revision = buffer and buffer.text_revision or nil
   self.last_transaction_line1 = nil
   self.last_transaction_line2 = nil
   core.log_quiet(
@@ -483,24 +483,24 @@ function Service:invalidate_block_suffix(block, relative)
 end
 
 ---Invalidates tokenizer-state-dependent cached suffixes immediately after a
----Document transaction. Repeated calls for the same transaction are harmless.
+---Buffer transaction. Repeated calls for the same transaction are harmless.
 function Service:on_text_transaction(transaction)
   if self.closed or not (transaction and transaction.changed) then return nil end
   if self.last_transaction == transaction then
     return self.last_transaction_line1, self.last_transaction_line2
   end
   self.last_transaction = transaction
-  local doc = self:doc()
-  if not doc then return nil end
+  local buffer = self:buffer()
+  if not buffer then return nil end
   if transaction.full_snapshot then
     self:reset_for_full_snapshot(transaction)
     return nil
   end
   if self.awaiting_reload_revision then
     -- Edits may arrive before the replacement semantic parse publishes. Keep
-    -- the epoch pinned to the newest Document revision so that publication of
+    -- the epoch pinned to the newest Buffer revision so that publication of
     -- that revision can re-enable fence membership.
-    self.awaiting_reload_revision = doc.text_revision
+    self.awaiting_reload_revision = buffer.text_revision
   end
   local invalid_line1, invalid_line2
   local affected = false
@@ -557,9 +557,9 @@ function Service:on_text_transaction(transaction)
     block.body_line1 = map_old_line(old_body_line1, "start")
     block.body_line2 = map_old_line(old_body_line2, "end")
     block.closing_line = old_closing and map_old_line(old_closing, "end") or nil
-    -- Even an edit entirely before this block changes the Document revision.
+    -- Even an edit entirely before this block changes the Buffer revision.
     -- Its mapped coordinates belong to that new revision immediately.
-    block.source_revision = doc.text_revision
+    block.source_revision = buffer.text_revision
 
     if intersects then
       affected = true
@@ -585,7 +585,7 @@ function Service:on_text_transaction(transaction)
         invalid_line2 = math.max(invalid_line2 or block.body_line2, block.body_line2)
       end
     else
-      block.source_revision = doc.text_revision
+      block.source_revision = buffer.text_revision
     end
   end
 
@@ -605,24 +605,24 @@ function Service:complete_node(node, line)
 end
 
 function Service:describe_block(node, line)
-  local doc = self:doc()
-  if not (doc and node and node.type == "code_fenced") then return nil, "missing" end
+  local buffer = self:buffer()
+  if not (buffer and node and node.type == "code_fenced") then return nil, "missing" end
   if self.awaiting_reload_revision then return nil, "reload-pending" end
   node = self:complete_node(node, line)
   if not node then return nil, "incomplete" end
 
   local opening_line = node.source.line1
   local last_line = effective_line2(node)
-  local opening = without_newline(doc.lines[opening_line])
+  local opening = without_newline(buffer.lines[opening_line])
   local marker, marker_count = fence_marker(opening)
   if not marker then return nil, "incomplete" end
   local has_closing = last_line > opening_line
-    and closes_fence(without_newline(doc.lines[last_line]), marker, marker_count)
+    and closes_fence(without_newline(buffer.lines[last_line]), marker, marker_count)
   local body_line1 = opening_line + 1
   local body_line2 = has_closing and last_line - 1 or last_line
   if body_line2 < body_line1 then body_line2 = body_line1 - 1 end
 
-  local info = range_text(doc, node.attributes and node.attributes.code_info)
+  local info = range_text(buffer, node.attributes and node.attributes.code_info)
   local resolved, metadata = syntax.resolve_language(info, { source = "markdown-fence" })
   local selected = resolved or syntax.plain_text_syntax
   local fingerprint = table.concat({
@@ -637,7 +637,7 @@ function Service:describe_block(node, line)
     metadata = metadata,
     selected_syntax = selected,
     syntax_identity = resolved,
-    source_revision = doc.text_revision,
+    source_revision = buffer.text_revision,
     opening_line = opening_line,
     closing_line = has_closing and last_line or nil,
     body_line1 = body_line1,
@@ -773,12 +773,12 @@ function Service:request(node, line, priority)
   if line < block.body_line1 or line > block.body_line2 then return nil, "delimiter" end
   local relative = line - block.body_line1 + 1
   local entry = block.lines[relative]
-  local doc = self:doc()
-  local source = doc and doc:get_utf8_line(line)
+  local buffer = self:buffer()
+  local source = buffer and buffer:get_utf8_line(line)
   if block.uncacheable[relative] == source then return nil, "oversized" end
   if block.uncacheable[relative] then block.uncacheable[relative] = nil end
   if entry and entry.complete and entry.text == source
-    and block.source_revision == (doc and doc.text_revision)
+    and block.source_revision == (buffer and buffer.text_revision)
     and block.tokenizer_generation == self.tokenizer_generation
     and not block.structurally_unsafe
     and not (block.unsafe_from and relative >= block.unsafe_from)
@@ -809,7 +809,7 @@ function Service:peek_line_tokens(node, line)
   if self.closed or not node then return nil end
   local block = self.blocks[node.id]
   if not block or line < block.body_line1 or line > block.body_line2 then return nil end
-  if block.source_revision ~= (self:doc() and self:doc().text_revision)
+  if block.source_revision ~= (self:buffer() and self:buffer().text_revision)
     or block.tokenizer_generation ~= self.tokenizer_generation
     or block.structurally_unsafe
   then
@@ -818,8 +818,8 @@ function Service:peek_line_tokens(node, line)
   local relative = line - block.body_line1 + 1
   if block.unsafe_from and relative >= block.unsafe_from then return nil end
   local entry = block.lines[relative]
-  local doc = self:doc()
-  if entry and entry.complete and doc and entry.text == doc:get_utf8_line(line) then
+  local buffer = self:buffer()
+  if entry and entry.complete and buffer and entry.text == buffer:get_utf8_line(line) then
     return entry
   end
 end
@@ -828,16 +828,16 @@ function Service:peek_line_tokens_at_line(line)
   if self.closed then return nil end
   for _, block in pairs(self.blocks) do
     if line >= block.body_line1 and line <= block.body_line2
-      and block.source_revision == (self:doc() and self:doc().text_revision)
+      and block.source_revision == (self:buffer() and self:buffer().text_revision)
       and block.tokenizer_generation == self.tokenizer_generation
       and not block.structurally_unsafe
     then
       local relative = line - block.body_line1 + 1
       if not block.unsafe_from or relative < block.unsafe_from then
         local entry = block.lines[relative]
-        local doc = self:doc()
-        if entry and entry.complete and doc
-          and entry.text == doc:get_utf8_line(line)
+        local buffer = self:buffer()
+        if entry and entry.complete and buffer
+          and entry.text == buffer:get_utf8_line(line)
         then
           return entry
         end
@@ -854,10 +854,10 @@ function Service:line_generation(node, line)
 end
 
 function Service:is_line_unsafe(line)
-  local doc = self:doc()
+  local buffer = self:buffer()
   for _, block in pairs(self.blocks) do
     if block.service_generation == self.generation
-      and block.source_revision == (doc and doc.text_revision)
+      and block.source_revision == (buffer and buffer.text_revision)
       and line >= block.body_line1 and line <= block.body_line2
     then
       local relative = line - block.body_line1 + 1
@@ -873,11 +873,11 @@ end
 ---authoritative presentation membership.
 function Service:contains_line(line)
   if self.awaiting_reload_revision then return false end
-  local doc = self:doc()
+  local buffer = self:buffer()
   for _, block in pairs(self.blocks) do
     local line2 = block.closing_line or block.body_line2
     if block.service_generation == self.generation
-      and block.source_revision == (doc and doc.text_revision)
+      and block.source_revision == (buffer and buffer.text_revision)
       and not block.structurally_unsafe
       and line >= block.opening_line and line <= line2
     then
@@ -889,10 +889,10 @@ end
 
 function Service:is_opening_line(line)
   if self.awaiting_reload_revision then return false end
-  local doc = self:doc()
+  local buffer = self:buffer()
   for _, block in pairs(self.blocks) do
     if block.service_generation == self.generation
-      and block.source_revision == (doc and doc.text_revision)
+      and block.source_revision == (buffer and buffer.text_revision)
       and not block.structurally_unsafe
       and line == block.opening_line
     then
@@ -923,11 +923,11 @@ function Service:next_queued_block()
 end
 
 function Service:tokenize_one(block)
-  local doc = self:doc()
-  if not doc or self.closed or self.blocks[block.id] ~= block
+  local buffer = self:buffer()
+  if not buffer or self.closed or self.blocks[block.id] ~= block
     or block.service_generation ~= self.generation
     or block.tokenizer_generation ~= self.tokenizer_generation
-    or block.source_revision ~= doc.text_revision
+    or block.source_revision ~= buffer.text_revision
   then
     self.diagnostics.stale_publications = self.diagnostics.stale_publications + 1
     return false, "stale"
@@ -936,7 +936,7 @@ function Service:tokenize_one(block)
   if relative > block.wanted_relative then return false, "complete" end
   local line = block.body_line1 + relative - 1
   if line > block.body_line2 then return false, "complete" end
-  local text = doc:get_utf8_line(line)
+  local text = buffer:get_utf8_line(line)
   if not text then return false, "stale" end
   local init_state = block.current_state
   local current = block.in_progress
@@ -1004,7 +1004,7 @@ function Service:tokenize_one(block)
     while block.old_suffix[reused_to + 1] do
       local candidate = block.old_suffix[reused_to + 1]
       local candidate_line = block.body_line1 + reused_to
-      if candidate.text ~= doc:get_utf8_line(candidate_line)
+      if candidate.text ~= buffer:get_utf8_line(candidate_line)
         or candidate.init_state ~= previous_state
       then
         break
@@ -1098,27 +1098,27 @@ function Service:get_diagnostics()
   return copy
 end
 
-function fence_highlight.get(doc)
-  if not doc then return nil end
-  local service = services_by_doc[doc]
+function fence_highlight.get(buffer)
+  if not buffer then return nil end
+  local service = services_by_buffer[buffer]
   if not service or service.closed then
-    service = Service:new(doc)
-    services_by_doc[doc] = service
+    service = Service:new(buffer)
+    services_by_buffer[buffer] = service
   end
   return service
 end
 
-function fence_highlight.peek(doc)
-  return services_by_doc[doc]
+function fence_highlight.peek(buffer)
+  return services_by_buffer[buffer]
 end
 
-function fence_highlight.close(doc, reason)
-  local service = services_by_doc[doc]
+function fence_highlight.close(buffer, reason)
+  local service = services_by_buffer[buffer]
   return service and service:close(reason) or false
 end
 
-Doc.register_text_transaction_handler("markdown-fence-highlight", function(doc, transaction)
-  local service = services_by_doc[doc]
+Buffer.register_text_transaction_handler("markdown-fence-highlight", function(buffer, transaction)
+  local service = services_by_buffer[buffer]
   if service then service:on_text_transaction(transaction) end
 end)
 

@@ -17,7 +17,7 @@
 
 typedef struct AnvilTSParseJob AnvilTSParseJob;
 
-struct AnvilTSDocumentState {
+struct AnvilTSBufferState {
   uint64_t id;
   int refcount;
   const AnvilTSLanguage *language;
@@ -37,7 +37,7 @@ struct AnvilTSParseJob {
   AnvilTSParseJob *completed_next;
   uint64_t id;
   uint64_t generation;
-  AnvilTSDocumentState *state;
+  AnvilTSBufferState *state;
   const AnvilTSLanguage *language;
   AnvilTSSnapshot *snapshot;
   SDL_AtomicInt cancel;
@@ -85,7 +85,7 @@ static void service_set_error(char **error, const char *message) {
   *error = service_strdup(message);
 }
 
-static void state_set_reason_locked(AnvilTSDocumentState *state, const char *reason) {
+static void state_set_reason_locked(AnvilTSBufferState *state, const char *reason) {
   free(state->reason);
   state->reason = service_strdup(reason);
 }
@@ -277,14 +277,14 @@ static int service_worker_main(void *userdata) {
   return 0;
 }
 
-AnvilTSDocumentState *anvil_ts_document_state_new(
+AnvilTSBufferState *anvil_ts_buffer_state_new(
   const AnvilTSLanguage *language,
   uint32_t parse_timeout_ms
 ) {
   if (!language || !anvil_ts_language_is_compatible(language)) return NULL;
   if (!service_ensure_initialized()) return NULL;
   if (!service_lock()) return NULL;
-  AnvilTSDocumentState *state = (AnvilTSDocumentState *) calloc(1, sizeof(*state));
+  AnvilTSBufferState *state = (AnvilTSBufferState *) calloc(1, sizeof(*state));
   if (!state) {
     service_unlock();
     return NULL;
@@ -298,13 +298,13 @@ AnvilTSDocumentState *anvil_ts_document_state_new(
   return state;
 }
 
-void anvil_ts_document_state_retain(AnvilTSDocumentState *state) {
+void anvil_ts_buffer_state_retain(AnvilTSBufferState *state) {
   if (!state || !service_ensure_initialized() || !service_lock()) return;
   state->refcount++;
   service_unlock();
 }
 
-static void state_destroy_unlocked(AnvilTSDocumentState *state) {
+static void state_destroy_unlocked(AnvilTSBufferState *state) {
   if (!state) return;
   if (state->current_tree) ts_tree_delete(state->current_tree);
   anvil_ts_snapshot_free(state->current_snapshot);
@@ -312,7 +312,7 @@ static void state_destroy_unlocked(AnvilTSDocumentState *state) {
   free(state);
 }
 
-void anvil_ts_document_state_release(AnvilTSDocumentState *state) {
+void anvil_ts_buffer_state_release(AnvilTSBufferState *state) {
   if (!state) return;
   if (!service_ensure_initialized() || !service_lock()) return;
   state->refcount--;
@@ -321,11 +321,11 @@ void anvil_ts_document_state_release(AnvilTSDocumentState *state) {
   if (destroy) state_destroy_unlocked(state);
 }
 
-const char *anvil_ts_document_state_language_id(const AnvilTSDocumentState *state) {
+const char *anvil_ts_buffer_state_language_id(const AnvilTSBufferState *state) {
   return state && state->language ? state->language->id : NULL;
 }
 
-const char *anvil_ts_document_state_status_string(AnvilTSStateStatus status) {
+const char *anvil_ts_buffer_state_status_string(AnvilTSStateStatus status) {
   switch (status) {
     case ANVIL_TS_STATE_IDLE: return "idle";
     case ANVIL_TS_STATE_QUEUED: return "queued";
@@ -338,15 +338,15 @@ const char *anvil_ts_document_state_status_string(AnvilTSStateStatus status) {
   }
 }
 
-AnvilTSStateStatus anvil_ts_document_state_status(const AnvilTSDocumentState *state) {
+AnvilTSStateStatus anvil_ts_buffer_state_status(const AnvilTSBufferState *state) {
   if (!state || !service_ensure_initialized() || !service_lock()) return ANVIL_TS_STATE_FAILED;
   AnvilTSStateStatus status = state->status;
   service_unlock();
   return status;
 }
 
-bool anvil_ts_document_state_status_snapshot(
-  const AnvilTSDocumentState *state,
+bool anvil_ts_buffer_state_status_snapshot(
+  const AnvilTSBufferState *state,
   AnvilTSStateStatus *status,
   char **reason
 ) {
@@ -364,21 +364,21 @@ bool anvil_ts_document_state_status_snapshot(
   return true;
 }
 
-uint64_t anvil_ts_document_state_generation(const AnvilTSDocumentState *state) {
+uint64_t anvil_ts_buffer_state_generation(const AnvilTSBufferState *state) {
   if (!state || !service_ensure_initialized() || !service_lock()) return 0;
   uint64_t generation = state->generation;
   service_unlock();
   return generation;
 }
 
-uint64_t anvil_ts_document_state_tree_generation(const AnvilTSDocumentState *state) {
+uint64_t anvil_ts_buffer_state_tree_generation(const AnvilTSBufferState *state) {
   if (!state || !service_ensure_initialized() || !service_lock()) return 0;
   uint64_t generation = state->tree_generation;
   service_unlock();
   return generation;
 }
 
-bool anvil_ts_document_state_has_tree(const AnvilTSDocumentState *state) {
+bool anvil_ts_buffer_state_has_tree(const AnvilTSBufferState *state) {
   if (!state || !service_ensure_initialized() || !service_lock()) return false;
   bool has_tree = state->current_tree != NULL;
   service_unlock();
@@ -724,8 +724,8 @@ bool anvil_ts_query_captures_in_tree(
   return ok;
 }
 
-bool anvil_ts_document_state_query_captures(
-  AnvilTSDocumentState *state,
+bool anvil_ts_buffer_state_query_captures(
+  AnvilTSBufferState *state,
   const TSQuery *query,
   uint32_t byte_start,
   uint32_t byte_end,
@@ -773,8 +773,8 @@ bool anvil_ts_document_state_query_captures(
   return ok;
 }
 
-bool anvil_ts_document_state_node_ranges(
-  AnvilTSDocumentState *state,
+bool anvil_ts_buffer_state_node_ranges(
+  AnvilTSBufferState *state,
   uint32_t byte_start,
   uint32_t byte_end,
   bool named_only,
@@ -835,8 +835,8 @@ bool anvil_ts_document_state_node_ranges(
   return true;
 }
 
-static bool document_state_schedule_parse_internal(
-  AnvilTSDocumentState *state,
+static bool buffer_state_schedule_parse_internal(
+  AnvilTSBufferState *state,
   AnvilTSSnapshot *snapshot,
   uint64_t generation,
   const AnvilTSEdit *edit,
@@ -900,23 +900,23 @@ static bool document_state_schedule_parse_internal(
   return true;
 }
 
-bool anvil_ts_document_state_schedule_parse(
-  AnvilTSDocumentState *state,
+bool anvil_ts_buffer_state_schedule_parse(
+  AnvilTSBufferState *state,
   AnvilTSSnapshot *snapshot,
   uint64_t generation,
   char **error
 ) {
-  return document_state_schedule_parse_internal(state, snapshot, generation, NULL, error);
+  return buffer_state_schedule_parse_internal(state, snapshot, generation, NULL, error);
 }
 
-bool anvil_ts_document_state_schedule_parse_with_edit(
-  AnvilTSDocumentState *state,
+bool anvil_ts_buffer_state_schedule_parse_with_edit(
+  AnvilTSBufferState *state,
   AnvilTSSnapshot *snapshot,
   uint64_t generation,
   const AnvilTSEdit *edit,
   char **error
 ) {
-  return document_state_schedule_parse_internal(state, snapshot, generation, edit, error);
+  return buffer_state_schedule_parse_internal(state, snapshot, generation, edit, error);
 }
 
 static void job_detach_state_locked(AnvilTSParseJob *job) {
@@ -930,14 +930,14 @@ static void job_free(AnvilTSParseJob *job) {
   if (job->result_tree) ts_tree_delete(job->result_tree);
   anvil_ts_snapshot_free(job->snapshot);
   free(job->error);
-  AnvilTSDocumentState *state = job->state;
+  AnvilTSBufferState *state = job->state;
   job->state = NULL;
   free(job);
-  anvil_ts_document_state_release(state);
+  anvil_ts_buffer_state_release(state);
 }
 
-AnvilTSPollResult anvil_ts_document_state_poll(
-  AnvilTSDocumentState *state,
+AnvilTSPollResult anvil_ts_buffer_state_poll(
+  AnvilTSBufferState *state,
   uint64_t current_generation
 ) {
   AnvilTSPollResult result;
@@ -1017,7 +1017,7 @@ AnvilTSPollResult anvil_ts_document_state_poll(
   return result;
 }
 
-void anvil_ts_document_state_cancel(AnvilTSDocumentState *state) {
+void anvil_ts_buffer_state_cancel(AnvilTSBufferState *state) {
   if (!state || !service_ensure_initialized() || !service_lock()) return;
   if (state->active_job) SDL_SetAtomicInt(&state->active_job->cancel, 1);
   if (!state->closed) {
@@ -1027,7 +1027,7 @@ void anvil_ts_document_state_cancel(AnvilTSDocumentState *state) {
   service_unlock();
 }
 
-void anvil_ts_document_state_close(AnvilTSDocumentState *state) {
+void anvil_ts_buffer_state_close(AnvilTSBufferState *state) {
   if (!state || !service_ensure_initialized() || !service_lock()) return;
   if (state->closed) {
     service_unlock();

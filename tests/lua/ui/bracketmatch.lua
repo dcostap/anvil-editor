@@ -9,43 +9,43 @@ local worker_pool = require "core.worker_pool"
 
 require "plugins.bracketmatch"
 
-local function remove_doc(doc)
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+local function remove_buffer(buffer)
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
 end
 
 local function open_brace_view(context)
-  local doc = core.open_doc()
-  doc:text_input("{\n}")
-  doc:set_selection(1, 1)
-  local view = core.root_panel:open_doc(doc)
+  local buffer = core.open_buffer()
+  buffer:text_input("{\n}")
+  buffer:set_selection(1, 1)
+  local view = core.root_panel:open_buffer(buffer)
   core.set_active_view(view)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 320, 240
   view.scroll.x, view.scroll.to.x = 0, 0
   view.scroll.y, view.scroll.to.y = 0, 0
   view:update()
-  context.view, context.doc = view, doc
-  return view, doc
+  context.view, context.buffer = view, buffer
+  return view, buffer
 end
 
 local function open_text_view(context, text, col)
-  local doc = core.open_doc()
-  doc:text_input(text)
-  doc:set_selection(1, col)
-  local view = core.root_panel:open_doc(doc)
+  local buffer = core.open_buffer()
+  buffer:text_input(text)
+  buffer:set_selection(1, col)
+  local view = core.root_panel:open_buffer(buffer)
   core.set_active_view(view)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 320, 240
   view.scroll.x, view.scroll.to.x = 0, 0
   view.scroll.y, view.scroll.to.y = 0, 0
-  context.view, context.doc = view, doc
-  return view, doc
+  context.view, context.buffer = view, buffer
+  return view, buffer
 end
 
 local function capture_frame_rects(view, line, drawn_text)
@@ -78,7 +78,7 @@ end
 
 local function refresh_markdown(view)
   markdown.live_render.refresh_view(view)
-  local instance = markdown_model.peek(view.doc)
+  local instance = markdown_model.peek(view.buffer)
   if not instance then return end
   local deadline = system.get_time() + 5
   repeat
@@ -109,9 +109,9 @@ test.describe("Bracket match frame", function()
       local node = root:get_node_for_view(context.view)
       if node then node:remove_view(root, context.view) end
     end
-    if context.doc then
-      if context.doc:is_dirty() then context.doc:clean() end
-      remove_doc(context.doc)
+    if context.buffer then
+      if context.buffer:is_dirty() then context.buffer:clean() end
+      remove_buffer(context.buffer)
     end
     local wrapping = config.plugins.linewrapping
     if context.wrapping then
@@ -123,7 +123,7 @@ test.describe("Bracket match frame", function()
     end
   end)
 
-  test.it("keeps every frame edge inside the document content clip", function(context)
+  test.it("keeps every frame edge inside the buffer content clip", function(context)
     local view = open_brace_view(context)
     local frame = capture_frame_rects(view, 1)
     local content_x = select(1, view:get_line_screen_position(1, 1))
@@ -156,7 +156,7 @@ test.describe("Bracket match frame", function()
     wrapping.wrapping_indent = 0
     wrapping.require_tokenization = false
     view:set_wrapping_enabled(true)
-    LineWrapping.update_docview_breaks(view)
+    LineWrapping.update_textview_breaks(view)
     view:update()
 
     local frame = capture_frame_rects(view, 1)
@@ -204,11 +204,11 @@ test.describe("Bracket match frame", function()
   end)
 
   test.it("aligns matching brackets inside a Markdown heading link", function(context)
-    local view, doc = open_text_view(context, "# Editing[[keys.md]]", 12)
-    doc:set_filename("heading.md", "heading.md")
+    local view, buffer = open_text_view(context, "# Editing[[keys.md]]", 12)
+    buffer:set_filename("heading.md", "heading.md")
     core.set_active_view(view)
     refresh_markdown(view)
-    doc:set_selection(1, 12)
+    buffer:set_selection(1, 12)
     view:update()
 
     local drawn_text = {}

@@ -14,42 +14,42 @@ local function empty(reason)
   return {}, reason
 end
 
-local function line_starts(doc, ts)
-  local change_id = doc.get_change_id and doc:get_change_id() or 0
+local function line_starts(buffer, ts)
+  local change_id = buffer.get_change_id and buffer:get_change_id() or 0
   if ts.outline_line_starts and ts.outline_line_starts_change_id == change_id then
     return ts.outline_line_starts
   end
   local starts = {}
   local offset = 0
-  for i = 1, #doc.lines do
+  for i = 1, #buffer.lines do
     starts[i] = offset
-    offset = offset + #doc.lines[i]
+    offset = offset + #buffer.lines[i]
   end
-  starts[#doc.lines + 1] = offset
+  starts[#buffer.lines + 1] = offset
   ts.outline_line_starts = starts
   ts.outline_line_starts_change_id = change_id
   return starts
 end
 
-local function byte_len(doc, ts)
-  local starts = line_starts(doc, ts)
-  return starts[#doc.lines + 1] or 0
+local function byte_len(buffer, ts)
+  local starts = line_starts(buffer, ts)
+  return starts[#buffer.lines + 1] or 0
 end
 
-local function text_for_capture(doc, capture)
-  if not doc or not capture then return "" end
+local function text_for_capture(buffer, capture)
+  if not buffer or not capture then return "" end
   local start_line = capture.start_line or 1
   local end_line = capture.end_line or start_line
   local start_col = capture.start_col or 1
   local end_col = capture.end_col or start_col
   if start_line == end_line then
-    local line = doc.lines[start_line] or ""
+    local line = buffer.lines[start_line] or ""
     return line:sub(start_col, math.max(start_col - 1, end_col - 1))
   end
 
   local parts = {}
   for line_idx = start_line, end_line do
-    local line = doc.lines[line_idx] or ""
+    local line = buffer.lines[line_idx] or ""
     if line_idx == start_line then
       parts[#parts + 1] = line:sub(start_col)
     elseif line_idx == end_line then
@@ -130,9 +130,9 @@ local function collapse_text_with_span(text, span_start, span_end)
   return collapsed, start_pos and { start_pos, end_pos } or nil
 end
 
-local function declaration_preview(doc, item, name_capture)
-  if not doc or not item or not name_capture then return nil end
-  local raw = text_for_capture(doc, item)
+local function declaration_preview(buffer, item, name_capture)
+  if not buffer or not item or not name_capture then return nil end
+  local raw = text_for_capture(buffer, item)
   if raw == "" then return nil end
   local name_start = (name_capture.start_byte or 0) - (item.start_byte or 0) + 1
   local name_end = (name_capture.end_byte or 0) - (item.start_byte or 0)
@@ -154,7 +154,7 @@ local function declaration_preview(doc, item, name_capture)
   return collapse_text_with_span(raw, name_start, name_end)
 end
 
-local function group_signature(doc, group, name)
+local function group_signature(buffer, group, name)
   local captures = group and group.signatures
   if not captures or #captures == 0 then return nil end
   table.sort(captures, function(a, b)
@@ -165,7 +165,7 @@ local function group_signature(doc, group, name)
 
   local params, returns, full = {}, {}, {}
   for _, capture in ipairs(captures) do
-    local text = text_for_capture(doc, capture)
+    local text = text_for_capture(buffer, capture)
     if capture.capture == "signature.params" then
       params[#params + 1] = text
     elseif capture.capture == "signature.return" then
@@ -195,16 +195,16 @@ local function group_signature(doc, group, name)
   return signature
 end
 
-local function symbol_from_group(doc, group)
+local function symbol_from_group(buffer, group)
   if not group or not group.item or not group.name then return nil end
-  local name = trim_name(text_for_capture(doc, group.name))
+  local name = trim_name(text_for_capture(buffer, group.name))
   if name == "" then return nil end
   local item = group.item
-  local declaration, declaration_name_span = declaration_preview(doc, item, group.name)
+  local declaration, declaration_name_span = declaration_preview(buffer, item, group.name)
   return {
     name = name,
     kind = group.kind,
-    signature = group_signature(doc, group, name),
+    signature = group_signature(buffer, group, name),
     declaration = declaration,
     declaration_name_span = declaration_name_span,
     start_line = item.start_line,
@@ -257,22 +257,22 @@ local function tree_ready(ts)
       and ts.status == "ready" and not ts.stale_unrenderable
 end
 
-function outline.get_document_outline(doc, opts)
+function outline.get_buffer_outline(buffer, opts)
   opts = opts or {}
-  if not doc or not doc.lines then return empty("no-document") end
-  local ts = doc.treesitter
+  if not buffer or not buffer.lines then return empty("no-buffer") end
+  local ts = buffer.treesitter
   if not ts then return empty("unsupported") end
   if not ts.native then return empty(ts.reason or ts.status or "disabled") end
   if not tree_ready(ts) then return empty("not-ready") end
   if not ts.queries or not ts.queries.outline then return empty("missing-query") end
 
-  local captures, err = ts.native:query_captures(ts.queries.outline, 0, byte_len(doc, ts), {
+  local captures, err = ts.native:query_captures(ts.queries.outline, 0, byte_len(buffer, ts), {
     match_limit = opts.match_limit or (ts.language and ts.language.outline_match_limit) or DEFAULT_MATCH_LIMIT,
     max_captures = opts.max_captures or (ts.language and ts.language.outline_max_captures) or DEFAULT_MAX_CAPTURES,
     timeout_ms = opts.timeout_ms or (ts.language and ts.language.outline_query_timeout_ms) or DEFAULT_QUERY_TIMEOUT_MS,
   })
   if not captures then
-    log_quiet("Tree-sitter: outline query failed for %s: %s", doc.get_name and doc:get_name() or tostring(doc), tostring(err))
+    log_quiet("Tree-sitter: outline query failed for %s: %s", buffer.get_name and buffer:get_name() or tostring(buffer), tostring(err))
     return empty(err or "query-failed")
   end
 
@@ -302,7 +302,7 @@ function outline.get_document_outline(doc, opts)
 
   local symbols = {}
   for _, group in pairs(groups) do
-    local symbol = symbol_from_group(doc, group)
+    local symbol = symbol_from_group(buffer, group)
     if symbol then symbols[#symbols + 1] = symbol end
   end
   table.sort(symbols, compare_symbols)
@@ -310,9 +310,9 @@ function outline.get_document_outline(doc, opts)
   return symbols
 end
 
-function outline.get_current_document_outline(opts)
+function outline.get_current_buffer_outline(opts)
   local view = core.active_view
-  return outline.get_document_outline(view and view.doc, opts)
+  return outline.get_buffer_outline(view and view.buffer, opts)
 end
 
 return outline

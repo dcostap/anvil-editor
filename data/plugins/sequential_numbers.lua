@@ -3,10 +3,10 @@
 
 local core = require "core"
 local command = require "core.command"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 
-local function is_docview(v)
-  return v and v.extends and v:extends(DocView) and v.doc
+local function is_textview(v)
+  return v and v.extends and v:extends(TextView) and v.buffer
 end
 
 local function parse_number(text)
@@ -22,9 +22,9 @@ end
 
 local function insert_numbers(dv, initial, stride)
   if dv.can_edit and not dv:can_edit("insert sequential numbers", { warn = true }) then return end
-  local doc = dv.doc
+  local buffer = dv.buffer
   local selections, final_by_idx = {}, {}
-  for idx, line1, col1, line2, col2 in doc:get_selections(true) do
+  for idx, line1, col1, line2, col2 in buffer:get_selections(true) do
     selections[#selections + 1] = {
       idx = idx,
       line1 = line1,
@@ -37,10 +37,10 @@ local function insert_numbers(dv, initial, stride)
   end
 
   if #selections == 0 then return end
-  doc:apply_edits(selections, {
+  buffer:apply_edits(selections, {
     type = "replace",
-    selections = doc:selections_after_edits(selections, final_by_idx),
-    last_selection = doc.last_selection,
+    selections = buffer:selections_after_edits(selections, final_by_idx),
+    last_selection = buffer.last_selection,
     merge_cursors = false,
   })
 end
@@ -54,7 +54,7 @@ local function prompt_stride(dv, initial)
       return parse_number(text) ~= nil
     end,
     submit = function(text)
-      if not is_docview(dv) then return end
+      if not is_textview(dv) then return end
       if dv.can_edit and not dv:can_edit("insert sequential numbers", { warn = true }) then return end
       local stride = parse_number(text)
       if not stride then return end
@@ -66,10 +66,10 @@ local function prompt_stride(dv, initial)
 end
 
 command.add(function()
-  if not is_docview(core.active_view) then return false end
+  if not is_textview(core.active_view) then return false end
   return true, core.active_view
 end, {
-  ["doc:insert-sequential-numbers-on-cursors"] = function(dv)
+  ["text:insert-sequential-numbers-on-cursors"] = function(dv)
     if dv.can_edit and not dv:can_edit("insert sequential numbers", { warn = true }) then return end
     core.global_prompt_bar:enter("Sequential Numbers Initial", {
       text = "0",
@@ -79,7 +79,7 @@ end, {
         return parse_number(text) ~= nil
       end,
       submit = function(text)
-        if not is_docview(dv) then return end
+        if not is_textview(dv) then return end
         if dv.can_edit and not dv:can_edit("insert sequential numbers", { warn = true }) then return end
         local initial = parse_number(text)
         if not initial then return end

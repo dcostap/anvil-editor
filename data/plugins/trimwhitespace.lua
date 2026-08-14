@@ -1,7 +1,7 @@
 -- mod-version:3
 local config = require "core.config"
 local command = require "core.command"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 
 ---Configuration options for `trimwhitespace` plugin.
 ---@class config.plugins.trimwhitespace
@@ -20,7 +20,7 @@ config.plugins.trimwhitespace.config_spec = {
     },
     {
       label = "Trim Empty End Lines",
-      description = "Remove any empty new lines at the end of documents.",
+      description = "Remove any empty new lines at the end of Buffers.",
       path = "trim_empty_end_lines",
       type = "toggle",
       default = false
@@ -30,22 +30,22 @@ config.plugins.trimwhitespace.config_spec = {
 ---@class plugins.trimwhitespace
 local trimwhitespace = {}
 
----Disable whitespace trimming for a specific document.
----@param doc core.doc
-function trimwhitespace.disable(doc)
-  doc.disable_trim_whitespace = true
+---Disable whitespace trimming for a specific buffer.
+---@param buffer core.buffer
+function trimwhitespace.disable(buffer)
+  buffer.disable_trim_whitespace = true
 end
 
 ---Re-enable whitespace trimming if previously disabled.
----@param doc core.doc
-function trimwhitespace.enable(doc)
-  doc.disable_trim_whitespace = nil
+---@param buffer core.buffer
+function trimwhitespace.enable(buffer)
+  buffer.disable_trim_whitespace = nil
 end
 
----Perform whitespace trimming in all lines of a document except the
+---Perform whitespace trimming in all lines of a buffer except the
 ---line where the caret is currently positioned.
----@param doc core.doc
-function trimwhitespace.trim(doc)
+---@param buffer core.buffer
+function trimwhitespace.trim(buffer)
   local protected_cols_by_line = {}
   local function protect_endpoint(line, col)
     protected_cols_by_line[line] = math.max(protected_cols_by_line[line] or 0, col)
@@ -58,21 +58,21 @@ function trimwhitespace.trim(doc)
     end
   end
 
-  protect_selections(doc.selections)
+  protect_selections(buffer.selections)
 
-  local ok, DocView = pcall(require, "core.docview")
-  local views = ok and DocView.registry and DocView.registry[doc]
+  local ok, TextView = pcall(require, "core.textview")
+  local views = ok and TextView.registry and TextView.registry[buffer]
   if views then
     for view in pairs(views) do
-      if view.doc == doc and view.selection_state then
+      if view.buffer == buffer and view.selection_state then
         protect_selections(view.selection_state.selections)
       end
     end
   end
 
   local edits = {}
-  for i = 1, #doc.lines do
-    local line = doc.lines[i]
+  for i = 1, #buffer.lines do
+    local line = buffer.lines[i]
     local content_end = #line - 1
     local keep_end = content_end
     while keep_end > 0 do
@@ -98,32 +98,32 @@ function trimwhitespace.trim(doc)
     end
   end
   if #edits > 0 then
-    local snapshots = ok and DocView.snapshot_registered_selection_states
-      and DocView.snapshot_registered_selection_states(doc)
+    local snapshots = ok and TextView.snapshot_registered_selection_states
+      and TextView.snapshot_registered_selection_states(buffer)
       or nil
     local selections = {}
-    for i = 1, #(doc.selections or {}) do selections[i] = doc.selections[i] end
-    doc:apply_edits(edits, {
+    for i = 1, #(buffer.selections or {}) do selections[i] = buffer.selections[i] end
+    buffer:apply_edits(edits, {
       type = "replace",
       selections = selections,
-      last_selection = doc.last_selection,
+      last_selection = buffer.last_selection,
       merge_cursors = false,
     })
-    if snapshots and DocView.restore_registered_selection_states then
-      DocView.restore_registered_selection_states(doc, snapshots)
+    if snapshots and TextView.restore_registered_selection_states then
+      TextView.restore_registered_selection_states(buffer, snapshots)
     end
   end
 end
 
----Removes all empty new lines at the end of the document.
----@param doc core.doc
+---Removes all empty new lines at the end of the buffer.
+---@param buffer core.buffer
 ---@param raw_remove? boolean Perform the removal not registering to undo stack
-function trimwhitespace.trim_empty_end_lines(doc, raw_remove)
+function trimwhitespace.trim_empty_end_lines(buffer, raw_remove)
   if raw_remove then
-    for _=#doc.lines, 1, -1 do
-      local l = #doc.lines
-      if l > 1 and doc.lines[l] == "\n" then
-        table.remove(doc.lines, l)
+    for _=#buffer.lines, 1, -1 do
+      local l = #buffer.lines
+      if l > 1 and buffer.lines[l] == "\n" then
+        table.remove(buffer.lines, l)
       else
         break
       end
@@ -132,8 +132,8 @@ function trimwhitespace.trim_empty_end_lines(doc, raw_remove)
   end
 
   local first_empty
-  for l = #doc.lines, 2, -1 do
-    if doc.lines[l] == "\n" then
+  for l = #buffer.lines, 2, -1 do
+    if buffer.lines[l] == "\n" then
       first_empty = l
     else
       break
@@ -141,29 +141,29 @@ function trimwhitespace.trim_empty_end_lines(doc, raw_remove)
   end
   if not first_empty then return end
 
-  local current_line = doc:get_selection()
+  local current_line = buffer:get_selection()
   if current_line and current_line >= first_empty then
-    doc:set_selection(first_empty - 1, math.huge, first_empty - 1, math.huge)
+    buffer:set_selection(first_empty - 1, math.huge, first_empty - 1, math.huge)
   end
-  doc:remove(first_empty - 1, math.huge, #doc.lines, math.huge)
+  buffer:remove(first_empty - 1, math.huge, #buffer.lines, math.huge)
 end
 
 
-command.add("core.docview", {
+command.add("core.textview", {
   ["trim-whitespace:trim-trailing-whitespace"] = function(dv)
     if dv.can_edit and not dv:can_edit("trim whitespace", { warn = true }) then return end
-    trimwhitespace.trim(dv.doc)
+    trimwhitespace.trim(dv.buffer)
   end,
 
   ["trim-whitespace:trim-empty-end-lines"] = function(dv)
     if dv.can_edit and not dv:can_edit("trim whitespace", { warn = true }) then return end
-    trimwhitespace.trim_empty_end_lines(dv.doc)
+    trimwhitespace.trim_empty_end_lines(dv.buffer)
   end,
 })
 
 
-local doc_save = Doc.save
-Doc.save = function(self, ...)
+local buffer_save = Buffer.save
+Buffer.save = function(self, ...)
   if
     config.plugins.trimwhitespace.enabled
     and
@@ -174,7 +174,7 @@ Doc.save = function(self, ...)
       trimwhitespace.trim_empty_end_lines(self)
     end
   end
-  doc_save(self, ...)
+  buffer_save(self, ...)
 end
 
 

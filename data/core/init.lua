@@ -14,9 +14,9 @@ local TitleBar
 local GlobalPromptBar
 local NagView
 local tool_window
-local DocView
+local TextView
 local ImageView
-local Doc
+local Buffer
 local Project
 
 ---Core functionality.
@@ -185,7 +185,7 @@ end
 
 function core.open_project_in_same_window(project)
   local project = core.set_project(project)
-  core.root_panel:close_all_docviews()
+  core.root_panel:close_all_textviews()
   update_recents_project("add", project.path)
   command.perform("core:restart")
 end
@@ -258,7 +258,7 @@ function core.open_project(project)
 end
 
 
----Get project for currently opened DocView or given filename path.
+---Get project for currently opened TextView or given filename path.
 ---If the given path does not belongs to any of the opened projects a new
 ---project object will be created and returned using the directory of the
 ---given filename path.
@@ -269,11 +269,11 @@ end
 function core.current_project(filename)
   if not filename then
     if
-      core.active_view:extends(DocView)
+      core.active_view:extends(TextView)
       and
-      core.active_view.doc and core.active_view.doc.abs_filename
+      core.active_view.buffer and core.active_view.buffer.abs_filename
     then
-      filename = core.active_view.doc.abs_filename
+      filename = core.active_view.buffer.abs_filename
     else
       return core.projects[1], true, false
     end
@@ -521,9 +521,9 @@ function core.init()
   NagView = require "core.nagview"
   tool_window = require "core.tool_window"
   Project = require "core.project"
-  DocView = require "core.docview"
+  TextView = require "core.textview"
   ImageView = require "core.imageview"
-  Doc = require "core.doc"
+  Buffer = require "core.buffer"
   core.treesitter = require "core.treesitter"
 
   -- apply to default color scheme
@@ -614,7 +614,7 @@ function core.init()
 
   core.frame_start = 0
   core.clip_rect_stack = {{ 0,0,0,0 }}
-  core.docs = {}
+  core.buffers = {}
   core.projects = {}
   core.cursor_clipboard = {}
   core.cursor_clipboard_whole_line = {}
@@ -802,13 +802,13 @@ function core.init()
 end
 
 
-function core.confirm_close_docs(docs, close_fn, ...)
+function core.confirm_close_buffers(buffers, close_fn, ...)
   local dirty_count = 0
   local dirty_name
-  for _, doc in ipairs(docs or core.docs) do
-    if doc:is_dirty() then
+  for _, buffer in ipairs(buffers or core.buffers) do
+    if buffer:is_dirty() then
       dirty_count = dirty_count + 1
-      dirty_name = doc:get_name()
+      dirty_name = buffer:get_name()
     end
   end
   if dirty_count > 0 then
@@ -816,7 +816,7 @@ function core.confirm_close_docs(docs, close_fn, ...)
     if dirty_count == 1 then
       text = string.format("\"%s\" has unsaved changes. Quit anyway?", dirty_name)
     else
-      text = string.format("%d docs have unsaved changes. Quit anyway?", dirty_count)
+      text = string.format("%d buffers have unsaved changes. Quit anyway?", dirty_count)
     end
     local args = {...}
     local opt = {
@@ -859,7 +859,7 @@ function core.exit(quit_fn, force)
     save_app_state()
     quit_fn()
   else
-    core.confirm_close_docs(core.docs, core.exit, quit_fn, true)
+    core.confirm_close_buffers(core.buffers, core.exit, quit_fn, true)
   end
 end
 
@@ -1134,7 +1134,7 @@ map_new_syntax_colors = function(clear_new)
   ---`type.class.default_library` falls back to `type.class`, then `type`.
   ---Themes can therefore color a broad parent once or override any child.
   local symbols_map = {
-    -- symbols related to doc comments and attributes
+    -- symbols related to buffer comments and attributes
     ["annotation"]                 = { alt = "keyword",  dec = 30 },
     ["annotation.decorator"]       = { alt = "annotation" },
     ["annotation.function"]        = { alt = "function", dec = 30 },
@@ -1545,14 +1545,14 @@ function core.set_active_view(view)
     end
     core.next_active_view = nil
     local old_active_view = core.active_view
-    if old_active_view and old_active_view.extends and old_active_view:extends(DocView)
-    and old_active_view.doc and old_active_view.owns_doc_selection_mirror
-    and old_active_view:owns_doc_selection_mirror()
-    and not old_active_view.doc.bound_selection_view then
+    if old_active_view and old_active_view.extends and old_active_view:extends(TextView)
+    and old_active_view.buffer and old_active_view.owns_buffer_selection_mirror
+    and old_active_view:owns_buffer_selection_mirror()
+    and not old_active_view.buffer.bound_selection_view then
       old_active_view:capture_selection_state()
     end
-    if view.doc and view.doc.abs_filename then
-      core.set_visited(view.doc.abs_filename)
+    if view.buffer and view.buffer.abs_filename then
+      core.set_visited(view.buffer.abs_filename)
     end
     core.last_active_view = old_active_view
     core.active_view = view
@@ -1563,17 +1563,17 @@ function core.set_active_view(view)
       core.blink_timer = core.blink_start
     end
     core.log_quiet("Focus diagnostics: reset caret blink on active view change active=%s", tostring(view))
-    if view.extends and view:extends(DocView) and view.doc and view.become_selection_mirror_owner then
+    if view.extends and view:extends(TextView) and view.buffer and view.become_selection_mirror_owner then
       view:become_selection_mirror_owner()
     end
   end
   if
-    core.active_view:extends(DocView)
+    core.active_view:extends(TextView)
     and
-    core.active_view.doc and core.active_view.doc.abs_filename
+    core.active_view.buffer and core.active_view.buffer.abs_filename
   then
     local project = core.current_project(
-      core.active_view.doc.abs_filename
+      core.active_view.buffer.abs_filename
     )
     if project then system.chdir(project.path) end
   end
@@ -1651,11 +1651,11 @@ function core.root_project() return core.projects[1] end
 function core.normalize_to_project_dir(path) return core.root_project():normalize_path(path) end
 function core.project_absolute_path(path) return core.root_project():absolute_path(path) end
 
-local function close_doc_view(doc)
+local function close_buffer_view(buffer)
   core.add_thread(function()
     local views = core.root_panel.root_node:get_children()
     for _, view in ipairs(views) do
-      if view.doc == doc then
+      if view.buffer == buffer then
         local node = core.root_panel.root_node:get_node_for_view(view)
         node:close_view(core.root_panel.root_node, view)
       end
@@ -1667,17 +1667,17 @@ local function filename_has_control_chars(filename)
   return type(filename) == "string" and filename:find("[%z\1-\31]") ~= nil
 end
 
-function core.open_doc(filename)
+function core.open_buffer(filename)
   local new_file = true
   local abs_filename
-  local close_docview = false
+  local close_textview = false
   if filename then
     if filename_has_control_chars(filename) then
       core.log_quiet("Refusing to open filename with control characters: %q", filename)
       error(string.format("invalid filename: %q", filename))
     end
     -- normalize filename and set absolute filename then
-    -- try to find existing doc for filename
+    -- try to find existing buffer for filename
     filename = core.root_project():normalize_path(filename)
     abs_filename = core.root_project():absolute_path(filename)
     if filename_has_control_chars(filename) or filename_has_control_chars(abs_filename) then
@@ -1692,32 +1692,32 @@ function core.open_doc(filename)
         "File '%s' with size %0.2fMB exceeds config.file_size_limit of %sMB",
         filename, size, config.file_size_limit
       )
-      close_docview = true
+      close_textview = true
       filename = nil
       abs_filename = nil
       new_file = true
     end
-    for _, doc in ipairs(core.docs) do
-      if doc.abs_filename and common.path_equals(abs_filename, doc.abs_filename) then
-        if close_docview then close_doc_view(doc) end
-        return doc
+    for _, buffer in ipairs(core.buffers) do
+      if buffer.abs_filename and common.path_equals(abs_filename, buffer.abs_filename) then
+        if close_textview then close_buffer_view(buffer) end
+        return buffer
       end
     end
   end
-  -- no existing doc for filename; create new
-  local doc = Doc(filename, abs_filename, new_file)
-  table.insert(core.docs, doc)
-  core.log_quiet(filename and "Opened doc \"%s\"" or "Opened new doc", filename)
-  if close_docview then close_doc_view(doc) end
-  return doc
+  -- no existing buffer for filename; create new
+  local buffer = Buffer(filename, abs_filename, new_file)
+  table.insert(core.buffers, buffer)
+  core.log_quiet(filename and "Opened buffer \"%s\"" or "Opened new buffer", filename)
+  if close_textview then close_buffer_view(buffer) end
+  return buffer
 end
 
 
-function core.get_views_referencing_doc(doc)
+function core.get_views_referencing_buffer(buffer)
   local res = {}
   local views = core.root_panel.root_node:get_children()
   for _, view in ipairs(views) do
-    if view.doc == doc then table.insert(res, view) end
+    if view.buffer == buffer then table.insert(res, view) end
   end
   return res
 end
@@ -1761,7 +1761,7 @@ end
 ---If the given file is a supported image, it will open it in the image viewer;
 ---otherwise, it will open it as a normal text file.
 ---@param filename string Path to the file to open
----@return core.imageview|core.docview
+---@return core.imageview|core.textview
 function core.open_file(filename)
   return require("core.panes").open_path(filename)
 end
@@ -2024,12 +2024,12 @@ function core.get_view_title(view)
   local title = ""
   local project = core.projects[1]
   if view.get_filename and view:get_filename() then
-    if view.doc.abs_filename then
-      local prj, is_open, belongs = core.current_project(view.doc.abs_filename)
+    if view.buffer.abs_filename then
+      local prj, is_open, belongs = core.current_project(view.buffer.abs_filename)
       if prj and is_open and belongs then
         project = prj
-        title = common.relative_path(project.path, view.doc.abs_filename)
-        if view.doc:is_dirty() then title = title .. "*" end
+        title = common.relative_path(project.path, view.buffer.abs_filename)
+        if view.buffer:is_dirty() then title = title .. "*" end
       else
         title = view:get_filename()
       end
@@ -2142,21 +2142,21 @@ local function perf_stats_enabled()
 end
 
 local perf_diagnostic_keys = {
-  "docview_update_ms",
-  "docview_update_cache_ms",
-  "docview_update_selection_ms",
-  "docview_scroll_to_make_visible_ms",
-  "docview_update_blink_ms",
-  "docview_update_active_focus_ms",
-  "docview_update_ime_ms",
-  "docview_update_super_ms",
+  "textview_update_ms",
+  "textview_update_cache_ms",
+  "textview_update_selection_ms",
+  "textview_scroll_to_make_visible_ms",
+  "textview_update_blink_ms",
+  "textview_update_active_focus_ms",
+  "textview_update_ime_ms",
+  "textview_update_super_ms",
   "ime_set_location_calls",
   "ime_set_location_ms",
   "ime_set_location_changed",
   "ime_set_location_system_ms",
-  "linewrapping_update_docview_breaks_calls",
-  "linewrapping_update_docview_breaks_ms",
-  "linewrapping_update_docview_breaks_width_changed",
+  "linewrapping_update_textview_breaks_calls",
+  "linewrapping_update_textview_breaks_ms",
+  "linewrapping_update_textview_breaks_width_changed",
   "linewrapping_reconstruct_breaks_calls",
   "linewrapping_reconstruct_breaks_ms",
   "linewrapping_reconstruct_breaks_lines",
@@ -2173,15 +2173,15 @@ local perf_diagnostic_keys = {
   "linewrapping_draw_line_text_segments",
   "linewrapping_draw_line_text_bytes",
   "linewrapping_draw_line_text_known_bounds_segments",
-  "docview_line_packet_hits",
-  "docview_line_packet_misses",
-  "docview_line_packet_builds",
-  "docview_line_packet_build_ms",
-  "docview_line_packet_replay_ms",
-  "docview_line_packet_evictions",
-  "docview_line_packet_resident_packets",
-  "docview_line_packet_resident_bytes",
-  "docview_line_packet_frame_failures",
+  "textview_line_packet_hits",
+  "textview_line_packet_misses",
+  "textview_line_packet_builds",
+  "textview_line_packet_build_ms",
+  "textview_line_packet_replay_ms",
+  "textview_line_packet_evictions",
+  "textview_line_packet_resident_packets",
+  "textview_line_packet_resident_bytes",
+  "textview_line_packet_frame_failures",
   "core_root_panel_update_ms",
   "core_tool_window_update_ms",
   "rootpanel_update_ms",
@@ -2190,7 +2190,7 @@ local perf_diagnostic_keys = {
   "rootpanel_node_update_ms",
   "rootpanel_final_layout_ms",
   "rootpanel_drag_overlay_ms",
-  "rootpanel_defer_open_docs_ms",
+  "rootpanel_defer_open_buffers_ms",
   "node_update_layout_calls",
   "node_update_layout_leaf_calls",
   "node_update_layout_split_calls",
@@ -2292,18 +2292,18 @@ local function new_perf_frame_stats()
     selection_cache_lines = 0,
     selection_cache_ranges = 0,
     selection_cache_merged_ranges = 0,
-    doc_get_selections_calls = 0,
-    doc_get_selections_iters = 0,
-    doc_set_selections_calls = 0,
-    doc_set_selections_ms = 0,
-    doc_add_selection_calls = 0,
-    doc_add_selection_ms = 0,
-    doc_merge_cursors_calls = 0,
-    doc_merge_cursors_ms = 0,
-    doc_sanitize_selection_calls = 0,
-    doc_sanitize_selection_ms = 0,
-    doc_apply_edits_calls = 0,
-    doc_apply_edits_ms = 0,
+    buffer_get_selections_calls = 0,
+    buffer_get_selections_iters = 0,
+    buffer_set_selections_calls = 0,
+    buffer_set_selections_ms = 0,
+    buffer_add_selection_calls = 0,
+    buffer_add_selection_ms = 0,
+    buffer_merge_cursors_calls = 0,
+    buffer_merge_cursors_ms = 0,
+    buffer_sanitize_selection_calls = 0,
+    buffer_sanitize_selection_ms = 0,
+    buffer_apply_edits_calls = 0,
+    buffer_apply_edits_ms = 0,
     command_calls = 0,
     command_total_ms = 0,
     command_predicate_ms = 0,
@@ -2329,7 +2329,7 @@ function core.step(next_frame_time, options)
   }
   last_core_step_stats = step_stats
   core.perf_frame_stats = perf_stats_enabled() and new_perf_frame_stats() or nil
-  core.docview_frame_stats = nil
+  core.textview_frame_stats = nil
   core.render_frame_active = false
 
   -- handle events
@@ -2454,17 +2454,17 @@ function core.step(next_frame_time, options)
 
   local pre_draw_start_time = system.get_time()
 
-  -- close unreferenced docs
-  for i = #core.docs, 1, -1 do
-    local doc = core.docs[i]
+  -- close unreferenced buffers
+  for i = #core.buffers, 1, -1 do
+    local buffer = core.buffers[i]
     local history = core.navigation_history
-    local retained_for_navigation = history and history.retains_doc
-      and history.retains_doc(doc)
-    if #core.get_views_referencing_doc(doc) == 0 and not retained_for_navigation then
-      table.remove(core.docs, i)
-      doc:on_close()
+    local retained_for_navigation = history and history.retains_buffer
+      and history.retains_buffer(buffer)
+    if #core.get_views_referencing_buffer(buffer) == 0 and not retained_for_navigation then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       core.collect_garbage = true
-      if #core.docs == 0 then
+      if #core.buffers == 0 then
         system.chdir(core.projects[1].path)
       end
     end
@@ -2484,7 +2484,7 @@ function core.step(next_frame_time, options)
   core.clip_rect_stack[1] = { 0, 0, width, height }
   renderer.set_clip_rect(table.unpack(core.clip_rect_stack[1]))
   local draw_emit_start_time = system.get_time()
-  core.docview_frame_stats = core.perf_frame_stats
+  core.textview_frame_stats = core.perf_frame_stats
   core.render_frame_id = (core.render_frame_id or 0) + 1
   core.render_frame_active = true
   local draw_perf = package.loaded["core.perf"]
@@ -2806,7 +2806,7 @@ local function frame_pacing_stats_log(fields)
       frame_pacing_stats_enabled = false
       return
     end
-    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,event_count,event_ms,update_ms,pre_draw_ms,draw_emit_ms,renderer_end_ms,frame_time_ms,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,draw_calls,quad_instances,texture_quads,texture_uploads,texture_upload_bytes,d3d11_glyph_push_ms,d3d11_flush_quads_ms,d3d11_dwm_flush_ms,d3d11_clear_state_ms,rencache_commands,rencache_text_commands,rencache_rect_commands,rencache_set_clip_commands,rencache_command_bytes,rencache_text_bytes,rencache_draw_text_ms,rencache_draw_text_width_ms,display_packet_replays,display_packet_commands_replayed,display_packet_text_commands_replayed,display_packet_rect_commands_replayed,display_packet_source_bytes,display_packet_frame_bytes_copied,display_packet_replay_ms,display_packet_frame_allocation_failures,rencache_frame_failed,docview_draw_ms,docview_gutter_ms,docview_body_ms,docview_text_ms,docview_highlighter_get_line_ms,docview_token_loop_ms,docview_renderer_draw_text_ms,docview_visible_lines,docview_text_lines,docview_tokens,docview_draw_text_calls,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
+    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,event_count,event_ms,update_ms,pre_draw_ms,draw_emit_ms,renderer_end_ms,frame_time_ms,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,draw_calls,quad_instances,texture_quads,texture_uploads,texture_upload_bytes,d3d11_glyph_push_ms,d3d11_flush_quads_ms,d3d11_dwm_flush_ms,d3d11_clear_state_ms,rencache_commands,rencache_text_commands,rencache_rect_commands,rencache_set_clip_commands,rencache_command_bytes,rencache_text_bytes,rencache_draw_text_ms,rencache_draw_text_width_ms,display_packet_replays,display_packet_commands_replayed,display_packet_text_commands_replayed,display_packet_rect_commands_replayed,display_packet_source_bytes,display_packet_frame_bytes_copied,display_packet_replay_ms,display_packet_frame_allocation_failures,rencache_frame_failed,textview_draw_ms,textview_gutter_ms,textview_body_ms,textview_text_ms,textview_highlighter_get_line_ms,textview_token_loop_ms,textview_renderer_draw_text_ms,textview_visible_lines,textview_text_lines,textview_tokens,textview_draw_text_calls,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
     frame_pacing_stats_file:flush()
   end
   frame_pacing_stats_seq = frame_pacing_stats_seq + 1
@@ -2861,17 +2861,17 @@ local function frame_pacing_stats_log(fields)
     string.format("%.3f", fields.display_packet_replay_ms or 0),
     tostring(fields.display_packet_frame_allocation_failures or 0),
     fields.rencache_frame_failed and "1" or "0",
-    string.format("%.3f", fields.docview_draw_ms or 0),
-    string.format("%.3f", fields.docview_gutter_ms or 0),
-    string.format("%.3f", fields.docview_body_ms or 0),
-    string.format("%.3f", fields.docview_text_ms or 0),
-    string.format("%.3f", fields.docview_highlighter_get_line_ms or 0),
-    string.format("%.3f", fields.docview_token_loop_ms or 0),
-    string.format("%.3f", fields.docview_renderer_draw_text_ms or 0),
-    tostring(fields.docview_visible_lines or 0),
-    tostring(fields.docview_text_lines or 0),
-    tostring(fields.docview_tokens or 0),
-    tostring(fields.docview_draw_text_calls or 0),
+    string.format("%.3f", fields.textview_draw_ms or 0),
+    string.format("%.3f", fields.textview_gutter_ms or 0),
+    string.format("%.3f", fields.textview_body_ms or 0),
+    string.format("%.3f", fields.textview_text_ms or 0),
+    string.format("%.3f", fields.textview_highlighter_get_line_ms or 0),
+    string.format("%.3f", fields.textview_token_loop_ms or 0),
+    string.format("%.3f", fields.textview_renderer_draw_text_ms or 0),
+    tostring(fields.textview_visible_lines or 0),
+    tostring(fields.textview_text_lines or 0),
+    tostring(fields.textview_tokens or 0),
+    tostring(fields.textview_draw_text_calls or 0),
     string.format("%.3f", fields.sleep_requested_ms or 0),
     string.format("%.3f", fields.sleep_actual_ms or 0),
     fields.skipped_post_present_sleep and "1" or "0",
@@ -3182,8 +3182,8 @@ function core.run_step(options)
   -- Frame/update counters belong to the core.step() that produced them. Do
   -- not repeat the previous step's nonzero counters across scheduler-only
   -- iterations; that made idle captures report phantom Root Panel updates.
-  local docview_stats = did_core_step
-    and (core.perf_frame_stats or core.docview_frame_stats or {})
+  local textview_stats = did_core_step
+    and (core.perf_frame_stats or core.textview_frame_stats or {})
     or {}
   local total_ms = (system.get_time() - run_step_start) * 1000
   if did_redraw then
@@ -3197,23 +3197,23 @@ function core.run_step(options)
     perf_last_redraw_time = t
   end
   local active_view = core.active_view
-  local active_doc = active_view and active_view.doc
+  local active_buffer = active_view and active_view.buffer
   local active_view_name = active_view and tostring(active_view) or ""
-  local active_view_is_docview = active_view and active_view.extends and active_view:extends(DocView) or false
+  local active_view_is_textview = active_view and active_view.extends and active_view:extends(TextView) or false
   local window_has_focus = core.window and system.window_has_focus(core.window) or false
   local queue_depth = system.pending_event_count and system.pending_event_count() or (system.has_pending_events() and 1 or 0)
-  local selection_count = active_doc and active_doc.selections and (#active_doc.selections / 4) or 0
+  local selection_count = active_buffer and active_buffer.selections and (#active_buffer.selections / 4) or 0
   local search_selection_count = 0
-  if active_doc and active_doc.search_selections then
-    for _ in pairs(active_doc.search_selections) do
+  if active_buffer and active_buffer.search_selections then
+    for _ in pairs(active_buffer.search_selections) do
       search_selection_count = search_selection_count + 1
     end
   end
 
   if focus_diag_last_state == nil or focus_diag_last_state ~= window_has_focus then
     core.log_quiet(
-      "Focus diagnostics: window_has_focus=%s active=%s docview=%s redraw=%s event_count=%d pending=%s queue=%d run_mode=%s native={%s}",
-      tostring(window_has_focus), active_view_name, tostring(active_view_is_docview),
+      "Focus diagnostics: window_has_focus=%s active=%s textview=%s redraw=%s event_count=%d pending=%s queue=%d run_mode=%s native={%s}",
+      tostring(window_has_focus), active_view_name, tostring(active_view_is_textview),
       tostring(did_redraw), step_stats.event_count, tostring(pending_events_at_start),
       queue_depth, tostring(run_threads_mode),
       system.window_focus_diagnostics and core.window and system.window_focus_diagnostics(core.window) or "unavailable"
@@ -3223,20 +3223,20 @@ function core.run_step(options)
 
   if window_has_focus then
     focus_diag_last_anomaly_key = nil
-  elseif active_view_is_docview then
+  elseif active_view_is_textview then
     local anomaly_key = string.format(
       "%s:%s",
       tostring(active_view),
-      tostring(active_doc and (active_doc.abs_filename or active_doc.filename) or "")
+      tostring(active_buffer and (active_buffer.abs_filename or active_buffer.filename) or "")
     )
     if focus_diag_last_anomaly_key ~= anomaly_key then
       local line1, col1, line2, col2
-      if active_doc then
-        line1, col1, line2, col2 = active_doc:get_selection()
+      if active_buffer then
+        line1, col1, line2, col2 = active_buffer:get_selection()
       end
       core.log_quiet(
-        "Focus diagnostics: active DocView while window_has_focus=false file=%s selection_count=%s selection=%s,%s-%s,%s redraw=%s blink=%.3f event_count=%d pending=%s queue=%d native={%s}",
-        tostring(active_doc and (active_doc.abs_filename or active_doc.filename) or ""),
+        "Focus diagnostics: active TextView while window_has_focus=false file=%s selection_count=%s selection=%s,%s-%s,%s redraw=%s blink=%.3f event_count=%d pending=%s queue=%d native={%s}",
+        tostring(active_buffer and (active_buffer.abs_filename or active_buffer.filename) or ""),
         tostring(selection_count), tostring(line1), tostring(col1), tostring(line2), tostring(col2),
         tostring(did_redraw), core.blink_timer or 0, step_stats.event_count,
         tostring(pending_events_at_start), queue_depth,
@@ -3259,7 +3259,7 @@ function core.run_step(options)
     did_redraw = did_redraw,
     window_has_focus = window_has_focus,
     active_view_name = active_view_name,
-    active_view_is_docview = active_view_is_docview,
+    active_view_is_textview = active_view_is_textview,
     selection_count = selection_count,
     search_selection_count = search_selection_count,
     pending_events = pending_events_at_start,
@@ -3303,112 +3303,112 @@ function core.run_step(options)
     d3d11_flush_quads_ms = renderer_stats.d3d11_flush_quads_ms,
     d3d11_dwm_flush_ms = renderer_stats.d3d11_dwm_flush_ms,
     d3d11_clear_state_ms = renderer_stats.d3d11_clear_state_ms,
-    docview_draw_ms = docview_stats.draw_ms,
-    docview_prepare_ms = docview_stats.prepare_ms,
-    docview_prepare_highlight_ms = docview_stats.prepare_highlight_ms,
-    docview_prepare_caret_ms = docview_stats.prepare_caret_ms,
-    docview_prepare_selection_ms = docview_stats.prepare_selection_ms,
-    docview_prepare_merge_ms = docview_stats.prepare_merge_ms,
-    docview_gutter_ms = docview_stats.gutter_ms,
-    docview_body_ms = docview_stats.body_ms,
-    docview_text_ms = docview_stats.text_ms,
-    docview_overlay_ms = docview_stats.overlay_ms,
-    docview_highlighter_get_line_ms = docview_stats.highlighter_get_line_ms,
-    docview_token_loop_ms = docview_stats.token_loop_ms,
-    docview_renderer_draw_text_ms = docview_stats.renderer_draw_text_ms,
-    docview_line_hint_calls = docview_stats.line_hint_calls,
-    docview_line_hint_drawn = docview_stats.line_hint_drawn,
-    docview_line_hint_ms = docview_stats.line_hint_ms,
-    docview_line_hint_get_ms = docview_stats.line_hint_get_ms,
-    docview_line_hint_normalize_ms = docview_stats.line_hint_normalize_ms,
-    docview_line_hint_layout_ms = docview_stats.line_hint_layout_ms,
-    docview_line_hint_measure_ms = docview_stats.line_hint_measure_ms,
-    docview_line_hint_truncate_ms = docview_stats.line_hint_truncate_ms,
-    docview_line_hint_draw_ms = docview_stats.line_hint_draw_ms,
-    docview_line_hint_draw_text_calls = docview_stats.line_hint_draw_text_calls,
-    docview_line_hint_draw_text_ms = docview_stats.line_hint_draw_text_ms,
-    docview_line_hint_skip_no_hint = docview_stats.line_hint_skip_no_hint,
-    docview_line_hint_skip_no_space = docview_stats.line_hint_skip_no_space,
-    docview_line_hint_skip_truncated = docview_stats.line_hint_skip_truncated,
-    filetree_line_hint_calls = docview_stats.filetree_line_hint_calls,
-    filetree_line_hint_ms = docview_stats.filetree_line_hint_ms,
-    filetree_line_hint_get_file_info_calls = docview_stats.filetree_line_hint_get_file_info_calls,
-    filetree_line_hint_get_file_info_ms = docview_stats.filetree_line_hint_get_file_info_ms,
-    filetree_line_hint_format_ms = docview_stats.filetree_line_hint_format_ms,
-    filetree_line_hint_git_ms = docview_stats.filetree_line_hint_git_ms,
-    filetree_line_hint_segments = docview_stats.filetree_line_hint_segments,
-    filetree_line_hint_cache_hits = docview_stats.filetree_line_hint_cache_hits,
-    filetree_line_hint_cache_misses = docview_stats.filetree_line_hint_cache_misses,
-    filetree_line_hint_folder_count_hits = docview_stats.filetree_line_hint_folder_count_hits,
-    filetree_line_hint_folder_count_pending = docview_stats.filetree_line_hint_folder_count_pending,
-    filetree_line_hint_entry_calls = docview_stats.filetree_line_hint_entry_calls,
-    filetree_line_hint_entry_ms = docview_stats.filetree_line_hint_entry_ms,
-    filetree_entry_snapshot_hits = docview_stats.filetree_entry_snapshot_hits,
-    filetree_entry_snapshot_builds = docview_stats.filetree_entry_snapshot_builds,
-    filetree_entry_snapshot_rows = docview_stats.filetree_entry_snapshot_rows,
-    filetree_entry_snapshot_build_ms = docview_stats.filetree_entry_snapshot_build_ms,
-    filetree_folder_row_background_calls = docview_stats.filetree_folder_row_background_calls,
-    filetree_folder_row_background_rects = docview_stats.filetree_folder_row_background_rects,
-    filetree_folder_row_background_ms = docview_stats.filetree_folder_row_background_ms,
-    filetree_line_is_dir_calls = docview_stats.filetree_line_is_dir_calls,
-    filetree_line_is_dir_ms = docview_stats.filetree_line_is_dir_ms,
-    filetree_draw_line_body_calls = docview_stats.filetree_draw_line_body_calls,
-    filetree_draw_line_body_ms = docview_stats.filetree_draw_line_body_ms,
-    filetree_draw_line_text_calls = docview_stats.filetree_draw_line_text_calls,
-    filetree_draw_line_text_ms = docview_stats.filetree_draw_line_text_ms,
-    filetree_draw_line_text_git_ms = docview_stats.filetree_draw_line_text_git_ms,
-    filetree_draw_line_text_colored_calls = docview_stats.filetree_draw_line_text_colored_calls,
-    filetree_draw_line_text_plain_calls = docview_stats.filetree_draw_line_text_plain_calls,
-    lsp_render_tokens_calls = docview_stats.lsp_render_tokens_calls,
-    lsp_render_tokens_ms = docview_stats.lsp_render_tokens_ms,
-    lsp_render_tokens_matching_ms = docview_stats.lsp_render_tokens_matching_ms,
-    lsp_render_tokens_capability_ms = docview_stats.lsp_render_tokens_capability_ms,
-    lsp_render_tokens_latest_ms = docview_stats.lsp_render_tokens_latest_ms,
-    lsp_render_tokens_cache_hits = docview_stats.lsp_render_tokens_cache_hits,
-    lsp_render_tokens_cache_misses = docview_stats.lsp_render_tokens_cache_misses,
-    lsp_render_tokens_line_offsets_ms = docview_stats.lsp_render_tokens_line_offsets_ms,
-    lsp_render_tokens_line_offsets_lines = docview_stats.lsp_render_tokens_line_offsets_lines,
-    lsp_render_tokens_scan_ms = docview_stats.lsp_render_tokens_scan_ms,
-    lsp_render_tokens_scan_tokens = docview_stats.lsp_render_tokens_scan_tokens,
-    lsp_render_tokens_spans = docview_stats.lsp_render_tokens_spans,
-    lsp_render_tokens_base_ms = docview_stats.lsp_render_tokens_base_ms,
-    lsp_render_tokens_overlay_ms = docview_stats.lsp_render_tokens_overlay_ms,
-    lsp_render_tokens_schedule_calls = docview_stats.lsp_render_tokens_schedule_calls,
-    docview_visible_lines = docview_stats.visible_lines,
-    docview_text_lines = docview_stats.text_lines,
-    docview_tokens = docview_stats.tokens,
-    docview_draw_text_calls = docview_stats.draw_text_calls,
-    docview_caret_draw_calls = docview_stats.caret_draw_calls,
-    docview_selection_rect_calls = docview_stats.selection_rect_calls,
-    docview_prepare_highlight_iters = docview_stats.prepare_highlight_iters,
-    docview_prepare_caret_scan_count = docview_stats.prepare_caret_scan_count,
-    docview_visible_carets = docview_stats.visible_carets,
-    docview_prepare_selection_iters = docview_stats.prepare_selection_iters,
-    docview_visible_selection_ranges = docview_stats.visible_selection_ranges,
-    docview_selection_cache_lines = docview_stats.selection_cache_lines,
-    docview_selection_cache_ranges = docview_stats.selection_cache_ranges,
-    docview_selection_cache_merged_ranges = docview_stats.selection_cache_merged_ranges,
-    doc_get_selections_calls = docview_stats.doc_get_selections_calls,
-    doc_get_selections_iters = docview_stats.doc_get_selections_iters,
-    doc_set_selections_calls = docview_stats.doc_set_selections_calls,
-    doc_set_selections_ms = docview_stats.doc_set_selections_ms,
-    doc_add_selection_calls = docview_stats.doc_add_selection_calls,
-    doc_add_selection_ms = docview_stats.doc_add_selection_ms,
-    doc_merge_cursors_calls = docview_stats.doc_merge_cursors_calls,
-    doc_merge_cursors_ms = docview_stats.doc_merge_cursors_ms,
-    doc_sanitize_selection_calls = docview_stats.doc_sanitize_selection_calls,
-    doc_sanitize_selection_ms = docview_stats.doc_sanitize_selection_ms,
-    doc_apply_edits_calls = docview_stats.doc_apply_edits_calls,
-    doc_apply_edits_ms = docview_stats.doc_apply_edits_ms,
-    command_calls = docview_stats.command_calls,
-    command_total_ms = docview_stats.command_total_ms,
-    command_predicate_ms = docview_stats.command_predicate_ms,
-    command_body_ms = docview_stats.command_body_ms,
-    slowest_command_ms = docview_stats.slowest_command_ms,
-    slowest_command_name = docview_stats.slowest_command_name,
-    statusbar_selection_ms = docview_stats.statusbar_selection_ms,
-    statusbar_selection_cache_hits = docview_stats.statusbar_selection_cache_hits,
-    statusbar_selection_cache_misses = docview_stats.statusbar_selection_cache_misses,
+    textview_draw_ms = textview_stats.draw_ms,
+    textview_prepare_ms = textview_stats.prepare_ms,
+    textview_prepare_highlight_ms = textview_stats.prepare_highlight_ms,
+    textview_prepare_caret_ms = textview_stats.prepare_caret_ms,
+    textview_prepare_selection_ms = textview_stats.prepare_selection_ms,
+    textview_prepare_merge_ms = textview_stats.prepare_merge_ms,
+    textview_gutter_ms = textview_stats.gutter_ms,
+    textview_body_ms = textview_stats.body_ms,
+    textview_text_ms = textview_stats.text_ms,
+    textview_overlay_ms = textview_stats.overlay_ms,
+    textview_highlighter_get_line_ms = textview_stats.highlighter_get_line_ms,
+    textview_token_loop_ms = textview_stats.token_loop_ms,
+    textview_renderer_draw_text_ms = textview_stats.renderer_draw_text_ms,
+    textview_line_hint_calls = textview_stats.line_hint_calls,
+    textview_line_hint_drawn = textview_stats.line_hint_drawn,
+    textview_line_hint_ms = textview_stats.line_hint_ms,
+    textview_line_hint_get_ms = textview_stats.line_hint_get_ms,
+    textview_line_hint_normalize_ms = textview_stats.line_hint_normalize_ms,
+    textview_line_hint_layout_ms = textview_stats.line_hint_layout_ms,
+    textview_line_hint_measure_ms = textview_stats.line_hint_measure_ms,
+    textview_line_hint_truncate_ms = textview_stats.line_hint_truncate_ms,
+    textview_line_hint_draw_ms = textview_stats.line_hint_draw_ms,
+    textview_line_hint_draw_text_calls = textview_stats.line_hint_draw_text_calls,
+    textview_line_hint_draw_text_ms = textview_stats.line_hint_draw_text_ms,
+    textview_line_hint_skip_no_hint = textview_stats.line_hint_skip_no_hint,
+    textview_line_hint_skip_no_space = textview_stats.line_hint_skip_no_space,
+    textview_line_hint_skip_truncated = textview_stats.line_hint_skip_truncated,
+    filetree_line_hint_calls = textview_stats.filetree_line_hint_calls,
+    filetree_line_hint_ms = textview_stats.filetree_line_hint_ms,
+    filetree_line_hint_get_file_info_calls = textview_stats.filetree_line_hint_get_file_info_calls,
+    filetree_line_hint_get_file_info_ms = textview_stats.filetree_line_hint_get_file_info_ms,
+    filetree_line_hint_format_ms = textview_stats.filetree_line_hint_format_ms,
+    filetree_line_hint_git_ms = textview_stats.filetree_line_hint_git_ms,
+    filetree_line_hint_segments = textview_stats.filetree_line_hint_segments,
+    filetree_line_hint_cache_hits = textview_stats.filetree_line_hint_cache_hits,
+    filetree_line_hint_cache_misses = textview_stats.filetree_line_hint_cache_misses,
+    filetree_line_hint_folder_count_hits = textview_stats.filetree_line_hint_folder_count_hits,
+    filetree_line_hint_folder_count_pending = textview_stats.filetree_line_hint_folder_count_pending,
+    filetree_line_hint_entry_calls = textview_stats.filetree_line_hint_entry_calls,
+    filetree_line_hint_entry_ms = textview_stats.filetree_line_hint_entry_ms,
+    filetree_entry_snapshot_hits = textview_stats.filetree_entry_snapshot_hits,
+    filetree_entry_snapshot_builds = textview_stats.filetree_entry_snapshot_builds,
+    filetree_entry_snapshot_rows = textview_stats.filetree_entry_snapshot_rows,
+    filetree_entry_snapshot_build_ms = textview_stats.filetree_entry_snapshot_build_ms,
+    filetree_folder_row_background_calls = textview_stats.filetree_folder_row_background_calls,
+    filetree_folder_row_background_rects = textview_stats.filetree_folder_row_background_rects,
+    filetree_folder_row_background_ms = textview_stats.filetree_folder_row_background_ms,
+    filetree_line_is_dir_calls = textview_stats.filetree_line_is_dir_calls,
+    filetree_line_is_dir_ms = textview_stats.filetree_line_is_dir_ms,
+    filetree_draw_line_body_calls = textview_stats.filetree_draw_line_body_calls,
+    filetree_draw_line_body_ms = textview_stats.filetree_draw_line_body_ms,
+    filetree_draw_line_text_calls = textview_stats.filetree_draw_line_text_calls,
+    filetree_draw_line_text_ms = textview_stats.filetree_draw_line_text_ms,
+    filetree_draw_line_text_git_ms = textview_stats.filetree_draw_line_text_git_ms,
+    filetree_draw_line_text_colored_calls = textview_stats.filetree_draw_line_text_colored_calls,
+    filetree_draw_line_text_plain_calls = textview_stats.filetree_draw_line_text_plain_calls,
+    lsp_render_tokens_calls = textview_stats.lsp_render_tokens_calls,
+    lsp_render_tokens_ms = textview_stats.lsp_render_tokens_ms,
+    lsp_render_tokens_matching_ms = textview_stats.lsp_render_tokens_matching_ms,
+    lsp_render_tokens_capability_ms = textview_stats.lsp_render_tokens_capability_ms,
+    lsp_render_tokens_latest_ms = textview_stats.lsp_render_tokens_latest_ms,
+    lsp_render_tokens_cache_hits = textview_stats.lsp_render_tokens_cache_hits,
+    lsp_render_tokens_cache_misses = textview_stats.lsp_render_tokens_cache_misses,
+    lsp_render_tokens_line_offsets_ms = textview_stats.lsp_render_tokens_line_offsets_ms,
+    lsp_render_tokens_line_offsets_lines = textview_stats.lsp_render_tokens_line_offsets_lines,
+    lsp_render_tokens_scan_ms = textview_stats.lsp_render_tokens_scan_ms,
+    lsp_render_tokens_scan_tokens = textview_stats.lsp_render_tokens_scan_tokens,
+    lsp_render_tokens_spans = textview_stats.lsp_render_tokens_spans,
+    lsp_render_tokens_base_ms = textview_stats.lsp_render_tokens_base_ms,
+    lsp_render_tokens_overlay_ms = textview_stats.lsp_render_tokens_overlay_ms,
+    lsp_render_tokens_schedule_calls = textview_stats.lsp_render_tokens_schedule_calls,
+    textview_visible_lines = textview_stats.visible_lines,
+    textview_text_lines = textview_stats.text_lines,
+    textview_tokens = textview_stats.tokens,
+    textview_draw_text_calls = textview_stats.draw_text_calls,
+    textview_caret_draw_calls = textview_stats.caret_draw_calls,
+    textview_selection_rect_calls = textview_stats.selection_rect_calls,
+    textview_prepare_highlight_iters = textview_stats.prepare_highlight_iters,
+    textview_prepare_caret_scan_count = textview_stats.prepare_caret_scan_count,
+    textview_visible_carets = textview_stats.visible_carets,
+    textview_prepare_selection_iters = textview_stats.prepare_selection_iters,
+    textview_visible_selection_ranges = textview_stats.visible_selection_ranges,
+    textview_selection_cache_lines = textview_stats.selection_cache_lines,
+    textview_selection_cache_ranges = textview_stats.selection_cache_ranges,
+    textview_selection_cache_merged_ranges = textview_stats.selection_cache_merged_ranges,
+    buffer_get_selections_calls = textview_stats.buffer_get_selections_calls,
+    buffer_get_selections_iters = textview_stats.buffer_get_selections_iters,
+    buffer_set_selections_calls = textview_stats.buffer_set_selections_calls,
+    buffer_set_selections_ms = textview_stats.buffer_set_selections_ms,
+    buffer_add_selection_calls = textview_stats.buffer_add_selection_calls,
+    buffer_add_selection_ms = textview_stats.buffer_add_selection_ms,
+    buffer_merge_cursors_calls = textview_stats.buffer_merge_cursors_calls,
+    buffer_merge_cursors_ms = textview_stats.buffer_merge_cursors_ms,
+    buffer_sanitize_selection_calls = textview_stats.buffer_sanitize_selection_calls,
+    buffer_sanitize_selection_ms = textview_stats.buffer_sanitize_selection_ms,
+    buffer_apply_edits_calls = textview_stats.buffer_apply_edits_calls,
+    buffer_apply_edits_ms = textview_stats.buffer_apply_edits_ms,
+    command_calls = textview_stats.command_calls,
+    command_total_ms = textview_stats.command_total_ms,
+    command_predicate_ms = textview_stats.command_predicate_ms,
+    command_body_ms = textview_stats.command_body_ms,
+    slowest_command_ms = textview_stats.slowest_command_ms,
+    slowest_command_name = textview_stats.slowest_command_name,
+    statusbar_selection_ms = textview_stats.statusbar_selection_ms,
+    statusbar_selection_cache_hits = textview_stats.statusbar_selection_cache_hits,
+    statusbar_selection_cache_misses = textview_stats.statusbar_selection_cache_misses,
     sleep_requested_ms = sleep_requested_ms,
     sleep_actual_ms = sleep_actual_ms,
     skipped_post_present_sleep = skipped_post_present_sleep,
@@ -3420,7 +3420,7 @@ function core.run_step(options)
     core.performance_snapshot[key] = value
   end
   for _, key in ipairs(perf_diagnostic_keys) do
-    core.performance_snapshot[key] = docview_stats[key]
+    core.performance_snapshot[key] = textview_stats[key]
   end
   local perf = package.loaded["core.perf"]
   if perf and perf.on_frame then perf.on_frame(core.performance_snapshot) end
@@ -3477,17 +3477,17 @@ function core.run_step(options)
     display_packet_replay_ms = renderer_stats.display_packet_replay_ms,
     display_packet_frame_allocation_failures = renderer_stats.display_packet_frame_allocation_failures,
     rencache_frame_failed = renderer_stats.rencache_frame_failed,
-    docview_draw_ms = docview_stats.draw_ms,
-    docview_gutter_ms = docview_stats.gutter_ms,
-    docview_body_ms = docview_stats.body_ms,
-    docview_text_ms = docview_stats.text_ms,
-    docview_highlighter_get_line_ms = docview_stats.highlighter_get_line_ms,
-    docview_token_loop_ms = docview_stats.token_loop_ms,
-    docview_renderer_draw_text_ms = docview_stats.renderer_draw_text_ms,
-    docview_visible_lines = docview_stats.visible_lines,
-    docview_text_lines = docview_stats.text_lines,
-    docview_tokens = docview_stats.tokens,
-    docview_draw_text_calls = docview_stats.draw_text_calls,
+    textview_draw_ms = textview_stats.draw_ms,
+    textview_gutter_ms = textview_stats.gutter_ms,
+    textview_body_ms = textview_stats.body_ms,
+    textview_text_ms = textview_stats.text_ms,
+    textview_highlighter_get_line_ms = textview_stats.highlighter_get_line_ms,
+    textview_token_loop_ms = textview_stats.token_loop_ms,
+    textview_renderer_draw_text_ms = textview_stats.renderer_draw_text_ms,
+    textview_visible_lines = textview_stats.visible_lines,
+    textview_text_lines = textview_stats.text_lines,
+    textview_tokens = textview_stats.tokens,
+    textview_draw_text_calls = textview_stats.draw_text_calls,
     sleep_requested_ms = sleep_requested_ms,
     sleep_actual_ms = sleep_actual_ms,
     skipped_post_present_sleep = skipped_post_present_sleep,
@@ -3572,10 +3572,10 @@ function core.on_error(err)
   fp:write("Error: " .. tostring(err) .. "\n")
   fp:write(debug.traceback("", 4) .. "\n")
   fp:close()
-  -- save copy of all unsaved documents
-  for _, doc in ipairs(core.docs) do
-    if doc:is_dirty() and doc.filename then
-      pcall(doc.save, doc, doc.filename .. "~", doc.abs_filename and (doc.abs_filename .. "~"))
+  -- Save a copy of all unsaved Buffers.
+  for _, buffer in ipairs(core.buffers) do
+    if buffer:is_dirty() and buffer.filename then
+      pcall(buffer.save, buffer, buffer.filename .. "~", buffer.abs_filename and (buffer.abs_filename .. "~"))
     end
   end
 end

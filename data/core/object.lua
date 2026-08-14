@@ -33,7 +33,7 @@ end
 
 ---Check if object is exactly of the given type (no inheritance check).
 ---Use this for strict type matching.
----Example: `view:is(DocView)` returns true only if view is a DocView, not a subclass
+---Example: `view:is(TextView)` returns true only if view is a TextView, not a subclass
 ---@param T any Class to check against
 ---@return boolean is_exact True if object is exactly type T
 function Object:is(T)
@@ -42,7 +42,7 @@ end
 
 ---Check if the given object is exactly an instance of this class.
 ---Inverse of is() - checks if T is an instance of self.
----Example: `DocView:is_class_of(obj)` checks if obj is exactly a DocView
+---Example: `TextView:is_class_of(obj)` checks if obj is exactly a TextView
 ---@param T any Object to check
 ---@return boolean is_instance True if T is exactly an instance of this class
 function Object:is_class_of(T)
@@ -69,7 +69,7 @@ end
 
 ---Check if the given object/class inherits from this class.
 ---Inverse of extends() - checks if T is a subclass of self.
----Example: `View:is_extended_by(DocView)` checks if DocView inherits from View
+---Example: `View:is_extended_by(TextView)` checks if TextView inherits from View
 ---@param T any Object or class to check
 ---@return boolean is_extended True if T inherits from this class
 function Object:is_extended_by(T)

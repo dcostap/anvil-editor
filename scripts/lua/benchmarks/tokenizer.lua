@@ -1,4 +1,4 @@
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 
 local function copy_table(source)
   local copy = {}
@@ -72,7 +72,7 @@ if not info or info.type ~= "file" then
   os.exit(1)
 end
 
-local doc = Doc(file_arg, abs_path, false)
+local buffer = Buffer(file_arg, abs_path, false)
 
 local function tokenize_line(tokenizer, state, text)
   local resume
@@ -82,7 +82,7 @@ local function tokenize_line(tokenizer, state, text)
 
   repeat
     local tokens
-    tokens, next_state, resume = tokenizer.tokenize(doc.syntax, text, next_state, resume)
+    tokens, next_state, resume = tokenizer.tokenize(buffer.syntax, text, next_state, resume)
     out = tokens
     if resume then
       total_resumes = total_resumes + 1
@@ -99,8 +99,8 @@ local function verify_parity()
   local lua_resumes = 0
   local native_resumes = 0
 
-  for i = 1, #doc.lines do
-    local text = doc:get_utf8_line(i)
+  for i = 1, #buffer.lines do
+    local text = buffer:get_utf8_line(i)
     local lua_tokens
     local native_tokens
     local line_lua_resumes
@@ -143,8 +143,8 @@ local function benchmark_once(tokenizer)
   local total_resumes = 0
   local start = system.get_time()
 
-  for i = 1, #doc.lines do
-    local text = doc:get_utf8_line(i)
+  for i = 1, #buffer.lines do
+    local text = buffer:get_utf8_line(i)
     local _, next_state, line_resumes = tokenize_line(tokenizer, state, text)
     state = next_state
     total_resumes = total_resumes + line_resumes
@@ -183,8 +183,8 @@ end
 local parity_ok, parity = verify_parity()
 
 print(string.format("File: %s", abs_path))
-print(string.format("Syntax: %s", doc.syntax.name or "unknown"))
-print(string.format("Lines: %d", #doc.lines))
+print(string.format("Syntax: %s", buffer.syntax.name or "unknown"))
+print(string.format("Lines: %d", #buffer.lines))
 print(string.format("Iterations: %d", iterations))
 
 if parity_ok then

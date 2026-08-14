@@ -1,22 +1,22 @@
 local core = require "core"
 local config = require "core.config"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local style = require "core.style"
 local test = require "core.test"
 
 local function make_view(text)
-  local doc = Doc(nil, nil, true)
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
-  local view = DocView(doc)
+  local buffer = Buffer(nil, nil, true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  local view = TextView(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 400, 40
   view:set_wrapping_enabled(false)
-  return view, doc
+  return view, buffer
 end
 
-test.describe("DocView variable visual row metrics", function()
+test.describe("TextView variable visual row metrics", function()
   test.before_each(function(context)
     context.old_scroll_past_end = config.scroll_past_end
     context.old_scroll_context_lines = config.scroll_context_lines
@@ -70,16 +70,16 @@ test.describe("DocView variable visual row metrics", function()
     test.equal(line, 3)
   end)
 
-  test.it("invalidates metric cache when document text changes", function()
-    local view, doc = make_view("plain\ntwo")
+  test.it("invalidates metric cache when buffer text changes", function()
+    local view, buffer = make_view("plain\ntwo")
     local lh = view:get_line_height()
     view:add_visual_metric_provider("headings", {
       line_height = function(_, v, line)
-        if v.doc.lines[line]:match("^#") then return lh * 2 end
+        if v.buffer.lines[line]:match("^#") then return lh * 2 end
       end,
     })
     test.equal(view:get_visual_row_height(1), lh)
-    doc:insert(1, 1, "# ")
+    buffer:insert(1, 1, "# ")
     test.equal(view:get_visual_row_height(1), lh * 2)
   end)
 
@@ -97,15 +97,15 @@ test.describe("DocView variable visual row metrics", function()
   end)
 
   test.it("invalidates metrics after legacy raw text edits", function()
-    local view, doc = make_view("plain")
+    local view, buffer = make_view("plain")
     local lh = view:get_line_height()
     view:add_visual_metric_provider("headings", {
       line_height = function(_, v, line)
-        if v.doc.lines[line]:match("^#") then return lh * 2 end
+        if v.buffer.lines[line]:match("^#") then return lh * 2 end
       end,
     })
     test.equal(view:get_visual_row_height(1), lh)
-    doc:raw_insert(1, 1, "# ", doc.undo_stack, system.get_time())
+    buffer:raw_insert(1, 1, "# ", buffer.undo_stack, system.get_time())
     test.equal(view:get_visual_row_height(1), lh * 2)
   end)
 
@@ -329,7 +329,7 @@ test.describe("DocView variable visual row metrics", function()
     local base_size = view:get_scrollable_size()
     view:add_visual_metric_provider("tall-final", {
       line_height = function(_, _, line)
-        return line == #view.doc.lines and lh * 3 or nil
+        return line == #view.buffer.lines and lh * 3 or nil
       end,
     })
 

@@ -45,7 +45,7 @@ function NumberBox:new(parent, value, min, max, step)
   self:set_value(value)
 
   local this = self
-  function self.textbox.textview.doc:on_text_change(type)
+  function self.textbox.textview.buffer:on_text_change(type)
     if not tonumber(this.textbox:get_text()) then
       if not this.coroutine_run then
         this.coroutine_run = true

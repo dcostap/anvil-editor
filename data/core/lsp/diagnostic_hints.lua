@@ -1,14 +1,14 @@
 local core = require "core"
 local style = require "core.style"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 local diagnostic_markers = require "core.lsp.diagnostic_markers"
 
 local diagnostic_hints = {}
 
 local cache = setmetatable({}, { __mode = "k" })
 
-local function doc_change_id(doc)
-  if doc and doc.get_change_id then return doc:get_change_id() end
+local function buffer_change_id(buffer)
+  if buffer and buffer.get_change_id then return buffer:get_change_id() end
   return nil
 end
 
@@ -40,9 +40,9 @@ local function should_replace(existing, item, severity)
   return diagnostic_message(item.diagnostic) < diagnostic_message(existing.diagnostic)
 end
 
-local function build_line_hints(doc)
+local function build_line_hints(buffer)
   local by_line = {}
-  for _, item in ipairs(diagnostic_markers.visual_document_items(doc)) do
+  for _, item in ipairs(diagnostic_markers.visual_buffer_items(buffer)) do
     local diagnostic = item.diagnostic or {}
     local severity = tonumber(diagnostic.severity)
     if visible_severity(severity) and item.line1 then
@@ -63,29 +63,29 @@ local function build_line_hints(doc)
   return by_line
 end
 
-local function cached_line_hints(doc)
-  if not doc then return {} end
+local function cached_line_hints(buffer)
+  if not buffer then return {} end
   local generation = diagnostic_markers.generation and diagnostic_markers.generation() or 0
-  local change_id = doc_change_id(doc)
-  local entry = cache[doc]
+  local change_id = buffer_change_id(buffer)
+  local entry = cache[buffer]
   if not entry or entry.generation ~= generation or entry.change_id ~= change_id then
     entry = {
       generation = generation,
       change_id = change_id,
-      by_line = build_line_hints(doc),
+      by_line = build_line_hints(buffer),
     }
-    cache[doc] = entry
+    cache[buffer] = entry
   end
   return entry.by_line
 end
 
-function diagnostic_hints.get_line_hint(doc, line)
-  local entry = cached_line_hints(doc)[line]
+function diagnostic_hints.get_line_hint(buffer, line)
+  local entry = cached_line_hints(buffer)[line]
   if not entry or not entry.hint then return nil end
   return {
     text = entry.hint.text,
     color = severity_color(entry.hint.severity),
-    placement = "after_line_document_text",
+    placement = "after_line_buffer_text",
     gap_spaces = 4,
     truncate = "right",
   }
@@ -111,16 +111,16 @@ local function append_hint(view, base_hint, diagnostic_hint)
 end
 
 function diagnostic_hints.install()
-  DocView.__lsp_diagnostic_hints_module = diagnostic_hints
-  if DocView.__lsp_diagnostic_hints_installed then return false end
-  local base_get_line_hint = DocView.get_line_hint
-  DocView.__lsp_diagnostic_hints_installed = true
-  DocView.__lsp_diagnostic_hints_base_get_line_hint = base_get_line_hint
+  TextView.__lsp_diagnostic_hints_module = diagnostic_hints
+  if TextView.__lsp_diagnostic_hints_installed then return false end
+  local base_get_line_hint = TextView.get_line_hint
+  TextView.__lsp_diagnostic_hints_installed = true
+  TextView.__lsp_diagnostic_hints_base_get_line_hint = base_get_line_hint
 
-  function DocView:get_line_hint(line)
+  function TextView:get_line_hint(line)
     local base_hint = base_get_line_hint(self, line)
-    local module = DocView.__lsp_diagnostic_hints_module or diagnostic_hints
-    local diagnostic_hint = module.get_line_hint(self.doc, line)
+    local module = TextView.__lsp_diagnostic_hints_module or diagnostic_hints
+    local diagnostic_hint = module.get_line_hint(self.buffer, line)
     return append_hint(self, base_hint, diagnostic_hint)
   end
 

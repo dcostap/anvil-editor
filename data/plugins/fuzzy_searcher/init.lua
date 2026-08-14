@@ -9,8 +9,8 @@ local config = require "core.config"
 local process = require "core.process"
 local http = require "core.http"
 local storage = require "core.storage"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local ImageView = require "core.imageview"
 local file_context = require "core.file_context"
 local poi = require "core.poi"
@@ -21,17 +21,17 @@ local Widget = require "widget"
 local TextBox = require "widget.textbox"
 local fuzzy_native = require "fuzzy"
 
-local PreviewDocView = DocView:extend()
+local PreviewTextView = TextView:extend()
 
-function PreviewDocView:get_line_number_gutter_width()
+function PreviewTextView:get_line_number_gutter_width()
   return self:get_font():get_width("00000")
 end
 
-function PreviewDocView:draw_line_gutter(line, x, y, width)
+function PreviewTextView:draw_line_gutter(line, x, y, width)
   local lh = self:get_line_height()
   if self:line_numbers_visible() then
     local color = style.line_number
-    for _, line1, _, line2 in self.doc:get_selections(true) do
+    for _, line1, _, line2 in self.buffer:get_selections(true) do
       if line >= line1 and line <= line2 then
         color = style.line_number2
         break
@@ -217,16 +217,16 @@ end
 
 local function modal_textbox_command_allowed(cmd)
   if type(cmd) ~= "string" then return false end
-  if cmd:match("^doc:move%-") or cmd:match("^doc:select%-") then return true end
-  if cmd:match("^doc:delete") then return true end
-  return cmd == "doc:backspace"
-      or cmd == "doc:copy"
-      or cmd == "doc:cut"
-      or cmd == "doc:paste"
-      or cmd == "doc:undo"
-      or cmd == "doc:redo"
-      or cmd == "doc:select-all"
-      or cmd == "doc:select-none"
+  if cmd:match("^buffer:move%-") or cmd:match("^buffer:select%-") then return true end
+  if cmd:match("^buffer:delete") then return true end
+  return cmd == "text:backspace"
+      or cmd == "text:copy"
+      or cmd == "text:cut"
+      or cmd == "text:paste"
+      or cmd == "text:undo"
+      or cmd == "text:redo"
+      or cmd == "text:select-all"
+      or cmd == "text:select-none"
 end
 
 local function modal_command(stroke, predicate)
@@ -1421,7 +1421,7 @@ end
 
 local binary_preview_extensions = {
   pdf=true,
-  doc=true, docx=true, xls=true, xlsx=true, ppt=true, pptx=true,
+  buffer=true, docx=true, xls=true, xlsx=true, ppt=true, pptx=true,
   odt=true, ods=true, odp=true,
   zip=true, rar=true, ["7z"]=true, tar=true, gz=true, bz2=true, xz=true,
   exe=true, dll=true, pdb=true, lib=true, obj=true, so=true, dylib=true,
@@ -1915,8 +1915,8 @@ local function color_with_alpha(color, alpha)
   return { color[1] or 255, color[2] or 255, color[3] or 255, alpha or color[4] or 255 }
 end
 
-function PreviewDocView:get_font()
-  return style.get_small_font(DocView.get_font(self))
+function PreviewTextView:get_font()
+  return style.get_small_font(TextView.get_font(self))
 end
 
 local function text_span_for_anchor(spans, text_len, anchor_pos)
@@ -2172,7 +2172,7 @@ local function result_list_label_and_spans(r)
   end
   if r.kind == "symbol" then
     local text = r.label or r.name or ""
-    local prefix = r.symbol_scope == "document" and "$$ " or "$ "
+    local prefix = r.symbol_scope == "buffer" and "$$ " or "$ "
     return prefix .. text, offset_spans(r.match_spans or {}, #prefix)
   end
   local text = r.label or r.file or ""
@@ -2280,7 +2280,7 @@ local function draw_symbol_result_row(font, r, x, y, width, row_height)
   local path_w, gap, text_w = grep_row_columns(width)
   local line = tonumber(r.line) or 1
   local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
-  local prefix = r.symbol_scope == "document" and "$$ " or "$ "
+  local prefix = r.symbol_scope == "buffer" and "$$ " or "$ "
   draw_file_result_row(font, r.file or "", r.file_spans, prefix, x, y, path_w, line_suffix, r.prefix_span, r.root_role)
   if text_w <= 0 then return end
 
@@ -2788,20 +2788,20 @@ function FSView:new(prefix, opts)
   self.everything_loading_status = nil
 
   local source_view = core.active_view
-  local source_doc = source_view and source_view.doc
+  local source_buffer = source_view and source_view.buffer
   self.source_view = file_context.current_content_view(source_view) or source_view
-  self.source_doc = source_doc
+  self.source_buffer = source_buffer
   self.source_file_path = file_context.view_file_path(source_view)
-  self.source_file_line = source_doc and source_doc:get_selection(false) or 1
+  self.source_file_line = source_buffer and source_buffer:get_selection(false) or 1
 
   self.input = TextBox(self, prefix or "", "")
-  -- The picker query is a single-line field.  DocView defaults to the global
+  -- The picker query is a single-line field.  TextView defaults to the global
   -- editor wrapping setting, which can otherwise make long queries wrap in
   -- the input widget instead of scrolling horizontally.
   self.input.textview:set_wrapping_enabled(false)
   local default_input_draw_line_text = self.input.textview.draw_line_text
   function self.input.textview:draw_line_text(line, x, y)
-    local text = self.doc.lines[line] or ""
+    local text = self.buffer.lines[line] or ""
     local before, mode_marker, after = fuzzy_searcher.split_prompt_mode_marker(text)
     if mode_marker == "" or self.subparent.password then
       return default_input_draw_line_text(self, line, x, y)
@@ -2820,7 +2820,7 @@ function FSView:new(prefix, opts)
   -- When prefix is a grep mode quoted-exact query (e.g. #"text"),
   -- place the cursor before the closing quote so the user can extend the query.
   if (prefix or ""):match('^#".*"$') then cursor_col = cursor_col - 1 end
-  self.input.textview.doc:set_selection(1, cursor_col, 1, cursor_col)
+  self.input.textview.buffer:set_selection(1, cursor_col, 1, cursor_col)
   self.input.border.color = style.dim
   self.input.activate = function(input)
     TextBox.activate(input)
@@ -2839,7 +2839,7 @@ function FSView:new(prefix, opts)
   end
 
   if self.static_mode then
-    self.input.textview.doc.readonly = true
+    self.input.textview.buffer.readonly = true
   end
 
   if not self.static_mode and prompt_uses_file_index(prefix) then
@@ -3164,11 +3164,11 @@ function FSView:preview_contains(x, y)
 end
 
 function FSView:clear_preview_view()
-  if self.preview_view and self.preview_view.doc then
+  if self.preview_view and self.preview_view.buffer then
     if self.preview_view.cancel_horizontal_extent_scan then
       self.preview_view:cancel_horizontal_extent_scan()
     end
-    self.preview_view.doc:clear_search_selections()
+    self.preview_view.buffer:clear_search_selections()
   end
   self.preview_view = nil
   self.preview_key = nil
@@ -3185,19 +3185,19 @@ local function draw_preview_debug(view, result, x, y, w, h)
   local lines = {}
   local clip = core.clip_rect_stack and core.clip_rect_stack[#core.clip_rect_stack] or {}
 
-  if view:extends(DocView) then
+  if view:extends(TextView) then
     local minline, maxline = view:get_visible_line_range()
     local gw = view:get_gutter_width()
     local tx, ty = view:get_line_screen_position(minline)
-    local raw = tostring(view.doc.lines[minline] or "")
-    local utf8 = tostring(view.doc:get_utf8_line(minline) or "")
+    local raw = tostring(view.buffer.lines[minline] or "")
+    local utf8 = tostring(view.buffer:get_utf8_line(minline) or "")
     local sample = raw:gsub("\t", "→"):gsub("\n", "⏎")
     local usample = utf8:gsub("\t", "→"):gsub("\n", "⏎")
-    local tok = view.doc.highlighter:get_line(minline).tokens
-    lines[#lines+1] = "PREVIEW DEBUG: DocView"
+    local tok = view.buffer.highlighter:get_line(minline).tokens
+    lines[#lines+1] = "PREVIEW DEBUG: TextView"
     lines[#lines+1] = string.format("rect=(%.0f,%.0f %.0fx%.0f) view=(%.0f,%.0f %.0fx%.0f)", x, y, w, h, view.position.x, view.position.y, view.size.x, view.size.y)
     lines[#lines+1] = string.format("clip=(%.0f,%.0f %.0fx%.0f) scroll=(%.0f,%.0f -> %.0f,%.0f)", clip[1] or -1, clip[2] or -1, clip[3] or -1, clip[4] or -1, view.scroll.x, view.scroll.y, view.scroll.to.x, view.scroll.to.y)
-    lines[#lines+1] = string.format("lines=%d visible=%d..%d target=%s gutter=%.0f text_xy=(%.0f,%.0f) binary=%s", #view.doc.lines, minline, maxline, tostring(result and result.line), gw, tx, ty, tostring(view.doc.binary))
+    lines[#lines+1] = string.format("lines=%d visible=%d..%d target=%s gutter=%.0f text_xy=(%.0f,%.0f) binary=%s", #view.buffer.lines, minline, maxline, tostring(result and result.line), gw, tx, ty, tostring(view.buffer.binary))
     lines[#lines+1] = string.format("raw[%d] len=%d: %s", minline, #raw, sample:sub(1, 90))
     lines[#lines+1] = string.format("utf8[%d] len=%d: %s", minline, #utf8, usample:sub(1, 90))
     lines[#lines+1] = string.format("tokens=%d first=(%s,%s)", #tok, tostring(tok[1]), tostring(tok[2] and tok[2]:sub(1, 40)))
@@ -3272,7 +3272,7 @@ function FSView:update_preview_view()
       end
       return nil
     end
-    key = "doc:" .. path
+    key = "text:" .. path
   end
 
   if self.preview_key ~= key then
@@ -3280,22 +3280,22 @@ function FSView:update_preview_view()
     if key:sub(1, 6) == "image:" then
       view = ImageView(path, "fit")
     else
-      local ok, doc = pcall(Doc)
-      if ok and doc then
-        doc.disable_language_services = true
-        doc.disable_treesitter = true
-        doc.disable_gitdiff_highlight = true
+      local ok, buffer = pcall(Buffer)
+      if ok and buffer then
+        buffer.disable_language_services = true
+        buffer.disable_treesitter = true
+        buffer.disable_gitdiff_highlight = true
         local filename = core.normalize_to_project_dir(path)
         ok = pcall(function()
-          doc:set_filename(filename, path)
-          doc:load(path)
+          buffer:set_filename(filename, path)
+          buffer:load(path)
         end)
       end
-      if not ok or not doc then
+      if not ok or not buffer then
         self.preview_blocked = { reason = "Cannot open file", path = path }
         return nil
       end
-      view = PreviewDocView(doc)
+      view = PreviewTextView(buffer)
       view:set_wrapping_enabled(false)
     end
     self.preview_view = view
@@ -3308,8 +3308,8 @@ function FSView:update_preview_view()
   view.size.x, view.size.y = math.max(0, pw), math.max(0, ph)
 
   local target = r.line or 1
-  if view.doc then
-    target = common.clamp(target, 1, #view.doc.lines)
+  if view.buffer then
+    target = common.clamp(target, 1, #view.buffer.lines)
     local highlight_key = table.concat({
       r.kind or "", r.grep_query or "", r.fuzzy_query or "", tostring(target),
       tostring(r.col or ""), tostring(r.line2 or ""), tostring(r.col2 or ""), r.text or "",
@@ -3317,12 +3317,12 @@ function FSView:update_preview_view()
     if self.preview_target_line ~= target or self.preview_highlight_key ~= highlight_key then
       local reveal_col1, reveal_col2
       view:with_selection_state(function()
-        view.doc:clear_search_selections()
+        view.buffer:clear_search_selections()
         local selections = {}
         if r.kind == "grep" then
-          for _, span in ipairs(grep_content_spans(view.doc.lines[target] or "", r, 0, target) or {}) do
+          for _, span in ipairs(grep_content_spans(view.buffer.lines[target] or "", r, 0, target) or {}) do
             local col1, col2 = span[1], span[2] + 1
-            view.doc:add_search_selection(target, col1, target, col2)
+            view.buffer:add_search_selection(target, col1, target, col2)
             if not reveal_col1 then reveal_col1, reveal_col2 = col1, col2 end
             table.insert(selections, target)
             table.insert(selections, col1)
@@ -3330,11 +3330,11 @@ function FSView:update_preview_view()
             table.insert(selections, col2)
           end
         elseif r.kind == "symbol" and r.col then
-          local line1 = common.clamp(tonumber(r.line) or target, 1, #view.doc.lines)
-          local line2 = common.clamp(tonumber(r.line2) or line1, 1, #view.doc.lines)
+          local line1 = common.clamp(tonumber(r.line) or target, 1, #view.buffer.lines)
+          local line2 = common.clamp(tonumber(r.line2) or line1, 1, #view.buffer.lines)
           local col1 = math.max(1, tonumber(r.col) or 1)
           local col2 = math.max(col1 + 1, tonumber(r.col2) or (col1 + #(r.name or r.label or "")))
-          view.doc:add_search_selection(line1, col1, line2, col2)
+          view.buffer:add_search_selection(line1, col1, line2, col2)
           reveal_col1, reveal_col2 = col1, col2
           table.insert(selections, line1)
           table.insert(selections, col1)
@@ -3342,17 +3342,17 @@ function FSView:update_preview_view()
           table.insert(selections, col2)
         end
         if #selections > 0 then
-          view.doc:set_selection(selections[1], selections[2], selections[3], selections[4])
+          view.buffer:set_selection(selections[1], selections[2], selections[3], selections[4])
           for i = 5, #selections, 4 do
-            view.doc:set_selections(
+            view.buffer:set_selections(
               math.floor((i - 1) / 4) + 1,
               selections[i], selections[i + 1], selections[i + 2], selections[i + 3],
               nil, 0
             )
           end
-          view.doc.last_selection = 1
+          view.buffer.last_selection = 1
         else
-          view.doc:set_selection(target, 1, target, 1)
+          view.buffer:set_selection(target, 1, target, 1)
         end
       end)
       view:scroll_to_line(target, false, true)
@@ -3885,7 +3885,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     return
   elseif mode == "$$" then
     kill_file_search()
-    self:start_current_document_symbol_search(base, reset_selection)
+    self:start_current_buffer_symbol_search(base, reset_selection)
     return
   elseif mode == "@@" then
     kill_file_search()
@@ -4634,7 +4634,7 @@ local function symbol_result_from_item(item, query, opts)
     root_role = display and display.root_role or item.root_role,
     root_id = display and display.root_id or item.root_id,
     prefix_span = display and display.prefix_span or item.prefix_span,
-    doc = opts.doc,
+    buffer = opts.buffer,
     line = line,
     col = col,
     line2 = line2,
@@ -4831,37 +4831,37 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
   end)
 end
 
-function FSView:start_current_document_symbol_search(query, reset_selection)
+function FSView:start_current_buffer_symbol_search(query, reset_selection)
   symbol_generation = symbol_generation + 1
   local gen = symbol_generation
   local limit = self:max_result_limit()
   query = trim_query(query)
-  self:defer_loading_feedback("Finding current Document symbols…", {
+  self:defer_loading_feedback("Finding current Buffer symbols…", {
     clear_results = true,
     reset_selection = reset_selection,
     has_more = false,
   })
 
   core.add_thread(function()
-    local doc = self.source_doc or (self.source_view and self.source_view.doc) or (core.active_view and core.active_view.doc)
+    local buffer = self.source_buffer or (self.source_view and self.source_view.buffer) or (core.active_view and core.active_view.buffer)
     local treesitter = require "core.treesitter"
-    if doc then treesitter.attach_or_update_doc(doc, "current-document-symbol-search") end
+    if buffer then treesitter.attach_or_update_buffer(buffer, "current-buffer-symbol-search") end
     local deadline = system.get_time() + 3
-    while doc and doc.treesitter and doc.treesitter.status ~= "ready" and system.get_time() < deadline do
+    while buffer and buffer.treesitter and buffer.treesitter.status ~= "ready" and system.get_time() < deadline do
       if gen ~= symbol_generation or active_view ~= self then return end
-      treesitter.poll_doc(doc)
+      treesitter.poll_buffer(buffer)
       coroutine.yield(0.03)
     end
     if gen ~= symbol_generation or active_view ~= self then return end
     local ts_symbols = require "core.treesitter.symbol_index"
-    local results, reason, status = ts_symbols.current_document_symbols(doc, query, { limit = limit + 1 })
+    local results, reason, status = ts_symbols.current_buffer_symbols(buffer, query, { limit = limit + 1 })
     if status == "fresh" or status == "stale" then
-      set_symbol_results(self, query, results, "current Document", status, reason, limit, { scope = "document", doc = doc })
-      if #self.results == 0 and reason then self.status = "No current Document symbols: " .. tostring(reason) end
+      set_symbol_results(self, query, results, "current Buffer", status, reason, limit, { scope = "buffer", buffer = buffer })
+      if #self.results == 0 and reason then self.status = "No current Buffer symbols: " .. tostring(reason) end
     else
       self:cancel_deferred_loading_feedback()
       self.results = {}
-      self.status = reason or "No current Document symbols"
+      self.status = reason or "No current Buffer symbols"
       self:schedule_update(true)
     end
   end)
@@ -4956,10 +4956,10 @@ function fuzzy_searcher.apply_prompt_history_text(view, text, select_query)
   view.input:set_text(text)
   view._applying_prompt_history = false
 
-  local doc = view.input and view.input.textview and view.input.textview.doc
-  if doc then
+  local buffer = view.input and view.input.textview and view.input.textview.buffer
+  if buffer then
     local col = select_query and fuzzy_searcher.prompt_query_start(text) or (#text + 1)
-    doc:set_selection(1, col, 1, #text + 1)
+    buffer:set_selection(1, col, 1, #text + 1)
   end
   view.dirty = true
   view.force_refresh = true
@@ -5023,7 +5023,7 @@ function FSView:selected_file_path()
     return common.normalize_path(fullpath(r))
   end
 
-  local path = r.doc and r.doc.abs_filename
+  local path = r.buffer and r.buffer.abs_filename
   if path and path ~= "" then return common.normalize_path(path) end
 end
 
@@ -5075,12 +5075,12 @@ function FSView:confirm(target_side)
     end
     return
   end
-  if r.doc and r.line then
-    local doc = r.doc
+  if r.buffer and r.line then
+    local buffer = r.buffer
     local source_view = self.source_view
     self:close()
-    if source_view and source_view.doc == doc then
-      if r.line2 and r.col2 then doc:set_selection(r.line, r.col, r.line2, r.col2) else doc:set_selection(r.line, r.col) end
+    if source_view and source_view.buffer == buffer then
+      if r.line2 and r.col2 then buffer:set_selection(r.line, r.col, r.line2, r.col2) else buffer:set_selection(r.line, r.col) end
     end
     return
   end
@@ -5397,9 +5397,9 @@ end
 
 local function selected_text_for_search()
   local view = core.active_view
-  local doc = view and view.doc
-  if not doc then return "" end
-  local text = doc:get_text(table.unpack({ doc:get_selection() })) or ""
+  local buffer = view and view.buffer
+  if not buffer then return "" end
+  local text = buffer:get_text(table.unpack({ buffer:get_selection() })) or ""
   return text
 end
 
@@ -5481,7 +5481,7 @@ command.add(nil, {
   ["fuzzy-searcher:open-everything-files"] = function() open("@@") end,
   ["fuzzy-searcher:open-grep"] = function() open("#") end,
   ["fuzzy-searcher:open-symbols"] = function() open("$") end,
-  ["fuzzy-searcher:open-current-document-symbols"] = function() open("$$") end,
+  ["fuzzy-searcher:open-current-buffer-symbols"] = function() open("$$") end,
   ["fuzzy-searcher:open-commands"] = function() open(">") end,
 })
 
@@ -5513,7 +5513,7 @@ core.fuzzy_searcher_install_global_keymaps = function()
     ["ctrl+shift+e"] = "fuzzy-searcher:open-projects",
     ["ctrl+e"] = "fuzzy-searcher:open-files",
     ["ctrl+shift+j"] = "fuzzy-searcher:open-symbols",
-    ["ctrl+j"] = "fuzzy-searcher:open-current-document-symbols",
+    ["ctrl+j"] = "fuzzy-searcher:open-current-buffer-symbols",
     ["ctrl+shift+f"] = "fuzzy-searcher:open-grep",
     ["ctrl+shift+a"] = "fuzzy-searcher:open-commands",
     ["ctrl+shift+p"] = "fuzzy-searcher:open-commands",
@@ -5557,7 +5557,7 @@ keymap.on_key_pressed = function(key, ...)
     ensure_input_focus(picker)
     fuzzy_focus_log("key-picker-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(picker_cmd))
     command.perform(picker_cmd, ...)
-  elseif textbox_cmd and (not picker.static_mode or textbox_cmd == "doc:copy") then
+  elseif textbox_cmd and (not picker.static_mode or textbox_cmd == "text:copy") then
     ensure_input_focus(picker)
     fuzzy_focus_log("key-textbox-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(textbox_cmd))
     command.perform(textbox_cmd, ...)

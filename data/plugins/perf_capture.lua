@@ -4,7 +4,7 @@
 local core = require "core"
 local config = require "core.config"
 local common = require "core.common"
-local DocView = require "core.docview"
+local Editor = require "core.editor"
 local perf = require "core.perf"
 
 local function is_truthy_value(value)
@@ -51,16 +51,16 @@ if cadence_only then
       local view
       repeat
         view = core.active_view
-        if not (view and view:is(DocView) and view.doc
+        if not (view and view:extends(Editor) and view.buffer
           and (not target_file or target_file == ""
-            or common.path_equals(view.doc.abs_filename, target_file))) then
+            or common.path_equals(view.buffer.abs_filename, target_file))) then
           coroutine.yield(0.01)
         end
-      until view and view:is(DocView) and view.doc
+      until view and view:extends(Editor) and view.buffer
         and (not target_file or target_file == ""
-          or common.path_equals(view.doc.abs_filename, target_file))
-      local line = math.max(1, math.min(#view.doc.lines, math.floor(start_line)))
-      view.doc:set_selection(line, 1)
+          or common.path_equals(view.buffer.abs_filename, target_file))
+      local line = math.max(1, math.min(#view.buffer.lines, math.floor(start_line)))
+      view.buffer:set_selection(line, 1)
       view:scroll_to_line(line, true)
       core.redraw = true
     end)
@@ -110,17 +110,17 @@ local function sibling_perf_path(summary_path, suffix)
   return base .. suffix
 end
 
-local function active_docview()
+local function active_textview()
   local view = core.active_view
-  if view and view:is(DocView) and view.doc and #view.doc.lines > 0 then
-    if capture.file == "" or common.path_equals(view.doc.abs_filename, capture.file) then
+  if view and view:extends(Editor) and view.buffer and #view.buffer.lines > 0 then
+    if capture.file == "" or common.path_equals(view.buffer.abs_filename, capture.file) then
       return view
     end
   end
-  for _, doc in ipairs(core.docs or {}) do
-    if doc and #doc.lines > 0 and (capture.file == "" or common.path_equals(doc.abs_filename, capture.file)) then
-      local views = core.get_views_referencing_doc(doc)
-      if views and views[1] and views[1]:is(DocView) then return views[1] end
+  for _, buffer in ipairs(core.buffers or {}) do
+    if buffer and #buffer.lines > 0 and (capture.file == "" or common.path_equals(buffer.abs_filename, capture.file)) then
+      local views = core.get_views_referencing_buffer(buffer)
+      if views and views[1] and views[1]:extends(Editor) then return views[1] end
     end
   end
 end
@@ -134,14 +134,14 @@ end
 
 local function open_target_file()
   if capture.file == "" then return nil end
-  local ok, doc = pcall(core.open_doc, capture.file)
+  local ok, buffer = pcall(core.open_buffer, capture.file)
   if not ok then
-    core.log_quiet("Perf capture: refusing target file %q: %s", capture.file, tostring(doc))
+    core.log_quiet("Perf capture: refusing target file %q: %s", capture.file, tostring(buffer))
     capture.file = ""
     return nil
   end
-  if not doc then return nil end
-  return activate_view(core.root_panel:open_doc(doc))
+  if not buffer then return nil end
+  return activate_view(core.root_panel:open_buffer(buffer))
 end
 
 local function stabilize_ui(dv)
@@ -152,9 +152,9 @@ local function stabilize_ui(dv)
     core.status_bar:display_messages(false)
     core.status_bar.message = nil
   end
-  if dv and dv.doc then
-    local line = math.max(1, math.min(#dv.doc.lines, capture.start_line))
-    dv.doc:set_selection(line, 1)
+  if dv and dv.buffer then
+    local line = math.max(1, math.min(#dv.buffer.lines, capture.start_line))
+    dv.buffer:set_selection(line, 1)
     dv:scroll_to_line(line, true)
   end
   core.redraw = true
@@ -172,7 +172,7 @@ core.add_background_thread(function()
   local dv = open_target_file()
 
   repeat
-    dv = active_docview() or open_target_file()
+    dv = active_textview() or open_target_file()
     core.redraw = true
     coroutine.yield(0.05)
   until dv
@@ -202,7 +202,7 @@ core.add_background_thread(function()
   core.log_quiet(
     "Perf capture: recording %.2fs on %s (force_redraw=%s)",
     capture.duration,
-    capture.file ~= "" and capture.file or tostring(dv.doc.abs_filename or ""),
+    capture.file ~= "" and capture.file or tostring(dv.buffer.abs_filename or ""),
     tostring(capture.force_redraw)
   )
 
@@ -214,7 +214,7 @@ core.add_background_thread(function()
 
   write_result {
     done = 1,
-    file = capture.file ~= "" and capture.file or tostring(dv.doc.abs_filename or ""),
+    file = capture.file ~= "" and capture.file or tostring(dv.buffer.abs_filename or ""),
     start_time = string.format("%.6f", start_time),
     end_time = string.format("%.6f", end_time),
     duration = string.format("%.3f", end_time - start_time),

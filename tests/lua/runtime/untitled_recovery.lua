@@ -54,7 +54,7 @@ test.describe("untitled recovery helpers", function()
   end)
 
   test.test("safe replace keeps the previous primary if replacement fails after backup", function(context)
-    local path = join_path(context.temp_root, "doc.txt")
+    local path = join_path(context.temp_root, "buffer.txt")
     write_file(path, "old")
 
     local ok, err = recovery.safe_replace_bytes(path, "new", { fail_after_backup = true })
@@ -64,7 +64,7 @@ test.describe("untitled recovery helpers", function()
   end)
 
   test.test("safe replace writes new content and retains a backup", function(context)
-    local path = join_path(context.temp_root, "doc.txt")
+    local path = join_path(context.temp_root, "buffer.txt")
     write_file(path, "old")
 
     local ok, err = recovery.safe_replace_bytes(path, "new")
@@ -73,11 +73,11 @@ test.describe("untitled recovery helpers", function()
     test.equal(read_file(path .. ".bak"), "old")
   end)
 
-  test.test("doc serialization preserves LF and CRLF policy", function()
-    local doc = { lines = { "a\n", "b\n" }, crlf = false }
-    test.equal(recovery.serialize_doc_text(doc), "a\nb\n")
-    doc.crlf = true
-    test.equal(recovery.serialize_doc_text(doc), "a\r\nb\r\n")
+  test.test("buffer serialization preserves LF and CRLF policy", function()
+    local buffer = { lines = { "a\n", "b\n" }, crlf = false }
+    test.equal(recovery.serialize_buffer_text(buffer), "a\nb\n")
+    buffer.crlf = true
+    test.equal(recovery.serialize_buffer_text(buffer), "a\r\nb\r\n")
   end)
 
   test.test("missing primary manifest prefers valid temp over older backup", function(context)
@@ -85,13 +85,13 @@ test.describe("untitled recovery helpers", function()
     context.project_for_manifest = project
     local paths = recovery.project_paths(project)
     test.ok(common.mkdirp(paths.root))
-    write_file(paths.manifest .. ".tmp", "return { docs = { { id = \"from-temp\" } } }")
-    write_file(paths.manifest_bak, "return { docs = { { id = \"from-bak\" } } }")
+    write_file(paths.manifest .. ".tmp", "return { buffers = { { id = \"from-temp\" } } }")
+    write_file(paths.manifest_bak, "return { buffers = { { id = \"from-bak\" } } }")
 
     local loaded = recovery.load_manifest(project)
-    test.equal(#loaded.docs, 1)
-    test.equal(loaded.docs[1].id, "from-temp")
-    test.equal(read_file(paths.manifest), "return { docs = { { id = \"from-temp\" } } }")
+    test.equal(#loaded.buffers, 1)
+    test.equal(loaded.buffers[1].id, "from-temp")
+    test.equal(read_file(paths.manifest), "return { buffers = { { id = \"from-temp\" } } }")
   end)
 
   test.test("invalid primary manifest falls back to valid backup", function(context)
@@ -99,13 +99,13 @@ test.describe("untitled recovery helpers", function()
     context.project_for_manifest = project
     local paths = recovery.project_paths(project)
     test.ok(common.mkdirp(paths.root))
-    write_file(paths.manifest, "return { docs = nil }")
-    write_file(paths.manifest_bak, "return { docs = { { id = \"from-bak\" } } }")
+    write_file(paths.manifest, "return { buffers = nil }")
+    write_file(paths.manifest_bak, "return { buffers = { { id = \"from-bak\" } } }")
 
     local loaded = recovery.load_manifest(project)
-    test.equal(#loaded.docs, 1)
-    test.equal(loaded.docs[1].id, "from-bak")
-    test.equal(read_file(paths.manifest), "return { docs = { { id = \"from-bak\" } } }")
+    test.equal(#loaded.buffers, 1)
+    test.equal(loaded.buffers[1].id, "from-bak")
+    test.equal(read_file(paths.manifest), "return { buffers = { { id = \"from-bak\" } } }")
   end)
 
   test.test("manifest project mismatch is rejected", function(context)
@@ -113,10 +113,10 @@ test.describe("untitled recovery helpers", function()
     context.project_for_manifest = project
     local paths = recovery.project_paths(project)
     test.ok(common.mkdirp(paths.root))
-    write_file(paths.manifest, "return { project = \"" .. join_path(context.temp_root, "other") .. "\", docs = { { id = \"wrong-project\" } } }")
+    write_file(paths.manifest, "return { project = \"" .. join_path(context.temp_root, "other") .. "\", buffers = { { id = \"wrong-project\" } } }")
 
     local loaded = recovery.load_manifest(project)
-    test.equal(#loaded.docs, 0)
+    test.equal(#loaded.buffers, 0)
     test.equal(loaded.project, project)
   end)
 
@@ -124,8 +124,8 @@ test.describe("untitled recovery helpers", function()
     local project = join_path(context.temp_root, "project")
     context.project_for_manifest = project
     local manifest = {
-      docs = {
-        { id = "abc", name = "Untitled-1", backing = "docs" .. PATHSEP .. "abc.txt" }
+      buffers = {
+        { id = "abc", name = "Untitled-1", backing = "buffers" .. PATHSEP .. "abc.txt" }
       }
     }
     local ok, err = recovery.save_manifest(project, manifest)
@@ -133,7 +133,7 @@ test.describe("untitled recovery helpers", function()
 
     local loaded = recovery.load_manifest(project)
     test.equal(loaded.project_key, recovery.project_key(project))
-    test.equal(#loaded.docs, 1)
-    test.equal(loaded.docs[1].id, "abc")
+    test.equal(#loaded.buffers, 1)
+    test.equal(loaded.buffers[1].id, "abc")
   end)
 end)

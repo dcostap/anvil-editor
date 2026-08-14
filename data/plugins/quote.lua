@@ -17,10 +17,10 @@ local function replace(chr)
 end
 
 
-command.add("core.docview", {
+command.add("core.textview", {
   ["quote:quote"] = function(dv)
     if dv.can_edit and not dv:can_edit("quote", { warn = true }) then return end
-    dv.doc:replace(function(text)
+    dv.buffer:replace(function(text)
       return '"' .. text:gsub("[%z\001-\031\\\"]", replace) .. '"'
     end)
   end,

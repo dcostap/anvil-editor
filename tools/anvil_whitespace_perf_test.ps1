@@ -100,10 +100,10 @@ function Analyze-FrameStats([string]$Csv, [double]$StartTime, [double]$EndTime) 
   $metrics = [ordered]@{}
   foreach ($name in @(
     "total_ms", "frame_time_ms", "draw_emit_ms", "renderer_end_ms", "present_ms",
-    "docview_draw_ms", "docview_body_ms", "docview_text_ms", "docview_renderer_draw_text_ms",
-    "docview_highlighter_get_line_ms", "docview_token_loop_ms", "rencache_draw_text_ms", "rencache_draw_text_width_ms",
+    "textview_draw_ms", "textview_body_ms", "textview_text_ms", "textview_renderer_draw_text_ms",
+    "textview_highlighter_get_line_ms", "textview_token_loop_ms", "rencache_draw_text_ms", "rencache_draw_text_width_ms",
     "draw_calls", "quad_instances", "rencache_commands", "rencache_text_commands", "rencache_rect_commands",
-    "docview_visible_lines", "docview_text_lines", "docview_tokens", "docview_draw_text_calls"
+    "textview_visible_lines", "textview_text_lines", "textview_tokens", "textview_draw_text_calls"
   )) {
     $metrics[$name] = Get-ColumnStats $rows $name
   }

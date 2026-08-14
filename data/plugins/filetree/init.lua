@@ -7,7 +7,7 @@ local config = require "core.config"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local style = require "core.style"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local file_context = require "core.file_context"
 local project_paths = require "core.project_paths"
 local panes = require "core.panes"
@@ -54,7 +54,7 @@ local LINE_HINT_COUNT_WORKER_BUDGET = 0.008
 local LINE_HINT_COUNT_CHILD_BUDGET = 0.004
 
 local function perf_stats()
-  return core.docview_frame_stats
+  return core.textview_frame_stats
 end
 
 local function perf_add(stats, key, amount)
@@ -192,14 +192,14 @@ local function line_text(line)
   return line:sub(-1) == "\n" and line:sub(1, -2) or line
 end
 
-local function set_doc_lines(doc, lines)
-  doc:reset()
-  doc.lines = #lines > 0 and lines or { "\n" }
-  doc.clean_lines = {}
-  doc.highlighter:soft_reset()
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+local function set_buffer_lines(buffer, lines)
+  buffer:reset()
+  buffer.lines = #lines > 0 and lines or { "\n" }
+  buffer.clean_lines = {}
+  buffer.highlighter:soft_reset()
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
 local function item_name_less(a, b)
@@ -331,9 +331,9 @@ local function in_project(abs, project_root)
   return common.path_equals(abs, project_root) or common.path_belongs_to(abs, project_root)
 end
 
-local function update_open_docs_after_rename(old_abs, new_abs, entry_type)
-  for _, doc in ipairs(core.docs) do
-    local filename = doc.abs_filename
+local function update_open_buffers_after_rename(old_abs, new_abs, entry_type)
+  for _, buffer in ipairs(core.buffers) do
+    local filename = buffer.abs_filename
     local mapped
     if common.path_equals(filename, old_abs) then
       mapped = new_abs
@@ -341,8 +341,8 @@ local function update_open_docs_after_rename(old_abs, new_abs, entry_type)
       mapped = new_abs .. filename:sub(#old_abs + 1)
     end
     if mapped then
-      doc:set_filename(core.normalize_to_project_dir(mapped), mapped)
-      doc:reset_syntax()
+      buffer:set_filename(core.normalize_to_project_dir(mapped), mapped)
+      buffer:reset_syntax()
     end
   end
 end
@@ -717,7 +717,7 @@ local function recover_known_line_meta(view)
   local root = { abs = view.current_dir, type = "dir", level = -1 }
   local stack = {}
 
-  for i, line in ipairs(view.doc.lines) do
+  for i, line in ipairs(view.buffer.lines) do
     local parsed = parse_text(line_text(line))
     if parsed then
       local parent = parsed.level == 0 and root or stack[parsed.level - 1]
@@ -784,8 +784,8 @@ local PROJECT_PATH_SEPARATOR_PROVIDER = {
 }
 
 function FileTreeView:new()
-  local doc = Doc()
-  FileTreeView.super.new(self, doc)
+  local buffer = Buffer()
+  FileTreeView.super.new(self, buffer)
   self:add_visual_row_provider("filetree-project-path-separators", PROJECT_PATH_SEPARATOR_PROVIDER)
   self.target_size = filetree_config.size
   self.visible = filetree_config.visible
@@ -828,7 +828,7 @@ function FileTreeView:new()
   self:set_caption "File Tree"
 
   local view = self
-  function doc:on_text_change(type, transaction)
+  function buffer:on_text_change(type, transaction)
     view.last_text_change_type = type
     view.last_text_transaction = transaction
     view.status_cache = nil
@@ -1056,19 +1056,19 @@ end
 
 function FileTreeView:snapshot_lines()
   self.last_lines = {}
-  for i, line in ipairs(self.doc.lines) do
+  for i, line in ipairs(self.buffer.lines) do
     self.last_lines[i] = line_text(line)
     if self.line_meta[i] == nil then self.line_meta[i] = NO_META end
   end
-  for i = #self.doc.lines + 1, #self.line_meta do
+  for i = #self.buffer.lines + 1, #self.line_meta do
     self.line_meta[i] = nil
   end
-  self.last_change_id = self.doc:get_change_id()
+  self.last_change_id = self.buffer:get_change_id()
   self:invalidate_entry_snapshots()
 end
 
 function FileTreeView:sync_meta()
-  if self.last_lines and self.last_change_id == self.doc:get_change_id() then return end
+  if self.last_lines and self.last_change_id == self.buffer:get_change_id() then return end
   if not self.last_lines then
     self:snapshot_lines()
     return
@@ -1076,7 +1076,7 @@ function FileTreeView:sync_meta()
 
   local old_lines, old_meta = self.last_lines, self.line_meta
   local new_lines = {}
-  for i, line in ipairs(self.doc.lines) do new_lines[i] = line_text(line) end
+  for i, line in ipairs(self.buffer.lines) do new_lines[i] = line_text(line) end
 
   local same = #old_lines == #new_lines
   if same then
@@ -1085,7 +1085,7 @@ function FileTreeView:sync_meta()
     end
   end
   if same then
-    self.last_change_id = self.doc:get_change_id()
+    self.last_change_id = self.buffer:get_change_id()
     return
   end
 
@@ -1248,7 +1248,7 @@ function FileTreeView:capture_selection_paths()
   local by_line = snapshot.by_line
 
   local selections = {}
-  for idx, line1, col1, line2, col2 in self.doc:get_selections(false) do
+  for idx, line1, col1, line2, col2 in self.buffer:get_selections(false) do
     local entry1 = not errors[line1] and by_line[line1]
     local entry2 = not errors[line2] and by_line[line2]
     if not entry1 or not entry2 then return nil end
@@ -1262,7 +1262,7 @@ function FileTreeView:capture_selection_paths()
   if #selections == 0 then return nil end
   return {
     selections = selections,
-    last_selection = self.doc.last_selection,
+    last_selection = self.buffer.last_selection,
   }
 end
 
@@ -1397,7 +1397,7 @@ function FileTreeView:refresh_preserving_selection_paths(preserve_expansion, rev
 end
 
 function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
-  local l, c = self.doc:get_selection()
+  local l, c = self.buffer:get_selection()
   local expanded = preserve_expansion == false and {} or self:capture_expanded_paths()
   self:add_reveal_paths(expanded, reveal_paths)
 
@@ -1424,8 +1424,8 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
     self.line_meta[i] = make_meta(item)
   end
   self:append_project_path_sections(out)
-  set_doc_lines(self.doc, out)
-  for i = #out + 1, #self.doc.lines do self.line_meta[i] = NO_META end
+  set_buffer_lines(self.buffer, out)
+  for i = #out + 1, #self.buffer.lines do self.line_meta[i] = NO_META end
   self.project_path_separator_generation = (self.project_path_separator_generation or 0) + 1
   self:invalidate_visual_rows("filetree-project-path-separators")
   self.rendered_dir = self.current_dir
@@ -1437,7 +1437,7 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
   self.has_possible_edits = false
 
   if keep_selection then
-    self.doc:set_selection(math.min(l, #self.doc.lines), c)
+    self.buffer:set_selection(math.min(l, #self.buffer.lines), c)
   end
   self:update_filesystem_watches()
   self:schedule_git_status_refresh("filetree-refresh", false)
@@ -1482,27 +1482,27 @@ function FileTreeView:set_sort_mode(sort_mode)
   end)
 end
 
-function FileTreeView:doc_splice(at, remove, insert_lines, insert_meta)
+function FileTreeView:buffer_splice(at, remove, insert_lines, insert_meta)
   insert_lines = insert_lines or {}
   insert_meta = insert_meta or {}
-  common.splice(self.doc.lines, at, remove, insert_lines)
-  if remove > 0 then self.doc.highlighter:remove_notify(at, remove) end
-  if #insert_lines > 0 then self.doc.highlighter:insert_notify(at, #insert_lines) end
-  self.doc:clear_cache(at, math.max(remove, #insert_lines))
-  self.doc:sanitize_selection()
+  common.splice(self.buffer.lines, at, remove, insert_lines)
+  if remove > 0 then self.buffer.highlighter:remove_notify(at, remove) end
+  if #insert_lines > 0 then self.buffer.highlighter:insert_notify(at, #insert_lines) end
+  self.buffer:clear_cache(at, math.max(remove, #insert_lines))
+  self.buffer:sanitize_selection()
 
   for i = 1, #insert_lines do
     if insert_meta[i] == nil then insert_meta[i] = NO_META end
   end
   common.splice(self.line_meta, at, remove, insert_meta)
-  if #self.doc.lines == 0 then
-    self.doc.lines[1] = "\n"
+  if #self.buffer.lines == 0 then
+    self.buffer.lines[1] = "\n"
     self.line_meta[1] = NO_META
   end
   -- Expand/collapse is navigation, not filesystem editing. It rewrites the
-  -- backing text buffer outside Doc's undo machinery, so stale undo entries can
+  -- backing text buffer outside Buffer's undo machinery, so stale undo entries can
   -- point at removed lines. Drop them to avoid corrupt undo history.
-  self.doc:clear_undo_redo()
+  self.buffer:clear_undo_redo()
   self:snapshot_lines()
   self.status_cache = nil
 end
@@ -1513,7 +1513,7 @@ function FileTreeView:copy_line_payload(slots)
   for _, slot in ipairs(slots) do
     local slot_chunks, slot_items = {}, {}
     for line = slot.first, slot.last do
-      local text = self.doc.lines[line] or "\n"
+      local text = self.buffer.lines[line] or "\n"
       local item = {
         text = line_text(text),
         meta = clone_meta(self.line_meta[line]),
@@ -1549,20 +1549,20 @@ end
 function FileTreeView:selected_whole_line_slots()
   self:sync_meta()
   local slots = {}
-  for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
+  for _, line1, col1, line2, col2 in self.buffer:get_selections(true) do
     local first, last
     if line1 == line2 and col1 == col2 then
       first, last = line1, line1
     elseif col1 == 1 then
       if line2 > line1 and col2 == 1 then
         first, last = line1, line2 - 1
-      elseif col2 >= #(self.doc.lines[line2] or "") then
+      elseif col2 >= #(self.buffer.lines[line2] or "") then
         first, last = line1, line2
       end
     end
     if not first or first > last then return nil end
     first = math.max(1, first)
-    last = math.min(#self.doc.lines, last)
+    last = math.min(#self.buffer.lines, last)
     slots[#slots + 1] = { first = first, last = last }
   end
 
@@ -1573,14 +1573,14 @@ end
 function FileTreeView:selected_covered_line_slots()
   self:sync_meta()
   local slots = {}
-  for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
+  for _, line1, col1, line2, col2 in self.buffer:get_selections(true) do
     local first, last = line1, line2
     if line1 ~= line2 and col2 <= 1 then
       last = line2 - 1
     end
     if first <= last then
       first = math.max(1, first)
-      last = math.min(#self.doc.lines, last)
+      last = math.min(#self.buffer.lines, last)
       slots[#slots + 1] = { first = first, last = last }
     end
   end
@@ -1591,12 +1591,12 @@ end
 
 function FileTreeView:remove_line_range(first, last)
   if first > last then return end
-  if first == 1 and last >= #self.doc.lines then
-    self.doc:remove(1, 1, #self.doc.lines, math.huge)
-  elseif last < #self.doc.lines then
-    self.doc:remove(first, 1, last + 1, 1)
+  if first == 1 and last >= #self.buffer.lines then
+    self.buffer:remove(1, 1, #self.buffer.lines, math.huge)
+  elseif last < #self.buffer.lines then
+    self.buffer:remove(first, 1, last + 1, 1)
   else
-    self.doc:remove(first - 1, math.huge, last, math.huge)
+    self.buffer:remove(first - 1, math.huge, last, math.huge)
   end
 end
 
@@ -1617,15 +1617,15 @@ function FileTreeView:copy_or_cut_lines(delete)
   if delete then
     local edits = {}
     for _, range in ipairs(ranges) do
-      if range.first == 1 and range.last >= #self.doc.lines then
-        edits[#edits + 1] = { line1 = 1, col1 = 1, line2 = #self.doc.lines, col2 = math.huge, text = "" }
-      elseif range.last < #self.doc.lines then
+      if range.first == 1 and range.last >= #self.buffer.lines then
+        edits[#edits + 1] = { line1 = 1, col1 = 1, line2 = #self.buffer.lines, col2 = math.huge, text = "" }
+      elseif range.last < #self.buffer.lines then
         edits[#edits + 1] = { line1 = range.first, col1 = 1, line2 = range.last + 1, col2 = 1, text = "" }
       else
         edits[#edits + 1] = { line1 = range.first - 1, col1 = math.huge, line2 = range.last, col2 = math.huge, text = "" }
       end
     end
-    self.doc:apply_edits(edits, { type = "remove", merge_cursors = true })
+    self.buffer:apply_edits(edits, { type = "remove", merge_cursors = true })
     for i = #ranges, 1, -1 do
       local range = ranges[i]
       common.splice(self.line_meta, range.first, range.last - range.first + 1)
@@ -1649,8 +1649,8 @@ function FileTreeView:paste_lines_with_metadata()
   end
 
   local lines = {}
-  for idx in self.doc:get_selections() do
-    local line = self.doc:get_selection_idx(idx)
+  for idx in self.buffer:get_selections() do
+    local line = self.buffer:get_selection_idx(idx)
     if line then lines[#lines + 1] = line end
   end
   table.sort(lines)
@@ -1679,7 +1679,7 @@ function FileTreeView:paste_lines_with_metadata()
   for _, record in ipairs(records) do
     edits[#edits + 1] = { line1 = record.line, col1 = 1, line2 = record.line, col2 = 1, text = record.text }
   end
-  self.doc:apply_edits(edits, { type = "insert", merge_cursors = false })
+  self.buffer:apply_edits(edits, { type = "insert", merge_cursors = false })
 
   table.sort(records, function(a, b) return a.line > b.line end)
   for _, record in ipairs(records) do
@@ -1691,7 +1691,7 @@ function FileTreeView:paste_lines_with_metadata()
 end
 
 function FileTreeView:parse_line(line)
-  local parsed = parse_text(line_text(self.doc.lines[line]))
+  local parsed = parse_text(line_text(self.buffer.lines[line]))
   return parsed
 end
 
@@ -1955,7 +1955,7 @@ function FileTreeView:draw_line_text(line, x, y)
   local git_start = perf_start(stats)
   local git = self:get_git_info_for_line(line)
   perf_finish(stats, "filetree_draw_line_text_git_ms", git_start)
-  local text = line_text(self.doc:get_utf8_line(line))
+  local text = line_text(self.buffer:get_utf8_line(line))
   local project_path_color = self:project_path_line_color(line)
   if project_path_color then
     renderer.draw_text(
@@ -2016,7 +2016,7 @@ end
 
 function FileTreeView:collect_rows(include_hidden)
   local rows = {}
-  for i, line in ipairs(self.doc.lines) do
+  for i, line in ipairs(self.buffer.lines) do
     local meta = self.line_meta[i] or NO_META
     local text = line_text(line)
     rows[#rows + 1] = { line = i, text = text, meta = meta, hidden = false }
@@ -2036,7 +2036,7 @@ function FileTreeView:build_entries(include_hidden)
   local stats = perf_stats()
   local cache_key = include_hidden and "hidden" or "visible"
   local generation = self.entry_snapshot_generation or 0
-  local change_id = self.doc:get_change_id()
+  local change_id = self.buffer:get_change_id()
   local project_paths_generation = project_paths.generation()
   local current_indent_size = indent_size()
   local cached = self.entry_snapshots and self.entry_snapshots[cache_key]
@@ -2627,8 +2627,8 @@ end
 
 function FileTreeView:descendant_range(line, indent)
   local last = line
-  for i = line + 1, #self.doc.lines do
-    local text = line_text(self.doc.lines[i])
+  for i = line + 1, #self.buffer.lines do
+    local text = line_text(self.buffer.lines[i])
     local parsed, err = parse_text(text)
     if parsed and parsed.indent <= indent then break end
     if err then
@@ -2650,14 +2650,14 @@ function FileTreeView:collapse_folder(line, entry)
   local first, last = self:descendant_range(line, entry.level * INDENT)
   local draft = { lines = {}, meta = {} }
   for i = first, last do
-    draft.lines[#draft.lines + 1] = self:relative_descendant_line(line_text(self.doc.lines[i]), entry.level * INDENT + INDENT)
+    draft.lines[#draft.lines + 1] = self:relative_descendant_line(line_text(self.buffer.lines[i]), entry.level * INDENT + INDENT)
     draft.meta[#draft.meta + 1] = clone_meta(self.line_meta[i])
   end
   meta.draft = draft
   meta.expanded = false
 
   if last >= first then
-    self:doc_splice(first, last - first + 1, {}, {})
+    self:buffer_splice(first, last - first + 1, {}, {})
   else
     self:snapshot_lines()
     self.status_cache = nil
@@ -2672,7 +2672,7 @@ function FileTreeView:auto_expand_single_child_folder(parent_line, seen)
   seen[parent.abs] = true
 
   local child_line, child_entry, child_count = nil, nil, 0
-  for i = parent_line + 1, #self.doc.lines do
+  for i = parent_line + 1, #self.buffer.lines do
     local parsed = self:parse_line(i)
     if parsed and parsed.level <= parent.level then break end
     if parsed and parsed.level == parent.level + 1 then
@@ -2710,7 +2710,7 @@ function FileTreeView:expand_folder(line, entry, auto_single, seen)
     lines, metas = self:read_folder_lines(entry.abs, child_indent, entry)
   end
   meta.expanded = true
-  self:doc_splice(line + 1, 0, lines, metas)
+  self:buffer_splice(line + 1, 0, lines, metas)
   if auto_single then
     self:auto_expand_single_child_folder(line, seen)
   end
@@ -2751,7 +2751,7 @@ function FileTreeView:open_item(target)
   self:sync_meta()
   if target ~= "right" and self:open_selected_files() then return true end
 
-  local line = self.doc:get_selection(true)
+  local line = self.buffer:get_selection(true)
   local entry, err = self:entry_for_line(line)
   if not entry then
     if err then core.error("File Tree: %s", err) end
@@ -2785,7 +2785,7 @@ end
 function FileTreeView:get_point_of_interest_at(line)
   local entry = self:entry_for_line(line)
   if not entry then return nil end
-  local text = (self.doc:get_utf8_line(line) or ""):gsub("\n$", "")
+  local text = (self.buffer:get_utf8_line(line) or ""):gsub("\n$", "")
   return {
     kind = entry.type == "dir" and "directory" or "file",
     line = line,
@@ -2912,7 +2912,7 @@ function FileTreeView:apply_plan(plan)
     if not ok then core.error("File Tree: move failed: %s", err); return end
     selection_path_map[path_key(op.from)] = op.to
     selection_path_map.__moves[#selection_path_map.__moves + 1] = { from = op.from, to = op.to }
-    update_open_docs_after_rename(op.from, op.to, op.type)
+    update_open_buffers_after_rename(op.from, op.to, op.type)
     core.log("File Tree: moved %s -> %s", op.from, op.to)
     changed = true
   end
@@ -3152,7 +3152,7 @@ function FileTreeView:apply_edits()
   if not plan then self:show_plan_errors(err, reasons, ambiguities); return end
 
   if self:operation_count(plan) == 0 then
-    self.doc:clean()
+    self.buffer:clean()
     self.has_possible_edits = false
     self.status_cache = nil
     core.log("File Tree: nothing to apply")
@@ -3169,7 +3169,7 @@ file_context.exclude_content_view(view)
 panes.register_view("right", "filetree", view, { permanent = true })
 view.node = panes.node("right")
 
-local function wrap_doc_command(name, filetree_handler)
+local function wrap_buffer_command(name, filetree_handler)
   local base = command.map[name]
   command.add(function(...)
     if core.active_view == view then return true, "filetree", view end
@@ -3194,13 +3194,13 @@ local function wrap_doc_command(name, filetree_handler)
   })
 end
 
-wrap_doc_command("doc:copy", function(v)
+wrap_buffer_command("text:copy", function(v)
   return v:copy_or_cut_lines(false)
 end)
-wrap_doc_command("doc:cut", function(v)
+wrap_buffer_command("text:cut", function(v)
   return v:copy_or_cut_lines(true)
 end)
-wrap_doc_command("doc:paste", function(v)
+wrap_buffer_command("text:paste", function(v)
   return v:paste_lines_with_metadata()
 end)
 
@@ -3232,10 +3232,10 @@ local function find_entry(filename)
 end
 
 local function focus_entry(entry, filename)
-  local text = line_text(view.doc.lines[entry.line])
+  local text = line_text(view.buffer.lines[entry.line])
   local name = common.basename(filename)
   local start_col = text:find(name, 1, true) or 1
-  view.doc:set_selection(entry.line, start_col, entry.line, start_col + #name)
+  view.buffer:set_selection(entry.line, start_col, entry.line, start_col + #name)
   view:scroll_to_make_visible(entry.line, start_col)
 
   -- Bias horizontal scroll toward the start. Only scroll right if the
@@ -3338,7 +3338,7 @@ command.add(function() return core.active_view:is(FileTreeView) end, {
     view:refresh(false, false)
   end,
   ["filetree:select-all"] = function()
-    view.doc:set_selection(1, 1, #view.doc.lines, #view.doc.lines[#view.doc.lines])
+    view.buffer:set_selection(1, 1, #view.buffer.lines, #view.buffer.lines[#view.buffer.lines])
   end,
 })
 

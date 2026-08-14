@@ -1,22 +1,22 @@
 local core = require "core"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local test = require "core.test"
 local trimwhitespace = require "plugins.trimwhitespace"
 
-local function set_text(doc, text)
-  doc.lines = {}
+local function set_text(buffer, text)
+  buffer.lines = {}
   for line in (text .. "\n"):gmatch("(.-\n)") do
-    doc.lines[#doc.lines + 1] = line
+    buffer.lines[#buffer.lines + 1] = line
   end
-  if #doc.lines == 0 then doc.lines[1] = "\n" end
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+  if #buffer.lines == 0 then buffer.lines[1] = "\n" end
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
-local function text(doc)
-  return table.concat(doc.lines)
+local function text(buffer)
+  return table.concat(buffer.lines)
 end
 
 test.describe("trimwhitespace selection states", function()
@@ -28,29 +28,29 @@ test.describe("trimwhitespace selection states", function()
     if context.previous_active_view then
       core.set_active_view(context.previous_active_view)
     end
-    for _, doc in ipairs(context.docs or {}) do
-      doc:on_close()
+    for _, buffer in ipairs(context.buffers or {}) do
+      buffer:on_close()
     end
   end)
 
   test.it("preserves trailing whitespace before inactive view carets", function(context)
-    local doc = Doc()
-    set_text(doc, "aa   \nbb   \ncc   ")
-    local main = DocView(doc)
-    local side = DocView(doc)
-    context.docs = { doc }
+    local buffer = Buffer()
+    set_text(buffer, "aa   \nbb   \ncc   ")
+    local main = TextView(buffer)
+    local side = TextView(buffer)
+    context.buffers = { buffer }
 
     main:with_selection_state(function()
-      doc:set_selection(1, 1, 1, 1)
+      buffer:set_selection(1, 1, 1, 1)
     end)
     side:with_selection_state(function()
-      doc:set_selection(2, 5, 2, 5)
+      buffer:set_selection(2, 5, 2, 5)
     end)
     core.set_active_view(main)
 
-    trimwhitespace.trim(doc)
+    trimwhitespace.trim(buffer)
 
-    test.equal(text(doc), "aa\nbb  \ncc\n")
+    test.equal(text(buffer), "aa\nbb  \ncc\n")
     test.same(side:get_selection_state().selections, { 2, 5, 2, 5 })
   end)
 end)

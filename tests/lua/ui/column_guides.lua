@@ -1,31 +1,29 @@
 local core = require "core"
 local config = require "core.config"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
-local file_context = require "core.file_context"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
+local Editor = require "core.editor"
 local markdown = require "core.markdown"
 local test = require "core.test"
 
 require "plugins.column_guides"
 
 local function make_view(context, editor)
-  local doc = Doc()
-  local view = DocView(doc)
+  local buffer = Buffer()
+  local view = editor and Editor(buffer) or TextView(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 400, 200
-  if editor then file_context.mark_editor_view(view) end
-  context.docs[#context.docs + 1] = doc
+  context.buffers[#context.buffers + 1] = buffer
   return view
 end
 
 local function make_markdown_view(context)
-  local doc = Doc("column-guides.md", "column-guides.md", true)
-  local view = DocView(doc)
+  local buffer = Buffer("column-guides.md", "column-guides.md", true)
+  local view = Editor(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 400, 200
-  file_context.mark_editor_view(view)
   markdown.live_render.refresh_view(view)
-  context.docs[#context.docs + 1] = doc
+  context.buffers[#context.buffers + 1] = buffer
   return view
 end
 
@@ -50,7 +48,7 @@ end
 
 test.describe("Column Guides", function()
   test.before_each(function(context)
-    context.docs = {}
+    context.buffers = {}
     context.enabled = config.plugins.column_guides.enabled
     context.columns = config.plugins.column_guides.columns
     context.markdown_live_editor = config.markdown_live_editor
@@ -63,10 +61,10 @@ test.describe("Column Guides", function()
     config.plugins.column_guides.enabled = context.enabled
     config.plugins.column_guides.columns = context.columns
     config.markdown_live_editor = context.markdown_live_editor
-    for _, doc in ipairs(context.docs) do doc:on_close() end
+    for _, buffer in ipairs(context.buffers) do buffer:on_close() end
   end)
 
-  test.it("draws guides in Editors but not other Document Views", function(context)
+  test.it("draws guides in Editors but not other Text Views", function(context)
     local editor = make_view(context, true)
     local tool_view = make_view(context, false)
 
@@ -81,14 +79,13 @@ test.describe("Column Guides", function()
     test.equal(count_guides(view), 0)
   end)
 
-  test.it("does not draw guides in specialized Editor Document Views", function(context)
-    local SpecializedEditor = DocView:extend()
-    local doc = Doc()
-    local view = SpecializedEditor(doc)
+  test.it("does not draw guides in specialized Editors", function(context)
+    local SpecializedEditor = Editor:extend()
+    local buffer = Buffer()
+    local view = SpecializedEditor(buffer)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 400, 200
-    file_context.mark_editor_view(view)
-    context.docs[#context.docs + 1] = doc
+    context.buffers[#context.buffers + 1] = buffer
 
     test.equal(count_guides(view), 0)
   end)

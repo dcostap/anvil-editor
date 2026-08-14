@@ -3,7 +3,7 @@ local outline = require "core.treesitter.outline"
 
 -- Local Tree-sitter fallback symbol helpers.
 --
--- These APIs are intentionally current-document and syntactic only. They use the
+-- These APIs are intentionally current-buffer and syntactic only. They use the
 -- bundled locals.scm query to find identifier-shaped definitions/references, but
 -- they do not attempt C/C++ semantic resolution for macros, includes, templates,
 -- overloads, types, or build configuration. LSP should eventually supersede this
@@ -27,31 +27,31 @@ local function empty_list(reason)
   return {}, reason
 end
 
-local function line_starts(doc, ts)
-  local change_id = doc.get_change_id and doc:get_change_id() or 0
+local function line_starts(buffer, ts)
+  local change_id = buffer.get_change_id and buffer:get_change_id() or 0
   if ts.locals_line_starts and ts.locals_line_starts_change_id == change_id then
     return ts.locals_line_starts
   end
   local starts = {}
   local offset = 0
-  for i = 1, #doc.lines do
+  for i = 1, #buffer.lines do
     starts[i] = offset
-    offset = offset + #doc.lines[i]
+    offset = offset + #buffer.lines[i]
   end
-  starts[#doc.lines + 1] = offset
+  starts[#buffer.lines + 1] = offset
   ts.locals_line_starts = starts
   ts.locals_line_starts_change_id = change_id
   return starts
 end
 
-local function byte_len(doc, ts)
-  local starts = line_starts(doc, ts)
-  return starts[#doc.lines + 1] or 0
+local function byte_len(buffer, ts)
+  local starts = line_starts(buffer, ts)
+  return starts[#buffer.lines + 1] or 0
 end
 
-local function byte_offset(doc, ts, line, col)
-  local starts = line_starts(doc, ts)
-  line, col = doc:sanitize_position(line, col)
+local function byte_offset(buffer, ts, line, col)
+  local starts = line_starts(buffer, ts)
+  line, col = buffer:sanitize_position(line, col)
   return (starts[line] or 0) + col - 1
 end
 
@@ -63,8 +63,8 @@ local function sorted_selection(line1, col1, line2, col2)
   return line1, col1, line2, col2
 end
 
-local function capture_text(doc, capture)
-  return doc:get_text(capture.start_line, capture.start_col, capture.end_line, capture.end_col)
+local function capture_text(buffer, capture)
+  return buffer:get_text(capture.start_line, capture.start_col, capture.end_line, capture.end_col)
 end
 
 local function capture_kind(capture_name)
@@ -99,8 +99,8 @@ local function range_from_capture(capture)
   }
 end
 
-local function completion_preview_for_capture(doc, capture)
-  local line = doc and doc.lines and doc.lines[capture.start_line]
+local function completion_preview_for_capture(buffer, capture)
+  local line = buffer and buffer.lines and buffer.lines[capture.start_line]
   if not line then return nil end
   line = tostring(line):gsub("[\r\n]+$", "")
   local leading = line:match("^%s*") or ""
@@ -114,10 +114,10 @@ local function completion_preview_for_capture(doc, capture)
   return text, { start_col, end_col }
 end
 
-local function item_from_capture(doc, capture)
-  local preview, preview_name_span = completion_preview_for_capture(doc, capture)
+local function item_from_capture(buffer, capture)
+  local preview, preview_name_span = completion_preview_for_capture(buffer, capture)
   return {
-    name = capture_text(doc, capture),
+    name = capture_text(buffer, capture),
     kind = capture_kind(capture.capture) or "reference",
     capture = capture.capture,
     start_line = capture.start_line,
@@ -132,22 +132,22 @@ local function item_from_capture(doc, capture)
   }
 end
 
-local function query_captures(doc, opts)
+local function query_captures(buffer, opts)
   opts = opts or {}
-  if not doc or not doc.lines then return empty_list("no-document") end
-  local ts = doc.treesitter
+  if not buffer or not buffer.lines then return empty_list("no-buffer") end
+  local ts = buffer.treesitter
   if not ts then return empty_list("unsupported") end
   if not ts.native then return empty_list(ts.reason or ts.status or "disabled") end
   if not tree_ready(ts) then return empty_list("not-ready") end
   if not ts.queries or not ts.queries.locals then return empty_list("missing-query") end
 
-  local captures, err = ts.native:query_captures(ts.queries.locals, 0, byte_len(doc, ts), {
+  local captures, err = ts.native:query_captures(ts.queries.locals, 0, byte_len(buffer, ts), {
     match_limit = opts.match_limit or (ts.language and ts.language.locals_match_limit) or DEFAULT_MATCH_LIMIT,
     max_captures = opts.max_captures or (ts.language and ts.language.locals_max_captures) or DEFAULT_MAX_CAPTURES,
     timeout_ms = opts.timeout_ms or (ts.language and ts.language.locals_query_timeout_ms) or DEFAULT_QUERY_TIMEOUT_MS,
   })
   if not captures then
-    log_quiet("Tree-sitter: local symbol query failed for %s: %s", doc.get_name and doc:get_name() or tostring(doc), tostring(err))
+    log_quiet("Tree-sitter: local symbol query failed for %s: %s", buffer.get_name and buffer:get_name() or tostring(buffer), tostring(err))
     return empty_list(err or "query-failed")
   end
   return captures
@@ -170,7 +170,7 @@ local function dedupe_items(items)
   return result
 end
 
-local function target_at(doc, captures, start_byte, end_byte)
+local function target_at(buffer, captures, start_byte, end_byte)
   local best
   for _, capture in ipairs(captures) do
     if is_symbol_capture(capture) and capture.start_byte <= start_byte and capture.end_byte >= end_byte then
@@ -198,8 +198,8 @@ local function enclosing_outline_symbol_from_list(symbols, start_byte, end_byte)
   return best
 end
 
-local function enclosing_outline_symbol(doc, start_byte, end_byte)
-  return enclosing_outline_symbol_from_list(outline.get_document_outline(doc), start_byte, end_byte)
+local function enclosing_outline_symbol(buffer, start_byte, end_byte)
+  return enclosing_outline_symbol_from_list(outline.get_buffer_outline(buffer), start_byte, end_byte)
 end
 
 local function in_scope(capture, scope)
@@ -207,11 +207,11 @@ local function in_scope(capture, scope)
   return capture.start_byte >= scope.start_byte and capture.end_byte <= scope.end_byte
 end
 
-local function find_definition(doc, captures, name, target, scope)
+local function find_definition(buffer, captures, name, target, scope)
   local local_defs, global_defs = {}, {}
   for _, capture in ipairs(captures) do
-    if is_definition(capture) and capture_text(doc, capture) == name then
-      local item = item_from_capture(doc, capture)
+    if is_definition(capture) and capture_text(buffer, capture) == name then
+      local item = item_from_capture(buffer, capture)
       if in_scope(capture, scope) then
         local_defs[#local_defs + 1] = item
       else
@@ -233,22 +233,22 @@ local function find_definition(doc, captures, name, target, scope)
   if #global_defs > 0 then return global_defs[1], nil end
 end
 
-local function target_context(doc, line1, col1, line2, col2, opts)
-  if not doc or not doc.lines then return nil, nil, nil, "no-document" end
-  local ts = doc.treesitter
+local function target_context(buffer, line1, col1, line2, col2, opts)
+  if not buffer or not buffer.lines then return nil, nil, nil, "no-buffer" end
+  local ts = buffer.treesitter
   if not ts then return nil, nil, nil, "unsupported" end
-  if not line1 or not col1 then line1, col1, line2, col2 = doc:get_selection(true) end
+  if not line1 or not col1 then line1, col1, line2, col2 = buffer:get_selection(true) end
   if not line1 or not col1 then return nil, nil, nil, "no-selection" end
   line1, col1, line2, col2 = sorted_selection(line1, col1, line2, col2)
-  local start_byte = byte_offset(doc, ts, line1, col1)
-  local end_byte = byte_offset(doc, ts, line2, col2)
-  local captures, reason = query_captures(doc, opts)
+  local start_byte = byte_offset(buffer, ts, line1, col1)
+  local end_byte = byte_offset(buffer, ts, line2, col2)
+  local captures, reason = query_captures(buffer, opts)
   if #captures == 0 then return nil, nil, nil, reason end
-  local target = target_at(doc, captures, start_byte, end_byte)
+  local target = target_at(buffer, captures, start_byte, end_byte)
   if not target then return nil, nil, nil, "no-symbol" end
-  local name = capture_text(doc, target)
-  local scope = enclosing_outline_symbol(doc, target.start_byte, target.end_byte)
-  return captures, item_from_capture(doc, target), scope, nil, name
+  local name = capture_text(buffer, target)
+  local scope = enclosing_outline_symbol(buffer, target.start_byte, target.end_byte)
+  return captures, item_from_capture(buffer, target), scope, nil, name
 end
 
 local function sort_symbol_items(items)
@@ -260,14 +260,14 @@ local function sort_symbol_items(items)
   return items
 end
 
-function locals.get_document_symbols(doc, opts)
-  local captures, reason = query_captures(doc, opts)
+function locals.get_buffer_symbols(buffer, opts)
+  local captures, reason = query_captures(buffer, opts)
   if #captures == 0 then return empty_list(reason) end
   local items = {}
   local seen = {}
   for _, capture in ipairs(captures) do
     if is_definition(capture) then
-      local item = item_from_capture(doc, capture)
+      local item = item_from_capture(buffer, capture)
       local key = table.concat({ item.name or "", item.kind or "" }, "\0")
       if item.name ~= "" and not seen[key] then
         seen[key] = true
@@ -278,27 +278,27 @@ function locals.get_document_symbols(doc, opts)
   return sort_symbol_items(items)
 end
 
-function locals.get_visible_document_symbols(doc, line1, col1, line2, col2, opts)
+function locals.get_visible_buffer_symbols(buffer, line1, col1, line2, col2, opts)
   opts = opts or {}
-  if not doc or not doc.lines then return empty_list("no-document") end
-  local ts = doc.treesitter
+  if not buffer or not buffer.lines then return empty_list("no-buffer") end
+  local ts = buffer.treesitter
   if not ts then return empty_list("unsupported") end
   if not ts.native then return empty_list(ts.reason or ts.status or "disabled") end
   if not tree_ready(ts) then return empty_list("not-ready") end
   if not ts.queries or not ts.queries.outline then return empty_list("missing-outline-query") end
 
-  if not line1 or not col1 then line1, col1, line2, col2 = doc:get_selection(true) end
+  if not line1 or not col1 then line1, col1, line2, col2 = buffer:get_selection(true) end
   if not line1 or not col1 then return empty_list("no-selection") end
   line2, col2 = line2 or line1, col2 or col1
   line1, col1, line2, col2 = sorted_selection(line1, col1, line2, col2)
 
-  local partial_start = byte_offset(doc, ts, line1, col1)
-  local cursor_byte = byte_offset(doc, ts, line2, col2)
+  local partial_start = byte_offset(buffer, ts, line1, col1)
+  local cursor_byte = byte_offset(buffer, ts, line2, col2)
   local partial_end = cursor_byte
-  local captures, reason = query_captures(doc, opts)
+  local captures, reason = query_captures(buffer, opts)
   if #captures == 0 then return empty_list(reason) end
 
-  local outline_symbols = outline.get_document_outline(doc)
+  local outline_symbols = outline.get_buffer_outline(buffer)
   local cursor_scope = enclosing_outline_symbol_from_list(outline_symbols, cursor_byte, cursor_byte)
   local cursor_local_scopes = {}
   for _, capture in ipairs(captures) do
@@ -330,7 +330,7 @@ function locals.get_visible_document_symbols(doc, line1, col1, line2, col2, opts
           in_visible_scope = definition_scope == nil
         end
         if in_visible_scope then
-          local item = item_from_capture(doc, capture)
+          local item = item_from_capture(buffer, capture)
           if item.name ~= "" then
             local previous = items_by_name[item.name]
             if not previous or (item.start_byte or 0) > (previous.start_byte or 0) then
@@ -350,10 +350,10 @@ function locals.get_visible_document_symbols(doc, line1, col1, line2, col2, opts
   return sort_symbol_items(items)
 end
 
-function locals.get_local_definition(doc, line1, col1, line2, col2, opts)
-  local captures, target, scope, reason, name = target_context(doc, line1, col1, line2, col2, opts)
+function locals.get_local_definition(buffer, line1, col1, line2, col2, opts)
+  local captures, target, scope, reason, name = target_context(buffer, line1, col1, line2, col2, opts)
   if not captures then return empty(reason) end
-  local definition, definition_scope = find_definition(doc, captures, name, target, scope)
+  local definition, definition_scope = find_definition(buffer, captures, name, target, scope)
   if not definition then return empty("no-local-definition") end
   definition.scope = definition_scope
   definition.target = target
@@ -361,15 +361,15 @@ function locals.get_local_definition(doc, line1, col1, line2, col2, opts)
   return definition
 end
 
-function locals.get_local_references(doc, line1, col1, line2, col2, opts)
-  local captures, target, scope, reason, name = target_context(doc, line1, col1, line2, col2, opts)
+function locals.get_local_references(buffer, line1, col1, line2, col2, opts)
+  local captures, target, scope, reason, name = target_context(buffer, line1, col1, line2, col2, opts)
   if not captures then return empty_list(reason) end
-  local definition, definition_scope = find_definition(doc, captures, name, target, scope)
+  local definition, definition_scope = find_definition(buffer, captures, name, target, scope)
   local ref_scope = definition_scope or scope
   local items = {}
   for _, capture in ipairs(captures) do
-    if is_symbol_capture(capture) and capture_text(doc, capture) == name and in_scope(capture, ref_scope) then
-      items[#items + 1] = item_from_capture(doc, capture)
+    if is_symbol_capture(capture) and capture_text(buffer, capture) == name and in_scope(capture, ref_scope) then
+      items[#items + 1] = item_from_capture(buffer, capture)
     end
   end
   items = dedupe_items(items)
@@ -382,26 +382,26 @@ function locals.get_local_references(doc, line1, col1, line2, col2, opts)
   return items
 end
 
-local function select_item(doc, item)
-  if not doc or not item then return false end
-  doc:set_selection(item.start_line, item.start_col, item.end_line, item.end_col)
+local function select_item(buffer, item)
+  if not buffer or not item then return false end
+  buffer:set_selection(item.start_line, item.start_col, item.end_line, item.end_col)
   return true
 end
 
-function locals.goto_local_definition(doc)
-  doc = doc or (core.active_view and core.active_view.doc)
-  local definition, reason = locals.get_local_definition(doc)
+function locals.goto_local_definition(buffer)
+  buffer = buffer or (core.active_view and core.active_view.buffer)
+  local definition, reason = locals.get_local_definition(buffer)
   if not definition then return false, reason end
-  return select_item(doc, definition)
+  return select_item(buffer, definition)
 end
 
-function locals.goto_local_declaration(doc)
-  return locals.goto_local_definition(doc)
+function locals.goto_local_declaration(buffer)
+  return locals.goto_local_definition(buffer)
 end
 
-function locals.select_local_references(doc)
-  doc = doc or (core.active_view and core.active_view.doc)
-  local references, reason = locals.get_local_references(doc)
+function locals.select_local_references(buffer)
+  buffer = buffer or (core.active_view and core.active_view.buffer)
+  local references, reason = locals.get_local_references(buffer)
   if not references or #references == 0 then return false, reason end
   local selections = {}
   for _, ref in ipairs(references) do
@@ -410,7 +410,7 @@ function locals.select_local_references(doc)
     selections[#selections + 1] = ref.end_line
     selections[#selections + 1] = ref.end_col
   end
-  doc:set_selection_list(selections, doc.last_selection, { sanitized = true, merge_cursors = true })
+  buffer:set_selection_list(selections, buffer.last_selection, { sanitized = true, merge_cursors = true })
   return true
 end
 

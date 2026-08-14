@@ -2,8 +2,8 @@ local common = require "core.common"
 local command = require "core.command"
 local config = require "core.config"
 local core = require "core"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
 local test = require "core.test"
@@ -22,7 +22,7 @@ end
 
 local function image_count(view, label)
   local count = 0
-  for line, text in ipairs(view.doc.lines) do
+  for line, text in ipairs(view.buffer.lines) do
     if text:find("![[", 1, true) then
       local render = test.not_nil(view:get_line_render(line))
       local found = false
@@ -72,20 +72,20 @@ test.describe("Markdown pending images", function()
       end
 
       local filename = root .. PATHSEP .. "note.md"
-      local doc = Doc(filename, filename, true)
-      doc:insert(1, 1, "![[one.png]]\nplain")
-      doc:clear_undo_redo()
-      view = DocView(doc)
+      local buffer = Buffer(filename, filename, true)
+      buffer:insert(1, 1, "![[one.png]]\nplain")
+      buffer:clear_undo_redo()
+      view = Editor(buffer)
       view.position.x, view.position.y = 0, 0
       view.size.x, view.size.y = 500, 500
       view:set_wrapping_enabled(true)
       core.active_view = view
       markdown.live_render.refresh_view(view)
-      local instance = test.not_nil(markdown_model.peek(doc))
+      local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_ready(instance), instance.reason)
       test.equal(image_count(view, "initial duplicate"), 1)
 
-      doc:apply_edits({
+      buffer:apply_edits({
         { line1 = 2, col1 = 1, line2 = 2, col2 = 1, text = "![[one.png]]\n" },
       }, { type = "insert" })
 
@@ -129,21 +129,21 @@ test.describe("Markdown pending images", function()
       end
 
       local filename = root .. PATHSEP .. "note.md"
-      local doc = Doc(filename, filename, true)
-      doc:insert(1, 1, "- \n![[one.png]]\nplain")
-      doc:clear_undo_redo()
-      view = DocView(doc)
+      local buffer = Buffer(filename, filename, true)
+      buffer:insert(1, 1, "- \n![[one.png]]\nplain")
+      buffer:clear_undo_redo()
+      view = Editor(buffer)
       view.position.x, view.position.y = 0, 0
       view.size.x, view.size.y = 500, 500
       view:set_wrapping_enabled(true)
       core.active_view = view
       markdown.live_render.refresh_view(view)
-      local instance = test.not_nil(markdown_model.peek(doc))
+      local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_ready(instance), instance.reason)
       test.equal(image_count(view, "initial list exit"), 1)
 
-      doc:set_selection(1, 3)
-      test.ok(command.perform("doc:newline"))
+      buffer:set_selection(1, 3)
+      test.ok(command.perform("text:newline"))
 
       test.equal(image_count(view, "pending list exit"), 1)
       test.ok(wait_ready(instance), instance.reason)
@@ -185,21 +185,21 @@ test.describe("Markdown pending images", function()
       end
 
       local filename = root .. PATHSEP .. "note.md"
-      local doc = Doc(filename, filename, true)
-      doc:insert(1, 1, "\n![[one.png]]\n\n# Heading")
-      doc:clear_undo_redo()
-      view = DocView(doc)
+      local buffer = Buffer(filename, filename, true)
+      buffer:insert(1, 1, "\n![[one.png]]\n\n# Heading")
+      buffer:clear_undo_redo()
+      view = Editor(buffer)
       view.position.x, view.position.y = 0, 0
       view.size.x, view.size.y = 500, 500
       view:set_wrapping_enabled(true)
       core.active_view = view
       markdown.live_render.refresh_view(view)
-      local instance = test.not_nil(markdown_model.peek(doc))
+      local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_ready(instance), instance.reason)
       view:invalidate_line_render("pending-image-fixture")
       test.equal(image_count(view, "initial"), 1)
 
-      doc:set_selection(1, 1)
+      buffer:set_selection(1, 1)
       view:on_text_input("\n")
       test.equal(image_count(view, "pending Enter"), 1)
     end)

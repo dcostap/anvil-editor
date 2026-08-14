@@ -48,22 +48,22 @@ test.describe("File-type icons", function()
   test.it("keeps the caret after a Path Tree file icon when moving left onto the filename", function()
     local command = require "core.command"
     local core = require "core"
-    local Doc = require "core.doc"
+    local Buffer = require "core.buffer"
     local file_icons = require "core.file_icons"
     local path_tree = require "plugins.path_tree"
 
     local tree = path_tree.build({ { path = "src/example.py" } })
-    local view = path_tree.View(Doc(nil, nil, true))
+    local view = path_tree.View(Buffer(nil, nil, true))
     view:set_path_tree(tree)
 
     local line = tree:line_for_record(1)
-    local text = view.doc.lines[line]:gsub("\n$", "")
+    local text = view.buffer.lines[line]:gsub("\n$", "")
     local name_col = assert(text:find("example.py", 1, true))
-    view.doc:set_selection(line, name_col + 1)
+    view.buffer:set_selection(line, name_col + 1)
     core.active_view = view
 
-    test.equal(command.perform("doc:move-to-previous-char"), true)
-    local caret_line, caret_col = view.doc:get_selection()
+    test.equal(command.perform("text:move-to-previous-char"), true)
+    local caret_line, caret_col = view.buffer:get_selection()
     test.equal(caret_line, line)
     test.equal(caret_col, name_col)
     test.equal(

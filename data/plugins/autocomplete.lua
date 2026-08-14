@@ -5,8 +5,8 @@ local common = require "core.common"
 local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local View = require "core.view"
 local RootPanel = require "core.rootpanel"
 local project_paths = require "core.project_paths"
@@ -35,8 +35,8 @@ local tree_sitter_registry = require "core.treesitter.registry"
 ---@field icon? string
 ---Description shown when the symbol is hovered on the autocomplete box.
 ---@field desc? string
----Internal source classification used to keep Document Word Completion behavior distinct.
----@field autocomplete_source? "document_word"
+---Internal source classification used to keep Buffer Word Completion behavior distinct.
+---@field autocomplete_source? "buffer_word"
 ---An optional callback called once when the symbol is hovered.
 ---@field onhover? fun(idx:integer,item:plugins.autocomplete.symbolinfo)
 ---An optional callback called when the symbol is selected.
@@ -63,14 +63,14 @@ local tree_sitter_registry = require "core.treesitter.registry"
 ---@field font renderer.font
 ---@field color string | renderer.color
 
----@alias plugins.autocomplete.onclose fun(doc:core.doc,item:plugins.autocomplete.symbolinfo)
+---@alias plugins.autocomplete.onclose fun(buffer:core.buffer,item:plugins.autocomplete.symbolinfo)
 
 ---@class plugins.autocomplete.cachedata
 ---@field last_change_id number
 ---@field symbols table<string,boolean>
 
----Symbols cache of all open documents
----@type table<core.doc,plugins.autocomplete.cachedata>
+---Symbols cache of all open Buffers
+---@type table<core.buffer,plugins.autocomplete.cachedata>
 local cache = setmetatable({}, { __mode = "k" })
 
 ---Configuration options for `autocomplete` plugin.
@@ -79,9 +79,9 @@ local cache = setmetatable({}, { __mode = "k" })
 ---@field min_len integer
 ---The max amount of scrollable items
 ---@field max_suggestions integer
----Maximum amount of symbols to cache per document
+---Maximum amount of symbols to cache per buffer
 ---@field max_symbols integer
----Maximum length of document symbols to cache and render in autocomplete.
+---Maximum length of buffer symbols to cache and render in autocomplete.
 ---@field max_symbol_length integer
 ---Which symbols to show on the suggestions list: global, local, related, none
 ---@field suggestions_scope "global" | "local" | "related" | "none"
@@ -115,7 +115,7 @@ config.plugins.autocomplete.config_spec = {
     },
     {
       label = "Maximum Symbols",
-      description = "Maximum amount of symbols to cache per document.",
+      description = "Maximum amount of symbols to cache per buffer.",
       path = "max_symbols",
       type = "number",
       default = 4000,
@@ -124,7 +124,7 @@ config.plugins.autocomplete.config_spec = {
     },
     {
       label = "Maximum Symbol Length",
-      description = "Maximum length of document symbols to cache and render in autocomplete.",
+      description = "Maximum length of buffer symbols to cache and render in autocomplete.",
       path = "max_symbol_length",
       type = "number",
       default = 40,
@@ -138,15 +138,15 @@ config.plugins.autocomplete.config_spec = {
       type = "selection",
       default = "local",
       values = {
-        {"All Documents", "global"},
-        {"Current Document", "local"},
-        {"Related Documents", "related"},
+        {"All Buffers", "global"},
+        {"Current Buffer", "local"},
+        {"Related Buffers", "related"},
         {"Known Symbols", "none"}
       },
       on_apply = function(value)
         if value == "global" then
-          for _, doc in ipairs(core.docs) do
-            if cache[doc] then cache[doc] = nil end
+          for _, buffer in ipairs(core.buffers) do
+            if cache[buffer] then cache[buffer] = nil end
           end
         end
       end
@@ -197,13 +197,13 @@ autocomplete.map_manually = {}
 autocomplete.on_close = nil
 ---@type table<string,plugins.autocomplete.icon>
 autocomplete.icons = {}
----@type table<string,fun(view:core.docview,opts:table):plugins.autocomplete.symbols?,table? >
+---@type table<string,fun(view:core.textview,opts:table):plugins.autocomplete.symbols?,table? >
 autocomplete.providers = {}
 local provider_maps = {}
 
 -- Flag that indicates if the autocomplete box was manually triggered
 -- with the autocomplete.complete() function to prevent the suggestions
--- from getting cluttered with arbitrary document symbols by using the
+-- from getting cluttered with arbitrary buffer symbols by using the
 -- autocomplete.map_manually table.
 local triggered_manually = false
 
@@ -257,7 +257,7 @@ function autocomplete.add(t, manually_triggered)
 end
 
 ---Same as translate.start_of_word but uses `symbol_non_word_chars` instead.
----@param doc core.doc
+---@param buffer core.buffer
 ---@param line integer
 ---@param col integer
 ---@return integer line
@@ -318,11 +318,11 @@ local function display_text(text, max_len)
   return text:sub(1, max_len - 1) .. "…"
 end
 
-local function translate_start_of_word(doc, line, col)
+local function translate_start_of_word(buffer, line, col)
   while true do
-    local line2, col2 = doc:position_offset(line, col, -1)
-    local char = doc:get_char(line2, col2)
-    if doc:get_non_word_chars(true):find(char, nil, true)
+    local line2, col2 = buffer:position_offset(line, col, -1)
+    local char = buffer:get_char(line2, col2)
+    if buffer:get_non_word_chars(true):find(char, nil, true)
     or line == line2 and col == col2 then
       break
     end
@@ -331,46 +331,46 @@ local function translate_start_of_word(doc, line, col)
   return line, col
 end
 
----Retrieve the current document partial symbol.
+---Retrieve the current buffer partial symbol.
 ---@return string partial
 ---@return integer line1
 ---@return integer col1
 ---@return integer line2
 ---@return integer col2
 function autocomplete.get_partial_symbol()
-  local doc = core.active_view.doc
-  local line2, col2 = doc:get_selection()
-  local line1, col1 = doc:position_offset(line2, col2, translate_start_of_word)
-  return doc:get_text(line1, col1, line2, col2), line1, col1, line2, col2
+  local buffer = core.active_view.buffer
+  local line2, col2 = buffer:get_selection()
+  local line1, col1 = buffer:position_offset(line2, col2, translate_start_of_word)
+  return buffer:get_text(line1, col1, line2, col2), line1, col1, line2, col2
 end
 
 --
--- Thread that scans open document symbols and cache them
+-- Thread that scans open buffer symbols and cache them
 --
 local global_symbols = {}
 
 core.add_thread(function()
-  ---@param doc core.doc
+  ---@param buffer core.buffer
   ---@return table<string,string>
-  local function load_syntax_symbols(doc)
+  local function load_syntax_symbols(buffer)
     return {}
   end
 
-  ---@param doc core.doc
+  ---@param buffer core.buffer
   ---@return table<string,boolean>
-  local function get_symbols(doc)
+  local function get_symbols(buffer)
     local s = {}
-    local syntax_symbols = load_syntax_symbols(doc)
+    local syntax_symbols = load_syntax_symbols(buffer)
     local max_symbols = config.plugins.autocomplete.max_symbols
-    if doc.disable_symbols then return syntax_symbols end
+    if buffer.disable_symbols then return syntax_symbols end
     local i = 1
     local symbols_count = 0
     local scanned_symbols = 0
-    local symbol_pattern = doc:get_symbol_pattern()
+    local symbol_pattern = buffer:get_symbol_pattern()
     local slice_start = system.get_time()
     local slice_budget = 0.001
-    while i <= #doc.lines do
-      local line = doc.lines[i]
+    while i <= #buffer.lines do
+      local line = buffer.lines[i]
       local search_from = 1
       while search_from <= #line do
         local match_start, match_end, captured_symbol = line:find(symbol_pattern, search_from)
@@ -387,15 +387,15 @@ core.add_thread(function()
           symbols_count = symbols_count + 1
           if symbols_count > max_symbols then
             s = nil
-            doc.disable_symbols = true
+            buffer.disable_symbols = true
             local filename_message
-            if doc.filename then
-              filename_message = doc.filename
+            if buffer.filename then
+              filename_message = buffer.filename
             else
               filename_message = "unnamed"
             end
             core.warn(
-              "Too many symbols in '%s': stopping auto-complete for this document "
+              "Too many symbols in '%s': stopping auto-complete for this buffer "
                 .. "according to config.plugins.autocomplete.max_symbols.",
               filename_message
             )
@@ -415,28 +415,28 @@ core.add_thread(function()
     return s
   end
 
-  ---@param doc core.doc
+  ---@param buffer core.buffer
   ---@return boolean
-  local function cache_is_valid(doc)
-    local c = cache[doc]
-    return c and c.last_change_id == doc:get_change_id()
+  local function cache_is_valid(buffer)
+    local c = cache[buffer]
+    return c and c.last_change_id == buffer:get_change_id()
   end
 
   while true do
     local symbols = {}
 
-    -- lift all symbols from all docs
-    for _, doc in ipairs(core.docs) do
-      -- update the cache if the doc has changed since the last iteration
-      if not cache_is_valid(doc) then
-        cache[doc] = {
-          last_change_id = doc:get_change_id(),
-          symbols = get_symbols(doc)
+    -- lift all symbols from all buffers
+    for _, buffer in ipairs(core.buffers) do
+      -- update the cache if the buffer has changed since the last iteration
+      if not cache_is_valid(buffer) then
+        cache[buffer] = {
+          last_change_id = buffer:get_change_id(),
+          symbols = get_symbols(buffer)
         }
       end
-      -- update symbol set with doc's symbol set
+      -- update symbol set with buffer's symbol set
       if config.plugins.autocomplete.suggestions_scope == "global" then
-        for sym in pairs(cache[doc].symbols) do
+        for sym in pairs(cache[buffer].symbols) do
           symbols[sym] = true
         end
       end
@@ -452,8 +452,8 @@ core.add_thread(function()
     local valid = true
     while valid do
       coroutine.yield(1)
-      for _, doc in ipairs(core.docs) do
-        if not cache_is_valid(doc) then
+      for _, buffer in ipairs(core.buffers) do
+        if not cache_is_valid(buffer) then
           valid = false
           break
         end
@@ -469,8 +469,8 @@ local suggestions_offset = 1
 local suggestions_idx = 1
 local suggestions = {}
 local last_line, last_col
-local last_doc
-local pending_deletion_doc
+local last_buffer
+local pending_deletion_buffer
 
 local function display_info(suggestion)
   local info = suggestion and suggestion.info
@@ -568,12 +568,12 @@ local function tree_sitter_symbol_index_module()
   return ok and symbols or nil
 end
 
-local function project_completion_language_ids(doc)
-  local path = doc and (doc.abs_filename or doc.filename)
+local function project_completion_language_ids(buffer)
+  local path = buffer and (buffer.abs_filename or buffer.filename)
   if not path or path == "" then return nil end
   local resolved = project_paths.resolve(path)
   if not resolved or not resolved.flags or resolved.flags.autocomplete == false then return nil end
-  local ts = doc.treesitter
+  local ts = buffer.treesitter
   local language_id = ts and ts.language_id
   if not language_id then return nil end
   local language = ts.language or tree_sitter_registry.get(path, "")
@@ -586,25 +586,25 @@ local function project_completion_language_ids(doc)
   return { language_id }
 end
 
-local function member_completion_receiver(doc)
-  if not doc or not core.active_view or core.active_view.doc ~= doc then return nil end
+local function member_completion_receiver(buffer)
+  if not buffer or not core.active_view or core.active_view.buffer ~= buffer then return nil end
   local _, line1, col1 = autocomplete.get_partial_symbol()
-  local language = doc.treesitter and doc.treesitter.language
+  local language = buffer.treesitter and buffer.treesitter.language
   local separators = language and language.member_completion_separators or { "." }
   local separator_line, separator_col, separator_length
   for _, separator in ipairs(separators) do
     separator = tostring(separator or "")
     if separator ~= "" and (not separator_length or #separator > separator_length) then
-      local start_line, start_col = doc:position_offset(line1, col1, -#separator)
-      if start_line == line1 and doc:get_text(start_line, start_col, line1, col1) == separator then
+      local start_line, start_col = buffer:position_offset(line1, col1, -#separator)
+      if start_line == line1 and buffer:get_text(start_line, start_col, line1, col1) == separator then
         separator_line, separator_col, separator_length = start_line, start_col, #separator
       end
     end
   end
   if not separator_line then return nil end
-  local receiver_line, receiver_col = doc:position_offset(separator_line, separator_col, translate_start_of_word)
+  local receiver_line, receiver_col = buffer:position_offset(separator_line, separator_col, translate_start_of_word)
   if receiver_line ~= separator_line or receiver_col == separator_col then return nil end
-  local receiver = doc:get_text(receiver_line, receiver_col, separator_line, separator_col)
+  local receiver = buffer:get_text(receiver_line, receiver_col, separator_line, separator_col)
   return receiver ~= "" and receiver or nil
 end
 
@@ -650,9 +650,9 @@ local function native_fuzzy_module()
   return native_fuzzy_ok and native_fuzzy or nil
 end
 
-local function has_lsp_completion(doc)
+local function has_lsp_completion(buffer)
   local completion = lsp_completion_module()
-  return completion and completion.has_available_client and completion.has_available_client(doc) or false
+  return completion and completion.has_available_client and completion.has_available_client(buffer) or false
 end
 
 local function at_word_completion_position()
@@ -664,12 +664,12 @@ local function reset_lsp_completion_items()
   lsp_completion_context = nil
 end
 
-local function completion_context_key(doc, line, col)
-  return table.concat({ tostring(doc), tostring(doc.get_change_id and doc:get_change_id() or 0), tostring(line), tostring(col) }, ":")
+local function completion_context_key(buffer, line, col)
+  return table.concat({ tostring(buffer), tostring(buffer.get_change_id and buffer:get_change_id() or 0), tostring(line), tostring(col) }, ":")
 end
 
-local function set_lsp_completion_items(doc, line, col, items)
-  if not lsp_completion_context or lsp_completion_context.key ~= completion_context_key(doc, line, col) then return end
+local function set_lsp_completion_items(buffer, line, col, items)
+  if not lsp_completion_context or lsp_completion_context.key ~= completion_context_key(buffer, line, col) then return end
   lsp_completion_items = items or {}
   update_suggestions()
   core.redraw = true
@@ -735,8 +735,8 @@ local function character_count(text)
   return count
 end
 
-local function automatic_document_word_match(item, needle)
-  if type(item) ~= "table" or item.autocomplete_source ~= "document_word" then return true end
+local function automatic_buffer_word_match(item, needle)
+  if type(item) ~= "table" or item.autocomplete_source ~= "buffer_word" then return true end
   local text = suggestion_text(item)
   needle = tostring(needle or "")
   return character_count(text) >= 5
@@ -1060,13 +1060,13 @@ local function reset_suggestions(skip_close)
 
   triggered_manually = false
   force_basic_suggestions = true
-  pending_deletion_doc = nil
+  pending_deletion_buffer = nil
   reset_lsp_completion_items()
 
   if not skip_close then
-    local doc = core.active_view.doc
+    local buffer = core.active_view.buffer
     if autocomplete.on_close then
-      autocomplete.on_close(doc, suggestions[suggestions_idx])
+      autocomplete.on_close(buffer, suggestions[suggestions_idx])
       autocomplete.on_close = nil
     end
     autocomplete.map_manually = {}
@@ -1074,8 +1074,8 @@ local function reset_suggestions(skip_close)
 end
 
 function update_suggestions()
-  local doc = core.active_view.doc
-  local filename = doc and doc.filename or ""
+  local buffer = core.active_view.buffer
+  local filename = buffer and buffer.filename or ""
 
   suggestions = {}
   desc_rect = nil
@@ -1083,7 +1083,7 @@ function update_suggestions()
   local assigned_sym = {}
   local contextual_member_count = 0
 
-  local lsp_available = has_lsp_completion(doc)
+  local lsp_available = has_lsp_completion(buffer)
 
   -- get all relevant suggestions for given filename
   local items = {}
@@ -1151,16 +1151,16 @@ function update_suggestions()
   local scope = config.plugins.autocomplete.suggestions_scope
 
   if not lsp_available and force_basic_suggestions then
-    local function source_location_fields(symbol, source_doc)
+    local function source_location_fields(symbol, source_buffer)
       if type(symbol) ~= "table" then return nil end
       local name_start = symbol.name_range and symbol.name_range.start
       local name_end = symbol.name_range and symbol.name_range["end"]
-      local path = symbol.path or symbol.abs_filename or (source_doc and (source_doc.abs_filename or source_doc.filename))
+      local path = symbol.path or symbol.abs_filename or (source_buffer and (source_buffer.abs_filename or source_buffer.filename))
       local line = name_start and name_start.line or symbol.start_line
       local col = name_start and name_start.col or symbol.start_col
       if not line or not col then return nil end
       return {
-        source_doc = source_doc,
+        source_buffer = source_buffer,
         source_path = path,
         source_line = line,
         source_col = col,
@@ -1191,7 +1191,7 @@ function update_suggestions()
           add_candidate_item(setmetatable({
             text = name,
             info = "normal",
-            autocomplete_source = "document_word",
+            autocomplete_source = "buffer_word",
           }, mt), false)
         end
       end
@@ -1199,14 +1199,14 @@ function update_suggestions()
 
     local locals = tree_sitter_locals_module()
     local symbols, visible_symbols = nil, false
-    if locals and locals.get_visible_document_symbols then
+    if locals and locals.get_visible_buffer_symbols then
       local _, line1, col1, line2, col2 = autocomplete.get_partial_symbol()
       local reason
-      symbols, reason = locals.get_visible_document_symbols(doc, line1, col1, line2, col2)
+      symbols, reason = locals.get_visible_buffer_symbols(buffer, line1, col1, line2, col2)
       visible_symbols = symbols ~= nil and reason == nil
     end
-    if not visible_symbols and locals and locals.get_document_symbols then
-      symbols = locals.get_document_symbols(doc)
+    if not visible_symbols and locals and locals.get_buffer_symbols then
+      symbols = locals.get_buffer_symbols(buffer)
     end
 
     for _, symbol in ipairs(symbols or {}) do
@@ -1218,7 +1218,7 @@ function update_suggestions()
         symbol.completion_preview,
         symbol.completion_preview_name_span,
         false,
-        source_location_fields(symbol, doc)
+        source_location_fields(symbol, buffer)
       )
     end
 
@@ -1226,17 +1226,17 @@ function update_suggestions()
 
     if scope == "global" then
       if visible_symbols then
-        for _, d in ipairs(core.docs) do
-          if d ~= doc and cache[d] and cache[d].symbols then add_cache_symbols(cache[d].symbols) end
+        for _, d in ipairs(core.buffers) do
+          if d ~= buffer and cache[d] and cache[d].symbols then add_cache_symbols(cache[d].symbols) end
         end
       else
         text_symbols = global_symbols
       end
-    elseif scope == "local" and not visible_symbols and cache[doc] and cache[doc].symbols then
-      text_symbols = cache[doc].symbols
+    elseif scope == "local" and not visible_symbols and cache[buffer] and cache[buffer].symbols then
+      text_symbols = cache[buffer].symbols
     elseif scope == "related" then
-      for _, d in ipairs(core.docs) do
-        if doc.syntax == d.syntax and (d ~= doc or not visible_symbols) then
+      for _, d in ipairs(core.buffers) do
+        if buffer.syntax == d.syntax and (d ~= buffer or not visible_symbols) then
           if cache[d] and cache[d].symbols then add_cache_symbols(cache[d].symbols) end
         end
       end
@@ -1245,7 +1245,7 @@ function update_suggestions()
     add_cache_symbols(text_symbols)
 
     local symbol_index = tree_sitter_symbol_index_module()
-    local project_language_ids = project_completion_language_ids(doc)
+    local project_language_ids = project_completion_language_ids(buffer)
     if symbol_index and project_language_ids then
       local function project_item(symbol)
         local name = symbol.name
@@ -1287,11 +1287,11 @@ function update_suggestions()
       end
 
       local contextual_names = {}
-      local receiver = member_completion_receiver(doc)
+      local receiver = member_completion_receiver(buffer)
       if receiver then
         local contextual_symbols = {}
-        if symbol_index.current_document_symbols then
-          local current_symbols = symbol_index.current_document_symbols(doc, partial, {
+        if symbol_index.current_buffer_symbols then
+          local current_symbols = symbol_index.current_buffer_symbols(buffer, partial, {
             parent_names = { receiver },
             limit = math.max(20, config.plugins.autocomplete.max_suggestions * 2),
           })
@@ -1300,7 +1300,7 @@ function update_suggestions()
         for _, symbol in ipairs(query_project_symbols(partial, { parent_names = { receiver } })) do
           contextual_symbols[#contextual_symbols + 1] = symbol
         end
-        local active_path = common.normalize_path(doc.abs_filename or doc.filename or "")
+        local active_path = common.normalize_path(buffer.abs_filename or buffer.filename or "")
         local active_dir = active_path ~= "" and common.dirname(active_path) or ""
         local function locality(symbol)
           local path = common.normalize_path(symbol.path or symbol.abs_filename or "")
@@ -1330,7 +1330,7 @@ function update_suggestions()
 
       local function add_project_symbols(query)
         if not query or query == "" then return end
-        local language = doc.treesitter and doc.treesitter.language
+        local language = buffer.treesitter and buffer.treesitter.language
         for _, symbol in ipairs(query_project_symbols(query, {
           symbol_kinds = language and language.bare_completion_symbol_kinds,
         })) do
@@ -1355,8 +1355,8 @@ function update_suggestions()
 
   -- Do not display a completion that is already exactly under the caret. It
   -- can happen when the generic symbol scanner finds the current word in the
-  -- document (including ordinary prose), but accepting it would not change
-  -- the document.
+  -- buffer (including ordinary prose), but accepting it would not change
+  -- the buffer.
   local function is_noop_completion(item)
     if type(item) == "table" and item.onselect then return false end
     if suggestion_text(item) ~= partial then return false end
@@ -1365,11 +1365,11 @@ function update_suggestions()
     if not prefix or prefix == "" then return true end
 
     local av = core.active_view
-    if not av or not av.doc then return false end
+    if not av or not av.buffer then return false end
     local _, line1, col1 = autocomplete.get_partial_symbol()
-    local prefix_line, prefix_col = av.doc:position_offset(line1, col1, -#prefix)
+    local prefix_line, prefix_col = av.buffer:position_offset(line1, col1, -#prefix)
     return prefix_line == line1
-      and av.doc:get_text(prefix_line, prefix_col, line1, col1) == prefix
+      and av.buffer:get_text(prefix_line, prefix_col, line1, col1) == prefix
   end
 
   local si = 0 -- suggestions index
@@ -1398,12 +1398,12 @@ function update_suggestions()
     local ordered, seen = {}, {}
     for _, item in ipairs(suggestions) do seen[suggestion_text(item)] = item end
     local matchable_items = items
-    -- Automatic Document Word Completion is deliberately conservative. A
+    -- Automatic Buffer Word Completion is deliberately conservative. A
     -- manual invocation keeps the full fuzzy set, including short words.
     if not triggered_manually then
       matchable_items = {}
       for _, item in ipairs(items) do
-        if automatic_document_word_match(item, partial) then
+        if automatic_buffer_word_match(item, partial) then
           matchable_items[#matchable_items + 1] = item
         end
       end
@@ -1455,23 +1455,23 @@ function update_suggestions()
 end
 
 local function get_active_view()
-  if core.active_view:is(DocView) then
+  if core.active_view:extends(Editor) then
     return core.active_view
   end
 end
 
 local function request_lsp_completion(av, opts)
   opts = opts or {}
-  local doc = av and av.doc
-  local completion = doc and lsp_completion_module()
-  if not completion or not completion.has_available_client or not completion.has_available_client(doc) then return false end
-  local line, col = doc:get_selection()
-  local key = completion_context_key(doc, line, col)
+  local buffer = av and av.buffer
+  local completion = buffer and lsp_completion_module()
+  if not completion or not completion.has_available_client or not completion.has_available_client(buffer) then return false end
+  local line, col = buffer:get_selection()
+  local key = completion_context_key(buffer, line, col)
   if lsp_completion_context and lsp_completion_context.key == key and lsp_completion_context.pending then return true end
   lsp_completion_context = { key = key, pending = true }
   lsp_completion_items = nil
   local trigger_character = opts.trigger_character
-  completion.request(doc, {
+  completion.request(buffer, {
     show = false,
     manual = opts.manual,
     trigger_character = trigger_character,
@@ -1480,7 +1480,7 @@ local function request_lsp_completion(av, opts)
       if lsp_completion_context and lsp_completion_context.key == key then
         lsp_completion_context.pending = false
       end
-      set_lsp_completion_items(doc, line, col, items)
+      set_lsp_completion_items(buffer, line, col, items)
     end,
   })
   return true
@@ -1919,14 +1919,14 @@ local function show_autocomplete(opts)
     -- update partial symbol and suggestions
     partial = autocomplete.get_partial_symbol()
 
-    local doc = av.doc
+    local buffer = av.buffer
     local completion = lsp_completion_module()
-    local lsp_available = completion and completion.has_available_client and completion.has_available_client(doc)
+    local lsp_available = completion and completion.has_available_client and completion.has_available_client(buffer)
     local trigger_character = nil
-    if lsp_available and opts.text and completion.is_trigger_character and completion.is_trigger_character(doc, opts.text) then
+    if lsp_available and opts.text and completion.is_trigger_character and completion.is_trigger_character(buffer, opts.text) then
       trigger_character = opts.text:sub(-1)
     end
-    local member_receiver = member_completion_receiver(doc)
+    local member_receiver = member_completion_receiver(buffer)
     local should_open_normally = triggered_manually
       or provider_force_open
       or #partial >= config.plugins.autocomplete.min_len
@@ -1944,11 +1944,11 @@ local function show_autocomplete(opts)
       end
 
       if not triggered_manually then
-        last_line, last_col = av.doc:get_selection()
-        last_doc = av.doc
+        last_line, last_col = av.buffer:get_selection()
+        last_buffer = av.buffer
       else
-        local line, col = av.doc:get_selection()
-        local char = av.doc:get_char(line, col-1, line, col-1)
+        local line, col = av.buffer:get_selection()
+        local char = av.buffer:get_char(line, col-1, line, col-1)
 
         if char:match("%s") or (char:match("%p") and col ~= last_col and not lsp_available) then
           reset_suggestions()
@@ -1968,10 +1968,10 @@ local function show_autocomplete(opts)
 end
 
 --
--- Patch event logic into RootPanel and Doc
+-- Patch event logic into RootPanel and Buffer
 --
 local on_text_input = RootPanel.on_text_input
-local on_doc_close = Doc.on_close
+local on_buffer_close = Buffer.on_close
 local on_mouse_pressed = RootPanel.on_mouse_pressed
 local on_mouse_released = RootPanel.on_mouse_released
 local on_mouse_moved = RootPanel.on_mouse_moved
@@ -2036,8 +2036,8 @@ RootPanel.on_mouse_wheel = function(self, y, x)
   return on_mouse_wheel(self, y, x)
 end
 
-Doc.register_text_transaction_handler("autocomplete", function(doc, transaction)
-  if doc ~= last_doc or #suggestions == 0 then return end
+Buffer.register_text_transaction_handler("autocomplete", function(buffer, transaction)
+  if buffer ~= last_buffer or #suggestions == 0 then return end
 
   local deleted = transaction and transaction.edits and #transaction.edits > 0
   for _, edit in ipairs(transaction and transaction.edits or {}) do
@@ -2046,11 +2046,11 @@ Doc.register_text_transaction_handler("autocomplete", function(doc, transaction)
       break
     end
   end
-  pending_deletion_doc = deleted and doc or nil
+  pending_deletion_buffer = deleted and buffer or nil
 end)
 
-Doc.on_close = function(self)
-  on_doc_close(self)
+Buffer.on_close = function(self)
+  on_buffer_close(self)
   if cache[self] then cache[self] = nil end
 end
 
@@ -2063,9 +2063,9 @@ RootPanel.update = function(...)
 
   local av = get_active_view()
   if av then
-    local line, col = av.doc:get_selection()
-    local deleted = pending_deletion_doc == av.doc and #suggestions > 0
-    pending_deletion_doc = nil
+    local line, col = av.buffer:get_selection()
+    local deleted = pending_deletion_buffer == av.buffer and #suggestions > 0
+    pending_deletion_buffer = nil
 
     if deleted and line == last_line and col <= last_col then
       show_autocomplete({ keep_open = true })
@@ -2105,9 +2105,9 @@ function autocomplete.open(on_close, opts)
   if on_close then
     if autocomplete.on_close then
       local current_on_close = autocomplete.on_close
-      autocomplete.on_close = function (doc, item)
-        current_on_close(doc, item)
-        on_close(doc, item)
+      autocomplete.on_close = function (buffer, item)
+        current_on_close(buffer, item)
+        on_close(buffer, item)
       end
     else
       autocomplete.on_close = on_close
@@ -2120,10 +2120,10 @@ function autocomplete.open(on_close, opts)
     if opts.force_basic ~= nil then
       force_basic_suggestions = opts.force_basic == true
     else
-      force_basic_suggestions = at_word_completion_position() or member_completion_receiver(av.doc) ~= nil
+      force_basic_suggestions = at_word_completion_position() or member_completion_receiver(av.buffer) ~= nil
     end
-    last_line, last_col = av.doc:get_selection()
-    last_doc = av.doc
+    last_line, last_col = av.buffer:get_selection()
+    last_buffer = av.buffer
     request_lsp_completion(av, { manual = true })
     update_suggestions()
   end
@@ -2212,12 +2212,12 @@ local function source_range(item)
 end
 
 local function select_source_range(view, line1, col1, line2, col2)
-  if not view or not view.doc then return false end
+  if not view or not view.buffer then return false end
   local function select_range()
     if view.expand_folds_covering_range then
       view:expand_folds_covering_range(line1, col1, line2, col2, "autocomplete-source")
     end
-    view.doc:set_selection(line1, col1, line2, col2)
+    view.buffer:set_selection(line1, col1, line2, col2)
     return true
   end
   if view.with_selection_state then return view:with_selection_state(select_range) end
@@ -2227,8 +2227,8 @@ end
 local function open_completion_source_view(item, target_opposite, line1, col1, line2, col2, restore_focus)
   local path = item.source_path
   local panes = require "core.panes"
-  local active_docview = get_active_view()
-  local source_pane = panes.pane_for_view(active_docview) or "left"
+  local active_textview = get_active_view()
+  local source_pane = panes.pane_for_view(active_textview) or "left"
   local target_pane = target_opposite and panes.opposite(source_pane) or source_pane
   local opts = {
     pane = target_pane,
@@ -2236,14 +2236,14 @@ local function open_completion_source_view(item, target_opposite, line1, col1, l
     col = col1,
     line2 = line2,
     col2 = col2,
-    source_view = active_docview,
+    source_view = active_textview,
     focus = true,
   }
   if path and path ~= "" then return panes.open_path(path, opts) end
-  if item.source_doc and (target_opposite or not active_docview or active_docview.doc ~= item.source_doc) then
-    return panes.open_doc(item.source_doc, opts)
+  if item.source_buffer and (target_opposite or not active_textview or active_textview.buffer ~= item.source_buffer) then
+    return panes.open_buffer(item.source_buffer, opts)
   end
-  return active_docview
+  return active_textview
 end
 
 local function reveal_completion_source(target_opposite)
@@ -2257,7 +2257,7 @@ local function reveal_completion_source(target_opposite)
   local restore_focus = get_active_view()
   reset_suggestions()
   local view = open_completion_source_view(item, target_opposite, line1, col1, line2, col2, restore_focus)
-  if not view or not view.doc then
+  if not view or not view.buffer then
     quiet_log("Autocomplete source navigation could not open source for %s", tostring(item.text or item))
     return true
   end
@@ -2266,17 +2266,17 @@ local function reveal_completion_source(target_opposite)
   return true
 end
 
-local function docview_predicate()
-  local active_docview = get_active_view()
-  return active_docview ~= nil, active_docview
+local function textview_predicate()
+  local active_textview = get_active_view()
+  return active_textview ~= nil, active_textview
 end
 
 local function predicate()
-  local active_docview = get_active_view()
-  return active_docview and active_docview.doc == last_doc and #suggestions > 0, active_docview
+  local active_textview = get_active_view()
+  return active_textview and active_textview.buffer == last_buffer and #suggestions > 0, active_textview
 end
 
-command.add(docview_predicate, {
+command.add(textview_predicate, {
   ["autocomplete:trigger"] = function()
     autocomplete.trigger()
   end,
@@ -2285,7 +2285,7 @@ command.add(docview_predicate, {
 command.add(predicate, {
   ["autocomplete:complete"] = function(dv)
     if dv.can_edit and not dv:can_edit("autocomplete", { warn = true }) then return end
-    local doc = dv.doc
+    local buffer = dv.buffer
     local item = suggestions[suggestions_idx]
     local inserted = false
     if item.onselect then
@@ -2297,9 +2297,9 @@ command.add(predicate, {
 
       local edits = {}
       local final_by_idx = {}
-      for idx, line1, col1, line2, col2 in doc:get_selections(true) do
+      for idx, line1, col1, line2, col2 in buffer:get_selections(true) do
         local n = col1 - 1
-        local line = doc.lines[line1]
+        local line = buffer.lines[line1]
         local replace_line1, replace_col1 = line1, col1
         for i = 1, sz + 1 do
           local j = sz - i
@@ -2325,10 +2325,10 @@ command.add(predicate, {
       end
 
       if #edits > 0 then
-        doc:apply_edits(edits, {
+        buffer:apply_edits(edits, {
           type = "insert",
-          selections = doc:selections_after_edits(edits, final_by_idx),
-          last_selection = doc.last_selection,
+          selections = buffer:selections_after_edits(edits, final_by_idx),
+          last_selection = buffer.last_selection,
           merge_cursors = false,
         })
       end
@@ -2379,9 +2379,9 @@ command.add(predicate, {
 poi.add_activation_provider("autocomplete-source", {
   priority = 200,
   point_at_caret = function()
-    local active_docview = get_active_view()
-    if not active_docview or active_docview.doc ~= last_doc or #suggestions == 0 then return nil end
-    local line, col = active_docview.doc:get_selection()
+    local active_textview = get_active_view()
+    if not active_textview or active_textview.buffer ~= last_buffer or #suggestions == 0 then return nil end
+    local line, col = active_textview.buffer:get_selection()
     return {
       kind = "completion-source",
       line = line,

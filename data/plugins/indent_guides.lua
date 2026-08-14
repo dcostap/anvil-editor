@@ -3,7 +3,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
-local line_packets = require "core.docview_line_packets"
+local line_packets = require "core.textview_line_packets"
 
 local indent_guides = {
   enabled = true,
@@ -16,7 +16,7 @@ indent_guides = line_packets.persistent_contributor_config(
   "indent_guides", indent_guides
 )
 
-local indent_cache_by_doc = setmetatable({}, { __mode = "k" })
+local indent_cache_by_buffer = setmetatable({}, { __mode = "k" })
 
 local function perf_scope_begin(name)
   if not core.perf_draw_scope_active then return nil end
@@ -40,10 +40,10 @@ local function guide_color(active)
   return active and style.indent_guide_active or style.indent_guide
 end
 
-local function indent_cache(doc, indent_size)
-  local change_id = doc.get_change_id and doc:get_change_id() or 0
+local function indent_cache(buffer, indent_size)
+  local change_id = buffer.get_change_id and buffer:get_change_id() or 0
   local limit = indent_guides.blank_line_search_limit or 25
-  local cache = indent_cache_by_doc[doc]
+  local cache = indent_cache_by_buffer[buffer]
   if
     not cache
     or cache.change_id ~= change_id
@@ -57,18 +57,18 @@ local function indent_cache(doc, indent_size)
       leading = {},
       effective = {},
     }
-    indent_cache_by_doc[doc] = cache
+    indent_cache_by_buffer[buffer] = cache
   end
   return cache
 end
 
-local function compute_leading_indent_cols(doc, line, indent_size)
-  local text = doc.lines[line]
+local function compute_leading_indent_cols(buffer, line, indent_size)
+  local text = buffer.lines[line]
   if not text then return 0, true end
 
   local whitespace = text:match("^[ \t]*") or ""
   local next_char = text:sub(#whitespace + 1, #whitespace + 1)
-  -- doc.lines entries commonly include their trailing newline. Do not let that
+  -- buffer.lines entries commonly include their trailing newline. Do not let that
   -- newline count as indentation, and treat newline-only lines as blank.
   local is_blank = next_char == "" or next_char == "\r" or next_char == "\n"
   local cols = 0
@@ -83,46 +83,46 @@ local function compute_leading_indent_cols(doc, line, indent_size)
   return cols, is_blank
 end
 
-local function leading_indent_cols(doc, line, indent_size)
-  local cache = indent_cache(doc, indent_size)
+local function leading_indent_cols(buffer, line, indent_size)
+  local cache = indent_cache(buffer, indent_size)
   local cached = cache.leading[line]
   if cached then return cached[1], cached[2] end
 
-  local cols, is_blank = compute_leading_indent_cols(doc, line, indent_size)
+  local cols, is_blank = compute_leading_indent_cols(buffer, line, indent_size)
   cache.leading[line] = { cols, is_blank }
   return cols, is_blank
 end
 
-local function previous_nonblank_indent(doc, line, indent_size, limit)
+local function previous_nonblank_indent(buffer, line, indent_size, limit)
   local start = math.max(1, line - limit)
   for i = line - 1, start, -1 do
-    local cols, blank = leading_indent_cols(doc, i, indent_size)
+    local cols, blank = leading_indent_cols(buffer, i, indent_size)
     if not blank then return cols, i end
   end
 end
 
-local function next_nonblank_indent(doc, line, indent_size, limit)
-  local stop = math.min(#doc.lines, line + limit)
+local function next_nonblank_indent(buffer, line, indent_size, limit)
+  local stop = math.min(#buffer.lines, line + limit)
   for i = line + 1, stop do
-    local cols, blank = leading_indent_cols(doc, i, indent_size)
+    local cols, blank = leading_indent_cols(buffer, i, indent_size)
     if not blank then return cols, i end
   end
 end
 
-local function effective_indent_cols(doc, line, indent_size)
-  local cache = indent_cache(doc, indent_size)
+local function effective_indent_cols(buffer, line, indent_size)
+  local cache = indent_cache(buffer, indent_size)
   local cached = cache.effective[line]
   if cached ~= nil then return cached end
 
-  local cols, blank = leading_indent_cols(doc, line, indent_size)
+  local cols, blank = leading_indent_cols(buffer, line, indent_size)
   if not blank then
     cache.effective[line] = cols
     return cols
   end
 
   local limit = cache.blank_line_search_limit
-  local prev = previous_nonblank_indent(doc, line, indent_size, limit)
-  local nexti = next_nonblank_indent(doc, line, indent_size, limit)
+  local prev = previous_nonblank_indent(buffer, line, indent_size, limit)
+  local nexti = next_nonblank_indent(buffer, line, indent_size, limit)
   cols = (prev and nexti) and math.max(prev, nexti) or (prev or nexti or 0)
   cache.effective[line] = cols
   return cols
@@ -143,24 +143,24 @@ local function current_clip_x_range(dv)
 end
 
 local function active_indent_depth(dv, indent_size)
-  local line = dv.doc:get_selection()
-  line = common.clamp(line or 1, 1, #dv.doc.lines)
+  local line = dv.buffer:get_selection()
+  line = common.clamp(line or 1, 1, #dv.buffer.lines)
 
-  local cols, blank = leading_indent_cols(dv.doc, line, indent_size)
-  local text = dv.doc.lines[line]
+  local cols, blank = leading_indent_cols(dv.buffer, line, indent_size)
+  local text = dv.buffer.lines[line]
   local limit = indent_guides.blank_line_search_limit or 25
 
   if blank then
-    local prev = previous_nonblank_indent(dv.doc, line, indent_size, limit)
-    local nexti = next_nonblank_indent(dv.doc, line, indent_size, limit)
+    local prev = previous_nonblank_indent(dv.buffer, line, indent_size, limit)
+    local nexti = next_nonblank_indent(dv.buffer, line, indent_size, limit)
     cols = math.max(prev or 0, nexti or 0)
   elseif is_closing_block_line(text) then
-    local prev = previous_nonblank_indent(dv.doc, line, indent_size, limit)
+    local prev = previous_nonblank_indent(dv.buffer, line, indent_size, limit)
     if prev and prev > cols then
       cols = prev
     end
   else
-    local nexti = next_nonblank_indent(dv.doc, line, indent_size, 1)
+    local nexti = next_nonblank_indent(dv.buffer, line, indent_size, 1)
     if nexti and nexti > cols then
       -- Caret is on a block-opening line; highlight the block being opened.
       cols = nexti
@@ -174,9 +174,9 @@ end
 local function emit_indent_guides(self, line, x, y, emit_grid, emit_rect)
   local conf = indent_guides
   if conf.enabled and not markdown_live_mode(self) then
-    local _, indent_size = self.doc:get_indent_info()
+    local _, indent_size = self.buffer:get_indent_info()
     indent_size = indent_size or config.indent_size or 2
-    local indent_cols = effective_indent_cols(self.doc, line, indent_size)
+    local indent_cols = effective_indent_cols(self.buffer, line, indent_size)
     local indent_levels = math.floor(indent_cols / indent_size)
     local indent_px = self:get_font():get_width(string.rep(" ", indent_size))
     local lh = self:get_line_height()
@@ -239,7 +239,7 @@ local indent_contributor = {
       and not markdown_live_mode(view)
   end,
   signature = function(view)
-    local _, indent_size = view.doc:get_indent_info()
+    local _, indent_size = view.buffer:get_indent_info()
     return table.concat({
       tostring(indent_guides.line_width),
       tostring(indent_guides.blank_line_search_limit),
@@ -254,9 +254,9 @@ local indent_contributor = {
   invalidate_transaction = function(view, first_line, last_line)
     local limit = math.max(0, tonumber(indent_guides.blank_line_search_limit) or 0)
     local line1 = math.max(1, first_line - limit)
-    local line2 = math.min(#view.doc.lines, last_line + limit)
+    local line2 = math.min(#view.buffer.lines, last_line + limit)
     for line = line1, line2 do
-      if view.doc.lines[line]:match("^[ \t]*\r?\n?$") then
+      if view.buffer.lines[line]:match("^[ \t]*\r?\n?$") then
         line_packets.invalidate_range(view, line, line)
       end
     end

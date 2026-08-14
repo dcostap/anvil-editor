@@ -1,7 +1,7 @@
 local common = require "core.common"
 local core = require "core"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local style = require "core.style"
 local test = require "core.test"
 local diagnostic_hints = require "core.lsp.diagnostic_hints"
@@ -21,22 +21,22 @@ local function mkdir(path)
   return path
 end
 
-local function set_text(doc, text)
-  doc.lines = {}
+local function set_text(buffer, text)
+  buffer.lines = {}
   for line in (text .. "\n"):gmatch("(.-\n)") do
-    doc.lines[#doc.lines + 1] = line
+    buffer.lines[#buffer.lines + 1] = line
   end
-  if #doc.lines == 0 then doc.lines[1] = "\n" end
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+  if #buffer.lines == 0 then buffer.lines[1] = "\n" end
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
-local function new_doc(path, text)
-  local doc = Doc()
-  set_text(doc, text or "")
-  doc:set_filename(path, path)
-  return doc
+local function new_buffer(path, text)
+  local buffer = Buffer()
+  set_text(buffer, text or "")
+  buffer:set_filename(path, path)
+  return buffer
 end
 
 local function fake_client(id)
@@ -79,8 +79,8 @@ test.describe("LSP diagnostic Line Hints", function()
   test.after_each(function(context)
     core.active_view = context.original_active_view
     if context.original_style_warn then style.warn = context.original_style_warn end
-    if context.docs then
-      for _, doc in ipairs(context.docs) do pcall(function() doc:on_close() end) end
+    if context.buffers then
+      for _, buffer in ipairs(context.buffers) do pcall(function() buffer:on_close() end) end
     end
     if context.clients then
       for _, client in ipairs(context.clients) do diagnostics.clear_client(client) end
@@ -91,10 +91,10 @@ test.describe("LSP diagnostic Line Hints", function()
     end
   end)
 
-  local function track_doc(context, doc)
-    context.docs = context.docs or {}
-    context.docs[#context.docs + 1] = doc
-    return doc
+  local function track_buffer(context, buffer)
+    context.buffers = context.buffers or {}
+    context.buffers[#context.buffers + 1] = buffer
+    return buffer
   end
 
   local function track_client(context, client)
@@ -105,17 +105,17 @@ test.describe("LSP diagnostic Line Hints", function()
 
   local function setup(context)
     local path = join_path(temp_root, "main.cpp")
-    local doc = track_doc(context, new_doc(path, "first\nsecond\nthird"))
+    local buffer = track_buffer(context, new_buffer(path, "first\nsecond\nthird"))
     local client = track_client(context, fake_client())
-    documents.attach(client, doc, { language_id = "cpp" })
+    documents.attach(client, buffer, { language_id = "cpp" })
     diagnostics.attach_client(client)
-    return doc, client, uri.path_to_uri(path)
+    return buffer, client, uri.path_to_uri(path)
   end
 
   test.it("shows current error and warning diagnostics as line hints", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 0, 0, 5), severity = 2, message = "warning loses" },
         { range = lsp_range(0, 2, 0, 5), severity = 1, message = "error wins" },
@@ -125,7 +125,7 @@ test.describe("LSP diagnostic Line Hints", function()
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     local error_hint = view:get_line_hint(1)
     test.equal(error_hint.text, "error wins")
     test.equal(error_hint.color, style.error)
@@ -138,68 +138,68 @@ test.describe("LSP diagnostic Line Hints", function()
   end)
 
   test.it("uses the earliest diagnostic when severities tie", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 3, 0, 5), severity = 2, message = "later warning" },
         { range = lsp_range(0, 0, 0, 2), severity = 2, message = "earlier warning" },
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     local hint = view:get_line_hint(1)
     test.equal(hint.text, "earlier warning")
     test.equal(hint.color, style.warn)
   end)
 
-  test.it("keeps stale-tracked hints visible when document sync makes diagnostics stale", function(context)
-    local doc, client, document_uri = setup(context)
+  test.it("keeps stale-tracked hints visible when buffer sync makes diagnostics stale", function(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 0, 0, 5), severity = 1, message = "stale error" },
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     test.equal(view:get_line_hint(1).text, "stale error")
 
-    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "new " } })
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "new " } })
     test.equal(view:get_line_hint(1).text, "stale error")
-    documents.flush(client, doc)
+    documents.flush(client, buffer)
 
     test.equal(view:get_line_hint(1).text, "stale error")
   end)
 
   test.it("shifts stale-tracked hints to the original diagnostic line when inserting newline at diagnostic start", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(1, 0, 1, 6), severity = 1, message = "moves down" },
       },
     })
 
-    local view = DocView(doc)
-    doc:insert(2, 1, "\n")
+    local view = TextView(buffer)
+    buffer:insert(2, 1, "\n")
 
     test.is_nil(view:get_line_hint(2))
     test.equal(view:get_line_hint(3).text, "moves down")
   end)
 
   test.it("preserves hints through broad replacements that keep diagnostic text", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(1, 0, 1, 6), severity = 1, message = "preserved" },
       },
     })
 
-    local view = DocView(doc)
-    doc:apply_edits({
-      { line1 = 1, col1 = 1, line2 = 3, col2 = #doc.lines[3], text = "zero\nfirst\nsecond\nthird\n" },
+    local view = TextView(buffer)
+    buffer:apply_edits({
+      { line1 = 1, col1 = 1, line2 = 3, col2 = #buffer.lines[3], text = "zero\nfirst\nsecond\nthird\n" },
     })
 
     test.is_nil(view:get_line_hint(2))
@@ -207,37 +207,37 @@ test.describe("LSP diagnostic Line Hints", function()
   end)
 
   test.it("shifts stale-tracked hints when inserting lines before diagnostics", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(1, 0, 1, 6), severity = 1, message = "moves down" },
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     test.is_nil(view:get_line_hint(1))
     test.equal(view:get_line_hint(2).text, "moves down")
 
-    doc:insert(1, 1, "inserted\n")
+    buffer:insert(1, 1, "inserted\n")
     test.is_nil(view:get_line_hint(2))
     test.equal(view:get_line_hint(3).text, "moves down")
 
-    documents.flush(client, doc)
+    documents.flush(client, buffer)
     test.equal(view:get_line_hint(3).text, "moves down")
   end)
 
-  test.it("draws diagnostic hints left-aligned after their line's Document text", function(context)
-    local doc, client, document_uri = setup(context)
-    set_text(doc, "short\nrightmost text\nerr")
+  test.it("draws diagnostic hints left-aligned after their line's Buffer text", function(context)
+    local buffer, client, buffer_uri = setup(context)
+    set_text(buffer, "short\nrightmost text\nerr")
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 0, 0, 5), severity = 1, message = "aligned error" },
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 240
 
@@ -273,10 +273,10 @@ test.describe("LSP diagnostic Line Hints", function()
   end)
 
   test.it("truncates diagnostic hints on the right when they do not fit", function(context)
-    local doc, client, document_uri = setup(context)
-    set_text(doc, "err\nrightmost text")
+    local buffer, client, buffer_uri = setup(context)
+    set_text(buffer, "err\nrightmost text")
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         {
           range = lsp_range(0, 0, 0, 3),
@@ -286,7 +286,7 @@ test.describe("LSP diagnostic Line Hints", function()
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 240
 
@@ -329,8 +329,8 @@ test.describe("LSP diagnostic Line Hints", function()
     diagnostic_hints.install()
     require "core.linewrapping"
 
-    local doc = track_doc(context, new_doc(join_path(temp_root, "wrapped.cpp"), "abcdefghi"))
-    local view = DocView(doc)
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "wrapped.cpp"), "abcdefghi"))
+    local view = TextView(buffer)
     view.wrapped_settings = {}
     view.wrapped_lines = { 1, 1, 1, 6 }
     view.wrapped_line_to_idx = { [1] = 1, [2] = 3 }
@@ -338,6 +338,7 @@ test.describe("LSP diagnostic Line Hints", function()
     view.draw_line_text = function(self)
       return self:get_line_height() * 2
     end
+    view.draw_line_highlight = function() end
 
     local calls = {}
     view.draw_line_hint = function(_, line, x, y)

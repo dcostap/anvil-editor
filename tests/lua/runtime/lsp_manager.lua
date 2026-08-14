@@ -1,7 +1,7 @@
 local common = require "core.common"
 local core = require "core"
 local core_config = require "core.config"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local diagnostics = require "core.lsp.diagnostics"
@@ -52,26 +52,26 @@ local function write_file(path, text)
   return path
 end
 
-local function set_text(doc, text)
-  doc.lines = {}
+local function set_text(buffer, text)
+  buffer.lines = {}
   for line in (text .. "\n"):gmatch("(.-\n)") do
-    doc.lines[#doc.lines + 1] = line
+    buffer.lines[#buffer.lines + 1] = line
   end
-  if #doc.lines == 0 then doc.lines[1] = "\n" end
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+  if #buffer.lines == 0 then buffer.lines[1] = "\n" end
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
-local function new_doc(path, text)
-  local doc = Doc()
-  set_text(doc, text or "int main() {}")
-  doc:set_filename(path, path)
-  return doc
+local function new_buffer(path, text)
+  local buffer = Buffer()
+  set_text(buffer, text or "int main() {}")
+  buffer:set_filename(path, path)
+  return buffer
 end
 
-local function ready_entry_for_doc(doc)
-  local client, entry = manager.client_for_doc(doc)
+local function ready_entry_for_buffer(buffer)
+  local client, entry = manager.client_for_buffer(buffer)
   return client and client.state == "ready" and entry or nil
 end
 
@@ -106,8 +106,8 @@ test.describe("core.lsp.manager", function()
     core_config.lsp = context.original_lsp_config
     if context.added_project then core.remove_project(context.added_project) end
     core.projects = context.original_projects
-    if context.docs then
-      for _, doc in ipairs(context.docs) do pcall(function() doc:on_close() end) end
+    if context.buffers then
+      for _, buffer in ipairs(context.buffers) do pcall(function() buffer:on_close() end) end
     end
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)
@@ -115,57 +115,57 @@ test.describe("core.lsp.manager", function()
     end
   end)
 
-  local function track_doc(context, doc)
-    context.docs = context.docs or {}
-    context.docs[#context.docs + 1] = doc
-    return doc
+  local function track_buffer(context, buffer)
+    context.buffers = context.buffers or {}
+    context.buffers[#context.buffers + 1] = buffer
+    return buffer
   end
 
-  test.test("auto-start waits for Doc(filename) load before didOpen sync", function(context)
+  test.test("auto-start waits for Buffer(filename) load before didOpen sync", function(context)
     manager.set_server_definitions({ fake = fake_definition() })
     manager.set_auto_start(true)
     local root = setup_project(context)
     local path = write_file(join_path(root, "loaded.fakecpp"), "loaded-content\n")
 
-    local doc = track_doc(context, Doc(path, path))
+    local buffer = track_buffer(context, Buffer(path, path))
     wait_for(3, function()
-      local client = manager.client_for_doc(doc)
+      local client = manager.client_for_buffer(buffer)
       return client and (client.transport.stderr_tail or ""):find("didOpenText=loaded%-content", 1) ~= nil
     end)
 
-    local client = manager.client_for_doc(doc)
+    local client = manager.client_for_buffer(buffer)
     test.not_nil(client)
     test.ok(not (client.transport.stderr_tail or ""):find("didOpenTextLength=1\n", 1, true))
     manager.set_auto_start(false)
   end)
 
-  test.test("explicit start for an already-loaded document syncs loaded contents", function(context)
+  test.test("explicit start for an already-loaded buffer syncs loaded contents", function(context)
     manager.set_server_definitions({ fake = fake_definition() })
     local root = setup_project(context)
     local path = write_file(join_path(root, "explicit.fakecpp"), "explicit-content\n")
-    local doc = track_doc(context, Doc(path, path))
+    local buffer = track_buffer(context, Buffer(path, path))
 
-    test.not_nil(manager.ensure_doc(doc))
+    test.not_nil(manager.ensure_buffer(buffer))
     wait_for(3, function()
-      local client = manager.client_for_doc(doc)
+      local client = manager.client_for_buffer(buffer)
       return client and (client.transport.stderr_tail or ""):find("didOpenText=explicit%-content", 1) ~= nil
     end)
   end)
 
-  test.test("matching document starts fake client, reaches ready, syncs, and registers provider", function(context)
+  test.test("matching buffer starts fake client, reaches ready, syncs, and registers provider", function(context)
     manager.set_server_definitions({ fake = fake_definition() })
     local root = setup_project(context)
-    local doc = track_doc(context, new_doc(join_path(root, "main.fakecpp"), "abcd"))
+    local buffer = track_buffer(context, new_buffer(join_path(root, "main.fakecpp"), "abcd"))
 
-    test.not_nil(manager.ensure_doc(doc))
-    wait_for(3, function() return ready_entry_for_doc(doc) ~= nil end)
+    test.not_nil(manager.ensure_buffer(buffer))
+    wait_for(3, function() return ready_entry_for_buffer(buffer) ~= nil end)
 
-    local client, entry = manager.client_for_doc(doc)
+    local client, entry = manager.client_for_buffer(buffer)
     test.not_nil(client)
     test.equal(client.state, "ready")
     test.equal(entry.root.root, common.normalize_path(root))
-    test.not_nil(documents.state(client, doc))
-    test.ok(provider.is_available(doc, "document_outline"))
+    test.not_nil(documents.state(client, buffer))
+    test.ok(provider.is_available(buffer, "buffer_outline"))
     wait_for(3, function()
       return (client.transport.stderr_tail or ""):find("didOpen=", 1, true) ~= nil
     end)
@@ -174,24 +174,24 @@ test.describe("core.lsp.manager", function()
   test.test("global disable prevents starts and stops active clients", function(context)
     manager.set_server_definitions({ fake = fake_definition() })
     local root = setup_project(context)
-    local doc = track_doc(context, new_doc(join_path(root, "main.fakecpp"), "abcd"))
+    local buffer = track_buffer(context, new_buffer(join_path(root, "main.fakecpp"), "abcd"))
 
-    test.not_nil(manager.ensure_doc(doc))
-    wait_for(3, function() return ready_entry_for_doc(doc) ~= nil end)
-    test.ok(provider.is_available(doc, "document_outline"))
+    test.not_nil(manager.ensure_buffer(buffer))
+    wait_for(3, function() return ready_entry_for_buffer(buffer) ~= nil end)
+    test.ok(provider.is_available(buffer, "buffer_outline"))
 
     test.ok(manager.disable({ persist = false, shutdown_timeout = 0.1 }))
     test.equal(manager.is_enabled(), false)
     test.equal(core_config.lsp.enabled, false)
-    test.is_nil(manager.client_for_doc(doc))
-    test.equal(provider.is_available(doc, "document_outline"), false)
+    test.is_nil(manager.client_for_buffer(buffer))
+    test.equal(provider.is_available(buffer, "buffer_outline"), false)
     test.contains(manager.status(), "LSP disabled")
 
-    local ok, err = manager.ensure_doc(doc)
+    local ok, err = manager.ensure_buffer(buffer)
     test.is_nil(ok)
     test.equal(err, "LSP disabled")
 
-    test.ok(manager.enable({ persist = false, attach_open_docs = false }))
+    test.ok(manager.enable({ persist = false, attach_open_buffers = false }))
     test.equal(manager.is_enabled(), true)
     test.equal(core_config.lsp.enabled, true)
   end)
@@ -202,12 +202,12 @@ test.describe("core.lsp.manager", function()
     local src = mkdir(join_path(root, "src", "deep"))
     write_file(join_path(src, "compile_commands.json"), "[]")
     context.added_project = core.add_project(root)
-    local doc = track_doc(context, new_doc(join_path(src, "main.fakecpp"), "abcd"))
+    local buffer = track_buffer(context, new_buffer(join_path(src, "main.fakecpp"), "abcd"))
 
-    test.not_nil(manager.ensure_doc(doc))
-    wait_for(3, function() return ready_entry_for_doc(doc) ~= nil end)
+    test.not_nil(manager.ensure_buffer(buffer))
+    wait_for(3, function() return ready_entry_for_buffer(buffer) ~= nil end)
 
-    local _client, entry = manager.client_for_doc(doc)
+    local _client, entry = manager.client_for_buffer(buffer)
     test.not_nil(entry)
     test.equal(entry.root.root, common.normalize_path(root))
     test.equal(entry.root.source, "fallback_root")
@@ -221,12 +221,12 @@ test.describe("core.lsp.manager", function()
     project_paths.configure_project {
       external = { { path = "../external-src", label = "external-src" } },
     }
-    local doc = track_doc(context, new_doc(join_path(external, "main.fakecpp"), "abcd"))
+    local buffer = track_buffer(context, new_buffer(join_path(external, "main.fakecpp"), "abcd"))
 
-    test.not_nil(manager.ensure_doc(doc))
-    wait_for(3, function() return ready_entry_for_doc(doc) ~= nil end)
+    test.not_nil(manager.ensure_buffer(buffer))
+    wait_for(3, function() return ready_entry_for_buffer(buffer) ~= nil end)
 
-    local _client, entry = manager.client_for_doc(doc)
+    local _client, entry = manager.client_for_buffer(buffer)
     test.not_nil(entry)
     test.equal(entry.root.root, common.normalize_path(external))
     test.equal(entry.root.source, "fallback_root")
@@ -240,12 +240,12 @@ test.describe("core.lsp.manager", function()
     project_paths.configure_project {
       external = { { path = "../external-src", label = "external-src" } },
     }
-    local doc = track_doc(context, new_doc(join_path(root, "main.fakecpp"), "abcd"))
+    local buffer = track_buffer(context, new_buffer(join_path(root, "main.fakecpp"), "abcd"))
 
-    test.not_nil(manager.ensure_doc(doc))
-    wait_for(3, function() return ready_entry_for_doc(doc) ~= nil end)
+    test.not_nil(manager.ensure_buffer(buffer))
+    wait_for(3, function() return ready_entry_for_buffer(buffer) ~= nil end)
 
-    local client = manager.client_for_doc(doc)
+    local client = manager.client_for_buffer(buffer)
     test.not_nil(client)
     local folders = client.workspace_folders
     test.not_nil(folders)
@@ -260,11 +260,11 @@ test.describe("core.lsp.manager", function()
     local root = setup_project(context)
     local external = mkdir(join_path(context.temp_root, "late-external-src"))
     core.projects = { Project(root) }
-    local doc1 = track_doc(context, new_doc(join_path(root, "one.fakecpp"), "one"))
+    local buffer1 = track_buffer(context, new_buffer(join_path(root, "one.fakecpp"), "one"))
 
-    test.not_nil(manager.ensure_doc(doc1))
-    wait_for(3, function() return ready_entry_for_doc(doc1) ~= nil end)
-    local first_client = manager.client_for_doc(doc1)
+    test.not_nil(manager.ensure_buffer(buffer1))
+    wait_for(3, function() return ready_entry_for_buffer(buffer1) ~= nil end)
+    local first_client = manager.client_for_buffer(buffer1)
     test.not_nil(first_client)
     local first_folders = first_client.workspace_folders
     local first_names = {}
@@ -274,14 +274,14 @@ test.describe("core.lsp.manager", function()
     project_paths.configure_project {
       external = { { path = "../late-external-src", label = "late-external-src" } },
     }
-    local doc2 = track_doc(context, new_doc(join_path(root, "two.fakecpp"), "two"))
-    test.not_nil(manager.ensure_doc(doc2))
+    local buffer2 = track_buffer(context, new_buffer(join_path(root, "two.fakecpp"), "two"))
+    test.not_nil(manager.ensure_buffer(buffer2))
     wait_for(3, function()
-      local client = manager.client_for_doc(doc2)
+      local client = manager.client_for_buffer(buffer2)
       return client and client.state == "ready" and client ~= first_client
     end)
 
-    local second_client = manager.client_for_doc(doc2)
+    local second_client = manager.client_for_buffer(buffer2)
     local second_names = {}
     for _, folder in ipairs(second_client.workspace_folders or {}) do second_names[folder.name] = true end
     test.ok(second_names["late-external-src"])
@@ -290,31 +290,31 @@ test.describe("core.lsp.manager", function()
   test.test("documents with same identity reuse one client", function(context)
     manager.set_server_definitions({ fake = fake_definition() })
     local root = setup_project(context)
-    local doc1 = track_doc(context, new_doc(join_path(root, "one.fakecpp"), "one"))
-    local doc2 = track_doc(context, new_doc(join_path(root, "two.fakecpp"), "two"))
+    local buffer1 = track_buffer(context, new_buffer(join_path(root, "one.fakecpp"), "one"))
+    local buffer2 = track_buffer(context, new_buffer(join_path(root, "two.fakecpp"), "two"))
 
-    manager.ensure_doc(doc1)
-    manager.ensure_doc(doc2)
+    manager.ensure_buffer(buffer1)
+    manager.ensure_buffer(buffer2)
     wait_for(3, function()
-      local c1 = manager.client_for_doc(doc1)
-      local c2 = manager.client_for_doc(doc2)
+      local c1 = manager.client_for_buffer(buffer1)
+      local c2 = manager.client_for_buffer(buffer2)
       return c1 and c2 and c1 == c2 and c1.state == "ready"
     end)
 
     local count = 0
     for _ in pairs(manager.entries()) do count = count + 1 end
     test.equal(count, 1)
-    local client = manager.client_for_doc(doc1)
-    test.not_nil(documents.state(client, doc1))
-    test.not_nil(documents.state(client, doc2))
+    local client = manager.client_for_buffer(buffer1)
+    test.not_nil(documents.state(client, buffer1))
+    test.not_nil(documents.state(client, buffer2))
   end)
 
   test.test("missing executable no-ops without crashing and is visible in status", function(context)
     manager.set_server_definitions({ fake = fake_definition({ command = "definitely-missing-anvil-lsp-test-server" }) })
     local root = setup_project(context)
-    local doc = track_doc(context, new_doc(join_path(root, "main.fakecpp"), "abcd"))
+    local buffer = track_buffer(context, new_buffer(join_path(root, "main.fakecpp"), "abcd"))
 
-    local ok, err = manager.ensure_doc(doc)
+    local ok, err = manager.ensure_buffer(buffer)
     test.is_nil(ok)
     test.equal(err, "no available LSP server")
     local count = 0
@@ -332,11 +332,11 @@ test.describe("core.lsp.manager", function()
       },
     }
     local root = setup_project(context)
-    local doc = track_doc(context, new_doc(join_path(root, "main.fakecpp"), "abcd"))
+    local buffer = track_buffer(context, new_buffer(join_path(root, "main.fakecpp"), "abcd"))
 
-    test.not_nil(manager.ensure_doc(doc))
-    wait_for(3, function() return ready_entry_for_doc(doc) ~= nil end)
-    local client = manager.client_for_doc(doc)
+    test.not_nil(manager.ensure_buffer(buffer))
+    wait_for(3, function() return ready_entry_for_buffer(buffer) ~= nil end)
+    local client = manager.client_for_buffer(buffer)
     test.not_nil(client)
     test.equal(client.server_id, "fake-local-config-lsp")
   end)
@@ -349,33 +349,33 @@ test.describe("core.lsp.manager", function()
       },
     }) })
     local root = setup_project(context)
-    local doc = track_doc(context, new_doc(join_path(root, "main.fakecpp"), "abcd"))
+    local buffer = track_buffer(context, new_buffer(join_path(root, "main.fakecpp"), "abcd"))
 
-    manager.ensure_doc(doc)
-    wait_for(3, function() return #diagnostics.current_for_doc(doc) == 1 end)
+    manager.ensure_buffer(buffer)
+    wait_for(3, function() return #diagnostics.current_for_buffer(buffer) == 1 end)
 
-    local items = diagnostics.current_for_doc(doc)
+    local items = diagnostics.current_for_buffer(buffer)
     test.equal(items[1].message, "fake diagnostic")
     test.equal(items[1].source, "fake-lsp")
   end)
 
-  test.test("document sync sends didOpen and didChange through manager client", function(context)
+  test.test("buffer sync sends didOpen and didChange through manager client", function(context)
     manager.set_server_definitions({ fake = fake_definition() })
     local root = setup_project(context)
-    local doc = track_doc(context, new_doc(join_path(root, "main.fakecpp"), "abcd"))
+    local buffer = track_buffer(context, new_buffer(join_path(root, "main.fakecpp"), "abcd"))
 
-    manager.ensure_doc(doc)
-    wait_for(3, function() return ready_entry_for_doc(doc) ~= nil end)
-    local client = manager.client_for_doc(doc)
+    manager.ensure_buffer(buffer)
+    wait_for(3, function() return ready_entry_for_buffer(buffer) ~= nil end)
+    local client = manager.client_for_buffer(buffer)
     wait_for(3, function()
       return (client.transport.stderr_tail or ""):find("didOpen=", 1, true) ~= nil
     end)
 
-    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "x" } })
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "x" } })
     wait_for(3, function()
       return (client.transport.stderr_tail or ""):find("didChange=1", 1, true) ~= nil
     end)
-    local state = documents.state(client, doc)
+    local state = documents.state(client, buffer)
     test.equal(state.lsp_version, 1)
   end)
 end)

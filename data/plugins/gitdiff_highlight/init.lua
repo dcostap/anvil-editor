@@ -4,8 +4,8 @@
 local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
-local DocView = require "core.docview"
-local Doc = require "core.doc"
+local TextView = require "core.textview"
+local Buffer = require "core.buffer"
 local command = require "core.command"
 local style = require "core.style"
 local file_context = require "core.file_context"
@@ -56,25 +56,25 @@ local function new_state()
 	}
 end
 
-local function get_state(doc)
-	return states[doc] or { is_in_repo = false, operational = false, ranges = {}, line_index = {} }
+local function get_state(buffer)
+	return states[buffer] or { is_in_repo = false, operational = false, ranges = {}, line_index = {} }
 end
 
-local function ensure_state(doc)
-	local state = states[doc]
+local function ensure_state(buffer)
+	local state = states[buffer]
 	if not state then
 		state = new_state()
-		states[doc] = state
+		states[buffer] = state
 	end
 	return state
 end
 
-local function doc_gitdiff_disabled(doc)
-	return doc and doc.disable_gitdiff_highlight
+local function buffer_gitdiff_disabled(buffer)
+	return buffer and buffer.disable_gitdiff_highlight
 end
 
-local function clear_state(doc, error_message)
-	local state = ensure_state(doc)
+local function clear_state(buffer, error_message)
+	local state = ensure_state(buffer)
 	state.is_in_repo = false
 	state.operational = false
 	state.loading = false
@@ -144,8 +144,8 @@ local function timestamp_name()
 	)
 end
 
-local function write_debug_dump(doc)
-	local state = get_state(doc)
+local function write_debug_dump(buffer)
+	local state = get_state(buffer)
 	local path = temp_dir() .. PATHSEP .. timestamp_name()
 	local fp, err = io.open(path, "wb")
 	if not fp then
@@ -159,11 +159,11 @@ local function write_debug_dump(doc)
 
 	w("Anvil gitdiff_highlight debug dump")
 	w("time=%s", os.date("%Y-%m-%d %H:%M:%S"))
-	w("doc.filename=%s", tostring(doc and doc.filename))
-	w("doc.abs_filename=%s", tostring(doc and doc.abs_filename))
-	w("doc.lines=%s", tostring(doc and doc.lines and #doc.lines))
-	w("doc.encoding=%s", tostring(doc and doc.encoding))
-	w("doc.binary=%s", tostring(doc and doc.binary))
+	w("buffer.filename=%s", tostring(buffer and buffer.filename))
+	w("buffer.abs_filename=%s", tostring(buffer and buffer.abs_filename))
+	w("buffer.lines=%s", tostring(buffer and buffer.lines and #buffer.lines))
+	w("buffer.encoding=%s", tostring(buffer and buffer.encoding))
+	w("buffer.binary=%s", tostring(buffer and buffer.binary))
 	w("git_path=%s", tostring(git_executable()))
 	w("")
 	w("state.is_in_repo=%s", tostring(state.is_in_repo))
@@ -257,11 +257,11 @@ local function git(args, max_stdout)
 	return run_process_capture(full, max_stdout)
 end
 
-local function decode_base_text(doc, text)
+local function decode_base_text(buffer, text)
 	if text:find("%z", 1, true) then return nil, "binary file" end
-	if doc.needs_encoding_conversion and doc:needs_encoding_conversion() then
+	if buffer.needs_encoding_conversion and buffer:needs_encoding_conversion() then
 		if not encoding or not encoding.convert then return nil, "encoding conversion unavailable" end
-		local ok, converted = pcall(encoding.convert, "UTF-8", doc.encoding, text, {
+		local ok, converted = pcall(encoding.convert, "UTF-8", buffer.encoding, text, {
 			strict = false,
 			handle_from_bom = true,
 		})
@@ -273,9 +273,9 @@ local function decode_base_text(doc, text)
 	return text
 end
 
-local function build_line_index(doc, state)
+local function build_line_index(buffer, state)
 	local index = {}
-	local max_line = #doc.lines
+	local max_line = #buffer.lines
 	for _, range in ipairs(state.ranges or {}) do
 		if range.type == "deletion" then
 			local line = math.max(1, math.min(max_line, range.current_start))
@@ -294,19 +294,19 @@ end
 local schedule_local_diff
 local schedule_base_reload
 
-local function finish_base_worker(doc, state)
-	state = state or ensure_state(doc)
+local function finish_base_worker(buffer, state)
+	state = state or ensure_state(buffer)
 	state.base_worker_running = false
 	state.loading = false
 	if state.base_reload_requested then
 		state.base_reload_requested = false
-		schedule_base_reload(doc, "queued-base-reload")
+		schedule_base_reload(buffer, "queued-base-reload")
 	end
 end
 
-schedule_local_diff = function(doc, reason)
-	if not doc or not doc.abs_filename or doc_gitdiff_disabled(doc) then return end
-	local state = ensure_state(doc)
+schedule_local_diff = function(buffer, reason)
+	if not buffer or not buffer.abs_filename or buffer_gitdiff_disabled(buffer) then return end
+	local state = ensure_state(buffer)
 	if not state.base_lines then return end
 
 	state.local_generation = state.local_generation + 1
@@ -316,22 +316,22 @@ schedule_local_diff = function(doc, reason)
 
 	core.add_thread(function()
 		while true do
-			local current_state = ensure_state(doc)
+			local current_state = ensure_state(buffer)
 			local deadline = current_state.local_deadline or 0
 			local now = system.get_time()
 			if now >= deadline then break end
 			coroutine.yield(math.min(0.05, deadline - now))
 		end
 
-		local current_state = ensure_state(doc)
+		local current_state = ensure_state(buffer)
 		local generation = current_state.local_generation
-		local built, meta = ranges.build(current_state.base_lines or {}, doc.lines or {}, {
+		local built, meta = ranges.build(current_state.base_lines or {}, buffer.lines or {}, {
 			max_diff_cells = plugin_config.max_diff_cells,
 			max_diff_lines = plugin_config.max_diff_lines,
 		})
 		if generation ~= current_state.local_generation then
 			current_state.local_worker_running = false
-			schedule_local_diff(doc, "stale-local-diff")
+			schedule_local_diff(buffer, "stale-local-diff")
 			return
 		end
 
@@ -339,12 +339,12 @@ schedule_local_diff = function(doc, reason)
 		current_state.operational = not current_state.too_large and current_state.is_in_repo
 		current_state.error = meta and meta.error or (meta and meta.reason)
 		current_state.ranges = built or {}
-		build_line_index(doc, current_state)
+		build_line_index(buffer, current_state)
 		current_state.local_worker_running = false
 		if plugin_config.debug_log then
 			core.log_quiet(
 				"[gitdiff_highlight] local diff %s: ranges=%d too_large=%s error=%s cells=%s",
-				doc.abs_filename or "?",
+				buffer.abs_filename or "?",
 				#current_state.ranges,
 				tostring(current_state.too_large),
 				tostring(current_state.error),
@@ -355,9 +355,9 @@ schedule_local_diff = function(doc, reason)
 	end)
 end
 
-schedule_base_reload = function(doc, reason)
-	if not doc or not doc.abs_filename or doc_gitdiff_disabled(doc) then return end
-	local state = ensure_state(doc)
+schedule_base_reload = function(buffer, reason)
+	if not buffer or not buffer.abs_filename or buffer_gitdiff_disabled(buffer) then return end
+	local state = ensure_state(buffer)
 	if state.base_worker_running then
 		state.base_reload_requested = true
 		return
@@ -368,28 +368,28 @@ schedule_base_reload = function(doc, reason)
 	local base_generation = state.base_generation
 
 	core.add_thread(function()
-		local full_path = doc.abs_filename
+		local full_path = buffer.abs_filename
 		local git_full_path = normalize_git_path(full_path)
 		local file_dir = dirname(full_path)
 
-		if doc.binary then
-			clear_state(doc, "binary file")
-			finish_base_worker(doc, state)
+		if buffer.binary then
+			clear_state(buffer, "binary file")
+			finish_base_worker(buffer, state)
 			return
 		end
 
 		local rc, root, err = git({ "-C", file_dir, "rev-parse", "--show-toplevel" }, 64 * 1024)
-		if base_generation ~= ensure_state(doc).base_generation then finish_base_worker(doc, state); return end
+		if base_generation ~= ensure_state(buffer).base_generation then finish_base_worker(buffer, state); return end
 		if rc ~= 0 then
-			clear_state(doc, "not in git repository")
-			finish_base_worker(doc, state)
+			clear_state(buffer, "not in git repository")
+			finish_base_worker(buffer, state)
 			return
 		end
 		root = trim_eol(root)
 
 		local rel
 		rc, rel, err = git({ "-C", root, "ls-files", "--full-name", "--error-unmatch", "--", git_full_path }, 64 * 1024)
-		if base_generation ~= ensure_state(doc).base_generation then finish_base_worker(doc, state); return end
+		if base_generation ~= ensure_state(buffer).base_generation then finish_base_worker(buffer, state); return end
 		if rc ~= 0 then
 			local fallback_rel = repo_relative_path(root, full_path)
 			if fallback_rel then
@@ -397,8 +397,8 @@ schedule_base_reload = function(doc, reason)
 			end
 		end
 		if rc ~= 0 then
-			clear_state(doc, "file is not tracked: " .. tostring(err))
-			finish_base_worker(doc, state)
+			clear_state(buffer, "file is not tracked: " .. tostring(err))
+			finish_base_worker(buffer, state)
 			return
 		end
 		rel = normalize_git_path(trim_eol(rel))
@@ -406,10 +406,10 @@ schedule_base_reload = function(doc, reason)
 		local max_stdout = plugin_config.max_file_size + 1
 		local base_text
 		rc, base_text, err = git({ "-C", root, "show", "--textconv", "HEAD:" .. rel }, max_stdout)
-		if base_generation ~= ensure_state(doc).base_generation then finish_base_worker(doc, state); return end
+		if base_generation ~= ensure_state(buffer).base_generation then finish_base_worker(buffer, state); return end
 		if rc == nil then
-			clear_state(doc, err or "git show failed")
-			finish_base_worker(doc, state)
+			clear_state(buffer, err or "git show failed")
+			finish_base_worker(buffer, state)
 			return
 		elseif rc ~= 0 then
 			-- Unborn HEAD or a path tracked in the index but absent from HEAD: treat
@@ -417,19 +417,19 @@ schedule_base_reload = function(doc, reason)
 			base_text = ""
 		end
 		if #base_text > plugin_config.max_file_size then
-			clear_state(doc, "base file too large")
-			finish_base_worker(doc, state)
+			clear_state(buffer, "base file too large")
+			finish_base_worker(buffer, state)
 			return
 		end
 
-		local decoded, decode_err = decode_base_text(doc, base_text)
+		local decoded, decode_err = decode_base_text(buffer, base_text)
 		if not decoded then
-			clear_state(doc, decode_err)
-			finish_base_worker(doc, state)
+			clear_state(buffer, decode_err)
+			finish_base_worker(buffer, state)
 			return
 		end
 
-		local current_state = ensure_state(doc)
+		local current_state = ensure_state(buffer)
 		current_state.is_in_repo = true
 		current_state.operational = true
 		current_state.loading = false
@@ -437,23 +437,23 @@ schedule_base_reload = function(doc, reason)
 		current_state.repo_root = root
 		current_state.rel_path = rel
 		current_state.base_text = decoded
-		current_state.base_lines = ranges.split_doc_lines(decoded)
+		current_state.base_lines = ranges.split_buffer_lines(decoded)
 		if plugin_config.debug_log then
 			core.log_quiet(
 				"[gitdiff_highlight] base loaded %s: root=%s rel=%s base_lines=%d",
-				doc.abs_filename or "?",
+				buffer.abs_filename or "?",
 				tostring(root),
 				tostring(rel),
 				#current_state.base_lines
 			)
 		end
-		finish_base_worker(doc, current_state)
-		schedule_local_diff(doc, reason or "base-reload")
+		finish_base_worker(buffer, current_state)
+		schedule_local_diff(buffer, reason or "base-reload")
 	end)
 end
 
-local function effective_diff_for_line(doc, line)
-	local state = get_state(doc)
+local function effective_diff_for_line(buffer, line)
+	local state = get_state(buffer)
 	return state.line_index and state.line_index[line]
 end
 
@@ -464,17 +464,17 @@ local function gitdiff_padding(dv)
 	return style.padding.x * 1.5 + line_number_width
 end
 
-local old_docview_gutter = DocView.draw_line_gutter
-local old_gutter_width = DocView.get_gutter_width
-function DocView:draw_line_gutter(line, x, y, width)
-	if self.suppress_gitdiff_gutter or not plugin_config.gutter or not get_state(self.doc).is_in_repo then
-		return old_docview_gutter(self, line, x, y, width)
+local old_textview_gutter = TextView.draw_line_gutter
+local old_gutter_width = TextView.get_gutter_width
+function TextView:draw_line_gutter(line, x, y, width)
+	if self.suppress_gitdiff_gutter or not plugin_config.gutter or not get_state(self.buffer).is_in_repo then
+		return old_textview_gutter(self, line, x, y, width)
 	end
 
 	local lh = self:get_line_height()
-	local gutter_height = old_docview_gutter(self, line, x, y, width) or lh
+	local gutter_height = old_textview_gutter(self, line, x, y, width) or lh
 
-	local line_diff = effective_diff_for_line(self.doc, line)
+	local line_diff = effective_diff_for_line(self.buffer, line)
 	if line_diff == nil then return gutter_height end
 	local first_row = self:get_visual_row(line, 1, false)
 	local marker_height = self:get_visual_row_y_offset(
@@ -494,7 +494,7 @@ function DocView:draw_line_gutter(line, x, y, width)
 	return gutter_height
 end
 
-function DocView:get_gutter_width()
+function TextView:get_gutter_width()
 	local gw, gpad = old_gutter_width(self)
 	if self.suppress_gitdiff_gutter then return gw, gpad end
 	-- Reserve the gitdiff marker lane immediately so newly opened files do not
@@ -502,11 +502,11 @@ function DocView:get_gutter_width()
 	return gw + style.padding.x * style.gitdiff_width / 12, gpad
 end
 
-local old_draw_scrollbar = DocView.draw_scrollbar
-function DocView:draw_scrollbar()
+local old_draw_scrollbar = TextView.draw_scrollbar
+function TextView:draw_scrollbar()
 	old_draw_scrollbar(self)
 	if not plugin_config.overview or self.diff_view_parent then return end
-	local state = get_state(self.doc)
+	local state = get_state(self.buffer)
 	if not state.is_in_repo or not state.ranges or #state.ranges == 0 then return end
 
 	local sx, sy, sw, sh = self.v_scrollbar:get_track_rect()
@@ -517,12 +517,12 @@ function DocView:draw_scrollbar()
 
 	for _, range in ipairs(state.ranges) do
 		local count = math.max(0, range.current_end - range.current_start)
-		local anchor = math.max(1, math.min(#self.doc.lines, range.current_start))
+		local anchor = math.max(1, math.min(#self.buffer.lines, range.current_start))
 		local start_row = self:get_visual_row(anchor, 1, false)
 		local start_offset = self:get_visual_row_y_offset(start_row)
 		local end_offset = start_offset
 		if count > 0 then
-			local end_line = math.max(1, math.min(#self.doc.lines, range.current_end - 1))
+			local end_line = math.max(1, math.min(#self.buffer.lines, range.current_end - 1))
 			local end_row = self:get_visual_row(end_line, 1, false)
 				+ self:get_visual_row_count_for_line(end_line)
 			end_offset = self:get_visual_row_y_offset(end_row)
@@ -547,35 +547,35 @@ function DocView:draw_scrollbar()
 	self.v_scrollbar:draw_thumb()
 end
 
-local old_text_change = Doc.on_text_change
-function Doc:on_text_change(change_type, transaction, ...)
+local old_text_change = Buffer.on_text_change
+function Buffer:on_text_change(change_type, transaction, ...)
 	local result = old_text_change(self, change_type, transaction, ...)
-	if not doc_gitdiff_disabled(self) and get_state(self).is_in_repo then schedule_local_diff(self, "text-change") end
+	if not buffer_gitdiff_disabled(self) and get_state(self).is_in_repo then schedule_local_diff(self, "text-change") end
 	return result
 end
 
-local old_doc_save = Doc.save
-function Doc:save(...)
-	local results = pack_results(old_doc_save(self, ...))
-	if not doc_gitdiff_disabled(self) then schedule_base_reload(self, "save") end
+local old_buffer_save = Buffer.save
+function Buffer:save(...)
+	local results = pack_results(old_buffer_save(self, ...))
+	if not buffer_gitdiff_disabled(self) then schedule_base_reload(self, "save") end
 	return unpack(results, 1, results.n)
 end
 
-local old_doc_load = Doc.load
-function Doc:load(...)
-	local results = pack_results(old_doc_load(self, ...))
-	if not doc_gitdiff_disabled(self) then schedule_base_reload(self, "load") end
+local old_buffer_load = Buffer.load
+function Buffer:load(...)
+	local results = pack_results(old_buffer_load(self, ...))
+	if not buffer_gitdiff_disabled(self) then schedule_base_reload(self, "load") end
 	return unpack(results, 1, results.n)
 end
 
-local old_set_filename = Doc.set_filename
-function Doc:set_filename(...)
+local old_set_filename = Buffer.set_filename
+function Buffer:set_filename(...)
 	local state = ensure_state(self)
 	state.base_generation = state.base_generation + 1
 	state.local_generation = state.local_generation + 1
 	local results = pack_results(old_set_filename(self, ...))
 	clear_state(self, "path changed")
-	if self.abs_filename and not doc_gitdiff_disabled(self) then schedule_base_reload(self, "path-change") end
+	if self.abs_filename and not buffer_gitdiff_disabled(self) then schedule_base_reload(self, "path-change") end
 	return unpack(results, 1, results.n)
 end
 
@@ -588,8 +588,8 @@ core.add_thread(function()
 	local old_line_highlight_color = MiniMap.line_highlight_color
 	function MiniMap:line_highlight_color(line_index)
 		local view = core.active_view
-		local doc = view and view.doc
-		local state = doc and get_state(doc)
+		local buffer = view and view.buffer
+		local state = buffer and get_state(buffer)
 		if state and state.is_in_repo and state.line_index and state.line_index[line_index] then
 			return color_for_diff(state.line_index[line_index])
 		end
@@ -604,14 +604,14 @@ local function gitdiff_unavailable_message(state)
 end
 
 local function gitdiff_points_for_view(view)
-	if not file_context.is_editor_view(view) or not view.doc then return nil, "no-provider" end
-	local doc = view.doc
-	local state = get_state(doc)
+	if not file_context.is_editor_view(view) or not view.buffer then return nil, "no-provider" end
+	local buffer = view.buffer
+	local state = get_state(buffer)
 	local unavailable = gitdiff_unavailable_message(state)
 	if unavailable then return nil, unavailable end
 	local points = {}
 	for _, range in ipairs(state.ranges or {}) do
-		local line = math.min(#doc.lines, math.max(1, range.current_start or 1))
+		local line = math.min(#buffer.lines, math.max(1, range.current_start or 1))
 		points[#points + 1] = {
 			line = line,
 			col = 1,
@@ -625,12 +625,12 @@ local function gitdiff_points_for_view(view)
 	return points
 end
 
-local docview_get_points_of_interest = DocView.get_points_of_interest
-function DocView:get_points_of_interest(opts)
+local textview_get_points_of_interest = TextView.get_points_of_interest
+function TextView:get_points_of_interest(opts)
 	local git_points, unavailable = gitdiff_points_for_view(self, opts)
 	local provider_points, provider_unavailable
-	if docview_get_points_of_interest then
-		provider_points, provider_unavailable = docview_get_points_of_interest(self, opts)
+	if textview_get_points_of_interest then
+		provider_points, provider_unavailable = textview_get_points_of_interest(self, opts)
 	end
 	if git_points and provider_points then
 		local combined = {}
@@ -656,21 +656,21 @@ command.add(active_editor_view, {
 	["gitdiff:next-change"] = function(view) jump_to_gitdiff_change(view, 1) end,
 })
 
-command.add("core.docview", {
+command.add("core.textview", {
 	["gitdiff:refresh"] = function()
 		local view = core.active_view
-		if view and view.doc then schedule_base_reload(view.doc, "manual-refresh") end
+		if view and view.buffer then schedule_base_reload(view.buffer, "manual-refresh") end
 	end,
 	["gitdiff:debug-state"] = function()
 		local view = core.active_view
-		local doc = view and view.doc
-		if not doc then return end
-		write_debug_dump(doc)
+		local buffer = view and view.buffer
+		if not buffer then return end
+		write_debug_dump(buffer)
 	end,
 })
 
-function gitdiff_highlight._set_state_for_tests(doc, state)
-	states[doc] = state
+function gitdiff_highlight._set_state_for_tests(buffer, state)
+	states[buffer] = state
 end
 
 return gitdiff_highlight

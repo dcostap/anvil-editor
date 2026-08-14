@@ -1,6 +1,6 @@
 local config = require "core.config"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local linewrapping = require "core.linewrapping"
 local test = require "core.test"
 
@@ -22,23 +22,23 @@ local function make_source(line_count, line_factory)
 end
 
 local function new_view(name, source, width_cells)
-  local doc = Doc(name, name, true)
-  doc:insert(1, 1, source)
-  doc:clear_undo_redo()
-  local view = DocView(doc)
+  local buffer = Buffer(name, name, true)
+  buffer:insert(1, 1, source)
+  buffer:clear_undo_redo()
+  local view = TextView(buffer)
   view.size.x, view.size.y = 1200, 800
   local font = view:get_font()
   local width = font:get_width(string.rep("x", width_cells))
-  return doc, view, font, width
+  return buffer, view, font, width
 end
 
-local function close(doc, view)
+local function close(buffer, view)
   view:set_wrapping_enabled(false)
-  doc:on_close()
+  buffer:on_close()
 end
 
 local function benchmark_reconstruction(name, source, width_cells, iterations)
-  local doc, view, font, width = new_view(name, source, width_cells)
+  local buffer, view, font, width = new_view(name, source, width_cells)
   linewrapping.reconstruct_breaks(view, font, width)
   local samples = {}
   for iteration = 1, iterations do
@@ -49,11 +49,11 @@ local function benchmark_reconstruction(name, source, width_cells, iterations)
   end
   local result = {
     bytes = #source,
-    lines = #doc.lines,
+    lines = #buffer.lines,
     rows = linewrapping.get_total_wrapped_lines(view),
     median_ms = median(samples),
   }
-  close(doc, view)
+  close(buffer, view)
   return result
 end
 
@@ -61,12 +61,12 @@ local function benchmark_edit_position(line_count, target_line)
   local source = make_source(line_count, function(line)
     return string.format("value_%05d = representative_words_for_wrapping alpha beta gamma delta\n", line)
   end)
-  local doc, view, _, width = new_view("linewrap-edit-benchmark.lua", source, 72)
+  local buffer, view, _, width = new_view("linewrap-edit-benchmark.lua", source, 72)
   linewrapping.reconstruct_breaks(view, view:get_font(), width)
-  doc:set_selection(target_line, 1, target_line, 1)
-  local ms = elapsed_ms(function() doc:text_input(string.rep("x", 72)) end)
+  buffer:set_selection(target_line, 1, target_line, 1)
+  local ms = elapsed_ms(function() buffer:text_input(string.rep("x", 72)) end)
   local rows = linewrapping.get_total_wrapped_lines(view)
-  close(doc, view)
+  close(buffer, view)
   return ms, rows, #source
 end
 
@@ -74,7 +74,7 @@ local function benchmark_multi_range_edit(source, line_count, edit_count, force_
   local samples = {}
   local rows
   for iteration = 1, 5 do
-    local doc, view, _, width = new_view(
+    local buffer, view, _, width = new_view(
       "linewrap-multi-range-benchmark.lua", source, 72
     )
     linewrapping.reconstruct_breaks(view, view:get_font(), width)
@@ -92,16 +92,16 @@ local function benchmark_multi_range_edit(source, line_count, edit_count, force_
     end
     collectgarbage("collect")
     local ok, elapsed = pcall(elapsed_ms, function()
-      doc:apply_edits(edits, { type = "linewrap-multi-range-benchmark" })
+      buffer:apply_edits(edits, { type = "linewrap-multi-range-benchmark" })
     end)
     linewrapping.update_multiple_nonstructural_breaks = original_update
     if not ok then
-      close(doc, view)
+      close(buffer, view)
       error(elapsed, 0)
     end
     samples[iteration] = elapsed
     rows = linewrapping.get_total_wrapped_lines(view)
-    close(doc, view)
+    close(buffer, view)
   end
   return median(samples), rows
 end

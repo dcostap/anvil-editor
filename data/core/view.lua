@@ -172,7 +172,7 @@ function View:move_towards(t, k, dest, rate, name)
     t["move_data_"..k] = nil
   else
     local constant_scroll = name == "scroll"
-      and self.doc
+      and self.buffer
       and config.scroll_animation_type == "constant"
     local constant_general = name ~= "scroll"
       and config.animation_type == "constant"
@@ -226,7 +226,7 @@ end
 
 
 ---Get the name displayed in the view's tab.
----Override to show document name, file path, etc.
+---Override to show buffer name, file path, etc.
 ---@return string name
 function View:get_name()
   return "---"

@@ -29,7 +29,7 @@ local function line_text(line)
 end
 
 local function find_line(view, wanted)
-  for i, line in ipairs(view.doc.lines) do
+  for i, line in ipairs(view.buffer.lines) do
     if line_text(line) == wanted then return i end
   end
 end
@@ -119,7 +119,7 @@ test.describe("File Tree Project Path Roles", function()
     test.not_nil(external_root)
     test.not_nil(missing_root)
     test.ok(readme_line < vendored_section)
-    test.not_equal(line_text(filetree.doc.lines[vendored_section - 1]), "")
+    test.not_equal(line_text(filetree.buffer.lines[vendored_section - 1]), "")
     test.equal(vendored_section, vendored_root)
     test.ok(vendored_root < external_section)
     test.equal(external_section, external_root)
@@ -157,7 +157,7 @@ test.describe("File Tree Project Path Roles", function()
 
     test.ok(command.perform("fuzzy-searcher:focus-selected-in-tree"), "expected focus command to run")
 
-    local line = filetree.doc:get_selection()
+    local line = filetree.buffer:get_selection()
     local entry = filetree:entry_for_line(line)
     test.is_nil(core.fuzzy_searcher_active_view)
     test.equal(core.active_view, filetree)
@@ -178,7 +178,7 @@ test.describe("File Tree Project Path Roles", function()
     local filetree = setup_project_paths(context)
     local vendored_section = find_section_start(filetree, "vendored")
     test.not_nil(vendored_section)
-    test.equal(line_text(filetree.doc.lines[vendored_section]), "library1/")
+    test.equal(line_text(filetree.buffer.lines[vendored_section]), "library1/")
     local entry, err = filetree:entry_for_line(vendored_section)
     test.not_nil(entry)
     test.equal(err, nil)
@@ -193,7 +193,7 @@ test.describe("File Tree Project Path Roles", function()
         break
       end
     end
-    test.ok(found_provider_row, "expected separator to be a visual row, not a document row")
+    test.ok(found_provider_row, "expected separator to be a visual row, not a buffer row")
   end)
 
   test.it("rejects new rows typed under browse-only Project Directory sections", function(context)
@@ -202,7 +202,7 @@ test.describe("File Tree Project Path Roles", function()
     local entry = filetree:entry_for_line(external_root)
     filetree:expand_folder(external_root, entry, false)
 
-    filetree.doc:insert(external_root + 1, 1, "\tNewFile.java\n")
+    filetree.buffer:insert(external_root + 1, 1, "\tNewFile.java\n")
     local plan = filetree:plan_changes(true)
     test.ok(plan.invalid, "expected Project Directory section edits to be invalid")
     test.equal(plan.status[external_root + 1], "invalid")
@@ -230,7 +230,7 @@ test.describe("File Tree Project Path Roles", function()
     local external_root = find_line(filetree, "jdk-src/")
     test.not_nil(external_root)
 
-    filetree.doc.lines[external_root] = "jdk-renamed/\n"
+    filetree.buffer.lines[external_root] = "jdk-renamed/\n"
     local plan = filetree:plan_changes(false)
     test.not_nil(plan)
     test.equal(#plan.project_path_label_updates, 1)
@@ -249,7 +249,7 @@ test.describe("File Tree Project Path Roles", function()
     local external_root = find_line(filetree, "jdk-src/")
     test.not_nil(external_root)
 
-    table.remove(filetree.doc.lines, external_root)
+    table.remove(filetree.buffer.lines, external_root)
     table.remove(filetree.line_meta, external_root)
     local plan = filetree:plan_changes(false)
     test.not_nil(plan)

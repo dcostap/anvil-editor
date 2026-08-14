@@ -7,15 +7,15 @@ local function normalize_encoding(encoding)
   return encoding
 end
 
-local function get_line(doc, line)
-  if doc.get_utf8_line then
-    return doc:get_utf8_line(line)
+local function get_line(buffer, line)
+  if buffer.get_utf8_line then
+    return buffer:get_utf8_line(line)
   end
-  return doc.lines and doc.lines[line] or "\n"
+  return buffer.lines and buffer.lines[line] or "\n"
 end
 
-local function line_count(doc)
-  return doc.lines and #doc.lines or 1
+local function line_count(buffer)
+  return buffer.lines and #buffer.lines or 1
 end
 
 local function line_content(raw)
@@ -29,7 +29,7 @@ local function line_content(raw)
   return raw
 end
 
-local function max_doc_col(raw)
+local function max_buffer_col(raw)
   raw = raw or "\n"
   if raw:sub(-1) == "\n" then
     return #raw
@@ -43,13 +43,13 @@ local function clamp_number(value, fallback)
   return math.floor(value)
 end
 
-local function clamp_doc_position(doc, line, col)
-  local nlines = math.max(line_count(doc), 1)
+local function clamp_buffer_position(buffer, line, col)
+  local nlines = math.max(line_count(buffer), 1)
   line = clamp_number(line, 1)
   if line < 1 then line = 1 end
   if line > nlines then line = nlines end
-  local raw = get_line(doc, line)
-  local max_col = max_doc_col(raw)
+  local raw = get_line(buffer, line)
+  local max_col = max_buffer_col(raw)
   col = clamp_number(col, 1)
   if col < 1 then col = 1 end
   if col > max_col then col = max_col end
@@ -135,10 +135,10 @@ local function byte_col_from_utf16_units(text, target_units, bias)
   return #text + 1
 end
 
-function position.doc_to_lsp(doc, line, col, encoding)
+function position.buffer_to_lsp(buffer, line, col, encoding)
   encoding = normalize_encoding(encoding)
   local text
-  line, col, text = clamp_doc_position(doc, line, col)
+  line, col, text = clamp_buffer_position(buffer, line, col)
   local byte_count = math.min(math.max(col - 1, 0), #text)
   local character
   if encoding == "utf-8" then
@@ -149,17 +149,17 @@ function position.doc_to_lsp(doc, line, col, encoding)
   return { line = line - 1, character = character }
 end
 
-function position.lsp_to_doc(doc, lsp_position, encoding, bias)
+function position.lsp_to_buffer(buffer, lsp_position, encoding, bias)
   encoding = normalize_encoding(encoding)
   lsp_position = type(lsp_position) == "table" and lsp_position or {}
-  local nlines = math.max(line_count(doc), 1)
+  local nlines = math.max(line_count(buffer), 1)
   local lsp_line = clamp_number(lsp_position.line, 0)
   if lsp_line < 0 then lsp_line = 0 end
   if lsp_line > nlines - 1 then lsp_line = nlines - 1 end
   local line = lsp_line + 1
-  local raw = get_line(doc, line)
+  local raw = get_line(buffer, line)
   local text = line_content(raw)
-  local max_col = max_doc_col(raw)
+  local max_col = max_buffer_col(raw)
   local character = clamp_number(lsp_position.character, 0)
   if character < 0 then character = 0 end
 
@@ -174,7 +174,7 @@ function position.lsp_to_doc(doc, lsp_position, encoding, bias)
   return line, col
 end
 
-local function doc_range_points(range)
+local function buffer_range_points(range)
   if range.line1 or range.col1 or range.line2 or range.col2 then
     return range.line1, range.col1, range.line2, range.col2
   end
@@ -189,20 +189,20 @@ local function doc_range_points(range)
   return range[1], range[2], range[3], range[4]
 end
 
-function position.range_doc_to_lsp(doc, range, encoding)
-  local line1, col1, line2, col2 = doc_range_points(range or {})
+function position.range_buffer_to_lsp(buffer, range, encoding)
+  local line1, col1, line2, col2 = buffer_range_points(range or {})
   return {
-    start = position.doc_to_lsp(doc, line1, col1, encoding),
-    ["end"] = position.doc_to_lsp(doc, line2, col2, encoding),
+    start = position.buffer_to_lsp(buffer, line1, col1, encoding),
+    ["end"] = position.buffer_to_lsp(buffer, line2, col2, encoding),
   }
 end
 
-function position.range_lsp_to_doc(doc, range, encoding, bias)
+function position.range_lsp_to_buffer(buffer, range, encoding, bias)
   range = type(range) == "table" and range or {}
   local start = range.start or range[1] or {}
   local finish = range["end"] or range.finish or range[2] or {}
-  local line1, col1 = position.lsp_to_doc(doc, start, encoding, bias)
-  local line2, col2 = position.lsp_to_doc(doc, finish, encoding, bias)
+  local line1, col1 = position.lsp_to_buffer(buffer, start, encoding, bias)
+  local line2, col2 = position.lsp_to_buffer(buffer, finish, encoding, bias)
   return {
     line1,
     col1,

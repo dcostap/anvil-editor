@@ -1,6 +1,6 @@
 local common = require "core.common"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local style = require "core.style"
 local test = require "core.test"
 local diagnostic_markers = require "core.lsp.diagnostic_markers"
@@ -21,22 +21,22 @@ local function mkdir(path)
   return path
 end
 
-local function set_text(doc, text)
-  doc.lines = {}
+local function set_text(buffer, text)
+  buffer.lines = {}
   for line in (text .. "\n"):gmatch("(.-\n)") do
-    doc.lines[#doc.lines + 1] = line
+    buffer.lines[#buffer.lines + 1] = line
   end
-  if #doc.lines == 0 then doc.lines[1] = "\n" end
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+  if #buffer.lines == 0 then buffer.lines[1] = "\n" end
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
-local function new_doc(path, text)
-  local doc = Doc()
-  set_text(doc, text or "")
-  doc:set_filename(path, path)
-  return doc
+local function new_buffer(path, text)
+  local buffer = Buffer()
+  set_text(buffer, text or "")
+  buffer:set_filename(path, path)
+  return buffer
 end
 
 local function fake_client(id)
@@ -104,8 +104,8 @@ test.describe("LSP Diagnostic Underlines", function()
     if context.original_warning_underline then style.diagnostic_warning_underline = context.original_warning_underline end
     if context.original_removal_grace then diagnostic_markers.set_removal_grace_seconds(context.original_removal_grace) end
     if context.test_font_key then style[context.test_font_key] = nil end
-    if context.docs then
-      for _, doc in ipairs(context.docs) do pcall(function() doc:on_close() end) end
+    if context.buffers then
+      for _, buffer in ipairs(context.buffers) do pcall(function() buffer:on_close() end) end
     end
     if context.clients then
       for _, client in ipairs(context.clients) do diagnostics.clear_client(client) end
@@ -116,10 +116,10 @@ test.describe("LSP Diagnostic Underlines", function()
     end
   end)
 
-  local function track_doc(context, doc)
-    context.docs = context.docs or {}
-    context.docs[#context.docs + 1] = doc
-    return doc
+  local function track_buffer(context, buffer)
+    context.buffers = context.buffers or {}
+    context.buffers[#context.buffers + 1] = buffer
+    return buffer
   end
 
   local function track_client(context, client)
@@ -130,17 +130,17 @@ test.describe("LSP Diagnostic Underlines", function()
 
   local function setup(context, text)
     local path = join_path(temp_root, "main.cpp")
-    local doc = track_doc(context, new_doc(path, text or "first\nsecond\nthird"))
+    local buffer = track_buffer(context, new_buffer(path, text or "first\nsecond\nthird"))
     local client = track_client(context, fake_client())
-    documents.attach(client, doc, { language_id = "cpp" })
+    documents.attach(client, buffer, { language_id = "cpp" })
     diagnostics.attach_client(client)
-    return doc, client, uri.path_to_uri(path)
+    return buffer, client, uri.path_to_uri(path)
   end
 
   test.it("draws error and warning underlines for diagnostic ranges", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 0, 0, 5), severity = 1, message = "error" },
         { range = lsp_range(1, 0, 1, 6), severity = 2, message = "warning" },
@@ -148,7 +148,7 @@ test.describe("LSP Diagnostic Underlines", function()
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     local calls = with_fake_draw_poly(function()
       diagnostic_underlines.draw_line(view, 1, 10, 20)
       diagnostic_underlines.draw_line(view, 2, 10, 40)
@@ -167,15 +167,15 @@ test.describe("LSP Diagnostic Underlines", function()
   end)
 
   test.it("anchors rendered-line underlines to the rendered text row", function(context)
-    local doc, client, document_uri = setup(context, "heading")
+    local buffer, client, buffer_uri = setup(context, "heading")
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 0, 0, 7), severity = 1, message = "error" },
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     local base_height = view:get_line_height()
     local leading_gap = math.max(2, math.floor(base_height / 2))
     view:add_visual_metric_provider("tall-rendered-row", {
@@ -216,21 +216,21 @@ test.describe("LSP Diagnostic Underlines", function()
     test.ok(min_y > y + leading_gap - 2)
   end)
 
-  test.it("keeps stale-tracked underlines visible when document sync makes diagnostics stale", function(context)
-    local doc, client, document_uri = setup(context)
+  test.it("keeps stale-tracked underlines visible when buffer sync makes diagnostics stale", function(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 0, 0, 5), severity = 1, message = "stale error" },
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     local calls = with_fake_draw_poly(function()
       diagnostic_underlines.draw_line(view, 1, 0, 0)
-      doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "new " } })
+      buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "new " } })
       diagnostic_underlines.draw_line(view, 1, 0, 0)
-      documents.flush(client, doc)
+      documents.flush(client, buffer)
       diagnostic_underlines.draw_line(view, 1, 0, 0)
     end)
 
@@ -238,137 +238,137 @@ test.describe("LSP Diagnostic Underlines", function()
   end)
 
   test.it("shifts stale-tracked underlines to the original diagnostic line when inserting newline at diagnostic start", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(1, 0, 1, 6), severity = 1, message = "moves down" },
       },
     })
 
-    doc:insert(2, 1, "\n")
+    buffer:insert(2, 1, "\n")
 
-    test.equal(#diagnostic_underlines.ranges_for_line(doc, 2), 0)
-    local shifted = diagnostic_underlines.ranges_for_line(doc, 3)
+    test.equal(#diagnostic_underlines.ranges_for_line(buffer, 2), 0)
+    local shifted = diagnostic_underlines.ranges_for_line(buffer, 3)
     test.equal(#shifted, 1)
     test.equal(shifted[1].col1, 1)
     test.equal(shifted[1].col2, 7)
   end)
 
   test.it("preserves underlines through broad replacements that keep diagnostic text", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(1, 0, 1, 6), severity = 1, message = "preserved" },
       },
     })
 
-    doc:apply_edits({
-      { line1 = 1, col1 = 1, line2 = 3, col2 = #doc.lines[3], text = "zero\nfirst\nsecond\nthird\n" },
+    buffer:apply_edits({
+      { line1 = 1, col1 = 1, line2 = 3, col2 = #buffer.lines[3], text = "zero\nfirst\nsecond\nthird\n" },
     })
 
-    test.equal(#diagnostic_underlines.ranges_for_line(doc, 2), 0)
-    local shifted = diagnostic_underlines.ranges_for_line(doc, 3)
+    test.equal(#diagnostic_underlines.ranges_for_line(buffer, 2), 0)
+    local shifted = diagnostic_underlines.ranges_for_line(buffer, 3)
     test.equal(#shifted, 1)
     test.equal(shifted[1].col1, 1)
     test.equal(shifted[1].col2, 7)
   end)
 
   test.it("shifts stale-tracked underlines when inserting lines before diagnostics", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(1, 0, 1, 6), severity = 1, message = "moves down" },
       },
     })
 
-    test.equal(#diagnostic_underlines.ranges_for_line(doc, 2), 1)
-    doc:insert(1, 1, "inserted\n")
-    test.equal(#diagnostic_underlines.ranges_for_line(doc, 2), 0)
-    local shifted = diagnostic_underlines.ranges_for_line(doc, 3)
+    test.equal(#diagnostic_underlines.ranges_for_line(buffer, 2), 1)
+    buffer:insert(1, 1, "inserted\n")
+    test.equal(#diagnostic_underlines.ranges_for_line(buffer, 2), 0)
+    local shifted = diagnostic_underlines.ranges_for_line(buffer, 3)
     test.equal(#shifted, 1)
     test.equal(shifted[1].col1, 1)
     test.equal(shifted[1].col2, 7)
-    documents.flush(client, doc)
-    test.equal(#diagnostic_underlines.ranges_for_line(doc, 3), 1)
+    documents.flush(client, buffer)
+    test.equal(#diagnostic_underlines.ranges_for_line(buffer, 3), 1)
   end)
 
   test.it("does not create visual markers from same-version publishes while local edits are pending", function(context)
-    local doc, client, document_uri = setup(context)
-    doc:insert(1, 1, "dirty ")
+    local buffer, client, buffer_uri = setup(context)
+    buffer:insert(1, 1, "dirty ")
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 0, 0, 5), severity = 1, message = "stale publish" },
       },
     })
 
-    test.equal(#diagnostic_underlines.ranges_for_line(doc, 1), 0)
+    test.equal(#diagnostic_underlines.ranges_for_line(buffer, 1), 0)
   end)
 
   test.it("authoritative empty publishes defer marker removal to avoid flicker", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     context.original_removal_grace = diagnostic_markers.set_removal_grace_seconds(60)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 0, 0, 5), severity = 1, message = "kept briefly" },
       },
     })
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {},
     })
 
-    test.equal(#diagnostic_underlines.ranges_for_line(doc, 1), 1)
+    test.equal(#diagnostic_underlines.ranges_for_line(buffer, 1), 1)
   end)
 
   test.it("expired deferred marker removals stop rendering", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     context.original_removal_grace = diagnostic_markers.set_removal_grace_seconds(0)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 0, 0, 5), severity = 1, message = "removed" },
       },
     })
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {},
     })
 
-    test.equal(#diagnostic_underlines.ranges_for_line(doc, 1), 0)
+    test.equal(#diagnostic_underlines.ranges_for_line(buffer, 1), 0)
   end)
 
   test.it("same-version empty publishes while dirty do not clear tracked underlines", function(context)
-    local doc, client, document_uri = setup(context)
+    local buffer, client, buffer_uri = setup(context)
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 0, 0, 5), severity = 1, message = "kept" },
       },
     })
-    doc:insert(1, 1, "dirty ")
+    buffer:insert(1, 1, "dirty ")
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {},
     })
 
-    test.equal(#diagnostic_underlines.ranges_for_line(doc, 1), 1)
+    test.equal(#diagnostic_underlines.ranges_for_line(buffer, 1), 1)
   end)
 
   test.it("keeps zero-width diagnostics visible", function(context)
-    local doc, client, document_uri = setup(context, "abc")
+    local buffer, client, buffer_uri = setup(context, "abc")
     publish(client, {
-      textDocument = { uri = document_uri, version = 0 },
+      textDocument = { uri = buffer_uri, version = 0 },
       diagnostics = {
         { range = lsp_range(0, 1, 0, 1), severity = 1, message = "zero" },
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     local calls = with_fake_draw_poly(function()
       diagnostic_underlines.draw_line(view, 1, 0, 0)
     end)
@@ -380,18 +380,18 @@ test.describe("LSP Diagnostic Underlines", function()
 
   test.it("splits wrapped underline ranges across visual rows", function(context)
     require "core.linewrapping"
-    local doc = track_doc(context, new_doc(join_path(temp_root, "wrapped.cpp"), "abcdefghi"))
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "wrapped.cpp"), "abcdefghi"))
     local client = track_client(context, fake_client())
-    documents.attach(client, doc, { language_id = "cpp" })
+    documents.attach(client, buffer, { language_id = "cpp" })
     diagnostics.attach_client(client)
     publish(client, {
-      textDocument = { uri = uri.path_to_uri(doc.filename), version = 0 },
+      textDocument = { uri = uri.path_to_uri(buffer.filename), version = 0 },
       diagnostics = {
         { range = lsp_range(0, 2, 0, 8), severity = 1, message = "wrapped" },
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     view.wrapped_settings = {}
     view.wrapped_lines = { 1, 1, 1, 6 }
     view.wrapped_line_to_idx = { [1] = 1, [2] = 3 }
@@ -411,18 +411,18 @@ test.describe("LSP Diagnostic Underlines", function()
 
   test.it("uses resolved visual-row offsets for wrapped underlines", function(context)
     require "core.linewrapping"
-    local doc = track_doc(context, new_doc(join_path(temp_root, "wrapped-variable.cpp"), "abcdefghi"))
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "wrapped-variable.cpp"), "abcdefghi"))
     local client = track_client(context, fake_client())
-    documents.attach(client, doc, { language_id = "cpp" })
+    documents.attach(client, buffer, { language_id = "cpp" })
     diagnostics.attach_client(client)
     publish(client, {
-      textDocument = { uri = uri.path_to_uri(doc.filename), version = 0 },
+      textDocument = { uri = uri.path_to_uri(buffer.filename), version = 0 },
       diagnostics = {
         { range = lsp_range(0, 2, 0, 8), severity = 1, message = "wrapped variable" },
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     view.wrapped_settings = {}
     view.wrapped_lines = { 1, 1, 1, 6 }
     view.wrapped_line_to_idx = { [1] = 1, [2] = 3 }
@@ -444,20 +444,20 @@ test.describe("LSP Diagnostic Underlines", function()
     test.equal(min_y2 - min_y1, lh * 2)
   end)
 
-  test.it("draws wrapped underlines once through DocView line body", function(context)
-    local doc = track_doc(context, new_doc(join_path(temp_root, "wrapped-once.cpp"), "abcdefghi"))
+  test.it("draws wrapped underlines once through TextView line body", function(context)
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "wrapped-once.cpp"), "abcdefghi"))
     local client = track_client(context, fake_client())
-    documents.attach(client, doc, { language_id = "cpp" })
+    documents.attach(client, buffer, { language_id = "cpp" })
     diagnostics.attach_client(client)
     diagnostic_underlines.install()
     publish(client, {
-      textDocument = { uri = uri.path_to_uri(doc.filename), version = 0 },
+      textDocument = { uri = uri.path_to_uri(buffer.filename), version = 0 },
       diagnostics = {
         { range = lsp_range(0, 2, 0, 8), severity = 1, message = "wrapped" },
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     view.wrapped_settings = {}
     view.wrapped_lines = { 1, 1, 1, 6 }
     view.wrapped_line_to_idx = { [1] = 1, [2] = 3 }
@@ -479,18 +479,18 @@ test.describe("LSP Diagnostic Underlines", function()
 
   test.it("culls wrapped underline ranges to visible visual rows", function(context)
     require "core.linewrapping"
-    local doc = track_doc(context, new_doc(join_path(temp_root, "wrapped-culled.cpp"), "abcdefghi"))
+    local buffer = track_buffer(context, new_buffer(join_path(temp_root, "wrapped-culled.cpp"), "abcdefghi"))
     local client = track_client(context, fake_client())
-    documents.attach(client, doc, { language_id = "cpp" })
+    documents.attach(client, buffer, { language_id = "cpp" })
     diagnostics.attach_client(client)
     publish(client, {
-      textDocument = { uri = uri.path_to_uri(doc.filename), version = 0 },
+      textDocument = { uri = uri.path_to_uri(buffer.filename), version = 0 },
       diagnostics = {
         { range = lsp_range(0, 0, 0, 9), severity = 1, message = "wrapped" },
       },
     })
 
-    local view = DocView(doc)
+    local view = TextView(buffer)
     view.wrapped_settings = {}
     view.wrapped_lines = { 1, 1, 1, 4, 1, 7 }
     view.wrapped_line_to_idx = { [1] = 1, [2] = 4 }

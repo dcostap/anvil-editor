@@ -4,7 +4,7 @@
 local core = require "core"
 local config = require "core.config"
 local common = require "core.common"
-local DocView = require "core.docview"
+local Editor = require "core.editor"
 local perf = require "core.perf"
 
 local function truthy(name)
@@ -36,10 +36,10 @@ local snippets = {
   "test", " edit", " sample", "\n", " cursor", " perf",
 }
 
-local function active_docview()
+local function active_textview()
   local view = core.active_view
-  if view and view:is(DocView) and view.doc and #view.doc.lines > 0 then
-    if stress.file == "" or common.path_equals(view.doc.abs_filename, stress.file) then
+  if view and view:extends(Editor) and view.buffer and #view.buffer.lines > 0 then
+    if stress.file == "" or common.path_equals(view.buffer.abs_filename, stress.file) then
       return view
     end
   end
@@ -54,23 +54,23 @@ end
 
 local function open_target_file()
   if stress.file == "" then return nil end
-  local doc = core.open_doc(stress.file)
-  if not doc then return nil end
-  return activate_view(core.root_panel:open_doc(doc))
+  local buffer = core.open_buffer(stress.file)
+  if not buffer then return nil end
+  return activate_view(core.root_panel:open_buffer(buffer))
 end
 
-local function clamp_line(doc, line)
-  return math.max(1, math.min(#doc.lines, line))
+local function clamp_line(buffer, line)
+  return math.max(1, math.min(#buffer.lines, line))
 end
 
-local function line_len(doc, line)
-  return #(doc.lines[line] or "") + 1
+local function line_len(buffer, line)
+  return #(buffer.lines[line] or "") + 1
 end
 
-local function set_cursor(doc, line, col)
-  line = clamp_line(doc, line)
-  col = math.max(1, math.min(line_len(doc, line), col))
-  doc:set_selections(1, line, col)
+local function set_cursor(buffer, line, col)
+  line = clamp_line(buffer, line)
+  col = math.max(1, math.min(line_len(buffer, line), col))
+  buffer:set_selections(1, line, col)
   return line, col
 end
 
@@ -86,38 +86,38 @@ end
 
 local function run_operation(dv, step)
   activate_view(dv)
-  local doc = dv.doc
-  local nlines = math.max(1, #doc.lines)
+  local buffer = dv.buffer
+  local nlines = math.max(1, #buffer.lines)
   local line = ((stress.start_line + step * 7 - 2) % nlines) + 1
-  local col = ((step * 11) % math.max(1, line_len(doc, line))) + 1
-  line, col = set_cursor(doc, line, col)
+  local col = ((step * 11) % math.max(1, line_len(buffer, line))) + 1
+  line, col = set_cursor(buffer, line, col)
 
   local mode = step % 12
   if mode == 0 then
-    doc:text_input(snippets[(step % #snippets) + 1])
+    buffer:text_input(snippets[(step % #snippets) + 1])
   elseif mode == 1 then
-    doc:move_to(1)
+    buffer:move_to(1)
   elseif mode == 2 then
-    doc:move_to(-1)
+    buffer:move_to(-1)
   elseif mode == 3 then
-    doc:select_to(6)
+    buffer:select_to(6)
   elseif mode == 4 then
-    doc:delete_to(-1)
+    buffer:delete_to(-1)
   elseif mode == 5 then
-    local line2 = clamp_line(doc, line + 1)
-    doc:set_selections(1, line, 1, line2, math.min(8, line_len(doc, line2)))
+    local line2 = clamp_line(buffer, line + 1)
+    buffer:set_selections(1, line, 1, line2, math.min(8, line_len(buffer, line2)))
   elseif mode == 6 then
-    doc:text_input("a")
+    buffer:text_input("a")
   elseif mode == 7 then
-    doc:move_to(0, 1)
+    buffer:move_to(0, 1)
   elseif mode == 8 then
-    doc:move_to(0, -1)
+    buffer:move_to(0, -1)
   elseif mode == 9 then
     dv:scroll_to_line(line, true)
   elseif mode == 10 then
-    doc:text_input("bc")
+    buffer:text_input("bc")
   else
-    doc:set_selections(1, line, math.max(1, col - 3), line, math.min(line_len(doc, line), col + 3))
+    buffer:set_selections(1, line, math.max(1, col - 3), line, math.min(line_len(buffer, line), col + 3))
   end
   core.redraw = true
 end
@@ -127,7 +127,7 @@ core.add_thread(function()
   local dv = open_target_file()
 
   repeat
-    dv = active_docview() or open_target_file()
+    dv = active_textview() or open_target_file()
     coroutine.yield(0.05)
   until dv
 

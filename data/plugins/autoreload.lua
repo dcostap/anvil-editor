@@ -3,7 +3,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local DirWatch = require "core.dirwatch"
 
 local reload_diff_flash
@@ -36,65 +36,65 @@ local watch = DirWatch()
 local times = setmetatable({}, { __mode = "k" })
 local changed = setmetatable({}, { __mode = "k" })
 
-local function update_time(doc)
-  if doc.abs_filename then
-    local info = system.get_file_info(doc.abs_filename)
-    times[doc] = info and { modified = info.modified, size = info.size }
+local function update_time(buffer)
+  if buffer.abs_filename then
+    local info = system.get_file_info(buffer.abs_filename)
+    times[buffer] = info and { modified = info.modified, size = info.size }
   end
 end
 
-local function reload_doc(doc)
+local function reload_buffer(buffer)
   local old_lines
   if reload_diff_flash and reload_diff_flash.clone_lines then
-    old_lines = reload_diff_flash.clone_lines(doc.lines)
+    old_lines = reload_diff_flash.clone_lines(buffer.lines)
   end
-  doc:reload()
-  update_time(doc)
+  buffer:reload()
+  update_time(buffer)
   if old_lines and reload_diff_flash and reload_diff_flash.flash then
-    reload_diff_flash.flash(doc, old_lines, doc.lines, { reason = "autoreload" })
+    reload_diff_flash.flash(buffer, old_lines, buffer.lines, { reason = "autoreload" })
   end
   core.redraw = true
-  core.log_quiet("Auto-reloaded doc \"%s\"", doc.filename)
+  core.log_quiet("Auto-reloaded buffer \"%s\"", buffer.filename)
 end
 
-local function check_prompt_reload(doc)
-  if doc and doc.deferred_reload then
+local function check_prompt_reload(buffer)
+  if buffer and buffer.deferred_reload then
     core.nag_view:show(
       "File Changed",
-      doc.filename .. " has changed. Reload this file?",
+      buffer.filename .. " has changed. Reload this file?",
       {
         { font = style.font, text = "Yes", default_yes = true },
         { font = style.font, text = "No" , default_no = true }
       }, function(item)
-      if item.text == "Yes" then reload_doc(doc) end
-      doc.deferred_reload = false
+      if item.text == "Yes" then reload_buffer(buffer) end
+      buffer.deferred_reload = false
     end)
   end
 end
 
-local function autoreload_doc(doc)
-  if changed[doc] then changed[doc] = nil end
+local function autoreload_buffer(buffer)
+  if changed[buffer] then changed[buffer] = nil end
   if
-    not doc:is_dirty()
+    not buffer:is_dirty()
     and
     not config.plugins.autoreload.always_show_nagview
   then
-    reload_doc(doc)
-  elseif not doc.deferred_reload then
-    doc.deferred_reload = true
-    check_prompt_reload(doc)
+    reload_buffer(buffer)
+  elseif not buffer.deferred_reload then
+    buffer.deferred_reload = true
+    check_prompt_reload(buffer)
   end
 end
 
 local core_set_active_view = core.set_active_view
 function core.set_active_view(view)
   core_set_active_view(view)
-  if core.active_view.doc and changed[core.active_view.doc] then
-    local doc = core.active_view.doc
+  if core.active_view.buffer and changed[core.active_view.buffer] then
+    local buffer = core.active_view.buffer
     core.add_thread(function()
-      -- validate doc in case the active view rapidly changed
-      if doc == core.active_view.doc then
-        autoreload_doc(doc)
+      -- validate buffer in case the active view rapidly changed
+      if buffer == core.active_view.buffer then
+        autoreload_buffer(buffer)
       end
     end)
   end
@@ -103,28 +103,28 @@ end
 core.add_thread(function()
   while true do
     watch:check(function(file)
-      for _, doc in ipairs(core.docs) do
-        if common.path_equals(doc.abs_filename, file) then
-          local info = system.get_file_info(doc.abs_filename or "")
+      for _, buffer in ipairs(core.buffers) do
+        if common.path_equals(buffer.abs_filename, file) then
+          local info = system.get_file_info(buffer.abs_filename or "")
           if
-            info and info.type == "file" and times[doc]
+            info and info.type == "file" and times[buffer]
             and
             (
-              times[doc].modified ~= info.modified
+              times[buffer].modified ~= info.modified
               or
-              times[doc].size ~= info.size
+              times[buffer].size ~= info.size
             )
           then
             if
               core.active_view
               and
-              core.active_view.doc
+              core.active_view.buffer
               and
-              core.active_view.doc == doc
+              core.active_view.buffer == buffer
             then
-              autoreload_doc(doc)
-            elseif not doc.deferred_reload then
-              changed[doc] = true
+              autoreload_buffer(buffer)
+            elseif not buffer.deferred_reload then
+              changed[buffer] = true
             end
           end
         end
@@ -134,16 +134,16 @@ core.add_thread(function()
   end
 end)
 
--- patch `Doc.save|load` to store modified time
-local load = Doc.load
-local save = Doc.save
-local on_close = Doc.on_close
+-- patch `Buffer.save|load` to store modified time
+local load = Buffer.load
+local save = Buffer.save
+local on_close = Buffer.on_close
 
-Doc.load = function(self, ...)
+Buffer.load = function(self, ...)
   local res = load(self, ...)
   core.add_thread(function()
-    -- apply autoreload only to ui loaded documents
-    if #core.get_views_referencing_doc(self) > 0 then
+    -- apply autoreload only to Buffers loaded in the UI
+    if #core.get_views_referencing_buffer(self) > 0 then
       if not times[self] then watch:watch(self.abs_filename) end
       update_time(self)
     end
@@ -151,17 +151,17 @@ Doc.load = function(self, ...)
   return res
 end
 
-Doc.save = function(self, ...)
+Buffer.save = function(self, ...)
   local res = save(self, ...)
-  -- if starting with an unsaved document with a filename.
-  if #core.get_views_referencing_doc(self) > 0 then
+  -- if starting with an unsaved buffer with a filename.
+  if #core.get_views_referencing_buffer(self) > 0 then
     if not times[self] then watch:watch(self.abs_filename) end
     update_time(self)
   end
   return res
 end
 
-Doc.on_close = function(self)
+Buffer.on_close = function(self)
   on_close(self)
   if times[self] then
     times[self] = nil

@@ -1,8 +1,8 @@
 local core = require "core"
 local config = require "core.config"
 local command = require "core.command"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
@@ -23,19 +23,19 @@ local function wait_ready(instance)
 end
 
 local function make_view(text)
-  local doc = Doc("heading-leading-gap.md", "heading-leading-gap.md", true)
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
-  local view = DocView(doc)
+  local buffer = Buffer("heading-leading-gap.md", "heading-leading-gap.md", true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  local view = Editor(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 500, 200
   view:set_wrapping_enabled(false)
-  return view, doc
+  return view, buffer
 end
 
 local function refresh(view)
   markdown.live_render.refresh_view(view)
-  local instance = markdown_model.peek(view.doc)
+  local instance = markdown_model.peek(view.buffer)
   if not instance then return end
   local deadline = system.get_time() + 5
   while instance.status ~= "ready" and system.get_time() < deadline do
@@ -91,8 +91,8 @@ test.describe("Markdown heading leading spacing", function()
   end)
 
   test.it("keeps a heading fixed when its preceding blank line becomes text", function()
-    local view, doc = make_view("\n## Resultados")
-    doc:set_selection(1, 1)
+    local view, buffer = make_view("\n## Resultados")
+    buffer:set_selection(1, 1)
     refresh(view)
 
     local preceding_height = view:get_position_visual_row_height(1, 1)
@@ -104,8 +104,8 @@ test.describe("Markdown heading leading spacing", function()
     test.ok(text_y > heading_row_y)
     test.equal(caret_y, highlight_y)
 
-    doc:insert(1, 1, "x")
-    local instance = test.not_nil(markdown_model.peek(doc))
+    buffer:insert(1, 1, "x")
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_ready(instance), instance.reason)
 
     test.equal(view:get_position_visual_row_height(1, 1), preceding_height)
@@ -116,8 +116,8 @@ test.describe("Markdown heading leading spacing", function()
   end)
 
   test.it("keeps heading spacing stable when the caret reveals its syntax", function()
-    local view, doc = make_view("# Heading\nstuff")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("# Heading\nstuff")
+    buffer:set_selection(2, 1)
     refresh(view)
 
     local inactive_height = view:get_position_visual_row_height(1, 1)
@@ -129,7 +129,7 @@ test.describe("Markdown heading leading spacing", function()
       "heading must not reserve trailing spacing"
     )
     local _, inactive_y = view:get_line_screen_position(2)
-    doc:set_selection(1, 1)
+    buffer:set_selection(1, 1)
 
     local active_height = view:get_position_visual_row_height(1, 1)
     local active_render = test.not_nil(view:get_line_render(1))
@@ -151,14 +151,14 @@ test.describe("Markdown heading leading spacing", function()
   end)
 
   test.it("keeps typed following text from changing heading spacing on reveal", function()
-    local view, doc = make_view("# Heading\n")
-    doc:set_selection(2, 1)
+    local view, buffer = make_view("# Heading\n")
+    buffer:set_selection(2, 1)
     refresh(view)
     view:on_text_input("stuff")
 
     local inactive_height = view:get_position_visual_row_height(1, 1)
     local _, inactive_y = view:get_line_screen_position(2)
-    doc:set_selection(1, 1)
+    buffer:set_selection(1, 1)
 
     local active_height = view:get_position_visual_row_height(1, 1)
     local _, active_y = view:get_line_screen_position(2)
@@ -173,14 +173,14 @@ test.describe("Markdown heading leading spacing", function()
   end)
 
   test.it("keeps spacing stable through enter, typing, and vertical movement", function()
-    local view, doc = make_view("# Heading")
-    doc:set_selection(1, #doc.lines[1] + 1)
+    local view, buffer = make_view("# Heading")
+    buffer:set_selection(1, #buffer.lines[1] + 1)
     refresh(view)
     view:on_text_input("\nstuff")
 
     local inactive_height = view:get_position_visual_row_height(1, 1)
     local _, inactive_y = view:get_line_screen_position(2)
-    command.perform("doc:move-to-previous-line", view)
+    command.perform("text:move-to-previous-line", view)
 
     local active_height = view:get_position_visual_row_height(1, 1)
     local _, active_y = view:get_line_screen_position(2)
@@ -195,14 +195,14 @@ test.describe("Markdown heading leading spacing", function()
   end)
 
   test.it("keeps spacing stable through reveal with wrapping enabled", function()
-    local view, doc = make_view("# Heading\nstuff")
+    local view, buffer = make_view("# Heading\nstuff")
     view:set_wrapping_enabled(true)
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
     refresh(view)
 
     local inactive_count = view:get_visual_row_count_for_line(1)
     local inactive_height = view:get_position_visual_row_height(1, 1)
-    doc:set_selection(1, 1)
+    buffer:set_selection(1, 1)
 
     test.equal(view:get_visual_row_count_for_line(1), inactive_count)
     test.equal(view:get_position_visual_row_height(1, 1), inactive_height)
@@ -210,24 +210,24 @@ test.describe("Markdown heading leading spacing", function()
 
   test.it("keeps following content fixed through publication when a heading unwraps", function()
     local source = "# This rendered heading wraps across several visual rows in a narrow editor"
-    local view, doc = make_view(source .. "\nstuff")
+    local view, buffer = make_view(source .. "\nstuff")
     view.size.x = 300
     view:set_wrapping_enabled(true)
-    doc:set_selection(1, 10)
+    buffer:set_selection(1, 10)
     refresh(view)
 
     test.ok(
       view:get_visual_row_count_for_line(1) > 1,
       "the heading must initially occupy multiple Wrapped Visual Rows"
     )
-    doc:remove(1, 10, 1, #doc.lines[1])
+    buffer:remove(1, 10, 1, #buffer.lines[1])
     test.equal(
       view:get_visual_row_count_for_line(1), 1,
       "deleting the suffix must unwrap the heading"
     )
 
     local _, pending_y = view:get_line_screen_position(2)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_ready(instance), instance.reason)
     local _, published_y = view:get_line_screen_position(2)
 
@@ -242,10 +242,10 @@ test.describe("Markdown heading leading spacing", function()
 
   test.it("keeps following content fixed through publication when a heading wraps", function()
     local source = "# Procedimiento Apagado conexión host iDrac testing testinga"
-    local view, doc = make_view(source .. "\nstuff")
+    local view, buffer = make_view(source .. "\nstuff")
     view.size.x = 620
     view:set_wrapping_enabled(true)
-    doc:set_selection(1, #doc.lines[1])
+    buffer:set_selection(1, #buffer.lines[1])
     refresh(view)
 
     test.equal(
@@ -259,7 +259,7 @@ test.describe("Markdown heading leading spacing", function()
     )
 
     local _, pending_y = view:get_line_screen_position(2)
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_ready(instance), instance.reason)
     local _, published_y = view:get_line_screen_position(2)
 
@@ -274,9 +274,9 @@ test.describe("Markdown heading leading spacing", function()
 
   test.it("does not transiently unwrap an active heading before publication", function()
     local source = "# Procedimiento Apagado conexión host iDrac testing testingaa"
-    local view, doc = make_view(source .. "\nstuff")
+    local view, buffer = make_view(source .. "\nstuff")
     view.size.x = 1200
-    doc:set_selection(1, #doc.lines[1])
+    buffer:set_selection(1, #buffer.lines[1])
     core.active_view = view
     refresh(view)
 
@@ -297,13 +297,13 @@ test.describe("Markdown heading leading spacing", function()
       view:get_visual_row_count_for_line(1) > 1,
       "the heading must initially occupy multiple Wrapped Visual Rows"
     )
-    test.ok(command.perform("doc:backspace"))
+    test.ok(command.perform("text:backspace"))
 
     test.ok(
       view:get_visual_row_count_for_line(1) > 1,
       "the pending heading must not transiently unwrap"
     )
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_ready(instance), instance.reason)
     test.ok(
       view:get_visual_row_count_for_line(1) > 1,
@@ -312,8 +312,8 @@ test.describe("Markdown heading leading spacing", function()
   end)
 
   test.it("positions autocomplete below the rendered heading row", function()
-    local view, doc = make_view("# Proce")
-    doc:set_selection(1, #doc.lines[1])
+    local view, buffer = make_view("# Proce")
+    buffer:set_selection(1, #buffer.lines[1])
     core.active_view = view
     refresh(view)
 
@@ -324,7 +324,7 @@ test.describe("Markdown heading leading spacing", function()
     })
     test.ok(autocomplete.is_open(), "autocomplete must be open for the heading")
 
-    local line, col = doc:get_selection()
+    local line, col = buffer:get_selection()
     local row_y, row_height = view:get_position_highlight_geometry(line, col)
     local _, popup_y = autocomplete._test.get_suggestions_rect(view)
     test.ok(
@@ -334,15 +334,15 @@ test.describe("Markdown heading leading spacing", function()
   end)
 
   test.it("keeps spacing stable when Enter and following characters are separate edits", function()
-    local view, doc = make_view("# Heading")
-    doc:set_selection(1, #doc.lines[1] + 1)
+    local view, buffer = make_view("# Heading")
+    buffer:set_selection(1, #buffer.lines[1] + 1)
     refresh(view)
     view:on_text_input("\n")
     for character in ("stuff"):gmatch(".") do view:on_text_input(character) end
 
     local inactive_height = view:get_position_visual_row_height(1, 1)
     local _, inactive_y = view:get_line_screen_position(2)
-    command.perform("doc:move-to-previous-line", view)
+    command.perform("text:move-to-previous-line", view)
 
     local active_height = view:get_position_visual_row_height(1, 1)
     local _, active_y = view:get_line_screen_position(2)
@@ -357,7 +357,7 @@ test.describe("Markdown heading leading spacing", function()
   end)
 
   test.it("keeps a following heading aligned while exiting a task and inserting blank rows", function()
-    local view, doc = make_view(table.concat({
+    local view, buffer = make_view(table.concat({
       "- [ ] informar FechaSuAlbaran. Obligado",
       "- [ ] informar SuAlbaranNo Obligado",
       "- [ ] ",
@@ -367,13 +367,13 @@ test.describe("Markdown heading leading spacing", function()
       "```",
     }, "\n"))
     view:set_wrapping_enabled(true)
-    doc:set_selection(3, #doc.lines[3])
+    buffer:set_selection(3, #buffer.lines[3])
     core.active_view = view
     refresh(view)
 
     local function assert_heading_matches_fresh(label)
       local heading_line
-      for line, text in ipairs(doc.lines) do
+      for line, text in ipairs(buffer.lines) do
         if text:find("## Albaranes.", 1, true) then heading_line = line break end
       end
       heading_line = test.not_nil(heading_line)
@@ -382,9 +382,9 @@ test.describe("Markdown heading leading spacing", function()
       local actual_heading_height = view:get_position_visual_row_height(heading_line, 1)
       local actual_row_count = view:get_visual_row_count_for_line(heading_line)
 
-      local fresh_view, fresh_doc = make_view(table.concat(doc.lines))
+      local fresh_view, fresh_buffer = make_view(table.concat(buffer.lines))
       fresh_view:set_wrapping_enabled(true)
-      fresh_doc:set_selection(math.max(1, heading_line - 1), 1)
+      fresh_buffer:set_selection(math.max(1, heading_line - 1), 1)
       refresh(fresh_view)
       linewrapping.complete_async_reconstruction(fresh_view)
       local _, expected_heading_y = fresh_view:get_line_screen_position(heading_line)
@@ -426,20 +426,20 @@ test.describe("Markdown heading leading spacing", function()
       end
     end
 
-    test.equal(command.perform("doc:newline"), true)
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(command.perform("text:newline"), true)
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     assert_pending_metrics_have_one_owner("exiting the empty task")
     assert_heading_matches_fresh("exiting the empty task")
-    test.equal(command.perform("doc:newline"), true)
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(command.perform("text:newline"), true)
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     assert_pending_metrics_have_one_owner("inserting the following blank row")
     assert_heading_matches_fresh("inserting the following blank row")
-    doc:set_selection(4, 1)
-    test.equal(command.perform("doc:backspace"), true)
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    buffer:set_selection(4, 1)
+    test.equal(command.perform("text:backspace"), true)
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     assert_pending_metrics_have_one_owner("deleting the inserted blank row")
     assert_heading_matches_fresh("deleting the inserted blank row")
-    local instance = test.not_nil(markdown_model.peek(doc))
+    local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_ready(instance), instance.reason)
     linewrapping.complete_async_reconstruction(view)
 
@@ -454,15 +454,15 @@ test.describe("Markdown heading leading spacing", function()
         and ("## Heading " .. line)
         or ("ordinary Markdown line " .. line)
     end
-    local view, doc = make_view(table.concat(lines, "\n"))
+    local view, buffer = make_view(table.concat(lines, "\n"))
     view:set_wrapping_enabled(true)
-    doc:set_selection(10, #doc.lines[10])
+    buffer:set_selection(10, #buffer.lines[10])
     refresh(view)
     linewrapping.complete_async_reconstruction(view)
 
-    doc:insert(10, #doc.lines[10], "a")
-    doc:insert(10, #doc.lines[10], "b")
-    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    buffer:insert(10, #buffer.lines[10], "a")
+    buffer:insert(10, #buffer.lines[10], "b")
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
 
     local owner = test.not_nil(view.__markdown_live_owner)
     test.equal(

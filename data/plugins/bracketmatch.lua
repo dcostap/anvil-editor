@@ -3,8 +3,8 @@ local core = require "core"
 local style = require "core.style"
 local command = require "core.command"
 local keymap = require "core.keymap"
-local DocView = require "core.docview"
-local line_packets = require "core.docview_line_packets"
+local TextView = require "core.textview"
+local line_packets = require "core.textview_line_packets"
 
 -- Colors can be configured as follows:
 --   underline color  = `style.bracketmatch_color`
@@ -31,29 +31,29 @@ local bracket_maps = {
 }
 
 
---- @param doc core.doc
+--- @param buffer core.buffer
 --- @param line integer
 --- @param col integer
 --- @return string? type
 --- @return string? text
-local function get_token_at(doc, line, col)
+local function get_token_at(buffer, line, col)
   local column = 0
-  for _,type,text in doc.highlighter:each_token(line) do
+  for _,type,text in buffer.highlighter:each_token(line) do
     column = column + #text
     if column >= col then return type, text end
   end
 end
 
-local function get_render_token_at(doc, line, col)
+local function get_render_token_at(buffer, line, col)
   local column = 0
-  for _,type,text in doc.highlighter:each_render_token(line) do
+  for _,type,text in buffer.highlighter:each_render_token(line) do
     column = column + #text
     if column >= col then return type, text end
   end
 end
 
 
---- @param doc core.doc
+--- @param buffer core.buffer
 --- @param line integer
 --- @param col integer
 --- @param line_limit integer
@@ -62,21 +62,21 @@ end
 --- @param direction integer
 --- @return integer? line
 --- @return integer? col
-local function get_matching_bracket(doc, line, col, line_limit, open_byte, close_byte, direction)
+local function get_matching_bracket(buffer, line, col, line_limit, open_byte, close_byte, direction)
   local end_line = line + line_limit * direction
   local depth = 0
 
   while line ~= end_line do
-    local byte = doc.lines[line]:byte(col)
-    if byte == open_byte and get_token_at(doc, line, col) ~= "comment" then
+    local byte = buffer.lines[line]:byte(col)
+    if byte == open_byte and get_token_at(buffer, line, col) ~= "comment" then
       depth = depth + 1
-    elseif byte == close_byte and get_token_at(doc, line, col) ~= "comment" then
+    elseif byte == close_byte and get_token_at(buffer, line, col) ~= "comment" then
       depth = depth - 1
       if depth == 0 then return line, col end
     end
 
     local prev_line, prev_col = line, col
-    line, col = doc:position_offset(line, col, direction)
+    line, col = buffer:position_offset(line, col, direction)
     if line == prev_line and col == prev_col then
       break
     end
@@ -91,17 +91,17 @@ local select_adj = 0
 local function update_state(line_limit)
   line_limit = line_limit or math.huge
 
-  -- reset if we don't have a document (eg. DocView isn't focused)
-  local doc = core.active_view.doc
-  if not doc then
+  -- reset if we don't have a buffer (eg. TextView isn't focused)
+  local buffer = core.active_view.buffer
+  if not buffer then
     state = {}
     return
   end
 
   -- early exit if nothing has changed since the last call
-  local line, col = doc:get_selection()
-  local change_id = doc:get_change_id()
-  if  state.doc == doc and state.line == line and state.col == col
+  local line, col = buffer:get_selection()
+  local change_id = buffer:get_change_id()
+  if  state.buffer == buffer and state.line == line and state.col == col
   and state.change_id == change_id and state.limit == line_limit then
     return
   end
@@ -110,13 +110,13 @@ local function update_state(line_limit)
   local line2, col2
   for _, map in ipairs(bracket_maps) do
     for i = 0, -1, -1 do
-      local line, col = doc:position_offset(line, col, i)
-      local open = doc.lines[line]:byte(col)
+      local line, col = buffer:position_offset(line, col, i)
+      local open = buffer.lines[line]:byte(col)
       local close = map[open]
-      if close and get_token_at(doc, line, col) ~= "comment" then
+      if close and get_token_at(buffer, line, col) ~= "comment" then
         -- i == 0 if the cursor is on the left side of a bracket (or -1 when on right)
         select_adj = i + 1 -- if i == 0 then select_adj = 1 else select_adj = 0 end
-        line2, col2 = get_matching_bracket(doc, line, col, line_limit, open, close, map.direction)
+        line2, col2 = get_matching_bracket(buffer, line, col, line_limit, open, close, map.direction)
         goto found
       end
     end
@@ -126,7 +126,7 @@ local function update_state(line_limit)
   -- update
   state = {
     change_id = change_id,
-    doc = doc,
+    buffer = buffer,
     line = line,
     col = col,
     line2 = line2,
@@ -136,16 +136,16 @@ local function update_state(line_limit)
 end
 
 
-local update = DocView.update
+local update = TextView.update
 
 --- @param ... any
-function DocView:update(...)
+function TextView:update(...)
   update(self, ...)
   update_state(bracketmatch.line_limit)
 end
 
 
---- @param dv core.docview
+--- @param dv core.textview
 --- @param x number
 --- @param y number
 --- @param screen_x number
@@ -157,22 +157,22 @@ end
 --- @param bg_color renderer.color | boolean
 --- @param char_color renderer.color | boolean
 local function redraw_char(dv, x, y, screen_x, screen_y, width, height, line, col, bg_color, char_color)
-  local token = get_render_token_at(dv.doc, line, col)
+  local token = get_render_token_at(dv.buffer, line, col)
   if not char_color then
     char_color = style.syntax[token]
   end
   local font = style.syntax_fonts[token] or dv:get_font()
-  local char = string.sub(dv.doc.lines[line], col, col)
+  local char = string.sub(dv.buffer.lines[line], col, col)
 
   if not bg_color then
     -- redraw background
     core.push_clip_rect(screen_x, screen_y, width, height)
-    local dlt = DocView.draw_line_text
-    DocView.draw_line_text = function() end
+    local dlt = TextView.draw_line_text
+    TextView.draw_line_text = function() end
     line_packets.with_suspended_finalization(dv, function()
       dv:draw_line_body(line, x, y)
     end)
-    DocView.draw_line_text = dlt
+    TextView.draw_line_text = dlt
     core.pop_clip_rect()
   else
     renderer.draw_rect(screen_x, screen_y, width, height, bg_color)
@@ -186,7 +186,7 @@ local function redraw_char(dv, x, y, screen_x, screen_y, width, height, line, co
 end
 
 
---- @param dv core.docview
+--- @param dv core.textview
 --- @param x number
 --- @param y number
 --- @param line integer
@@ -256,7 +256,7 @@ local function render_suppresses_range(dv, line, col, width)
 end
 
 
-local draw_line_text = DocView.draw_line_text
+local draw_line_text = TextView.draw_line_text
 
 local function perf_scope_begin(name)
   if not core.perf_draw_scope_active then return nil end
@@ -274,11 +274,11 @@ end
 --- @param x number
 --- @param y number
 --- @return number
-function DocView:draw_line_text(line, x, y)
+function TextView:draw_line_text(line, x, y)
   local scope = perf_scope_begin("bracket_match")
   local lh = draw_line_text(self, line, x, y)
   local width = 1
-  if self.doc == state.doc and state.line2 then
+  if self.buffer == state.buffer and state.line2 then
     if line == state.line and bracketmatch.highlight_both then
       local offset = 0
       if state.line == state.line2 and math.abs(state.col + select_adj - 1 - state.col2) == 1 then
@@ -306,17 +306,17 @@ function DocView:draw_line_text(line, x, y)
 end
 
 
-command.add("core.docview", {
+command.add("core.textview", {
   ["bracket-match:move-to-matching"] = function(dv)
     update_state()
     if state.line2 then
-      dv.doc:set_selection(state.line2, state.col2)
+      dv.buffer:set_selection(state.line2, state.col2)
     end
   end,
   ["bracket-match:select-to-matching"] = function(dv)
     update_state()
     if state.line2 then
-        dv.doc:set_selection(state.line, state.col, state.line2, state.col2 + select_adj)
+        dv.buffer:set_selection(state.line, state.col, state.line2, state.col2 + select_adj)
     end
   end,
 })

@@ -3,7 +3,7 @@
 -- Does nothing unless ANVIL_SELECTION_STRESS_TEST is truthy.
 local core = require "core"
 local config = require "core.config"
-local DocView = require "core.docview"
+local Editor = require "core.editor"
 
 local function truthy(name)
   local value = os.getenv(name)
@@ -29,25 +29,25 @@ local stress = {
   start_line = env_number("ANVIL_SELECTION_STRESS_START_LINE", 1),
 }
 
-local function active_docview()
+local function active_textview()
   local view = core.active_view
-  if view and view:is(DocView) and view.doc and #view.doc.lines > 1 then
+  if view and view:extends(Editor) and view.buffer and #view.buffer.lines > 1 then
     return view
   end
 end
 
 local function set_huge_selection(dv)
   dv:with_selection_state(function()
-    local doc = dv.doc
-    local last = math.min(#doc.lines, stress.start_line + stress.huge_lines)
-    doc.selections = { stress.start_line, 1, last, math.huge }
-    doc.last_selection = 1
+    local buffer = dv.buffer
+    local last = math.min(#buffer.lines, stress.start_line + stress.huge_lines)
+    buffer.selections = { stress.start_line, 1, last, math.huge }
+    buffer.last_selection = 1
   end)
 end
 
 local function set_multiline_cursors(dv, base_line, phase)
-  local doc = dv.doc
-  local nlines = #doc.lines
+  local buffer = dv.buffer
+  local nlines = #buffer.lines
   local max_count = math.max(1, math.min(stress.cursor_count, nlines - stress.drag_lines - 1))
   local selections = {}
   local drag = math.max(1, math.floor((phase % 1) * stress.drag_lines) + 1)
@@ -64,15 +64,15 @@ local function set_multiline_cursors(dv, base_line, phase)
     selections[p + 3] = col2
   end
   dv:with_selection_state(function()
-    doc.selections = selections
-    doc.last_selection = 1
+    buffer.selections = selections
+    buffer.last_selection = 1
   end)
 end
 
 core.add_thread(function()
   local dv
   repeat
-    dv = active_docview()
+    dv = active_textview()
     coroutine.yield(0.05)
   until dv
 
@@ -95,7 +95,7 @@ core.add_thread(function()
     set_multiline_cursors(dv, base_line, elapsed * 4)
     dv:scroll_to_line(base_line, true)
     base_line = base_line + stress.scroll_lines_per_frame
-    if base_line > math.max(1, #dv.doc.lines - stress.cursor_count - stress.drag_lines - 1) then
+    if base_line > math.max(1, #dv.buffer.lines - stress.cursor_count - stress.drag_lines - 1) then
       base_line = 1
     end
     core.redraw = true

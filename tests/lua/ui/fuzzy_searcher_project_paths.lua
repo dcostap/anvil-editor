@@ -197,18 +197,18 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
   end)
 
   test.it("ranks literal and compact path-scope matches ahead of loose subsequence paths", function(context)
-    local fmt_doc = join_path(context.root, "fmt", "doc.odin")
+    local fmt_file = join_path(context.root, "fmt", "doc.odin")
     local fmt_impl = join_path(context.root, "fmt", "fmt.odin")
     local compact = join_path(context.root, "odin", "doc-format", "doc_format.odin")
     local loose = join_path(context.root, "sys", "darwin", "Foundation", "NSEnumerator.odin")
     mkdirp(join_path(context.root, "fmt"))
     mkdirp(join_path(context.root, "odin", "doc-format"))
     mkdirp(join_path(context.root, "sys", "darwin", "Foundation"))
-    local fmt_doc_display = helpers.file_display_item(fmt_doc)
+    local fmt_file_display = helpers.file_display_item(fmt_file)
     local fmt_impl_display = helpers.file_display_item(fmt_impl)
     local compact_display = helpers.file_display_item(compact)
     local loose_display = helpers.file_display_item(loose)
-    helpers.set_file_cache_for_test({ fmt_doc_display, fmt_impl_display, compact_display, loose_display })
+    helpers.set_file_cache_for_test({ fmt_file_display, fmt_impl_display, compact_display, loose_display })
     local scope, scope_meta = helpers.build_scope("fmt", nil, 4)
     test.equal(#scope, 4, "expected literal, compact, and loose fuzzy paths in scope")
     local function result(path, display, line, content_score)
@@ -225,8 +225,8 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
       }
     end
     local results = helpers.order_grep_results({
-      result(fmt_doc, fmt_doc_display, 1, 11484),
-      result(fmt_doc, fmt_doc_display, 2, 11177),
+      result(fmt_file, fmt_file_display, 1, 11484),
+      result(fmt_file, fmt_file_display, 2, 11177),
       result(fmt_impl, fmt_impl_display, 1, 11477),
       result(fmt_impl, fmt_impl_display, 2, 10800),
       result(compact, compact_display, 1, 10000),
@@ -239,10 +239,16 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     end
     test.not_nil(loose_index, "expected the loose F-m-t path to remain searchable")
     for i, result in ipairs(results) do
-      if common.path_equals(result.abs_path, fmt_doc)
+      if common.path_equals(result.abs_path, fmt_file)
       or common.path_equals(result.abs_path, fmt_impl)
       or common.path_equals(result.abs_path, compact) then
-        test.ok(i < loose_index, "expected literal and compact fmt paths ahead of the loose path match")
+        test.ok(
+          i < loose_index,
+          string.format(
+            "expected literal and compact fmt paths ahead of the loose path match: path=%s class=%s loose_index=%s index=%s",
+            tostring(result.abs_path), tostring(result.path_match_class), tostring(loose_index), tostring(i)
+          )
+        )
       end
     end
   end)

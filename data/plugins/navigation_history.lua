@@ -18,10 +18,10 @@ local suppress_count = 0
 local retired_editors = {}
 
 local tracked_commands = {
-  ["doc:set-cursor"] = true,
-  ["doc:set-cursor-word"] = true,
-  ["doc:set-cursor-line"] = true,
-  ["doc:select-to-cursor"] = true,
+  ["text:set-cursor"] = true,
+  ["text:set-cursor-word"] = true,
+  ["text:set-cursor-line"] = true,
+  ["text:select-to-cursor"] = true,
   ["bracket-match:move-to-matching"] = true,
   ["find-replace:repeat-find"] = true,
   ["find-replace:previous-find"] = true,
@@ -120,9 +120,9 @@ local function clone_selection_state(state)
   }
 end
 
-local function doc_in_core_docs(doc)
-  for _, open_doc in ipairs(core.docs or {}) do
-    if open_doc == doc then return true end
+local function buffer_in_core_buffers(buffer)
+  for _, open_buffer in ipairs(core.buffers or {}) do
+    if open_buffer == buffer then return true end
   end
   return false
 end
@@ -172,7 +172,7 @@ local function release_unreferenced_retired_editors(reason)
       end
       core.log_quiet(
         "Navigation History released retired Editor for %s: %s",
-        view.doc and view.doc:get_name() or tostring(view),
+        view.buffer and view.buffer:get_name() or tostring(view),
         tostring(reason or "unreferenced")
       )
     end
@@ -180,10 +180,10 @@ local function release_unreferenced_retired_editors(reason)
 end
 
 function M.retain_replaced_editor(view, pane)
-  if not (view and view.doc and history_references_view(view)) then return false end
+  if not (view and view.buffer and history_references_view(view)) then return false end
   retired_editors[view] = true
   view.__pane_retired_editor = pane
-  core.log_quiet("Navigation History retained replaced Editor for %s", view.doc:get_name())
+  core.log_quiet("Navigation History retained replaced Editor for %s", view.buffer:get_name())
   return true
 end
 
@@ -191,13 +191,13 @@ function M.activate_retired_editor(view)
   if not retired_editors[view] then return false end
   retired_editors[view] = nil
   view.__pane_retired_editor = nil
-  core.log_quiet("Navigation History reactivated retained Editor for %s", view.doc:get_name())
+  core.log_quiet("Navigation History reactivated retained Editor for %s", view.buffer:get_name())
   return true
 end
 
-function M.retains_doc(doc)
+function M.retains_buffer(buffer)
   for view in pairs(retired_editors) do
-    if view.doc == doc then return true end
+    if view.buffer == buffer then return true end
   end
   return false
 end
@@ -246,7 +246,7 @@ local function navigation_scope(view)
     return { key = pane, kind = "file-tree", owner = view, pane = pane }
   end
 
-  if file_context.is_editor_view(view) or (view.doc and view.doc.git_historical_read_only) then
+  if file_context.is_editor_view(view) or (view.buffer and view.buffer.git_historical_read_only) then
     return { key = pane, kind = "editor", owner = pane_owner or view, pane = pane }
   end
 end
@@ -282,7 +282,7 @@ local function place_identity_matches(a, b)
   if a.scope_kind == "file-tree" then return a.scope_owner == b.scope_owner end
   if a.view and b.view then return a.view == b.view end
   if a.filename and b.filename then return common.path_equals(a.filename, b.filename) end
-  if a.doc ~= nil and b.doc ~= nil then return a.doc == b.doc end
+  if a.buffer ~= nil and b.buffer ~= nil then return a.buffer == b.buffer end
   return false
 end
 
@@ -361,19 +361,19 @@ end
 local function view_label(view)
   if not view then return "<nil>" end
   if type(view) ~= "table" then return string.format("%s{type=%s}", tostring(view), type(view)) end
-  local doc = view.doc
-  local filename = doc and (doc.abs_filename or doc.filename) or view.path
-  return string.format("%s{file=%s doc=%s open=%s active=%s}",
-    tostring(view), tostring(filename), tostring(doc), tostring(view_is_open(view)), tostring(core.active_view == view))
+  local buffer = view.buffer
+  local filename = buffer and (buffer.abs_filename or buffer.filename) or view.path
+  return string.format("%s{file=%s buffer=%s open=%s active=%s}",
+    tostring(view), tostring(filename), tostring(buffer), tostring(view_is_open(view)), tostring(core.active_view == view))
 end
 
 local function place_label(place)
   if not place then return "<nil>" end
   local selection_count = place.selection_state and math.floor(#(place.selection_state.selections or {}) / 4) or 0
   return string.format(
-    "{scope=%s key=%s pane=%s file=%s view=%s doc=%s sel=%s,%s-%s,%s selections=%d scroll=%.1f,%.1f git=%s/%s/%s output_slot=%s tree_dir=%s}",
+    "{scope=%s key=%s pane=%s file=%s view=%s buffer=%s sel=%s,%s-%s,%s selections=%d scroll=%.1f,%.1f git=%s/%s/%s output_slot=%s tree_dir=%s}",
     tostring(place.scope_kind), tostring(place.scope_key), tostring(place.pane), tostring(place.filename), tostring(place.view),
-    tostring(place.doc), tostring(place.line), tostring(place.col), tostring(place.line2), tostring(place.col2),
+    tostring(place.buffer), tostring(place.line), tostring(place.col), tostring(place.line2), tostring(place.col2),
     selection_count, tonumber(place.scroll_x) or 0, tonumber(place.scroll_y) or 0,
     tostring(place.git_tab_id), tostring(place.git_pane), tostring(place.git_diff_side),
     tostring(place.output_slot_index), tostring(place.file_tree_current_dir))
@@ -445,25 +445,25 @@ function M.capture_place(view)
   if view == scope.owner and type(view.get_focus_view) == "function" then
     view = view:get_focus_view() or view
   end
-  local doc = view.doc
+  local buffer = view.buffer
   local selection_state = view.get_selection_state and view:get_selection_state() or nil
-  local selections = selection_state and selection_state.selections or (doc and doc.selections) or {}
-  local last = selection_state and selection_state.last_selection or (doc and doc.last_selection) or 1
+  local selections = selection_state and selection_state.selections or (buffer and buffer.selections) or {}
+  local last = selection_state and selection_state.last_selection or (buffer and buffer.last_selection) or 1
   local offset = ((last - 1) * 4) + 1
   local line = selections[offset] or selections[1]
   local col = selections[offset + 1] or selections[2]
   local line2 = selections[offset + 2] or line
   local col2 = selections[offset + 3] or col
-  local path = doc and doc.abs_filename or view.path
+  local path = buffer and buffer.abs_filename or view.path
   local output_owner = scope.kind == "command-output" and scope.owner or nil
   local git_view = scope.kind == "git" and scope.owner or nil
   local git_diff_side
   if git_view and git_view.model_tab then
     local tab = git_view:model_tab()
     local diff = tab and tab.diff_view
-    if diff and view == diff.doc_view_a then
+    if diff and view == diff.buffer_view_a then
       git_diff_side = "left"
-    elseif diff and view == diff.doc_view_b then
+    elseif diff and view == diff.buffer_view_b then
       git_diff_side = "right"
     end
   end
@@ -475,7 +475,7 @@ function M.capture_place(view)
     scope_owner = scope.owner,
     pane = scope.pane,
     view = view,
-    doc = doc,
+    buffer = buffer,
     filename = path and common.normalize_path(path) or nil,
     selection_state = clone_selection_state(selection_state),
     line = line,
@@ -545,14 +545,14 @@ local function place_invalid_reason(place)
     if not (info and info.type == "dir") then return "file-tree-directory-missing" end
   end
   if place.view and view_is_open(place.view) then
-    if place.doc ~= nil and place.view.doc ~= place.doc then return "open-view-document-changed" end
+    if place.buffer ~= nil and place.view.buffer ~= place.buffer then return "open-view-buffer-changed" end
     return nil
   end
   if place.scope_kind ~= "editor" and place.view and not view_is_open(place.view) then
     return "removed-tool-not-rebuildable"
   end
-  if place.doc and doc_in_core_docs(place.doc) then return nil end
-  if not place.filename then return "document-closed-and-no-filename" end
+  if place.buffer and buffer_in_core_buffers(place.buffer) then return nil end
+  if not place.filename then return "buffer-closed-and-no-filename" end
   if not system.get_file_info(place.filename) then return "file-missing" end
   return nil
 end
@@ -722,7 +722,7 @@ local function apply_place_to_view(view, place)
     and place.file_tree_selection_paths
     and view.restore_selection_paths
     and view:restore_selection_paths(place.file_tree_selection_paths)
-  if view.doc and place.line and place.col and not restored_file_tree_selection then
+  if view.buffer and place.line and place.col and not restored_file_tree_selection then
     if view.expand_folds_covering_range then
       view:expand_folds_covering_range(place.line, place.col, place.line2 or place.line, place.col2 or place.col, "navigation-history")
     end
@@ -731,15 +731,15 @@ local function apply_place_to_view(view, place)
     end
     if view.with_selection_state then
       view:with_selection_state(function()
-        if place.selection_state and view.doc.set_selection_list then
-          view.doc:set_selection_list(copy_array(place.selection_state.selections), place.selection_state.last_selection or 1,
+        if place.selection_state and view.buffer.set_selection_list then
+          view.buffer:set_selection_list(copy_array(place.selection_state.selections), place.selection_state.last_selection or 1,
             { sanitized = true, take_ownership = true })
         else
-          view.doc:set_selection(place.line, place.col, place.line2 or place.line, place.col2 or place.col)
+          view.buffer:set_selection(place.line, place.col, place.line2 or place.line, place.col2 or place.col)
         end
       end)
     else
-      view.doc:set_selection(place.line, place.col, place.line2 or place.line, place.col2 or place.col)
+      view.buffer:set_selection(place.line, place.col, place.line2 or place.line, place.col2 or place.col)
     end
   end
   -- A retained Markdown Editor's metric cache still describes the place we
@@ -758,7 +758,7 @@ local function apply_place_to_view(view, place)
       view.scroll.to.y, view.scroll.y = place.scroll_y or 0, place.scroll_y or 0
     end
   end
-  if view.doc and place.line and place.col and not restored_file_tree_selection then
+  if view.buffer and place.line and place.col and not restored_file_tree_selection then
     local state = view.get_selection_state and view:get_selection_state()
     local last = state and state.last_selection or 1
     local selections = state and state.selections or {}
@@ -773,21 +773,21 @@ local function apply_place_to_view(view, place)
     place_label(place), view_label(view), tostring(not not restored_file_tree_selection))
 end
 
-local function restore_missing_view(place, doc)
-  debug_log("restore missing view begin place=%s supplied_doc=%s doc_open=%s",
-    place_label(place), tostring(doc), tostring(doc and doc_in_core_docs(doc)))
+local function restore_missing_view(place, buffer)
+  debug_log("restore missing view begin place=%s supplied_buffer=%s buffer_open=%s",
+    place_label(place), tostring(buffer), tostring(buffer and buffer_in_core_buffers(buffer)))
   if place.filename then
     debug_log("restore missing pane view opening file=%s pane=%s", tostring(place.filename), tostring(place.pane))
-    doc = core.open_doc(place.filename)
+    buffer = core.open_buffer(place.filename)
   end
-  if doc then
-    local view = panes.open_doc(doc, { pane = place.pane or place.scope_key, focus = false })
-    debug_log("restore missing pane view result place=%s view=%s doc=%s",
-      place_label(place), view_label(view), tostring(doc))
-    return view, doc
+  if buffer then
+    local view = panes.open_buffer(buffer, { pane = place.pane or place.scope_key, focus = false })
+    debug_log("restore missing pane view result place=%s view=%s buffer=%s",
+      place_label(place), view_label(view), tostring(buffer))
+    return view, buffer
   end
   debug_log("restore missing view failed place=%s", place_label(place))
-  return nil, doc
+  return nil, buffer
 end
 
 local function restore_command_output_place(place)
@@ -842,7 +842,7 @@ local function restore_git_anchor(owner, place, on_diff_ready)
         end
         return nil, true
       end
-      if owner.update_pane_docs then owner:update_pane_docs() end
+      if owner.update_pane_buffers then owner:update_pane_buffers() end
       local details = owner.pane_view and owner:pane_view("details")
       local tree = details and details.path_tree
       if tree then
@@ -865,7 +865,7 @@ local function restore_git_anchor(owner, place, on_diff_ready)
         if place.git_diff_side and selected_path == path and not tab.loading_file
           and (tab.left_text ~= nil or tab.right_text ~= nil)
         then
-          if owner.update_pane_docs then owner:update_pane_docs() end
+          if owner.update_pane_buffers then owner:update_pane_buffers() end
           return nil, false
         end
         if place.git_diff_side and selected_path == path and tab.loading_file then
@@ -881,7 +881,7 @@ local function restore_git_anchor(owner, place, on_diff_ready)
           core.redraw = true
           if on_diff_ready then on_diff_ready() end
         end)
-        if owner.update_pane_docs then owner:update_pane_docs() end
+        if owner.update_pane_buffers then owner:update_pane_buffers() end
         local list = owner.pane_view and owner:pane_view("file-list")
         if not place.git_diff_side then
           resolved_line = list and (
@@ -895,7 +895,7 @@ local function restore_git_anchor(owner, place, on_diff_ready)
       end
     end
   end
-  if owner.update_pane_docs then owner:update_pane_docs() end
+  if owner.update_pane_buffers then owner:update_pane_buffers() end
   return resolved_line, false
 end
 
@@ -925,7 +925,7 @@ local function complete_deferred_git_restore(owner, place)
   local previous_restoring = restoring
   restoring = true
   local ok, err = xpcall(function()
-    if owner.update_pane_docs then owner:update_pane_docs() end
+    if owner.update_pane_buffers then owner:update_pane_buffers() end
     local resolved_line
     if place.git_pane == "details" then
       resolved_line = select(1, restore_git_anchor(owner, place, nil))
@@ -985,7 +985,7 @@ function M.restore_place(place)
 
   restoring = true
   local ok, err = xpcall(function()
-    local doc = place.doc
+    local buffer = place.buffer
     local view = place.view
     local resolved_git_line
     local deferred_git_restore = false
@@ -999,17 +999,17 @@ function M.restore_place(place)
       if view and not view_is_open(view) and view.__pane_retired_editor
         and panes.restore_retired_editor(view, place.pane or place.scope_key)
       then
-        doc = view.doc
+        buffer = view.buffer
         debug_log("restore route=retained-pane-view view=%s", view_label(view))
       end
-      if view and (not view_is_open(view) or view.doc ~= doc) then
-        debug_log("restore discarding stale view=%s expected_doc=%s place=%s",
-          view_label(view), tostring(doc), place_label(place))
+      if view and (not view_is_open(view) or view.buffer ~= buffer) then
+        debug_log("restore discarding stale view=%s expected_buffer=%s place=%s",
+          view_label(view), tostring(buffer), place_label(place))
         view = nil
       end
       if not view then
         debug_log("restore route=rebuild-missing-view place=%s", place_label(place))
-        view, doc = restore_missing_view(place, doc)
+        view, buffer = restore_missing_view(place, buffer)
       else
         local node = core.root_panel.root_node:get_node_for_view(view)
         debug_log("restore route=existing-pane-view node=%s view=%s", tostring(node), view_label(view))

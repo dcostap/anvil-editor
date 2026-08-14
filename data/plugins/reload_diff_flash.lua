@@ -3,7 +3,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 
 local M = {}
 
@@ -133,7 +133,7 @@ local function add_modify_line(model, line, old_text, new_text)
       local col2 = math.min(col, line_col2)
       if col1 < col2 then add_inline_range(model, line, col1, col2, "modify") end
     elseif tag == "delete" then
-      -- Deleted text has no span in the reloaded document.  If a modified line
+      -- Deleted text has no span in the reloaded buffer.  If a modified line
       -- only deleted text, the line-level flash below gives the user an anchor.
     end
   end
@@ -266,44 +266,44 @@ local function inline_color_for(range, alpha)
   return color_with_alpha(style.reload_diff_flash_inline, alpha)
 end
 
-local function active_docviews_for_doc(doc)
+local function active_textviews_for_buffer(buffer)
   local out = {}
-  local registry = DocView.registry and DocView.registry[doc]
+  local registry = TextView.registry and TextView.registry[buffer]
   if registry then
     for view in pairs(registry) do
-      if view.doc == doc then out[#out + 1] = view end
+      if view.buffer == buffer then out[#out + 1] = view end
     end
-  elseif core.get_views_referencing_doc then
-    out = core.get_views_referencing_doc(doc)
+  elseif core.get_views_referencing_buffer then
+    out = core.get_views_referencing_buffer(buffer)
   end
   return out
 end
 
-function M.flash(doc, old_lines, new_lines, opts)
+function M.flash(buffer, old_lines, new_lines, opts)
   local cfg = plugin_config()
   if cfg == false or (cfg and cfg.enabled == false) then return nil, { disabled = true } end
-  if not doc then return nil, { error = "missing_doc" } end
+  if not buffer then return nil, { error = "missing_buffer" } end
 
   old_lines = clone_lines(old_lines)
-  new_lines = clone_lines(new_lines or doc.lines)
+  new_lines = clone_lines(new_lines or buffer.lines)
   local model = M.build_model(old_lines, new_lines, opts)
   if model.meta.clean or not has_flashes(model) then return nil, model.meta end
 
-  model.doc = doc
+  model.buffer = buffer
   model.start_time = system.get_time()
   model.duration = option(opts, "duration", 2.0)
 
   local installed = {}
-  for _, view in ipairs(active_docviews_for_doc(doc)) do
+  for _, view in ipairs(active_textviews_for_buffer(buffer)) do
     if view.add_decoration_provider and view.remove_decoration_provider then
       local provider = {}
       function provider.line_background(_, provider_view, line)
-        if provider_view.doc ~= doc then return nil end
+        if provider_view.buffer ~= buffer then return nil end
         local entry = model.lines[line]
         if entry and entry.line then return line_color_for(entry, model_alpha(model)) end
       end
       function provider.inline_ranges(_, provider_view, line)
-        if provider_view.doc ~= doc then return nil end
+        if provider_view.buffer ~= buffer then return nil end
         local entry = model.lines[line]
         if not entry or not entry.inline or #entry.inline == 0 then return nil end
         local alpha = model_alpha(model)
@@ -341,7 +341,7 @@ function M.flash(doc, old_lines, new_lines, opts)
   end)
 
   core.redraw = true
-  core.log_quiet("Reload diff flash installed for %s: views=%d", doc:get_name(), #installed)
+  core.log_quiet("Reload diff flash installed for %s: views=%d", buffer:get_name(), #installed)
   return model, model.meta
 end
 

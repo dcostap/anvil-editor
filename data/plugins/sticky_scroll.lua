@@ -1,6 +1,7 @@
 -- mod-version:3
 local core = require "core"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
+local Editor = require "core.editor"
 local style = require "core.style"
 local common = require "core.common"
 local command = require "core.command"
@@ -20,23 +21,23 @@ local function perf_scope_end(token)
   if perf and perf.scope_end then perf.scope_end(token) end
 end
 
-local function get_doc_line_text(doc, line)
-  if doc.get_utf8_line then return doc:get_utf8_line(line) end
-  return doc.lines[line] or ""
+local function get_buffer_line_text(buffer, line)
+  if buffer.get_utf8_line then return buffer:get_utf8_line(line) end
+  return buffer.lines[line] or ""
 end
 
 -- Ignore lines with only the opening bracket
-function SS.get_level_ignore_open_bracket(doc, line)
-  if get_doc_line_text(doc, line):match("^%s*{%s*$") then
+function SS.get_level_ignore_open_bracket(buffer, line)
+  if get_buffer_line_text(buffer, line):match("^%s*{%s*$") then
     return -1
   end
-  return SS.get_level_default(doc, line)
+  return SS.get_level_default(buffer, line)
 end
 
 local filetype_overrides = {
-  ["Markdown"] = function(doc, line)
+  ["Markdown"] = function(buffer, line)
     -- Use the markdown heading level only
-    local indent = string.match(get_doc_line_text(doc, line), "^#+() .+")
+    local indent = string.match(get_buffer_line_text(buffer, line), "^#+() .+")
     return indent or math.huge
   end,
   ["C"] = SS.get_level_ignore_open_bracket,
@@ -48,7 +49,7 @@ local sticky_scroll = {
   max_sticky_lines = 5,
   min_scope_lines = 10,
   rebuild_debounce = 0.5,
-  -- The key is the syntax name, the value is a function that receives the doc
+  -- The key is the syntax name, the value is a function that receives the buffer
   -- and the line, and returns the level [-1; math.huge]. Use `false` to disable
   -- the plugin for that filetype.
   filetype_overrides = filetype_overrides,
@@ -60,9 +61,9 @@ local function markdown_live_mode(view)
     and live_render.is_live_mode(view)
 end
 
--- Automatically remove docview (keys) when not needed anymore
--- Automatically create a docview entry on access
-SS.managed_docviews = setmetatable({}, {
+-- Automatically remove textview (keys) when not needed anymore
+-- Automatically create a textview entry on access
+SS.managed_textviews = setmetatable({}, {
   __mode = "k",
   __index = function(t, k)
       local v = {enabled = true, sticky_lines = {}, reference_line = 1, syntax = nil}
@@ -79,23 +80,23 @@ local regex_pattern = regex.compile([[(\s*)\S]])
 ---TODO: maybe only consider the indent type of the file,
 ---      or even only consider valid the type of the first character in the line.
 ---
----@param doc core.doc
+---@param buffer core.buffer
 ---@param line integer
 ---@return integer #>0 for lines with indents and text, 0 for lines with no indent, -1 for lines without any non-whitespace characters
-function SS.get_level_from_indent(doc, line)
-  local text = get_doc_line_text(doc, line)
+function SS.get_level_from_indent(buffer, line)
+  local text = get_buffer_line_text(buffer, line)
   local s, e = regex.find_offsets(regex_pattern --[[@as regex]], text)
   return s and e - s or -1
 end
 
 ---Same as SS.get_level_from_indent, but ignores lines with only comments.
----@param doc core.doc
+---@param buffer core.buffer
 ---@param line integer
 ---@return integer #>0 for lines with indents and text, 0 for lines with no indent, -1 for lines without any non-whitespace characters
-function SS.get_level_default(doc, line)
-  for _, type, text in doc.highlighter:each_token(line) do
+function SS.get_level_default(buffer, line)
+  for _, type, text in buffer.highlighter:each_token(line) do
     if type ~= "comment" then
-      return SS.get_level_from_indent(doc, line)
+      return SS.get_level_from_indent(buffer, line)
     end
   end
   return -1
@@ -103,14 +104,14 @@ end
 
 ---Return the function to use to get the level.
 ---
----@param doc core.doc
+---@param buffer core.buffer
 ---@param line integer
 ---@return function
-function SS.get_level_getter(doc)
+function SS.get_level_getter(buffer)
   local get_level = SS.get_level_default
-  if doc.syntax.name
-   and sticky_scroll.filetype_overrides[doc.syntax.name] ~= nil then
-    get_level = sticky_scroll.filetype_overrides[doc.syntax.name]
+  if buffer.syntax.name
+   and sticky_scroll.filetype_overrides[buffer.syntax.name] ~= nil then
+    get_level = sticky_scroll.filetype_overrides[buffer.syntax.name]
     if get_level == false then
       get_level = nil
     end
@@ -119,15 +120,15 @@ function SS.get_level_getter(doc)
 end
 
 ---Returns whether the plugin is enabled.
----If `dv` is provided, returns if the docview is enabled.
----The "global" check has priority over the docview check.
+---If `dv` is provided, returns if the textview is enabled.
+---The "global" check has priority over the textview check.
 ---
----@param dv core.docview?
+---@param dv core.textview?
 ---return boolean
 function SS.should_run(dv)
-  if dv and not dv:is(DocView) then return false end
+  if dv and not (dv:is(TextView) or dv:is(Editor)) then return false end
   if dv and markdown_live_mode(dv) then return false end
-  if dv and not SS.managed_docviews[dv].enabled then return false end
+  if dv and not SS.managed_textviews[dv].enabled then return false end
   if not sticky_scroll.enabled then return false end
   return true
 end
@@ -136,41 +137,41 @@ local function get_visible_line_range(dv)
   return dv:get_visible_line_range()
 end
 
-local function sticky_line_height(docview, line)
-  if docview.get_visual_row and docview.get_visual_row_height then
-    local first_row = docview:get_visual_row(line, 1)
-    local row_count = docview.get_visual_row_count_for_line
-      and docview:get_visual_row_count_for_line(line) or 1
+local function sticky_line_height(textview, line)
+  if textview.get_visual_row and textview.get_visual_row_height then
+    local first_row = textview:get_visual_row(line, 1)
+    local row_count = textview.get_visual_row_count_for_line
+      and textview:get_visual_row_count_for_line(line) or 1
     local height = 0
     for row = first_row, first_row + math.max(1, row_count) - 1 do
-      height = height + docview:get_visual_row_height(row)
+      height = height + textview:get_visual_row_height(row)
     end
     return height
-  elseif docview.get_position_visual_row_height then
-    return docview:get_position_visual_row_height(line, 1)
+  elseif textview.get_position_visual_row_height then
+    return textview:get_position_visual_row_height(line, 1)
   end
-  return docview:get_line_height()
+  return textview:get_line_height()
 end
 
-function SS.get_sticky_stack_height(docview, sticky_lines)
+function SS.get_sticky_stack_height(textview, sticky_lines)
   local height = 0
   for _, line in ipairs(sticky_lines or {}) do
-    height = height + sticky_line_height(docview, line)
+    height = height + sticky_line_height(textview, line)
   end
   return height
 end
 
-function SS.get_sticky_layout(docview, sticky_lines, reference_line)
+function SS.get_sticky_layout(textview, sticky_lines, reference_line)
   local layout = {}
-  local y = docview.position.y
+  local y = textview.position.y
   local reference_y
   if reference_line then
     local _reference_x
-    _reference_x, reference_y = docview:get_line_screen_position(reference_line)
+    _reference_x, reference_y = textview:get_line_screen_position(reference_line)
   end
   for i = #(sticky_lines or {}), 1, -1 do
     local line = sticky_lines[i]
-    local height = sticky_line_height(docview, line)
+    local height = sticky_line_height(textview, line)
     layout[#layout + 1] = {
       line = line,
       y = reference_y and math.min(y, reference_y) or y,
@@ -188,12 +189,12 @@ local function sticky_entry_at_y(layout, y)
   end
 end
 
-local function sticky_horizontal_bounds(docview)
-  local width = docview.get_presentation_viewport_width
-    and docview:get_presentation_viewport_width() or docview.size.x
-  local x = docview.position.x
-  if width ~= docview.size.x and docview.get_content_offset then
-    x = select(1, docview:get_content_offset()) + (docview.scroll.x or 0)
+local function sticky_horizontal_bounds(textview)
+  local width = textview.get_presentation_viewport_width
+    and textview:get_presentation_viewport_width() or textview.size.x
+  local x = textview.position.x
+  if width ~= textview.size.x and textview.get_content_offset then
+    x = select(1, textview:get_content_offset()) + (textview.scroll.x or 0)
   end
   return x, width
 end
@@ -219,24 +220,24 @@ local function draw_sticky_shadow(x, y, width)
   core.pop_clip_rect()
 end
 
-local function start_model_build(docview, doc)
-  docview.sticky_scroll_model_generation = (docview.sticky_scroll_model_generation or 0) + 1
-  local generation = docview.sticky_scroll_model_generation
-  docview.sticky_scroll_model_building = true
-  docview.sticky_scroll_model_pending_time = nil
-  local change_id = doc:get_change_id()
+local function start_model_build(textview, buffer)
+  textview.sticky_scroll_model_generation = (textview.sticky_scroll_model_generation or 0) + 1
+  local generation = textview.sticky_scroll_model_generation
+  textview.sticky_scroll_model_building = true
+  textview.sticky_scroll_model_pending_time = nil
+  local change_id = buffer:get_change_id()
 
-  local get_level = SS.get_level_getter(doc)
+  local get_level = SS.get_level_getter(buffer)
   if not get_level then
-    docview.sticky_scroll_model_scopes = {}
-    docview.sticky_scroll_model_line_scope = {}
-    docview.sticky_scroll_cache = {}
-    docview.sticky_scroll_model_change_id = change_id
-    docview.sticky_scroll_model_building = false
-    docview.sticky_scroll_model_ready = true
+    textview.sticky_scroll_model_scopes = {}
+    textview.sticky_scroll_model_line_scope = {}
+    textview.sticky_scroll_cache = {}
+    textview.sticky_scroll_model_change_id = change_id
+    textview.sticky_scroll_model_building = false
+    textview.sticky_scroll_model_ready = true
     core.log_quiet(
       "Sticky scroll model: published empty model for %s at change %s",
-      doc:get_name(), tostring(change_id)
+      buffer:get_name(), tostring(change_id)
     )
     return
   end
@@ -249,9 +250,9 @@ local function start_model_build(docview, doc)
     local slice_lines = 0
     local slice_budget = 0.001
 
-    for line = 1, #doc.lines do
-      if doc:get_change_id() ~= change_id then break end
-      local level = get_level(doc, line)
+    for line = 1, #buffer.lines do
+      if buffer:get_change_id() ~= change_id then break end
+      local level = get_level(buffer, line)
       if level >= 0 then
         while #stack > 0 and scopes[stack[#stack]].level >= level do
           scopes[stack[#stack]].last_line = line - 1
@@ -259,7 +260,7 @@ local function start_model_build(docview, doc)
         end
         local parent = stack[#stack]
         local idx = #scopes + 1
-        scopes[idx] = { line = line, level = level, parent = parent, last_line = #doc.lines, has_child = false }
+        scopes[idx] = { line = line, level = level, parent = parent, last_line = #buffer.lines, has_child = false }
         if parent then scopes[parent].has_child = true end
         stack[#stack + 1] = idx
       end
@@ -272,28 +273,28 @@ local function start_model_build(docview, doc)
       end
     end
 
-    if docview.sticky_scroll_model_generation == generation then
-      if doc:get_change_id() == change_id then
-        docview.sticky_scroll_model_scopes = scopes
-        docview.sticky_scroll_model_line_scope = line_scope
-        docview.sticky_scroll_cache = {}
-        docview.sticky_scroll_model_change_id = change_id
-        docview.sticky_scroll_model_ready = true
+    if textview.sticky_scroll_model_generation == generation then
+      if buffer:get_change_id() == change_id then
+        textview.sticky_scroll_model_scopes = scopes
+        textview.sticky_scroll_model_line_scope = line_scope
+        textview.sticky_scroll_cache = {}
+        textview.sticky_scroll_model_change_id = change_id
+        textview.sticky_scroll_model_ready = true
         core.log_quiet(
           "Sticky scroll model: published %d scopes for %s at change %s",
-          #scopes, doc:get_name(), tostring(change_id)
+          #scopes, buffer:get_name(), tostring(change_id)
         )
       end
-      docview.sticky_scroll_model_building = false
+      textview.sticky_scroll_model_building = false
     end
     core.redraw = true
-  end, doc)
+  end, buffer)
 end
 
-local function get_model_sticky_lines(docview, start_line, max_sticky_lines)
-  if not docview.sticky_scroll_model_ready then return {} end
-  local scopes = docview.sticky_scroll_model_scopes or {}
-  local line_scope = docview.sticky_scroll_model_line_scope or {}
+local function get_model_sticky_lines(textview, start_line, max_sticky_lines)
+  if not textview.sticky_scroll_model_ready then return {} end
+  local scopes = textview.sticky_scroll_model_scopes or {}
+  local line_scope = textview.sticky_scroll_model_line_scope or {}
   local res = {}
   local idx = line_scope[common.clamp(start_line, 1, #line_scope)]
   while idx and #res < max_sticky_lines do
@@ -310,49 +311,49 @@ local function get_model_sticky_lines(docview, start_line, max_sticky_lines)
   return res
 end
 
-local function schedule_model_build(docview)
-  docview.sticky_scroll_model_generation = (docview.sticky_scroll_model_generation or 0) + 1
-  docview.sticky_scroll_model_pending_time = system.get_time() + (sticky_scroll.rebuild_debounce or 0)
-  docview.sticky_scroll_model_building = false
+local function schedule_model_build(textview)
+  textview.sticky_scroll_model_generation = (textview.sticky_scroll_model_generation or 0) + 1
+  textview.sticky_scroll_model_pending_time = system.get_time() + (sticky_scroll.rebuild_debounce or 0)
+  textview.sticky_scroll_model_building = false
 end
 
 local last_max_sticky_lines
-local old_dv_update = DocView.update
-function DocView:update(...)
+local old_dv_update = TextView.update
+function TextView:update(...)
   local res = old_dv_update(self, ...)
   if not SS.should_run(self) then return res end
 
-  -- The cache belongs to the last atomically published scope model. Document
+  -- The cache belongs to the last atomically published scope model. Buffer
   -- changes schedule its replacement without exposing a half-built model.
-  local docview = SS.managed_docviews[self]
-  local current_change_id = self.doc:get_change_id()
+  local textview = SS.managed_textviews[self]
+  local current_change_id = self.buffer:get_change_id()
   local settings_changed = last_max_sticky_lines ~= sticky_scroll.max_sticky_lines
-    or docview.syntax ~= self.doc.syntax
+    or textview.syntax ~= self.buffer.syntax
   if settings_changed then
-    docview.sticky_scroll_cache = {}
-    docview.sticky_scroll_model_scopes = {}
-    docview.sticky_scroll_model_line_scope = {}
-    docview.sticky_scroll_model_ready = false
-    docview.sticky_lines = {}
-    docview.reference_line = 1
-    docview.syntax = self.doc.syntax
-    docview.sticky_scroll_last_change_id = current_change_id
+    textview.sticky_scroll_cache = {}
+    textview.sticky_scroll_model_scopes = {}
+    textview.sticky_scroll_model_line_scope = {}
+    textview.sticky_scroll_model_ready = false
+    textview.sticky_lines = {}
+    textview.reference_line = 1
+    textview.syntax = self.buffer.syntax
+    textview.sticky_scroll_last_change_id = current_change_id
     last_max_sticky_lines = sticky_scroll.max_sticky_lines
-    start_model_build(docview, self.doc)
-  elseif docview.sticky_scroll_last_change_id ~= current_change_id then
-    docview.sticky_scroll_last_change_id = current_change_id
-    schedule_model_build(docview)
-  elseif docview.sticky_scroll_model_pending_time
-     and system.get_time() >= docview.sticky_scroll_model_pending_time
-     and not docview.sticky_scroll_model_building then
-    start_model_build(docview, self.doc)
+    start_model_build(textview, self.buffer)
+  elseif textview.sticky_scroll_last_change_id ~= current_change_id then
+    textview.sticky_scroll_last_change_id = current_change_id
+    schedule_model_build(textview)
+  elseif textview.sticky_scroll_model_pending_time
+     and system.get_time() >= textview.sticky_scroll_model_pending_time
+     and not textview.sticky_scroll_model_building then
+    start_model_build(textview, self.buffer)
   end
 
   -- Scope models are published atomically. While a replacement is pending or
   -- building, retain the last settled sticky stack instead of substituting a
   -- different hierarchy heuristic whose candidates can flicker during typing.
-  if not docview.sticky_scroll_model_ready
-  or docview.sticky_scroll_model_change_id ~= current_change_id then
+  if not textview.sticky_scroll_model_ready
+  or textview.sticky_scroll_model_change_id ~= current_change_id then
     return res
   end
 
@@ -361,17 +362,17 @@ function DocView:update(...)
   -- We need to find the first line that'll be visible
   -- even after the sticky lines are drawn.
   local from = math.max(1, minline)
-  local to = math.min(minline + sticky_scroll.max_sticky_lines, #self.doc.lines)
+  local to = math.min(minline + sticky_scroll.max_sticky_lines, #self.buffer.lines)
   local new_sticky_lines = {}
   local new_reference_line = to
   for i = from, to do
     -- Simple cache
-    if not docview.sticky_scroll_cache[i] then
-      docview.sticky_scroll_cache[i] = get_model_sticky_lines(
-        docview, i, sticky_scroll.max_sticky_lines
+    if not textview.sticky_scroll_cache[i] then
+      textview.sticky_scroll_cache[i] = get_model_sticky_lines(
+        textview, i, sticky_scroll.max_sticky_lines
       )
     end
-    local scroll_lines = docview.sticky_scroll_cache[i]
+    local scroll_lines = textview.sticky_scroll_cache[i]
     local _, nl_y = self:get_line_screen_position(i)
     if nl_y >= self.position.y + SS.get_sticky_stack_height(self, scroll_lines) then
       break
@@ -380,13 +381,13 @@ function DocView:update(...)
     new_reference_line = i
   end
 
-  docview.sticky_lines = new_sticky_lines
-  docview.reference_line = new_reference_line
+  textview.sticky_lines = new_sticky_lines
+  textview.reference_line = new_reference_line
   return res
 end
 
-local old_dv_draw_overlay = DocView.draw_overlay
-function DocView:draw_overlay(...)
+local old_dv_draw_overlay = TextView.draw_overlay
+function TextView:draw_overlay(...)
   local scope = perf_scope_begin("sticky_scroll_overlay")
   local res = old_dv_draw_overlay(self, ...)
   if not SS.should_run(self) then
@@ -403,10 +404,10 @@ function DocView:draw_overlay(...)
   self.scroll.x = scroll_x
 
   local gw, gpad = self:get_gutter_width()
-  local data = SS.managed_docviews[self]
+  local data = SS.managed_textviews[self]
   local layout = SS.get_sticky_layout(self, data.sticky_lines, data.reference_line)
 
-  -- DocView narrows the active clip to exclude the gutter before drawing its
+  -- TextView narrows the active clip to exclude the gutter before drawing its
   -- overlay. Widen it to the whole view, but retain the enclosing clip because
   -- a sticky row being pushed out can temporarily have a y above the view.
   local clip_index = #core.clip_rect_stack
@@ -448,11 +449,11 @@ function DocView:draw_overlay(...)
   return res
 end
 
-local old_mouse_pressed = DocView.on_mouse_pressed
-function DocView:on_mouse_pressed(button, x, y, clicks, ...)
+local old_mouse_pressed = TextView.on_mouse_pressed
+function TextView:on_mouse_pressed(button, x, y, clicks, ...)
   if not SS.should_run(self) then return old_mouse_pressed(self, button, x, y, clicks, ...) end
 
-  local data = SS.managed_docviews[self]
+  local data = SS.managed_textviews[self]
   data.sticky_lines_mouse_pressed = false
   if #data.sticky_lines == 0 then
     return old_mouse_pressed(self, button, x, y, clicks, ...)
@@ -498,15 +499,15 @@ function DocView:on_mouse_pressed(button, x, y, clicks, ...)
     col = self:get_x_offset_col(entry.line, x - sticky_x)
   end
   self:scroll_to_make_visible(entry.line, col)
-  self.doc:set_selection(entry.line, col)
+  self.buffer:set_selection(entry.line, col)
   return true
 end
 
-local old_mouse_moved = DocView.on_mouse_moved
-function DocView:on_mouse_moved(x, y, ...)
+local old_mouse_moved = TextView.on_mouse_moved
+function TextView:on_mouse_moved(x, y, ...)
   if not SS.should_run(self) then return old_mouse_moved(self, x, y, ...) end
 
-  local data = SS.managed_docviews[self]
+  local data = SS.managed_textviews[self]
   data.hovered_sticky_scroll_line = nil
   if #data.sticky_lines == 0 then
     return old_mouse_moved(self, x, y, ...)
@@ -530,8 +531,8 @@ function DocView:on_mouse_moved(x, y, ...)
   return true
 end
 
-local old_scroll_to_make_visible = DocView.scroll_to_make_visible
-function DocView:scroll_to_make_visible(line, col, ...)
+local old_scroll_to_make_visible = TextView.scroll_to_make_visible
+function TextView:scroll_to_make_visible(line, col, ...)
   old_scroll_to_make_visible(self, line, col, ...)
   if not SS.should_run(self) then return end
 
@@ -540,7 +541,7 @@ function DocView:scroll_to_make_visible(line, col, ...)
   local before_scroll = self.scroll.y
   local _, ly = self:get_line_screen_position(line, col)
   ly = ly - self.position.y + (before_scroll - self.scroll.to.y)
-  local data = SS.managed_docviews[self]
+  local data = SS.managed_textviews[self]
   -- Avoid moving the caret under the sticky lines.
   local sticky_height
   if data.sticky_lines_mouse_pressed or self.mouse_selecting then
@@ -568,16 +569,16 @@ command.add_toggle("sticky-lines:toggle", {
   end,
 })
 
--- Per-docview commands
-command.add_toggle("sticky-lines:toggle-doc", {
+-- Per-textview commands
+command.add_toggle("sticky-lines:toggle-buffer", {
   predicate = SS.should_run,
   get = function(dv)
     dv = dv or core.active_view
-    return dv and SS.managed_docviews[dv].enabled
+    return dv and SS.managed_textviews[dv].enabled
   end,
   set = function(enabled, dv)
     dv = dv or core.active_view
-    if dv then SS.managed_docviews[dv].enabled = enabled end
+    if dv then SS.managed_textviews[dv].enabled = enabled end
   end,
 })
 

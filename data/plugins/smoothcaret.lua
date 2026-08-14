@@ -2,16 +2,16 @@
 local core = require "core"
 local config = require "core.config"
 local style = require "core.style"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
 
 local smoothcaret = {
   enabled = false,
   rate = 0.65,
 }
 
-local docview_update = DocView.update
-function DocView:update()
-  docview_update(self)
+local textview_update = TextView.update
+function TextView:update()
+  textview_update(self)
 
   if not smoothcaret.enabled then return end
 
@@ -21,11 +21,11 @@ function DocView:update()
   if not self.carets then
     self.carets = { }
   end
-  -- and we need the list of visible ones that `DocView:draw_caret` will use in succession
+  -- and we need the list of visible ones that `TextView:draw_caret` will use in succession
   self.visible_carets = { }
 
   local idx, v_idx = 1, 1
-  for _, line, col in self.doc:get_selections() do
+  for _, line, col in self.buffer:get_selections() do
     local x, y = self:get_line_screen_position(line, col)
     -- Keep the position relative to the whole View
     -- This way scrolling won't animate the caret
@@ -41,7 +41,7 @@ function DocView:update()
     c.target.y = y
 
     -- Chech if the number of carets changed
-    if self.last_n_selections ~= #self.doc.selections then
+    if self.last_n_selections ~= #self.buffer.selections then
       -- Don't animate when there are new carets
       c.current.x = x
       c.current.y = y
@@ -57,7 +57,7 @@ function DocView:update()
     end
     idx = idx + 1
   end
-  self.last_n_selections = #self.doc.selections
+  self.last_n_selections = #self.buffer.selections
 
   -- Remove unused carets to avoid animating new ones when they are added
   for i = idx, #self.carets do
@@ -73,11 +73,11 @@ function DocView:update()
     end
   end
 
-  -- This is used by `DocView:draw_caret` to keep track of the current caret per view.
+  -- This is used by `TextView:draw_caret` to keep track of the current caret per view.
   self.smoothcaret_draw_caret_idx = 1
 end
 
-local docview_draw_caret = DocView.draw_caret
+local textview_draw_caret = TextView.draw_caret
 
 local function perf_scope_begin(name)
   if not core.perf_draw_scope_active then return nil end
@@ -91,10 +91,10 @@ local function perf_scope_end(token)
   if perf and perf.scope_end then perf.scope_end(token) end
 end
 
-function DocView:draw_caret(x, y, line, col, caret_idx_arg, color)
+function TextView:draw_caret(x, y, line, col, caret_idx_arg, color)
   local scope = perf_scope_begin("smooth_caret")
   if not smoothcaret.enabled then
-    docview_draw_caret(self, x, y, line, col, caret_idx_arg, color)
+    textview_draw_caret(self, x, y, line, col, caret_idx_arg, color)
     perf_scope_end(scope)
     return
   end
@@ -102,7 +102,7 @@ function DocView:draw_caret(x, y, line, col, caret_idx_arg, color)
   local idx = caret_idx_arg or self.smoothcaret_draw_caret_idx or 1
   local c = self.visible_carets and self.visible_carets[idx]
     or { current = { x = x, y = y } }
-  docview_draw_caret(self, c.current.x - self.scroll.x, c.current.y - self.scroll.y, line, col, caret_idx_arg, color)
+  textview_draw_caret(self, c.current.x - self.scroll.x, c.current.y - self.scroll.y, line, col, caret_idx_arg, color)
 
   self.smoothcaret_draw_caret_idx = idx + 1
   perf_scope_end(scope)

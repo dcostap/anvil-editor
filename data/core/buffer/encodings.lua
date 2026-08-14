@@ -1,8 +1,8 @@
 local core = require "core"
 local common = require "core.common"
 
----Helper functions to change a document encoding.
----@class core.doc.encodings
+---Helper functions to change a buffer encoding.
+---@class core.buffer.encodings
 local encodings = {}
 
 ---@class encodings.encoding

@@ -212,7 +212,7 @@ local EXTENSIONS = {
   css = "css", ["css.map"] = "css", sss = "css", pcss = "css", postcss = "css",
   csv = "csv", xls = "xls", xlsx = "xls", ods = "xls",
   cu = "cu", cuh = "cu", hu = "cu", cake = "cake", ctp = "cake_php", d = "d",
-  doc = "word", docx = "word", odt = "word", rtf = "word",
+  buffer = "word", docx = "word", odt = "word", rtf = "word",
   ejs = "ejs", ex = "elixir", exs = "elixir_script", elm = "elm",
   ico = "favicon", gitignore = "git", gitconfig = "git", gitkeep = "git",
   gitattributes = "git", gitmodules = "git",

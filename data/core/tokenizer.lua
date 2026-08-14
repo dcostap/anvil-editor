@@ -514,8 +514,8 @@ function tokenizer.clear_native_cache(root_syntax)
   for _, syn in ipairs(syntax.items) do
     clear_native_cache_from_syntax(syn, visited)
   end
-  for _, doc in ipairs(core.docs or {}) do
-    clear_native_cache_from_syntax(doc.syntax, visited)
+  for _, buffer in ipairs(core.buffers or {}) do
+    clear_native_cache_from_syntax(buffer.syntax, visited)
   end
   notify_backend_changed("cache-reset")
 end
@@ -541,7 +541,7 @@ end
 
 ---Return the list of syntaxes active for a tokenizer state.
 ---
----@param base_syntax table The base syntax of the document.
+---@param base_syntax table The base syntax of the buffer.
 ---@param state string Tokenizer state previously returned by `tokenize`.
 ---@return table syntaxes Array of syntaxes starting from the innermost one.
 function tokenizer.extract_subsyntaxes(base_syntax, state)

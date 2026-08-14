@@ -1,20 +1,20 @@
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local style = require "core.style"
 local test = require "core.test"
 
 local function make_view(text)
-  local doc = Doc(nil, nil, true)
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
-  local view = DocView(doc)
+  local buffer = Buffer(nil, nil, true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  local view = TextView(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 500, 120
   view:set_wrapping_enabled(false)
-  return view, doc
+  return view, buffer
 end
 
-test.describe("DocView render fragments", function()
+test.describe("TextView render fragments", function()
   test.it("maps hidden source markers to stable x positions", function()
     local view = make_view("## Heading")
     view:add_line_render_provider("markdown", {
@@ -146,14 +146,14 @@ test.describe("DocView render fragments", function()
   end)
 
   test.it("invalidates cached provider output after text transactions", function()
-    local view, doc = make_view("one")
+    local view, buffer = make_view("one")
     view:add_line_render_provider("test", {
       render_line = function(_, _, _, context)
         return { fragments = { { text = context.source_text } } }
       end,
     })
     test.equal(view:get_line_render(1).source_text, "one")
-    doc:insert(1, 4, "!")
+    buffer:insert(1, 4, "!")
     test.equal(view:get_line_render(1).source_text, "one!")
   end)
 
@@ -302,7 +302,7 @@ test.describe("DocView render fragments", function()
       end,
     })
     view.get_line_hint = function()
-      return { text = "hint", font = view:get_font(), placement = "after_line_document_text" }
+      return { text = "hint", font = view:get_font(), placement = "after_line_buffer_text" }
     end
 
     local old_draw_text = renderer.draw_text
@@ -536,14 +536,14 @@ test.describe("DocView render fragments", function()
   end)
 
   test.it("invalidates cached output after legacy raw text edits", function()
-    local view, doc = make_view("one")
+    local view, buffer = make_view("one")
     view:add_line_render_provider("test", {
       render_line = function(_, _, _, context)
         return { fragments = { { text = context.source_text } } }
       end,
     })
     test.equal(view:get_line_render(1).source_text, "one")
-    doc:raw_insert(1, 1, "x", doc.undo_stack, system.get_time())
+    buffer:raw_insert(1, 1, "x", buffer.undo_stack, system.get_time())
     test.equal(view:get_line_render(1).source_text, "xone")
   end)
 

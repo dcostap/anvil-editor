@@ -77,7 +77,7 @@ local annotations_syntax = {
     { pattern = "@diagnostic%s+()[%S]+",
       type = { "annotation", "annotation.function" }
     },
-    -- @enum doc type
+    -- @enum buffer type
     { pattern = "@enum%s+()[%S]+",
       type = { "annotation", "annotation.param" }
     },
@@ -144,18 +144,18 @@ local annotations_syntax = {
     { pattern = "@generic%s+()[%w%._]+",
       type = { "annotation", "annotation.param" }
     },
-    -- @module doc type
+    -- @module buffer type
     { pattern = "@module%s+()%b''",
       type = { "annotation", "annotation.string" }
     },
     { pattern = "@module%s+()%b\"\"",
       type = { "annotation", "annotation.string" }
     },
-    -- @operator doc type
+    -- @operator buffer type
     { pattern = "@operator%s+()[%w_]+",
       type = { "annotation", "annotation.function" }
     },
-    -- @param doc type
+    -- @param buffer type
     { pattern = "@param%s+()[%w%._]+()%??()%s+%b''",
       type = {
         "annotation", "annotation.param",
@@ -192,7 +192,7 @@ local annotations_syntax = {
     { pattern = "@return%s+()[%w%.%[%]_]+()%??",
       type = { "annotation", "annotation.type", "annotation.operator" }
     },
-    -- type doc tag
+    -- type buffer tag
     { pattern = "@type%s+()%b''",
       type = { "annotation", "annotation.string" }
     },
@@ -202,7 +202,7 @@ local annotations_syntax = {
     { pattern = "@type%s+()[%w%._%[%]]+()%??",
       type = { "annotation", "annotation.type", "annotation.operator" }
     },
-    -- @vararg doc type (deprecated)
+    -- @vararg buffer type (deprecated)
     { pattern = "@vararg%s+()[%w%.%[%]_]+()%??",
       type = { "annotation", "annotation.type", "annotation.operator" }
     },
@@ -228,7 +228,7 @@ local annotations_syntax = {
     { pattern = "|%s*()[^%s|?]+()%??",
       type = { "annotation.operator", "annotation.type", "annotation.operator" }
     },
-    -- match doc tags syntax for symbols table to properly work
+    -- match buffer tags syntax for symbols table to properly work
     { pattern = "@[%a_]+%w*",         type = "comment" },
     -- match everything else as normal comment
     { pattern = "[%w%p]+",            type = "comment" },

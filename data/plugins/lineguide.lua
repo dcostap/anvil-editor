@@ -2,7 +2,8 @@
 local command = require "core.command"
 local config = require "core.config"
 local style = require "core.style"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
+local Editor = require "core.editor"
 
 ---Configuration options for `lineguide` plugin.
 ---@class config.plugins.lineguide
@@ -90,7 +91,7 @@ local function get_ruler(v)
   return result
 end
 
-local draw_overlay = DocView.draw_overlay
+local draw_overlay = TextView.draw_overlay
 
 local function perf_scope_begin(name)
   if not core.perf_draw_scope_active then return nil end
@@ -104,14 +105,14 @@ local function perf_scope_end(token)
   if perf and perf.scope_end then perf.scope_end(token) end
 end
 
-function DocView:draw_overlay(...)
+function TextView:draw_overlay(...)
   local scope = perf_scope_begin("line_guides")
   if
     type(config.plugins.lineguide) == "table"
     and
     config.plugins.lineguide.enabled
     and
-    self:is(DocView)
+    self:extends(Editor)
   then
     local conf = config.plugins.lineguide
     local line_x = self:get_line_screen_position(1)

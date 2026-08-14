@@ -30,7 +30,7 @@ local DEFAULT_SYNC_QUERY_ITEM_LIMIT = 5000
 local MAX_FILE_BYTES = 2 * 1024 * 1024
 
 local indexes = {}
-local open_documents = setmetatable({}, { __mode = "v" })
+local open_buffers = setmetatable({}, { __mode = "v" })
 
 local function log_quiet(...)
   if core and core.log_quiet then core.log_quiet(...) end
@@ -96,8 +96,8 @@ local function new_index(root)
     usage_truncated = false,
     usage_truncated_reason = nil,
     by_path = {},
-    open_docs = {},
-    open_doc_jobs = {},
+    open_buffers = {},
+    open_buffer_jobs = {},
     pending_reindex_paths = {},
     pending_reindex_dirs = {},
     watcher = nil,
@@ -905,35 +905,35 @@ function symbol_index.invalidate(root)
   end
 end
 
-local refresh_open_document_overlays
+local refresh_open_buffer_overlays
 local overlay_entry_current
 
-local function doc_should_suppress_disk(doc)
-  if not doc then return false end
-  if type(doc.is_dirty) == "function" then
-    local ok, dirty = pcall(doc.is_dirty, doc)
+local function buffer_should_suppress_disk(buffer)
+  if not buffer then return false end
+  if type(buffer.is_dirty) == "function" then
+    local ok, dirty = pcall(buffer.is_dirty, buffer)
     return ok and dirty or false
   end
   return false
 end
 
-local function has_pending_open_doc_overlay(index)
-  return index and index.open_doc_jobs and next(index.open_doc_jobs) ~= nil
+local function has_pending_open_buffer_overlay(index)
+  return index and index.open_buffer_jobs and next(index.open_buffer_jobs) ~= nil
 end
 
 local function overlay_paths(index)
   local paths = {}
-  for path in pairs(index.open_doc_jobs or {}) do paths[path] = true end
-  for path, entry in pairs(index.open_docs or {}) do
+  for path in pairs(index.open_buffer_jobs or {}) do paths[path] = true end
+  for path, entry in pairs(index.open_buffers or {}) do
     if overlay_entry_current and overlay_entry_current(entry) then paths[path] = true end
   end
-  for path, doc in pairs(open_documents) do
-    if common.path_belongs_to(path, index.root) and doc_should_suppress_disk(doc) then paths[path] = true end
+  for path, buffer in pairs(open_buffers) do
+    if common.path_belongs_to(path, index.root) and buffer_should_suppress_disk(buffer) then paths[path] = true end
   end
-  for _, doc in pairs(core.docs or {}) do
-    local path = doc and (doc.abs_filename or doc.filename)
+  for _, buffer in pairs(core.buffers or {}) do
+    local path = buffer and (buffer.abs_filename or buffer.filename)
     path = path and common.normalize_path(path)
-    if path and common.path_belongs_to(path, index.root) and doc_should_suppress_disk(doc) then paths[path] = true end
+    if path and common.path_belongs_to(path, index.root) and buffer_should_suppress_disk(buffer) then paths[path] = true end
   end
 
   local ordered = {}
@@ -943,10 +943,10 @@ local function overlay_paths(index)
 end
 
 overlay_entry_current = function(entry)
-  if not entry or not entry.doc then return false end
-  local doc = entry.doc
-  local ts = doc.treesitter
-  local change_id = doc.get_change_id and doc:get_change_id() or 0
+  if not entry or not entry.buffer then return false end
+  local buffer = entry.buffer
+  local ts = buffer.treesitter
+  local change_id = buffer.get_change_id and buffer:get_change_id() or 0
   return ts and ts.status == "ready" and entry.change_id == change_id
 end
 
@@ -979,7 +979,7 @@ end
 local function combined_symbols(index, kind, disk_symbols)
   kind = kind or "symbols"
   disk_symbols = disk_symbols or index.symbols or {}
-  if refresh_open_document_overlays then refresh_open_document_overlays(index) end
+  if refresh_open_buffer_overlays then refresh_open_buffer_overlays(index) end
   index.combined_symbols_cache = index.combined_symbols_cache or {}
   local project_paths_generation = project_paths_module().generation()
   local paths, paths_signature = overlay_paths(index)
@@ -995,7 +995,7 @@ local function combined_symbols(index, kind, disk_symbols)
   end
 
   inc_ui_metric(index, "combined_symbols_cache_misses", 1)
-  local overlay = index.open_docs or {}
+  local overlay = index.open_buffers or {}
   local out = {}
   for _, symbol in ipairs(disk_symbols) do
     if not paths[symbol.path] and project_path_allows(symbol.path, kind) then
@@ -1024,8 +1024,8 @@ local function combined_symbols(index, kind, disk_symbols)
 end
 
 local function combined_usages_for_name(index, name)
-  if refresh_open_document_overlays then refresh_open_document_overlays(index) end
-  local overlay = index.open_docs or {}
+  if refresh_open_buffer_overlays then refresh_open_buffer_overlays(index) end
+  local overlay = index.open_buffers or {}
   local paths = overlay_paths(index)
   local out = {}
   for _, usage in ipairs((index.usages_by_name or {})[name] or {}) do
@@ -1140,15 +1140,15 @@ local function filtered_symbols(symbols, query, limit, opts)
   return out, #items > #out
 end
 
-local function refresh_current_core_docs_for_index(index)
-  -- Query paths must not synchronously extract open-document overlays. Open
-  -- documents are remembered here only so dirty buffers can suppress stale disk
+local function refresh_current_core_buffers_for_index(index)
+  -- Query paths must not synchronously extract open-buffer overlays. Open
+  -- Buffers are remembered here only so dirty Buffers can suppress stale disk
   -- entries; overlay records are updated by the Tree-sitter parse-ready hook.
   if not index then return end
-  for _, doc in pairs(core.docs or {}) do
-    local path = doc and (doc.abs_filename or doc.filename)
+  for _, buffer in pairs(core.buffers or {}) do
+    local path = buffer and (buffer.abs_filename or buffer.filename)
     path = path and common.normalize_path(path)
-    if path and common.path_belongs_to(path, index.root) then open_documents[path] = doc end
+    if path and common.path_belongs_to(path, index.root) then open_buffers[path] = buffer end
   end
 end
 
@@ -1160,8 +1160,8 @@ local function merge_status(current, next_status)
 end
 
 local function native_query_path_rules(index, snapshot, kind)
-  refresh_current_core_docs_for_index(index)
-  if refresh_open_document_overlays then refresh_open_document_overlays(index) end
+  refresh_current_core_buffers_for_index(index)
+  if refresh_open_buffer_overlays then refresh_open_buffer_overlays(index) end
   local suppressed, signature = overlay_paths(index)
   local generation = project_paths_module().generation()
   index.native_query_filter_cache = index.native_query_filter_cache or {}
@@ -1205,7 +1205,7 @@ local function bounded_overlay_symbols(index, suppressed, query, opts, capacity)
   local candidates, matched = {}, 0
   local kinds = opts.symbol_kinds or opts.kinds
   query = tostring(query or "")
-  for path, entry in pairs(index.open_docs or {}) do
+  for path, entry in pairs(index.open_buffers or {}) do
     if suppressed[path] and overlay_entry_current(entry) then
       for _, symbol in ipairs(entry.symbols or {}) do
         if project_path_allows(symbol.path, opts.kind or "symbols")
@@ -1261,7 +1261,7 @@ local function native_project_symbols(index, snapshot, query, opts)
   for i, symbol in ipairs(results) do
     results[i] = public_symbol(refresh_project_path_metadata(index, symbol, kind))
   end
-  return results, page.has_more or overlay_more or merged_more, has_pending_open_doc_overlay(index)
+  return results, page.has_more or overlay_more or merged_more, has_pending_open_buffer_overlay(index)
 end
 
 function symbol_index.workspace_symbols(query, opts)
@@ -1299,8 +1299,8 @@ function symbol_index.workspace_symbols(query, opts)
       elseif root_status == "stale" then reason = reason or "indexing" end
       any_usable = true
     elseif index.symbol_status == "ready" then
-      refresh_current_core_docs_for_index(index)
-      if has_pending_open_doc_overlay(index) then
+      refresh_current_core_buffers_for_index(index)
+      if has_pending_open_buffer_overlay(index) then
         reason = reason or "overlay-indexing"
       elseif query_text ~= "" and disk_symbol_count > sync_limit and not opts.allow_large_sync_query then
         reason = reason or "query-too-large"
@@ -1327,7 +1327,7 @@ function symbol_index.workspace_symbols(query, opts)
           any_usable = true
         end
       end
-    elseif (disk_symbol_count > 0 or next(index.open_docs or {}) ~= nil) and opts.allow_stale then
+    elseif (disk_symbol_count > 0 or next(index.open_buffers or {}) ~= nil) and opts.allow_stale then
       if query_text ~= "" and disk_symbol_count > sync_limit and not opts.allow_large_sync_query then
         reason = reason or "query-too-large"
       else
@@ -1476,8 +1476,8 @@ local function native_workspace_symbols_async(query, opts, roots)
         roots = per_root, index = #roots == 1 and index or nil,
       }
     end
-    refresh_current_core_docs_for_index(index)
-    if has_pending_open_doc_overlay(index) then
+    refresh_current_core_buffers_for_index(index)
+    if has_pending_open_buffer_overlay(index) then
       return nil, "overlay-indexing", "pending", { roots = per_root, index = #roots == 1 and index or nil }
     end
     local excluded, included, suppressed = native_query_path_rules(index, snapshot, opts.kind or "symbols")
@@ -1696,7 +1696,7 @@ end
 local function bounded_overlay_usages(index, suppressed, name, opts, capacity)
   local candidates, matched = {}, 0
   local include_declaration = opts.include_declaration ~= false
-  for path, entry in pairs(index.open_docs or {}) do
+  for path, entry in pairs(index.open_buffers or {}) do
     if suppressed[path] and overlay_entry_current(entry) then
       for _, usage in ipairs((entry.usages_by_name or {})[name] or {}) do
         if (include_declaration or not usage.is_declaration)
@@ -1736,7 +1736,7 @@ local function native_project_usages(index, snapshot, name, opts)
   for i, usage in ipairs(combined) do
     combined[i] = public_usage(name, refresh_project_path_metadata(index, usage, "usages"))
   end
-  return combined, has_more, has_pending_open_doc_overlay(index)
+  return combined, has_more, has_pending_open_buffer_overlay(index)
 end
 
 function symbol_index.workspace_usages(name, opts)
@@ -1772,13 +1772,13 @@ function symbol_index.workspace_usages(name, opts)
       elseif root_status == "stale" then reason = reason or "indexing" end
       any_usable = true
     elseif index.usage_status == "ready" then
-      refresh_current_core_docs_for_index(index)
-      if has_pending_open_doc_overlay(index) then
+      refresh_current_core_buffers_for_index(index)
+      if has_pending_open_buffer_overlay(index) then
         reason = reason or "overlay-indexing"
       elseif #((index.usages_by_name or {})[name] or {}) > sync_limit and not opts.allow_large_sync_query then
         reason = reason or "query-too-large"
       else
-        refresh_current_core_docs_for_index(index)
+        refresh_current_core_buffers_for_index(index)
         local source = combined_usages_for_name(index, name)
         if single_root and #all_usages == 0 then
           all_usages = source
@@ -1788,7 +1788,7 @@ function symbol_index.workspace_usages(name, opts)
         root_status = "fresh"
         any_usable = true
       end
-    elseif opts.allow_stale and ((index.usages_by_name or {})[name] or next(index.open_docs or {}) ~= nil) then
+    elseif opts.allow_stale and ((index.usages_by_name or {})[name] or next(index.open_buffers or {}) ~= nil) then
       if #((index.usages_by_name or {})[name] or {}) > sync_limit and not opts.allow_large_sync_query then
         reason = reason or "query-too-large"
       else
@@ -1847,51 +1847,51 @@ function symbol_index.query_usages_async(name, opts)
   return symbol_index.workspace_usages_async(name, opts)
 end
 
-local function doc_path(doc)
-  local path = doc and (doc.abs_filename or doc.filename)
+local function buffer_path(buffer)
+  local path = buffer and (buffer.abs_filename or buffer.filename)
   return path and common.normalize_path(path) or nil
 end
 
-local function doc_lines(doc)
-  return doc and doc.lines or nil
+local function buffer_lines(buffer)
+  return buffer and buffer.lines or nil
 end
 
-local function doc_text_from_lines(lines)
+local function buffer_text_from_lines(lines)
   if type(lines) ~= "table" then return nil, "missing-lines" end
   return table.concat(lines, "\n")
 end
 
-local function cancel_open_doc_job(index, path)
-  local job = index and index.open_doc_jobs and index.open_doc_jobs[path]
+local function cancel_open_buffer_job(index, path)
+  local job = index and index.open_buffer_jobs and index.open_buffer_jobs[path]
   if job and job.handle then worker_pool.system():cancel(job.handle) end
-  if index and index.open_doc_jobs then index.open_doc_jobs[path] = nil end
+  if index and index.open_buffer_jobs then index.open_buffer_jobs[path] = nil end
 end
 
-local function submit_open_doc_overlay(index, doc, path, reason)
-  local ts = doc and doc.treesitter
+local function submit_open_buffer_overlay(index, buffer, path, reason)
+  local ts = buffer and buffer.treesitter
   if not ts or ts.status ~= "ready" then return false, "not-ready" end
   local language = ts.language
   if not language then return false, "missing-language" end
-  local text, text_err = doc_text_from_lines(doc_lines(doc))
+  local text, text_err = buffer_text_from_lines(buffer_lines(buffer))
   if not text then return false, text_err or "missing-lines" end
   if #text > MAX_FILE_BYTES then return false, "too-large" end
 
-  local change_id = doc.get_change_id and doc:get_change_id() or 0
+  local change_id = buffer.get_change_id and buffer:get_change_id() or 0
   local project_paths_generation = index.project_paths_generation or project_paths_module().generation()
-  cancel_open_doc_job(index, path)
-  index.open_doc_jobs = index.open_doc_jobs or {}
+  cancel_open_buffer_job(index, path)
+  index.open_buffer_jobs = index.open_buffer_jobs or {}
   local job = {
-    doc = doc,
+    buffer = buffer,
     path = path,
     change_id = change_id,
     generation = index.generation,
     project_paths_generation = project_paths_generation,
   }
-  index.open_doc_jobs[path] = job
+  index.open_buffer_jobs[path] = job
 
   local function current()
-    local active = index.open_doc_jobs and index.open_doc_jobs[path]
-    local current_change_id = doc.get_change_id and doc:get_change_id() or 0
+    local active = index.open_buffer_jobs and index.open_buffer_jobs[path]
+    local current_change_id = buffer.get_change_id and buffer:get_change_id() or 0
     return active == job
        and index.generation == job.generation
        and current_change_id == change_id
@@ -1901,13 +1901,13 @@ local function submit_open_doc_overlay(index, doc, path, reason)
   local sources = language.query_sources or {}
   local usage_kind = usage_query_kind(language)
   local handle, err = worker_pool.system():submit({
-    kind = "treesitter_open_doc_overlay",
+    kind = "treesitter_open_buffer_overlay",
     native = true,
     native_kind = "treesitter_index_text",
     priority = "interactive",
     generation = index.generation,
     project_paths_generation = project_paths_generation,
-    phase = "open-doc-overlay",
+    phase = "open-buffer-overlay",
     native_payload = {
       path = path,
       relpath = common.relative_path(index.root, path),
@@ -1940,7 +1940,7 @@ local function submit_open_doc_overlay(index, doc, path, reason)
         symbols = {},
         usages_by_name = {},
         usage_count = 0,
-        doc = doc,
+        buffer = buffer,
         change_id = change_id,
       }
       local offset = 0
@@ -1961,63 +1961,63 @@ local function submit_open_doc_overlay(index, doc, path, reason)
         offset = page.next_offset
       until offset >= page.total
       result:close()
-      index.open_docs[path] = file
+      index.open_buffers[path] = file
       bump_overlay_generation(index)
       core.redraw = true
     end,
     on_complete = function()
       if current() then
-        index.open_doc_jobs[path] = nil
-        log_quiet("Tree-sitter Project index: updated open document overlay for %s (%s)", tostring(path), tostring(reason or "change"))
+        index.open_buffer_jobs[path] = nil
+        log_quiet("Tree-sitter Project index: updated open buffer overlay for %s (%s)", tostring(path), tostring(reason or "change"))
       end
     end,
     on_error = function(message)
       if current() then
-        index.open_doc_jobs[path] = nil
-        if index.open_docs[path] then
-          index.open_docs[path] = nil
+        index.open_buffer_jobs[path] = nil
+        if index.open_buffers[path] then
+          index.open_buffers[path] = nil
           bump_overlay_generation(index)
         end
-        log_quiet("Tree-sitter Project index: skipped open doc overlay for %s under %s: %s", tostring(path), tostring(index.root), tostring(message and message.error or "overlay-failed"))
+        log_quiet("Tree-sitter Project index: skipped open buffer overlay for %s under %s: %s", tostring(path), tostring(index.root), tostring(message and message.error or "overlay-failed"))
       end
     end,
     on_cancelled = function()
-      if current() then index.open_doc_jobs[path] = nil end
+      if current() then index.open_buffer_jobs[path] = nil end
     end,
   })
   if not handle then
-    index.open_doc_jobs[path] = nil
+    index.open_buffer_jobs[path] = nil
     return false, err or "submit-failed"
   end
   job.handle = handle
   return true, "scheduled"
 end
 
-refresh_open_document_overlays = function(index)
+refresh_open_buffer_overlays = function(index)
   if not index then return false end
   local changed = false
   local seen = {}
-  local docs = {}
-  for path, doc in pairs(open_documents) do docs[path] = doc end
-  for _, doc in pairs(core.docs or {}) do
-    local path = doc_path(doc)
-    if path then docs[path] = doc end
+  local buffers = {}
+  for path, buffer in pairs(open_buffers) do buffers[path] = buffer end
+  for _, buffer in pairs(core.buffers or {}) do
+    local path = buffer_path(buffer)
+    if path then buffers[path] = buffer end
   end
-  for path, doc in pairs(docs) do
+  for path, buffer in pairs(buffers) do
     if path and common.path_belongs_to(path, index.root) then
       seen[path] = true
-      local current = index.open_docs[path]
-      local change_id = doc.get_change_id and doc:get_change_id() or 0
-      if not current or current.doc ~= doc or current.change_id ~= change_id then
-        local scheduled = submit_open_doc_overlay(index, doc, path, "refresh")
+      local current = index.open_buffers[path]
+      local change_id = buffer.get_change_id and buffer:get_change_id() or 0
+      if not current or current.buffer ~= buffer or current.change_id ~= change_id then
+        local scheduled = submit_open_buffer_overlay(index, buffer, path, "refresh")
         changed = scheduled or changed
       end
     end
   end
-  for path, entry in pairs(index.open_docs or {}) do
-    if not seen[path] or not entry.doc then
-      cancel_open_doc_job(index, path)
-      index.open_docs[path] = nil
+  for path, entry in pairs(index.open_buffers or {}) do
+    if not seen[path] or not entry.buffer then
+      cancel_open_buffer_job(index, path)
+      index.open_buffers[path] = nil
       changed = true
     end
   end
@@ -2025,66 +2025,66 @@ refresh_open_document_overlays = function(index)
   return changed
 end
 
-function symbol_index.remember_open_document(doc)
-  local path = doc_path(doc)
+function symbol_index.remember_open_buffer(buffer)
+  local path = buffer_path(buffer)
   if not path then return false, "no-path" end
-  open_documents[path] = doc
+  open_buffers[path] = buffer
   return true
 end
 
-function symbol_index.update_open_document(doc, reason)
-  local path = doc_path(doc)
+function symbol_index.update_open_buffer(buffer, reason)
+  local path = buffer_path(buffer)
   if not path then return false, "no-path" end
-  open_documents[path] = doc
+  open_buffers[path] = buffer
   local updated = false
-  local change_id = doc.get_change_id and doc:get_change_id() or 0
+  local change_id = buffer.get_change_id and buffer:get_change_id() or 0
   for _, index in pairs(indexes) do
     if common.path_belongs_to(path, index.root) then
-      local current = index.open_docs[path]
-      if current and current.doc == doc and current.change_id == change_id then
+      local current = index.open_buffers[path]
+      if current and current.buffer == buffer and current.change_id == change_id then
         updated = true
       else
-        local scheduled, err = submit_open_doc_overlay(index, doc, path, reason)
+        local scheduled, err = submit_open_buffer_overlay(index, buffer, path, reason)
         if scheduled then
           updated = true
         else
-          cancel_open_doc_job(index, path)
-          if index.open_docs[path] then bump_overlay_generation(index) end
-          index.open_docs[path] = nil
-          log_quiet("Tree-sitter Project index: skipped open doc overlay for %s under %s: %s", tostring(path), tostring(index.root), tostring(err))
+          cancel_open_buffer_job(index, path)
+          if index.open_buffers[path] then bump_overlay_generation(index) end
+          index.open_buffers[path] = nil
+          log_quiet("Tree-sitter Project index: skipped open buffer overlay for %s under %s: %s", tostring(path), tostring(index.root), tostring(err))
         end
       end
     end
   end
   if updated then
     core.redraw = true
-    log_quiet("Tree-sitter Project index: updated open document overlay for %s (%s)", tostring(path), tostring(reason or "change"))
+    log_quiet("Tree-sitter Project index: updated open buffer overlay for %s (%s)", tostring(path), tostring(reason or "change"))
   end
   return updated
 end
 
-function symbol_index.clear_open_document(doc, reason)
-  local path = doc_path(doc)
+function symbol_index.clear_open_buffer(buffer, reason)
+  local path = buffer_path(buffer)
   local cleared = false
-  for open_path, open_doc in pairs(open_documents) do
-    if (path and open_path == path) or open_doc == doc then
-      open_documents[open_path] = nil
+  for open_path, open_buffer in pairs(open_buffers) do
+    if (path and open_path == path) or open_buffer == buffer then
+      open_buffers[open_path] = nil
       cleared = true
     end
   end
   for _, index in pairs(indexes) do
     local index_cleared = false
-    for overlay_path, entry in pairs(index.open_docs or {}) do
-      if (path and overlay_path == path) or entry.doc == doc then
-        cancel_open_doc_job(index, overlay_path)
-        index.open_docs[overlay_path] = nil
+    for overlay_path, entry in pairs(index.open_buffers or {}) do
+      if (path and overlay_path == path) or entry.buffer == buffer then
+        cancel_open_buffer_job(index, overlay_path)
+        index.open_buffers[overlay_path] = nil
         cleared = true
         index_cleared = true
       end
     end
-    for overlay_path, job in pairs(index.open_doc_jobs or {}) do
-      if (path and overlay_path == path) or job.doc == doc then
-        cancel_open_doc_job(index, overlay_path)
+    for overlay_path, job in pairs(index.open_buffer_jobs or {}) do
+      if (path and overlay_path == path) or job.buffer == buffer then
+        cancel_open_buffer_job(index, overlay_path)
         cleared = true
       end
     end
@@ -2092,7 +2092,7 @@ function symbol_index.clear_open_document(doc, reason)
   end
   if cleared then
     core.redraw = true
-    log_quiet("Tree-sitter Project index: cleared open document overlay for %s (%s)", tostring(path or doc), tostring(reason or "clear"))
+    log_quiet("Tree-sitter Project index: cleared open buffer overlay for %s (%s)", tostring(path or buffer), tostring(reason or "clear"))
   end
   return cleared
 end
@@ -2359,12 +2359,12 @@ function symbol_index.mark_file_dirty(path, reason)
   return symbol_index.reindex_file(path, { force = true, reason = reason or "dirty" })
 end
 
-function symbol_index.current_document_symbols(doc, query, opts)
+function symbol_index.current_buffer_symbols(buffer, query, opts)
   opts = opts or {}
-  if not doc then return {}, "no-document", "unavailable" end
-  local symbols, reason = outline.get_document_outline(doc, opts)
+  if not buffer then return {}, "no-buffer", "unavailable" end
+  local symbols, reason = outline.get_buffer_outline(buffer, opts)
   if not symbols or #symbols == 0 then return {}, reason or "no-symbols", "fresh" end
-  local path = doc.abs_filename or doc.filename
+  local path = buffer.abs_filename or buffer.filename
   local root = normalize_root(opts.root)
   local relpath = path
   if path and common.path_belongs_to(path, root) then relpath = common.relative_path(root, path):gsub("\\", "/") end
@@ -2394,7 +2394,7 @@ function symbol_index.reset_for_tests()
     index.watched_dirs = {}
   end
   indexes = {}
-  open_documents = setmetatable({}, { __mode = "v" })
+  open_buffers = setmetatable({}, { __mode = "v" })
 end
 
 return symbol_index

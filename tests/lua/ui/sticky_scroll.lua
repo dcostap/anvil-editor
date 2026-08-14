@@ -1,23 +1,24 @@
 local core = require "core"
 local test = require "core.test"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
+local Editor = require "core.editor"
 local markdown_live = require "core.markdown.live_render"
 local sticky_scroll = require "plugins.sticky_scroll"
 
-local function make_view(text)
-  local doc = Doc("sticky.md", "sticky.md", true)
-  doc:insert(1, 1, text)
-  local view = DocView(doc)
+local function make_view(text, editor)
+  local buffer = Buffer("sticky.md", "sticky.md", true)
+  buffer:insert(1, 1, text)
+  local view = editor and Editor(buffer) or TextView(buffer)
   view.position.x, view.position.y = 10, 20
   view.size.x, view.size.y = 500, 240
   view:set_wrapping_enabled(false)
-  return view, doc
+  return view, buffer
 end
 
 test.describe("sticky scroll", function()
   test.it("does not run in Markdown Live Preview", function()
-    local view = make_view("# Parent\nbody")
+    local view = make_view("# Parent\nbody", true)
     test.equal(markdown_live.attach(view), true)
     test.equal(markdown_live.is_live_mode(view), true)
 
@@ -26,11 +27,11 @@ test.describe("sticky scroll", function()
     markdown_live.detach(view)
   end)
 
-  test.it("uses cleaned UTF-8 text when measuring indentation in binary-marked documents", function()
+  test.it("uses cleaned UTF-8 text when measuring indentation in binary-marked Buffers", function()
     local invalid_surrogate = "\237\160\128"
     local line = "  " .. invalid_surrogate .. "heading\n"
     local clean_line = line:uclean("\26", true)
-    local doc = {
+    local buffer = {
       binary = true,
       lines = { line },
       clean_lines = { clean_line },
@@ -40,7 +41,7 @@ test.describe("sticky scroll", function()
       end,
     }
 
-    test.ok(sticky_scroll.get_level_from_indent(doc, 1) >= 0)
+    test.ok(sticky_scroll.get_level_from_indent(buffer, 1) >= 0)
   end)
 
   test.it("keeps the settled Markdown scope chain while rebuilding after typing", function()
@@ -49,7 +50,7 @@ test.describe("sticky scroll", function()
     lines[7] = "## Following section"
     for i = 8, 24 do lines[i] = "following section paragraph " .. i end
     local view = make_view(table.concat(lines, "\n"))
-    local data = sticky_scroll.managed_docviews[view]
+    local data = sticky_scroll.managed_textviews[view]
     view.scroll.y = view:get_visual_row_y_offset(5)
     view.scroll.to.y = view.scroll.y
 
@@ -62,11 +63,11 @@ test.describe("sticky scroll", function()
     view:update()
     test.same(data.sticky_lines, { 1 })
 
-    view.doc:insert(5, 2, "x")
+    view.buffer:insert(5, 2, "x")
     view:update()
 
     test.same(data.sticky_lines, { 1 })
-    local changed_id = view.doc:get_change_id()
+    local changed_id = view.buffer:get_change_id()
     test.ok(data.sticky_scroll_model_change_id ~= changed_id)
 
     data.sticky_scroll_model_pending_time = 0
@@ -116,7 +117,7 @@ test.describe("sticky scroll", function()
     test.equal(layout[1].height, view:get_line_height() * row_count)
 
     local row2_col = test.not_nil(view:get_visual_row_bounds_for_line(1, 2))
-    local data = sticky_scroll.managed_docviews[view]
+    local data = sticky_scroll.managed_textviews[view]
     data.enabled = true
     data.sticky_lines = { 1 }
     data.reference_line = nil
@@ -125,7 +126,7 @@ test.describe("sticky scroll", function()
       view:on_mouse_pressed("left", sticky_x + 4, layout[1].y + view:get_line_height() + 2, 1),
       true
     )
-    local selected_line, selected_col = view.doc:get_selection()
+    local selected_line, selected_col = view.buffer:get_selection()
     test.equal(selected_line, 1)
     test.ok(selected_col >= row2_col)
 
@@ -136,7 +137,7 @@ test.describe("sticky scroll", function()
 
   test.it("keeps sticky lines inside the enclosing view clip", function()
     local view = make_view("# Parent\nbody")
-    local data = sticky_scroll.managed_docviews[view]
+    local data = sticky_scroll.managed_textviews[view]
     data.enabled = true
     data.sticky_lines = { 1 }
     data.reference_line = 2

@@ -1,5 +1,7 @@
 # Untitled Recovery and Autosave Revamp Plan
 
+`PANE_VIEW_BUFFER_REDESIGN_PLAN.md` controls Pane placement, View lifecycle, and Buffer or Text View names. Interpret this plan through that model.
+
 ## Purpose
 
 Make Anvil's untitled Document preservation as robust as a first-class editor feature: users can create many untitled Documents, edit them freely, and trust that their contents are conserved quickly and recoverably without polluting Project files.

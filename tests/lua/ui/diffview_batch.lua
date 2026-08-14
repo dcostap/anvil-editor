@@ -3,8 +3,8 @@ local command = require "core.command"
 local config = require "core.config"
 local test = require "core.test"
 local diffview = require "plugins.diffview"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 
 local function track(context, kind, value)
   context[kind] = context[kind] or {}
@@ -22,8 +22,8 @@ local function wait_until(predicate, timeout, message)
   end
 end
 
-local function text(doc)
-  return table.concat(doc.lines)
+local function text(buffer)
+  return table.concat(buffer.lines)
 end
 
 local function write_file(path, content)
@@ -64,8 +64,8 @@ test.describe("DiffView batch behavior", function()
     for _, view in ipairs(context.diffviews or {}) do
       local node = core.root_panel.root_node:get_node_for_view(view)
       if node then node:remove_view(core.root_panel.root_node, view) end
-      view.doc_view_a.doc:on_close()
-      view.doc_view_b.doc:on_close()
+      view.buffer_view_a.buffer:on_close()
+      view.buffer_view_b.buffer:on_close()
     end
   end)
 
@@ -81,8 +81,8 @@ test.describe("DiffView batch behavior", function()
     test.ok(view, err)
     track(context, "diffviews", view)
     test.equal("Sugar Diff", view:get_name())
-    test.equal("left\n", text(view.doc_view_a.doc))
-    test.equal("right\n", text(view.doc_view_b.doc))
+    test.equal("left\n", text(view.buffer_view_a.buffer))
+    test.equal("right\n", text(view.buffer_view_b.buffer))
     test.equal("Old", view.request.content_titles[1])
     test.equal("New", view.request.content_titles[2])
   end)
@@ -128,11 +128,11 @@ test.describe("DiffView batch behavior", function()
     test.ok(err and err:find("editable must be a boolean", 1, true))
 
     view, err = diffview.open({ contents = {
-      { kind = "document", doc = {} },
+      { kind = "buffer", buffer = {} },
       diffview.content.blank(),
     } }, true)
     test.equal(nil, view)
-    test.ok(err and err:find("requires a Doc", 1, true))
+    test.ok(err and err:find("requires a Buffer", 1, true))
 
     view, err = diffview.open({ contents = {
       diffview.content.file("same/path.txt"),
@@ -141,36 +141,36 @@ test.describe("DiffView batch behavior", function()
     test.equal(nil, view)
     test.ok(err and err:find("same file", 1, true))
 
-    local file_doc = Doc("path.txt", "same/path.txt", true)
+    local file_buffer = Buffer("path.txt", "same/path.txt", true)
     view, err = diffview.open({ contents = {
-      diffview.content.document(file_doc),
+      diffview.content.buffer(file_buffer),
       diffview.content.file("same/./path.txt"),
     } }, true)
     test.equal(nil, view)
     test.ok(err and err:find("same file", 1, true))
 
-    local abs_doc = Doc("path.txt", core.project_absolute_path("same/path.txt"), true)
+    local abs_buffer = Buffer("path.txt", core.project_absolute_path("same/path.txt"), true)
     view, err = diffview.open({ contents = {
-      diffview.content.document(abs_doc),
+      diffview.content.buffer(abs_buffer),
       diffview.content.file("same/path.txt"),
     } }, true)
     test.equal(nil, view)
     test.ok(err and err:find("same file", 1, true))
   end)
 
-  test.it("uses side title precedence and closes only owned transient docs", function(context)
+  test.it("uses side title precedence and closes only owned transient buffers", function(context)
     local left_closed, right_closed = 0, 0
-    local left_doc = Doc("caller", "caller", true)
-    local old_left_close = left_doc.on_close
-    left_doc.on_close = function(doc, ...)
+    local left_buffer = Buffer("caller", "caller", true)
+    local old_left_close = left_buffer.on_close
+    left_buffer.on_close = function(buffer, ...)
       left_closed = left_closed + 1
-      return old_left_close(doc, ...)
+      return old_left_close(buffer, ...)
     end
 
     local right = diffview.content.text("owned text", { name = "Content Name" })
     local view, err = diffview.open({
       contents = {
-        diffview.content.document(left_doc, { name = "Document Content Name" }),
+        diffview.content.buffer(left_buffer, { name = "Buffer Content Name" }),
         right,
       },
       content_titles = { nil, "Title Override" },
@@ -178,14 +178,14 @@ test.describe("DiffView batch behavior", function()
     test.ok(view, err)
     track(context, "diffviews", view)
 
-    local old_right_close = view.doc_view_b.doc.on_close
-    view.doc_view_b.doc.on_close = function(doc, ...)
+    local old_right_close = view.buffer_view_b.buffer.on_close
+    view.buffer_view_b.buffer.on_close = function(buffer, ...)
       right_closed = right_closed + 1
-      return old_right_close(doc, ...)
+      return old_right_close(buffer, ...)
     end
 
-    test.equal("caller", view.doc_view_a.doc:get_name())
-    test.equal("Title Override", view.doc_view_b.doc:get_name())
+    test.equal("caller", view.buffer_view_a.buffer:get_name())
+    test.equal("Title Override", view.buffer_view_b.buffer:get_name())
 
     local closed = false
     view:try_close(function() closed = true end)
@@ -194,7 +194,7 @@ test.describe("DiffView batch behavior", function()
     test.equal(1, right_closed)
   end)
 
-  test.it("blank diff controller opens editable documents and replaces a side in place", function(context)
+  test.it("blank diff controller opens editable Buffers and replaces a side in place", function(context)
     local node = core.root_panel:get_active_node_default()
     test.ok(command.perform("diff-view:open-blank-diff"))
     local view = core.active_view.diff_view_parent
@@ -203,15 +203,15 @@ test.describe("DiffView batch behavior", function()
     view = controller:get_view()
     track(context, "diffviews", view)
     test.equal(node, core.root_panel.root_node:get_node_for_view(view))
-    test.equal(view.doc_view_a, core.active_view)
+    test.equal(view.buffer_view_a, core.active_view)
 
-    view.doc_view_a:on_text_input("left")
+    view.buffer_view_a:on_text_input("left")
     wait_until(function() return view.updater_idx == nil end, 1, "expected initial diff computation to finish")
     local before_generation = view.diff_generation
-    view.doc_view_b:on_text_input("right")
+    view.buffer_view_b:on_text_input("right")
     wait_until(function() return view.diff_generation > before_generation and view.updater_idx == nil end, 1, "expected edit to schedule one rediff")
 
-    view.doc_view_a.doc:clean()
+    view.buffer_view_a.buffer:clean()
 
     local path = core.project_absolute_path("tmp-diff-replace-left.txt")
     pcall(os.remove, path)
@@ -224,8 +224,8 @@ test.describe("DiffView batch behavior", function()
     track(context, "diffviews", new_view)
     test.equal(node, core.root_panel.root_node:get_node_for_view(new_view))
     test.equal(old_idx, node:get_view_idx(new_view))
-    test.equal("file left\n", text(new_view.doc_view_a.doc))
-    test.equal("right\n", text(new_view.doc_view_b.doc))
+    test.equal("file left\n", text(new_view.buffer_view_a.buffer))
+    test.equal("right\n", text(new_view.buffer_view_b.buffer))
   end)
 
   test.it("adopted sides preserve dirty-confirmation and editability metadata", function(context)
@@ -247,7 +247,7 @@ test.describe("DiffView batch behavior", function()
     local new_view, err = controller:replace_content("right", diffview.content.file(right_path))
     test.ok(new_view, err)
     track(context, "diffviews", new_view)
-    new_view.doc_view_a:on_text_input("dirty ")
+    new_view.buffer_view_a:on_text_input("dirty ")
 
     local old_nag_view = core.nag_view
     local nag_callback
@@ -275,8 +275,8 @@ test.describe("DiffView batch behavior", function()
     ro_view, err = ro_controller:replace_content("right", diffview.content.blank({ name = "New Right" }))
     test.ok(ro_view, err)
     track(context, "diffviews", ro_view)
-    ro_view.doc_view_a:on_text_input("X")
-    test.equal("read only\n", text(ro_view.doc_view_a.doc))
+    ro_view.buffer_view_a:on_text_input("X")
+    test.equal("read only\n", text(ro_view.buffer_view_a.buffer))
   end)
 
   test.it("controller reload balances reused content assignment hooks", function(context)
@@ -317,7 +317,7 @@ test.describe("DiffView batch behavior", function()
     }, true)
     test.ok(view, err)
     track(context, "diffviews", view)
-    view.doc_view_a:on_text_input("dirty ")
+    view.buffer_view_a:on_text_input("dirty ")
 
     local old_nag_view = core.nag_view
     local nag_callback
@@ -335,7 +335,7 @@ test.describe("DiffView batch behavior", function()
     test.equal(false, closed)
   end)
 
-  test.it("blank diff side replacement can be cancelled for dirty owned documents", function(context)
+  test.it("blank diff side replacement can be cancelled for dirty owned Buffers", function(context)
     local controller = diffview.DiffRequestController(diffview.MutableDiffRequestChain({
       title = "Blank Diff View",
       kind = "blank",
@@ -344,7 +344,7 @@ test.describe("DiffView batch behavior", function()
     }), { noshow = true })
     local view = controller:get_view()
     track(context, "diffviews", view)
-    view.doc_view_a:on_text_input("dirty")
+    view.buffer_view_a:on_text_input("dirty")
 
     local path = core.project_absolute_path("tmp-diff-cancel-replace.txt")
     pcall(os.remove, path)
@@ -366,16 +366,16 @@ test.describe("DiffView batch behavior", function()
     test.ok(nag_callback, "expected dirty replacement confirmation")
     nag_callback({ text = "Cancel" })
     test.equal(view, controller:get_view())
-    test.equal("dirty\n", text(view.doc_view_a.doc))
+    test.equal("dirty\n", text(view.buffer_view_a.buffer))
   end)
 
-  test.it("read-only diff guards block view-routed edits without locking caller documents", function(context)
-    local doc = Doc("caller", "caller", true)
-    doc:insert(1, 1, "left")
-    doc:clear_undo_redo()
+  test.it("read-only diff guards block view-routed edits without locking caller Buffers", function(context)
+    local buffer = Buffer("caller", "caller", true)
+    buffer:insert(1, 1, "left")
+    buffer:clear_undo_redo()
     local view, err = diffview.open({
       contents = {
-        diffview.content.document(doc, { read_only_reason = "snapshot" }),
+        diffview.content.buffer(buffer, { read_only_reason = "snapshot" }),
         diffview.content.blank(),
       },
       editable_policy = "read-only",
@@ -383,25 +383,25 @@ test.describe("DiffView batch behavior", function()
     test.ok(view, err)
     track(context, "diffviews", view)
 
-    view.doc_view_a:on_text_input("X")
-    test.equal("left\n", text(doc))
+    view.buffer_view_a:on_text_input("X")
+    test.equal("left\n", text(buffer))
 
-    core.active_view = view.doc_view_a
-    view.doc_view_a.doc:set_selection(1, 1, 1, 2)
-    command.perform("doc:delete")
-    test.equal("left\n", text(doc))
-    command.perform("doc:delete-lines")
-    test.equal("left\n", text(doc))
-    command.perform("doc:upper-case")
-    test.equal("left\n", text(doc))
+    core.active_view = view.buffer_view_a
+    view.buffer_view_a.buffer:set_selection(1, 1, 1, 2)
+    command.perform("text:delete")
+    test.equal("left\n", text(buffer))
+    command.perform("text:delete-lines")
+    test.equal("left\n", text(buffer))
+    command.perform("text:upper-case")
+    test.equal("left\n", text(buffer))
     command.perform("quote:quote")
-    test.equal("left\n", text(doc))
-    view.doc_view_a:on_ime_text_editing("Z", 0, 1)
-    test.equal("left\n", text(doc))
+    test.equal("left\n", text(buffer))
+    view.buffer_view_a:on_ime_text_editing("Z", 0, 1)
+    test.equal("left\n", text(buffer))
 
-    local normal = DocView(doc)
+    local normal = TextView(buffer)
     normal:on_text_input("Y")
-    test.equal(text(doc), "Yeft\n")
+    test.equal(text(buffer), "Yeft\n")
   end)
 
   test.it("read-only file diff guards block destructive file commands", function(context)
@@ -419,13 +419,13 @@ test.describe("DiffView batch behavior", function()
     }, true)
     test.ok(view, err)
     track(context, "diffviews", view)
-    core.active_view = view.doc_view_a
+    core.active_view = view.buffer_view_a
 
-    local old_crlf = view.doc_view_a.doc.crlf
-    command.perform("doc:toggle-line-ending")
-    test.equal(view.doc_view_a.doc.crlf, old_crlf)
-    view.doc_view_a.doc:insert(1, 1, "dirty ")
-    command.perform("doc:save")
+    local old_crlf = view.buffer_view_a.buffer.crlf
+    command.perform("text:toggle-line-ending")
+    test.equal(view.buffer_view_a.buffer.crlf, old_crlf)
+    view.buffer_view_a.buffer:insert(1, 1, "dirty ")
+    command.perform("text:save")
     test.equal(read_file(path), "left\n")
     command.perform("file:delete")
     test.ok(file_exists(path), "read-only file delete should be blocked")
@@ -435,13 +435,13 @@ test.describe("DiffView batch behavior", function()
     test.equal(nil, command.map["diff-view:sync-change"])
   end)
 
-  test.it("rejects same document requests and balances assignment hooks", function(context)
-    local doc = Doc("shared", "shared", true)
+  test.it("rejects same buffer requests and balances assignment hooks", function(context)
+    local buffer = Buffer("shared", "shared", true)
     local events = {}
     local request = {
       contents = {
-        diffview.content.document(doc),
-        diffview.content.document(doc),
+        diffview.content.buffer(buffer),
+        diffview.content.buffer(buffer),
       },
       on_assigned = function(_, assigned)
         events[#events + 1] = assigned and "request assigned" or "request unassigned"
@@ -449,7 +449,7 @@ test.describe("DiffView batch behavior", function()
     }
     local view, err = diffview.open(request, true)
     test.equal(nil, view)
-    test.ok(err and err:find("same document", 1, true))
+    test.ok(err and err:find("same buffer", 1, true))
     test.equal(0, #events)
 
     local left_events, right_events = {}, {}
@@ -502,7 +502,7 @@ test.describe("DiffView batch behavior", function()
     test.equal(#view.diff_folds_b, 0)
   end)
 
-  test.it("folds long unchanged regions and toggles them from diff DocViews", function(context)
+  test.it("folds long unchanged regions and toggles them from diff TextViews", function(context)
     local old_context = config.plugins.diffview.fold_context_lines
     local old_min = config.plugins.diffview.fold_min_lines
     local old_default = config.plugins.diffview.fold_unchanged_by_default
@@ -529,13 +529,13 @@ test.describe("DiffView batch behavior", function()
 
     test.ok(#view.diff_folds_a > 0)
     test.ok(#view.diff_folds_b > 0)
-    test.ok(view.diff_folds_a[1].core_fold ~= nil, "expected diff folds to be backed by core DocView folds")
-    test.equal(view.doc_view_a:get_collapsed_fold_at_line(view.diff_folds_a[1].hidden_start), view.diff_folds_a[1].core_fold)
-    local folded_size = view.doc_view_a:get_scrollable_size()
-    core.active_view = view.doc_view_a
+    test.ok(view.diff_folds_a[1].core_fold ~= nil, "expected diff folds to be backed by core TextView folds")
+    test.equal(view.buffer_view_a:get_collapsed_fold_at_line(view.diff_folds_a[1].hidden_start), view.diff_folds_a[1].core_fold)
+    local folded_size = view.buffer_view_a:get_scrollable_size()
+    core.active_view = view.buffer_view_a
     test.equal(command.perform("diff-view:toggle-folding"), true)
     test.equal(#view.diff_folds_a, 0)
-    test.ok(view.doc_view_a:get_scrollable_size() > folded_size)
+    test.ok(view.buffer_view_a:get_scrollable_size() > folded_size)
     core.active_view = view
     test.equal(command.perform("diff-view:toggle-folding"), true)
     test.ok(#view.diff_folds_a > 0)
@@ -578,8 +578,8 @@ test.describe("DiffView batch behavior", function()
     end
 
     local before_generation = view.diff_generation
-    view.doc_view_a.doc:apply_edits({ { line1 = 8, col1 = 1, line2 = 8, col2 = 1, text = "inserted before fold\n" } }, { type = "insert" })
-    view.doc_view_b.doc:apply_edits({ { line1 = 8, col1 = 1, line2 = 8, col2 = 1, text = "inserted before fold\n" } }, { type = "insert" })
+    view.buffer_view_a.buffer:apply_edits({ { line1 = 8, col1 = 1, line2 = 8, col2 = 1, text = "inserted before fold\n" } }, { type = "insert" })
+    view.buffer_view_b.buffer:apply_edits({ { line1 = 8, col1 = 1, line2 = 8, col2 = 1, text = "inserted before fold\n" } }, { type = "insert" })
     wait_until(function() return view.diff_generation > before_generation and view.updater_idx == nil end, 1, "expected rediff after insertion")
 
     for _, fold in ipairs(view.diff_folds_a) do
@@ -650,8 +650,8 @@ test.describe("DiffView batch behavior", function()
     view:expand_fold(view.diff_folds_a[1])
     test.equal(initial - 1, #view.diff_folds_a)
     local before_generation = view.diff_generation
-    view.doc_view_a.doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "same inserted\n" } }, { type = "insert" })
-    view.doc_view_b.doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "same inserted\n" } }, { type = "insert" })
+    view.buffer_view_a.buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "same inserted\n" } }, { type = "insert" })
+    view.buffer_view_b.buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "same inserted\n" } }, { type = "insert" })
     wait_until(function() return view.diff_generation > before_generation and view.updater_idx == nil end, 1, "expected rediff")
     test.equal(initial, #view.diff_folds_a)
   end)
@@ -744,27 +744,27 @@ test.describe("DiffView batch behavior", function()
 
     local fold = view.diff_folds_a[1]
     test.not_nil(fold)
-    view.doc_view_a.doc:set_selection(fold.hidden_start + 1, 1)
-    local line = view.doc_view_a.doc:get_selection()
+    view.buffer_view_a.buffer:set_selection(fold.hidden_start + 1, 1)
+    local line = view.buffer_view_a.buffer:get_selection()
     test.equal(line, fold.hidden_start + 1)
 
-    core.active_view = view.doc_view_a
-    view.doc_view_a.doc:set_selection(fold.hidden_start, 1)
-    test.equal(command.perform("doc:move-to-next-line"), true)
-    line = view.doc_view_a.doc:get_selection()
+    core.active_view = view.buffer_view_a
+    view.buffer_view_a.buffer:set_selection(fold.hidden_start, 1)
+    test.equal(command.perform("text:move-to-next-line"), true)
+    line = view.buffer_view_a.buffer:get_selection()
     test.equal(line, fold.hidden_end + 1)
-    test.equal(view.doc_view_b.doc:get_selection(), fold.hidden_end + 1)
-    local _, y1 = view.doc_view_a:get_line_screen_position(line, 1)
-    test.equal(command.perform("doc:move-to-next-line"), true)
-    line = view.doc_view_a.doc:get_selection()
+    test.equal(view.buffer_view_b.buffer:get_selection(), fold.hidden_end + 1)
+    local _, y1 = view.buffer_view_a:get_line_screen_position(line, 1)
+    test.equal(command.perform("text:move-to-next-line"), true)
+    line = view.buffer_view_a.buffer:get_selection()
     test.equal(line, fold.hidden_end + 2)
-    local _, y2 = view.doc_view_a:get_line_screen_position(line, 1)
+    local _, y2 = view.buffer_view_a:get_line_screen_position(line, 1)
     test.ok(y2 > y1)
 
-    view.doc_view_a.position.y, view.doc_view_a.size.y = 0, 80
-    view.doc_view_b.position.y, view.doc_view_b.size.y = 0, 80
-    view.doc_view_a:scroll_to_make_visible(7, 1, true)
-    test.equal(view.doc_view_b.scroll.to.y, view.doc_view_a.scroll.to.y)
+    view.buffer_view_a.position.y, view.buffer_view_a.size.y = 0, 80
+    view.buffer_view_b.position.y, view.buffer_view_b.size.y = 0, 80
+    view.buffer_view_a:scroll_to_make_visible(7, 1, true)
+    test.equal(view.buffer_view_b.scroll.to.y, view.buffer_view_a.scroll.to.y)
   end)
 
   test.it("expands folded regions when clicking their widget line", function(context)
@@ -798,7 +798,7 @@ test.describe("DiffView batch behavior", function()
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 400
     view:update()
-    local x, y = view.doc_view_a:get_line_screen_position(fold.hidden_start, 1)
+    local x, y = view.buffer_view_a:get_line_screen_position(fold.hidden_start, 1)
 
     test.equal(view:on_mouse_pressed("left", x + 1, y + 1, 1), true)
     test.equal(#view.diff_folds_a, fold_count - 1)
@@ -822,19 +822,19 @@ test.describe("DiffView batch behavior", function()
       true
     ))
     wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
-    view.doc_view_a:set_wrapping_enabled(true)
-    view.doc_view_b:set_wrapping_enabled(true)
+    view.buffer_view_a:set_wrapping_enabled(true)
+    view.buffer_view_b:set_wrapping_enabled(true)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 620, 300
     view:update()
 
-    local left_rows = view.doc_view_a:get_visual_row_count_for_line(2)
-    local right_rows = view.doc_view_b:get_visual_row_count_for_line(2)
+    local left_rows = view.buffer_view_a:get_visual_row_count_for_line(2)
+    local right_rows = view.buffer_view_b:get_visual_row_count_for_line(2)
     test.ok(left_rows ~= right_rows, "fixture should wrap the replacement to different heights")
-    local _, left_y = view.doc_view_a:get_line_screen_position(3, 1)
-    local _, right_y = view.doc_view_b:get_line_screen_position(3, 1)
+    local _, left_y = view.buffer_view_a:get_line_screen_position(3, 1)
+    local _, right_y = view.buffer_view_b:get_line_screen_position(3, 1)
     test.equal(left_y, right_y, "the line after a differently wrapped replacement should remain aligned")
-    test.equal(view.doc_view_a:get_scrollable_line_count(), view.doc_view_b:get_scrollable_line_count())
+    test.equal(view.buffer_view_a:get_scrollable_line_count(), view.buffer_view_b:get_scrollable_line_count())
   end)
 
   test.it("keeps folded panes synchronized around insert-only hunks", function(context)
@@ -866,7 +866,7 @@ test.describe("DiffView batch behavior", function()
 
     test.equal(#view.diff_folds_a, #view.diff_folds_b)
     test.equal(view.diff_folds_a[1].hidden_count, view.diff_folds_b[1].hidden_count)
-    test.equal(view.doc_view_a:get_scrollable_size(), view.doc_view_b:get_scrollable_size())
+    test.equal(view.buffer_view_a:get_scrollable_size(), view.buffer_view_b:get_scrollable_size())
   end)
 
   test.it("wraps diff change navigation across file boundaries", function(context)
@@ -879,16 +879,16 @@ test.describe("DiffView batch behavior", function()
     ))
     wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
 
-    local left = view.doc_view_a
+    local left = view.buffer_view_a
     core.set_active_view(left)
-    left.doc:set_selection(4, 1)
+    left.buffer:set_selection(4, 1)
     test.ok(command.perform("diff-view:next-change"))
-    test.equal(left.doc:get_selection(), 2)
+    test.equal(left.buffer:get_selection(), 2)
     test.ok(command.perform("diff-view:prev-change"))
-    test.equal(left.doc:get_selection(), 4)
+    test.equal(left.buffer:get_selection(), 4)
   end)
 
-  test.it("uses providers and listeners without replacing child DocView or Doc methods", function(context)
+  test.it("uses providers and listeners without replacing child TextView or Buffer methods", function(context)
     local view = track(context, "diffviews", diffview.string_to_string(
       "aa\nleft\nbb",
       "aa\nright\nbb",
@@ -898,14 +898,14 @@ test.describe("DiffView batch behavior", function()
     ))
     wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
 
-    test.equal(rawget(view.doc_view_a, "draw_line_text"), nil)
-    test.equal(rawget(view.doc_view_a, "scroll_to_line"), nil)
-    test.equal(rawget(view.doc_view_a, "scroll_to_make_visible"), nil)
-    test.equal(view.doc_view_a.doc.set_selection, Doc.set_selection)
-    test.equal(view.doc_view_a.doc.raw_insert, Doc.raw_insert)
-    test.equal(view.doc_view_a.doc.raw_remove, Doc.raw_remove)
-    test.ok(view.doc_view_a.decoration_providers["diff-view"] ~= nil)
-    test.ok(view.doc_view_a.poi_providers["diff-view"] ~= nil)
+    test.equal(rawget(view.buffer_view_a, "draw_line_text"), nil)
+    test.equal(rawget(view.buffer_view_a, "scroll_to_line"), nil)
+    test.equal(rawget(view.buffer_view_a, "scroll_to_make_visible"), nil)
+    test.equal(view.buffer_view_a.buffer.set_selection, Buffer.set_selection)
+    test.equal(view.buffer_view_a.buffer.raw_insert, Buffer.raw_insert)
+    test.equal(view.buffer_view_a.buffer.raw_remove, Buffer.raw_remove)
+    test.ok(view.buffer_view_a.decoration_providers["diff-view"] ~= nil)
+    test.ok(view.buffer_view_a.poi_providers["diff-view"] ~= nil)
   end)
 
 end)

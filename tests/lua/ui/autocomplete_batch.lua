@@ -13,22 +13,22 @@ local function track(context, kind, value)
   return value
 end
 
-local function remove_doc(doc)
-  for i = #core.docs, 1, -1 do
-    if core.docs[i] == doc then
-      table.remove(core.docs, i)
-      doc:on_close()
+local function remove_buffer(buffer)
+  for i = #core.buffers, 1, -1 do
+    if core.buffers[i] == buffer then
+      table.remove(core.buffers, i)
+      buffer:on_close()
       return
     end
   end
 end
 
 local function open_editor(context, text)
-  local doc = track(context, "docs", core.open_doc())
-  if text and text ~= "" then doc:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_doc(doc))
+  local buffer = track(context, "buffers", core.open_buffer())
+  if text and text ~= "" then buffer:text_input(text) end
+  local view = track(context, "views", core.root_panel:open_buffer(buffer))
   core.set_active_view(view)
-  return view, doc
+  return view, buffer
 end
 
 local function write_file(path, text)
@@ -38,18 +38,18 @@ local function write_file(path, text)
 end
 
 local function open_file_editor(context, path)
-  local doc = track(context, "docs", core.open_doc(path))
-  doc:set_selection(#doc.lines, #(doc.lines[#doc.lines] or ""))
-  local view = track(context, "views", core.root_panel:open_doc(doc))
+  local buffer = track(context, "buffers", core.open_buffer(path))
+  buffer:set_selection(#buffer.lines, #(buffer.lines[#buffer.lines] or ""))
+  local view = track(context, "views", core.root_panel:open_buffer(buffer))
   core.set_active_view(view)
-  return view, doc
+  return view, buffer
 end
 
-local function wait_treesitter_ready(doc, timeout)
+local function wait_treesitter_ready(buffer, timeout)
   local deadline = system.get_time() + (timeout or 3)
   while system.get_time() < deadline do
-    treesitter.poll_doc(doc)
-    if doc.treesitter and doc.treesitter.status == "ready" then return true end
+    treesitter.poll_buffer(buffer)
+    if buffer.treesitter and buffer.treesitter.status == "ready" then return true end
     coroutine.yield(0.01)
   end
   return false
@@ -106,9 +106,9 @@ end
 
 local function set_view_selections(view, selections)
   view:with_selection_state(function()
-    view.doc:set_selection(selections[1], selections[2], selections[3], selections[4])
+    view.buffer:set_selection(selections[1], selections[2], selections[3], selections[4])
     for i = 5, #selections, 4 do
-      view.doc:set_selections((i - 1) / 4 + 1, selections[i], selections[i + 1], selections[i + 2], selections[i + 3], nil, 0)
+      view.buffer:set_selections((i - 1) / 4 + 1, selections[i], selections[i + 1], selections[i + 2], selections[i + 3], nil, 0)
     end
   end)
 end
@@ -116,7 +116,7 @@ end
 local function view_selections(view)
   return view:with_selection_state(function()
     local selections = {}
-    for i = 1, #view.doc.selections do selections[i] = view.doc.selections[i] end
+    for i = 1, #view.buffer.selections do selections[i] = view.buffer.selections[i] end
     return selections
   end)
 end
@@ -138,9 +138,9 @@ test.describe("autocomplete batch behavior", function()
       local node = root:get_node_for_view(view)
       if node then node:remove_view(root, view) end
     end
-    for _, doc in ipairs(context.docs or {}) do
-      if doc:is_dirty() then doc:clean() end
-      remove_doc(doc)
+    for _, buffer in ipairs(context.buffers or {}) do
+      if buffer:is_dirty() then buffer:clean() end
+      remove_buffer(buffer)
     end
     if context.reset_symbol_index then symbol_index.reset_for_tests() end
     for _, root_path in ipairs(context.temp_roots or {}) do common.rm(root_path, true) end
@@ -157,7 +157,7 @@ test.describe("autocomplete batch behavior", function()
       selections[#selections + 1] = 1
       selections[#selections + 1] = start_col
     end
-    local view, doc = open_editor(context, line)
+    local view, buffer = open_editor(context, line)
     set_view_selections(view, selections)
     autocomplete.add({
       name = "test-overlap-autocomplete-regression",
@@ -168,13 +168,13 @@ test.describe("autocomplete batch behavior", function()
     core.root_panel:on_text_input("z")
 
     test.ok(
-      table.concat(doc.lines) ~= line .. "\n" and not autocomplete.is_open(),
-      "typing should modify the document instead of leaving the autocomplete popup open"
+      table.concat(buffer.lines) ~= line .. "\n" and not autocomplete.is_open(),
+      "typing should modify the buffer instead of leaving the autocomplete popup open"
     )
   end)
 
   test.it("keeps the popup open while deleting letters from the active word", function(context)
-    local view, doc = open_editor(context, "")
+    local view, buffer = open_editor(context, "")
     autocomplete.add({
       name = "test-autocomplete-delete-refresh",
       files = ".*",
@@ -184,19 +184,19 @@ test.describe("autocomplete batch behavior", function()
     core.root_panel:on_text_input("foobar")
     test.ok(autocomplete.is_open(), "expected autocomplete to open while typing")
 
-    test.ok(command.perform("doc:backspace"))
+    test.ok(command.perform("text:backspace"))
     core.root_panel:update()
 
-    test.equal(table.concat(doc.lines), "fooba\n")
+    test.equal(table.concat(buffer.lines), "fooba\n")
     test.ok(autocomplete.is_open(), "expected autocomplete to stay open after deleting a letter")
     test.ok(command.perform("autocomplete:next"))
     test.equal(autocomplete.get_selected_suggestion().text, "foobarx")
 
     for _ = 1, 3 do
-      test.ok(command.perform("doc:backspace"))
+      test.ok(command.perform("text:backspace"))
       core.root_panel:update()
     end
-    test.equal(table.concat(doc.lines), "fo\n")
+    test.equal(table.concat(buffer.lines), "fo\n")
     test.ok(autocomplete.is_open(), "expected autocomplete to stay open below the normal minimum length")
   end)
 
@@ -220,7 +220,7 @@ test.describe("autocomplete batch behavior", function()
     config.plugins.autocomplete.suggestions_scope = "local"
     open_editor(context, "Isn't okay. Won’t happen. 'Quoted'.\n")
 
-    -- The document-symbol cache refreshes asynchronously.
+    -- The buffer-symbol cache refreshes asynchronously.
     coroutine.yield(1.1)
     core.root_panel:on_text_input("Is")
 
@@ -232,7 +232,7 @@ test.describe("autocomplete batch behavior", function()
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "Quoted")
   end)
 
-  test.it("automatically offers only Document words that start with the partial", function(context)
+  test.it("automatically offers only Buffer words that start with the partial", function(context)
     context.autocomplete_min_len = config.plugins.autocomplete.min_len
     context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
     config.plugins.autocomplete.min_len = 3
@@ -242,10 +242,10 @@ test.describe("autocomplete batch behavior", function()
     coroutine.yield(1.1)
     core.root_panel:on_text_input("clo")
 
-    test.ok(not autocomplete.is_open(), "a middle match should not open automatic Document Word Completion")
+    test.ok(not autocomplete.is_open(), "a middle match should not open automatic Buffer Word Completion")
   end)
 
-  test.it("automatically discards Document words shorter than five characters", function(context)
+  test.it("automatically discards Buffer words shorter than five characters", function(context)
     context.autocomplete_min_len = config.plugins.autocomplete.min_len
     context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
     config.plugins.autocomplete.min_len = 3
@@ -259,7 +259,7 @@ test.describe("autocomplete batch behavior", function()
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "testing")
   end)
 
-  test.it("manual Document Word Completion retains fuzzy matches and short words", function(context)
+  test.it("manual Buffer Word Completion retains fuzzy matches and short words", function(context)
     context.autocomplete_min_len = config.plugins.autocomplete.min_len
     context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
     config.plugins.autocomplete.min_len = 3
@@ -294,14 +294,14 @@ test.describe("autocomplete batch behavior", function()
     test.ok(not autocomplete.is_open(), "expected oversized suggestion to be ignored")
   end)
 
-  test.it("completes matching partials at multiple carets in one document change", function(context)
-    local view, doc = open_editor(context, "fo\nfo")
+  test.it("completes matching partials at multiple carets in one buffer change", function(context)
+    local view, buffer = open_editor(context, "fo\nfo")
     set_view_selections(view, {
       1, 3, 1, 3,
       2, 3, 2, 3,
     })
     local changes = 0
-    function doc:on_text_change()
+    function buffer:on_text_change()
       changes = changes + 1
     end
 
@@ -312,7 +312,7 @@ test.describe("autocomplete batch behavior", function()
     })
     test.ok(command.perform("autocomplete:complete"))
 
-    test.equal(table.concat(doc.lines), "foobar\nfoobar\n")
+    test.equal(table.concat(buffer.lines), "foobar\nfoobar\n")
     test.equal(changes, 1)
     test.same(view_selections(view), {
       1, 7, 1, 7,
@@ -402,7 +402,7 @@ test.describe("autocomplete batch behavior", function()
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "resolve_message")
   end)
 
-  test.it("does not apply automatic Document-word filters to Project symbols", function(context)
+  test.it("does not apply automatic Buffer-word filters to Project symbols", function(context)
     local _, active_path = seed_odin_project_symbol(context, "current.odin")
     local symbol = symbol_index.status(core.root_project().path).symbols[1]
     symbol.name = "exec"
@@ -422,14 +422,14 @@ test.describe("autocomplete batch behavior", function()
   test.it("does not duplicate an enum prefix already present at the caret", function(context)
     local _, active_path = seed_odin_project_symbol(context, "current.odin")
     write_file(active_path, "Route_Message_Type.reso")
-    local _, doc = open_file_editor(context, active_path)
+    local _, buffer = open_file_editor(context, active_path)
 
     autocomplete.trigger()
 
     test.ok(autocomplete.is_open())
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "RESOLVE")
     test.ok(command.perform("autocomplete:complete"))
-    test.equal(table.concat(doc.lines), "Route_Message_Type.RESOLVE\n")
+    test.equal(table.concat(buffer.lines), "Route_Message_Type.RESOLVE\n")
   end)
 
   test.it("opens after a container dot and prioritizes that container's members", function(context)
@@ -442,7 +442,7 @@ test.describe("autocomplete batch behavior", function()
       relpath = "other.odin",
     })
     write_file(active_path, "Route_Message_Type")
-    local _, doc = open_file_editor(context, active_path)
+    local _, buffer = open_file_editor(context, active_path)
 
     core.root_panel:on_text_input(".")
 
@@ -453,7 +453,7 @@ test.describe("autocomplete batch behavior", function()
     test.equal(item.text, "RESOLVE")
     test.equal(item.preview_context, "Route_Message_Type")
     test.ok(command.perform("autocomplete:complete"))
-    test.equal(table.concat(doc.lines), "Route_Message_Type.RESOLVE\n")
+    test.equal(table.concat(buffer.lines), "Route_Message_Type.RESOLVE\n")
   end)
 
   test.it("uses the same container context for non-enum members", function(context)
@@ -465,7 +465,7 @@ test.describe("autocomplete batch behavior", function()
     symbol.parent_name = "Point"
     symbol.signature = "int"
     write_file(active_path, "Point")
-    local _, doc = open_file_editor(context, active_path)
+    local _, buffer = open_file_editor(context, active_path)
 
     core.root_panel:on_text_input(".")
 
@@ -475,14 +475,14 @@ test.describe("autocomplete batch behavior", function()
     test.equal(item.preview_context, "Point")
     test.equal(item.icon, "field")
     test.ok(command.perform("autocomplete:complete"))
-    test.equal(table.concat(doc.lines), "Point.count\n")
+    test.equal(table.concat(buffer.lines), "Point.count\n")
   end)
 
-  test.it("uses freshly parsed members from the current Document", function(context)
+  test.it("uses freshly parsed members from the current Buffer", function(context)
     local _, active_path = seed_odin_project_symbol(context, "current.odin")
     write_file(active_path, "Point :: struct { count: int }\nPoint.")
-    local _, doc = open_file_editor(context, active_path)
-    test.ok(wait_treesitter_ready(doc), "expected current Document Tree-sitter data")
+    local _, buffer = open_file_editor(context, active_path)
+    test.ok(wait_treesitter_ready(buffer), "expected current Buffer Tree-sitter data")
 
     autocomplete.trigger()
 
@@ -491,7 +491,7 @@ test.describe("autocomplete batch behavior", function()
     test.equal(item.text, "count")
     test.equal(item.preview_context, "Point")
     test.ok(command.perform("autocomplete:complete"))
-    test.equal(table.concat(doc.lines), "Point :: struct { count: int }\nPoint.count\n")
+    test.equal(table.concat(buffer.lines), "Point :: struct { count: int }\nPoint.count\n")
   end)
 
   test.it("does not force generic suggestions after an unresolved receiver dot", function(context)
@@ -514,14 +514,14 @@ test.describe("autocomplete batch behavior", function()
     symbol.signature = "()"
     symbol.language_id = "cpp"
     write_file(active_path, "MenuGui")
-    local _, doc = open_file_editor(context, active_path)
+    local _, buffer = open_file_editor(context, active_path)
 
     core.root_panel:on_text_input("::")
 
     test.ok(autocomplete.is_open())
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "reset")
     test.ok(command.perform("autocomplete:complete"))
-    test.equal(table.concat(doc.lines), "MenuGui::reset\n")
+    test.equal(table.concat(buffer.lines), "MenuGui::reset\n")
   end)
 
   test.it("does not add an invalid qualifier to unscoped C enum members", function(context)
@@ -532,13 +532,13 @@ test.describe("autocomplete batch behavior", function()
     symbol.parent_name = "Color"
     symbol.language_id = "c"
     write_file(active_path, "RE")
-    local _, doc = open_file_editor(context, active_path)
+    local _, buffer = open_file_editor(context, active_path)
 
     autocomplete.trigger()
 
     test.ok(autocomplete.is_open())
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "RED")
     test.ok(command.perform("autocomplete:complete"))
-    test.equal(table.concat(doc.lines), "RED\n")
+    test.equal(table.concat(buffer.lines), "RED\n")
   end)
 end)

@@ -12,7 +12,7 @@ test.describe("Project path identity", function()
   test.before_each(function(context)
     context.original_projects = core.projects
     context.original_recent_projects = core.recent_projects
-    context.original_docs = core.docs
+    context.original_buffers = core.buffers
     context.original_visited_files = core.visited_files
     context.original_max_visited_files = config.max_visited_files
     context.temp_root = USERDIR
@@ -26,7 +26,7 @@ test.describe("Project path identity", function()
   test.after_each(function(context)
     core.projects = context.original_projects
     core.recent_projects = context.original_recent_projects
-    core.docs = context.original_docs
+    core.buffers = context.original_buffers
     core.visited_files = context.original_visited_files
     config.max_visited_files = context.original_max_visited_files
     if context.temp_root and system.get_file_info(context.temp_root) then
@@ -55,7 +55,7 @@ test.describe("Project path identity", function()
     test.equal(second, first)
   end)
 
-  test.test("deduplicates open docs by Windows path identity", function(context)
+  test.test("deduplicates open buffers by Windows path identity", function(context)
     if PLATFORM ~= "Windows" then return end
 
     local project_path = join_path(context.temp_root, "GLP4")
@@ -64,13 +64,13 @@ test.describe("Project path identity", function()
     fp:write("return 1\n")
     fp:close()
     core.projects = {}
-    core.docs = {}
+    core.buffers = {}
     core.add_project(project_path)
 
-    local first = core.open_doc(file_path)
-    local second = core.open_doc(file_path:lower())
+    local first = core.open_buffer(file_path)
+    local second = core.open_buffer(file_path:lower())
 
-    test.equal(#core.docs, 1)
+    test.equal(#core.buffers, 1)
     test.equal(second, first)
   end)
 
@@ -129,22 +129,22 @@ test.describe("Project path identity", function()
     test.equal(core.visited_files[2].last_edited, 300)
   end)
 
-  test.test("updates Recent File edit metadata when its Document changes", function(context)
+  test.test("updates Recent File edit metadata when its Buffer changes", function(context)
     local path = join_path(context.temp_root, "edited.txt")
     local fp = assert(io.open(path, "wb"))
     fp:write("before\n")
     fp:close()
     core.visited_files = {}
 
-    local doc = core.open_doc(path)
+    local buffer = core.open_buffer(path)
     core.set_visited(path, 100)
-    doc:insert(1, 1, "after ")
+    buffer:insert(1, 1, "after ")
 
     test.ok((core.visited_files[1].last_edited or 0) > 100)
-    doc:clean()
-    for i = #core.docs, 1, -1 do
-      if core.docs[i] == doc then table.remove(core.docs, i) end
+    buffer:clean()
+    for i = #core.buffers, 1, -1 do
+      if core.buffers[i] == buffer then table.remove(core.buffers, i) end
     end
-    doc:on_close()
+    buffer:on_close()
   end)
 end)

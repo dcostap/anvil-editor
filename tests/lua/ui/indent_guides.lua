@@ -1,33 +1,33 @@
 local style = require "core.style"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local test = require "core.test"
 
 require "plugins.indent_guides"
 
-local function set_text(doc, text)
-  doc.lines = {}
+local function set_text(buffer, text)
+  buffer.lines = {}
   for line in (text .. "\n"):gmatch("(.-\n)") do
-    doc.lines[#doc.lines + 1] = line
+    buffer.lines[#buffer.lines + 1] = line
   end
-  if #doc.lines == 0 then doc.lines[1] = "\n" end
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+  if #buffer.lines == 0 then buffer.lines[1] = "\n" end
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
 local function new_view(text)
-  local doc = Doc()
-  set_text(doc, text or "")
-  local view = DocView(doc)
+  local buffer = Buffer()
+  set_text(buffer, text or "")
+  local view = TextView(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 80, 200
-  return doc, view
+  return buffer, view
 end
 
 test.describe("indent guide drawing", function()
   test.it("batches visible guide rects with draw_rect_grid", function()
-    local doc, view = new_view(string.rep(" ", 1000) .. "x")
+    local buffer, view = new_view(string.rep(" ", 1000) .. "x")
     local rect_grid_calls = 0
     local guide_rect_calls = 0
     local old_draw_rect = renderer.draw_rect
@@ -55,6 +55,6 @@ test.describe("indent guide drawing", function()
 
     test.ok(rect_grid_calls > 0, "expected indent guides to use renderer.draw_rect_grid")
     test.equal(guide_rect_calls, 0)
-    doc:on_close()
+    buffer:on_close()
   end)
 end)

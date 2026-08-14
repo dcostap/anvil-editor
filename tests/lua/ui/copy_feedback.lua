@@ -1,19 +1,19 @@
 local core = require "core"
 local command = require "core.command"
 local copy_feedback = require "core.copy_feedback"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local style = require "core.style"
 local test = require "core.test"
 
 local function make_view(text)
-  local doc = Doc(nil, nil, true)
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
-  local view = DocView(doc)
+  local buffer = Buffer(nil, nil, true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  local view = TextView(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 400, 200
-  return view, doc
+  return view, buffer
 end
 
 test.describe("Copy Feedback Highlight", function()
@@ -28,22 +28,22 @@ test.describe("Copy Feedback Highlight", function()
       local root = core.root_panel.root_node
       local node = root:get_node_for_view(context.view)
       if node then node:remove_view(root, context.view) end
-      context.doc:on_close()
+      context.buffer:on_close()
     end
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
-  test.it("briefly marks the exact Document View text copied by doc:copy", function(context)
-    local view, doc = make_view("alpha")
-    context.view, context.doc = view, doc
+  test.it("briefly marks the exact Text View text copied by buffer:copy", function(context)
+    local view, buffer = make_view("alpha")
+    context.view, context.buffer = view, buffer
     local node = core.root_panel:get_active_node_default()
     node:add_view(view)
     node:set_active_view(view)
     view:with_selection_state(function()
-      doc:set_selection(1, 2, 1, 5)
+      buffer:set_selection(1, 2, 1, 5)
     end)
 
-    test.ok(command.perform("doc:copy"), "expected copy command to run")
+    test.ok(command.perform("text:copy"), "expected copy command to run")
     test.equal(system.get_clipboard(), "lph")
 
     local old_rect = renderer.draw_rect

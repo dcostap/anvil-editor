@@ -4,8 +4,9 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local core_syntax = require "core.syntax"
-local DocView = require "core.docview"
-local Doc = require "core.doc"
+local TextView = require "core.textview"
+local Editor = require "core.editor"
+local Buffer = require "core.buffer"
 
 local detectindent = {}
 local cache = setmetatable({}, { __mode = "k" })
@@ -331,12 +332,12 @@ local function get_non_empty_lines(syntax, lines)
 end
 
 
-local function detect_indent_stat(doc)
+local function detect_indent_stat(buffer)
   local stat = {}
   local tab_count = 0
   local runs = 1
   local max_lines = auto_detect_max_lines
-  for i, text in get_non_empty_lines(doc.syntax, doc.lines) do
+  for i, text in get_non_empty_lines(buffer.syntax, buffer.lines) do
     local spaces = text:match("^ +")
     if spaces then table.insert(stat, spaces:len()) end
     local tabs = text:match("^\t+")
@@ -356,54 +357,54 @@ local function detect_indent_stat(doc)
   end
 end
 
-function detectindent.detect(doc)
-  return detect_indent_stat(doc)
+function detectindent.detect(buffer)
+  return detect_indent_stat(buffer)
 end
 
 
-local function update_cache(doc)
-  local type, size, score = detect_indent_stat(doc)
+local function update_cache(buffer)
+  local type, size, score = detect_indent_stat(buffer)
   local score_threshold = 2
   if score < score_threshold then
     -- use default values
     type = config.tab_type
     size = config.indent_size
   end
-  cache[doc] = { type = type, size = size, confirmed = (score >= score_threshold) }
-  doc.indent_info = cache[doc]
+  cache[buffer] = { type = type, size = size, confirmed = (score >= score_threshold) }
+  buffer.indent_info = cache[buffer]
   core.log_quiet(
     "Indent detection for %s: syntax=%s type=%s size=%d score=%d confirmed=%s",
-    doc:get_name(), tostring(doc.syntax and doc.syntax.name), type, size, score,
+    buffer:get_name(), tostring(buffer.syntax and buffer.syntax.name), type, size, score,
     tostring(score >= score_threshold)
   )
 end
 
--- Override DocView to ensure we only apply detectindent to visible doc views.
-local docview_new = DocView.new
-function DocView:new(...)
-  docview_new(self, ...)
+-- Override TextView to ensure we only apply detectindent to visible Text Views.
+local textview_new = TextView.new
+function TextView:new(...)
+  textview_new(self, ...)
   self.init_detectindent = true
 end
 
-local docview_draw = DocView.draw
-function DocView:draw(...)
-  docview_draw(self, ...)
+local textview_draw = TextView.draw
+function TextView:draw(...)
+  textview_draw(self, ...)
   if self.init_detectindent then
-    -- perform detection only to ui loaded documents
-    if #core.get_views_referencing_doc(self.doc) > 0 then
-      local type, size, confirmed = self.doc:get_indent_info()
+    -- perform detection only for Buffers loaded in the UI
+    if #core.get_views_referencing_buffer(self.buffer) > 0 then
+      local type, size, confirmed = self.buffer:get_indent_info()
       if not confirmed then
-        update_cache(self.doc)
+        update_cache(self.buffer)
       else
-        cache[self.doc] = { type = type, size = size, confirmed = confirmed }
+        cache[self.buffer] = { type = type, size = size, confirmed = confirmed }
       end
     end
     self.init_detectindent = nil
   end
 end
 
-local clean = Doc.clean
-function Doc:clean(...)
+local clean = Buffer.clean
+function Buffer:clean(...)
   clean(self, ...)
   if cache[self] then
     local _, _, confirmed = self:get_indent_info()
@@ -413,29 +414,29 @@ function Doc:clean(...)
   end
 end
 
-local on_close = Doc.on_close
-function Doc:on_close()
+local on_close = Buffer.on_close
+function Buffer:on_close()
   on_close(self)
   if cache[self] then cache[self] = nil end
 end
 
 
-local function set_indent_type(doc, type)
-  local _, indent_size = doc:get_indent_info()
-  cache[doc] = {
+local function set_indent_type(buffer, type)
+  local _, indent_size = buffer:get_indent_info()
+  cache[buffer] = {
     type = type,
     size = indent_size,
     confirmed = true
   }
-  doc.indent_info = cache[doc]
+  buffer.indent_info = cache[buffer]
 end
 
 local function set_indent_type_command(dv)
   core.global_prompt_bar:enter("Specify indent style for this file", {
     submit = function(value)
-      local doc = dv.doc
+      local buffer = dv.buffer
       value = value:lower()
-      set_indent_type(doc, value == "tabs" and "hard" or "soft")
+      set_indent_type(buffer, value == "tabs" and "hard" or "soft")
     end,
     suggest = function(text)
       return common.fuzzy_match({"tabs", "spaces"}, text)
@@ -448,22 +449,22 @@ local function set_indent_type_command(dv)
 end
 
 
-local function set_indent_size(doc, size)
-  local indent_type = doc:get_indent_info()
-  cache[doc] = {
+local function set_indent_size(buffer, size)
+  local indent_type = buffer:get_indent_info()
+  cache[buffer] = {
     type = indent_type,
     size = size,
     confirmed = true
   }
-  doc.indent_info = cache[doc]
+  buffer.indent_info = cache[buffer]
 end
 
 local function set_indent_size_command(dv)
   core.global_prompt_bar:enter("Specify indent size for current file", {
     submit = function(value)
       value = math.floor(tonumber(value))
-      local doc = dv.doc
-      set_indent_size(doc, value)
+      local buffer = dv.buffer
+      set_indent_size(buffer, value)
     end,
     validate = function(value)
       value = tonumber(value)
@@ -473,30 +474,30 @@ local function set_indent_size_command(dv)
 end
 
 
-command.add("core.docview", {
+command.add("core.textview", {
   ["indent:set-file-indent-type"] = set_indent_type_command,
   ["indent:set-file-indent-size"] = set_indent_size_command
 })
 
 command.add(
   function()
-    return core.active_view:is(DocView)
-      and cache[core.active_view.doc]
-      and cache[core.active_view.doc].type == "soft"
+    return core.active_view:extends(Editor)
+      and cache[core.active_view.buffer]
+      and cache[core.active_view.buffer].type == "soft"
   end, {
   ["indent:switch-file-to-tabs-indentation"] = function()
-    set_indent_type(core.active_view.doc, "hard")
+    set_indent_type(core.active_view.buffer, "hard")
   end
 })
 
 command.add(
   function()
-    return core.active_view:is(DocView)
-      and cache[core.active_view.doc]
-      and cache[core.active_view.doc].type == "hard"
+    return core.active_view:extends(Editor)
+      and cache[core.active_view.buffer]
+      and cache[core.active_view.buffer].type == "hard"
   end, {
   ["indent:switch-file-to-spaces-indentation"] = function()
-    set_indent_type(core.active_view.doc, "soft")
+    set_indent_type(core.active_view.buffer, "soft")
   end
 })
 

@@ -19,10 +19,10 @@ end
 local Highlighter = Object:extend()
 
 local function invalidate_line_packets(highlighter, line, count)
-  local packets = package.loaded["core.docview_line_packets"]
-  if packets and packets.invalidate_document and highlighter.doc then
-    packets.invalidate_document(
-      highlighter.doc, line or 1,
+  local packets = package.loaded["core.textview_line_packets"]
+  if packets and packets.invalidate_buffer and highlighter.buffer then
+    packets.invalidate_buffer(
+      highlighter.buffer, line or 1,
       line and (line + math.max(0, count or 0)) or math.huge
     )
   end
@@ -30,8 +30,8 @@ end
 
 function Highlighter:__tostring() return "Highlighter" end
 
-function Highlighter:new(doc)
-  self.doc = doc
+function Highlighter:new(buffer)
+  self.buffer = buffer
   self.running = false
   self:reset()
 end
@@ -41,11 +41,11 @@ function Highlighter:start()
   if self.running then return end
   self.running = true
   core.add_thread(function()
-    local views = #core.get_views_referencing_doc(self.doc)
+    local views = #core.get_views_referencing_buffer(self.buffer)
     local prev_line = 0
     while self.first_invalid_line <= self.max_wanted_line do
-      if not self.doc then return end
-      local line_count = #self.doc.lines
+      if not self.buffer then return end
+      local line_count = #self.buffer.lines
       if self.first_invalid_line > line_count then break end
       local max = math.min(self.first_invalid_line + 40, self.max_wanted_line, line_count)
       local line
@@ -54,11 +54,11 @@ function Highlighter:start()
         local prev = (i > 1) and self.lines[i - 1]
         local state = prev and prev.state
         line = self.lines[i]
-        if line and line.resume and (line.init_state ~= state or line.text ~= self.doc:get_utf8_line(i)) then
+        if line and line.resume and (line.init_state ~= state or line.text ~= self.buffer:get_utf8_line(i)) then
           -- Reset the progress if no longer valid
           line.resume = nil
         end
-        if not (line and line.init_state == state and line.text == self.doc:get_utf8_line(i) and not line.resume) then
+        if not (line and line.init_state == state and line.text == self.buffer:get_utf8_line(i) and not line.resume) then
           retokenized_from = retokenized_from or i
           self.lines[i] = self:tokenize_line(i, state, line and line.resume)
           if not self.lines[i] then
@@ -92,10 +92,10 @@ function Highlighter:start()
       core.redraw = true
       coroutine.yield()
 
-      -- stop tokenizer if the doc was originally referenced by a docview
+      -- stop tokenizer if the buffer was originally referenced by a textview
       -- but it was closed, helps when closing files that have huge lines
       -- and tokenization is taking a long time
-      if views > 0 and #core.get_views_referencing_doc(self.doc) == 0 then
+      if views > 0 and #core.get_views_referencing_buffer(self.buffer) == 0 then
         break
       end
     end
@@ -130,7 +130,7 @@ end
 
 function Highlighter:invalidate(idx)
   self.first_invalid_line = math.min(self.first_invalid_line, idx)
-  set_max_wanted_lines(self, math.min(self.max_wanted_line, #self.doc.lines))
+  set_max_wanted_lines(self, math.min(self.max_wanted_line, #self.buffer.lines))
 end
 
 function Highlighter:insert_notify(line, n)
@@ -172,7 +172,7 @@ function Highlighter:batch_notify(changed_ranges)
     end
   end
   if not first_line then return end
-  self:invalidate_render_cache(first_line, math.min(#self.doc.lines, last_line or first_line))
+  self:invalidate_render_cache(first_line, math.min(#self.buffer.lines, last_line or first_line))
   self:invalidate(first_line)
   if core and core.log_quiet and applied > 1 then
     core.log_quiet("Highlighter batch update shifted %d changed range(s) from line %d", applied, first_line)
@@ -182,38 +182,38 @@ end
 function Highlighter:update_notify(line, n)
   -- plugins can hook here to be notified that lines have been retokenized
   invalidate_line_packets(self, line, n)
-  self.doc:clear_cache(line, n)
+  self.buffer:clear_cache(line, n)
 end
 
 function Highlighter:invalidate_render_cache(first_line, last_line)
   self.render_line_frame_cache = nil
   local intelligence = get_language_intelligence()
-  if intelligence and self.doc then
-    intelligence.invalidate_render_cache(self.doc, first_line, last_line)
+  if intelligence and self.buffer then
+    intelligence.invalidate_render_cache(self.buffer, first_line, last_line)
   end
-  if self.doc and first_line then
-    self.doc:clear_cache(first_line, (last_line or first_line) - first_line)
-  elseif self.doc then
-    self.doc:clear_cache(1, #self.doc.lines)
+  if self.buffer and first_line then
+    self.buffer:clear_cache(first_line, (last_line or first_line) - first_line)
+  elseif self.buffer then
+    self.buffer:clear_cache(1, #self.buffer.lines)
   end
 end
 
 
 function Highlighter:tokenize_line(idx, state, resume)
-  local text = self.doc:get_utf8_line(idx)
+  local text = self.buffer:get_utf8_line(idx)
   if not text then return nil end
   local res = {}
   res.init_state = state
   res.text = text
-  res.tokens, res.state, res.resume = tokenizer.tokenize(self.doc.syntax, res.text, state, resume)
+  res.tokens, res.state, res.resume = tokenizer.tokenize(self.buffer.syntax, res.text, state, resume)
   return res
 end
 
 
 function Highlighter:get_line(idx)
-  if not self.doc then return {text="", tokens={"normal", ""}} end
+  if not self.buffer then return {text="", tokens={"normal", ""}} end
   local line = self.lines[idx]
-  if not line or line.text ~= self.doc:get_utf8_line(idx) then
+  if not line or line.text ~= self.buffer:get_utf8_line(idx) then
     local prev = self.lines[idx - 1]
     line = self:tokenize_line(idx, prev and prev.state)
     if not line then return {text="", tokens={"normal", ""}} end
@@ -230,13 +230,13 @@ function Highlighter:each_token(idx, scol)
 end
 
 function Highlighter:get_render_line(idx)
-  if not self.doc then return {text="", tokens={"normal", ""}, source="tokenizer"} end
+  if not self.buffer then return {text="", tokens={"normal", ""}, source="tokenizer"} end
 
   local function make_line(text, tokens, source)
     return { text = text, tokens = tokens, source = source }
   end
 
-  local text = self.doc:get_utf8_line(idx) or ""
+  local text = self.buffer:get_utf8_line(idx) or ""
   local frame_cache
   local frame_id = core.render_frame_active and core.render_frame_id
   if frame_id then
@@ -266,7 +266,7 @@ function Highlighter:get_render_line(idx)
 
   local intelligence = get_language_intelligence()
   if intelligence then
-    local tokens, _, provider_id = intelligence.render_tokens(self.doc, idx)
+    local tokens, _, provider_id = intelligence.render_tokens(self.buffer, idx)
     if tokens then
       return finish(text, tokens, provider_id or "language-intelligence")
     end

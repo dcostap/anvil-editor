@@ -2,10 +2,11 @@
 
 local core = require "core"
 local style = require "core.style"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
+local Editor = require "core.editor"
 local linewrapping = require "core.linewrapping"
-local line_packets = require "core.docview_line_packets"
+local line_packets = require "core.textview_line_packets"
 local command = require "core.command"
 
 local function perf_scope_begin(name)
@@ -82,8 +83,8 @@ local function update_selected_state(self)
   then
     local vl1, vl2 = self:get_visible_line_range()
     local cache_key = table.concat({
-      tostring(self.doc:get_change_id()),
-      tostring(self.doc.selection_revision or 0),
+      tostring(self.buffer:get_change_id()),
+      tostring(self.buffer.selection_revision or 0),
       tostring(vl1),
       tostring(vl2),
     }, ":")
@@ -91,7 +92,7 @@ local function update_selected_state(self)
 
     local selections = {}
     local col1, col2
-    for _, l1, c1, l2, c2 in self.doc:get_selections(true) do
+    for _, l1, c1, l2, c2 in self.buffer:get_selections(true) do
       if l1 > vl2 then break end
       if l2 < vl1 then goto skip end
       -- everything selected treat as not show_selected_only
@@ -105,27 +106,27 @@ local function update_selected_state(self)
       if l1 == l2 and l1 >= vl1 and l1 <= vl2 then
         col1, col2 = self:get_visible_cols_range(l1, 20)
         c1, c2 = math.max(col1, c1), math.min(col2, c2)
-        selections[l1] = {c1, c2, self.doc.lines[l1]:sub(c1, c2)}
+        selections[l1] = {c1, c2, self.buffer.lines[l1]:sub(c1, c2)}
       -- multiple lines selection
       elseif l1 ~= l2 then
         -- first line
         if l1 >= vl1 and l1 <= vl2 then
           col1, col2 = self:get_visible_cols_range(l1, 20)
           col1 = math.max(c1, col1)
-          selections[l1] = {col1, col2, self.doc.lines[l1]:sub(col1, col2)}
+          selections[l1] = {col1, col2, self.buffer.lines[l1]:sub(col1, col2)}
         end
         -- lines in between
         if l2 - l1 > 1 then
           for idx=l1+1, l2-1 do
             col1, col2 = self:get_visible_cols_range(idx, 20)
-            selections[idx] = {col1, col2, self.doc.lines[idx]:sub(col1, col2)}
+            selections[idx] = {col1, col2, self.buffer.lines[idx]:sub(col1, col2)}
           end
         end
         -- last line
         if l2 >= vl1 and l2 <= vl2 then
           col1, col2 = self:get_visible_cols_range(l2, 20)
           col2 = math.min(c2, col2)
-          selections[l2] = {col1, col2, self.doc.lines[l2]:sub(col1, col2)}
+          selections[l2] = {col1, col2, self.buffer.lines[l2]:sub(col1, col2)}
         end
       end
       ::skip::
@@ -141,14 +142,14 @@ end
 
 local function get_line_runs(self, idx)
   local cache = self.drawwhitespace_cache
-  local change_id = self.doc:get_change_id()
+  local change_id = self.buffer:get_change_id()
   if not cache or cache.change_id ~= change_id then
     cache = { change_id = change_id, lines = {} }
     self.drawwhitespace_cache = cache
   end
 
   local entry = cache.lines[idx]
-  local text = self.doc.lines[idx]
+  local text = self.buffer.lines[idx]
   if entry and entry.text == text then return entry end
 
   local line_len = #text
@@ -362,7 +363,7 @@ end
 
 local function get_line_x_cache(self, idx, entry)
   local font = self:get_font()
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   local font_size = font:get_size()
   local fast_space_width
   local fast_tab_width
@@ -380,7 +381,7 @@ local function get_line_x_cache(self, idx, entry)
   if entry.ascii and not self.wrapped_settings then
     local can_use_fast_widths = not syntax_fonts_key
     if not can_use_fast_widths then
-      local hline = self.doc.highlighter:get_render_line(idx)
+      local hline = self.buffer.highlighter:get_render_line(idx)
       tokens = hline and hline.tokens
       can_use_fast_widths = true
       for i = 1, #(tokens or {}), 2 do
@@ -398,7 +399,7 @@ local function get_line_x_cache(self, idx, entry)
     end
   end
   if not fast_space_width then
-    local hline = tokens and nil or self.doc.highlighter:get_render_line(idx)
+    local hline = tokens and nil or self.buffer.highlighter:get_render_line(idx)
     tokens = tokens or (hline and hline.tokens)
   end
 
@@ -539,7 +540,7 @@ local function draw_tab_markers(self, idx, x, font, ty, substitution, start_col,
   if marker == "" then return end
 
   local clip_left, clip_right = current_clip_x_range(self)
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   indent_size = indent_size or 2
   local marker_width, tab_width = cached_tab_metrics(font, marker, indent_size)
   local batch_tabs = tab_width > 0 and marker_width < tab_width
@@ -635,7 +636,7 @@ local function append_packet_space_markers(
   if end_x <= start_x then return end
   local clip_left, clip_right = current_clip_x_range(self)
   if end_x <= clip_left or start_x >= clip_right then return end
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   indent_size = indent_size or 2
 
   if marker_matches_space_advance(font, marker) then
@@ -674,7 +675,7 @@ local function append_packet_tab_markers(
   local marker = substitution.sub or ""
   if marker == "" then return end
   local clip_left, clip_right = current_clip_x_range(self)
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   indent_size = indent_size or 2
   local marker_width, tab_width = cached_tab_metrics(
     font, marker, indent_size
@@ -718,7 +719,7 @@ local function append_packet_whitespace(builder, self, idx, context)
       self, row_idx + 1
     )
     local row_continues = next_line == idx
-    if not row_continues then row_end_col = #self.doc.lines[idx] end
+    if not row_continues then row_end_col = #self.buffer.lines[idx] end
     local row_y = context.screen_y
       + self:get_visual_row_y_offset(row_idx)
       - self:get_visual_row_y_offset(context.first_idx)
@@ -789,7 +790,7 @@ local function draw_wrapped_whitespace(self, idx, x, y, font, entry)
     local _, row_start_col = linewrapping.get_idx_line_col(self, row_idx)
     local row_next_line, row_end_col = linewrapping.get_idx_line_col(self, row_idx + 1)
     local row_continues_line = row_next_line == idx
-    if not row_continues_line then row_end_col = #self.doc.lines[idx] end
+    if not row_continues_line then row_end_col = #self.buffer.lines[idx] end
     local row_y = y
       + self:get_visual_row_y_offset(row_idx)
       - self:get_visual_row_y_offset(first_idx)
@@ -829,14 +830,14 @@ local function draw_legacy_whitespace(self, idx, x, y)
   if
     not drawwhitespace.enabled
     or
-    getmetatable(self) ~= DocView
+    (getmetatable(self) ~= TextView and getmetatable(self) ~= Editor)
     or
     markdown_live_mode(self)
   then
     return
   end
 
-  local line_text = self.doc.lines[idx]
+  local line_text = self.buffer.lines[idx]
   if not line_text or not line_text:find("[ \t]") then
     return
   end
@@ -876,7 +877,7 @@ local function draw_legacy_whitespace(self, idx, x, y)
   else
     if not self.drawwhitespace_selections[idx] then goto not_selected end
     col1, col2, text = table.unpack(self.drawwhitespace_selections[idx])
-    local line_len = #self.doc.lines[idx]
+    local line_len = #self.buffer.lines[idx]
     -- TODO: Selected-only mode still builds full-line whitespace/x-offset
     -- caches before scanning the selected substring; consider a selection-local
     -- path if very long selected lines become hot again.

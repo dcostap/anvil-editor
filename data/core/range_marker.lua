@@ -1,6 +1,6 @@
 local core = require "core"
 local common = require "core.common"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 
 local range_marker = {}
 
@@ -62,8 +62,8 @@ local function offset_to_position_for_lines(lines, starts, total, offset)
   return #lines, #(lines[#lines] or "")
 end
 
-local function offsets_for_doc_range(doc, line1, col1, line2, col2)
-  local lines = doc and doc.lines or { "\n" }
+local function offsets_for_buffer_range(buffer, line1, col1, line2, col2)
+  local lines = buffer and buffer.lines or { "\n" }
   line1, col1 = sanitize_position_in_lines(lines, line1 or 1, col1 or 1)
   line2, col2 = sanitize_position_in_lines(lines, line2 or line1, col2 or col1)
   local start_offset = position_to_offset_for_lines(lines, line1, col1)
@@ -90,7 +90,7 @@ end
 
 function Marker:range()
   if not self.valid then return nil end
-  local lines = self.doc and self.doc.lines or { "\n" }
+  local lines = self.buffer and self.buffer.lines or { "\n" }
   local starts, total = line_starts_for(lines)
   local line1, col1 = offset_to_position_for_lines(lines, starts, total, self.start_offset)
   local line2, col2 = offset_to_position_for_lines(lines, starts, total, self.end_offset)
@@ -105,7 +105,7 @@ function Marker:range()
 end
 
 function Marker:set_range(line1, col1, line2, col2)
-  local start_offset, end_offset = offsets_for_doc_range(self.doc, line1, col1, line2, col2)
+  local start_offset, end_offset = offsets_for_buffer_range(self.buffer, line1, col1, line2, col2)
   local changed = not self.valid or self.start_offset ~= start_offset or self.end_offset ~= end_offset
   self.start_offset = start_offset
   self.end_offset = end_offset
@@ -205,7 +205,7 @@ function Marker:update_for_transaction(transaction)
   if not self.valid then return false end
   if transaction and transaction.full_snapshot then
     if not transaction.content_changed then return false end
-    self:invalidate("document-reloaded")
+    self:invalidate("buffer-reloaded")
     return true
   end
   local edits = transaction and transaction.edits or {}
@@ -238,7 +238,7 @@ function Marker:update_for_transaction(transaction)
     s, e = ns, ne
     delta = delta + len - (b - a)
   end
-  local lines = self.doc and self.doc.lines or { "\n" }
+  local lines = self.buffer and self.buffer.lines or { "\n" }
   local _, total = line_starts_for(lines)
   s = common.clamp(s, 0, total)
   e = common.clamp(e, 0, total)
@@ -252,25 +252,25 @@ function Marker:update_for_transaction(transaction)
   return changed
 end
 
-local function doc_store(doc)
-  local store = stores[doc]
+local function buffer_store(buffer)
+  local store = stores[buffer]
   if not store then
     store = { markers = {} }
-    stores[doc] = store
+    stores[buffer] = store
   end
   return store
 end
 
-function range_marker.markers_for_doc(doc)
-  return doc_store(doc).markers
+function range_marker.markers_for_buffer(buffer)
+  return buffer_store(buffer).markers
 end
 
-function range_marker.new(doc, opts)
+function range_marker.new(buffer, opts)
   opts = opts or {}
-  assert(doc, "range marker requires a document")
-  local start_offset, end_offset = offsets_for_doc_range(doc, opts.line1, opts.col1, opts.line2, opts.col2)
+  assert(buffer, "range marker requires a buffer")
+  local start_offset, end_offset = offsets_for_buffer_range(buffer, opts.line1, opts.col1, opts.line2, opts.col2)
   local marker = setmetatable({
-    doc = doc,
+    buffer = buffer,
     start_offset = start_offset,
     end_offset = end_offset,
     valid = true,
@@ -284,7 +284,7 @@ function range_marker.new(doc, opts)
     data = opts.data,
     on_change = opts.on_change,
   }, Marker)
-  local markers = doc_store(doc).markers
+  local markers = buffer_store(buffer).markers
   markers[#markers + 1] = marker
   bump_generation()
   notify_marker_changed(marker, "new")
@@ -295,8 +295,8 @@ range_marker.add = range_marker.new
 
 function range_marker.remove(marker)
   if not marker then return false end
-  local doc = marker.doc
-  local store = doc and stores[doc]
+  local buffer = marker.buffer
+  local store = buffer and stores[buffer]
   if store then
     for i = #store.markers, 1, -1 do
       if store.markers[i] == marker then
@@ -315,26 +315,26 @@ function range_marker.remove(marker)
   return was_valid
 end
 
-function range_marker.update_doc(doc, transaction)
-  local store = stores[doc]
+function range_marker.update_buffer(buffer, transaction)
+  local store = stores[buffer]
   if not store then return 0 end
   local changed = 0
   for _, marker in ipairs(store.markers) do
     if marker:update_for_transaction(transaction) then changed = changed + 1 end
   end
   if changed > 0 and core and core.log_quiet then
-    core.log_quiet("Updated %d range marker(s) for %s", changed, doc:get_name())
+    core.log_quiet("Updated %d range marker(s) for %s", changed, buffer:get_name())
   end
   return changed
 end
 
-if Doc.register_text_transaction_handler then
-  Doc.register_text_transaction_handler("range_marker", range_marker.update_doc)
+if Buffer.register_text_transaction_handler then
+  Buffer.register_text_transaction_handler("range_marker", range_marker.update_buffer)
 else
-  local old_on_text_transaction = Doc.on_text_transaction
-  function Doc:on_text_transaction(transaction)
+  local old_on_text_transaction = Buffer.on_text_transaction
+  function Buffer:on_text_transaction(transaction)
     old_on_text_transaction(self, transaction)
-    range_marker.update_doc(self, transaction)
+    range_marker.update_buffer(self, transaction)
   end
 end
 

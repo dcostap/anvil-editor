@@ -49,7 +49,7 @@ test.describe("Markdown shared parser", function()
 
   test.it("indexes heading anchors and block ids", function()
     local parsed = parser.parse("# Repeated Heading\n\n## Repeated Heading\n\nA block ^quote-of-the-day\nSee [[^not-a-definition]]")
-    local index = anchors.index_document(parsed)
+    local index = anchors.index_buffer(parsed)
     test.equal(index.headings[1].slug, "repeated-heading")
     test.equal(index.headings[2].slug, "repeated-heading-1")
     test.equal(index.headings[1].path_text, "Repeated Heading")

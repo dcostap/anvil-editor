@@ -1,24 +1,24 @@
 local core = require "core"
 local command = require "core.command"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local test = require "core.test"
 
 require "plugins.sequential_numbers"
 
-local function set_text(doc, text)
-  doc.lines = {}
+local function set_text(buffer, text)
+  buffer.lines = {}
   for line in (text .. "\n"):gmatch("(.-\n)") do
-    doc.lines[#doc.lines + 1] = line
+    buffer.lines[#buffer.lines + 1] = line
   end
-  if #doc.lines == 0 then doc.lines[1] = "\n" end
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+  if #buffer.lines == 0 then buffer.lines[1] = "\n" end
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
-local function text(doc)
-  return table.concat(doc.lines)
+local function text(buffer)
+  return table.concat(buffer.lines)
 end
 
 local function selection(view)
@@ -26,28 +26,28 @@ local function selection(view)
 end
 
 local function new_view(context, source)
-  local doc = Doc()
-  set_text(doc, source)
-  local view = DocView(doc)
-  context.docs = context.docs or {}
-  context.docs[#context.docs + 1] = doc
+  local buffer = Buffer()
+  set_text(buffer, source)
+  local view = TextView(buffer)
+  context.buffers = context.buffers or {}
+  context.buffers[#context.buffers + 1] = buffer
   core.set_active_view(view)
-  return view, doc
+  return view, buffer
 end
 
 local function set_view_selections(view, selections)
   view:with_selection_state(function()
-    local doc = view.doc
-    doc.selections = {}
+    local buffer = view.buffer
+    buffer.selections = {}
     for i = 1, #selections, 4 do
-      doc:set_selections((i - 1) / 4 + 1, selections[i], selections[i + 1], selections[i + 2], selections[i + 3], nil, i == 1 and nil or 0)
+      buffer:set_selections((i - 1) / 4 + 1, selections[i], selections[i + 1], selections[i + 2], selections[i + 3], nil, i == 1 and nil or 0)
     end
-    doc.last_selection = 1
+    buffer.last_selection = 1
   end)
 end
 
 local function run_command(initial, stride)
-  test.ok(command.perform("doc:insert-sequential-numbers-on-cursors"))
+  test.ok(command.perform("text:insert-sequential-numbers-on-cursors"))
   test.equal(core.active_view, core.global_prompt_bar)
   core.global_prompt_bar:set_text(tostring(initial))
   core.global_prompt_bar:submit()
@@ -68,8 +68,8 @@ test.describe("Sequential Numbers", function()
     if core.active_view == core.global_prompt_bar then
       core.global_prompt_bar:exit(false)
     end
-    for _, doc in ipairs(context.docs or {}) do
-      doc:on_close()
+    for _, buffer in ipairs(context.buffers or {}) do
+      buffer:on_close()
     end
     if context.previous_active_view then
       core.set_active_view(context.previous_active_view)
@@ -77,20 +77,20 @@ test.describe("Sequential Numbers", function()
   end)
 
   test.it("inserts increasing numbers at collapsed carets", function(context)
-    local view, doc = new_view(context, "a b c")
+    local view, buffer = new_view(context, "a b c")
     set_view_selections(view, {
       1, 1, 1, 1,
       1, 3, 1, 3,
       1, 5, 1, 5,
     })
     local changes = 0
-    function doc:on_text_change()
+    function buffer:on_text_change()
       changes = changes + 1
     end
 
     run_command(10, 5)
 
-    test.equal(text(doc), "10a 15b 20c\n")
+    test.equal(text(buffer), "10a 15b 20c\n")
     test.equal(changes, 1)
     test.same(selection(view), {
       1, 3, 1, 3,
@@ -100,7 +100,7 @@ test.describe("Sequential Numbers", function()
   end)
 
   test.it("replaces selected ranges with decreasing numbers", function(context)
-    local view, doc = new_view(context, "xx yy zz")
+    local view, buffer = new_view(context, "xx yy zz")
     set_view_selections(view, {
       1, 1, 1, 3,
       1, 4, 1, 6,
@@ -109,7 +109,7 @@ test.describe("Sequential Numbers", function()
 
     run_command(3, -1)
 
-    test.equal(text(doc), "3 2 1\n")
+    test.equal(text(buffer), "3 2 1\n")
     test.same(selection(view), {
       1, 2, 1, 2,
       1, 4, 1, 4,

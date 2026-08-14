@@ -1,7 +1,7 @@
 local core = require "core"
 local config = require "core.config"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -13,16 +13,16 @@ local function write_file(path, content)
 end
 
 local function make_view(text)
-  local doc = Doc(nil, nil, true)
-  doc:insert(1, 1, text)
-  doc:clear_undo_redo()
-  local view = DocView(doc)
+  local buffer = Buffer(nil, nil, true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  local view = TextView(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 400, 200
-  return view, doc
+  return view, buffer
 end
 
-test.describe("DocView decoration providers", function()
+test.describe("TextView decoration providers", function()
   test.it("draws line backgrounds and inline ranges in provider order", function()
     local view = make_view("alpha\nbeta")
     local old_rect = renderer.draw_rect
@@ -179,7 +179,7 @@ test.describe("DocView decoration providers", function()
     local view = make_view("alpha")
     local count = 0
     view:add_selection_listener("test", function(_, state) count = count + 1; test.equal(state.selections[1], 1) end)
-    view:with_selection_state(function() view.doc:set_selection(1, 2) end)
+    view:with_selection_state(function() view.buffer:set_selection(1, 2) end)
     test.ok(count > 0, "expected selection listener to fire")
   end)
 
@@ -194,7 +194,7 @@ test.describe("DocView decoration providers", function()
   end)
 
   test.it("draws current-line highlights over decoration backgrounds with gutter coverage", function()
-    local view, doc = make_view("one\ntwo\nthree")
+    local view, buffer = make_view("one\ntwo\nthree")
     view.position.x = 17
     view.size.x = 360
     view.__full_width_highlight_position_x = 3
@@ -206,7 +206,7 @@ test.describe("DocView decoration providers", function()
         if line == 2 then return decoration end
       end,
     })
-    doc:set_selection(2, 1)
+    buffer:set_selection(2, 1)
 
     local old_highlight = config.highlight_current_line
     local old_text = renderer.draw_text
@@ -255,7 +255,7 @@ test.describe("DocView decoration providers", function()
   end)
 
   test.it("draws and clicks provider-owned visual rows without selecting text", function()
-    local view, doc = make_view("one\ntwo\nthree")
+    local view, buffer = make_view("one\ntwo\nthree")
     local draws, clicks = 0, 0
     view.draw_overlay = function() end
     view:add_visual_row_provider("actions", {
@@ -294,36 +294,36 @@ test.describe("DocView decoration providers", function()
     if not ok then error(err, 0) end
     test.equal(1, draws)
 
-    doc:set_selection(1, 1)
+    buffer:set_selection(1, 1)
     local x = view.position.x + view:get_gutter_width() + 5
     local y = view.position.y + style.padding.y + view:get_line_height()
     test.ok(view:on_mouse_pressed("left", x, y, 1))
     test.equal(1, clicks)
-    local line, col = doc:get_selection()
+    local line, col = buffer:get_selection()
     test.equal(1, line)
     test.equal(1, col)
   end)
 
-  test.it("invalidates provider visual rows after same-line document edits", function()
-    local view, doc = make_view("TODO one\ntwo")
+  test.it("invalidates provider visual rows after same-line buffer edits", function()
+    local view, buffer = make_view("TODO one\ntwo")
     view:add_visual_row_provider("todo", {
       visual_rows = function(_, v, line, placement)
-        if placement == "before" and (v.doc.lines[line] or ""):find("TODO", 1, true) then
+        if placement == "before" and (v.buffer.lines[line] or ""):find("TODO", 1, true) then
           return { { id = "todo" } }
         end
       end,
     })
     test.equal(3, view:get_scrollable_line_count())
     local observed_in_text_change
-    function doc:on_text_change()
+    function buffer:on_text_change()
       observed_in_text_change = view:get_scrollable_line_count()
     end
-    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 5, text = "done" } }, { type = "replace" })
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 5, text = "done" } }, { type = "replace" })
     test.equal(2, observed_in_text_change)
     test.equal(2, view:get_scrollable_line_count())
-    doc:undo()
+    buffer:undo()
     test.equal(3, view:get_scrollable_line_count())
-    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 5, text = "xxxx" } }, { type = "replace" })
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 5, text = "xxxx" } }, { type = "replace" })
     test.equal(2, view:get_scrollable_line_count())
   end)
 
@@ -331,19 +331,19 @@ test.describe("DocView decoration providers", function()
     local path = core.project_absolute_path("tmp-visual-row-reload.txt")
     pcall(os.remove, path)
     write_file(path, "TODO one\ntwo\n")
-    local doc = Doc("tmp-visual-row-reload.txt", path)
-    local view = DocView(doc)
+    local buffer = Buffer("tmp-visual-row-reload.txt", path)
+    local view = TextView(buffer)
     view:add_visual_row_provider("todo", {
       visual_rows = function(_, v, line, placement)
-        if placement == "before" and (v.doc.lines[line] or ""):find("TODO", 1, true) then
+        if placement == "before" and (v.buffer.lines[line] or ""):find("TODO", 1, true) then
           return { { id = "todo" } }
         end
       end,
     })
     test.equal(3, view:get_scrollable_line_count())
     write_file(path, "done one\ntwo\n")
-    doc:load(path)
-    test.ok(not doc.lines[1]:find("TODO", 1, true), doc.lines[1])
+    buffer:load(path)
+    test.ok(not buffer.lines[1]:find("TODO", 1, true), buffer.lines[1])
     test.equal(2, view:get_scrollable_line_count())
     pcall(os.remove, path)
   end)
@@ -352,14 +352,14 @@ test.describe("DocView decoration providers", function()
     local path = core.project_absolute_path("tmp-visual-row-wrap-reload.txt")
     pcall(os.remove, path)
     write_file(path, string.rep("wide ", 40) .. "\nshort\n")
-    local doc = Doc("tmp-visual-row-wrap-reload.txt", path)
-    local view = DocView(doc)
+    local buffer = Buffer("tmp-visual-row-wrap-reload.txt", path)
+    local view = TextView(buffer)
     view.size.x = 120
     view:set_wrapping_enabled(true)
     view:update_wrap_cache()
     local before = view:get_scrollable_line_count()
     write_file(path, "short\nshort\n")
-    doc:load(path)
+    buffer:load(path)
     view:update_wrap_cache()
     local after = view:get_scrollable_line_count()
     test.ok(after < before, string.format("expected reload to reduce wrapped rows from %d, got %d", before, after))

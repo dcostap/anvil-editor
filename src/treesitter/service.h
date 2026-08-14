@@ -25,7 +25,7 @@ typedef enum AnvilTSStateStatus {
   ANVIL_TS_STATE_CLOSED,
 } AnvilTSStateStatus;
 
-typedef struct AnvilTSDocumentState AnvilTSDocumentState;
+typedef struct AnvilTSBufferState AnvilTSBufferState;
 
 typedef struct AnvilTSPollResult {
   AnvilTSStateStatus status;
@@ -77,24 +77,24 @@ typedef bool (*AnvilTSNodeRangeCallback)(
 
 typedef bool (*AnvilTSCancelCallback)(void *payload);
 
-AnvilTSDocumentState *anvil_ts_document_state_new(
+AnvilTSBufferState *anvil_ts_buffer_state_new(
   const AnvilTSLanguage *language,
   uint32_t parse_timeout_ms
 );
-void anvil_ts_document_state_retain(AnvilTSDocumentState *state);
-void anvil_ts_document_state_release(AnvilTSDocumentState *state);
+void anvil_ts_buffer_state_retain(AnvilTSBufferState *state);
+void anvil_ts_buffer_state_release(AnvilTSBufferState *state);
 
-const char *anvil_ts_document_state_language_id(const AnvilTSDocumentState *state);
-AnvilTSStateStatus anvil_ts_document_state_status(const AnvilTSDocumentState *state);
-const char *anvil_ts_document_state_status_string(AnvilTSStateStatus status);
-bool anvil_ts_document_state_status_snapshot(
-  const AnvilTSDocumentState *state,
+const char *anvil_ts_buffer_state_language_id(const AnvilTSBufferState *state);
+AnvilTSStateStatus anvil_ts_buffer_state_status(const AnvilTSBufferState *state);
+const char *anvil_ts_buffer_state_status_string(AnvilTSStateStatus status);
+bool anvil_ts_buffer_state_status_snapshot(
+  const AnvilTSBufferState *state,
   AnvilTSStateStatus *status,
   char **reason
 );
-uint64_t anvil_ts_document_state_generation(const AnvilTSDocumentState *state);
-uint64_t anvil_ts_document_state_tree_generation(const AnvilTSDocumentState *state);
-bool anvil_ts_document_state_has_tree(const AnvilTSDocumentState *state);
+uint64_t anvil_ts_buffer_state_generation(const AnvilTSBufferState *state);
+uint64_t anvil_ts_buffer_state_tree_generation(const AnvilTSBufferState *state);
+bool anvil_ts_buffer_state_has_tree(const AnvilTSBufferState *state);
 bool anvil_ts_query_captures_in_tree_with_cursor(
   TSTree *tree,
   const AnvilTSSnapshot *snapshot,
@@ -129,8 +129,8 @@ bool anvil_ts_query_captures_in_tree(
   char **error
 );
 
-bool anvil_ts_document_state_query_captures(
-  AnvilTSDocumentState *state,
+bool anvil_ts_buffer_state_query_captures(
+  AnvilTSBufferState *state,
   const TSQuery *query,
   uint32_t byte_start,
   uint32_t byte_end,
@@ -142,8 +142,8 @@ bool anvil_ts_document_state_query_captures(
   bool *exceeded_match_limit,
   char **error
 );
-bool anvil_ts_document_state_node_ranges(
-  AnvilTSDocumentState *state,
+bool anvil_ts_buffer_state_node_ranges(
+  AnvilTSBufferState *state,
   uint32_t byte_start,
   uint32_t byte_end,
   bool named_only,
@@ -153,25 +153,25 @@ bool anvil_ts_document_state_node_ranges(
   char **error
 );
 
-bool anvil_ts_document_state_schedule_parse(
-  AnvilTSDocumentState *state,
+bool anvil_ts_buffer_state_schedule_parse(
+  AnvilTSBufferState *state,
   AnvilTSSnapshot *snapshot,
   uint64_t generation,
   char **error
 );
-bool anvil_ts_document_state_schedule_parse_with_edit(
-  AnvilTSDocumentState *state,
+bool anvil_ts_buffer_state_schedule_parse_with_edit(
+  AnvilTSBufferState *state,
   AnvilTSSnapshot *snapshot,
   uint64_t generation,
   const AnvilTSEdit *edit,
   char **error
 );
-AnvilTSPollResult anvil_ts_document_state_poll(
-  AnvilTSDocumentState *state,
+AnvilTSPollResult anvil_ts_buffer_state_poll(
+  AnvilTSBufferState *state,
   uint64_t current_generation
 );
-void anvil_ts_document_state_cancel(AnvilTSDocumentState *state);
-void anvil_ts_document_state_close(AnvilTSDocumentState *state);
+void anvil_ts_buffer_state_cancel(AnvilTSBufferState *state);
+void anvil_ts_buffer_state_close(AnvilTSBufferState *state);
 
 bool anvil_ts_service_register_complete_event(void);
 void anvil_ts_service_ack_complete_event(void);

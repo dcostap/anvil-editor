@@ -3,15 +3,15 @@ local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
 local keymap = require "core.keymap"
-local translate = require "core.doc.translate"
+local translate = require "core.buffer.translate"
 local tokenizer = require "core.tokenizer"
 local ime = require "core.ime"
 local linewrapping = require "core.linewrapping"
-local line_packets = require "core.docview_line_packets"
+local line_packets = require "core.textview_line_packets"
 local language_intelligence = require "core.language_intelligence"
 local range_marker = require "core.range_marker"
 local copy_feedback = require "core.copy_feedback"
-local Doc = require "core.doc"
+local Buffer = require "core.buffer"
 local View = require "core.view"
 
 local CACHE_LINE_LEN = 500
@@ -20,25 +20,25 @@ local LINE_HINT_ELLIPSIS = "…"
 local IME_VIEW = nil
 local IME_STATE = {line1 = 0, col1 = 0, line2 = 0, col2 = 0, w = 0, h = 0}
 
----@class core.docview.position
+---@class core.textview.position
 ---@field line integer
 ---@field col integer
 ---@field offset number
 
----@class core.docview.ime_selection
+---@class core.textview.ime_selection
 ---@field from integer
 ---@field size integer
 
----View for editing documents with syntax highlighting and text editing.
+---View for presenting Buffers with syntax highlighting and text behavior.
 ---Extends View to provide text editing capabilities including selection,
 ---scrolling, IME support, and rendering with syntax highlighting.
----@class core.docview : core.view
----@overload fun(doc: core.doc):core.docview
+---@class core.textview : core.view
+---@overload fun(buffer: core.buffer):core.textview
 ---@field super core.view
----@field doc core.doc
+---@field buffer core.buffer
 ---@field font string
----@field last_x_offset core.docview.position
----@field ime_selection core.docview.ime_selection
+---@field last_x_offset core.textview.position
+---@field ime_selection core.textview.ime_selection
 ---@field ime_status boolean
 ---@field hovering_gutter boolean
 ---@field cache_font renderer.font
@@ -50,35 +50,35 @@ local IME_STATE = {line1 = 0, col1 = 0, line2 = 0, col2 = 0, w = 0, h = 0}
 ---@field last_line2 integer
 ---@field last_col2 integer
 ---@field hovered_render_fragment table?
-local DocView = View:extend()
+local TextView = View:extend()
 
-function DocView:__tostring() return "DocView" end
+function TextView:__tostring() return "TextView" end
 
-DocView.context = "workspace"
+TextView.context = "workspace"
 
-function DocView:is_wrapping_enabled()
+function TextView:is_wrapping_enabled()
   return not not self.wrapping_enabled
 end
 
-function DocView:has_wrapping()
+function TextView:has_wrapping()
   return self.wrapped_settings ~= nil
 end
 
-DocView.is_wrapped = DocView.has_wrapping
+TextView.is_wrapped = TextView.has_wrapping
 
-function DocView:clear_wrap_cache()
+function TextView:clear_wrap_cache()
   linewrapping.clear_wrap_cache(self)
 end
 
-function DocView:compute_wrap_width()
+function TextView:compute_wrap_width()
   return linewrapping.compute_wrap_width(self)
 end
 
 local function capture_wrap_viewport_anchor(view, new_width)
   local settings = view.wrapped_settings
   if not settings or settings.width == new_width or not view.scroll then return end
-  if view.wrapped_doc_line_count ~= #view.doc.lines
-    or view.wrapped_text_revision ~= (view.doc.text_revision or 0)
+  if view.wrapped_buffer_line_count ~= #view.buffer.lines
+    or view.wrapped_text_revision ~= (view.buffer.text_revision or 0)
   then
     return
   end
@@ -113,15 +113,15 @@ local function restore_wrap_viewport_anchor(view, anchor, expected_width)
   end
 end
 
-function DocView:update_wrap_cache()
+function TextView:update_wrap_cache()
   local width = self:compute_wrap_width()
   local anchor = capture_wrap_viewport_anchor(self, width)
-  local result = linewrapping.update_docview_breaks(self, width)
+  local result = linewrapping.update_textview_breaks(self, width)
   restore_wrap_viewport_anchor(self, anchor, width)
   return result
 end
 
-function DocView:set_wrapping_enabled(enabled)
+function TextView:set_wrapping_enabled(enabled)
   self.wrapping_enabled = not not enabled
   if self.wrapping_enabled then
     self:cancel_horizontal_extent_scan()
@@ -131,17 +131,17 @@ function DocView:set_wrapping_enabled(enabled)
   end
 end
 
-function DocView:get_total_visual_lines()
+function TextView:get_total_visual_lines()
   if self:has_composed_visual_rows() then return self:get_composed_visual_row_count() end
   return linewrapping.get_total_wrapped_lines(self)
 end
 
-function DocView:get_visual_row(line, col, line_end)
+function TextView:get_visual_row(line, col, line_end)
   if self:has_composed_visual_rows() then return self:get_composed_visual_row_for_position(line, col, line_end) end
   return linewrapping.get_line_idx_col_count(self, line, col, line_end)
 end
 
-function DocView:get_visual_row_line_col(idx)
+function TextView:get_visual_row_line_col(idx)
   if self:has_composed_visual_rows() then
     local entry = self:get_visual_row_entry(idx)
     if entry and entry.type == "fold" then return entry.fold.line1, 1 end
@@ -151,7 +151,7 @@ function DocView:get_visual_row_line_col(idx)
   return linewrapping.get_idx_line_col(self, idx)
 end
 
-function DocView:get_visual_row_count_for_line(line)
+function TextView:get_visual_row_count_for_line(line)
   if self:has_collapsed_folds() then
     local hidden, fold = self:is_line_hidden_by_fold(line)
     if hidden then return 0 end
@@ -160,24 +160,24 @@ function DocView:get_visual_row_count_for_line(line)
   return linewrapping.get_wrapped_line_count(self, line)
 end
 
-function DocView:get_visual_row_bounds_for_line(line, row_idx)
+function TextView:get_visual_row_bounds_for_line(line, row_idx)
   if self:has_collapsed_folds() then
     local hidden, fold = self:is_line_hidden_by_fold(line)
     if hidden then return nil, nil end
     if fold and fold.line1 == line then return 1, 1 end
   end
-  if not self.wrapped_settings then return 1, #(self.doc.lines[line] or "") + 1 end
+  if not self.wrapped_settings then return 1, #(self.buffer.lines[line] or "") + 1 end
   local first_idx = self.wrapped_line_to_idx[line]
   if not first_idx then return nil, nil end
   local idx = first_idx + math.max(0, (row_idx or 1) - 1)
   local row_line, row_start_col = linewrapping.get_idx_line_col(self, idx)
   if row_line ~= line then return nil, nil end
   local next_line, next_col = linewrapping.get_idx_line_col(self, idx + 1)
-  local row_end_col = next_line == line and next_col or (#self.doc.lines[line] + 1)
+  local row_end_col = next_line == line and next_col or (#self.buffer.lines[line] + 1)
   return row_start_col, row_end_col
 end
 
-function DocView:iter_visible_wrap_rows_for_line(line, y)
+function TextView:iter_visible_wrap_rows_for_line(line, y)
   if self:has_collapsed_folds() then
     local hidden, fold = self:is_line_hidden_by_fold(line)
     if hidden then return function() return nil end end
@@ -206,11 +206,11 @@ end
 
 local next_selection_owner_id = 0
 
-DocView.registry = DocView.registry or setmetatable({}, { __mode = "k" })
-DocView.fold_views_by_doc = DocView.fold_views_by_doc or setmetatable({}, { __mode = "k" })
-DocView.mirror_owner = DocView.mirror_owner or setmetatable({}, { __mode = "k" })
-DocView.owner_views = DocView.owner_views or DocView.session_views or setmetatable({}, { __mode = "v" })
-DocView.session_views = DocView.owner_views -- deprecated compatibility alias
+TextView.registry = TextView.registry or setmetatable({}, { __mode = "k" })
+TextView.fold_views_by_buffer = TextView.fold_views_by_buffer or setmetatable({}, { __mode = "k" })
+TextView.mirror_owner = TextView.mirror_owner or setmetatable({}, { __mode = "k" })
+TextView.owner_views = TextView.owner_views or TextView.session_views or setmetatable({}, { __mode = "v" })
+TextView.session_views = TextView.owner_views -- deprecated compatibility alias
 
 local register_fold_view
 local unregister_fold_view
@@ -280,8 +280,8 @@ local function font_looks_monospace(font)
   return value
 end
 
-local function has_relevant_syntax_fonts(doc)
-  local syntax_name = tostring(doc.syntax and doc.syntax.name or ""):lower()
+local function has_relevant_syntax_fonts(buffer)
+  local syntax_name = tostring(buffer.syntax and buffer.syntax.name or ""):lower()
   local is_markdown = syntax_name:find("markdown", 1, true) ~= nil
   for name in pairs(style.syntax_fonts) do
     if is_markdown or not tostring(name):match("^markdown_") then
@@ -317,9 +317,9 @@ end
 
 local function get_fast_ascii_monospace_x_offset(self, line, col, line_text, font)
   if col <= 1 then return 0 end
-  if has_relevant_syntax_fonts(self.doc) or not font_looks_monospace(font) then return nil end
+  if has_relevant_syntax_fonts(self.buffer) or not font_looks_monospace(font) then return nil end
 
-  local change_id = self.doc:get_change_id()
+  local change_id = self.buffer:get_change_id()
   local cache = self.__fast_ascii_col_x_cache
   if not cache or cache.change_id ~= change_id or cache.font ~= font or cache.font_size ~= font:get_size() then
     cache = { change_id = change_id, font = font, font_size = font:get_size(), lines = {} }
@@ -333,23 +333,23 @@ local function get_fast_ascii_monospace_x_offset(self, line, col, line_text, fon
   end
   if not entry.fast then return nil end
 
-  perf_frame_add("docview_get_col_x_offset_fast_ascii_calls", 1)
+  perf_frame_add("textview_get_col_x_offset_fast_ascii_calls", 1)
   return (col - 1) * font:get_width(" ")
 end
 
-local function with_wrapped_caret_affinity(docview, fn, ...)
-  local old = docview.__use_wrapped_caret_affinity
-  docview.__use_wrapped_caret_affinity = true
-  local results = { pcall(fn, docview, ...) }
-  docview.__use_wrapped_caret_affinity = old
+local function with_wrapped_caret_affinity(textview, fn, ...)
+  local old = textview.__use_wrapped_caret_affinity
+  textview.__use_wrapped_caret_affinity = true
+  local results = { pcall(fn, textview, ...) }
+  textview.__use_wrapped_caret_affinity = old
   if not results[1] then error(results[2], 0) end
   return table.unpack(results, 2)
 end
 
-local function apply_resolved_line_end_affinity(docview)
-  linewrapping.apply_resolved_line_end_affinity(docview)
-  if docview.apply_resolved_line_render_position_row_affinity then
-    docview:apply_resolved_line_render_position_row_affinity()
+local function apply_resolved_line_end_affinity(textview)
+  linewrapping.apply_resolved_line_end_affinity(textview)
+  if textview.apply_resolved_line_render_position_row_affinity then
+    textview:apply_resolved_line_render_position_row_affinity()
   end
 end
 
@@ -371,7 +371,7 @@ local function get_wrapped_segment_bounds(view, line, col1, col2, idx1, idx2, id
   local row_line, row_start_col = linewrapping.get_idx_line_col(view, idx)
   if row_line ~= line then return nil, nil end
   local next_line, next_start_col = linewrapping.get_idx_line_col(view, idx + 1)
-  local row_end_col = next_line == line and next_start_col or (#view.doc.lines[line] + 1)
+  local row_end_col = next_line == line and next_start_col or (#view.buffer.lines[line] + 1)
   local x1 = idx == idx1 and view:get_col_x_offset(line, col1, false) or view:get_col_x_offset(line, row_start_col, false)
   local x2 = idx == idx2 and view:get_col_x_offset(line, col2, false) or view:get_col_x_offset(line, row_end_col, true)
   return x1, x2
@@ -418,7 +418,7 @@ local function selection_count(selections)
   return math.max(1, math.floor(#(selections or {}) / 4))
 end
 
-local function normalize_selection_state(doc, state, force)
+local function normalize_selection_state(buffer, state, force)
   state = state or {}
   if not force and state.normalized and type(state.selections) == "table" and #state.selections >= 4 then
     state.last_selection = common.clamp(math.floor(tonumber(state.last_selection) or 1), 1, selection_count(state.selections))
@@ -433,8 +433,8 @@ local function normalize_selection_state(doc, state, force)
       if not line1 or not col1 then break end
       local line2 = selections[i + 2] or line1
       local col2 = selections[i + 3] or col1
-      line1, col1 = doc:sanitize_position(line1, col1)
-      line2, col2 = doc:sanitize_position(line2, col2)
+      line1, col1 = buffer:sanitize_position(line1, col1)
+      line2, col2 = buffer:sanitize_position(line2, col2)
       normalized[#normalized + 1] = line1
       normalized[#normalized + 1] = col1
       normalized[#normalized + 1] = line2
@@ -442,7 +442,7 @@ local function normalize_selection_state(doc, state, force)
     end
   end
   if #normalized == 0 then
-    local line, col = doc:sanitize_position(1, 1)
+    local line, col = buffer:sanitize_position(1, 1)
     normalized = { line, col, line, col }
   end
   state.selections = normalized
@@ -451,78 +451,78 @@ local function normalize_selection_state(doc, state, force)
   return state
 end
 
-local function ensure_selection_state(state, doc)
+local function ensure_selection_state(state, buffer)
   if not state or type(state.selections) ~= "table" or #state.selections < 4 then
-    return normalize_selection_state(doc, state, true)
+    return normalize_selection_state(buffer, state, true)
   end
   state.last_selection = common.clamp(math.floor(tonumber(state.last_selection) or 1), 1, selection_count(state.selections))
   return state
 end
 
-local function get_mirror_owner_view(doc)
-  local owner_id = DocView.mirror_owner[doc]
-  local view = owner_id and DocView.owner_views[owner_id]
-  if view and view.doc == doc and view.selection_state then
+local function get_mirror_owner_view(buffer)
+  local owner_id = TextView.mirror_owner[buffer]
+  local view = owner_id and TextView.owner_views[owner_id]
+  if view and view.buffer == buffer and view.selection_state then
     local view_owner_id = view.selection_state.owner_id or view.selection_state.session_id
     if view_owner_id == owner_id then return view end
   end
 end
 
 local function register_view(view)
-  local doc = view.doc
-  local views = DocView.registry[doc]
+  local buffer = view.buffer
+  local views = TextView.registry[buffer]
   if not views then
     views = setmetatable({}, { __mode = "k" })
-    DocView.registry[doc] = views
+    TextView.registry[buffer] = views
   end
   views[view] = true
   local owner_id = view.selection_state.owner_id or view.selection_state.session_id
   view.selection_state.owner_id = owner_id
   view.selection_state.session_id = owner_id -- deprecated compatibility alias
-  DocView.owner_views[owner_id] = view
-  if not get_mirror_owner_view(doc) then
-    DocView.mirror_owner[doc] = owner_id
+  TextView.owner_views[owner_id] = view
+  if not get_mirror_owner_view(buffer) then
+    TextView.mirror_owner[buffer] = owner_id
   end
 end
 
-function DocView.get_doc_mirror_owner_view(doc)
-  return get_mirror_owner_view(doc)
+function TextView.get_buffer_mirror_owner_view(buffer)
+  return get_mirror_owner_view(buffer)
 end
 
-function DocView.get_doc_mirror_owner_id(doc)
-  local view = get_mirror_owner_view(doc)
+function TextView.get_buffer_mirror_owner_id(buffer)
+  local view = get_mirror_owner_view(buffer)
   return view and (view.selection_state.owner_id or view.selection_state.session_id)
 end
 
----@deprecated Use `DocView.get_doc_mirror_owner_id` instead.
-function DocView.get_doc_mirror_owner_session_id(doc)
-  core.deprecation_log("DocView.get_doc_mirror_owner_session_id")
-  return DocView.get_doc_mirror_owner_id(doc)
+---@deprecated Use `TextView.get_buffer_mirror_owner_id` instead.
+function TextView.get_buffer_mirror_owner_session_id(buffer)
+  core.deprecation_log("TextView.get_buffer_mirror_owner_session_id")
+  return TextView.get_buffer_mirror_owner_id(buffer)
 end
 
-function DocView.count_registered_docviews(doc)
+function TextView.count_registered_textviews(buffer)
   local count = 0
-  local views = DocView.registry[doc]
+  local views = TextView.registry[buffer]
   if views then
     for view in pairs(views) do
-      if view.doc == doc then count = count + 1 end
+      if view.buffer == buffer then count = count + 1 end
     end
   end
   return count
 end
 
-function DocView:owns_doc_selection_mirror()
-  return get_mirror_owner_view(self.doc) == self
+function TextView:owns_buffer_selection_mirror()
+  return get_mirror_owner_view(self.buffer) == self
 end
 
-function DocView:get_selection_state()
+function TextView:get_selection_state()
   local selections = self.selection_state and self.selection_state.selections
   local last_selection = self.selection_state and self.selection_state.last_selection or 1
-  if self.doc.bound_selection_view == self then
-    selections = self.doc.selections
-    last_selection = self.doc.last_selection
+  if self.buffer.bound_selection_view == self then
+    selections = self.buffer.selections
+    last_selection = self.buffer.last_selection
   end
-  local state = normalize_selection_state(self.doc, {
+  local state = normalize_selection_state(self.buffer, {
     selections = copy_array(selections),
     last_selection = last_selection,
     normalized = true,
@@ -533,21 +533,21 @@ function DocView:get_selection_state()
   }
 end
 
-function DocView:set_selection_state(state)
+function TextView:set_selection_state(state)
   local old_state = self:get_selection_state()
   local owner_id = self.selection_state and (self.selection_state.owner_id or self.selection_state.session_id) or new_selection_owner_id()
-  self.selection_state = normalize_selection_state(self.doc, {
+  self.selection_state = normalize_selection_state(self.buffer, {
     selections = copy_array(state and state.selections or state),
     last_selection = state and state.last_selection or 1,
     owner_id = owner_id,
   })
   self.selection_state.owner_id = owner_id
   self.selection_state.session_id = owner_id -- deprecated compatibility alias
-  DocView.owner_views[owner_id] = self
-  if self.doc.bound_selection_view == self then
-    self.doc.selections = self.selection_state.selections
-    self.doc.last_selection = self.selection_state.last_selection
-  elseif not self.doc.bound_selection_view and self:owns_doc_selection_mirror() then
+  TextView.owner_views[owner_id] = self
+  if self.buffer.bound_selection_view == self then
+    self.buffer.selections = self.selection_state.selections
+    self.buffer.last_selection = self.selection_state.last_selection
+  elseif not self.buffer.bound_selection_view and self:owns_buffer_selection_mirror() then
     self:apply_selection_state()
   end
   local new_state = self:get_selection_state()
@@ -556,50 +556,50 @@ function DocView:set_selection_state(state)
   end
 end
 
-function DocView:capture_selection_state(old_state)
+function TextView:capture_selection_state(old_state)
   old_state = old_state or self:get_selection_state()
   local owner_id = self.selection_state and (self.selection_state.owner_id or self.selection_state.session_id) or new_selection_owner_id()
-  if self.selection_state and self.doc.selections == self.selection_state.selections then
-    self.selection_state.last_selection = self.doc.last_selection
+  if self.selection_state and self.buffer.selections == self.selection_state.selections then
+    self.selection_state.last_selection = self.buffer.last_selection
     self.selection_state.owner_id = owner_id
     self.selection_state.session_id = owner_id -- deprecated compatibility alias
   else
-    self.selection_state = normalize_selection_state(self.doc, {
-      selections = copy_array(self.doc.selections),
-      last_selection = self.doc.last_selection,
+    self.selection_state = normalize_selection_state(self.buffer, {
+      selections = copy_array(self.buffer.selections),
+      last_selection = self.buffer.last_selection,
       owner_id = owner_id,
       normalized = true,
     })
     self.selection_state.owner_id = owner_id
     self.selection_state.session_id = owner_id -- deprecated compatibility alias
   end
-  DocView.owner_views[owner_id] = self
+  TextView.owner_views[owner_id] = self
   local new_state = self:get_selection_state()
   if self.notify_selection_listeners and not selection_states_equal(old_state, new_state) then
     self:notify_selection_listeners("capture", old_state, new_state)
   end
 end
 
-function DocView:apply_selection_state()
-  normalize_selection_state(self.doc, self.selection_state)
-  self.doc.selections = copy_array(self.selection_state.selections)
-  self.doc.last_selection = self.selection_state.last_selection
+function TextView:apply_selection_state()
+  normalize_selection_state(self.buffer, self.selection_state)
+  self.buffer.selections = copy_array(self.selection_state.selections)
+  self.buffer.last_selection = self.selection_state.last_selection
 end
 
-function DocView:become_selection_mirror_owner()
+function TextView:become_selection_mirror_owner()
   local owner_id = self.selection_state.owner_id or self.selection_state.session_id
   self.selection_state.owner_id = owner_id
   self.selection_state.session_id = owner_id -- deprecated compatibility alias
-  DocView.mirror_owner[self.doc] = owner_id
-  DocView.owner_views[owner_id] = self
-  if not self.doc.bound_selection_view then
+  TextView.mirror_owner[self.buffer] = owner_id
+  TextView.owner_views[owner_id] = self
+  if not self.buffer.bound_selection_view then
     self:apply_selection_state()
   end
 end
 
-function DocView.refresh_doc_selection_mirror(doc)
-  if doc.bound_selection_view then return false end
-  local view = get_mirror_owner_view(doc)
+function TextView.refresh_buffer_selection_mirror(buffer)
+  if buffer.bound_selection_view then return false end
+  local view = get_mirror_owner_view(buffer)
   if view then
     view:apply_selection_state()
     return true
@@ -607,42 +607,42 @@ function DocView.refresh_doc_selection_mirror(doc)
   return false
 end
 
-function DocView.sync_doc_mirror_owner_state(doc)
-  if doc.bound_selection_view or doc.__selection_text_adjusting then return end
-  local view = get_mirror_owner_view(doc)
+function TextView.sync_buffer_mirror_owner_state(buffer)
+  if buffer.bound_selection_view or buffer.__selection_text_adjusting then return end
+  local view = get_mirror_owner_view(buffer)
   if view then view:capture_selection_state() end
 end
 
-function DocView.reset_registered_selection_states(doc)
-  local views = DocView.registry[doc]
+function TextView.reset_registered_selection_states(buffer)
+  local views = TextView.registry[buffer]
   if views then
     for view in pairs(views) do
-      if view.doc == doc then
-        view:set_selection_state({ selections = doc.selections, last_selection = doc.last_selection })
+      if view.buffer == buffer then
+        view:set_selection_state({ selections = buffer.selections, last_selection = buffer.last_selection })
       end
     end
   end
-  DocView.refresh_doc_selection_mirror(doc)
+  TextView.refresh_buffer_selection_mirror(buffer)
 end
 
-function DocView.sanitize_registered_selection_states(doc)
-  local views = DocView.registry[doc]
+function TextView.sanitize_registered_selection_states(buffer)
+  local views = TextView.registry[buffer]
   if views then
     for view in pairs(views) do
-      if view.doc == doc and view.selection_state then
-        normalize_selection_state(doc, view.selection_state, true)
+      if view.buffer == buffer and view.selection_state then
+        normalize_selection_state(buffer, view.selection_state, true)
       end
     end
   end
-  DocView.refresh_doc_selection_mirror(doc)
+  TextView.refresh_buffer_selection_mirror(buffer)
 end
 
-function DocView.snapshot_registered_selection_states(doc)
+function TextView.snapshot_registered_selection_states(buffer)
   local snapshots = {}
-  local views = DocView.registry[doc]
+  local views = TextView.registry[buffer]
   if views then
     for view in pairs(views) do
-      if view.doc == doc then
+      if view.buffer == buffer then
         snapshots[view] = view:get_selection_state()
       end
     end
@@ -650,40 +650,40 @@ function DocView.snapshot_registered_selection_states(doc)
   return snapshots
 end
 
-function DocView.restore_registered_selection_states(doc, snapshots)
+function TextView.restore_registered_selection_states(buffer, snapshots)
   for view, state in pairs(snapshots or {}) do
-    if view.doc == doc then view:set_selection_state(state) end
+    if view.buffer == buffer then view:set_selection_state(state) end
   end
-  DocView.sanitize_registered_selection_states(doc)
+  TextView.sanitize_registered_selection_states(buffer)
 end
 
-function DocView.adjust_registered_selection_states(doc, kind, active_view, ...)
-  local views = DocView.registry[doc]
+function TextView.adjust_registered_selection_states(buffer, kind, active_view, ...)
+  local views = TextView.registry[buffer]
   if views then
     for view in pairs(views) do
-      if view.doc == doc and view.selection_state
+      if view.buffer == buffer and view.selection_state
       and view ~= active_view
-      and view.selection_state.selections ~= doc.selections then
+      and view.selection_state.selections ~= buffer.selections then
         if kind == "insert" then
-          doc:adjust_selection_state_for_insert(view.selection_state, ...)
+          buffer:adjust_selection_state_for_insert(view.selection_state, ...)
         elseif kind == "remove" then
-          doc:adjust_selection_state_for_remove(view.selection_state, ...)
+          buffer:adjust_selection_state_for_remove(view.selection_state, ...)
         end
       end
     end
   end
-  if not doc.bound_selection_view then
-    DocView.refresh_doc_selection_mirror(doc)
+  if not buffer.bound_selection_view then
+    TextView.refresh_buffer_selection_mirror(buffer)
   end
 end
 
-function DocView.adjust_registered_selection_states_for_batch(doc, active_view, mapper, transaction)
-  local views = DocView.registry[doc]
+function TextView.adjust_registered_selection_states_for_batch(buffer, active_view, mapper, transaction)
+  local views = TextView.registry[buffer]
   if views then
     for view in pairs(views) do
-      if view.doc == doc and view.selection_state
+      if view.buffer == buffer and view.selection_state
       and view ~= active_view
-      and view.selection_state.selections ~= doc.selections then
+      and view.selection_state.selections ~= buffer.selections then
         local selections = view.selection_state.selections
         local mapped = {}
         for i = 1, #selections, 4 do
@@ -696,26 +696,26 @@ function DocView.adjust_registered_selection_states_for_batch(doc, active_view, 
         end
         view.selection_state.selections = mapped
         view.selection_state.normalized = false
-        normalize_selection_state(doc, view.selection_state, true)
+        normalize_selection_state(buffer, view.selection_state, true)
       end
     end
   end
-  if not doc.bound_selection_view then
-    DocView.refresh_doc_selection_mirror(doc)
+  if not buffer.bound_selection_view then
+    TextView.refresh_buffer_selection_mirror(buffer)
   end
 end
 
-function DocView:with_selection_state(fn, ...)
-  local doc = self.doc
-  if doc.bound_selection_view == self then
+function TextView:with_selection_state(fn, ...)
+  local buffer = self.buffer
+  if buffer.bound_selection_view == self then
     return fn(...)
   end
 
   local old_self_selection_state = self:get_selection_state()
-  local old_selections = doc.selections
-  local old_last_selection = doc.last_selection
-  local old_bound_view = doc.bound_selection_view
-  local old_bound_owner_id = doc.bound_selection_owner_id or doc.bound_selection_session_id
+  local old_selections = buffer.selections
+  local old_last_selection = buffer.last_selection
+  local old_bound_view = buffer.bound_selection_view
+  local old_bound_owner_id = buffer.bound_selection_owner_id or buffer.bound_selection_session_id
 
   -- If a nested binding suspends another view, make that view's owned state
   -- point at its current live compatibility table before it is hidden.  This
@@ -729,8 +729,8 @@ function DocView:with_selection_state(fn, ...)
     old_bound_view.selection_state.session_id = old_bound_view.selection_state.owner_id
   end
 
-  local stack = doc.__selection_binding_stack or {}
-  doc.__selection_binding_stack = stack
+  local stack = buffer.__selection_binding_stack or {}
+  buffer.__selection_binding_stack = stack
   stack[#stack + 1] = {
     view = self,
     old_bound_view = old_bound_view,
@@ -738,17 +738,17 @@ function DocView:with_selection_state(fn, ...)
     old_last_selection = old_last_selection,
   }
 
-  self.selection_state = ensure_selection_state(self.selection_state, doc)
+  self.selection_state = ensure_selection_state(self.selection_state, buffer)
   if not self.selection_state.owner_id then
     self.selection_state.owner_id = self.selection_state.session_id or new_selection_owner_id()
   end
   self.selection_state.session_id = self.selection_state.owner_id -- deprecated compatibility alias
-  DocView.owner_views[self.selection_state.owner_id] = self
-  doc.bound_selection_view = self
-  doc.bound_selection_owner_id = self.selection_state.owner_id
-  doc.bound_selection_session_id = self.selection_state.owner_id -- deprecated compatibility alias
-  doc.selections = self.selection_state.selections
-  doc.last_selection = self.selection_state.last_selection
+  TextView.owner_views[self.selection_state.owner_id] = self
+  buffer.bound_selection_view = self
+  buffer.bound_selection_owner_id = self.selection_state.owner_id
+  buffer.bound_selection_session_id = self.selection_state.owner_id -- deprecated compatibility alias
+  buffer.selections = self.selection_state.selections
+  buffer.last_selection = self.selection_state.last_selection
 
   local args = pack(...)
   local ok, res = xpcall(function()
@@ -760,23 +760,23 @@ function DocView:with_selection_state(fn, ...)
   end, debug.traceback)
 
   stack[#stack] = nil
-  if #stack == 0 then doc.__selection_binding_stack = nil end
+  if #stack == 0 then buffer.__selection_binding_stack = nil end
   local restore_selections = old_selections
   local restore_last_selection = old_last_selection
   if old_bound_view and old_bound_view.selection_state then
     restore_selections = old_bound_view.selection_state.selections
     restore_last_selection = old_bound_view.selection_state.last_selection
   end
-  doc.selections = restore_selections
-  doc.last_selection = restore_last_selection
-  doc.bound_selection_view = old_bound_view
-  doc.bound_selection_owner_id = old_bound_owner_id
-  doc.bound_selection_session_id = old_bound_owner_id
+  buffer.selections = restore_selections
+  buffer.last_selection = restore_last_selection
+  buffer.bound_selection_view = old_bound_view
+  buffer.bound_selection_owner_id = old_bound_owner_id
+  buffer.bound_selection_session_id = old_bound_owner_id
 
   local mirror_ok, mirror_err = true, nil
   if not old_bound_view then
     mirror_ok, mirror_err = xpcall(function()
-      DocView.refresh_doc_selection_mirror(doc)
+      TextView.refresh_buffer_selection_mirror(buffer)
     end, debug.traceback)
   end
 
@@ -787,7 +787,7 @@ function DocView:with_selection_state(fn, ...)
 end
 
 ---Helper to move cursor vertically while preserving horizontal offset.
----@param dv core.docview
+---@param dv core.textview
 ---@param line integer Current line
 ---@param col integer Current column
 ---@param offset integer Line offset (-1 for up, 1 for down)
@@ -804,21 +804,21 @@ local function move_to_line_offset(dv, line, col, offset)
 end
 
 
-DocView.translate = {
-  ["previous_page"] = function(doc, line, col, dv)
+TextView.translate = {
+  ["previous_page"] = function(buffer, line, col, dv)
     local min, max = dv:get_visible_line_range()
     return line - (max - min), 1
   end,
 
-  ["next_page"] = function(doc, line, col, dv)
-    if line == #doc.lines then
-      return #doc.lines, #doc.lines[line]
+  ["next_page"] = function(buffer, line, col, dv)
+    if line == #buffer.lines then
+      return #buffer.lines, #buffer.lines[line]
     end
     local min, max = dv:get_visible_line_range()
     return line + (max - min), 1
   end,
 
-  ["previous_line"] = function(doc, line, col, dv)
+  ["previous_line"] = function(buffer, line, col, dv)
     if dv and dv.wrapped_settings then
       return linewrapping.wrapped_visual_line_position(dv, line, col, -1)
     end
@@ -828,38 +828,38 @@ DocView.translate = {
     return move_to_line_offset(dv, line, col, -1)
   end,
 
-  ["next_line"] = function(doc, line, col, dv)
+  ["next_line"] = function(buffer, line, col, dv)
     if dv and dv.wrapped_settings then
       return linewrapping.wrapped_visual_line_position(dv, line, col, 1)
     end
-    if line == #doc.lines then
-      return #doc.lines, math.huge
+    if line == #buffer.lines then
+      return #buffer.lines, math.huge
     end
     return move_to_line_offset(dv, line, col, 1)
   end,
 }
 
 
----Constructor - initializes a document view.
----@param doc core.doc Document to display
-function DocView:new(doc)
-  DocView.super.new(self)
+---Constructor - initializes a Text View.
+---@param buffer core.buffer Buffer to display
+function TextView:new(buffer)
+  TextView.super.new(self)
   self.cursor = "ibeam"
   self.scrollable = true
-  self.doc = assert(doc)
+  self.buffer = assert(buffer)
   local owner_id = new_selection_owner_id()
-  self.selection_state = normalize_selection_state(self.doc, {
-    selections = copy_array(self.doc.selections),
-    last_selection = self.doc.last_selection,
+  self.selection_state = normalize_selection_state(self.buffer, {
+    selections = copy_array(self.buffer.selections),
+    last_selection = self.buffer.last_selection,
     owner_id = owner_id,
     session_id = owner_id, -- deprecated compatibility alias
     normalized = true,
   })
   register_view(self)
-  self.doc.cache.col_x = {}
-  self.doc.cache.line_width = {}
+  self.buffer.cache.col_x = {}
+  self.buffer.cache.line_width = {}
   self.__line_width_cache = {}
-  self.doc.cache.ulen = {}
+  self.buffer.cache.ulen = {}
   self.font = "code_font"
   self.last_x_offset = {}
   self.ime_selection = { from = 0, size = 0 }
@@ -869,7 +869,7 @@ function DocView:new(doc)
   self.h_scrollbar:set_forced_status(config.force_scrollbar_status)
   self.cache_font = self:get_font()
   self.cache_font_size = self.cache_font:get_size()
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   self.cache_indent_size = indent_size
   self.fold_regions = {}
   self.fold_generation = 0
@@ -910,18 +910,18 @@ function DocView:new(doc)
   self.fold_listeners = {}
   self.edit_guards = {}
   self.owned_features = {}
-  self:add_owned_feature("core.docview-line-packets", {
+  self:add_owned_feature("core.textview-line-packets", {
     on_release = function(_, view)
       line_packets.clear(view)
     end,
   })
   register_fold_view(self)
-  linewrapping.register_docview(self)
+  linewrapping.register_textview(self)
   self:set_wrapping_enabled(config.plugins.linewrapping.enable_by_default)
 end
 
 
-function DocView:get_owned_feature_state()
+function TextView:get_owned_feature_state()
   local state = {}
   for id, value in pairs(self.__pending_owned_feature_state or {}) do state[id] = value end
   for id, feature in pairs(self.owned_features or {}) do
@@ -929,20 +929,20 @@ function DocView:get_owned_feature_state()
       local ok, value = pcall(feature.get_state, feature, self)
       if ok and value ~= nil and state[id] == nil then state[id] = value
       elseif not ok then
-        core.log_quiet("DocView owned feature %s state save failed for %s: %s", id, self.doc:get_name(), tostring(value))
+        core.log_quiet("TextView owned feature %s state save failed for %s: %s", id, self.buffer:get_name(), tostring(value))
       end
     end
   end
   return next(state) and state or nil
 end
 
-function DocView:restore_owned_feature_state(state)
+function TextView:restore_owned_feature_state(state)
   for id, value in pairs(state or {}) do
     local feature = self.owned_features and self.owned_features[id]
     if feature and feature.set_state then
       local ok, err = pcall(feature.set_state, feature, self, value)
       if not ok then
-        core.log_quiet("DocView owned feature %s state restore failed for %s: %s", id, self.doc:get_name(), tostring(err))
+        core.log_quiet("TextView owned feature %s state restore failed for %s: %s", id, self.buffer:get_name(), tostring(err))
         self.__pending_owned_feature_state = self.__pending_owned_feature_state or {}
         self.__pending_owned_feature_state[id] = value
       end
@@ -953,61 +953,24 @@ function DocView:restore_owned_feature_state(state)
   end
 end
 
-function DocView:get_state()
+function TextView:get_state()
   local selection_state = self:get_selection_state()
   return {
-    filename = self.doc.filename,
+    filename = self.buffer.filename,
     selection = copy_array(selection_state.selections),
     selection_state = selection_state,
     scroll = { x = self.scroll.to.x, y = self.scroll.to.y },
-    crlf = self.doc.crlf,
-    text = self.doc.new_file and self.doc:get_text(1, 1, math.huge, math.huge),
-    language_mode = self.doc.language_mode_override,
+    crlf = self.buffer.crlf,
+    text = self.buffer.new_file and self.buffer:get_text(1, 1, math.huge, math.huge),
+    language_mode = self.buffer.language_mode_override,
     owned_features = self:get_owned_feature_state(),
   }
 end
 
 
-function DocView.from_state(state)
-  local file_context = require "core.file_context"
-  local dv
-  if not state.filename then
-    -- document not associated to a file
-    dv = DocView(core.open_doc())
-  else
-    -- we have a filename, try to read the file
-    local ok, doc = pcall(core.open_doc, state.filename)
-    if ok then
-      dv = DocView(doc)
-    end
-  end
-  if dv and dv.doc then
-    file_context.mark_editor_view(dv)
-    if dv.doc.new_file and state.text then
-      dv.doc:insert(1, 1, state.text)
-      dv.doc.crlf = state.crlf
-    end
-    if state.language_mode then
-      dv.doc:set_language_mode(state.language_mode, { reason = "workspace-restore" })
-    end
-    if state.selection_state then
-      dv:set_selection_state(state.selection_state)
-    elseif state.selection then
-      dv:set_selection_state({ selections = state.selection, last_selection = 1 })
-    end
-    dv.last_line1, dv.last_col1, dv.last_line2, dv.last_col2 = table.unpack(dv.selection_state.selections, 1, 4)
-    dv.scroll.x, dv.scroll.to.x = state.scroll.x, state.scroll.x
-    dv.scroll.y, dv.scroll.to.y = state.scroll.y, state.scroll.y
-    dv.needs_initial_scroll_validation = true
-    dv:restore_owned_feature_state(state.owned_features)
-  end
-  return dv
-end
-
-
----Register lifecycle state owned by this Editor view.
+---Register lifecycle state owned by this Text View.
 ---The feature's on_release(feature, view, reason) callback runs exactly once.
-function DocView:add_owned_feature(id, feature)
+function TextView:add_owned_feature(id, feature)
   assert(type(id) == "string" and id ~= "", "owned feature id must be a non-empty string")
   assert(type(feature) == "table", "owned feature must be a table")
   self.owned_features = self.owned_features or {}
@@ -1023,15 +986,15 @@ function DocView:add_owned_feature(id, feature)
       if not next(pending) then self.__pending_owned_feature_state = nil end
     else
       core.log_quiet(
-        "DocView owned feature %s deferred state restore failed for %s: %s",
-        id, self.doc:get_name(), tostring(err)
+        "TextView owned feature %s deferred state restore failed for %s: %s",
+        id, self.buffer:get_name(), tostring(err)
       )
     end
   end
   return true
 end
 
-function DocView:remove_owned_feature(id, reason)
+function TextView:remove_owned_feature(id, reason)
   local features = self.owned_features
   local feature = features and features[id]
   if not feature then return false end
@@ -1040,15 +1003,15 @@ function DocView:remove_owned_feature(id, reason)
     local ok, err = pcall(feature.on_release, feature, self, reason or "removed")
     if not ok then
       core.log_quiet(
-        "DocView owned feature %s release failed for %s: %s",
-        tostring(id), self.doc:get_name(), tostring(err)
+        "TextView owned feature %s release failed for %s: %s",
+        tostring(id), self.buffer:get_name(), tostring(err)
       )
     end
   end
   return true
 end
 
-function DocView:release_owned_features(reason)
+function TextView:release_owned_features(reason)
   local ids = {}
   for id in pairs(self.owned_features or {}) do ids[#ids + 1] = id end
   table.sort(ids)
@@ -1056,30 +1019,30 @@ function DocView:release_owned_features(reason)
   return #ids
 end
 
----Attempt to close the view, prompting to save if document is dirty.
----Shows "Unsaved Changes" dialog if this is the last view of a dirty document.
+---Attempt to close the view, prompting to save if buffer is dirty.
+---Shows "Unsaved Changes" dialog if this is the last view of a dirty buffer.
 ---@param do_close function Callback to execute when close is confirmed
-function DocView:try_close(do_close)
+function TextView:try_close(do_close)
   local function unregister_and_close()
     self:cancel_horizontal_extent_scan()
     self:clear_fold_regions("view-close")
     unregister_fold_view(self)
-    linewrapping.unregister_docview(self)
+    linewrapping.unregister_textview(self)
     self:release_owned_features("view-close")
     do_close()
   end
-  if self.doc:is_dirty()
-  and #core.get_views_referencing_doc(self.doc) == 1 then
+  if self.buffer:is_dirty()
+  and #core.get_views_referencing_buffer(self.buffer) == 1 then
     core.global_prompt_bar:enter("Unsaved Changes; Confirm Close", {
       submit = function(_, item)
         if item.text:match("^[cC]") then
           unregister_and_close()
         elseif item.text:match("^[sS]") then
-          local ok, err = pcall(self.doc.save, self.doc)
+          local ok, err = pcall(self.buffer.save, self.buffer)
           if ok then
             unregister_and_close()
           elseif not tostring(err):find("file changed on disk", 1, true) then
-            core.error("Couldn't save file \"%s\": %s", self.doc.filename, err)
+            core.error("Couldn't save file \"%s\": %s", self.buffer.filename, err)
           end
         end
       end,
@@ -1097,20 +1060,20 @@ end
 
 
 ---Get the display name for the tab (filename with * if dirty).
----@return string name Document name with asterisk if modified
-function DocView:get_name()
-  local post = self.doc:is_dirty() and "*" or ""
-  local name = self.doc:get_name()
+---@return string name Buffer name with asterisk if modified
+function TextView:get_name()
+  local post = self.buffer:is_dirty() and "*" or ""
+  local name = self.buffer:get_name()
   return name:match("[^/%\\]*$") .. post
 end
 
 
 ---Get the full filename path for display (with home directory encoded).
 ---@return string filename Full path or name with asterisk if modified
-function DocView:get_filename()
-  if self.doc.abs_filename then
-    local post = self.doc:is_dirty() and "*" or ""
-    return common.home_encode(self.doc.abs_filename) .. post
+function TextView:get_filename()
+  if self.buffer.abs_filename then
+    local post = self.buffer:is_dirty() and "*" or ""
+    return common.home_encode(self.buffer.abs_filename) .. post
   end
   return self:get_name()
 end
@@ -1118,25 +1081,25 @@ end
 
 ---Get the height reserved for the horizontal scrollbar, if it is visible.
 ---@return number height Reserved height in pixels
-function DocView:get_horizontal_scrollbar_height()
+function TextView:get_horizontal_scrollbar_height()
   local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
   return math.max(0, h_scroll or 0)
 end
 
 
----Get the vertical viewport height available for document rows.
+---Get the vertical viewport height available for buffer rows.
 ---@return number height Viewport height in pixels
-function DocView:get_vertical_viewport_height()
+function TextView:get_vertical_viewport_height()
   return math.max(0, self.size.y - self:get_horizontal_scrollbar_height())
 end
 
 
----Get the number of visual rows in the document scroll model.
+---Get the number of visual rows in the buffer scroll model.
 ---@return integer count Visual row count
-function DocView:get_scrollable_line_count()
+function TextView:get_scrollable_line_count()
   if self:has_composed_visual_rows() then return self:get_composed_visual_row_count() end
   if self.wrapped_settings then return linewrapping.get_total_wrapped_lines(self) end
-  return #self.doc.lines
+  return #self.buffer.lines
 end
 
 
@@ -1147,7 +1110,7 @@ end
 
 ---Get the normal caret scroll context that can fit above and below the caret.
 ---@return integer count Context line count
-function DocView:get_visible_scroll_context_lines()
+function TextView:get_visible_scroll_context_lines()
   local lh = self:get_line_height()
   if lh <= 0 then return 0 end
   local visible_span = math.max(0, math.floor((self:get_vertical_viewport_height() - style.padding.y) / lh))
@@ -1159,15 +1122,15 @@ end
 ---Keep this aligned with normal caret context so end-of-file scrolling moves
 ---smoothly into the same visible band instead of pinning the caret near the top.
 ---@return integer count Context line count
-function DocView:get_scroll_past_end_context_lines()
+function TextView:get_scroll_past_end_context_lines()
   return self:get_visible_scroll_context_lines()
 end
 
 
----Get scrollable height for a document with the given visual row count.
+---Get scrollable height for a buffer with the given visual row count.
 ---@param line_count integer Visual row count
 ---@return number height Total scrollable height in pixels
-function DocView:get_scrollable_size_for_line_count(line_count)
+function TextView:get_scrollable_size_for_line_count(line_count)
   line_count = math.max(1, math.floor(tonumber(line_count) or 1))
   local h_scroll = self:get_horizontal_scrollbar_height()
   local lh = self:get_line_height()
@@ -1186,9 +1149,9 @@ function DocView:get_scrollable_size_for_line_count(line_count)
 end
 
 
----Get the total scrollable height of the document.
+---Get the total scrollable height of the buffer.
 ---@return number height Total height in pixels
-function DocView:get_scrollable_size()
+function TextView:get_scrollable_size()
   local cache = self:get_visual_row_metric_cache()
   if cache then
     local h_scroll = self:get_horizontal_scrollbar_height()
@@ -1219,7 +1182,7 @@ local UNWRAPPED_WIDTH_SCAN_YIELD = 0.005
 
 local function get_unwrapped_width_settings(self)
   local font = self:get_font()
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   return {
     font = font,
     font_size = font:get_size(),
@@ -1236,19 +1199,19 @@ local function unwrapped_width_cache_is_current(self, cache, settings)
     and cache.font == settings.font
     and cache.font_size == settings.font_size
     and cache.indent_size == settings.indent_size
-    and cache.line_count == #self.doc.lines
-    and cache.text_revision == (self.doc.text_revision or 0)
+    and cache.line_count == #self.buffer.lines
+    and cache.text_revision == (self.buffer.text_revision or 0)
     and cache.line_render_generation == settings.line_render_generation
     and cache.line_render_invalidation_generation
       == settings.line_render_invalidation_generation
     and cache.line
-    and self.doc.lines[cache.line] == cache.line_text
+    and self.buffer.lines[cache.line] == cache.line_text
 end
 
 local function unwrapped_width_scan_is_current(self, token)
   if not token or token.cancelled
   or self.__async_horizontal_extent_scan ~= token
-  or self.doc ~= token.doc
+  or self.buffer ~= token.buffer
   then
     return false
   end
@@ -1259,8 +1222,8 @@ local function unwrapped_width_scan_is_current(self, token)
     and settings.line_render_generation == token.line_render_generation
     and settings.line_render_invalidation_generation
       == token.line_render_invalidation_generation
-    and #self.doc.lines == token.line_count
-    and (self.doc.text_revision or 0) == token.text_revision
+    and #self.buffer.lines == token.line_count
+    and (self.buffer.text_revision or 0) == token.text_revision
 end
 
 local function get_unwrapped_line_width(self, line)
@@ -1270,9 +1233,9 @@ local function get_unwrapped_line_width(self, line)
     self.__line_width_cache = cache
   end
 
-  local text = self.doc.lines[line] or ""
+  local text = self.buffer.lines[line] or ""
   local font = self:get_font()
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   local font_size = font:get_size()
   local markdown_owner = self.__markdown_live_owner
   local semantic_model = markdown_owner and markdown_owner.semantic_model
@@ -1280,7 +1243,7 @@ local function get_unwrapped_line_width(self, line)
     markdown_owner.semantic_pending_line ~= nil
     or semantic_model and (
       semantic_model.status == "pending"
-      or semantic_model.published_revision ~= self.doc.text_revision
+      or semantic_model.published_revision ~= self.buffer.text_revision
     )
   )
   local skip_render = semantic_pending and (
@@ -1310,24 +1273,24 @@ local function get_unwrapped_line_width(self, line)
   return width
 end
 
-local function cache_unwrapped_max_line(cache, doc, line, width)
+local function cache_unwrapped_max_line(cache, buffer, line, width)
   cache.line = line
-  cache.line_text = doc.lines[line] or ""
+  cache.line_text = buffer.lines[line] or ""
   cache.width = width
-  cache.line_count = #doc.lines
+  cache.line_count = #buffer.lines
 end
 
-function DocView:cancel_horizontal_extent_scan()
+function TextView:cancel_horizontal_extent_scan()
   local token = self.__async_horizontal_extent_scan
   if not token then return false end
   token.cancelled = true
   self.__async_horizontal_extent_scan = nil
   if token.thread_key then core.wake_thread(token.thread_key) end
-  perf_frame_add("docview_async_horizontal_extent_cancellations", 1)
+  perf_frame_add("textview_async_horizontal_extent_cancellations", 1)
   return true
 end
 
-function DocView:is_horizontal_extent_scan_pending()
+function TextView:is_horizontal_extent_scan_pending()
   return self.__async_horizontal_extent_scan ~= nil
 end
 
@@ -1336,14 +1299,14 @@ local function start_unwrapped_width_scan(self)
 
   local settings = get_unwrapped_width_settings(self)
   local token = {
-    doc = self.doc,
+    buffer = self.buffer,
     font = settings.font,
     font_size = settings.font_size,
     indent_size = settings.indent_size,
     line_render_generation = settings.line_render_generation,
     line_render_invalidation_generation = settings.line_render_invalidation_generation,
-    text_revision = self.doc.text_revision or 0,
-    line_count = #self.doc.lines,
+    text_revision = self.buffer.text_revision or 0,
+    line_count = #self.buffer.lines,
     next_line = 1,
     max_line = 1,
     width = 0,
@@ -1351,7 +1314,7 @@ local function start_unwrapped_width_scan(self)
     yields = 0,
   }
   self.__async_horizontal_extent_scan = token
-  perf_frame_add("docview_async_horizontal_extent_scans", 1)
+  perf_frame_add("textview_async_horizontal_extent_scans", 1)
 
   token.thread_key = core.add_background_thread(function()
     while unwrapped_width_scan_is_current(self, token) do
@@ -1374,7 +1337,7 @@ local function start_unwrapped_width_scan(self)
         end
       end
       token.work_ms = token.work_ms + (system.get_time() - started) * 1000
-      perf_frame_add("docview_async_horizontal_extent_lines", lines)
+      perf_frame_add("textview_async_horizontal_extent_lines", lines)
 
       if not unwrapped_width_scan_is_current(self, token) then return end
       if token.next_line > token.line_count then
@@ -1385,19 +1348,19 @@ local function start_unwrapped_width_scan(self)
           indent_size = token.indent_size,
           width = token.width,
           line = line,
-          line_text = self.doc.lines[line] or "",
+          line_text = self.buffer.lines[line] or "",
           line_count = token.line_count,
           text_revision = token.text_revision,
           line_render_generation = token.line_render_generation,
           line_render_invalidation_generation = token.line_render_invalidation_generation,
         }
         self.__async_horizontal_extent_scan = nil
-        perf_frame_add("docview_async_horizontal_extent_commits", 1)
-        perf_frame_add("docview_async_horizontal_extent_ms", token.work_ms)
+        perf_frame_add("textview_async_horizontal_extent_commits", 1)
+        perf_frame_add("textview_async_horizontal_extent_ms", token.work_ms)
         if token.yields > 0 then
           core.log_quiet(
             "Committed async horizontal extent for %s: lines=%d width=%.1f work_ms=%.1f yields=%d",
-            self.doc:get_name(), token.line_count, token.width,
+            self.buffer:get_name(), token.line_count, token.width,
             token.work_ms, token.yields
           )
         end
@@ -1406,7 +1369,7 @@ local function start_unwrapped_width_scan(self)
       end
 
       token.yields = token.yields + 1
-      perf_frame_add("docview_async_horizontal_extent_yields", 1)
+      perf_frame_add("textview_async_horizontal_extent_yields", 1)
       coroutine.yield(UNWRAPPED_WIDTH_SCAN_YIELD)
     end
   end, token)
@@ -1414,14 +1377,14 @@ end
 
 local function update_unwrapped_width_from_active_lines(self, cache)
   local function consider(line)
-    if not line or line < 1 or line > #self.doc.lines then return end
+    if not line or line < 1 or line > #self.buffer.lines then return end
     local width = get_unwrapped_line_width(self, line)
     if width > cache.width then
-      cache_unwrapped_max_line(cache, self.doc, line, width)
+      cache_unwrapped_max_line(cache, self.buffer, line, width)
     end
   end
 
-  for _, line1, _, line2 in self.doc:get_selections() do
+  for _, line1, _, line2 in self.buffer:get_selections() do
     consider(line1)
     consider(line2)
   end
@@ -1455,8 +1418,8 @@ local function get_max_line_render_horizontal_extent(self)
         width = math.max(width, tonumber(result) or 0)
       else
         core.log_quiet(
-          "DocView horizontal extent provider %s failed for %s: %s",
-          entry.id, self.doc:get_name(), tostring(result)
+          "TextView horizontal extent provider %s failed for %s: %s",
+          entry.id, self.buffer:get_name(), tostring(result)
         )
       end
     end
@@ -1466,7 +1429,7 @@ end
 
 ---Get the scrollable width for unwrapped text or overflowing rendered content.
 ---@return number width Total horizontal scrollable width in pixels
-function DocView:get_h_scrollable_size()
+function TextView:get_h_scrollable_size()
   local presentation_width = get_max_line_render_horizontal_extent(self)
   if self.wrapping_enabled and presentation_width <= 0 then return 0 end
   local gutter_width = self:get_gutter_width()
@@ -1484,7 +1447,7 @@ end
 ---uncapped while an unwrapped extent scan is pending.  The scan reports the
 ---real bound later; clamping to the temporary viewport-sized fallback here
 ---would discard a match reveal requested by a preview or find operation.
-function DocView:clamp_scroll_position()
+function TextView:clamp_scroll_position()
   local max = self:get_scrollable_size() - self.size.y
   self.scroll.to.y = common.clamp(self.scroll.to.y, 0, max)
 
@@ -1498,7 +1461,7 @@ function DocView:clamp_scroll_position()
   self.scroll.to.x = common.clamp(self.scroll.to.x, 0, max)
 end
 
-function DocView:update_scrollbar()
+function TextView:update_scrollbar()
   local presentation_width = get_max_line_render_horizontal_extent(self)
   local _, _, v_scroll_w = self.v_scrollbar:get_track_rect()
   local rendered_width = self:get_gutter_width() + presentation_width
@@ -1507,15 +1470,15 @@ function DocView:update_scrollbar()
   self.h_scrollbar:set_forced_status(
     rendered_overflow and "expanded" or config.force_scrollbar_status
   )
-  return DocView.super.update_scrollbar(self)
+  return TextView.super.update_scrollbar(self)
 end
 
 
----Return the stable viewport width used by specialized Document presentations.
+---Return the stable viewport width used by specialized Buffer presentations.
 ---Unlike `size.x`, this remains tied to the effective presentation area while
 ---a layout adapter temporarily substitutes drawing geometry.
 ---@return number width
-function DocView:get_presentation_viewport_width()
+function TextView:get_presentation_viewport_width()
   return self.size.x
 end
 
@@ -1524,29 +1487,29 @@ end
 ---specialized line and row layout. Layout adapters should override this with
 ---a token that remains stable while they temporarily substitute draw geometry.
 ---@return any generation
-function DocView:get_presentation_layout_generation()
+function TextView:get_presentation_layout_generation()
   return self.size.x
 end
 
 
 ---Get the font used for rendering text.
 ---@return renderer.font font The code font
-function DocView:get_font()
+function TextView:get_font()
   return style[self.font]
 end
 
 
 ---Get the line height in pixels.
 ---@return integer height Line height including line spacing
-function DocView:get_line_height()
+function TextView:get_line_height()
   return math.floor(self:get_font():get_height() * config.line_height)
 end
 
-function DocView:has_visual_metric_providers()
+function TextView:has_visual_metric_providers()
   return next(self.visual_metric_providers or {}) ~= nil
 end
 
-function DocView:add_visual_metric_provider(id, provider, opts)
+function TextView:add_visual_metric_provider(id, provider, opts)
   assert(type(id) == "string" and id ~= "", "visual metric provider id must be a non-empty string")
   assert(type(provider) == "table", "visual metric provider must be a table")
   opts = opts or {}
@@ -1557,7 +1520,7 @@ function DocView:add_visual_metric_provider(id, provider, opts)
   self:invalidate_visual_metrics(id)
 end
 
-function DocView:remove_visual_metric_provider(id)
+function TextView:remove_visual_metric_provider(id)
   if not self.visual_metric_providers or not self.visual_metric_providers[id] then return false end
   self.visual_metric_providers[id] = nil
   self.__visual_metric_provider_entries = nil
@@ -1581,7 +1544,7 @@ local function invalidate_visual_metric_rows(view, cache, row1, row2)
     view.render_cache_diagnostics.metric_invalidations + row2 - row1 + 1
 end
 
-function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
+function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
   local cache = self.__visual_metric_cache
   local wrap_change = self.__line_render_wrap_change
   self.__line_render_wrap_change = nil
@@ -1621,7 +1584,7 @@ function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
       if old_row1 == new_row1 and remove_count == insert_count then
         invalidate_visual_metric_rows(self, cache, new_row1, new_row2)
         cache.wrap_layout_generation = current_wrap_generation
-        cache.text_revision = self.doc.text_revision or 0
+        cache.text_revision = self.buffer.text_revision or 0
         cache.signature = self:get_visual_metric_signature()
         return
       end
@@ -1671,22 +1634,22 @@ function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
       end
       cache.invalidated_rows = (cache.invalidated_rows or 0) + insert_count
       cache.wrap_layout_generation = current_wrap_generation
-      cache.text_revision = self.doc.text_revision or 0
+      cache.text_revision = self.buffer.text_revision or 0
       cache.signature = self:get_visual_metric_signature()
       self.render_cache_diagnostics.metric_invalidations =
         self.render_cache_diagnostics.metric_invalidations + insert_count
       self.render_cache_diagnostics.metric_row_splices =
         self.render_cache_diagnostics.metric_row_splices + 1
-      perf_frame_add("docview_visual_metric_row_splices", 1)
-      perf_frame_add("docview_visual_metric_row_splice_rows", insert_count)
+      perf_frame_add("textview_visual_metric_row_splices", 1)
+      perf_frame_add("textview_visual_metric_row_splice_rows", insert_count)
       return
     end
     if cache.row_count == current_row_count and self.wrapped_line_to_idx
       and unchanged_except_wrap
     then
-      local logical_line1 = common.clamp(math.floor(line1), 1, #self.doc.lines)
+      local logical_line1 = common.clamp(math.floor(line1), 1, #self.buffer.lines)
       local logical_line2 = common.clamp(
-        math.floor(line2 or logical_line1), logical_line1, #self.doc.lines
+        math.floor(line2 or logical_line1), logical_line1, #self.buffer.lines
       )
       local row1 = self.wrapped_line_to_idx[logical_line1]
       local next_row = self.wrapped_line_to_idx[logical_line2 + 1]
@@ -1695,7 +1658,7 @@ function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
           self, cache, row1, next_row and next_row - 1 or current_row_count
         )
         cache.wrap_layout_generation = current_wrap_generation
-        cache.text_revision = self.doc.text_revision or 0
+        cache.text_revision = self.buffer.text_revision or 0
         cache.signature = self:get_visual_metric_signature()
         return
       end
@@ -1709,7 +1672,7 @@ function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
   self.__visual_metric_cache = nil
 end
 
-function DocView:visual_metric_provider_entries()
+function TextView:visual_metric_provider_entries()
   if self.__visual_metric_provider_entries then return self.__visual_metric_provider_entries end
   local result = {}
   for _, entry in pairs(self.visual_metric_providers or {}) do
@@ -1737,11 +1700,11 @@ end
 -- layouts are prepared in slices and atomically adopted by linewrapping.
 local MAX_SYNC_LINE_RENDER_WRAP_LINES = 128
 
-function DocView:has_line_render_providers()
+function TextView:has_line_render_providers()
   return next(self.line_render_providers or {}) ~= nil
 end
 
-function DocView:add_line_render_provider(id, provider, opts)
+function TextView:add_line_render_provider(id, provider, opts)
   assert(type(id) == "string" and id ~= "", "line render provider id must be a non-empty string")
   assert(type(provider) == "table", "line render provider must be a table")
   opts = opts or {}
@@ -1751,7 +1714,7 @@ function DocView:add_line_render_provider(id, provider, opts)
   self:invalidate_line_render(id)
 end
 
-function DocView:remove_line_render_provider(id)
+function TextView:remove_line_render_provider(id)
   if not self.line_render_providers or not self.line_render_providers[id] then return false end
   self.line_render_providers[id] = nil
   self.__line_render_provider_entries = nil
@@ -1759,7 +1722,7 @@ function DocView:remove_line_render_provider(id)
   return true
 end
 
-function DocView:invalidate_line_render(_provider_id, line1, line2, opts)
+function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
   opts = opts or {}
   self.__line_render_invalidation_generation =
     (self.__line_render_invalidation_generation or 0) + 1
@@ -1772,14 +1735,14 @@ function DocView:invalidate_line_render(_provider_id, line1, line2, opts)
     local owner = self.__markdown_live_owner
     local model = owner and owner.semantic_model
     perf.add_detail(string.format(
-      "docview_line_render_invalidation:provider=%s:range=%s-%s:lines=%s:caller=%s:%s:revision=%s:model=%s:pending=%s:pending_wrap=%s:adoption=%s",
+      "textview_line_render_invalidation:provider=%s:range=%s-%s:lines=%s:caller=%s:%s:revision=%s:model=%s:pending=%s:pending_wrap=%s:adoption=%s",
       tostring(_provider_id or "unknown"),
       tostring(requested_line1 or "full"),
       tostring(requested_line2 or "full"),
       tostring(requested_line1 and (requested_line2 - requested_line1 + 1) or "full"),
       tostring(caller.short_src or caller.source or "unknown"),
       tostring(caller.currentline or 0),
-      tostring(self.doc and self.doc.text_revision or "none"),
+      tostring(self.buffer and self.buffer.text_revision or "none"),
       tostring(model and model.status or "none"),
       tostring(owner and owner.semantic_pending_line or "none"),
       tostring(owner and owner.semantic_pending_wrap_line or "none"),
@@ -1800,8 +1763,8 @@ function DocView:invalidate_line_render(_provider_id, line1, line2, opts)
     cache.invalidated_lines = (cache.invalidated_lines or 0) + requested_line2 - requested_line1 + 1
     self.render_cache_diagnostics.line_invalidations =
       self.render_cache_diagnostics.line_invalidations + requested_line2 - requested_line1 + 1
-    local layout_line1 = common.clamp(requested_line1, 1, #self.doc.lines)
-    local layout_line2 = common.clamp(requested_line2, layout_line1, #self.doc.lines)
+    local layout_line1 = common.clamp(requested_line1, 1, #self.buffer.lines)
+    local layout_line2 = common.clamp(requested_line2, layout_line1, #self.buffer.lines)
     if self.wrapped_settings and not self.__line_render_wrap_invalidating then
       self.__line_render_wrap_invalidating = true
       local invalidated_layout_lines = layout_line2 - layout_line1 + 1
@@ -1828,9 +1791,9 @@ function DocView:invalidate_line_render(_provider_id, line1, line2, opts)
   end
   if cache then
     self.render_cache_diagnostics.line_invalidations =
-      self.render_cache_diagnostics.line_invalidations + #self.doc.lines
+      self.render_cache_diagnostics.line_invalidations + #self.buffer.lines
   end
-  perf_detail("docview_line_render_full_invalidation:" .. tostring(_provider_id or "unknown"), 1)
+  perf_detail("textview_line_render_full_invalidation:" .. tostring(_provider_id or "unknown"), 1)
   self.__line_render_generation = (self.__line_render_generation or 0) + 1
   self.__line_render_wrap_change = nil
   self.__line_render_cache = nil
@@ -1839,7 +1802,7 @@ function DocView:invalidate_line_render(_provider_id, line1, line2, opts)
   if self.wrapped_settings and not self.__line_render_wrap_invalidating then
     self.__line_render_wrap_invalidating = true
     if opts.defer_wrapped_reconstruction
-      or #self.doc.lines > MAX_SYNC_LINE_RENDER_WRAP_LINES
+      or #self.buffer.lines > MAX_SYNC_LINE_RENDER_WRAP_LINES
     then
       perf_frame_add("linewrapping_async_line_render_invalidation_calls", 1)
       linewrapping.reconstruct_breaks_async(
@@ -1858,14 +1821,14 @@ function DocView:invalidate_line_render(_provider_id, line1, line2, opts)
   end
 end
 
-function DocView:line_render_provider_entries()
+function TextView:line_render_provider_entries()
   if not self.__line_render_provider_entries then
     self.__line_render_provider_entries = sorted_inline_provider_entries(self.line_render_providers)
   end
   return self.__line_render_provider_entries
 end
 
-function DocView:get_render_cache_diagnostics()
+function TextView:get_render_cache_diagnostics()
   local result = {}
   for key, value in pairs(self.render_cache_diagnostics or {}) do result[key] = value end
   result.resident_line_entries = 0
@@ -1880,15 +1843,15 @@ local MIN_LINE_NUMBER_GUTTER_DIGITS = 2
 
 ---Get the width reserved for line numbers in the gutter.
 ---@return number width Line number label width
-function DocView:get_line_number_gutter_width()
-  local digits = math.max(MIN_LINE_NUMBER_GUTTER_DIGITS, #tostring(#self.doc.lines))
+function TextView:get_line_number_gutter_width()
+  local digits = math.max(MIN_LINE_NUMBER_GUTTER_DIGITS, #tostring(#self.buffer.lines))
   return self:get_font():get_width(string.rep("0", digits))
 end
 
----Whether this Document View should draw line-number labels.
+---Whether this Text View should draw line-number labels.
 ---A per-view boolean overrides the global line-number setting.
 ---@return boolean visible
-function DocView:line_numbers_visible()
+function TextView:line_numbers_visible()
   if self.show_line_numbers ~= nil then return self.show_line_numbers end
   return config.show_line_numbers
 end
@@ -1898,7 +1861,7 @@ end
 ---view's ordinary line-number preference (for example, while Source Mode is
 ---temporarily inactive).
 ---@return boolean visible
-function DocView:line_number_gutter_visible()
+function TextView:line_number_gutter_visible()
   local visible = self:line_numbers_visible()
   for _, entry in ipairs(self:decoration_provider_entries()) do
     local provider = entry.provider
@@ -1909,8 +1872,8 @@ function DocView:line_number_gutter_visible()
         visible = result
       elseif not ok then
         core.log_quiet(
-          "DocView decoration provider %s.line_number_gutter_visible failed for %s: %s",
-          tostring(entry.id), self.doc:get_name(), tostring(result)
+          "TextView decoration provider %s.line_number_gutter_visible failed for %s: %s",
+          tostring(entry.id), self.buffer:get_name(), tostring(result)
         )
       end
     end
@@ -1921,9 +1884,9 @@ end
 ---Whether the line number for one logical line should be drawn.
 ---Decoration providers may return a boolean from `line_number_visible` to
 ---override the normal all-lines presentation for a specialized Editor mode.
----@param line integer Logical Document line
+---@param line integer Logical Buffer line
 ---@return boolean visible
-function DocView:line_number_visible_at(line)
+function TextView:line_number_visible_at(line)
   if not self:line_numbers_visible() then return false end
   local visible = true
   for _, entry in ipairs(self:decoration_provider_entries()) do
@@ -1935,8 +1898,8 @@ function DocView:line_number_visible_at(line)
         visible = result
       elseif not ok then
         core.log_quiet(
-          "DocView decoration provider %s.line_number_visible failed for %s: %s",
-          tostring(entry.id), self.doc:get_name(), tostring(result)
+          "TextView decoration provider %s.line_number_visible failed for %s: %s",
+          tostring(entry.id), self.buffer:get_name(), tostring(result)
         )
       end
     end
@@ -1944,10 +1907,10 @@ function DocView:line_number_visible_at(line)
   return visible
 end
 
----Get the standard Document View gutter width.
+---Get the standard Text View gutter width.
 ---@return number width Total gutter width
 ---@return number padding Padding within gutter
-function DocView:get_gutter_width()
+function TextView:get_gutter_width()
   local padding = self.gutter_padding
   if padding == nil then padding = style.padding.x * 2 end
   if self:line_number_gutter_visible() then
@@ -1956,24 +1919,24 @@ function DocView:get_gutter_width()
   return padding, padding
 end
 
-local function compact_fold_views(doc)
-  local views = DocView.fold_views_by_doc[doc]
+local function compact_fold_views(buffer)
+  local views = TextView.fold_views_by_buffer[buffer]
   if not views then return nil end
   local compacted = setmetatable({}, { __mode = "v" })
   for _, view in pairs(views) do
-    if view and view.doc == doc then compacted[#compacted + 1] = view end
+    if view and view.buffer == buffer then compacted[#compacted + 1] = view end
   end
-  DocView.fold_views_by_doc[doc] = #compacted > 0 and compacted or nil
-  return DocView.fold_views_by_doc[doc]
+  TextView.fold_views_by_buffer[buffer] = #compacted > 0 and compacted or nil
+  return TextView.fold_views_by_buffer[buffer]
 end
 
 register_fold_view = function(view)
-  local doc = view and view.doc
-  if not doc then return end
-  local views = compact_fold_views(doc)
+  local buffer = view and view.buffer
+  if not buffer then return end
+  local views = compact_fold_views(buffer)
   if not views then
     views = setmetatable({}, { __mode = "v" })
-    DocView.fold_views_by_doc[doc] = views
+    TextView.fold_views_by_buffer[buffer] = views
   end
   for _, existing in pairs(views) do
     if existing == view then return end
@@ -1982,30 +1945,30 @@ register_fold_view = function(view)
 end
 
 unregister_fold_view = function(view)
-  local doc = view and view.doc
-  local views = doc and DocView.fold_views_by_doc[doc]
+  local buffer = view and view.buffer
+  local views = buffer and TextView.fold_views_by_buffer[buffer]
   if not views then return end
   local compacted = setmetatable({}, { __mode = "v" })
   for _, existing in pairs(views) do
-    if existing and existing ~= view and existing.doc == doc then compacted[#compacted + 1] = existing end
+    if existing and existing ~= view and existing.buffer == buffer then compacted[#compacted + 1] = existing end
   end
-  DocView.fold_views_by_doc[doc] = #compacted > 0 and compacted or nil
+  TextView.fold_views_by_buffer[buffer] = #compacted > 0 and compacted or nil
 end
 
-local function clear_fold_views_for_doc(doc, reason)
-  local views = compact_fold_views(doc)
+local function clear_fold_views_for_buffer(buffer, reason)
+  local views = compact_fold_views(buffer)
   if not views then return end
   for _, view in ipairs(views) do
-    if view and view.clear_fold_regions then view:clear_fold_regions(reason or "doc-close") end
+    if view and view.clear_fold_regions then view:clear_fold_regions(reason or "buffer-close") end
     unregister_fold_view(view)
   end
 end
 
-if Doc and not Doc.__docview_folding_close_patched then
-  Doc.__docview_folding_close_patched = true
-  local old_on_close = Doc.on_close
-  function Doc:on_close(...)
-    clear_fold_views_for_doc(self, "doc-close")
+if Buffer and not Buffer.__textview_folding_close_patched then
+  Buffer.__textview_folding_close_patched = true
+  local old_on_close = Buffer.on_close
+  function Buffer:on_close(...)
+    clear_fold_views_for_buffer(self, "buffer-close")
     return old_on_close(self, ...)
   end
 end
@@ -2022,7 +1985,7 @@ local function sorted_provider_entries(entries)
   return list
 end
 
-function DocView:add_decoration_provider(id, provider, opts)
+function TextView:add_decoration_provider(id, provider, opts)
   assert(type(id) == "string" and id ~= "", "decoration provider id must be a non-empty string")
   assert(type(provider) == "table", "decoration provider must be a table")
   opts = opts or {}
@@ -2030,13 +1993,13 @@ function DocView:add_decoration_provider(id, provider, opts)
   self.decoration_providers[id] = { id = id, provider = provider, priority = opts.priority or provider.priority or 0 }
 end
 
-function DocView:remove_decoration_provider(id)
+function TextView:remove_decoration_provider(id)
   if not self.decoration_providers or not self.decoration_providers[id] then return false end
   self.decoration_providers[id] = nil
   return true
 end
 
-function DocView:decoration_provider_entries()
+function TextView:decoration_provider_entries()
   return sorted_provider_entries(self.decoration_providers)
 end
 
@@ -2046,7 +2009,7 @@ local copy_feedback_decoration_provider = {
   end,
 }
 
-function DocView:show_copy_feedback(ranges)
+function TextView:show_copy_feedback(ranges)
   local copied_ranges = {}
   for _, range in ipairs(ranges or {}) do
     local line1, col1 = range.line1 or range[1], range.col1 or range[2]
@@ -2062,12 +2025,12 @@ function DocView:show_copy_feedback(ranges)
   if not self.decoration_providers["core.copy-feedback"] then
     self:add_decoration_provider("core.copy-feedback", copy_feedback_decoration_provider, { priority = 100000 })
   end
-  core.log_quiet("DocView copy feedback: %s (%d range%s)", self.doc:get_name(), #copied_ranges, #copied_ranges == 1 and "" or "s")
+  core.log_quiet("TextView copy feedback: %s (%d range%s)", self.buffer:get_name(), #copied_ranges, #copied_ranges == 1 and "" or "s")
   core.redraw = true
   return true
 end
 
-function DocView:get_copy_feedback_ranges(line)
+function TextView:get_copy_feedback_ranges(line)
   local feedback = self.copy_feedback
   local color = copy_feedback.color(feedback, style.copy_feedback)
   if not color then
@@ -2077,7 +2040,7 @@ function DocView:get_copy_feedback_ranges(line)
   end
 
   local ranges = {}
-  local text = self.doc.lines[line]
+  local text = self.buffer.lines[line]
   if not text then return ranges end
   for _, range in ipairs(feedback.ranges or {}) do
     if line >= range.line1 and line <= range.line2 then
@@ -2092,7 +2055,7 @@ function DocView:get_copy_feedback_ranges(line)
   return ranges
 end
 
-function DocView:add_clipboard_paste_provider(id, provider, opts)
+function TextView:add_clipboard_paste_provider(id, provider, opts)
   assert(type(id) == "string" and id ~= "", "clipboard-paste provider id must be a non-empty string")
   assert(type(provider) == "table", "clipboard-paste provider must be a table")
   opts = opts or {}
@@ -2102,20 +2065,20 @@ function DocView:add_clipboard_paste_provider(id, provider, opts)
   }
 end
 
-function DocView:remove_clipboard_paste_provider(id)
+function TextView:remove_clipboard_paste_provider(id)
   if not self.clipboard_paste_providers or not self.clipboard_paste_providers[id] then return false end
   self.clipboard_paste_providers[id] = nil
   return true
 end
 
-function DocView:paste_from_provider()
+function TextView:paste_from_provider()
   for _, entry in ipairs(sorted_provider_entries(self.clipboard_paste_providers)) do
     local fn = entry.provider.on_clipboard_paste
     if fn then
       local ok, handled = pcall(fn, entry.provider, self)
       if not ok then
-        core.log_quiet("DocView clipboard-paste provider %s failed for %s: %s",
-          tostring(entry.id), self.doc:get_name(), tostring(handled))
+        core.log_quiet("TextView clipboard-paste provider %s failed for %s: %s",
+          tostring(entry.id), self.buffer:get_name(), tostring(handled))
       elseif handled then
         return true
       end
@@ -2124,7 +2087,7 @@ function DocView:paste_from_provider()
   return false
 end
 
-function DocView:add_file_drop_provider(id, provider, opts)
+function TextView:add_file_drop_provider(id, provider, opts)
   assert(type(id) == "string" and id ~= "", "file-drop provider id must be a non-empty string")
   assert(type(provider) == "table", "file-drop provider must be a table")
   opts = opts or {}
@@ -2134,29 +2097,29 @@ function DocView:add_file_drop_provider(id, provider, opts)
   }
 end
 
-function DocView:remove_file_drop_provider(id)
+function TextView:remove_file_drop_provider(id)
   if not self.file_drop_providers or not self.file_drop_providers[id] then return false end
   self.file_drop_providers[id] = nil
   return true
 end
 
-function DocView:on_file_dropped(filename, x, y)
+function TextView:on_file_dropped(filename, x, y)
   for _, entry in ipairs(sorted_provider_entries(self.file_drop_providers)) do
     local fn = entry.provider.on_file_dropped
     if fn then
       local ok, handled = pcall(fn, entry.provider, self, filename, x, y)
       if not ok then
-        core.log_quiet("DocView file-drop provider %s failed for %s: %s",
-          tostring(entry.id), self.doc:get_name(), tostring(handled))
+        core.log_quiet("TextView file-drop provider %s failed for %s: %s",
+          tostring(entry.id), self.buffer:get_name(), tostring(handled))
       elseif handled then
         return true
       end
     end
   end
-  return DocView.super.on_file_dropped(self, filename, x, y)
+  return TextView.super.on_file_dropped(self, filename, x, y)
 end
 
-function DocView:add_poi_provider(id, provider, opts)
+function TextView:add_poi_provider(id, provider, opts)
   assert(type(id) == "string" and id ~= "", "POI provider id must be a non-empty string")
   assert(type(provider) == "table", "POI provider must be a table")
   opts = opts or {}
@@ -2164,13 +2127,13 @@ function DocView:add_poi_provider(id, provider, opts)
   self.poi_providers[id] = { id = id, provider = provider, priority = opts.priority or provider.priority or 0 }
 end
 
-function DocView:remove_poi_provider(id)
+function TextView:remove_poi_provider(id)
   if not self.poi_providers or not self.poi_providers[id] then return false end
   self.poi_providers[id] = nil
   return true
 end
 
-function DocView:get_points_of_interest(opts)
+function TextView:get_points_of_interest(opts)
   local points = {}
   for _, entry in ipairs(sorted_provider_entries(self.poi_providers)) do
     local provider = entry.provider
@@ -2180,41 +2143,41 @@ function DocView:get_points_of_interest(opts)
       if ok and res then
         for _, point in ipairs(res) do points[#points + 1] = point end
       elseif not ok then
-        core.log_quiet("DocView POI provider %s failed for %s: %s", tostring(entry.id), self.doc:get_name(), tostring(res))
+        core.log_quiet("TextView POI provider %s failed for %s: %s", tostring(entry.id), self.buffer:get_name(), tostring(res))
       end
     end
   end
   return points
 end
 
-function DocView:add_selection_listener(id, fn)
+function TextView:add_selection_listener(id, fn)
   assert(type(id) == "string" and id ~= "", "selection listener id must be a non-empty string")
   assert(type(fn) == "function", "selection listener must be a function")
   self.selection_listeners = self.selection_listeners or {}
   self.selection_listeners[id] = fn
 end
 
-function DocView:remove_selection_listener(id)
+function TextView:remove_selection_listener(id)
   if not self.selection_listeners or not self.selection_listeners[id] then return false end
   self.selection_listeners[id] = nil
   return true
 end
 
-function DocView:notify_selection_listeners(reason, old_state, new_state)
+function TextView:notify_selection_listeners(reason, old_state, new_state)
   for id, fn in pairs(self.selection_listeners or {}) do
     local ok, err = pcall(fn, self, new_state or self:get_selection_state(), old_state, reason)
-    if not ok then core.log_quiet("DocView selection listener %s failed for %s: %s", tostring(id), self.doc:get_name(), tostring(err)) end
+    if not ok then core.log_quiet("TextView selection listener %s failed for %s: %s", tostring(id), self.buffer:get_name(), tostring(err)) end
   end
 end
 
-function DocView:begin_line_render_interaction(reason)
+function TextView:begin_line_render_interaction(reason)
   self.__line_render_interaction_state = {
     reason = reason,
     selection_state = self:get_selection_state(),
   }
 end
 
-function DocView:end_line_render_interaction(reason)
+function TextView:end_line_render_interaction(reason)
   local interaction = self.__line_render_interaction_state
   if not interaction then return false end
   self.__line_render_interaction_state = nil
@@ -2230,8 +2193,8 @@ function DocView:end_line_render_interaction(reason)
       )
       if not ok then
         core.log_quiet(
-          "DocView line-render provider %s interaction end failed for %s: %s",
-          tostring(entry.id), self.doc:get_name(), tostring(handled)
+          "TextView line-render provider %s interaction end failed for %s: %s",
+          tostring(entry.id), self.buffer:get_name(), tostring(handled)
         )
         needs_fallback = true
       elseif handled == false then
@@ -2248,65 +2211,65 @@ function DocView:end_line_render_interaction(reason)
   return true
 end
 
-function DocView:get_line_render_selection_state()
+function TextView:get_line_render_selection_state()
   local state = self.__line_render_interaction_state and self.__line_render_interaction_state.selection_state
   return state or self:get_selection_state()
 end
 
-function DocView:add_scroll_listener(id, fn)
+function TextView:add_scroll_listener(id, fn)
   assert(type(id) == "string" and id ~= "", "scroll listener id must be a non-empty string")
   assert(type(fn) == "function", "scroll listener must be a function")
   self.scroll_listeners = self.scroll_listeners or {}
   self.scroll_listeners[id] = fn
 end
 
-function DocView:remove_scroll_listener(id)
+function TextView:remove_scroll_listener(id)
   if not self.scroll_listeners or not self.scroll_listeners[id] then return false end
   self.scroll_listeners[id] = nil
   return true
 end
 
-function DocView:notify_scroll_listeners(reason)
+function TextView:notify_scroll_listeners(reason)
   for id, fn in pairs(self.scroll_listeners or {}) do
     local ok, err = pcall(fn, self, reason)
-    if not ok then core.log_quiet("DocView scroll listener %s failed for %s: %s", tostring(id), self.doc:get_name(), tostring(err)) end
+    if not ok then core.log_quiet("TextView scroll listener %s failed for %s: %s", tostring(id), self.buffer:get_name(), tostring(err)) end
   end
 end
 
-function DocView:add_fold_listener(id, fn)
+function TextView:add_fold_listener(id, fn)
   assert(type(id) == "string" and id ~= "", "fold listener id must be a non-empty string")
   assert(type(fn) == "function", "fold listener must be a function")
   self.fold_listeners = self.fold_listeners or {}
   self.fold_listeners[id] = fn
 end
 
-function DocView:remove_fold_listener(id)
+function TextView:remove_fold_listener(id)
   if not self.fold_listeners or not self.fold_listeners[id] then return false end
   self.fold_listeners[id] = nil
   return true
 end
 
-function DocView:notify_fold_listeners(event, fold, reason)
+function TextView:notify_fold_listeners(event, fold, reason)
   for id, fn in pairs(self.fold_listeners or {}) do
     local ok, err = pcall(fn, self, event, fold, reason)
-    if not ok then core.log_quiet("DocView fold listener %s failed for %s: %s", tostring(id), self.doc:get_name(), tostring(err)) end
+    if not ok then core.log_quiet("TextView fold listener %s failed for %s: %s", tostring(id), self.buffer:get_name(), tostring(err)) end
   end
 end
 
-function DocView:add_edit_guard(id, guard)
+function TextView:add_edit_guard(id, guard)
   assert(type(id) == "string" and id ~= "", "edit guard id must be a non-empty string")
   assert(type(guard) == "function" or type(guard) == "table", "edit guard must be a function or table")
   self.edit_guards = self.edit_guards or {}
   self.edit_guards[id] = guard
 end
 
-function DocView:remove_edit_guard(id)
+function TextView:remove_edit_guard(id)
   if not self.edit_guards or not self.edit_guards[id] then return false end
   self.edit_guards[id] = nil
   return true
 end
 
-function DocView:can_edit(reason, opts)
+function TextView:can_edit(reason, opts)
   opts = opts or {}
   for id, guard in pairs(self.edit_guards or {}) do
     local is_table = type(guard) == "table"
@@ -2319,7 +2282,7 @@ function DocView:can_edit(reason, opts)
         ok, allowed, why = pcall(fn, self, reason, opts)
       end
       if not ok then
-        core.log_quiet("DocView edit guard %s failed for %s: %s", tostring(id), self.doc:get_name(), tostring(allowed))
+        core.log_quiet("TextView edit guard %s failed for %s: %s", tostring(id), self.buffer:get_name(), tostring(allowed))
       elseif allowed == false then
         why = why or "This view is read-only"
         if opts.warn then core.warn(why) end
@@ -2330,7 +2293,7 @@ function DocView:can_edit(reason, opts)
   return true
 end
 
-function DocView:add_visual_row_provider(id, provider, opts)
+function TextView:add_visual_row_provider(id, provider, opts)
   assert(type(id) == "string" and id ~= "", "visual row provider id must be a non-empty string")
   assert(type(provider) == "table", "visual row provider must be a table")
   opts = opts or {}
@@ -2339,14 +2302,14 @@ function DocView:add_visual_row_provider(id, provider, opts)
   self:bump_fold_generation("visual-row-provider")
 end
 
-function DocView:remove_visual_row_provider(id)
+function TextView:remove_visual_row_provider(id)
   if not self.visual_row_providers or not self.visual_row_providers[id] then return false end
   self.visual_row_providers[id] = nil
   self:bump_fold_generation("visual-row-provider-clear")
   return true
 end
 
-function DocView:invalidate_visual_rows(provider_id)
+function TextView:invalidate_visual_rows(provider_id)
   self.__visual_row_invalidation_generation = (self.__visual_row_invalidation_generation or 0) + 1
   if provider_id then
     self.__visual_row_provider_invalidations = self.__visual_row_provider_invalidations or {}
@@ -2356,25 +2319,25 @@ function DocView:invalidate_visual_rows(provider_id)
   self:bump_fold_generation(provider_id and ("visual-row-invalidate:" .. tostring(provider_id)) or "visual-row-invalidate")
 end
 
-function DocView:visual_row_provider_entries()
+function TextView:visual_row_provider_entries()
   return sorted_provider_entries(self.visual_row_providers)
 end
 
-function DocView:set_visual_row_extension(id, extension)
+function TextView:set_visual_row_extension(id, extension)
   assert(type(id) == "string" and id ~= "", "visual row extension id must be a non-empty string")
   self.visual_row_extensions = self.visual_row_extensions or {}
   self.visual_row_extensions[id] = extension
   self:bump_fold_generation("visual-row-extension")
 end
 
-function DocView:clear_visual_row_extension(id)
+function TextView:clear_visual_row_extension(id)
   if not self.visual_row_extensions or not self.visual_row_extensions[id] then return false end
   self.visual_row_extensions[id] = nil
   self:bump_fold_generation("visual-row-extension-clear")
   return true
 end
 
-function DocView:has_extra_visual_rows()
+function TextView:has_extra_visual_rows()
   for _, extension in pairs(self.visual_row_extensions or {}) do
     if extension then return true end
   end
@@ -2384,7 +2347,7 @@ function DocView:has_extra_visual_rows()
   return false
 end
 
-function DocView:has_composed_visual_rows()
+function TextView:has_composed_visual_rows()
   return self:has_collapsed_folds() or self:has_extra_visual_rows()
 end
 
@@ -2394,7 +2357,7 @@ local function visual_row_count_from_provider(view, entry, method, line)
   if fn then
     local ok, count = pcall(fn, provider, view, line)
     if ok then return math.max(0, math.floor(tonumber(count) or 0)) end
-    core.log_quiet("DocView visual row provider %s.%s failed for %s: %s", tostring(entry.id), method, view.doc:get_name(), tostring(count))
+    core.log_quiet("TextView visual row provider %s.%s failed for %s: %s", tostring(entry.id), method, view.buffer:get_name(), tostring(count))
     return 0
   end
   local table_name = method == "rows_before" and "before" or "after"
@@ -2402,14 +2365,14 @@ local function visual_row_count_from_provider(view, entry, method, line)
   if type(rows) == "function" then
     local ok, count = pcall(rows, line, view)
     if ok then return math.max(0, math.floor(tonumber(count) or 0)) end
-    core.log_quiet("DocView visual row provider %s.%s failed for %s: %s", tostring(entry.id), table_name, view.doc:get_name(), tostring(count))
+    core.log_quiet("TextView visual row provider %s.%s failed for %s: %s", tostring(entry.id), table_name, view.buffer:get_name(), tostring(count))
   elseif rows then
     return math.max(0, math.floor(tonumber(rows[line]) or 0))
   end
   return 0
 end
 
-function DocView:get_extra_visual_rows_before_line(line)
+function TextView:get_extra_visual_rows_before_line(line)
   local total = 0
   for _, extension in pairs(self.visual_row_extensions or {}) do
     local before = extension.before
@@ -2425,7 +2388,7 @@ function DocView:get_extra_visual_rows_before_line(line)
   return total
 end
 
-function DocView:get_extra_visual_rows_after_line(line)
+function TextView:get_extra_visual_rows_after_line(line)
   local total = 0
   for _, extension in pairs(self.visual_row_extensions or {}) do
     local after = extension.after
@@ -2441,9 +2404,9 @@ function DocView:get_extra_visual_rows_after_line(line)
   return total
 end
 
-local function normalize_fold_lines(doc, line1, line2)
-  line1 = common.clamp(math.floor(tonumber(line1) or 1), 1, #doc.lines)
-  line2 = common.clamp(math.floor(tonumber(line2) or line1), 1, #doc.lines)
+local function normalize_fold_lines(buffer, line1, line2)
+  line1 = common.clamp(math.floor(tonumber(line1) or 1), 1, #buffer.lines)
+  line2 = common.clamp(math.floor(tonumber(line2) or line1), 1, #buffer.lines)
   if line2 < line1 then line1, line2 = line2, line1 end
   return line1, line2
 end
@@ -2459,13 +2422,13 @@ local function default_fold_placeholder(fold)
   return string.format("⋯ %d line%s folded ⋯", count, count == 1 and "" or "s")
 end
 
-local function fold_preview_text(doc, fold)
-  if not doc or not fold then return nil end
+local function fold_preview_text(buffer, fold)
+  if not buffer or not fold then return nil end
   local line1 = fold.line1 or 1
   local line2 = fold.line2 or line1
   local col1 = fold.col1 or 1
-  local col2 = fold.col2 or (#(doc.lines[line2] or "") + 1)
-  local ok, text = pcall(doc.get_text, doc, line1, col1, line2, col2)
+  local col2 = fold.col2 or (#(buffer.lines[line2] or "") + 1)
+  local ok, text = pcall(buffer.get_text, buffer, line1, col1, line2, col2)
   if not ok or not text then return nil end
   text = tostring(text):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
   if text == "" then return nil end
@@ -2480,7 +2443,7 @@ local function fold_preview_text(doc, fold)
   return text
 end
 
-local function fold_placeholder(doc, fold)
+local function fold_placeholder(buffer, fold)
   if type(fold.placeholder) == "function" then
     local ok, text = pcall(fold.placeholder, fold)
     if ok and text then return tostring(text) end
@@ -2488,39 +2451,39 @@ local function fold_placeholder(doc, fold)
     return tostring(fold.placeholder)
   end
   local base = default_fold_placeholder(fold)
-  local preview = fold_preview_text(doc, fold)
+  local preview = fold_preview_text(buffer, fold)
   return preview and (preview .. "  " .. base) or base
 end
 
-function DocView:refresh_fold_region(fold)
+function TextView:refresh_fold_region(fold)
   if not fold or not fold.marker or not fold.marker:is_valid() then return false end
   local range = fold.marker:range()
   if not range then return false end
   fold.line1, fold.col1, fold.line2, fold.col2 = range.line1, range.col1, range.line2, range.col2
-  fold.line1, fold.line2 = normalize_fold_lines(self.doc, fold.line1, fold.line2)
+  fold.line1, fold.line2 = normalize_fold_lines(self.buffer, fold.line1, fold.line2)
   fold.hidden_count = fold_hidden_count(fold)
   return true
 end
 
-function DocView:bump_fold_generation(reason)
+function TextView:bump_fold_generation(reason)
   self.fold_generation = (self.fold_generation or 0) + 1
   self.__collapsed_fold_cache = nil
   self.__fold_layout_cache = nil
   self.__composed_visual_row_cache = nil
   core.redraw = true
   if reason and core.log_quiet then
-    core.log_quiet("DocView fold generation %d for %s: %s", self.fold_generation, self.doc:get_name(), tostring(reason))
+    core.log_quiet("TextView fold generation %d for %s: %s", self.fold_generation, self.buffer:get_name(), tostring(reason))
   end
 end
 
-function DocView:has_collapsed_folds()
+function TextView:has_collapsed_folds()
   for _, fold in ipairs(self.fold_regions or {}) do
     if fold.collapsed and fold.marker and fold.marker:is_valid() then return true end
   end
   return false
 end
 
-function DocView:get_collapsed_folds()
+function TextView:get_collapsed_folds()
   local generation = self.fold_generation or 0
   local cache = self.__collapsed_fold_cache
   if cache and cache.generation == generation then return cache.folds end
@@ -2536,23 +2499,23 @@ function DocView:get_collapsed_folds()
   return folds
 end
 
-function DocView:get_collapsed_fold_at_line(line)
+function TextView:get_collapsed_fold_at_line(line)
   for _, fold in ipairs(self:get_collapsed_folds()) do
     if line >= fold.line1 and line <= fold.line2 then return fold end
   end
 end
 
-function DocView:is_line_hidden_by_fold(line)
+function TextView:is_line_hidden_by_fold(line)
   local fold = self:get_collapsed_fold_at_line(line)
   return fold and line > fold.line1, fold
 end
 
-function DocView:fold_aware_line_move(line, direction)
-  local target = common.clamp(line + direction, 1, #self.doc.lines)
+function TextView:fold_aware_line_move(line, direction)
+  local target = common.clamp(line + direction, 1, #self.buffer.lines)
   local fold = self:get_collapsed_fold_at_line(target)
   if fold and target > fold.line1 then
     if direction > 0 then
-      target = fold.line2 < #self.doc.lines and fold.line2 + 1 or fold.line1
+      target = fold.line2 < #self.buffer.lines and fold.line2 + 1 or fold.line1
     else
       target = fold.line1
     end
@@ -2560,7 +2523,7 @@ function DocView:fold_aware_line_move(line, direction)
   return target
 end
 
-function DocView:folded_visual_line_position(line, col, direction)
+function TextView:folded_visual_line_position(line, col, direction)
   line = line or 1
   col = col or 1
   local line_end = self.wrapped_settings and linewrapping.has_wrapped_line_end_affinity(self, line, col) or false
@@ -2599,21 +2562,21 @@ function DocView:folded_visual_line_position(line, col, direction)
         x = self:get_col_x_offset(line, col, line_end)
       end
       local target_line, target_col, target_line_end = linewrapping.get_line_col_from_index_and_x(self, entry.wrapped_idx, x)
-      target_col = common.clamp(target_col or col or 1, 1, #(self.doc.lines[target_line] or ""))
+      target_col = common.clamp(target_col or col or 1, 1, #(self.buffer.lines[target_line] or ""))
       last_x_offset.offset = x
       last_x_offset.line = target_line
       last_x_offset.col = target_col
       last_x_offset.line_end = target_line_end
       return target_line, target_col, target_line_end
     end
-    return entry.line, common.clamp(col, 1, #(self.doc.lines[entry.line] or "")), false
+    return entry.line, common.clamp(col, 1, #(self.buffer.lines[entry.line] or "")), false
   end
   return line, col, false
 end
 
-function DocView:add_fold_region(opts)
+function TextView:add_fold_region(opts)
   opts = opts or {}
-  local line1, line2 = normalize_fold_lines(self.doc, opts.line1 or opts[1], opts.line2 or opts[2])
+  local line1, line2 = normalize_fold_lines(self.buffer, opts.line1 or opts[1], opts.line2 or opts[2])
   if line2 <= line1 then return nil, "fold region must span multiple lines" end
   local contained_folds = {}
   for _, fold in ipairs(self:get_collapsed_folds()) do
@@ -2635,12 +2598,12 @@ function DocView:add_fold_region(opts)
   self.__fold_next_id = (self.__fold_next_id or 0) + 1
   local id = opts.id or self.__fold_next_id
   local fold
-  local marker = range_marker.new(self.doc, {
+  local marker = range_marker.new(self.buffer, {
     line1 = line1,
     col1 = opts.col1 or 1,
     line2 = line2,
-    col2 = opts.col2 or (#self.doc.lines[line2] + 1),
-    kind = "docview-fold",
+    col2 = opts.col2 or (#self.buffer.lines[line2] + 1),
+    kind = "textview-fold",
     data = { view = self, id = id },
     invalidate_on_edit_overlap = opts.invalidate_on_edit_overlap ~= false,
     greedy_left = false,
@@ -2664,7 +2627,7 @@ function DocView:add_fold_region(opts)
     line1 = line1,
     col1 = opts.col1 or 1,
     line2 = line2,
-    col2 = opts.col2 or (#self.doc.lines[line2] + 1),
+    col2 = opts.col2 or (#self.buffer.lines[line2] + 1),
     collapsed = opts.collapsed ~= false,
     placeholder = opts.placeholder,
     show_widget = opts.show_widget ~= false,
@@ -2683,7 +2646,7 @@ function DocView:add_fold_region(opts)
   return fold
 end
 
-function DocView:remove_fold_region(id_or_fold, reason)
+function TextView:remove_fold_region(id_or_fold, reason)
   for i = #(self.fold_regions or {}), 1, -1 do
     local fold = self.fold_regions[i]
     if fold == id_or_fold or fold.id == id_or_fold then
@@ -2698,7 +2661,7 @@ function DocView:remove_fold_region(id_or_fold, reason)
   return false
 end
 
-function DocView:clear_fold_regions(reason)
+function TextView:clear_fold_regions(reason)
   if not self.fold_regions or #self.fold_regions == 0 then return end
   local old_folds = self.fold_regions
   for _, fold in ipairs(old_folds) do fold.__removing = true; range_marker.remove(fold.marker) end
@@ -2707,7 +2670,7 @@ function DocView:clear_fold_regions(reason)
   for _, fold in ipairs(old_folds) do self:notify_fold_listeners("remove", fold, reason or "clear") end
 end
 
-function DocView:expand_fold_region(id_or_fold, reason)
+function TextView:expand_fold_region(id_or_fold, reason)
   local fold = type(id_or_fold) == "table" and id_or_fold or nil
   if not fold then
     for _, candidate in ipairs(self.fold_regions or {}) do
@@ -2721,7 +2684,7 @@ function DocView:expand_fold_region(id_or_fold, reason)
   return true
 end
 
-function DocView:collapse_fold_region(id_or_fold, reason)
+function TextView:collapse_fold_region(id_or_fold, reason)
   local fold = type(id_or_fold) == "table" and id_or_fold or nil
   if not fold then
     for _, candidate in ipairs(self.fold_regions or {}) do
@@ -2755,7 +2718,7 @@ function DocView:collapse_fold_region(id_or_fold, reason)
   return true
 end
 
-function DocView:run_fold_transaction(fn)
+function TextView:run_fold_transaction(fn)
   local old_depth = self.__fold_transaction_depth or 0
   self.__fold_transaction_depth = old_depth + 1
   local ok, a, b, c = pcall(fn)
@@ -2765,16 +2728,16 @@ function DocView:run_fold_transaction(fn)
   return a, b, c
 end
 
-function DocView:get_line_visual_row_count(line)
+function TextView:get_line_visual_row_count(line)
   if self.wrapped_settings then return linewrapping.get_wrapped_line_count(self, line) end
   return 1
 end
 
-function DocView:get_folded_visual_row_count()
+function TextView:get_folded_visual_row_count()
   local count, line = 0, 1
   local folds = self:get_collapsed_folds()
   local fidx = 1
-  while line <= #self.doc.lines do
+  while line <= #self.buffer.lines do
     while folds[fidx] and folds[fidx].line1 < line do fidx = fidx + 1 end
     local fold = folds[fidx]
     if fold and line == fold.line1 then
@@ -2790,12 +2753,12 @@ function DocView:get_folded_visual_row_count()
   return math.max(1, count)
 end
 
-function DocView:get_folded_visual_row_for_position(line, col, line_end)
-  line = common.clamp(line or 1, 1, #self.doc.lines)
+function TextView:get_folded_visual_row_for_position(line, col, line_end)
+  line = common.clamp(line or 1, 1, #self.buffer.lines)
   local row, current = 1, 1
   local folds = self:get_collapsed_folds()
   local fidx = 1
-  while current <= #self.doc.lines do
+  while current <= #self.buffer.lines do
     while folds[fidx] and folds[fidx].line1 < current do fidx = fidx + 1 end
     local fold = folds[fidx]
     if fold and current == fold.line1 then
@@ -2833,14 +2796,14 @@ local function provider_generation_value(view, entry)
   if not fn then return nil end
   local ok, gen = pcall(fn, provider, view)
   if ok then return gen end
-  core.log_quiet("DocView visual row provider %s.generation failed for %s: %s", tostring(entry.id), view.doc:get_name(), tostring(gen))
+  core.log_quiet("TextView visual row provider %s.generation failed for %s: %s", tostring(entry.id), view.buffer:get_name(), tostring(gen))
 end
 
-function DocView:visual_row_cache_signature()
+function TextView:visual_row_cache_signature()
   local parts = {
     tostring(self.fold_generation or 0),
-    tostring(self.doc.text_revision or 0),
-    tostring(#self.doc.lines),
+    tostring(self.buffer.text_revision or 0),
+    tostring(#self.buffer.lines),
     tostring(self.wrapped_settings and linewrapping.get_total_wrapped_lines(self) or 0),
     tostring(self.__wrap_layout_generation or 0),
     tostring(self.__visual_row_invalidation_generation or 0),
@@ -2873,36 +2836,36 @@ local function provider_object_rows(view, entry, line, placement, previous_line_
   if not (provider and provider.visual_rows) then return nil end
   local ok, rows = pcall(provider.visual_rows, provider, view, line, placement, previous_line_total or 0)
   if not ok then
-    core.log_quiet("DocView visual row provider %s.visual_rows failed for %s: %s", tostring(entry.id), view.doc:get_name(), tostring(rows))
+    core.log_quiet("TextView visual row provider %s.visual_rows failed for %s: %s", tostring(entry.id), view.buffer:get_name(), tostring(rows))
     return nil
   end
   if rows == nil then return nil end
   if type(rows) ~= "table" then
-    core.log_quiet("DocView visual row provider %s returned non-table rows for %s", tostring(entry.id), view.doc:get_name())
+    core.log_quiet("TextView visual row provider %s returned non-table rows for %s", tostring(entry.id), view.buffer:get_name())
     return nil
   end
   return rows
 end
 
-function DocView:append_provider_rows(entries, provider_entry, line, placement, previous_line_total)
+function TextView:append_provider_rows(entries, provider_entry, line, placement, previous_line_total)
   local rows = provider_object_rows(self, provider_entry, line, placement, previous_line_total)
   if not rows then return 0 end
   local seen = {}
   local added = 0
   for i, row in ipairs(rows) do
     if type(row) ~= "table" then
-      core.log_quiet("DocView visual row provider %s row %d at %s:%d is not a table", tostring(provider_entry.id), i, placement, line)
+      core.log_quiet("TextView visual row provider %s row %d at %s:%d is not a table", tostring(provider_entry.id), i, placement, line)
     else
       local id = row.id or tostring(i)
       if seen[id] then
-        core.log_quiet("DocView visual row provider %s duplicate row id %s at %s:%d", tostring(provider_entry.id), tostring(id), placement, line)
+        core.log_quiet("TextView visual row provider %s duplicate row id %s at %s:%d", tostring(provider_entry.id), tostring(id), placement, line)
         seen[id] = seen[id] + 1
         id = tostring(id) .. "#" .. tostring(seen[id])
       else
         seen[id] = 1
       end
       if row.height_rows ~= nil and row.height_rows ~= 1 then
-        core.log_quiet("DocView visual row provider %s row %s requested unsupported height_rows=%s", tostring(provider_entry.id), tostring(id), tostring(row.height_rows))
+        core.log_quiet("TextView visual row provider %s row %s requested unsupported height_rows=%s", tostring(provider_entry.id), tostring(id), tostring(row.height_rows))
       end
       added = added + 1
       append_composed_entry(entries, {
@@ -2920,7 +2883,7 @@ function DocView:append_provider_rows(entries, provider_entry, line, placement, 
   return added
 end
 
-function DocView:append_legacy_provider_rows(entries, provider_id, line, placement, count)
+function TextView:append_legacy_provider_rows(entries, provider_id, line, placement, count)
   count = math.max(0, math.floor(tonumber(count) or 0))
   for i = 1, count do
     append_composed_entry(entries, {
@@ -2937,7 +2900,7 @@ function DocView:append_legacy_provider_rows(entries, provider_id, line, placeme
   end
 end
 
-function DocView:build_composed_visual_rows()
+function TextView:build_composed_visual_rows()
   local entries = {}
   local folds = self:get_collapsed_folds()
   local fidx = 1
@@ -2977,7 +2940,7 @@ function DocView:build_composed_visual_rows()
   end
 
   local line = 1
-  while line <= #self.doc.lines do
+  while line <= #self.buffer.lines do
     while folds[fidx] and folds[fidx].line1 < line do fidx = fidx + 1 end
     self:append_legacy_provider_rows(entries, "visual-row-extension", line, "before", extension_count(line, "before"))
     append_provider_placement(line, "before")
@@ -3024,7 +2987,7 @@ function DocView:build_composed_visual_rows()
   return entries
 end
 
-function DocView:composed_visual_rows()
+function TextView:composed_visual_rows()
   local signature = self:visual_row_cache_signature()
   local cache = self.__composed_visual_row_cache
   if not cache or cache.signature ~= signature then
@@ -3062,12 +3025,12 @@ function DocView:composed_visual_rows()
   return cache.entries
 end
 
-function DocView:get_composed_visual_row_count()
+function TextView:get_composed_visual_row_count()
   return #self:composed_visual_rows()
 end
 
-function DocView:get_composed_visual_row_for_position(line, col, line_end)
-  line = common.clamp(line or 1, 1, #self.doc.lines)
+function TextView:get_composed_visual_row_for_position(line, col, line_end)
+  line = common.clamp(line or 1, 1, #self.buffer.lines)
   local rows = self:composed_visual_rows()
   local indexed_row = self.__composed_visual_row_cache.position_rows[line]
   if indexed_row then
@@ -3101,12 +3064,12 @@ function DocView:get_composed_visual_row_for_position(line, col, line_end)
   return fallback
 end
 
-function DocView:get_visual_row_entry(target_row)
+function TextView:get_visual_row_entry(target_row)
   target_row = common.clamp(math.floor(target_row or 1), 1, self:get_composed_visual_row_count())
   return self:composed_visual_rows()[target_row]
 end
 
-function DocView:get_metric_row_entry(row)
+function TextView:get_metric_row_entry(row)
   if self:has_composed_visual_rows() then
     return self:get_visual_row_entry(row)
   elseif self.wrapped_settings then
@@ -3116,12 +3079,12 @@ function DocView:get_metric_row_entry(row)
   return { type = "line", line = row, row_in_line = 1, absolute_row = row, row = row }
 end
 
-function DocView:get_visual_metric_signature(
+function TextView:get_visual_metric_signature(
   wrap_layout_generation, row_count_override, text_revision_override
 )
   local row_count = row_count_override or self:get_scrollable_line_count()
   local line_height = self:get_line_height()
-  local text_revision = text_revision_override or self.doc.text_revision or 0
+  local text_revision = text_revision_override or self.buffer.text_revision or 0
   local fold_generation = self.fold_generation or 0
   local wrap_generation = wrap_layout_generation or self.__wrap_layout_generation or 0
   local metric_generation = self.__visual_metric_generation or 0
@@ -3168,7 +3131,7 @@ function DocView:get_visual_metric_signature(
   if same then
     self.render_cache_diagnostics.metric_signature_cache_hits =
       self.render_cache_diagnostics.metric_signature_cache_hits + 1
-    perf_frame_add("docview_visual_metric_signature_cache_hits", 1)
+    perf_frame_add("textview_visual_metric_signature_cache_hits", 1)
     return state.signature
   end
 
@@ -3194,7 +3157,7 @@ function DocView:get_visual_metric_signature(
   local signature = table.concat(parts, "|")
   self.render_cache_diagnostics.metric_signature_computations =
     self.render_cache_diagnostics.metric_signature_computations + 1
-  perf_frame_add("docview_visual_metric_signature_computations", 1)
+  perf_frame_add("textview_visual_metric_signature_computations", 1)
   if cacheable then
     local provider_seeds = {}
     for index, entry in ipairs(entries) do
@@ -3279,8 +3242,8 @@ local function prepare_sparse_visual_metrics(view, providers, default_height, ro
         end
       elseif not ok then
         core.log_quiet(
-          "DocView visual metric provider %s.sparse_line_metrics failed for %s: %s",
-          tostring(provider_entry.id), view.doc:get_name(), tostring(descriptor)
+          "TextView visual metric provider %s.sparse_line_metrics failed for %s: %s",
+          tostring(provider_entry.id), view.buffer:get_name(), tostring(descriptor)
         )
       end
     end
@@ -3317,8 +3280,8 @@ compute_visual_row_height = function(
         )
         if not ok then
           core.log_quiet(
-            "DocView visual metric provider %s.line_metrics failed for %s: %s",
-            tostring(provider_entry.id), view.doc:get_name(), tostring(value)
+            "TextView visual metric provider %s.line_metrics failed for %s: %s",
+            tostring(provider_entry.id), view.buffer:get_name(), tostring(value)
           )
           value = false
         end
@@ -3336,8 +3299,8 @@ compute_visual_row_height = function(
           height = math.max(1, tonumber(value) or height)
         elseif not ok then
           core.log_quiet(
-            "DocView visual metric provider %s.line_height failed for %s: %s",
-            tostring(provider_entry.id), view.doc:get_name(), tostring(value)
+            "TextView visual metric provider %s.line_height failed for %s: %s",
+            tostring(provider_entry.id), view.buffer:get_name(), tostring(value)
           )
         end
       end
@@ -3349,8 +3312,8 @@ compute_visual_row_height = function(
         height = math.max(1, tonumber(value) or height)
       elseif not ok then
         core.log_quiet(
-          "DocView visual metric provider %s.line_height failed for %s: %s",
-          tostring(provider_entry.id), view.doc:get_name(), tostring(value)
+          "TextView visual metric provider %s.line_height failed for %s: %s",
+          tostring(provider_entry.id), view.buffer:get_name(), tostring(value)
         )
       end
     elseif sparse and provider and provider.line_height then
@@ -3361,21 +3324,21 @@ compute_visual_row_height = function(
   return height
 end
 
-function DocView:get_visual_row_metric_cache()
+function TextView:get_visual_row_metric_cache()
   if not self:has_visual_metric_providers() then return nil end
   local perf_active = core.perf_frame_stats ~= nil
   local lookup_start = perf_active and system.get_time()
-  perf_frame_add("docview_visual_metric_cache_calls", 1)
+  perf_frame_add("textview_visual_metric_cache_calls", 1)
   local signature_start = perf_active and system.get_time()
   local signature = self:get_visual_metric_signature()
-  perf_elapsed("docview_visual_metric_signature_ms", signature_start)
+  perf_elapsed("textview_visual_metric_signature_ms", signature_start)
   local cache = self.__visual_metric_cache
   local providers = self:visual_metric_provider_entries()
   local default_height = self:get_line_height()
   if cache and cache.signature == signature then
     self.render_cache_diagnostics.metric_cache_hits =
       self.render_cache_diagnostics.metric_cache_hits + 1
-    perf_frame_add("docview_visual_metric_cache_hits", 1)
+    perf_frame_add("textview_visual_metric_cache_hits", 1)
     if cache.dirty_rows then
       local dirty_rows = 0
       for _ in pairs(cache.dirty_rows) do dirty_rows = dirty_rows + 1 end
@@ -3383,8 +3346,8 @@ function DocView:get_visual_row_metric_cache()
         self.render_cache_diagnostics.metric_dirty_passes + 1
       self.render_cache_diagnostics.metric_dirty_rows =
         self.render_cache_diagnostics.metric_dirty_rows + dirty_rows
-      perf_frame_add("docview_visual_metric_dirty_passes", 1)
-      perf_frame_add("docview_visual_metric_dirty_rows", dirty_rows)
+      perf_frame_add("textview_visual_metric_dirty_passes", 1)
+      perf_frame_add("textview_visual_metric_dirty_rows", dirty_rows)
       local anchor_row = metric_tree_row_at_y(
         cache.height_tree, cache.row_count, math.max(0, self.scroll and self.scroll.y or 0)
       )
@@ -3409,16 +3372,16 @@ function DocView:get_visual_row_metric_cache()
         self.scroll.to.y = self.scroll.to.y + anchor_delta
       end
     end
-    perf_elapsed("docview_visual_metric_cache_lookup_ms", lookup_start)
+    perf_elapsed("textview_visual_metric_cache_lookup_ms", lookup_start)
     return cache
   end
 
   if cache then
     self.render_cache_diagnostics.metric_signature_changes =
       self.render_cache_diagnostics.metric_signature_changes + 1
-    perf_frame_add("docview_visual_metric_signature_changes", 1)
+    perf_frame_add("textview_visual_metric_signature_changes", 1)
     perf_detail(
-      "docview_visual_metric_signature_transition:" ..
+      "textview_visual_metric_signature_transition:" ..
       tostring(cache.signature) .. " -> " .. tostring(signature),
       1
     )
@@ -3434,8 +3397,8 @@ function DocView:get_visual_row_metric_cache()
     self.render_cache_diagnostics.metric_full_rebuilds + 1
   self.render_cache_diagnostics.metric_full_rebuild_rows =
     self.render_cache_diagnostics.metric_full_rebuild_rows + row_count
-  perf_frame_add("docview_visual_metric_full_rebuilds", 1)
-  perf_frame_add("docview_visual_metric_full_rebuild_rows", row_count)
+  perf_frame_add("textview_visual_metric_full_rebuilds", 1)
+  perf_frame_add("textview_visual_metric_full_rebuild_rows", row_count)
   local heights = {}
   local line_metrics_cache = {}
   local total = 0
@@ -3451,7 +3414,7 @@ function DocView:get_visual_row_metric_cache()
   cache = {
     signature = signature,
     wrap_layout_generation = self.__wrap_layout_generation or 0,
-    text_revision = self.doc.text_revision or 0,
+    text_revision = self.buffer.text_revision or 0,
     heights = heights,
     height_tree = height_tree,
     total_height = total,
@@ -3461,22 +3424,22 @@ function DocView:get_visual_row_metric_cache()
     sparse_metrics = sparse_metrics,
   }
   self.__visual_metric_cache = cache
-  perf_elapsed("docview_visual_metric_full_rebuild_ms", rebuild_start)
-  perf_elapsed("docview_visual_metric_cache_lookup_ms", lookup_start)
+  perf_elapsed("textview_visual_metric_full_rebuild_ms", rebuild_start)
+  perf_elapsed("textview_visual_metric_cache_lookup_ms", lookup_start)
   return cache
 end
 
-function DocView:get_visual_row_height(row)
+function TextView:get_visual_row_height(row)
   local cache = self:get_visual_row_metric_cache()
   return cache and cache.heights[common.clamp(row, 1, cache.row_count)] or self:get_line_height()
 end
 
----Returns the resolved visual-row height for a Document position.
+---Returns the resolved visual-row height for a Buffer position.
 ---@param line integer
 ---@param col? integer
 ---@param line_end? boolean
 ---@return number
-function DocView:get_position_visual_row_height(line, col, line_end)
+function TextView:get_position_visual_row_height(line, col, line_end)
   return self:get_visual_row_height(self:get_visual_row(line, col or 1, line_end))
 end
 
@@ -3485,7 +3448,7 @@ end
 ---@param col? integer
 ---@param line_end? boolean
 ---@return number
-function DocView:get_position_caret_height(line, col, line_end)
+function TextView:get_position_caret_height(line, col, line_end)
   local row_height = self:get_position_visual_row_height(line, col, line_end)
   local render_line = self:get_line_render(line)
   local _, position_row = self:get_position_line_render_row(line, col or 1)
@@ -3497,8 +3460,8 @@ function DocView:get_position_caret_height(line, col, line_end)
     local ok, value = pcall(requested, self, render_line, line, col or 1, row_height)
     if ok then requested = value else
       core.log_quiet(
-        "DocView line-render caret height failed for %s: %s",
-        self.doc:get_name(), tostring(value)
+        "TextView line-render caret height failed for %s: %s",
+        self.buffer:get_name(), tostring(value)
       )
       requested = nil
     end
@@ -3506,7 +3469,7 @@ function DocView:get_position_caret_height(line, col, line_end)
   return math.max(1, tonumber(requested) or row_height)
 end
 
-function DocView:get_visual_row_y_offset(row)
+function TextView:get_visual_row_y_offset(row)
   local cache = self:get_visual_row_metric_cache()
   if cache then
     row = common.clamp(row, 1, cache.row_count + 1)
@@ -3515,7 +3478,7 @@ function DocView:get_visual_row_y_offset(row)
   return math.max(0, row - 1) * self:get_line_height()
 end
 
-function DocView:get_visual_row_at_y(y)
+function TextView:get_visual_row_at_y(y)
   local cache = self:get_visual_row_metric_cache()
   if not cache then
     return common.clamp(math.floor(y / self:get_line_height()) + 1, 1, self:get_scrollable_line_count())
@@ -3531,7 +3494,7 @@ local function overscan_metric_rows(cache, first, last, total)
   return first, last
 end
 
-function DocView:iter_visible_visual_rows()
+function TextView:iter_visible_visual_rows()
   local _, y1, _, y2 = self:get_content_bounds()
   local total = self:get_scrollable_line_count()
   local cache = self:get_visual_row_metric_cache()
@@ -3560,8 +3523,8 @@ function DocView:iter_visible_visual_rows()
   end
 end
 
-function DocView:expand_folds_covering_range(line1, col1, line2, col2, reason)
-  line1, line2 = normalize_fold_lines(self.doc, line1, line2 or line1)
+function TextView:expand_folds_covering_range(line1, col1, line2, col2, reason)
+  line1, line2 = normalize_fold_lines(self.buffer, line1, line2 or line1)
   local changed = false
   for _, fold in ipairs(self:get_collapsed_folds()) do
     if not (line2 < fold.line1 or line1 > fold.line2) then
@@ -3573,20 +3536,20 @@ function DocView:expand_folds_covering_range(line1, col1, line2, col2, reason)
   return changed
 end
 
-function DocView:expand_folds_at_line(line, reason)
+function TextView:expand_folds_at_line(line, reason)
   return self:expand_folds_covering_range(line, 1, line, 1, reason or "expand-line")
 end
 
-function DocView:select_and_reveal(line1, col1, line2, col2, opts)
+function TextView:select_and_reveal(line1, col1, line2, col2, opts)
   opts = opts or {}
   if opts.fold_policy ~= "keep" then
     self:expand_folds_covering_range(line1, col1, line2 or line1, col2 or col1, opts.reason or "select-and-reveal")
   end
-  self.doc:set_selection(line1, col1, line2 or line1, col2 or col1)
+  self.buffer:set_selection(line1, col1, line2 or line1, col2 or col1)
   self:scroll_to_make_visible(line1, col1, opts.instant, { line2 = line2, col2 = col2 })
 end
 
-function DocView:reveal_range(line1, col1, line2, col2, opts)
+function TextView:reveal_range(line1, col1, line2, col2, opts)
   opts = opts or {}
   if opts.fold_policy ~= "keep" then
     self:expand_folds_covering_range(line1, col1, line2 or line1, col2 or col1, opts.reason or "reveal-range")
@@ -3602,9 +3565,9 @@ local function is_blank_line(text)
   return tostring(text or ""):match("^%s*$") ~= nil
 end
 
-function DocView:get_fold_target(line1, col1, line2, col2, opts)
-  line1 = common.clamp(line1 or 1, 1, #self.doc.lines)
-  line2 = common.clamp(line2 or line1, 1, #self.doc.lines)
+function TextView:get_fold_target(line1, col1, line2, col2, opts)
+  line1 = common.clamp(line1 or 1, 1, #self.buffer.lines)
+  line2 = common.clamp(line2 or line1, 1, #self.buffer.lines)
   col1, col2 = col1 or 1, col2 or col1 or 1
   if line2 < line1 or line2 == line1 and col2 < col1 then
     line1, col1, line2, col2 = line2, col2, line1, col1
@@ -3613,17 +3576,17 @@ function DocView:get_fold_target(line1, col1, line2, col2, opts)
   if line2 > line1 then
     if col2 == 1 then line2 = math.max(line1, line2 - 1) end
     if line2 > line1 then
-      return { line1 = line1, col1 = 1, line2 = line2, col2 = #self.doc.lines[line2] + 1, kind = "selection" }
+      return { line1 = line1, col1 = 1, line2 = line2, col2 = #self.buffer.lines[line2] + 1, kind = "selection" }
     end
   end
 
   local function indentation_target_at(start, kind)
-    while start <= #self.doc.lines and is_blank_line(self.doc.lines[start]) do start = start + 1 end
-    if start > #self.doc.lines then return nil end
-    local base_indent = line_indent(self.doc.lines[start])
+    while start <= #self.buffer.lines and is_blank_line(self.buffer.lines[start]) do start = start + 1 end
+    if start > #self.buffer.lines then return nil end
+    local base_indent = line_indent(self.buffer.lines[start])
     local last = start
-    for line = start + 1, #self.doc.lines do
-      local text = self.doc.lines[line]
+    for line = start + 1, #self.buffer.lines do
+      local text = self.buffer.lines[line]
       if is_blank_line(text) then
         last = line
       elseif line_indent(text) > base_indent then
@@ -3632,32 +3595,32 @@ function DocView:get_fold_target(line1, col1, line2, col2, opts)
         break
       end
     end
-    while last > start and is_blank_line(self.doc.lines[last]) do last = last - 1 end
+    while last > start and is_blank_line(self.buffer.lines[last]) do last = last - 1 end
     if last > start then
-      return { line1 = start, col1 = 1, line2 = last, col2 = #self.doc.lines[last] + 1, kind = kind or "indent" }
+      return { line1 = start, col1 = 1, line2 = last, col2 = #self.buffer.lines[last] + 1, kind = kind or "indent" }
     end
   end
 
-  local syntax_target, syntax_reason = language_intelligence.fold_target(self.doc, line1, col1, line2, col2)
+  local syntax_target, syntax_reason = language_intelligence.fold_target(self.buffer, line1, col1, line2, col2)
   if syntax_target then return syntax_target end
   if syntax_reason and syntax_reason ~= "no-provider" and syntax_reason ~= "unsupported" and syntax_reason ~= "not-ready" then
-    core.log_quiet("Syntax Fold Target unavailable for %s: %s", self.doc:get_name(), tostring(syntax_reason))
+    core.log_quiet("Syntax Fold Target unavailable for %s: %s", self.buffer:get_name(), tostring(syntax_reason))
   end
 
   local direct = indentation_target_at(line1, "indent")
   if direct then return direct end
 
   for start = line1 - 1, 1, -1 do
-    if not is_blank_line(self.doc.lines[start]) then
+    if not is_blank_line(self.buffer.lines[start]) then
       local target = indentation_target_at(start, "enclosing-indent")
       if target and target.line2 >= line1 then return target end
     end
   end
 end
 
-function DocView:fold_at_caret(opts)
+function TextView:fold_at_caret(opts)
   opts = opts or {}
-  local line1, col1, line2, col2 = self.doc:get_selection(true)
+  local line1, col1, line2, col2 = self.buffer:get_selection(true)
   local target = self:get_fold_target(line1, col1, line2, col2, opts)
   if not target then return nil, "no foldable multi-line range at caret" end
   for _, fold in ipairs(self.fold_regions or {}) do
@@ -3669,10 +3632,10 @@ function DocView:fold_at_caret(opts)
   return self:add_fold_region(target)
 end
 
-function DocView:unfold_at_caret(reason)
+function TextView:unfold_at_caret(reason)
   reason = reason or "unfold-at-caret"
   local changed = false
-  for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
+  for _, line1, col1, line2, col2 in self.buffer:get_selections(true) do
     if line1 ~= line2 or col1 ~= col2 then
       if self:expand_folds_covering_range(line1, col1, line2, col2, reason) then
         changed = true
@@ -3681,13 +3644,13 @@ function DocView:unfold_at_caret(reason)
   end
   if changed then return true end
 
-  local line = self.doc:get_selection()
+  local line = self.buffer:get_selection()
   local fold = self:get_collapsed_fold_at_line(line)
   if fold then return self:expand_fold_region(fold, reason) end
   return false
 end
 
-function DocView:unfold_all(reason)
+function TextView:unfold_all(reason)
   local changed = false
   for _, fold in ipairs(self.fold_regions or {}) do
     if fold.collapsed then
@@ -3699,8 +3662,8 @@ function DocView:unfold_all(reason)
   return changed
 end
 
-local function selection_overlaps_fold(doc, fold)
-  for _, line1, col1, line2, col2 in doc:get_selections(true) do
+local function selection_overlaps_fold(buffer, fold)
+  for _, line1, col1, line2, col2 in buffer:get_selections(true) do
     if (line1 ~= line2 or col1 ~= col2) and line1 <= fold.line2 and line2 >= fold.line1 then return true end
   end
   return false
@@ -3746,7 +3709,7 @@ end
 ---@return number? height Height of the rendered content
 ---@return table? render_line
 ---@return table? position_row
-function DocView:get_line_render_content_geometry(line, col, line_end)
+function TextView:get_line_render_content_geometry(line, col, line_end)
   local render_line = self:get_line_render(line)
   if not render_line then return nil end
 
@@ -3767,10 +3730,10 @@ function DocView:get_line_render_content_geometry(line, col, line_end)
   return y_offset, height, render_line, nil
 end
 
-local function selection_covers_fold(doc, fold)
+local function selection_covers_fold(buffer, fold)
   local fold_col1 = fold.col1 or 1
-  local fold_col2 = fold.col2 or (#(doc.lines[fold.line2] or "") + 1)
-  for _, line1, col1, line2, col2 in doc:get_selections(true) do
+  local fold_col2 = fold.col2 or (#(buffer.lines[fold.line2] or "") + 1)
+  for _, line1, col1, line2, col2 in buffer:get_selections(true) do
     if (line1 ~= line2 or col1 ~= col2)
     and position_le(line1, col1, fold.line1, fold_col1)
     and position_ge(line2, col2, fold.line2, fold_col2) then
@@ -3780,21 +3743,21 @@ local function selection_covers_fold(doc, fold)
   return false
 end
 
-function DocView:draw_fold_widget_gutter(fold, x, y, width, height)
+function TextView:draw_fold_widget_gutter(fold, x, y, width, height)
   local lh = height or self:get_line_height()
   renderer.draw_rect(x, y, width, lh, style.gutter_bg or style.background2)
   if self:line_number_visible_at(fold.line1) then
-    local color = selection_overlaps_fold(self.doc, fold) and style.line_number2 or style.line_number
+    local color = selection_overlaps_fold(self.buffer, fold) and style.line_number2 or style.line_number
     common.draw_text(self:get_font(), color, tostring(fold.line1), "right", x + style.padding.x, y, width - style.padding.x, lh)
   end
   return lh
 end
 
-function DocView:draw_fold_widget_body(fold, x, y, height)
+function TextView:draw_fold_widget_body(fold, x, y, height)
   local lh = height or self:get_line_height()
   local bx = x + self.scroll.x
   local bw = math.max(0, self.position.x + self.size.x - bx)
-  local bg = selection_covers_fold(self.doc, fold) and style.selection or style.fold_widget_background
+  local bg = selection_covers_fold(self.buffer, fold) and style.selection or style.fold_widget_background
   renderer.draw_rect(bx, y, bw, lh, bg)
   local border = style.fold_widget_border or style.fold_widget_effect or style.accent
   local t = math.max(1, SCALE)
@@ -3802,7 +3765,7 @@ function DocView:draw_fold_widget_body(fold, x, y, height)
   renderer.draw_rect(bx, y + lh - t, bw, t, border)
   renderer.draw_rect(bx, y, t, lh, border)
   renderer.draw_rect(bx + bw - t, y, t, lh, border)
-  common.draw_text(self:get_font(), style.fold_widget_text or style.dim, fold_placeholder(self.doc, fold), "left", x + style.padding.x, y, self.size.x, lh)
+  common.draw_text(self:get_font(), style.fold_widget_text or style.dim, fold_placeholder(self.buffer, fold), "left", x + style.padding.x, y, self.size.x, lh)
   return lh
 end
 
@@ -3812,7 +3775,7 @@ end
 ---@param col? integer Optional column number
 ---@return number x Screen x coordinate
 ---@return number y Screen y coordinate
-function DocView:get_line_screen_position(line, col, line_end)
+function TextView:get_line_screen_position(line, col, line_end)
   local function render_y_offset()
     if not col then return 0 end
     local _, row = self:get_position_line_render_row(line, col)
@@ -3847,7 +3810,7 @@ end
 
 ---Get the vertical offset for centering text within a line.
 ---@return number offset Y offset to center text in line height
-function DocView:get_line_text_y_offset()
+function TextView:get_line_text_y_offset()
   local lh = self:get_line_height()
   local th = self:get_font():get_height()
   return (lh - th) / 2
@@ -3867,10 +3830,10 @@ end
 ---@return integer col2
 ---@return integer ucol1
 ---@return integer ucol2
-function DocView:get_visible_cols_range(line, extra_cols)
+function TextView:get_visible_cols_range(line, extra_cols)
   extra_cols = extra_cols or 100
 
-  local text = self.doc.lines[line]
+  local text = self.buffer.lines[line]
   local line_len = #text
   if line_len == 1 then return 1, 1, 1, 1 end
 
@@ -3890,7 +3853,7 @@ function DocView:get_visible_cols_range(line, extra_cols)
   local ucol1, ucol2 = col1, col2
 
   -- if line shorter than estimate then handle utf8 stuff
-  local cache = self.doc.cache.ulen
+  local cache = self.buffer.cache.ulen
   local ulen = cache[line]
   if not ulen then
     ulen = text:ulen(nil, nil, true)
@@ -3910,7 +3873,7 @@ end
 ---Get the range of visible lines in the current viewport.
 ---@return integer minline First visible line
 ---@return integer maxline Last visible line
-function DocView:get_visible_line_range()
+function TextView:get_visible_line_range()
   local x, y, x2, y2 = self:get_content_bounds()
   local cache = self:get_visual_row_metric_cache()
   local lh = self:get_line_height()
@@ -3923,7 +3886,7 @@ function DocView:get_visible_line_range()
     minidx, maxidx = overscan_metric_rows(cache, minidx, maxidx, total)
     local first = self:get_visual_row_entry(minidx)
     local last = self:get_visual_row_entry(maxidx)
-    return first and first.line or 1, last and (last.fold and last.fold.line2 or last.line) or #self.doc.lines
+    return first and first.line or 1, last and (last.fold and last.fold.line2 or last.line) or #self.buffer.lines
   end
   if self.wrapped_settings then
     local total = linewrapping.get_total_wrapped_lines(self)
@@ -3937,10 +3900,10 @@ function DocView:get_visible_line_range()
     return minline, maxline
   end
   local minline = cache and self:get_visual_row_at_y(math.max(0, y - style.padding.y)) or math.max(1, math.floor((y - style.padding.y) / lh) + 1)
-  local maxline = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(#self.doc.lines, math.floor((y2 - style.padding.y) / lh) + 1)
-  minline = common.clamp(minline, 1, #self.doc.lines)
-  maxline = common.clamp(maxline, 1, #self.doc.lines)
-  minline, maxline = overscan_metric_rows(cache, minline, maxline, #self.doc.lines)
+  local maxline = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(#self.buffer.lines, math.floor((y2 - style.padding.y) / lh) + 1)
+  minline = common.clamp(minline, 1, #self.buffer.lines)
+  maxline = common.clamp(maxline, 1, #self.buffer.lines)
+  minline, maxline = overscan_metric_rows(cache, minline, maxline, #self.buffer.lines)
   return minline, maxline
 end
 
@@ -3963,12 +3926,12 @@ local function line_render_signature(view, line)
   return table.concat(parts, "\0")
 end
 
-function DocView:get_line_render(line)
+function TextView:get_line_render(line)
   if not self:has_line_render_providers() then return nil end
   local perf_active = core.perf_frame_stats ~= nil
   local lookup_start = perf_active and system.get_time()
-  perf_frame_add("docview_line_render_cache_calls", 1)
-  local source_line = self.doc.lines[line] or ""
+  perf_frame_add("textview_line_render_cache_calls", 1)
+  local source_line = self.buffer.lines[line] or ""
   local generation = self.__line_render_generation or 0
   local cache = self.__line_render_cache
   if not cache or cache.generation ~= generation then
@@ -3980,21 +3943,21 @@ function DocView:get_line_render(line)
   if cached and cached.source_line == source_line and cached.signature == signature then
     cache.hits = cache.hits + 1
     self.render_cache_diagnostics.line_hits = self.render_cache_diagnostics.line_hits + 1
-    perf_frame_add("docview_line_render_cache_hits", 1)
-    perf_elapsed("docview_line_render_cache_lookup_ms", lookup_start)
+    perf_frame_add("textview_line_render_cache_hits", 1)
+    perf_elapsed("textview_line_render_cache_lookup_ms", lookup_start)
     return cached.render_line or nil
   end
   cache.misses = cache.misses + 1
   self.render_cache_diagnostics.line_misses = self.render_cache_diagnostics.line_misses + 1
-  perf_frame_add("docview_line_render_cache_misses", 1)
+  perf_frame_add("textview_line_render_cache_misses", 1)
   if cached then
     self.render_cache_diagnostics.line_signature_misses =
       self.render_cache_diagnostics.line_signature_misses + 1
-    perf_frame_add("docview_line_render_signature_misses", 1)
+    perf_frame_add("textview_line_render_signature_misses", 1)
   else
     self.render_cache_diagnostics.line_cold_misses =
       self.render_cache_diagnostics.line_cold_misses + 1
-    perf_frame_add("docview_line_render_cold_misses", 1)
+    perf_frame_add("textview_line_render_cold_misses", 1)
   end
   local build_start = perf_active and system.get_time()
   local source_text = source_line:sub(-1) == "\n" and source_line:sub(1, -2) or source_line
@@ -4009,7 +3972,7 @@ function DocView:get_line_render(line)
         resolved = render_line
         break
       elseif not ok then
-        core.log_quiet("DocView line render provider %s.render_line failed for %s: %s", tostring(entry.id), self.doc:get_name(), tostring(render_line))
+        core.log_quiet("TextView line render provider %s.render_line failed for %s: %s", tostring(entry.id), self.buffer:get_name(), tostring(render_line))
       end
     end
   end
@@ -4018,12 +3981,12 @@ function DocView:get_line_render(line)
     signature = signature,
     render_line = resolved or false,
   }
-  perf_elapsed("docview_line_render_build_ms", build_start)
-  perf_elapsed("docview_line_render_cache_lookup_ms", lookup_start)
+  perf_elapsed("textview_line_render_build_ms", build_start)
+  perf_elapsed("textview_line_render_cache_lookup_ms", lookup_start)
   return resolved
 end
 
-function DocView:get_render_fragment_at_position(x, y)
+function TextView:get_render_fragment_at_position(x, y)
   if not self:has_line_render_providers() then return nil end
   local line, col = self:resolve_screen_position(x, y)
   local render_line = self:get_line_render(line)
@@ -4031,7 +3994,7 @@ function DocView:get_render_fragment_at_position(x, y)
   if self.wrapped_settings and not render_line.disable_wrapping then
     local idx, _, _, row_start = linewrapping.get_line_idx_col_count(self, line, col)
     local next_line, row_end = linewrapping.get_idx_line_col(self, idx + 1)
-    if next_line ~= line then row_end = #(self.doc.lines[line] or "") end
+    if next_line ~= line then row_end = #(self.buffer.lines[line] or "") end
     local line_x, line_y = self:get_line_screen_position(line)
     local first_idx = self:get_visual_row(line, 1, false)
     local row_y = line_y + self:get_visual_row_y_offset(idx)
@@ -4081,7 +4044,7 @@ function DocView:get_render_fragment_at_position(x, y)
     content_height = content_height or row_height
   end
   local tx = render_line.x_offset or 0
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
     if not fragment.hidden then
       local col1 = fragment.source_col1 or 1
@@ -4125,7 +4088,7 @@ local function render_widget_rect(fragment, x, y, row_height, padding)
   return left, top, width, content_height + padding * 2
 end
 
-function DocView:get_render_widget_at_position(x, y)
+function TextView:get_render_widget_at_position(x, y)
   if not self:has_line_render_providers() then return nil end
   local line, col = self:resolve_screen_position(x, y)
   local render_line = self:get_line_render(line)
@@ -4137,7 +4100,7 @@ function DocView:get_render_widget_at_position(x, y)
     )
     local next_line, row_end = linewrapping.get_idx_line_col(self, idx + 1)
     local last_row = next_line ~= line
-    if last_row then row_end = #(self.doc.lines[line] or "") end
+    if last_row then row_end = #(self.buffer.lines[line] or "") end
     local line_x, line_y = self:get_line_screen_position(line)
     local first_idx = self:get_visual_row(line, 1, false)
     local row_height = self:get_visual_row_height(idx)
@@ -4200,7 +4163,7 @@ function DocView:get_render_widget_at_position(x, y)
     content_height = content_height or row_height
   end
   local tx = render_line.x_offset or 0
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   local widget_hits = {}
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
     if not fragment.hidden then
@@ -4238,11 +4201,11 @@ function DocView:get_render_widget_at_position(x, y)
   end
 end
 
-function DocView:get_render_widget_near_position(x, y)
+function TextView:get_render_widget_near_position(x, y)
   if not self:has_line_render_providers() then return nil end
   local resolved_line = self:resolve_screen_position(x, y)
   local best
-  for line = math.max(1, resolved_line - 1), math.min(#self.doc.lines, resolved_line + 1) do
+  for line = math.max(1, resolved_line - 1), math.min(#self.buffer.lines, resolved_line + 1) do
     local render_line = self:get_line_render(line)
     if render_line then
       local line_x, line_y = self:get_line_screen_position(line)
@@ -4255,7 +4218,7 @@ function DocView:get_render_widget_near_position(x, y)
         content_height = content_height or row_height
       end
       local tx = render_line.x_offset or 0
-      local _, indent_size = self.doc:get_indent_info()
+      local _, indent_size = self.buffer:get_indent_info()
       for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
         if not fragment.hidden then
           local font = fragment.font or self:get_font()
@@ -4312,19 +4275,19 @@ end
 
 ---Discard normalized fragment copies after mutating a render line in place.
 ---@param render_line table?
-function DocView:invalidate_line_render_fragment_normalization(render_line)
+function TextView:invalidate_line_render_fragment_normalization(render_line)
   if render_line then
     render_line.__normalized_fragments_cache = nil
     render_line.__native_text_layout_cache = nil
   end
 end
 
-function DocView:iter_line_render_fragments(render_line)
+function TextView:iter_line_render_fragments(render_line)
   local source_text = render_line.source_text or ""
   local source_fragments = render_line.fragments
   self.render_cache_diagnostics.fragment_normalization_calls =
     self.render_cache_diagnostics.fragment_normalization_calls + 1
-  perf_frame_add("docview_fragment_normalization_calls", 1)
+  perf_frame_add("textview_fragment_normalization_calls", 1)
   local cache = render_line.__normalized_fragments_cache
   if cache
     and cache.source_text == source_text
@@ -4332,12 +4295,12 @@ function DocView:iter_line_render_fragments(render_line)
   then
     self.render_cache_diagnostics.fragment_normalization_cache_hits =
       self.render_cache_diagnostics.fragment_normalization_cache_hits + 1
-    perf_frame_add("docview_fragment_normalization_cache_hits", 1)
+    perf_frame_add("textview_fragment_normalization_cache_hits", 1)
     return cache.fragments
   end
   self.render_cache_diagnostics.fragment_normalization_builds =
     self.render_cache_diagnostics.fragment_normalization_builds + 1
-  perf_frame_add("docview_fragment_normalization_builds", 1)
+  perf_frame_add("textview_fragment_normalization_builds", 1)
   local fragments = {}
   local cursor = 1
   for _, fragment in ipairs(source_fragments or {}) do
@@ -4365,7 +4328,7 @@ function DocView:iter_line_render_fragments(render_line)
   return fragments
 end
 
-function DocView:get_line_render_position_row(render_line, col, prefer_next)
+function TextView:get_line_render_position_row(render_line, col, prefer_next)
   col = math.max(1, col or 1)
   local rows = render_line and render_line.position_rows or {}
   for index, row in ipairs(rows) do
@@ -4387,7 +4350,7 @@ end
 ---@param line integer
 ---@return table? render_line
 ---@return table? rows
-function DocView:get_line_render_position_rows(line)
+function TextView:get_line_render_position_rows(line)
   local render_line = self:get_line_render(line)
   local rows = render_line and render_line.position_rows
   if type(rows) ~= "table" or #rows == 0 then return render_line, nil end
@@ -4399,13 +4362,13 @@ local function render_position_key(line, col)
 end
 
 ---Resolve a caret row with view-local boundary affinity.
-function DocView:get_position_line_render_row(line, col, prefer_next)
+function TextView:get_position_line_render_row(line, col, prefer_next)
   local render_line, rows = self:get_line_render_position_rows(line)
   if not rows then return render_line, nil, nil end
   local affinity = self.line_render_position_row_affinity
   if affinity
-  and affinity.selection_key == linewrapping.selection_state_key(self.doc)
-  and affinity.text_revision == (self.doc.text_revision or 0)
+  and affinity.selection_key == linewrapping.selection_state_key(self.buffer)
+  and affinity.text_revision == (self.buffer.text_revision or 0)
   then
     local index = affinity.positions[render_position_key(line, col)]
     if index and rows[index] then return render_line, rows[index], index end
@@ -4414,24 +4377,24 @@ function DocView:get_position_line_render_row(line, col, prefer_next)
   return render_line, row, index
 end
 
-function DocView:clear_pending_line_render_position_row_affinity()
+function TextView:clear_pending_line_render_position_row_affinity()
   self.__pending_line_render_position_rows = nil
 end
 
-function DocView:queue_line_render_position_row_affinity(line, col, index)
+function TextView:queue_line_render_position_row_affinity(line, col, index)
   if not (line and col and index) then return end
   self.__pending_line_render_position_rows =
     self.__pending_line_render_position_rows or {}
   self.__pending_line_render_position_rows[render_position_key(line, col)] = index
 end
 
-function DocView:apply_pending_line_render_position_row_affinity()
+function TextView:apply_pending_line_render_position_row_affinity()
   local positions = self.__pending_line_render_position_rows
   self.__pending_line_render_position_rows = nil
   if positions and next(positions) then
     self.line_render_position_row_affinity = {
-      selection_key = linewrapping.selection_state_key(self.doc),
-      text_revision = self.doc.text_revision or 0,
+      selection_key = linewrapping.selection_state_key(self.buffer),
+      text_revision = self.buffer.text_revision or 0,
       positions = positions,
     }
   else
@@ -4439,16 +4402,16 @@ function DocView:apply_pending_line_render_position_row_affinity()
   end
 end
 
-function DocView:apply_resolved_line_render_position_row_affinity()
+function TextView:apply_resolved_line_render_position_row_affinity()
   local resolved = self.resolved_line_render_position_row
   self.resolved_line_render_position_row = nil
   if not resolved then return end
   local line, col, index = resolved[1], resolved[2], resolved[3]
-  for _, caret_line, caret_col in self.doc:get_selections(false) do
+  for _, caret_line, caret_col in self.buffer:get_selections(false) do
     if caret_line == line and caret_col == col then
       self.line_render_position_row_affinity = {
-        selection_key = linewrapping.selection_state_key(self.doc),
-        text_revision = self.doc.text_revision or 0,
+        selection_key = linewrapping.selection_state_key(self.buffer),
+        text_revision = self.buffer.text_revision or 0,
         positions = { [render_position_key(line, col)] = index },
       }
       return
@@ -4461,7 +4424,7 @@ end
 ---@param col integer
 ---@return integer? col1
 ---@return integer? col2
-function DocView:get_line_render_position_row_bounds(line, col)
+function TextView:get_line_render_position_row_bounds(line, col)
   local _, row, index = self:get_position_line_render_row(line, col)
   if not row then return nil end
   return math.max(1, row.source_col1 or 1),
@@ -4496,7 +4459,7 @@ end
 ---Move between independently navigable caret rows inside one rendered line.
 ---@return integer? line
 ---@return integer? col
-function DocView:move_within_line_render_position_rows(line, col, direction)
+function TextView:move_within_line_render_position_rows(line, col, direction)
   local render_line, rows = self:get_line_render_position_rows(line)
   if not rows or #rows < 2 then return nil end
   local _, current, index = self:get_position_line_render_row(line, col)
@@ -4526,7 +4489,7 @@ end
 
 ---Land on the first/last caret row when vertical movement enters a rendered line.
 ---@return integer col
-function DocView:land_on_line_render_position_row(line, fallback_col, direction, x)
+function TextView:land_on_line_render_position_row(line, fallback_col, direction, x)
   local render_line, rows = self:get_line_render_position_rows(line)
   if not rows or #rows < 2 then return fallback_col end
   x = x or 0
@@ -4556,14 +4519,14 @@ function DocView:land_on_line_render_position_row(line, fallback_col, direction,
 end
 
 ---Whether an unwrapped navigation command must honor rendered caret rows.
-function DocView:needs_line_render_position_navigation(command_name)
+function TextView:needs_line_render_position_navigation(command_name)
   local direction = command_name:find("previous%-line", 1) and -1
     or command_name:find("next%-line", 1) and 1 or nil
-  for _, line in self.doc:get_selections(false) do
+  for _, line in self.buffer:get_selections(false) do
     local _, rows = self:get_line_render_position_rows(line)
     if rows and #rows > 1 then return true end
     if direction then
-      local target = common.clamp(line + direction, 1, #self.doc.lines)
+      local target = common.clamp(line + direction, 1, #self.buffer.lines)
       local _, target_rows = self:get_line_render_position_rows(target)
       if target_rows and #target_rows > 1 then return true end
     end
@@ -4574,7 +4537,7 @@ end
 ---Resolve Current Line Highlight geometry for one caret position.
 ---@return number y
 ---@return number height
-function DocView:get_position_highlight_geometry(line, col, line_end)
+function TextView:get_position_highlight_geometry(line, col, line_end)
   local _, row = self:get_position_line_render_row(line, col or 1)
   if row then
     local _, line_y = self:get_line_screen_position(line)
@@ -4606,7 +4569,7 @@ end
 local function get_line_render_raw_col_x_offset(self, render_line, col)
   col = math.max(1, col or 1)
   local xoffset = render_line.x_offset or 0
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   local fragments = self:iter_line_render_fragments(render_line)
   local layout_cache = render_line.__native_text_layout_cache
   if not layout_cache or layout_cache.fragments ~= fragments
@@ -4686,7 +4649,7 @@ end
 ---Return a source-column width mapper optimized for monotonically increasing
 ---columns. Wrapping scans every UTF-8 boundary in order, so retaining the
 ---current fragment avoids restarting the mixed-fragment search per character.
-function DocView:get_line_render_col_x_cursor(render_line)
+function TextView:get_line_render_col_x_cursor(render_line)
   get_line_render_raw_col_x_offset(self, render_line, 1)
   local cache = render_line.__native_text_layout_cache
   local entries = cache and cache.entries or {}
@@ -4752,7 +4715,7 @@ end
 ---Use retained native UTF-8 advances when a rendered line consists of one or
 ---more contiguous source-preserving text runs. Hidden, widget, remapped, and
 ---explicit-width fragments keep the general rendered-column mapping path.
-function DocView:get_line_render_native_wrap(render_line, width, mode, start_col, begin_width)
+function TextView:get_line_render_native_wrap(render_line, width, mode, start_col, begin_width)
   get_line_render_raw_col_x_offset(self, render_line, 1)
   local cache = render_line.__native_text_layout_cache
   if not cache or #cache.entries == 0 then return nil end
@@ -4809,7 +4772,7 @@ function DocView:get_line_render_native_wrap(render_line, width, mode, start_col
   return splits
 end
 
-function DocView:get_line_render_col_x_offset(render_line, col, position_row)
+function TextView:get_line_render_col_x_offset(render_line, col, position_row)
   local xoffset = get_line_render_raw_col_x_offset(self, render_line, col)
   local row = position_row or self:get_line_render_position_row(render_line, col)
   if not row then return xoffset end
@@ -4827,10 +4790,10 @@ local function render_line_for_hit_test(render_line)
   return hit_line
 end
 
-function DocView:get_line_render_x_offset_col(render_line, x)
+function TextView:get_line_render_x_offset_col(render_line, x)
   render_line = render_line_for_hit_test(render_line)
   local xoffset = render_line.x_offset or 0
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   -- Populate the native per-fragment layout cache shared with width mapping.
   get_line_render_raw_col_x_offset(self, render_line, 1)
   local layout_cache = render_line.__native_text_layout_cache
@@ -4884,7 +4847,7 @@ end
 ---@param x number Horizontal offset from the rendered line origin
 ---@param y number Vertical offset from the rendered row origin
 ---@return integer? col Source column, or nil when ordinary mapping should be used
-function DocView:get_line_render_position_col(render_line, x, y)
+function TextView:get_line_render_position_col(render_line, x, y)
   if render_line.position_rows then
     local row, row_index
     for index, candidate in ipairs(render_line.position_rows) do
@@ -4917,7 +4880,7 @@ function DocView:get_line_render_position_col(render_line, x, y)
     end
   end
   local xoffset = render_line.x_offset or 0
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
     local font = render_fragment_font(self, fragment)
     font:set_tab_size(indent_size)
@@ -4973,7 +4936,7 @@ end
 ---@param line_end boolean? Whether this is the visual line end
 ---@param skip_render boolean? Measure source text without requesting a rendered line
 ---@return number offset Horizontal pixel offset
-function DocView:get_col_x_offset(line, col, line_end, skip_render)
+function TextView:get_col_x_offset(line, col, line_end, skip_render)
   local render_line = not skip_render and self:get_line_render(line) or nil
   if render_line then
     local _, position_row = self:get_position_line_render_row(line, col)
@@ -5001,7 +4964,7 @@ function DocView:get_col_x_offset(line, col, line_end, skip_render)
     local _, _, _, scol = linewrapping.get_line_idx_col_count(self, line, col, line_end)
     local xoffset, i = (scol ~= 1 and self.wrapped_line_offsets[line] or 0), 1
     local default_font = self:get_font()
-    for _, type, text in self.doc.highlighter:each_token(line) do
+    for _, type, text in self.buffer.highlighter:each_token(line) do
       if i + #text >= scol then
         if i < scol then
           text = text:sub(scol - i + 1)
@@ -5013,8 +4976,8 @@ function DocView:get_col_x_offset(line, col, line_end, skip_render)
         local font = style.syntax_fonts[type] or default_font
         for char in common.utf8_chars(text) do
           if i >= col then
-            perf_frame_add("docview_get_col_x_offset_wrapped_calls", 1)
-            perf_elapsed("docview_get_col_x_offset_wrapped_ms", perf_start)
+            perf_frame_add("textview_get_col_x_offset_wrapped_calls", 1)
+            perf_elapsed("textview_get_col_x_offset_wrapped_ms", perf_start)
             return xoffset
           end
           xoffset = xoffset + font:get_width(char)
@@ -5024,14 +4987,14 @@ function DocView:get_col_x_offset(line, col, line_end, skip_render)
         i = i + #text
       end
     end
-    perf_frame_add("docview_get_col_x_offset_wrapped_calls", 1)
-    perf_elapsed("docview_get_col_x_offset_wrapped_ms", perf_start)
+    perf_frame_add("textview_get_col_x_offset_wrapped_calls", 1)
+    perf_elapsed("textview_get_col_x_offset_wrapped_ms", perf_start)
     return xoffset
   end
   local column = 1
   local xoffset = 0
-  local cache = self.doc.cache.col_x
-  local line_text = self.doc.lines[line]
+  local cache = self.buffer.cache.col_x
+  local line_text = self.buffer.lines[line]
   local line_len = #line_text
   if line_len > CACHE_LINE_LEN then
     if cache[line] and cache[line][col] then
@@ -5049,7 +5012,7 @@ function DocView:get_col_x_offset(line, col, line_end, skip_render)
     end
   end
   local default_font = self:get_font()
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   default_font:set_tab_size(indent_size)
   if line_len > CACHE_LINE_LEN and column == 1 then
     local fast_x = get_fast_ascii_monospace_x_offset(self, line, col, line_text, default_font)
@@ -5059,7 +5022,7 @@ function DocView:get_col_x_offset(line, col, line_end, skip_render)
     end
   end
   local scol = column > 1 and column or nil
-  for _, type, text in self.doc.highlighter:each_render_token(line, scol) do
+  for _, type, text in self.buffer.highlighter:each_render_token(line, scol) do
     local font = style.syntax_fonts[type] or default_font
     if font ~= default_font then font:set_tab_size(indent_size) end
     local length = #text
@@ -5097,7 +5060,7 @@ end
 ---@param line integer Line number
 ---@param x number Horizontal pixel offset
 ---@return integer col Column number (byte offset)
-function DocView:get_x_offset_col(line, x)
+function TextView:get_x_offset_col(line, x)
   local render_line = self:get_line_render(line)
   if render_line then return self:get_line_render_x_offset_col(render_line, x) end
   if self.wrapped_settings then
@@ -5105,7 +5068,7 @@ function DocView:get_x_offset_col(line, x)
     local _, target_col = linewrapping.get_line_col_from_index_and_x(self, idx, x)
     return target_col
   end
-  local line_text = self.doc.lines[line]
+  local line_text = self.buffer.lines[line]
   local line_len = #line_text
 
   -- we leverage the caching already present on col_x, this works on all lines,
@@ -5126,9 +5089,9 @@ function DocView:get_x_offset_col(line, x)
 
   local xoffset, i = 0, 1
   local default_font = self:get_font()
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   default_font:set_tab_size(indent_size)
-  for _, type, text in self.doc.highlighter:each_render_token(line) do
+  for _, type, text in self.buffer.highlighter:each_render_token(line) do
     local font = style.syntax_fonts[type] or default_font
     if font ~= default_font then font:set_tab_size(indent_size) end
     local width = font:get_width(text, {tab_offset = xoffset})
@@ -5153,12 +5116,12 @@ function DocView:get_x_offset_col(line, x)
 end
 
 
----Convert screen coordinates to document line/column.
+---Convert screen coordinates to buffer line/column.
 ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
 ---@return integer line Line number
 ---@return integer col Column number
-function DocView:resolve_screen_position(x, y)
+function TextView:resolve_screen_position(x, y)
   self.resolved_fold_widget = nil
   self.resolved_line_render_position_row = nil
   if self.wrapped_settings then
@@ -5179,7 +5142,7 @@ function DocView:resolve_screen_position(x, y)
         if row and row.hit_test then
           local ok, line, col = pcall(row.hit_test, self, row, x - ox, y - (content_y + style.padding.y + self:get_visual_row_y_offset(idx)))
           if ok and line then return line, col or 1 end
-          if not ok then core.log_quiet("DocView provider row hit_test failed for %s: %s", self.doc:get_name(), tostring(line)) end
+          if not ok then core.log_quiet("TextView provider row hit_test failed for %s: %s", self.buffer:get_name(), tostring(line)) end
         end
         return entry.line, 1
       elseif entry then
@@ -5236,7 +5199,7 @@ function DocView:resolve_screen_position(x, y)
   local content_x, content_y = self:get_content_offset()
   local ox, oy = content_x + self:get_gutter_width(), content_y + style.padding.y
   local row = self:get_visual_row_at_y(math.max(0, y - oy))
-  local line = common.clamp(row, 1, #self.doc.lines)
+  local line = common.clamp(row, 1, #self.buffer.lines)
   if self:has_composed_visual_rows() then
     local entry = self:get_visual_row_entry(common.clamp(row, 1, self:get_composed_visual_row_count()))
     if entry and entry.type == "fold" then
@@ -5248,7 +5211,7 @@ function DocView:resolve_screen_position(x, y)
       if row_obj and row_obj.hit_test then
         local ok, hit_line, hit_col = pcall(row_obj.hit_test, self, row_obj, x - ox, y - (content_y + style.padding.y + self:get_visual_row_y_offset(entry.absolute_row)))
         if ok and hit_line then return hit_line, hit_col or 1 end
-        if not ok then core.log_quiet("DocView provider row hit_test failed for %s: %s", self.doc:get_name(), tostring(hit_line)) end
+        if not ok then core.log_quiet("TextView provider row hit_test failed for %s: %s", self.buffer:get_name(), tostring(hit_line)) end
       end
       line = entry.line
     elseif entry then
@@ -5284,7 +5247,7 @@ end
 ---@param ignore_if_visible? boolean Don't scroll if line already visible
 ---@param instant? boolean Jump immediately without animation
 ---@param opts? table Optional scroll behavior options
-function DocView:scroll_to_line(line, ignore_if_visible, instant, opts)
+function TextView:scroll_to_line(line, ignore_if_visible, instant, opts)
   if self.wrapping_enabled then self:update_wrap_cache() end
   local min, max = self:get_visible_line_range()
   local visible_margin_lines = opts and opts.visible_margin_lines or 0
@@ -5306,8 +5269,8 @@ end
 
 
 ---Check if this view accepts text input.
----@return boolean accepts Always returns true for DocView
-function DocView:supports_text_input()
+---@return boolean accepts Always returns true for TextView
+function TextView:supports_text_input()
   return true
 end
 
@@ -5321,10 +5284,10 @@ end
 ---@param col integer Column number
 ---@param instant? boolean Jump immediately without animation
 ---@param opts? table Optional range/scroll options
-function DocView:scroll_to_make_visible(line, col, instant, opts)
+function TextView:scroll_to_make_visible(line, col, instant, opts)
   if self.wrapping_enabled then self:update_wrap_cache() end
   if self.wrapped_settings then
-    with_wrapped_caret_affinity(self, DocView.scroll_to_make_visible_unwrapped, line, col, instant, opts)
+    with_wrapped_caret_affinity(self, TextView.scroll_to_make_visible_unwrapped, line, col, instant, opts)
     if self:get_h_scrollable_size() <= self.size.x then
       self.scroll.to.x = 0
       if instant then self.scroll.x = self.scroll.to.x end
@@ -5337,7 +5300,7 @@ function DocView:scroll_to_make_visible(line, col, instant, opts)
   return result
 end
 
-function DocView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
+function TextView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
   opts = opts or {}
   if opts.vertical ~= false then
     self.scroll.y = math.max(0, self.scroll.y or 0)
@@ -5454,9 +5417,9 @@ end
 ---Updates cursor icon, gutter hover state, and extends selection if dragging.
 ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
-function DocView:on_mouse_moved(x, y, ...)
+function TextView:on_mouse_moved(x, y, ...)
   local selecting = self.mouse_selecting ~= nil
-  DocView.super.on_mouse_moved(self, x, y, ...)
+  TextView.super.on_mouse_moved(self, x, y, ...)
 
   self.hovering_gutter = false
   local gw = self:get_gutter_width()
@@ -5537,8 +5500,8 @@ function DocView:on_mouse_moved(x, y, ...)
       )
       if not ok then
         core.log_quiet(
-          "DocView rendered selection handler failed for %s: %s",
-          self.doc:get_name(), tostring(handled)
+          "TextView rendered selection handler failed for %s: %s",
+          self.buffer:get_name(), tostring(handled)
         )
       end
       special_handled = ok and handled == true
@@ -5547,15 +5510,15 @@ function DocView:on_mouse_moved(x, y, ...)
       -- The rendered interaction owns Selection State for this drag.
     elseif keymap.modkeys["ctrl"] then
       if l1 > l2 then l1, l2 = l2, l1 end
-      self.doc.selections = { }
+      self.buffer.selections = { }
       for i = l1, l2 do
-        self.doc:set_selections(i - l1 + 1, i, math.min(c1, #self.doc.lines[i]), i, math.min(c2, #self.doc.lines[i]))
+        self.buffer:set_selections(i - l1 + 1, i, math.min(c1, #self.buffer.lines[i]), i, math.min(c2, #self.buffer.lines[i]))
       end
     else
       if snap_type then
-        l1, c1, l2, c2 = self:mouse_selection(self.doc, snap_type, l1, c1, l2, c2)
+        l1, c1, l2, c2 = self:mouse_selection(self.buffer, snap_type, l1, c1, l2, c2)
       end
-      self.doc:set_selection(l1, c1, l2, c2)
+      self.buffer:set_selection(l1, c1, l2, c2)
     end
   end
   if selecting then
@@ -5563,8 +5526,8 @@ function DocView:on_mouse_moved(x, y, ...)
   end
 end
 
-function DocView:on_mouse_left()
-  DocView.super.on_mouse_left(self)
+function TextView:on_mouse_left()
+  TextView.super.on_mouse_left(self)
   if self.hovered_render_fragment then
     self.hovered_render_fragment.hovered = nil
     self.hovered_render_fragment = nil
@@ -5579,7 +5542,7 @@ end
 
 
 ---Adjust selection based on snap type (word, line).
----@param doc core.doc Document
+---@param buffer core.buffer Buffer
 ---@param snap_type string Snap type: "word" or "lines"
 ---@param line1 integer Start line
 ---@param col1 integer Start column
@@ -5589,14 +5552,14 @@ end
 ---@return integer col1 Adjusted start column
 ---@return integer line2 Adjusted end line
 ---@return integer col2 Adjusted end column
-function DocView:mouse_selection(doc, snap_type, line1, col1, line2, col2)
+function TextView:mouse_selection(buffer, snap_type, line1, col1, line2, col2)
   local swap = line2 < line1 or line2 == line1 and col2 <= col1
   if swap then
     line1, col1, line2, col2 = line2, col2, line1, col1
   end
   if snap_type == "word" then
-    line1, col1 = translate.start_of_word(doc, line1, col1)
-    line2, col2 = translate.end_of_word(doc, line2, col2)
+    line1, col1 = translate.start_of_word(buffer, line1, col1)
+    line2, col2 = translate.end_of_word(buffer, line2, col2)
   elseif snap_type == "lines" then
     col1, col2, line2 = 1, 1, line2 + 1
   end
@@ -5614,8 +5577,8 @@ end
 ---@param y number Screen y coordinate
 ---@param clicks integer Number of clicks
 ---@return boolean? handled True if event was handled
-function DocView:on_mouse_pressed(button, x, y, clicks)
-  if button == "left" then self.doc:clear_search_selections() end
+function TextView:on_mouse_pressed(button, x, y, clicks)
+  if button == "left" then self.buffer:clear_search_selections() end
   if button == "left" and not self.hovering_gutter then
     local widget_hit = self:get_render_widget_at_position(x, y)
     if widget_hit and widget_hit.widget.on_mouse_pressed then
@@ -5625,8 +5588,8 @@ function DocView:on_mouse_pressed(button, x, y, clicks)
       )
       if not ok then
         core.log_quiet(
-          "DocView render widget click failed for %s: %s",
-          self.doc:get_name(), tostring(handled)
+          "TextView render widget click failed for %s: %s",
+          self.buffer:get_name(), tostring(handled)
         )
       end
       if ok and handled ~= false then return true end
@@ -5639,8 +5602,8 @@ function DocView:on_mouse_pressed(button, x, y, clicks)
       )
       if not ok then
         core.log_quiet(
-          "DocView render fragment click failed for %s: %s",
-          self.doc:get_name(), tostring(handled)
+          "TextView render fragment click failed for %s: %s",
+          self.buffer:get_name(), tostring(handled)
         )
       end
       if ok and handled ~= false then return true end
@@ -5653,7 +5616,7 @@ function DocView:on_mouse_pressed(button, x, y, clicks)
       local row = provider_entry.provider_row
       if row and row.on_click then
         local ok, handled = pcall(row.on_click, self, row, button, x, y, clicks)
-        if not ok then core.log_quiet("DocView provider row click failed for %s: %s", self.doc:get_name(), tostring(handled)) end
+        if not ok then core.log_quiet("TextView provider row click failed for %s: %s", self.buffer:get_name(), tostring(handled)) end
       end
       return true
     end
@@ -5662,12 +5625,12 @@ function DocView:on_mouse_pressed(button, x, y, clicks)
     self.resolved_fold_widget = nil
     if fold and (resolved_widget or fold.show_widget ~= false) then
       self:expand_fold_region(fold.id, "mouse")
-      self.doc:set_selection(fold.line1, 1, fold.line1, 1)
+      self.buffer:set_selection(fold.line1, 1, fold.line1, 1)
       return true
     end
   end
   if button ~= "left" or not self.hovering_gutter then
-    local result = DocView.super.on_mouse_pressed(self, button, x, y, clicks)
+    local result = TextView.super.on_mouse_pressed(self, button, x, y, clicks)
     if button == "left" then
       apply_resolved_line_end_affinity(self)
     end
@@ -5675,17 +5638,17 @@ function DocView:on_mouse_pressed(button, x, y, clicks)
   end
   local line = self:resolve_screen_position(x, y)
   if keymap.modkeys["shift"] then
-    local sline, scol, sline2, scol2 = self.doc:get_selection(true)
+    local sline, scol, sline2, scol2 = self.buffer:get_selection(true)
     if line > sline then
-      self.doc:set_selection(sline, 1, line,  #self.doc.lines[line])
+      self.buffer:set_selection(sline, 1, line,  #self.buffer.lines[line])
     else
-      self.doc:set_selection(line, 1, sline2, #self.doc.lines[sline2])
+      self.buffer:set_selection(line, 1, sline2, #self.buffer.lines[sline2])
     end
   else
     if clicks == 1 then
-      self.doc:set_selection(line, 1, line, 1)
+      self.buffer:set_selection(line, 1, line, 1)
     elseif clicks == 2 then
-      self.doc:set_selection(line, 1, line, #self.doc.lines[line])
+      self.buffer:set_selection(line, 1, line, #self.buffer.lines[line])
     end
   end
   return true
@@ -5693,8 +5656,8 @@ end
 
 
 ---Handle mouse release to end text selection.
-function DocView:on_mouse_released(...)
-  DocView.super.on_mouse_released(self, ...)
+function TextView:on_mouse_released(...)
+  TextView.super.on_mouse_released(self, ...)
   self.mouse_selecting = nil
   self:end_line_render_interaction("mouse-release")
 end
@@ -5702,23 +5665,23 @@ end
 
 ---Handle text input from keyboard.
 ---@param text string Input text
-function DocView:on_text_input(text)
+function TextView:on_text_input(text)
   if not self:can_edit("text input", { warn = true, text = text }) then return false end
-  self.doc:clear_search_selections()
-  local line = self.doc:get_selection()
+  self.buffer:clear_search_selections()
+  local line = self.buffer:get_selection()
   local render_line = self:get_line_render(line)
   if render_line and render_line.on_text_input then
     local ok, handled = pcall(render_line.on_text_input, self, text)
     if not ok then
       core.log_quiet(
-        "DocView rendered text input failed for %s: %s",
-        self.doc:get_name(), tostring(handled)
+        "TextView rendered text input failed for %s: %s",
+        self.buffer:get_name(), tostring(handled)
       )
     elseif handled then
       return true
     end
   end
-  self.doc:text_input(text)
+  self.buffer:text_input(text)
   return true
 end
 
@@ -5728,16 +5691,16 @@ end
 ---@param text string Composition text
 ---@param start integer Selection start within composition
 ---@param length integer Selection length within composition
-function DocView:on_ime_text_editing(text, start, length)
+function TextView:on_ime_text_editing(text, start, length)
   if not self:can_edit("IME text input", { warn = true, text = text }) then return false end
   local was_composing = self.ime_status
   local composing = #text > 0
   if composing and not was_composing then
     self:begin_line_render_interaction("ime-composition")
   end
-  self.doc:clear_search_selections()
+  self.buffer:clear_search_selections()
   local handled, adjusted_start, adjusted_length = false, start, length
-  local line = self.doc:get_selection()
+  local line = self.buffer:get_selection()
   local render_line = self:get_line_render(line)
   if render_line and render_line.on_ime_text_editing then
     local ok, result, result_start, result_length = pcall(
@@ -5745,8 +5708,8 @@ function DocView:on_ime_text_editing(text, start, length)
     )
     if not ok then
       core.log_quiet(
-        "DocView rendered IME input failed for %s: %s",
-        self.doc:get_name(), tostring(result)
+        "TextView rendered IME input failed for %s: %s",
+        self.buffer:get_name(), tostring(result)
       )
     elseif result then
       handled = true
@@ -5754,7 +5717,7 @@ function DocView:on_ime_text_editing(text, start, length)
       adjusted_length = tonumber(result_length) or length
     end
   end
-  if not handled then self.doc:ime_text_editing(text, start, length) end
+  if not handled then self.buffer:ime_text_editing(text, start, length) end
   self.ime_status = composing
   self.ime_selection.from = adjusted_start
   self.ime_selection.size = adjusted_length
@@ -5764,7 +5727,7 @@ function DocView:on_ime_text_editing(text, start, length)
 
   -- Set the composition bounding box that the system IME
   -- will consider when drawing its interface
-  local line1, col1, line2, col2 = self.doc:get_selection(true)
+  local line1, col1, line2, col2 = self.buffer:get_selection(true)
   local col = math.min(col1, col2)
   self:update_ime_location()
   self:scroll_to_make_visible(line1, col + adjusted_start)
@@ -5773,10 +5736,10 @@ end
 
 ---Update IME composition window location.
 ---Sets the bounding box for the system IME composition window.
-function DocView:update_ime_location()
+function TextView:update_ime_location()
   if core.active_view ~= self then return end
 
-  local line1, col1, line2, col2 = self.doc:get_selection(true)
+  local line1, col1, line2, col2 = self.buffer:get_selection(true)
   if
     not self.ime_status and core.active_view == IME_VIEW
     and
@@ -5822,59 +5785,59 @@ function DocView:update_ime_location()
 end
 
 
-function DocView:active_window_has_focus()
+function TextView:active_window_has_focus()
   local focused_window = core.active_window or core.window
   return not system.window_has_focus or system.window_has_focus(focused_window)
 end
 
 ---Update the view state each frame.
 ---Handles cache invalidation, auto-scrolling to caret, and blink timing.
-function DocView:update()
+function TextView:update()
   local perf_active = core.perf_frame_stats ~= nil
   local update_start = perf_active and system.get_time()
 
   -- clear cache if font or indent size changed
   local phase_start = perf_active and system.get_time()
   local font = self:get_font()
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   if
     self.cache_indent_size ~= indent_size
     or
     self.cache_font ~= font or self.cache_font_size ~= font:get_size()
   then
-    self.doc.cache.col_x = {}
-    self.doc.cache.line_width = {}
+    self.buffer.cache.col_x = {}
+    self.buffer.cache.line_width = {}
     self.__line_width_cache = {}
     self.__unwrapped_content_width_cache = nil
     self.cache_font = font
     self.cache_font_size = font:get_size()
     self.cache_indent_size = indent_size
   end
-  perf_elapsed("docview_update_cache_ms", phase_start)
+  perf_elapsed("textview_update_cache_ms", phase_start)
 
   if self.wrapping_enabled and self.size.x > 0 then
     local wrap_start = perf_active and system.get_time()
     self:update_wrap_cache()
-    perf_elapsed("docview_update_wrap_cache_ms", wrap_start)
+    perf_elapsed("textview_update_wrap_cache_ms", wrap_start)
   end
 
   -- scroll to make caret visible and reset blink timer if it moved
   phase_start = perf_active and system.get_time()
-  local line1, col1, line2, col2 = self.doc:get_selection()
+  local line1, col1, line2, col2 = self.buffer:get_selection()
   local selection_moved = line1 ~= self.last_line1 or col1 ~= self.last_col1 or
       line2 ~= self.last_line2 or col2 ~= self.last_col2
   if (selection_moved or self.needs_initial_scroll_validation) and self.size.x > 0 then
     if core.active_view == self and not ime.editing then
       local scroll_start = perf_active and system.get_time()
       self:scroll_to_make_visible(line1, col1, self.needs_initial_scroll_validation)
-      perf_elapsed("docview_scroll_to_make_visible_ms", scroll_start)
+      perf_elapsed("textview_scroll_to_make_visible_ms", scroll_start)
       self.needs_initial_scroll_validation = nil
     end
     core.blink_reset()
     self.last_line1, self.last_col1 = line1, col1
     self.last_line2, self.last_col2 = line2, col2
   end
-  perf_elapsed("docview_update_selection_ms", phase_start)
+  perf_elapsed("textview_update_selection_ms", phase_start)
 
   -- update blink timer
   phase_start = perf_active and system.get_time()
@@ -5882,7 +5845,7 @@ function DocView:update()
   if not config.disable_blink then
     local focus_start = perf_active and system.get_time()
     active_window_has_focus = self:active_window_has_focus()
-    perf_elapsed("docview_update_active_focus_ms", focus_start)
+    perf_elapsed("textview_update_active_focus_ms", focus_start)
   end
   if not config.disable_blink and active_window_has_focus and self == core.active_view and not self.mouse_selecting then
     local T, t0 = config.blink_period, core.blink_start
@@ -5892,49 +5855,49 @@ function DocView:update()
     end
     core.blink_timer = tb
   end
-  perf_elapsed("docview_update_blink_ms", phase_start)
+  perf_elapsed("textview_update_blink_ms", phase_start)
 
   phase_start = perf_active and system.get_time()
   self:update_ime_location()
-  perf_elapsed("docview_update_ime_ms", phase_start)
+  perf_elapsed("textview_update_ime_ms", phase_start)
 
   phase_start = perf_active and system.get_time()
-  DocView.super.update(self)
+  TextView.super.update(self)
   line_packets.update_contributors(self)
-  perf_elapsed("docview_update_super_ms", phase_start)
-  perf_elapsed("docview_update_ms", update_start)
+  perf_elapsed("textview_update_super_ms", phase_start)
+  perf_elapsed("textview_update_ms", update_start)
 end
 
 
 ---Draw the current line highlight bar.
 ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
-function DocView:get_line_highlight_rect(x, y, height)
+function TextView:get_line_highlight_rect(x, y, height)
   local lh = height or self:get_line_height()
   local pos_x = self.__full_width_highlight_position_x or self.position.x
   local size_x = self.__full_width_highlight_size_x or self.size.x
   return pos_x, y, size_x, lh
 end
 
-function DocView:draw_line_highlight(x, y, height)
+function TextView:draw_line_highlight(x, y, height)
   local rx, ry, rw, rh = self:get_line_highlight_rect(x, y, height)
   renderer.draw_rect(rx, ry, rw, rh, style.line_highlight)
 end
 
-function DocView:draw_content_left_edge()
+function TextView:draw_content_left_edge()
   local edge_w = math.max(1, math.floor(SCALE))
   local edge_padding = style.padding.x * 0.25
   local x = self:get_line_screen_position(1) - edge_padding - edge_w
-  renderer.draw_rect(x, self.position.y, edge_w, self.size.y, style.docview_content_left_edge)
+  renderer.draw_rect(x, self.position.y, edge_w, self.size.y, style.textview_content_left_edge)
 end
 
-function DocView:line_has_current_line_highlight(line)
+function TextView:line_has_current_line_highlight(line)
   local highlight_cache = self.__line_body_highlight_cache
   if highlight_cache then return highlight_cache[line] or false end
 
   local hcl = config.highlight_current_line
   if hcl == false then return false end
-  for lidx, line1, col1, line2, col2 in self.doc:get_selections(false) do
+  for lidx, line1, col1, line2, col2 in self.buffer:get_selections(false) do
     if line1 > line then break end
     if line1 == line then
       if hcl == "no_selection" and ((line1 ~= line2) or (col1 ~= col2)) then
@@ -5946,7 +5909,7 @@ function DocView:line_has_current_line_highlight(line)
   return false
 end
 
-function DocView:draw_current_line_highlights(minline, maxline, draw_highlight)
+function TextView:draw_current_line_highlights(minline, maxline, draw_highlight)
   draw_highlight = draw_highlight or function(x, y, height)
     self:draw_line_highlight(x, y, height)
   end
@@ -5954,7 +5917,7 @@ function DocView:draw_current_line_highlights(minline, maxline, draw_highlight)
     if config.highlight_current_line == false then return end
     local highlighted_rows = {}
     local hcl = config.highlight_current_line
-    for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+    for _, line1, col1, line2, col2 in self.buffer:get_selections(false) do
       if line1 > maxline then break end
       if line1 >= minline and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
         local line_end = self.wrapped_settings
@@ -5980,7 +5943,7 @@ function DocView:draw_current_line_highlights(minline, maxline, draw_highlight)
   if self.wrapped_settings then
     if config.highlight_current_line == false then return end
     local hcl = config.highlight_current_line
-    for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+    for _, line1, col1, line2, col2 in self.buffer:get_selections(false) do
       if line1 > maxline then break end
       if line1 >= minline and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
         local line_end = linewrapping.has_wrapped_line_end_affinity(self, line1, col1)
@@ -5995,7 +5958,7 @@ function DocView:draw_current_line_highlights(minline, maxline, draw_highlight)
   end
   if config.highlight_current_line == false then return end
   local hcl = config.highlight_current_line
-  for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+  for _, line1, col1, line2, col2 in self.buffer:get_selections(false) do
     if line1 > maxline then break end
     if line1 >= minline
     and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2))
@@ -6009,7 +5972,7 @@ end
 
 ---Draw the full-width underlay before gutter and row contents. The content
 ---portion is drawn again later over semantic line decoration backgrounds.
-function DocView:draw_current_line_underlay_highlights(minline, maxline)
+function TextView:draw_current_line_underlay_highlights(minline, maxline)
   self:draw_current_line_highlights(minline, maxline, function(x, y, height)
     local rx, ry, rw, rh = self:get_line_highlight_rect(x, y, height)
     renderer.draw_rect(rx, ry, rw, rh, style.line_highlight)
@@ -6018,21 +5981,21 @@ end
 
 
 ---Return a non-interactive visual hint for a line.
----Override this in Document View subclasses or plugins. The result can be a
+---Override this in Text View subclasses or plugins. The result can be a
 ---string, a single segment table `{ text, color?, font? }`, or a list of
 ---segment tables. Hints are drawn right-aligned by default and are never part
----of the Document text.
+---of the Buffer text.
 ---@param line integer Line number
 ---@return string|table|nil hint
-function DocView:get_line_hint(line)
+function TextView:get_line_hint(line)
   return nil
 end
 
----Minimum horizontal gap between Document text and a Line Hint.
+---Minimum horizontal gap between Buffer text and a Line Hint.
 ---@param line integer Line number
 ---@param hint_options? table Normalized Line Hint options
 ---@return number gap Pixel gap
-function DocView:get_line_hint_gap(line, hint_options)
+function TextView:get_line_hint_gap(line, hint_options)
   local gap_spaces = hint_options and hint_options.gap_spaces
   if gap_spaces then
     return self:get_font():get_width(string.rep(" ", math.max(0, gap_spaces)))
@@ -6041,7 +6004,7 @@ function DocView:get_line_hint_gap(line, hint_options)
   return style.padding.x * 2
 end
 
-function DocView:normalize_line_hint(hint)
+function TextView:normalize_line_hint(hint)
   if hint == nil or hint == false then return nil end
 
   local default_font = self:get_font()
@@ -6083,7 +6046,7 @@ function DocView:normalize_line_hint(hint)
   return segments
 end
 
-function DocView:measure_line_hint_segments(segments)
+function TextView:measure_line_hint_segments(segments)
   local width = 0
   for _, segment in ipairs(segments or {}) do
     width = width + segment.font:get_width(segment.text)
@@ -6107,7 +6070,7 @@ local function copy_line_hint_options(target, source)
   return target
 end
 
-function DocView:truncate_line_hint_segments(segments, max_width, direction)
+function TextView:truncate_line_hint_segments(segments, max_width, direction)
   max_width = math.max(0, max_width or 0)
   if self:measure_line_hint_segments(segments) <= max_width then
     return segments, false
@@ -6199,22 +6162,22 @@ function DocView:truncate_line_hint_segments(segments, max_width, direction)
   return copy_line_hint_options(kept, segments), true
 end
 
-function DocView:get_line_hint_text_end_x(line, x)
-  local text = self.doc.lines[line] or ""
+function TextView:get_line_hint_text_end_x(line, x)
+  local text = self.buffer.lines[line] or ""
   local text_len = #text
   if text:sub(-1) == "\n" then text_len = text_len - 1 end
   return x + self:get_col_x_offset(line, text_len + 1)
 end
 
----Draw a Line Hint for a line, clipped/truncated so it never covers Document text.
+---Draw a Line Hint for a line, clipped/truncated so it never covers Buffer text.
 ---@param line integer Line number
 ---@param x number Screen x coordinate of the line's text origin
 ---@param y number Screen y coordinate of the line
 ---@return number? x_advance
 ---@return number? x
 ---@return number? width
-function DocView:draw_line_hint(line, x, y)
-  local stats = core.docview_frame_stats
+function TextView:draw_line_hint(line, x, y)
+  local stats = core.textview_frame_stats
   local total_start = stats and system.get_time()
   if stats then stats.line_hint_calls = stats.line_hint_calls + 1 end
 
@@ -6267,9 +6230,9 @@ function DocView:draw_line_hint(line, x, y)
     if width > available + 0.5 then finish("line_hint_skip_truncated"); return end
   end
 
-  local draw_x = placement == "after_line_document_text" and hint_left_limit or content_right - width
+  local draw_x = placement == "after_line_buffer_text" and hint_left_limit or content_right - width
   local tx = draw_x
-  local line_text = self.doc.lines[line] or ""
+  local line_text = self.buffer.lines[line] or ""
   local hint_col = self.wrapped_settings and #line_text + 1 or 1
   local content_y_offset, content_height = self:get_line_render_content_geometry(
     line, hint_col, self.wrapped_settings and true or false
@@ -6323,7 +6286,7 @@ end
 
 local function cached_fast_ascii_monospace_width(self, line, text, font, indent_size)
   local font_size = font:get_size()
-  local change_id = self.doc:get_change_id()
+  local change_id = self.buffer:get_change_id()
   local cache = self.__fast_ascii_monospace_width_cache
   if
     not cache
@@ -6482,8 +6445,8 @@ local function draw_render_widget(view, fragment, x, y, row_height, context)
   local ok, err = pcall(widget.draw, view, fragment, x, y, row_height)
   if not ok then
     core.log_quiet(
-      "DocView %s draw failed for %s: %s",
-      context or "render widget", view.doc:get_name(), tostring(err)
+      "TextView %s draw failed for %s: %s",
+      context or "render widget", view.buffer:get_name(), tostring(err)
     )
     return false
   end
@@ -6556,10 +6519,10 @@ local function draw_render_widget(view, fragment, x, y, row_height, context)
 end
 
 ---Draw a visual prefix in the indent of each visible soft-wrap continuation.
----@param line integer Logical document line
+---@param line integer Logical buffer line
 ---@param x number Screen x coordinate of the line body
 ---@param y number Screen y coordinate of the first visual row
-function DocView:draw_soft_wrap_continuation_indicators(line, x, y)
+function TextView:draw_soft_wrap_continuation_indicators(line, x, y)
   if not self.wrapped_settings then return end
   local indicator = config.plugins.linewrapping.continuation_indicator
   if type(indicator) ~= "string" or indicator == "" then return end
@@ -6610,13 +6573,13 @@ end
 ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
 ---@return integer height Line height
-function DocView:draw_line_text(line, x, y)
-  if not self.doc.lines[line] then
+function TextView:draw_line_text(line, x, y)
+  if not self.buffer.lines[line] then
     core.log_quiet(
-      "DocView draw_line_text: skipped stale line for %s (line=%s document_lines=%d)",
-      self.doc:get_name(), tostring(line), #self.doc.lines
+      "TextView draw_line_text: skipped stale line for %s (line=%s buffer_lines=%d)",
+      self.buffer:get_name(), tostring(line), #self.buffer.lines
     )
-    if self.wrapped_settings then self.wrapped_doc_line_count = nil end
+    if self.wrapped_settings then self.wrapped_buffer_line_count = nil end
     return self:get_line_height()
   end
 
@@ -6630,13 +6593,13 @@ function DocView:draw_line_text(line, x, y)
     local begin_width = self.wrapped_line_offsets[line] or 0
     local first_visual_row = self:get_visual_row(line, 1)
     local first_row_y_offset = self:get_visual_row_y_offset(first_visual_row)
-    local _, indent_size = self.doc:get_indent_info()
+    local _, indent_size = self.buffer:get_indent_info()
     local fragments = self:iter_line_render_fragments(render_line)
     for idx = visible_idx1, visible_idx2 do
       local _, row_start = linewrapping.get_idx_line_col(self, idx)
       local next_line, row_end = linewrapping.get_idx_line_col(self, idx + 1)
       local last_row = next_line ~= line
-      if last_row then row_end = #(self.doc.lines[line] or "") end
+      if last_row then row_end = #(self.buffer.lines[line] or "") end
       local tx = x + (render_line.x_offset or 0)
         + (row_start ~= 1 and begin_width or 0)
       local visual_row = self:get_visual_row(line, row_start)
@@ -6703,11 +6666,11 @@ function DocView:draw_line_text(line, x, y)
   if render_line then
     if render_line.position_rows and not render_line.position_rows_draw_full_line then
       local fragments = self:iter_line_render_fragments(render_line)
-      local _, indent_size = self.doc:get_indent_info()
+      local _, indent_size = self.buffer:get_indent_info()
       local layout_height = render_line.layout_height
         or self:get_position_visual_row_height(line, 1)
 
-      -- Block widgets are anchored to the rendered Document line rather than
+      -- Block widgets are anchored to the rendered Buffer line rather than
       -- to one text caret row. Draw each exactly once; text fragments below
       -- are then sliced through the same source ranges used for navigation.
       for _, fragment in ipairs(fragments) do
@@ -6779,7 +6742,7 @@ function DocView:draw_line_text(line, x, y)
       render_line, row_height, true
     )
     local content_y = y + content_y_offset
-    local _, indent_size = self.doc:get_indent_info()
+    local _, indent_size = self.buffer:get_indent_info()
     for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
       if not fragment.hidden then
         local col1 = fragment.source_col1 or 1
@@ -6830,14 +6793,14 @@ function DocView:draw_line_text(line, x, y)
         local row_line, row_start_col = linewrapping.get_idx_line_col(self, idx)
         if row_line == line then
           local next_line, row_end_col = linewrapping.get_idx_line_col(self, idx + 1)
-          if next_line ~= line then row_end_col = #self.doc.lines[line] end
+          if next_line ~= line then row_end_col = #self.buffer.lines[line] end
           local tx = x + (row_start_col ~= 1 and (self.wrapped_line_offsets[line] or 0) or 0)
-          renderer.draw_text(self:get_font(), self.doc.lines[line]:sub(row_start_col, math.max(row_start_col, row_end_col - 1)), tx, y + text_y_offset + (idx - first_idx) * lh, provider_text_color)
+          renderer.draw_text(self:get_font(), self.buffer.lines[line]:sub(row_start_col, math.max(row_start_col, row_end_col - 1)), tx, y + text_y_offset + (idx - first_idx) * lh, provider_text_color)
         end
       end
       return lh * count
     end
-    renderer.draw_text(self:get_font(), self.doc.lines[line], x, y + text_y_offset, provider_text_color)
+    renderer.draw_text(self:get_font(), self.buffer.lines[line], x, y + text_y_offset, provider_text_color)
     return lh
   end
   local packet_height = line_packets.draw_content(self, line, x, y)
@@ -6897,7 +6860,7 @@ function DocView:draw_line_text(line, x, y)
     local row_idx = visible_idx1
     local _, row_start_col = linewrapping.get_idx_line_col(self, row_idx)
     local row_next_line, row_end_col = linewrapping.get_idx_line_col(self, row_idx + 1)
-    if row_next_line ~= line then row_end_col = #self.doc.lines[line] end
+    if row_next_line ~= line then row_end_col = #self.buffer.lines[line] end
     local tx = x + (row_start_col ~= 1 and begin_width or 0)
     local ty = y + text_y_offset + (row_idx - first_idx) * lh
     local token_start_col = 1
@@ -6907,14 +6870,14 @@ function DocView:draw_line_text(line, x, y)
       if row_idx > visible_idx2 then return false end
       _, row_start_col = linewrapping.get_idx_line_col(self, row_idx)
       row_next_line, row_end_col = linewrapping.get_idx_line_col(self, row_idx + 1)
-      if row_next_line ~= line then row_end_col = #self.doc.lines[line] end
+      if row_next_line ~= line then row_end_col = #self.buffer.lines[line] end
       tx = x + (row_start_col ~= 1 and begin_width or 0)
       ty = y + text_y_offset + (row_idx - first_idx) * lh
       return true
     end
 
     local token_loop_scope = perf_scope_begin("token_and_wrap_loop")
-    for _, type, text in self.doc.highlighter:each_token(line) do
+    for _, type, text in self.buffer.highlighter:each_token(line) do
       if row_idx > visible_idx2 then break end
       local token_end_col = token_start_col + #text
       local color = style.syntax[type] or style.syntax["normal"]
@@ -6959,13 +6922,13 @@ function DocView:draw_line_text(line, x, y)
     return lh * count
   end
 
-  local stats = core.docview_frame_stats
+  local stats = core.textview_frame_stats
   local text_start = stats and system.get_time()
   local default_font = self:get_font()
   local tx, ty = x, y + self:get_line_text_y_offset()
   local last_token = nil
   local get_line_start = stats and system.get_time()
-  local render_line = self.doc.highlighter:get_render_line(line)
+  local render_line = self.buffer.highlighter:get_render_line(line)
   local tokens = render_line.tokens
   if stats then stats.highlighter_get_line_ms = stats.highlighter_get_line_ms + (system.get_time() - get_line_start) * 1000 end
   local syntax = style.syntax
@@ -6975,13 +6938,13 @@ function DocView:draw_line_text(line, x, y)
   if tokens_count > 0 and string.sub(tokens[tokens_count], -1) == "\n" then
     last_token = tokens_count - 1
   end
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   local token_loop_start = stats and system.get_time()
   local line_start_tx = tx
   local unwrapped_default_ascii_width = default_font:get_width(" ")
   local unwrapped_tab_width = unwrapped_default_ascii_width * indent_size
   local unwrapped_default_font_height = default_font:get_height()
-  local line_text = self.doc.lines[line]
+  local line_text = self.buffer.lines[line]
   local line_len = #line_text
   local draw_start_col = 1
   local draw_end_col = line_len
@@ -7021,7 +6984,7 @@ function DocView:draw_line_text(line, x, y)
           end
         end
       elseif candidate_tx < target_x - default_font:get_width("W") * 128 then
-        local lo, hi = col1 + 1, #self.doc.lines[line]
+        local lo, hi = col1 + 1, #self.buffer.lines[line]
         while lo <= hi do
           local mid = math.floor((lo + hi) / 2)
           local mid_tx = col_tx(mid)
@@ -7328,7 +7291,7 @@ end
 ---@param y number Screen y coordinate
 ---@param line integer Line number (for overwrite mode char width)
 ---@param col integer Column number (for overwrite mode char width)
-function DocView:draw_caret(x, y, line, col, caret_idx, color)
+function TextView:draw_caret(x, y, line, col, caret_idx, color)
   color = color or style.caret
   if config.animated_caret then
     self.animated_caret_positions = self.animated_caret_positions or {}
@@ -7385,7 +7348,7 @@ function DocView:draw_caret(x, y, line, col, caret_idx, color)
     x, y = pos.x, pos.y
   end
 
-  local stats = core.docview_frame_stats
+  local stats = core.textview_frame_stats
   if stats then stats.caret_draw_calls = stats.caret_draw_calls + 1 end
   local line_end = self.wrapped_settings
     and linewrapping.has_wrapped_line_end_affinity(self, line, col)
@@ -7401,8 +7364,8 @@ function DocView:draw_caret(x, y, line, col, caret_idx, color)
     )
     y = y + content_y_offset
   end
-  if self.doc.overwrite then
-    local w = self:get_font():get_width(self.doc:get_char(line, col))
+  if self.buffer.overwrite then
+    local w = self:get_font():get_width(self.buffer:get_char(line, col))
     renderer.draw_rect(x, y + lh, w, style.caret_width * 2, color)
   else
     renderer.draw_rect(x, y, style.caret_width, lh, color)
@@ -7410,14 +7373,14 @@ function DocView:draw_caret(x, y, line, col, caret_idx, color)
 end
 
 
-function DocView:search_match_style(primary)
+function TextView:search_match_style(primary)
   if primary then
     return style.search_selection, style.search_selection_outline
   end
   return style.selectionhighlight, style.search_selection_secondary_outline
 end
 
----Iterate the screen rectangles occupied by a single-line Document range.
+---Iterate the screen rectangles occupied by a single-line Buffer range.
 ---Soft-wrapped ranges are split into one rectangle per Wrapped Visual Row.
 ---@param line integer
 ---@param col1 integer
@@ -7425,8 +7388,8 @@ end
 ---@param origin_x? number Optional draw-line x origin
 ---@param origin_y? number Optional draw-line y origin
 ---@return function iterator
-function DocView:iter_text_range_screen_segments(line, col1, col2, origin_x, origin_y)
-  local text = self.doc.lines[line] or ""
+function TextView:iter_text_range_screen_segments(line, col1, col2, origin_x, origin_y)
+  local text = self.buffer.lines[line] or ""
   col1 = common.clamp(math.floor(tonumber(col1) or 1), 1, #text + 1)
   col2 = common.clamp(math.floor(tonumber(col2) or col1), 1, #text + 1)
   if col2 < col1 then col1, col2 = col2, col1 end
@@ -7544,7 +7507,7 @@ local function draw_render_line_under_selection_backgrounds(view, render_line, x
   end
 end
 
-function DocView:draw_search_match_background(line, col1, col2, primary)
+function TextView:draw_search_match_background(line, col1, col2, primary)
   local bg = self:search_match_style(primary)
   for x1, y, x2, h in self:iter_text_range_screen_segments(
     line, col1, col2
@@ -7553,7 +7516,7 @@ function DocView:draw_search_match_background(line, col1, col2, primary)
   end
 end
 
-function DocView:draw_search_match_outline(line, col1, col2, primary)
+function TextView:draw_search_match_outline(line, col1, col2, primary)
   local _, outline = self:search_match_style(primary)
   local t = math.max(1, SCALE)
   for x1, y, x2, h in self:iter_text_range_screen_segments(
@@ -7573,8 +7536,8 @@ end
 ---overlapping same-color ranges into one rectangle.
 ---@param minline integer First visible line
 ---@param maxline integer Last visible line
-function DocView:prepare_line_body_draw_cache(minline, maxline)
-  local stats = core.docview_frame_stats
+function TextView:prepare_line_body_draw_cache(minline, maxline)
+  local stats = core.textview_frame_stats
   local prepare_start = stats and system.get_time()
   local highlight_cache = {}
   local selection_cache = {}
@@ -7585,7 +7548,7 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
 
   local phase_start = stats and system.get_time()
   if hcl ~= false then
-    for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+    for _, line1, col1, line2, col2 in self.buffer:get_selections(false) do
       if stats then stats.prepare_highlight_iters = stats.prepare_highlight_iters + 1 end
       local top_line = math.min(line1, line2)
       if top_line > maxline then break end
@@ -7601,7 +7564,7 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
   if stats then stats.prepare_highlight_ms = stats.prepare_highlight_ms + (system.get_time() - phase_start) * 1000 end
 
   phase_start = stats and system.get_time()
-  local selections = self.doc.selections
+  local selections = self.buffer.selections
   for i = 1, #selections, 4 do
     if stats then stats.prepare_caret_scan_count = stats.prepare_caret_scan_count + 1 end
     local raw_line1, raw_col1 = selections[i], selections[i + 1]
@@ -7618,7 +7581,7 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
   end
 
   phase_start = stats and system.get_time()
-  for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
+  for _, line1, col1, line2, col2 in self.buffer:get_selections(true) do
     if stats then stats.prepare_selection_iters = stats.prepare_selection_iters + 1 end
     if line1 > maxline then break end
     if line2 >= minline then
@@ -7627,11 +7590,11 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
       local to_line = math.min(line2, maxline)
       for line = from_line, to_line do
         gutter_selection_cache[line] = true
-        local text = self.doc.lines[line]
+        local text = self.buffer.lines[line]
         local c1 = line1 ~= line and 1 or col1
         local c2 = line2 ~= line and #text + 1 or col2
         if c1 ~= c2 then
-          local is_search_selection = self.doc:is_search_selection(line1, c1, line, c2)
+          local is_search_selection = self.buffer:is_search_selection(line1, c1, line, c2)
           if is_search_selection then
             local search_list = search_match_cache[line]
             if not search_list then
@@ -7696,7 +7659,7 @@ local function provider_call(view, entry, method, ...)
   if not fn then return nil end
   local ok, res = pcall(fn, provider, ...)
   if not ok then
-    core.log_quiet("DocView decoration provider %s.%s failed for %s: %s", tostring(entry.id), method, view.doc:get_name(), tostring(res))
+    core.log_quiet("TextView decoration provider %s.%s failed for %s: %s", tostring(entry.id), method, view.buffer:get_name(), tostring(res))
     return nil
   end
   return res
@@ -7851,7 +7814,7 @@ local function draw_decoration_inline_ranges(view, line, x, y)
   end
 end
 
-function DocView:decoration_text_color(line)
+function TextView:decoration_text_color(line)
   for _, entry in ipairs(self:decoration_provider_entries()) do
     local color = provider_call(self, entry, "text_color", self, line)
     if color then return color end
@@ -7946,7 +7909,7 @@ local function draw_line_render_empty_cell_selections(
   if type(rows) ~= "table" then return false end
   local carets = {}
   for _, caret_line, caret_col, anchor_line, anchor_col in
-    view.doc:get_selections(false)
+    view.buffer:get_selections(false)
   do
     if caret_line == line and anchor_line == line and caret_col == anchor_col then
       carets[caret_col] = true
@@ -7962,13 +7925,13 @@ local function draw_line_render_empty_cell_selections(
   return drawn
 end
 
-function DocView:draw_line_body(line, x, y)
-  if not self.doc.lines[line] then
+function TextView:draw_line_body(line, x, y)
+  if not self.buffer.lines[line] then
     core.log_quiet(
-      "DocView draw_line_body: skipped stale line for %s (line=%s document_lines=%d)",
-      self.doc:get_name(), tostring(line), #self.doc.lines
+      "TextView draw_line_body: skipped stale line for %s (line=%s buffer_lines=%d)",
+      self.buffer:get_name(), tostring(line), #self.buffer.lines
     )
-    if self.wrapped_settings then self.wrapped_doc_line_count = nil end
+    if self.wrapped_settings then self.wrapped_buffer_line_count = nil end
     return line_packets.finish_line_body(
       self, line, x, y, self:get_line_height()
     )
@@ -8027,7 +7990,7 @@ function DocView:draw_line_body(line, x, y)
     local highlight_rows
     local hcl = config.highlight_current_line
     if hcl ~= false then
-      for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+      for _, line1, col1, line2, col2 in self.buffer:get_selections(false) do
         if line1 == line and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
           local line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col1)
           local idx = linewrapping.get_line_idx_col_count(self, line, col1, line_end)
@@ -8061,12 +8024,12 @@ function DocView:draw_line_body(line, x, y)
     draw_line_render_empty_cell_selections(
       self, line, render_line, x, y, style.selection
     )
-    for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
+    for _, line1, col1, line2, col2 in self.buffer:get_selections(true) do
       if line >= line1 and line <= line2 then
         if line1 ~= line then col1 = 1 end
-        if line2 ~= line then col2 = #self.doc.lines[line] + 1 end
+        if line2 ~= line then col2 = #self.buffer.lines[line] + 1 end
         if col1 ~= col2 then
-          if self.doc:is_search_selection(line1, col1, line, col2) then
+          if self.buffer:is_search_selection(line1, col1, line, col2) then
             search_matches = search_matches or {}
             search_matches[#search_matches + 1] = { col1, col2, true }
           elseif render_line and render_line.position_rows then
@@ -8115,7 +8078,7 @@ function DocView:draw_line_body(line, x, y)
       )
     end
 
-    local underline_module = DocView.__lsp_diagnostic_underlines_module or package.loaded["core.lsp.diagnostic_underlines"]
+    local underline_module = TextView.__lsp_diagnostic_underlines_module or package.loaded["core.lsp.diagnostic_underlines"]
     if underline_module and underline_module.draw_line then
       local underline_scope = perf_scope_begin("diagnostic_underlines")
       underline_module.draw_line(self, line, x, y)
@@ -8136,7 +8099,7 @@ function DocView:draw_line_body(line, x, y)
   draw_decoration_line_backgrounds(self, line, x, y)
 
   if self:line_has_current_line_highlight(line) then
-    for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+    for _, line1, col1, line2, col2 in self.buffer:get_selections(false) do
       if line1 == line
       and (config.highlight_current_line ~= "no_selection"
         or (line1 == line2 and col1 == col2))
@@ -8177,20 +8140,20 @@ function DocView:draw_line_body(line, x, y)
         local x1 = x + self:get_col_x_offset(line, sel[1])
         local x2 = x + self:get_col_x_offset(line, sel[2])
         if x1 ~= x2 then
-          local stats = core.docview_frame_stats
+          local stats = core.textview_frame_stats
           if stats then stats.selection_rect_calls = stats.selection_rect_calls + 1 end
           renderer.draw_rect(x1, y, x2 - x1, lh, sel[3])
         end
       end
     end
   elseif not selection_cache then
-    for lidx, line1, col1, line2, col2 in self.doc:get_selections(true) do
+    for lidx, line1, col1, line2, col2 in self.buffer:get_selections(true) do
       if line1 > line then break end
       if line >= line1 and line <= line2 then
-        local text = self.doc.lines[line]
+        local text = self.buffer.lines[line]
         if line1 ~= line then col1 = 1 end
         if line2 ~= line then col2 = #text + 1 end
-        if self.doc:is_search_selection(line1, col1, line, col2) then
+        if self.buffer:is_search_selection(line1, col1, line, col2) then
           fallback_search_matches = fallback_search_matches or {}
           fallback_search_matches[#fallback_search_matches + 1] = { col1, col2, true }
         elseif render_line and render_line.position_rows then
@@ -8205,7 +8168,7 @@ function DocView:draw_line_body(line, x, y)
           local x1 = x + self:get_col_x_offset(line, col1)
           local x2 = x + self:get_col_x_offset(line, col2)
           if x1 ~= x2 then
-            local stats = core.docview_frame_stats
+            local stats = core.textview_frame_stats
             if stats then stats.selection_rect_calls = stats.selection_rect_calls + 1 end
             renderer.draw_rect(x1, y, x2 - x1, lh, style.selection)
           end
@@ -8233,7 +8196,7 @@ function DocView:draw_line_body(line, x, y)
     end
   end
 
-  local underline_module = DocView.__lsp_diagnostic_underlines_module
+  local underline_module = TextView.__lsp_diagnostic_underlines_module
     or package.loaded["core.lsp.diagnostic_underlines"]
   if underline_module and underline_module.draw_line then
     local underline_scope = perf_scope_begin("diagnostic_underlines")
@@ -8253,7 +8216,7 @@ end
 ---@param y number Screen y coordinate
 ---@param width number Gutter width
 ---@return integer height Line height
-function DocView:draw_line_gutter(line, x, y, width)
+function TextView:draw_line_gutter(line, x, y, width)
   local render_line = self:get_line_render(line)
   local uses_wrapped_rows = self.wrapped_settings
     and not (render_line and render_line.disable_wrapping)
@@ -8276,7 +8239,7 @@ function DocView:draw_line_gutter(line, x, y, width)
     if gutter_selection_cache then
       if gutter_selection_cache[line] then color = style.line_number2 end
     else
-      for _, line1, _, line2 in self.doc:get_selections(true) do
+      for _, line1, _, line2 in self.buffer:get_selections(true) do
         if line1 > line then break end
         if line >= line1 and line <= line2 then
           color = style.line_number2
@@ -8304,7 +8267,7 @@ end
 ---@param col1 integer Start column
 ---@param line2 integer End line
 ---@param col2 integer End column
-function DocView:draw_ime_decoration(line1, col1, line2, col2)
+function TextView:draw_ime_decoration(line1, col1, line2, col2)
   local line_size = math.max(1, SCALE)
   if line2 < line1 or line1 == line2 and col2 < col1 then
     line1, col1, line2, col2 = line2, col2, line1, col1
@@ -8313,7 +8276,7 @@ function DocView:draw_ime_decoration(line1, col1, line2, col2)
   -- Draw IME underline
   for line = line1, line2 do
     local range_col1 = line == line1 and col1 or 1
-    local range_col2 = line == line2 and col2 or #(self.doc.lines[line] or "") + 1
+    local range_col2 = line == line2 and col2 or #(self.buffer.lines[line] or "") + 1
     for x1, y, x2, row_height in self:iter_text_range_screen_segments(
       line, range_col1, range_col2
     ) do
@@ -8345,17 +8308,17 @@ end
 
 ---Draw overlay elements (carets, IME decoration).
 ---Called after main text to draw on top.
-function DocView:draw_overlay()
+function TextView:draw_overlay()
   if self.wrapped_settings then
     linewrapping.draw_guide(self)
-    return with_wrapped_caret_affinity(self, DocView.draw_overlay_unwrapped)
+    return with_wrapped_caret_affinity(self, TextView.draw_overlay_unwrapped)
   end
   return self:draw_overlay_unwrapped()
 end
 
-function DocView:draw_overlay_unwrapped()
+function TextView:draw_overlay_unwrapped()
   local scope = perf_scope_begin("core_overlay")
-  local stats = core.docview_frame_stats
+  local stats = core.textview_frame_stats
   local overlay_start = stats and system.get_time()
   local minline, maxline = self:get_visible_line_range()
   local is_active = core.active_view == self
@@ -8383,7 +8346,7 @@ function DocView:draw_overlay_unwrapped()
     end
   else
     local caret_idx = 0
-    for _, line1, col1, line2, col2 in self.doc:get_selections() do
+    for _, line1, col1, line2, col2 in self.buffer:get_selections() do
       caret_idx = caret_idx + 1
       if line1 >= minline and line1 <= maxline then
         if is_active and ime.editing then
@@ -8400,10 +8363,10 @@ function DocView:draw_overlay_unwrapped()
 end
 
 
-function DocView:draw_folded()
+function TextView:draw_folded()
   local draw_scope = perf_scope_begin("draw_folded")
   self:draw_background(style.background)
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   self:get_font():set_tab_size(indent_size)
 
   local minline, maxline = self:get_visible_line_range()
@@ -8449,7 +8412,7 @@ function DocView:draw_folded()
           row.draw, self, row, x + gw, entry.y,
           math.max(0, self.size.x - gw), entry.height or self:get_line_height()
         )
-        if not ok then core.log_quiet("DocView provider row draw failed for %s: %s", self.doc:get_name(), tostring(err)) end
+        if not ok then core.log_quiet("TextView provider row draw failed for %s: %s", self.buffer:get_name(), tostring(err)) end
       end
     elseif not drawn_bodies[entry.line] then
       drawn_bodies[entry.line] = true
@@ -8470,7 +8433,7 @@ function DocView:draw_folded()
   perf_scope_end(draw_scope)
 end
 
-function DocView:draw_wrapped()
+function TextView:draw_wrapped()
   local draw_scope = perf_scope_begin("draw_wrapped", true)
   if self:has_composed_visual_rows() then
     local result = self:draw_folded()
@@ -8479,7 +8442,7 @@ function DocView:draw_wrapped()
   end
   local phase_scope = perf_scope_begin("background")
   self:draw_background(style.background)
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   self:get_font():set_tab_size(indent_size)
   perf_scope_end(phase_scope)
 
@@ -8551,28 +8514,28 @@ function DocView:draw_wrapped()
   perf_scope_end(draw_scope)
 end
 
----Draw the entire document view.
+---Draw the entire Text View.
 ---Renders background, gutters, text, selections, carets, and scrollbars.
-local function draw_docview(self)
+local function draw_textview(self)
   if self.wrapped_settings then
-    local document_lines = #self.doc.lines
+    local buffer_lines = #self.buffer.lines
     local wrapped_last_line = self.wrapped_lines
       and #self.wrapped_lines >= 2
       and self.wrapped_lines[#self.wrapped_lines - 1]
       or nil
-    local stale_line_count = self.wrapped_doc_line_count ~= document_lines
-    local stale_text = self.wrapped_text_revision ~= (self.doc.text_revision or 0)
-    local stale_mapping = type(wrapped_last_line) == "number" and wrapped_last_line > document_lines
+    local stale_line_count = self.wrapped_buffer_line_count ~= buffer_lines
+    local stale_text = self.wrapped_text_revision ~= (self.buffer.text_revision or 0)
+    local stale_mapping = type(wrapped_last_line) == "number" and wrapped_last_line > buffer_lines
     if stale_line_count or stale_text or stale_mapping then
       core.log_quiet(
-        "DocView draw: rebuilding stale wrapped rows for %s (cached_lines=%s document_lines=%d cached_last_line=%s stale_text=%s)",
-        self.doc:get_name(), tostring(self.wrapped_doc_line_count), document_lines,
+        "TextView draw: rebuilding stale wrapped rows for %s (cached_lines=%s buffer_lines=%d cached_last_line=%s stale_text=%s)",
+        self.buffer:get_name(), tostring(self.wrapped_buffer_line_count), buffer_lines,
         tostring(wrapped_last_line), tostring(stale_text)
       )
-      -- A stale mapping can survive when external document replacement also
+      -- A stale mapping can survive when external buffer replacement also
       -- overwrote the line-count metadata. Force update_wrap_cache() to perform
       -- a full reconstruction instead of accepting that metadata as current.
-      if stale_mapping then self.wrapped_doc_line_count = nil end
+      if stale_mapping then self.wrapped_buffer_line_count = nil end
       self:update_wrap_cache()
     end
   end
@@ -8602,13 +8565,13 @@ local function draw_docview(self)
     return self:draw_wrapped()
   end
   self:draw_background(style.background)
-  local _, indent_size = self.doc:get_indent_info()
+  local _, indent_size = self.buffer:get_indent_info()
   self:get_font():set_tab_size(indent_size)
 
   local minline, maxline = self:get_visible_line_range()
   local lh = self:get_line_height()
 
-  local stats = core.docview_frame_stats
+  local stats = core.textview_frame_stats
   if stats then stats.visible_lines = stats.visible_lines + math.max(0, maxline - minline + 1) end
   self:prepare_line_body_draw_cache(minline, maxline)
   self:draw_current_line_underlay_highlights(minline, maxline)
@@ -8642,25 +8605,25 @@ local function draw_docview(self)
   self:draw_scrollbar()
 end
 
-function DocView:draw()
-  local stats = core.docview_frame_stats
-  if not stats then return draw_docview(self) end
-  local draw_scope = perf_scope_begin("docview_core", true)
+function TextView:draw()
+  local stats = core.textview_frame_stats
+  if not stats then return draw_textview(self) end
+  local draw_scope = perf_scope_begin("textview_core", true)
   local draw_start = system.get_time()
-  local result = draw_docview(self)
+  local result = draw_textview(self)
   stats.draw_ms = stats.draw_ms + (system.get_time() - draw_start) * 1000
   perf_scope_end(draw_scope)
   return result
 end
 
 local function bind_selection_method(name)
-  local fn = DocView[name]
-  DocView[name] = function(self, ...)
+  local fn = TextView[name]
+  TextView[name] = function(self, ...)
     return self:with_selection_state(fn, self, ...)
   end
 end
 
-Doc.register_text_transaction_handler("docview-render-caches", function(doc, transaction)
+Buffer.register_text_transaction_handler("textview-render-caches", function(buffer, transaction)
   if not (transaction and transaction.changed) then return end
   local line1, line2
   local line_structure_changed = false
@@ -8673,8 +8636,8 @@ Doc.register_text_transaction_handler("docview-render-caches", function(doc, tra
     line2 = math.max(line2 or old_line2, old_line2, new_line2)
     if old_line2 - old_line1 ~= new_line2 - new_line1 then line_structure_changed = true end
   end
-  for view in pairs(DocView.registry[doc] or {}) do
-    if view and view.doc == doc then
+  for view in pairs(TextView.registry[buffer] or {}) do
+    if view and view.buffer == buffer then
       line_packets.apply_transaction(view, transaction)
       local invalid_line1, invalid_line2 = line1, line2
       local provider_entries = view:line_render_provider_entries()
@@ -8692,8 +8655,8 @@ Doc.register_text_transaction_handler("docview-render-caches", function(doc, tra
             invalid_line2 = math.max(invalid_line2 or provider_line2 or provider_line1, provider_line2 or provider_line1)
           elseif not ok then
             core.log_quiet(
-              "DocView line render provider %s transaction hook failed for %s: %s",
-              tostring(entry.id), doc:get_name(), tostring(provider_line1)
+              "TextView line render provider %s transaction hook failed for %s: %s",
+              tostring(entry.id), buffer:get_name(), tostring(provider_line1)
             )
           end
         else
@@ -8701,7 +8664,7 @@ Doc.register_text_transaction_handler("docview-render-caches", function(doc, tra
         end
       end
       if line_structure_changed and not providers_handle_line_structure and line1 then
-        invalid_line2 = math.max(invalid_line2 or line1, #doc.lines)
+        invalid_line2 = math.max(invalid_line2 or line1, #buffer.lines)
       end
       if view:has_line_render_providers() then
         -- Line wrapping observes the text transaction before render providers
@@ -8729,4 +8692,4 @@ for _, name in ipairs {
   bind_selection_method(name)
 end
 
-return DocView
+return TextView

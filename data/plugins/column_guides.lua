@@ -5,7 +5,8 @@ local command = require "core.command"
 local config = require "core.config"
 local file_context = require "core.file_context"
 local style = require "core.style"
-local DocView = require "core.docview"
+local TextView = require "core.textview"
+local Editor = require "core.editor"
 
 ---Configuration options for `column_guides` plugin.
 ---@class config.plugins.column_guides
@@ -72,7 +73,7 @@ end
 
 local function is_standard_editor(dv)
   return file_context.is_editor_view(dv)
-    and getmetatable(dv) == DocView
+    and getmetatable(dv) == Editor
     and not dv:has_line_render_providers()
 end
 
@@ -96,7 +97,7 @@ local function draw_column_guides(dv)
   core.pop_clip_rect()
 end
 
-local old_draw_current_line_highlights = DocView.draw_current_line_highlights
+local old_draw_current_line_highlights = TextView.draw_current_line_highlights
 
 local function perf_scope_begin(name)
   if not core.perf_draw_scope_active then return nil end
@@ -110,7 +111,7 @@ local function perf_scope_end(token)
   if perf and perf.scope_end then perf.scope_end(token) end
 end
 
-function DocView:draw_current_line_highlights(...)
+function TextView:draw_current_line_highlights(...)
   local scope = perf_scope_begin("column_guides")
   old_draw_current_line_highlights(self, ...)
 

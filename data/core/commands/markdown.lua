@@ -1,7 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
-local DocView = require "core.docview"
+local Editor = require "core.editor"
 local markdown_completion = require "core.markdown.completion"
 local markdown_live = require "core.markdown.live_render"
 local markdown_tables = require "core.markdown.tables"
@@ -10,7 +10,7 @@ local markdown_vault_index = require "core.markdown.vault_index"
 
 command.add(function()
   local view = core.active_view
-  if view and view:extends(DocView) and markdown_live.is_markdown_doc(view.doc) then
+  if view and view:extends(Editor) and markdown_live.is_markdown_buffer(view.buffer) then
     return true, view
   end
   return false
@@ -43,15 +43,15 @@ end, {
     markdown_live.set_project_remote_image_trust(view, false)
   end,
   ["markdown-live-preview:review-rename-link-updates"] = function(view)
-    markdown_rename_links.present(markdown_vault_index.pending_rename(view.doc.abs_filename))
+    markdown_rename_links.present(markdown_vault_index.pending_rename(view.buffer.abs_filename))
   end,
 })
 
 command.add(function()
   local view = core.active_view
   if config.markdown_live_interactive_tables == true
-  and view and view:extends(DocView)
-  and markdown_live.is_markdown_doc(view.doc)
+  and view and view:extends(Editor)
+  and markdown_live.is_markdown_buffer(view.buffer)
   and markdown_live.is_live_mode(view)
   and markdown_tables.has_interactive_context(view)
   then
@@ -106,8 +106,8 @@ end, {
 command.add(function()
   local view = core.active_view
   if config.markdown_live_interactive_tables == true
-  and view and view:extends(DocView)
-  and markdown_live.is_markdown_doc(view.doc)
+  and view and view:extends(Editor)
+  and markdown_live.is_markdown_buffer(view.buffer)
   and markdown_live.is_live_mode(view)
   and markdown_tables.has_interactive_context(view)
   and markdown_tables.has_text_clipboard()
@@ -124,8 +124,8 @@ end, {
 command.add(function(x, y)
   local view = core.active_view
   if config.markdown_live_interactive_tables == true
-  and view and view:extends(DocView)
-  and markdown_live.is_markdown_doc(view.doc)
+  and view and view:extends(Editor)
+  and markdown_live.is_markdown_buffer(view.buffer)
   and markdown_live.is_live_mode(view)
   and ((type(x) == "number" and type(y) == "number")
     and markdown_tables.has_interactive_position(view, x, y)
@@ -143,8 +143,8 @@ end, {
 
 command.add(function()
   local view = core.active_view
-  if view and view:extends(DocView)
-  and markdown_live.is_markdown_doc(view.doc)
+  if view and view:extends(Editor)
+  and markdown_live.is_markdown_buffer(view.buffer)
   and markdown_tables.has_command_context(view)
   then
     return true, view

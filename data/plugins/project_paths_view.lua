@@ -4,11 +4,11 @@
 local core = require "core"
 local common = require "core.common"
 local command = require "core.command"
-local Doc = require "core.doc"
-local DocView = require "core.docview"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local project_paths = require "core.project_paths"
 
-local ProjectPathsView = DocView:extend()
+local ProjectPathsView = TextView:extend()
 ProjectPathsView.context = "application"
 
 local view
@@ -76,14 +76,14 @@ local function find_effective_entry(id_or_path)
   end
 end
 
-local function set_doc_lines(doc, lines)
-  doc:reset()
-  doc.lines = #lines > 0 and lines or { "\n" }
-  doc.clean_lines = {}
-  doc.highlighter:soft_reset()
-  doc:clear_undo_redo()
-  doc:clean()
-  doc:set_selection(1, 1)
+local function set_buffer_lines(buffer, lines)
+  buffer:reset()
+  buffer.lines = #lines > 0 and lines or { "\n" }
+  buffer.clean_lines = {}
+  buffer.highlighter:soft_reset()
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer:set_selection(1, 1)
 end
 
 local function serialize_project_config_block()
@@ -242,7 +242,7 @@ end
 local function selected_filetree_directory()
   local ok, filetree = pcall(require, "plugins.filetree")
   if not (ok and core.active_view == filetree) then return nil, "select a folder in the File Tree first" end
-  local line = filetree.doc:get_selection(true)
+  local line = filetree.buffer:get_selection(true)
   local entry, err = filetree:entry_for_line(line)
   if not entry then return nil, err or "no File Tree entry selected" end
   if entry.type ~= "dir" then return nil, "selected File Tree row is not a folder" end
@@ -310,7 +310,7 @@ local function prompt_role(path, roles, callback)
 end
 
 function ProjectPathsView:new()
-  ProjectPathsView.super.new(self, Doc())
+  ProjectPathsView.super.new(self, Buffer())
   self.entries_by_line = {}
   self:refresh()
 end
@@ -336,11 +336,11 @@ function ProjectPathsView:refresh()
     lines[#lines + 1] = line
     self.entries_by_line[#lines] = entry
   end
-  set_doc_lines(self.doc, lines)
+  set_buffer_lines(self.buffer, lines)
 end
 
 function ProjectPathsView:selected_entry()
-  local line = self.doc:get_selection(true)
+  local line = self.buffer:get_selection(true)
   return self.entries_by_line[line]
 end
 
@@ -385,6 +385,7 @@ local function open_view()
   if not view then view = ProjectPathsView() end
   view:refresh()
   local node = core.root_panel:get_active_node_default()
+  if node and node.locked then node = core.root_panel:get_left_pane() end
   if node then node:add_view(view) else core.set_active_view(view) end
   return view
 end

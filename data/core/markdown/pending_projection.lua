@@ -298,13 +298,13 @@ function projection.ordered_changed_ranges(transaction)
   return ranges
 end
 
-function projection.transaction_changes_list_structure(doc, transaction, pre_edit_lines)
+function projection.transaction_changes_list_structure(buffer, transaction, pre_edit_lines)
   for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
     local old_line = range.old_line1 or range.new_line1 or 1
     local new_line = range.new_line1 or old_line
     local previous = pre_edit_lines and pre_edit_lines[old_line]
     if projection.list_signature(previous and previous.source_text or "")
-      ~= projection.list_signature(doc.lines[new_line] or "")
+      ~= projection.list_signature(buffer.lines[new_line] or "")
     then
       return true
     end
@@ -312,7 +312,7 @@ function projection.transaction_changes_list_structure(doc, transaction, pre_edi
   return false
 end
 
-function projection.transaction_changes_block_context(doc, transaction, pre_edit_lines)
+function projection.transaction_changes_block_context(buffer, transaction, pre_edit_lines)
   local changed = false
   local global = false
   for _, range in ipairs(projection.ordered_changed_ranges(transaction)) do
@@ -320,7 +320,7 @@ function projection.transaction_changes_block_context(doc, transaction, pre_edit
     local new_line = range.new_line1 or old_line
     local previous = pre_edit_lines and pre_edit_lines[old_line]
     local old_text = previous and previous.source_text or ""
-    local new_text = (doc.lines[new_line] or ""):gsub("\n$", "")
+    local new_text = (buffer.lines[new_line] or ""):gsub("\n$", "")
     local old_signature = projection.block_signature(old_text)
     local new_signature = projection.block_signature(new_text)
     if (old_signature == "reference" or new_signature == "reference")
@@ -356,7 +356,7 @@ local function link_target_signature(text)
   return ""
 end
 
-function projection.transaction_changes_link_targets(doc, transaction, pre_edit_lines)
+function projection.transaction_changes_link_targets(buffer, transaction, pre_edit_lines)
   for _, range in ipairs(projection.ordered_changed_ranges(transaction)) do
     local old_line1 = range.old_line1 or range.new_line1 or 1
     local old_line2 = range.old_line2 or old_line1
@@ -367,13 +367,13 @@ function projection.transaction_changes_link_targets(doc, transaction, pre_edit_
       if previous and link_target_signature(previous.source_text) ~= "" then return true end
     end
     for line = new_line1, new_line2 do
-      if link_target_signature(doc.lines[line]) ~= "" then return true end
+      if link_target_signature(buffer.lines[line]) ~= "" then return true end
     end
   end
   return false
 end
 
-function projection.transaction_changes_frontmatter(doc, transaction, pre_edit_lines)
+function projection.transaction_changes_frontmatter(buffer, transaction, pre_edit_lines)
   local function delimiter(text)
     text = tostring(text or ""):gsub("\n$", "")
     return text:match("^%s*%-%-%-%s*$") ~= nil
@@ -384,26 +384,26 @@ function projection.transaction_changes_frontmatter(doc, transaction, pre_edit_l
     local old_line = range.old_line1 or range.new_line1 or 1
     local new_line = range.new_line1 or old_line
     local previous = pre_edit_lines and pre_edit_lines[old_line]
-    if delimiter(previous and previous.source_text) ~= delimiter(doc.lines[new_line]) then
+    if delimiter(previous and previous.source_text) ~= delimiter(buffer.lines[new_line]) then
       return true
     end
   end
   return false
 end
 
-function projection.transaction_changes_html(doc, transaction, pre_edit_lines)
+function projection.transaction_changes_html(buffer, transaction, pre_edit_lines)
   for _, range in ipairs(projection.ordered_changed_ranges(transaction)) do
     local old_line = range.old_line1 or range.new_line1 or 1
     local new_line = range.new_line1 or old_line
     local previous = pre_edit_lines and pre_edit_lines[old_line]
     local old_mode = html_block_mode(previous and previous.source_text or "")
-    local new_mode = html_block_mode((doc.lines[new_line] or ""):gsub("\n$", ""))
+    local new_mode = html_block_mode((buffer.lines[new_line] or ""):gsub("\n$", ""))
     if old_mode ~= new_mode then return true end
   end
   return false
 end
 
-function projection.transaction_changes_raw_context(doc, transaction, pre_edit_lines)
+function projection.transaction_changes_raw_context(buffer, transaction, pre_edit_lines)
   if transaction and transaction.type == "load" then return true end
   local ranges = projection.ordered_changed_ranges(transaction)
   if #ranges == 0 then return false end
@@ -430,7 +430,7 @@ function projection.transaction_changes_raw_context(doc, transaction, pre_edit_l
       return previous and previous.source_text
     end)
     local new = signatures(new_line1, new_line2, function(line)
-      return (doc.lines[line] or ""):gsub("\n$", "")
+      return (buffer.lines[line] or ""):gsub("\n$", "")
     end)
     if old == nil or old ~= new then return true end
   end
