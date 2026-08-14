@@ -221,7 +221,20 @@ end
 ---Example: `core.global_prompt_bar:enter("Save?", {submit = do_close})`
 ---@param do_close function Call this function to actually close the view
 function View:try_close(do_close)
-  do_close()
+  self:can_close(function()
+    self:on_close()
+    do_close()
+  end)
+end
+
+---Request close approval without releasing View resources.
+---@param approve function Call this function when closing is allowed.
+function View:can_close(approve)
+  approve()
+end
+
+---Release resources after an approved close transaction commits.
+function View:on_close()
 end
 
 

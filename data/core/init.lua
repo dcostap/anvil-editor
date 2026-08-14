@@ -663,9 +663,8 @@ function core.init()
   -- Load default commands first so plugins/core features can override them.
   command.add_defaults()
 
-  -- Create the first Pane before plugins add or replace Views.
-  local panes = require "core.panes"
-  panes.create()
+  -- Pane 1 is created only by restored state or an explicit open request.
+  require "core.panes"
 
   -- Shared Point of Interest navigation commands/keymaps are loaded before
   -- plugins so providers can attach themselves during plugin initialization.
@@ -1660,6 +1659,19 @@ local function close_buffer_view(buffer)
   end)
 end
 
+function core.clear_active_view(view)
+  if view and core.active_view ~= view then return false end
+  local old = core.active_view
+  if not old then return false end
+  if core.window then system.text_input(core.window, false) end
+  core.last_active_view = old
+  core.active_view = nil
+  core.next_active_view = nil
+  core.redraw = true
+  core.log_quiet("Focus diagnostics: cleared active View")
+  return true
+end
+
 local function filename_has_control_chars(filename)
   return type(filename) == "string" and filename:find("[%z\1-\31]") ~= nil
 end
@@ -1711,16 +1723,24 @@ end
 
 function core.get_views_referencing_buffer(buffer)
   local res = {}
-  for _, view in ipairs(core.root_panel:children()) do
-    if view.buffer == buffer then table.insert(res, view) end
+  local seen = {}
+  local pane_manager = require "core.panes"
+  for _, pane in ipairs(pane_manager.ordered()) do
+    for _, view in ipairs(pane_manager.history_views(pane)) do
+      if view.buffer == buffer and not seen[view] then
+        seen[view] = true
+        table.insert(res, view)
+      end
+    end
   end
   return res
 end
 
 
 ---@param filename string
+---@param opts? table
 ---@return core.imageview? image_view
-function core.open_image(filename)
+function core.open_image(filename, opts)
   ---@cast ImageView core.imageview
   if ImageView.is_supported(filename) then
     local abs_filename = core.root_project():absolute_path(filename)
@@ -1728,26 +1748,13 @@ function core.open_image(filename)
     if not file then return false end
     file:close()
 
-    local panes = require "core.panes"
-    local pane = panes.resolve_target()
-    local node = panes.node(pane)
-    for i, view in ipairs(node.views) do
-      if common.path_equals(view.path, abs_filename) then
-        node:set_active_view(node.views[i])
-        return view
-      end
-    end
-    local view = ImageView(abs_filename)
-    if view.image then
-      panes.open_view(view, { pane = pane, focus = true })
-      core.root_panel.root_node:update_layout()
-      return view
-    else
-      core.error(
-        "Image could not be loaded.%s",
-        view.errmsg and " Error: " .. view.errmsg or ""
-      )
-    end
+    local view, err = require("core.panes").place(function()
+      local image = ImageView(abs_filename)
+      if not image.image then error(image.errmsg or "image load failed") end
+      return image
+    end, opts or {})
+    if not view then core.error("Image could not be loaded: %s", tostring(err)) end
+    return view
   end
 end
 
@@ -1756,9 +1763,13 @@ end
 ---If the given file is a supported image, it will open it in the image viewer;
 ---otherwise, it will open it as a normal text file.
 ---@param filename string Path to the file to open
----@return core.imageview|core.textview
-function core.open_file(filename)
-  return require("core.panes").open_path(filename)
+---@param opts? table
+---@return core.imageview|core.editor
+function core.open_file(filename, opts)
+  if ImageView.is_supported(filename) then return core.open_image(filename, opts) end
+  local info = system.get_file_info(filename)
+  if info and info.type == "dir" then return nil, "cannot open a directory as a file" end
+  return core.root_panel:open_buffer(core.open_buffer(filename), opts)
 end
 
 

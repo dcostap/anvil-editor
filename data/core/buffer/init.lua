@@ -141,6 +141,10 @@ end
 function Buffer:set_filename(filename, abs_filename)
   local old = metadata_snapshot(self)
   local old_path = language_mode.buffer_path(self)
+  if core.buffer_registry and core.buffer_registry:identity(self)
+      and not core.buffer_registry:can_use_identity(self, abs_filename) then
+    error("another Buffer already has this file identity")
+  end
   self.filename = filename
   self.abs_filename = abs_filename
   language_mode.on_buffer_path_changed(self, old_path, language_mode.buffer_path(self))
@@ -455,6 +459,11 @@ function Buffer:save(filename, abs_filename)
   else
     assert(self.filename or abs_filename, "calling save on unnamed buffer without absolute path")
     abs_filename = abs_filename or core.project_absolute_path(filename)
+  end
+
+  if core.buffer_registry and core.buffer_registry:identity(self)
+      and not core.buffer_registry:can_use_identity(self, abs_filename) then
+    error("another Buffer already has this file identity")
   end
 
   local output

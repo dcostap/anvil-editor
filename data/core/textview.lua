@@ -1019,28 +1019,22 @@ function TextView:release_owned_features(reason)
   return #ids
 end
 
----Attempt to close the view, prompting to save if buffer is dirty.
----Shows "Unsaved Changes" dialog if this is the last view of a dirty buffer.
----@param do_close function Callback to execute when close is confirmed
-function TextView:try_close(do_close)
-  local function unregister_and_close()
-    self:cancel_horizontal_extent_scan()
-    self:clear_fold_regions("view-close")
-    unregister_fold_view(self)
-    linewrapping.unregister_textview(self)
-    self:release_owned_features("view-close")
-    do_close()
-  end
-  if self.buffer:is_dirty()
-  and #core.get_views_referencing_buffer(self.buffer) == 1 then
+---Request close approval without releasing Text View resources.
+---@param approve function Callback to execute when close is approved.
+function TextView:can_close(approve)
+  local references = core.buffer_registry
+    and core.buffer_registry:reference_count(self.buffer)
+    or #core.get_views_referencing_buffer(self.buffer)
+  if self.buffer:is_dirty() and references <= 1 then
     core.global_prompt_bar:enter("Unsaved Changes; Confirm Close", {
       submit = function(_, item)
         if item.text:match("^[cC]") then
-          unregister_and_close()
+          self.discard_buffer_on_close = true
+          approve()
         elseif item.text:match("^[sS]") then
           local ok, err = pcall(self.buffer.save, self.buffer)
           if ok then
-            unregister_and_close()
+            approve()
           elseif not tostring(err):find("file changed on disk", 1, true) then
             core.error("Couldn't save file \"%s\": %s", self.buffer.filename, err)
           end
@@ -1054,8 +1048,18 @@ function TextView:try_close(do_close)
       end
     })
   else
-    unregister_and_close()
+    approve()
   end
+end
+
+function TextView:on_close()
+  if self.textview_closed then return end
+  self.textview_closed = true
+  self:cancel_horizontal_extent_scan()
+  self:clear_fold_regions("view-close")
+  unregister_fold_view(self)
+  linewrapping.unregister_textview(self)
+  self:release_owned_features("view-close")
 end
 
 

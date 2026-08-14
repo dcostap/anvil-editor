@@ -56,4 +56,12 @@ test.describe("Current Editor command routing", function()
     test.not_ok(command.perform("text:newline"))
     test.equal(#stray.buffer.lines, 1)
   end)
+
+  test.it("routes text editing to an Editor subclass", function()
+    local SpecializedEditor = Editor:extend()
+    local pane = panes.create { factory = function() return SpecializedEditor(Buffer()) end }
+    test.equal(core.current_editor(), pane.current_view)
+    test.ok(command.perform("text:newline"))
+    test.equal(#pane.current_view.buffer.lines, 2)
+  end)
 end)

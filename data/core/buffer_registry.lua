@@ -4,7 +4,9 @@ local BufferRegistry = Object:extend()
 
 local function file_key(path)
   if type(path) ~= "string" or path == "" then return nil end
-  return "file:" .. path:gsub("\\", "/"):gsub("/+", "/"):lower()
+  path = path:gsub("\\", "/"):gsub("/+", "/")
+  if PLATFORM == "Windows" then path = path:lower() end
+  return "file:" .. path
 end
 
 local function is_dirty(buffer)
@@ -33,7 +35,7 @@ function BufferRegistry:register(buffer, identity)
   local current = self.records[buffer]
   if current then return buffer end
   local key = file_key(identity or buffer.abs_filename)
-  if key and self.by_identity[key] then return self.by_identity[key] end
+  if key and self.by_identity[key] then return nil, "file identity is already registered" end
   if not key then
     self.next_untitled_id = self.next_untitled_id + 1
     key = "untitled:" .. self.next_untitled_id
@@ -60,17 +62,26 @@ function BufferRegistry:update_identity(buffer)
   local record = assert(self.records[buffer], "Buffer is not registered")
   local key = file_key(buffer.abs_filename)
   if not key then return record.identity end
-  local conflict = self.by_identity[key]
-  assert(not conflict or conflict == buffer, "another Buffer already has this file identity")
+  assert(self:can_use_identity(buffer, buffer.abs_filename),
+    "another Buffer already has this file identity")
   self.by_identity[record.identity] = nil
   record.identity = key
   self.by_identity[key] = buffer
   return key
 end
 
+function BufferRegistry:can_use_identity(buffer, identity)
+  local key = file_key(identity)
+  local existing = key and self.by_identity[key]
+  return not existing or existing == buffer
+end
+
 function BufferRegistry:retain(buffer, owner)
   assert(owner ~= nil, "Buffer owner is required")
-  if not self.records[buffer] then self:register(buffer) end
+  if not self.records[buffer] then
+    local registered, err = self:register(buffer)
+    assert(registered == buffer, err or "Buffer registration failed")
+  end
   self.records[buffer].owners[owner] = true
   return buffer
 end

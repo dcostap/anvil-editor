@@ -57,9 +57,13 @@ test.describe("Pane navigation and movement", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.split(one, "right", { factory = factory("two") })
     local three = panes.split(two, "right", { factory = factory("three") })
+    one.group.root.ratio = 0.35
+    one.group.root.b.ratio = 0.7
     panes.move(three, one, "left")
     test.same(names(), { "three", "one", "two" })
     test.equal(three.group, one.group)
+    test.equal(one.group.root.ratio, 0.35)
+    test.equal(one.group.root.b.ratio, 0.7)
   end)
 
   test.it("detaches one Pane as a new singleton group", function()
@@ -93,5 +97,18 @@ test.describe("Pane navigation and movement", function()
     test.ok(err:find("factory failed", 1, true))
     test.same(layout.serialize(one.group.root), before)
     test.same(names(), { "one" })
+  end)
+
+  test.it("rejects an invalid split before constructing or registering a Pane", function()
+    local one = panes.create { factory = factory("one") }
+    local constructed = false
+    local result, err = panes.split(one, "diagonal", {
+      factory = function() constructed = true; return NamedView("bad") end,
+    })
+    test.is_nil(result)
+    test.ok(err)
+    test.not_ok(constructed)
+    test.equal(panes.count(), 1)
+    test.ok(panes.validate())
   end)
 end)

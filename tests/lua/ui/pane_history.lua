@@ -14,7 +14,7 @@ end
 function HistoryView:get_name() return self.name end
 function HistoryView:on_suspend() self.suspends = self.suspends + 1 end
 function HistoryView:on_resume() self.resumes = self.resumes + 1 end
-function HistoryView:try_close(close)
+function HistoryView:can_close(close)
   self.closes = self.closes + 1
   close()
 end
@@ -50,6 +50,16 @@ test.describe("Pane View history", function()
     test.equal(one.resumes, 1)
     test.equal(panes.forward(pane), two)
     test.equal(two.resumes, 2)
+  end)
+
+  test.it("keeps the Current View when replacement construction fails", function()
+    local pane = panes.create { factory = factory("one") }
+    local one = pane.current_view
+    local result, err = panes.replace_view(pane, function() error("construction failed") end)
+    test.is_nil(result)
+    test.ok(err:find("construction failed", 1, true))
+    test.equal(pane.current_view, one)
+    test.same(panes.history_views(pane), { one })
   end)
 
   test.it("keeps history independent for each Pane", function()
@@ -96,6 +106,20 @@ test.describe("Pane View history", function()
     test.is_nil(one.__pane_owner)
   end)
 
+  test.it("keeps a protected suspended View during soft history trimming", function()
+    local protected = make("terminal")
+    protected.history_protected = true
+    local pane = panes.create {
+      factory = function() return protected end,
+      history_limit = 2,
+    }
+    panes.present(make("two"), { pane = pane })
+    panes.present(make("three"), { pane = pane })
+    local views = panes.history_views(pane)
+    test.equal(views[1], protected)
+    test.equal(views[2]:get_name(), "three")
+  end)
+
   test.it("closes Current and retained Views before removing a Pane", function()
     local pane = panes.create { factory = factory("one") }
     local one = pane.current_view
@@ -105,5 +129,27 @@ test.describe("Pane View history", function()
     test.equal(one.closes, 1)
     test.equal(two.closes, 1)
     test.equal(panes.count(), 0)
+  end)
+
+  test.it("does not release any View when a retained View cancels Pane close", function()
+    local TransactionView = View:extend()
+    function TransactionView:new(name, cancel)
+      TransactionView.super.new(self)
+      self.name, self.cancel, self.releases = name, cancel, 0
+    end
+    function TransactionView:get_name() return self.name end
+    function TransactionView:can_close(approve)
+      if not self.cancel then approve() end
+    end
+    function TransactionView:on_close() self.releases = self.releases + 1 end
+
+    local retained = TransactionView("retained", true)
+    local pane = panes.create { factory = function() return retained end }
+    local current = TransactionView("current", false)
+    panes.present(current, { pane = pane })
+    test.not_ok(panes.close(pane))
+    test.equal(retained.releases, 0)
+    test.equal(current.releases, 0)
+    test.equal(panes.count(), 1)
   end)
 end)

@@ -183,9 +183,6 @@ function RootPanel:view_at(x, y)
   end
   local group = panes().visible_group()
   local pane = group and layout.pane_at(group.root, x, y)
-  if pane and pane.command_bar and point_in_view(pane.command_bar, x, y) then
-    return pane.command_bar
-  end
   return pane and pane.current_view or nil
 end
 
@@ -194,17 +191,25 @@ function RootPanel:get_active_pane()
 end
 
 function RootPanel:open_buffer(buffer, opts)
+  opts = opts or {}
   local Editor = require "core.editor"
-  for _, pane in ipairs(panes().ordered()) do
-    if pane.current_view.buffer == buffer then
-      panes().focus(pane)
-      return pane.current_view
+  local target = panes().find(opts.pane or panes().active())
+  if target and (opts.placement == nil or opts.placement == "current") then
+    for _, view in ipairs(panes().history_views(target)) do
+      if view.extends and view:extends(Editor) and view.buffer == buffer then
+        panes().present(view, { pane = target, focus = opts.focus })
+        return view
+      end
     end
   end
-  local view = Editor(buffer)
-  local pane, err = panes().present(view, { pane = opts and opts.pane, focus = not opts or opts.focus ~= false })
-  if not pane then return nil, err end
-  return view
+  return panes().place(function() return Editor(buffer) end, {
+    pane = opts.pane,
+    placement = opts.placement or "current",
+    direction = opts.direction,
+    focus = opts.focus,
+    preserve_focus = opts.preserve_focus,
+    reason = opts.reason,
+  })
 end
 
 function RootPanel:close_all_views(keep_view)
@@ -250,14 +255,7 @@ function RootPanel:update_layout()
   if group then
     layout.update_rects(group.root, self.content_rect)
     for _, pane in ipairs(layout.leaves(group.root)) do
-      if pane.command_bar then
-        pane.command_bar:update_rect {
-          x = pane.position.x, y = pane.position.y,
-          w = pane.size.x, h = pane.size.y,
-        }
-      else
-        set_rect(pane.current_view, pane.position.x, pane.position.y, pane.size.x, pane.size.y)
-      end
+      set_rect(pane.current_view, pane.position.x, pane.position.y, pane.size.x, pane.size.y)
     end
   end
 end
@@ -373,8 +371,12 @@ function RootPanel:on_touch_moved(x, y, ...)
   return call_view(self.touched_view, "on_touch_moved", x, y, ...)
 end
 
-function RootPanel:on_file_dropped(filename)
-  if core.open_file then return core.open_file(filename) end
+function RootPanel:on_file_dropped(filename, x, y)
+  local group = panes().visible_group()
+  local pane = group and x and y and layout.pane_at(group.root, x, y) or panes().active()
+  if core.open_file then
+    return core.open_file(filename, { pane = pane, placement = "current", reason = "file-drop" })
+  end
 end
 
 local function draw_split_dividers(node)
@@ -395,11 +397,6 @@ function RootPanel:draw()
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.background)
   local group = panes().visible_group()
   for _, view in ipairs(self:pane_views()) do call_view(view, "draw") end
-  if group then
-    for _, pane in ipairs(layout.leaves(group.root)) do
-      if pane.command_bar then pane.command_bar:draw() end
-    end
-  end
   if group then draw_split_dividers(group.root) end
   for _, view in ipairs(self:shell_views()) do call_view(view, "draw") end
   self:draw_active_app_overlay()

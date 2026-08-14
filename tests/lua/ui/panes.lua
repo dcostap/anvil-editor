@@ -124,4 +124,27 @@ test.describe("Pane manager", function()
     }
     test.not_ok(pcall(panes.validate))
   end)
+
+  test.it("removes focus-target ownership when its View closes", function()
+    local pane = panes.create { factory = factory("one") }
+    local child = FakeView("child")
+    panes.register_focus_target(pane.current_view, child)
+    test.equal(panes.pane_for_view(child), pane)
+    panes.close(pane, { force = true })
+    test.is_nil(panes.pane_for_view(child))
+    test.ok(panes.validate())
+  end)
+
+  test.it("clears a closed final Pane View from global focus", function()
+    local pane = panes.create { factory = factory("one") }
+    core.active_view = pane.current_view
+    local clear_active_view = core.clear_active_view
+    core.clear_active_view = function(view)
+      if core.active_view == view then core.active_view = nil; return true end
+      return false
+    end
+    panes.close(pane, { force = true })
+    core.clear_active_view = clear_active_view
+    test.is_nil(core.active_view)
+  end)
 end)

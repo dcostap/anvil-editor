@@ -22,11 +22,20 @@ function Editor:release_buffer()
 end
 
 function Editor:on_history_discarded()
-  self:release_buffer()
+  self:on_close()
 end
 
 function Editor:on_close()
+  Editor.super.on_close(self)
   self:release_buffer()
+  if self.discard_buffer_on_close and core.buffer_registry
+      and core.buffer_registry:reference_count(self.buffer) == 0 then
+    core.buffer_registry:remove(self.buffer, true)
+  end
+end
+
+function Editor:can_suspend()
+  return self.buffer.abs_filename ~= nil
 end
 
 function Editor:get_navigation_state()

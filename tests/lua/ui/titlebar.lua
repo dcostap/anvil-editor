@@ -65,4 +65,34 @@ test.describe("Global title bar Pane entries", function()
     test.not_equal(panes.active(), two)
     test.equal(panes.active().current_view:get_name(), "one")
   end)
+
+  test.it("marks Pane Group boundaries and closes a Tab with middle-click", function()
+    local one = panes.create { factory = factory("one") }
+    panes.split(one, "right", { factory = factory("two") })
+    panes.create { factory = factory("three") }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local entries = title:get_pane_entries()
+    test.ok(entries[1].group_start)
+    test.not_ok(entries[2].group_start)
+    test.ok(entries[3].group_start)
+    test.ok(title:on_mouse_pressed("middle", entries[2].x + 2, entries[2].y + 2, 1))
+    test.equal(panes.count(), 2)
+  end)
+
+  test.it("pages the global Tab lane with the mouse wheel", function()
+    local first
+    for i = 1, 6 do
+      local pane = panes.create { factory = factory("view-" .. i) }
+      first = first or pane
+    end
+    panes.focus(first)
+    local title = TitleBar()
+    title.size.x = 420
+    title:update()
+    local before = title.tab_offset
+    test.ok(title:on_mouse_wheel(-1, 0))
+    test.ok(title.tab_offset > before)
+  end)
 end)

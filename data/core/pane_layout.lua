@@ -34,6 +34,31 @@ function layout.leaves(root)
   return collect_leaves(root, {})
 end
 
+local function collect_leaf_nodes(node, result)
+  if not node then return result end
+  if is_leaf(node) then
+    result[#result + 1] = node
+  else
+    assert(is_split(node), "invalid Pane layout node")
+    collect_leaf_nodes(node.a, result)
+    collect_leaf_nodes(node.b, result)
+  end
+  return result
+end
+
+function layout.reorder(root, ordered_panes)
+  local nodes = collect_leaf_nodes(root, {})
+  assert(#nodes == #ordered_panes, "Pane reorder count does not match layout")
+  local seen = {}
+  for i, pane in ipairs(ordered_panes) do
+    assert(pane and not seen[pane], "Pane reorder contains an invalid duplicate")
+    seen[pane] = true
+    nodes[i].pane = pane
+  end
+  layout.validate(root)
+  return root
+end
+
 local function find_node(node, pane, parent, key)
   if not node then return nil end
   if is_leaf(node) then

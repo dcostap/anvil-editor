@@ -152,9 +152,15 @@ function command.generate_predicate(predicate)
   if type(predicate) == "table" then
     local class = predicate
     if not strict then
-      predicate = function(...) return core.active_view:extends(class), core.active_view, ... end
+      predicate = function(...)
+        local view = core.active_view
+        return view ~= nil and view.extends and view:extends(class) or false, view, ...
+      end
     else
-      predicate = function(...) return core.active_view:is(class), core.active_view, ... end
+      predicate = function(...)
+        local view = core.active_view
+        return view ~= nil and view.is and view:is(class) or false, view, ...
+      end
     end
   end
   ---@cast predicate core.command.predicate_function

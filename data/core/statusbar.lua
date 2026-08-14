@@ -183,7 +183,8 @@ StatusBar.Item = StatusBarItem
 ---Check if active view is a Text View (but not the Global Prompt Bar).
 ---@return boolean
 local function predicate_textview()
-  return core.active_view:extends(TextView)
+  return core.active_view ~= nil
+    and core.active_view:extends(TextView)
     and not core.active_view:is(GlobalPromptBar)
 end
 

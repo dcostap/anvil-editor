@@ -63,6 +63,9 @@ end
 
 local function release_view(pane, view)
   if view and view.__pane_owner == pane then view.__pane_owner = nil end
+  for child, owner in pairs(M.focus_owners) do
+    if child == view or owner == view then M.focus_owners[child] = nil end
+  end
 end
 
 local function capture_navigation_state(view)
@@ -91,8 +94,6 @@ local function create_identity(view, opts)
       limit = math.max(1, tonumber(opts and opts.history_limit) or 100),
     },
   }
-  local PaneCommandBar = require "core.pane_command_bar"
-  pane.command_bar = PaneCommandBar(pane)
   claim_view(pane, view)
   pane.history.entries[1] = { view = view, state = capture_navigation_state(view) }
   pane.history.index = 1
@@ -162,7 +163,7 @@ function M.current_editor()
   local pane = M.active_pane
   local view = pane and pane.current_view
   local Editor = require "core.editor"
-  return view and view.is and view:is(Editor) and view or nil
+  return view and view.extends and view:extends(Editor) and view or nil
 end
 
 function M.visible_group()
@@ -219,6 +220,10 @@ function M.split(target, direction, opts)
   opts = opts or {}
   local pane = M.find(target)
   if not pane then return nil, "invalid target Pane" end
+  if direction ~= "left" and direction ~= "right"
+      and direction ~= "up" and direction ~= "down" then
+    return nil, "invalid split direction"
+  end
   local view, err = make_view(opts)
   if not view then
     quiet("Pane split failed target=%s: %s", pane.id, tostring(err))
@@ -310,6 +315,25 @@ function M.move(source_target, destination_target, direction)
     return nil, "invalid Pane move direction"
   end
   local destination_group = destination.group
+  if source.group == destination_group then
+    local ordered = layout.leaves(destination_group.root)
+    local source_index, destination_index
+    for i, pane in ipairs(ordered) do
+      if pane == source then source_index = i end
+      if pane == destination then destination_index = i end
+    end
+    table.remove(ordered, source_index)
+    if source_index < destination_index then destination_index = destination_index - 1 end
+    local insertion = (direction == "left" or direction == "up")
+      and destination_index or destination_index + 1
+    table.insert(ordered, insertion, source)
+    layout.reorder(destination_group.root, ordered)
+    M.active_pane = source
+    M.visible_group_value = destination_group
+    focus_view(source)
+    after_mutation(string.format("reordered %s %s of %s", source.id, direction, destination.id))
+    return source
+  end
   remove_from_group(source)
   source.group = destination_group
   destination_group.root = layout.split(destination_group.root, destination, direction, source)
@@ -384,7 +408,24 @@ local function discard_entry(pane, index)
   end
   if not retained then
     release_view(pane, entry.view)
-    call_lifecycle(entry.view, "on_history_discarded")
+    if entry.view.on_history_discarded then
+      entry.view:on_history_discarded()
+    else
+      call_lifecycle(entry.view, "on_close")
+    end
+  end
+end
+
+local function can_trim_history_view(view)
+  if view.can_discard_from_history then return view:can_discard_from_history() end
+  if view.buffer and view.buffer.is_dirty and view.buffer:is_dirty() then return false end
+  return not view.history_protected
+end
+
+local function clear_recreatable_forward(pane)
+  local history = pane.history
+  for i = #history.entries, history.index + 1, -1 do
+    if can_trim_history_view(history.entries[i].view) then discard_entry(pane, i) end
   end
 end
 
@@ -400,8 +441,15 @@ function M.prune_history(target)
     end
   end
   while #pane.history.entries > pane.history.limit do
-    local index = pane.history.index == 1 and #pane.history.entries or 1
-    discard_entry(pane, index)
+    local discard_index
+    for i, entry in ipairs(pane.history.entries) do
+      if i ~= pane.history.index and can_trim_history_view(entry.view) then
+        discard_index = i
+        break
+      end
+    end
+    if not discard_index then break end
+    discard_entry(pane, discard_index)
     removed = removed + 1
   end
   pane.current_view = pane.history.entries[pane.history.index].view
@@ -438,9 +486,10 @@ function M.record_location(target)
       == navigation_state_key(pane.current_view, state) then
     return false
   end
-  for i = #history.entries, history.index + 1, -1 do discard_entry(pane, i) end
-  history.entries[#history.entries + 1] = { view = pane.current_view, state = state }
-  history.index = #history.entries
+  clear_recreatable_forward(pane)
+  local index = history.index + 1
+  table.insert(history.entries, index, { view = pane.current_view, state = state })
+  history.index = index
   M.prune_history(pane)
   after_mutation("recorded location in " .. pane.id)
   return true
@@ -464,27 +513,116 @@ function M.present(view, opts)
     for i, entry in ipairs(pane.history.entries) do
       if entry.view == view then
         set_history_index(pane, i, opts)
+        if opts.focus ~= false and M.active_pane ~= pane then M.focus(pane) end
         return pane
       end
     end
   end
 
   local history = pane.history
-  for i = #history.entries, history.index + 1, -1 do discard_entry(pane, i) end
+  clear_recreatable_forward(pane)
   history.entries[history.index].state = capture_navigation_state(pane.current_view)
   call_lifecycle(pane.current_view, "on_suspend")
   claim_view(pane, view)
-  history.entries[#history.entries + 1] = {
+  local index = history.index + 1
+  table.insert(history.entries, index, {
     view = view,
     state = capture_navigation_state(view),
-  }
-  history.index = #history.entries
+  })
+  history.index = index
   pane.current_view = view
   call_lifecycle(view, "on_resume")
   M.prune_history(pane)
   if opts.focus ~= false then M.focus(pane) end
   after_mutation("presented View in " .. pane.id)
   return pane
+end
+
+local function construct_view(factory)
+  local ok, view = pcall(factory)
+  if not ok then return nil, view end
+  if not view then return nil, "View factory returned nil" end
+  return view
+end
+
+local function commit_non_suspendable_replacement(pane, old, view, opts)
+  local history = pane.history
+  local insertion = history.index
+  local kept = {}
+  for _, entry in ipairs(history.entries) do
+    if entry.view ~= old then kept[#kept + 1] = entry end
+  end
+  insertion = math.max(1, math.min(insertion, #kept + 1))
+  claim_view(pane, view)
+  table.insert(kept, insertion, { view = view, state = capture_navigation_state(view) })
+  history.entries, history.index = kept, insertion
+  pane.current_view = view
+  release_view(pane, old)
+  call_lifecycle(old, "on_close")
+  call_lifecycle(view, "on_resume")
+  if not opts or opts.focus ~= false then M.focus(pane) end
+  after_mutation("replaced non-suspendable View in " .. pane.id)
+  return pane
+end
+
+function M.replace_view(target, factory, opts)
+  opts = opts or {}
+  local pane = M.find(target or opts.pane or M.active_pane)
+  if not pane then return nil, "invalid target Pane" end
+  assert(type(factory) == "function", "View replacement requires a factory")
+  local old = pane.current_view
+  local suspendable = not old.can_suspend or old:can_suspend() ~= false
+  if suspendable then
+    local view, err = construct_view(factory)
+    if not view then return nil, err end
+    local result, present_err = M.present(view, { pane = pane, focus = opts.focus })
+    return result and view or nil, present_err
+  end
+
+  local result, failure
+  local function approved()
+    local view, err = construct_view(factory)
+    if not view then
+      old.discard_buffer_on_close = nil
+      failure = err
+      return
+    end
+    commit_non_suspendable_replacement(pane, old, view, opts)
+    result = view
+  end
+  if opts.force or not old.can_close then approved() else old:can_close(approved) end
+  if result then return result end
+  return nil, failure or "View replacement is pending or was canceled"
+end
+
+function M.place(factory, opts)
+  opts = opts or {}
+  local placement = opts.placement or "current"
+  local starting = M.active_pane
+  local explicit = opts.pane ~= nil
+  local target = M.find(opts.pane or M.active_pane)
+  if explicit and not target then return nil, "invalid target Pane" end
+  local view, pane, err
+  if placement == "current" then
+    if target then
+      view, err = M.replace_view(target, factory, opts)
+      pane = view and target or nil
+    else
+      pane, err = M.create { factory = factory, focus = opts.focus }
+      view = pane and pane.current_view or nil
+    end
+  elseif placement == "new" then
+    pane, err = M.create { factory = factory, focus = opts.focus }
+    view = pane and pane.current_view or nil
+  elseif placement == "split" then
+    if not target then return nil, "split placement requires a target Pane" end
+    pane, err = M.split(target, opts.direction or "right", { factory = factory, focus = opts.focus })
+    view = pane and pane.current_view or nil
+  else
+    return nil, "invalid View placement"
+  end
+  if view and opts.preserve_focus and starting and M.contains(starting) then M.focus(starting) end
+  return view, pane or err
 end
 
 function M.back(target)
@@ -518,6 +656,7 @@ end
 local function commit_close(pane)
   local old_order = M.ordered()
   local old_index = M.number(pane)
+  local closed_active_view = M.pane_for_view(core.active_view) == pane
   local group = pane.group
   group.root = layout.remove(group.root, pane)
   local released = {}
@@ -540,6 +679,7 @@ local function commit_close(pane)
   if #survivors == 0 then
     M.active_pane = nil
     M.visible_group_value = nil
+    if closed_active_view and core.clear_active_view then core.clear_active_view(core.active_view) end
   elseif M.active_pane == pane or not M.contains(M.active_pane) then
     M.active_pane = next_pane
     M.visible_group_value = next_pane.group
@@ -569,7 +709,7 @@ local function authorize_close(pane, force, done)
     local view = views[index]
     if not view then done(); return end
     index = index + 1
-    if force or not view.try_close then next_view() else view:try_close(next_view) end
+    if force or not view.can_close then next_view() else view:can_close(next_view) end
   end
   next_view()
 end
@@ -656,6 +796,11 @@ function M.validate()
     end
   end
   for _, pane in pairs(M.panes_by_id) do assert(seen_panes[pane], "registered Pane is missing from layout") end
+  for child, owner in pairs(M.focus_owners) do
+    assert(child ~= owner, "focus target cannot own itself")
+    assert(seen_owned_views[owner], "focus target owner is not retained by a Pane")
+    assert(owner.__pane_owner == seen_owned_views[owner], "focus target owner points to the wrong Pane")
+  end
   if not next(seen_panes) then
     assert(M.active_pane == nil and M.visible_group_value == nil, "zero Panes require no active Pane or visible group")
   else
