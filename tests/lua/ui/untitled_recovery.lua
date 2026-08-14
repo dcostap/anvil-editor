@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local Project = require "core.project"
 local Editor = require "core.editor"
+local BufferRegistry = require "core.buffer_registry"
 local storage = require "core.storage"
 local recovery = require "plugins.untitled_recovery"
 require "plugins.untitled_tabs"
@@ -59,6 +60,7 @@ test.describe("untitled recovery integration", function()
   test.before_each(function(context)
     context.original_projects = core.projects
     context.original_buffers = core.buffers
+    context.original_buffer_registry = core.buffer_registry
     context.original_root_panel = core.root_panel
     context.original_active_view = core.active_view
     context.original_nag_view = core.nag_view
@@ -71,6 +73,7 @@ test.describe("untitled recovery integration", function()
     test.ok(common.mkdirp(context.project_dir))
     core.projects = { Project(context.project_dir) }
     core.buffers = {}
+    core.buffer_registry = BufferRegistry(core.buffers)
     core.active_view = nil
     core.root_panel = make_root_panel(context)
     core.add_thread = function(fn)
@@ -83,6 +86,7 @@ test.describe("untitled recovery integration", function()
   test.after_each(function(context)
     core.projects = context.original_projects
     core.buffers = context.original_buffers
+    core.buffer_registry = context.original_buffer_registry
     core.root_panel = context.original_root_panel
     core.active_view = context.original_active_view
     core.nag_view = context.original_nag_view
@@ -249,6 +253,7 @@ test.describe("untitled recovery integration", function()
     test.not_nil(state.text)
 
     core.buffers = {}
+    core.buffer_registry = BufferRegistry(core.buffers)
     local restored = Editor.from_state(state)
     test.not_nil(restored)
     test.equal(restored.buffer:get_text(1, 1, math.huge, math.huge), "old new")
@@ -350,6 +355,7 @@ test.describe("untitled recovery integration", function()
     local state = Editor(buffer):get_state()
 
     core.buffers = {}
+    core.buffer_registry = BufferRegistry(core.buffers)
     local restored = Editor.from_state(state)
     test.not_nil(restored)
     test.equal(restored.buffer.intellij_untitled_id, "buffer-restore")
@@ -534,6 +540,7 @@ test.describe("untitled recovery integration", function()
     test.ok(recovery.flush_buffer(buffer, "test", true))
 
     core.buffers = {}
+    core.buffer_registry = BufferRegistry(core.buffers)
     context.views = {}
     core.root_panel = make_root_panel(context)
 
@@ -591,6 +598,7 @@ test.describe("untitled recovery integration", function()
     test.equal(cleaned, false)
     test.not_nil(system.get_file_info(old.backing_path))
     core.buffers = {}
+    core.buffer_registry = BufferRegistry(core.buffers)
     local restored_count = recovery.restore_project(context.project_dir)
     test.equal(restored_count, 0)
   end)
@@ -610,6 +618,7 @@ test.describe("untitled recovery integration", function()
 
     test.not_nil(system.get_file_info(backing))
     core.buffers = {}
+    core.buffer_registry = BufferRegistry(core.buffers)
     local restored_count = recovery.restore_project(context.project_dir)
     test.equal(restored_count, 0)
   end)

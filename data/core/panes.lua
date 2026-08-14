@@ -102,6 +102,21 @@ local function create_identity(view, opts)
   return pane
 end
 
+local function create_restored_identity(view, id)
+  local pane = {
+    id = id,
+    group = nil,
+    current_view = view,
+    position = { x = 0, y = 0 },
+    size = { x = 0, y = 0 },
+    history = { entries = {}, index = 1, limit = 100 },
+  }
+  claim_view(pane, view)
+  pane.history.entries[1] = { view = view, state = capture_navigation_state(view) }
+  M.panes_by_id[id] = pane
+  return pane
+end
+
 local function create_group(pane, index)
   local group = {
     id = next_id("group"),
@@ -746,6 +761,138 @@ function M.close_all(opts)
   end
   close_next()
   return M.count() == 0
+end
+
+local function serialize_pruned_layout(node, valid)
+  if not node then return nil end
+  if node.kind == "pane" then
+    if valid[node.pane] then return { kind = "pane", pane_id = node.pane.id } end
+    return nil
+  end
+  if node.kind ~= "split" then return nil end
+  local a = serialize_pruned_layout(node.a, valid)
+  local b = serialize_pruned_layout(node.b, valid)
+  if not a then return b end
+  if not b then return a end
+  return { kind = "split", axis = node.axis, ratio = node.ratio, a = a, b = b }
+end
+
+function M.save_workspace_state(save_view)
+  assert(type(save_view) == "function", "Workspace View saver is required")
+  local state = { version = 1, groups = {}, panes = {} }
+  local valid = {}
+  for _, pane in ipairs(M.ordered()) do
+    local ok, saved = pcall(save_view, pane.current_view)
+    if ok and saved then
+      valid[pane] = true
+      state.panes[#state.panes + 1] = { id = pane.id, view = saved }
+    elseif not ok then
+      quiet("Workspace: skipped Pane %s after View save failed: %s", pane.id, tostring(saved))
+    end
+  end
+  local saved_groups = {}
+  for _, group in ipairs(M.groups) do
+    local saved_layout = serialize_pruned_layout(group.root, valid)
+    if saved_layout then
+      state.groups[#state.groups + 1] = { id = group.id, layout = saved_layout }
+      saved_groups[group] = true
+    end
+  end
+  if M.visible_group_value and saved_groups[M.visible_group_value] then
+    state.visible_group_id = M.visible_group_value.id
+  end
+  if M.active_pane and valid[M.active_pane] and saved_groups[M.active_pane.group] then
+    state.focused_pane_id = M.active_pane.id
+  end
+  return state
+end
+
+local function prune_restored_layout(node, panes_by_id, attached)
+  if type(node) ~= "table" then return nil end
+  if node.kind == "pane" then
+    local pane = panes_by_id[node.pane_id]
+    if not pane or attached[pane] then return nil end
+    attached[pane] = true
+    return { kind = "pane", pane_id = pane.id }
+  end
+  if node.kind ~= "split" or (node.axis ~= "x" and node.axis ~= "y") then return nil end
+  local a = prune_restored_layout(node.a, panes_by_id, attached)
+  local b = prune_restored_layout(node.b, panes_by_id, attached)
+  if not a then return b end
+  if not b then return a end
+  return {
+    kind = "split", axis = node.axis,
+    ratio = common.clamp(tonumber(node.ratio) or 0.5, 0.05, 0.95),
+    a = a, b = b,
+  }
+end
+
+local function numeric_id(id, prefix)
+  return tonumber(type(id) == "string" and id:match("^" .. prefix .. "%-(%d+)$") or nil) or 0
+end
+
+function M.restore_workspace_state(state, load_view)
+  M.close_all { force = true }
+  M.reset_for_tests()
+  if type(state) ~= "table" or state.version ~= 1
+      or type(state.groups) ~= "table" or type(state.panes) ~= "table" then
+    quiet("Workspace: ignored obsolete or invalid Pane layout state")
+    return false
+  end
+  assert(type(load_view) == "function", "Workspace View loader is required")
+
+  local restored = {}
+  for _, record in ipairs(state.panes) do
+    if type(record) == "table" and type(record.id) == "string" and not restored[record.id] then
+      local ok, view = pcall(load_view, record.view)
+      if ok and view then
+        local pane = create_restored_identity(view, record.id)
+        restored[pane.id] = pane
+        M.next_pane_id = math.max(M.next_pane_id, numeric_id(pane.id, "pane"))
+      else
+        quiet("Workspace: pruned invalid View for Pane %s: %s", record.id, tostring(view))
+      end
+    end
+  end
+
+  local attached = {}
+  local group_ids = {}
+  for _, record in ipairs(state.groups) do
+    if type(record) == "table" and type(record.id) == "string" and not group_ids[record.id] then
+      local pruned = prune_restored_layout(record.layout, restored, attached)
+      if pruned then
+        local root = layout.deserialize(pruned, restored)
+        local group = { id = record.id, root = root }
+        group_ids[group.id] = true
+        M.groups[#M.groups + 1] = group
+        M.groups_by_id[group.id] = group
+        M.next_group_id = math.max(M.next_group_id, numeric_id(group.id, "group"))
+        for _, pane in ipairs(layout.leaves(root)) do pane.group = group end
+      end
+    end
+  end
+
+  for _, pane in pairs(restored) do
+    if not attached[pane] then
+      local views = M.history_views(pane)
+      M.panes_by_id[pane.id] = nil
+      for _, view in ipairs(views) do
+        release_view(pane, view)
+        call_lifecycle(view, "on_close")
+      end
+    end
+  end
+
+  local visible = M.groups_by_id[state.visible_group_id] or M.groups[1]
+  local focused = M.panes_by_id[state.focused_pane_id]
+  if not focused or not visible or focused.group ~= visible then
+    focused = visible and layout.leaves(visible.root)[1] or nil
+  end
+  M.visible_group_value = visible
+  M.active_pane = focused
+  if focused then focus_view(focused) end
+  after_mutation("restored Workspace")
+  return true
 end
 
 function M.reset_for_tests()

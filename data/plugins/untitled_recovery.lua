@@ -438,6 +438,7 @@ end
 function M.ensure_buffer_backing(buffer, opts)
   opts = opts or {}
   if not is_untitled_buffer(buffer) then return nil end
+  if core.buffer_registry then core.buffer_registry:retain(buffer, M) end
   buffer.intellij_untitled_id = sanitize_id(opts.id or buffer.intellij_untitled_id) or new_buffer_id()
   buffer.intellij_untitled_name = opts.name or buffer.intellij_untitled_name or "Untitled"
   buffer.intellij_untitled_project_path = opts.project or buffer.intellij_untitled_project_path or current_project_path()
@@ -1024,6 +1025,7 @@ function M.handle_save_as_success(buffer, old)
       mark_manifest_explicit_closed(project, id, old.name, old.backing_rel)
     end
   end
+  if core.buffer_registry then core.buffer_registry:release(buffer, M) end
   return cleaned
 end
 
@@ -1050,6 +1052,7 @@ function M.handle_confirmed_discard(buffer)
   buffer.intellij_untitled_backing_saved_at = nil
   buffer.intellij_untitled_force_dirty = nil
   buffer.intellij_untitled_project_path = nil
+  if core.buffer_registry then core.buffer_registry:release(buffer, M) end
 end
 
 if not core.__untitled_recovery_patched then

@@ -1,31 +1,35 @@
 local core = require "core"
 local common = require "core.common"
 local Project = require "core.project"
+local BufferRegistry = require "core.buffer_registry"
 local project_paths = require "core.project_paths"
 local storage = require "core.storage"
 local panes = require "core.panes"
+require "plugins.workspace"
 local test = require "core.test"
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
 end
 
+local function replace_buffers(buffers)
+  core.buffers = buffers or {}
+  core.buffer_registry = BufferRegistry(core.buffers)
+  for _, buffer in ipairs(core.buffers) do core.buffer_registry:register(buffer) end
+end
+
 local function leaf_state(label)
   return {
-    type = "leaf",
-    active_view = 1,
-    views = {
-      {
-        module = "core.view",
-        active = true,
-        state = { label = label }
-      }
-    }
+    version = 1,
+    visible_group_id = "group-1",
+    focused_pane_id = "pane-1",
+    groups = { { id = "group-1", layout = { kind = "pane", pane_id = "pane-1" } } },
+    panes = { { id = "pane-1", view = { module = "core.view", state = { label = label } } } },
   }
 end
 
 local function empty_leaf_state()
-  return { type = "leaf", views = {} }
+  return { version = 1, groups = {}, panes = {} }
 end
 
 local function has_key(keys, expected)
@@ -51,7 +55,10 @@ local function run_last_captured_thread(context)
   local thread = table.remove(context.captured_threads or {})
   test.not_nil(thread)
   local co = coroutine.create(function() thread.fn(table.unpack(thread.args or {})) end)
+  local steps = 0
   while coroutine.status(co) ~= "dead" do
+    steps = steps + 1
+    test.ok(steps <= 1000, "Workspace thread did not settle")
     local ok, err = coroutine.resume(co)
     test.ok(ok, err)
   end
@@ -88,6 +95,7 @@ test.describe("Workspace persistence", function()
     context.original_projects = core.projects
     context.original_recent_projects = core.recent_projects
     context.original_buffers = core.buffers
+    context.original_buffer_registry = core.buffer_registry
     context.original_visited_files = core.visited_files
     context.original_root_panel = core.root_panel
     context.original_active_view = core.active_view
@@ -104,9 +112,17 @@ test.describe("Workspace persistence", function()
         local saved = save_view(view)
         if saved then views[#views + 1] = saved end
       end
-      return { panes = { left = { views = views }, right = { views = {} } }, right_visible = false, focused_pane = "left" }
+      local state = { version = 1, groups = {}, panes = {} }
+      if views[1] then
+        state.visible_group_id = "group-1"
+        state.focused_pane_id = "pane-1"
+        state.groups[1] = { id = "group-1", layout = { kind = "pane", pane_id = "pane-1" } }
+        state.panes[1] = { id = "pane-1", view = views[1] }
+      end
+      return state
     end
     panes.restore_workspace_state = function(state)
+      context.restore_called = true
       context.restored_pane_state = state
       return true
     end
@@ -132,6 +148,7 @@ test.describe("Workspace persistence", function()
     core.projects = context.original_projects
     core.recent_projects = context.original_recent_projects
     core.buffers = context.original_buffers
+    core.buffer_registry = context.original_buffer_registry
     core.visited_files = context.original_visited_files
     core.root_panel = context.original_root_panel
     core.active_view = context.original_active_view
@@ -161,13 +178,13 @@ test.describe("Workspace persistence", function()
     local other_path = join_path(context.temp_root, "other_project")
     storage.save("ws", "test_project-10", {
       path = project_path:upper(),
-      documents = empty_leaf_state(),
+      pane_state = empty_leaf_state(),
       directories = {},
       visited_files = {}
     })
     storage.save("ws", "test_project-11", {
       path = project_path,
-      documents = empty_leaf_state(),
+      pane_state = empty_leaf_state(),
       directories = {},
       visited_files = {}
     })
@@ -175,7 +192,7 @@ test.describe("Workspace persistence", function()
     local panel, view = make_fake_root_panel("current")
     core.projects = { Project(project_path) }
     core.recent_projects = {}
-    core.buffers = {}
+    replace_buffers()
     core.visited_files = {}
     core.root_panel = panel
     core.active_view = view
@@ -190,8 +207,8 @@ test.describe("Workspace persistence", function()
 
     local saved = storage.load("ws", "test_project-10")
     test.type(saved, "table")
-    test.equal(#saved.documents.panes.left.views, 1)
-    test.equal(saved.documents.panes.left.views[1].state.label, "current")
+    test.equal(#saved.pane_state.panes, 1)
+    test.equal(saved.pane_state.panes[1].view.state.label, "current")
   end)
 
   test.test("skips views with invalid control characters in filenames", function(context)
@@ -200,7 +217,7 @@ test.describe("Workspace persistence", function()
     local panel, view = make_fake_root_panel("bad", { filename = "test.txt\n", scroll = { x = 0, y = 0 } })
     core.projects = { Project(project_path) }
     core.recent_projects = {}
-    core.buffers = {}
+    replace_buffers()
     core.visited_files = {}
     core.root_panel = panel
     core.active_view = view
@@ -211,7 +228,7 @@ test.describe("Workspace persistence", function()
     test.equal(#keys, 1)
     local saved = storage.load("ws", keys[1])
     test.type(saved, "table")
-    test.equal(#saved.documents.panes.left.views, 0)
+    test.equal(#saved.pane_state.panes, 0)
   end)
 
   test.test("skips named-file views that restored as missing new files", function(context)
@@ -221,7 +238,7 @@ test.describe("Workspace persistence", function()
     local panel, view = make_fake_root_panel("missing", { filename = "missing.txt", scroll = { x = 0, y = 0 } }, buffer)
     core.projects = { Project(project_path) }
     core.recent_projects = {}
-    core.buffers = { buffer }
+    replace_buffers({ buffer })
     core.visited_files = {}
     core.root_panel = panel
     core.active_view = view
@@ -232,7 +249,7 @@ test.describe("Workspace persistence", function()
     test.equal(#keys, 1)
     local saved = storage.load("ws", keys[1])
     test.type(saved, "table")
-    test.equal(#saved.documents.panes.left.views, 0)
+    test.equal(#saved.pane_state.panes, 0)
   end)
 
   test.test("restoring a workspace preserves local Project Paths on disk", function(context)
@@ -242,7 +259,7 @@ test.describe("Workspace persistence", function()
     test.ok(common.mkdirp(external_path))
     storage.save("ws", "test_project-10", {
       path = project_path,
-      documents = empty_leaf_state(),
+      pane_state = empty_leaf_state(),
       project_paths = {
         entries = {
           { path = external_path, label = "external-project", role = "external" },
@@ -254,7 +271,7 @@ test.describe("Workspace persistence", function()
     local panel, view = make_fake_root_panel("source")
     core.projects = { Project(source_path) }
     core.recent_projects = {}
-    core.buffers = {}
+    replace_buffers()
     core.visited_files = {}
     core.root_panel = panel
     core.active_view = view
@@ -267,6 +284,36 @@ test.describe("Workspace persistence", function()
     test.type(saved.project_paths, "table")
     test.equal(saved.project_paths.entries[1].label, "external-project")
     test.equal(project_paths.resolve(join_path(external_path, "file.odin")).entry.label, "external-project")
+  end)
+
+  test.test("ignores legacy Pane layout while restoring independent Project Paths", function(context)
+    local project_path = join_path(context.temp_root, "test_project")
+    local source_path = join_path(context.temp_root, "source_project")
+    local external_path = join_path(context.temp_root, "legacy_external")
+    test.ok(common.mkdirp(external_path))
+    storage.save("ws", "test_project-10", {
+      path = project_path,
+      documents = { panes = { left = { views = {} }, right = { views = {} } } },
+      project_paths = {
+        entries = { { path = external_path, label = "legacy-external", role = "external" } },
+      },
+      visited_files = {},
+    })
+    local panel, view = make_fake_root_panel("source")
+    core.projects = { Project(source_path) }
+    core.recent_projects = {}
+    replace_buffers()
+    core.visited_files = {}
+    core.root_panel = panel
+    core.active_view = view
+
+    core.set_project(project_path)
+    run_last_captured_thread(context)
+
+    test.ok(context.restore_called)
+    test.is_nil(context.restored_pane_state)
+    test.equal(project_paths.resolve(join_path(external_path, "file.lua")).entry.label,
+      "legacy-external")
   end)
 
   test.test("refreshes File Tree after Workspace Project Paths are loaded", function(context)
@@ -289,7 +336,7 @@ test.describe("Workspace persistence", function()
     local panel, view = make_fake_root_panel("main")
     core.projects = { Project(project_path) }
     core.recent_projects = {}
-    core.buffers = {}
+    replace_buffers()
     core.visited_files = {}
     core.root_panel = panel
     core.active_view = view
@@ -304,7 +351,9 @@ test.describe("Workspace persistence", function()
     test.equal(#keys, 1)
     local saved = storage.load("ws", keys[1])
     test.type(saved, "table")
-    test.same(saved.documents, { marker = "pane-state" })
+    test.same(saved.pane_state, { marker = "pane-state" })
+    test.equal(saved.version, 1)
+    test.is_nil(saved.documents)
   end)
 
   test.test("persists Recent File view and edit metadata in the Workspace", function(context)
@@ -314,7 +363,7 @@ test.describe("Workspace persistence", function()
     local panel, view = make_fake_root_panel("main")
     core.projects = { Project(project_path) }
     core.recent_projects = {}
-    core.buffers = {}
+    replace_buffers()
     core.visited_files = {
       { path = recent_path, last_viewed = 123, last_edited = 100 },
     }
@@ -337,14 +386,14 @@ test.describe("Workspace persistence", function()
     local source_path = join_path(context.temp_root, "source_project")
     storage.save("ws", "test_project-10", {
       path = project_path,
-      documents = { marker = "restored-pane-state" },
+      pane_state = { marker = "restored-pane-state" },
       visited_files = {},
     })
 
     local panel, view = make_fake_root_panel("source")
     core.projects = { Project(source_path) }
     core.recent_projects = {}
-    core.buffers = {}
+    replace_buffers()
     core.visited_files = {}
     core.root_panel = panel
     core.active_view = view
@@ -364,7 +413,7 @@ test.describe("Workspace persistence", function()
     local destination_path = join_path(context.temp_root, "test_project")
     storage.save("ws", "test_project-10", {
       path = destination_path,
-      documents = leaf_state("destination"),
+      pane_state = leaf_state("destination"),
       directories = {},
       visited_files = {}
     })
@@ -372,7 +421,7 @@ test.describe("Workspace persistence", function()
     local panel, view = make_fake_root_panel("source")
     core.projects = { Project(source_path) }
     core.recent_projects = {}
-    core.buffers = {}
+    replace_buffers()
     core.visited_files = {}
     core.root_panel = panel
     core.active_view = view
@@ -387,8 +436,8 @@ test.describe("Workspace persistence", function()
     test.ok(context.restart_called, "expected project switch to request restart")
     local destination = storage.load("ws", "test_project-10")
     test.type(destination, "table")
-    test.equal(#destination.documents.views, 1)
-    test.equal(destination.documents.views[1].state.label, "destination")
+    test.equal(#destination.pane_state.panes, 1)
+    test.equal(destination.pane_state.panes[1].view.state.label, "destination")
     test.same(workspace_keys_for_path(destination_path), { "test_project-10" })
   end)
 end)

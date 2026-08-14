@@ -28,13 +28,7 @@ local function close_unattached_view_buffer(view)
   for _, open_buffer in ipairs(core.buffers or {}) do
     if open_buffer == buffer then
       if #core.get_views_referencing_buffer(buffer) == 0 then
-        for i = #core.buffers, 1, -1 do
-          if core.buffers[i] == buffer then
-            table.remove(core.buffers, i)
-            buffer:on_close()
-            break
-          end
-        end
+        if core.buffer_registry then core.buffer_registry:remove(buffer, true) end
       end
       return
     end
@@ -76,15 +70,7 @@ end
 
 local function count_saved_views(node)
   if type(node) ~= "table" then return 0 end
-  if node.panes then
-    local left = node.panes.left and node.panes.left.views or {}
-    local right = node.panes.right and node.panes.right.views or {}
-    return #left + #right
-  end
-  if node.type == "leaf" then
-    return type(node.views) == "table" and #node.views or 0
-  end
-  return count_saved_views(node.a) + count_saved_views(node.b)
+  return type(node.panes) == "table" and #node.panes or 0
 end
 
 
@@ -94,7 +80,7 @@ local function matching_workspace_entries(project_dir)
     local workspace = storage.load(STORAGE_MODULE, entry.key)
     if type(workspace) == "table" and common.path_equals(workspace.path, project_dir) then
       entry.workspace = workspace
-      entry.saved_view_count = count_saved_views(workspace.documents)
+      entry.saved_view_count = count_saved_views(workspace.pane_state)
       entries[#entries + 1] = entry
     end
   end
@@ -281,10 +267,11 @@ local function save_workspace()
   clear_duplicate_workspace_entries(entries, key)
 
   untitled_recovery.flush_all("workspace save", true)
-  local documents = panes.save_workspace_state(save_view)
+  local pane_state = panes.save_workspace_state(save_view)
   storage.save(STORAGE_MODULE, key, {
+    version = 1,
     path = project_dir,
-    documents = documents,
+    pane_state = pane_state,
     project_paths = project_paths.save_workspace_state(),
     language_modes = language_mode.save_workspace_state(),
     visited_files = core.prune_visited_files and core.prune_visited_files() or core.visited_files,
@@ -297,7 +284,7 @@ local function save_workspace()
       "Workspace: saved %s for %s with %d view(s)",
       key,
       project_dir,
-      count_saved_views(documents)
+      count_saved_views(pane_state)
     )
   end
 end
@@ -307,9 +294,8 @@ function core.save_workspace()
   return save_workspace()
 end
 
-local function left_pane_workspace_is_empty()
-  local left_pane = core.root_panel and core.root_panel:get_left_pane()
-  return left_pane and left_pane:is_empty() and #core.buffers == 0
+local function workspace_is_empty()
+  return panes.count() == 0 and #core.buffers == 0
 end
 
 local function maybe_show_empty_project_file_tree()
@@ -320,7 +306,7 @@ local function maybe_show_empty_project_file_tree()
   coroutine.yield()
   coroutine.yield()
   if core.active_view == initial_active_view
-  and left_pane_workspace_is_empty()
+  and workspace_is_empty()
   and command.is_valid("filetree:focus-and-show") then
     command.perform("filetree:focus-and-show")
   end
@@ -349,7 +335,7 @@ local function load_workspace()
             core.log_quiet("Workspace: migrated path-only Recent Files to view/edit metadata")
           end
         end
-        panes.restore_workspace_state(workspace.documents, load_view)
+        panes.restore_workspace_state(workspace.pane_state, load_view)
         sync_workspace_project_paths_to_core_projects()
         tool_window.restore_project_state(core.root_project(), workspace.tool_windows)
       end
@@ -362,57 +348,54 @@ local function load_workspace()
 end
 
 
-local run = core.run
+if not core.__workspace_hooks_installed then
+  core.__workspace_hooks_installed = true
 
-function core.run(...)
-  if #core.buffers == 0 then
+  local set_project = core.set_project
+  function core.set_project(project)
+    core.try(save_workspace)
+    project = set_project(project)
     core.try(load_workspace)
-
-    local set_project = core.set_project
-    function core.set_project(project)
-      core.try(save_workspace)
-      project = set_project(project)
-      core.try(load_workspace)
-      return project
-    end
-
-    local open_project_in_same_window = core.open_project_in_same_window
-    function core.open_project_in_same_window(project, ...)
-      untitled_recovery.flush_all("same-window project switch", true)
-      suppress_next_exit_workspace_save = true
-      local result = table.pack(pcall(open_project_in_same_window, project, ...))
-      if not result[1] then
-        suppress_next_exit_workspace_save = false
-        error(result[2], 0)
-      end
-      if suppress_next_exit_workspace_save then
-        -- The wrapped function did not reach core.exit, so do not let a stale
-        -- suppression skip an unrelated later quit.
-        suppress_next_exit_workspace_save = false
-      end
-      return table.unpack(result, 2, result.n)
-    end
-
-    local exit = core.exit
-    function core.exit(quit_fn, force)
-      if force then
-        if suppress_next_exit_workspace_save then
-          suppress_next_exit_workspace_save = false
-          if core.log_quiet then
-            core.log_quiet(
-              "Workspace: skipped forced-exit save for %s during same-window project switch",
-              tostring(core.root_project() and core.root_project().path)
-            )
-          end
-        else
-          core.try(save_workspace)
-        end
-      end
-      exit(quit_fn, force)
-    end
-
+    return project
   end
 
+  local open_project_in_same_window = core.open_project_in_same_window
+  function core.open_project_in_same_window(project, ...)
+    untitled_recovery.flush_all("same-window project switch", true)
+    suppress_next_exit_workspace_save = true
+    local result = table.pack(pcall(open_project_in_same_window, project, ...))
+    if not result[1] then
+      suppress_next_exit_workspace_save = false
+      error(result[2], 0)
+    end
+    if suppress_next_exit_workspace_save then
+      suppress_next_exit_workspace_save = false
+    end
+    return table.unpack(result, 2, result.n)
+  end
+
+  local exit = core.exit
+  function core.exit(quit_fn, force)
+    if force then
+      if suppress_next_exit_workspace_save then
+        suppress_next_exit_workspace_save = false
+        if core.log_quiet then
+          core.log_quiet(
+            "Workspace: skipped forced-exit save for %s during same-window project switch",
+            tostring(core.root_project() and core.root_project().path)
+          )
+        end
+      else
+        core.try(save_workspace)
+      end
+    end
+    exit(quit_fn, force)
+  end
+end
+
+local run = core.run
+function core.run(...)
+  if #core.buffers == 0 then core.try(load_workspace) end
   core.run = run
   return core.run(...)
 end
