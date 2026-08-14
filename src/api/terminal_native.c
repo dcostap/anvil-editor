@@ -103,6 +103,17 @@ typedef struct {
   bool search_scan_continuing;
 } TerminalSession;
 
+typedef struct {
+  bool has_foreground;
+  bool has_background;
+  bool has_cursor;
+  bool has_palette;
+  GhosttyColorRgb foreground;
+  GhosttyColorRgb background;
+  GhosttyColorRgb cursor;
+  GhosttyColorRgb palette[16];
+} TerminalColors;
+
 static void push_status(lua_State *L, TerminalSession *session);
 
 static void wake_for_terminal_output(TerminalSession *session) {
@@ -589,7 +600,28 @@ static void close_session(TerminalSession *session) {
   }
 }
 
-static bool initialize_terminal(TerminalSession *session) {
+static bool set_terminal_colors(TerminalSession *session, const TerminalColors *colors) {
+  if (colors->has_foreground && ghostty_terminal_set(
+      session->terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &colors->foreground
+    ) != GHOSTTY_SUCCESS) return false;
+  if (colors->has_background && ghostty_terminal_set(
+      session->terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &colors->background
+    ) != GHOSTTY_SUCCESS) return false;
+  if (colors->has_cursor && ghostty_terminal_set(
+      session->terminal, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &colors->cursor
+    ) != GHOSTTY_SUCCESS) return false;
+  if (colors->has_palette) {
+    GhosttyColorRgb palette[256];
+    ghostty_color_palette_default(palette);
+    memcpy(palette, colors->palette, sizeof(colors->palette));
+    if (ghostty_terminal_set(
+        session->terminal, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, palette
+      ) != GHOSTTY_SUCCESS) return false;
+  }
+  return true;
+}
+
+static bool initialize_terminal(TerminalSession *session, const TerminalColors *colors) {
   if (ghostty_terminal_new(NULL, &session->terminal, session->cols, session->rows) != GHOSTTY_SUCCESS) {
     return false;
   }
@@ -636,11 +668,75 @@ static bool initialize_terminal(TerminalSession *session) {
     session->terminal, GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
     (const void *)terminal_desktop_notification
   );
+  if (!set_terminal_colors(session, colors)) return false;
   ghostty_terminal_resize(
     session->terminal, session->cols, session->rows,
     session->cell_width, session->cell_height
   );
   return ghostty_render_state_update(session->render_state, session->terminal) == GHOSTTY_SUCCESS;
+}
+
+static GhosttyColorRgb unpack_color(lua_Integer value) {
+  uint32_t color = (uint32_t)value;
+  return (GhosttyColorRgb) {
+    .r = (uint8_t)(color >> 16),
+    .g = (uint8_t)(color >> 8),
+    .b = (uint8_t)color,
+  };
+}
+
+static bool read_color_field(
+  lua_State *L, int table_index, const char *name, GhosttyColorRgb *color
+) {
+  lua_getfield(L, table_index, name);
+  if (lua_isnil(L, -1)) {
+    lua_pop(L, 1);
+    return false;
+  }
+  lua_Integer value = luaL_checkinteger(L, -1);
+  luaL_argcheck(
+    L, value >= 0 && value <= 0xffffff, table_index, "terminal color is out of range"
+  );
+  *color = unpack_color(value);
+  lua_pop(L, 1);
+  return true;
+}
+
+static TerminalColors read_terminal_colors(lua_State *L, int table_index) {
+  TerminalColors colors = {0};
+  colors.has_foreground = read_color_field(L, table_index, "foreground", &colors.foreground);
+  colors.has_background = read_color_field(L, table_index, "background", &colors.background);
+  colors.has_cursor = read_color_field(L, table_index, "cursor_color", &colors.cursor);
+
+  lua_getfield(L, table_index, "palette");
+  if (!lua_isnil(L, -1)) {
+    luaL_checktype(L, -1, LUA_TTABLE);
+    luaL_argcheck(
+      L, lua_rawlen(L, -1) == 16, table_index, "terminal palette must have 16 colors"
+    );
+    for (int index = 0; index < 16; index++) {
+      lua_rawgeti(L, -1, index + 1);
+      lua_Integer value = luaL_checkinteger(L, -1);
+      luaL_argcheck(
+        L, value >= 0 && value <= 0xffffff, table_index, "terminal color is out of range"
+      );
+      colors.palette[index] = unpack_color(value);
+      lua_pop(L, 1);
+    }
+    colors.has_palette = true;
+  }
+  lua_pop(L, 1);
+  return colors;
+}
+
+static int f_terminal_set_colors(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  luaL_checktype(L, 2, LUA_TTABLE);
+  TerminalColors colors = read_terminal_colors(L, 2);
+  bool ok = !session->closed && set_terminal_colors(session, &colors) &&
+    ghostty_render_state_update(session->render_state, session->terminal) == GHOSTTY_SUCCESS;
+  lua_pushboolean(L, ok);
+  return 1;
 }
 
 static bool create_kill_job(TerminalSession *session) {
@@ -780,6 +876,7 @@ static bool create_pseudoconsole(
 
 static int f_terminal_new(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
+  TerminalColors colors = read_terminal_colors(L, 1);
   TerminalSession *session = (TerminalSession *)lua_newuserdata(L, sizeof(*session));
   memset(session, 0, sizeof(*session));
   luaL_setmetatable(L, API_TYPE_TERMINAL_SESSION);
@@ -825,7 +922,7 @@ static int f_terminal_new(lua_State *L) {
     return 2;
   }
 
-  if (!initialize_terminal(session)) {
+  if (!initialize_terminal(session, &colors)) {
     close_session(session);
     lua_pop(L, 1);
     lua_pushnil(L);
@@ -2317,6 +2414,7 @@ static const luaL_Reg terminal_methods[] = {
   { "hyperlink", f_terminal_hyperlink },
   { "open_hyperlink", f_terminal_open_hyperlink },
   { "focus", f_terminal_focus },
+  { "set_colors", f_terminal_set_colors },
   { "snapshot", f_terminal_snapshot },
   { "close", f_terminal_close },
   { "__gc", f_terminal_gc },

@@ -7,6 +7,10 @@ local test = require "core.test"
 
 local terminal = require "plugins.terminal"
 
+local function packed_color(color)
+  return color[1] * 0x10000 + color[2] * 0x100 + color[3]
+end
+
 local function draw_calls(fn)
   local previous_text = renderer.draw_text
   local previous_known = renderer.draw_text_known_bounds
@@ -84,6 +88,10 @@ local function fake_native()
       self.focus_events[#self.focus_events + 1] = focused
       return true
     end
+    function session:set_colors(colors)
+      self.colors = colors
+      return true
+    end
     function session:resize(cols, rows, cell_width, cell_height)
       self.resizes[#self.resizes + 1] = { cols, rows, cell_width, cell_height }
       return true
@@ -143,6 +151,36 @@ test.describe("Terminal View", function()
     local advance = style.terminal_font:get_width("M")
     test.equal(view.cell_width, advance)
     test.equal(view.native_cell_width, math.max(1, math.ceil(advance)))
+  end)
+
+  test.it("starts sessions with the active terminal theme", function(context)
+    test.ok(type(style.terminal_foreground) == "table")
+    test.ok(type(style.terminal_background) == "table")
+    test.ok(type(style.terminal_cursor) == "table")
+    test.equal(#style.terminal_palette, 16)
+
+    terminal.open()
+    local options = context.sessions[1].options
+    test.equal(options.foreground, packed_color(style.terminal_foreground))
+    test.equal(options.background, packed_color(style.terminal_background))
+    test.equal(options.cursor_color, packed_color(style.terminal_cursor))
+    for index, color in ipairs(style.terminal_palette) do
+      test.equal(options.palette[index], packed_color(color))
+    end
+  end)
+
+  test.it("updates a running session after a theme change", function(context)
+    local view = terminal.open()
+    local generation = core.color_theme_generation or 0
+    core.color_theme_generation = generation + 1
+    view:update()
+    core.color_theme_generation = generation
+
+    local colors = context.sessions[1].colors
+    test.equal(colors.foreground, packed_color(style.terminal_foreground))
+    test.equal(colors.background, packed_color(style.terminal_background))
+    test.equal(colors.cursor_color, packed_color(style.terminal_cursor))
+    test.equal(#colors.palette, 16)
   end)
 
   test.it("sends text and unhandled keys to the focused terminal", function(context)

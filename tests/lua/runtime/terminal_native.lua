@@ -27,6 +27,42 @@ local function wait_for_text(session, expected, timeout)
 end
 
 test.describe("Native terminal session", function()
+  test.it("applies configured default and ANSI colors", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      foreground = 0x123456,
+      background = 0x234567,
+      cursor_color = 0x345678,
+      palette = {
+        0x010101, 0x654321, 0x030303, 0x040404,
+        0x050505, 0x060606, 0x070707, 0x080808,
+        0x090909, 0x0a0a0a, 0x0b0b0b, 0x0c0c0c,
+        0x0d0d0d, 0x0e0e0e, 0x0f0f0f, 0x101010,
+      },
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$e=[char]27; [Console]::Write($e+'[31mANVIL_THEME_RED'+$e+'[0m')"]],
+    })
+    test.ok(session, start_error)
+
+    local text, snapshot = wait_for_text(session, "ANVIL_THEME_RED")
+    test.ok(text:find("ANVIL_THEME_RED", 1, true), text)
+    test.equal(snapshot.foreground, 0x123456)
+    test.equal(snapshot.background, 0x234567)
+    test.equal(snapshot.cursor.color, 0x345678)
+    local found_red = false
+    for _, row in ipairs(snapshot.rows) do
+      for _, run in ipairs(row.text_runs or {}) do
+        if run.text:find("ANVIL_THEME_RED", 1, true) then
+          found_red = run.fg == 0x654321
+        end
+      end
+    end
+    session:close()
+    test.ok(found_red, "ANSI red did not use the configured palette")
+  end)
+
   test.it("runs a ConPTY command and parses its VT output", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"

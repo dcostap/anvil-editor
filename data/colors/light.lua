@@ -111,6 +111,17 @@ style.warn = c(C.warning_stripe)
 style.error = c("db3b4b")
 style.modified = c("003dd7")
 
+-- Integrated terminal colors for a light terminal surface.
+style.terminal_foreground = c(C.text_fg)
+style.terminal_background = c(C.text_bg)
+style.terminal_cursor = c("000000")
+style.terminal_palette = {
+  c("000000"), c("cd3131"), c("008000"), c("949800"),
+  c("0451a5"), c("a626a4"), c("007e8a"), c("555555"),
+  c("666666"), c("db3b4b"), c("14a614"), c("b5a000"),
+  c("3574f0"), c("bc05bc"), c("0598bc"), c("a5a5a5"),
+}
+
 -- Diff/search/selection-like colors
 style.diff_delete = c("ffe5e5")
 style.diff_insert = c("e3f7e7")

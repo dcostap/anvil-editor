@@ -111,6 +111,18 @@ style.good = c(C.string)
 style.warn = c(C.warning_stripe)
 style.error = c("c56a6a")
 style.modified = c(C.ctrl_clickable)
+
+-- Integrated terminal colors. Applications can override these per session
+-- through VT control sequences. Explicit RGB colors remain unchanged.
+style.terminal_foreground = c(C.text_fg)
+style.terminal_background = c(C.text_bg)
+style.terminal_cursor = c("ffffff")
+style.terminal_palette = {
+  c("1c1e26"), c("e05260"), c("59a577"), c("e9b379"),
+  c("68b0e6"), c("ac88bf"), c("339c9c"), c("bcc9d9"),
+  c("5a6270"), c("f06a75"), c("70bd8b"), c("f2c47e"),
+  c("7abcf2"), c("c69ada"), c("55b8b8"), c("f4f7fb"),
+}
 style.markdown_live_heading_marker = style.dim
 style.markdown_live_link = c(C.ctrl_clickable)
 style.markdown_live_inline_code_bg = style.background2

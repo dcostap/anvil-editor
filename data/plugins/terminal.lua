@@ -71,6 +71,23 @@ local function rgb(view, value, fallback, alpha)
   return color
 end
 
+local function packed_color(color)
+  return color[1] * 0x10000 + color[2] * 0x100 + color[3]
+end
+
+local function session_colors()
+  local palette = {}
+  for index, color in ipairs(style.terminal_palette) do
+    palette[index] = packed_color(color)
+  end
+  return {
+    foreground = packed_color(style.terminal_foreground),
+    background = packed_color(style.terminal_background),
+    cursor_color = packed_color(style.terminal_cursor),
+    palette = palette,
+  }
+end
+
 local function perf_scope_begin(name, capture_heap)
   local perf = package.loaded["core.perf"]
   return perf and perf.scope_begin and perf.scope_begin(name, capture_heap) or nil
@@ -144,17 +161,15 @@ function TerminalView:new(options)
 
   local native, load_error = terminal_native()
   if not native then error(load_error) end
-  local session, start_error = native.new({
-    cols = self.cols,
-    rows = self.rows,
-    cell_width = self.native_cell_width,
-    cell_height = self.cell_height,
-    cwd = self.launch_options.cwd,
-    shell = self.launch_options.shell,
-  })
+  local native_options = session_colors()
+  native_options.cols, native_options.rows = self.cols, self.rows
+  native_options.cell_width, native_options.cell_height = self.native_cell_width, self.cell_height
+  native_options.cwd, native_options.shell = self.launch_options.cwd, self.launch_options.shell
+  local session, start_error = native.new(native_options)
   if not session then error(start_error or "Could not start the terminal.") end
   self.session = session
   self.snapshot = session:snapshot()
+  self.theme_generation = core.color_theme_generation or 0
   self.running = true
   views[#views + 1] = self
   core.log_quiet("Terminal View started: cwd=%s cols=%d rows=%d", self.launch_options.cwd, self.cols, self.rows)
@@ -173,11 +188,11 @@ end
 function TerminalView:create_session()
   local native, load_error = terminal_native()
   if not native then return false, load_error end
-  local session, start_error = native.new({
-    cols = self.cols, rows = self.rows,
-    cell_width = self.native_cell_width, cell_height = self.cell_height,
-    cwd = self.launch_options.cwd, shell = self.launch_options.shell,
-  })
+  local native_options = session_colors()
+  native_options.cols, native_options.rows = self.cols, self.rows
+  native_options.cell_width, native_options.cell_height = self.native_cell_width, self.cell_height
+  native_options.cwd, native_options.shell = self.launch_options.cwd, self.launch_options.shell
+  local session, start_error = native.new(native_options)
   if not session then return false, start_error or "Could not start the terminal." end
   return session
 end
@@ -185,6 +200,7 @@ end
 function TerminalView:adopt_session(session)
   self.session = session
   self.snapshot = session:snapshot()
+  self.theme_generation = core.color_theme_generation or 0
   self.running = true
   self.exit_code = nil
   self.reported_error = nil
@@ -260,6 +276,15 @@ end
 function TerminalView:update()
   TerminalView.super.update(self)
   if not self.session then return end
+
+  local theme_generation = core.color_theme_generation or 0
+  if theme_generation ~= self.theme_generation then
+    self.theme_generation = theme_generation
+    if self.session:set_colors(session_colors()) then
+      self.snapshot = self.session:snapshot(self.snapshot)
+      core.redraw = true
+    end
+  end
 
   if self.search_pending then
     self:search(self.search_pending.query, self.search_pending.reverse)
