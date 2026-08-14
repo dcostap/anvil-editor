@@ -7205,8 +7205,7 @@ function live.link_at_caret(view)
 end
 
 local function record_navigation_origin()
-  local ok, history = pcall(require, "plugins.navigation_history")
-  if ok and history.record_current_place then history.record_current_place("markdown-live-link") end
+  require("core.panes").record_location()
 end
 
 local function open_link_resolution(resolution)

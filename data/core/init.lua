@@ -17,11 +17,20 @@ local tool_window
 local TextView
 local ImageView
 local Buffer
+local BufferRegistry
 local Project
 
 ---Core functionality.
 ---@class core
 local core = {}
+
+function core.current_pane()
+  return require("core.panes").active()
+end
+
+function core.current_editor()
+  return require("core.panes").current_editor()
+end
 
 -- A focus/restored/exposed event can arrive while Windows is still showing the
 -- alt-tab/task-switcher transition.  The first D3D present may be accepted but
@@ -524,6 +533,7 @@ function core.init()
   TextView = require "core.textview"
   ImageView = require "core.imageview"
   Buffer = require "core.buffer"
+  BufferRegistry = require "core.buffer_registry"
   core.treesitter = require "core.treesitter"
 
   -- apply to default color scheme
@@ -615,6 +625,7 @@ function core.init()
   core.frame_start = 0
   core.clip_rect_stack = {{ 0,0,0,0 }}
   core.buffers = {}
+  core.buffer_registry = BufferRegistry(core.buffers)
   core.projects = {}
   core.cursor_clipboard = {}
   core.cursor_clipboard_whole_line = {}
@@ -1683,16 +1694,15 @@ function core.open_buffer(filename)
       abs_filename = nil
       new_file = true
     end
-    for _, buffer in ipairs(core.buffers) do
-      if buffer.abs_filename and common.path_equals(abs_filename, buffer.abs_filename) then
-        if close_textview then close_buffer_view(buffer) end
-        return buffer
-      end
+    local existing = core.buffer_registry:find(abs_filename)
+    if existing then
+      if close_textview then close_buffer_view(existing) end
+      return existing
     end
   end
   -- no existing buffer for filename; create new
   local buffer = Buffer(filename, abs_filename, new_file)
-  table.insert(core.buffers, buffer)
+  core.buffer_registry:register(buffer, abs_filename)
   core.log_quiet(filename and "Opened buffer \"%s\"" or "Opened new buffer", filename)
   if close_textview then close_buffer_view(buffer) end
   return buffer
@@ -2439,20 +2449,10 @@ function core.step(next_frame_time, options)
 
   local pre_draw_start_time = system.get_time()
 
-  -- close unreferenced buffers
-  for i = #core.buffers, 1, -1 do
-    local buffer = core.buffers[i]
-    local history = core.navigation_history
-    local retained_for_navigation = history and history.retains_buffer
-      and history.retains_buffer(buffer)
-    if #core.get_views_referencing_buffer(buffer) == 0 and not retained_for_navigation then
-      table.remove(core.buffers, i)
-      buffer:on_close()
-      core.collect_garbage = true
-      if #core.buffers == 0 then
-        system.chdir(core.projects[1].path)
-      end
-    end
+  -- Let the Buffer Registry close clean Buffers with no live or retained owner.
+  if core.buffer_registry:collect() > 0 then
+    core.collect_garbage = true
+    if #core.buffers == 0 then system.chdir(core.projects[1].path) end
   end
 
   -- update window title

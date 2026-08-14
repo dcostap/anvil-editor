@@ -12,6 +12,36 @@ end
 
 function Editor:new(buffer)
   Editor.super.new(self, buffer)
+  if core.buffer_registry then core.buffer_registry:retain(buffer, self) end
+end
+
+function Editor:release_buffer()
+  if self.buffer_retention_released then return end
+  self.buffer_retention_released = true
+  if core.buffer_registry then core.buffer_registry:release(self.buffer, self) end
+end
+
+function Editor:on_history_discarded()
+  self:release_buffer()
+end
+
+function Editor:on_close()
+  self:release_buffer()
+end
+
+function Editor:get_navigation_state()
+  return {
+    selection_state = self:get_selection_state(),
+    scroll = { x = self.scroll.x, y = self.scroll.y },
+  }
+end
+
+function Editor:set_navigation_state(state)
+  if state.selection_state then self:set_selection_state(state.selection_state) end
+  if state.scroll then
+    self.scroll.x, self.scroll.to.x = state.scroll.x or 0, state.scroll.x or 0
+    self.scroll.y, self.scroll.to.y = state.scroll.y or 0, state.scroll.y or 0
+  end
 end
 
 function Editor.from_state(state)

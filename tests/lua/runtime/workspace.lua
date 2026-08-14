@@ -95,7 +95,6 @@ test.describe("Workspace persistence", function()
     context.original_restart = core.restart
     context.original_restart_request = core.restart_request
     context.original_quit_request = core.quit_request
-    context.original_navigation_history = core.navigation_history
     context.original_filetree_module = package.loaded["plugins.filetree"]
     context.original_panes_save_workspace_state = panes.save_workspace_state
     context.original_panes_restore_workspace_state = panes.restore_workspace_state
@@ -140,7 +139,6 @@ test.describe("Workspace persistence", function()
     core.restart = context.original_restart
     core.restart_request = context.original_restart_request
     core.quit_request = context.original_quit_request
-    core.navigation_history = context.original_navigation_history
     package.loaded["plugins.filetree"] = context.original_filetree_module
     panes.save_workspace_state = context.original_panes_save_workspace_state
     panes.restore_workspace_state = context.original_panes_restore_workspace_state
@@ -359,42 +357,6 @@ test.describe("Workspace persistence", function()
     run_last_captured_thread(context)
 
     test.same(context.restored_pane_state, { marker = "restored-pane-state" })
-  end)
-
-  test.test("resets Navigation History and suppresses synthetic places while restoring a Workspace", function(context)
-    local project_path = join_path(context.temp_root, "test_project")
-    local source_path = join_path(context.temp_root, "source_project")
-    storage.save("ws", "test_project-10", {
-      path = project_path,
-      documents = empty_leaf_state(),
-      visited_files = {},
-    })
-
-    local panel, view = make_fake_root_panel("source")
-    core.projects = { Project(source_path) }
-    core.recent_projects = {}
-    core.buffers = {}
-    core.visited_files = {}
-    core.root_panel = panel
-    core.active_view = view
-
-    local events = {}
-    core.navigation_history = {
-      clear_history = function()
-        events[#events + 1] = "clear"
-      end,
-      suppress_recording = function(fn)
-        events[#events + 1] = "suppress-begin"
-        local result = table.pack(fn())
-        events[#events + 1] = "suppress-end"
-        return table.unpack(result, 1, result.n)
-      end,
-    }
-
-    core.set_project(project_path)
-    run_last_captured_thread(context)
-
-    test.same(events, { "clear", "suppress-begin", "suppress-end" })
   end)
 
   test.test("same-window Project switch does not overwrite destination workspace with empty tabs", function(context)

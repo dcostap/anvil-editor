@@ -117,15 +117,10 @@ local function result_buffer_range(view, result)
   end
 end
 
-local function navigation_history()
-  return core.navigation_history or package.loaded["plugins.navigation_history"]
-end
-
 local function open_location(result, opts)
   opts = opts or {}
   if not result then return false, "no result" end
-  local history = navigation_history()
-  local navigation_anchor = opts.navigation_anchor or (history and history.capture_current_place())
+  panes.record_location(panes.pane_for_view(opts.view) or opts.pane or panes.active())
 
   if result.start_line then
     local view = opts.view or core.active_view
@@ -142,7 +137,7 @@ local function open_location(result, opts)
         view:expand_folds_covering_range(result.start_line, result.start_col, result.end_line, result.end_col, "language-location")
       end
       buffer:set_selection(result.start_line, result.start_col, result.end_line, result.end_col)
-      if history then history.record_place(navigation_anchor, { reason = "language-location" }) end
+      panes.record_location(panes.pane_for_view(view))
       return true
     end
   end
@@ -168,7 +163,7 @@ local function open_location(result, opts)
     end
     view.buffer:set_selection(result.line, result.col, line2, col2)
   end
-  if history then history.record_place(navigation_anchor, { reason = "language-location" }) end
+  panes.record_location(panes.pane_for_view(view))
   return true
 end
 
@@ -340,8 +335,6 @@ function language.goto_declaration(view, opts)
   if not buffer then return false, "no active buffer" end
   local symbol = symbol_text_at_buffer_selection(buffer)
   if not symbol then return false, "no symbol at caret" end
-  local history = navigation_history()
-  local navigation_anchor = history and history.capture_current_place()
   local line, col = buffer:get_selection()
 
   local function show_no_declaration(reason)
@@ -351,7 +344,7 @@ function language.goto_declaration(view, opts)
 
   local function open_declaration_results(results)
     if #results == 1 then
-      open_location(results[1], { view = view, navigation_anchor = navigation_anchor, pane = opts.pane })
+      open_location(results[1], { view = view, pane = opts.pane })
     elseif #results > 1 then
       local items = {}
       for _, result in ipairs(results) do
@@ -384,7 +377,7 @@ function language.goto_declaration(view, opts)
   local function try_local_declaration(reason)
     local fallback, fallback_reason = intelligence.local_declaration(buffer, line, col)
     if fallback then
-      open_location(fallback, { view = view, navigation_anchor = navigation_anchor, pane = opts.pane })
+      open_location(fallback, { view = view, pane = opts.pane })
     else
       try_workspace_declaration(fallback_reason or reason)
     end

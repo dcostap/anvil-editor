@@ -146,6 +146,9 @@ function Buffer:set_filename(filename, abs_filename)
   language_mode.on_buffer_path_changed(self, old_path, language_mode.buffer_path(self))
   local syntax_changed = self:reset_syntax({ notify = false })
   local filename_changed = old.filename ~= self.filename or old.abs_filename ~= self.abs_filename
+  if filename_changed and core.buffer_registry and core.buffer_registry:identity(self) then
+    core.buffer_registry:update_identity(self)
+  end
   if filename_changed or syntax_changed then
     self:notify_metadata_listeners({
       kind = "metadata",

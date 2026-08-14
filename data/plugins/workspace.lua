@@ -356,17 +356,7 @@ local function load_workspace()
       untitled_recovery.restore_project(core.root_project().path)
     end
 
-    local history = core.navigation_history
-    if history and history.clear_history then
-      history.clear_history()
-      core.log_quiet("Workspace: reset Navigation History before restoring Project state")
-    end
-    if history and history.suppress_recording then
-      history.suppress_recording(restore_workspace_state)
-      core.log_quiet("Workspace: restored Project state with Navigation History recording suppressed")
-    else
-      restore_workspace_state()
-    end
+    restore_workspace_state()
     maybe_show_empty_project_file_tree()
   end)
 end

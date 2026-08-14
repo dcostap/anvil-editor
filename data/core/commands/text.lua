@@ -3276,7 +3276,10 @@ commands["text:unfold-all"] = function(dv)
   dv:unfold_all("command")
 end
 
-command.add("core.textview", commands)
+command.add(function(...)
+  local editor = core.current_editor()
+  return editor ~= nil, editor, ...
+end, commands)
 
 command.add_toggle("line-wrapping:toggle", {
   get = function(view)

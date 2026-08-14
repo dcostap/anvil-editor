@@ -17,13 +17,11 @@ local core_plugins = {
   centered_editor = true,
   custom_nagview = true,
   custom_welcome = true,
-  edit_location_history = true,
   filetree = true,
   project_paths_view = true,
   global_prompt_bar_sanitize = true,
   intellij_actions = true,
   intellij_find = true,
-  navigation_history = true,
   scale_debug_log = true,
   selection_surround = true,
   smart_indent_rules = true,
@@ -178,11 +176,6 @@ plugin_defaults("linewrapping", {
   enable_by_default = true,
   require_tokenization = false,
 })
-plugin_defaults("navigation_history", {
-  debug = true,
-  debug_main_log = true,
-  max_entries = 150,
-})
 plugin_defaults("scale", {
   autodetect = true,
   default_scale = DEFAULT_SCALE,
@@ -193,9 +186,7 @@ plugin_defaults("trimwhitespace", {
   trim_empty_end_lines = false,
 })
 -- IntelliJ-style navigation, custom actions/keybindings, and local workflow plugins.
-require_core_plugin "navigation_history"
 require_core_plugin "intellij_actions"
-require_core_plugin "edit_location_history"
 reload_core_plugin "global_prompt_bar_sanitize"
 require_core_plugin "intellij_find"
 require_core_plugin "untitled_recovery"

@@ -10,7 +10,7 @@ local config = require "core.config"
 local Buffer = require "core.buffer"
 local Node = require "core.node"
 local file_context = require "core.file_context"
-local navigation_history = require "plugins.navigation_history"
+local panes = require "core.panes"
 
 local function can_edit(dv, reason)
   return not (dv and dv.can_edit) or dv:can_edit(reason, { warn = true })
@@ -469,7 +469,7 @@ local function open_terminal_at_active_file(dv)
 end
 
 local function record_navigation_place(reason)
-  navigation_history.record_current_place(reason or "intellij-action")
+  panes.record_location()
 end
 
 local node_close_view = Node.close_view
