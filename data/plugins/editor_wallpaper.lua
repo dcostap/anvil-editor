@@ -76,7 +76,6 @@ end
 if not core.__editor_wallpaper_patched then
   core.__editor_wallpaper_patched = true
   local View = require "core.view"
-  local Node = require "core.node"
   local view_draw_background = View.draw_background
   function View:draw_background(color)
     if should_wallpaper_background(self, color) then
@@ -96,31 +95,6 @@ if not core.__editor_wallpaper_patched then
     return a, b, c, d, e
   end
 
-  local node_draw_tab_borders = Node.draw_tab_borders
-  function Node:draw_tab_borders(view, is_active, is_hovered, x, y, w, h, standalone)
-    local tab_x, tab_y, tab_w, tab_h = x, y, w, h
-    local a, b, c, d = node_draw_tab_borders(self, view, is_active, is_hovered, x, y, w, h, standalone)
-    if is_hovered then
-      renderer.draw_rect(tab_x, tab_y, tab_w, tab_h, style.editor_wallpaper_tab_hover)
-    end
-    return a, b, c, d
-  end
-
-  local node_draw_tabs = Node.draw_tabs
-  function Node:draw_tabs(...)
-    local _, y, _, h = self:get_scroll_button_rect(1)
-    draw_wallpaper_region(self.position.x, y, self.size.x, h, wallpaper.opacity)
-
-    -- The shared tab renderer fills the row with style.tab_background, so make
-    -- that fill transparent while preserving the rest of the tab rendering.
-    local old_tab_background = style.tab_background
-    local base = old_tab_background
-    style.tab_background = { base[1] or 0, base[2] or 0, base[3] or 0, 0 }
-    local ok, a, b, c, d, e = pcall(node_draw_tabs, self, ...)
-    style.tab_background = old_tab_background
-    if not ok then error(a) end
-    return a, b, c, d, e
-  end
 end
 
 wallpaper.draw_region = draw_wallpaper_region

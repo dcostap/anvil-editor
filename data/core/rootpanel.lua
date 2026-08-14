@@ -351,6 +351,8 @@ end
 
 function RootPanel:keyboard_target()
   if self:contains_view(core.active_view) then return core.active_view end
+  local active_pane = panes().pane_for_view(core.active_view)
+  if active_pane and active_pane.current_view then return core.active_view end
   local pane = panes().active()
   return pane and pane.current_view or nil
 end

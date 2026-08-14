@@ -8,6 +8,8 @@ local test = require "core.test"
 
 local diffview = require "plugins.diffview"
 local LineWrapping = require "core.linewrapping"
+local Editor = require "core.editor"
+local panes = require "core.panes"
 
 local function track(context, kind, value)
   context[kind] = context[kind] or {}
@@ -28,8 +30,8 @@ end
 local function open_editor(context, text)
   local buffer = track(context, "buffers", core.open_buffer())
   if text and text ~= "" then buffer:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_buffer(buffer))
-  core.set_active_view(view)
+  local view = track(context, "views", panes.place(function() return Editor(buffer) end,
+    { placement = "new", focus = true }))
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 320, 240
   view.scroll.x, view.scroll.to.x = 0, 0
@@ -178,12 +180,10 @@ end
 test.describe("line wrapping current line highlight", function()
   test.after_each(function(context)
     restore_config(context)
-    local root = core.root_panel.root_node
+    panes.reset_for_tests()
     for _, view in ipairs(context.views or {}) do
       view.wrapping_enabled = false
       view.wrapped_settings = nil
-      local node = root:get_node_for_view(view)
-      if node then node:remove_view(root, view) end
     end
     for _, buffer in ipairs(context.buffers or {}) do
       if buffer:is_dirty() then buffer:clean() end
@@ -381,12 +381,10 @@ end)
 test.describe("line wrapping visual navigation", function()
   test.after_each(function(context)
     restore_config(context)
-    local root = core.root_panel.root_node
+    panes.reset_for_tests()
     for _, view in ipairs(context.views or {}) do
       view.wrapping_enabled = false
       view.wrapped_settings = nil
-      local node = root:get_node_for_view(view)
-      if node then node:remove_view(root, view) end
     end
     for _, buffer in ipairs(context.buffers or {}) do
       if buffer:is_dirty() then buffer:clean() end

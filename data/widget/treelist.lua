@@ -418,7 +418,7 @@ function TreeList:update()
   -- this will make sure hovered_item is updated
   local dy = math.abs(self.last_scroll_y - self.scroll.y)
   if dy > 0 then
-    self:on_mouse_moved(core.root_view.mouse.x, core.root_view.mouse.y, 0, 0)
+    self:on_mouse_moved(core.root_panel.mouse.x, core.root_panel.mouse.y, 0, 0)
     self.last_scroll_y = self.scroll.y
   end
 
@@ -453,7 +453,7 @@ function TreeList:draw_tooltip()
   local x, y = self.tooltip.x + tooltip_offset, self.tooltip.y + tooltip_offset
   w, h = w + style.padding.x, h + style.padding.y
 
-  if x + w > core.root_view.root_node.size.x then -- check if we can span right
+  if x + w > core.root_panel.size.x then -- check if we can span right
     x = x - w -- span left instead
   end
 
@@ -621,7 +621,7 @@ function TreeList:draw()
     and
     self.tooltip.x and self.tooltip.alpha > 0
   then
-    core.root_view:defer_draw(self.draw_tooltip, self)
+    core.root_panel:defer_draw(self.draw_tooltip, self)
   end
 
   return true

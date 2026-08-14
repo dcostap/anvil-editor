@@ -1064,7 +1064,7 @@ local function reset_suggestions(skip_close)
   reset_lsp_completion_items()
 
   if not skip_close then
-    local buffer = core.active_view.buffer
+    local buffer = core.active_view and core.active_view.buffer
     if autocomplete.on_close then
       autocomplete.on_close(buffer, suggestions[suggestions_idx])
       autocomplete.on_close = nil

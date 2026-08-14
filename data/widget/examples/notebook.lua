@@ -133,8 +133,13 @@ command.add(nil,{
     if inside_node then
       notebook:toggle_visible()
     else
-      local node = core.root_panel:get_left_pane()
-      node:split("down", notebook, {y=true}, true)
+      local panes = require "core.panes"
+      local pane = panes.active()
+      if pane then
+        panes.split(pane, "down", { factory = function() return notebook end, focus = true })
+      else
+        panes.create { factory = function() return notebook end, focus = true }
+      end
       notebook:show()
       inside_node = true
     end

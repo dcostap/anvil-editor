@@ -646,7 +646,7 @@ function TerminalView:search(query, reverse)
 end
 
 function TerminalView:prompt_search()
-  core.command_view:enter("Terminal Search", {
+  core.global_prompt_bar:enter("Terminal Search", {
     text = self.search_query or "",
     select_text = true,
     show_suggestions = false,

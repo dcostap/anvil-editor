@@ -2,6 +2,7 @@ local common = require "core.common"
 local core = require "core"
 local ImageView = require "core.imageview"
 local test = require "core.test"
+local panes = require "core.panes"
 
 local temp_root
 local project_temp_root
@@ -15,6 +16,7 @@ end
 
 test.describe("graphics apis", function()
   test.before_each(function(context)
+    panes.reset_for_tests()
     temp_root = USERDIR
       .. PATHSEP .. "graphics-tests-"
       .. system.get_process_id() .. "-"
@@ -33,18 +35,7 @@ test.describe("graphics apis", function()
   end)
 
   test.after_each(function(context)
-    local views = core.root_panel.root_node:get_children()
-    for i = #views, 1, -1 do
-      local view = views[i]
-      if view:extends(ImageView)
-          and view.path
-          and common.path_belongs_to(view.path, context.project_temp_root) then
-        local node = core.root_panel.root_node:get_node_for_view(view)
-        if node then
-          node:remove_view(core.root_panel.root_node, view)
-        end
-      end
-    end
+    panes.reset_for_tests()
 
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)

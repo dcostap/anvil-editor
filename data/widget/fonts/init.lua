@@ -65,12 +65,12 @@ local function clean_fonts_cache()
         coroutine.yield(1)
       end
       if
-        core.active_view ~= core.command_view
+        core.active_view ~= core.global_prompt_bar
         or
         (
-          core.command_view.label ~= "Select Font: "
+          core.global_prompt_bar.label ~= "Select Font: "
           and
-          core.command_view.label ~= "List only monospaced fonts?: "
+          core.global_prompt_bar.label ~= "List only monospaced fonts?: "
         )
       then
         fontcache = nil
@@ -97,21 +97,21 @@ function Fonts.show_picker(callback, monospaced)
       while
         (fontcache.building or (monospaced and not fontcache.monospaced))
         and
-        core.active_view == core.command_view
+        core.active_view == core.global_prompt_bar
         and
-        core.command_view.label == "Select Font: "
+        core.global_prompt_bar.label == "Select Font: "
       do
-        core.command_view:update_suggestions()
+        core.global_prompt_bar:update_suggestions()
         coroutine.yield(2)
       end
       generate_fonts(monospaced)
-      core.command_view:update_suggestions()
+      core.global_prompt_bar:update_suggestions()
     end)
   end
 
   last_statusview_render = system.get_time()
 
-  core.command_view:enter("Select Font", {
+  core.global_prompt_bar:enter("Select Font", {
     submit = function(text, item)
       callback(item.text, item.info)
       clean_fonts_cache()
@@ -145,7 +145,7 @@ end
 function Fonts.show_picker_ask_monospace(callback)
   if not fontcache then fontcache = FontCache() end
 
-  core.command_view:enter("List only monospaced fonts?", {
+  core.global_prompt_bar:enter("List only monospaced fonts?", {
     submit = function(text, item)
       Fonts.show_picker(callback, item.mono)
     end,
@@ -179,10 +179,10 @@ function Fonts.clean_cache()
   return fontcache:rebuild()
 end
 
-core.status_view:add_item({
+core.status_bar:add_item({
   predicate = function()
-    return core.active_view == core.command_view
-      and core.command_view.label == "Select Font: "
+    return core.active_view == core.global_prompt_bar
+      and core.global_prompt_bar.label == "Select Font: "
   end,
   name = "widget:font-select",
   alignment = StatusView.Item.LEFT,

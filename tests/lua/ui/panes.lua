@@ -147,4 +147,17 @@ test.describe("Pane manager", function()
     core.clear_active_view = clear_active_view
     test.is_nil(core.active_view)
   end)
+
+  test.it("closes the Current View and restores the previous View", function()
+    local pane = panes.create { factory = factory("one") }
+    local first = pane.current_view
+    local second = FakeView("two")
+    function second:on_close() self.closed = (self.closed or 0) + 1 end
+    panes.present(second, { pane = pane })
+
+    test.ok(panes.close_view(pane, { force = true }))
+    test.equal(pane.current_view, first)
+    test.equal(panes.history_length(pane), 1)
+    test.equal(second.closed, 1)
+  end)
 end)

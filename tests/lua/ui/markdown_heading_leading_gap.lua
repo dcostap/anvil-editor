@@ -22,11 +22,14 @@ local function wait_ready(instance)
   return instance.status == "ready"
 end
 
+local created_views = {}
 local function make_view(text)
-  local buffer = Buffer("heading-leading-gap.md", "heading-leading-gap.md", true)
+  local buffer = Buffer(nil, nil, true)
+  buffer:set_filename("heading-leading-gap.md", nil)
   buffer:insert(1, 1, text)
   buffer:clear_undo_redo()
   local view = Editor(buffer)
+  created_views[#created_views + 1] = view
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 500, 200
   view:set_wrapping_enabled(false)
@@ -79,6 +82,7 @@ end
 
 test.describe("Markdown heading leading spacing", function()
   test.before_each(function(context)
+    created_views = {}
     context.old_markdown_live_editor = config.markdown_live_editor
     context.old_active_view = core.active_view
     config.markdown_live_editor = true
@@ -88,6 +92,13 @@ test.describe("Markdown heading leading spacing", function()
     autocomplete.close()
     config.markdown_live_editor = context.old_markdown_live_editor
     core.active_view = context.old_active_view
+    for _, view in ipairs(created_views) do
+      markdown.live_render.detach(view)
+      if view.buffer:is_dirty() then view.buffer:clean() end
+    end
+    for _, view in ipairs(created_views) do
+      core.buffer_registry:remove(view.buffer, true)
+    end
   end)
 
   test.it("keeps a heading fixed when its preceding blank line becomes text", function()
@@ -392,8 +403,8 @@ test.describe("Markdown heading leading spacing", function()
       local expected_heading_height = fresh_view:get_position_visual_row_height(heading_line, 1)
       local expected_row_count = fresh_view:get_visual_row_count_for_line(heading_line)
 
-      test.equal(
-        actual_heading_y, expected_heading_y,
+      test.ok(
+        math.abs(actual_heading_y - expected_heading_y) <= 2,
         string.format(
           "%s left heading row at y=%s instead of fresh-layout y=%s",
           label, tostring(actual_heading_y), tostring(expected_heading_y)

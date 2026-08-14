@@ -243,33 +243,10 @@ function M.activate(view, poi, opts)
   return false
 end
 
-local function focus_view_for_pane_owner(owner)
-  if owner and type(owner.get_focus_view) == "function" then
-    return owner:get_focus_view() or owner
-  end
-  return owner
-end
-
-function M.right_target_view()
-  if not panes.right_visible() then return nil end
-  local owner = panes.selected_view("right")
-  if owner and not panes.is_placeholder(owner) then return focus_view_for_pane_owner(owner) end
-end
-
 local function active_view_has_activatable_poi(...)
   local view = provider_view(core.active_view)
   local poi = M.point_at_caret(view, { activatable = true, silent = true })
   return poi ~= nil, view, poi, ...
-end
-
-local function perform_right_navigate_activate(direction)
-  local starting_focus = core.active_view
-  local starting_right = panes.pane_for_view(starting_focus) == "right"
-  local target = M.right_target_view()
-  local selected = M.navigate(target, direction, { source = "right-pane" })
-  if type(selected) ~= "table" then return end
-  M.activate(target, selected, { pane = "left", preserve_focus = starting_right, source = "right-pane" })
-  if starting_right and starting_focus then core.set_active_view(starting_focus) end
 end
 
 command.add(nil, {
@@ -279,20 +256,14 @@ command.add(nil, {
   ["poi:next"] = function()
     M.navigate(core.active_view, 1)
   end,
-  ["poi:right-previous-activate"] = function()
-    perform_right_navigate_activate(-1)
-  end,
-  ["poi:right-next-activate"] = function()
-    perform_right_navigate_activate(1)
-  end,
 })
 
 command.add(active_view_has_activatable_poi, {
   ["poi:activate"] = function(view, poi)
     M.activate(view, poi, { preserve_focus = false })
   end,
-  ["poi:activate-right"] = function(view, poi)
-    M.activate(view, poi, { pane = "right", preserve_focus = false })
+  ["poi:activate-split"] = function(view, poi)
+    M.activate(view, poi, { placement = "split", preserve_focus = false })
   end,
 })
 
@@ -300,10 +271,8 @@ keymap.add({
   ["ctrl+alt+,"] = "poi:previous",
   ["ctrl+alt+."] = "poi:next",
   ["alt+r"] = "poi:activate",
-  ["alt+shift+r"] = "poi:activate-right",
-  ["ctrl+shift+r"] = "poi:activate-right",
-  ["alt+8"] = "poi:right-previous-activate",
-  ["alt+9"] = "poi:right-next-activate",
+  ["alt+shift+r"] = "poi:activate-split",
+  ["ctrl+shift+r"] = "poi:activate-split",
 })
 
 return M

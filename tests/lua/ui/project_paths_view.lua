@@ -5,6 +5,7 @@ local project_paths = require "core.project_paths"
 local test = require "core.test"
 
 local project_paths_view = require "plugins.project_paths_view"
+local panes = require "core.panes"
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
@@ -66,12 +67,7 @@ end
 
 test.describe("Project Paths View", function()
   test.after_each(function(context)
-    if context.view then
-      local root = core.root_panel and core.root_panel.root_node
-      local node = root and root:get_node_for_view(context.view)
-      if node then node:remove_view(root, context.view) end
-    end
-    if context.original_active_view then core.set_active_view(context.original_active_view) end
+    panes.reset_for_tests()
     project_paths.configure_project {}
     project_paths.load_workspace_state(nil)
     if context.save_workspace_was_stubbed then core.save_workspace = context.original_save_workspace end

@@ -122,10 +122,10 @@ test.describe("File Tree entry snapshots", function()
       opened = { path = path, opts = opts }
       return {}
     end
-    ok, result = pcall(command.perform, "poi:activate-right")
+    ok, result = pcall(command.perform, "poi:activate-split")
     core.open_file = original_open_file
     if not ok then error(result, 0) end
     test.ok(result)
-    test.equal(opened.opts.placement, "current")
+    test.equal(opened.opts.placement, "split")
   end)
 end)

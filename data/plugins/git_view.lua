@@ -5,7 +5,6 @@ local core = require "core"
 local common = require "core.common"
 local command = require "core.command"
 local keymap = require "core.keymap"
-local tool_window = require "core.tool_window"
 local RootPanel = require "core.rootpanel"
 local GitView = require "plugins.git.view"
 local backend = require "plugins.git.backend"
@@ -225,7 +224,7 @@ end
 function sync_model_active_from_focus(tw)
   if not (tw and tw.git_model) or tw.hidden then return end
   local view = focused_git_view()
-  if view and view.tool_window == tw and view.tab_id and tw.git_model:find_tab(view.tab_id) then
+  if view and view.git_session == tw and view.tab_id and tw.git_model:find_tab(view.tab_id) then
     tw.git_model.active_tab = view.tab_id
   end
 end
@@ -435,7 +434,7 @@ function git_view.save_state(tw)
 end
 
 function git_view.restore_state(project, state, opts)
-  local existing = tool_window.get(project, "git")
+  local existing = panes.git_sessions[project_key(project)]
   if existing and existing.git_view then
     if state and state.model then existing.git_view.model:apply_state(state.model) end
     existing.git_model = existing.git_view.model
@@ -456,11 +455,6 @@ function git_view.restore_state(project, state, opts)
   opts.state = state
   return git_view.open_view(project, opts)
 end
-
-tool_window.register_kind("git", {
-  save = git_view.save_state,
-  restore = git_view.restore_state,
-})
 
 command.add(nil, {
   ["git:open-view"] = function()
@@ -615,7 +609,7 @@ end, {
 
   ["git:close-selected-tab"] = function(view)
     if not view then return end
-    local tw = view.tool_window
+    local tw = view.git_session
     view:try_close(function()
       remove_node_view(tw, view)
     end)

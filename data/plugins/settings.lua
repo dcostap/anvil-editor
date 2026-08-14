@@ -2623,7 +2623,7 @@ end
 --------------------------------------------------------------------------------
 local theme_commands = {
   ["theme:select"] = function()
-    core.command_view:enter("Theme", {
+    core.global_prompt_bar:enter("Theme", {
       text = normalize_color_theme_name(settings.config.theme),
       select_text = true,
       suggest = suggest_color_themes,

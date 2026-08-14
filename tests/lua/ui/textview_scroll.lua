@@ -3,6 +3,8 @@ local command = require "core.command"
 local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
+local Editor = require "core.editor"
+local panes = require "core.panes"
 
 require "plugins.intellij_find"
 
@@ -25,8 +27,8 @@ end
 local function open_editor(context, text)
   local buffer = track(context, "buffers", core.open_buffer())
   if text and text ~= "" then buffer:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_buffer(buffer))
-  core.set_active_view(view)
+  local view = track(context, "views", panes.place(function() return Editor(buffer) end,
+    { placement = "new", focus = true }))
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 220, 180
   view.scroll.x, view.scroll.to.x = 0, 0
@@ -76,11 +78,7 @@ test.describe("TextView selection scrolling", function()
     if command.is_valid("user:find-close") then command.perform("user:find-close") end
     config.scroll_past_end = context.scroll_past_end
     config.scroll_context_lines = context.scroll_context_lines
-    local root = core.root_panel.root_node
-    for _, view in ipairs(context.views or {}) do
-      local node = root:get_node_for_view(view)
-      if node then node:remove_view(root, view) end
-    end
+    panes.reset_for_tests()
     for _, buffer in ipairs(context.buffers or {}) do
       if buffer:is_dirty() then buffer:clean() end
       remove_buffer(buffer)

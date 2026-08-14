@@ -3,6 +3,7 @@ local common = require "core.common"
 local config = require "core.config"
 local Project = require "core.project"
 local test = require "core.test"
+local BufferRegistry = require "core.buffer_registry"
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
@@ -13,6 +14,7 @@ test.describe("Project path identity", function()
     context.original_projects = core.projects
     context.original_recent_projects = core.recent_projects
     context.original_buffers = core.buffers
+    context.original_buffer_registry = core.buffer_registry
     context.original_visited_files = core.visited_files
     context.original_max_visited_files = config.max_visited_files
     context.temp_root = USERDIR
@@ -27,6 +29,7 @@ test.describe("Project path identity", function()
     core.projects = context.original_projects
     core.recent_projects = context.original_recent_projects
     core.buffers = context.original_buffers
+    core.buffer_registry = context.original_buffer_registry
     core.visited_files = context.original_visited_files
     config.max_visited_files = context.original_max_visited_files
     if context.temp_root and system.get_file_info(context.temp_root) then
@@ -64,7 +67,8 @@ test.describe("Project path identity", function()
     fp:write("return 1\n")
     fp:close()
     core.projects = {}
-    core.buffers = {}
+    core.buffer_registry = BufferRegistry()
+    core.buffers = core.buffer_registry:list()
     core.add_project(project_path)
 
     local first = core.open_buffer(file_path)

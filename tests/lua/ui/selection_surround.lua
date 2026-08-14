@@ -19,8 +19,12 @@ local function set_text(buffer, text)
   buffer:set_selection(1, 1)
 end
 
+local buffer_id = 0
 local function new_view(context, text, filename)
-  local buffer = filename and Buffer(filename, filename, true) or Buffer()
+  buffer_id = buffer_id + 1
+  local stem, extension = filename and filename:match("^(.*)(%.[^./\\]+)$")
+  local identity = filename and ((stem or filename) .. ".anvil-test-" .. buffer_id .. (extension or ""))
+  local buffer = filename and Buffer(filename, identity, true) or Buffer()
   set_text(buffer, text)
   local view = Editor(buffer)
   context.buffers[#context.buffers + 1] = buffer

@@ -3,7 +3,6 @@ local command = require "core.command"
 local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
-local tool_window = require "core.tool_window"
 local panes = require "core.panes"
 local View = require "core.view"
 local RootPanel = require "core.rootpanel"
@@ -93,7 +92,7 @@ test.describe("Git View command", function()
     context.original_active_view = core.active_view
     context.original_active_window = core.active_window
     context.original_linewrapping_default = config.plugins.linewrapping.enable_by_default
-    tool_window.reset_for_tests()
+    panes.git_sessions = {}
     context.project = { path = "C:/repo" }
   end)
 
@@ -103,14 +102,14 @@ test.describe("Git View command", function()
     core.active_view = context.original_active_view
     core.active_window = context.original_active_window
     config.plugins.linewrapping.enable_by_default = context.original_linewrapping_default
-    tool_window.reset_for_tests()
+    panes.git_sessions = {}
   end)
 
   test.test("git:open-view reuses one project Git pane session", function(context)
     local first = open_fake_git_view(context.project)
     local second = open_fake_git_view(context.project)
     test.equal(first, second)
-    test.not_nil(tool_window.get(context.project, "git"))
+    test.not_nil(panes.git_sessions[context.project.path])
     test.not_nil(first.git_view)
   end)
 
@@ -677,18 +676,16 @@ test.describe("Git View command", function()
     view.model.active_tab = history_tab.id
     tw:hide()
 
-    local states = tool_window.get_project_state(context.project)
-    tool_window.reset_for_tests()
-    tool_window.restore_project_state(context.project, states, {
-      git = {
+    local state = git_view.save_state(tw)
+    panes.git_sessions = {}
+    git_view.restore_state(context.project, state, {
         window = fake_window(2222),
         window_id = 2222,
         root = fake_root(),
         git_view_opts = { backend = fake_backend },
-      },
     })
 
-    local restored = tool_window.get(context.project, "git")
+    local restored = panes.git_sessions[context.project.path]
     test.not_nil(restored)
     test.equal(restored.hidden, true)
     test.equal(restored.git_view.model.active_tab, history_tab.id)
@@ -726,7 +723,7 @@ test.describe("Git View command", function()
     local old_tab = view.model:open_file_history("old.lua")
     git_view.ensure_tab_view(tw, old_tab, true)
     test.equal(#tw.root:get_active_node_default().views, 2)
-    tool_window.restore_project_state(context.project, {
+    git_view.restore_state(context.project,
       {
         kind = "git",
         hidden = true,
@@ -735,8 +732,7 @@ test.describe("Git View command", function()
           active_tab = "log",
           tabs = { { id = "log", kind = "log", selected_commit = 1 } },
         },
-      },
-    })
+      })
     test.equal(tw.hidden, true)
     test.equal(view.model.active_tab, "log")
     test.equal(view.model:find_tab("history\0file\0C:/repo\0old.lua"), nil)
@@ -775,7 +771,7 @@ test.describe("Git View command", function()
         return { cancel = function() end }
       end,
     }
-    tool_window.restore_project_state(context.project, {
+    git_view.restore_state(context.project,
       {
         kind = "git",
         hidden = true,
@@ -784,16 +780,13 @@ test.describe("Git View command", function()
           active_tab = "log",
           tabs = { { id = "log", kind = "log", selected_commit = 1, selected_commit_hash = "abc123" } },
         },
-      },
-    }, {
-      git = {
+      }, {
         window = fake_window(3333),
         window_id = 3333,
         root = fake_root(),
         git_view_opts = { backend = backend },
-      },
     })
-    local restored = tool_window.get(context.project, "git")
+    local restored = panes.git_sessions[context.project.path]
     test.equal(restored.git_view.refresh_started, nil)
     test.equal(log_calls, 0)
 
@@ -832,7 +825,7 @@ test.describe("Git View command", function()
     test.equal(closed, true)
     test.equal(tw.hidden, true)
     test.equal(tw.git_view, nil)
-    test.equal(tool_window.get(context.project, "git"), nil)
+    test.equal(panes.git_sessions[context.project.path], nil)
   end)
 
   test.test("closing the Git Log Pane Tab removes sibling Git tabs and repairs focus", function(context)
@@ -851,7 +844,7 @@ test.describe("Git View command", function()
       local node = tw.root:get_active_node_default()
       node:remove_view(tw.root.root_node, view)
     end)
-    test.equal(tool_window.get(context.project, "git"), nil)
+    test.equal(panes.git_sessions[context.project.path], nil)
     for _, candidate in ipairs(tw.root:get_active_node_default().views) do
       test.ok(candidate ~= sibling)
     end

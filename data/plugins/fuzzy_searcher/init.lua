@@ -212,7 +212,7 @@ local function modal_picker_command_allowed(cmd)
   if type(cmd) ~= "string" then return false end
   return cmd:match("^fuzzy%-searcher:") ~= nil
       or cmd == "poi:activate"
-      or cmd == "poi:activate-right"
+      or cmd == "poi:activate-split"
 end
 
 local function modal_textbox_command_allowed(cmd)
@@ -5374,7 +5374,7 @@ poi.add_activation_provider("fuzzy-searcher-result", {
       col2 = 2,
       text_bounds = true,
       activate = function(_, _, opts)
-        view:confirm(opts and opts.pane == "right")
+        view:confirm(opts and opts.placement == "split")
         return true
       end,
     }

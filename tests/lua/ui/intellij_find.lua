@@ -5,6 +5,8 @@ local style = require "core.style"
 local test = require "core.test"
 local MessageBox = require "widget.messagebox"
 local LineWrapping = require "core.linewrapping"
+local Editor = require "core.editor"
+local panes = require "core.panes"
 
 require "plugins.intellij_find"
 
@@ -27,8 +29,8 @@ end
 local function open_editor(context, text)
   local buffer = track(context, "buffers", core.open_buffer())
   if text and text ~= "" then buffer:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_buffer(buffer))
-  core.set_active_view(view)
+  local view = track(context, "views", panes.place(function() return Editor(buffer) end,
+    { placement = "new", focus = true }))
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 360, 180
   view.scroll.x, view.scroll.to.x = 0, 0
@@ -64,11 +66,7 @@ test.describe("TextView Prompt Bar find", function()
       command.perform("user:find-close")
     end
 
-    local root = core.root_panel.root_node
-    for _, view in ipairs(context.views or {}) do
-      local node = root:get_node_for_view(view)
-      if node then node:remove_view(root, view) end
-    end
+    panes.reset_for_tests()
     for _, buffer in ipairs(context.buffers or {}) do
       if buffer:is_dirty() then buffer:clean() end
       remove_buffer(buffer)
@@ -83,7 +81,9 @@ test.describe("TextView Prompt Bar find", function()
       context,
       table.concat(prefix) .. "cursor input middle\n" .. "cursor input last\n"
     )
-    buffer:set_selection(origin_line, 1, origin_line, 1)
+    view:with_selection_state(function()
+      buffer:set_selection(origin_line, 1, origin_line, 1)
+    end)
 
     test.ok(command.perform("find-replace:find"))
     core.root_panel:on_text_input("i")
@@ -94,7 +94,7 @@ test.describe("TextView Prompt Bar find", function()
 
   test.it("opens on the currently selected match when the caret is at the selection end", function(context)
     local view, buffer = open_editor(context, "input first\ninput second\n")
-    buffer:set_selection(1, 6, 1, 1)
+    view:with_selection_state(function() buffer:set_selection(1, 6, 1, 1) end)
 
     test.ok(command.perform("find-replace:find"))
 
@@ -107,7 +107,7 @@ test.describe("TextView Prompt Bar find", function()
     lines[1] = "NEEDLE first"
     lines[12] = "NEEDLE bottom edge"
     local view, buffer = open_editor(context, table.concat(lines, "\n"))
-    buffer:set_selection(1, 1, 1, 1)
+    view:with_selection_state(function() buffer:set_selection(1, 1, 1, 1) end)
 
     test.ok(command.perform("find-replace:find"))
     type_into_active_view("NEEDLE")

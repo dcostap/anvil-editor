@@ -441,7 +441,6 @@ local diagnostic_frame_keys = {
   "textview_line_packet_resident_bytes",
   "textview_line_packet_frame_failures",
   "core_root_panel_update_ms",
-  "core_tool_window_update_ms",
   "rootpanel_update_ms",
   "rootpanel_copy_position_ms",
   "rootpanel_initial_layout_ms",
@@ -1335,7 +1334,6 @@ local function write_summary(path)
   drill_metric("linewrap compute bytes", "linewrapping_compute_line_breaks_bytes", update_denom, "update")
   drill_metric("linewrap compute splits", "linewrapping_compute_line_breaks_splits", update_denom, "update")
   drill_metric("core root_panel update ms", "core_root_panel_update_ms", update_denom, "update")
-  drill_metric("core tool_window update ms", "core_tool_window_update_ms", update_denom, "update")
   drill_metric("rootpanel update ms", "rootpanel_update_ms", update_denom, "update")
   drill_metric("rootpanel copy position ms", "rootpanel_copy_position_ms", update_denom, "update")
   drill_metric("rootpanel initial layout ms", "rootpanel_initial_layout_ms", update_denom, "update")

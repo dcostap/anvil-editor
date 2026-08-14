@@ -193,14 +193,14 @@ local function active_textview()
 end
 
 local function activate_view(view)
-  local node = core.root_panel.root_node:get_node_for_view(view)
-  if node then node:set_active_view(view) else core.set_active_view(view) end
+  local panes = require "core.panes"
+  local pane = panes.pane_for_view(view)
+  if pane then panes.present(view, { pane = pane, focus = true }) else core.set_active_view(view) end
   return view
 end
 
 local function open_file(path)
-  local buffer = assert(core.open_buffer(path))
-  return activate_view(core.root_panel:open_buffer(buffer))
+  return activate_view(assert(core.open_file(path, { placement = "current", focus = true })))
 end
 
 local function set_position(view, line)
@@ -212,15 +212,12 @@ end
 local function setup_tabs(primary)
   if benchmark.scenario ~= "tab-heavy-titlebar" then return end
   assert(benchmark.tab_dir ~= "", "tab-heavy-titlebar requires a tab fixture directory")
-  local node = assert(
-    core.root_panel.root_node:get_node_for_view(primary),
-    "primary benchmark Editor is not attached to a pane"
-  )
+  local panes = require "core.panes"
   for i = 1, benchmark.tab_count do
     local path = benchmark.tab_dir .. PATHSEP .. string.format("benchmark-tab-%03d.lua", i)
-    node:add_view(Editor(assert(core.open_buffer(path))))
+    panes.create { factory = function() return Editor(assert(core.open_buffer(path))) end, focus = false }
   end
-  node:set_active_view(primary)
+  activate_view(primary)
 end
 
 local PrimitiveRenderView = View:extend()
@@ -290,10 +287,9 @@ end
 
 local function open_primitive_view()
   local view = PrimitiveRenderView()
-  local node = core.root_panel:get_active_node_default()
-  node:add_view(view)
-  node:set_active_view(view)
-  core.set_active_view(view)
+  require("core.panes").place(function() return view end, {
+    placement = "current", focus = true, reason = "perf-primitives",
+  })
   return view
 end
 

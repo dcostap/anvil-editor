@@ -47,8 +47,9 @@ end
 
 local function activate_view(view)
   if not view then return nil end
-  local node = core.root_panel and core.root_panel.root_node and core.root_panel.root_node:get_node_for_view(view)
-  if node then node:set_active_view(view) else core.set_active_view(view) end
+  local panes = require "core.panes"
+  local pane = panes.pane_for_view(view)
+  if pane then panes.present(view, { pane = pane, focus = true }) else core.set_active_view(view) end
   return view
 end
 
@@ -56,7 +57,10 @@ local function open_target_file()
   if stress.file == "" then return nil end
   local buffer = core.open_buffer(stress.file)
   if not buffer then return nil end
-  return activate_view(core.root_panel:open_buffer(buffer))
+  local Editor = require "core.editor"
+  return activate_view(require("core.panes").place(function() return Editor(buffer) end, {
+    placement = "current", focus = true,
+  }))
 end
 
 local function clamp_line(buffer, line)

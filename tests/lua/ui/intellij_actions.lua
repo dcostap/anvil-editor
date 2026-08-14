@@ -3,6 +3,8 @@ local command = require "core.command"
 local common = require "core.common"
 local project_paths = require "core.project_paths"
 local test = require "core.test"
+local Editor = require "core.editor"
+local panes = require "core.panes"
 
 require "plugins.intellij_actions"
 
@@ -35,8 +37,8 @@ end
 local function open_editor(context, text)
   local buffer = track(context, "buffers", core.open_buffer())
   if text and text ~= "" then buffer:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_buffer(buffer))
-  core.set_active_view(view)
+  local view = track(context, "views", panes.place(function() return Editor(buffer) end,
+    { placement = "new", focus = true }))
   return view, buffer
 end
 
@@ -75,11 +77,7 @@ test.describe("IntelliJ actions batch behavior", function()
       context.original_process_start = nil
     end
 
-    local root = core.root_panel.root_node
-    for _, view in ipairs(context.views or {}) do
-      local node = root:get_node_for_view(view)
-      if node then node:remove_view(root, view) end
-    end
+    panes.reset_for_tests()
     for _, buffer in ipairs(context.buffers or {}) do
       if buffer:is_dirty() then buffer:clean() end
       remove_buffer(buffer)
@@ -213,13 +211,13 @@ test.describe("IntelliJ actions batch behavior", function()
     system.set_clipboard = function(text) copied = text end
 
     local external_buffer = track(context, "buffers", core.open_buffer(external_file_path))
-    local external_view = track(context, "views", core.root_panel:open_buffer(external_buffer))
+    local external_view = track(context, "views", panes.place(function() return Editor(external_buffer) end, { placement = "new" }))
     core.set_active_view(external_view)
     test.ok(command.perform("user:copy-project-path"))
     test.equal(copied, core.root_project().path)
 
     local project_buffer = track(context, "buffers", core.open_buffer(project_file_path))
-    local project_view = track(context, "views", core.root_panel:open_buffer(project_buffer))
+    local project_view = track(context, "views", panes.place(function() return Editor(project_buffer) end, { placement = "new" }))
     core.set_active_view(project_view)
     test.ok(command.perform("user:copy-project-path"))
     test.equal(copied, core.root_project().path)
@@ -233,7 +231,7 @@ test.describe("IntelliJ actions batch behavior", function()
     write_file(file_path, "return true\n")
 
     local buffer = track(context, "buffers", core.open_buffer(file_path))
-    local view = track(context, "views", core.root_panel:open_buffer(buffer))
+    local view = track(context, "views", panes.place(function() return Editor(buffer) end, { placement = "new" }))
     core.set_active_view(view)
 
     local exec_commands = {}
@@ -279,7 +277,7 @@ test.describe("IntelliJ actions batch behavior", function()
     write_file(file_path, "return true\n")
 
     local buffer = track(context, "buffers", core.open_buffer(file_path))
-    local view = track(context, "views", core.root_panel:open_buffer(buffer))
+    local view = track(context, "views", panes.place(function() return Editor(buffer) end, { placement = "new" }))
     core.set_active_view(view)
 
     local process = require "core.process"

@@ -13,7 +13,6 @@ local StatusBar
 local TitleBar
 local GlobalPromptBar
 local NagView
-local tool_window
 local TextView
 local ImageView
 local Buffer
@@ -528,7 +527,6 @@ function core.init()
   TitleBar = require "core.titlebar"
   GlobalPromptBar = require "core.global_prompt_bar"
   NagView = require "core.nagview"
-  tool_window = require "core.tool_window"
   Project = require "core.project"
   TextView = require "core.textview"
   ImageView = require "core.imageview"
@@ -652,13 +650,6 @@ function core.init()
   core.nag_view = NagView()
   ---@type core.titlebar
   core.title_bar = TitleBar()
-
-  -- Deprecated compatibility aliases for external plugins/user modules written
-  -- against older UI names. Built-in code should use the canonical names above.
-  core.root_view = core.root_panel
-  core.command_view = core.global_prompt_bar
-  core.status_view = core.status_bar
-  core.title_view = core.title_bar
 
   -- Load default commands first so plugins/core features can override them.
   command.add_defaults()
@@ -2000,9 +1991,9 @@ function core.on_event(type, ...)
       return true
     end
     if core.active_window ~= core.window then
-      local left_node = core.root_panel and core.root_panel.get_left_pane and core.root_panel:get_left_pane()
-      if left_node and left_node.active_view then
-        activate_for_main_window(left_node.active_view)
+      local pane = core.panes and core.panes.active()
+      if pane and pane.current_view then
+        activate_for_main_window(pane.current_view)
       else
         core.active_window = core.window
       end
@@ -2190,7 +2181,6 @@ local perf_diagnostic_keys = {
   "textview_line_packet_resident_bytes",
   "textview_line_packet_frame_failures",
   "core_root_panel_update_ms",
-  "core_tool_window_update_ms",
   "rootpanel_update_ms",
   "rootpanel_copy_position_ms",
   "rootpanel_initial_layout_ms",
@@ -2363,24 +2353,7 @@ function core.step(next_frame_time, options)
     step_stats.event_count = step_stats.event_count + 1
     local event_window_id = system.get_last_event_window_id and system.get_last_event_window_id()
     local main_window_id = core.window and system.get_window_id and system.get_window_id(core.window)
-    if tool_window and event_window_id and event_window_id ~= main_window_id then
-      local ok, handled
-      if type == "textinput" and did_keymap then
-        ok, handled = true, true
-        did_keymap = false
-      else
-        ok, handled = core.try(tool_window.handle_event, event_window_id, type, a, b, c, d)
-      end
-      if ok and handled then
-        did_keymap = (tool_window.last_did_keymap or false) or did_keymap
-        event_received = type
-      elseif ok then
-        local _, res = core.try(core.on_event, type, a, b, c, d)
-        did_keymap = res or did_keymap
-      else
-        event_received = type
-      end
-    elseif type == "textinput" and did_keymap then
+    if type == "textinput" and did_keymap then
       did_keymap = false
     elseif type == "mousemoved" then
       core.try(core.on_event, type, a, b, c, d)
@@ -2431,15 +2404,6 @@ function core.step(next_frame_time, options)
       local elapsed = (system.get_time() - phase_start) * 1000
       if perf and perf.frame_add then perf.frame_add("core_root_panel_update_ms", elapsed)
       else stats.core_root_panel_update_ms = (stats.core_root_panel_update_ms or 0) + elapsed end
-    end
-    if tool_window then
-      phase_start = stats and system.get_time()
-      tool_window.update_all()
-      if stats then
-        local elapsed = (system.get_time() - phase_start) * 1000
-        if perf and perf.frame_add then perf.frame_add("core_tool_window_update_ms", elapsed)
-        else stats.core_tool_window_update_ms = (stats.core_tool_window_update_ms or 0) + elapsed end
-      end
     end
   end
   step_stats.update_ms = (system.get_time() - update_start_time) * 1000
@@ -2502,7 +2466,6 @@ function core.step(next_frame_time, options)
   end
   local renderer_end_start_time = system.get_time()
   renderer.end_frame()
-  if tool_window then tool_window.draw_all() end
   step_stats.renderer_end_ms = (system.get_time() - renderer_end_start_time) * 1000
 
   local frame_time = system.get_time() - start_time

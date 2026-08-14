@@ -8,7 +8,8 @@ local test = require "core.test"
 
 local function make_view(text, filename)
   filename = filename or "markdown-list-navigation.md"
-  local buffer = Buffer(filename, filename, true)
+  local buffer = Buffer(nil, nil, true)
+  buffer:set_filename(filename, nil)
   buffer:insert(1, 1, text)
   buffer:clear_undo_redo()
   local view = Editor(buffer)

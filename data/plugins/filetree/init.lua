@@ -2801,7 +2801,8 @@ function FileTreeView:open_selected_files()
   return true
 end
 
-function FileTreeView:open_item()
+function FileTreeView:open_item(opts)
+  opts = opts or {}
   self:sync_meta()
   if self:open_selected_files() then return true end
 
@@ -2829,7 +2830,8 @@ function FileTreeView:open_item()
       local pane = panes.pane_for_view(self)
       return core.open_file(entry.abs, {
         pane = pane,
-        placement = "current",
+        placement = opts.placement or "current",
+        direction = opts.placement == "split" and "right" or nil,
         focus = true,
         reason = "filetree-open",
       }) ~= nil
@@ -2849,8 +2851,8 @@ function FileTreeView:get_point_of_interest_at(line)
     line2 = line,
     col2 = math.max(2, #text + 1),
     text_bounds = true,
-    activate = function()
-      return self:open_item()
+    activate = function(_, _, opts)
+      return self:open_item(opts)
     end,
   }
 end

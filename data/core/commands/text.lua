@@ -10,6 +10,7 @@ local translate = require "core.buffer.translate"
 local style = require "core.style"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
+local Editor = require "core.editor"
 local tokenizer = require "core.tokenizer"
 local panes = require "core.panes"
 
@@ -3278,15 +3279,24 @@ commands["text:unfold-all"] = function(dv)
 end
 
 command.add(function(...)
-  local editor = core.current_editor()
-  if editor then return true, editor, ... end
   local view = core.active_view
+  local editor = core.current_editor()
   local panes = require "core.panes"
   local owner = panes.owner_for_view(view)
+  if view and view ~= editor and owner ~= view
+      and view.extends and view:extends(TextView) and not view:is(Editor) then
+    return true, view, ...
+  end
+  if view and view:is(Editor) and not owner then
+    return true, view, ...
+  end
+  if editor then return true, editor, ... end
   local pane = owner and panes.pane_for_view(owner)
   local owned_text_view = owner and owner ~= view and pane and pane.current_view == owner
     and view and view.extends and view:extends(TextView)
-  return not not owned_text_view, view, ...
+  local specialized_text_view = view and view.accepts_text_commands
+    and view.extends and view:extends(TextView)
+  return not not (owned_text_view or specialized_text_view), view, ...
 end, commands)
 
 command.add_toggle("line-wrapping:toggle", {

@@ -206,7 +206,7 @@ test.describe("Fuzzy Searcher preview", function()
     }
     picker.selected = 1
 
-    test.ok(command.perform("poi:activate-right"))
+    test.ok(command.perform("poi:activate-split"))
 
     local view = core.active_view
     test.ok(view and view.buffer and view.buffer.abs_filename == path, "expected side-accepted file to become active")
@@ -240,7 +240,7 @@ test.describe("Fuzzy Searcher preview", function()
       { kind = "project", label = project, project = project },
     })
 
-    test.ok(press_command_binding("poi:activate-right"), "expected alternate activation input to be handled")
+    test.ok(press_command_binding("poi:activate-split"), "expected alternate activation input to be handled")
     test.equal(opened, project)
     test.is_nil(core.fuzzy_searcher_active_view, "expected activation to close the picker")
   end)

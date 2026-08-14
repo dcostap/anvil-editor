@@ -15,6 +15,7 @@ local style = require "core.style"
 local prompt_bar_renderer = require "core.prompt_bar_renderer"
 local common = require "core.common"
 local file_context = require "core.file_context"
+local panes = require "core.panes"
 local translate = require "core.buffer.translate"
 local Buffer = require "core.buffer"
 local Highlighter = require "core.buffer.highlighter"
@@ -221,7 +222,7 @@ local function focus_field(view, state, field_name)
   state.focus = field_name or state.focus or "find"
   local field = state.focus == "replace" and state.replace or state.find
   field.local_find_owner = view
-  field.__pane_focus_owner = view
+  panes.register_focus_target(view, field)
   core.set_active_view(field)
   core.blink_reset()
   core.redraw = true

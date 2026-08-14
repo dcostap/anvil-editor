@@ -141,9 +141,9 @@ local function preview_suggestions(plan)
 end
 
 function rename_links.present(plan)
-  if not (plan and not plan.applied and #plan.files > 0 and core.command_view) then return false end
+  if not (plan and not plan.applied and #plan.files > 0 and core.global_prompt_bar) then return false end
   local suggestions = preview_suggestions(plan)
-  core.command_view:enter("Markdown links affected by rename", {
+  core.global_prompt_bar:enter("Markdown links affected by rename", {
     text = "",
     suggest = function(text)
       local needle = tostring(text or ""):lower()

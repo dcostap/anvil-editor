@@ -4,6 +4,8 @@ local command = require "core.command"
 local TextView = require "core.textview"
 local Project = require "core.project"
 local test = require "core.test"
+local Editor = require "core.editor"
+local panes = require "core.panes"
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
@@ -25,11 +27,6 @@ local function read_file(path)
 end
 
 local function remove_buffer(buffer)
-  local root = core.root_panel.root_node
-  for _, view in ipairs(core.get_views_referencing_buffer(buffer)) do
-    local node = root:get_node_for_view(view)
-    if node then node:remove_view(root, view) end
-  end
   for i = #core.buffers, 1, -1 do
     if core.buffers[i] == buffer then
       table.remove(core.buffers, i)
@@ -41,6 +38,7 @@ end
 
 test.describe("Save As command", function()
   test.before_each(function(context)
+    panes.reset_for_tests()
     context.original_projects = core.projects
     context.original_active_view = core.active_view
     context.original_nag_view = core.nag_view
@@ -55,6 +53,7 @@ test.describe("Save As command", function()
   end)
 
   test.after_each(function(context)
+    panes.reset_for_tests()
     if core.active_view == core.global_prompt_bar then
       core.global_prompt_bar:exit(false)
     end
@@ -86,8 +85,7 @@ test.describe("Save As command", function()
 
     local buffer = core.open_buffer()
     buffer:insert(1, 1, "new content")
-    local view = core.root_panel:open_buffer(buffer)
-    core.set_active_view(view)
+    local view = panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
 
     core.nag_view = {
       show = function(_, title, message, buttons, callback)

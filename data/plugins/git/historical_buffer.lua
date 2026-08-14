@@ -96,7 +96,7 @@ function historical.create_buffer(repo, rev, relpath, text)
 end
 
 local function main_root_panel()
-  return core.tool_window_main_root_panel or core.root_panel
+  return core.root_panel
 end
 
 local function views_referencing_buffer(root_panel, buffer)

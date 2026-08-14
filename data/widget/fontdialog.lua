@@ -78,7 +78,7 @@ function FontDialog:new(font, options)
       this:set_font(fontdata)
       this:update_preview()
     end, false)
-    core.status_view:remove_tooltip()
+    core.status_bar:remove_tooltip()
   end
 
   self.choose_mono = Button(self.panel, "Mono")
@@ -90,7 +90,7 @@ function FontDialog:new(font, options)
       this:set_font(fontdata)
       this:update_preview()
     end, true)
-    core.status_view:remove_tooltip()
+    core.status_bar:remove_tooltip()
   end
 
   self.line = Line(self.panel)

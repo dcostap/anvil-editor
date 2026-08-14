@@ -7,6 +7,8 @@ local test = require "core.test"
 
 local centered_editor = require "plugins.centered_editor"
 local sticky_scroll = require "plugins.sticky_scroll"
+local Editor = require "core.editor"
+local panes = require "core.panes"
 
 local function track(context, kind, value)
   context[kind] = context[kind] or {}
@@ -27,8 +29,8 @@ end
 local function open_editor(context, text)
   local buffer = track(context, "buffers", core.open_buffer())
   if text and text ~= "" then buffer:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_buffer(buffer))
-  core.set_active_view(view)
+  local view = track(context, "views", panes.place(function() return Editor(buffer) end,
+    { placement = "new", focus = true }))
   view.position.x, view.position.y = 10, 20
   view.size.x, view.size.y = 1000, 240
   view.scroll.x, view.scroll.to.x = 0, 0
@@ -72,18 +74,17 @@ end
 
 test.describe("centered editor", function()
   test.before_each(function(context)
+    panes.reset_for_tests()
     save_centered_config(context)
     use_test_centered_config()
   end)
 
   test.after_each(function(context)
     restore_centered_config(context)
-    local root = core.root_panel.root_node
+    panes.reset_for_tests()
     for _, view in ipairs(context.views or {}) do
       view.wrapping_enabled = false
       view.wrapped_settings = nil
-      local node = root:get_node_for_view(view)
-      if node then node:remove_view(root, view) end
     end
     for _, buffer in ipairs(context.buffers or {}) do
       if buffer:is_dirty() then buffer:clean() end

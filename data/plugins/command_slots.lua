@@ -583,6 +583,7 @@ function CommandOutputView:__tostring() return "CommandOutputView" end
 
 function CommandOutputView:new(slot)
   CommandOutputView.super.new(self, CommandOutputBuffer())
+  self.accepts_text_commands = true
   self.slot = slot
   self.command_output_view = true
   self.poi_cache = nil
@@ -1071,17 +1072,8 @@ end
 
 M.CommandOutputBuffer = CommandOutputBuffer
 M.CommandOutputView = CommandOutputView
-M.CommandOutputPanel = CommandOutputPanel
-
 local function ensure_output_panel()
-  if not M.output_panel or not M.output_panel.command_output_panel or M.output_panel.command_output_panel_version ~= COMMAND_OUTPUT_PANEL_VERSION then
-    if M.output_panel then panes.remove_view(M.output_panel, { force = true, focus_left = false }) end
-    M.output_panel = CommandOutputPanel()
-  end
-  if not panes.contains_view("right", M.output_panel) then
-    panes.register_view("right", "command-output", M.output_panel)
-  end
-  return M.output_panel
+  return nil
 end
 
 local function ensure_output_view(slot, focus)

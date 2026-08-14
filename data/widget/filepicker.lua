@@ -289,7 +289,7 @@ end
 
 ---@param self widget.filepicker
 local function show_file_picker(self)
-  core.command_view:enter("Choose File", {
+  core.global_prompt_bar:enter("Choose File", {
     text = self:get_relative_path(),
     submit = function(text)
       ---@type string
@@ -354,7 +354,7 @@ end
 
 ---@param self widget.filepicker
 local function show_dir_picker(self)
-  core.command_view:enter("Choose Directory", {
+  core.global_prompt_bar:enter("Choose Directory", {
     text = self:get_relative_path(),
     submit = function(text)
       local path = common.home_expand(text)

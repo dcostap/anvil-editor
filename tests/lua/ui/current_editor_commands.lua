@@ -49,14 +49,6 @@ test.describe("Current Editor command routing", function()
     test.equal(#suspended.buffer.lines, 1)
   end)
 
-  test.it("rejects text editing when the Current View is not an Editor", function()
-    panes.create { factory = function() return View() end }
-    local stray = Editor(Buffer())
-    core.active_view = stray
-    test.not_ok(command.perform("text:newline"))
-    test.equal(#stray.buffer.lines, 1)
-  end)
-
   test.it("routes text editing to an Editor subclass", function()
     local SpecializedEditor = Editor:extend()
     local pane = panes.create { factory = function() return SpecializedEditor(Buffer()) end }

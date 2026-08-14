@@ -91,6 +91,8 @@ test.describe("Markdown pending visual continuity", function()
       test.equal(count_visuals(view, "attachment_chip"), 2)
       test.ok(wait_ready(instance), instance.reason)
       markdown.live_render.detach(view)
+      view:on_close()
+      core.buffer_registry:remove(view.buffer, true)
       view = nil
 
       view = make_view(filename, "- \n![[manual.pdf]]\nplain")
@@ -152,6 +154,8 @@ test.describe("Markdown pending visual continuity", function()
       test.equal(count_visuals(view, "embed_preview"), 2)
       test.ok(wait_ready(instance), instance.reason)
       markdown.live_render.detach(view)
+      view:on_close()
+      core.buffer_registry:remove(view.buffer, true)
       view = nil
 
       view = make_view(source, "- \n![[Target]]\nplain")

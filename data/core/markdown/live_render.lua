@@ -6675,8 +6675,8 @@ local function invalidate_semantic_publication(view, instance, reason)
     perf.frame_add("markdown_live_publication_prune_images_ms", prune_images_ms)
     perf.frame_add("markdown_live_publication_line_invalidate_ms", line_invalidate_ms)
     perf.frame_add("markdown_live_publication_metric_invalidate_ms", metric_invalidate_ms)
-    local root = core.root_panel and core.root_panel.root_node
-    local node = root and root.get_node_for_view and root:get_node_for_view(view)
+    local panes = require "core.panes"
+    local pane = panes.pane_for_view(view)
     perf.record_markdown_view_publication({
       time = system.get_time(),
       elapsed_ms = total_ms,
@@ -6687,7 +6687,7 @@ local function invalidate_semantic_publication(view, instance, reason)
       generation = instance.generation,
       wrapped = view.wrapped_settings ~= nil,
       active = core.active_view == view,
-      visible = not node or node.active_view == view,
+      visible = not pane or (panes.is_visible(pane) and pane.current_view == view),
       view_width = view.size and view.size.x or 0,
       range_count = #(ranges or {}),
       publication_lines = publication_lines,
@@ -7236,7 +7236,7 @@ end
 
 local function open_ambiguous_picker(view, link, resolution)
   local index = view.__markdown_live_owner and view.__markdown_live_owner.link_index
-  if not (index and core.command_view) then return false end
+  if not (index and core.global_prompt_bar) then return false end
   local suggestions = {}
   for _, entry in ipairs(resolution.candidates or {}) do
     suggestions[#suggestions + 1] = { text = entry.rel_path, entry = entry }
@@ -7247,7 +7247,7 @@ local function open_ambiguous_picker(view, link, resolution)
       if suggestion.text == text then return suggestion end
     end
   end
-  core.command_view:enter("Open Markdown Link", {
+  core.global_prompt_bar:enter("Open Markdown Link", {
     text = "",
     suggest = function(text)
       local needle = tostring(text or ""):lower()
@@ -7404,10 +7404,12 @@ function live.refresh_view(view)
 end
 
 local function refresh_open_views()
-  local root = core.root_panel and core.root_panel.root_node
-  if not (root and root.get_children) then return end
-  for _, view in ipairs(root:get_children()) do
-    live.refresh_view(view)
+  local panes = require "core.panes"
+  local seen = {}
+  for _, pane in ipairs(panes.ordered()) do
+    for _, view in ipairs(panes.history_views(pane)) do
+      if not seen[view] then seen[view] = true; live.refresh_view(view) end
+    end
   end
 end
 

@@ -119,8 +119,13 @@ widget.draggable = false
 widget.defer_draw = false
 widget.target_size = 250
 
-local node = core.root_panel:get_left_pane()
-node:split("right", widget, {x=true}, true)
+local panes = require "core.panes"
+local pane = panes.active()
+if pane then
+  panes.split(pane, "right", { factory = function() return widget end, focus = true })
+else
+  panes.create { factory = function() return widget end, focus = true }
+end
 
 command.add(nil,{
   ["find-widget:toggle"] = function()

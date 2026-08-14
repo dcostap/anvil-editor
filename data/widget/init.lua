@@ -933,7 +933,7 @@ function Widget:on_mouse_released(button, x, y)
 
   if widget_showing_tooltip then
     widget_showing_tooltip = false
-    core.status_view:remove_tooltip()
+    core.status_bar:remove_tooltip()
   end
 
   if self.captured_widget then
@@ -1055,7 +1055,7 @@ function Widget:on_mouse_moved(x, y, dx, dy)
       elseif child.mouse_is_hovering then
         if widget_showing_tooltip then
           widget_showing_tooltip = false
-          core.status_view:remove_tooltip()
+          core.status_bar:remove_tooltip()
         end
         child.mouse_is_hovering = false
         child:on_mouse_leave(x, y, dx, dy)
@@ -1110,7 +1110,7 @@ function Widget:on_mouse_moved(x, y, dx, dy)
         end
         if(#tooltip > 0) then
           widget_showing_tooltip = true
-          core.status_view:show_tooltip(tooltip)
+          core.status_bar:show_tooltip(tooltip)
         end
       end
       self:on_mouse_enter(x, y, dx, dy)
@@ -1120,7 +1120,7 @@ function Widget:on_mouse_moved(x, y, dx, dy)
     self:on_mouse_leave(x, y, dx, dy)
     if widget_showing_tooltip then
       widget_showing_tooltip = false
-      core.status_view:remove_tooltip()
+      core.status_bar:remove_tooltip()
     end
     self.mouse_is_hovering = false
     is_over = false
@@ -1588,7 +1588,7 @@ function Widget.override_rootview()
   end
 
   function RootView:on_mouse_moved(x, y, dx, dy)
-    if core.active_view ~= core.command_view then
+    if core.active_view ~= core.global_prompt_bar then
       for i=#floating_widgets, 1, -1 do
         local widget = floating_widgets[i]
         if widget.visible then
@@ -1682,7 +1682,7 @@ function Widget.override_rootview()
     for i=1, count, 1 do
       local widget = floating_widgets[i]
       if widget.visible and widget.defer_draw then
-        core.root_view:defer_draw(widget.draw, widget)
+        core.root_panel:defer_draw(widget.draw, widget)
       end
     end
     root_view_draw(self)

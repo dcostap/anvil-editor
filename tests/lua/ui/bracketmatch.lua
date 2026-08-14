@@ -6,6 +6,8 @@ local LineWrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
 local worker_pool = require "core.worker_pool"
+local Editor = require "core.editor"
+local panes = require "core.panes"
 
 require "plugins.bracketmatch"
 
@@ -23,8 +25,7 @@ local function open_brace_view(context)
   local buffer = core.open_buffer()
   buffer:text_input("{\n}")
   buffer:set_selection(1, 1)
-  local view = core.root_panel:open_buffer(buffer)
-  core.set_active_view(view)
+  local view = panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 320, 240
   view.scroll.x, view.scroll.to.x = 0, 0
@@ -38,8 +39,7 @@ local function open_text_view(context, text, col)
   local buffer = core.open_buffer()
   buffer:text_input(text)
   buffer:set_selection(1, col)
-  local view = core.root_panel:open_buffer(buffer)
-  core.set_active_view(view)
+  local view = panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 320, 240
   view.scroll.x, view.scroll.to.x = 0, 0
@@ -93,6 +93,7 @@ end
 
 test.describe("Bracket match frame", function()
   test.before_each(function(context)
+    panes.reset_for_tests()
     local wrapping = config.plugins.linewrapping
     context.wrapping = {
       mode = wrapping.mode,
@@ -104,11 +105,7 @@ test.describe("Bracket match frame", function()
   end)
 
   test.after_each(function(context)
-    local root = core.root_panel.root_node
-    if context.view then
-      local node = root:get_node_for_view(context.view)
-      if node then node:remove_view(root, context.view) end
-    end
+    panes.reset_for_tests()
     if context.buffer then
       if context.buffer:is_dirty() then context.buffer:clean() end
       remove_buffer(context.buffer)

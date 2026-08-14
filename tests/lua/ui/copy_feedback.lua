@@ -2,7 +2,8 @@ local core = require "core"
 local command = require "core.command"
 local copy_feedback = require "core.copy_feedback"
 local Buffer = require "core.buffer"
-local TextView = require "core.textview"
+local Editor = require "core.editor"
+local panes = require "core.panes"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -10,7 +11,7 @@ local function make_view(text)
   local buffer = Buffer(nil, nil, true)
   buffer:insert(1, 1, text)
   buffer:clear_undo_redo()
-  local view = TextView(buffer)
+  local view = Editor(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 400, 200
   return view, buffer
@@ -18,6 +19,7 @@ end
 
 test.describe("Copy Feedback Highlight", function()
   test.before_each(function(context)
+    panes.reset_for_tests()
     context.previous_active_view = core.active_view
     context.previous_clipboard = system.get_clipboard()
   end)
@@ -25,20 +27,15 @@ test.describe("Copy Feedback Highlight", function()
   test.after_each(function(context)
     system.set_clipboard(context.previous_clipboard or "")
     if context.view then
-      local root = core.root_panel.root_node
-      local node = root:get_node_for_view(context.view)
-      if node then node:remove_view(root, context.view) end
+      panes.reset_for_tests()
       context.buffer:on_close()
     end
-    if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
   test.it("briefly marks the exact Text View text copied by buffer:copy", function(context)
     local view, buffer = make_view("alpha")
     context.view, context.buffer = view, buffer
-    local node = core.root_panel:get_active_node_default()
-    node:add_view(view)
-    node:set_active_view(view)
+    panes.present(view, { placement = "new", focus = true })
     view:with_selection_state(function()
       buffer:set_selection(1, 2, 1, 5)
     end)

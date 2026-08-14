@@ -254,7 +254,7 @@ local function selected_filetree_directory()
 end
 
 local function prompt(label, options)
-  core.command_view:enter(label, options)
+  core.global_prompt_bar:enter(label, options)
 end
 
 local function prompt_label(path, callback)

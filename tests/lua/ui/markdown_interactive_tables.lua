@@ -12,7 +12,8 @@ local test = require "core.test"
 local worker_pool = require "core.worker_pool"
 
 local function make_view(text, filename)
-  local buffer = Buffer(filename or "interactive-table.md", filename or "interactive-table.md", true)
+  local buffer = Buffer(nil, nil, true)
+  buffer:set_filename(filename or "interactive-table.md", nil)
   buffer:insert(1, 1, text)
   buffer:clear_undo_redo()
   local view = Editor(buffer)

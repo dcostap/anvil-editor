@@ -165,30 +165,3 @@ function EmptyView:draw()
     y = y + line_h
   end
 end
-
-local function patch_existing_node(node)
-  if not node then return end
-  if node.type == "leaf" then
-    for _, view in ipairs(node.views or {}) do
-      if view.is and view:is(EmptyView) then
-        prepare(view)
-      end
-    end
-  else
-    patch_existing_node(node.a)
-    patch_existing_node(node.b)
-  end
-end
-
-local function patch_existing()
-  if core.root_panel and core.root_panel.root_node then
-    patch_existing_node(core.root_panel.root_node)
-    core.redraw = true
-  end
-end
-
-patch_existing()
-core.add_thread(function()
-  coroutine.yield(0)
-  patch_existing()
-end)

@@ -38,8 +38,18 @@ local function wait_until(predicate, timeout)
   return predicate()
 end
 
+local test_buffer_id = 0
 local function make_view(text, filename)
-  local buffer = Buffer(filename or "note.md", filename or "note.md", true)
+  test_buffer_id = test_buffer_id + 1
+  local buffer
+  if filename then
+    local stem, extension = filename:match("^(.*)(%.[^./\\]+)$")
+    local identity = (stem or filename) .. ".anvil-test-" .. test_buffer_id .. (extension or "")
+    buffer = Buffer(filename, identity, true)
+  else
+    buffer = Buffer(nil, nil, true)
+    buffer:set_filename("note.md", nil)
+  end
   buffer:insert(1, 1, text)
   buffer:clear_undo_redo()
   local view = Editor(buffer)
@@ -2234,10 +2244,10 @@ test.describe("Markdown Live Preview", function()
     core.projects = { Project(root) }
     markdown.vault_index.get_index(root):rebuild("ui-link-actions")
     local old_active, old_open_file = core.active_view, core.open_file
-    local old_enter = core.command_view.enter
+    local old_enter = core.global_prompt_bar.enter
     local opened, picker
     core.open_file = function(path) opened = path return {} end
-    core.command_view.enter = function(_, label, opts) picker = { label = label, opts = opts } end
+    core.global_prompt_bar.enter = function(_, label, opts) picker = { label = label, opts = opts } end
     local ok, err = pcall(function()
       local missing_view, missing_buffer = make_view(
         "[[folder/New]]\nplain", root .. PATHSEP .. "notes" .. PATHSEP .. "MissingSource.md"
@@ -2293,7 +2303,7 @@ test.describe("Markdown Live Preview", function()
       test.equal(#filtered, 1)
       test.equal(filtered[1].text, "b/Note.md")
     end)
-    core.command_view.enter = old_enter
+    core.global_prompt_bar.enter = old_enter
     core.open_file, core.active_view = old_open_file, old_active
     core.projects = old_projects
     common.rm(root, true)
@@ -2311,9 +2321,9 @@ test.describe("Markdown Live Preview", function()
     write(ref_path, "[[Old]]\n")
     local index = markdown.vault_index.get_index(root):rebuild("rename-preview-ui")
     local plan = test.not_nil(index:plan_note_rename(old_path, root .. PATHSEP .. "New.md"))
-    local old_enter, old_show = core.command_view.enter, core.nag_view.show
+    local old_enter, old_show = core.global_prompt_bar.enter, core.nag_view.show
     local picker, confirmation
-    core.command_view.enter = function(_, label, opts) picker = { label = label, opts = opts } end
+    core.global_prompt_bar.enter = function(_, label, opts) picker = { label = label, opts = opts } end
     core.nag_view.show = function(_, title, text, options, callback)
       confirmation = { title = title, text = text, options = options, callback = callback }
     end
@@ -2331,7 +2341,7 @@ test.describe("Markdown Live Preview", function()
       local after = test.not_nil(io.open(ref_path, "rb")); local after_text = after:read("*a"); after:close()
       test.equal(after_text, "[[New]]\n")
     end)
-    core.command_view.enter, core.nag_view.show = old_enter, old_show
+    core.global_prompt_bar.enter, core.nag_view.show = old_enter, old_show
     common.rm(root, true)
     if not ok then error(err, 0) end
   end)
@@ -4686,17 +4696,18 @@ test.describe("Markdown Live Preview", function()
 
   test.it("automatically follows direct Buffer filename and syntax changes", function()
     local view, buffer = make_view("# Title", "note.md")
+    local suffix = tostring(test_buffer_id)
     refresh(view)
     test.equal(view.__markdown_live_attached, true)
 
-    buffer:set_filename("note.txt", "note.txt")
+    buffer:set_filename("note.txt", "note-" .. suffix .. ".txt")
     test.equal(view.__markdown_live_attached, nil)
 
-    buffer:set_filename("note.md", "note.md")
+    buffer:set_filename("note.md", "note-" .. suffix .. ".md")
     test.equal(view.__markdown_live_attached, true)
 
     view.__markdown_live_image_cache = { ["image.png"] = { path = "old/image.png" } }
-    buffer:set_filename("moved/note.md", "moved/note.md")
+    buffer:set_filename("moved/note.md", "moved/note-" .. suffix .. ".md")
     test.equal(view.__markdown_live_attached, true)
     test.equal(view.__markdown_live_image_cache, nil)
   end)
