@@ -92,7 +92,7 @@ local function update_state(line_limit)
   line_limit = line_limit or math.huge
 
   -- reset if we don't have a buffer (eg. TextView isn't focused)
-  local buffer = core.active_view.buffer
+  local buffer = core.active_view and core.active_view.buffer
   if not buffer then
     state = {}
     return

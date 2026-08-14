@@ -79,6 +79,7 @@ fi
 
 cd "$workdir"
 export SDL_VIDEO_DRIVER="${SDL_VIDEO_DRIVER:-dummy}"
+export ANVIL_HEADLESS_TEST=1
 export ANVIL_USERDIR="$userdir"
 if [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "mingw"* || "$OSTYPE" == "cygwin"* ]]; then
   export USERPROFILE="$userdir"

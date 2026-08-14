@@ -178,7 +178,7 @@ test.describe("Fuzzy Searcher preview", function()
 
     test.ok(command.perform("fuzzy-searcher:focus-selected-in-tree"), "expected focus command to run")
 
-    local filetree = require "plugins.filetree"
+    local filetree = assert(require("plugins.filetree").new())
     local line = filetree.buffer:get_selection()
     local entry = filetree:entry_for_line(line)
     test.is_nil(core.fuzzy_searcher_active_view, "expected picker to close after focusing its relevant file")

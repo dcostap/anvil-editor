@@ -185,6 +185,27 @@ function TerminalView:get_name()
   return title and title ~= "" and title or "Terminal"
 end
 
+function TerminalView:get_cwd()
+  return terminal_pwd(self.snapshot) or self.launch_options.cwd
+end
+
+function TerminalView:get_state()
+  return {
+    cwd = self:get_cwd(),
+    shell = self.launch_options.shell,
+  }
+end
+
+function TerminalView.from_state(state)
+  if type(state) ~= "table" then return nil end
+  local ok, view = pcall(TerminalView, { cwd = state.cwd, shell = state.shell })
+  return ok and view or nil
+end
+
+function TerminalView:can_discard_from_history()
+  return self.session == nil
+end
+
 function TerminalView:create_session()
   local native, load_error = terminal_native()
   if not native then return false, load_error end
@@ -346,6 +367,22 @@ function TerminalView:update()
       perf_detail("terminal_snapshot_ms", (system.get_time() - snapshot_started) * 1000)
       perf_detail("terminal_snapshot_calls", 1)
     end
+    core.redraw = true
+  end
+end
+
+function TerminalView:update_suspended()
+  if not self.session then return end
+  local changed, running, status = self.session:update()
+  self.running = running ~= false
+  self.exit_code = status and status.exit_code or self.exit_code
+  if status and status.error and status.error ~= self.reported_error then
+    self.reported_error = status.error
+    core.error(status.error)
+  end
+  if changed or status then
+    self.snapshot = self.session:snapshot(self.snapshot)
+    self:handle_events()
     core.redraw = true
   end
 end
@@ -799,21 +836,30 @@ function TerminalView:on_mouse_wheel(delta_y)
   return false
 end
 
-function TerminalView:try_close(do_close)
+function TerminalView:can_close(approve)
+  approve()
+end
+
+function TerminalView:on_close()
   self.pending_clipboard = nil
   if self.session then
     self.session:close()
     self.session = nil
     core.log_quiet("Terminal View closed")
   end
-  do_close()
+  TerminalView.super.on_close(self)
 end
 
 function M.open(options)
-  local ok, view = core.try(TerminalView, options)
-  if not ok or not view then return nil end
-  panes.open_view(view, { pane = "right", focus = true })
-  return view
+  options = options or {}
+  return panes.place(function() return TerminalView(options) end, {
+    pane = options.pane,
+    placement = options.placement or "current",
+    direction = options.direction,
+    focus = options.focus,
+    preserve_focus = options.preserve_focus,
+    reason = options.reason or "terminal-open",
+  })
 end
 
 function M.open_views()
@@ -830,6 +876,8 @@ function M._set_native_for_tests(native)
 end
 
 M.TerminalView = TerminalView
+M.from_state = TerminalView.from_state
+TerminalView._module_name = "plugins.terminal"
 
 command.add(nil, {
   ["terminal:open"] = function() return M.open() ~= nil end,

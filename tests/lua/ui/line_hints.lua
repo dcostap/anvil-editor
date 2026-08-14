@@ -99,7 +99,7 @@ test.describe("File Tree Line Hints", function()
 
     write_file(temp_root .. PATHSEP .. "file.bin", string.rep("x", 23 * 1024))
 
-    local filetree = require "plugins.filetree"
+    local filetree = assert(require("plugins.filetree").new())
     context.filetree = filetree
     context.filetree_previous_dir = filetree.current_dir
     filetree.current_dir = temp_root
@@ -156,7 +156,7 @@ test.describe("File Tree Line Hints", function()
   end)
 
   test.it("shows a fixed prose age without the modified date", function(context)
-    local filetree = require "plugins.filetree"
+    local filetree = assert(require("plugins.filetree").new())
     context.saved_line_hint_state = {
       filetree = filetree,
       line_hint_cache = filetree.line_hint_cache,

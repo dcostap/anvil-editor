@@ -1455,7 +1455,7 @@ function update_suggestions()
 end
 
 local function get_active_view()
-  if core.active_view:extends(Editor) then
+  if core.active_view and core.active_view:extends(Editor) then
     return core.active_view
   end
 end

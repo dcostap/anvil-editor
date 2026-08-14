@@ -532,11 +532,11 @@ local function ensure_parent_directory_exists(abs)
   return true
 end
 
-local function create_directory_path(normalized, abs)
+local function create_directory_path(normalized, abs, source_view)
   local ok, existed = ensure_directory_exists(abs, normalized)
   if not ok then return end
 
-  command.perform("filetree:sync-path", abs)
+  command.perform("filetree:sync-path", abs, source_view)
   if existed then
     core.log("Folder already exists \"%s\"", normalized)
   else
@@ -544,7 +544,7 @@ local function create_directory_path(normalized, abs)
   end
 end
 
-local function create_empty_file(text)
+local function create_empty_file(text, source_view)
   local trimmed = trim_path_input(text)
   if trimmed == "" then return end
 
@@ -554,7 +554,7 @@ local function create_empty_file(text)
   local abs = core.project_absolute_path(normalized)
 
   if is_directory then
-    create_directory_path(normalized, abs)
+    create_directory_path(normalized, abs, source_view)
     return
   end
 
@@ -564,7 +564,7 @@ local function create_empty_file(text)
   core.root_panel:open_buffer(buffer)
   local ok, err = pcall(buffer.save, buffer, normalized, abs)
   if ok then
-    command.perform("filetree:sync-path", abs)
+    command.perform("filetree:sync-path", abs, source_view)
     core.log("Created \"%s\"", normalized)
   else
     core.error(err)
@@ -578,9 +578,11 @@ command.add(nil, {
   end,
 
   ["user:new-file-with-path"] = function()
+    local panes = require "core.panes"
+    local source_view = panes.owner_for_view(core.active_view) or core.active_view
     core.global_prompt_bar:enter("New File or Folder", {
       text = default_new_file_text(),
-      submit = create_empty_file,
+      submit = function(text) create_empty_file(text, source_view) end,
       suggest = function(text)
         return common.home_encode_list(common.path_suggest(common.home_expand(common.sanitize_prompt_path(text))))
       end,

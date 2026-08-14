@@ -78,7 +78,7 @@ local function setup_project_paths(context)
     },
   }
 
-  local filetree = require "plugins.filetree"
+  local filetree = assert(require("plugins.filetree").new())
   context.filetree = filetree
   context.previous_dir = filetree.current_dir
   filetree.current_dir = context.root
@@ -151,6 +151,7 @@ test.describe("File Tree Project Path Roles", function()
   test.it("focuses a Fuzzy Searcher result from an External Project Directory", function(context)
     local filetree = setup_project_paths(context)
     local path = join_path(context.external, "java", "lang", "String.java")
+    core.set_active_view(filetree)
     fuzzy_searcher.open_static_results("External results", {
       { kind = "file", label = path, file = path },
     })

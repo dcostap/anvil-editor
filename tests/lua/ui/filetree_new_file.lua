@@ -1,6 +1,7 @@
 local common = require "core.common"
 local core = require "core"
 local command = require "core.command"
+local panes = require "core.panes"
 local test = require "core.test"
 
 require "plugins.untitled_tabs"
@@ -24,18 +25,16 @@ local function find_filetree_line(view, wanted)
 end
 
 local function remove_buffer(buffer)
-  local root = core.root_panel.root_node
-  for _, view in ipairs(core.get_views_referencing_buffer(buffer)) do
-    local node = root:get_node_for_view(view)
-    if node then node:remove_view(root, view) end
-  end
-  for i = #core.buffers, 1, -1 do
-    if core.buffers[i] == buffer then
-      table.remove(core.buffers, i)
-      buffer:on_close()
-      return
+  for i = #panes.ordered(), 1, -1 do
+    local pane = panes.ordered()[i]
+    for _, view in ipairs(panes.history_views(pane)) do
+      if view.buffer == buffer then
+        panes.close(pane, { force = true })
+        break
+      end
     end
   end
+  if core.buffer_registry then core.buffer_registry:remove(buffer, true) end
 end
 
 local function setup_tree(context)
@@ -53,7 +52,7 @@ local function setup_tree(context)
   test.ok(common.mkdirp(paths.folder))
   write_file(paths.file, "sibling")
 
-  local filetree = require "plugins.filetree"
+  local filetree = assert(require("plugins.filetree").new())
   context.filetree = filetree
   context.previous_dir = filetree.current_dir
   filetree.current_dir = temp_root

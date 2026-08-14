@@ -1,9 +1,12 @@
 local command = require "core.command"
 local core = require "core"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local keymap = require "core.keymap"
 local panes = require "core.panes"
 local style = require "core.style"
 local test = require "core.test"
+local View = require "core.view"
 
 local terminal = require "plugins.terminal"
 
@@ -51,7 +54,12 @@ local function fake_native()
       searches = {},
       closed = false,
     }
-    function session:update() return false, true end
+    function session:update()
+      self.update_calls = (self.update_calls or 0) + 1
+      local changed = self.next_changed or false
+      self.next_changed = false
+      return changed, not self.closed
+    end
     function session:snapshot()
       return {
         rows = {},
@@ -122,6 +130,7 @@ end
 
 test.describe("Terminal View", function()
   test.before_each(function(context)
+    panes.reset_for_tests()
     context.previous_active_view = core.active_view
     context.native, context.sessions = fake_native()
     terminal._set_native_for_tests(context.native)
@@ -129,21 +138,70 @@ test.describe("Terminal View", function()
 
   test.after_each(function(context)
     for _, view in ipairs(terminal.open_views()) do
-      view:try_close(function()
-        panes.remove_view(view, { force = true, focus_left = false })
-      end)
+      local pane = panes.pane_for_view(view)
+      if pane then panes.close(pane, { force = true }) else view:on_close() end
     end
+    panes.reset_for_tests()
     terminal._set_native_for_tests(nil)
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
-  test.it("opens and focuses a Terminal View in the Right Pane", function(context)
+  test.it("opens and focuses a Terminal View in Pane 1", function(context)
     test.ok(command.perform("terminal:open"))
 
     local view = core.active_view
     test.ok(view and view.terminal_view)
-    test.equal(panes.pane_for_view(view), "right")
+    test.equal(panes.pane_for_view(view), panes.active())
+    test.equal(panes.number(panes.active()), 1)
     test.equal(#context.sessions, 1)
+  end)
+
+  test.it("suspends an Editor and restores the exact terminal session", function(context)
+    local pane = panes.create { factory = function() return Editor(Buffer(nil, nil, true)) end }
+    pane.current_view.buffer:set_filename("saved.lua", "C:/saved.lua")
+    local editor = pane.current_view
+    local view = terminal.open { pane = pane }
+    local session = view.session
+    test.equal(pane.current_view, view)
+    test.equal(panes.back(pane), editor)
+    test.not_ok(session.closed)
+    test.equal(panes.forward(pane), view)
+    test.equal(view.session, session)
+  end)
+
+  test.it("services a terminal while its Pane Group is hidden", function(context)
+    local view = terminal.open()
+    local session = view.session
+    panes.create { factory = function() return View() end }
+    local before = session.update_calls or 0
+    core.root_panel:update()
+    test.ok((session.update_calls or 0) > before)
+    test.not_ok(session.closed)
+  end)
+
+  test.it("closes all retained terminal sessions only when Pane close commits", function(context)
+    local first = terminal.open()
+    local pane = panes.active()
+    local second = terminal.open { pane = pane }
+    local first_session, second_session = first.session, second.session
+    test.not_ok(first_session.closed)
+    test.not_ok(second_session.closed)
+    test.ok(panes.close(pane, { force = true }))
+    test.ok(first_session.closed)
+    test.ok(second_session.closed)
+  end)
+
+  test.it("restores Workspace launch state as a new shell session", function(context)
+    local view = terminal.open { cwd = "C:/workspace", shell = "pwsh.exe" }
+    local first_session = view.session
+    local state = view:get_state()
+    panes.close(panes.active(), { force = true })
+    local restored = terminal.from_state(state)
+    test.not_nil(restored)
+    test.not_equal(restored.session, first_session)
+    test.equal(restored.launch_options.cwd, "C:/workspace")
+    test.equal(restored.launch_options.shell, "pwsh.exe")
+    restored:on_close()
   end)
 
   test.it("uses the exact font advance for terminal cells", function()

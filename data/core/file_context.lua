@@ -39,35 +39,59 @@ function M.active_file_path()
   return M.view_file_path(core.active_view)
 end
 
-function M.left_pane_file_view()
+local function current_pane_view()
   local panes = core.panes or package.loaded["core.panes"]
-  local view = panes and panes.selected_view("left")
-  if M.is_file_view(view) then return view end
-end
-
-function M.left_pane_file_path()
-  return M.view_file_path(M.left_pane_file_view())
+  local pane = panes and panes.active()
+  return pane and pane.current_view or nil
 end
 
 function M.current_file_path(fallback_view)
-  return M.active_file_path() or M.left_pane_file_path() or M.view_file_path(fallback_view)
+  return M.active_file_path() or M.view_file_path(current_pane_view()) or M.view_file_path(fallback_view)
 end
 
 function M.current_file_view(fallback_view)
   if M.is_file_view(core.active_view) then return core.active_view end
-  return M.left_pane_file_view() or (M.is_file_view(fallback_view) and fallback_view or nil)
+  local pane_view = current_pane_view()
+  return M.is_file_view(pane_view) and pane_view
+    or (M.is_file_view(fallback_view) and fallback_view or nil)
 end
 
-function M.selected_left_content_view()
+function M.source_directory(view)
   local panes = core.panes or package.loaded["core.panes"]
-  local view = panes and panes.selected_view("left")
-  if M.is_content_view(view) then return view end
+  view = panes and panes.owner_for_view(view or core.active_view) or view or core.active_view
+  if view then
+    if view.get_cwd then
+      local cwd = view:get_cwd()
+      if cwd and cwd ~= "" then return common.normalize_path(cwd) end
+    end
+    if type(view.cwd) == "string" and view.cwd ~= "" then
+      return common.normalize_path(view.cwd)
+    end
+    if type(view.current_dir) == "string" and view.current_dir ~= "" then
+      return common.normalize_path(view.current_dir)
+    end
+    local path = M.view_file_path(view)
+    if path then return common.dirname(path) end
+  end
+  local project = core.root_project and core.root_project()
+  return project and project.path or nil
+end
+
+function M.resolve_path(path, view)
+  local base = M.source_directory(view)
+  if path == nil or path == "" or path == "." then return base end
+  path = common.home_expand(path)
+  if common.is_absolute_path and common.is_absolute_path(path) then
+    return common.normalize_path(path)
+  end
+  return common.normalize_path((base and (base .. PATHSEP) or "") .. path)
 end
 
 function M.current_content_view(fallback_view)
   if M.is_content_view(core.active_view) then return core.active_view end
   if M.is_content_view(fallback_view) then return fallback_view end
-  return M.selected_left_content_view()
+  local view = current_pane_view()
+  return M.is_content_view(view) and view or nil
 end
 
 function M.mark_visited(view)

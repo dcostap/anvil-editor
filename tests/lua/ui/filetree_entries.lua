@@ -3,7 +3,7 @@ local core = require "core"
 local command = require "core.command"
 local panes = require "core.panes"
 local test = require "core.test"
-local filetree = require "plugins.filetree"
+local filetree = assert(require("plugins.filetree").new())
 local project_paths = require "core.project_paths"
 
 local function write_file(path, text)
@@ -105,27 +105,27 @@ test.describe("File Tree entry snapshots", function()
     filetree.buffer:set_selection(entry.line, 1)
     core.set_active_view(filetree)
     local opened
-    local original_open_path = panes.open_path
-    panes.open_path = function(path, opts)
+    local original_open_file = core.open_file
+    core.open_file = function(path, opts)
       opened = { path = path, opts = opts }
       return {}
     end
     local ok, result = pcall(command.perform, "poi:activate")
-    panes.open_path = original_open_path
+    core.open_file = original_open_file
     if not ok then error(result, 0) end
 
     test.ok(result)
     test.ok(common.path_equals(opened.path, root .. PATHSEP .. "root.txt"))
-    test.equal(opened.opts.pane, "left")
+    test.equal(opened.opts.placement, "current")
 
-    panes.open_path = function(path, opts)
+    core.open_file = function(path, opts)
       opened = { path = path, opts = opts }
       return {}
     end
     ok, result = pcall(command.perform, "poi:activate-right")
-    panes.open_path = original_open_path
+    core.open_file = original_open_file
     if not ok then error(result, 0) end
     test.ok(result)
-    test.equal(opened.opts.pane, "right")
+    test.equal(opened.opts.placement, "split")
   end)
 end)

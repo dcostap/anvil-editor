@@ -77,7 +77,7 @@ local function setup_tree(context)
   overrides[common.normalize_path(paths.new_file)] = 40
   patch_modified_times(context, overrides)
 
-  local filetree = require "plugins.filetree"
+  local filetree = assert(require("plugins.filetree").new())
   context.filetree = filetree
   context.previous_dir = filetree.current_dir
   context.previous_sort_mode = filetree:get_sort_mode()
@@ -86,6 +86,7 @@ local function setup_tree(context)
   filetree:refresh(false, false)
   filetree:set_sort_mode("name")
   filetree:refresh(false, false)
+  core.set_active_view(filetree)
   return filetree, paths
 end
 

@@ -263,7 +263,20 @@ end
 function RootPanel:update()
   self:update_app_overlay()
   self:update_layout()
-  for _, view in ipairs(self:pane_views()) do call_view(view, "update") end
+  local current = {}
+  for _, view in ipairs(self:pane_views()) do
+    current[view] = true
+    call_view(view, "update")
+  end
+  local serviced = {}
+  for _, pane in ipairs(panes().ordered()) do
+    for _, view in ipairs(panes().history_views(pane)) do
+      if not current[view] and not serviced[view] and view.update_suspended then
+        serviced[view] = true
+        call_view(view, "update_suspended")
+      end
+    end
+  end
   self.overlapping_view = self:view_at(self.mouse.x, self.mouse.y)
 end
 

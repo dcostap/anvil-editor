@@ -1,6 +1,6 @@
 local core = require "core"
 local test = require "core.test"
-local filetree = require "plugins.filetree"
+local filetree = assert(require("plugins.filetree").new())
 
 local function set_filetree_lines(lines)
   filetree.buffer.lines = {}
