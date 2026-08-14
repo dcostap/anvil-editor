@@ -5,6 +5,7 @@ local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local markdown_live = require "core.markdown.live_render"
 local test = require "core.test"
+local panes = require "core.panes"
 
 require "plugins.selection_surround"
 
@@ -22,8 +23,10 @@ end
 local buffer_id = 0
 local function new_view(context, text, filename)
   buffer_id = buffer_id + 1
-  local stem, extension = filename and filename:match("^(.*)(%.[^./\\]+)$")
-  local identity = filename and ((stem or filename) .. ".anvil-test-" .. buffer_id .. (extension or ""))
+  local stem, extension
+  if filename then stem, extension = filename:match("^(.*)(%.[^./\\]+)$") end
+  local identity = filename and ((stem or filename) .. ".selection-surround-"
+    .. system.get_process_id() .. "-" .. buffer_id .. (extension or ""))
   local buffer = filename and Buffer(filename, identity, true) or Buffer()
   set_text(buffer, text)
   local view = Editor(buffer)
@@ -49,6 +52,7 @@ end
 
 test.describe("Selection surrounding", function()
   test.before_each(function(context)
+    panes.reset_for_tests()
     context.buffers = {}
     context.previous_active_view = core.active_view
     context.previous_tab_type = config.tab_type
@@ -58,9 +62,9 @@ test.describe("Selection surrounding", function()
   end)
 
   test.after_each(function(context)
+    panes.reset_for_tests()
     config.tab_type = context.previous_tab_type
     config.indent_size = context.previous_indent_size
-    if context.previous_active_view then core.set_active_view(context.previous_active_view) end
     for _, buffer in ipairs(context.buffers) do buffer:on_close() end
   end)
 
@@ -201,7 +205,7 @@ test.describe("Selection surrounding", function()
 
   test.it("surrounds selected Markdown in Live Preview and Source Mode", function(context)
     local view, buffer = new_view(context, "alpha beta", "note.md")
-    core.set_active_view(view)
+    panes.present(view, { placement = "new", focus = true })
     markdown_live.set_source_mode(view, false, "selection-surround-test")
     buffer:set_selection(1, 1, 1, 6)
 

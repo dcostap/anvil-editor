@@ -278,13 +278,9 @@ function RootPanel:update()
     current[view] = true
     call_view(view, "update")
   end
-  local serviced = {}
-  for _, pane in ipairs(panes().ordered()) do
-    for _, view in ipairs(panes().history_views(pane)) do
-      if not current[view] and not serviced[view] and view.update_suspended then
-        serviced[view] = true
-        call_view(view, "update_suspended")
-      end
+  for view in pairs(panes().suspended_services) do
+    if not current[view] then
+      call_view(view, "update_suspended")
     end
   end
   self.overlapping_view = self:view_at(self.mouse.x, self.mouse.y)

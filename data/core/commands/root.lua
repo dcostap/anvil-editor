@@ -9,10 +9,10 @@ local function active_pane()
 end
 
 local commands = {
-  ["root:close"] = function(pane) return panes.close(pane) end,
+  ["pane:close"] = function(pane) return panes.close(pane) end,
   ["view:close"] = function(pane) return panes.close_view(pane) end,
-  ["root:close-all"] = function() return panes.close_all() end,
-  ["root:close-all-others"] = function(pane)
+  ["pane:close-all"] = function() return panes.close_all() end,
+  ["pane:close-all-others"] = function(pane)
     local result = true
     for index = #panes.ordered(), 1, -1 do
       local candidate = panes.ordered()[index]
@@ -20,32 +20,32 @@ local commands = {
     end
     return result
   end,
-  ["root:move-tab-left"] = function(pane)
+  ["pane:move-left"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index > 1 then return panes.move(pane, ordered[index - 1], "left") end
   end,
-  ["root:move-tab-right"] = function(pane)
+  ["pane:move-right"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index < #ordered then return panes.move(pane, ordered[index + 1], "right") end
   end,
-  ["root:switch-to-previous-tab"] = function(pane)
+  ["pane:focus-previous"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if #ordered > 0 then return panes.focus_index((index - 2) % #ordered + 1) end
   end,
-  ["root:switch-to-next-tab"] = function(pane)
+  ["pane:focus-next"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if #ordered > 0 then return panes.focus_index(index % #ordered + 1) end
   end,
 }
 
 for _, direction in ipairs { "left", "right", "up", "down" } do
-  commands["root:switch-to-" .. direction] = function()
+  commands["pane:focus-" .. direction] = function()
     return panes.focus_direction(direction)
   end
 end
 
 for index = 1, 9 do
-  commands["root:switch-to-tab-" .. index] = function()
+  commands["pane:focus-" .. index] = function()
     return panes.focus_index(index)
   end
 end
@@ -53,7 +53,7 @@ end
 command.add(active_pane, commands)
 
 command.add(nil, {
-  ["root:close-or-quit"] = function()
+  ["pane:close-or-quit"] = function()
     local pane = panes.active()
     if pane then return panes.close(pane) end
     return core.quit()

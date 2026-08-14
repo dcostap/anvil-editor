@@ -3408,14 +3408,7 @@ local function show_filetree(target)
 end
 
 command.add(nil, {
-  ["filetree:toggle"] = function()
-    if active_filetree() and panes.is_back_available() then panes.back() else show_filetree() end
-  end,
   ["filetree:focus"] = function() show_filetree() end,
-  ["filetree:focus-editor-and-hide"] = function()
-    if active_filetree() then panes.back() end
-  end,
-  ["filetree:focus-and-show"] = function() show_filetree() end,
   ["filetree:focus-current-file"] = function()
     show_filetree(file_context.current_file_path())
   end,
@@ -3456,8 +3449,7 @@ end, {
 })
 
 keymap.add {
-  ["ctrl+\\"] = "filetree:toggle",
-  ["alt+2"] = "filetree:focus-and-show",
+  ["ctrl+\\"] = "filetree:focus",
   ["ctrl+s"] = "filetree:apply",
   ["f5"] = "filetree:refresh",
   ["alt+home"] = "filetree:project-root",

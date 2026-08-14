@@ -42,6 +42,8 @@ test.describe("TextView owned features", function()
 
   test.it("releases view-local feature ownership before confirmed close", function()
     local buffer = Buffer("owned-feature.txt", "owned-feature.txt", true)
+    buffer:clean()
+    buffer.new_file = false
     local view = TextView(buffer)
     local released, closed = false, false
     view:add_owned_feature("test", {

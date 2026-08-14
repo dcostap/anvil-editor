@@ -4,6 +4,9 @@ local pane_layout = require "core.pane_layout"
 local RootPanel = require "core.rootpanel"
 local View = require "core.view"
 local test = require "core.test"
+local autocomplete = require "plugins.autocomplete"
+local command = require "core.command"
+local Widget = require "widget"
 
 local FakeView = View:extend()
 
@@ -41,6 +44,9 @@ test.describe("Root Panel Pane presentation", function()
   local root
 
   test.before_each(function()
+    autocomplete.close()
+    Widget.destroy_floating_widgets()
+    if command.is_valid("root:pick-color-cancel") then command.perform("root:pick-color-cancel") end
     panes.reset_for_tests()
     saved = {
       root_panel = core.root_panel,
@@ -51,12 +57,14 @@ test.describe("Root Panel Pane presentation", function()
       active_view = core.active_view,
       set_active_view = core.set_active_view,
       draw_rect = renderer.draw_rect,
+      app_overlay = core.app_overlay,
     }
     core.title_bar = FakeView("title", 10)
     core.nag_view = FakeView("nag", 5)
     core.nag_view.show_height = 5
     core.global_prompt_bar = FakeView("prompt", 7)
     core.status_bar = FakeView("status", 8)
+    core.app_overlay = nil
     root = RootPanel()
     root.size.x, root.size.y = 300, 200
     core.root_panel = root
@@ -65,6 +73,7 @@ test.describe("Root Panel Pane presentation", function()
   end)
 
   test.after_each(function()
+    autocomplete.close()
     panes.reset_for_tests()
     renderer.draw_rect = saved.draw_rect
     saved.draw_rect = nil
@@ -108,10 +117,12 @@ test.describe("Root Panel Pane presentation", function()
     local one = panes.create { factory = pane_factory("one") }
     local two = panes.split(one, "right", { factory = pane_factory("two") })
     root:update()
-    root:on_mouse_pressed("left", 20, 80, 1)
+    local one_rect = pane_layout.find(one.group.root, one).rect
+    local two_rect = pane_layout.find(two.group.root, two).rect
+    root:on_mouse_pressed("left", one_rect.x + one_rect.w / 2, one_rect.y + one_rect.h / 2, 1)
     test.equal(one.current_view.presses, 1)
     test.equal(panes.active(), one)
-    root:on_mouse_pressed("left", 250, 80, 1)
+    root:on_mouse_pressed("left", two_rect.x + two_rect.w / 2, two_rect.y + two_rect.h / 2, 1)
     test.equal(two.current_view.presses, 1)
     test.equal(panes.active(), two)
   end)

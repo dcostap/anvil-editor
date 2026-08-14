@@ -60,6 +60,7 @@ local function tag_buffer(buffer, name, id)
   if not buffer or buffer.filename then return buffer end
   buffer.intellij_untitled = true
   buffer.intellij_untitled_name = name or buffer.intellij_untitled_name or next_untitled_name()
+  buffer.display_name = buffer.intellij_untitled_name
   ensure_untitled_id(buffer, id)
   untitled_recovery.ensure_buffer_backing(buffer, { no_manifest = true })
   return buffer
@@ -264,6 +265,7 @@ if not core.__untitled_tabs_patched then
       untitled_recovery.handle_save_as_success(self, old_untitled)
       self.intellij_untitled = nil
       self.intellij_untitled_name = nil
+      self.display_name = nil
       self.intellij_untitled_id = nil
       self.intellij_untitled_backing_path = nil
       self.intellij_untitled_backing_rel = nil

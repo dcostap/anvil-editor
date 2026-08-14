@@ -38,7 +38,9 @@ test.describe("Current Editor command routing", function()
   end)
 
   test.it("does not route text editing to a suspended Editor", function()
-    local pane = panes.create { factory = editor_factory() }
+    local source = Buffer()
+    source:set_filename("suspended.txt", "suspended.txt")
+    local pane = panes.create { factory = function() return Editor(source) end }
     local suspended = pane.current_view
     local current = Editor(Buffer())
     panes.present(current, { pane = pane })

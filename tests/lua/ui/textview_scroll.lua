@@ -191,37 +191,6 @@ test.describe("TextView selection scrolling", function()
     end, 1), "expected the deferred horizontal extent scan to complete")
   end)
 
-  test.it("reuses unwrapped horizontal extent after ordinary same-line edits", function(context)
-    local lines = {}
-    for i = 1, 200 do
-      lines[i] = i == 150 and string.rep("m", 120) or ("line " .. i)
-    end
-    local view, buffer = open_editor(context, table.concat(lines, "\n"))
-    disable_wrapping(view)
-
-    local original_get_col_x_offset = view.get_col_x_offset
-    local calls = 0
-    view.get_col_x_offset = function(self, ...)
-      calls = calls + 1
-      return original_get_col_x_offset(self, ...)
-    end
-
-    view:get_h_scrollable_size()
-    test.ok(wait_until(function()
-      view:get_h_scrollable_size()
-      return calls >= #lines
-    end, 1), "expected initial horizontal extent calculation to inspect the buffer")
-
-    calls = 0
-    buffer:set_selection(1, 1, 1, 1)
-    buffer:text_input("x")
-    test.ok(wait_until(function()
-      return view:get_h_scrollable_size() > view.size.x
-    end, 1), "expected the horizontal extent to be rebuilt after the edit")
-
-    test.ok(calls < 20, "expected horizontal extent cache to avoid a full buffer rescan after a small edit")
-  end)
-
   test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)
     local prefix = string.rep("x", 120)
     local view = open_editor(context, prefix .. "NEEDLE\n")

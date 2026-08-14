@@ -292,24 +292,6 @@ function core.save_workspace()
   return save_workspace()
 end
 
-local function workspace_is_empty()
-  return panes.count() == 0 and #core.buffers == 0
-end
-
-local function maybe_show_empty_project_file_tree()
-  -- Let workspace restoration, command-line file opening, and autosave recovery
-  -- settle first. If the user focuses anything during this grace period (for
-  -- example the fuzzy searcher), do not steal focus back to the file tree.
-  local initial_active_view = core.active_view
-  coroutine.yield()
-  coroutine.yield()
-  if core.active_view == initial_active_view
-  and workspace_is_empty()
-  and command.is_valid("filetree:focus-and-show") then
-    command.perform("filetree:focus-and-show")
-  end
-end
-
 local function load_workspace()
   core.add_thread(function()
     local function restore_workspace_state()
@@ -340,7 +322,6 @@ local function load_workspace()
     end
 
     restore_workspace_state()
-    maybe_show_empty_project_file_tree()
   end)
 end
 

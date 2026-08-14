@@ -225,27 +225,53 @@ function GitView:get_focus_view()
   return self:pane_view("log-list")
 end
 
+function GitView:get_state()
+  local session = self.git_session or self.git_session
+  return {
+    project_path = self.project and self.project.path,
+    tab_id = self.tab_id,
+    session = session and session.git_model and {
+      kind = "git",
+      hidden = false,
+      model = session.git_model:get_state(),
+    } or nil,
+  }
+end
+
+function GitView.from_state(state)
+  if not (state and state.project_path) then return nil end
+  local project
+  for _, candidate in ipairs(core.projects or {}) do
+    if candidate.path == state.project_path then project = candidate; break end
+  end
+  if not project then return nil end
+  local manager = require "plugins.git_view"
+  local session = manager.restore_state(project, state.session or {}, { focus = false })
+  if not session then return nil end
+  local tab = session.git_model and session.git_model:find_tab(state.tab_id or "log")
+  return tab and manager.ensure_tab_view(session, tab, false) or session.git_view
+end
+
 local function active_leaf_view(node)
   if not node then return nil end
   if node.type == "leaf" then return node.active_view or node.views and node.views[1] end
   return active_leaf_view(node.a) or active_leaf_view(node.b)
 end
 
-function GitView:try_close(callback)
+function GitView:on_close()
   if self.tab_id == "log" then
-    if self.tool_window and not self.tool_window.__pane_session then
-      self.tool_window:hide()
+    if self.git_session and not self.git_session.__pane_session then
+      self.git_session:hide()
       return false
     end
-    if self.tool_window and self.tool_window.__pane_session then
-      local tw = self.tool_window
+    if self.git_session and self.git_session.__pane_session then
+      local tw = self.git_session
       local active_before = core.active_view
       local active_owner_before = active_before and (active_before.git_owner_view or active_before)
       local active_was_session_view = false
       for _, session_view in pairs(tw.git_tab_views or {}) do
         if active_owner_before == session_view then active_was_session_view = true; break end
       end
-      if callback then callback() end
       local function remove_from_node(node, view)
         if not (node and view) then return false end
         if node.type == "leaf" then
@@ -289,20 +315,18 @@ function GitView:try_close(callback)
       end
       return true
     end
-    if callback then callback() end
     return true
   end
   for i, tab in ipairs(self.model.tabs) do
     if tab.id == self.tab_id and tab.closable then
       table.remove(self.model.tabs, i)
-      if self.tool_window and self.tool_window.git_tab_views then
-        self.tool_window.git_tab_views[self.tab_id] = nil
+      if self.git_session and self.git_session.git_tab_views then
+        self.git_session.git_tab_views[self.tab_id] = nil
       end
-      if callback then callback() end
       if self.model.active_tab == self.tab_id then
         local active = core.active_view and (core.active_view.git_owner_view or core.active_view)
         if not (active and active.model == self.model and active.tab_id and self.model:find_tab(active.tab_id)) then
-          active = active_leaf_view(self.tool_window and self.tool_window.root and self.tool_window.root.root_node)
+          active = active_leaf_view(self.git_session and self.git_session.root and self.git_session.root.root_node)
         end
         if active and active.model == self.model and active.tab_id and self.model:find_tab(active.tab_id) then
           self.model.active_tab = active.tab_id
@@ -314,7 +338,6 @@ function GitView:try_close(callback)
       return true
     end
   end
-  if callback then callback() end
   return true
 end
 
@@ -1085,7 +1108,7 @@ function GitView:ensure_diff_view(tab)
   return view
 end
 
-local function with_tool_window_event_window(tw, fn)
+local function with_git_session_event_window(tw, fn)
   local previous_event_window = core.event_window
   local previous_active_window = core.active_window
   local window = tw and tw.window
@@ -1120,7 +1143,7 @@ function GitView:focus_diff_pane(side)
   self.focus_pane = "diff"
   self.focused_diff_buffer_view = focus
   focus.git_owner_view = self
-  return with_tool_window_event_window(self.tool_window, function()
+  return with_git_session_event_window(self.git_session, function()
     core.set_active_view(focus)
     if core.active_view then core.active_view.git_owner_view = self end
     return true
@@ -1140,7 +1163,7 @@ function GitView:focus_pane_view(name)
   self.focused_pane_name = name
   self.focus_pane = "buffer"
   view.git_owner_view = self
-  return with_tool_window_event_window(self.tool_window, function()
+  return with_git_session_event_window(self.git_session, function()
     core.set_active_view(view)
     return true
   end)

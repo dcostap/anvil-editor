@@ -1443,7 +1443,7 @@ test.describe("Text View Selection State edit characterization", function()
       2, 4, 2, 3,
     })
 
-    core.root_panel:on_text_input("X")
+    main:on_text_input("X")
 
     test.equal(text(buffer), "aXcd\nwxXz\n")
     test.same(selection(main), {

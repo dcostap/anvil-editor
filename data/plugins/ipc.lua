@@ -1090,7 +1090,7 @@ end)
 
 ipc:listen_signal("core.tab_drag_received", function()
   IPC.force_draw()
-  command.perform("root:close")
+  command.perform("pane:close")
 end)
 
 

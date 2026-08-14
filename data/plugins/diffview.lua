@@ -1401,15 +1401,17 @@ function DiffView:dispose_owned_buffers(opts)
   end
 end
 
-function DiffView:try_close(do_close)
+function DiffView:can_close(approve)
   prompt_dirty_buffers(self:dirty_confirmation_side_buffers(), function(confirmed)
     if not confirmed then return end
-    return DiffView.super.try_close(self, function(...)
-      self:dispose_integrations()
-      self:dispose_owned_buffers()
-      return do_close(...)
-    end)
+    return DiffView.super.can_close(self, approve)
   end)
+end
+
+function DiffView:on_close()
+  self:dispose_integrations()
+  self:dispose_owned_buffers()
+  return DiffView.super.on_close(self)
 end
 
 local function redraw_thumb(view_scrollbar)

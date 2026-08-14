@@ -11,6 +11,7 @@ local backend = require "plugins.git.backend"
 local historical_buffer = require "plugins.git.historical_buffer"
 local model = require "plugins.git.model"
 local panes = require "core.panes"
+panes.git_sessions = panes.git_sessions or {}
 
 local git_view = {
   backend = backend,
@@ -81,7 +82,7 @@ local function live_git_view(view)
   if not (view and view.model and view.model.log_tab) then return nil end
   if view.tab_id and view.tab_id ~= "log" then
     if not (view.model.find_tab and view.model:find_tab(view.tab_id)) then return nil end
-    local tw = view.tool_window
+    local tw = view.git_session
     if tw and tw.git_tab_views and tw.git_tab_views[view.tab_id] ~= view then return nil end
   end
   return view
@@ -210,6 +211,9 @@ local function activate_git_tab_view(tw, view)
     tw:show()
   end
   local focus = view.get_focus_view and (view:get_focus_view() or view) or view
+  if focus ~= view and panes.pane_for_view(view) then
+    panes.register_focus_target(view, focus)
+  end
   local previous_event_window = core.event_window
   core.event_window = tw.window
   local ok = pcall(core.set_active_view, focus)
@@ -243,7 +247,7 @@ function git_view.ensure_tab_view(tw, tab, focus, target_node)
         core.redraw = true
       end,
     })
-    view.tool_window = tw
+    view.git_session = tw
     function view:on_model_tab_open(opened_tab)
       git_view.ensure_tab_view(tw, opened_tab, true)
     end
@@ -345,7 +349,7 @@ function git_view.open_view(project, opts)
     if opts.state and opts.state.hidden then git_view_opts.defer_refresh = true end
     git_view_opts.tab_id = "log"
     view = GitView(project, git_view_opts)
-    view.tool_window = tw
+    view.git_session = tw
     function view:on_model_tab_open(opened_tab)
       git_view.ensure_tab_view(tw, opened_tab, true)
     end
@@ -403,8 +407,8 @@ end
 local function active_or_open_view()
   local view = active_git_view()
   if view then
-    if view.tool_window then view.tool_window:show() end
-    return view.tool_window, view
+    if view.git_session then view.git_session:show() end
+    return view.git_session, view
   end
   return git_view.open_view(current_project())
 end
@@ -476,7 +480,7 @@ command.add(nil, {
         return
       end
       local tab, err = v.model:open_selected_commit_diff(function() core.redraw = true end)
-      if tab then git_view.ensure_tab_view(v.tool_window, tab, true) end
+      if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
       if not tab and err then core.log_quiet("Git View: open selected commit diff skipped: %s", err.message or err.kind) end
     end
     when_model_ready(view, open_diff)
@@ -486,7 +490,7 @@ command.add(nil, {
     local tw, view = active_or_open_view()
     when_model_ready(view, function(v)
       local tab, err = v.model:open_working_tree_diff(function() core.redraw = true end)
-      if tab then git_view.ensure_tab_view(v.tool_window, tab, true) end
+      if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
       if not tab and err then core.log_quiet("Git View: open working tree diff skipped: %s", err.message or err.kind) end
     end)
   end,
@@ -513,7 +517,7 @@ command.add(nil, {
           v.model.repo = repo
         end
         local tab, tab_err = v.model:open_file_history(repo.relpath, function() core.redraw = true end)
-        if tab then git_view.ensure_tab_view(v.tool_window, tab, true) end
+        if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
         if not tab and tab_err then core.log_quiet("Git View: file history skipped: %s", tab_err.message or tab_err.kind) end
         core.redraw = true
       end)
@@ -554,7 +558,7 @@ command.add(nil, {
         when_model_ready(view, function(v)
           if v.model.repo and not common.path_equals(repo.root, v.model.repo.root) then v.model.repo = repo end
           local tab, tab_err = v.model:open_selection_history(repo.relpath, start_line, end_line, function() core.redraw = true end)
-          if tab then git_view.ensure_tab_view(v.tool_window, tab, true) end
+          if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
           if not tab and tab_err then core.log_quiet("Git View: selection history skipped: %s", tab_err.message or tab_err.kind) end
           core.redraw = true
         end)
@@ -618,7 +622,7 @@ end, {
 
 local function close_git_view_tab(view)
   if not view then return end
-  local tw = view.tool_window
+  local tw = view.git_session
   if view.tab_id == "log" and tw then
     local node = active_node(tw)
     local active = node and (node.current_view or node.active_view)

@@ -1497,6 +1497,12 @@ function Widget:destroy()
   end
 end
 
+function Widget.destroy_floating_widgets()
+  while #floating_widgets > 0 do
+    floating_widgets[#floating_widgets]:destroy()
+  end
+end
+
 ---Toggle the forced interception of given event even if all the conditions
 ---for emitting it are not met.
 ---

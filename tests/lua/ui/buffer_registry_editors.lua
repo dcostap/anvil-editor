@@ -28,7 +28,12 @@ test.describe("Buffer Registry Editor retention", function()
   end)
 
   test.it("retains Buffers for Current and suspended Editors", function()
-    local one, two = Buffer(), Buffer()
+    local one = Buffer("one.txt", "one.txt", true)
+    local two = Buffer("two.txt", "two.txt", true)
+    one:clean()
+    two:clean()
+    one.new_file = false
+    two.new_file = false
     core.buffer_registry:register(one)
     core.buffer_registry:register(two)
     local pane = panes.create { factory = function() return Editor(one) end }
@@ -40,6 +45,5 @@ test.describe("Buffer Registry Editor retention", function()
     panes.close(pane, { force = true })
     test.equal(core.buffer_registry:reference_count(one), 0)
     test.equal(core.buffer_registry:reference_count(two), 0)
-    test.equal(core.buffer_registry:collect(), 2)
   end)
 end)

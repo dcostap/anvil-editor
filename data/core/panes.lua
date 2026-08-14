@@ -7,6 +7,7 @@ local M = {
   panes_by_id = {},
   groups_by_id = {},
   focus_owners = setmetatable({}, { __mode = "k" }),
+  suspended_services = setmetatable({}, { __mode = "k" }),
   active_pane = nil,
   visible_group_value = nil,
   next_pane_id = 0,
@@ -59,10 +60,12 @@ local function claim_view(pane, view)
   local existing = M.pane_for_view and M.pane_for_view(view)
   assert(not existing or existing == pane, "View is already owned by another Pane")
   view.__pane_owner = pane
+  if view.update_suspended then M.suspended_services[view] = true end
 end
 
 local function release_view(pane, view)
   if view and view.__pane_owner == pane then view.__pane_owner = nil end
+  if view then M.suspended_services[view] = nil end
   for child, owner in pairs(M.focus_owners) do
     if child == view or owner == view then M.focus_owners[child] = nil end
   end
@@ -524,6 +527,10 @@ function M.present(view, opts)
   if existing and existing ~= pane then
     return nil, "View is owned by another Pane"
   end
+  local current = pane.current_view
+  if current ~= view and current.can_suspend and current:can_suspend() == false then
+    return nil, "Current View requires transactional replacement"
+  end
   if existing == pane then
     for i, entry in ipairs(pane.history.entries) do
       if entry.view == view then
@@ -933,6 +940,7 @@ function M.reset_for_tests()
   M.panes_by_id = {}
   M.groups_by_id = {}
   M.focus_owners = setmetatable({}, { __mode = "k" })
+  M.suspended_services = setmetatable({}, { __mode = "k" })
   M.active_pane = nil
   M.visible_group_value = nil
   M.next_pane_id = 0
