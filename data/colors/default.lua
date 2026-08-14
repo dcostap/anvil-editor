@@ -119,7 +119,9 @@ style.terminal_background = c(C.text_bg)
 style.terminal_cursor = c("ffffff")
 style.terminal_palette = {
   c("1c1e26"), c("e05260"), c("59a577"), c("e9b379"),
-  c("68b0e6"), c("ac88bf"), c("339c9c"), c("bcc9d9"),
+  -- Normal ANSI blue is also a common background. Keep it dark enough
+  -- for the default terminal foreground. Bright blue remains index 12.
+  c("1f4f8f"), c("ac88bf"), c("339c9c"), c("bcc9d9"),
   c("5a6270"), c("f06a75"), c("70bd8b"), c("f2c47e"),
   c("7abcf2"), c("c69ada"), c("55b8b8"), c("f4f7fb"),
 }
