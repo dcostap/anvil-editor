@@ -75,6 +75,8 @@ typedef struct {
   uint16_t rows;
   uint32_t cell_width;
   uint32_t cell_height;
+  GhosttyColorScheme color_scheme;
+  bool color_scheme_known;
   bool closed;
   bool running;
   uint64_t process_exit_seen_ms;
@@ -432,6 +434,16 @@ static bool terminal_size(
   return true;
 }
 
+static bool terminal_color_scheme(
+  GhosttyTerminal terminal, void *userdata, GhosttyColorScheme *out_scheme
+) {
+  (void)terminal;
+  TerminalSession *session = (TerminalSession *)userdata;
+  if (!session || !session->color_scheme_known || !out_scheme) return false;
+  *out_scheme = session->color_scheme;
+  return true;
+}
+
 static GhosttyString terminal_version(GhosttyTerminal terminal, void *userdata) {
   (void)terminal;
   (void)userdata;
@@ -607,6 +619,13 @@ static bool set_terminal_colors(TerminalSession *session, const TerminalColors *
   if (colors->has_background && ghostty_terminal_set(
       session->terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &colors->background
     ) != GHOSTTY_SUCCESS) return false;
+  if (colors->has_background) {
+    unsigned int brightness = 299u * colors->background.r +
+      587u * colors->background.g + 114u * colors->background.b;
+    session->color_scheme = brightness >= 128000u ?
+      GHOSTTY_COLOR_SCHEME_LIGHT : GHOSTTY_COLOR_SCHEME_DARK;
+    session->color_scheme_known = true;
+  }
   if (colors->has_cursor && ghostty_terminal_set(
       session->terminal, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &colors->cursor
     ) != GHOSTTY_SUCCESS) return false;
@@ -649,6 +668,10 @@ static bool initialize_terminal(TerminalSession *session, const TerminalColors *
   );
   ghostty_terminal_set(
     session->terminal, GHOSTTY_TERMINAL_OPT_SIZE, (const void *)terminal_size
+  );
+  ghostty_terminal_set(
+    session->terminal, GHOSTTY_TERMINAL_OPT_COLOR_SCHEME,
+    (const void *)terminal_color_scheme
   );
   ghostty_terminal_set(
     session->terminal, GHOSTTY_TERMINAL_OPT_XTVERSION, (const void *)terminal_version

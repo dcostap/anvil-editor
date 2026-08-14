@@ -63,6 +63,24 @@ test.describe("Native terminal session", function()
     test.ok(found_red, "ANSI red did not use the configured palette")
   end)
 
+  test.it("reports the configured light color scheme", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      foreground = 0x080808,
+      background = 0xffffff,
+      cursor_color = 0x000000,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -File tests/fixtures/terminal_color_scheme_query.ps1]],
+    })
+    test.ok(session, start_error)
+
+    local text = wait_for_text(session, "ANVIL_LIGHT_SCHEME")
+    session:close()
+    test.ok(text:find("ANVIL_LIGHT_SCHEME", 1, true), text)
+  end)
+
   test.it("runs a ConPTY command and parses its VT output", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"

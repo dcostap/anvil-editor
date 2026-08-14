@@ -117,7 +117,7 @@ style.terminal_background = c(C.text_bg)
 style.terminal_cursor = c("000000")
 style.terminal_palette = {
   c("000000"), c("cd3131"), c("008000"), c("949800"),
-  c("0451a5"), c("a626a4"), c("007e8a"), c("555555"),
+  c("547da7"), c("a626a4"), c("007e8a"), c("555555"),
   c("666666"), c("db3b4b"), c("14a614"), c("b5a000"),
   c("3574f0"), c("bc05bc"), c("0598bc"), c("a5a5a5"),
 }
