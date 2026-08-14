@@ -273,6 +273,8 @@ function GlobalPromptBar:enter(label, ...)
   end
 
   self.state = common.merge(default_state, options)
+  self.pane_scope = options.pane_scope
+  self.pane_source_view = options.pane_source_view
 
   -- Retrieve text added with GlobalPromptBar:set_text
   -- and use it if options.text is not given
@@ -283,10 +285,12 @@ function GlobalPromptBar:enter(label, ...)
   end
 
   core.set_active_view(self)
-  core.root_panel:show_app_overlay(self, "global_prompt_bar_overlay_background", {
-    unobscured_view = self,
-    transition_name = "global_prompt_bar",
-  })
+  if not self.pane_scope then
+    core.root_panel:show_app_overlay(self, "global_prompt_bar_overlay_background", {
+      unobscured_view = self,
+      transition_name = "global_prompt_bar",
+    })
+  end
   self:update_suggestions()
   self.gutter_text_brightness = 100
   self.label = label .. ": "
@@ -299,9 +303,15 @@ end
 ---@param inexplicit boolean? True if exit was automatic (e.g., focus lost)
 function GlobalPromptBar:exit(submitted, inexplicit)
   if core.active_view == self then
-    core.set_active_view(core.last_active_view)
+    local pane = self.pane_scope
+    local panes = pane and (core.panes or require "core.panes")
+    if pane and panes.contains(pane) then
+      panes.focus(pane)
+    else
+      core.set_active_view(core.last_active_view)
+    end
   end
-  core.root_panel:hide_app_overlay(self)
+  if not self.pane_scope then core.root_panel:hide_app_overlay(self) end
   local cancel = self.state.cancel
   self.state = default_state
   self.buffer:reset()
@@ -309,6 +319,8 @@ function GlobalPromptBar:exit(submitted, inexplicit)
   if not submitted then cancel(not inexplicit) end
   self.save_suggestion = nil
   self.last_text = ""
+  self.pane_scope = nil
+  self.pane_source_view = nil
 end
 
 

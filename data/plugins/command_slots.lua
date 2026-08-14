@@ -1,5 +1,5 @@
 -- mod-version:3 priority:250
--- Project-scoped PowerShell command slots with read-only Right Pane output.
+-- Project-scoped shell command slots with reusable Command Output Views.
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
@@ -15,6 +15,7 @@ local TextView = require "core.textview"
 local View = require "core.view"
 local file_context = require "core.file_context"
 local panes = require "core.panes"
+local shell = require "core.shell"
 
 local M = core.command_slots or {}
 core.command_slots = M
@@ -35,6 +36,7 @@ local IDLE_WORKER_POLL_SECONDS = 1
 local COMMAND_OUTPUT_PANEL_VERSION = 2
 
 M.slots = M.slots or {}
+M.project_slots = M.project_slots or {}
 M.project_state_cache = M.project_state_cache or {}
 M.token_counter = M.token_counter or 0
 
@@ -245,8 +247,29 @@ end
 
 M.extract_output_location_pois = extract_output_location_pois
 
-local function slot_for_index(index)
-  return M.slots[index]
+local function slots_for_project(project_path)
+  local key = project_path or root_project_path()
+  local slots = M.project_slots[key]
+  if not slots then
+    slots = {}
+    for _, def in ipairs(SLOT_DEFS) do
+      slots[def.index] = {
+        index = def.index,
+        key = def.key,
+        label = def.label,
+        project_path = key,
+        output_history = {},
+        output_history_index = 0,
+      }
+    end
+    M.project_slots[key] = slots
+  end
+  if key == root_project_path() then M.slots = slots end
+  return slots
+end
+
+local function slot_for_index(index, project_path)
+  return slots_for_project(project_path)[index]
 end
 
 local function is_blank(text)
@@ -588,6 +611,24 @@ function CommandOutputView:try_close(do_close)
   do_close()
 end
 
+function CommandOutputView:can_close(approve)
+  approve()
+end
+
+function CommandOutputView:on_close()
+  local slot = self.slot
+  if slot and slot.running then slot.running:cancel() end
+  if slot and slot.view == self then
+    slot.view = nil
+    slot.pane_id = nil
+  end
+  CommandOutputView.super.on_close(self)
+end
+
+function CommandOutputView:can_discard_from_history()
+  return not (self.slot and self.slot.running)
+end
+
 function CommandOutputView:save_displayed_entry_state()
   local entry = self.displayed_entry
   if not entry then return end
@@ -672,7 +713,8 @@ end
 function CommandOutputView:get_points_of_interest(opts)
   local text = self.buffer.output_text or ""
   local key = self:cache_key_for_pois()
-  local root = root_project_path()
+  local entry = self.displayed_entry
+  local root = entry and entry.cwd or root_project_path()
   local cache = self.poi_cache
   if not (cache and cache.key == key and cache.text == text and cache.root == root) then
     cache = {
@@ -713,14 +755,38 @@ function CommandOutputView:activate_point_of_interest(poi, opts)
   opts = opts or {}
   local preserve_focus = opts.preserve_focus
   if preserve_focus == nil then preserve_focus = true end
-  return panes.open_path(poi.path, {
-    pane = opts.pane or "left",
+  local pane = panes.pane_for_view(self)
+  local placement = opts.placement or (opts.pane == "right" and "split" or "current")
+  return core.open_file(poi.path, {
+    pane = pane,
+    placement = placement,
+    direction = placement == "split" and "right" or nil,
     line = poi.target_line or poi.line,
     col = poi.target_col or 1,
-    focus = opts.pane == "right" and true or nil,
+    focus = not preserve_focus,
     preserve_focus = preserve_focus,
-    restore_focus = preserve_focus and core.active_view or nil,
   })
+end
+
+function CommandOutputView:get_navigation_state()
+  return {
+    output_history_index = self.slot and self.slot.output_history_index or nil,
+    selection_state = self:get_selection_state(),
+    scroll = { x = self.scroll.x, y = self.scroll.y },
+  }
+end
+
+function CommandOutputView:set_navigation_state(state)
+  if state and state.output_history_index and self.slot then
+    local index = common.clamp(state.output_history_index, 1, #(self.slot.output_history or {}))
+    self.slot.output_history_index = index
+    self:show_entry(self.slot.output_history[index])
+  end
+  if state and state.selection_state then self:set_selection_state(state.selection_state) end
+  if state and state.scroll then
+    self.scroll.x, self.scroll.to.x = state.scroll.x or 0, state.scroll.x or 0
+    self.scroll.y, self.scroll.to.y = state.scroll.y or 0, state.scroll.y or 0
+  end
 end
 
 function CommandOutputView:draw_poi_underlines(line, x, y)
@@ -1012,9 +1078,26 @@ local function ensure_output_panel()
 end
 
 local function ensure_output_view(slot, focus)
-  local panel = ensure_output_panel()
-  panes.show("right", { view = panel, focus = focus == true })
-  return panel:select_slot(slot.index, { focus = focus == true, follow_end = true })
+  local pane = slot.pane_id and panes.find(slot.pane_id) or nil
+  local view = slot.view
+  if pane and view and panes.pane_for_view(view) == pane then
+    if pane.current_view ~= view then panes.present(view, { pane = pane, focus = focus ~= false }) end
+    return view
+  end
+
+  slot.pane_id = nil
+  if view and not panes.pane_for_view(view) then view:on_close(); view = nil end
+  view = view or CommandOutputView(slot)
+  local placed = panes.place(function() return view end, {
+    placement = "new",
+    focus = focus ~= false,
+    reason = "command-output",
+  })
+  if not placed then return nil end
+  slot.view = placed
+  pane = panes.pane_for_view(placed)
+  slot.pane_id = pane and pane.id or nil
+  return placed
 end
 
 local function strip_ansi(text)
@@ -1098,8 +1181,8 @@ local function finish_run(slot, kind, exit_code, detail)
   local footer
   if kind == "exited" then
     footer = string.format("\n--- exited with code %s in %.1fs ---\n", tostring(exit_code), elapsed)
-  elseif kind == "killed" then
-    footer = string.format("\n--- killed after %.1fs ---\n", elapsed)
+  elseif kind == "cancelled" or kind == "killed" then
+    footer = string.format("\n--- cancelled after %.1fs ---\n", elapsed)
   elseif kind == "start-error" then
     footer = string.format("\n--- could not start PowerShell: %s ---\n", tostring(detail or "unknown error"))
   elseif kind == "write-error" then
@@ -1110,8 +1193,8 @@ local function finish_run(slot, kind, exit_code, detail)
 
   append_to_output(slot, footer, true)
   core.log_quiet(
-    "Command Slot %d: run finished kind=%s exit=%s detail=%s elapsed=%.1fs",
-    slot.index,
+    "Command Output %s: run finished kind=%s exit=%s detail=%s elapsed=%.1fs",
+    tostring(slot.index or "one-time"),
     tostring(kind),
     tostring(exit_code),
     tostring(detail),
@@ -1251,14 +1334,10 @@ end
 function M.kill_slot(index, reason)
   local slot = slot_for_index(index)
   if not slot then return false end
-  local was_running = slot.running
-  if was_running then
-    finish_run(slot, "killed")
-  end
-  slot.run_generation = (slot.run_generation or 0) + 1
-  kill_worker(slot)
-  core.log_quiet("Command Slot %d: killed worker reason=%s", index, tostring(reason or "manual"))
-  return was_running
+  local run = slot.running
+  if not run then return false end
+  core.log_quiet("Command Slot %d: cancelling run reason=%s", index, tostring(reason or "manual"))
+  return run:cancel()
 end
 
 local function next_token(slot)
@@ -1266,95 +1345,75 @@ local function next_token(slot)
   return string.format("%d_%d_%d", slot.index, math.floor(system.get_time() * 1000000), M.token_counter)
 end
 
-local function default_run_command(slot, command_text)
-  local active_before = core.active_view
-  local focus_output = panes.pane_for_view(active_before) == "right"
+local function default_run_command(slot, command_text, opts)
+  opts = opts or {}
+  if slot.running then M.kill_slot(slot.index, "rerun") end
 
-  if slot.running then
-    M.kill_slot(slot.index, "rerun")
-  end
-
-  local cwd = root_project_path()
-  local header = string.format("PS %s> %s\n\n", tostring(cwd or ""), tostring(command_text or ""))
+  local cwd = opts.cwd or root_project_path()
+  local shell_name = opts.shell
+  local powershell = (not shell_name and PLATFORM == "Windows")
+    or shell.kind(shell_name) == "powershell"
+  local marker = powershell and "PS" or "$"
+  local header = string.format("%s %s> %s\n\n", marker, tostring(cwd or ""), tostring(command_text or ""))
   local entry = push_output_entry(slot, command_text, cwd, header)
-  local view = ensure_output_view(slot, focus_output)
-  if view and view.displayed_entry ~= entry then
-    view:show_entry(entry, { follow_end = true })
-  end
+  local view = ensure_output_view(slot, opts.focus)
+  if not view then return nil end
+  view:show_entry(entry, { follow_end = true })
 
-  slot.running = true
-  slot.token = next_token(slot)
-  slot.run_generation = (slot.run_generation or 0) + 1
-  local run_generation = slot.run_generation
-  local run_token = slot.token
   slot.start_time = system.get_time()
-  slot.pending_output = ""
-  -- Prewarmed readers normally sleep for a full second. A command becoming
-  -- active is explicit work, so make its stable slot-keyed reader runnable
-  -- immediately rather than trading idle efficiency for output latency.
-  core.wake_thread(slot)
   slot.output_bytes = 0
   slot.truncated = false
   slot.last_command_text = command_text
   slot.last_cwd = cwd
+  slot.run_generation = (slot.run_generation or 0) + 1
+  local generation = slot.run_generation
+  M.last_slot = slot
+  M.record_history(command_text, opts.project_path)
 
-  M.record_history(command_text, cwd)
-  core.log_quiet("Command Slot %d: running command in %s: %s", slot.index, cwd, command_text)
-
-  core.add_thread(function()
-    local function current_run()
-      return slot.running and slot.run_generation == run_generation and slot.token == run_token
-    end
-
-    if not current_run() then return end
-    local proc, start_err = ensure_worker(slot)
-    if not proc then
-      if current_run() then finish_run(slot, "start-error", nil, start_err) end
-      return
-    end
-
-    if not current_run() then return end
-    local payload = M._build_powershell_payload(command_text, cwd, run_token)
-    local written, write_err = proc.stdin:write(payload)
-    if written and written >= #payload then
-      if current_run() then slot.worker_consumed = true end
-      proc.stdin:close()
-      return
-    end
-
-    if not current_run() then return end
-    core.log_quiet("Command Slot %d: PowerShell write failed; restarting worker: %s", slot.index, tostring(write_err))
-    kill_worker(slot)
-    proc, start_err = ensure_worker(slot)
-    if not proc then
-      if current_run() then finish_run(slot, "start-error", nil, start_err) end
-      return
-    end
-
-    if not current_run() then return end
-    written, write_err = proc.stdin:write(payload)
-    if written and written >= #payload then
-      if current_run() then slot.worker_consumed = true end
-      proc.stdin:close()
-      return
-    end
-
-    if current_run() then
-      finish_run(slot, "write-error", nil, write_err)
-      kill_worker(slot)
-    end
-  end)
-
+  local run
+  run = shell.capture(command_text, {
+    cwd = cwd,
+    shell = shell_name,
+    max_output_bytes = config.plugins.command_slots.max_output_bytes,
+    on_output = function(text)
+      if slot.run_generation ~= generation then return end
+      if config.plugins.command_slots.strip_ansi ~= false then text = strip_ansi(text) end
+      append_output_text(slot, text)
+    end,
+    on_error = function(detail)
+      if slot.run_generation ~= generation then return end
+      finish_run(slot, "start-error", nil, detail.message)
+    end,
+    on_exit = function(result)
+      if slot.run_generation ~= generation then return end
+      if result.truncated then
+        append_output_text(slot, "\n--- output truncated; process output was drained ---\n")
+      end
+      finish_run(slot, result.cancelled and "cancelled" or "exited", result.code)
+    end,
+  })
+  slot.running = run
+  core.log_quiet("Command Output %s: running command in %s: %s", tostring(slot.index or "one-time"), cwd, command_text)
   return view
 end
 
 M._default_run_command = default_run_command
 M._run_command_impl = M._run_command_impl or default_run_command
 
-function M.run_command(index, command_text)
+function M.run_command(index, command_text, opts)
   local slot = slot_for_index(index)
   if not slot or is_blank(command_text) then return nil end
-  return M._run_command_impl(slot, command_text)
+  return M._run_command_impl(slot, command_text, opts)
+end
+
+function M.run_once(command_text, opts)
+  if is_blank(command_text) then return nil end
+  local slot = {
+    label = "Output",
+    output_history = {},
+    output_history_index = 0,
+  }
+  return default_run_command(slot, command_text, opts)
 end
 
 function M.run_slot(index)
@@ -1398,19 +1457,19 @@ end
 local function active_output_slot()
   local view = core.active_view
   if view and view.command_output_view and view.slot then return view.slot end
-  local panel = active_output_panel()
-  return panel and panel:active_slot()
 end
 
 function M.navigate_output_history(delta)
-  local panel = active_output_panel()
-  if not panel then
-    local slot = active_output_slot()
-    panel = slot and slot.view and slot.view.__pane_focus_owner
-  end
-  if panel and panel.switch_history then
-    return panel:switch_history(delta)
-  end
+  local slot = active_output_slot()
+  if not slot or not slot.view or #(slot.output_history or {}) == 0 then return false end
+  local current = slot.output_history_index or #slot.output_history
+  local next_index = common.clamp(current + delta, 1, #slot.output_history)
+  if next_index == current then return false end
+  panes.record_location(panes.pane_for_view(slot.view))
+  slot.view:save_displayed_entry_state()
+  slot.output_history_index = next_index
+  slot.view:show_entry(slot.output_history[next_index])
+  return true
 end
 
 local function install_commands()
@@ -1430,22 +1489,8 @@ local function install_commands()
     return false
   end
   map["command-slots:focus-output"] = function()
-    local panel = ensure_output_panel()
-    panes.show("right", { view = panel, focus = true })
-    local slot = panel:active_slot()
-    if slot then
-      panel:select_slot(slot.index, { focus = true, follow_end = true })
-    end
-  end
-  map["command-slots:switch-next"] = function()
-    local panel = ensure_output_panel()
-    panes.show("right", { view = panel, focus = true })
-    return panel:switch_tab(1)
-  end
-  map["command-slots:switch-previous"] = function()
-    local panel = ensure_output_panel()
-    panes.show("right", { view = panel, focus = true })
-    return panel:switch_tab(-1)
+    local slot = M.last_slot or slot_for_index(1)
+    return slot and ensure_output_view(slot, true) ~= nil
   end
   command.add(nil, map)
 
@@ -1555,62 +1600,28 @@ local function install_readonly_command_guards()
 end
 
 function M.prewarm()
-  if config.plugins.command_slots.prewarm == false then return end
-  core.add_thread(function()
-    coroutine.yield(0.2)
-    for _, def in ipairs(SLOT_DEFS) do
-      local slot = slot_for_index(def.index)
-      if slot then
-        ensure_worker(slot)
-        coroutine.yield(0.05)
-      end
-    end
-  end)
+  core.log_quiet("Command Slots: shell capture prewarming is disabled")
 end
 
 function M._reset_for_tests()
-  if M.output_panel then
-    panes.remove_view(M.output_panel, { force = true, focus_left = false })
-    M.output_panel = nil
+  M.output_panel = nil
+  for _, slots in pairs(M.project_slots) do
+    for _, slot in ipairs(slots) do
+      if slot.running and slot.running.cancel then slot.running:cancel() end
+      if slot.proc then kill_worker(slot) end
+    end
   end
-  for _, slot in ipairs(M.slots) do
-    if slot.proc then kill_worker(slot) end
-    slot.proc = nil
-    slot.worker_consumed = false
-    slot.running = false
-    slot.run_generation = 0
-    slot.token = nil
-    slot.pending_output = ""
-    slot.output_history = {}
-    slot.output_history_index = 0
-    slot.current_output_entry = nil
-    slot.last_command_text = nil
-    slot.last_cwd = nil
-    slot.view = nil
-  end
+  M.project_slots = {}
+  M.slots = slots_for_project()
+  M.last_slot = nil
   M.project_state_cache = {}
   M._run_command_impl = default_run_command
 end
 
-for _, def in ipairs(SLOT_DEFS) do
-  local slot = M.slots[def.index] or {}
-  slot.index = def.index
-  slot.key = def.key
-  slot.label = def.label
-  slot.pending_output = slot.pending_output or ""
-  slot.output_history = slot.output_history or {}
-  slot.output_history_index = slot.output_history_index or #slot.output_history
-  M.slots[def.index] = slot
-end
-
-ensure_output_panel()
+M.slots = slots_for_project()
 
 install_commands()
 install_keymaps()
 install_readonly_command_guards()
-
-if not running_lua_tests() then
-  M.prewarm()
-end
 
 return M

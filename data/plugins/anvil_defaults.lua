@@ -98,9 +98,7 @@ plugin_defaults("command_slots", {
   max_output_bytes = 10 * 1024 * 1024,
   max_output_history = 100,
   max_history = 100,
-  prewarm = true,
   strip_ansi = true,
-  powershell_candidates = { "pwsh.exe", "powershell.exe" },
 })
 plugin_defaults("terminal", {
   shell = nil,

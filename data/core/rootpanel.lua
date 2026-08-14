@@ -241,21 +241,31 @@ function RootPanel:update_layout()
 
   local title_h = title and title.size.y or 0
   local nag_h = nag and (nag.show_height or nag.size.y) or 0
+  local pane_prompt = prompt and prompt.pane_scope and panes().find(prompt.pane_scope)
   local prompt_h = prompt and prompt.size.y or 0
+  local global_prompt_h = pane_prompt and 0 or prompt_h
   local status_h = status and status.size.y or 0
   set_rect(title, x, y, w, title_h)
   set_rect(nag, x, y + title_h, w, nag_h)
   set_rect(status, x, y + h - status_h, w, status_h)
-  set_rect(prompt, x, y + h - status_h - prompt_h, w, prompt_h)
+  if not pane_prompt then set_rect(prompt, x, y + h - status_h - prompt_h, w, prompt_h) end
 
   local content_y = y + title_h + nag_h
-  local content_h = math.max(0, h - title_h - nag_h - prompt_h - status_h)
+  local content_h = math.max(0, h - title_h - nag_h - global_prompt_h - status_h)
   self.content_rect = { x = x, y = content_y, w = w, h = content_h }
   local group = panes().visible_group()
   if group then
     layout.update_rects(group.root, self.content_rect)
     for _, pane in ipairs(layout.leaves(group.root)) do
       set_rect(pane.current_view, pane.position.x, pane.position.y, pane.size.x, pane.size.y)
+    end
+    if pane_prompt and pane_prompt.group == group then
+      local bar_h = math.min(prompt_h, pane_prompt.size.y)
+      set_rect(prompt, pane_prompt.position.x,
+        pane_prompt.position.y + pane_prompt.size.y - bar_h,
+        pane_prompt.size.x, bar_h)
+      set_rect(pane_prompt.current_view, pane_prompt.position.x, pane_prompt.position.y,
+        pane_prompt.size.x, math.max(0, pane_prompt.size.y - bar_h))
     end
   end
 end
