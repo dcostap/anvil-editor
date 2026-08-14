@@ -1,238 +1,68 @@
-local common = require "core.common"
 local core = require "core"
-local Node = require "core.node"
-local test = require "core.test"
+local panes = require "core.panes"
 local TitleBar = require "core.titlebar"
+local View = require "core.view"
+local test = require "core.test"
 
-test.describe("Title Bar", function()
-  test.after_each(function(context)
-    if context.original_root_project then core.root_project = context.original_root_project end
-    if context.original_common_draw_text then common.draw_text = context.original_common_draw_text end
-    if context.original_set_window_hit_test then system.set_window_hit_test = context.original_set_window_hit_test end
+local NamedView = View:extend()
+function NamedView:new(name)
+  NamedView.super.new(self)
+  self.name = name
+end
+function NamedView:get_name() return self.name end
+
+local function factory(name)
+  return function() return NamedView(name) end
+end
+
+test.describe("Global title bar Pane entries", function()
+  local set_active_view
+
+  test.before_each(function()
+    panes.reset_for_tests()
+    set_active_view = core.set_active_view
+    core.set_active_view = function(view) core.active_view = view end
   end)
 
-  test.it("truncates Project title text before native window controls", function(context)
-    context.original_root_project = core.root_project
-    context.original_common_draw_text = common.draw_text
-
-    local project_title = "prefix-abcdefghijklmnopqrstuvwxyz-SUFFIX"
-    core.root_project = function()
-      return { path = "C:" .. PATHSEP .. "tmp" .. PATHSEP .. project_title }
-    end
-
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 420 * SCALE, 32 * SCALE
-
-    local calls = {}
-    common.draw_text = function(font, color, text, align, x, y, w, h)
-      calls[#calls + 1] = { font = font, text = text, align = align, x = x, y = y, w = w, h = h }
-      return x + font:get_width(text), y + font:get_height(), x, y
-    end
-
-    titlebar:draw_window_title()
-
-    test.equal(#calls, 1)
-    local call = calls[1]
-    test.ok(call.font:get_width(project_title) > call.w,
-      "expected test Project title to exceed available width")
-    test.ok(call.font:get_width(call.text) <= call.w, call.text)
-    test.ok(call.text:find("^prefix%-"), call.text)
-    test.ok(call.text:find("…$"), call.text)
-    test.ok(not call.text:find("SUFFIX", 1, true), call.text)
+  test.after_each(function()
+    panes.reset_for_tests()
+    core.set_active_view = set_active_view
   end)
 
-  test.it("keeps Left and Right Pane tab regions separated by one safe zone", function()
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
-
-    local left_node = { views = { {} }, titlebar_tab_offset = 1 }
-    local right_node = { views = { {} }, titlebar_tab_offset = 1 }
-    titlebar.get_tabs_node = function(_, pane)
-      return pane == "left" and left_node or right_node
-    end
-
-    local lx, _, lw = titlebar:get_pane_tabs_rect("left")
-    local rx, _, rw = titlebar:get_pane_tabs_rect("right")
-    local safe_x, _, safe_width = titlebar:get_titlebar_safe_rect()
-
-    test.ok(lw > 0)
-    test.ok(rw > 0)
-    test.ok(lx + lw <= safe_x)
-    test.ok(safe_x + safe_width <= rx)
+  test.it("shows all Panes in current numeric order", function()
+    local one = panes.create { factory = factory("alpha.lua") }
+    panes.split(one, "right", { factory = factory("beta.lua") })
+    panes.create { factory = factory("settings") }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local entries = title:get_pane_entries()
+    test.equal(#entries, 3)
+    test.equal(entries[1].label, "1 alpha.lua")
+    test.equal(entries[2].label, "2 beta.lua")
+    test.equal(entries[3].label, "3 settings")
   end)
 
-  test.it("allocates Title Bar width from each pane's tab demand", function()
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 1800 * SCALE, 32 * SCALE
-
-    local left_node = { views = { {} }, titlebar_tab_offset = 1 }
-    local right_node = { views = { {}, {}, {}, {}, {} }, titlebar_tab_offset = 1 }
-    titlebar.get_tabs_node = function(_, pane)
-      return pane == "left" and left_node or right_node
-    end
-
-    local _, _, left_width = titlebar:get_pane_tabs_rect("left")
-    local _, _, right_width = titlebar:get_pane_tabs_rect("right")
-    test.ok(right_width > left_width)
-    test.ok(math.abs(left_width - right_width / #right_node.views) < 0.001,
-      "equally sized labels should have equal per-tab widths")
+  test.it("marks the active Pane and its visible group", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.split(one, "right", { factory = factory("two") })
+    panes.focus(one)
+    local entries = TitleBar():get_pane_entries()
+    test.ok(entries[1].active)
+    test.ok(entries[1].visible)
+    test.not_ok(entries[2].active)
+    test.ok(entries[2].visible)
   end)
 
-  test.it("anchors Right Pane tabs beside the window controls and adds tabs leftward", function()
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
-
-    local controls_x
-    for _, x in titlebar:each_control_item() do
-      controls_x = x
-      break
-    end
-
-    local first, second = {}, {}
-    local node = {
-      views = { first },
-      active_view = first,
-      titlebar_tab_offset = 1,
-    }
-    titlebar.get_tabs_node = function(_, pane)
-      return pane == "right" and node or nil
-    end
-
-    local first_x, _, first_width = titlebar:get_titlebar_tab_rect("right", node, node.views, 1)
-    test.equal(first_x + first_width, controls_x)
-
-    node.views = { first, second }
-    first_x, _, first_width = titlebar:get_titlebar_tab_rect("right", node, node.views, 1)
-    local second_x, _, second_width = titlebar:get_titlebar_tab_rect("right", node, node.views, 2)
-    test.equal(first_x + first_width, controls_x)
-    test.equal(second_x + second_width, first_x)
-
-    local pane, _, hit_first = titlebar:get_titlebar_tab_at(first_x + first_width / 2, titlebar.size.y / 2)
-    local _, _, hit_second = titlebar:get_titlebar_tab_at(second_x + second_width / 2, titlebar.size.y / 2)
-    test.equal(pane, "right")
-    test.equal(hit_first, first)
-    test.equal(hit_second, second)
+  test.it("focuses a Pane from its global entry", function()
+    panes.create { factory = factory("one") }
+    local two = panes.create { factory = factory("two") }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local entry = title:get_pane_entries()[1]
+    test.ok(title:on_mouse_pressed("left", entry.x + 2, entry.y + 2, 1))
+    test.not_equal(panes.active(), two)
+    test.equal(panes.active().current_view:get_name(), "one")
   end)
-
-  test.it("sizes each Pane Tab from its own label", function()
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 1800 * SCALE, 32 * SCALE
-
-    local short = { get_name = function() return "a.lua" end }
-    local long = { get_name = function() return "a-significantly-longer-buffer-name.lua" end }
-    local node = Node()
-    node.views = { short, long }
-    node.active_view = short
-    node.titlebar_tab_offset = 1
-    titlebar.get_tabs_node = function(_, pane)
-      return pane == "left" and node or nil
-    end
-
-    local _, _, short_width = titlebar:get_titlebar_tab_rect("left", node, node.views, 1)
-    local _, _, long_width = titlebar:get_titlebar_tab_rect("left", node, node.views, 2)
-
-    test.ok(short_width < long_width,
-      string.format("short=%g long=%g", short_width, long_width))
-  end)
-
-  test.it("keeps a draggable safe zone between the Left and Right Pane tabs", function(context)
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
-
-    local safe_x, _, safe_width = titlebar:get_titlebar_safe_rect()
-    local left_tabs_x, _, left_tabs_width = titlebar:get_pane_tabs_rect("left")
-    local right_tabs_x, _, right_tabs_width = titlebar:get_pane_tabs_rect("right")
-
-    test.ok(safe_width > 0)
-    test.ok(left_tabs_x + left_tabs_width <= safe_x)
-    test.ok(safe_x + safe_width <= right_tabs_x)
-    test.is_nil(titlebar:get_titlebar_tab_at(safe_x + safe_width / 2, titlebar.size.y / 2))
-    test.is_nil(titlebar:get_titlebar_scroll_button_at(safe_x + safe_width / 2, titlebar.size.y / 2))
-
-    context.original_set_window_hit_test = system.set_window_hit_test
-    local hit_test_args
-    system.set_window_hit_test = function(...)
-      hit_test_args = { ... }
-    end
-    titlebar:configure_hit_test(true)
-
-    test.not_nil(hit_test_args)
-    local left_interactive_x, _, left_interactive_width = titlebar:get_pane_tabs_interactive_rect("left")
-    local right_interactive_x, _, right_interactive_width = titlebar:get_pane_tabs_interactive_rect("right")
-    test.equal(hit_test_args[5], left_interactive_x)
-    test.equal(hit_test_args[6], left_interactive_width)
-    test.ok(hit_test_args[6] <= left_tabs_width)
-    test.equal(hit_test_args[7], right_interactive_x)
-    test.equal(hit_test_args[8], right_interactive_width)
-    test.ok(hit_test_args[8] <= right_tabs_width)
-  end)
-
-  test.it("backfills hidden Pane Tabs and removes overflow buttons after growing", function()
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 600 * SCALE, 32 * SCALE
-
-    local views = {}
-    for i = 1, 10 do views[i] = {} end
-    local node = {
-      views = views,
-      active_view = views[#views],
-      titlebar_tab_offset = 1,
-    }
-    titlebar.get_tabs_node = function(_, pane)
-      return pane == "right" and node or nil
-    end
-
-    titlebar:scroll_titlebar_tabs_to_active("right", node)
-    test.ok(node.titlebar_tab_offset > 1)
-
-    titlebar.size.x = 1800 * SCALE
-    titlebar:scroll_titlebar_tabs_to_active("right", node)
-
-    test.equal(node.titlebar_tab_offset, 1)
-    local _, _, _, _, show_previous, show_next =
-      titlebar:get_titlebar_tabs_content_rect("right", node, views)
-    test.ok(not show_previous)
-    test.ok(not show_next)
-  end)
-
-  test.it("keeps unused shared Title Bar width available for native window dragging", function(context)
-    local titlebar = TitleBar()
-    titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
-
-    local view = {}
-    local node = {
-      views = { view },
-      active_view = view,
-      titlebar_tab_offset = 1,
-    }
-    titlebar.get_tabs_node = function(_, pane)
-      return pane == "left" and node or nil
-    end
-
-    titlebar.size.x = 2000 * SCALE
-    local tabs_x, _, tabs_capacity = titlebar:get_pane_tabs_rect("left")
-    local safe_x, _, safe_width = titlebar:get_titlebar_safe_rect()
-    test.ok(safe_width > tabs_capacity)
-    test.is_nil(titlebar:get_titlebar_tab_at(safe_x + safe_width / 2, titlebar.size.y / 2))
-
-    context.original_set_window_hit_test = system.set_window_hit_test
-    local hit_test_args
-    system.set_window_hit_test = function(...)
-      hit_test_args = { ... }
-    end
-    titlebar:configure_hit_test(true)
-
-    test.equal(hit_test_args[5], tabs_x)
-    test.ok(hit_test_args[6] > 0)
-    test.ok(hit_test_args[6] <= tabs_capacity)
-  end)
-
 end)

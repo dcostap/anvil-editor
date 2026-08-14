@@ -1,737 +1,386 @@
--- Two-pane view model.
---
--- The Left Pane is permanent and the Right Pane is hideable. Both panes own
--- ordinary top-level views; the Title Bar is their shared tab presentation.
-
 local core = require "core"
-local command = require "core.command"
-local keymap = require "core.keymap"
-local Editor = require "core.editor"
-local EmptyView = require "core.emptyview"
-local ImageView = require "core.imageview"
-local common = require "core.common"
-local Node = require "core.node"
-local file_context = require "core.file_context"
+local layout = require "core.pane_layout"
 
-local M = core.panes or {}
+local M = {
+  groups = {},
+  panes_by_id = {},
+  groups_by_id = {},
+  focus_owners = setmetatable({}, { __mode = "k" }),
+  active_pane = nil,
+  visible_group_value = nil,
+  next_pane_id = 0,
+  next_group_id = 0,
+}
+
 core.panes = M
-M.selection_mru = M.selection_mru or { left = {}, right = {} }
-M.registered_views = M.registered_views or {}
-M.git_sessions = M.git_sessions or {}
-M.right_shown = M.right_shown or false
-M.width_ratio = M.width_ratio or 0.5
 
-local function has_no_locked_children(node)
-  if not node or node.locked then return false end
-  if node.type == "leaf" then return true end
-  return has_no_locked_children(node.a) and has_no_locked_children(node.b)
+local function quiet(message, ...)
+  if core.log_quiet then core.log_quiet(message, ...) end
 end
 
-local function get_unlocked_root(node)
-  if not node then return nil end
-  if node.type == "leaf" then return not node.locked and node or nil end
-  if has_no_locked_children(node) then return node end
-  return get_unlocked_root(node.a) or get_unlocked_root(node.b)
+local function request_refresh()
+  core.redraw = true
+  local root = core.root_panel
+  if root and root.request_layout then root:request_layout() end
 end
 
-function M.ensure_nodes()
-  if M.left_node and M.right_node then return M.left_node, M.right_node end
-  local root = core.root_panel and core.root_panel.root_node
-  if not root then return nil end
-  local container = get_unlocked_root(root)
-  if not container then return nil end
-  M.attaching = true
-  local left, right, split = Node(), Node(), Node("hsplit")
-  left:consume(container)
-  container:consume(split)
-  container.a, container.b = left, right
-  container.__pane_container = true
-  left.pane_id, right.pane_id = "left", "right"
-  right.locked = { x = true }
-  right.resizable = false
-  right.views[1].__pane_placeholder = true
-  M.container_node, M.left_node, M.right_node = container, left, right
-  M.attaching = false
-  return left, right
-end
-
-local function right_parent_width()
-  local node = M.right_node
-  local parent = node and core.root_panel.root_node and node:get_parent_node(core.root_panel.root_node)
-  return math.max(0, parent and parent.size.x or core.root_panel and core.root_panel.size.x or 0)
-end
-
-function M.target_right_width()
-  return M.right_shown and math.floor(right_parent_width() * M.width_ratio) or 0
-end
-
-function M.update_right_view_size(view)
-  if view then view.size.x = M.target_right_width() end
-end
-
-local function attach_right_view(view, id)
-  if id then view.__pane_view_id = id; M.registered_views[id] = view end
-  if view.__pane_size_wrapped then return view end
-  view.__pane_size_wrapped = true
-  view.__pane_original_update = view.update
-  function view:update(...)
-    M.update_right_view_size(self)
-    return self.__pane_original_update(self, ...)
+local function next_id(kind)
+  if kind == "pane" then
+    M.next_pane_id = M.next_pane_id + 1
+    return "pane-" .. M.next_pane_id
   end
+  M.next_group_id = M.next_group_id + 1
+  return "group-" .. M.next_group_id
+end
+
+local function make_view(opts)
+  opts = opts or {}
+  local factory = opts.factory or opts.view_factory
+  if not factory then
+    factory = function()
+      local Editor = require "core.editor"
+      return Editor(core.open_buffer())
+    end
+  end
+  local ok, view = pcall(factory)
+  if not ok then return nil, view end
+  if not view then return nil, "Pane View factory returned nil" end
   return view
 end
 
-local function valid_pane(pane)
-  assert(pane == "left" or pane == "right", "pane must be 'left' or 'right'")
+local function group_index(group)
+  for i, candidate in ipairs(M.groups) do
+    if candidate == group then return i end
+  end
+end
+
+local function assign_view(pane, view)
+  local existing = M.pane_for_view and M.pane_for_view(view)
+  assert(not existing or existing == pane, "View is already Current in another Pane")
+  pane.current_view = assert(view)
+  view.__pane_owner = pane
+end
+
+local function clear_view_owner(pane, view)
+  if view and view.__pane_owner == pane then view.__pane_owner = nil end
+end
+
+local function create_identity(view)
+  local pane = {
+    id = next_id("pane"),
+    group = nil,
+    current_view = nil,
+    position = { x = 0, y = 0 },
+    size = { x = 0, y = 0 },
+    navigation_history = nil,
+  }
+  local PaneCommandBar = require "core.pane_command_bar"
+  pane.command_bar = PaneCommandBar(pane)
+  assign_view(pane, view)
+  M.panes_by_id[pane.id] = pane
   return pane
 end
 
-function M.node(pane)
-  pane = valid_pane(pane)
-  M.ensure_nodes()
-  return pane == "right" and M.right_node or M.left_node
+local function create_group(pane, index)
+  local group = {
+    id = next_id("group"),
+    root = { kind = "pane", pane = pane },
+  }
+  pane.group = group
+  M.groups_by_id[group.id] = group
+  table.insert(M.groups, index or (#M.groups + 1), group)
+  return group
 end
 
-function M.is_placeholder(view)
-  return not not (view and (view.__pane_placeholder or (view.is and view:is(EmptyView))))
+local function focus_view(pane)
+  local view = pane and pane.current_view
+  if not view then return end
+  local target = view.get_focus_view and view:get_focus_view() or view
+  if target and target ~= view then M.register_focus_target(view, target) end
+  local root = core.root_panel
+  if target and core.set_active_view and root and root.contains_view and root:contains_view(target) then
+    core.set_active_view(target)
+  end
+end
+
+local function after_mutation(reason)
+  M.validate()
+  request_refresh()
+  quiet("Pane manager: %s count=%d active=%s", reason, M.count(), M.active_pane and M.active_pane.id or "none")
+end
+
+function M.count()
+  local count = 0
+  for _, group in ipairs(M.groups) do count = count + #layout.leaves(group.root) end
+  return count
+end
+
+function M.ordered()
+  local result = {}
+  for _, group in ipairs(M.groups) do
+    for _, pane in ipairs(layout.leaves(group.root)) do result[#result + 1] = pane end
+  end
+  return result
+end
+
+function M.number(pane)
+  for i, candidate in ipairs(M.ordered()) do
+    if candidate == pane then return i end
+  end
+end
+
+function M.find(id)
+  if type(id) == "table" then return M.contains(id) and id or nil end
+  return M.panes_by_id[id]
+end
+
+function M.active()
+  return M.active_pane
+end
+
+function M.visible_group()
+  return M.visible_group_value
+end
+
+function M.contains(pane)
+  return type(pane) == "table" and pane.id and M.panes_by_id[pane.id] == pane
+end
+
+function M.is_visible(pane)
+  return M.contains(pane) and pane.group == M.visible_group_value
+end
+
+function M.owner_for_view(view)
+  if not view then return nil end
+  return M.focus_owners[view] or view.__pane_owner and view or nil
 end
 
 function M.pane_for_view(view)
-  if not view then return nil end
-  local owner = view.__pane_focus_owner or view.git_owner_view or view.diff_view_parent
-  local root = core.root_panel and core.root_panel.root_node
-  local node = root and root:get_node_for_view(owner or view)
-  if node == M.node("right") then return "right", owner or view end
-  if node == M.node("left") then return "left", owner or view end
+  local owner = M.owner_for_view(view)
+  return owner and owner.__pane_owner or nil
 end
 
-function M.focused_pane()
-  return M.pane_for_view(core.active_view)
+function M.register_focus_target(owner_view, child_view)
+  assert(owner_view and child_view, "focus owner and target are required")
+  M.focus_owners[child_view] = owner_view
+  return child_view
 end
 
-function M.opposite(pane)
-  return pane == "right" and "left" or "right"
+function M.unregister_focus_target(child_view)
+  local owner = M.focus_owners[child_view]
+  M.focus_owners[child_view] = nil
+  return owner
 end
 
-function M.resolve_target(opts)
+function M.create(opts)
   opts = opts or {}
-  if opts.pane then return valid_pane(opts.pane) end
-  local source = opts.source_view or opts.view
-  local pane = source and M.pane_for_view(source) or M.pane_for_view(core.active_view)
-  pane = pane or "left"
-  if opts.opposite then pane = M.opposite(pane) end
+  local view, err = make_view(opts)
+  if not view then
+    quiet("Pane create failed: %s", tostring(err))
+    return nil, err
+  end
+  local pane = create_identity(view)
+  local group = create_group(pane)
+  M.active_pane = pane
+  M.visible_group_value = group
+  if opts.focus ~= false then focus_view(pane) end
+  after_mutation("created " .. pane.id)
   return pane
 end
 
-function M.contains_view(pane, view)
-  local node = M.node(pane)
-  if not (node and view) then return false end
-  for _, candidate in ipairs(node.views or {}) do
-    if candidate == view then return true end
-  end
-  return false
-end
-
-function M.selected_view(pane)
-  local node = M.node(pane)
-  return node and node.active_view
-end
-
-function M.open_views(pane)
-  local views = {}
-  local node = M.node(pane)
-  for _, view in ipairs(node and node.views or {}) do
-    if not M.is_placeholder(view) then views[#views + 1] = view end
-  end
-  return views
-end
-
-local function remember_selected(pane, view)
-  if not (pane and view and not M.is_placeholder(view)) then return end
-  local mru = M.selection_mru[pane]
-  for i = #mru, 1, -1 do if mru[i] == view then table.remove(mru, i) end end
-  table.insert(mru, 1, view)
-end
-
-local function most_recent_open_view(pane, excluding)
-  for _, view in ipairs(M.selection_mru[pane]) do
-    if view ~= excluding and M.contains_view(pane, view) then return view end
-  end
-  for _, view in ipairs(M.open_views(pane)) do if view ~= excluding then return view end end
-end
-
-function M.remember_focus(owner, view)
-  if not (owner and view) then return end
-  M.focus_by_owner = M.focus_by_owner or setmetatable({}, { __mode = "k" })
-  M.focus_by_owner[owner] = view
-end
-
-function M.switch(pane, delta)
-  pane = pane or M.focused_pane() or "left"
-  local views = M.open_views(pane)
-  if #views == 0 then return nil end
-  local selected = M.selected_view(pane)
-  local index = 1
-  for i, view in ipairs(views) do if view == selected then index = i; break end end
-  index = ((index - 1 + delta) % #views) + 1
-  local view = views[index]
-  M.node(pane):set_active_view(view)
-  M.show(pane, { view = view, focus = true })
-  return view
-end
-
-function M.switch_to_index(pane, index)
-  pane = pane or M.focused_pane() or "left"
-  local view = M.open_views(pane)[index]
-  if not view then return nil end
-  M.node(pane):set_active_view(view)
-  M.show(pane, { view = view, focus = true })
-  return view
-end
-
-function M.singleton_editor(pane)
-  for _, view in ipairs(M.open_views(pane)) do
-    if view.__pane_singleton_editor then return view end
-  end
-end
-
-function M.right_visible()
-  return M.right_shown == true
-end
-
-local function focus_target(view)
-  if not view then return nil end
-  local remembered = M.focus_by_owner and M.focus_by_owner[view]
-  return remembered or (view.get_focus_view and view:get_focus_view()) or view
-end
-
-function M.show(pane, opts)
-  pane = valid_pane(pane)
+function M.split(target, direction, opts)
   opts = opts or {}
-  if pane == "left" then
-    M.focus_intent = "left"
-    local view = opts.view or M.selected_view("left")
-    if opts.view and M.contains_view("left", opts.view) then M.node("left").active_view = opts.view end
-    remember_selected("left", view)
-    if opts.focus ~= false and view then core.set_active_view(focus_target(view)) end
-    return view
+  local pane = M.find(target)
+  if not pane then return nil, "invalid target Pane" end
+  local view, err = make_view(opts)
+  if not view then
+    quiet("Pane split failed target=%s: %s", pane.id, tostring(err))
+    return nil, err
   end
-
-  M.focus_intent = "right"
-  M.force_right_hidden = false
-  local view = opts.view or M.selected_view("right")
-  if M.is_placeholder(view) then view = M.open_views("right")[1] end
-  if view and not M.is_placeholder(view) then
-    remember_selected("right", view)
-    M.right_shown = true
-    local node = M.node("right")
-    local old = node.active_view
-    if old and old ~= view then old.visible = false end
-    node.active_view = view
-    view.visible = true
-    M.update_right_view_size(view)
-    if opts.focus ~= false then
-      core.set_active_view(focus_target(view))
-    end
+  local new_pane = create_identity(view)
+  new_pane.group = pane.group
+  pane.group.root = layout.split(pane.group.root, pane, direction, new_pane)
+  M.visible_group_value = pane.group
+  if opts.focus ~= false then
+    M.active_pane = new_pane
+    focus_view(new_pane)
   end
-  if core.root_panel and core.root_panel.root_node then core.root_panel.root_node:update_layout() end
-  return view
+  after_mutation(string.format("split %s %s -> %s", pane.id, direction, new_pane.id))
+  return new_pane
 end
 
-function M.hide_right(focus_left)
-  M.force_right_hidden = true
-  M.focus_intent = "left"
-  M.right_shown = false
-  local active = M.selected_view("right")
-  if active then
-    active.visible = false
-    M.update_right_view_size(active)
-  end
-  if focus_left ~= false then
-    local left = M.selected_view("left")
-    if left then core.set_active_view(focus_target(left)) end
-  end
-  if core.root_panel and core.root_panel.root_node then core.root_panel.root_node:update_layout() end
-  return true
+function M.focus(target)
+  local pane = M.find(target)
+  if not pane then return nil, "invalid Pane" end
+  M.active_pane = pane
+  M.visible_group_value = pane.group
+  focus_view(pane)
+  request_refresh()
+  quiet("Pane focus: id=%s number=%s", pane.id, tostring(M.number(pane)))
+  return pane
 end
 
-local function copy_position(source, target)
-  if not (source and target and source.buffer and source.buffer == target.buffer) then return end
-  if source.get_selection_state and target.set_selection_state then
-    target:set_selection_state(source:get_selection_state())
-  end
-  target.scroll.x, target.scroll.to.x = source.scroll.x or 0, source.scroll.to.x or source.scroll.x or 0
-  target.scroll.y, target.scroll.to.y = source.scroll.y or 0, source.scroll.to.y or source.scroll.y or 0
+function M.focus_index(index)
+  local pane = M.ordered()[tonumber(index)]
+  if not pane then return nil end
+  return M.focus(pane)
 end
 
-local function apply_location(view, opts)
-  if not (view and view.buffer and opts and opts.line) then return end
-  local col = opts.col or 1
-  local line2, col2 = opts.line2 or opts.line, opts.col2 or col
-  local function select()
-    if view.expand_folds_covering_range then
-      view:expand_folds_covering_range(opts.line, col, line2, col2, "pane-open")
-    end
-    view.buffer:set_selection(opts.line, col, line2, col2)
-  end
-  if view.with_selection_state then view:with_selection_state(select) else select() end
-  if view.scroll_to_make_visible then view:scroll_to_make_visible(opts.line, col) end
-end
-
-local function remove_from_node(node, view)
-  if not (node and view) then return false end
-  for i, candidate in ipairs(node.views or {}) do
-    if candidate == view then
-      table.remove(node.views, i)
-      if node.active_view == view then node.active_view = node.views[i] or node.views[i - 1] end
-      return true
-    end
-  end
-  return false
-end
-
-local function remove_right_view(view)
-  if view and view.on_mouse_left then view:on_mouse_left() end
-  view.visible = false
-  remove_from_node(M.node("right"), view)
-  for id, candidate in pairs(M.registered_views) do
-    if candidate == view then M.registered_views[id] = nil end
-  end
-end
-
-local function ensure_left_placeholder()
-  local node = M.node("left")
-  if #M.open_views("left") > 0 then return node.active_view end
-  for _, view in ipairs(node.views or {}) do if M.is_placeholder(view) then node.active_view = view; return view end end
-  local view = EmptyView()
-  view.__pane_placeholder = true
-  function view:get_name() return "Editor" end
-  node.views = { view }
-  node.active_view = view
-  return view
-end
-
-M.ensure_left_placeholder = ensure_left_placeholder
-
-local function add_view_to_pane(pane, view)
-  local node = M.node(pane)
-  local removed_active = false
-  for i = #node.views, 1, -1 do
-    if M.is_placeholder(node.views[i]) then
-      removed_active = removed_active or node.active_view == node.views[i]
-      table.remove(node.views, i)
-    end
-  end
-  if pane == "right" then
-    attach_right_view(view)
-    table.insert(node.views, view)
-    view.node = node
-    view.visible = M.right_shown and (removed_active or not node.active_view)
-  else
-    table.insert(node.views, view)
-    view.node = node
-  end
-  if removed_active or not node.active_view then node.active_view = view end
-  return node
-end
-
-local function select_view(pane, view, focus)
-  local node = M.node(pane)
-  node.active_view = view
-  remember_selected(pane, view)
-  if pane == "right" then
-    M.show("right", { view = view, focus = focus ~= false })
-  elseif focus ~= false then
-    node:set_active_view(view)
-  end
-  if core.root_panel and core.root_panel.root_node then core.root_panel.root_node:update_layout() end
-end
-
-local function detach_replaced_singleton(pane, view)
-  if pane == "right" then remove_right_view(view)
-  else remove_from_node(M.node("left"), view) end
-end
-
-local function retain_or_release_replaced_singleton(pane, view, reason)
-  if not view then return false end
-  local history = core.navigation_history
-  if history and history.retain_replaced_editor
-    and history.retain_replaced_editor(view, pane)
-  then
-    return true
-  end
-  if view.release_owned_features then view:release_owned_features(reason or "pane-editor-replace") end
-  return false
-end
-
-function M.open_buffer(buffer, opts)
-  opts = opts or {}
-  local pane = M.resolve_target(opts)
-  if pane == "right" then
-    M.force_right_hidden = false
-    M.focus_intent = "right"
-  end
-  local source = opts.source_view
-  local view
-  local singleton
-  local replaced_singleton
-  local navigation_anchor
-  for _, candidate in ipairs(M.open_views(pane)) do
-    if candidate.__pane_singleton_editor then singleton = candidate end
-    if candidate.buffer == buffer and (not buffer.abs_filename or not candidate.__pane_singleton_editor) then
-      view = candidate
-      break
-    end
-  end
-
-  if buffer.abs_filename and not view then
-    if singleton and singleton.buffer == buffer then
-      view = singleton
-    else
-      if singleton then
-        local dirty = singleton.buffer and singleton.buffer.is_dirty and singleton.buffer:is_dirty()
-        if dirty then
-          singleton.__pane_singleton_editor = nil
-        else
-          local history = core.navigation_history
-          if M.selected_view(pane) == singleton and history and history.capture_place then
-            local ok, place = pcall(history.capture_place, singleton)
-            if ok then navigation_anchor = place end
-          end
-          detach_replaced_singleton(pane, singleton)
-          replaced_singleton = singleton
-        end
-      end
-      view = Editor(buffer)
-      view.__pane_singleton_editor = true
-      add_view_to_pane(pane, view)
-    end
-  elseif not view then
-    view = Editor(buffer)
-    add_view_to_pane(pane, view)
-  end
-  if source then copy_position(source, view) end
-  apply_location(view, opts)
-  select_view(pane, view, opts.focus ~= false)
-  if navigation_anchor and core.navigation_history and core.navigation_history.record_place then
-    core.navigation_history.record_place(navigation_anchor, { reason = "pane-editor-replace" })
-  end
-  retain_or_release_replaced_singleton(pane, replaced_singleton, "pane-editor-replace")
-  local restore = opts.preserve_focus and (opts.restore_focus or source) or opts.restore_focus
-  if opts.focus == false and restore then core.set_active_view(restore) end
-  return view
-end
-
-function M.restore_retired_editor(view, pane)
-  pane = valid_pane(pane)
-  if not (view and view.__pane_retired_editor == pane and view.buffer) then return false end
-  if M.contains_view(pane, view) then return false end
-
-  local replaced = M.singleton_editor(pane)
-  if replaced and replaced ~= view then
-    local dirty = replaced.buffer and replaced.buffer.is_dirty and replaced.buffer:is_dirty()
-    if dirty then
-      replaced.__pane_singleton_editor = nil
-      replaced = nil
-    else
-      detach_replaced_singleton(pane, replaced)
-    end
-  end
-
-  local history = core.navigation_history
-  if history and history.activate_retired_editor then history.activate_retired_editor(view) end
-  view.__pane_retired_editor = nil
-  view.__pane_singleton_editor = true
-  add_view_to_pane(pane, view)
-  select_view(pane, view, false)
-  retain_or_release_replaced_singleton(pane, replaced, "pane-editor-history-replace")
-  return true
-end
-
-function M.open_view(view, opts)
-  opts = opts or {}
-  local pane = M.resolve_target(opts)
-  if pane == "right" then M.force_right_hidden = false; M.focus_intent = "right" end
-  if not M.contains_view(pane, view) then add_view_to_pane(pane, view) end
-  select_view(pane, view, opts.focus ~= false)
-  return view
-end
-
-function M.register_view(pane, id, view, opts)
-  opts = opts or {}
-  pane = valid_pane(pane)
-  if opts.permanent then view.__pane_permanent = true end
-  if pane == "right" then
-    attach_right_view(view, id)
-    if not M.contains_view("right", view) then add_view_to_pane("right", view) end
-  else
-    M.open_view(view, { pane = "left", focus = false })
-  end
-  return view
-end
-
-function M.open_path(path, opts)
-  opts = opts or {}
-  local pane = M.resolve_target(opts)
-  path = path and common.normalize_path(path)
-  if not path then return nil end
-  if ImageView.is_supported(path) then
-    path = core.root_project():absolute_path(path)
-    for _, candidate in ipairs(M.open_views(pane)) do
-      if candidate.path and common.path_equals(candidate.path, path) then
-        M.node(pane):set_active_view(candidate)
-        M.show(pane, { view = candidate, focus = opts.focus ~= false })
-        return candidate
+function M.focus_direction(direction)
+  local active = M.active_pane
+  if not active then return nil end
+  local ax = active.position.x + active.size.x / 2
+  local ay = active.position.y + active.size.y / 2
+  local best, best_score
+  for _, candidate in ipairs(layout.leaves(active.group.root)) do
+    if candidate ~= active then
+      local cx = candidate.position.x + candidate.size.x / 2
+      local cy = candidate.position.y + candidate.size.y / 2
+      local primary, secondary
+      if direction == "left" then primary, secondary = ax - cx, math.abs(ay - cy)
+      elseif direction == "right" then primary, secondary = cx - ax, math.abs(ay - cy)
+      elseif direction == "up" then primary, secondary = ay - cy, math.abs(ax - cx)
+      elseif direction == "down" then primary, secondary = cy - ay, math.abs(ax - cx)
+      else return nil end
+      if primary > 0 then
+        local score = primary * 100000 + secondary
+        if not best_score or score < best_score then best, best_score = candidate, score end
       end
     end
-    local view = ImageView(path)
-    if not view.image then
-      core.error("Image could not be loaded.%s", view.errmsg and " Error: " .. view.errmsg or "")
-      return nil
-    end
-    return M.open_view(view, { pane = pane, focus = opts.focus ~= false })
   end
-  local ok, buffer = core.try(core.open_buffer, path)
-  if ok and buffer then return M.open_buffer(buffer, opts) end
+  return best and M.focus(best) or nil
 end
 
-function M.move_view_to_pane(view, target_pane)
-  local source_pane, owner = M.pane_for_view(view)
-  view = owner or view
-  target_pane = valid_pane(target_pane)
-  if target_pane == "right" then
-    M.force_right_hidden = false
-    M.focus_intent = "right"
+function M.present(view, opts)
+  opts = opts or {}
+  local pane = M.find(opts.pane or M.active_pane)
+  if not pane then
+    return M.create { factory = function() return view end, focus = opts.focus }
   end
-  if not source_pane or source_pane == target_pane or not file_context.is_editor_view(view) then return nil end
-  local existing
-  local target_singleton
-  for _, candidate in ipairs(M.open_views(target_pane)) do
-    if candidate.buffer == view.buffer then existing = candidate end
-    if candidate.__pane_singleton_editor then target_singleton = candidate end
-  end
-
-  local function detach_source(release)
-    if release and view.release_owned_features then view:release_owned_features("pane-editor-move-duplicate") end
-    if source_pane == "right" then remove_right_view(view)
-    else remove_from_node(M.node("left"), view) end
-    if source_pane == "left" then
-      local next_view = most_recent_open_view("left", view) or ensure_left_placeholder()
-      M.node("left").active_view = next_view
-    end
-  end
-
+  local existing = M.pane_for_view(view)
   if existing then
-    copy_position(view, existing)
-    detach_source(true)
-    select_view(target_pane, existing, true)
+    if opts.focus ~= false then M.focus(existing) end
     return existing
   end
-
-  if view.buffer and view.buffer.abs_filename and target_singleton then
-    local dirty = target_singleton.buffer and target_singleton.buffer.is_dirty and target_singleton.buffer:is_dirty()
-    if dirty then
-      target_singleton.__pane_singleton_editor = nil
-    else
-      if target_singleton.release_owned_features then target_singleton:release_owned_features("pane-editor-move-replace") end
-      if target_pane == "right" then remove_right_view(target_singleton)
-      else remove_from_node(M.node("left"), target_singleton) end
-    end
-  end
-
-  detach_source(false)
-  if view.buffer and view.buffer.abs_filename then view.__pane_singleton_editor = true end
-  add_view_to_pane(target_pane, view)
-  select_view(target_pane, view, true)
-  return view
+  clear_view_owner(pane, pane.current_view)
+  assign_view(pane, view)
+  if opts.focus ~= false then M.focus(pane) end
+  after_mutation("presented View in " .. pane.id)
+  return pane
 end
 
-function M.close_view(view)
-  local pane, owner = M.pane_for_view(view)
-  view = owner or view
-  if not pane or not view or view.__pane_permanent then return false end
-  local function close()
-    if pane == "right" then
-      local was_visible = M.right_visible()
-      remove_right_view(view)
-      local next_view = most_recent_open_view("right", view)
-      if next_view then
-        M.show("right", { view = next_view, focus = was_visible })
-      else
-        M.hide_right(true)
-      end
-    else
-      remove_from_node(M.node("left"), view)
-      local next_view = most_recent_open_view("left", view) or ensure_left_placeholder()
-      M.node("left").active_view = next_view
-      core.set_active_view(next_view)
-    end
-  end
-  if view.try_close then view:try_close(close) else close() end
-  return true
+local function nearest_after_removal(old_order, old_index)
+  return old_order[math.min(old_index, #old_order)] or old_order[old_index - 1]
 end
 
-function M.remove_view(view, opts)
+local function commit_close(pane)
+  local old_order = M.ordered()
+  local old_index = M.number(pane)
+  local group = pane.group
+  group.root = layout.remove(group.root, pane)
+  clear_view_owner(pane, pane.current_view)
+  M.panes_by_id[pane.id] = nil
+  pane.group = nil
+  if not group.root then
+    local index = group_index(group)
+    if index then table.remove(M.groups, index) end
+    M.groups_by_id[group.id] = nil
+  end
+  local survivors = M.ordered()
+  local next_pane = nearest_after_removal(survivors, old_index)
+  if #survivors == 0 then
+    M.active_pane = nil
+    M.visible_group_value = nil
+  elseif M.active_pane == pane or not M.contains(M.active_pane) then
+    M.active_pane = next_pane
+    M.visible_group_value = next_pane.group
+    focus_view(next_pane)
+  elseif M.visible_group_value == group and not group.root then
+    M.visible_group_value = M.active_pane.group
+  end
+  after_mutation("closed " .. pane.id)
+end
+
+function M.close(target, opts)
   opts = opts or {}
-  local pane, owner = M.pane_for_view(view)
-  view = owner or view
-  if not pane or not view or (view.__pane_permanent and not opts.force) then return false end
-  if view.release_owned_features then view:release_owned_features("pane-view-remove") end
-  if pane == "right" then
-    local was_visible = M.right_visible()
-    remove_right_view(view)
-    local next_view = most_recent_open_view("right", view)
-    if next_view then M.show("right", { view = next_view, focus = was_visible and opts.focus_left ~= false })
-    else M.hide_right(opts.focus_left ~= false) end
-  else
-    remove_from_node(M.node("left"), view)
-    ensure_left_placeholder()
+  local pane = M.find(target)
+  if not pane then return false end
+  local committed = false
+  local function close()
+    if committed or not M.contains(pane) then return end
+    committed = true
+    commit_close(pane)
   end
-  return true
+  local view = pane.current_view
+  if opts.force or not view.try_close then close() else view:try_close(close) end
+  return committed
 end
 
-function M.save_workspace_state(save_view)
-  local state = {
-    right_visible = M.right_visible(),
-    focused_pane = M.focused_pane() or M.focus_intent or "left",
-    panes = {},
-  }
-  for _, pane in ipairs({ "left", "right" }) do
-    local pane_state = { views = {} }
-    local selected = M.selected_view(pane)
-    for _, view in ipairs(M.open_views(pane)) do
-      local item
-      if view.__pane_permanent then
-        item = { permanent_id = view.__pane_view_id }
-      elseif save_view then
-        item = save_view(view)
+function M.close_all(opts)
+  local ordered = M.ordered()
+  local index = 1
+  local function close_next()
+    local pane = ordered[index]
+    if not pane then return end
+    index = index + 1
+    if M.contains(pane) then
+      local view = pane.current_view
+      if not (opts and opts.force) and view.try_close then
+        view:try_close(function() commit_close(pane); close_next() end)
+      else
+        commit_close(pane)
+        close_next()
       end
-      if item then
-        item.pane_singleton_editor = M.singleton_editor(pane) == view or nil
-        pane_state.views[#pane_state.views + 1] = item
-        if view == selected then pane_state.selected = #pane_state.views end
-      end
+    else
+      close_next()
     end
-    state.panes[pane] = pane_state
   end
-  return state
-end
-
-function M.restore_workspace_state(state, load_view)
-  if type(state) ~= "table" then return false end
-  local pane_states = state.panes or {}
-  for _, pane in ipairs({ "left", "right" }) do
-    for _, view in ipairs(M.open_views(pane)) do
-      if not view.__pane_permanent then M.remove_view(view, { force = true, focus_left = false }) end
-    end
-    local restored = {}
-    for _, item in ipairs((pane_states[pane] and pane_states[pane].views) or {}) do
-      local view
-      if item.permanent_id and pane == "right" then
-        view = M.registered_views[item.permanent_id]
-      elseif load_view then
-        view = load_view(item)
-      end
-      if view then
-        if item.pane_singleton_editor then view.__pane_singleton_editor = true end
-        M.open_view(view, { pane = pane, focus = false })
-        restored[#restored + 1] = view
-      end
-    end
-    local selected = restored[(pane_states[pane] and pane_states[pane].selected) or 1]
-    if selected then M.node(pane).active_view = selected end
-  end
-  ensure_left_placeholder()
-  if state.right_visible then
-    M.show("right", { focus = false })
-  else
-    M.hide_right(false)
-  end
-  local focus_pane = state.focused_pane == "right" and state.right_visible and "right" or "left"
-  M.show(focus_pane, { focus = true })
-  return true
+  close_next()
+  return M.count() == 0
 end
 
 function M.reset_for_tests()
-  local left = M.node("left")
-  for i = #(left and left.views or {}), 1, -1 do
-    local view = left.views[i]
-    if view.release_owned_features then view:release_owned_features("pane-test-reset") end
-    table.remove(left.views, i)
-  end
-  ensure_left_placeholder()
-
-  local right = M.node("right")
-  for i = #(right and right.views or {}), 1, -1 do
-    local view = right.views[i]
-    if not M.is_placeholder(view) and not view.__pane_permanent then remove_right_view(view) end
-  end
-  M.hide_right(false)
-  local selected = M.selected_view("left")
-  if selected then core.set_active_view(selected) end
+  for _, pane in ipairs(M.ordered()) do clear_view_owner(pane, pane.current_view) end
+  M.groups = {}
+  M.panes_by_id = {}
+  M.groups_by_id = {}
+  M.focus_owners = setmetatable({}, { __mode = "k" })
+  M.active_pane = nil
+  M.visible_group_value = nil
+  M.next_pane_id = 0
+  M.next_group_id = 0
 end
 
-command.add(nil, {
-  ["pane:focus-left-and-hide-right"] = function()
-    return M.hide_right(true)
-  end,
-  ["pane:toggle-focus"] = function()
-    if M.focused_pane() == "right" then
-      return M.show("left", { focus = true })
-    end
-    return M.show("right", { focus = true })
-  end,
-  ["pane:open-current-file-opposite"] = function()
-    local pane, owner = M.pane_for_view(core.active_view)
-    local view = owner or core.active_view
-    if not (pane and view and file_context.is_editor_view(view) and view.buffer) then return false end
-    M.open_buffer(view.buffer, { pane = M.opposite(pane), source_view = view, focus = true })
-    return true
-  end,
-  ["pane:move-current-file-opposite"] = function()
-    local pane, owner = M.pane_for_view(core.active_view)
-    local view = owner or core.active_view
-    if not (pane and view and file_context.is_editor_view(view) and view.buffer) then return false end
-    return M.move_view_to_pane(view, M.opposite(pane)) ~= nil
-  end,
-})
-
-command.add(function()
-  local pane, owner = M.pane_for_view(core.active_view)
-  local view = owner or core.active_view
-  return pane ~= nil and view ~= nil and not view.__pane_permanent, view
-end, {
-  ["pane:close-current"] = function(view)
-    M.close_view(view)
-  end,
-})
-
-keymap.add_direct({
-  ["ctrl+w"] = "pane:close-current",
-  ["alt+1"] = "pane:focus-left-and-hide-right",
-  ["alt+º"] = "pane:toggle-focus",
-  ["alt+grave"] = "pane:toggle-focus",
-  ["alt+`"] = "pane:toggle-focus",
-  ["ctrl+0"] = "pane:open-current-file-opposite",
-  ["ctrl+9"] = "pane:move-current-file-opposite",
-})
-
-local base_set_active_view = core.panes_base_set_active_view or core.set_active_view
-core.panes_base_set_active_view = base_set_active_view
-function core.set_active_view(view)
-  if M.attaching then return base_set_active_view(view) end
-  local pane, owner = M.pane_for_view(view)
-  if pane then
-    M.focus_intent = pane
-    if owner and owner ~= view then
-      M.focus_by_owner = M.focus_by_owner or setmetatable({}, { __mode = "k" })
-      M.focus_by_owner[owner] = view
-    end
-    if pane == "left" and (owner or view).__hide_right_pane_on_focus then
-      M.hide_right(false)
+function M.validate()
+  local seen_panes = {}
+  local seen_views = {}
+  for _, group in ipairs(M.groups) do
+    assert(group and group.id and M.groups_by_id[group.id] == group, "invalid Pane Group registry")
+    assert(group.root, "Pane Group has no layout")
+    layout.validate(group.root)
+    local members = layout.leaves(group.root)
+    assert(#members > 0, "Pane Group is empty")
+    for _, pane in ipairs(members) do
+      assert(not seen_panes[pane], "Pane appears in more than one Pane Group")
+      seen_panes[pane] = true
+      assert(pane.group == group, "Pane points to the wrong Pane Group")
+      assert(pane.id and M.panes_by_id[pane.id] == pane, "invalid Pane registry")
+      assert(pane.current_view, "Pane has no Current View")
+      assert(not seen_views[pane.current_view], "View is Current in more than one Pane")
+      seen_views[pane.current_view] = true
+      assert(pane.current_view.__pane_owner == pane, "Current View points to the wrong Pane")
     end
   end
-  return base_set_active_view(view)
+  for _, pane in pairs(M.panes_by_id) do assert(seen_panes[pane], "registered Pane is missing from layout") end
+  if not next(seen_panes) then
+    assert(M.active_pane == nil and M.visible_group_value == nil, "zero Panes require no active Pane or visible group")
+  else
+    assert(M.active_pane and seen_panes[M.active_pane], "active Pane is invalid")
+    assert(M.visible_group_value and M.groups_by_id[M.visible_group_value.id] == M.visible_group_value, "visible Pane Group is invalid")
+    assert(M.active_pane.group == M.visible_group_value, "active Pane must belong to visible Pane Group")
+  end
+  for i, pane in ipairs(M.ordered()) do assert(M.number(pane) == i, "Pane numbering is invalid") end
+  return true
 end
 
 return M

@@ -649,23 +649,12 @@ function core.init()
   core.status_view = core.status_bar
   core.title_view = core.title_bar
 
-  -- Some plugins (eg: console) require the Root Panel layout tree to be initialized to defaults.
-  local cur_node = core.root_panel.root_node
-  cur_node.pane_id = "left"
-  cur_node:split("up", core.title_bar, {y = true})
-  cur_node = cur_node.b
-  cur_node:split("up", core.nag_view, {y = true})
-  cur_node = cur_node.b
-  cur_node = cur_node:split("down", core.global_prompt_bar, {y = true})
-  cur_node = cur_node:split("down", core.status_bar, {y = true})
-
   -- Load default commands first so plugins/core features can override them.
   command.add_defaults()
 
-  -- Build the two top-level panes before plugins register permanent Pane Views.
+  -- Create the first Pane before plugins add or replace Views.
   local panes = require "core.panes"
-  panes.ensure_nodes()
-  panes.ensure_left_placeholder()
+  panes.create()
 
   -- Shared Point of Interest navigation commands/keymaps are loaded before
   -- plugins so providers can attach themselves during plugin initialization.
@@ -1653,12 +1642,9 @@ function core.project_absolute_path(path) return core.root_project():absolute_pa
 
 local function close_buffer_view(buffer)
   core.add_thread(function()
-    local views = core.root_panel.root_node:get_children()
-    for _, view in ipairs(views) do
-      if view.buffer == buffer then
-        local node = core.root_panel.root_node:get_node_for_view(view)
-        node:close_view(core.root_panel.root_node, view)
-      end
+    local panes = require "core.panes"
+    for _, pane in ipairs(panes.ordered()) do
+      if pane.current_view.buffer == buffer then panes.close(pane) end
     end
   end)
 end
@@ -1715,8 +1701,7 @@ end
 
 function core.get_views_referencing_buffer(buffer)
   local res = {}
-  local views = core.root_panel.root_node:get_children()
-  for _, view in ipairs(views) do
+  for _, view in ipairs(core.root_panel:children()) do
     if view.buffer == buffer then table.insert(res, view) end
   end
   return res
