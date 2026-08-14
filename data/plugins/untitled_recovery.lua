@@ -234,6 +234,11 @@ local function try_load_manifest_file(file, paths)
   local ok, data = pcall(fn)
   if not ok then return nil, data end
   if type(data) ~= "table" then return nil, "manifest did not return a table" end
+  if data.buffers == nil and type(data.docs) == "table" then
+    data.buffers = data.docs
+    data.docs = nil
+    log_quiet("Untitled recovery: migrated pre-Buffer manifest %s", file)
+  end
   if type(data.buffers) ~= "table" then return nil, "manifest buffers field is missing or invalid" end
   if data.project and not common.path_equals(data.project, paths.project) then
     return nil, string.format("manifest project mismatch: %s", tostring(data.project))

@@ -514,11 +514,6 @@ end, {
   ["git:focus-diff-pane"] = function(view)
     if view and view.focus_diff_pane then view:focus_diff_pane() end
   end,
-
-  ["git:close-selected-tab"] = function(view)
-    if not view then return end
-    remove_pane_view(view)
-  end,
 })
 
 local function close_git_view_tab(view)

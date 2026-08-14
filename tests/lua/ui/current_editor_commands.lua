@@ -58,4 +58,18 @@ test.describe("Current Editor command routing", function()
     test.ok(command.perform("text:newline"))
     test.equal(#pane.current_view.buffer.lines, 2)
   end)
+
+  test.it("evaluates View command predicates with zero Panes", function()
+    panes.reset_for_tests()
+    core.active_view = nil
+    for _, name in ipairs {
+      "find-replace:repeat-find",
+      "find-replace:select-add-next",
+      "indent:switch-file-to-tabs-indentation",
+      "indent:switch-file-to-spaces-indentation",
+    } do
+      local ok, err = pcall(command.is_valid, name)
+      test.ok(ok, name .. ": " .. tostring(err))
+    end
+  end)
 end)

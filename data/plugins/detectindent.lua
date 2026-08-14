@@ -481,7 +481,7 @@ command.add("core.textview", {
 
 command.add(
   function()
-    return core.active_view:extends(Editor)
+    return core.active_view and core.active_view:extends(Editor)
       and cache[core.active_view.buffer]
       and cache[core.active_view.buffer].type == "soft"
   end, {
@@ -492,7 +492,7 @@ command.add(
 
 command.add(
   function()
-    return core.active_view:extends(Editor)
+    return core.active_view and core.active_view:extends(Editor)
       and cache[core.active_view.buffer]
       and cache[core.active_view.buffer].type == "hard"
   end, {

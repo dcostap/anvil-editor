@@ -1,4 +1,5 @@
 local Buffer = require "core.buffer"
+local command = require "core.command"
 local core = require "core"
 local common = require "core.common"
 local Editor = require "core.editor"
@@ -55,6 +56,12 @@ test.describe("Pane Command Bar", function()
     test.equal(core.global_prompt_bar.position.x, pane.position.x)
     core.global_prompt_bar:exit(false)
     test.equal(core.active_view, source)
+  end)
+
+  test.it("opens through the canonical View command", function()
+    local pane = panes.create { factory = function() return View() end }
+    test.ok(command.perform("view:open-command-bar"))
+    test.equal(core.global_prompt_bar.pane_scope, pane)
   end)
 
   test.it("opens Untitled and file Editors in the source Pane", function(context)

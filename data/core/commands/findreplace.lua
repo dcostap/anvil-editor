@@ -14,7 +14,9 @@ local found_expression
 local FIND_NAV_VISIBLE_MARGIN_LINES = 4
 
 local function buffer()
-  local is_TextView = core.active_view:extends(TextView) and not core.active_view:is(GlobalPromptBar)
+  local active = core.active_view
+  local is_TextView = active and active.extends and active:extends(TextView)
+    and not active:is(GlobalPromptBar)
   return is_TextView and core.active_view.buffer or (last_view and last_view.buffer)
 end
 
@@ -155,7 +157,9 @@ local function replace(kind, default, fn)
 end
 
 local function has_selection()
-  return core.active_view:extends(TextView) and core.active_view.buffer:has_selection()
+  local active = core.active_view
+  return active and active.extends and active:extends(TextView)
+    and active.buffer:has_selection()
 end
 
 local function has_unique_selection()
@@ -292,10 +296,11 @@ command.add("core.textview!", {
 
 local function valid_for_finding()
   -- Allow using this while in the GlobalPromptBar
-  if core.active_view:is(GlobalPromptBar) and last_view then
+  local active = core.active_view
+  if active and active.is and active:is(GlobalPromptBar) and last_view then
     return true, last_view
   end
-  return core.active_view:extends(TextView), core.active_view
+  return active and active.extends and active:extends(TextView) or false, active
 end
 
 command.add(valid_for_finding, {

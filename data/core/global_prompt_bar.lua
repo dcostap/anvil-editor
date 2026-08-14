@@ -629,8 +629,9 @@ local root_panel_on_mouse_released = RootPanel.on_mouse_released
 
 ---Intercept mouse movement to check Global Prompt Bar suggestions first.
 function RootPanel:on_mouse_moved(...)
-  if core.active_view:is(GlobalPromptBar) then
-    if core.active_view:on_mouse_moved(...) then return true end
+  local active = core.active_view
+  if active and active.is and active:is(GlobalPromptBar) then
+    if active:on_mouse_moved(...) then return true end
   end
   return root_panel_on_mouse_moved(self, ...)
 end
@@ -638,8 +639,9 @@ end
 
 ---Intercept mouse wheel to check Global Prompt Bar suggestions first.
 function RootPanel:on_mouse_wheel(...)
-  if core.active_view:is(GlobalPromptBar) then
-    if core.active_view:on_mouse_wheel(...) then return true end
+  local active = core.active_view
+  if active and active.is and active:is(GlobalPromptBar) then
+    if active:on_mouse_wheel(...) then return true end
   end
   return root_panel_on_mouse_wheel(self, ...)
 end
@@ -647,8 +649,9 @@ end
 
 ---Intercept mouse press to check Global Prompt Bar suggestions first.
 function RootPanel:on_mouse_pressed(...)
-  if core.active_view:is(GlobalPromptBar) then
-    if core.active_view:on_mouse_pressed(...) then return true end
+  local active = core.active_view
+  if active and active.is and active:is(GlobalPromptBar) then
+    if active:on_mouse_pressed(...) then return true end
   end
   return root_panel_on_mouse_pressed(self, ...)
 end
@@ -656,8 +659,9 @@ end
 
 ---Intercept mouse release to check Global Prompt Bar suggestions first.
 function RootPanel:on_mouse_released(...)
-  if core.active_view:is(GlobalPromptBar) then
-    if core.active_view:on_mouse_released(...) then return true end
+  local active = core.active_view
+  if active and active.is and active:is(GlobalPromptBar) then
+    if active:on_mouse_released(...) then return true end
   end
   return root_panel_on_mouse_released(self, ...)
 end

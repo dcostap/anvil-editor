@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local layout = require "core.pane_layout"
 local panes = require "core.panes"
 local View = require "core.view"
@@ -110,5 +111,26 @@ test.describe("Pane navigation and movement", function()
     test.not_ok(constructed)
     test.equal(panes.count(), 1)
     test.ok(panes.validate())
+  end)
+
+  test.it("creates a new singleton Pane through the canonical command", function()
+    local first = panes.create { factory = factory("one") }
+    test.ok(command.perform("pane:new"))
+    local created = panes.active()
+    test.not_equal(created, first)
+    test.equal(panes.count(), 2)
+    test.equal(#panes.groups, 2)
+    test.ok(created.current_view.buffer.intellij_untitled)
+  end)
+
+  test.it("splits the active Pane through the canonical command", function()
+    local first = panes.create { factory = factory("one") }
+    test.ok(command.perform("pane:split-right"))
+    local created = panes.active()
+    test.not_equal(created, first)
+    test.equal(panes.count(), 2)
+    test.equal(created.group, first.group)
+    test.equal(first.current_view:get_name(), "one")
+    test.ok(created.current_view.buffer.intellij_untitled)
   end)
 end)

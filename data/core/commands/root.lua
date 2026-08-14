@@ -8,6 +8,13 @@ local function active_pane()
   return pane ~= nil, pane
 end
 
+local function new_untitled_editor()
+  local Editor = require "core.editor"
+  local buffer = core.open_buffer()
+  local untitled = require "plugins.untitled_tabs"
+  return Editor(untitled.tag_buffer(buffer))
+end
+
 local commands = {
   ["pane:close"] = function(pane) return panes.close(pane) end,
   ["view:close"] = function(pane) return panes.close_view(pane) end,
@@ -20,11 +27,11 @@ local commands = {
     end
     return result
   end,
-  ["pane:move-left"] = function(pane)
+  ["pane:move-previous"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index > 1 then return panes.move(pane, ordered[index - 1], "left") end
   end,
-  ["pane:move-right"] = function(pane)
+  ["pane:move-next"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index < #ordered then return panes.move(pane, ordered[index + 1], "right") end
   end,
@@ -37,6 +44,12 @@ local commands = {
     if #ordered > 0 then return panes.focus_index(index % #ordered + 1) end
   end,
 }
+
+for _, direction in ipairs { "left", "right", "up", "down" } do
+  commands["pane:split-" .. direction] = function(pane)
+    return panes.split(pane, direction, { factory = new_untitled_editor })
+  end
+end
 
 for _, direction in ipairs { "left", "right", "up", "down" } do
   commands["pane:focus-" .. direction] = function()
@@ -53,6 +66,9 @@ end
 command.add(active_pane, commands)
 
 command.add(nil, {
+  ["pane:new"] = function()
+    return panes.create { factory = new_untitled_editor }
+  end,
   ["pane:close-or-quit"] = function()
     local pane = panes.active()
     if pane then return panes.close(pane) end

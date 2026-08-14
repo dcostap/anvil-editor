@@ -1260,11 +1260,11 @@ end
 ---@return boolean
 function StatusBar:on_mouse_pressed(button, x, y, clicks)
   if not self.visible then return end
-  core.set_active_view(core.last_active_view)
+  if core.last_active_view then core.set_active_view(core.last_active_view) end
   if
     system.get_time() < self.message_timeout
     and
-    not core.active_view:is(LogView)
+    not (core.active_view and core.active_view:is(LogView))
   then
     command.perform "core:open-log"
   else

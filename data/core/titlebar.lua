@@ -45,6 +45,23 @@ local function draw_centered_text(font, text, rect, color)
     rect.y + math.floor((rect.h - height) / 2), color)
 end
 
+local function fit_text(font, text, max_width)
+  if max_width <= 0 then return "" end
+  if font:get_width(text) <= max_width then return text end
+  local ellipsis = "…"
+  if font:get_width(ellipsis) > max_width then return "" end
+  local low, high = 0, text:ulen()
+  while low < high do
+    local middle = math.ceil((low + high) / 2)
+    if font:get_width(text:usub(1, middle) .. ellipsis) <= max_width then
+      low = middle
+    else
+      high = middle - 1
+    end
+  end
+  return text:usub(1, low) .. ellipsis
+end
+
 function TitleBar:__tostring() return "TitleBar" end
 
 function TitleBar:new()
@@ -250,7 +267,9 @@ function TitleBar:draw()
   if self.size.y <= 0 then return end
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.titlebar)
   local font = style.font
-  draw_centered_text(font, project_name(), self.project_rect, style.text)
+  draw_centered_text(font,
+    fit_text(font, project_name(), math.max(0, self.project_rect.w - style.padding.x * 2)),
+    self.project_rect, style.text)
   for i, entry in ipairs(self:get_pane_entries()) do
     local rect = self.entries[i]
     if rect then
@@ -264,9 +283,7 @@ function TitleBar:draw()
     end
     local label_rect = { x = rect.x + style.padding.x, y = rect.y,
       w = math.max(0, rect.w - style.padding.x * 2 - 20 * SCALE), h = rect.h }
-    local label = entry.label
-    while #label > 1 and font:get_width(label) > label_rect.w do label = label:sub(1, -2) end
-    if label ~= entry.label and #label > 1 then label = label:sub(1, -2) .. "…" end
+    local label = fit_text(font, entry.label, label_rect.w)
     renderer.draw_text(font, label, label_rect.x,
       label_rect.y + math.floor((label_rect.h - font:get_height()) / 2), style.text)
     if self.hovered_entry == i then

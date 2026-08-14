@@ -16,17 +16,19 @@ local function factory(name)
 end
 
 test.describe("Global title bar Pane entries", function()
-  local set_active_view
+  local set_active_view, projects
 
   test.before_each(function()
     panes.reset_for_tests()
     set_active_view = core.set_active_view
+    projects = core.projects
     core.set_active_view = function(view) core.active_view = view end
   end)
 
   test.after_each(function()
     panes.reset_for_tests()
     core.set_active_view = set_active_view
+    core.projects = projects
   end)
 
   test.it("shows all Panes in current numeric order", function()
@@ -94,5 +96,29 @@ test.describe("Global title bar Pane entries", function()
     local before = title.tab_offset
     test.ok(title:on_mouse_wheel(-1, 0))
     test.ok(title.tab_offset > before)
+  end)
+
+  test.it("keeps a long Project name out of the Tab lane", function()
+    core.projects = { { path = "C:/projects/Israel Mallo Martínez - ManualSistemas" } }
+    panes.create { factory = factory("notes.md") }
+    local title = TitleBar()
+    title.size.x = 700
+    title:update()
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local drawn = {}
+    renderer.draw_rect = function() end
+    renderer.draw_text = function(font, text, x, y, color)
+      drawn[#drawn + 1] = { font = font, text = text, x = x, y = y, color = color }
+      return x + font:get_width(text)
+    end
+    local ok, err = pcall(title.draw, title)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    test.ok(ok, err)
+    local project = drawn[1]
+    test.not_nil(project)
+    test.ok(project.x + project.font:get_width(project.text)
+      <= title.project_rect.x + title.project_rect.w)
   end)
 end)

@@ -65,6 +65,7 @@ local function tag_buffer(buffer, name, id)
   untitled_recovery.ensure_buffer_backing(buffer, { no_manifest = true })
   return buffer
 end
+M.tag_buffer = tag_buffer
 
 local function utf8_prefix(text, max_bytes)
   text = tostring(text or "")
@@ -574,11 +575,6 @@ local function create_empty_file(text, source_view)
 end
 
 command.add(nil, {
-  ["user:new-untitled-tab"] = function()
-    local buffer = tag_buffer(core.open_buffer())
-    core.root_panel:open_buffer(buffer)
-  end,
-
   ["user:new-file-with-path"] = function()
     local panes = require "core.panes"
     local source_view = panes.owner_for_view(core.active_view) or core.active_view
@@ -593,7 +589,7 @@ command.add(nil, {
 })
 
 keymap.add_direct {
-  ["ctrl+t"] = "user:new-untitled-tab",
+  ["ctrl+t"] = "pane:new",
   ["ctrl+shift+n"] = "user:new-file-with-path",
 }
 

@@ -77,4 +77,22 @@ test.describe("command palette toggle status", function()
       state = true,
     })
   end)
+
+  test.it("opens the command palette with zero Panes", function()
+    panes.reset_for_tests()
+    core.active_view = nil
+    local ok, err = pcall(fuzzy_searcher.open, ">")
+    test.ok(ok, err)
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker:close()
+    test.is_nil(core.active_view)
+  end)
+
+  test.it("restores the source Pane when the command palette closes", function(context)
+    local view = open_editor(context, "source\n")
+    fuzzy_searcher.open(">")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker:close()
+    test.equal(core.active_view, view)
+  end)
 end)

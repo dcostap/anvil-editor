@@ -5003,6 +5003,7 @@ end
 
 function FSView:close()
   fuzzy_focus_log("close", self)
+  local input_view = self.input and self.input.textview
   core.root_panel:hide_app_overlay(self)
   self:record_prompt_history()
   self:cancel_deferred_loading_feedback()
@@ -5016,6 +5017,10 @@ function FSView:close()
   self:destroy()
   if active_view == self then active_view = nil end
   if core.fuzzy_searcher_active_view == self then core.fuzzy_searcher_active_view = nil end
+  if not panes.contains(self.source_pane)
+      and (core.active_view == self or core.active_view == input_view) then
+    core.clear_active_view(core.active_view)
+  end
 end
 
 function FSView:selected_file_path()

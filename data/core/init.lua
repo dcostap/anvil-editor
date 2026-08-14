@@ -277,7 +277,8 @@ end
 function core.current_project(filename)
   if not filename then
     if
-      core.active_view:extends(TextView)
+      core.active_view
+      and core.active_view:extends(TextView)
       and
       core.active_view.buffer and core.active_view.buffer.abs_filename
     then

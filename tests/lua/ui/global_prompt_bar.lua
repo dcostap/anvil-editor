@@ -2,6 +2,16 @@ local core = require "core"
 local config = require "core.config"
 local test = require "core.test"
 
+test.describe("Global Prompt Bar pointer interception", function()
+  test.it("routes pointer movement when no View owns focus", function()
+    local active = core.active_view
+    core.active_view = nil
+    local ok, err = pcall(core.root_panel.on_mouse_moved, core.root_panel, 0, 0, 0, 0)
+    core.active_view = active
+    test.ok(ok, err)
+  end)
+end)
+
 local function capture_overlay_rects()
   local rects = {}
   local alphas = {}

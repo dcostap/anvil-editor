@@ -447,6 +447,23 @@ test.describe("untitled recovery integration", function()
     test.equal(read_file(join_path(paths.buffers, "crash-id.txt")), "new temp text\n")
   end)
 
+  test.it("loads recovery manifests saved before the Buffer naming cut", function(context)
+    local paths = recovery.project_paths(context.project_dir)
+    test.ok(common.mkdirp(paths.root))
+    write_file(paths.manifest, [[return {
+      version = 1,
+      project = "]] .. context.project_dir:gsub("\\", "\\\\") .. [[",
+      docs = {
+        { id = "old-id", name = "Untitled-Old", backing = "buffers\\old-id.txt" }
+      }
+    }]])
+
+    local manifest = recovery.load_manifest(context.project_dir)
+    test.equal(#manifest.buffers, 1)
+    test.equal(manifest.buffers[1].id, "old-id")
+    test.equal(manifest.docs, nil)
+  end)
+
   test.test("workspace-backed untitled buffers are not duplicated when manifest is missing", function(context)
     local paths = recovery.project_paths(context.project_dir)
     test.ok(common.mkdirp(paths.buffers))

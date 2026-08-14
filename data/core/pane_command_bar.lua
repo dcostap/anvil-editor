@@ -144,7 +144,7 @@ function M.open(target)
 end
 
 command.add(nil, {
-  ["pane-command-bar:open"] = function() return M.open() end,
+  ["view:open-command-bar"] = function() return M.open() end,
 })
 
 return M
