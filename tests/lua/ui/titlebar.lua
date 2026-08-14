@@ -68,6 +68,27 @@ test.describe("Global title bar Pane entries", function()
     test.equal(panes.active().current_view:get_name(), "one")
   end)
 
+  test.it("uses content-sized Tabs instead of filling the title lane", function()
+    panes.create { factory = factory("one") }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local entry = title:get_pane_entries()[1]
+    test.ok(entry.w < title.size.x / 2)
+  end)
+
+  test.it("uses the full Tab surface to focus its Pane", function()
+    local one = panes.create { factory = factory("one") }
+    panes.create { factory = factory("two") }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local entry = title:get_pane_entries()[1]
+    test.ok(title:on_mouse_pressed("left", entry.x + entry.w - 2, entry.y + 2, 1))
+    test.equal(panes.active(), one)
+    test.equal(panes.count(), 2)
+  end)
+
   test.it("marks Pane Group boundaries and closes a Tab with middle-click", function()
     local one = panes.create { factory = factory("one") }
     panes.split(one, "right", { factory = factory("two") })
@@ -105,15 +126,18 @@ test.describe("Global title bar Pane entries", function()
     title.size.x = 700
     title:update()
     local old_draw_rect = renderer.draw_rect
+    local old_draw_rounded_rect = renderer.draw_rounded_rect
     local old_draw_text = renderer.draw_text
     local drawn = {}
     renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
     renderer.draw_text = function(font, text, x, y, color)
       drawn[#drawn + 1] = { font = font, text = text, x = x, y = y, color = color }
       return x + font:get_width(text)
     end
     local ok, err = pcall(title.draw, title)
     renderer.draw_rect = old_draw_rect
+    renderer.draw_rounded_rect = old_draw_rounded_rect
     renderer.draw_text = old_draw_text
     test.ok(ok, err)
     local project = drawn[1]

@@ -7,6 +7,9 @@ local View = require "core.view"
 local TitleBar = View:extend()
 
 local CAPTION_COUNT = 3
+local TAB_SIDE_INSET = math.floor(3 * SCALE)
+local TAB_TOP_INSET = math.floor(4 * SCALE)
+local TAB_RADIUS = math.floor(8 * SCALE)
 
 local function panes()
   return core.panes or require "core.panes"
@@ -62,6 +65,28 @@ local function fit_text(font, text, max_width)
   return text:usub(1, low) .. ellipsis
 end
 
+local function pane_label(number, pane)
+  local view = pane.current_view
+  local name = view.get_name and view:get_name() or "View"
+  return string.format("%d %s", number, name)
+end
+
+local function preferred_tab_width(number, pane)
+  local min_width = config.integrated_titlebar_tab_min_width or 80 * SCALE
+  local max_width = config.integrated_titlebar_tab_max_width or style.tab_width
+  local width = style.font:get_width(pane_label(number, pane)) + style.padding.x * 2
+  return common.clamp(width, min_width, math.max(min_width, max_width))
+end
+
+local function draw_tab_tile(x, y, w, h, color)
+  local side_inset = math.min(TAB_SIDE_INSET, math.max(0, w / 2 - 1))
+  local top_inset = math.min(TAB_TOP_INSET, math.max(0, h - 1))
+  local tile_width = math.max(1, w - side_inset * 2)
+  local radius = math.min(TAB_RADIUS, tile_width / 2)
+  renderer.draw_rounded_rect(x + side_inset, y + top_inset, tile_width,
+    math.max(1, h - top_inset + radius), radius, color)
+end
+
 function TitleBar:__tostring() return "TitleBar" end
 
 function TitleBar:new()
@@ -80,19 +105,17 @@ function TitleBar:get_pane_entries()
   local visible = panes().visible_group()
   local ordered = panes().ordered()
   for i, pane in ipairs(ordered) do
-    local name = pane.current_view.get_name and pane.current_view:get_name() or "View"
     local geometry = self.entries[i] or {}
     result[i] = {
       pane = pane,
       number = i,
-      label = string.format("%d %s", i, name),
+      label = pane_label(i, pane),
       active = pane == active,
       visible = pane.group == visible,
       x = geometry.x,
       y = geometry.y,
       w = geometry.w,
       h = geometry.h,
-      close_x = geometry.close_x,
       group_start = i == 1 or ordered[i - 1].group ~= pane.group,
     }
   end
@@ -125,33 +148,36 @@ function TitleBar:update_geometry()
   local ordered = panes().ordered()
   local count = #ordered
   self.entries = {}
-  if count > 0 then
-    local min_width = config.integrated_titlebar_tab_min_width or 48 * SCALE
-    local max_width = config.integrated_titlebar_tab_max_width or 300 * SCALE
-    local visible_count = math.max(1, math.min(count, math.floor(available / math.max(1, min_width))))
-    local max_offset = math.max(1, count - visible_count + 1)
-    self.tab_offset = common.clamp(self.tab_offset or 1, 1, max_offset)
+  if count > 0 and available > 0 then
+    local widths = {}
+    for i, pane in ipairs(ordered) do widths[i] = preferred_tab_width(i, pane) end
+    self.tab_offset = common.clamp(self.tab_offset or 1, 1, count)
     local active = panes().active()
     if active ~= self.last_active_pane then
       self.last_active_pane = active
       local active_index = panes().number(active)
       if active_index and active_index < self.tab_offset then self.tab_offset = active_index end
-      if active_index and active_index >= self.tab_offset + visible_count then
-        self.tab_offset = active_index - visible_count + 1
+      if active_index then
+        local used = 0
+        for i = self.tab_offset, active_index do used = used + widths[i] end
+        while used > available and self.tab_offset < active_index do
+          used = used - widths[self.tab_offset]
+          self.tab_offset = self.tab_offset + 1
+        end
       end
     end
-    local width = common.clamp(available / visible_count,
-      math.min(min_width, available / visible_count), max_width)
-    local last = math.min(count, self.tab_offset + visible_count - 1)
-    for i = self.tab_offset, last do
-      local x = start_x + (i - self.tab_offset) * width
+    local x = start_x
+    for i = self.tab_offset, count do
+      local width = math.min(widths[i], available)
+      if i > self.tab_offset and x + width > start_x + available then break end
       self.entries[i] = {
         x = x,
         y = self.position.y,
         w = width,
         h = h,
-        close_x = x + width - math.min(22 * SCALE, width / 3),
       }
+      x = x + width
+      if x >= start_x + available then break end
     end
   end
 end
@@ -231,11 +257,7 @@ function TitleBar:on_mouse_pressed(button, x, y, clicks)
   local index, rect = self:entry_at(x, y)
   if index then
     local pane = panes().ordered()[index]
-    if pane and x >= rect.close_x then
-      panes().close(pane)
-    elseif pane then
-      panes().focus(pane)
-    end
+    if pane then panes().focus(pane) end
     return true
   end
   if clicks == 2 and core.window then
@@ -273,23 +295,21 @@ function TitleBar:draw()
   for i, entry in ipairs(self:get_pane_entries()) do
     local rect = self.entries[i]
     if rect then
-    local color = entry.active and (style.titlebar_tab_active or style.background)
-      or self.hovered_entry == i and (style.titlebar_tab_hover or style.background2)
-      or entry.visible and (style.background2 or style.titlebar)
-      or style.titlebar
-    renderer.draw_rect(rect.x, rect.y, rect.w, rect.h, color)
-    if entry.group_start and i > 1 then
-      renderer.draw_rect(rect.x, rect.y, math.max(1, 2 * SCALE), rect.h, style.divider)
-    end
-    local label_rect = { x = rect.x + style.padding.x, y = rect.y,
-      w = math.max(0, rect.w - style.padding.x * 2 - 20 * SCALE), h = rect.h }
-    local label = fit_text(font, entry.label, label_rect.w)
-    renderer.draw_text(font, label, label_rect.x,
-      label_rect.y + math.floor((label_rect.h - font:get_height()) / 2), style.text)
-    if self.hovered_entry == i then
-      draw_centered_text(font, "×", { x = rect.close_x, y = rect.y,
-        w = rect.x + rect.w - rect.close_x, h = rect.h }, style.text)
-    end
+      local hovered = self.hovered_entry == i
+      if entry.active then
+        draw_tab_tile(rect.x, rect.y, rect.w, rect.h,
+          style.titlebar_tab_active or style.background)
+      end
+      if hovered then
+        draw_tab_tile(rect.x, rect.y, rect.w, rect.h,
+          style.titlebar_tab_hover or style.background2)
+      end
+      local label_rect = { x = rect.x + style.padding.x, y = rect.y,
+        w = math.max(0, rect.w - style.padding.x * 2), h = rect.h }
+      local label = fit_text(font, entry.label, label_rect.w)
+      renderer.draw_text(font, label, label_rect.x,
+        label_rect.y + math.floor((label_rect.h - font:get_height()) / 2),
+        (entry.active or hovered) and style.text or style.dim)
     end
   end
   local glyphs = { "—", core.window_mode == "maximized" and "❐" or "□", "×" }
