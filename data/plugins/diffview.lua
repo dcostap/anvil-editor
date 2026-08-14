@@ -1804,7 +1804,7 @@ command.add(text_compare_with_predicate, {
 
 
 
-local compare_add_to_root_node
+local present_diff_view
 local diffview
 
 local side_names = { left = 1, right = 2, base = 3, a = 1, b = 2, [1] = 1, [2] = 2, [3] = 3 }
@@ -1911,7 +1911,7 @@ function DiffRequestController:reload(opts)
     })
     attached = true
   elseif not opts.noshow then
-    compare_add_to_root_node(view)
+    present_diff_view(view)
     attached = true
   end
   if old_view then
@@ -2015,14 +2015,14 @@ function diffview.open(request, noshow)
   if not normalized then return nil, err end
   local view = DiffView(normalized)
   if not noshow then
-    compare_add_to_root_node(view)
+    present_diff_view(view)
   end
   return view
 end
 
----Helper differences view to rootpanel add.
+---Present a Diff View in the active Pane.
 ---@param view plugins.diffview.view
-compare_add_to_root_node = function(view)
+present_diff_view = function(view)
   panes.place(function() return view end, {
     placement = "current",
     focus = true,
@@ -2040,7 +2040,7 @@ end
 local function compare_start(a, b, ct, names, noshow)
   local view = DiffView(legacy_request(a, b, ct, names))
   if not noshow then
-    compare_add_to_root_node(view)
+    present_diff_view(view)
   end
   return view
 end

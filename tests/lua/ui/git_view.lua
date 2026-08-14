@@ -15,37 +15,6 @@ local function fake_window(id)
   return { get_size = function() return 640, 480 end, id = id }
 end
 
-local function fake_root()
-  local node = {
-    type = "leaf",
-    added = {},
-    active_view = nil,
-    views = {},
-    add_view = function(self, view)
-      self.added[#self.added + 1] = view
-      self.views[#self.views + 1] = view
-      self.active_view = view
-    end,
-    set_active_view = function(self, view)
-      self.active_view = view
-    end,
-    remove_view = function(self, root, view)
-      for i, candidate in ipairs(self.views) do
-        if candidate == view then table.remove(self.views, i); break end
-      end
-      if self.active_view == view then self.active_view = self.views[#self.views] end
-    end,
-  }
-  return {
-    size = { x = 0, y = 0 },
-    root_node = node,
-    get_active_node_default = function() return node end,
-    get_left_pane = function() return node end,
-    update = function() end,
-    draw = function() end,
-  }
-end
-
 local fake_backend = {
   repo_for_path = function(path) return { root = path } end,
   build_log_args = function() return { "log" } end,
@@ -80,9 +49,22 @@ local function open_fake_git_view(project)
   return git_view.open_view(project, {
     window = fake_window(1111),
     window_id = 1111,
-    root = fake_root(),
     git_view_opts = { backend = fake_backend },
   })
+end
+
+local function session_views(session)
+  local result, seen = {}, {}
+  for _, pane in ipairs(panes.ordered()) do
+    for _, entry in ipairs(pane.history.entries) do
+      local view = entry.view
+      if view and view.git_session == session and not seen[view] then
+        seen[view] = true
+        result[#result + 1] = view
+      end
+    end
+  end
+  return result
 end
 
 test.describe("Git View command", function()
@@ -114,13 +96,13 @@ test.describe("Git View command", function()
   end)
 
   test.test("opening a Git Pane Tab focuses the visible list TextView", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     test.equal(core.active_view.git_owner_view, view)
     test.equal(core.active_view.git_pane, "log-list")
   end)
 
   test.test("focus gained restores Git Log pane focus from the shell view", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     core.active_view = view
     core.active_window = core.window
 
@@ -131,7 +113,7 @@ test.describe("Git View command", function()
   end)
 
   test.test("clicking a commit row updates selected commit details", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 600
     view.model:log_tab().commits = {
@@ -141,17 +123,17 @@ test.describe("Git View command", function()
     local second_row_y = view:commit_list_y() + view:row_height()
     view:on_mouse_pressed("left", 10, second_row_y, 1)
     test.equal(view.model:selected_commit().hash, "b")
-    test.equal(tw.hidden, false)
+    test.equal(session.hidden, false)
   end)
 
   test.it("does not repeat the Git Pane Tab title inside the Git screen", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     view.position.y = 30
     test.equal(view:commit_list_y(), view.position.y + style.padding.y)
   end)
 
-  test.test("opened Git items become real tool-window tabs", function(context)
-    local tw, view = open_fake_git_view(context.project)
+  test.test("opened Git items become Pane history Views", function(context)
+    local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-test",
       kind = "commit_diff",
@@ -160,18 +142,18 @@ test.describe("Git View command", function()
       changed_files = {},
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
 
     test.not_nil(tab_view)
     test.equal(tab_view.tab_id, "diff-test")
     test.equal(view.model.active_tab, "diff-test")
-    test.equal(tw.root:get_active_node_default().active_view, tab_view)
-    test.equal(#tw.root:get_active_node_default().views, 2)
-    test.equal(tw.hidden, false)
+    test.equal(panes.active().current_view, tab_view)
+    test.equal(#session_views(session), 2)
+    test.equal(session.hidden, false)
   end)
 
   test.test("file history click hit-testing matches rendered rows", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 600
     local tab = {
@@ -187,7 +169,7 @@ test.describe("Git View command", function()
       selected_commit = 1,
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local history_view = git_view.ensure_tab_view(tw, tab, true)
+    local history_view = git_view.ensure_tab_view(session, tab, true)
     history_view.position.x, history_view.position.y = 0, 0
     history_view.size.x, history_view.size.y = 800, 600
     tab.scroll = history_view:row_height()
@@ -202,11 +184,11 @@ test.describe("Git View command", function()
     tab.scroll = 999999
     history_view:clamp_history_scroll(tab)
     test.ok(tab.scroll < 999999)
-    test.equal(tw.hidden, false)
+    test.equal(session.hidden, false)
   end)
 
   test.test("selecting a history commit loads changed files for details", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 600
     local changed_file_calls = 0
@@ -235,7 +217,7 @@ test.describe("Git View command", function()
       selected_commit = 1,
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local history_view = git_view.ensure_tab_view(tw, tab, true)
+    local history_view = git_view.ensure_tab_view(session, tab, true)
     history_view.position.x, history_view.position.y = 0, 0
     history_view.size.x, history_view.size.y = 800, 600
     changed_file_calls = 0
@@ -252,7 +234,7 @@ test.describe("Git View command", function()
   end)
 
   test.it("commit diff file list renders changed files as a project-relative tree", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-tree",
       kind = "commit_diff",
@@ -266,7 +248,7 @@ test.describe("Git View command", function()
       selected_file = 3,
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
 
     tab_view:update_pane_buffers()
     local list = tab_view:pane_view("file-list")
@@ -319,7 +301,7 @@ test.describe("Git View command", function()
   end)
 
   test.it("keeps an inactive list caret on the collapsed ancestor of its selected file", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-collapsed-selection",
       kind = "commit_diff",
@@ -332,7 +314,7 @@ test.describe("Git View command", function()
       selected_file = 2,
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
     tab_view:update_pane_buffers()
     local list = tab_view:pane_view("file-list")
     core.active_view = list
@@ -349,7 +331,7 @@ test.describe("Git View command", function()
   end)
 
   test.it("activates a changed file from Git Log details with that file preselected", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local commit = {
       hash = "details-tree",
       subject = "Details tree",
@@ -397,7 +379,7 @@ test.describe("Git View command", function()
   end)
 
   test.it("invalidates embedded Path Tree layout when Git details rows are replaced", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local long_name = string.rep("i", 260) .. ".txt"
     local commit = {
       hash = "details-layout",
@@ -428,7 +410,7 @@ test.describe("Git View command", function()
   end)
 
   test.test("commit diff tabs can focus diff content and return to the Git list", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-focus",
       kind = "commit_diff",
@@ -443,14 +425,14 @@ test.describe("Git View command", function()
       diff_generation = 1,
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
     core.active_view = tab_view
 
     test.equal(command.perform("git:focus-diff-pane"), true)
     test.equal(core.active_view.git_owner_view, tab_view)
-    tw:activate_root()
+    session:activate_root()
     test.equal(core.active_view.git_owner_view, tab_view)
-    git_view.sync_tab_views(tw, false)
+    git_view.sync_tab_views(session, false)
     test.equal(core.active_view.git_owner_view, tab_view)
     test.equal(command.perform("git:focus-list-pane"), true)
     test.equal(core.active_view.git_owner_view, tab_view)
@@ -458,7 +440,7 @@ test.describe("Git View command", function()
   end)
 
   test.it("focused Git diff TextView becomes the active Git pane", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-caret",
       kind = "commit_diff",
@@ -473,7 +455,7 @@ test.describe("Git View command", function()
       diff_generation = 1,
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
     tab_view.position.x, tab_view.position.y = 0, 0
     tab_view.size.x, tab_view.size.y = 800, 600
 
@@ -486,7 +468,7 @@ test.describe("Git View command", function()
 
   test.it("keeps Git Log pane TextViews unwrapped", function(context)
     config.plugins.linewrapping.enable_by_default = true
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     view:update_pane_buffers()
     local list = view:pane_view("log-list")
     local details = view:pane_view("details")
@@ -495,7 +477,7 @@ test.describe("Git View command", function()
   end)
 
   test.test("pane focus cycle enters Log list and details TextViews", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     core.active_view = view
 
     test.equal(command.perform("git:focus-next-pane"), true)
@@ -503,30 +485,30 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_pane, "log-list")
     test.equal(core.active_view:get_gutter_width(), 0)
     test.equal(core.active_view:draw_line_gutter(1, 0, 0, 0), core.active_view:get_line_height())
-    tw:activate_root()
+    session:activate_root()
     test.equal(core.active_view.git_pane, "log-list")
     core.active_view.buffer:set_selection(1, 2)
-    tw:activate_root()
+    session:activate_root()
     test.equal(select(2, core.active_view.buffer:get_selection()), 2)
     test.equal(command.perform("git:focus-next-pane"), true)
     test.equal(core.active_view.git_pane, "details")
   end)
 
   test.it("opens and restores a Git View through Pane history", function(context)
-    local tw, view = git_view.open_view(context.project, {
+    local session, view = git_view.open_view(context.project, {
       root = core.root_panel,
       git_view_opts = { backend = fake_backend },
     })
     local pane = panes.pane_for_view(view)
     test.not_nil(pane)
     panes.present(View(), { pane = pane })
-    tw:activate_root()
+    session:activate_root()
     test.equal(pane.current_view, view)
     test.equal(core.active_view.git_owner_view, view)
   end)
 
   test.it("pane focus cycles through Git diff list and both text panes", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-panes",
       kind = "commit_diff",
@@ -541,12 +523,12 @@ test.describe("Git View command", function()
       diff_generation = 1,
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
     core.active_view = tab_view
 
     test.equal(command.perform("git:focus-next-pane"), true)
     test.equal(core.active_view.git_pane, "file-list")
-    tw:activate_root()
+    session:activate_root()
     test.equal(core.active_view.git_pane, "file-list")
     test.equal(command.perform("git:focus-next-pane"), true)
     local diff = tab.diff_view
@@ -583,7 +565,7 @@ test.describe("Git View command", function()
   end)
 
   test.test("keyboard row commands navigate and activate Git rows", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     core.active_view = view
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 600
@@ -599,14 +581,14 @@ test.describe("Git View command", function()
     test.equal(list.buffer:get_selection(), 2)
     test.equal(command.perform("poi:activate"), true)
     test.equal(view.model:selected_tab().kind, "commit_diff")
-    test.equal(#tw.root:get_active_node_default().views, 2)
+    test.equal(#session_views(session), 2)
 
     core.active_view = {}
     test.equal(command.perform("git:select-next-row"), false)
   end)
 
   test.it("does not activate a Git row while another Pane View has focus", function(context)
-    local tw, view = git_view.open_view(context.project, {
+    local session, view = git_view.open_view(context.project, {
       root = core.root_panel,
       git_view_opts = { backend = fake_backend },
     })
@@ -622,7 +604,7 @@ test.describe("Git View command", function()
   end)
 
   test.test("mouse wheel scrolls a long log", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 120
     core.active_view = view
@@ -634,11 +616,11 @@ test.describe("Git View command", function()
     test.equal(view.scroll.to.y, 0)
     view:on_mouse_wheel(-1, 0)
     test.ok(view.scroll.to.y > 0)
-    test.equal(tw.hidden, false)
+    test.equal(session.hidden, false)
   end)
 
   test.it("scrolls the rendered Path Tree while navigating an inactive diff file list", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local files = {}
     for index = 1, 40 do
       local path = string.format("src/file-%03d.lua", index)
@@ -653,7 +635,7 @@ test.describe("Git View command", function()
       selected_file = 1,
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
     tab_view:update_pane_buffers()
     local list = tab_view:pane_view("file-list")
     list.position.x, list.position.y = 0, 0
@@ -671,17 +653,16 @@ test.describe("Git View command", function()
   end)
 
   test.test("saves and restores hidden Git View Pane Tab state", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local history_tab = view.model:open_file_history("src/app.lua")
     view.model.active_tab = history_tab.id
-    tw:hide()
+    session:hide()
 
-    local state = git_view.save_state(tw)
+    local state = git_view.save_state(session)
     panes.git_sessions = {}
     git_view.restore_state(context.project, state, {
         window = fake_window(2222),
         window_id = 2222,
-        root = fake_root(),
         git_view_opts = { backend = fake_backend },
     })
 
@@ -692,8 +673,31 @@ test.describe("Git View command", function()
     test.not_nil(restored.git_view.model:find_tab(history_tab.id))
   end)
 
+  test.it("round-trips the selected Git tab through Pane Workspace state", function(context)
+    core.projects = { context.project }
+    local session, view = open_fake_git_view(context.project)
+    local history_tab = view.model:open_file_history("src/app.lua")
+    local history_view = git_view.ensure_tab_view(session, history_tab, true)
+    local state = panes.save_workspace_state(function(candidate)
+      return { module = candidate:get_module(), state = candidate:get_state() }
+    end)
+    test.equal(state.panes[1].view.state.tab_id, history_tab.id)
+
+    panes.reset_for_tests()
+    panes.git_sessions = {}
+    test.ok(panes.restore_workspace_state(state, function(saved)
+      return require(saved.module).from_state(saved.state)
+    end))
+
+    local restored = panes.active().current_view
+    test.equal(restored.tab_id, history_tab.id)
+    test.equal(restored.model.active_tab, history_tab.id)
+    test.ok(restored ~= history_view)
+    test.equal(panes.git_sessions[context.project.path].git_tab_views[history_tab.id], restored)
+  end)
+
   test.test("syncing real tabs follows model tab id changes", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     view.model.repo = { root = "C:/repo" }
     local tab = {
       id = "diff-old",
@@ -705,24 +709,24 @@ test.describe("Git View command", function()
       changed_files = {},
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local old_view = git_view.ensure_tab_view(tw, tab, true)
+    local old_view = git_view.ensure_tab_view(session, tab, true)
     tab.id = "diff-new"
     tab.title = "Diff new"
     view.model.active_tab = "diff-new"
 
-    git_view.sync_tab_views(tw, true)
+    git_view.sync_tab_views(session, true)
 
-    test.equal(tw.git_tab_views["diff-old"], nil)
-    test.not_nil(tw.git_tab_views["diff-new"])
-    test.ok(tw.git_tab_views["diff-new"] ~= old_view)
-    test.equal(tw.root:get_active_node_default().active_view.tab_id, "diff-new")
+    test.equal(session.git_tab_views["diff-old"], nil)
+    test.not_nil(session.git_tab_views["diff-new"])
+    test.ok(session.git_tab_views["diff-new"] ~= old_view)
+    test.equal(panes.active().current_view.tab_id, "diff-new")
   end)
 
   test.test("restoring over an existing Git View applies saved hidden state", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local old_tab = view.model:open_file_history("old.lua")
-    git_view.ensure_tab_view(tw, old_tab, true)
-    test.equal(#tw.root:get_active_node_default().views, 2)
+    git_view.ensure_tab_view(session, old_tab, true)
+    test.equal(#session_views(session), 2)
     git_view.restore_state(context.project,
       {
         kind = "git",
@@ -733,11 +737,11 @@ test.describe("Git View command", function()
           tabs = { { id = "log", kind = "log", selected_commit = 1 } },
         },
       })
-    test.equal(tw.hidden, true)
+    test.equal(session.hidden, true)
     test.equal(view.model.active_tab, "log")
     test.equal(view.model:find_tab("history\0file\0C:/repo\0old.lua"), nil)
-    test.equal(tw.git_tab_views[old_tab.id], nil)
-    test.equal(#tw.root:get_active_node_default().views, 1)
+    test.equal(session.git_tab_views[old_tab.id], nil)
+    test.equal(#session_views(session), 1)
   end)
 
   test.test("commands refresh a hidden restored Git View before using it", function(context)
@@ -783,7 +787,6 @@ test.describe("Git View command", function()
       }, {
         window = fake_window(3333),
         window_id = 3333,
-        root = fake_root(),
         git_view_opts = { backend = backend },
     })
     local restored = panes.git_sessions[context.project.path]
@@ -799,7 +802,7 @@ test.describe("Git View command", function()
   end)
 
   test.test("close command closes the focused real Git tab", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-close",
       kind = "commit_diff",
@@ -808,28 +811,29 @@ test.describe("Git View command", function()
       changed_files = {},
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
     core.projects = { context.project }
     core.active_view = tab_view
 
     test.equal(command.perform("git:close-selected-tab"), true)
     test.equal(view.model:find_tab(tab.id), nil)
-    test.equal(tw.git_tab_views[tab.id], nil)
-    test.equal(tw.hidden, false)
+    test.equal(session.git_tab_views[tab.id], nil)
+    test.equal(session.hidden, false)
   end)
 
   test.test("closing the Git Log Pane Tab removes the owning Git session", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local closed = false
-    view:try_close(function() closed = true end)
+    local pane = panes.pane_for_view(view)
+    closed = panes.close_view(pane, { view = view })
     test.equal(closed, true)
-    test.equal(tw.hidden, true)
-    test.equal(tw.git_view, nil)
+    test.equal(session.hidden, true)
+    test.equal(session.git_view, nil)
     test.equal(panes.git_sessions[context.project.path], nil)
   end)
 
   test.test("closing the Git Log Pane Tab removes sibling Git tabs and repairs focus", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-sibling",
       kind = "commit_diff",
@@ -838,17 +842,14 @@ test.describe("Git View command", function()
       changed_files = {},
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local sibling = git_view.ensure_tab_view(tw, tab, true)
+    local sibling = git_view.ensure_tab_view(session, tab, true)
     core.active_view = sibling
-    view:try_close(function()
-      local node = tw.root:get_active_node_default()
-      node:remove_view(tw.root.root_node, view)
-    end)
+    local pane = panes.pane_for_view(view)
+    panes.close_view(pane, { view = view })
     test.equal(panes.git_sessions[context.project.path], nil)
-    for _, candidate in ipairs(tw.root:get_active_node_default().views) do
-      test.ok(candidate ~= sibling)
-    end
+    test.equal(#session_views(session), 0)
     test.ok(core.active_view ~= sibling)
+    test.ok(panes.validate())
   end)
 
   test.test("command predicates tolerate zero-Pane focus", function(context)

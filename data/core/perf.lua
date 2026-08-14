@@ -391,9 +391,8 @@ local diagnostic_frame_keys = {
   "centered_editor_should_center_not_pane",
   "centered_editor_should_center_no_width",
   "centered_editor_should_center_too_narrow",
-  "centered_editor_node_lookup_calls",
-  "centered_editor_node_lookup_cache_hits",
-  "centered_editor_node_lookup_ms",
+  "centered_editor_pane_lookup_calls",
+  "centered_editor_pane_lookup_ms",
   "centered_editor_with_geometry_calls",
   "centered_editor_with_geometry_entries",
   "centered_editor_with_geometry_nested_bypasses",
@@ -1258,9 +1257,8 @@ local function write_summary(path)
   drill_metric("Markdown image file-exists calls", "markdown_image_file_exists_calls", run_denom, "run_loop")
   drill_metric("centered should_center calls", "centered_editor_should_center_calls", run_denom, "run_loop")
   drill_metric("centered should_center true", "centered_editor_should_center_true", run_denom, "run_loop")
-  drill_metric("centered node lookup calls", "centered_editor_node_lookup_calls", run_denom, "run_loop")
-  drill_metric("centered node lookup cache hits", "centered_editor_node_lookup_cache_hits", run_denom, "run_loop")
-  drill_metric("centered node lookup ms", "centered_editor_node_lookup_ms", run_denom, "run_loop")
+  drill_metric("centered Pane lookup calls", "centered_editor_pane_lookup_calls", run_denom, "run_loop")
+  drill_metric("centered Pane lookup ms", "centered_editor_pane_lookup_ms", run_denom, "run_loop")
   drill_metric("centered geometry wrapper calls", "centered_editor_with_geometry_calls", run_denom, "run_loop")
   drill_metric("centered geometry entries", "centered_editor_with_geometry_entries", run_denom, "run_loop")
   drill_metric("centered nested bypasses", "centered_editor_with_geometry_nested_bypasses", run_denom, "run_loop")

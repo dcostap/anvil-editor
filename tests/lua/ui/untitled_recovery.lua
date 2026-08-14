@@ -28,22 +28,19 @@ local function write_file(path, text)
 end
 
 local function make_root_panel(context)
-  local node = { views = {} }
-  function node:get_children() return self.views end
-  function node:get_node_for_view() return nil end
-  local panel = { root_node = node }
-  function panel:close_all_views(root_node, keep_view)
-    for i = #self.root_node.views, 1, -1 do
-      if self.root_node.views[i] ~= keep_view then table.remove(self.root_node.views, i) end
+  local panel = { views = {} }
+  function panel:close_all_views(keep_view)
+    for i = #self.views, 1, -1 do
+      if self.views[i] ~= keep_view then table.remove(self.views, i) end
     end
   end
   function panel:open_buffer(buffer)
     local view = Editor(buffer)
-    self.root_node.views[#self.root_node.views + 1] = view
+    self.views[#self.views + 1] = view
     core.active_view = view
     return view
   end
-  context.views = node.views
+  context.views = panel.views
   return panel
 end
 

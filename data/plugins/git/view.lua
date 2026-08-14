@@ -226,7 +226,7 @@ function GitView:get_focus_view()
 end
 
 function GitView:get_state()
-  local session = self.git_session or self.git_session
+  local session = self.git_session
   return {
     project_path = self.project and self.project.path,
     tab_id = self.tab_id,
@@ -252,67 +252,23 @@ function GitView.from_state(state)
   return tab and manager.ensure_tab_view(session, tab, false) or session.git_view
 end
 
-local function active_leaf_view(node)
-  if not node then return nil end
-  if node.type == "leaf" then return node.active_view or node.views and node.views[1] end
-  return active_leaf_view(node.a) or active_leaf_view(node.b)
-end
-
 function GitView:on_close()
   if self.tab_id == "log" then
-    if self.git_session and not self.git_session.__pane_session then
-      self.git_session:hide()
-      return false
-    end
-    if self.git_session and self.git_session.__pane_session then
-      local tw = self.git_session
-      local active_before = core.active_view
-      local active_owner_before = active_before and (active_before.git_owner_view or active_before)
-      local active_was_session_view = false
-      for _, session_view in pairs(tw.git_tab_views or {}) do
-        if active_owner_before == session_view then active_was_session_view = true; break end
+    if self.git_session then
+      local session = self.git_session
+      local siblings = {}
+      for _, view in pairs(session.git_tab_views or {}) do
+        if view ~= self then siblings[#siblings + 1] = view end
       end
-      local function remove_from_node(node, view)
-        if not (node and view) then return false end
-        if node.type == "leaf" then
-          for i = #(node.views or {}), 1, -1 do
-            if node.views[i] == view then
-              table.remove(node.views, i)
-              if node.active_view == view then node.active_view = node.views[i] or node.views[#node.views] end
-              return true
-            end
-          end
-          return false
-        end
-        return remove_from_node(node.a, view) or remove_from_node(node.b, view)
+      for _, view in ipairs(siblings) do
+        local pane = core.panes and core.panes.pane_for_view(view)
+        if pane then core.panes.close_view(pane, { view = view, force = true }) end
       end
-      local root = tw.root and tw.root.root_node
-      for _, view in pairs(tw.git_tab_views or {}) do
-        if view ~= self then
-          if tw.__pane_session and tw.root == core.root_panel and core.panes then
-            local pane = core.panes.pane_for_view(view)
-            if pane then core.panes.close_view(pane, { view = view, force = true }) end
-          else
-            remove_from_node(root, view)
-          end
-        end
-      end
-      tw.git_tab_views = {}
-      tw.git_view = nil
-      tw.git_model = nil
-      tw.hidden = true
-      if core.panes and core.panes.git_sessions then core.panes.git_sessions[tw.project_key] = nil end
-      if active_was_session_view then
-        local main = core.root_panel and core.root_panel.get_left_pane and core.root_panel:get_left_pane()
-        if main and main.active_view and main.active_view ~= self then
-          core.set_active_view(main.active_view)
-        elseif core.panes and tw.root == core.root_panel then
-          local pane = core.panes.pane_for_view(self)
-          if pane and pane.current_view ~= self then core.panes.focus(pane) end
-        else
-          core.active_view = nil
-        end
-      end
+      session.git_tab_views = {}
+      session.git_view = nil
+      session.git_model = nil
+      session.hidden = true
+      if core.panes and core.panes.git_sessions then core.panes.git_sessions[session.project_key] = nil end
       return true
     end
     return true
@@ -326,7 +282,9 @@ function GitView:on_close()
       if self.model.active_tab == self.tab_id then
         local active = core.active_view and (core.active_view.git_owner_view or core.active_view)
         if not (active and active.model == self.model and active.tab_id and self.model:find_tab(active.tab_id)) then
-          active = active_leaf_view(self.git_session and self.git_session.root and self.git_session.root.root_node)
+          local session = self.git_session
+          local selected = session and session.git_model and session.git_model:selected_tab()
+          active = selected and session.git_tab_views and session.git_tab_views[selected.id]
         end
         if active and active.model == self.model and active.tab_id and self.model:find_tab(active.tab_id) then
           self.model.active_tab = active.tab_id
@@ -1108,10 +1066,10 @@ function GitView:ensure_diff_view(tab)
   return view
 end
 
-local function with_git_session_event_window(tw, fn)
+local function with_git_session_event_window(session, fn)
   local previous_event_window = core.event_window
   local previous_active_window = core.active_window
-  local window = tw and tw.window
+  local window = session and session.window
   local ok = false
   if window and system.get_window_id then ok = pcall(system.get_window_id, window) end
   if ok then

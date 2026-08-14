@@ -5,7 +5,6 @@ local core = require "core"
 local common = require "core.common"
 local command = require "core.command"
 local keymap = require "core.keymap"
-local RootPanel = require "core.rootpanel"
 local GitView = require "plugins.git.view"
 local backend = require "plugins.git.backend"
 local historical_buffer = require "plugins.git.historical_buffer"
@@ -19,7 +18,6 @@ local git_view = {
   View = GitView,
 }
 
-local active_node
 local sync_model_active_from_focus
 
 local function current_project()
@@ -31,13 +29,12 @@ local function project_key(project)
   return tostring(project or "")
 end
 
-local function make_left_pane_git_session(project, opts)
+local function make_git_session(project, opts)
   opts = opts or {}
   local key = project_key(project)
-  local tw = panes.git_sessions[key]
-  if tw then return tw, false end
-  tw = {
-    __pane_session = true,
+  local session = panes.git_sessions[key]
+  if session then return session, false end
+  session = {
     project = project,
     project_key = key,
     kind = "git",
@@ -45,45 +42,42 @@ local function make_left_pane_git_session(project, opts)
     title = "Git - " .. tostring(type(project) == "table" and project.path or project),
     window = opts.window or core.window,
     window_id = opts.window_id or (core.window and system.get_window_id and system.get_window_id(core.window)),
-    root = opts.root or core.root_panel,
     hidden = false,
   }
-  function tw:raise() self.hidden = false; return self end
-  function tw:hide()
+  function session:raise() self.hidden = false; return self end
+  function session:hide()
     self.hidden = true
     if self.git_view then self.git_view.visible = false end
     return self
   end
-  function tw:show()
+  function session:show()
     self.hidden = false
     local tab = self.git_model and self.git_model:selected_tab()
     local view = self.git_tab_views and tab and self.git_tab_views[tab.id] or self.git_view
     if view then git_view.ensure_tab_view(self, tab or self.git_model:log_tab(), true) end
     return self
   end
-  function tw:activate_root()
+  function session:activate_root()
     local tab = self.git_model and self.git_model:selected_tab()
     local view = self.git_tab_views and tab and self.git_tab_views[tab.id] or self.git_view
     if view then
-      if self.root == core.root_panel then
-        local pane = panes.pane_for_view(view)
-        if pane then panes.present(view, { pane = pane, focus = true }) end
-      end
+      local pane = panes.pane_for_view(view)
+      if pane then panes.present(view, { pane = pane, focus = true }) end
       local focus = view.get_focus_view and (view:get_focus_view() or view) or view
       core.set_active_view(focus)
       return view
     end
   end
-  panes.git_sessions[key] = tw
-  return tw, true
+  panes.git_sessions[key] = session
+  return session, true
 end
 
 local function live_git_view(view)
   if not (view and view.model and view.model.log_tab) then return nil end
   if view.tab_id and view.tab_id ~= "log" then
     if not (view.model.find_tab and view.model:find_tab(view.tab_id)) then return nil end
-    local tw = view.git_session
-    if tw and tw.git_tab_views and tw.git_tab_views[view.tab_id] ~= view then return nil end
+    local session = view.git_session
+    if session and session.git_tab_views and session.git_tab_views[view.tab_id] ~= view then return nil end
   end
   return view
 end
@@ -96,13 +90,13 @@ end
 local function active_git_view()
   return focused_git_view() or (function()
     local project = current_project()
-    local tw = project and panes.git_sessions[project_key(project)]
-    if not tw then return nil end
-    sync_model_active_from_focus(tw)
-    local node = active_node(tw)
-    local node_view = node and node.active_view
-    if node_view and node_view.model and node_view.model.log_tab then return node_view end
-    return (tw.git_tab_views and tw.git_model and tw.git_tab_views[tw.git_model.active_tab]) or tw.git_view
+    local session = project and panes.git_sessions[project_key(project)]
+    if not session then return nil end
+    sync_model_active_from_focus(session)
+    local pane = panes.active()
+    local pane_view = pane and pane.current_view
+    if pane_view and pane_view.model and pane_view.model.log_tab then return pane_view end
+    return (session.git_tab_views and session.git_model and session.git_tab_views[session.git_model.active_tab]) or session.git_view
   end)()
 end
 
@@ -112,110 +106,45 @@ local function copy_options(options)
   return result
 end
 
-function active_node(tw)
-  if tw and tw.__pane_session then
-    if tw.root ~= core.root_panel then
-      return tw.root and tw.root.get_left_pane and tw.root:get_left_pane()
-    end
-    local tab = tw.git_model and tw.git_model:selected_tab()
-    local view = tw.git_tab_views and tab and tw.git_tab_views[tab.id] or tw.git_view
-    return panes.pane_for_view(view) or panes.active()
-  end
-  if not tw or not tw.root then return nil end
-  local root = tw.root.root_node
-  local active = core.active_view
-  local owner = active and (active.git_owner_view or active)
-  if root and owner and root.get_node_for_view then
-    local node = root:get_node_for_view(owner)
-    if node then return node end
-  end
-  return tw.root.get_active_node_default and tw.root:get_active_node_default()
+local function pane_for_session(session)
+  local tab = session and session.git_model and session.git_model:selected_tab()
+  local view = session and session.git_tab_views and tab and session.git_tab_views[tab.id] or session and session.git_view
+  return panes.pane_for_view(view) or panes.active()
 end
 
-local function node_in_tree(root, target)
-  if not root or not target then return false end
-  if root == target then return true end
-  if root.type ~= "leaf" then return node_in_tree(root.a, target) or node_in_tree(root.b, target) end
-  return false
+local function remove_pane_view(view)
+  local pane = panes.pane_for_view(view)
+  return pane and panes.close_view(pane, { view = view, force = true }) or false
 end
 
-local function owner_node_for_view(tw, view)
-  if tw and tw.__pane_session then
-    if tw.root ~= core.root_panel then
-      local node = active_node(tw)
-      for _, candidate in ipairs(node and node.views or {}) do
-        if candidate == view then return node end
-      end
-      return nil
-    end
-    return panes.pane_for_view(view)
-  end
-  local root = tw and tw.root and tw.root.root_node
-  if root and root.get_node_for_view then
-    local node = root:get_node_for_view(view)
-    if node then return node end
-  end
-  local node = active_node(tw)
-  if node and node.views then
-    for _, candidate in ipairs(node.views) do
-      if candidate == view then return node end
-    end
-  end
-end
-
-local function remove_node_view(tw, view)
-  local node = owner_node_for_view(tw, view)
-  if tw and tw.__pane_session and tw.root == core.root_panel then
-    return node and panes.close_view(node, { view = view, force = true }) or false
-  end
-  if node and node.remove_view and tw and tw.root and tw.root.root_node then
-    node:remove_view(tw.root.root_node, view)
-    return true
-  elseif node and node.views then
-    for i = #node.views, 1, -1 do
-      if node.views[i] == view then table.remove(node.views, i) end
-    end
-    if node.active_view == view then node.active_view = node.views[#node.views] end
-    return true
-  end
-end
-
-local function install_model_update_hook(tw)
-  if not tw or not tw.git_model then return end
-  tw.git_model.on_update = function()
-    git_view.sync_tab_views(tw, false)
+local function install_model_update_hook(session)
+  if not session or not session.git_model then return end
+  session.git_model.on_update = function()
+    git_view.sync_tab_views(session, false)
     core.redraw = true
   end
 end
 
-local function activate_git_tab_view(tw, view)
-  if not tw or not view then return end
-  local node = owner_node_for_view(tw, view) or active_node(tw)
-  if tw.__pane_session then
-    if tw.root ~= core.root_panel then
-      if node then node.active_view = view end
-    elseif owner_node_for_view(tw, view) then
-      panes.present(view, { pane = owner_node_for_view(tw, view), focus = true })
-    else
-      panes.place(function() return view end, {
-        pane = node,
-        placement = "current",
-        focus = true,
-        reason = "git-view",
-      })
-    end
-    tw.hidden = false
-  elseif node then
-    node.active_view = view
-  elseif tw.show then
-    tw:show()
+local function activate_git_tab_view(session, view)
+  if not session or not view then return end
+  local pane = panes.pane_for_view(view) or pane_for_session(session)
+  if panes.pane_for_view(view) then
+    panes.present(view, { pane = pane, focus = true })
+  else
+    panes.place(function() return view end, {
+      pane = pane,
+      placement = "current",
+      focus = true,
+      reason = "git-view",
+    })
   end
+  session.hidden = false
   local focus = view.get_focus_view and (view:get_focus_view() or view) or view
   if focus ~= view and panes.pane_for_view(view) then
     panes.register_focus_target(view, focus)
   end
   local previous_event_window = core.event_window
-  core.event_window = tw.window
+  core.event_window = session.window
   local ok = pcall(core.set_active_view, focus)
   if not ok then
     core.event_window = core.window
@@ -225,110 +154,84 @@ local function activate_git_tab_view(tw, view)
   core.event_window = previous_event_window
 end
 
-function sync_model_active_from_focus(tw)
-  if not (tw and tw.git_model) or tw.hidden then return end
+function sync_model_active_from_focus(session)
+  if not (session and session.git_model) or session.hidden then return end
   local view = focused_git_view()
-  if view and view.git_session == tw and view.tab_id and tw.git_model:find_tab(view.tab_id) then
-    tw.git_model.active_tab = view.tab_id
+  if view and view.git_session == session and view.tab_id and session.git_model:find_tab(view.tab_id) then
+    session.git_model.active_tab = view.tab_id
   end
 end
 
-function git_view.ensure_tab_view(tw, tab, focus, target_node)
-  if not tw or not tab then return nil end
-  tw.git_tab_views = tw.git_tab_views or {}
-  local view = tw.git_tab_views[tab.id]
+function git_view.ensure_tab_view(session, tab, focus, target_pane)
+  if not session or not tab then return nil end
+  session.git_tab_views = session.git_tab_views or {}
+  local view = session.git_tab_views[tab.id]
   if not view then
-    view = GitView(tw.project, {
-      model = tw.git_model,
+    view = GitView(session.project, {
+      model = session.git_model,
       tab_id = tab.id,
       defer_refresh = true,
       on_update = function()
-        git_view.sync_tab_views(tw, false)
+        git_view.sync_tab_views(session, false)
         core.redraw = true
       end,
     })
-    view.git_session = tw
+    view.git_session = session
     function view:on_model_tab_open(opened_tab)
-      git_view.ensure_tab_view(tw, opened_tab, true)
+      git_view.ensure_tab_view(session, opened_tab, true)
     end
-    tw.git_tab_views[tab.id] = view
-    local node = target_node or active_node(tw)
-    if tw.__pane_session then
-      if tw.root ~= core.root_panel and node and node.add_view then
-        node:add_view(view)
-      elseif focus then
-        activate_git_tab_view(tw, view)
-      end
-    elseif node and node.add_view then
-      if focus then
-        node:add_view(view)
-      elseif node.views then
-        table.insert(node.views, view)
-      else
-        local previous_node_active = node.active_view
-        local previous_core_active = core.active_view
-        node:add_view(view)
-        node.active_view = previous_node_active
-        core.active_view = previous_core_active
-      end
-    end
+    session.git_tab_views[tab.id] = view
+    if target_pane then panes.present(view, { pane = target_pane, focus = false })
+    elseif focus then activate_git_tab_view(session, view) end
   end
-  if tw.__pane_session and view and not owner_node_for_view(tw, view) then
-    if tw.root ~= core.root_panel then
-      local node = active_node(tw)
-      if node and node.add_view then node:add_view(view) end
-    elseif focus then
-      activate_git_tab_view(tw, view)
-    end
+  if view and not panes.pane_for_view(view) then
+    if target_pane then panes.present(view, { pane = target_pane, focus = false })
+    elseif focus then activate_git_tab_view(session, view) end
   end
   if focus then
-    tab = tw.git_model:select_tab(tab.id, function() core.redraw = true end) or tab
-    activate_git_tab_view(tw, view)
+    tab = session.git_model:select_tab(tab.id, function() core.redraw = true end) or tab
+    activate_git_tab_view(session, view)
   end
   return view
 end
 
-local function focus_model_active_tab(tw)
-  if not tw or not tw.git_model then return end
-  local tab = tw.git_model:selected_tab()
-  return git_view.ensure_tab_view(tw, tab, true)
+local function focus_model_active_tab(session)
+  if not session or not session.git_model then return end
+  local tab = session.git_model:selected_tab()
+  return git_view.ensure_tab_view(session, tab, true)
 end
 
-function git_view.sync_tab_views(tw, focus_active)
-  if not tw or not tw.git_model then return end
-  tw.git_tab_views = tw.git_tab_views or {}
+function git_view.sync_tab_views(session, focus_active)
+  if not session or not session.git_model then return end
+  session.git_tab_views = session.git_tab_views or {}
   local valid = {}
-  for _, tab in ipairs(tw.git_model.tabs or {}) do valid[tab.id] = tab end
-  local preserve_focus, preserve_view, preserve_node
-  for id, view in pairs(tw.git_tab_views) do
+  for _, tab in ipairs(session.git_model.tabs or {}) do valid[tab.id] = tab end
+  local preserve_focus, preserve_view, preserve_pane
+  for id, view in pairs(session.git_tab_views) do
     if not valid[id] then
-      local owner_node = owner_node_for_view(tw, view)
+      local owner_pane = panes.pane_for_view(view)
       if core.active_view == view or (core.active_view and core.active_view.git_owner_view == view)
-          or (owner_node and owner_node.active_view == view) then
+          or (owner_pane and owner_pane.current_view == view) then
         preserve_focus = true
         preserve_view = view
-        preserve_node = owner_node
+        preserve_pane = owner_pane
       end
-      remove_node_view(tw, view)
-      tw.git_tab_views[id] = nil
+      remove_pane_view(view)
+      session.git_tab_views[id] = nil
     end
   end
-  for _, tab in ipairs(tw.git_model.tabs or {}) do
-    local target_node = preserve_focus and tab.id == tw.git_model.active_tab and preserve_node or nil
-    if target_node and not node_in_tree(tw.root and tw.root.root_node, target_node) then target_node = nil end
-    local view = git_view.ensure_tab_view(tw, tab, false, target_node)
-    if preserve_focus and preserve_view and tab.id == tw.git_model.active_tab and view then
+  for _, tab in ipairs(session.git_model.tabs or {}) do
+    local target_pane = preserve_focus and tab.id == session.git_model.active_tab
+      and panes.contains(preserve_pane) and preserve_pane or nil
+    local view = git_view.ensure_tab_view(session, tab, false, target_pane)
+    if preserve_focus and preserve_view and tab.id == session.git_model.active_tab and view then
       view.focus_pane = preserve_view.focus_pane
       view.focused_diff_buffer_view = nil
     end
   end
-  local tab = tw.git_model:selected_tab()
-  local view = tw.git_tab_views and tab and tw.git_tab_views[tab.id]
-  local node = view and (owner_node_for_view(tw, view) or active_node(tw))
-  if view and node then
-    if not tw.__pane_session or tw.root ~= core.root_panel then node.active_view = view end
-    if (focus_active or preserve_focus) and not tw.hidden then tw:activate_root() end
-  end
+  local tab = session.git_model:selected_tab()
+  local view = session.git_tab_views and tab and session.git_tab_views[tab.id]
+  if view and (focus_active or preserve_focus) and not session.hidden then session:activate_root() end
   return view
 end
 
@@ -341,32 +244,33 @@ function git_view.open_view(project, opts)
   end
 
   local view
-  local tw, created = make_left_pane_git_session(project, opts)
-  tw.hidden = opts.state and opts.state.hidden or false
-  if created or not tw.git_view then
+  local session, created = make_git_session(project, opts)
+  session.hidden = opts.state and opts.state.hidden or false
+  if created or not session.git_view then
     local git_view_opts = copy_options(opts.git_view_opts)
     if opts.state and opts.state.model then git_view_opts.state = opts.state.model end
     if opts.state and opts.state.hidden then git_view_opts.defer_refresh = true end
     git_view_opts.tab_id = "log"
     view = GitView(project, git_view_opts)
-    view.git_session = tw
+    view.git_session = session
     function view:on_model_tab_open(opened_tab)
-      git_view.ensure_tab_view(tw, opened_tab, true)
+      git_view.ensure_tab_view(session, opened_tab, true)
     end
-    tw.git_view = view
-    tw.git_model = view.model
-    tw.git_tab_views = { log = view }
-    tw.hidden = opts.state and opts.state.hidden or false
-    install_model_update_hook(tw)
-    git_view.ensure_tab_view(tw, view.model:log_tab(), not tw.hidden)
-    git_view.sync_tab_views(tw, not tw.hidden)
-    if not tw.hidden then focus_model_active_tab(tw) end
-  elseif tw.git_view then
-    view = (tw.git_tab_views and tw.git_tab_views[tw.git_model.active_tab]) or tw.git_view
+    session.git_view = view
+    session.git_model = view.model
+    session.git_tab_views = { log = view }
+    session.hidden = opts.state and opts.state.hidden or false
+    install_model_update_hook(session)
+    local focus = not session.hidden and opts.focus ~= false
+    git_view.ensure_tab_view(session, view.model:log_tab(), focus)
+    git_view.sync_tab_views(session, focus)
+    if focus then focus_model_active_tab(session) end
+  elseif session.git_view then
+    view = (session.git_tab_views and session.git_tab_views[session.git_model.active_tab]) or session.git_view
     view:set_refresh_pending()
-    git_view.ensure_tab_view(tw, view:model_tab(), true)
+    git_view.ensure_tab_view(session, view:model_tab(), opts.focus ~= false)
   end
-  return tw, view
+  return session, view
 end
 
 local function active_file_view()
@@ -427,13 +331,13 @@ local function when_model_ready(view, action)
   end)
 end
 
-function git_view.save_state(tw)
-  if not tw or not tw.git_view or not tw.git_view.model then return nil end
-  sync_model_active_from_focus(tw)
+function git_view.save_state(session)
+  if not session or not session.git_view or not session.git_view.model then return nil end
+  sync_model_active_from_focus(session)
   return {
     kind = "git",
-    hidden = tw.hidden and true or false,
-    model = tw.git_view.model:get_state(),
+    hidden = session.hidden and true or false,
+    model = session.git_view.model:get_state(),
   }
 end
 
@@ -466,12 +370,12 @@ command.add(nil, {
   end,
 
   ["git:refresh-view"] = function()
-    local tw, view = active_or_open_view()
+    local session, view = active_or_open_view()
     if view then view.model:refresh_log(function() core.redraw = true end) end
   end,
 
   ["git:open-selected-commit-diff"] = function()
-    local tw, view = active_or_open_view()
+    local session, view = active_or_open_view()
     local function open_diff(v)
       if v.activate_model_tab then v:activate_model_tab(function() core.redraw = true end) end
       local selected = v.model:selected_tab()
@@ -487,7 +391,7 @@ command.add(nil, {
   end,
 
   ["git:open-working-tree-diff"] = function()
-    local tw, view = active_or_open_view()
+    local session, view = active_or_open_view()
     when_model_ready(view, function(v)
       local tab, err = v.model:open_working_tree_diff(function() core.redraw = true end)
       if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
@@ -511,7 +415,7 @@ command.add(nil, {
           or (not common.path_equals(project.path, repo.root) and not common.path_belongs_to(project.path, repo.root)) then
         project = { path = repo.root }
       end
-      local tw, view = git_view.open_view(project)
+      local session, view = git_view.open_view(project)
       when_model_ready(view, function(v)
         if v.model.repo and not common.path_equals(repo.root, v.model.repo.root) then
           v.model.repo = repo
@@ -554,7 +458,7 @@ command.add(nil, {
             or (not common.path_equals(project.path, repo.root) and not common.path_belongs_to(project.path, repo.root)) then
           project = { path = repo.root }
         end
-        local tw, view = git_view.open_view(project)
+        local session, view = git_view.open_view(project)
         when_model_ready(view, function(v)
           if v.model.repo and not common.path_equals(repo.root, v.model.repo.root) then v.model.repo = repo end
           local tab, tab_err = v.model:open_selection_history(repo.relpath, start_line, end_line, function() core.redraw = true end)
@@ -613,40 +517,35 @@ end, {
 
   ["git:close-selected-tab"] = function(view)
     if not view then return end
-    local tw = view.git_session
-    view:try_close(function()
-      remove_node_view(tw, view)
-    end)
+    remove_pane_view(view)
   end,
 })
 
 local function close_git_view_tab(view)
   if not view then return end
-  local tw = view.git_session
-  if view.tab_id == "log" and tw then
-    local node = active_node(tw)
-    local active = node and (node.current_view or node.active_view)
+  local session = view.git_session
+  if view.tab_id == "log" and session then
+    local pane = pane_for_session(session)
+    local active = pane and pane.current_view
     if active and active.model == view.model and active.tab_id ~= "log" then view = active end
   end
   if view.tab_id == "log" then
-    view:try_close(function()
-      remove_node_view(tw, view)
-    end)
+    remove_pane_view(view)
     return
   end
-  local node = owner_node_for_view(tw, view)
+  local pane = panes.pane_for_view(view)
   for i, tab in ipairs(view.model.tabs or {}) do
     if tab.id == view.tab_id and tab.closable then
       table.remove(view.model.tabs, i)
       break
     end
   end
-  if tw and tw.git_tab_views then tw.git_tab_views[view.tab_id] = nil end
+  if session and session.git_tab_views then session.git_tab_views[view.tab_id] = nil end
   local previous_active = core.active_view
-  remove_node_view(tw, view)
-  local active = node and node.active_view
+  remove_pane_view(view)
+  local active = pane and panes.contains(pane) and pane.current_view
   if previous_active == view or previous_active and previous_active.git_owner_view == view then
-    local focus_target = active and active.model == view.model and active or tw and tw.git_view
+    local focus_target = active and active.model == view.model and active or session and session.git_view
     if focus_target and focus_target ~= view and focus_target.focus_list_pane then
       focus_target:focus_list_pane()
     end

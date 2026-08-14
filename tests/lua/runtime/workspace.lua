@@ -64,7 +64,7 @@ local function run_last_captured_thread(context)
   end
 end
 
-local function make_fake_root_panel(label, state, buffer)
+local function make_fake_pane_host(label, state, buffer)
   local view = { buffer = buffer }
   function view:get_state()
     return state or { label = label }
@@ -73,19 +73,9 @@ local function make_fake_root_panel(label, state, buffer)
     return "core.view"
   end
 
-  local panel = {
-    root_node = {
-      type = "leaf",
-      views = { view },
-      active_view = view
-    }
-  }
+  local panel = { current_views = { view } }
   function panel:close_all_textviews()
-    self.root_node.views = {}
-    self.root_node.active_view = nil
-  end
-  function panel:get_left_pane()
-    return { is_empty = function() return false end }
+    self.current_views = {}
   end
   return panel, view
 end
@@ -108,7 +98,7 @@ test.describe("Workspace persistence", function()
     context.original_panes_restore_workspace_state = panes.restore_workspace_state
     panes.save_workspace_state = function(save_view)
       local views = {}
-      for _, view in ipairs(core.root_panel and core.root_panel.root_node and core.root_panel.root_node.views or {}) do
+      for _, view in ipairs(core.root_panel and core.root_panel.current_views or {}) do
         local saved = save_view(view)
         if saved then views[#views + 1] = saved end
       end
@@ -189,7 +179,7 @@ test.describe("Workspace persistence", function()
       visited_files = {}
     })
 
-    local panel, view = make_fake_root_panel("current")
+    local panel, view = make_fake_pane_host("current")
     core.projects = { Project(project_path) }
     core.recent_projects = {}
     replace_buffers()
@@ -214,7 +204,7 @@ test.describe("Workspace persistence", function()
   test.test("skips views with invalid control characters in filenames", function(context)
     local project_path = join_path(context.temp_root, "source_project")
     local other_path = join_path(context.temp_root, "other_project")
-    local panel, view = make_fake_root_panel("bad", { filename = "test.txt\n", scroll = { x = 0, y = 0 } })
+    local panel, view = make_fake_pane_host("bad", { filename = "test.txt\n", scroll = { x = 0, y = 0 } })
     core.projects = { Project(project_path) }
     core.recent_projects = {}
     replace_buffers()
@@ -235,7 +225,7 @@ test.describe("Workspace persistence", function()
     local project_path = join_path(context.temp_root, "source_project")
     local other_path = join_path(context.temp_root, "other_project")
     local buffer = { filename = "missing.txt", new_file = true }
-    local panel, view = make_fake_root_panel("missing", { filename = "missing.txt", scroll = { x = 0, y = 0 } }, buffer)
+    local panel, view = make_fake_pane_host("missing", { filename = "missing.txt", scroll = { x = 0, y = 0 } }, buffer)
     core.projects = { Project(project_path) }
     core.recent_projects = {}
     replace_buffers({ buffer })
@@ -268,7 +258,7 @@ test.describe("Workspace persistence", function()
       visited_files = {},
     })
 
-    local panel, view = make_fake_root_panel("source")
+    local panel, view = make_fake_pane_host("source")
     core.projects = { Project(source_path) }
     core.recent_projects = {}
     replace_buffers()
@@ -299,7 +289,7 @@ test.describe("Workspace persistence", function()
       },
       visited_files = {},
     })
-    local panel, view = make_fake_root_panel("source")
+    local panel, view = make_fake_pane_host("source")
     core.projects = { Project(source_path) }
     core.recent_projects = {}
     replace_buffers()
@@ -333,7 +323,7 @@ test.describe("Workspace persistence", function()
   test.test("saves two-pane Workspace state", function(context)
     local project_path = join_path(context.temp_root, "source_project")
     local other_path = join_path(context.temp_root, "other_project")
-    local panel, view = make_fake_root_panel("main")
+    local panel, view = make_fake_pane_host("main")
     core.projects = { Project(project_path) }
     core.recent_projects = {}
     replace_buffers()
@@ -360,7 +350,7 @@ test.describe("Workspace persistence", function()
     local project_path = join_path(context.temp_root, "source_project")
     local other_path = join_path(context.temp_root, "other_project")
     local recent_path = join_path(project_path, "recent.lua")
-    local panel, view = make_fake_root_panel("main")
+    local panel, view = make_fake_pane_host("main")
     core.projects = { Project(project_path) }
     core.recent_projects = {}
     replace_buffers()
@@ -390,7 +380,7 @@ test.describe("Workspace persistence", function()
       visited_files = {},
     })
 
-    local panel, view = make_fake_root_panel("source")
+    local panel, view = make_fake_pane_host("source")
     core.projects = { Project(source_path) }
     core.recent_projects = {}
     replace_buffers()
@@ -418,7 +408,7 @@ test.describe("Workspace persistence", function()
       visited_files = {}
     })
 
-    local panel, view = make_fake_root_panel("source")
+    local panel, view = make_fake_pane_host("source")
     core.projects = { Project(source_path) }
     core.recent_projects = {}
     replace_buffers()

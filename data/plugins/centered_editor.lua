@@ -69,12 +69,12 @@ local function settings()
   return config.plugins.centered_editor or centered_editor
 end
 
-local function root_node_for_view(view)
+local function pane_for_view(view)
   local perf_start = core.perf_frame_stats and system.get_time()
-  perf_frame_add("centered_editor_node_lookup_calls", 1)
-  local node = panes.pane_for_view(view)
-  perf_elapsed("centered_editor_node_lookup_ms", perf_start)
-  return node
+  perf_frame_add("centered_editor_pane_lookup_calls", 1)
+  local pane = panes.pane_for_view(view)
+  perf_elapsed("centered_editor_pane_lookup_ms", perf_start)
+  return pane
 end
 
 local function set_pane_membership(view, is_member)
@@ -99,8 +99,8 @@ function M.should_center(view)
     return false
   end
   if cfg.pane_views_only then
-    local node = root_node_for_view(view)
-    local is_member = node ~= nil
+    local pane = pane_for_view(view)
+    local is_member = pane ~= nil
     set_pane_membership(view, is_member)
     if not is_member then
       perf_frame_add("centered_editor_should_center_not_pane", 1)
@@ -254,10 +254,10 @@ save_textview_method("get_presentation_layout_generation")
 function TextView:get_presentation_layout_generation()
   local cfg = settings()
   if cfg.pane_views_only and self.__centered_editor_pane_membership == nil then
-    local node = root_node_for_view(self)
+    local pane = pane_for_view(self)
     set_pane_membership(
       self,
-      node ~= nil
+      pane ~= nil
     )
   elseif not cfg.pane_views_only then
     set_pane_membership(self, true)
