@@ -2228,20 +2228,21 @@ local function open_completion_source_view(item, target_opposite, line1, col1, l
   local path = item.source_path
   local panes = require "core.panes"
   local active_textview = get_active_view()
-  local source_pane = panes.pane_for_view(active_textview) or "left"
-  local target_pane = target_opposite and panes.opposite(source_pane) or source_pane
+  local source_pane = panes.pane_for_view(active_textview) or panes.active()
   local opts = {
-    pane = target_pane,
+    pane = source_pane,
+    placement = target_opposite and "split" or "current",
+    direction = target_opposite and "right" or nil,
     line = line1,
     col = col1,
     line2 = line2,
     col2 = col2,
-    source_view = active_textview,
     focus = true,
   }
-  if path and path ~= "" then return panes.open_path(path, opts) end
+  if path and path ~= "" then return core.open_file(path, opts) end
   if item.source_buffer and (target_opposite or not active_textview or active_textview.buffer ~= item.source_buffer) then
-    return panes.open_buffer(item.source_buffer, opts)
+    local Editor = require "core.editor"
+    return panes.place(function() return Editor(item.source_buffer) end, opts)
   end
   return active_textview
 end

@@ -8,6 +8,7 @@ local style = require "core.style"
 local tokenizer = require "core.tokenizer"
 local View = require "core.view"
 local TextView = require "core.textview"
+local panes = require "core.panes"
 
 -- check if widget is installed before proceeding
 local widget_found, Widget = pcall(require, "widget")
@@ -565,7 +566,7 @@ settings.add("User Interface",
       on_apply = function(value)
         local mode = config.force_scrollbar_status_mode or "global"
         local globally = mode == "global"
-        local views = core.root_panel.root_node:get_children()
+        local views = core.root_panel:pane_views()
         for _, view in ipairs(views) do
           if globally or view:extends(TextView) then
             view.h_scrollbar:set_forced_status(value)
@@ -589,7 +590,7 @@ settings.add("User Interface",
       },
       on_apply = function(value)
         local globally = value == "global"
-        local views = core.root_panel.root_node:get_children()
+        local views = core.root_panel:pane_views()
         for _, view in ipairs(views) do
           if globally or view:extends(TextView) then
             view.h_scrollbar:set_forced_status(config.force_scrollbar_status)
@@ -2510,9 +2511,17 @@ end
 ---@param view widget
 local function open_settings_view(view)
   view:show()
-  local node = core.root_panel:get_active_node_default()
-  node:add_view(view)
-  node:set_active_view(view)
+  local pane = panes.pane_for_view(view)
+  if pane then
+    panes.present(view, { pane = pane, focus = true })
+  else
+    panes.place(function() return view end, {
+      pane = panes.active(),
+      placement = "current",
+      focus = true,
+      reason = "settings",
+    })
+  end
 end
 
 ---Show a generated configuration view.
@@ -2644,19 +2653,7 @@ command.add(nil, theme_commands)
 
 command.add(nil, {
   ["ui:settings"] = function()
-    settings.ui:show()
-    local node = core.root_panel:get_active_node_default()
-    local found = false
-    for _, view in ipairs(node.views) do
-      if view == settings.ui then
-        found = true
-        node:set_active_view(view)
-        break
-      end
-    end
-    if not found then
-      node:add_view(settings.ui)
-    end
+    open_settings_view(settings.ui)
   end,
 })
 

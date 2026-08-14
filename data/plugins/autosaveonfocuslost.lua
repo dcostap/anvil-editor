@@ -22,26 +22,16 @@ local function is_protected_buffer(buffer)
       or common.path_equals(buffer.abs_filename, project_file)
 end
 
-local function save_node_fallback(node)
-  if node.type == "leaf" then
-    local i = 1
-    while i <= #node.views do
-      local view = node.views[i]
-      if view:extends(Editor) and not view:is(GlobalPromptBar)
-          and view.buffer.filename and view.buffer:is_dirty()
-          and not is_protected_buffer(view.buffer) then
-        local ok, err = pcall(view.buffer.save, view.buffer)
+local function save_node_fallback()
+  for _, buffer in ipairs(core.buffers) do
+      if buffer.filename and buffer:is_dirty() and not is_protected_buffer(buffer) then
+        local ok, err = pcall(buffer.save, buffer)
         if ok then
-          core.log_quiet("Saved buffer \"%s\"", view.buffer.filename)
+          core.log_quiet("Saved buffer \"%s\"", buffer.filename)
         elseif not tostring(err):find("file changed on disk", 1, true) then
-          core.error("Couldn't save file \"%s\": %s", view.buffer.filename, err)
+          core.error("Couldn't save file \"%s\": %s", buffer.filename, err)
         end
       end
-      i = i + 1
-    end
-  else
-    if node.a then save_node_fallback(node.a) end
-    if node.b then save_node_fallback(node.b) end
   end
 end
 
@@ -49,7 +39,7 @@ function RootPanel:on_focus_lost(...)
   if autosave_fast and autosave_fast.enabled ~= false then
     autosave_fast.save_all_dirty("application focus lost")
   else
-    save_node_fallback(core.root_panel.root_node)
+    save_node_fallback()
   end
   return on_focus_lost(self, ...)
 end

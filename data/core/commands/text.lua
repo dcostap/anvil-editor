@@ -11,6 +11,7 @@ local style = require "core.style"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local tokenizer = require "core.tokenizer"
+local panes = require "core.panes"
 
 
 local function buffer()
@@ -2434,9 +2435,9 @@ local commands = {
       core.error("Cannot remove unsaved buffer")
       return
     end
-    for i,textview in ipairs(core.get_views_referencing_buffer(dv.buffer)) do
-      local node = core.root_panel.root_node:get_node_for_view(textview)
-      node:close_view(core.root_panel.root_node, textview)
+    for _, textview in ipairs(core.get_views_referencing_buffer(dv.buffer)) do
+      local pane = panes.pane_for_view(textview)
+      if pane then panes.close_view(pane, { view = textview, force = true }) end
     end
     os.remove(filename)
     core.log("Removed \"%s\"", filename)
@@ -3278,7 +3279,14 @@ end
 
 command.add(function(...)
   local editor = core.current_editor()
-  return editor ~= nil, editor, ...
+  if editor then return true, editor, ... end
+  local view = core.active_view
+  local panes = require "core.panes"
+  local owner = panes.owner_for_view(view)
+  local pane = owner and panes.pane_for_view(owner)
+  local owned_text_view = owner and owner ~= view and pane and pane.current_view == owner
+    and view and view.extends and view:extends(TextView)
+  return not not owned_text_view, view, ...
 end, commands)
 
 command.add_toggle("line-wrapping:toggle", {

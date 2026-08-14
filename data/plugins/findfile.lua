@@ -324,8 +324,9 @@ end
 local function open_file_in_project(project, path, line)
   local filename = file_in_project(project, path)
   if filename then
-    require("core.panes").open_path(filename, {
-      pane = "left",
+    core.open_file(filename, {
+      pane = require("core.panes").active(),
+      placement = "current",
       line = line or 1,
       col = 1,
     })

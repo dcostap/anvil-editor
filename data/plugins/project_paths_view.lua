@@ -7,6 +7,7 @@ local command = require "core.command"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local project_paths = require "core.project_paths"
+local panes = require "core.panes"
 
 local ProjectPathsView = TextView:extend()
 ProjectPathsView.context = "application"
@@ -387,9 +388,17 @@ end
 local function open_view()
   if not view then view = ProjectPathsView() end
   view:refresh()
-  local node = core.root_panel:get_active_node_default()
-  if node and node.locked then node = core.root_panel:get_left_pane() end
-  if node then node:add_view(view) else core.set_active_view(view) end
+  local pane = panes.pane_for_view(view)
+  if pane then
+    panes.present(view, { pane = pane, focus = true })
+  else
+    panes.place(function() return view end, {
+      pane = panes.active(),
+      placement = "current",
+      focus = true,
+      reason = "project-paths",
+    })
+  end
   return view
 end
 

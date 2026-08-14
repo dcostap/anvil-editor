@@ -5,6 +5,7 @@ local test = require "core.test"
 local diffview = require "plugins.diffview"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
+local panes = require "core.panes"
 
 local function track(context, kind, value)
   context[kind] = context[kind] or {}
@@ -50,6 +51,7 @@ end
 test.describe("DiffView batch behavior", function()
   test.before_each(function(context)
     context.original_active_view = core.active_view
+    panes.reset_for_tests()
   end)
 
   test.after_each(function(context)
@@ -62,11 +64,12 @@ test.describe("DiffView batch behavior", function()
     if context.cleanup_adopt_left then pcall(os.remove, context.cleanup_adopt_left) end
     if context.cleanup_adopt_right then pcall(os.remove, context.cleanup_adopt_right) end
     for _, view in ipairs(context.diffviews or {}) do
-      local node = core.root_panel.root_node:get_node_for_view(view)
-      if node then node:remove_view(core.root_panel.root_node, view) end
+      local pane = panes.pane_for_view(view)
+      if pane then panes.close_view(pane, { view = view, force = true }) end
       view.buffer_view_a.buffer:on_close()
       view.buffer_view_b.buffer:on_close()
     end
+    panes.reset_for_tests()
   end)
 
   test.it("normalizes left/right request sugar and opens a side-by-side view", function(context)
@@ -195,14 +198,14 @@ test.describe("DiffView batch behavior", function()
   end)
 
   test.it("blank diff controller opens editable Buffers and replaces a side in place", function(context)
-    local node = core.root_panel:get_active_node_default()
     test.ok(command.perform("diff-view:open-blank-diff"))
     local view = core.active_view.diff_view_parent
     local controller = view and view.request_controller
     test.ok(controller and controller.get_view, "expected blank diff controller")
     view = controller:get_view()
+    local pane = panes.pane_for_view(view)
     track(context, "diffviews", view)
-    test.equal(node, core.root_panel.root_node:get_node_for_view(view))
+    test.equal(panes.active(), panes.pane_for_view(view))
     test.equal(view.buffer_view_a, core.active_view)
 
     view.buffer_view_a:on_text_input("left")
@@ -218,12 +221,10 @@ test.describe("DiffView batch behavior", function()
     write_file(path, "file left\n")
     context.cleanup_replace_file = path
 
-    local old_idx = node:get_view_idx(view)
     local new_view, err = controller:replace_content("left", diffview.content.file(path), { title = "File Left" })
     test.ok(new_view, err)
     track(context, "diffviews", new_view)
-    test.equal(node, core.root_panel.root_node:get_node_for_view(new_view))
-    test.equal(old_idx, node:get_view_idx(new_view))
+    test.equal(pane, panes.pane_for_view(new_view))
     test.equal("file left\n", text(new_view.buffer_view_a.buffer))
     test.equal("right\n", text(new_view.buffer_view_b.buffer))
   end)
@@ -744,6 +745,7 @@ test.describe("DiffView batch behavior", function()
 
     local fold = view.diff_folds_a[1]
     test.not_nil(fold)
+    panes.create { factory = function() return view end }
     view.buffer_view_a.buffer:set_selection(fold.hidden_start + 1, 1)
     local line = view.buffer_view_a.buffer:get_selection()
     test.equal(line, fold.hidden_start + 1)

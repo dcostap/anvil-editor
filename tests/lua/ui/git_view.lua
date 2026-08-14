@@ -88,6 +88,7 @@ end
 
 test.describe("Git View command", function()
   test.before_each(function(context)
+    panes.reset_for_tests()
     context.original_projects = core.projects
     context.original_active_view = core.active_view
     context.original_active_window = core.active_window
@@ -97,6 +98,7 @@ test.describe("Git View command", function()
   end)
 
   test.after_each(function(context)
+    panes.reset_for_tests()
     core.projects = context.original_projects
     core.active_view = context.original_active_view
     core.active_window = context.original_active_window
@@ -511,37 +513,17 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_pane, "details")
   end)
 
-  test.it("focusing a Git View hides the Right Pane", function(context)
-    local tw, view = open_fake_git_view(context.project)
-    panes.open_view(view, { pane = "left", focus = false })
-    local panel = View()
-    panes.register_view("right", "git-test-panel", panel)
-    panes.show("right", { view = panel, focus = true })
-    test.equal(panes.right_visible(), true)
-    test.equal(core.active_view, panel)
-
+  test.it("opens and restores a Git View through Pane history", function(context)
+    local tw, view = git_view.open_view(context.project, {
+      root = core.root_panel,
+      git_view_opts = { backend = fake_backend },
+    })
+    local pane = panes.pane_for_view(view)
+    test.not_nil(pane)
+    panes.present(View(), { pane = pane })
     tw:activate_root()
-
-    test.equal(panes.right_visible(), false)
+    test.equal(pane.current_view, view)
     test.equal(core.active_view.git_owner_view, view)
-    test.equal(core.active_view.git_pane, "log-list")
-    panes.remove_view(panel, { force = true, focus_left = false })
-    panes.remove_view(view, { force = true, focus_left = false })
-  end)
-
-  test.it("hiding the File Tree restores the caret-bearing Git surface", function(context)
-    local tw, view = open_fake_git_view(context.project)
-    panes.open_view(view, { pane = "left", focus = false })
-    local panel = View()
-    panes.register_view("right", "git-focus-restore-panel", panel)
-    panes.show("right", { view = panel, focus = true })
-
-    panes.hide_right(true)
-
-    test.equal(core.active_view.git_owner_view, view)
-    test.equal(core.active_view.git_pane, "log-list")
-    panes.remove_view(panel, { force = true, focus_left = false })
-    panes.remove_view(view, { force = true, focus_left = false })
   end)
 
   test.it("pane focus cycles through Git diff list and both text panes", function(context)
@@ -625,18 +607,19 @@ test.describe("Git View command", function()
   end)
 
   test.it("does not activate a Git row while another Pane View has focus", function(context)
-    local tw, view = open_fake_git_view(context.project)
+    local tw, view = git_view.open_view(context.project, {
+      root = core.root_panel,
+      git_view_opts = { backend = fake_backend },
+    })
     core.projects = { context.project }
     view.model:log_tab().commits = {
       { hash = "a", short_hash = "a", subject = "First", parents = {} },
     }
     local panel = View()
-    panes.register_view("right", "git-row-focus-scope-panel", panel)
-    panes.show("right", { view = panel, focus = true })
+    panes.create { factory = function() return panel end, focus = true }
 
     test.equal(command.perform("git:activate-selected-row"), false)
     test.equal(view.model:selected_tab().kind, "log")
-    panes.remove_view(panel, { force = true, focus_left = false })
   end)
 
   test.test("mouse wheel scrolls a long log", function(context)
@@ -875,16 +858,10 @@ test.describe("Git View command", function()
     test.ok(core.active_view ~= sibling)
   end)
 
-  test.test("command predicates tolerate focus outside a legacy unmarked tool root", function(context)
+  test.test("command predicates tolerate zero-Pane focus", function(context)
     local old_text_input = system.text_input
     system.text_input = function() return true end
-    local tw = git_view.open_view(context.project, {
-      window = fake_window(1919),
-      window_id = 1919,
-      root = RootPanel(),
-      git_view_opts = { backend = fake_backend },
-    })
-    tw.root.root_node.pane_id = nil
+    panes.reset_for_tests()
     core.active_view = {}
 
     local ok = pcall(command.is_valid, "git:focus-list-pane")

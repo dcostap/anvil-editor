@@ -664,6 +664,36 @@ function M.is_forward_available(target)
   return pane ~= nil and pane.history.index < #pane.history.entries
 end
 
+function M.close_view(target, opts)
+  opts = opts or {}
+  local pane = M.find(target or M.active_pane)
+  if not pane then return false end
+  local view = opts.view or pane.current_view
+  local found, other_view = false, false
+  for _, entry in ipairs(pane.history.entries) do
+    if entry.view == view then found = true else other_view = true end
+  end
+  if not found then return false end
+  if not other_view then return M.close(pane, opts) end
+
+  local committed = false
+  local function approved()
+    local was_current = pane.current_view == view
+    if was_current then call_lifecycle(view, "on_suspend") end
+    for index = #pane.history.entries, 1, -1 do
+      if pane.history.entries[index].view == view then discard_entry(pane, index) end
+    end
+    pane.history.index = common.clamp(pane.history.index, 1, #pane.history.entries)
+    pane.current_view = pane.history.entries[pane.history.index].view
+    if was_current then call_lifecycle(pane.current_view, "on_resume") end
+    if opts.focus ~= false then M.focus(pane) end
+    after_mutation("closed View in " .. pane.id)
+    committed = true
+  end
+  if opts.force or not view.can_close then approved() else view:can_close(approved) end
+  return committed
+end
+
 local function nearest_after_removal(old_order, old_index)
   return old_order[math.min(old_index, #old_order)] or old_order[old_index - 1]
 end

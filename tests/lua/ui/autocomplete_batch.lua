@@ -6,6 +6,8 @@ local test = require "core.test"
 local symbol_index = require "core.treesitter.symbol_index"
 local treesitter = require "core.treesitter"
 local autocomplete = require "plugins.autocomplete"
+local Editor = require "core.editor"
+local panes = require "core.panes"
 
 local function track(context, kind, value)
   context[kind] = context[kind] or {}
@@ -26,8 +28,9 @@ end
 local function open_editor(context, text)
   local buffer = track(context, "buffers", core.open_buffer())
   if text and text ~= "" then buffer:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_buffer(buffer))
-  core.set_active_view(view)
+  local view = track(context, "views", panes.place(function() return Editor(buffer) end, {
+    placement = "new", focus = true,
+  }))
   return view, buffer
 end
 
@@ -40,8 +43,9 @@ end
 local function open_file_editor(context, path)
   local buffer = track(context, "buffers", core.open_buffer(path))
   buffer:set_selection(#buffer.lines, #(buffer.lines[#buffer.lines] or ""))
-  local view = track(context, "views", core.root_panel:open_buffer(buffer))
-  core.set_active_view(view)
+  local view = track(context, "views", panes.place(function() return Editor(buffer) end, {
+    placement = "new", focus = true,
+  }))
   return view, buffer
 end
 
@@ -122,6 +126,10 @@ local function view_selections(view)
 end
 
 test.describe("autocomplete batch behavior", function()
+  test.before_each(function()
+    panes.reset_for_tests()
+  end)
+
   test.after_each(function(context)
     autocomplete.close()
     if context.autocomplete_min_len then
@@ -133,11 +141,7 @@ test.describe("autocomplete batch behavior", function()
     if context.autocomplete_scope then
       config.plugins.autocomplete.suggestions_scope = context.autocomplete_scope
     end
-    local root = core.root_panel.root_node
-    for _, view in ipairs(context.views or {}) do
-      local node = root:get_node_for_view(view)
-      if node then node:remove_view(root, view) end
-    end
+    panes.reset_for_tests()
     for _, buffer in ipairs(context.buffers or {}) do
       if buffer:is_dirty() then buffer:clean() end
       remove_buffer(buffer)

@@ -127,9 +127,10 @@ local function open_location(result, opts)
     local buffer = view and view.buffer
     if buffer then
       if opts.pane and panes.pane_for_view(view) ~= opts.pane then
-        view = panes.open_buffer(buffer, {
+        local Editor = require "core.editor"
+        view = panes.place(function() return Editor(buffer) end, {
           pane = opts.pane,
-          source_view = opts.view,
+          placement = "current",
           focus = true,
         }) or view
       end
@@ -144,9 +145,9 @@ local function open_location(result, opts)
 
   local path = result_path(result)
   if not path then return false, "location has no path" end
-  local view = panes.open_path(path, {
+  local view = core.open_file(path, {
     pane = opts.pane,
-    source_view = opts.view,
+    placement = "current",
     focus = true,
   })
   if not view or not view.buffer then return false, "failed to open target" end

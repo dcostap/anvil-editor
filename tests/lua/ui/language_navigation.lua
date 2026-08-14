@@ -3,6 +3,7 @@ local core = require "core"
 local command = require "core.command"
 local EmptyView = require "core.emptyview"
 local Project = require "core.project"
+local panes = require "core.panes"
 local test = require "core.test"
 local treesitter = require "core.treesitter"
 local symbol_index = require "core.treesitter.symbol_index"
@@ -20,11 +21,6 @@ local function write_file(path, content)
 end
 
 local function remove_buffer(buffer)
-  local root = core.root_panel.root_node
-  for _, view in ipairs(core.get_views_referencing_buffer(buffer)) do
-    local node = root:get_node_for_view(view)
-    if node then node:remove_view(root, view) end
-  end
   for i = #core.buffers, 1, -1 do
     if core.buffers[i] == buffer then
       table.remove(core.buffers, i)
@@ -58,14 +54,8 @@ test.describe("language navigation", function()
     context.original_projects = core.projects
     context.original_active_view = core.active_view
     context.original_cwd = system.getcwd()
-    context.original_left_pane_views = nil
-    local node = core.root_panel and core.root_panel:get_left_pane()
-    if node then
-      context.original_left_pane_views = { views = node.views, active_view = node.active_view }
-      node.views = {}
-      node:add_view(EmptyView())
-      core.set_active_view(node.active_view)
-    end
+    panes.reset_for_tests()
+    panes.create { factory = function() return EmptyView() end }
     context.temp_root = USERDIR
       .. PATHSEP .. "language-navigation-tests-"
       .. system.get_process_id() .. "-"
@@ -77,6 +67,7 @@ test.describe("language navigation", function()
   end)
 
   test.after_each(function(context)
+    panes.reset_for_tests()
     if context.temp_root then
       for i = #core.buffers, 1, -1 do
         local buffer = core.buffers[i]
@@ -96,13 +87,6 @@ test.describe("language navigation", function()
           if not ok and system.get_time() < deadline then coroutine.yield(0.05) end
         until ok or system.get_time() >= deadline
         test.ok(ok, err)
-      end
-    end
-    if context.original_left_pane_views then
-      local node = core.root_panel and core.root_panel:get_left_pane()
-      if node then
-        node.views = context.original_left_pane_views.views
-        node.active_view = context.original_left_pane_views.active_view
       end
     end
     core.projects = context.original_projects
@@ -140,13 +124,13 @@ target :: proc() {}
       return active and active.buffer and common.path_equals(active.buffer.abs_filename, defs_path)
     end))
 
-    local project_file_tabs = 0
-    for _, item in ipairs(core.root_panel:get_left_pane().views) do
+    local project_views = 0
+    for _, item in ipairs(panes.history_views(panes.active())) do
       if item.buffer and item.buffer.abs_filename and common.path_belongs_to(item.buffer.abs_filename, context.temp_root) then
-        project_file_tabs = project_file_tabs + 1
+        project_views = project_views + 1
       end
     end
-    test.equal(project_file_tabs, 2, "dirty source Editor should remain as a dedicated Pane Tab")
+    test.equal(project_views, 2, "dirty source Editor should remain in Pane history")
     local buffer = core.active_view.buffer
     local line1, col1, line2, col2 = buffer:get_selection(true)
     test.equal(line1, 3)

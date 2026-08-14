@@ -3,6 +3,7 @@ local config = require "core.config"
 local common = require "core.common"
 local command = require "core.command"
 local LogView = require "core.logview"
+local panes = require "core.panes"
 
 
 local previous_win_mode = "normal"
@@ -267,22 +268,22 @@ command.add(nil, {
   end,
 
   ["core:open-log"] = function()
-    local node = core.root_panel:get_active_node_default()
-    node:add_view(LogView())
+    panes.place(function() return LogView() end, {
+      placement = "current",
+      focus = true,
+      reason = "open-log",
+    })
   end,
 
   ["core:open-user-module"] = function()
-    local user_module_buffer = core.open_buffer(USERDIR .. "/init.lua")
-    if not user_module_buffer then return end
-    core.root_panel:open_buffer(user_module_buffer)
+    core.open_file(USERDIR .. "/init.lua", { placement = "current", focus = true })
   end,
 
   ["core:open-project-module"] = function()
     if not system.get_file_info(".anvil_project.lua") then
       core.try(core.write_init_project_module, ".anvil_project.lua")
     end
-    local buffer = core.open_buffer(".anvil_project.lua")
-    core.root_panel:open_buffer(buffer)
+    core.open_file(".anvil_project.lua", { placement = "current", focus = true })
   end,
 
   ["core:change-project-folder"] = function()

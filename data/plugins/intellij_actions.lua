@@ -8,7 +8,7 @@ local common = require "core.common"
 local search = require "core.buffer.search"
 local config = require "core.config"
 local Buffer = require "core.buffer"
-local Node = require "core.node"
+local Editor = require "core.editor"
 local file_context = require "core.file_context"
 local panes = require "core.panes"
 
@@ -472,13 +472,13 @@ local function record_navigation_place(reason)
   panes.record_location()
 end
 
-local node_close_view = Node.close_view
-function Node:close_view(root, view)
-  local path = active_file_path(view)
+local editor_on_close = Editor.on_close
+function Editor:on_close()
+  local path = active_file_path(self)
   if path then
     table.insert(closed_tabs, path)
   end
-  return node_close_view(self, root, view)
+  return editor_on_close(self)
 end
 
 local selection_debug_log = USERDIR .. PATHSEP .. "selection-expansion-debug.log"

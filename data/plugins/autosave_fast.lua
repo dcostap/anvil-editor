@@ -212,16 +212,17 @@ local function discard_missing_file_buffer(buffer, name)
   disk_state[buffer] = nil
   buffer:clean()
   core.add_thread(function()
-    -- Wait until NagView has finished closing before changing tabs/nodes.
+    -- Wait until NagView has finished closing before changing Pane Views.
     coroutine.yield(0)
-    local views = core.root_panel.root_node:get_children()
+    local panes = require "core.panes"
     local closed = 0
-    for _, view in ipairs(views) do
-      if view.buffer == buffer then
-        local node = core.root_panel.root_node:get_node_for_view(view)
-        if node then
-          node:close_view(core.root_panel.root_node, view)
+    for _, pane in ipairs(panes.ordered()) do
+      for _, view in ipairs(panes.history_views(pane)) do
+        if view.buffer == buffer then
+          if panes.close_view(pane, { view = view, force = true }) then
           closed = closed + 1
+          end
+          break
         end
       end
     end

@@ -7,6 +7,7 @@ local style = require "core.style"
 local linewrapping = require "core.linewrapping"
 local TextView = require "core.textview"
 local Editor = require "core.editor"
+local panes = require "core.panes"
 
 local centered_editor = config.plugins.centered_editor
 
@@ -71,22 +72,7 @@ end
 local function root_node_for_view(view)
   local perf_start = core.perf_frame_stats and system.get_time()
   perf_frame_add("centered_editor_node_lookup_calls", 1)
-  local root = core.root_panel and core.root_panel.root_node
-  local cached = view and view.__centered_editor_cached_node
-  if cached
-    and view.__centered_editor_cached_root == root
-    and cached.get_view_idx
-    and cached:get_view_idx(view)
-  then
-    perf_frame_add("centered_editor_node_lookup_cache_hits", 1)
-    perf_elapsed("centered_editor_node_lookup_ms", perf_start)
-    return cached
-  end
-  local node = root and root.get_node_for_view and root:get_node_for_view(view) or nil
-  if view then
-    view.__centered_editor_cached_root = root
-    view.__centered_editor_cached_node = node
-  end
+  local node = panes.pane_for_view(view)
   perf_elapsed("centered_editor_node_lookup_ms", perf_start)
   return node
 end
@@ -114,7 +100,7 @@ function M.should_center(view)
   end
   if cfg.pane_views_only then
     local node = root_node_for_view(view)
-    local is_member = node and node.get_view_idx and node:get_view_idx(view) ~= nil
+    local is_member = node ~= nil
     set_pane_membership(view, is_member)
     if not is_member then
       perf_frame_add("centered_editor_should_center_not_pane", 1)
@@ -271,7 +257,7 @@ function TextView:get_presentation_layout_generation()
     local node = root_node_for_view(self)
     set_pane_membership(
       self,
-      node and node.get_view_idx and node:get_view_idx(self) ~= nil
+      node ~= nil
     )
   elseif not cfg.pane_views_only then
     set_pane_membership(self, true)

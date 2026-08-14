@@ -10,6 +10,7 @@ local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local panes = require "core.panes"
 local file_context = require "core.file_context"
+local View = require "core.view"
 
 local function temp_file_path(name)
   local base = system.absolute_path(".")
@@ -27,13 +28,13 @@ local function remove_file(path)
 end
 
 local function close_file_views_and_buffers(path)
-  for _, view in ipairs(core.root_panel.root_node:get_children()) do
-    local view_path = view.path or (view.buffer and view.buffer.abs_filename)
-    if view_path == path then
-      local node = core.root_panel.root_node:get_node_for_view(view)
-      if node then
+  for _, pane in ipairs(panes.ordered()) do
+    for _, view in ipairs(panes.history_views(pane)) do
+      local view_path = view.path or (view.buffer and view.buffer.abs_filename)
+      if view_path == path then
         if view:extends(TextView) and view.buffer:is_dirty() then view.buffer:clean() end
-        node:remove_view(core.root_panel.root_node, view)
+        panes.close_view(pane, { view = view, force = true })
+        break
       end
     end
   end
@@ -94,6 +95,8 @@ end
 
 test.describe("Fuzzy Searcher preview", function()
   test.before_each(function(context)
+    panes.reset_for_tests()
+    context.source_pane = panes.create { factory = function() return View() end }
     context.linewrapping_enable_by_default = config.plugins.linewrapping.enable_by_default
   end)
 
@@ -108,6 +111,7 @@ test.describe("Fuzzy Searcher preview", function()
     if core.fuzzy_searcher_active_view then
       core.fuzzy_searcher_active_view:close()
     end
+    panes.reset_for_tests()
     for _, buffer in ipairs(context.buffers or {}) do buffer:on_close() end
     for _, path in ipairs(context.files or {}) do
       close_file_views_and_buffers(path)
@@ -186,7 +190,7 @@ test.describe("Fuzzy Searcher preview", function()
     test.ok(entry and common.path_equals(entry.abs, path), "expected File Tree selection on the result's Buffer file")
   end)
 
-  test.it("focuses a Right Pane Editor when accepting a file for the Right Pane", function(context)
+  test.it("focuses an Editor in a split Pane on alternate acceptance", function(context)
     local path = temp_file_path("fuzzy-confirm-side-focus-test.txt")
     context.files = { path }
     write_file(path, "side target\n")
@@ -206,8 +210,9 @@ test.describe("Fuzzy Searcher preview", function()
 
     local view = core.active_view
     test.ok(view and view.buffer and view.buffer.abs_filename == path, "expected side-accepted file to become active")
-    test.equal(panes.pane_for_view(view), "right")
-    test.ok(file_context.is_editor_view(view), "expected accepted file to be focused as a Right Pane Editor")
+    test.not_equal(panes.pane_for_view(view), context.source_pane)
+    test.equal(panes.count(), 2)
+    test.ok(file_context.is_editor_view(view), "expected accepted file to be focused as an Editor")
   end)
 
   test.it("routes Point of Interest Activation through modal picker input", function(context)

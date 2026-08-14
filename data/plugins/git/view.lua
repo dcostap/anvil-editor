@@ -262,7 +262,14 @@ function GitView:try_close(callback)
       end
       local root = tw.root and tw.root.root_node
       for _, view in pairs(tw.git_tab_views or {}) do
-        if view ~= self then remove_from_node(root, view) end
+        if view ~= self then
+          if tw.__pane_session and tw.root == core.root_panel and core.panes then
+            local pane = core.panes.pane_for_view(view)
+            if pane then core.panes.close_view(pane, { view = view, force = true }) end
+          else
+            remove_from_node(root, view)
+          end
+        end
       end
       tw.git_tab_views = {}
       tw.git_view = nil
@@ -274,7 +281,8 @@ function GitView:try_close(callback)
         if main and main.active_view and main.active_view ~= self then
           core.set_active_view(main.active_view)
         elseif core.panes and tw.root == core.root_panel then
-          core.panes.remove_view(self, { force = true })
+          local pane = core.panes.pane_for_view(self)
+          if pane and pane.current_view ~= self then core.panes.focus(pane) end
         else
           core.active_view = nil
         end

@@ -1,5 +1,6 @@
 local core = require "core"
 local panes = require "core.panes"
+local pane_layout = require "core.pane_layout"
 local RootPanel = require "core.rootpanel"
 local View = require "core.view"
 local test = require "core.test"
@@ -133,9 +134,16 @@ test.describe("Root Panel Pane presentation", function()
     local one = panes.create { factory = pane_factory("one") }
     panes.split(one, "right", { factory = pane_factory("two") })
     root:update()
-    test.ok(root:on_mouse_pressed("left", 150, 50, 1))
-    test.ok(root:on_mouse_moved(75, 50, -75, 0))
+    local rect = one.group.root.rect
+    local divider_x = rect.x + rect.w * one.group.root.ratio
+    local target_x = rect.x + rect.w * 0.25
+    core.active_view = one.current_view
+    test.not_nil(pane_layout.divider_at(one.group.root, divider_x, rect.y + 20, 3))
+    test.ok(root:on_mouse_pressed("left", divider_x, rect.y + 20, 1))
+    test.not_nil(root.dragged_divider)
+    root:on_mouse_moved(target_x, rect.y + 20, target_x - divider_x, 0)
     test.ok(one.group.root.ratio < 0.3)
-    test.ok(root:on_mouse_released("left", 75, 50))
+    root:on_mouse_released("left", target_x, rect.y + 20)
+    test.is_nil(root.dragged_divider)
   end)
 end)

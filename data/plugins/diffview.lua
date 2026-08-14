@@ -1597,8 +1597,7 @@ local function start_compare()
     return
   end
   local view = DiffView(element_a, element_b, DiffView.type.FILE_FILE)
-  panes.open_view(view, { pane = "left", focus = true })
-  core.set_active_view(view)
+  panes.place(function() return view end, { placement = "current", focus = true, reason = "diff-compare" })
   element_a = nil
   element_b = nil
 end
@@ -1609,8 +1608,7 @@ local function start_compare_string()
     return
   end
   local view = DiffView(element_a_text, element_b_text, DiffView.type.STRING_STRING)
-  panes.open_view(view, { pane = "left", focus = true })
-  core.set_active_view(view)
+  panes.place(function() return view end, { placement = "current", focus = true, reason = "diff-compare" })
   element_a_text = nil
   element_b_text = nil
 end
@@ -1900,16 +1898,15 @@ function DiffRequestController:reload(opts)
   view.request_controller = self
   self.view = view
 
-  local node, idx
-  if old_view then
-    node = core.root_panel.root_node:get_node_for_view(old_view)
-    idx = node and node:get_view_idx(old_view)
-  end
   local attached = false
-  if node and idx then
-    node.views[idx] = view
-    if node.tab_bar and node.tab_bar.invalidate_layout_cache then node.tab_bar:invalidate_layout_cache() end
-    node:set_active_view(view)
+  local pane = old_view and panes.pane_for_view(old_view)
+  if pane then
+    panes.place(function() return view end, {
+      pane = pane,
+      placement = "current",
+      focus = true,
+      reason = "diff-reload",
+    })
     attached = true
   elseif not opts.noshow then
     compare_add_to_root_node(view)
@@ -2024,8 +2021,11 @@ end
 ---Helper differences view to rootpanel add.
 ---@param view plugins.diffview.view
 compare_add_to_root_node = function(view)
-  panes.open_view(view, { pane = "left", focus = true })
-  core.set_active_view(view)
+  panes.place(function() return view end, {
+    placement = "current",
+    focus = true,
+    reason = "diff-open",
+  })
 end
 
 ---Helper differences starter.

@@ -757,7 +757,7 @@ function CommandOutputView:activate_point_of_interest(poi, opts)
   if preserve_focus == nil then preserve_focus = true end
   local pane = panes.pane_for_view(self)
   local placement = opts.placement or (opts.pane == "right" and "split" or "current")
-  return core.open_file(poi.path, {
+  local view = core.open_file(poi.path, {
     pane = pane,
     placement = placement,
     direction = placement == "split" and "right" or nil,
@@ -766,6 +766,13 @@ function CommandOutputView:activate_point_of_interest(poi, opts)
     focus = not preserve_focus,
     preserve_focus = preserve_focus,
   })
+  if view and view.buffer then
+    view.buffer:set_selection(
+      poi.target_line or poi.line,
+      poi.target_col or 1
+    )
+  end
+  return view
 end
 
 function CommandOutputView:get_navigation_state()

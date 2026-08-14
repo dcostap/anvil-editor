@@ -107,27 +107,23 @@ function core.set_active_view(view)
   return result
 end
 
-local function collect_other_dirty_buffers(node, keep_view, dirty_buffers, seen)
-  if not node then return end
-  if node.type == "leaf" then
-    for _, view in ipairs(node.views or {}) do
+local function collect_other_dirty_buffers(keep_view, dirty_buffers, seen)
+  local panes = require "core.panes"
+  for _, pane in ipairs(panes.ordered()) do
+    for _, view in ipairs(panes.history_views(pane)) do
       local buffer = view ~= keep_view and view.buffer
       if buffer and not seen[buffer] and buffer:is_dirty() then
         seen[buffer] = true
         dirty_buffers[#dirty_buffers + 1] = buffer
       end
     end
-  else
-    collect_other_dirty_buffers(node.a, keep_view, dirty_buffers, seen)
-    collect_other_dirty_buffers(node.b, keep_view, dirty_buffers, seen)
   end
 end
 
 command.add(nil, {
   ["root:close-all-others"] = function()
-    local root = core.root_panel and core.root_panel.root_node
     local dirty_buffers = {}
-    collect_other_dirty_buffers(root, core.active_view, dirty_buffers, {})
+    collect_other_dirty_buffers(core.active_view, dirty_buffers, {})
     core.confirm_close_buffers(dirty_buffers, core.root_panel.close_all_views, core.root_panel, core.active_view)
   end,
 })

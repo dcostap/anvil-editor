@@ -2792,6 +2792,7 @@ function FSView:new(prefix, opts)
   local source_view = core.active_view
   local source_buffer = source_view and source_view.buffer
   self.source_view = file_context.current_content_view(source_view) or source_view
+  self.source_pane = panes.pane_for_view(source_view) or panes.active()
   self.source_buffer = source_buffer
   self.source_file_path = file_context.view_file_path(source_view)
   self.source_file_line = source_buffer and source_buffer:get_selection(false) or 1
@@ -5080,10 +5081,19 @@ function FSView:confirm(target_side)
   if r.buffer and r.line then
     local buffer = r.buffer
     local source_view = self.source_view
+    local source_pane = self.source_pane
     self:close()
-    if source_view and source_view.buffer == buffer then
-      if r.line2 and r.col2 then buffer:set_selection(r.line, r.col, r.line2, r.col2) else buffer:set_selection(r.line, r.col) end
+    local view = source_view
+    if not (view and view.buffer == buffer) then
+      local Editor = require "core.editor"
+      view = panes.place(function() return Editor(buffer) end, {
+        pane = source_pane,
+        placement = target_side and "split" or "current",
+        direction = target_side and "right" or nil,
+        focus = true,
+      })
     end
+    if r.line2 and r.col2 then buffer:set_selection(r.line, r.col, r.line2, r.col2) else buffer:set_selection(r.line, r.col) end
     return
   end
   if r.file then
@@ -5093,26 +5103,20 @@ function FSView:confirm(target_side)
       line, col, line2, col2 = grep_accept_range(r)
     end
     local source_view = self.source_view
+    local source_pane = self.source_pane
     self:close()
-    if target_side then
-      panes.open_path(path, {
-        pane = "right",
-        line = line,
-        col = col,
-        line2 = line2,
-        col2 = col2,
-        focus = true,
-        restore_focus = source_view,
-      })
-    else
-      panes.open_path(path, {
-        pane = "left",
-        line = line,
-        col = col,
-        line2 = line2,
-        col2 = col2,
-        source_view = source_view,
-      })
+    local view = core.open_file(path, {
+      pane = source_pane,
+      placement = target_side and "split" or "current",
+      direction = target_side and "right" or nil,
+      line = line,
+      col = col,
+      line2 = line2,
+      col2 = col2,
+      focus = true,
+    })
+    if view and view.buffer then
+      view.buffer:set_selection(line, col, line2 or line, col2 or col)
     end
   end
 end

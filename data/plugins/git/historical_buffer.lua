@@ -101,23 +101,19 @@ end
 
 local function views_referencing_buffer(root_panel, buffer)
   local views = {}
-  local root = root_panel and root_panel.root_node
-  if not root or not root.get_children then return views end
-  for _, view in ipairs(root:get_children()) do
-    if view.buffer == buffer then views[#views + 1] = view end
+  local panes = require "core.panes"
+  for _, pane in ipairs(panes.ordered()) do
+    for _, view in ipairs(panes.history_views(pane)) do
+      if view.buffer == buffer then views[#views + 1] = view end
+    end
   end
   return views
 end
 
 local function activate_view(root_panel, view)
-  local node = root_panel and root_panel.root_node
-    and root_panel.root_node.get_node_for_view
-    and root_panel.root_node:get_node_for_view(view)
-  if node and node.set_active_view then
-    node:set_active_view(view)
-  else
-    core.set_active_view(view)
-  end
+  local panes = require "core.panes"
+  local pane = panes.pane_for_view(view)
+  if pane then panes.present(view, { pane = pane, focus = true }) end
 end
 
 local function open_buffer_view(buffer)
@@ -128,13 +124,11 @@ local function open_buffer_view(buffer)
   end
 
   local view = HistoricalTextView(buffer)
-  local previous_event_window = core.event_window
-  core.active_window = core.window
-  core.event_window = core.window
-  root_panel:get_active_node_default():add_view(view)
-  core.set_active_view(view)
-  core.event_window = previous_event_window
-  core.active_window = core.window
+  require("core.panes").place(function() return view end, {
+    placement = "current",
+    focus = true,
+    reason = "git-historical-buffer",
+  })
   return view, buffer, true
 end
 
