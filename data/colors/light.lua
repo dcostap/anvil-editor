@@ -282,7 +282,6 @@ style.project_path_external = style.accent
 style.project_path_external_dim = style.dim
 style.project_path_vendored = style.syntax.metadata
 style.project_path_vendored_dim = style.dim
-style.project_path_excluded = style.error
 style.project_path_missing = style.warn
 style.project_path_separator = style.dim
 

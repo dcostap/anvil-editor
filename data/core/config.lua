@@ -93,22 +93,6 @@ config.force_scrollbar_status = false
 ---@type number
 config.file_size_limit = 100
 
----A list of files and directories to ignore.
----Each element is a Lua pattern, where patterns ending with a forward slash
----are recognized as directories while patterns ending with an anchor ("$") are
----recognized as files.
----@type string[]
-config.ignore_files = {
-  -- folders
-  "^%.svn/",        "^%.git/",   "^%.hg/",        "^CVS/", "^%.Trash/", "^%.Trash%-.*/",
-  "^node_modules/", "^%.cache/", "^__pycache__/",
-  -- files
-  "%.pyc$",         "%.pyo$",       "%.exe$",        "%.dll$",   "%.obj$", "%.o$",
-  "%.a$",           "%.lib$",       "%.so$",         "%.dylib$", "%.ncb$", "%.sdf$",
-  "%.suo$",         "%.pdb$",       "%.idb$",        "%.class$", "%.psd$", "%.db$",
-  "^desktop%.ini$", "^%.DS_Store$", "^%._.*$", "^%.directory$",
-}
-
 ---Lua pattern used to find symbols when advanced syntax highlighting
 ---is not available.
 ---This pattern is also used for navigation, e.g. move to next word.

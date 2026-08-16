@@ -1,14 +1,12 @@
-local core = require "core"
 local common = require "core.common"
-local config = require "core.config"
 local Object = require "core.object"
+local project_files = require "core.project_files"
 
 ---Core projects class.
 ---@class core.project : core.object
 ---@overload fun(path:string):core.project
 ---@field path string
 ---@field name string
----@field compiled table
 local Project = Object:extend()
 
 
@@ -16,13 +14,6 @@ local Project = Object:extend()
 function Project:new(path)
   self.path = common.normalize_volume(common.normalize_path(path) or path)
   self.name = common.basename(self.path)
-  self:compile_ignore_files()
-end
-
-
----Inspect config.ignore_files patterns and prepare ready to use entries.
-function Project:compile_ignore_files()
-  self.compiled = core.get_ignore_file_rules()
 end
 
 
@@ -78,11 +69,6 @@ function Project:path_belongs_to(path)
 end
 
 
-local function fileinfo_pass_filter(info, ignore_compiled)
-  if info.size >= config.file_size_limit * 1e6 then return false end
-  return not common.match_ignore_rule(info.filename, info, ignore_compiled)
-end
-
 ---Compute a file's info entry completed with "filename" to be used
 ---in project scan or false if it shouldn't appear in the list.
 ---@param path string
@@ -93,41 +79,24 @@ function Project:get_file_info(path)
   -- a directory, for example for /dev/* entries on linux.
   if info and info.type then
     info.filename = common.relative_path(self.path, path)
-    return fileinfo_pass_filter(info, self.compiled) and info or false
+    local included = project_files.contains(self.path, path, info.type)
+    return included == false and false or info
   end
   return false
-end
-
-local function get_dir_content(project, path, entries)
-  local all = system.list_dir(path) or {}
-  for _, file in ipairs(all) do
-    file = path .. PATHSEP .. file
-    local info = project:get_file_info(file)
-    if info then
-      info.filename = file
-      table.insert(entries, info)
-    end
-  end
-end
-
-local function find_files_rec(project, path)
-  local entries = {}
-  get_dir_content(project, path, entries)
-
-  for _, info in ipairs(entries) do
-    if info.type == "file" then
-      coroutine.yield(project, info)
-    elseif not common.match_pattern(common.basename(info.filename), config.ignore_files) and info.type then
-      get_dir_content(project, info.filename, entries)
-    end
-  end
 end
 
 ---Returns iterator of all project files.
 ---@return fun():core.project,string
 function Project:files()
   return coroutine.wrap(function()
-    find_files_rec(self, self.path)
+    local files = project_files.list(self.path) or {}
+    for _, file in ipairs(files) do
+      local info = system.get_file_info(file.path)
+      if info and info.type == "file" then
+        info.filename = file.path
+        coroutine.yield(self, info)
+      end
+    end
   end)
 end
 

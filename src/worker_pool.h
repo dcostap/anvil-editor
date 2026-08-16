@@ -124,8 +124,6 @@ typedef struct AnvilWorkerJobSpec {
   bool project_scoped;
   const char *const *project_excluded_paths;
   uint32_t project_excluded_path_count;
-  const char *const *project_ignore_patterns;
-  uint32_t project_ignore_pattern_count;
   const AnvilWorkerProjectRunLanguageSpec *project_languages;
   uint32_t project_language_count;
   uint32_t project_progress_files;

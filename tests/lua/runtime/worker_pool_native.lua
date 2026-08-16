@@ -750,7 +750,7 @@ Route_Message_Type :: enum c.uchar {
     os.remove(path4)
   end)
 
-  test.test("native Project runs enumerate, filter, parse, and publish through one job", function()
+  test.test("native Project runs parse and publish an explicit Project file list", function()
     local root = USERDIR .. PATHSEP .. "native-project-run"
     common.rm(root, true)
     common.mkdirp(root .. PATHSEP .. "ignored")
@@ -782,8 +782,8 @@ Route_Message_Type :: enum c.uchar {
       kind = "treesitter_project_run",
       project_builder = builder,
       project_root = root,
-      excluded_paths = { root .. PATHSEP .. "excluded" },
-      ignore_patterns = "^ignored/",
+      project_scoped = true,
+      scan_paths = { root .. PATHSEP .. "a.c", root .. PATHSEP .. "b.c" },
       project_usage_cap = 100,
       max_file_bytes = 1024 * 1024,
       languages = languages,

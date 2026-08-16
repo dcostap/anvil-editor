@@ -659,7 +659,6 @@ fun use(item: TargetThing): Int {
     mkdir(root)
     mkdir(external)
     mkdir(root .. PATHSEP .. "src" .. PATHSEP .. "vendor" .. PATHSEP .. "library1")
-    mkdir(root .. PATHSEP .. "generated")
     write_file(root .. PATHSEP .. "Root.kt", [[package demo
 
 class RootThing
@@ -672,11 +671,6 @@ class ExternalThing
 
 class VendorThing
 ]])
-    write_file(root .. PATHSEP .. "generated" .. PATHSEP .. "Excluded.kt", [[package demo
-
-class ExcludedThing
-]])
-
     core.projects = { Project(root) }
     project_paths.load_workspace_state(nil)
     project_paths.configure_project {
@@ -685,9 +679,6 @@ class ExcludedThing
       },
       vendored = {
         { path = "src/vendor/library1", label = "library1" },
-      },
-      excluded = {
-        { path = "generated", label = "generated" },
       },
     }
 
@@ -1006,7 +997,7 @@ class ExcludedThing
     common.rm(external, true)
   end)
 
-  test.it("Tree-sitter workspace symbols can use autocomplete Project Path roots", function()
+  test.it("Tree-sitter autocomplete uses all Project Path roots", function()
     symbol_index.reset_for_tests()
     local original_projects = core.projects
     local root = USERDIR .. PATHSEP .. "treesitter-autocomplete-roots-root-"
@@ -1020,10 +1011,10 @@ class ExcludedThing
     project_paths.load_workspace_state(nil)
     project_paths.configure_project {
       external = {
-        { path = external, label = "external-src", autocomplete = false },
+        { path = external, label = "external-src" },
       },
       vendored = {
-        { path = "vendor", label = "vendor", symbols = true, autocomplete = false },
+        { path = "vendor", label = "vendor" },
       },
     }
     local root_index = seed_ready_symbol_index(root, { "RootThing" })
@@ -1045,7 +1036,7 @@ class ExcludedThing
       refresh_after_seconds = 0,
     })
     test.equal(status, "fresh", reason)
-    test.not_ok(find_symbol(symbols, "ExternalThing", "class"))
+    test.ok(find_symbol(symbols, "ExternalThing", "class"))
 
     symbols, reason, status = symbol_index.workspace_symbols("VendorThing", {
       kind = "autocomplete",
@@ -1053,7 +1044,7 @@ class ExcludedThing
       refresh_after_seconds = 0,
     })
     test.equal(status, "fresh", reason)
-    test.not_ok(find_symbol(symbols, "VendorThing", "class"))
+    test.ok(find_symbol(symbols, "VendorThing", "class"))
 
     symbols, reason, status = symbol_index.workspace_symbols("VendorThing", {
       kind = "symbols",
@@ -1123,6 +1114,85 @@ fun make(): EagerThing = EagerThing()
     test.not_nil(refs[1].range)
     test.equal(next(status.usages_by_name), nil, "native snapshots must not materialize Project usages in Lua")
     test.ok(status.native_snapshot:summary().usages > 0)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter Project indexing uses ripgrep path filtering", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-ripgrep-project-files-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    mkdir(root .. PATHSEP .. ".git")
+    mkdir(root .. PATHSEP .. "build")
+    mkdir(root .. PATHSEP .. "ignored-by-anvil")
+    write_file(root .. PATHSEP .. ".gitignore", "build/\n")
+    write_file(root .. PATHSEP .. ".ignore", "ignored-by-anvil/\n")
+    write_file(root .. PATHSEP .. "Visible.kt", "class VisibleProjectSymbol\n")
+    write_file(root .. PATHSEP .. "build" .. PATHSEP .. "Generated.kt",
+      "class GitIgnoredProjectSymbol\n")
+    write_file(root .. PATHSEP .. "ignored-by-anvil" .. PATHSEP .. "Generated.kt",
+      "class IgnoreFileProjectSymbol\n")
+
+    symbol_index.start_project_indexing({ root = root, reason = "test", refresh_after_seconds = 0 })
+    local status = wait_index_ready(root)
+    test.equal(status.status, "ready", status.reason)
+    test.equal(status.native_snapshot:summary().files, 1)
+
+    local visible = assert(symbol_index.workspace_symbols("VisibleProjectSymbol", {
+      root = root, limit = 20, refresh_after_seconds = 0,
+    }))
+    local git_ignored = assert(symbol_index.workspace_symbols("GitIgnoredProjectSymbol", {
+      root = root, limit = 20, refresh_after_seconds = 0,
+    }))
+    local anvil_ignored = assert(symbol_index.workspace_symbols("IgnoreFileProjectSymbol", {
+      root = root, limit = 20, refresh_after_seconds = 0,
+    }))
+    test.equal(#visible, 1)
+    test.equal(#git_ignored, 0)
+    test.equal(#anvil_ignored, 0)
+
+    local generation = status.generation
+    local matched, watch_reason = symbol_index.mark_watch_paths_dirty(root, {
+      [root .. PATHSEP .. "build" .. PATHSEP .. "Generated.kt"] = true,
+    }, "project-watch")
+    test.not_ok(matched)
+    test.equal(watch_reason, "ignored")
+    test.equal(symbol_index.status(root).generation, generation)
+
+    write_file(root .. PATHSEP .. "build" .. PATHSEP .. "Generated.kt",
+      "class ChangedGitIgnoredProjectSymbol\n")
+    local reindexed, reindex_reason = symbol_index.reindex_file(
+      root .. PATHSEP .. "build" .. PATHSEP .. "Generated.kt",
+      { force = true, reason = "ignored-save" }
+    )
+    test.ok(reindexed, reindex_reason)
+    status = wait_index_ready(root)
+    local changed_ignored = assert(symbol_index.workspace_symbols("ChangedGitIgnoredProjectSymbol", {
+      root = root, limit = 20, refresh_after_seconds = 0,
+    }))
+    test.equal(#changed_ignored, 0)
+
+    write_file(root .. PATHSEP .. ".gitignore", "")
+    matched, watch_reason = symbol_index.mark_watch_paths_dirty(root, {
+      [root .. PATHSEP .. ".gitignore"] = true,
+    }, "ignore-rules-changed")
+    test.ok(matched, watch_reason)
+    status = wait_index_ready(root)
+    local newly_included = assert(symbol_index.workspace_symbols("ChangedGitIgnoredProjectSymbol", {
+      root = root, limit = 20, refresh_after_seconds = 0,
+    }))
+    test.equal(#newly_included, 1)
+
+    write_file(root .. PATHSEP .. ".gitignore", "build/\n")
+    matched, watch_reason = symbol_index.mark_watch_paths_dirty(root, {
+      [root .. PATHSEP .. ".gitignore"] = true,
+    }, "ignore-rules-changed")
+    test.ok(matched, watch_reason)
+    status = wait_index_ready(root)
+    local newly_excluded = assert(symbol_index.workspace_symbols("ChangedGitIgnoredProjectSymbol", {
+      root = root, limit = 20, refresh_after_seconds = 0,
+    }))
+    test.equal(#newly_excluded, 0)
     common.rm(root, true)
   end)
 
@@ -1253,7 +1323,7 @@ fun make%d(): DebouncedThing%d = DebouncedThing%d()
     common.rm(root, true)
   end)
 
-  test.it("Tree-sitter Project indexing uses one native enumerating run", function()
+  test.it("Tree-sitter Project indexing uses one native run from the shared file list", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-native-run-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
@@ -1379,7 +1449,7 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
     common.rm(root, true)
   end)
 
-  test.it("Tree-sitter Project watcher ignores excluded filesystem noise", function()
+  test.it("Tree-sitter Project watcher ignores filtered filesystem noise", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-watcher-ignore-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)

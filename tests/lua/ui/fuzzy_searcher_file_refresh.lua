@@ -1,5 +1,6 @@
 local core = require "core"
 local common = require "core.common"
+local command = require "core.command"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local process = require "core.process"
@@ -164,7 +165,7 @@ test.describe("Fuzzy Searcher file refresh", function()
       "expected the previous completed snapshot to remain searchable during refresh")
   end)
 
-  test.it("applies configured file and directory ignores before native ingestion", function(context)
+  test.it("applies ripgrep ignore files and hidden-path defaults before native ingestion", function(context)
     local marker = context.root .. PATHSEP .. "native-ignore-scan-ready.md"
     local ignored_executable = context.root .. PATHSEP .. "native-ignore-executable.exe"
     local ignored_module_dir = context.root .. PATHSEP .. "node_modules"
@@ -177,6 +178,9 @@ test.describe("Fuzzy Searcher file refresh", function()
     write_file(ignored_executable)
     write_file(ignored_module)
     write_file(ignored_trash)
+    local ignore = assert(io.open(context.root .. PATHSEP .. ".ignore", "wb"))
+    ignore:write("node_modules/\n*.exe\n")
+    ignore:close()
 
     fuzzy_searcher.open("native-ignore-scan-ready")
     local picker = assert(core.fuzzy_searcher_active_view)
@@ -192,6 +196,47 @@ test.describe("Fuzzy Searcher file refresh", function()
       coroutine.yield(0.1)
       test.ok(not picker_has_path(picker, path), "expected ignored path to stay out of the native index: " .. path)
     end
+  end)
+
+  test.it("toggles ignored files for the current file search", function(context)
+    local ignored_dir = context.root .. PATHSEP .. "ignored-search"
+    local ignored_file = ignored_dir .. PATHSEP .. "toggle-ignored-result.md"
+    test.ok(common.mkdirp(ignored_dir))
+    write_file(ignored_file)
+    local ignore = assert(io.open(context.root .. PATHSEP .. ".ignore", "wb"))
+    ignore:write("ignored-search/\n")
+    ignore:close()
+
+    fuzzy_searcher.open("toggle-ignored-result")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return not helpers.file_index_status().indexing end))
+    test.not_ok(picker_has_path(picker, ignored_file))
+
+    test.ok(command.perform("fuzzy-searcher:toggle-ignored-files"))
+    test.ok(wait_until(function() return picker_has_path(picker, ignored_file) end),
+      "expected the ignored file after enabling the search toggle")
+    test.equal(picker.include_ignored, true)
+  end)
+
+  test.it("toggles ignored files for the current text search", function(context)
+    local ignored_dir = context.root .. PATHSEP .. "ignored-text-search"
+    local ignored_file = ignored_dir .. PATHSEP .. "result.md"
+    test.ok(common.mkdirp(ignored_dir))
+    write_file(ignored_file, "UNIQUE_IGNORED_TEXT_RESULT\n")
+    local ignore = assert(io.open(context.root .. PATHSEP .. ".ignore", "wb"))
+    ignore:write("ignored-text-search/\n")
+    ignore:close()
+
+    fuzzy_searcher.open("#UNIQUE_IGNORED_TEXT_RESULT")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    coroutine.yield(0.3)
+    test.not_ok(picker_has_path(picker, ignored_file))
+
+    test.ok(command.perform("fuzzy-searcher:toggle-ignored-files"))
+    test.ok(wait_until(function() return picker_has_path(picker, ignored_file) end, 10),
+      "expected ignored text after enabling the search toggle; status="
+        .. tostring(picker.status) .. " include=" .. tostring(picker.include_ignored)
+        .. " results=" .. tostring(#(picker.results or {})))
   end)
 
   test.it("prewarms Project files and avoids a redundant scan on the first picker open", function(context)

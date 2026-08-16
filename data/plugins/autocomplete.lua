@@ -572,7 +572,7 @@ local function project_completion_language_ids(buffer)
   local path = buffer and (buffer.abs_filename or buffer.filename)
   if not path or path == "" then return nil end
   local resolved = project_paths.resolve(path)
-  if not resolved or not resolved.flags or resolved.flags.autocomplete == false then return nil end
+  if not resolved then return nil end
   local ts = buffer.treesitter
   local language_id = ts and ts.language_id
   if not language_id then return nil end

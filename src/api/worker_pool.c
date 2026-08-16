@@ -423,8 +423,6 @@ static int pool_submit(lua_State *L) {
     &spec.project_query_parent_name_count);
   spec.project_query_languages = read_submit_string_array(L, 2, "query_languages", 65536,
     &spec.project_query_language_count);
-  spec.project_ignore_patterns = read_submit_string_array(L, 2, "ignore_patterns", 4096,
-    &spec.project_ignore_pattern_count);
   AnvilWorkerProjectRunLanguageSpec *project_languages = NULL;
   const char ***language_patterns = NULL;
   lua_getfield(L, 2, "languages");
@@ -469,7 +467,6 @@ static int pool_submit(lua_State *L) {
   SDL_free((void *)spec.project_query_kinds);
   SDL_free((void *)spec.project_query_parent_names);
   SDL_free((void *)spec.project_query_languages);
-  SDL_free((void *)spec.project_ignore_patterns);
   for (uint32_t i = 0; i < spec.project_language_count; i++) SDL_free((void *)language_patterns[i]);
   SDL_free(language_patterns);
   SDL_free(project_languages);

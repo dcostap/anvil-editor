@@ -119,11 +119,6 @@ plugin_defaults("filetree", {
   folder_row_background = style.filetree_folder_row_background,
   show_line_hints = true,
 })
-plugin_defaults("findfile", {
-  show_recent = true,
-  enable_cache = false,
-  cache_expiration = 60,
-})
 plugin_defaults("git", {
   git_path = "git",
   log_page_size = 500,

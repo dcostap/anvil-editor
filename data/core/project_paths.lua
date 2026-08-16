@@ -16,7 +16,6 @@ local ROLE_ORDER = {
   root = 0,
   external = 1,
   vendored = 2,
-  excluded = 3,
 }
 
 local SOURCE_ORDER = {
@@ -25,61 +24,18 @@ local SOURCE_ORDER = {
   workspace = 2,
 }
 
-local KIND_FIELD = {
-  files = "searchable",
-  file = "searchable",
-  search = "searchable",
-  fuzzy = "searchable",
-  grep = "grep",
-  symbols = "symbols",
-  symbol = "symbols",
-  usages = "usages",
-  usage = "usages",
-  autocomplete = "autocomplete",
-  browsable = "browsable",
-  filetree = "browsable",
-}
-
 local ROLE_DEFAULTS = {
   root = {
-    browsable = true,
-    searchable = true,
-    grep = true,
-    symbols = true,
-    usages = true,
-    autocomplete = true,
     rank_penalty = 0,
     filetree_style = "root",
   },
   external = {
-    browsable = true,
-    searchable = true,
-    grep = true,
-    symbols = true,
-    usages = true,
-    autocomplete = true,
     rank_penalty = 150,
     filetree_style = "external",
   },
   vendored = {
-    browsable = true,
-    searchable = true,
-    grep = true,
-    symbols = true,
-    usages = true,
-    autocomplete = true,
     rank_penalty = 75,
     filetree_style = "vendored",
-  },
-  excluded = {
-    browsable = true,
-    searchable = false,
-    grep = false,
-    symbols = false,
-    usages = false,
-    autocomplete = false,
-    rank_penalty = 0,
-    filetree_style = "excluded",
   },
 }
 
@@ -135,8 +91,7 @@ end
 
 local function entries_signature(entries, root_key)
   local fields = {
-    "path", "label", "role", "source", "browsable", "searchable", "grep",
-    "symbols", "usages", "autocomplete", "rank_penalty", "filetree_style", "exists",
+    "path", "label", "role", "source", "rank_penalty", "filetree_style", "exists",
   }
   local rows = {}
   for _, entry in ipairs(entries or {}) do
@@ -153,6 +108,7 @@ local function invalidate(reason)
   merged_entries_cache = nil
   merged_entries_cache_root_key = nil
   merged_entries_cache_projects_key = nil
+  require("core.project_files").invalidate()
   if core.log_quiet then
     core.log_quiet("Project paths: invalidated generation=%d reason=%s", generation, tostring(reason or "updated"))
   end
@@ -175,6 +131,7 @@ local function normalize_entry(entry, defaults)
   if type(entry) ~= "table" then return nil end
   defaults = defaults or {}
   local role = entry.role or defaults.role or "external"
+  if not ROLE_DEFAULTS[role] then return nil end
   local source = entry.source or defaults.source or "workspace"
   local base = defaults.base or root_path()
   local abs = normalize_abs(entry.path, base)
@@ -334,22 +291,6 @@ local function merged_entries()
   return copy_list(cached_merged_entries())
 end
 
-local function positive_entries(entries)
-  local result = {}
-  for _, entry in ipairs(entries or merged_entries()) do
-    if entry.role ~= "excluded" then result[#result + 1] = entry end
-  end
-  return result
-end
-
-local function excluded_entries(entries)
-  local result = {}
-  for _, entry in ipairs(entries or merged_entries()) do
-    if entry.role == "excluded" then result[#result + 1] = entry end
-  end
-  return result
-end
-
 local function longest_match(path, entries)
   local best
   local best_len = -1
@@ -365,29 +306,6 @@ local function longest_match(path, entries)
   return best
 end
 
-local function flags_for(entry, path, entries)
-  local flags = {}
-  for key, value in pairs(entry or {}) do
-    if key == "browsable" or key == "searchable" or key == "grep"
-    or key == "symbols" or key == "usages" or key == "autocomplete"
-    or key == "rank_penalty" or key == "filetree_style" then
-      flags[key] = value
-    end
-  end
-  local excluded = longest_match(path, excluded_entries(entries))
-  if excluded then
-    for _, key in ipairs({ "browsable", "searchable", "grep", "symbols", "usages", "autocomplete" }) do
-      if excluded[key] ~= nil then flags[key] = excluded[key] end
-    end
-    flags.excluded_entry = excluded
-  end
-  return flags
-end
-
-local function kind_field(kind)
-  return KIND_FIELD[kind or "files"] or kind
-end
-
 function project_paths.entries(opts)
   opts = opts or {}
   local entries = merged_entries()
@@ -401,14 +319,12 @@ function project_paths.entries(opts)
   return entries
 end
 
-function project_paths.search_roots(kind)
-  local field = kind_field(kind or "files")
+function project_paths.search_roots()
   local entries = merged_entries()
   local roots = {}
   local enabled_roots = {}
-  for _, entry in ipairs(positive_entries(entries)) do
-    local flags = flags_for(entry, entry.path, entries)
-    if entry.exists and entry[field] ~= false and flags[field] ~= false then
+  for _, entry in ipairs(entries) do
+    if entry.exists then
       local contained = false
       for _, prior in ipairs(enabled_roots) do
         if path_matches(entry.path, prior.path) and not common.path_equals(entry.path, prior.path) then
@@ -434,7 +350,6 @@ function project_paths.resolve(path)
   return {
     entry = best,
     relpath = relpath(best.path, abs),
-    flags = flags_for(best, abs, entries),
   }
 end
 
@@ -462,9 +377,7 @@ function project_paths.display_path(path, opts)
     text = rel ~= "" and (entry.label .. PATHSEP .. rel) or entry.label
     prefix_span = { 1, #entry.label }
   end
-  local field = kind_field(opts.kind)
   local rank_penalty = tonumber(entry.rank_penalty) or 0
-  if field and resolved.flags[field] == false then rank_penalty = math.huge end
   return {
     text = text,
     root_label = entry.label,
@@ -474,7 +387,6 @@ function project_paths.display_path(path, opts)
     relpath = rel,
     abs_path = abs,
     rank_penalty = rank_penalty,
-    flags = resolved.flags,
   }
 end
 
@@ -498,28 +410,16 @@ function project_paths.absolute_path(display)
   return project and project:absolute_path(normalized) or normalize_abs(normalized)
 end
 
-function project_paths.is_excluded(path, kind)
-  local abs = normalize_abs(path)
-  if not abs then return false end
-  local excluded = longest_match(abs, excluded_entries())
-  if not excluded then return false end
-  if not kind then return true end
-  local field = kind_field(kind)
-  return excluded[field] == false
-end
-
-function project_paths.rank_penalty(path, kind)
+function project_paths.rank_penalty(path)
   local resolved = project_paths.resolve(path)
   if not resolved then return 0 end
-  local field = kind_field(kind)
-  if field and resolved.flags[field] == false then return math.huge end
   return tonumber(resolved.entry.rank_penalty) or 0
 end
 
 function project_paths.configure_project(spec)
   spec = spec or {}
   local entries = {}
-  for _, role in ipairs({ "external", "vendored", "excluded" }) do
+  for _, role in ipairs({ "external", "vendored" }) do
     for _, entry in ipairs(role_entries_from_spec(spec, role)) do
       entries[#entries + 1] = entry
     end
@@ -569,12 +469,6 @@ function project_paths.add_external(entry, opts)
   return normalized
 end
 
-function project_paths.add_excluded_path(entry, opts)
-  local copy = copy_entry(entry or {})
-  copy.role = "excluded"
-  return project_paths.add_external(copy, opts)
-end
-
 local function find_mutable_entry(id_or_path)
   local normalized_path = type(id_or_path) == "string" and normalize_abs(id_or_path) or nil
   local normalized_key = normalized_path and path_key(normalized_path)
@@ -610,7 +504,7 @@ function project_paths.change_role(id_or_path, role)
   if not entry then return false end
   entry.role = role
   local defaults = defaults_for_role(role)
-  for _, field in ipairs({ "browsable", "searchable", "grep", "symbols", "usages", "autocomplete", "rank_penalty", "filetree_style" }) do
+  for _, field in ipairs({ "rank_penalty", "filetree_style" }) do
     entry[field] = defaults[field]
   end
   entry.id = make_id(entry.source, entry.role, entry.path)
@@ -649,7 +543,7 @@ local function save_entries_state(source_entries)
       role = entry.role,
     }
     local defaults = ROLE_DEFAULTS[entry.role] or {}
-    for _, field in ipairs({ "browsable", "searchable", "grep", "symbols", "usages", "autocomplete", "rank_penalty", "filetree_style" }) do
+    for _, field in ipairs({ "rank_penalty", "filetree_style" }) do
       if entry[field] ~= defaults[field] then saved[field] = entry[field] end
     end
     entries[#entries + 1] = saved
@@ -706,7 +600,7 @@ function project_paths.save_workspace_state()
       role = entry.role,
     }
     local defaults = ROLE_DEFAULTS[entry.role] or {}
-    for _, field in ipairs({ "browsable", "searchable", "grep", "symbols", "usages", "autocomplete", "rank_penalty", "filetree_style" }) do
+    for _, field in ipairs({ "rank_penalty", "filetree_style" }) do
       if entry[field] ~= defaults[field] then saved[field] = entry[field] end
     end
     entries[#entries + 1] = saved

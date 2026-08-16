@@ -60,7 +60,6 @@ test.describe("Project path roles", function()
     test.equal(entries[1].role, "root")
     test.equal(entries[1].source, "implicit")
     test.ok(common.path_equals(entries[1].path, context.root))
-    test.equal(entries[1].searchable, true)
   end)
 
   test.test("effective entries are cached until project paths change", function(context)
@@ -78,7 +77,6 @@ test.describe("Project path roles", function()
       context.project_paths.entries()
       context.project_paths.resolve(join_path(context.root, "src", "main.lua"))
       context.project_paths.display_path(join_path(context.root, "src", "main.lua"))
-      context.project_paths.is_excluded(join_path(context.root, "src", "main.lua"), "files")
       context.project_paths.search_roots("files")
     end
 
@@ -146,23 +144,6 @@ test.describe("Project path roles", function()
     test.equal(resolved.relpath, join_path("foo", "Baz.java"))
   end)
 
-  test.test("excluded project paths suppress kind-specific capabilities while remaining browsable", function(context)
-    context.project_paths.configure_project {
-      excluded = {
-        { path = "generated", label = "generated" },
-      },
-    }
-
-    local filename = join_path(context.root, "generated", "Output.java")
-    local resolved = context.project_paths.resolve(filename)
-
-    test.equal(resolved.entry.role, "excluded")
-    test.equal(resolved.flags.browsable, true)
-    test.equal(resolved.flags.searchable, false)
-    test.equal(context.project_paths.is_excluded(filename, "files"), true)
-    test.equal(context.project_paths.is_excluded(filename, "symbols"), true)
-  end)
-
   test.test("display path metadata and reverse resolution use role labels", function(context)
     context.project_paths.configure_project {
       external = {
@@ -193,17 +174,12 @@ test.describe("Project path roles", function()
       external = {
         { path = "../jdk-src", label = "jdk-src" },
       },
-      excluded = {
-        { path = "generated", label = "generated" },
-      },
     }
     test.equal(context.project_paths.resolve(join_path(context.external, "java", "lang", "String.java")).entry.role, "external")
-    test.equal(context.project_paths.is_excluded(join_path(context.root, "generated", "Output.java"), "files"), true)
 
     context.project_paths.configure_project {}
 
     test.is_nil(context.project_paths.resolve(join_path(context.external, "java", "lang", "String.java")))
-    test.equal(context.project_paths.is_excluded(join_path(context.root, "generated", "Output.java"), "files"), false)
   end)
 
   test.test("failed project config transactions restore the previous project path entries", function(context)
@@ -252,7 +228,6 @@ test.describe("Project path roles", function()
 
   test.test("workspace state round-trips local project path entries", function(context)
     context.project_paths.add_external({ path = context.external, label = "jdk-src" }, { source = "workspace" })
-    context.project_paths.add_excluded_path({ path = "generated", label = "generated" }, { source = "workspace" })
 
     local state = context.project_paths.save_workspace_state()
     context.project_paths.load_workspace_state(nil)
@@ -260,6 +235,5 @@ test.describe("Project path roles", function()
 
     context.project_paths.load_workspace_state(state)
     test.equal(context.project_paths.resolve(join_path(context.external, "java", "lang", "String.java")).entry.role, "external")
-    test.equal(context.project_paths.is_excluded(join_path(context.root, "generated", "Output.java"), "files"), true)
   end)
 end)

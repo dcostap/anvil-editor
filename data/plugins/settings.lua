@@ -245,32 +245,6 @@ settings.add("General",
       default = 10,
       min = 1,
       max = 50,
-      on_apply = function()
-        for _, project in ipairs(core.projects) do
-          project:compile_ignore_files()
-        end
-      end
-    },
-    {
-      label = "Ignore Files",
-      description = "List of lua patterns matching files to be ignored by the editor.",
-      path = "ignore_files",
-      type = settings.type.LIST_STRINGS,
-      default = {
-        -- folders
-        "^%.svn/",        "^%.git/",   "^%.hg/",        "^CVS/", "^%.Trash/", "^%.Trash%-.*/",
-        "^node_modules/", "^%.cache/", "^__pycache__/",
-        -- files
-        "%.pyc$",         "%.pyo$",       "%.exe$",        "%.dll$",   "%.obj$", "%.o$",
-        "%.a$",           "%.lib$",       "%.so$",         "%.dylib$", "%.ncb$", "%.sdf$",
-        "%.suo$",         "%.pdb$",       "%.idb$",        "%.class$", "%.psd$", "%.db$",
-        "^desktop%.ini$", "^%.DS_Store$", "^%.directory$",
-      },
-      on_apply = function()
-        for _, project in ipairs(core.projects) do
-          project:compile_ignore_files()
-        end
-      end
     },
     {
       label = "Maximum Clicks",

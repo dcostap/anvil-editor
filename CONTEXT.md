@@ -28,13 +28,17 @@ _Avoid_: external folder, linked folder, library folder
 A directory in or attached to a Project that contains third-party or dependency source code and is presented as a distinct named source area.
 _Avoid_: vendor marker, special folder, library folder
 
-**Excluded Project Path**:
-A Project path that remains visible as part of the Project context but is intentionally left out of project-wide search and navigation.
-_Avoid_: ignored folder, hidden folder
-
 **Project Path Role**:
-The user-facing classification assigned to a Project path, such as Root Project content, External Project Directory content, or Excluded Project Path content.
+The user-facing classification assigned to Root Project content, an External Project Directory, or a Vendored Project Directory.
 _Avoid_: path marker, folder marker, special folder
+
+**Project Search Scope**:
+The files available to Project-wide search and indexing. Project ignore rules and hidden-path rules define the default scope.
+_Avoid_: file catalog, search database
+
+**Include Ignored Files**:
+A temporary File Search or Text Search option that adds ignored files to that search. Hidden paths stay excluded.
+_Avoid_: disable ignores, index ignored files
 
 **Workspace**:
 The per-project editor state that restores open views, tabs, splits, scroll positions, selection state, extra project directories, and recently visited files.

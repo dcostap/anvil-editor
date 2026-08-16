@@ -243,7 +243,6 @@ local function sync_workspace_project_paths_to_core_projects()
   local root_path = root_project and root_project.path
   for _, entry in ipairs(project_paths.entries({ include_root = false })) do
     if entry.source == "workspace"
-    and entry.role ~= "excluded"
     and root_path
     and not common.path_equals(entry.path, root_path)
     and not common.path_belongs_to(entry.path, root_path) then

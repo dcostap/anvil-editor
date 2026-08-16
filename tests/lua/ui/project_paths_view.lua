@@ -42,17 +42,14 @@ local function setup_project(context)
   context.root = join_path(context.temp_root, "app")
   context.external = join_path(context.temp_root, "jdk-src")
   context.vendor = join_path(context.root, "src", "vendor", "library1")
-  context.generated = join_path(context.root, "generated")
   mkdirp(context.root)
   mkdirp(context.external)
   mkdirp(context.vendor)
-  mkdirp(context.generated)
   core.projects = { Project(context.root) }
   system.chdir(context.root)
   project_paths.configure_project {
     external = { { path = "../jdk-src", label = "jdk-src" } },
     vendored = { { path = "src/vendor/library1", label = "library1" } },
-    excluded = { { path = "generated", label = "generated" } },
   }
   local view = project_paths_view.open_view()
   context.view = view
@@ -84,14 +81,12 @@ test.describe("Project Paths View", function()
     local _, root_entry = find_row(view, common.basename(context.root))
     local _, external_entry = find_row(view, "jdk-src")
     local _, vendored_entry = find_row(view, "library1")
-    local _, excluded_entry = find_row(view, "generated")
 
     test.not_nil(root_entry)
     test.equal(root_entry.role, "root")
     test.equal(root_entry.source, "implicit")
     test.equal(external_entry.role, "external")
     test.equal(vendored_entry.role, "vendored")
-    test.equal(excluded_entry.role, "excluded")
 
     local text = table.concat(view.buffer.lines)
     test.ok(text:find("project config", 1, true), "expected project config storage column")

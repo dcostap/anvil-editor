@@ -136,7 +136,7 @@ local function workspace_folders_for_selection(selection)
   local folders = {}
   local seen = {}
   for _, entry in ipairs(project_paths.search_roots("symbols")) do
-    if entry.exists and entry.role ~= "excluded" then
+    if entry.exists then
       local key = common.path_compare_key(entry.path)
       if key and not seen[key] then
         seen[key] = true

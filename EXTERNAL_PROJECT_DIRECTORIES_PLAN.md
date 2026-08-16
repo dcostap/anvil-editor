@@ -1,5 +1,8 @@
 # Project Path Roles and External Project Directories Plan
 
+> Current code no longer supports Excluded Project Paths or per-role search flags.
+> Project-wide tools now use ripgrep ignore rules through the shared Project Search Scope.
+
 ## Goal
 
 Add first-class support for **Project Path Roles**, starting with **External Project Directories**, **Vendored Project Directories**, and **Excluded Project Paths**. External Project Directories are additional directories that belong to the active Workspace for browsing, fuzzy file search, grep, Project Symbol Search, Project Usage Search, autocomplete, and other project-wide tools, while remaining visually and semantically distinct from the Root Project.

@@ -46,7 +46,6 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     context.root = join_path(context.temp_root, "app")
     context.external = join_path(context.temp_root, "jdk-src")
     mkdirp(join_path(context.root, "src", "vendor", "library1", "foo"))
-    mkdirp(join_path(context.root, "generated"))
     mkdirp(join_path(context.external, "java", "lang"))
     core.projects = { Project(context.root) }
     core.visited_files = {}
@@ -57,9 +56,6 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
       },
       vendored = {
         { path = "src/vendor/library1", label = "library1" },
-      },
-      excluded = {
-        { path = "generated", label = "generated" },
       },
     }
   end)
@@ -174,26 +170,6 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     local vendored = picker_result_for_path(picker, vendored_file)
     test.equal(vendored.file, "library1" .. PATHSEP .. "foo" .. PATHSEP .. "NativeBaz.java")
     test.equal(vendored.root_role, "vendored")
-  end)
-
-  test.it("rejects grep results beneath a Project Path with grep disabled", function(context)
-    local disabled_dir = join_path(context.root, "src", "vendor", "library1")
-    local disabled_file = join_path(disabled_dir, "foo", "Baz.java")
-    write_file(disabled_file, "NEEDLE\n")
-    project_paths.configure_project {
-      vendored = {
-        { path = disabled_dir, label = "library1", grep = false },
-      },
-    }
-
-    local result = helpers.decorate_grep_result({
-      file = common.relative_path(context.root, disabled_file),
-      line = 1,
-      col = 1,
-      text = "NEEDLE",
-    }, context.root)
-
-    test.is_nil(result)
   end)
 
   test.it("ranks literal and compact path-scope matches ahead of loose subsequence paths", function(context)
@@ -357,13 +333,4 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     test.ok(common.path_equals(row.path, external_file))
   end)
 
-  test.it("omits excluded Project Paths from recent file rows", function(context)
-    local excluded_file = join_path(context.root, "generated", "Output.java")
-    write_file(excluded_file)
-    core.visited_files = { excluded_file }
-
-    local recents = helpers.recent_files()
-
-    test.equal(#recents, 0)
-  end)
 end)

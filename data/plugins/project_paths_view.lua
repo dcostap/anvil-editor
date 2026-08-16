@@ -18,14 +18,12 @@ local ROLE_LABELS = {
   root = "Root",
   external = "External",
   vendored = "Vendored",
-  excluded = "Excluded",
 }
 
 local ROLE_FROM_LABEL = {
   root = "root",
   external = "external",
   vendored = "vendored",
-  excluded = "excluded",
 }
 
 local STORAGE_LABELS = {
@@ -89,7 +87,7 @@ end
 
 local function serialize_project_config_block()
   local state = project_paths.save_project_state()
-  local by_role = { external = {}, vendored = {}, excluded = {} }
+  local by_role = { external = {}, vendored = {} }
   for _, entry in ipairs(state.entries or {}) do
     if by_role[entry.role] then by_role[entry.role][#by_role[entry.role] + 1] = entry end
   end
@@ -99,12 +97,12 @@ local function serialize_project_config_block()
     "local project_paths = require \"core.project_paths\"\n",
     "project_paths.configure_project {\n",
   }
-  for _, role in ipairs({ "external", "vendored", "excluded" }) do
+  for _, role in ipairs({ "external", "vendored" }) do
     lines[#lines + 1] = "  " .. role .. " = {\n"
     for _, entry in ipairs(by_role[role]) do
       local pieces = { "path = " .. quote(entry.path) }
       if entry.label and entry.label ~= "" then pieces[#pieces + 1] = "label = " .. quote(entry.label) end
-      for _, field in ipairs({ "browsable", "searchable", "grep", "symbols", "usages", "autocomplete", "rank_penalty", "filetree_style" }) do
+      for _, field in ipairs({ "rank_penalty", "filetree_style" }) do
         if entry[field] ~= nil then
           local value = entry[field]
           local text = type(value) == "string" and quote(value) or tostring(value)
@@ -294,7 +292,7 @@ end
 
 local function prompt_role(path, roles, callback)
   local choices = {}
-  for _, role in ipairs(roles or { "external", "vendored", "excluded" }) do
+  for _, role in ipairs(roles or { "external", "vendored" }) do
     choices[#choices + 1] = { text = role_label(role), role = role }
   end
   local default_text = choices[1] and choices[1].text or "External"
@@ -409,7 +407,7 @@ local function prompt_add_directory(path, default_role, default_source)
   local function with_path(target)
     if not target or target == "" then return end
     target = common.normalize_path(system.absolute_path(common.home_expand(target)) or common.home_expand(target))
-    local roles = default_role and { default_role } or { "external", "vendored", "excluded" }
+    local roles = default_role and { default_role } or { "external", "vendored" }
     if default_role and default_source then
       prompt_label(target, function(label) add_entry(target, default_role, default_source, label) end)
     elseif default_role then
@@ -442,10 +440,6 @@ command.add(nil, {
     if path then return add_entry(path, "external", "project") end
     prompt_add_directory(nil, "external", "project")
   end,
-  ["project-paths:add-excluded-project-path"] = function(path)
-    if path then return add_entry(path, "excluded", "workspace") end
-    prompt_add_directory(nil, "excluded")
-  end,
   ["project-paths:mark-selected-folder"] = function()
     local path, err = selected_filetree_directory()
     if not path then core.error("Project Paths: %s", tostring(err)); return end
@@ -456,8 +450,8 @@ command.add(nil, {
     end
     local root = root_path()
     local roles = root and (common.path_equals(path, root) or common.path_belongs_to(path, root))
-      and { "vendored", "excluded" }
-      or { "external", "vendored", "excluded" }
+      and { "vendored" }
+      or { "external", "vendored" }
     prompt_role(path, roles, function(role, label, source) add_entry(path, role, source, label) end)
   end,
 })

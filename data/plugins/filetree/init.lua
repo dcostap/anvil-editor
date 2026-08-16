@@ -996,7 +996,7 @@ function FileTreeView:sync_path(path, reason)
     local root = core.root_project and core.root_project()
     local resolved = root and common.path_equals(self.root_dir, root.path)
       and project_paths.resolve(path)
-    if not resolved or resolved.flags.browsable == false then return false end
+    if not resolved then return false end
   end
   return self:queue_filesystem_sync(path, reason or "notification")
 end
@@ -1242,7 +1242,7 @@ function FileTreeView:add_reveal_paths(expanded, paths)
     elseif target then
       local resolved = project_paths.resolve(target)
       local entry = resolved and resolved.entry
-      if entry and entry.role ~= "root" and resolved.flags.browsable ~= false then
+      if entry and entry.role ~= "root" then
         expanded[entry.path] = true
         local dir = parent_dir(target)
         while dir and not common.path_equals(dir, entry.path) and in_project(dir, entry.path) do
@@ -1385,8 +1385,6 @@ end
 
 local function project_path_role_for_abs(abs)
   local display = project_paths.display_path(abs, { kind = "filetree" })
-  local flags = display and display.flags
-  if flags and flags.excluded_entry then return "excluded", display end
   return display and display.root_role, display
 end
 
@@ -1984,7 +1982,6 @@ function FileTreeView:project_path_line_color(line)
   if meta.project_path_separator then return nil end
   if meta.project_path_role == "external" then return style.project_path_external end
   if meta.project_path_role == "vendored" then return style.project_path_vendored end
-  if meta.project_path_role == "excluded" then return style.project_path_excluded end
   return nil
 end
 
@@ -2136,8 +2133,7 @@ function FileTreeView:build_entries(include_hidden)
     local project = core.root_project and core.root_project()
     local root_tree = project and common.path_equals(self.root_dir, project.path)
     local resolved = root_tree and project_paths.resolve(abs) or nil
-    local browsable = root_tree
-      and resolved and resolved.flags.browsable ~= false
+    local browsable = root_tree and resolved
       or (not root_tree and in_project(abs, self.root_dir))
     if not browsable then
       errors[row.line] = "path escapes Project Paths"
@@ -3300,7 +3296,7 @@ local function focus_file(view, filename)
   local resolved = filename and project_paths.resolve(filename)
   local in_root = filename and in_project(filename, view.root_dir)
   local in_project_section = filename and root and common.path_equals(view.root_dir, root.path)
-    and resolved and resolved.entry.role ~= "root" and resolved.flags.browsable ~= false
+    and resolved and resolved.entry.role ~= "root"
   if not filename or not (in_root or in_project_section) then return false end
 
   local refreshed = false

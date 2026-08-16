@@ -15,6 +15,7 @@ local ImageView = require "core.imageview"
 local file_context = require "core.file_context"
 local poi = require "core.poi"
 local project_paths = require "core.project_paths"
+local project_files = require "core.project_files"
 local panes = require "core.panes"
 local path_tree = require "plugins.path_tree"
 local Widget = require "widget"
@@ -537,7 +538,12 @@ local function open_anvil_window(path)
 end
 
 local function kill_grep()
-  if grep_proc and grep_proc:running() then pcall(function() grep_proc:kill() end) end
+  if grep_proc then
+    local proc = grep_proc
+    if proc:running() then pcall(function() proc:kill() end) end
+    if proc.stdout then pcall(function() proc.stdout:close() end) end
+    pcall(function() proc:wait(250, 0.001) end)
+  end
   grep_proc = nil
 end
 
@@ -560,12 +566,13 @@ local function native_file_index_ready()
   return fuzzy_searcher.files_fuzzy_index and fuzzy_searcher.files_fuzzy_index_generation == fuzzy_searcher.files_generation
 end
 
-function fuzzy_searcher.file_roots_signature(roots)
+function fuzzy_searcher.file_roots_signature(roots, include_ignored)
   local parts = {}
   for _, root in ipairs(roots or {}) do
     parts[#parts + 1] = root.id or root.path
     parts[#parts + 1] = root.path
   end
+  parts[#parts + 1] = include_ignored and "ignored" or "default"
   return table.concat(parts, "\0")
 end
 
@@ -593,70 +600,6 @@ local function cancel_file_index_scan()
   fuzzy_searcher.files_scan_reason = nil
 end
 
-local function lua_ignore_pattern_to_glob(pattern)
-  local out, i = {}, 1
-  while i <= #pattern do
-    local c = pattern:sub(i, i)
-    local next_c = pattern:sub(i + 1, i + 1)
-    if c == "%" then
-      if next_c == "" then return nil end
-      out[#out + 1] = next_c
-      i = i + 2
-    elseif c == "." and next_c == "*" then
-      out[#out + 1] = "*"
-      i = i + 2
-    elseif c:find("[%^%$%(%)%[%]%+%-%?%*%.]") then
-      return nil
-    else
-      out[#out + 1] = c
-      i = i + 1
-    end
-  end
-  return table.concat(out)
-end
-
-local function ignored_rule_globs(ignore_rules)
-  local globs = {}
-  for _, rule in ipairs(ignore_rules) do
-    local body, glob
-    if rule.match_dir then
-      body = rule.pattern:match("^%^(.+)/%$?$")
-      glob = body and lua_ignore_pattern_to_glob(body)
-      if glob then globs[#globs + 1] = "!**/" .. glob .. "/**" end
-    else
-      local anchored_start = rule.pattern:sub(1, 1) == "^"
-      local anchored_end = rule.pattern:sub(-1) == "$"
-      body = rule.pattern
-      if anchored_start then body = body:sub(2) end
-      if anchored_end then body = body:sub(1, -2) end
-      glob = anchored_end and lua_ignore_pattern_to_glob(body) or nil
-      if glob then
-        globs[#globs + 1] = anchored_start and ("!**/" .. glob) or ("!**/*" .. glob)
-      end
-    end
-    if not glob then
-      core.log_quiet("Fuzzy native file index: unsupported ignore pattern remains scanner-unfiltered: %s", tostring(rule.pattern))
-    end
-  end
-  return globs
-end
-
-local function file_scan_exclude_globs(root, ignore_rules)
-  local globs = { "!**/.git/**" }
-  for _, glob in ipairs(ignored_rule_globs(ignore_rules)) do
-    globs[#globs + 1] = glob
-  end
-  for _, entry in ipairs(project_paths.entries()) do
-    if project_paths.is_excluded(entry.path, "files")
-      and common.path_belongs_to(entry.path, root.path)
-    then
-      local relative = common.relative_path(root.path, entry.path):gsub("\\", "/")
-      if relative ~= "" and relative ~= "." then globs[#globs + 1] = "!" .. relative .. "/**" end
-    end
-  end
-  return globs
-end
-
 local function native_file_index_root_specs(roots)
   local entries = project_paths.entries()
   local specs = {}
@@ -670,8 +613,7 @@ local function native_file_index_root_specs(roots)
       mappings = {},
     }
     for _, entry in ipairs(entries) do
-      if entry.role ~= "excluded" and entry.searchable ~= false
-        and not common.path_equals(entry.path, root.path)
+      if not common.path_equals(entry.path, root.path)
         and common.path_belongs_to(entry.path, root.path)
       then
         spec.mappings[#spec.mappings + 1] = {
@@ -697,23 +639,11 @@ local function file_index_count()
   return #(fuzzy_searcher.files_cache or {})
 end
 
-local function file_scan_command(root, ignore_rules)
-  local args = {
-    fuzzy_searcher.rg,
-    "--files",
-    "--hidden",
-    "--null",
-    "--max-filesize", tostring(config.file_size_limit) .. "M",
-  }
-  for _, glob in ipairs(file_scan_exclude_globs(root, ignore_rules)) do
-    args[#args + 1] = "--glob"
-    args[#args + 1] = glob
-  end
-  args[#args + 1] = "."
-  return args
+local function file_scan_command(_, include_ignored)
+  return project_files.scan_command(include_ignored)
 end
 
-local function start_file_index(roots, signature, reason)
+local function start_file_index(roots, signature, reason, include_ignored)
   if fuzzy_searcher.files_indexing then return false end
 
   local builder_ok, native_builder = pcall(
@@ -731,8 +661,6 @@ local function start_file_index(roots, signature, reason)
   fuzzy_searcher.files_refresh_requested = false
   fuzzy_searcher.files_scan_generation = fuzzy_searcher.files_scan_generation + 1
   local scan_generation = fuzzy_searcher.files_scan_generation
-  local ignore_rules = core.get_ignore_file_rules()
-
   core.log_quiet("Fuzzy file index scan started (%s)", tostring(reason or "picker-open"))
   core.add_thread(function()
     coroutine.yield(0.05)
@@ -748,84 +676,41 @@ local function start_file_index(roots, signature, reason)
         return
       end
 
-      local args = file_scan_command(root, ignore_rules)
-
-      local proc, start_error = process.start(args, {
-        cwd = root.path,
-        stdout = process.REDIRECT_PIPE,
-        stderr = process.REDIRECT_DISCARD,
-        stdin = process.REDIRECT_DISCARD,
+      local files, scan_error = project_files.list(root.path, {
+        refresh = true,
+        include_ignored = include_ignored,
       })
-      if not proc then
+      if not files then
         scan_failed = true
         core.log_quiet(
           "Fuzzy file index could not start scanner for %s: %s",
-          tostring(root.path), tostring(start_error or "unknown error")
+          tostring(root.path), tostring(scan_error or "unknown error")
         )
         break
       end
-      fuzzy_searcher.files_scan_proc = proc
-      core.__fuzzy_file_scan_proc = proc
-
-      local progress_deadline = system.get_time() + 30
-      local read_failed, timed_out = false, false
-      while true do
-        if scan_generation ~= fuzzy_searcher.files_scan_generation
-          or fuzzy_searcher.files_cache_root ~= signature
-        then
-          if proc:running() then pcall(function() proc:kill() end) end
-          proc:wait(process.WAIT_DEADLINE)
-          if fuzzy_searcher.files_scan_proc == proc then fuzzy_searcher.files_scan_proc = nil end
-          if core.__fuzzy_file_scan_proc == proc then core.__fuzzy_file_scan_proc = nil end
-          pcall(native_builder.free, native_builder)
-          return
-        end
-        if system.get_time() >= progress_deadline then
-          timed_out = true
-          if proc:running() then pcall(function() proc:kill() end) end
-          break
-        end
-
-        local ok, chunk_or_error = pcall(
-          proc.stdout.read, proc.stdout, 256 * 1024, { scan = 0.001, timeout = 0.1 }
-        )
-        if ok and chunk_or_error then
-          progress_deadline = system.get_time() + 30
-          local feed_started = system.get_time()
-          local fed, feed_error = pcall(native_builder.feed, native_builder, root_index, chunk_or_error)
-          native_feed_seconds = native_feed_seconds + (system.get_time() - feed_started)
-          if not fed then
-            read_failed = true
-            core.log_quiet("Fuzzy native file index ingestion failed for %s: %s",
-              tostring(root.path), tostring(feed_error))
-            if proc:running() then pcall(function() proc:kill() end) end
-            break
+      local chunk, chunk_bytes = {}, 0
+      for _, file in ipairs(files) do
+        local value = file.relative .. "\0"
+        chunk[#chunk + 1] = value
+        chunk_bytes = chunk_bytes + #value
+        if chunk_bytes >= 256 * 1024 then
+          if scan_generation ~= fuzzy_searcher.files_scan_generation
+            or fuzzy_searcher.files_cache_root ~= signature
+          then
+            pcall(native_builder.free, native_builder)
+            return
           end
-        elseif not ok and not tostring(chunk_or_error):find("timeout expired", 1, true) then
-          read_failed = true
-          core.log_quiet(
-            "Fuzzy file index could not read scanner output for %s: %s",
-            tostring(root.path), tostring(chunk_or_error)
-          )
-          if proc:running() then pcall(function() proc:kill() end) end
-          break
-        elseif not proc:running() then
-          break
+          local feed_started = system.get_time()
+          native_builder:feed(root_index, table.concat(chunk))
+          native_feed_seconds = native_feed_seconds + (system.get_time() - feed_started)
+          chunk, chunk_bytes = {}, 0
+          coroutine.yield(0)
         end
       end
-
-      local execute_code = proc:wait(process.WAIT_DEADLINE)
-      if fuzzy_searcher.files_scan_proc == proc then fuzzy_searcher.files_scan_proc = nil end
-      if core.__fuzzy_file_scan_proc == proc then core.__fuzzy_file_scan_proc = nil end
-
-      -- ripgrep uses exit code 1 for an empty, otherwise successful result set.
-      if timed_out or read_failed or (execute_code ~= 0 and execute_code ~= 1) then
-        scan_failed = true
-        core.log_quiet(
-          "Fuzzy file index scan failed for %s: %s",
-          tostring(root.path), timed_out and "timeout" or ("exit code " .. tostring(execute_code or "unknown"))
-        )
-        break
+      if #chunk > 0 then
+        local feed_started = system.get_time()
+        native_builder:feed(root_index, table.concat(chunk))
+        native_feed_seconds = native_feed_seconds + (system.get_time() - feed_started)
       end
     end
 
@@ -922,25 +807,27 @@ end
 
 local function ensure_file_index()
   local roots = project_paths.search_roots("files")
-  local signature = fuzzy_searcher.file_roots_signature(roots)
+  local include_ignored = active_view and active_view.include_ignored == true
+  local signature = fuzzy_searcher.file_roots_signature(roots, include_ignored)
   if fuzzy_searcher.files_cache_test_override and fuzzy_searcher.files_cache_root == signature then return end
   prepare_file_index_roots(roots, signature)
   if native_file_index_ready() or fuzzy_searcher.files_cache or fuzzy_searcher.files_indexing then return end
-  start_file_index(roots, signature, "initial-picker-open")
+  start_file_index(roots, signature, "initial-picker-open", include_ignored)
 end
 
 local function prewarm_file_index()
   local roots = project_paths.search_roots("files")
   if #roots == 0 then return false end
-  local signature = fuzzy_searcher.file_roots_signature(roots)
+  local signature = fuzzy_searcher.file_roots_signature(roots, false)
   prepare_file_index_roots(roots, signature)
   if native_file_index_ready() or fuzzy_searcher.files_cache or fuzzy_searcher.files_indexing then return false end
-  return start_file_index(roots, signature, "project-prewarm")
+  return start_file_index(roots, signature, "project-prewarm", false)
 end
 
 function fuzzy_searcher.refresh_file_index_for_picker_open()
   local roots = project_paths.search_roots("files")
-  local signature = fuzzy_searcher.file_roots_signature(roots)
+  local include_ignored = active_view and active_view.include_ignored == true
+  local signature = fuzzy_searcher.file_roots_signature(roots, include_ignored)
   if fuzzy_searcher.files_cache_test_override and fuzzy_searcher.files_cache_root == signature then return end
   prepare_file_index_roots(roots, signature)
   if fuzzy_searcher.files_skip_next_picker_refresh and native_file_index_ready() then
@@ -956,7 +843,7 @@ function fuzzy_searcher.refresh_file_index_for_picker_open()
     end
     return
   end
-  start_file_index(roots, signature, "picker-open")
+  start_file_index(roots, signature, "picker-open", include_ignored)
 end
 
 local function get_files()
@@ -1005,9 +892,20 @@ function fuzzy_searcher.get_recent_file_entries(skip_path)
         abs = abs and common.normalize_path(abs)
       end
       local key = abs and common.path_compare_key(abs)
-      if key and key ~= current_key and not seen[key] and not project_paths.is_excluded(abs, "files") then
+      if key and key ~= current_key and not seen[key] then
         local info = system.get_file_info(abs)
-        if info and info.type == "file" then
+        local include_ignored = active_view and active_view.include_ignored == true
+        local included = true
+        if not include_ignored then
+          for _, root in ipairs(project_paths.search_roots("files")) do
+            if common.path_equals(abs, root.path) or common.path_belongs_to(abs, root.path) then
+              local listed = project_files.contains(root.path, abs, "file")
+              if listed ~= nil then included = listed end
+              break
+            end
+          end
+        end
+        if info and info.type == "file" and included then
           seen[key] = true
           out[#out+1] = {
             text = fuzzy_searcher.file_display_item(abs) or abs,
@@ -1597,7 +1495,7 @@ local function decorate_grep_result(result, root)
   local abs = filename and common.is_absolute_path(filename)
     and filename
     or common.normalize_path(root .. PATHSEP .. tostring(result.file or ""))
-  if not abs or project_paths.is_excluded(abs, "grep") then return nil end
+  if not abs then return nil end
   local display = project_paths.display_path(abs, { kind = "grep" })
   if display then
     if display.rank_penalty == math.huge then return nil end
@@ -1632,8 +1530,9 @@ local function scope_key(scope)
   return table.concat(scope, "\0")
 end
 
-local function fuzzy_job_key(root, scope, seed)
-  return root .. "\0" .. scope_key(scope) .. "\0" .. seed:lower()
+local function fuzzy_job_key(root, scope, seed, include_ignored)
+  return root .. "\0" .. scope_key(scope) .. "\0"
+    .. (include_ignored and "ignored" or "default") .. "\0" .. seed:lower()
 end
 
 local function seed_for_tokens(tokens)
@@ -1650,7 +1549,7 @@ local function kill_fuzzy_grep_jobs()
   fuzzy_grep_jobs = {}
 end
 
-local function ensure_fuzzy_grep_job(root, scope, tokens)
+local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored)
   if not tokens or #tokens == 0 then return nil end
 
   -- Prefer reusing an already-warm broader stream when the user appends tokens,
@@ -1659,12 +1558,12 @@ local function ensure_fuzzy_grep_job(root, scope, tokens)
   local preferred_seed = seed_for_tokens(tokens)
   local reusable
   for _, tok in ipairs(tokens) do
-    local existing = fuzzy_grep_jobs[fuzzy_job_key(root, scope, tok)]
+    local existing = fuzzy_grep_jobs[fuzzy_job_key(root, scope, tok, include_ignored)]
     if existing then reusable = existing; break end
   end
 
   local function start_job(seed)
-    local key = fuzzy_job_key(root, scope, seed)
+    local key = fuzzy_job_key(root, scope, seed, include_ignored)
     local job = fuzzy_grep_jobs[key]
     if job then job.last_used = system.get_time(); return job end
 
@@ -1685,8 +1584,15 @@ local function ensure_fuzzy_grep_job(root, scope, tokens)
     fuzzy_grep_jobs[key] = job
 
     core.add_thread(function()
-      local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F", "--hidden", "--glob", "!.git/**", "-e", seed }
-      if scope then args[#args+1] = "--"; for _, f in ipairs(scope) do args[#args+1] = f end end
+      local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F" }
+      project_files.add_filter_arguments(args, include_ignored)
+      args[#args + 1], args[#args + 2] = "-e", seed
+      if scope then
+        args[#args+1] = "--"
+        for _, f in ipairs(scope) do args[#args+1] = f end
+      else
+        args[#args + 1] = "."
+      end
       local proc = process.start(args, { cwd = root, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_DISCARD, stdin = process.REDIRECT_DISCARD })
       job.proc = proc
       if not proc then job.done = true; job.version = job.version + 1; return end
@@ -2387,7 +2293,6 @@ end
 local function project_path_prefix_color(role)
   if role == "external" then return style.project_path_external end
   if role == "vendored" then return style.project_path_vendored end
-  if role == "excluded" then return style.project_path_excluded end
   return style.project_path_external
 end
 
@@ -2788,6 +2693,7 @@ function FSView:new(prefix, opts)
   self.everything_loading_feedback_generation = 0
   self.everything_loading_pending = false
   self.everything_loading_status = nil
+  self.include_ignored = false
 
   local source_view = core.active_view
   local source_buffer = source_view and source_view.buffer
@@ -4117,7 +4023,9 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
   for _, root_entry in ipairs(roots) do
     local root_scope = scope_for_root(scope, root_entry.path)
     if not scope or #root_scope > 0 then
-      local job, preferred_job = ensure_fuzzy_grep_job(root_entry.path, root_scope, tokens)
+      local job, preferred_job = ensure_fuzzy_grep_job(
+        root_entry.path, root_scope, tokens, self.include_ignored == true
+      )
       add_job(job)
       add_job(preferred_job)
     end
@@ -4458,8 +4366,7 @@ function FSView:start_grep(base, line, grep)
   if exact_query and exact_query ~= "" then grep = exact_query end
 
   local terms = parse_code_search_terms(grep)
-  local single_token_exact = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
-  if not exact_query and (#terms > 1 or single_token_exact) then
+  if not exact_query and #terms > 1 then
     self:start_grep_fuzzy_stream(base, line, grep, terms, scope, roots, gen, preserve_results, scope_meta)
     return
   end
@@ -4528,18 +4435,34 @@ function FSView:start_grep(base, line, grep)
       if gen ~= grep_generation or active_view ~= self then return end
       local root_scope = scope_for_root(scope, root.path)
       if not scope or #root_scope > 0 then
-        local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F", "--hidden", "--glob", "!.git/**", "-e", grep }
-        if scope then args[#args+1] = "--"; for _, f in ipairs(root_scope) do args[#args+1] = f end end
+        local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F" }
+        project_files.add_filter_arguments(args, self.include_ignored == true)
+        args[#args + 1], args[#args + 2] = "-e", grep
+        if scope then
+          args[#args+1] = "--"
+          for _, f in ipairs(root_scope) do args[#args+1] = f end
+        else
+          args[#args + 1] = "."
+        end
         local proc = process.start(args, { cwd = root.path, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_DISCARD, stdin = process.REDIRECT_DISCARD })
         grep_proc = proc
 
         if proc then
           while gen == grep_generation and active_view == self do
-            local l = proc.stdout:read("line", { scan = 1 / config.fps })
-            if l then
-              local r = decorate_grep_result(parse_vimgrep(l), root.path)
-              if r and not add_result(r, seen, true) then break end
-            elseif not proc:running() then break else coroutine.yield(1 / config.fps) end
+            local ok, line_or_error = pcall(
+              proc.stdout.read, proc.stdout, "line", { scan = 0.001, timeout = 0.1 }
+            )
+            if ok and line_or_error then
+              local result = decorate_grep_result(parse_vimgrep(line_or_error), root.path)
+              if result and not add_result(result, seen, true) then break end
+            elseif not ok and not tostring(line_or_error):find("timeout expired", 1, true) then
+              core.log_quiet("Fuzzy grep read failed under %s: %s", tostring(root.path), tostring(line_or_error))
+              break
+            elseif not proc:running() then
+              break
+            else
+              coroutine.yield(1 / config.fps)
+            end
           end
           if proc:running() then pcall(function() proc:kill() end) end
           proc:wait(process.WAIT_DEADLINE)
@@ -5023,6 +4946,33 @@ function FSView:close()
   end
 end
 
+function FSView:can_toggle_ignored_files()
+  if self.static_mode then return false end
+  local mode = fuzzy_searcher.prompt_mode(self.input and self.input:get_text() or "")
+  return mode == "" or mode == "#"
+end
+
+function FSView:toggle_ignored_files()
+  if not self:can_toggle_ignored_files() then return false end
+  self.include_ignored = not self.include_ignored
+  kill_grep()
+  kill_fuzzy_grep_jobs()
+  local text = self.input and self.input:get_text() or ""
+  local base, _, grep = parse_query(text)
+  if grep == nil or base ~= "" then
+    cancel_file_index_scan()
+    fuzzy_searcher.files_cache_root = nil
+    fuzzy_searcher.refresh_file_index_for_picker_open()
+  end
+  self.current_query_key = nil
+  self.force_refresh = true
+  self.dirty = true
+  self:schedule_update(true)
+  core.log_quiet("Fuzzy Searcher: %s ignored files for this search",
+    self.include_ignored and "included" or "excluded")
+  return true
+end
+
 function FSView:selected_file_path()
   local r = self:selected_result()
   if not r then return end
@@ -5043,7 +4993,7 @@ function FSView:focus_selected_in_tree()
   end
 
   local resolved = project_paths.resolve(path)
-  if not resolved or resolved.flags.browsable == false then
+  if not resolved then
     core.log_quiet("Fuzzy Searcher: selected file is not browsable in the File Tree: %s", path)
     return
   end
@@ -5174,7 +5124,9 @@ function FSView:draw()
   local row_padding = m.row_padding
   self:ensure_selection_visible()
 
-  renderer.draw_text(font, self.status or "", x + pad, y + self.input.size.y + pad * 1.5, style.dim)
+  local status = self.status or ""
+  if self.include_ignored then status = status .. " — ignored files included" end
+  renderer.draw_text(font, status, x + pad, y + self.input.size.y + pad * 1.5, style.dim)
   local full_width_mode = self:is_full_width_mode()
   local vertical_preview = m.vertical_preview
   local command_mode = self:is_command_mode()
@@ -5518,6 +5470,16 @@ command.add(picker_active, {
   end,
 })
 
+command.add(function()
+  local view = current_picker()
+  return view and view:can_toggle_ignored_files()
+end, {
+  ["fuzzy-searcher:toggle-ignored-files"] = function()
+    local view = current_picker()
+    if view then view:toggle_ignored_files() end
+  end,
+})
+
 -- Global open shortcuts intentionally override conflicting defaults.
 core.fuzzy_searcher_install_global_keymaps = function()
   keymap.add({
@@ -5543,6 +5505,7 @@ core.fuzzy_searcher_install_picker_keymaps = function()
     ["ctrl+l"] = "fuzzy-searcher:focus-selected-in-tree",
     ["ctrl+shift+l"] = "fuzzy-searcher:reveal-selected-in-explorer",
     ["ctrl+c"] = "fuzzy-searcher:copy-selected",
+    ["ctrl+i"] = "fuzzy-searcher:toggle-ignored-files",
     ["up"] = "fuzzy-searcher:previous",
     ["down"] = "fuzzy-searcher:next",
     ["alt+left"] = "fuzzy-searcher:prompt-history-previous",

@@ -1,8 +1,8 @@
 local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
-local Project = require "core.project"
 local project_paths = require "core.project_paths"
+local project_files = require "core.project_files"
 local DirWatch = require "core.dirwatch"
 local registry = require "core.treesitter.registry"
 local outline = require "core.treesitter.outline"
@@ -164,10 +164,6 @@ local function copy_item(item)
   return copy
 end
 
-local function project_path_allows(path, kind)
-  return project_paths_module().rank_penalty(path, kind) ~= math.huge
-end
-
 local function cached_project_path_metadata(index, path, kind)
   if not (index and path) then return nil end
   local generation = project_paths_module().generation()
@@ -324,26 +320,32 @@ local function refresh_watches_for_dir(index, dir)
   local info = system.get_file_info(dir)
   if not info or info.type ~= "dir" then return false end
 
-  local project = Project(index.root)
   prune_missing_watches(index, dir)
   local changed = watch_dir(index, dir)
+  if common.path_equals(dir, index.root) then
+    local git_info = common.normalize_path(index.root .. PATHSEP .. ".git" .. PATHSEP .. "info")
+    local git_info_stat = system.get_file_info(git_info)
+    if git_info_stat and git_info_stat.type == "dir" and watch_dir(index, git_info) then
+      changed = true
+    end
+  end
   local mode = index.watcher.monitor and index.watcher.monitor.mode and index.watcher.monitor:mode()
   if mode == "single" then
     log_quiet("Tree-sitter Project index: watching %s with single native watch; skipping recursive watch setup", tostring(dir))
     return changed
   end
-  local stack = { dir }
+  local listed, list_error = project_files.list(index.root)
+  if not listed then
+    log_quiet("Tree-sitter Project watcher could not list files under %s: %s",
+      tostring(index.root), tostring(list_error))
+    return changed
+  end
   local yielded = 0
-  while #stack > 0 do
-    local current = table.remove(stack)
-    local names = system.list_dir(current) or {}
-    for _, name in ipairs(names) do
-      local path = common.normalize_path(current .. PATHSEP .. name)
-      local child = project:get_file_info(path)
-      if child and child.type == "dir" then
-        if watch_dir(index, path) then changed = true end
-        stack[#stack + 1] = path
-      end
+  for _, path in ipairs(project_files.directories(index.root) or {}) do
+    if (common.path_equals(path, dir) or common.path_belongs_to(path, dir))
+      and watch_dir(index, path)
+    then
+      changed = true
     end
     yielded = yielded + 1
     if yielded >= DEFAULT_SCAN_YIELD_FILES * 16 then
@@ -421,16 +423,6 @@ local function native_project_run_languages_payload()
     end
   end
   return out
-end
-
-local function project_index_exclusions_payload()
-  local excluded = {}
-  for _, entry in ipairs(project_paths_module().entries()) do
-    if entry.path and entry.symbols == false and entry.usages == false then
-      excluded[#excluded + 1] = { path = entry.path }
-    end
-  end
-  return excluded
 end
 
 local function current_worker_message(index, message)
@@ -711,8 +703,6 @@ local function submit_native_run(index, generation, opts, phase)
     end
     table.sort(scan_paths)
     run.native_orchestrated = true
-    local excluded_paths = {}
-    for _, entry in ipairs(project_index_exclusions_payload()) do excluded_paths[#excluded_paths + 1] = entry.path end
     local handle, submit_error = worker_pool.system():submit({
       kind = "treesitter_project_run",
       native = true,
@@ -727,8 +717,6 @@ local function submit_native_run(index, generation, opts, phase)
         project_scoped = scoped,
         scan_paths = scan_paths,
         remove_paths = opts.remove_paths or {},
-        excluded_paths = excluded_paths,
-        ignore_patterns = config.ignore_files,
         languages = native_project_run_languages_payload(),
         project_usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
         project_progress_files = opts.progress_files or 64,
@@ -827,6 +815,33 @@ end
 submit_worker_scan = function(index, generation, opts, phase)
   opts = opts or {}
   phase = phase or "combined"
+  if phase == "combined" and not opts.files and not opts.scan_root and not opts.scan_roots then
+    index.status = "indexing"
+    index.symbol_status = "indexing"
+    index.usage_status = "indexing"
+    index.reason = opts.reason
+    index.started_at = system.get_time()
+    index.finished_at = nil
+    core.add_thread(function()
+      local listed, list_error = project_files.list(index.root, { refresh = true })
+      if index.generation ~= generation then return end
+      if not listed then
+        index.status = "failed"
+        index.symbol_status = "failed"
+        index.usage_status = "failed"
+        index.reason = list_error or "Project file listing failed"
+        index.finished_at = system.get_time()
+        core.log_quiet("Tree-sitter Project index could not list files under %s: %s",
+          tostring(index.root), tostring(index.reason))
+        return
+      end
+      local files = {}
+      for _, file in ipairs(listed) do files[#files + 1] = { path = file.path } end
+      local run_opts = common.merge(opts, { files = files })
+      submit_native_run(index, generation, run_opts, phase)
+    end)
+    return true, "listing"
+  end
   submit_native_run(index, generation, opts, phase)
 end
 
@@ -998,16 +1013,14 @@ local function combined_symbols(index, kind, disk_symbols)
   local overlay = index.open_buffers or {}
   local out = {}
   for _, symbol in ipairs(disk_symbols) do
-    if not paths[symbol.path] and project_path_allows(symbol.path, kind) then
+    if not paths[symbol.path] then
       out[#out + 1] = refresh_project_path_metadata(index, copy_item(symbol), kind)
     end
   end
   for _, entry in pairs(overlay) do
     if overlay_entry_current(entry) then
       for _, symbol in ipairs(entry.symbols or {}) do
-        if project_path_allows(symbol.path, kind) then
-          out[#out + 1] = refresh_project_path_metadata(index, copy_item(symbol), kind)
-        end
+        out[#out + 1] = refresh_project_path_metadata(index, copy_item(symbol), kind)
       end
     end
   end
@@ -1029,16 +1042,14 @@ local function combined_usages_for_name(index, name)
   local paths = overlay_paths(index)
   local out = {}
   for _, usage in ipairs((index.usages_by_name or {})[name] or {}) do
-    if not paths[usage.path] and not project_paths_module().is_excluded(usage.path, "usages") then
+    if not paths[usage.path] then
       out[#out + 1] = refresh_project_path_metadata(index, usage, "usages")
     end
   end
   for _, entry in pairs(overlay) do
     if overlay_entry_current(entry) then
       for _, usage in ipairs((entry.usages_by_name or {})[name] or {}) do
-        if not project_paths_module().is_excluded(usage.path, "usages") then
-          out[#out + 1] = refresh_project_path_metadata(index, usage, "usages")
-        end
+        out[#out + 1] = refresh_project_path_metadata(index, usage, "usages")
       end
     end
   end
@@ -1172,10 +1183,6 @@ local function native_query_path_rules(index, snapshot, kind)
   end
   local excluded, included = {}, {}
   for path in pairs(suppressed) do excluded[#excluded + 1] = path end
-  for _, entry in ipairs(project_paths_module().entries()) do
-    local target = entry[kind] == false and excluded or included
-    target[#target + 1] = entry.path
-  end
   table.sort(excluded)
   table.sort(included)
   cache = {
@@ -1208,8 +1215,7 @@ local function bounded_overlay_symbols(index, suppressed, query, opts, capacity)
   for path, entry in pairs(index.open_buffers or {}) do
     if suppressed[path] and overlay_entry_current(entry) then
       for _, symbol in ipairs(entry.symbols or {}) do
-        if project_path_allows(symbol.path, opts.kind or "symbols")
-        and symbol_kind_allowed(symbol, kinds)
+        if symbol_kind_allowed(symbol, kinds)
         and symbol_language_allowed(symbol, opts.language_ids or opts.languages)
         and symbol_parent_allowed(symbol, opts.parent_names) then
           local score = query == "" and 0 or (native_fuzzy and native_fuzzy.score(symbol_fuzzy_text(symbol), query, { mode = "generic" }))
@@ -1699,8 +1705,7 @@ local function bounded_overlay_usages(index, suppressed, name, opts, capacity)
   for path, entry in pairs(index.open_buffers or {}) do
     if suppressed[path] and overlay_entry_current(entry) then
       for _, usage in ipairs((entry.usages_by_name or {})[name] or {}) do
-        if (include_declaration or not usage.is_declaration)
-        and project_path_allows(usage.path, "usages") then
+        if include_declaration or not usage.is_declaration then
           matched = matched + 1
           insert_bounded(candidates, usage, usage_less, capacity)
         end
@@ -2111,9 +2116,13 @@ local function submit_targeted_file_reindex(index, path, opts)
   if not index or not path then return false, "no-index" end
   if not common.path_belongs_to(path, index.root) then return false, "outside-project" end
 
+  project_files.invalidate(index.root)
+  local listed, list_error = project_files.list(index.root, { refresh = true })
+  if not listed then return false, list_error or "Project file listing failed" end
+  local included = project_files.contains(index.root, path, "file") == true
   local info = system.get_file_info(path)
   if index.native_snapshot then
-    local language = info and info.type == "file" and registry.get(path) or nil
+    local language = included and info and info.type == "file" and registry.get(path) or nil
     local files = {}
     if language and language.query_sources and language.query_sources.outline then
       files[1] = { path = path, root = index.root, info = serializable_file_info(info), language_id = language.id }
@@ -2141,15 +2150,31 @@ local function submit_targeted_directories_reindex(index, dirs, opts)
         return false, "outside-project"
       end
       local info = system.get_file_info(dir)
-      if info and info.type == "dir" then scan_roots[#scan_roots + 1] = dir
+      if info and info.type == "dir" then
+        scan_roots[#scan_roots + 1] = dir
+        remove_paths[#remove_paths + 1] = dir
       else remove_paths[#remove_paths + 1] = dir end
+    end
+    local listed = project_files.cached(index.root)
+    local files
+    if listed then
+      files = {}
+      for _, file in ipairs(listed) do
+        for _, scan_root in ipairs(scan_roots) do
+          if common.path_belongs_to(file.path, scan_root) then
+            files[#files + 1] = { path = file.path }
+            break
+          end
+        end
+      end
     end
     index.generation = (index.generation or 0) + 1
     local scheduled, reason = submit_native_run(index, index.generation, {
       reason = opts.reason or "directory-dirty",
       base_snapshot = index.native_snapshot,
       remove_paths = remove_paths,
-      scan_roots = scan_roots,
+      scan_roots = files and nil or scan_roots,
+      files = files,
     }, "targeted-directory")
     return scheduled and true or false, reason
   end
@@ -2203,27 +2228,20 @@ function symbol_index.mark_directories_dirty(dirs, reason, opts)
   local matched = false
   local ignored = false
   for _, index in pairs(indexes) do
+    if not opts.project_files_refreshed then
+      project_files.invalidate(index.root)
+      local refreshed, refresh_error = project_files.list(index.root, { refresh = true })
+      if not refreshed then
+        log_quiet("Tree-sitter Project directory refresh could not list files under %s: %s",
+          tostring(index.root), tostring(refresh_error))
+      end
+    end
     local index_dirs = {}
     for dir in pairs(scopes) do
       if common.path_equals(dir, index.root) or common.path_belongs_to(dir, index.root) then
-        local allowed = project_path_allows(dir, "symbols")
-        if allowed then
-          local info = system.get_file_info(dir)
-          local relative = common.relative_path(index.root, dir)
-          local filter_info = info and {
-            type = info.type,
-            size = info.size or 0,
-            modified = info.modified,
-            filename = relative,
-          } or {
-            type = "dir",
-            size = 0,
-            filename = relative,
-          }
-          allowed = not common.match_ignore_rule(
-            relative, filter_info, core.get_ignore_file_rules()
-          )
-        end
+        local allowed = true
+        local listed = project_files.contains(index.root, dir, "dir")
+        if listed ~= nil then allowed = allowed and listed end
         if allowed then index_dirs[#index_dirs + 1] = dir
         else ignored = true end
       end
@@ -2265,22 +2283,28 @@ function symbol_index.mark_directory_dirty(dir, reason, opts)
 end
 
 local function watch_path_allowed(index, path, info, assumed_type)
-  if not project_path_allows(path, "symbols") then return false end
-  local relative = common.relative_path(index.root, path)
-  local filter_info = {
-    type = (info and info.type) or assumed_type or "file",
-    size = (info and info.size) or 0,
-    modified = info and info.modified,
-    filename = relative,
-  }
-  return not common.match_ignore_rule(
-    relative, filter_info, core.get_ignore_file_rules()
-  )
+  local kind = (info and info.type) or assumed_type or "file"
+  local listed = project_files.contains(index.root, path, kind)
+  if listed ~= nil then return listed end
+  return true
 end
 
 local function has_project_index_provider(path)
   local language = registry.get(path)
   return language and language.query_sources and language.query_sources.outline ~= nil
+end
+
+local function ignore_rules_scope(root, path)
+  local name = common.basename(path)
+  if name == ".gitignore" or name == ".ignore" or name == ".rgignore" then
+    return common.dirname(path)
+  end
+  local parent = common.dirname(path)
+  if name == "exclude" and common.basename(parent) == "info"
+    and common.basename(common.dirname(parent)) == ".git"
+  then
+    return root
+  end
 end
 
 ---Turn changed filesystem leaf paths into the smallest relevant directory
@@ -2298,43 +2322,64 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
   local index = indexes[root]
   if not index then return false, "no-index" end
 
+  local old_membership = {}
+  for key, value in pairs(paths) do
+    local path = type(key) == "number" and value or key
+    if path then
+      old_membership[common.normalize_path(path)] =
+        project_files.contains(root, path, "file") == true
+        or project_files.contains(root, path, "dir") == true
+    end
+  end
+  project_files.invalidate(root)
+  local refreshed, refresh_error = project_files.list(root, { refresh = true })
+  if not refreshed then
+    log_quiet("Tree-sitter Project watcher could not refresh Project files under %s: %s",
+      tostring(root), tostring(refresh_error))
+  end
+
   local scopes = {}
   local ignored, irrelevant = 0, 0
   for key, value in pairs(paths) do
     local path = type(key) == "number" and value or key
     path = path and common.normalize_path(path)
     if path and (common.path_equals(path, root) or common.path_belongs_to(path, root)) then
-      local info = system.get_file_info(path)
-      if info and info.type == "dir" then
-        if watch_path_allowed(index, path, info, "dir") then
-          add_coalesced_scope(scopes, path, true)
-        else
-          ignored = ignored + 1
-        end
-      elseif has_project_index_provider(path) then
-        -- Do not size-filter source paths here. A file that grew beyond the
-        -- native scan cap may already have records in the current snapshot;
-        -- refreshing its scope is what removes those now-stale records.
-        if watch_path_allowed(index, path, info, "file") then
-          add_coalesced_scope(scopes, common.dirname(path), true)
-        else
-          ignored = ignored + 1
-        end
-      elseif not info then
-        -- The watcher cannot reliably distinguish a removed file from a
-        -- removed directory after the path is gone. Conservatively refresh the
-        -- parent: dotted directories can contain indexed descendants and must
-        -- not leave stale symbols behind.
-        local parent = common.dirname(path)
-        if not watch_path_allowed(index, path, nil, "dir") then
-          ignored = ignored + 1
-        elseif watch_path_allowed(index, parent, system.get_file_info(parent), "dir") then
-          add_coalesced_scope(scopes, parent, true)
-        else
-          ignored = ignored + 1
-        end
+      local rules_scope = ignore_rules_scope(root, path)
+      if rules_scope then
+        add_coalesced_scope(scopes, rules_scope, true)
       else
-        irrelevant = irrelevant + 1
+        local info = system.get_file_info(path)
+        if info and info.type == "dir" then
+          if watch_path_allowed(index, path, info, "dir") then
+            add_coalesced_scope(scopes, path, true)
+          else
+            ignored = ignored + 1
+          end
+        elseif has_project_index_provider(path) then
+          -- Do not size-filter source paths here. A file that grew beyond the
+          -- native scan cap may already have records in the current snapshot;
+          -- refreshing its scope is what removes those now-stale records.
+          if watch_path_allowed(index, path, info, "file") then
+            add_coalesced_scope(scopes, common.dirname(path), true)
+          else
+            ignored = ignored + 1
+          end
+        elseif not info then
+          -- The watcher cannot reliably distinguish a removed file from a
+          -- removed directory after the path is gone. Conservatively refresh the
+          -- parent: dotted directories can contain indexed descendants and must
+          -- not leave stale symbols behind.
+          local parent = common.dirname(path)
+          if not old_membership[path] and not watch_path_allowed(index, path, nil, "dir") then
+            ignored = ignored + 1
+          elseif watch_path_allowed(index, parent, system.get_file_info(parent), "dir") then
+            add_coalesced_scope(scopes, parent, true)
+          else
+            ignored = ignored + 1
+          end
+        else
+          irrelevant = irrelevant + 1
+        end
       end
     end
   end
@@ -2344,9 +2389,8 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
   if not next(scopes) then
     return false, ignored > 0 and irrelevant == 0 and "ignored" or "irrelevant"
   end
-  return symbol_index.mark_directories_dirty(
-    scopes, reason or "project-watch", opts
-  )
+  return symbol_index.mark_directories_dirty(scopes, reason or "project-watch",
+    common.merge(opts or {}, { project_files_refreshed = refreshed ~= nil }))
 end
 
 function symbol_index.mark_file_dirty(path, reason)

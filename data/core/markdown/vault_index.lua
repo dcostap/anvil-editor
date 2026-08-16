@@ -7,6 +7,7 @@ local anchors = require "core.markdown.anchors"
 local links = require "core.markdown.links"
 local parser = require "core.markdown.parser"
 local worker_pool = require "core.worker_pool"
+local project_files = require "core.project_files"
 
 local vault_index = {}
 
@@ -440,6 +441,17 @@ end
 function Index:adopt_manifest_watch_dirs(manifest, watcher, watcher_serial)
   local monitor = watcher and watcher.monitor
   if monitor and monitor.mode and monitor:mode() == "single" then return end
+  local listed = project_files.cached(self.root)
+  if listed then
+    core.add_thread(function()
+      for _, dir in ipairs(project_files.directories(self.root) or {}) do
+        if self.watcher ~= watcher or self.watcher_serial ~= watcher_serial then return end
+        self:watch_dir(dir)
+        coroutine.yield(0)
+      end
+    end)
+    return
+  end
   core.add_thread(function()
     local summary, offset = manifest:summary(), 0
     while self.watcher == watcher and self.watcher_serial == watcher_serial
@@ -487,6 +499,9 @@ function Index:start_watcher()
   self.watcher_serial = self.watcher_serial + 1
   local serial = self.watcher_serial
   self:watch_dir(self.root)
+  local git_info = join_path(self.root, ".git" .. PATHSEP .. "info")
+  local git_info_stat = system.get_file_info(git_info)
+  if git_info_stat and git_info_stat.type == "dir" then self:watch_dir(git_info) end
   if self.manifest_snapshot then self:adopt_manifest_watch_dirs(self.manifest_snapshot, watcher, serial) end
   core.add_thread(function()
     local next_degraded_rescan = system.get_time() + 5
@@ -596,15 +611,9 @@ function Index:rebuild_async(reason)
     rebuild_reason
   )
 
-  local scan_paths = {}
-  if self.manifest_snapshot and not classification_changed then
-    for key, path in pairs(self.dirty_manifest_scopes) do
-      scan_paths[#scan_paths + 1] = path
-      self.dirty_manifest_scopes[key] = nil
-    end
-    table.sort(scan_paths)
-  elseif classification_changed then
-    self.dirty_manifest_scopes = {}
+  local function submit_scan_paths(scan_paths, previous_manifest)
+  self.dirty_manifest_scopes = {}
+  if classification_changed then
     core.log_quiet("Markdown vault attachment policy changed; forcing a full manifest rebuild: root=%s", self.root)
   end
 
@@ -631,9 +640,9 @@ function Index:rebuild_async(reason)
     native_payload = {
       project_root = self.root,
       show_unsupported_files = self.show_unsupported_files,
-      manifest = #scan_paths > 0 and self.manifest_snapshot or nil,
+      manifest = previous_manifest,
       scan_paths = scan_paths,
-      project_scoped = #scan_paths > 0,
+      project_scoped = true,
     },
     is_stale = function() return serial ~= self.rebuild_serial end,
     on_stale = function(message)
@@ -748,6 +757,45 @@ function Index:rebuild_async(reason)
   else
     self.manifest_job = handle
   end
+  end
+
+  local scoped_paths = {}
+  local can_update_scopes = self.manifest_snapshot ~= nil and not classification_changed
+  for _, path in pairs(self.dirty_manifest_scopes) do
+    local info = system.get_file_info(path)
+    if not (info and info.type == "file"
+      and project_files.contains(self.root, path, "file") == true)
+    then
+      can_update_scopes = false
+      break
+    end
+    scoped_paths[#scoped_paths + 1] = path
+  end
+  if #scoped_paths == 0 then can_update_scopes = false end
+  if can_update_scopes then
+    table.sort(scoped_paths)
+    -- Keep the published snapshot available while a known file is refreshed.
+    self.status, self.reason = "ready", nil
+    submit_scan_paths(scoped_paths, self.manifest_snapshot)
+    return false
+  end
+
+  self.manifest_job = {}
+  core.add_thread(function()
+    local listed, list_error = project_files.list(self.root, { refresh = true })
+    if serial ~= self.rebuild_serial then return end
+    self.manifest_job = nil
+    if not listed then
+      self.status, self.reason = "error", list_error or "Project file listing failed"
+      self:notify("error", self.reason)
+      core.log_quiet("Markdown vault could not list Project files under %s: %s",
+        tostring(self.root), tostring(self.reason))
+      return
+    end
+    local scan_paths = {}
+    for _, file in ipairs(listed) do scan_paths[#scan_paths + 1] = file.path end
+    submit_scan_paths(scan_paths, nil)
+  end)
   return false
 end
 

@@ -53,15 +53,12 @@ local function setup_project_paths(context)
   context.external = join_path(context.temp_root, "jdk-src")
   context.missing = join_path(context.temp_root, "missing-src")
   context.vendor = join_path(context.root, "src", "vendor", "library1")
-  context.excluded = join_path(context.root, "generated")
   mkdirp(join_path(context.root, "src", "app"))
   mkdirp(join_path(context.vendor, "foo"))
   mkdirp(join_path(context.external, "java", "lang"))
-  mkdirp(context.excluded)
   write_file(join_path(context.root, "README.md"), "readme\n")
   write_file(join_path(context.vendor, "foo", "Baz.java"), "class Baz {}\n")
   write_file(join_path(context.external, "java", "lang", "String.java"), "class String {}\n")
-  write_file(join_path(context.excluded, "Generated.java"), "class Generated {}\n")
 
   core.projects = { Project(context.root) }
   system.chdir(context.root)
@@ -72,9 +69,6 @@ local function setup_project_paths(context)
     },
     vendored = {
       { path = "src/vendor/library1", label = "library1" },
-    },
-    excluded = {
-      { path = "generated", label = "generated" },
     },
   }
 
@@ -172,16 +166,6 @@ test.describe("File Tree Project Path Roles", function()
     test.is_nil(core.fuzzy_searcher_active_view)
     test.equal(core.active_view, filetree)
     test.ok(entry and common.path_equals(entry.abs, path), "expected File Tree selection on the external result")
-  end)
-
-  test.it("flags Excluded Project Path rows while keeping them visible", function(context)
-    local filetree = setup_project_paths(context)
-    local generated_line = find_line(filetree, "generated/")
-    test.not_nil(generated_line)
-    test.equal(filetree.line_meta[generated_line].project_path_role, "excluded")
-    local entry = filetree:entry_for_line(generated_line)
-    test.not_nil(entry)
-    test.ok(common.path_equals(entry.abs, context.excluded))
   end)
 
   test.it("draws Project Directory separators as visual rows before the first section row", function(context)

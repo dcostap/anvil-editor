@@ -393,20 +393,6 @@ local style = require "core.style"
 -- disable plugin detectindent, otherwise it is enabled by default:
 -- config.plugins.detectindent = false
 
----------------------------- Miscellaneous -------------------------------------
-
--- modify list of files to ignore when indexing the project:
--- config.ignore_files = {
---   -- folders
---   "^%.svn/",        "^%.git/",   "^%.hg/",        "^CVS/", "^%.Trash/", "^%.Trash%-.*/",
---   "^node_modules/", "^%.cache/", "^__pycache__/",
---   -- files
---   "%.pyc$",         "%.pyo$",       "%.exe$",        "%.dll$",   "%.obj$", "%.o$",
---   "%.a$",           "%.lib$",       "%.so$",         "%.dylib$", "%.ncb$", "%.sdf$",
---   "%.suo$",         "%.pdb$",       "%.idb$",        "%.class$", "%.psd$", "%.db$",
---   "^desktop%.ini$", "^%.DS_Store$", "^%.directory$",
--- }
-
 ]])
   init_file:close()
 end
@@ -422,36 +408,6 @@ function core.write_init_project_module(init_filename)
 -- It will be automatically reloaded when saved.
 
 local config = require "core.config"
-
--- you can add some patterns to ignore files within the project
--- this will overwrite the default ignored files
--- config.ignore_files = {"^%.", <some-patterns>}
-
--- this will extend the list of default ignored files
--- for i, v in ipairs({"^%.", <some-patterns>}) do table.insert(config.ignore_files, v) end
-
--- Patterns are normally applied to the file's or directory's name, without
--- its path. See below about how to apply filters on a path.
---
--- Here some examples:
---
--- "^%." matches any file of directory whose basename begins with a dot.
---
--- When there is an '/' at the end, the pattern will only match directories.
--- When there is an "$" at the end, the pattern will only match files.
---
--- "^%.git/" matches any directory named ".git" anywhere in the project.
--- "somefile$" matches a specific file
--- "%.lua$" matches any lua file
---
--- If a "/" appears anywhere in the pattern (except when it appears at the end or
--- is immediately followed by a '$'), then the pattern will be applied to the full
--- path of the file or directory. An initial "/" will be prepended to the file's
--- or directory's path to indicate the project's root.
---
--- "^/node_modules/" will match a directory named "node_modules" at the project's root.
--- "^/build.*/" will match any top level directory whose name begins with "build".
--- "^/subprojects/.+/" will match any directory inside a top-level folder named "subprojects".
 
 -- You may activate some plugins on a per-project basis to override the user's settings.
 -- config.plugins.trimwitespace = true
@@ -3548,38 +3504,6 @@ function core.deprecation_log(kind)
   if alerted_deprecations[kind] then return end
   alerted_deprecations[kind] = true
   core.warn("Used deprecated functionality [%s]. Check if your plugins are up to date.", kind)
-end
-
-
----A pre-processed config.ignore_files entry.
----@class core.ignore_file_rule
----A lua pattern.
----@field pattern string
----Match a full path including path separators, otherwise match filename only.
----@field use_path boolean
----Match directories only.
----@field match_dir boolean
-
----Gets a list of pre-processed config.ignore_files patterns for usage in
----combination of common.match_ignore_rule()
----@return core.ignore_file_rule[]
-function core.get_ignore_file_rules()
-  local ipatterns = config.ignore_files
-  local compiled = {}
-  -- config.ignore_files could be a simple string...
-  if type(ipatterns) ~= "table" then ipatterns = {ipatterns} end
-  for _, pattern in ipairs(ipatterns) do
-    -- we ignore malformed pattern that raise an error
-    if pcall(string.match, "a", pattern) then
-      table.insert(compiled, {
-        use_path = pattern:match("/[^/$]"), -- contains a slash but not at the end
-        -- An '/' or '/$' at the end means we want to match a directory.
-        match_dir = pattern:match(".+/%$?$"), -- to be used as a boolen value
-        pattern = pattern -- get the actual pattern
-      })
-    end
-  end
-  return compiled
 end
 
 

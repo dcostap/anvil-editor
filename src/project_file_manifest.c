@@ -348,13 +348,13 @@ AnvilProjectFileManifestSnapshot *anvil_project_file_manifest_build(
   SDL_SetAtomicInt(&snapshot->refcount, 1);
   snapshot->root = SDL_strdup(spec->root);
   ManifestWalk walk = { spec, snapshot, NULL };
-  bool scoped = spec->scoped && spec->previous && spec->scan_path_count > 0;
+  bool scoped = spec->scoped;
   for (uint32_t i = 0; scoped && i < spec->scan_path_count; i++) {
     if (spec->scan_paths[i] && path_equal(spec->scan_paths[i], snapshot->root)) scoped = false;
   }
   bool ok = snapshot->root != NULL;
   if (ok && scoped) {
-    for (uint64_t i = 0; ok && i < spec->previous->count; i++) {
+    for (uint64_t i = 0; ok && spec->previous && i < spec->previous->count; i++) {
       if ((i & 255u) == 0 && is_cancelled(spec)) { ok = false; break; }
       const ManifestOwnedRecord *record = &spec->previous->records[i];
       if (!record_in_scopes(record->absolute_path, spec->scan_paths, spec->scan_path_count)
