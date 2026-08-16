@@ -4,6 +4,7 @@ local Editor = require "core.editor"
 local layout = require "core.pane_layout"
 local panes = require "core.panes"
 local test = require "core.test"
+local View = require "core.view"
 
 local function write_file(path, text)
   local file = assert(io.open(path, "wb"))
@@ -62,6 +63,34 @@ test.describe("File opening through Panes", function()
     test.same(state.selections, { 2, 3, 2, 3 })
     test.equal(first.scroll.x, 7)
     test.equal(first.scroll.y, 11)
+  end)
+
+  test.it("keeps a file Buffer alive while replacement approval is pending", function()
+    local approve
+    local PendingView = View:extend()
+    function PendingView:can_suspend() return false end
+    function PendingView:can_close(callback) approve = callback end
+
+    local pane = panes.create { factory = function() return PendingView() end }
+    test.is_nil(core.open_file(first_path))
+    test.is_nil(core.buffer_registry:find(first_path))
+    test.equal(core.buffer_registry:collect(), 0)
+
+    test.not_nil(approve)
+    approve()
+    local editor = pane.current_view
+    test.ok(editor:is(Editor))
+    test.equal(editor.buffer.highlighter.buffer, editor.buffer)
+
+    local original = table.concat(editor.buffer.lines)
+    local ok, err = pcall(editor.buffer.insert, editor.buffer, 1, 1, "x")
+    test.ok(ok, err)
+    editor.buffer:undo()
+    test.equal(table.concat(editor.buffer.lines), original)
+
+    write_file(first_path, "changed on disk\n")
+    editor.buffer:reload()
+    test.equal(table.concat(editor.buffer.lines), "changed on disk\n")
   end)
 
   test.it("uses independent Editor Selection State for one Buffer in two Panes", function()

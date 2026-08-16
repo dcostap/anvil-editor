@@ -995,7 +995,7 @@ end)
 ipc:register_method("core.open_file", function(file)
   if system.get_file_info(file) then
     system.raise_window(core.window)
-    core.root_panel:open_buffer(core.open_buffer(file))
+    core.open_file(file)
   end
 end, {{name = "file", type = "string"}})
 
@@ -1059,7 +1059,7 @@ function RootPanel:on_mouse_moved(x, y, dx, dy)
       "core.tab_drag_received",
       rootpanel_waiting_drop_file
     )
-    core.root_panel:open_buffer(core.open_buffer(rootpanel_waiting_drop_file))
+    core.open_file(rootpanel_waiting_drop_file)
     rootpanel_waiting_drop_file = ""
     rootpanel_waiting_drop_instance = ""
   end

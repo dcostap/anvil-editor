@@ -212,6 +212,27 @@ function RootPanel:open_buffer(buffer, opts)
   })
 end
 
+function RootPanel:open_file(filename, opts)
+  opts = opts or {}
+  local project = core.root_project()
+  local normalized = project:normalize_path(filename)
+  local abs_filename = project:absolute_path(normalized)
+  local existing = core.buffer_registry:find(abs_filename)
+  if existing then return self:open_buffer(existing, opts) end
+
+  local Editor = require "core.editor"
+  return panes().place(function()
+    return Editor(core.open_buffer(filename))
+  end, {
+    pane = opts.pane,
+    placement = opts.placement or "current",
+    direction = opts.direction,
+    focus = opts.focus,
+    preserve_focus = opts.preserve_focus,
+    reason = opts.reason,
+  })
+end
+
 function RootPanel:close_all_views(keep_view)
   for i = #panes().ordered(), 1, -1 do
     local pane = panes().ordered()[i]

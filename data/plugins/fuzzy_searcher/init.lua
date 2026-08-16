@@ -217,8 +217,8 @@ end
 
 local function modal_textbox_command_allowed(cmd)
   if type(cmd) ~= "string" then return false end
-  if cmd:match("^buffer:move%-") or cmd:match("^buffer:select%-") then return true end
-  if cmd:match("^buffer:delete") then return true end
+  if cmd:match("^text:move%-to%-") or cmd:match("^text:select%-to%-") then return true end
+  if cmd:match("^text:delete") then return true end
   return cmd == "text:backspace"
       or cmd == "text:copy"
       or cmd == "text:cut"

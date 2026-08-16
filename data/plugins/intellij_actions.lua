@@ -352,8 +352,7 @@ end
 local function open_file_as_raw_text(dv)
   local path = active_file_or_error(dv)
   if not path then return end
-  local buffer = core.open_buffer(path)
-  core.root_panel:open_buffer(buffer)
+  core.open_file(path)
 end
 
 local function open_file_in_associated_program(dv)

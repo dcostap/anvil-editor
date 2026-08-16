@@ -1760,7 +1760,7 @@ function core.open_file(filename, opts)
   if ImageView.is_supported(filename) then return core.open_image(filename, opts) end
   local info = system.get_file_info(filename)
   if info and info.type == "dir" then return nil, "cannot open a directory as a file" end
-  return core.root_panel:open_buffer(core.open_buffer(filename), opts)
+  return core.root_panel:open_file(filename, opts)
 end
 
 
