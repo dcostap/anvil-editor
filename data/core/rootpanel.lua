@@ -455,13 +455,42 @@ end
 
 function RootPanel:on_file_dropped(filename, x, y)
   local group = panes().visible_group()
-  local pane = group and x and y and layout.pane_at(group.root, x, y) or panes().active()
-  local consumed = pane and call_view(
-    pane.current_view, "on_file_dropped", filename, x, y
+  local hit_pane = group and x and y and layout.pane_at(group.root, x, y) or nil
+  local target_pane = hit_pane or panes().active()
+  local consumed = hit_pane and call_view(
+    hit_pane.current_view, "on_file_dropped", filename, x, y
   )
   if consumed then return consumed end
+  local info = system.get_file_info(filename)
+  if info and info.type == "dir" then
+    local path = system.absolute_path(filename) or filename
+    local function add_to_window() core.add_project(path) end
+    if core.nag_view and core.nag_view.show then
+      core.nag_view:show(
+        "Open Project Directory",
+        string.format('Add "%s" to this window or open it in a new window?', path),
+        {
+          { text = "Current window", default_yes = true },
+          { text = "New window", default_no = true },
+          { text = "Cancel" },
+        },
+        function(option)
+          if option.text == "Current window" then
+            add_to_window()
+          elseif option.text == "New window" then
+            core.open_project_in_new_window(path)
+          end
+        end
+      )
+    else
+      add_to_window()
+    end
+    return true
+  end
   if core.open_file then
-    return core.open_file(filename, { pane = pane, placement = "current", reason = "file-drop" })
+    return core.open_file(filename, {
+      pane = target_pane, placement = "current", reason = "file-drop",
+    })
   end
 end
 

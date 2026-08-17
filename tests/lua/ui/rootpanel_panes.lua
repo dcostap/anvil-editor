@@ -1,4 +1,5 @@
 local core = require "core"
+local common = require "core.common"
 local panes = require "core.panes"
 local pane_layout = require "core.pane_layout"
 local RootPanel = require "core.rootpanel"
@@ -79,6 +80,8 @@ test.describe("Root Panel Pane presentation", function()
       active_view = core.active_view,
       set_active_view = core.set_active_view,
       open_file = core.open_file,
+      add_project = core.add_project,
+      open_project_in_new_window = core.open_project_in_new_window,
       draw_rect = renderer.draw_rect,
       set_cursor = system.set_cursor,
       cursor_change_req = core.cursor_change_req,
@@ -266,6 +269,35 @@ test.describe("Root Panel Pane presentation", function()
     test.equal(consumed, true)
     test.equal(pane.current_view.drops, 1)
     test.equal(fallback_calls, 0)
+  end)
+
+  test.it("does not send a shell-area file drop to the active Pane View", function()
+    local pane = panes.create { factory = pane_factory("editor") }
+    root:update()
+    pane.current_view.consume_drop = true
+    local fallback_calls = 0
+    core.open_file = function() fallback_calls = fallback_calls + 1; return true end
+
+    test.equal(root:on_file_dropped("ordinary.txt", 20, 2), true)
+    test.equal(pane.current_view.drops, 0)
+    test.equal(fallback_calls, 1)
+  end)
+
+  test.it("offers Project actions for a dropped directory", function()
+    local fallback_calls = 0
+    local added
+    local choices, choose
+    core.open_file = function() fallback_calls = fallback_calls + 1 end
+    core.add_project = function(path) added = path end
+    core.nag_view.show = function(_, _, _, options, callback)
+      choices, choose = options, callback
+    end
+
+    test.equal(root:on_file_dropped(USERDIR, 20, 20), true)
+    test.equal(fallback_calls, 0)
+    test.not_nil(choices)
+    choose(choices[1])
+    test.ok(common.path_equals(added, USERDIR))
   end)
 
   test.it("resizes the hit-tested divider", function()
