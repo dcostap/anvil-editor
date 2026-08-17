@@ -251,6 +251,26 @@ local function sync_workspace_project_paths_to_core_projects()
   end
 end
 
+local function ensure_initial_filetree_pane()
+  if panes.count() > 0 then return false end
+  local ok, filetree = pcall(require, "plugins.filetree")
+  if not ok or not filetree or not filetree.open then
+    core.log_quiet("Workspace: initial File Tree is unavailable: %s", tostring(filetree))
+    return false
+  end
+  local view, err = filetree.open(nil, {
+    placement = "new",
+    focus = true,
+    reason = "initial-project",
+  })
+  if not view then
+    core.log_quiet("Workspace: initial File Tree failed: %s", tostring(err))
+    return false
+  end
+  core.log_quiet("Workspace: opened initial File Tree Pane for empty Project state")
+  return true
+end
+
 
 local function save_workspace()
   local project = core.root_project and core.root_project()
@@ -318,6 +338,7 @@ local function load_workspace()
         sync_workspace_project_paths_to_core_projects()
       end
       untitled_recovery.restore_project(core.root_project().path)
+      ensure_initial_filetree_pane()
     end
 
     restore_workspace_state()

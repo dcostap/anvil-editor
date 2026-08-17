@@ -96,6 +96,7 @@ test.describe("Workspace persistence", function()
     context.original_filetree_module = package.loaded["plugins.filetree"]
     context.original_panes_save_workspace_state = panes.save_workspace_state
     context.original_panes_restore_workspace_state = panes.restore_workspace_state
+    context.original_panes_count = panes.count
     panes.save_workspace_state = function(save_view)
       local views = {}
       for _, view in ipairs(core.root_panel and core.root_panel.current_views or {}) do
@@ -149,6 +150,7 @@ test.describe("Workspace persistence", function()
     package.loaded["plugins.filetree"] = context.original_filetree_module
     panes.save_workspace_state = context.original_panes_save_workspace_state
     panes.restore_workspace_state = context.original_panes_restore_workspace_state
+    panes.count = context.original_panes_count
     if context.original_cwd then
       pcall(system.chdir, context.original_cwd)
     end
@@ -396,6 +398,32 @@ test.describe("Workspace persistence", function()
     run_last_captured_thread(context)
 
     test.same(context.restored_pane_state, { marker = "restored-pane-state" })
+  end)
+
+  test.test("opens the File Tree when a new Project restores no Panes", function(context)
+    local project_path = join_path(context.temp_root, "test_project")
+    local source_path = join_path(context.temp_root, "source_project")
+    local opened
+    package.loaded["plugins.filetree"] = {
+      open = function(target, opts)
+        opened = { target = target, opts = opts }
+        return { get_name = function() return "File Tree" end }
+      end,
+      refresh_preserving_selection_paths = function() end,
+    }
+    panes.count = function() return 0 end
+    core.projects = { Project(source_path) }
+    core.recent_projects = {}
+    replace_buffers()
+
+    core.set_project(project_path)
+    run_last_captured_thread(context)
+
+    test.not_nil(opened)
+    test.is_nil(opened.target)
+    test.equal(opened.opts.placement, "new")
+    test.equal(opened.opts.focus, true)
+    test.equal(opened.opts.reason, "initial-project")
   end)
 
   test.test("same-window Project switch does not overwrite destination workspace with empty tabs", function(context)
