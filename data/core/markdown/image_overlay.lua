@@ -1,6 +1,5 @@
 local common = require "core.common"
 local core = require "core"
-local keymap = require "core.keymap"
 local style = require "core.style"
 
 local overlay = {}
@@ -24,6 +23,7 @@ local state = {
 }
 
 overlay.state = state
+local modal_handlers
 
 local function viewport()
   local root = core.root_panel
@@ -82,6 +82,9 @@ function overlay.visible()
 end
 
 function overlay.close()
+  if core.root_panel and core.root_panel.pop_modal_input then
+    core.root_panel:pop_modal_input(overlay)
+  end
   state.visible = false
   state.path = nil
   state.image = nil
@@ -109,6 +112,10 @@ function overlay.open(path)
   state.scroll.x, state.scroll.y = 0, 0
   state.dragging = false
   scale_image()
+  core.root_panel:push_modal_input(overlay, {
+    label = "markdown-image",
+    handlers = modal_handlers,
+  })
   core.redraw = true
   return true
 end
@@ -218,6 +225,14 @@ function overlay.on_key_pressed(key)
   return true
 end
 
+modal_handlers = {
+  key_pressed = overlay.on_key_pressed,
+  mouse_pressed = overlay.on_mouse_pressed,
+  mouse_released = overlay.on_mouse_released,
+  mouse_moved = overlay.on_mouse_moved,
+  mouse_wheel = overlay.on_mouse_wheel,
+}
+
 function overlay.draw()
   if not state.visible then return end
   local x, y, w, h = viewport()
@@ -251,35 +266,6 @@ function overlay.install()
     return result
   end
 
-  local old_pressed = RootPanel.on_mouse_pressed
-  function RootPanel:on_mouse_pressed(button, x, y, clicks, ...)
-    if state.visible then return overlay.on_mouse_pressed(button, x, y, clicks) end
-    return old_pressed(self, button, x, y, clicks, ...)
-  end
-
-  local old_released = RootPanel.on_mouse_released
-  function RootPanel:on_mouse_released(button, x, y, ...)
-    if state.visible then return overlay.on_mouse_released(button, x, y, ...) end
-    return old_released(self, button, x, y, ...)
-  end
-
-  local old_moved = RootPanel.on_mouse_moved
-  function RootPanel:on_mouse_moved(x, y, dx, dy, ...)
-    if state.visible then return overlay.on_mouse_moved(x, y, dx, dy) end
-    return old_moved(self, x, y, dx, dy, ...)
-  end
-
-  local old_wheel = RootPanel.on_mouse_wheel
-  function RootPanel:on_mouse_wheel(delta_y, delta_x, ...)
-    if state.visible then return overlay.on_mouse_wheel(delta_y, delta_x) end
-    return old_wheel(self, delta_y, delta_x, ...)
-  end
-
-  local old_key_pressed = keymap.on_key_pressed
-  keymap.on_key_pressed = function(key, ...)
-    if state.visible and overlay.on_key_pressed(key, ...) then return true end
-    return old_key_pressed(key, ...)
-  end
 end
 
 return overlay

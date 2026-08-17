@@ -87,7 +87,8 @@ local function press_command_binding(name)
     end
   end
 
-  local ok, result = pcall(keymap.on_key_pressed, assert(key, "expected a bound non-modifier key"))
+  local ok, result = pcall(core.on_event, "keypressed",
+    assert(key, "expected a bound non-modifier key"), keymap.modkeys)
   for modifier in pairs(modifiers) do keymap.modkeys[modifier] = previous[modifier] end
   if not ok then error(result, 0) end
   return result

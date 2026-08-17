@@ -46,7 +46,66 @@ function RootPanel:new()
   self.overlapping_view = nil
   self.touched_view = nil
   self.dragged_divider = nil
+  self.modal_inputs = {}
   self.content_rect = { x = 0, y = 0, w = 0, h = 0 }
+end
+
+local function modal_input_index(root, owner)
+  for index, entry in ipairs(root.modal_inputs) do
+    if entry.owner == owner then return index end
+  end
+end
+
+---Place one input owner above all normal UI targets.
+function RootPanel:push_modal_input(owner, options)
+  assert(owner ~= nil, "Modal Input Owner is required")
+  options = options or {}
+  local index = modal_input_index(self, owner)
+  if index then table.remove(self.modal_inputs, index) end
+  self.modal_inputs[#self.modal_inputs + 1] = {
+    owner = owner,
+    handlers = options.handlers,
+    label = options.label or tostring(owner),
+  }
+  core.log_quiet("Modal input: pushed owner=%s depth=%d",
+    options.label or tostring(owner), #self.modal_inputs)
+  return owner
+end
+
+---Remove an input owner without changing the other owners.
+function RootPanel:pop_modal_input(owner)
+  local index = modal_input_index(self, owner)
+  if not index then return false end
+  local entry = table.remove(self.modal_inputs, index)
+  core.log_quiet("Modal input: popped owner=%s depth=%d",
+    entry.label, #self.modal_inputs)
+  return true
+end
+
+---Return the input owner at the top of the stack.
+function RootPanel:modal_input_owner()
+  local entry = self.modal_inputs[#self.modal_inputs]
+  return entry and entry.owner or nil
+end
+
+---Send an input event only to the top owner.
+---Key handlers can return "target" or "keymap" for controlled routing.
+function RootPanel:dispatch_modal_input(event, ...)
+  local entry = self.modal_inputs[#self.modal_inputs]
+  if not entry then return false end
+  local handler = entry.handlers and entry.handlers[event]
+  local result
+  if handler then
+    result = handler(...)
+  else
+    handler = entry.owner["on_modal_" .. event] or entry.owner["on_" .. event]
+    if handler then result = handler(entry.owner, ...) end
+  end
+  if event == "key_pressed" then
+    core.log_quiet("Modal input: key owner=%s route=%s",
+      entry.label, tostring(result or "consumed"))
+  end
+  return true, result
 end
 
 function RootPanel:defer_draw(fn, ...)

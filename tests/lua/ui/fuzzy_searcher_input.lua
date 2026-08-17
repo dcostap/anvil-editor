@@ -29,7 +29,7 @@ test.describe("Fuzzy Searcher input", function()
     picker.input:set_text(">copy stuff")
     picker.input.textview.buffer:set_selection(1, 12)
 
-    keymap.on_key_pressed("left")
+    core.on_event("keypressed", "left", {})
 
     local line, column = picker.input.textview.buffer:get_selection()
     test.equal(line, 1)

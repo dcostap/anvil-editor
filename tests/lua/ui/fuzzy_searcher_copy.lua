@@ -9,7 +9,7 @@ local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local function press_copy_shortcut()
   local previous_ctrl = keymap.modkeys.ctrl
   keymap.modkeys.ctrl = true
-  local handled = keymap.on_key_pressed("c")
+  local handled = core.on_event("keypressed", "c", { ctrl = true })
   keymap.modkeys.ctrl = previous_ctrl
   return handled
 end

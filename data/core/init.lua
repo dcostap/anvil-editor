@@ -1912,6 +1912,12 @@ local function event_summary(type, ...)
   return tostring(type)
 end
 
+local function dispatch_modal_input(event, ...)
+  local root = core.root_panel
+  if not (root and root.dispatch_modal_input) then return false end
+  return root:dispatch_modal_input(event, ...)
+end
+
 function core.on_event(type, ...)
   core.current_event_context = event_summary(type, ...)
   local did_keymap = false
@@ -1923,13 +1929,15 @@ function core.on_event(type, ...)
       local text = (...)
       core.log_quiet("Fuzzy input event: textinput active=%s supports_text_input=%s bytes=%d", tostring(active_type), tostring(active and active:supports_text_input()), #tostring(text or ""))
     end
-    core.root_panel:on_text_input(...)
+    local modal, action = dispatch_modal_input("text_input", ...)
+    if not modal or action == "target" then core.root_panel:on_text_input(...) end
   elseif type == "textediting" then
     if fuzzy_input_debug then
       local text, start, len = ...
       core.log_quiet("Fuzzy input event: textediting active=%s supports_text_input=%s bytes=%d start=%s len=%s", tostring(active_type), tostring(active and active:supports_text_input()), #tostring(text or ""), tostring(start), tostring(len))
     end
-    ime.on_text_editing(...)
+    local modal, action = dispatch_modal_input("ime_text_editing", ...)
+    if not modal or action == "target" then ime.on_text_editing(...) end
   elseif type == "keypressed" then
     -- In some cases during IME composition input is still sent to us
     -- so we just ignore it.
@@ -1938,44 +1946,63 @@ function core.on_event(type, ...)
       return false
     end
     local key, event = ...
-    local pre_keymap = active and active.on_key_pressed_before_keymap
-    if pre_keymap then
-      did_keymap = core.root_panel:on_key_pressed_before_keymap(key, event) == true
-    end
-    local modifier_key = key == "left ctrl" or key == "right ctrl"
-      or key == "left shift" or key == "right shift"
-      or key == "left alt" or key == "right alt"
-      or key == "left gui" or key == "right gui"
-      or key == "left windows" or key == "right windows"
-    if not did_keymap and (not (event and event.altgr) or modifier_key) then
-      did_keymap = keymap.on_key_pressed(...)
-    end
-    if not did_keymap then
-      did_keymap = core.root_panel:on_key_pressed(...) == true
+    local modal, action = dispatch_modal_input("key_pressed", key, event)
+    if modal and action ~= "keymap" then
+      if action == "target" then core.root_panel:on_key_pressed(key, event) end
+      did_keymap = true
+    else
+      local pre_keymap = active and active.on_key_pressed_before_keymap
+      if pre_keymap then
+        did_keymap = core.root_panel:on_key_pressed_before_keymap(key, event) == true
+      end
+      local modifier_key = key == "left ctrl" or key == "right ctrl"
+        or key == "left shift" or key == "right shift"
+        or key == "left alt" or key == "right alt"
+        or key == "left gui" or key == "right gui"
+        or key == "left windows" or key == "right windows"
+      if not did_keymap and (not (event and event.altgr) or modifier_key) then
+        did_keymap = keymap.on_key_pressed(...)
+      end
+      if not did_keymap then
+        did_keymap = core.root_panel:on_key_pressed(...) == true
+      end
     end
   elseif type == "keyreleased" then
     keymap.on_key_released(...)
-    core.root_panel:on_key_released(...)
+    local modal = dispatch_modal_input("key_released", ...)
+    if not modal then core.root_panel:on_key_released(...) end
   elseif type == "mousemoved" then
-    core.root_panel:on_mouse_moved(...)
+    local modal = dispatch_modal_input("mouse_moved", ...)
+    if not modal then core.root_panel:on_mouse_moved(...) end
   elseif type == "mousepressed" then
-    if not core.root_panel:on_mouse_pressed(...) then
+    local modal = dispatch_modal_input("mouse_pressed", ...)
+    if modal then
+      did_keymap = true
+    elseif not core.root_panel:on_mouse_pressed(...) then
       did_keymap = keymap.on_mouse_pressed(...)
     end
   elseif type == "mousereleased" then
-    core.root_panel:on_mouse_released(...)
+    local modal = dispatch_modal_input("mouse_released", ...)
+    if not modal then core.root_panel:on_mouse_released(...) end
   elseif type == "mouseleft" then
-    core.root_panel:on_mouse_left()
+    local modal = dispatch_modal_input("mouse_left")
+    if not modal then core.root_panel:on_mouse_left() end
   elseif type == "mousewheel" then
-    if not core.root_panel:on_mouse_wheel(...) then
+    local modal, action = dispatch_modal_input("mouse_wheel", ...)
+    if modal then
+      did_keymap = action == "keymap" and keymap.on_mouse_wheel(...) or true
+    elseif not core.root_panel:on_mouse_wheel(...) then
       did_keymap = keymap.on_mouse_wheel(...)
     end
   elseif type == "touchpressed" then
-    core.root_panel:on_touch_pressed(...)
+    local modal = dispatch_modal_input("touch_pressed", ...)
+    if not modal then core.root_panel:on_touch_pressed(...) end
   elseif type == "touchreleased" then
-    core.root_panel:on_touch_released(...)
+    local modal = dispatch_modal_input("touch_released", ...)
+    if not modal then core.root_panel:on_touch_released(...) end
   elseif type == "touchmoved" then
-    core.root_panel:on_touch_moved(...)
+    local modal = dispatch_modal_input("touch_moved", ...)
+    if not modal then core.root_panel:on_touch_moved(...) end
   elseif type == "resized" then
     core.window_resizing_until = system.get_time() + 0.20
     local window_mode = system.get_window_mode(core.window)
@@ -1996,7 +2023,8 @@ function core.on_event(type, ...)
   elseif type == "exposed" then
     core.request_window_reactivation_repaint("exposed")
   elseif type == "filedropped" then
-    core.root_panel:on_file_dropped(...)
+    local modal = dispatch_modal_input("file_dropped", ...)
+    if not modal then core.root_panel:on_file_dropped(...) end
   elseif type == "singleinstanceopen" then
     local filename, secondary_elapsed_ms, transport_ms = ...
     core.log_quiet("Native single-instance open: file=%s sender_elapsed=%.1fms transport=%.1fms", tostring(filename), tonumber(secondary_elapsed_ms) or -1, tonumber(transport_ms) or -1)

@@ -30,6 +30,7 @@ test.describe("Fuzzy Searcher attention overlay", function()
 
     local ok, err = pcall(function()
       local picker = fuzzy_searcher.open_static_results("Results", {})
+      test.equal(root:modal_input_owner(), picker)
       root:update_app_overlay()
       root:draw_active_app_overlay()
 
@@ -37,6 +38,7 @@ test.describe("Fuzzy Searcher attention overlay", function()
       test.is_nil(unobscured_view, "the floating picker should not be excluded from the dimmer")
 
       picker:close()
+      test.is_nil(root:modal_input_owner())
       root:update_app_overlay()
       overlay_drawn = false
       root:draw_active_app_overlay()

@@ -212,6 +212,10 @@ _Avoid_: Selection session
 The top-level UI container for the editor window.
 _Avoid_: App shell, main panel
 
+**Modal Input Owner**:
+The top interaction that receives all user input until it closes. Owners form a stack when one interaction covers another.
+_Avoid_: priority interaction, modal popup, input-stealing View
+
 **Pane**:
 A numbered work area that shows one Current View and owns one Navigation History. Each Pane belongs to one Pane Group.
 _Avoid_: Left Pane, Right Pane, panel, split

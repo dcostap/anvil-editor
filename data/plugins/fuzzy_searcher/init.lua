@@ -45,13 +45,6 @@ function PreviewTextView:draw_line_gutter(line, x, y, width)
   return lh
 end
 
--- Older development versions of this plugin monkey-patched keymap.on_key_pressed.
--- Restore it on reload so this version uses normal Anvil commands/keymaps.
-if keymap.__fuzzy_searcher_original_on_key_pressed then
-  keymap.on_key_pressed = keymap.__fuzzy_searcher_original_on_key_pressed
-  keymap.__fuzzy_searcher_original_on_key_pressed = nil
-end
-
 local BUNDLED_PLUGIN_DIR = DATADIR .. PATHSEP .. "plugins" .. PATHSEP .. "fuzzy_searcher"
 local USER_PLUGIN_DIR = USERDIR .. PATHSEP .. "plugins" .. PATHSEP .. "fuzzy_searcher"
 local RECENT_COMMANDS_FILE = USER_PLUGIN_DIR .. PATHSEP .. "recent_commands.txt"
@@ -2801,6 +2794,7 @@ function FSView:new(prefix, opts)
     fuzzy_searcher.refresh_file_index_for_picker_open()
   end
   self:show()
+  core.root_panel:push_modal_input(self, { label = "fuzzy-searcher" })
   core.root_panel:show_app_overlay(self, "fuzzy_searcher_overlay_background")
   self:layout()
   ensure_input_focus(self)
@@ -3356,6 +3350,48 @@ function FSView:mouse_on_top(x, y)
   return self:is_visible()
 end
 
+function FSView:on_modal_key_pressed(key, ...)
+  if modal_modkey_map[key] then return "keymap" end
+
+  local stroke = modal_key_to_stroke(key)
+  local picker_cmd = modal_picker_command(stroke, self)
+  local textbox_cmd = not picker_cmd and modal_textbox_command(stroke)
+  if picker_cmd then
+    ensure_input_focus(self)
+    fuzzy_focus_log("key-picker-command", self,
+      "key=" .. tostring(key) .. " stroke=" .. tostring(stroke)
+        .. " cmd=" .. tostring(picker_cmd))
+    command.perform(picker_cmd, ...)
+  elseif textbox_cmd and (not self.static_mode or textbox_cmd == "text:copy") then
+    ensure_input_focus(self)
+    fuzzy_focus_log("key-textbox-command", self,
+      "key=" .. tostring(key) .. " stroke=" .. tostring(stroke)
+        .. " cmd=" .. tostring(textbox_cmd))
+    command.perform(textbox_cmd, ...)
+  elseif modal_should_let_text_input_through(key, stroke) and not self.static_mode then
+    ensure_input_focus(self)
+    self._awaiting_textinput = {
+      time = system.get_time(),
+      key = key,
+      stroke = stroke,
+      text_len = self.input and #(self.input:get_text() or "") or nil,
+    }
+    return "target"
+  else
+    fuzzy_focus_log("key-consumed", self,
+      "key=" .. tostring(key) .. " stroke=" .. tostring(stroke))
+  end
+  return true
+end
+
+function FSView:on_modal_text_input()
+  return "target"
+end
+
+function FSView:on_modal_ime_text_editing()
+  return "target"
+end
+
 function FSView:panel_contains(x, y)
   if not self:is_visible() then return false end
   local px = self.position.x - self.border.width
@@ -3505,6 +3541,11 @@ function FSView:on_mouse_wheel(y, x)
     self:schedule_update(true)
   end
   return true
+end
+
+function FSView:on_modal_mouse_wheel(y, x)
+  if scale_mouse_wheel_modkeys_pressed() then return "keymap" end
+  return self:on_mouse_wheel(y, x)
 end
 
 function FSView:start_file_search(query, line, reset_selection)
@@ -4996,6 +5037,7 @@ end
 function FSView:close()
   fuzzy_focus_log("close", self)
   local input_view = self.input and self.input.textview
+  core.root_panel:pop_modal_input(self)
   core.root_panel:hide_app_overlay(self)
   self:record_prompt_history()
   self:cancel_deferred_loading_feedback()
@@ -5587,46 +5629,6 @@ core.fuzzy_searcher_install_picker_keymaps = function()
   })
 end
 core.fuzzy_searcher_install_picker_keymaps()
-
-keymap.__fuzzy_searcher_original_on_key_pressed = keymap.on_key_pressed
-keymap.on_key_pressed = function(key, ...)
-  if modal_modkey_map[key] or not current_picker() then
-    return keymap.__fuzzy_searcher_original_on_key_pressed(key, ...)
-  end
-
-  local picker = current_picker()
-  local stroke = modal_key_to_stroke(key)
-  if key:match("^wheel") and scale_mouse_wheel_modkeys_pressed() then
-    return keymap.__fuzzy_searcher_original_on_key_pressed(key, ...)
-  end
-  local picker_cmd = modal_picker_command(stroke, picker)
-  local textbox_cmd = not picker_cmd and modal_textbox_command(stroke)
-  if picker_cmd then
-    ensure_input_focus(picker)
-    fuzzy_focus_log("key-picker-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(picker_cmd))
-    command.perform(picker_cmd, ...)
-  elseif textbox_cmd and (not picker.static_mode or textbox_cmd == "text:copy") then
-    ensure_input_focus(picker)
-    fuzzy_focus_log("key-textbox-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(textbox_cmd))
-    command.perform(textbox_cmd, ...)
-  elseif modal_should_let_text_input_through(key, stroke) and not picker.static_mode then
-    -- Printable keys must be handled by SDL textinput, not by key-name
-    -- fallbacks; this preserves keyboard layout, AltGr, dead keys and IME.
-    ensure_input_focus(picker)
-    picker._awaiting_textinput = {
-      time = system.get_time(),
-      key = key,
-      stroke = stroke,
-      text_len = picker.input and #(picker.input:get_text() or "") or nil,
-    }
-    return false
-  else
-    fuzzy_focus_log("key-consumed", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke))
-  end
-  -- The picker is modal: every non-modifier keypress is consumed while it is
-  -- open, even when it is not one of the picker/input shortcuts above.
-  return true
-end
 
 local cli = package.loaded["core.cli"]
 if not ((cli and cli.last_command == "test")

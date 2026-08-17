@@ -32,8 +32,6 @@ local noop = function() end
 ---@field force_focus boolean Whether to force focus on this view
 ---@field queue core.nagview.queue_item[] Queued dialogs waiting to show
 ---@field target_height number Target height for current message
----@field on_mouse_pressed_root function? Saved RootPanel.on_mouse_pressed for restoration
----@field new_on_mouse_pressed_root function? New RootPanel.on_mouse_pressed for validation
 ---@field dim_alpha number Alpha for background dimming [0-1]
 ---@field visible boolean Whether dialog is currently visible
 ---@field title string? Current dialog title
@@ -55,7 +53,6 @@ function NagView:new()
   self.queue = {}
   self.scrollable = true
   self.target_height = 0
-  self.on_mouse_pressed_root = nil
   self.dim_alpha = 0
   self.visible = false
 end
@@ -180,49 +177,6 @@ function NagView:on_mouse_moved(mx, my, ...)
 end
 
 
----Register mouse press hook to intercept clicks globally.
----Ensures dialog captures clicks even outside its bounds.
----@param self core.nagview
-local function register_mouse_pressed(self)
-  if self.on_mouse_pressed_root then return end
-  -- RootPanel is loaded locally to avoid NagView and RootPanel being
-  -- mutually recursive
-  local RootPanel = require "core.rootpanel"
-  self.on_mouse_pressed_root = RootPanel.on_mouse_pressed
-  local this = self
-  function RootPanel:on_mouse_pressed(button, x, y, clicks)
-    if
-      not this:on_mouse_pressed(button, x, y, clicks)
-    then
-      return this.on_mouse_pressed_root(self, button, x, y, clicks)
-    else
-      return true
-    end
-  end
-  self.new_on_mouse_pressed_root = RootPanel.on_mouse_pressed
-end
-
-
----Unregister mouse press hook and restore original handler.
----Validates hook hasn't been overwritten by other code before restoring.
----@param self core.nagview
-local function unregister_mouse_pressed(self)
-  local RootPanel = require "core.rootpanel"
-  if
-    self.on_mouse_pressed_root
-    and
-    -- just in case prevent overwriting what something else may
-    -- have overwrote after us, but after testing with various
-    -- plugins this doesn't seems to happen, but just in case
-    self.new_on_mouse_pressed_root == RootPanel.on_mouse_pressed
-  then
-    RootPanel.on_mouse_pressed = self.on_mouse_pressed_root
-    self.on_mouse_pressed_root = nil
-    self.new_on_mouse_pressed_root = nil
-  end
-end
-
-
 ---Handle mouse press events on dialog buttons.
 ---@param button core.view.mousebutton
 ---@param mx number Screen x coordinate
@@ -245,12 +199,32 @@ end
 ---Handle text input for keyboard shortcuts (Y/N).
 ---@param text string Input text
 function NagView:on_text_input(text)
-  if not self.visible then return end
+  if not self.visible then return false end
   if text:lower() == "y" then
     command.perform "dialog:select-yes"
   elseif text:lower() == "n" then
     command.perform "dialog:select-no"
   end
+  return true
+end
+
+
+---Handle keys before normal View commands and shortcuts.
+---@param key string Key name
+---@param event table? Key event details
+---@return boolean handled
+function NagView:on_key_pressed(key, event)
+  if not self.visible then return false end
+  if key == "return" or key == "keypad enter" then
+    command.perform "dialog:select"
+  elseif key == "escape" then
+    command.perform "dialog:select-no"
+  elseif key == "left" or key == "up" or key == "tab" and event and event.shift then
+    command.perform "dialog:previous-entry"
+  elseif key == "right" or key == "down" or key == "tab" then
+    command.perform "dialog:next-entry"
+  end
+  return true
 end
 
 
@@ -392,13 +366,12 @@ function NagView:next()
 
     self.force_focus = true
     core.set_active_view(self)
-    -- We add a hook to manage all the mouse_pressed events.
-    register_mouse_pressed(self)
+    core.root_panel:push_modal_input(self, { label = "confirmation" })
   else
     self.force_focus = false
+    core.root_panel:pop_modal_input(self)
     core.set_active_view(core.next_active_view or core.last_active_view)
     self.visible = false
-    unregister_mouse_pressed(self)
   end
 end
 
