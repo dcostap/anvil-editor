@@ -236,6 +236,11 @@ end
 ---Submit the current prompt text.
 ---Validates input, calls submit callback, and exits the Global Prompt Bar.
 function GlobalPromptBar:submit()
+  local change_id = self.buffer:get_change_id()
+  if change_id ~= self.last_change_id then
+    self:update_suggestions()
+    self.last_change_id = change_id
+  end
   local suggestion = self.suggestions[self.suggestion_idx]
   local text = self:get_text()
   if self.state.validate(text, suggestion) then

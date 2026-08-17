@@ -41,6 +41,34 @@ local function file_prompt_defaults()
   return default_text, root_dir
 end
 
+local function path_ends_with_separator(path)
+  return PLATFORM == "Windows" and path:match("[/\\]$") ~= nil
+    or PLATFORM ~= "Windows" and path:sub(-1) == PATHSEP
+end
+
+local function ensure_trailing_separator(path)
+  return path_ends_with_separator(path) and path or path .. PATHSEP
+end
+
+local function resolve_file_prompt_path(text, root_dir)
+  local expanded = common.home_expand(common.sanitize_prompt_path(text))
+  if common.is_absolute_path(expanded) then
+    return system.absolute_path(expanded) or expanded
+  end
+  if common.path_equals(root_dir, core.root_project().path) then
+    return core.root_project():absolute_path(expanded)
+  end
+  return system.absolute_path(root_dir .. PATHSEP .. expanded)
+    or root_dir .. PATHSEP .. expanded
+end
+
+local function is_missing_path_error(err)
+  if not err then return true end
+  err = err:lower()
+  return err:find("no such file", 1, true) ~= nil
+    or err:find("cannot find", 1, true) ~= nil
+end
+
 local function open_file(label, selection_callback, allow_directories)
   local default_text, root_dir = file_prompt_defaults()
   local filename = ""
@@ -59,33 +87,50 @@ local function open_file(label, selection_callback, allow_directories)
         common.path_suggest(common.home_expand(common.sanitize_prompt_path(text)), root_dir)
       )
     end,
-    validate = function(text)
+    validate = function(text, suggestion)
+      text = suggestion and suggestion.text or text
       text = common.sanitize_prompt_path(text)
-      filename = common.path_equals(root_dir, core.root_project().path) and
-        core.root_project():absolute_path(
-          common.home_expand(text)
-        ) or system.absolute_path(
-          common.home_expand(root_dir .. PATHSEP .. text)
-        ) or system.absolute_path(
-          common.home_expand(text)
-        ) or filename
+      filename = resolve_file_prompt_path(text, root_dir) or filename
       local path_stat, err = system.get_file_info(filename)
-      if err then
-        if filename ~= "" and err:find("No such file", 1, true) then
-          -- check if the containing directory exists
-          local dirname = common.dirname(filename)
-          local dir_stat = dirname and system.get_file_info(dirname)
-          if not dirname or (dir_stat and dir_stat.type == 'dir') then
-            return true
-          end
+      if not path_stat then
+        if filename == "" or not is_missing_path_error(err) then
+          core.error("Cannot open file %s: %s", text, err or "unknown error")
+          return false
         end
-        core.error("Cannot open file %s: %s", text, err)
-      elseif --[[@cast path_stat -nil]] path_stat.type == 'dir' then
-        -- TODO: remove the above cast once https://github.com/LuaLS/lua-language-server/discussions/3102 is implemented.
+        if path_ends_with_separator(text) then
+          local created, create_err, failed_path = common.mkdirp(filename)
+          if not created then
+            core.error("Cannot create folder %s: %s", failed_path or filename, create_err or "unknown error")
+            return false
+          end
+          core.log("Created folder: %s", filename:gsub("[/\\]+$", ""))
+          core.global_prompt_bar:set_text(ensure_trailing_separator(text))
+          core.global_prompt_bar:update_suggestions()
+          return false
+        end
+
+        local dirname = common.dirname(filename)
+        local dir_stat = dirname and system.get_file_info(dirname)
+        if not dirname or (dir_stat and dir_stat.type == "dir") then
+          return true
+        elseif not dir_stat then
+          local created, create_err, failed_path = common.mkdirp(dirname)
+          if not created then
+            core.error("Cannot create folders %s: %s", failed_path or dirname, create_err or "unknown error")
+            return false
+          end
+          core.log("Created folders: %s", dirname)
+          return true
+        end
+        core.error("Cannot open file %s: parent is not a folder", text)
+        return false
+      elseif path_stat.type == 'dir' then
         if allow_directories and selection_callback then
           return true
         end
-        core.error("Cannot open %s, is a folder", text)
+        core.global_prompt_bar:set_text(ensure_trailing_separator(text))
+        core.global_prompt_bar:update_suggestions()
+        return false
       else
         return true
       end

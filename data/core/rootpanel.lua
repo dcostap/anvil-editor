@@ -126,6 +126,12 @@ function RootPanel:draw_app_overlay(color, unobscured_view)
   local view_top = common.clamp(unobscured_view.position.y, top, bottom)
   local view_right = common.clamp(unobscured_view.position.x + unobscured_view.size.x, left, right)
   local view_bottom = common.clamp(unobscured_view.position.y + unobscured_view.size.y, top, bottom)
+  if unobscured_view == core.global_prompt_bar and core.status_bar then
+    local status_top = core.status_bar.position.y
+    if status_top <= view_bottom + 1 then
+      view_bottom = common.clamp(status_top + core.status_bar.size.y, top, bottom)
+    end
+  end
   if view_top > top then renderer.draw_rect(left, top, self.size.x, view_top - top, color) end
   if view_bottom < bottom then renderer.draw_rect(left, view_bottom, self.size.x, bottom - view_bottom, color) end
   if view_left > left and view_bottom > view_top then

@@ -110,7 +110,7 @@ test.describe("Global Prompt Bar attention overlay", function()
     local root = core.root_panel
     local bar = core.global_prompt_bar
     local root_bottom = root.position.y + root.size.y
-    local bar_bottom = bar.position.y + bar.size.y
+    local bar_bottom = core.status_bar.position.y + core.status_bar.size.y
     local expected = {
       { x = root.position.x, y = root.position.y, w = root.size.x,
         h = math.max(0, bar.position.y - root.position.y) },
@@ -132,12 +132,14 @@ test.describe("Global Prompt Bar attention overlay", function()
     test.equal(#capture_overlay_rects(), 0)
   end)
 
-  test.it("replaces the Status Bar at the bottom of the app", function()
+  test.it("stacks above the Status Bar at the bottom of the app", function()
     local root = core.root_panel
     local bar = core.global_prompt_bar
+    local status = core.status_bar
 
-    test.equal(core.status_bar.size.y, 0)
-    test.equal(bar.position.y + bar.size.y, root.position.y + root.size.y)
+    test.ok(status.size.y > 0)
+    test.equal(bar.position.y + bar.size.y, status.position.y)
+    test.equal(status.position.y + status.size.y, root.position.y + root.size.y)
   end)
 
 end)
