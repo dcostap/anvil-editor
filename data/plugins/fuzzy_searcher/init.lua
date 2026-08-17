@@ -2150,10 +2150,14 @@ function fuzzy_searcher.result_main_text(r)
   return text
 end
 
+function fuzzy_searcher.project_result_font(font)
+  return style.prose_font:get_size() == font:get_size()
+    and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
+end
+
 local function draw_project_result_row(font, r, x, y, width)
   local label, spans, prefix = result_list_label_and_spans(r)
-  local project_font = style.prose_font:get_size() == font:get_size()
-    and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
+  local project_font = fuzzy_searcher.project_result_font(font)
   local age = r.opened_at and compact_age(r.opened_at)
   local gap = style.padding.x
   local label_w = width
@@ -2205,8 +2209,7 @@ end
 local function draw_new_project_result_row(font, r, x, y, width)
   local prefix = "Open this new folder as project: "
   local cx = renderer.draw_text(font, prefix, x, y, style.dim)
-  local project_font = style.prose_font:get_size() == font:get_size()
-    and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
+  local project_font = fuzzy_searcher.project_result_font(font)
   local project_y = y + math.max(0, math.floor((font:get_height() - project_font:get_height()) / 2))
   draw_highlighted_text(project_font, r.project or r.label or "", cx, project_y, math.max(0, x + width - cx), style.text, {})
 end
@@ -3066,6 +3069,7 @@ end
 function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
   local flash = self.copy_flash
   local text = flash and flash.text or ""
+  local text_font = font
   local x = row_x
   local width = row_text_w
 
@@ -3077,18 +3081,28 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
     x = row_x + font:get_width("> ")
     width = math.max(0, row_text_w - font:get_width("> "))
   elseif r.kind == "project" then
-    x = row_x + font:get_width("@ ")
-    width = math.max(0, row_text_w - font:get_width("@ "))
+    local label, _, prefix = result_list_label_and_spans(r)
+    local prefix_w = font:get_width(prefix)
+    text = label
+    text_font = fuzzy_searcher.project_result_font(font)
+    x = row_x + prefix_w
+    width = math.max(0, row_text_w - prefix_w)
+    local age = r.opened_at and compact_age(r.opened_at)
+    if age and age ~= "" then
+      width = math.max(0, width - font:get_width(age) - style.padding.x)
+    end
   elseif r.kind == "new_project" then
     local prefix = "Open this new folder as project: "
     x = row_x + font:get_width(prefix)
     width = math.max(0, row_text_w - font:get_width(prefix))
+    text = r.project or r.label or ""
+    text_font = fuzzy_searcher.project_result_font(font)
   elseif r.kind == "everything" and r.is_folder then
     x = row_x + font:get_width("@ ")
     width = math.max(0, row_text_w - font:get_width("@ "))
   end
 
-  local text_w = font:get_width(text)
+  local text_w = text_font:get_width(text)
   if text_w > 0 then width = math.min(width, text_w) end
   return x, math.max(0, width)
 end

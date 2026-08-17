@@ -146,4 +146,24 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     test.same(core.cursor_clipboard_whole_line, {})
     test.equal(picker.copy_flash.text, "src/app.lua")
   end)
+
+  test.it("ends Project copy feedback at the rendered label", function()
+    local path = "C:" .. PATHSEP .. "Projects" .. PATHSEP .. "decomps" .. PATHSEP .. "oot"
+    local picker = fuzzy_searcher.open_static_results("Results", {
+      { kind = "project", label = path, project = path },
+    })
+    test.ok(picker:copy_selected())
+
+    local row_x, row_w = 100, 2000
+    local x, width = picker:copy_flash_bounds(
+      style.code_font, picker.results[1], row_x, row_w
+    )
+    local project_font = style.prose_font:get_size() == style.code_font:get_size()
+      and style.prose_font
+      or style.get_scaled_font(style.prose_font, style.code_font:get_size())
+    local expected_x = row_x + style.code_font:get_width("@ ")
+
+    test.equal(x, expected_x)
+    test.equal(width, project_font:get_width(path))
+  end)
 end)
