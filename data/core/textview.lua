@@ -239,6 +239,7 @@ local function pack(...)
 end
 
 local function perf_frame_add(key, amount)
+  if not core.perf_frame_stats then return end
   local perf = package.loaded["core.perf"]
   if perf and perf.frame_add then perf.frame_add(key, amount or 1) end
 end
@@ -1549,6 +1550,9 @@ local function invalidate_visual_metric_rows(view, cache, row1, row2)
 end
 
 function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
+  self.__visual_metric_snapshot_kind = nil
+  self.__visual_metric_snapshot_id = nil
+  self.__visual_metric_snapshot_cache = nil
   local cache = self.__visual_metric_cache
   local wrap_change = self.__line_render_wrap_change
   self.__line_render_wrap_change = nil
@@ -1709,6 +1713,8 @@ function TextView:has_line_render_providers()
 end
 
 function TextView:add_line_render_provider(id, provider, opts)
+  -- `generation` is View-scoped. Use `line_generation` when the token can
+  -- differ by line.
   assert(type(id) == "string" and id ~= "", "line render provider id must be a non-empty string")
   assert(type(provider) == "table", "line render provider must be a table")
   opts = opts or {}
@@ -1728,6 +1734,10 @@ end
 
 function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
   opts = opts or {}
+  self.__line_render_snapshot_kind = nil
+  self.__line_render_snapshot_id = nil
+  self.__line_render_snapshot_lines = nil
+  self.__line_render_snapshot_provider_generations = nil
   self.__line_render_invalidation_generation =
     (self.__line_render_invalidation_generation or 0) + 1
   local perf = package.loaded["core.perf"]
@@ -3330,6 +3340,17 @@ end
 
 function TextView:get_visual_row_metric_cache()
   if not self:has_visual_metric_providers() then return nil end
+  -- One UI phase observes one coherent provider state. Explicit
+  -- invalidation clears this snapshot immediately.
+  local snapshot_kind = core.ui_snapshot_active and "ui"
+    or core.render_frame_active and "frame" or nil
+  local snapshot_id = snapshot_kind == "ui" and core.ui_snapshot_id
+    or snapshot_kind == "frame" and core.render_frame_id or nil
+  if snapshot_id and self.__visual_metric_snapshot_kind == snapshot_kind
+    and self.__visual_metric_snapshot_id == snapshot_id
+  then
+    return self.__visual_metric_snapshot_cache
+  end
   local perf_active = core.perf_frame_stats ~= nil
   local lookup_start = perf_active and system.get_time()
   perf_frame_add("textview_visual_metric_cache_calls", 1)
@@ -3377,6 +3398,11 @@ function TextView:get_visual_row_metric_cache()
       end
     end
     perf_elapsed("textview_visual_metric_cache_lookup_ms", lookup_start)
+    if snapshot_id then
+      self.__visual_metric_snapshot_kind = snapshot_kind
+      self.__visual_metric_snapshot_id = snapshot_id
+      self.__visual_metric_snapshot_cache = cache
+    end
     return cache
   end
 
@@ -3428,6 +3454,11 @@ function TextView:get_visual_row_metric_cache()
     sparse_metrics = sparse_metrics,
   }
   self.__visual_metric_cache = cache
+  if snapshot_id then
+    self.__visual_metric_snapshot_kind = snapshot_kind
+    self.__visual_metric_snapshot_id = snapshot_id
+    self.__visual_metric_snapshot_cache = cache
+  end
   perf_elapsed("textview_visual_metric_full_rebuild_ms", rebuild_start)
   perf_elapsed("textview_visual_metric_cache_lookup_ms", lookup_start)
   return cache
@@ -3912,7 +3943,7 @@ function TextView:get_visible_line_range()
 end
 
 
-local function line_render_signature(view, line)
+local function line_render_signature(view, line, snapshot_provider_generations)
   local parts = {
     tostring(view.__line_render_generation or 0),
     tostring(core.color_theme_generation or 0),
@@ -3921,10 +3952,21 @@ local function line_render_signature(view, line)
     parts[#parts + 1] = tostring(entry.id)
     parts[#parts + 1] = tostring(entry.priority)
     local provider = entry.provider
-    local generation_fn = provider and (provider.line_generation or provider.generation)
-    if generation_fn then
-      local ok, generation = pcall(generation_fn, provider, view, line)
+    local line_generation = provider and provider.line_generation
+    if line_generation then
+      local ok, generation = pcall(line_generation, provider, view, line)
       parts[#parts + 1] = ok and tostring(generation) or "error"
+    elseif provider and provider.generation then
+      local resolved = snapshot_provider_generations
+        and snapshot_provider_generations[entry] or nil
+      if not resolved then
+        local ok, generation = pcall(provider.generation, provider, view)
+        resolved = { value = ok and tostring(generation) or "error" }
+        if snapshot_provider_generations then
+          snapshot_provider_generations[entry] = resolved
+        end
+      end
+      parts[#parts + 1] = resolved.value
     end
   end
   return table.concat(parts, "\0")
@@ -3932,6 +3974,29 @@ end
 
 function TextView:get_line_render(line)
   if not self:has_line_render_providers() then return nil end
+  -- Repeated geometry and draw queries must reuse the line resolved earlier
+  -- in this UI phase. Explicit invalidation clears the snapshot.
+  local snapshot_kind = core.ui_snapshot_active and "ui"
+    or core.render_frame_active and "frame" or nil
+  local snapshot_id = snapshot_kind == "ui" and core.ui_snapshot_id
+    or snapshot_kind == "frame" and core.render_frame_id or nil
+  local snapshot_lines
+  local invalidation_generation = self.__line_render_invalidation_generation or 0
+  if snapshot_id then
+    if self.__line_render_snapshot_kind ~= snapshot_kind
+      or self.__line_render_snapshot_id ~= snapshot_id
+      or self.__line_render_snapshot_invalidation_generation ~= invalidation_generation
+    then
+      self.__line_render_snapshot_kind = snapshot_kind
+      self.__line_render_snapshot_id = snapshot_id
+      self.__line_render_snapshot_invalidation_generation = invalidation_generation
+      self.__line_render_snapshot_lines = {}
+      self.__line_render_snapshot_provider_generations = {}
+    end
+    snapshot_lines = self.__line_render_snapshot_lines
+    local snapshot_result = snapshot_lines[line]
+    if snapshot_result ~= nil then return snapshot_result or nil end
+  end
   local perf_active = core.perf_frame_stats ~= nil
   local lookup_start = perf_active and system.get_time()
   perf_frame_add("textview_line_render_cache_calls", 1)
@@ -3942,13 +4007,16 @@ function TextView:get_line_render(line)
     cache = { generation = generation, lines = {}, hits = 0, misses = 0, invalidated_lines = 0 }
     self.__line_render_cache = cache
   end
-  local signature = line_render_signature(self, line)
+  local signature = line_render_signature(
+    self, line, snapshot_id and self.__line_render_snapshot_provider_generations or nil
+  )
   local cached = cache.lines[line]
   if cached and cached.source_line == source_line and cached.signature == signature then
     cache.hits = cache.hits + 1
     self.render_cache_diagnostics.line_hits = self.render_cache_diagnostics.line_hits + 1
     perf_frame_add("textview_line_render_cache_hits", 1)
     perf_elapsed("textview_line_render_cache_lookup_ms", lookup_start)
+    if snapshot_lines then snapshot_lines[line] = cached.render_line or false end
     return cached.render_line or nil
   end
   cache.misses = cache.misses + 1
@@ -3987,6 +4055,7 @@ function TextView:get_line_render(line)
   }
   perf_elapsed("textview_line_render_build_ms", build_start)
   perf_elapsed("textview_line_render_cache_lookup_ms", lookup_start)
+  if snapshot_lines then snapshot_lines[line] = resolved or false end
   return resolved
 end
 

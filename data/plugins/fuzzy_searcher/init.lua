@@ -3321,6 +3321,18 @@ function FSView:update_preview_view()
   return view
 end
 
+function FSView:update_selected_preview()
+  if not self:is_visible() then return nil end
+  local result = self:selected_result()
+  if (self:is_full_width_mode() and not self:is_deep_code_mode())
+    or (result and (result.kind == "command" or result.kind == "project"))
+  then
+    self:clear_preview_view()
+    return nil
+  end
+  return self:update_preview_view()
+end
+
 -- Treat the floating overlay as a modal surface for mouse routing: while it is
 -- open, editor hover/click/wheel events behind it should not leak through.
 function FSView:mouse_on_top(x, y)
@@ -5141,6 +5153,7 @@ function FSView:update()
     self._last_unexpected_focus_state = nil
   end
   self:refresh(self.input:get_text())
+  self:update_selected_preview()
 end
 
 function FSView:draw()
@@ -5297,40 +5310,37 @@ function FSView:draw()
   phase_scope = fuzzy_searcher._perf_scope_begin("preview")
   local r = self:selected_result()
   local px, py, preview_w, preview_h = self:preview_bounds()
-  if full_width_mode and not vertical_preview then
-    self:clear_preview_view()
-  elseif r and r.kind == "command" then
-    self:clear_preview_view()
-    core.push_clip_rect(px, py, preview_w, preview_h)
-    renderer.draw_text(font, "Command", px, py, style.accent)
-    draw_highlighted_text(font, r.command, px, py + lh, preview_w, style.text, r.match_spans or {})
-    local info = r.info or command_preview_info(r.command)
-    if info and info ~= "" then
-      renderer.draw_text(font, info, px, py + lh * 2, style.dim)
-    end
-    core.pop_clip_rect()
-  elseif r and r.kind == "project" then
-    self:clear_preview_view()
-    core.push_clip_rect(px, py, preview_w, preview_h)
-    renderer.draw_text(font, "Project", px, py, style.accent)
-    draw_highlighted_text(font, display_root(r.project), px, py + lh, preview_w, style.text, r.match_spans or {})
-    renderer.draw_text(font, "Enter: open here", px, py + lh * 3, style.dim)
-    renderer.draw_text(font, "Ctrl+Enter: open in new Anvil window", px, py + lh * 4, style.dim)
-    core.pop_clip_rect()
-  else
-    local preview_phase_scope = fuzzy_searcher._perf_scope_begin("preview_update")
-    local preview = self:update_preview_view()
-    fuzzy_searcher._perf_scope_end(preview_phase_scope)
-    if preview then
-      preview_phase_scope = fuzzy_searcher._perf_scope_begin("preview_draw")
-      draw_view_in_rect(preview, px, py, preview_w, preview_h, r)
-      fuzzy_searcher._perf_scope_end(preview_phase_scope)
-    elseif self.preview_blocked then
-      preview_phase_scope = fuzzy_searcher._perf_scope_begin("preview_placeholder")
+  if not (full_width_mode and not vertical_preview) then
+    if r and r.kind == "command" then
       core.push_clip_rect(px, py, preview_w, preview_h)
-      draw_preview_placeholder("Preview unavailable", self.preview_blocked.reason .. " — " .. basename(self.preview_blocked.path), px, py, preview_w, preview_h)
+      renderer.draw_text(font, "Command", px, py, style.accent)
+      draw_highlighted_text(font, r.command, px, py + lh, preview_w, style.text, r.match_spans or {})
+      local info = r.info or command_preview_info(r.command)
+      if info and info ~= "" then
+        renderer.draw_text(font, info, px, py + lh * 2, style.dim)
+      end
       core.pop_clip_rect()
-      fuzzy_searcher._perf_scope_end(preview_phase_scope)
+    elseif r and r.kind == "project" then
+      core.push_clip_rect(px, py, preview_w, preview_h)
+      renderer.draw_text(font, "Project", px, py, style.accent)
+      draw_highlighted_text(font, display_root(r.project), px, py + lh, preview_w, style.text, r.match_spans or {})
+      renderer.draw_text(font, "Enter: open here", px, py + lh * 3, style.dim)
+      renderer.draw_text(font, "Ctrl+Enter: open in new Anvil window", px, py + lh * 4, style.dim)
+      core.pop_clip_rect()
+    else
+      local preview = self.preview_view
+      local preview_phase_scope
+      if preview then
+        preview_phase_scope = fuzzy_searcher._perf_scope_begin("preview_draw")
+        draw_view_in_rect(preview, px, py, preview_w, preview_h, r)
+        fuzzy_searcher._perf_scope_end(preview_phase_scope)
+      elseif self.preview_blocked then
+        preview_phase_scope = fuzzy_searcher._perf_scope_begin("preview_placeholder")
+        core.push_clip_rect(px, py, preview_w, preview_h)
+        draw_preview_placeholder("Preview unavailable", self.preview_blocked.reason .. " — " .. basename(self.preview_blocked.path), px, py, preview_w, preview_h)
+        core.pop_clip_rect()
+        fuzzy_searcher._perf_scope_end(preview_phase_scope)
+      end
     end
   end
   fuzzy_searcher._perf_scope_end(phase_scope)

@@ -300,6 +300,26 @@ test.describe("Fuzzy Searcher preview", function()
     test.equal(preview:is_wrapping_enabled(), false)
   end)
 
+  test.it("updates the selected file preview before drawing", function(context)
+    local path = temp_file_path("fuzzy-preview-update-phase-test.txt")
+    context.files = { path }
+    write_file(path, "preview only\n")
+
+    fuzzy_searcher.open("#")
+    local picker = core.fuzzy_searcher_active_view
+    picker.results = { { kind = "file", file = path } }
+    picker.selected = 1
+    picker.refresh = function() end
+
+    picker:update()
+    local preview = test.not_nil(picker.preview_view)
+    local updates = 0
+    preview.update = function() updates = updates + 1 end
+
+    picker:update()
+    test.equal(updates, 1)
+  end)
+
   test.it("horizontally reveals off-screen content matches in the TextView preview", function(context)
     config.plugins.linewrapping.enable_by_default = false
 

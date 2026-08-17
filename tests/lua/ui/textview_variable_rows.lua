@@ -20,11 +20,19 @@ test.describe("TextView variable visual row metrics", function()
   test.before_each(function(context)
     context.old_scroll_past_end = config.scroll_past_end
     context.old_scroll_context_lines = config.scroll_context_lines
+    context.old_render_frame_active = core.render_frame_active
+    context.old_render_frame_id = core.render_frame_id
+    context.old_ui_snapshot_active = core.ui_snapshot_active
+    context.old_ui_snapshot_id = core.ui_snapshot_id
   end)
 
   test.after_each(function(context)
     config.scroll_past_end = context.old_scroll_past_end
     config.scroll_context_lines = context.old_scroll_context_lines
+    core.render_frame_active = context.old_render_frame_active
+    core.render_frame_id = context.old_render_frame_id
+    core.ui_snapshot_active = context.old_ui_snapshot_active
+    core.ui_snapshot_id = context.old_ui_snapshot_id
   end)
 
   test.it("uses provider row heights for scroll size and line positions", function()
@@ -94,6 +102,53 @@ test.describe("TextView variable visual row metrics", function()
     test.equal(view:get_visual_row_height(1), lh)
     generation = 2
     test.equal(view:get_visual_row_height(1), lh * 2)
+  end)
+
+  test.it("uses one metric snapshot during a UI phase", function()
+    local view = make_view("one\ntwo")
+    local generation = 1
+    local lh = view:get_line_height()
+    view:add_visual_metric_provider("external", {
+      generation = function() return generation end,
+      line_height = function() return lh * generation end,
+    })
+
+    core.ui_snapshot_id = (core.ui_snapshot_id or 0) + 1
+    core.ui_snapshot_active = true
+    test.equal(view:get_visual_row_height(1), lh)
+    generation = 2
+    test.equal(view:get_visual_row_height(1), lh)
+
+    core.ui_snapshot_id = core.ui_snapshot_id + 1
+    test.equal(view:get_visual_row_height(1), lh * 2)
+
+    generation = 3
+    view:invalidate_visual_metrics("external")
+    test.equal(view:get_visual_row_height(1), lh * 3)
+  end)
+
+  test.it("uses one line-render snapshot during a UI phase", function()
+    local view = make_view("one\ntwo")
+    local generation = 1
+    view:add_line_render_provider("external", {
+      generation = function() return generation end,
+      render_line = function(_, _, _, context)
+        return {
+          source_text = context.source_text,
+          fragments = {},
+          marker = generation,
+        }
+      end,
+    })
+
+    core.ui_snapshot_id = (core.ui_snapshot_id or 0) + 1
+    core.ui_snapshot_active = true
+    test.equal(test.not_nil(view:get_line_render(1)).marker, 1)
+    generation = 2
+    test.equal(test.not_nil(view:get_line_render(1)).marker, 1)
+
+    core.ui_snapshot_id = core.ui_snapshot_id + 1
+    test.equal(test.not_nil(view:get_line_render(1)).marker, 2)
   end)
 
   test.it("invalidates metrics after legacy raw text edits", function()

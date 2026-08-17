@@ -2270,6 +2270,8 @@ end
 
 function core.step(next_frame_time, options)
   options = options or {}
+  core.ui_snapshot_id = (core.ui_snapshot_id or 0) + 1
+  core.ui_snapshot_active = true
   local step_stats = {
     event_ms = 0,
     update_ms = 0,
@@ -2351,6 +2353,7 @@ function core.step(next_frame_time, options)
   local resizing = options.live_resize or (core.window_resizing_until and core.window_resizing_until > system.get_time())
   core.root_panel.size.x, core.root_panel.size.y = width, height
   if uncapped or resizing or priority_event or options.immediate or next_frame_time < system.get_time() then
+    core.ui_snapshot_id = core.ui_snapshot_id + 1
     local stats = core.perf_frame_stats
     local perf = stats and package.loaded["core.perf"]
     local phase_start = stats and system.get_time()
@@ -2374,6 +2377,7 @@ function core.step(next_frame_time, options)
       next_frame_time > system.get_time()
     )
   then
+    core.ui_snapshot_active = false
     return false
   end
   core.redraw = false
@@ -2401,6 +2405,7 @@ function core.step(next_frame_time, options)
   renderer.set_clip_rect(table.unpack(core.clip_rect_stack[1]))
   local draw_emit_start_time = system.get_time()
   core.textview_frame_stats = core.perf_frame_stats
+  core.ui_snapshot_id = core.ui_snapshot_id + 1
   core.render_frame_id = (core.render_frame_id or 0) + 1
   core.render_frame_active = true
   local draw_perf = package.loaded["core.perf"]
@@ -2499,6 +2504,7 @@ function core.step(next_frame_time, options)
     core.root_panel:defer_draw(draw_stats)
   end
 
+  core.ui_snapshot_active = false
   return true
 end
 

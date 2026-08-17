@@ -4,6 +4,7 @@ local json = require "core.json"
 local images = {}
 
 local function perf_frame_add(key, amount)
+  if not core.perf_frame_stats then return end
   local perf = package.loaded["core.perf"]
   if perf and perf.frame_add then perf.frame_add(key, amount or 1) end
 end

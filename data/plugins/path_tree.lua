@@ -404,7 +404,7 @@ function path_tree.inline_file_render(view, source_text, name_col, name, color)
 end
 
 local INLINE_FILE_ICON_PROVIDER = {
-  generation = function(_, view, line)
+  line_generation = function(_, view, line)
     return view:get_inline_file_icon_generation(line)
   end,
   render_line = function(_, view, line, context)
