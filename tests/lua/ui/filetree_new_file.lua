@@ -27,7 +27,7 @@ end
 local function remove_buffer(buffer)
   for i = #panes.ordered(), 1, -1 do
     local pane = panes.ordered()[i]
-    for _, view in ipairs(panes.history_views(pane)) do
+    for _, view in ipairs(panes.views(pane)) do
       if view.buffer == buffer then
         panes.close(pane, { force = true })
         break

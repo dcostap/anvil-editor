@@ -105,6 +105,24 @@ test.describe("File Tree instances", function()
     test.equal(tree.root_dir, common.normalize_path(root))
   end)
 
+  test.it("records a new Navigation Place when an existing File Tree is shown again", function()
+    local tree = assert(filetree.new(root))
+    local pane = panes.create { factory = function() return tree end }
+    local replacement = View()
+    panes.present(replacement, { pane = pane })
+
+    test.ok(command.perform("filetree:focus-file", file))
+
+    test.equal(pane.current_view, tree)
+    local selected = tree:entry_for_line(tree.buffer:get_selection(true))
+    test.ok(selected and common.path_equals(selected.abs, file))
+    test.equal(panes.history_length(pane), 3)
+    test.equal(panes.back(pane), replacement)
+    test.equal(panes.forward(pane), tree)
+    selected = tree:entry_for_line(tree.buffer:get_selection(true))
+    test.ok(selected and common.path_equals(selected.abs, file))
+  end)
+
   test.it("restores Workspace expansion, selection, and instance setup", function()
     local tree = assert(filetree.new(root))
     local _, _, initial = tree:build_entries(false)

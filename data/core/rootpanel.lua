@@ -201,7 +201,7 @@ function RootPanel:open_buffer(buffer, opts)
   local Editor = require "core.editor"
   local target = panes().find(opts.pane or panes().active())
   if target and (opts.placement == nil or opts.placement == "current") then
-    for _, view in ipairs(panes().history_views(target)) do
+    for _, view in ipairs(panes().views(target)) do
       if view.extends and view:extends(Editor) and view.buffer == buffer then
         panes().present(view, { pane = target, focus = opts.focus })
         return view

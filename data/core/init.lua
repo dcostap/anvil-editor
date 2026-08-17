@@ -1724,7 +1724,7 @@ function core.get_views_referencing_buffer(buffer)
   local seen = {}
   local pane_manager = require "core.panes"
   for _, pane in ipairs(pane_manager.ordered()) do
-    for _, view in ipairs(pane_manager.history_views(pane)) do
+    for _, view in ipairs(pane_manager.views(pane)) do
       if view.buffer == buffer and not seen[view] then
         seen[view] = true
         table.insert(res, view)

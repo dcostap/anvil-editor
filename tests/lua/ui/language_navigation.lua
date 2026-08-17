@@ -125,7 +125,7 @@ target :: proc() {}
     end))
 
     local project_views = 0
-    for _, item in ipairs(panes.history_views(panes.active())) do
+    for _, item in ipairs(panes.views(panes.active())) do
       if item.buffer and item.buffer.abs_filename and common.path_belongs_to(item.buffer.abs_filename, context.temp_root) then
         project_views = project_views + 1
       end

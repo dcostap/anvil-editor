@@ -7408,7 +7408,7 @@ local function refresh_open_views()
   local panes = require "core.panes"
   local seen = {}
   for _, pane in ipairs(panes.ordered()) do
-    for _, view in ipairs(panes.history_views(pane)) do
+    for _, view in ipairs(panes.views(pane)) do
       if not seen[view] then seen[view] = true; live.refresh_view(view) end
     end
   end

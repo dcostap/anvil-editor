@@ -217,7 +217,7 @@ local function discard_missing_file_buffer(buffer, name)
     local panes = require "core.panes"
     local closed = 0
     for _, pane in ipairs(panes.ordered()) do
-      for _, view in ipairs(panes.history_views(pane)) do
+      for _, view in ipairs(panes.views(pane)) do
         if view.buffer == buffer then
           if panes.close_view(pane, { view = view, force = true }) then
           closed = closed + 1

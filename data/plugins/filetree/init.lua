@@ -3356,7 +3356,7 @@ end
 function M.instances()
   local result, seen = {}, {}
   for _, pane in ipairs(panes.ordered()) do
-    for _, candidate in ipairs(panes.history_views(pane)) do
+    for _, candidate in ipairs(panes.views(pane)) do
       if candidate.extends and candidate:extends(FileTreeView) and not seen[candidate] then
         seen[candidate] = true
         result[#result + 1] = candidate
@@ -3374,7 +3374,7 @@ local function show_filetree(target)
   local view = active_filetree()
   if not view then
     local active = panes.active()
-    for _, candidate in ipairs(active and panes.history_views(active) or {}) do
+    for _, candidate in ipairs(active and panes.views(active) or {}) do
       if candidate.extends and candidate:extends(FileTreeView) then view = candidate; break end
     end
   end

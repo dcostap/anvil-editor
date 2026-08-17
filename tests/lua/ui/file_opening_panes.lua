@@ -65,6 +65,18 @@ test.describe("File opening through Panes", function()
     test.equal(first.scroll.y, 11)
   end)
 
+  test.it("records a new Navigation Place when an open file is visited again", function()
+    local first = core.open_file(first_path)
+    local second = core.open_file(second_path)
+
+    local revisited = core.open_file(first_path)
+
+    test.equal(revisited, first)
+    test.equal(panes.history_length(panes.active()), 3)
+    test.equal(panes.back(), second)
+    test.equal(panes.forward(), first)
+  end)
+
   test.it("keeps a file Buffer alive while replacement approval is pending", function()
     local approve
     local PendingView = View:extend()

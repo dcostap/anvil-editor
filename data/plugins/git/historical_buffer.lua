@@ -103,7 +103,7 @@ local function views_referencing_buffer(root_panel, buffer)
   local views = {}
   local panes = require "core.panes"
   for _, pane in ipairs(panes.ordered()) do
-    for _, view in ipairs(panes.history_views(pane)) do
+    for _, view in ipairs(panes.views(pane)) do
       if view.buffer == buffer then views[#views + 1] = view end
     end
   end

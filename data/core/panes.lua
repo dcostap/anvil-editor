@@ -96,6 +96,7 @@ local function create_identity(view, opts)
       index = 0,
       limit = math.max(1, tonumber(opts and opts.history_limit) or 100),
     },
+    retained_views = {},
   }
   claim_view(pane, view)
   pane.history.entries[1] = { view = view, state = capture_navigation_state(view) }
@@ -113,6 +114,7 @@ local function create_restored_identity(view, id)
     position = { x = 0, y = 0 },
     size = { x = 0, y = 0 },
     history = { entries = {}, index = 1, limit = 100 },
+    retained_views = {},
   }
   claim_view(pane, view)
   pane.history.entries[1] = { view = view, state = capture_navigation_state(view) }
@@ -443,6 +445,14 @@ local function call_lifecycle(view, method)
   if view and view[method] then view[method](view) end
 end
 
+local function log_navigation_history(pane, action)
+  quiet(
+    "Navigation History: pane=%s action=%s index=%d length=%d view=%s",
+    pane.id, action, pane.history.index, #pane.history.entries,
+    tostring(pane.current_view)
+  )
+end
+
 local function set_history_index(pane, index, opts)
   local history = pane.history
   if index < 1 or index > #history.entries then return nil end
@@ -454,21 +464,57 @@ local function set_history_index(pane, index, opts)
   history.index = index
   pane.current_view = next_view
   restore_navigation_state(next_view, history.entries[index].state)
+  log_navigation_history(pane, "traverse")
   if old ~= next_view then call_lifecycle(next_view, "on_resume") end
   if not opts or opts.focus ~= false then M.focus(pane) end
   after_mutation("navigated " .. pane.id)
   return pane.current_view
 end
 
-local function discard_entry(pane, index)
+local function history_has_view(pane, view)
+  for _, entry in ipairs(pane.history.entries) do
+    if entry.view == view then return true end
+  end
+  return false
+end
+
+local function retained_view_index(pane, view)
+  for index, candidate in ipairs(pane.retained_views or {}) do
+    if candidate == view then return index end
+  end
+end
+
+local function retain_view(pane, view)
+  if not retained_view_index(pane, view) then
+    pane.retained_views[#pane.retained_views + 1] = view
+  end
+end
+
+local function unretain_view(pane, view)
+  local index = retained_view_index(pane, view)
+  if index then table.remove(pane.retained_views, index) end
+  return index ~= nil
+end
+
+local function discard_retained_view(pane, index)
+  local view = table.remove(pane.retained_views, index)
+  if not view or history_has_view(pane, view) then return view end
+  release_view(pane, view)
+  if view.on_history_discarded then
+    view:on_history_discarded()
+  else
+    call_lifecycle(view, "on_close")
+  end
+  return view
+end
+
+local function discard_entry(pane, index, retain_if_unreferenced)
   local entry = table.remove(pane.history.entries, index)
   if not entry then return end
   if index <= pane.history.index then pane.history.index = pane.history.index - 1 end
-  local retained = false
-  for _, candidate in ipairs(pane.history.entries) do
-    if candidate.view == entry.view then retained = true; break end
-  end
-  if not retained then
+  local referenced = history_has_view(pane, entry.view)
+  if not referenced and retain_if_unreferenced then retain_view(pane, entry.view) end
+  if not referenced and not retained_view_index(pane, entry.view) then
     release_view(pane, entry.view)
     if entry.view.on_history_discarded then
       entry.view:on_history_discarded()
@@ -484,17 +530,27 @@ local function can_trim_history_view(view)
   return not view.history_protected
 end
 
-local function clear_recreatable_forward(pane)
+local function clear_forward_history(pane, preserve_view)
   local history = pane.history
+  local removed = #history.entries - history.index
   for i = #history.entries, history.index + 1, -1 do
-    if can_trim_history_view(history.entries[i].view) then discard_entry(pane, i) end
+    local view = history.entries[i].view
+    discard_entry(pane, i, view == preserve_view or not can_trim_history_view(view))
   end
+  if removed > 0 then log_navigation_history(pane, "clear-forward") end
 end
 
 function M.prune_history(target)
   local pane = M.find(target)
   if not pane then return 0 end
   local removed = 0
+  for index = #(pane.retained_views or {}), 1, -1 do
+    local view = pane.retained_views[index]
+    if (view.is_stale and view:is_stale()) or can_trim_history_view(view) then
+      discard_retained_view(pane, index)
+      removed = removed + 1
+    end
+  end
   for i = #pane.history.entries, 1, -1 do
     local view = pane.history.entries[i].view
     if i ~= pane.history.index and view.is_stale and view:is_stale() then
@@ -510,18 +566,21 @@ function M.prune_history(target)
         break
       end
     end
+    local retain
+    if not discard_index then
+      for i in ipairs(pane.history.entries) do
+        if i ~= pane.history.index then discard_index, retain = i, true; break end
+      end
+    end
     if not discard_index then break end
-    discard_entry(pane, discard_index)
+    discard_entry(pane, discard_index, retain)
     removed = removed + 1
   end
   pane.current_view = pane.history.entries[pane.history.index].view
   return removed
 end
 
-function M.history_views(target)
-  local pane = M.find(target)
-  if not pane then return {} end
-  M.prune_history(pane)
+local function collect_owned_views(pane)
   local result = {}
   local seen = {}
   for _, entry in ipairs(pane.history.entries) do
@@ -530,7 +589,22 @@ function M.history_views(target)
       result[#result + 1] = entry.view
     end
   end
+  for _, view in ipairs(pane.retained_views or {}) do
+    if not seen[view] then
+      seen[view] = true
+      result[#result + 1] = view
+    end
+  end
   return result
+end
+
+---Return each live View owned by a Pane once.
+---This includes protected Views retained outside the current Navigation History branch.
+function M.views(target)
+  local pane = M.find(target)
+  if not pane then return {} end
+  M.prune_history(pane)
+  return collect_owned_views(pane)
 end
 
 function M.history_length(target)
@@ -548,11 +622,12 @@ function M.record_location(target)
       == navigation_state_key(pane.current_view, state) then
     return false
   end
-  clear_recreatable_forward(pane)
+  clear_forward_history(pane, pane.current_view)
   local index = history.index + 1
   table.insert(history.entries, index, { view = pane.current_view, state = state })
   history.index = index
   M.prune_history(pane)
+  log_navigation_history(pane, "record-place")
   after_mutation("recorded location in " .. pane.id)
   return true
 end
@@ -575,20 +650,17 @@ function M.present(view, opts)
   if current ~= view and current.can_suspend and current:can_suspend() == false then
     return nil, "Current View requires transactional replacement"
   end
-  if existing == pane then
-    for i, entry in ipairs(pane.history.entries) do
-      if entry.view == view then
-        set_history_index(pane, i, opts)
-        if opts.focus ~= false and M.active_pane ~= pane then M.focus(pane) end
-        return pane
-      end
-    end
+  if existing == pane and current == view then
+    M.record_location(pane)
+    if opts.focus ~= false then M.focus(pane) end
+    return pane
   end
 
   local history = pane.history
-  clear_recreatable_forward(pane)
   history.entries[history.index].state = capture_navigation_state(pane.current_view)
+  clear_forward_history(pane, view)
   call_lifecycle(pane.current_view, "on_suspend")
+  unretain_view(pane, view)
   claim_view(pane, view)
   local index = history.index + 1
   table.insert(history.entries, index, {
@@ -599,6 +671,7 @@ function M.present(view, opts)
   pane.current_view = view
   call_lifecycle(view, "on_resume")
   M.prune_history(pane)
+  log_navigation_history(pane, "present")
   if opts.focus ~= false then M.focus(pane) end
   after_mutation("presented View in " .. pane.id)
   return pane
@@ -721,8 +794,8 @@ function M.close_view(target, opts)
   if not pane then return false end
   local view = opts.view or pane.current_view
   local found, other_view = false, false
-  for _, entry in ipairs(pane.history.entries) do
-    if entry.view == view then found = true else other_view = true end
+  for _, candidate in ipairs(collect_owned_views(pane)) do
+    if candidate == view then found = true else other_view = true end
   end
   if not found then return false end
   if not other_view then return M.close(pane, opts) end
@@ -731,8 +804,13 @@ function M.close_view(target, opts)
   local function approved()
     local was_current = pane.current_view == view
     if was_current then call_lifecycle(view, "on_suspend") end
+    unretain_view(pane, view)
     for index = #pane.history.entries, 1, -1 do
       if pane.history.entries[index].view == view then discard_entry(pane, index) end
+    end
+    if view.__pane_owner == pane then
+      release_view(pane, view)
+      call_lifecycle(view, "on_close")
     end
     pane.history.index = common.clamp(pane.history.index, 1, #pane.history.entries)
     pane.current_view = pane.history.entries[pane.history.index].view
@@ -761,13 +839,9 @@ local function commit_close(pane)
   end
   assert(old_group_index, "closed Pane is not in its Pane Group")
   group.root = layout.remove(group.root, pane)
-  local released = {}
-  for _, entry in ipairs(pane.history.entries) do
-    if not released[entry.view] then
-      released[entry.view] = true
-      release_view(pane, entry.view)
-      call_lifecycle(entry.view, "on_close")
-    end
+  for _, view in ipairs(collect_owned_views(pane)) do
+    release_view(pane, view)
+    call_lifecycle(view, "on_close")
   end
   M.panes_by_id[pane.id] = nil
   pane.group = nil
@@ -796,12 +870,8 @@ end
 
 local function close_candidates(pane)
   local result = { pane.current_view }
-  local seen = { [pane.current_view] = true }
-  for _, entry in ipairs(pane.history.entries) do
-    if not seen[entry.view] then
-      seen[entry.view] = true
-      result[#result + 1] = entry.view
-    end
+  for _, view in ipairs(collect_owned_views(pane)) do
+    if view ~= pane.current_view then result[#result + 1] = view end
   end
   return result
 end
@@ -963,7 +1033,7 @@ function M.restore_workspace_state(state, load_view)
 
   for _, pane in pairs(restored) do
     if not attached[pane] then
-      local views = M.history_views(pane)
+      local views = M.views(pane)
       M.panes_by_id[pane.id] = nil
       for _, view in ipairs(views) do
         release_view(pane, view)
@@ -986,7 +1056,7 @@ end
 
 function M.reset_for_tests()
   for _, pane in ipairs(M.ordered()) do
-    for _, entry in ipairs(pane.history.entries or {}) do release_view(pane, entry.view) end
+    for _, view in ipairs(collect_owned_views(pane)) do release_view(pane, view) end
   end
   M.groups = {}
   M.panes_by_id = {}
@@ -1029,6 +1099,14 @@ function M.validate()
           "View is retained by more than one Pane")
         seen_owned_views[entry.view] = pane
         assert(entry.view.__pane_owner == pane, "retained View points to the wrong Pane")
+      end
+      for _, view in ipairs(pane.retained_views or {}) do
+        assert(view and not history_has_view(pane, view),
+          "retained View must not duplicate a Navigation Place")
+        assert(not seen_owned_views[view] or seen_owned_views[view] == pane,
+          "View is retained by more than one Pane")
+        seen_owned_views[view] = pane
+        assert(view.__pane_owner == pane, "retained View points to the wrong Pane")
       end
     end
   end

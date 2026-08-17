@@ -71,6 +71,20 @@ test.describe("Pane navigation history", function()
     test.equal(panes.history_length(pane), 2)
   end)
 
+  test.it("records an explicit revisit inside the Current View", function()
+    local pane = panes.create { factory = factory("one", 1) }
+    local view = pane.current_view
+    view.place = 2
+
+    panes.present(view, { pane = pane })
+
+    test.equal(panes.history_length(pane), 2)
+    test.equal(panes.back(pane), view)
+    test.equal(view.place, 1)
+    test.equal(panes.forward(pane), view)
+    test.equal(view.place, 2)
+  end)
+
   test.it("does not record ordinary edits without a navigation event", function()
     local pane = panes.create { factory = factory("one", 1) }
     pane.current_view.edits = 3

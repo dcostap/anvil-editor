@@ -29,7 +29,7 @@ end
 
 local function close_file_views_and_buffers(path)
   for _, pane in ipairs(panes.ordered()) do
-    for _, view in ipairs(panes.history_views(pane)) do
+    for _, view in ipairs(panes.views(pane)) do
       local view_path = view.path or (view.buffer and view.buffer.abs_filename)
       if view_path == path then
         if view:extends(TextView) and view.buffer:is_dirty() then view.buffer:clean() end
