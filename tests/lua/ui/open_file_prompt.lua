@@ -53,4 +53,11 @@ test.describe("open file prompt", function()
 
     test.ok(core.global_prompt_bar.state.validate(path .. "\r\n"), errors[1])
   end)
+
+  test.it("ignores the keyboard event payload when opened by a shortcut", function()
+    command.perform("core:open-file", { key = "o", modifiers = { "ctrl" } })
+
+    test.equal(core.global_prompt_bar.label, "Open File: ")
+    test.equal(#errors, 0)
+  end)
 end)

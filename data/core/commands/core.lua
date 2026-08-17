@@ -260,6 +260,9 @@ command.add(nil, {
   end,
 
   ["core:open-file"] = function(label, selection_callback, allow_directories)
+    if type(label) ~= "string" then
+      label, selection_callback, allow_directories = nil, nil, nil
+    end
     open_file(label, selection_callback, allow_directories)
   end,
 

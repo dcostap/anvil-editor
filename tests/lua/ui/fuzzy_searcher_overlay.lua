@@ -63,6 +63,8 @@ test.describe("Fuzzy Searcher attention overlay", function()
 
       picker = fuzzy_searcher.open_static_results("Commands", {})
       root:update()
+      test.equal(bar.size.y, 0)
+      test.equal(bar.suggestions_height, 0)
       picker:close()
       picker = nil
       root:update()

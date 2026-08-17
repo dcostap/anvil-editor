@@ -254,6 +254,7 @@ function GlobalPromptBar:enter(label, ...)
   if self.state ~= default_state then
     return
   end
+  assert(type(label) == "string", "Global Prompt Bar label must be a string")
   local options = select(1, ...)
 
   if type(options) ~= "table" then
@@ -376,6 +377,9 @@ function GlobalPromptBar:update()
         core.log_quiet("Global Prompt Bar suspended under an application overlay")
       end
       self.covered_by_app_overlay = true
+      self.size.y = 0
+      self.suggestions_height = 0
+      core.redraw = true
     else
       self:exit(false, true)
     end
@@ -426,7 +430,8 @@ function GlobalPromptBar:update()
 
   -- update suggestions box height
   local lh = self:get_suggestion_line_height()
-  local dest = self.state.show_suggestions and math.min(#self.suggestions, config.max_visible_commands) * lh or 0
+  local dest = self.state.show_suggestions and not self.covered_by_app_overlay
+    and math.min(#self.suggestions, config.max_visible_commands) * lh or 0
   self:move_towards("suggestions_height", dest, nil, "global_prompt_bar")
 
   -- update suggestion cursor offset
@@ -550,6 +555,7 @@ end
 ---Draw the Global Prompt Bar.
 ---Renders input text and defers its suggestions box above the app overlay.
 function GlobalPromptBar:draw()
+  if self.covered_by_app_overlay then return end
   GlobalPromptBar.super.draw(self)
   if self.state.show_suggestions then
     core.root_panel:defer_draw(draw_suggestions_box, self)
