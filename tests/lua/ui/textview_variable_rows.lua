@@ -151,6 +151,34 @@ test.describe("TextView variable visual row metrics", function()
     test.equal(test.not_nil(view:get_line_render(1)).marker, 2)
   end)
 
+  test.it("uses one composed-row snapshot during a UI phase", function()
+    local view = make_view("one\ntwo")
+    local generation = 1
+    local enabled = true
+    view:add_visual_row_provider("external", {
+      generation = function() return generation end,
+      visual_rows = function(_, _, line, placement)
+        if enabled and line == 1 and placement == "after" then
+          return { { id = "external" } }
+        end
+      end,
+    })
+
+    core.ui_snapshot_id = (core.ui_snapshot_id or 0) + 1
+    core.ui_snapshot_active = true
+    test.equal(view:get_composed_visual_row_count(), 3)
+    enabled = false
+    generation = 2
+    test.equal(view:get_composed_visual_row_count(), 3)
+
+    core.ui_snapshot_id = core.ui_snapshot_id + 1
+    test.equal(view:get_composed_visual_row_count(), 2)
+
+    enabled = true
+    view:invalidate_visual_rows("external")
+    test.equal(view:get_composed_visual_row_count(), 3)
+  end)
+
   test.it("invalidates metrics after legacy raw text edits", function()
     local view, buffer = make_view("plain")
     local lh = view:get_line_height()

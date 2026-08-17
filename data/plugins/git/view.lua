@@ -859,7 +859,13 @@ end
 function GitView:update()
   self:update_pane_buffers()
   self:sync_selection_from_pane()
+  local tab = self:model_tab()
+  local diff_view
+  if tab and tab.kind == "commit_diff" then
+    diff_view = select(7, self:layout_diff_tab(tab, self.position.x + style.padding.x))
+  end
   for _, view in pairs(self.pane_views or {}) do view:update() end
+  if diff_view then diff_view:update() end
   GitView.super.update(self)
 end
 
@@ -1196,19 +1202,34 @@ function GitView:draw_history_tab(tab, x, y)
   details:draw()
 end
 
-function GitView:draw_diff_tab(tab, x, y)
+function GitView:layout_diff_tab(tab, x)
   local list_width = math.floor(self.size.x * 0.28)
   local diff_x = self.position.x + list_width + style.padding.x
   local list_right = diff_x - style.padding.x
   local diff_y = self:commit_list_y()
   local list = self:pane_view("file-list")
   list.position.x, list.position.y = x, diff_y
-  list.size.x, list.size.y = math.max(0, list_width - style.padding.x), self.position.y + self.size.y - diff_y - style.padding.y
+  list.size.x, list.size.y = math.max(0, list_width - style.padding.x),
+    self.position.y + self.size.y - diff_y - style.padding.y
+  local diff_w = self.position.x + self.size.x - diff_x - style.padding.x
+  local diff_h = self.position.y + self.size.y - diff_y - style.padding.y
+  local view
+  if not tab.loading_file and not tab.file_error
+    and (tab.left_text ~= nil or tab.right_text ~= nil)
+  then
+    view = self:ensure_diff_view(tab)
+    view.position.x, view.position.y = diff_x, diff_y
+    view.size.x, view.size.y = diff_w, diff_h
+  end
+  return list, diff_x, list_right, diff_y, diff_w, diff_h, view
+end
+
+function GitView:draw_diff_tab(tab, x, y)
+  local list, diff_x, list_right, diff_y, _, _, view =
+    self:layout_diff_tab(tab, x)
   list:draw()
   renderer.draw_rect(list_right, self.position.y, 1 * SCALE, self.size.y, style.divider)
 
-  local diff_w = self.position.x + self.size.x - diff_x - style.padding.x
-  local diff_h = self.position.y + self.size.y - diff_y - style.padding.y
   if tab.loading_file then
     renderer.draw_text(style.prose_font, "Loading file diff...", diff_x + style.padding.x, diff_y, style.dim)
     return
@@ -1221,10 +1242,6 @@ function GitView:draw_diff_tab(tab, x, y)
     renderer.draw_text(style.prose_font, "Select a changed file", diff_x + style.padding.x, diff_y, style.dim)
     return
   end
-  local view = self:ensure_diff_view(tab)
-  view.position.x, view.position.y = diff_x, diff_y
-  view.size.x, view.size.y = diff_w, diff_h
-  view:update()
   view:draw()
 end
 

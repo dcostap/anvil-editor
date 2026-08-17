@@ -617,6 +617,8 @@ function TitleBar:draw()
         (entry.active or hovered) and style.text or style.dim)
     end
   end
+  local window_focused = not core.window or not system.window_has_focus
+    or system.window_has_focus(core.window)
   for i, rect in ipairs(self.caption_rects) do
     local hovered = self.hovered_caption == i
     local pressed = hovered and self.pressed_caption == i
@@ -626,10 +628,8 @@ function TitleBar:draw()
       and (i == 3 and style.titlebar_close_hover or style.titlebar_control_hover)
       or nil
     if background then renderer.draw_rect(rect.x, rect.y, rect.w, rect.h, background) end
-    local focused = not core.window or not system.window_has_focus
-      or system.window_has_focus(core.window)
     local color = hovered and i == 3 and (style.titlebar_close_text or style.text)
-      or focused and style.text or style.dim
+      or window_focused and style.text or style.dim
     draw_caption_glyph(i, rect, color)
   end
   self:draw_pane_drag()

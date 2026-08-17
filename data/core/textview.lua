@@ -2005,16 +2005,23 @@ function TextView:add_decoration_provider(id, provider, opts)
   opts = opts or {}
   self.decoration_providers = self.decoration_providers or {}
   self.decoration_providers[id] = { id = id, provider = provider, priority = opts.priority or provider.priority or 0 }
+  self.__decoration_provider_entries = nil
 end
 
 function TextView:remove_decoration_provider(id)
   if not self.decoration_providers or not self.decoration_providers[id] then return false end
   self.decoration_providers[id] = nil
+  self.__decoration_provider_entries = nil
   return true
 end
 
 function TextView:decoration_provider_entries()
-  return sorted_provider_entries(self.decoration_providers)
+  if not self.__decoration_provider_entries then
+    self.__decoration_provider_entries = sorted_provider_entries(
+      self.decoration_providers
+    )
+  end
+  return self.__decoration_provider_entries
 end
 
 local copy_feedback_decoration_provider = {
@@ -2313,12 +2320,21 @@ function TextView:add_visual_row_provider(id, provider, opts)
   opts = opts or {}
   self.visual_row_providers = self.visual_row_providers or {}
   self.visual_row_providers[id] = { id = id, provider = provider, priority = opts.priority or provider.priority or 0 }
+  self.__visual_row_provider_entries = nil
   self:bump_fold_generation("visual-row-provider")
+end
+
+function TextView:clear_composed_visual_row_cache()
+  self.__composed_visual_row_cache = nil
+  self.__composed_visual_row_snapshot_kind = nil
+  self.__composed_visual_row_snapshot_id = nil
+  self.__composed_visual_row_snapshot_rows = nil
 end
 
 function TextView:remove_visual_row_provider(id)
   if not self.visual_row_providers or not self.visual_row_providers[id] then return false end
   self.visual_row_providers[id] = nil
+  self.__visual_row_provider_entries = nil
   self:bump_fold_generation("visual-row-provider-clear")
   return true
 end
@@ -2329,12 +2345,16 @@ function TextView:invalidate_visual_rows(provider_id)
     self.__visual_row_provider_invalidations = self.__visual_row_provider_invalidations or {}
     self.__visual_row_provider_invalidations[provider_id] = (self.__visual_row_provider_invalidations[provider_id] or 0) + 1
   end
-  self.__composed_visual_row_cache = nil
   self:bump_fold_generation(provider_id and ("visual-row-invalidate:" .. tostring(provider_id)) or "visual-row-invalidate")
 end
 
 function TextView:visual_row_provider_entries()
-  return sorted_provider_entries(self.visual_row_providers)
+  if not self.__visual_row_provider_entries then
+    self.__visual_row_provider_entries = sorted_provider_entries(
+      self.visual_row_providers
+    )
+  end
+  return self.__visual_row_provider_entries
 end
 
 function TextView:set_visual_row_extension(id, extension)
@@ -2483,7 +2503,7 @@ function TextView:bump_fold_generation(reason)
   self.fold_generation = (self.fold_generation or 0) + 1
   self.__collapsed_fold_cache = nil
   self.__fold_layout_cache = nil
-  self.__composed_visual_row_cache = nil
+  self:clear_composed_visual_row_cache()
   core.redraw = true
   if reason and core.log_quiet then
     core.log_quiet("TextView fold generation %d for %s: %s", self.fold_generation, self.buffer:get_name(), tostring(reason))
@@ -3002,6 +3022,15 @@ function TextView:build_composed_visual_rows()
 end
 
 function TextView:composed_visual_rows()
+  local snapshot_kind = core.ui_snapshot_active and "ui"
+    or core.render_frame_active and "frame" or nil
+  local snapshot_id = snapshot_kind == "ui" and core.ui_snapshot_id
+    or snapshot_kind == "frame" and core.render_frame_id or nil
+  if snapshot_id and self.__composed_visual_row_snapshot_kind == snapshot_kind
+    and self.__composed_visual_row_snapshot_id == snapshot_id
+  then
+    return self.__composed_visual_row_snapshot_rows
+  end
   local signature = self:visual_row_cache_signature()
   local cache = self.__composed_visual_row_cache
   if not cache or cache.signature ~= signature then
@@ -3035,6 +3064,11 @@ function TextView:composed_visual_rows()
       position_rows = position_rows,
     }
     self.__composed_visual_row_cache = cache
+  end
+  if snapshot_id then
+    self.__composed_visual_row_snapshot_kind = snapshot_kind
+    self.__composed_visual_row_snapshot_id = snapshot_id
+    self.__composed_visual_row_snapshot_rows = cache.entries
   end
   return cache.entries
 end
@@ -8711,6 +8745,9 @@ Buffer.register_text_transaction_handler("textview-render-caches", function(buff
   end
   for view in pairs(TextView.registry[buffer] or {}) do
     if view and view.buffer == buffer then
+      view.__composed_visual_row_snapshot_kind = nil
+      view.__composed_visual_row_snapshot_id = nil
+      view.__composed_visual_row_snapshot_rows = nil
       line_packets.apply_transaction(view, transaction)
       local invalid_line1, invalid_line2 = line1, line2
       local provider_entries = view:line_render_provider_entries()

@@ -466,6 +466,36 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_owner_view, tab_view)
   end)
 
+  test.it("updates an embedded commit diff before drawing", function(context)
+    local session, view = open_fake_git_view(context.project)
+    local tab = {
+      id = "diff-update",
+      kind = "commit_diff",
+      title = "Diff update",
+      closable = true,
+      changed_files = {
+        { status = "modified", old_path = "a.lua", new_path = "a.lua" },
+      },
+      selected_file = 1,
+      left_text = "old\n",
+      right_text = "new\n",
+      left_name = "a.lua",
+      right_name = "a.lua",
+      diff_generation = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
+    tab_view.position.x, tab_view.position.y = 0, 0
+    tab_view.size.x, tab_view.size.y = 800, 600
+    local diff = tab_view:ensure_diff_view(tab)
+    local updates = 0
+    diff.update = function() updates = updates + 1 end
+
+    tab_view:update()
+
+    test.equal(updates, 1)
+  end)
+
   test.it("keeps Git Log pane TextViews unwrapped", function(context)
     config.plugins.linewrapping.enable_by_default = true
     local session, view = open_fake_git_view(context.project)

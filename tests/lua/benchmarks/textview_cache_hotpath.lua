@@ -69,13 +69,34 @@ test.describe("TextView cache hot-path benchmark", function()
         view:get_line_render((call - 1) % 50 + 1)
       end
     end)
+
+    local visual_row_generation_calls = 0
+    view:add_visual_row_provider("benchmark", {
+      generation = function()
+        visual_row_generation_calls = visual_row_generation_calls + 1
+        return 1
+      end,
+      visual_rows = function() end,
+    })
+    view:composed_visual_rows()
+    visual_row_generation_calls = 0
+    core.render_frame_id = core.render_frame_id + 1
+    local visual_rows_ms = elapsed_ms(function()
+      for _ = 1, 200000 do view:composed_visual_rows() end
+    end)
+
+    view:add_decoration_provider("benchmark", {})
+    local decoration_entries_ms = elapsed_ms(function()
+      for _ = 1, 200000 do view:decoration_provider_entries() end
+    end)
     core.render_frame_active = old_render_active
     core.render_frame_id = old_render_frame_id
 
     print(string.format(
-      "TextView cache hot path: metric_ms=%.3f geometry_ms=%.3f metric_seed_calls=%d metric_generation_calls=%d line_ms=%.3f line_generation_calls=%d",
+      "TextView cache hot path: metric_ms=%.3f geometry_ms=%.3f metric_seed_calls=%d metric_generation_calls=%d line_ms=%.3f line_generation_calls=%d visual_rows_ms=%.3f visual_row_generation_calls=%d decoration_entries_ms=%.3f",
       metric_ms, geometry_ms, metric_seed_calls, metric_generation_calls, line_ms,
-      line_generation_calls
+      line_generation_calls, visual_rows_ms, visual_row_generation_calls,
+      decoration_entries_ms
     ))
     io.stdout:flush()
     test.ok(view:get_visual_row_metric_cache())

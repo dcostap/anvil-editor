@@ -804,7 +804,7 @@ end
 function LineWrapping.clear_wrap_cache(textview)
   textview.__async_wrap_reconstruction = nil
   textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
-  textview.__composed_visual_row_cache = nil
+  textview:clear_composed_visual_row_cache()
   textview.wrapped_lines = nil
   textview.wrapped_line_to_idx = nil
   textview.wrapped_line_offsets = nil
@@ -882,7 +882,7 @@ end
 function LineWrapping.reconstruct_breaks(textview, default_font, width)
   textview.__async_wrap_reconstruction = nil
   textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
-  textview.__composed_visual_row_cache = nil
+  textview:clear_composed_visual_row_cache()
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
   local reconstructed_lines = 0
@@ -985,7 +985,7 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     textview.wrapped_buffer_line_count = token.line_count
     textview.wrapped_text_revision = token.revision
     textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
-    textview.__composed_visual_row_cache = nil
+    textview:clear_composed_visual_row_cache()
     textview.__line_render_wrap_change = nil
     textview.__async_wrap_reconstruction = nil
     perf_frame_add("linewrapping_async_reconstruct_commits", 1)
@@ -1233,7 +1233,7 @@ function LineWrapping.update_multiple_nonstructural_breaks(textview, ranges)
   textview.wrapped_buffer_line_count = line_count
   textview.wrapped_text_revision = revision
   textview.__wrap_layout_generation = old_wrap_generation + 1
-  textview.__composed_visual_row_cache = nil
+  textview:clear_composed_visual_row_cache()
   textview.__line_render_wrap_change = {
     old_row_count = old_row_count,
     new_row_count = new_row_count,
@@ -1330,7 +1330,7 @@ function LineWrapping.update_same_line_suffix_breaks(textview, range, transactio
   textview.wrapped_buffer_line_count = #textview.buffer.lines
   textview.wrapped_text_revision = textview.buffer.text_revision or 0
   textview.__wrap_layout_generation = old_wrap_generation + 1
-  textview.__composed_visual_row_cache = nil
+  textview:clear_composed_visual_row_cache()
   textview.__line_render_wrap_change = {
     old_row_count = total,
     new_row_count = new_total,
@@ -1442,7 +1442,7 @@ function LineWrapping.update_breaks(textview, old_line1, old_line2, net_lines)
   textview.wrapped_buffer_line_count = #textview.buffer.lines
   textview.wrapped_text_revision = textview.buffer.text_revision or 0
   textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
-  textview.__composed_visual_row_cache = nil
+  textview:clear_composed_visual_row_cache()
   local new_row_count = LineWrapping.get_total_wrapped_lines(textview)
   textview.__line_render_wrap_change = {
     old_row_count = old_row_count,
