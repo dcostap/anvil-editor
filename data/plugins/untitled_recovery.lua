@@ -772,6 +772,7 @@ local function open_recovered_buffer(entry, paths, backing, reason)
   local buffer = core.open_buffer()
   buffer.intellij_untitled = true
   buffer.intellij_untitled_name = entry.name or ("Untitled-" .. tostring(entry.id):sub(1, 8))
+  buffer.display_name = buffer.intellij_untitled_name
   buffer.intellij_untitled_id = sanitize_id(entry.id) or new_buffer_id()
   buffer.intellij_untitled_project_path = paths.project
   buffer.intellij_untitled_backing_rel = entry.backing or backing_rel_for_id(buffer.intellij_untitled_id)
@@ -920,6 +921,7 @@ local function restore_old_inline_storage(project_path)
         local buffer = core.open_buffer()
         buffer.intellij_untitled = true
         buffer.intellij_untitled_name = item.name or "Untitled"
+        buffer.display_name = buffer.intellij_untitled_name
         buffer.intellij_untitled_id = sanitize_id(item.id) or new_buffer_id()
         buffer.intellij_untitled_project_path = project_path
         buffer.crlf = item.crlf or false

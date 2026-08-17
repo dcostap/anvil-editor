@@ -334,18 +334,21 @@ if not core.__untitled_tabs_patched then
     return core_confirm_close_buffers(filtered, discard_explicit_untitled_then_close, ...)
   end
 
-  local editor_try_close = Editor.try_close
-  function Editor:try_close(do_close)
-    if is_untitled_buffer(self.buffer) and not untitled_buffer_has_promptable_content(self.buffer) then
-      local buffer = self.buffer
-      local ok, err = pcall(do_close)
-      if ok then
-        if #core.get_views_referencing_buffer(buffer) == 0 then
-          untitled_recovery.handle_confirmed_discard(buffer)
-        end
-        return
+  local editor_can_close = Editor.can_close
+  local function approve_untitled_close(buffer, approve)
+    local result = table.pack(pcall(approve))
+    if result[1] then
+      if #core.get_views_referencing_buffer(buffer) == 0 then
+        untitled_recovery.handle_confirmed_discard(buffer)
       end
-      error(err, 0)
+      return table.unpack(result, 2, result.n)
+    end
+    error(result[2], 0)
+  end
+
+  function Editor:can_close(approve)
+    if is_untitled_buffer(self.buffer) and not untitled_buffer_has_promptable_content(self.buffer) then
+      return approve_untitled_close(self.buffer, approve)
     end
 
     if is_untitled_buffer(self.buffer)
@@ -362,35 +365,20 @@ if not core.__untitled_tabs_patched then
         },
         function(item)
           if item.text == "Close" then
-            local buffer = self.buffer
-            local ok, err = pcall(do_close)
-            if ok then
-              if #core.get_views_referencing_buffer(buffer) == 0 then
-                untitled_recovery.handle_confirmed_discard(buffer)
-              end
-            else
-              error(err, 0)
-            end
+            approve_untitled_close(self.buffer, approve)
           end
         end
       )
       return
     end
     if is_untitled_buffer(self.buffer) and #core.get_views_referencing_buffer(self.buffer) == 1 then
-      local original_do_close = do_close
       local buffer = self.buffer
-      do_close = function()
-        local result = table.pack(pcall(original_do_close))
-        if result[1] then
-          if #core.get_views_referencing_buffer(buffer) == 0 then
-            untitled_recovery.handle_confirmed_discard(buffer)
-          end
-          return table.unpack(result, 2, result.n)
-        end
-        error(result[2], 0)
+      local original_approve = approve
+      approve = function()
+        return approve_untitled_close(buffer, original_approve)
       end
     end
-    return editor_try_close(self, do_close)
+    return editor_can_close(self, approve)
   end
 
   local tabs_get_tab_preferred_width = Tabs.get_tab_preferred_width

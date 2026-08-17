@@ -284,7 +284,7 @@ test.describe("untitled recovery integration", function()
     test.ok(restored.buffer:is_dirty(), "empty recovered untitled buffers should still require save/discard")
   end)
 
-  test.test("blank forced-dirty untitled tab closes without discard prompt", function(context)
+  test.test("blank forced-dirty untitled Pane closes without discard prompt", function(context)
     local buffer = tag_untitled(core.open_buffer(), "Untitled-Blank", "blank-close")
     buffer.intellij_untitled_force_dirty = true
     test.ok(buffer:is_dirty(), "setup should exercise forced dirty restored-empty semantics")
@@ -295,12 +295,22 @@ test.describe("untitled recovery integration", function()
         error("blank untitled close should not prompt")
       end
     }
-
-    view:try_close(function()
-      for i = #context.views, 1, -1 do
-        if context.views[i] == view then table.remove(context.views, i) end
-      end
+    local prompt_bar = core.global_prompt_bar
+    core.global_prompt_bar = {
+      enter = function()
+        error("blank untitled close should not prompt")
+      end,
+    }
+    local ok, err = pcall(function()
+      view:can_close(function()
+        view:on_close()
+        for i = #context.views, 1, -1 do
+          if context.views[i] == view then table.remove(context.views, i) end
+        end
+      end)
     end)
+    core.global_prompt_bar = prompt_bar
+    test.ok(ok, err)
 
     test.equal(#core.get_views_referencing_buffer(buffer), 0)
     test.equal(buffer.intellij_untitled, nil)
@@ -466,6 +476,8 @@ test.describe("untitled recovery integration", function()
     test.equal(#context.views, 2)
     test.equal(context.views[1].buffer.intellij_untitled_id, "first")
     test.equal(context.views[2].buffer.intellij_untitled_id, "second")
+    test.equal(context.views[1]:get_name(), "Untitled-1*")
+    test.equal(context.views[2]:get_name(), "Untitled-2*")
     test.equal(context.open_options[1].placement, "new")
     test.equal(context.open_options[2].placement, "new")
   end)
