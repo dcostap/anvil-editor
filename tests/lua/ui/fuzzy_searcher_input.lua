@@ -35,4 +35,15 @@ test.describe("Fuzzy Searcher input", function()
     test.equal(line, 1)
     test.equal(column, 11)
   end)
+
+  test.it("keeps printable key presses available for text input", function()
+    fuzzy_searcher.open("")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+
+    local consumed = core.on_event("keypressed", "x", {})
+    core.on_event("textinput", "x")
+
+    test.not_ok(consumed)
+    test.equal(picker.input:get_text(), "x")
+  end)
 end)

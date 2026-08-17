@@ -1949,7 +1949,9 @@ function core.on_event(type, ...)
     local modal, action = dispatch_modal_input("key_pressed", key, event)
     if modal and action ~= "keymap" then
       if action == "target" then core.root_panel:on_key_pressed(key, event) end
-      did_keymap = true
+      -- SDL emits printable text separately through textinput only when the
+      -- keypressed event remains unconsumed.
+      did_keymap = action ~= "target"
     else
       local pre_keymap = active and active.on_key_pressed_before_keymap
       if pre_keymap then
