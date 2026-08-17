@@ -315,20 +315,27 @@ function RootPanel:ungrab_mouse(button)
   if self.grab and (not button or self.grab.button == button) then self.grab = nil end
 end
 
+local function scrollbar_owns_point(view, x, y)
+  return view and view.scrollbar_overlaps_point
+    and view:scrollbar_overlaps_point(x, y)
+end
+
 function RootPanel:on_mouse_pressed(button, x, y, clicks)
   self.mouse.x, self.mouse.y = x, y
+  if self.grab then self:on_mouse_released(self.grab.button, x, y) end
+  local view = self:view_at(x, y)
   local group = panes().visible_group()
   if button == "left" and group then
     local divider = layout.divider_at(group.root, x, y, DIVIDER_TOLERANCE * SCALE)
-    if divider then
+    if divider and not scrollbar_owns_point(view, x, y) then
       self.dragged_divider = divider
       return true
     end
   end
-  local view = self:view_at(x, y)
   self.overlapping_view = view
   local pane = panes().pane_for_view(view)
   if pane then panes().focus(pane) end
+  if view then self:grab_mouse(button, view) end
   return call_view(view, "on_mouse_pressed", button, x, y, clicks)
 end
 
@@ -338,9 +345,14 @@ function RootPanel:on_mouse_released(button, x, y, ...)
     self.dragged_divider = nil
     return true
   end
-  local view = self.grab and self.grab.view or self:view_at(x, y)
+  local grabbed_view = self.grab and self.grab.view
+  local view = grabbed_view or self:view_at(x, y)
   local result = call_view(view, "on_mouse_released", button, x, y, ...)
   self:ungrab_mouse(button)
+  local hovered_view = self:view_at(x, y)
+  if grabbed_view and grabbed_view ~= hovered_view then
+    self:on_mouse_moved(x, y, 0, 0)
+  end
   return result
 end
 
@@ -348,12 +360,30 @@ function RootPanel:on_mouse_moved(x, y, dx, dy)
   self.mouse.x, self.mouse.y = x, y
   if self.dragged_divider then
     layout.resize(self.dragged_divider, { x = x, y = y })
+    core.request_cursor(self.dragged_divider.axis == "x" and "sizeh" or "sizev")
     core.redraw = true
     return true
   end
   local view = self.grab and self.grab.view or self:view_at(x, y)
+  if self.grab then
+    local result = call_view(view, "on_mouse_moved", x, y, dx, dy)
+    core.request_cursor(view.cursor)
+    return result
+  end
+  local previous_view = self.overlapping_view
   self.overlapping_view = view
-  return call_view(view, "on_mouse_moved", x, y, dx, dy)
+  if previous_view and previous_view ~= view then
+    call_view(previous_view, "on_mouse_left")
+  end
+  local result = call_view(view, "on_mouse_moved", x, y, dx, dy)
+  if view then core.request_cursor(view.cursor) end
+  local group = panes().visible_group()
+  local divider = group and layout.divider_at(
+    group.root, x, y, DIVIDER_TOLERANCE * SCALE)
+  if divider and not scrollbar_owns_point(view, x, y) then
+    core.request_cursor(divider.axis == "x" and "sizeh" or "sizev")
+  end
+  return result
 end
 
 function RootPanel:on_mouse_left()

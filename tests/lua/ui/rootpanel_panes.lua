@@ -17,6 +17,9 @@ function FakeView:new(name, height)
   self.updates = 0
   self.draws = 0
   self.presses = 0
+  self.releases = 0
+  self.moves = 0
+  self.leaves = 0
   self.keys = 0
 end
 
@@ -29,6 +32,20 @@ function FakeView:draw() self.draws = self.draws + 1 end
 function FakeView:on_mouse_pressed()
   self.presses = self.presses + 1
   return true
+end
+function FakeView:on_mouse_released()
+  self.releases = self.releases + 1
+  return true
+end
+function FakeView:on_mouse_moved()
+  self.moves = self.moves + 1
+  return true
+end
+function FakeView:on_mouse_left()
+  self.leaves = self.leaves + 1
+end
+function FakeView:scrollbar_overlaps_point()
+  return self.scrollbar_hit == true
 end
 function FakeView:on_key_pressed()
   self.keys = self.keys + 1
@@ -125,6 +142,50 @@ test.describe("Root Panel Pane presentation", function()
     root:on_mouse_pressed("left", two_rect.x + two_rect.w / 2, two_rect.y + two_rect.h / 2, 1)
     test.equal(two.current_view.presses, 1)
     test.equal(panes.active(), two)
+  end)
+
+  test.it("keeps a pointer drag with the pressed Pane View", function()
+    local one = panes.create { factory = pane_factory("one") }
+    local two = panes.split(one, "right", { factory = pane_factory("two") })
+    root:update()
+    local one_rect = pane_layout.find(one.group.root, one).rect
+    local two_rect = pane_layout.find(two.group.root, two).rect
+
+    root:on_mouse_pressed("left", one_rect.x + 20, one_rect.y + 20, 1)
+    root:on_mouse_moved(two_rect.x + 20, two_rect.y + 20, 10, 0)
+    root:on_mouse_released("left", two_rect.x + 20, two_rect.y + 20)
+
+    test.equal(one.current_view.moves, 1)
+    test.equal(one.current_view.releases, 1)
+    test.equal(two.current_view.releases, 0)
+    test.is_nil(root.grab)
+  end)
+
+  test.it("clears hover state when the pointer enters another Pane View", function()
+    local one = panes.create { factory = pane_factory("one") }
+    local two = panes.split(one, "right", { factory = pane_factory("two") })
+    root:update()
+    local one_rect = pane_layout.find(one.group.root, one).rect
+    local two_rect = pane_layout.find(two.group.root, two).rect
+
+    root:on_mouse_moved(one_rect.x + 20, one_rect.y + 20, 0, 0)
+    root:on_mouse_moved(two_rect.x + 20, two_rect.y + 20, 10, 0)
+
+    test.equal(one.current_view.leaves, 1)
+    test.equal(two.current_view.moves, 1)
+  end)
+
+  test.it("lets a Pane scrollbar own presses near a divider", function()
+    local one = panes.create { factory = pane_factory("one") }
+    panes.split(one, "right", { factory = pane_factory("two") })
+    root:update()
+    local rect = one.group.root.rect
+    local divider_x = rect.x + rect.w * one.group.root.ratio
+    one.current_view.scrollbar_hit = true
+
+    test.ok(root:on_mouse_pressed("left", divider_x - 1, rect.y + 20, 1))
+    test.is_nil(root.dragged_divider)
+    test.equal(one.current_view.presses, 1)
   end)
 
   test.it("routes keyboard events through a registered focus target", function()

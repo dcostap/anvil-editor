@@ -10,6 +10,14 @@ local CAPTION_COUNT = 3
 local TAB_SIDE_INSET = math.floor(3 * SCALE)
 local TAB_TOP_INSET = math.floor(4 * SCALE)
 local TAB_RADIUS = math.floor(8 * SCALE)
+local caption_font
+local caption_font_size
+local caption_glyphs = {
+  "\238\164\161", -- U+E921 ChromeMinimize
+  "\238\164\162", -- U+E922 ChromeMaximize
+  "\238\164\163", -- U+E923 ChromeRestore
+  "\238\162\187", -- U+E8BB ChromeClose
+}
 
 local function panes()
   return core.panes or require "core.panes"
@@ -46,6 +54,66 @@ local function draw_centered_text(font, text, rect, color)
   local height = font:get_height()
   renderer.draw_text(font, text, rect.x + math.max(0, (rect.w - width) / 2),
     rect.y + math.floor((rect.h - height) / 2), color)
+end
+
+local function get_caption_font()
+  local size = 10 * SCALE
+  if caption_font == false and caption_font_size == size then return nil end
+  if caption_font and caption_font_size == size then return caption_font end
+  caption_font, caption_font_size = nil, size
+  for _, path in ipairs {
+    "C:/Windows/Fonts/segmdl2.ttf",
+    "C:/Windows/Fonts/SegoeIcons.ttf",
+  } do
+    local ok, font = pcall(renderer.font.load, path, size, {
+      antialiasing = "grayscale", hinting = "full"
+    })
+    if ok and font then caption_font = font; return font end
+  end
+  caption_font = false
+end
+
+local function draw_glyph_line(x, y, w, h, color)
+  renderer.draw_rect(math.floor(x), math.floor(y),
+    math.max(1, math.floor(w)), math.max(1, math.floor(h)), color)
+end
+
+local function draw_caption_glyph(index, rect, color)
+  local font = get_caption_font()
+  local glyph = index == 1 and caption_glyphs[1]
+    or index == 2 and caption_glyphs[core.window_mode == "maximized" and 3 or 2]
+    or caption_glyphs[4]
+  if font and glyph then
+    draw_centered_text(font, glyph, rect, color)
+    return
+  end
+  local scale = math.max(1, math.floor(SCALE))
+  local width = math.floor(10 * SCALE)
+  local height = math.floor(10 * SCALE)
+  local x = math.floor(rect.x + (rect.w - width) / 2)
+  local y = math.floor(rect.y + (rect.h - height) / 2)
+  if index == 1 then
+    draw_glyph_line(x, y + height - SCALE, width, scale, color)
+  elseif index == 2 and core.window_mode ~= "maximized" then
+    draw_glyph_line(x, y, width, scale, color)
+    draw_glyph_line(x, y + height - scale, width, scale, color)
+    draw_glyph_line(x, y, scale, height, color)
+    draw_glyph_line(x + width - scale, y, scale, height, color)
+  elseif index == 2 then
+    local offset = math.floor(3 * SCALE)
+    draw_glyph_line(x + offset, y, width - offset, scale, color)
+    draw_glyph_line(x + width - scale, y, scale, height - offset, color)
+    draw_glyph_line(x + offset, y + height - offset - scale, width - offset, scale, color)
+    draw_glyph_line(x, y + offset, width - offset, scale, color)
+    draw_glyph_line(x, y + height - scale, width - offset, scale, color)
+    draw_glyph_line(x, y + offset, scale, height - offset, color)
+    draw_glyph_line(x + width - offset - scale, y + offset, scale, height - offset, color)
+  else
+    for i = 0, width do
+      draw_glyph_line(x + i, y + i, scale, scale, color)
+      draw_glyph_line(x + width - i, y + i, scale, scale, color)
+    end
+  end
 end
 
 local function fit_text(font, text, max_width)
@@ -94,6 +162,7 @@ function TitleBar:new()
   self.visible = true
   self.hovered_entry = nil
   self.hovered_caption = nil
+  self.pressed_caption = nil
   self.entries = {}
   self.caption_rects = {}
   self.tab_offset = 1
@@ -182,8 +251,16 @@ function TitleBar:update_geometry()
   end
 end
 
-function TitleBar:configure_hit_test()
+function TitleBar:configure_hit_test(enabled)
   if not core.window or not system.set_window_hit_test then return end
+  if enabled == nil then enabled = self.visible end
+  if not enabled then
+    if self.hit_test_signature ~= "disabled" then
+      self.hit_test_signature = "disabled"
+      system.set_window_hit_test(core.window)
+    end
+    return
+  end
   local interactive_x, interactive_right
   for _, rect in pairs(self.entries) do
     interactive_x = math.min(interactive_x or rect.x, rect.x)
@@ -192,6 +269,12 @@ function TitleBar:configure_hit_test()
   local interactive_width = interactive_x and interactive_right - interactive_x or 0
   interactive_x = interactive_x or 0
   local _, _, resize_border = window_frame_metrics()
+  local signature = table.concat({
+    tostring(core.window), tostring(self.size.y), tostring(interactive_x),
+    tostring(interactive_width), tostring(resize_border), tostring(caption_width())
+  }, ":")
+  if signature == self.hit_test_signature then return end
+  self.hit_test_signature = signature
   system.set_window_hit_test(core.window, self.size.y, caption_width() * CAPTION_COUNT,
     math.floor(resize_border or 8 * SCALE), interactive_x, interactive_width, 0, 0)
 end
@@ -224,7 +307,7 @@ function TitleBar:on_mouse_moved(x, y, ...)
 end
 
 function TitleBar:on_mouse_left()
-  self.hovered_entry, self.hovered_caption = nil, nil
+  self.hovered_entry, self.hovered_caption, self.pressed_caption = nil, nil, nil
   core.redraw = true
 end
 
@@ -251,10 +334,11 @@ function TitleBar:on_mouse_pressed(button, x, y, clicks)
   if button ~= "left" then return false end
   local caption = self:caption_at(x, y)
   if caption then
-    perform_caption(caption)
+    self.pressed_caption = caption
+    core.redraw = true
     return true
   end
-  local index, rect = self:entry_at(x, y)
+  local index = self:entry_at(x, y)
   if index then
     local pane = panes().ordered()[index]
     if pane then panes().focus(pane) end
@@ -267,8 +351,18 @@ function TitleBar:on_mouse_pressed(button, x, y, clicks)
   return false
 end
 
-function TitleBar:on_mouse_released()
-  return self.hovered_entry ~= nil or self.hovered_caption ~= nil
+function TitleBar:on_mouse_released(button, x, y)
+  local pressed = self.pressed_caption
+  local released = button == "left" and self:caption_at(x, y) or nil
+  self.pressed_caption = nil
+  if pressed and released == pressed then perform_caption(pressed) end
+  if pressed then core.redraw = true end
+  return pressed ~= nil or self.hovered_entry ~= nil or self.hovered_caption ~= nil
+end
+
+function TitleBar:on_scale_change()
+  caption_font, caption_font_size = nil, nil
+  self.hit_test_signature = nil
 end
 
 function TitleBar:on_mouse_wheel(y, x)
@@ -312,14 +406,20 @@ function TitleBar:draw()
         (entry.active or hovered) and style.text or style.dim)
     end
   end
-  local glyphs = { "—", core.window_mode == "maximized" and "❐" or "□", "×" }
   for i, rect in ipairs(self.caption_rects) do
-    local color = self.hovered_caption == i
+    local hovered = self.hovered_caption == i
+    local pressed = hovered and self.pressed_caption == i
+    local background = pressed
+      and (i == 3 and style.titlebar_close_pressed or style.titlebar_control_pressed)
+      or hovered
       and (i == 3 and style.titlebar_close_hover or style.titlebar_control_hover)
       or nil
-    if color then renderer.draw_rect(rect.x, rect.y, rect.w, rect.h, color) end
-    draw_centered_text(font, glyphs[i], rect,
-      i == 3 and (style.titlebar_close_text or style.text) or style.text)
+    if background then renderer.draw_rect(rect.x, rect.y, rect.w, rect.h, background) end
+    local focused = not core.window or not system.window_has_focus
+      or system.window_has_focus(core.window)
+    local color = hovered and i == 3 and (style.titlebar_close_text or style.text)
+      or focused and style.text or style.dim
+    draw_caption_glyph(i, rect, color)
   end
 end
 

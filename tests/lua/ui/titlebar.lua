@@ -16,12 +16,18 @@ local function factory(name)
 end
 
 test.describe("Global title bar Pane entries", function()
-  local set_active_view, projects
+  local set_active_view, projects, window, window_mode, set_window_mode,
+    set_window_hit_test, quit
 
   test.before_each(function()
     panes.reset_for_tests()
     set_active_view = core.set_active_view
     projects = core.projects
+    window = core.window
+    window_mode = core.window_mode
+    set_window_mode = system.set_window_mode
+    set_window_hit_test = system.set_window_hit_test
+    quit = core.quit
     core.set_active_view = function(view) core.active_view = view end
   end)
 
@@ -29,6 +35,11 @@ test.describe("Global title bar Pane entries", function()
     panes.reset_for_tests()
     core.set_active_view = set_active_view
     core.projects = projects
+    core.window = window
+    core.window_mode = window_mode
+    system.set_window_mode = set_window_mode
+    system.set_window_hit_test = set_window_hit_test
+    core.quit = quit
   end)
 
   test.it("shows all Panes in current numeric order", function()
@@ -144,5 +155,48 @@ test.describe("Global title bar Pane entries", function()
     test.not_nil(project)
     test.ok(project.x + project.font:get_width(project.text)
       <= title.project_rect.x + title.project_rect.w)
+  end)
+
+  test.it("runs a caption action only after release over its pressed button", function()
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local maximize = title.caption_rects[2]
+    local calls = {}
+    core.window = {}
+    core.window_mode = "normal"
+    system.set_window_mode = function(_, mode) calls[#calls + 1] = mode end
+
+    test.ok(title:on_mouse_pressed("left", maximize.x + 2, maximize.y + 2, 1))
+    test.equal(#calls, 0)
+    title:on_mouse_released("left", maximize.x + 2, maximize.y + 2)
+    test.same(calls, { "maximized" })
+  end)
+
+  test.it("cancels a caption action when release leaves its pressed button", function()
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local minimize = title.caption_rects[1]
+    local calls = 0
+    core.window = {}
+    system.set_window_mode = function() calls = calls + 1 end
+
+    title:on_mouse_pressed("left", minimize.x + 2, minimize.y + 2, 1)
+    title:on_mouse_moved(minimize.x - 20, minimize.y + 2)
+    title:on_mouse_released("left", minimize.x - 20, minimize.y + 2)
+
+    test.equal(calls, 0)
+  end)
+
+  test.it("removes custom hit testing when the integrated title bar is disabled", function()
+    local title = TitleBar()
+    local argument_count
+    core.window = {}
+    system.set_window_hit_test = function(...) argument_count = select("#", ...) end
+
+    title:configure_hit_test(false)
+
+    test.equal(argument_count, 1)
   end)
 end)
