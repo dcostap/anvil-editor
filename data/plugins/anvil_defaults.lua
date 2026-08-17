@@ -302,6 +302,8 @@ config.indent_size = 4
 config.tab_type = "hard"
 -- Match IntelliJ/VSCode-style occurrence selection.
 config.select_add_next_no_case = true
+-- Show enough Prompt Bar suggestions for quick scanning.
+config.max_visible_commands = 20
 -- Integrated app-owned titlebar. On Windows this uses native non-client
 -- integration for shadow/resize/snap behavior while Lua draws the top bar.
 if PLATFORM == "Windows" then
