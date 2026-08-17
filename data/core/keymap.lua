@@ -295,7 +295,6 @@ if macos then
 end
 
 keymap.add_direct {
-  ["ctrl+shift+p"] = "fuzzy-searcher:open-commands",
   ["ctrl+o"] = "core:open-file",
   ["ctrl+,"] = "core:open-user-module",
   ["ctrl+shift+c"] = "core:change-project-folder",

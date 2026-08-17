@@ -5539,7 +5539,6 @@ core.fuzzy_searcher_install_global_keymaps = function()
     ["ctrl+j"] = "fuzzy-searcher:open-current-buffer-symbols",
     ["ctrl+shift+f"] = "fuzzy-searcher:open-grep",
     ["ctrl+shift+a"] = "fuzzy-searcher:open-commands",
-    ["ctrl+shift+p"] = "fuzzy-searcher:open-commands",
   }, true)
 end
 core.fuzzy_searcher_install_global_keymaps()

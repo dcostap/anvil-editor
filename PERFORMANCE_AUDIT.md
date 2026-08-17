@@ -577,8 +577,8 @@ remaining findings below received direct main-agent inspection.
 ### S5 — Project file pickers repeat broad scans and stale work
 
 - **Priority/confidence:** P2 / High
-- **Trigger:** Startup prewarm, reopening the fuzzy picker, or invoking legacy
-  `core:find-file`/Ctrl+P.
+- **Trigger:** Startup prewarm, reopening the fuzzy picker, or invoking the
+  legacy `core:find-file` command.
 - **Effect:** Fuzzy prewarm can ingest continuous `rg` output without an
   explicit budget yield; picker reopen starts another full scan; legacy Find
   File defaults to no cache and performs another recursive index/full ranking.
