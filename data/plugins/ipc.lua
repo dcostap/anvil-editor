@@ -8,9 +8,7 @@ local core = require "core"
 local cli = require "core.cli"
 local config = require "core.config"
 local common = require "core.common"
-local command = require "core.command"
 local Object = require "core.object"
-local RootPanel = require "core.rootpanel"
 local settings_found, settings = pcall(require, "plugins.settings")
 
 ---The maximum amount of seconds a message will be broadcasted.
@@ -1015,83 +1013,5 @@ ipc:register_method("core.change_directory", function(directory)
     end, directory)
   end
 end, {{name = "directory", type = "string"}})
-
---------------------------------------------------------------------------------
--- Register file dragging signals from instance to instance
---------------------------------------------------------------------------------
-ipc:register_signal("core.tab_drag_start", {{name = "file", type = "string"}})
-ipc:register_signal("core.tab_drag_stop")
-ipc:register_signal("core.tab_drag_received", {{name = "file", type = "string"}})
-
-local rootpanel_tab_dragging = false
-local rootpanel_dragged_node = nil
-local rootpanel_waiting_drop_file = ""
-local rootpanel_waiting_drop_instance = ""
-
-local rootpanel_on_mouse_moved = RootPanel.on_mouse_moved
-function RootPanel:on_mouse_moved(x, y, dx, dy)
-  rootpanel_on_mouse_moved(self, x, y, dx, dy)
-  if
-    self.dragged_node and self.dragged_node.dragging
-    and
-    not rootpanel_tab_dragging
-  then
-    ---@type core.buffer
-    local buffer = core.active_view.buffer
-    if buffer and buffer.abs_filename then
-      rootpanel_tab_dragging = true
-      ipc:signal(nil, "core.tab_drag_start", buffer.abs_filename)
-      rootpanel_dragged_node = self.dragged_node
-    end
-  elseif rootpanel_dragged_node then
-    local w, h, wx, wy = system.get_window_size(core.window)
-    if x < 0 or x > w or y < 0 or y > h then
-      self.dragged_node = nil
-      self:set_show_overlay(self.drag_overlay, false)
-    elseif not self.dragged_node then
-      self.dragged_node = rootpanel_dragged_node
-      self:set_show_overlay(self.drag_overlay, true)
-    end
-    core.request_cursor("hand")
-  elseif rootpanel_waiting_drop_file ~= "" then
-    ipc:signal(
-      rootpanel_waiting_drop_instance,
-      "core.tab_drag_received",
-      rootpanel_waiting_drop_file
-    )
-    core.open_file(rootpanel_waiting_drop_file)
-    rootpanel_waiting_drop_file = ""
-    rootpanel_waiting_drop_instance = ""
-  end
-end
-
-local rootpanel_on_mouse_released = RootPanel.on_mouse_released
-function RootPanel:on_mouse_released(button, x, y, ...)
-  rootpanel_on_mouse_released(self, button, x, y, ...)
-  if rootpanel_tab_dragging then
-    rootpanel_tab_dragging = false
-    rootpanel_dragged_node = nil
-    ipc:signal(nil, "core.tab_drag_stop")
-  end
-end
-
-ipc:listen_signal("core.tab_drag_start", function(instance, file)
-  rootpanel_waiting_drop_instance = instance
-  rootpanel_waiting_drop_file = file
-end)
-
-ipc:listen_signal("core.tab_drag_stop", function()
-  core.add_thread(function()
-    coroutine.yield()
-    rootpanel_waiting_drop_instance = ""
-    rootpanel_waiting_drop_file = ""
-  end)
-end)
-
-ipc:listen_signal("core.tab_drag_received", function()
-  IPC.force_draw()
-  command.perform("pane:close")
-end)
-
 
 return IPC

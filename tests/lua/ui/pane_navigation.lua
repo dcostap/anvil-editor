@@ -88,6 +88,33 @@ test.describe("Pane navigation and movement", function()
     test.same(names(), { "one", "two" })
   end)
 
+  test.it("uses the work-area center as a focus-only drop target", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.create { factory = factory("two") }
+    panes.focus(one)
+    layout.update_rects(one.group.root, { x = 0, y = 0, w = 200, h = 100 })
+
+    local target, direction = panes.drop_target_at(100, 50)
+    test.equal(target, one)
+    test.equal(direction, "center")
+    test.equal(panes.drop(two, 100, 50), one)
+    test.same(names(), { "one", "two" })
+    test.not_equal(one.group, two.group)
+    test.equal(panes.active(), one)
+  end)
+
+  test.it("moves a Pane to a Pane Group boundary as a singleton", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.split(one, "right", { factory = factory("two") })
+    local three = panes.create { factory = factory("three") }
+
+    test.equal(panes.move_to_group_boundary(two, three, "before"), two)
+    test.same(names(), { "one", "two", "three" })
+    test.equal(#panes.groups, 3)
+    test.not_equal(one.group, two.group)
+    test.not_equal(two.group, three.group)
+  end)
+
   test.it("does not mutate layout when a split factory fails", function()
     local one = panes.create { factory = factory("one") }
     local before = layout.serialize(one.group.root)

@@ -7,6 +7,9 @@ local View = require "core.view"
 local TitleBar = View:extend()
 
 local CAPTION_COUNT = 3
+local DRAG_THRESHOLD = 6
+local DRAG_SCROLL_EDGE = 28
+local DRAG_SCROLL_INTERVAL = 0.12
 local TAB_SIDE_INSET = math.floor(3 * SCALE)
 local TAB_TOP_INSET = math.floor(4 * SCALE)
 local TAB_RADIUS = math.floor(8 * SCALE)
@@ -163,6 +166,9 @@ function TitleBar:new()
   self.hovered_entry = nil
   self.hovered_caption = nil
   self.pressed_caption = nil
+  self.pressed_pane = nil
+  self.dragged_pane = nil
+  self.drag_target = nil
   self.entries = {}
   self.caption_rects = {}
   self.tab_offset = 1
@@ -302,12 +308,156 @@ end
 function TitleBar:on_mouse_moved(x, y, ...)
   self.hovered_entry = self:entry_at(x, y)
   self.hovered_caption = self:caption_at(x, y)
+  if self.pressed_pane then
+    self.drag_x, self.drag_y = x, y
+    if not self.dragged_pane and common.distance(
+      x, y, self.drag_start_x, self.drag_start_y
+    ) >= DRAG_THRESHOLD * SCALE then
+      self.dragged_pane = self.pressed_pane
+      core.log_quiet("Pane drag: started %s", self.dragged_pane.id)
+    end
+    if self.dragged_pane then
+      local now = system.get_time()
+      local lane_left = self.project_rect.x + self.project_rect.w
+      local lane_right = self.caption_rects[1] and self.caption_rects[1].x
+        or self.position.x + self.size.x
+      if y >= self.position.y and y < self.position.y + self.size.y
+      and now - (self.last_drag_scroll or 0) >= DRAG_SCROLL_INTERVAL then
+        local count = #panes().ordered()
+        local last_visible = 0
+        for index in pairs(self.entries) do last_visible = math.max(last_visible, index) end
+        if x < lane_left + DRAG_SCROLL_EDGE * SCALE and self.tab_offset > 1 then
+          self.tab_offset = self.tab_offset - 1
+          self.last_drag_scroll = now
+          self:update_geometry()
+        elseif x > lane_right - DRAG_SCROLL_EDGE * SCALE and last_visible < count then
+          self.tab_offset = self.tab_offset + 1
+          self.last_drag_scroll = now
+          self:update_geometry()
+        end
+      end
+      self.drag_target = self:resolve_pane_drag_target(x, y)
+      core.request_cursor("hand")
+      core.redraw = true
+      return true
+    end
+  end
   core.redraw = true
   return TitleBar.super.on_mouse_moved(self, x, y, ...)
 end
 
 function TitleBar:on_mouse_left()
-  self.hovered_entry, self.hovered_caption, self.pressed_caption = nil, nil, nil
+  self.hovered_entry, self.hovered_caption = nil, nil
+  if not self.pressed_pane then self.pressed_caption = nil end
+  core.redraw = true
+end
+
+local function group_entry_edge(title, group, placement)
+  local edge
+  for index, pane in ipairs(panes().ordered()) do
+    local rect = pane.group == group and title.entries[index] or nil
+    if rect then
+      local value = placement == "before" and rect.x or rect.x + rect.w
+      edge = edge and (placement == "before" and math.min(edge, value)
+        or math.max(edge, value)) or value
+    end
+  end
+  return edge
+end
+
+function TitleBar:resolve_pane_drag_target(x, y)
+  local source = self.dragged_pane
+  if not source then return nil end
+  local destination, direction = panes().drop_target_at(x, y)
+  if destination then
+    if destination == source and direction ~= "center" then return nil end
+    local rect = {
+      x = destination.position.x, y = destination.position.y,
+      w = destination.size.x, h = destination.size.y,
+    }
+    if direction == "left" then
+      rect.w = rect.w * 0.3
+    elseif direction == "right" then
+      rect.x, rect.w = rect.x + rect.w * 0.7, rect.w * 0.3
+    elseif direction == "up" then
+      rect.h = rect.h * 0.3
+    elseif direction == "down" then
+      rect.y, rect.h = rect.y + rect.h * 0.7, rect.h * 0.3
+    else
+      rect.x, rect.y = rect.x + rect.w * 0.2, rect.y + rect.h * 0.2
+      rect.w, rect.h = rect.w * 0.6, rect.h * 0.6
+    end
+    return { kind = "work", pane = destination, direction = direction, rect = rect }
+  end
+
+  local index, rect = self:entry_at(x, y)
+  local target = index and panes().ordered()[index]
+  if not target then
+    local lane_left = self.project_rect.x + self.project_rect.w
+    local lane_right = self.caption_rects[1] and self.caption_rects[1].x
+      or self.position.x + self.size.x
+    if y >= self.position.y and y < self.position.y + self.size.y
+    and x >= lane_left and x < lane_right then
+      local first_index, last_index
+      for entry_index in pairs(self.entries) do
+        first_index = math.min(first_index or entry_index, entry_index)
+        last_index = math.max(last_index or entry_index, entry_index)
+      end
+      local first_rect = first_index and self.entries[first_index]
+      local last_rect = last_index and self.entries[last_index]
+      local placement = first_rect and x < first_rect.x and "before"
+        or last_rect and x >= last_rect.x + last_rect.w and "after" or nil
+      local boundary_index = placement == "before" and first_index or last_index
+      target = boundary_index and panes().ordered()[boundary_index] or nil
+      if target and placement then
+        return {
+          kind = "group-boundary", pane = target, placement = placement,
+          indicator_x = group_entry_edge(self, target.group, placement),
+        }
+      end
+    end
+    return nil
+  end
+  if target == source then return nil end
+  if target.group == source.group then
+    local placement = x < rect.x + rect.w / 2 and "before" or "after"
+    return {
+      kind = "reorder", pane = target,
+      direction = placement == "before" and "left" or "right",
+      indicator_x = placement == "before" and rect.x or rect.x + rect.w,
+    }
+  end
+  local placement = x < rect.x + rect.w / 2 and "before" or "after"
+  return {
+    kind = "group-boundary", pane = target, placement = placement,
+    indicator_x = group_entry_edge(self, target.group, placement),
+  }
+end
+
+function TitleBar:apply_pane_drag_target(target)
+  local source = self.dragged_pane
+  if not source or not target then return nil end
+  if target.kind == "work" then
+    return panes().drop(source, self.drag_x, self.drag_y)
+  elseif target.kind == "reorder" then
+    return panes().move(source, target.pane, target.direction)
+  elseif target.kind == "group-boundary" then
+    return panes().move_to_group_boundary(source, target.pane, target.placement)
+  end
+end
+
+function TitleBar:clear_pane_drag(outcome)
+  local dragged = self.dragged_pane
+  self.pressed_pane = nil
+  self.dragged_pane = nil
+  self.drag_target = nil
+  self.drag_start_x, self.drag_start_y = nil, nil
+  self.drag_x, self.drag_y = nil, nil
+  self.last_drag_scroll = nil
+  if dragged then
+    core.log_quiet("Pane drag: finished %s outcome=%s", dragged.id, tostring(outcome))
+  end
+  core.request_cursor("arrow")
   core.redraw = true
 end
 
@@ -341,7 +491,11 @@ function TitleBar:on_mouse_pressed(button, x, y, clicks)
   local index = self:entry_at(x, y)
   if index then
     local pane = panes().ordered()[index]
-    if pane then panes().focus(pane) end
+    if pane then
+      self.pressed_pane = pane
+      self.drag_start_x, self.drag_start_y = x, y
+      self.drag_x, self.drag_y = x, y
+    end
     return true
   end
   if clicks == 2 and core.window then
@@ -357,7 +511,25 @@ function TitleBar:on_mouse_released(button, x, y)
   self.pressed_caption = nil
   if pressed and released == pressed then perform_caption(pressed) end
   if pressed then core.redraw = true end
+  if self.pressed_pane then
+    local source = self.pressed_pane
+    local dragged = self.dragged_pane ~= nil
+    self.drag_x, self.drag_y = x, y
+    local target = dragged and self:resolve_pane_drag_target(x, y) or nil
+    local outcome = dragged and self:apply_pane_drag_target(target) or nil
+    if not dragged and button == "left" then
+      local index = self:entry_at(x, y)
+      if index and panes().ordered()[index] == source then outcome = panes().focus(source) end
+    end
+    self:clear_pane_drag(outcome and "dropped" or "cancelled")
+    return true
+  end
   return pressed ~= nil or self.hovered_entry ~= nil or self.hovered_caption ~= nil
+end
+
+function TitleBar:on_focus_lost()
+  self.pressed_caption = nil
+  if self.pressed_pane then self:clear_pane_drag("cancelled") end
 end
 
 function TitleBar:on_scale_change()
@@ -377,6 +549,45 @@ function TitleBar:on_mouse_wheel(y, x)
   self:update_geometry()
   core.redraw = true
   return true
+end
+
+function TitleBar:draw_pane_drag()
+  local pane = self.dragged_pane
+  if not pane then return end
+  local target = self.drag_target
+  if target and target.kind == "work" and target.rect then
+    renderer.draw_rect(
+      target.rect.x, target.rect.y, target.rect.w, target.rect.h,
+      style.drag_overlay
+    )
+  elseif target and target.indicator_x then
+    local width = math.max(2, math.floor(2 * SCALE))
+    renderer.draw_rect(
+      target.indicator_x - width / 2, self.position.y + TAB_TOP_INSET,
+      width, math.max(1, self.size.y - TAB_TOP_INSET),
+      style.drag_overlay_tab
+    )
+  end
+
+  local number = panes().number(pane) or 1
+  local width = preferred_tab_width(number, pane)
+  local height = self.size.y
+  local x = common.clamp(
+    (self.drag_x or 0) - width / 2,
+    self.position.x,
+    math.max(self.position.x, self.position.x + self.size.x - width)
+  )
+  local y = common.clamp(
+    (self.drag_y or 0) - height / 2,
+    self.position.y,
+    math.max(self.position.y, self.position.y + self.size.y - height)
+  )
+  draw_tab_tile(x, y, width, height, style.titlebar_tab_hover or style.background2)
+  local label = fit_text(style.font, pane_label(number, pane), width - style.padding.x * 2)
+  renderer.draw_text(
+    style.font, label, x + style.padding.x,
+    y + math.floor((height - style.font:get_height()) / 2), style.text
+  )
 end
 
 function TitleBar:draw()
@@ -421,6 +632,7 @@ function TitleBar:draw()
       or focused and style.text or style.dim
     draw_caption_glyph(i, rect, color)
   end
+  self:draw_pane_drag()
 end
 
 return TitleBar

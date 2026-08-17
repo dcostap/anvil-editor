@@ -367,12 +367,6 @@ settings.add("Graphics",
       default = false
     },
     {
-      label = "Disable Tab Drag Transitions",
-      path = "disabled_transitions.tab_drag",
-      type = settings.type.TOGGLE,
-      default = false
-    },
-    {
       label = "Disable Status Bar Transitions",
       path = "disabled_transitions.statusbar",
       type = settings.type.TOGGLE,

@@ -1,4 +1,5 @@
 local core = require "core"
+local layout = require "core.pane_layout"
 local panes = require "core.panes"
 local TitleBar = require "core.titlebar"
 local View = require "core.view"
@@ -68,15 +69,16 @@ test.describe("Global title bar Pane entries", function()
   end)
 
   test.it("focuses a Pane from its global entry", function()
-    panes.create { factory = factory("one") }
+    local one = panes.create { factory = factory("one") }
     local two = panes.create { factory = factory("two") }
     local title = TitleBar()
     title.size.x = 900
     title:update()
     local entry = title:get_pane_entries()[1]
     test.ok(title:on_mouse_pressed("left", entry.x + 2, entry.y + 2, 1))
-    test.not_equal(panes.active(), two)
-    test.equal(panes.active().current_view:get_name(), "one")
+    test.equal(panes.active(), two)
+    test.ok(title:on_mouse_released("left", entry.x + 2, entry.y + 2))
+    test.equal(panes.active(), one)
   end)
 
   test.it("uses content-sized Tabs instead of filling the title lane", function()
@@ -96,8 +98,145 @@ test.describe("Global title bar Pane entries", function()
     title:update()
     local entry = title:get_pane_entries()[1]
     test.ok(title:on_mouse_pressed("left", entry.x + entry.w - 2, entry.y + 2, 1))
+    title:on_mouse_released("left", entry.x + entry.w - 2, entry.y + 2)
     test.equal(panes.active(), one)
     test.equal(panes.count(), 2)
+  end)
+
+  test.it("drags a Pane to reorder leaves without changing split ratios", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.split(one, "right", { factory = factory("two") })
+    one.group.root.ratio = 0.35
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local source = title.entries[2]
+    local target = title.entries[1]
+
+    title:on_mouse_pressed("left", source.x + source.w / 2, source.y + 2, 1)
+    title:on_mouse_moved(target.x + 2, target.y + 2, -source.w, 0)
+    title:on_mouse_released("left", target.x + 2, target.y + 2)
+
+    local ordered = panes.ordered()
+    test.equal(ordered[1], two)
+    test.equal(ordered[2], one)
+    test.equal(one.group.root.ratio, 0.35)
+  end)
+
+  test.it("drags a hidden Pane onto a visible work-area edge", function()
+    local source_pane = panes.create { factory = factory("source") }
+    local target_pane = panes.create { factory = factory("target") }
+    layout.update_rects(target_pane.group.root, { x = 0, y = 50, w = 200, h = 100 })
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local source = title.entries[1]
+
+    title:on_mouse_pressed("left", source.x + source.w / 2, source.y + 2, 1)
+    title:on_mouse_moved(195, 100, 100, 50)
+    title:on_mouse_released("left", 195, 100)
+
+    test.equal(source_pane.group, target_pane.group)
+    local ordered = panes.ordered()
+    test.equal(ordered[1], target_pane)
+    test.equal(ordered[2], source_pane)
+    test.equal(panes.active(), source_pane)
+  end)
+
+  test.it("drags a Pane to a title boundary as a singleton group", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.split(one, "right", { factory = factory("two") })
+    local three = panes.create { factory = factory("three") }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local source = title.entries[2]
+    local target = title.entries[3]
+
+    title:on_mouse_pressed("left", source.x + source.w / 2, source.y + 2, 1)
+    title:on_mouse_moved(target.x + 2, target.y + 2, target.x - source.x, 0)
+    title:on_mouse_released("left", target.x + 2, target.y + 2)
+
+    local ordered = panes.ordered()
+    test.equal(ordered[1], one)
+    test.equal(ordered[2], two)
+    test.equal(ordered[3], three)
+    test.equal(#panes.groups, 3)
+    test.not_equal(one.group, two.group)
+  end)
+
+  test.it("detaches a Pane at the outer Title Bar group boundary", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.split(one, "right", { factory = factory("two") })
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local source = title.entries[1]
+    local last = title.entries[2]
+    local boundary_x = last.x + last.w + 20
+
+    title:on_mouse_pressed("left", source.x + source.w / 2, source.y + 2, 1)
+    title:on_mouse_moved(boundary_x, source.y + 2, boundary_x - source.x, 0)
+    title:on_mouse_released("left", boundary_x, source.y + 2)
+
+    test.equal(#panes.groups, 2)
+    test.not_equal(one.group, two.group)
+    test.equal(panes.ordered()[2], one)
+  end)
+
+  test.it("cancels a Pane drag outside valid targets without changing focus", function()
+    local source_pane = panes.create { factory = factory("source") }
+    local focused = panes.create { factory = factory("focused") }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local source = title.entries[1]
+
+    title:on_mouse_pressed("left", source.x + source.w / 2, source.y + 2, 1)
+    title:on_mouse_moved(-50, -50, -100, -100)
+    title:on_mouse_released("left", -50, -50)
+
+    test.not_equal(source_pane.group, focused.group)
+    test.equal(panes.active(), focused)
+    test.is_nil(title.dragged_pane)
+    test.is_nil(title.drag_target)
+  end)
+
+  test.it("cancels a captured Pane drag when the window loses focus", function()
+    local pane = panes.create { factory = factory("source") }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local source = title.entries[1]
+
+    title:on_mouse_pressed("left", source.x + 2, source.y + 2, 1)
+    title:on_mouse_moved(source.x + 40, source.y + 2, 40, 0)
+    title:on_focus_lost()
+
+    test.equal(panes.active(), pane)
+    test.is_nil(title.pressed_pane)
+    test.is_nil(title.dragged_pane)
+  end)
+
+  test.it("pages hidden Tabs when a Pane drag reaches the lane edge", function()
+    local first
+    for i = 1, 7 do
+      local pane = panes.create { factory = factory("long-view-name-" .. i) }
+      first = first or pane
+    end
+    panes.focus(first)
+    local title = TitleBar()
+    title.size.x = 420
+    title:update()
+    local source = title.entries[1]
+    local lane_right = title.caption_rects[1].x
+
+    title:on_mouse_pressed("left", source.x + 2, source.y + 2, 1)
+    title:on_mouse_moved(lane_right - 1, source.y + 2, lane_right - source.x, 0)
+
+    test.ok(title.tab_offset > 1)
+    test.equal(title.dragged_pane, first)
+    title:on_mouse_released("left", -50, -50)
   end)
 
   test.it("marks Pane Group boundaries and closes a Tab with middle-click", function()

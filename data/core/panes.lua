@@ -375,6 +375,45 @@ function M.detach(target)
   return pane
 end
 
+function M.move_to_group_boundary(source_target, destination_target, placement)
+  local source = M.find(source_target)
+  local destination = M.find(destination_target)
+  if not source or not destination then return nil, "invalid source or target Pane" end
+  if placement ~= "before" and placement ~= "after" then
+    return nil, "invalid Pane Group boundary"
+  end
+  local source_group = source.group
+  local destination_group = destination.group
+  if source_group == destination_group and #layout.leaves(source_group.root) == 1 then
+    return source
+  end
+
+  local singleton = #layout.leaves(source_group.root) == 1
+  if singleton then
+    local index = assert(group_index(source_group), "source Pane Group is not registered")
+    table.remove(M.groups, index)
+  else
+    remove_from_group(source)
+  end
+
+  local destination_index = assert(
+    group_index(destination_group), "destination Pane Group is not registered"
+  )
+  local insertion = destination_index + (placement == "after" and 1 or 0)
+  if singleton then
+    table.insert(M.groups, insertion, source_group)
+  else
+    create_group(source, insertion)
+  end
+  M.active_pane = source
+  M.visible_group_value = source.group
+  focus_view(source)
+  after_mutation(string.format(
+    "moved %s %s group %s", source.id, placement, destination_group.id
+  ))
+  return source
+end
+
 function M.drop_target_at(x, y)
   local group = M.visible_group_value
   local pane = group and layout.pane_at(group.root, x, y)
@@ -386,12 +425,17 @@ function M.drop_target_at(x, y)
     { "up", top }, { "down", 1 - top },
   }
   table.sort(distances, function(a, b) return a[2] < b[2] end)
+  if distances[1][2] > 0.25 then return pane, "center" end
   return pane, distances[1][1]
 end
 
 function M.drop(source, x, y)
   local destination, direction = M.drop_target_at(x, y)
   if not destination then return nil, "no Pane drop target" end
+  if direction == "center" then
+    M.focus(destination)
+    return destination
+  end
   return M.move(source, destination, direction)
 end
 

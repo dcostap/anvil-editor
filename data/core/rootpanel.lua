@@ -436,7 +436,10 @@ end
 
 function RootPanel:on_focus_lost(...)
   core.redraw = true
-  return call_view(self:keyboard_target(), "on_focus_lost", ...)
+  local target = self:keyboard_target()
+  local grabbed = self.grab and self.grab.view or nil
+  if grabbed and grabbed ~= target then call_view(grabbed, "on_focus_lost", ...) end
+  return call_view(target, "on_focus_lost", ...)
 end
 
 function RootPanel:on_touch_pressed(x, y, ...)

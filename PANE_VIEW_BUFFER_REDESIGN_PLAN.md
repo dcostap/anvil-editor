@@ -1182,12 +1182,24 @@ A dragged Tab carries a Pane, not a View.
 
 The drag preview uses the Pane's current title.
 
+A short pointer movement remains a click. The click focuses the Pane on release.
+
+After the drag threshold, use a hand pointer and keep a floating Tab preview under the pointer.
+
+Show the exact work-area split region or Title Bar insertion boundary before the user drops.
+
+When hidden Tabs exist, dragging near either end of the Tab lane pages the lane.
+
+Releasing outside a valid target cancels the drag without changing Pane order or focus.
+
 Drop feedback must distinguish:
 
 - reorder between Pane Groups;
 - reorder inside one group;
 - join the visible group through a work-area split;
 - invalid non-contiguous placement.
+
+Pane dragging is local to one Anvil window. Do not convert a Pane into a file-only IPC drag.
 
 ## General View placement API
 
