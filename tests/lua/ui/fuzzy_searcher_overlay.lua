@@ -46,4 +46,35 @@ test.describe("Fuzzy Searcher attention overlay", function()
     root.draw_app_overlay = old_draw_app_overlay
     if not ok then error(err, 0) end
   end)
+
+  test.it("restores a covered confirmation prompt with its choices", function()
+    local root = core.root_panel
+    local bar = core.global_prompt_bar
+    bar:exit(true)
+    local previous_view = core.active_view
+    local picker
+    local ok, err = pcall(function()
+      bar:enter("Unsaved Changes; Confirm Close", {
+        suggest = function()
+          return { "Close Without Saving", "Save And Close" }
+        end,
+      })
+      test.equal(#bar.suggestions, 2)
+
+      picker = fuzzy_searcher.open_static_results("Commands", {})
+      root:update()
+      picker:close()
+      picker = nil
+      root:update()
+
+      test.equal(core.active_view, bar)
+      test.equal(#bar.suggestions, 2)
+      test.equal(root.app_overlay.owner, bar)
+    end)
+
+    if picker then pcall(function() picker:close() end) end
+    bar:exit(true)
+    if previous_view then core.set_active_view(previous_view) end
+    if not ok then error(err, 0) end
+  end)
 end)

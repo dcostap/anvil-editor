@@ -52,6 +52,7 @@ end
 ---@field label string Label text displayed in gutter
 ---@field mouse_position table Mouse coordinates {x, y}
 ---@field save_suggestion string? Saved suggestion for cycling
+---@field covered_by_app_overlay? boolean Another application overlay temporarily owns focus
 local GlobalPromptBar = TextView:extend()
 
 function GlobalPromptBar:__tostring() return "GlobalPromptBar" end
@@ -321,6 +322,7 @@ function GlobalPromptBar:exit(submitted, inexplicit)
   self.last_text = ""
   self.pane_scope = nil
   self.pane_source_view = nil
+  self.covered_by_app_overlay = nil
 end
 
 
@@ -367,7 +369,32 @@ function GlobalPromptBar:update()
   GlobalPromptBar.super.update(self)
 
   if core.active_view ~= self and self.state ~= default_state then
-    self:exit(false, true)
+    local overlay = not self.pane_scope and core.root_panel.app_overlay
+    local covered = overlay and overlay.owner ~= self and overlay.target > 0
+    if covered then
+      if not self.covered_by_app_overlay then
+        core.log_quiet("Global Prompt Bar suspended under an application overlay")
+      end
+      self.covered_by_app_overlay = true
+    else
+      self:exit(false, true)
+    end
+  elseif core.active_view == self and self.state ~= default_state then
+    local was_covered = self.covered_by_app_overlay
+    self.covered_by_app_overlay = nil
+    local overlay = not self.pane_scope and core.root_panel.app_overlay
+    if not self.pane_scope
+        and (not overlay or overlay.owner ~= self or overlay.target ~= 1) then
+      core.root_panel:show_app_overlay(
+        self, "global_prompt_bar_overlay_background", {
+          unobscured_view = self,
+          transition_name = "global_prompt_bar",
+        }
+      )
+    end
+    if was_covered then
+      core.log_quiet("Global Prompt Bar resumed after an application overlay")
+    end
   end
 
   -- update suggestions if text has changed

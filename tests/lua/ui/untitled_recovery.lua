@@ -34,9 +34,12 @@ local function make_root_panel(context)
       if self.views[i] ~= keep_view then table.remove(self.views, i) end
     end
   end
-  function panel:open_buffer(buffer)
+  function panel:open_buffer(buffer, opts)
+    opts = opts or {}
     local view = Editor(buffer)
     self.views[#self.views + 1] = view
+    context.open_options = context.open_options or {}
+    context.open_options[#context.open_options + 1] = opts
     core.active_view = view
     return view
   end
@@ -445,6 +448,26 @@ test.describe("untitled recovery integration", function()
     test.equal(restored_count, 1)
     test.equal(core.buffers[1]:get_text(1, 1, math.huge, math.huge), "new temp text")
     test.equal(read_file(join_path(paths.buffers, "crash-id.txt")), "new temp text\n")
+  end)
+
+  test.it("opens each recovered buffer for simultaneous work", function(context)
+    local paths = recovery.project_paths(context.project_dir)
+    test.ok(common.mkdirp(paths.buffers))
+    write_file(join_path(paths.buffers, "first.txt"), "first recovery\n")
+    write_file(join_path(paths.buffers, "second.txt"), "second recovery\n")
+    test.ok(recovery.save_manifest(context.project_dir, {
+      buffers = {
+        { id = "first", name = "Untitled-1", backing = "buffers" .. PATHSEP .. "first.txt" },
+        { id = "second", name = "Untitled-2", backing = "buffers" .. PATHSEP .. "second.txt" },
+      }
+    }))
+
+    test.equal(recovery.restore_project(context.project_dir), 2)
+    test.equal(#context.views, 2)
+    test.equal(context.views[1].buffer.intellij_untitled_id, "first")
+    test.equal(context.views[2].buffer.intellij_untitled_id, "second")
+    test.equal(context.open_options[1].placement, "new")
+    test.equal(context.open_options[2].placement, "new")
   end)
 
   test.it("loads recovery manifests saved before the Buffer naming cut", function(context)

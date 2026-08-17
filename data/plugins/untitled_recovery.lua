@@ -757,6 +757,15 @@ function M.attach_from_workspace_state(buffer, state)
   end
 end
 
+local function present_recovered_buffer(buffer)
+  if not core.root_panel or not core.root_panel.open_buffer then return end
+  core.root_panel:open_buffer(buffer, {
+    placement = "new",
+    focus = true,
+    reason = "untitled-recovery",
+  })
+end
+
 local function open_recovered_buffer(entry, paths, backing, reason)
   local text = read_file(backing)
   if not text then return false end
@@ -779,7 +788,7 @@ local function open_recovered_buffer(entry, paths, backing, reason)
     buffer.intellij_untitled_backing_dirty = true
     M.flush_buffer(buffer, reason or "reconcile", true)
   end
-  if core.root_panel and core.root_panel.open_buffer then core.root_panel:open_buffer(buffer) end
+  present_recovered_buffer(buffer)
   log_quiet("Untitled recovery: restored %s from %s (%s)", buffer.intellij_untitled_name, backing, reason or "manifest")
   return true
 end
@@ -919,7 +928,7 @@ local function restore_old_inline_storage(project_path)
         M.ensure_buffer_backing(buffer)
         local flushed = M.flush_buffer(buffer, "old inline recovery migration", true)
         if flushed and M.buffer_backing_current(buffer) then
-          if core.root_panel and core.root_panel.open_buffer then core.root_panel:open_buffer(buffer) end
+          present_recovered_buffer(buffer)
           restored = restored + 1
         else
           failed = true
