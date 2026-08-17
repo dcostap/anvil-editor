@@ -290,6 +290,7 @@ test.describe("untitled recovery integration", function()
     test.ok(buffer:is_dirty(), "setup should exercise forced dirty restored-empty semantics")
     test.equal(buffer:get_text(1, 1, math.huge, math.huge), "")
     local view = core.root_panel:open_buffer(buffer)
+    test.equal(view:get_name(), "Untitled-Blank")
     core.nag_view = {
       show = function()
         error("blank untitled close should not prompt")

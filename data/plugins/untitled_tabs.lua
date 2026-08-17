@@ -381,6 +381,17 @@ if not core.__untitled_tabs_patched then
     return editor_can_close(self, approve)
   end
 
+  local editor_get_name = Editor.get_name
+  function Editor:get_name()
+    if is_untitled_buffer(self.buffer) then
+      local name = self.buffer.intellij_untitled_name or "Untitled"
+      local dirty = self.buffer:is_dirty()
+        and untitled_buffer_has_promptable_content(self.buffer)
+      return name .. (dirty and "*" or "")
+    end
+    return editor_get_name(self)
+  end
+
   local tabs_get_tab_preferred_width = Tabs.get_tab_preferred_width
   local tabs_get_tab_width_cache_token = Tabs.get_tab_width_cache_token
   local function untitled_tab_width_cache_token(tabbar, idx, view)
