@@ -40,6 +40,10 @@ _Avoid_: file catalog, search database
 A temporary File Search or Text Search option that adds ignored files to that search. Hidden paths stay excluded.
 _Avoid_: disable ignores, index ignored files
 
+**Search Modifier**:
+A temporary option that changes the current search without changing its query text.
+_Avoid_: search modification, search mode
+
 **Workspace**:
 The per-project editor state that restores open views, tabs, splits, scroll positions, selection state, extra project directories, and recently visited files.
 _Avoid_: Session, app state

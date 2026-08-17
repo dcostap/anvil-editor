@@ -2747,6 +2747,9 @@ function FSView:new(prefix, opts)
   self.source_file_line = source_buffer and source_buffer:get_selection(false) or 1
 
   self.input = TextBox(self, prefix or "", "")
+  self.input:set_trailing_text(function()
+    return self:search_modifier_text()
+  end)
   -- The picker query is a single-line field.  TextView defaults to the global
   -- editor wrapping setting, which can otherwise make long queries wrap in
   -- the input widget instead of scrolling horizontally.
@@ -5018,6 +5021,16 @@ function FSView:can_toggle_ignored_files()
   return mode == "" or mode == "#"
 end
 
+function FSView:active_search_modifiers()
+  local modifiers = {}
+  if self.include_ignored then modifiers[#modifiers + 1] = "Ignored files included" end
+  return modifiers
+end
+
+function FSView:search_modifier_text()
+  return table.concat(self:active_search_modifiers(), "  ·  ")
+end
+
 function FSView:toggle_ignored_files()
   if not self:can_toggle_ignored_files() then return false end
   self.include_ignored = not self.include_ignored
@@ -5191,9 +5204,7 @@ function FSView:draw()
   local row_padding = m.row_padding
   self:ensure_selection_visible()
 
-  local status = self.status or ""
-  if self.include_ignored then status = status .. " — ignored files included" end
-  renderer.draw_text(font, status, x + pad, y + self.input.size.y + pad * 1.5, style.dim)
+  renderer.draw_text(font, self.status or "", x + pad, y + self.input.size.y + pad * 1.5, style.dim)
   local full_width_mode = self:is_full_width_mode()
   local vertical_preview = m.vertical_preview
   local command_mode = self:is_command_mode()

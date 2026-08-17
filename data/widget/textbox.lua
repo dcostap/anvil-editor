@@ -3,6 +3,7 @@
 --
 
 local core = require "core"
+local common = require "core.common"
 local style = require "core.style"
 local translate = require "core.buffer.translate"
 local Buffer = require "core.buffer"
@@ -225,6 +226,7 @@ function TextBox:new(parent, text, placeholder, options)
   self.active = false
   self.drag_select = false
   self.password = options and options.password or false
+  self.trailing_text = nil
 
   if text ~= "" then
     self.textview:set_text(text)
@@ -250,6 +252,46 @@ function TextBox:new(parent, text, placeholder, options)
   end
 end
 
+---Get optional text shown at the right edge of the field.
+---@return string text
+function TextBox:get_trailing_text()
+  local value = self.trailing_text
+  if type(value) == "function" then
+    local ok, result = pcall(value, self)
+    value = ok and result or ""
+  end
+  return value and tostring(value) or ""
+end
+
+---Set optional text shown at the right edge of the field.
+---@param text string|fun(textbox: widget.textbox):string|nil
+function TextBox:set_trailing_text(text)
+  self.trailing_text = text
+end
+
+---Get the bounds of the optional right-aligned text.
+---@return number? x
+---@return number? y
+---@return number? width
+---@return number? height
+function TextBox:get_trailing_text_bounds()
+  local text = self:get_trailing_text()
+  if text == "" then return nil end
+  local font = self:get_font()
+  local width, height = font:get_width(text), font:get_height()
+  return self.position.x + self.size.x - style.padding.x / 2 - width,
+    common.round(self.position.y + (self.size.y - height) / 2), width, height
+end
+
+local function trailing_reserved_width(self, text)
+  if text == "" then return 0 end
+  return self:get_font():get_width(text) + style.padding.x * 1.5
+end
+
+local function text_area_width(self, text)
+  return math.max(0, self.size.x - trailing_reserved_width(self, text))
+end
+
 ---@param width integer
 function TextBox:set_size(width)
   TextBox.super.set_size(
@@ -257,7 +299,7 @@ function TextBox:set_size(width)
     width,
     self:get_font():get_height() + (style.padding.y * 2)
   )
-  self.textview.size.x = self.size.x
+  self.textview.size.x = text_area_width(self, self:get_trailing_text())
 end
 
 --- Get the text displayed on the textbox.
@@ -377,7 +419,7 @@ function TextBox:update()
 
   self.textview.position.x = self.position.x + (style.padding.x / 2)
   self.textview.position.y = self.position.y - (style.padding.y/2.5)
-  self.textview.size.x = self.size.x
+  self.textview.size.x = text_area_width(self, self:get_trailing_text())
   self.textview.size.y = self.size.y - (style.padding.y * 2)
 
   self.textview:update()
@@ -390,14 +432,23 @@ end
 function TextBox:draw()
   if not TextBox.super.draw(self) then return false end
 
+  local trailing_text = self:get_trailing_text()
+  local text_width = text_area_width(self, trailing_text)
+
   core.push_clip_rect(
     self.position.x,
     self.position.y,
-    self.size.x,
+    text_width,
     self.size.y
   )
   self.textview:draw()
   core.pop_clip_rect()
+
+  if trailing_text ~= "" then
+    local font = self:get_font()
+    local x, y = self:get_trailing_text_bounds()
+    renderer.draw_text(font, trailing_text, x, y, style.dim)
+  end
 
   return true
 end
