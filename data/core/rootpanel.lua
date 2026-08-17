@@ -304,7 +304,17 @@ function RootPanel:update()
       call_view(view, "update_suspended")
     end
   end
-  self.overlapping_view = self:view_at(self.mouse.x, self.mouse.y)
+  if not self.grab and not self.dragged_divider then
+    local hovered = self:view_at(self.mouse.x, self.mouse.y)
+    if hovered ~= self.overlapping_view then
+      if self.overlapping_view then call_view(self.overlapping_view, "on_mouse_left") end
+      self.overlapping_view = hovered
+      if hovered then
+        call_view(hovered, "on_mouse_moved", self.mouse.x, self.mouse.y, 0, 0)
+        core.request_cursor(hovered.cursor)
+      end
+    end
+  end
 end
 
 function RootPanel:grab_mouse(button, view)
@@ -446,6 +456,10 @@ end
 function RootPanel:on_file_dropped(filename, x, y)
   local group = panes().visible_group()
   local pane = group and x and y and layout.pane_at(group.root, x, y) or panes().active()
+  local consumed = pane and call_view(
+    pane.current_view, "on_file_dropped", filename, x, y
+  )
+  if consumed then return consumed end
   if core.open_file then
     return core.open_file(filename, { pane = pane, placement = "current", reason = "file-drop" })
   end
@@ -472,11 +486,10 @@ function RootPanel:draw()
   if group then draw_split_dividers(group.root) end
   for _, view in ipairs(self:shell_views()) do call_view(view, "draw") end
   self:draw_active_app_overlay()
-  for i = #self.deferred_draws, 1, -1 do
-    local item = self.deferred_draws[i]
+  while #self.deferred_draws > 0 do
+    local item = table.remove(self.deferred_draws)
     item.fn(table.unpack(item, 1, #item))
   end
-  self.deferred_draws = {}
   if core.cursor_change_req then
     system.set_cursor(core.cursor_change_req)
     core.cursor_change_req = nil

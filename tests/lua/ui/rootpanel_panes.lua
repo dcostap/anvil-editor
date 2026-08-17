@@ -20,6 +20,7 @@ function FakeView:new(name, height)
   self.releases = 0
   self.moves = 0
   self.leaves = 0
+  self.drops = 0
   self.keys = 0
 end
 
@@ -47,6 +48,10 @@ end
 function FakeView:scrollbar_overlaps_point()
   return self.scrollbar_hit == true
 end
+function FakeView:on_file_dropped()
+  self.drops = self.drops + 1
+  return self.consume_drop == true
+end
 function FakeView:on_key_pressed()
   self.keys = self.keys + 1
   return true
@@ -73,6 +78,7 @@ test.describe("Root Panel Pane presentation", function()
       status_bar = core.status_bar,
       active_view = core.active_view,
       set_active_view = core.set_active_view,
+      open_file = core.open_file,
       draw_rect = renderer.draw_rect,
       set_cursor = system.set_cursor,
       cursor_change_req = core.cursor_change_req,
@@ -135,6 +141,18 @@ test.describe("Root Panel Pane presentation", function()
     test.equal(root.content_rect.h, 170)
   end)
 
+  test.it("runs deferred draws queued by another deferred draw", function()
+    local sequence = {}
+    root:defer_draw(function()
+      sequence[#sequence + 1] = "outer"
+      root:defer_draw(function() sequence[#sequence + 1] = "nested" end)
+    end)
+
+    root:draw()
+
+    test.same(sequence, { "outer", "nested" })
+  end)
+
   test.it("routes pointer events to the hit-tested Pane owner", function()
     local one = panes.create { factory = pane_factory("one") }
     local two = panes.split(one, "right", { factory = pane_factory("two") })
@@ -180,6 +198,20 @@ test.describe("Root Panel Pane presentation", function()
     test.equal(two.current_view.moves, 1)
   end)
 
+  test.it("clears hover state when another Pane Group replaces the hovered View", function()
+    local one = panes.create { factory = pane_factory("one") }
+    local two = panes.create { factory = pane_factory("two") }
+    panes.focus(one)
+    root:update()
+    root:on_mouse_moved(one.position.x + 20, one.position.y + 20, 0, 0)
+
+    panes.focus(two)
+    root:update()
+
+    test.equal(one.current_view.leaves, 1)
+    test.equal(two.current_view.moves, 1)
+  end)
+
   test.it("applies the hovered View cursor to the system pointer", function()
     local pane = panes.create { factory = pane_factory("editor") }
     root:update()
@@ -218,6 +250,22 @@ test.describe("Root Panel Pane presentation", function()
     test.ok(root:contains_view(child))
     test.ok(root:on_key_pressed("a"))
     test.equal(child.keys, 1)
+  end)
+
+  test.it("lets the Pane View consume a dropped file before fallback opening", function()
+    local pane = panes.create { factory = pane_factory("editor") }
+    root:update()
+    pane.current_view.consume_drop = true
+    local fallback_calls = 0
+    core.open_file = function() fallback_calls = fallback_calls + 1 end
+
+    local consumed = root:on_file_dropped(
+      "attachment.png", pane.position.x + 20, pane.position.y + 20
+    )
+
+    test.equal(consumed, true)
+    test.equal(pane.current_view.drops, 1)
+    test.equal(fallback_calls, 0)
   end)
 
   test.it("resizes the hit-tested divider", function()
