@@ -29,13 +29,13 @@ Use the BAT files in the repo root
   - first-time setup
   - builds the editor
   - installs a dev portable app to `C:\Projects\c_projects\anvil-portable`
-  - creates Windows junctions so portable `data\core`, `data\plugins`, and `data\colors` point back to this repo
+  - creates Windows junctions for editable data directories, including `data\core`, `data\plugins`, `data\colors`, and `data\widget`
   - launches the app
 
 - `update-anvil-dev-build.bat`
   - default finalization step only when non-Lua files were edited
   - use after C/C++, build-system, asset, or other non-Lua source/default-data changes so the dev portable app is refreshed consistently
-  - skip for Lua/plugin/color-only edits; those paths are junctioned into the portable app and can usually be reloaded in the running app
+  - skip for edits under junctioned data directories; reload or restart Anvil instead
   - close Anvil first if binaries may be replaced
   - rebuilds and updates the dev portable app
   - restores the source-data junctions
@@ -85,6 +85,8 @@ Keep personal machine-only state out of the repo, such as app state, workspace d
 - `anvil-portable\data\core    -> anvil-editor\data\core`
 - `anvil-portable\data\plugins -> anvil-editor\data\plugins`
 - `anvil-portable\data\colors  -> anvil-editor\data\colors`
+- `anvil-portable\data\widget  -> anvil-editor\data\widget`
+- `anvil-portable\data\treesitter -> anvil-editor\data\treesitter`
 
 `USERDIR` is the portable/user state and local-config root:
 
@@ -122,8 +124,10 @@ The dev portable install uses junctions:
 - `anvil-portable\data\core    -> anvil-editor\data\core`
 - `anvil-portable\data\plugins -> anvil-editor\data\plugins`
 - `anvil-portable\data\colors  -> anvil-editor\data\colors`
+- `anvil-portable\data\widget  -> anvil-editor\data\widget`
+- `anvil-portable\data\treesitter -> anvil-editor\data\treesitter`
 
-So core/plugin/color edits are made directly in the repo and can usually be reloaded in the running app without reinstalling.
+Edit these directories in the repo. Reload or restart Anvil without reinstalling the portable app.
 
 ### Lua syntax validation
 
@@ -322,7 +326,7 @@ When a change or feature is finished and non-Lua files were edited, run the rele
 
 From the agent/MSYS bash, use the `cmd.exe` double-slash form documented below.
 
-C/C++ edits require rebuilding and restarting the app. Lua/plugin/color-only edits are junctioned into the portable app, so do not run the BAT just for those changes; validate Lua syntax and reload/restart Anvil as appropriate.
+C/C++ edits require a rebuild and restart. For edits under junctioned data directories, validate syntax and reload or restart Anvil.
 
 Close Anvil before running the BAT if binaries may be replaced, because the exe may be locked.
 

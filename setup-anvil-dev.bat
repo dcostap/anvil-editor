@@ -38,6 +38,9 @@ if errorlevel 1 exit /b 1
 call :RemoveLink "%DEST%\data\plugins"
 if errorlevel 1 exit /b 1
 call :RemoveLink "%DEST%\data\colors"
+if errorlevel 1 exit /b 1
+call :RemoveLink "%DEST%\data\widget"
+if errorlevel 1 exit /b 1
 call :RemoveLink "%DEST%\data\treesitter"
 if errorlevel 1 exit /b 1
 
@@ -53,6 +56,9 @@ if errorlevel 1 exit /b 1
 call :LinkDir "%DEST%\data\plugins" "%REPO%\data\plugins"
 if errorlevel 1 exit /b 1
 call :LinkDir "%DEST%\data\colors" "%REPO%\data\colors"
+if errorlevel 1 exit /b 1
+call :LinkDir "%DEST%\data\widget" "%REPO%\data\widget"
+if errorlevel 1 exit /b 1
 call :LinkDir "%DEST%\data\treesitter" "%REPO%\data\treesitter"
 if errorlevel 1 exit /b 1
 
