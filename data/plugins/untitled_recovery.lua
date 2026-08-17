@@ -1088,10 +1088,11 @@ if not core.__untitled_recovery_patched then
   end
 
   local core_set_active_view = core.set_active_view
-  function core.set_active_view(view)
+  function core.set_active_view(view, focus_context)
+    focus_context = focus_context or core.focus_change_context(2)
     local previous = core.active_view
     local previous_buffer = previous and previous.buffer
-    local result = core_set_active_view(view)
+    local result = core_set_active_view(view, focus_context)
     local next_buffer = core.active_view and core.active_view.buffer
     if previous_buffer and previous_buffer ~= next_buffer and is_untitled_buffer(previous_buffer) and previous_buffer.intellij_untitled_backing_dirty then
       M.flush_buffer(previous_buffer, "buffer focus lost", true)

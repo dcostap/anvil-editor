@@ -87,8 +87,9 @@ local function autoreload_buffer(buffer)
 end
 
 local core_set_active_view = core.set_active_view
-function core.set_active_view(view)
-  core_set_active_view(view)
+function core.set_active_view(view, focus_context)
+  focus_context = focus_context or core.focus_change_context(2)
+  core_set_active_view(view, focus_context)
   if core.active_view.buffer and changed[core.active_view.buffer] then
     local buffer = core.active_view.buffer
     core.add_thread(function()

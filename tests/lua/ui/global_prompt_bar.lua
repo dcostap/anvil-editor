@@ -10,6 +10,31 @@ test.describe("Global Prompt Bar pointer interception", function()
     core.active_view = active
     test.ok(ok, err)
   end)
+
+  test.it("records the input event that moves focus away", function()
+    local bar = core.global_prompt_bar
+    bar:exit(true)
+    local target = core.panes.active().current_view
+    bar:enter("Focus", { show_suggestions = false })
+    core.root_panel:update()
+    local first_log = #core.log_items + 1
+
+    local x = target.position.x + math.min(5, target.size.x / 2)
+    local y = target.position.y + math.min(5, target.size.y / 2)
+    core.on_event("mousepressed", "left", x, y, 1)
+    core.on_event("mousereleased", "left", x, y, 1)
+
+    local focus_log
+    for index = first_log, #core.log_items do
+      local text = core.log_items[index].text
+      if text:find("Focus change:", 1, true) then focus_log = text end
+    end
+    test.ok(focus_log, "expected a focus-change diagnostic")
+    test.ok(focus_log:find("event=mousepressed", 1, true), focus_log)
+    test.ok(focus_log:find("button=left", 1, true), focus_log)
+    test.ok(focus_log:find("target=", 1, true), focus_log)
+    bar:exit(true)
+  end)
 end)
 
 test.describe("Global Prompt Bar typeahead", function()

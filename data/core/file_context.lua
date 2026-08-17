@@ -101,8 +101,9 @@ end
 
 local set_active_view = core.file_context_set_active_view or core.set_active_view
 core.file_context_set_active_view = set_active_view
-function core.set_active_view(view)
-  local result = set_active_view(view)
+function core.set_active_view(view, focus_context)
+  focus_context = focus_context or core.focus_change_context(2)
+  local result = set_active_view(view, focus_context)
   M.mark_visited(view)
   return result
 end

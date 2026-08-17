@@ -552,10 +552,11 @@ end
 
 local core_set_active_view_for_find = core.intellij_find_base_set_active_view or core.set_active_view
 core.intellij_find_base_set_active_view = core_set_active_view_for_find
-function core.set_active_view(view)
+function core.set_active_view(view, focus_context)
+  focus_context = focus_context or core.focus_change_context(2)
   local previous = core.active_view
   local previous_state = previous and previous.local_find_input and previous.local_find_state
-  local result = core_set_active_view_for_find(view)
+  local result = core_set_active_view_for_find(view, focus_context)
   local next = core.active_view
   if previous_state and previous_state.visible and next ~= previous then
     local next_state = next and next.local_find_input and next.local_find_state

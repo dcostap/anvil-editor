@@ -465,7 +465,24 @@ function core.init()
 
   -- log functions depend on config so initialize after loading config
   core.log_items = {}
+  local session_log_error
+  local loaded_session_log, SessionLog = pcall(require, "core.session_log")
+  if loaded_session_log then
+    local started, logger, err = pcall(SessionLog.start, USERDIR .. PATHSEP .. "logs")
+    if started then
+      core.session_log, session_log_error = logger, err
+    else
+      session_log_error = logger
+    end
+  else
+    session_log_error = SessionLog
+  end
   core.log_quiet("Anvil version %s - mod-version %s", VERSION, MOD_VERSION_STRING)
+  if core.session_log then
+    core.log_quiet("Session log started: %s", core.session_log.path)
+  else
+    core.log_quiet("Session log unavailable: %s", tostring(session_log_error or "unknown error"))
+  end
   if config.plugins and config.plugins.ipc and config.plugins.ipc.single_instance == false and system.set_native_single_instance_enabled then
     system.set_native_single_instance_enabled(false)
     core.log_quiet("Native single-instance handoff disabled by config.plugins.ipc.single_instance=false")
@@ -1464,7 +1481,35 @@ function core.set_recent_file_edited(filename, when)
 end
 
 
-function core.set_active_view(view)
+local function focus_view_label(view)
+  if not view then return "nil" end
+  local label_ok, label = pcall(tostring, view)
+  label = label_ok and label or "unprintable-view"
+  local type_name = tostring(view.type_name or "unknown")
+  if label == "" then label = type_name end
+  local buffer_name
+  if view.buffer and view.buffer.get_name then
+    local name_ok, name = pcall(view.buffer.get_name, view.buffer)
+    if name_ok then buffer_name = name end
+  end
+  return string.format("%s<%s%s>", label, type_name,
+    buffer_name and " buffer=" .. tostring(buffer_name) or "")
+end
+
+function core.focus_change_context(stack_level)
+  local info = debug.getinfo((stack_level or 1) + 1, "Sl")
+  return {
+    source = info and string.format("%s:%d", info.short_src, info.currentline) or "unknown"
+  }
+end
+
+local function focus_source(context)
+  if context and context.source then return context.source end
+  local info = debug.getinfo(3, "Sl")
+  return info and string.format("%s:%d", info.short_src, info.currentline) or "unknown"
+end
+
+function core.set_active_view(view, focus_context)
   assert(view, "Tried to set active view to nil")
   -- Reset the IME even if the focus didn't change. Clear composition on
   -- the previous input window before moving focus to another native window.
@@ -1508,7 +1553,13 @@ function core.set_active_view(view)
       core.blink_start = system.get_time()
       core.blink_timer = core.blink_start
     end
-    core.log_quiet("Focus diagnostics: reset caret blink on active view change active=%s", tostring(view))
+    core.log_quiet(
+      "Focus change: from=%s to=%s source=%s event=%s window=%s",
+      focus_view_label(old_active_view), focus_view_label(view),
+      focus_source(focus_context),
+      core.current_event_context or "none",
+      tostring(core.event_window or core.window)
+    )
     if view.extends and view:extends(TextView) and view.buffer and view.become_selection_mirror_owner then
       view:become_selection_mirror_owner()
     end
@@ -1745,6 +1796,14 @@ function core.custom_log(level, show, backtrace, fmt, ...)
     at = at,
     info = backtrace and debug.traceback("", 2):gsub("\t", "")
   }
+  local session_log = core.session_log
+  if session_log then
+    local ok, written = pcall(session_log.write, session_log, level, text, at)
+    if not ok or not written then
+      pcall(session_log.close, session_log)
+      core.session_log = nil
+    end
+  end
   table.insert(core.log_items, item)
   if #core.log_items > config.max_log_items then
     table.remove(core.log_items, 1)
@@ -1793,6 +1852,9 @@ function core.try(fn, ...)
   local ok, res = xpcall(fn, function(msg)
     local item = core.error("%s", msg)
     item.info = debug.traceback("", 2):gsub("\t", "")
+    if core.session_log then
+      pcall(core.session_log.write, core.session_log, "TRACE", item.info, item.at)
+    end
     err = msg
   end, ...)
   if ok then
@@ -1823,7 +1885,35 @@ local function update_scale(new_scale)
   end
 end
 
+local function modifier_summary(event)
+  if type(event) ~= "table" then return "none" end
+  local modifiers = {}
+  for _, name in ipairs { "ctrl", "shift", "alt", "gui", "altgr" } do
+    if event[name] then modifiers[#modifiers + 1] = name end
+  end
+  return #modifiers > 0 and table.concat(modifiers, "+") or "none"
+end
+
+local function event_summary(type, ...)
+  if type == "keypressed" or type == "keyreleased" then
+    local key, event = ...
+    return string.format("%s key=%s modifiers=%s", type, tostring(key), modifier_summary(event))
+  elseif type == "mousepressed" or type == "mousereleased" then
+    local button, x, y, clicks = ...
+    local target = core.root_panel and core.root_panel:view_at(x, y)
+    return string.format("%s button=%s x=%s y=%s clicks=%s target=%s",
+      type, tostring(button), tostring(x), tostring(y), tostring(clicks), focus_view_label(target))
+  elseif type == "mousewheel" then
+    local y, x = ...
+    return string.format("mousewheel x=%s y=%s", tostring(x), tostring(y))
+  elseif type == "textinput" then
+    return string.format("textinput bytes=%d", #tostring((...)))
+  end
+  return tostring(type)
+end
+
 function core.on_event(type, ...)
+  core.current_event_context = event_summary(type, ...)
   local did_keymap = false
   local active = core.active_view
   local active_type = active and active.type_name
@@ -1831,22 +1921,21 @@ function core.on_event(type, ...)
   if type == "textinput" then
     if fuzzy_input_debug then
       local text = (...)
-      core.log_quiet("Fuzzy input event: textinput active=%s supports_text_input=%s bytes=%d text=%s", tostring(active_type), tostring(active and active:supports_text_input()), #tostring(text or ""), tostring(text or ""))
+      core.log_quiet("Fuzzy input event: textinput active=%s supports_text_input=%s bytes=%d", tostring(active_type), tostring(active and active:supports_text_input()), #tostring(text or ""))
     end
     core.root_panel:on_text_input(...)
   elseif type == "textediting" then
     if fuzzy_input_debug then
       local text, start, len = ...
-      core.log_quiet("Fuzzy input event: textediting active=%s supports_text_input=%s bytes=%d text=%s start=%s len=%s", tostring(active_type), tostring(active and active:supports_text_input()), #tostring(text or ""), tostring(text or ""), tostring(start), tostring(len))
+      core.log_quiet("Fuzzy input event: textediting active=%s supports_text_input=%s bytes=%d start=%s len=%s", tostring(active_type), tostring(active and active:supports_text_input()), #tostring(text or ""), tostring(start), tostring(len))
     end
     ime.on_text_editing(...)
   elseif type == "keypressed" then
     -- In some cases during IME composition input is still sent to us
     -- so we just ignore it.
-    if ime.editing then return false end
-    if fuzzy_input_debug then
-      local key = (...)
-      core.log_quiet("Fuzzy input event: keypressed active=%s supports_text_input=%s key=%s", tostring(active_type), tostring(active and active:supports_text_input()), tostring(key))
+    if ime.editing then
+      core.current_event_context = nil
+      return false
     end
     local key, event = ...
     local pre_keymap = active and active.on_key_pressed_before_keymap
@@ -1969,6 +2058,7 @@ function core.on_event(type, ...)
   elseif type == "quit" then
     core.quit()
   end
+  core.current_event_context = nil
   return did_keymap
 end
 
@@ -2270,6 +2360,11 @@ end
 
 function core.step(next_frame_time, options)
   options = options or {}
+  local session_log = core.session_log
+  if session_log and session_log.pending_bytes > 0
+      and system.get_time() - session_log.last_flush >= 1 then
+    pcall(session_log.flush, session_log)
+  end
   core.ui_snapshot_id = (core.ui_snapshot_id or 0) + 1
   core.ui_snapshot_active = true
   local step_stats = {
@@ -2331,6 +2426,7 @@ function core.step(next_frame_time, options)
       local _, res = core.try(core.on_event, type, a, b, c, d)
       did_keymap = res or did_keymap
     end
+    core.current_event_context = nil
     note_event(type, event_item_start)
     event_received = type
   end
@@ -3008,6 +3104,10 @@ function core.run_step(options)
         worker_pool_module.shutdown_system({ cancel_running = true, timeout_ms = 1000 })
       end
       core.worker_pool_frame_stats = nil
+      if core.session_log then
+        pcall(core.session_log.close, core.session_log)
+        core.session_log = nil
+      end
       core.in_live_resize_frame = previous_live_resize_frame
       return false
     end

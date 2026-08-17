@@ -4921,10 +4921,10 @@ function FSView:on_text_input(text)
   -- Text input is the authoritative path for all printable characters,
   -- especially layout-dependent ones like AltGr, dead keys and IME output.
   self._awaiting_textinput = nil
-  fuzzy_focus_log("text-input-before", self, "bytes=" .. tostring(#tostring(text or "")) .. " text=" .. tostring(text or ""))
+  fuzzy_focus_log("text-input-before", self, "bytes=" .. tostring(#tostring(text or "")))
   ensure_input_focus(self)
   self.input:on_text_input(text)
-  fuzzy_focus_log("text-input-after", self, "bytes=" .. tostring(#tostring(text or "")) .. " text=" .. tostring(text or ""))
+  fuzzy_focus_log("text-input-after", self, "bytes=" .. tostring(#tostring(text or "")))
   return true
 end
 
@@ -5594,7 +5594,6 @@ keymap.on_key_pressed = function(key, ...)
       stroke = stroke,
       text_len = picker.input and #(picker.input:get_text() or "") or nil,
     }
-    fuzzy_focus_log("key-let-textinput-through", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " mods=" .. modal_modkeys_string())
     return false
   else
     fuzzy_focus_log("key-consumed", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke))

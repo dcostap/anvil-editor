@@ -7418,8 +7418,9 @@ function live.install()
   if live.__installed then return end
   live.__installed = true
   local old_set_active_view = core.set_active_view
-  core.set_active_view = function(view)
-    local result = old_set_active_view(view)
+  core.set_active_view = function(view, focus_context)
+    focus_context = focus_context or core.focus_change_context(2)
+    local result = old_set_active_view(view, focus_context)
     live.refresh_view(view)
     return result
   end

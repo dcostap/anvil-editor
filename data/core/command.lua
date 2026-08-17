@@ -335,6 +335,10 @@ local function perform(name, ...)
       args, n = pack(...), select("#", ...)
     end
     local body_start = perf_start()
+    core.log_quiet(
+      "Command: name=%s active=%s event=%s",
+      tostring(name), tostring(core.active_view), core.current_event_context or "none"
+    )
     local result = with_view_selection(first_textview_arg(args, n) or active_textview(), function()
       cmd.perform(table.unpack(args, 1, n))
       return true
