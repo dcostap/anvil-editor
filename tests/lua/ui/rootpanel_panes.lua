@@ -22,6 +22,7 @@ function FakeView:new(name, height)
   self.moves = 0
   self.leaves = 0
   self.drops = 0
+  self.focus_losses = 0
   self.keys = 0
 end
 
@@ -52,6 +53,9 @@ end
 function FakeView:on_file_dropped()
   self.drops = self.drops + 1
   return self.consume_drop == true
+end
+function FakeView:on_focus_lost()
+  self.focus_losses = self.focus_losses + 1
 end
 function FakeView:on_key_pressed()
   self.keys = self.keys + 1
@@ -85,6 +89,7 @@ test.describe("Root Panel Pane presentation", function()
       draw_rect = renderer.draw_rect,
       set_cursor = system.set_cursor,
       cursor_change_req = core.cursor_change_req,
+      redraw = core.redraw,
       app_overlay = core.app_overlay,
     }
     core.title_bar = FakeView("title", 10)
@@ -253,6 +258,17 @@ test.describe("Root Panel Pane presentation", function()
     test.ok(root:contains_view(child))
     test.ok(root:on_key_pressed("a"))
     test.equal(child.keys, 1)
+  end)
+
+  test.it("redraws and notifies the focus target when the window loses focus", function()
+    local pane = panes.create { factory = pane_factory("editor") }
+    core.active_view = pane.current_view
+    core.redraw = false
+
+    root:on_focus_lost()
+
+    test.equal(pane.current_view.focus_losses, 1)
+    test.equal(core.redraw, true)
   end)
 
   test.it("lets the Pane View consume a dropped file before fallback opening", function()

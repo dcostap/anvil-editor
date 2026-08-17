@@ -435,6 +435,7 @@ function RootPanel:on_ime_text_editing(...)
 end
 
 function RootPanel:on_focus_lost(...)
+  core.redraw = true
   return call_view(self:keyboard_target(), "on_focus_lost", ...)
 end
 
