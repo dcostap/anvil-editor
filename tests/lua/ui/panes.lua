@@ -114,6 +114,31 @@ test.describe("Pane manager", function()
     test.is_nil(panes.visible_group())
   end)
 
+  test.it("stays in the same Pane Group after closing its last ordered Pane", function()
+    local one = panes.create { factory = factory("one") }
+    local group = one.group
+    local two = panes.split(one, "right", { factory = factory("two") })
+    local three = panes.create { factory = factory("three") }
+    panes.focus(two)
+
+    test.ok(panes.close(two))
+
+    test.equal(panes.active(), one)
+    test.equal(panes.visible_group(), group)
+    test.not_equal(panes.visible_group(), three.group)
+  end)
+
+  test.it("switches Pane Groups after closing a group sole Pane", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.create { factory = factory("two") }
+    panes.focus(one)
+
+    test.ok(panes.close(one))
+
+    test.equal(panes.active(), two)
+    test.equal(panes.visible_group(), two.group)
+  end)
+
   test.it("rejects duplicate Pane membership", function()
     local one = panes.create { factory = factory("one") }
     local group = one.group

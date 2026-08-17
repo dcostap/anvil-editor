@@ -754,6 +754,12 @@ local function commit_close(pane)
   local old_index = M.number(pane)
   local closed_active_view = M.pane_for_view(core.active_view) == pane
   local group = pane.group
+  local old_group_order = layout.leaves(group.root)
+  local old_group_index
+  for index, member in ipairs(old_group_order) do
+    if member == pane then old_group_index = index break end
+  end
+  assert(old_group_index, "closed Pane is not in its Pane Group")
   group.root = layout.remove(group.root, pane)
   local released = {}
   for _, entry in ipairs(pane.history.entries) do
@@ -771,7 +777,9 @@ local function commit_close(pane)
     M.groups_by_id[group.id] = nil
   end
   local survivors = M.ordered()
-  local next_pane = nearest_after_removal(survivors, old_index)
+  local group_survivors = group.root and layout.leaves(group.root) or {}
+  local next_pane = nearest_after_removal(group_survivors, old_group_index)
+    or nearest_after_removal(survivors, old_index)
   if #survivors == 0 then
     M.active_pane = nil
     M.visible_group_value = nil
