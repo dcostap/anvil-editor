@@ -74,6 +74,8 @@ test.describe("Root Panel Pane presentation", function()
       active_view = core.active_view,
       set_active_view = core.set_active_view,
       draw_rect = renderer.draw_rect,
+      set_cursor = system.set_cursor,
+      cursor_change_req = core.cursor_change_req,
       app_overlay = core.app_overlay,
     }
     core.title_bar = FakeView("title", 10)
@@ -87,13 +89,16 @@ test.describe("Root Panel Pane presentation", function()
     core.root_panel = root
     core.set_active_view = function(view) core.active_view = view end
     renderer.draw_rect = function() end
+    core.cursor_change_req = nil
   end)
 
   test.after_each(function()
     autocomplete.close()
     panes.reset_for_tests()
     renderer.draw_rect = saved.draw_rect
+    system.set_cursor = saved.set_cursor
     saved.draw_rect = nil
+    saved.set_cursor = nil
     for key, value in pairs(saved) do core[key] = value end
   end)
 
@@ -173,6 +178,22 @@ test.describe("Root Panel Pane presentation", function()
 
     test.equal(one.current_view.leaves, 1)
     test.equal(two.current_view.moves, 1)
+  end)
+
+  test.it("applies the hovered View cursor to the system pointer", function()
+    local pane = panes.create { factory = pane_factory("editor") }
+    root:update()
+    pane.current_view.cursor = "ibeam"
+    local applied
+    system.set_cursor = function(cursor) applied = cursor end
+
+    root:on_mouse_moved(
+      pane.position.x + 20, pane.position.y + 20, 0, 0
+    )
+    root:draw()
+
+    test.equal(applied, "ibeam")
+    test.is_nil(core.cursor_change_req)
   end)
 
   test.it("lets a Pane scrollbar own presses near a divider", function()

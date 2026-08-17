@@ -477,6 +477,10 @@ function RootPanel:draw()
     item.fn(table.unpack(item, 1, #item))
   end
   self.deferred_draws = {}
+  if core.cursor_change_req then
+    system.set_cursor(core.cursor_change_req)
+    core.cursor_change_req = nil
+  end
 end
 
 return RootPanel
