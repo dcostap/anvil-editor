@@ -25,13 +25,14 @@ test.describe("core.dirwatch", function()
       unwatch = function() end,
     }
 
-    local parent, changed
-    watch:check(function(path, changed_path)
-      parent, changed = path, changed_path
+    local parent, changed, precise
+    watch:check(function(path, changed_path, has_leaf)
+      parent, changed, precise = path, changed_path, has_leaf
     end)
 
     test.equal(parent, watched)
     test.equal(changed, common.normalize_path(watched .. PATHSEP .. "active-session.log"))
+    test.ok(precise)
   end)
 
   test.it("queues one native wake notification for an unread change batch", function(context)

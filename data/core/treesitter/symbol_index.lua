@@ -3,7 +3,6 @@ local common = require "core.common"
 local config = require "core.config"
 local project_paths = require "core.project_paths"
 local project_files = require "core.project_files"
-local DirWatch = require "core.dirwatch"
 local registry = require "core.treesitter.registry"
 local outline = require "core.treesitter.outline"
 local worker_pool = require "core.worker_pool"
@@ -19,7 +18,6 @@ local function project_paths_module()
 end
 
 local DEFAULT_PARSE_TIMEOUT_MS = 1000
-local DEFAULT_SCAN_YIELD_FILES = 4
 local DEFAULT_QUERY_LIMIT = 200
 local DEFAULT_REFRESH_AFTER_SECONDS = 5
 local DEFAULT_MATCH_LIMIT = 50000
@@ -67,7 +65,9 @@ local function max_ui_metric(index, key, value)
 end
 
 local function safe_yield(wait)
-  if coroutine.isyieldable and coroutine.isyieldable() then
+  local yieldable = coroutine.isyieldable and coroutine.isyieldable()
+    or not coroutine.isyieldable and coroutine.running() ~= nil
+  if yieldable then
     coroutine.yield(wait)
     return true
   end
@@ -100,9 +100,6 @@ local function new_index(root)
     open_buffer_jobs = {},
     pending_reindex_paths = {},
     pending_reindex_dirs = {},
-    watcher = nil,
-    watched_dirs = {},
-    watch_generation = 0,
     watch_running = false,
     watch_ignored_events = 0,
     watch_irrelevant_events = 0,
@@ -264,10 +261,12 @@ local function drain_pending_reindexes(index)
   if pending and next(pending) ~= nil then
     index.pending_reindex_paths = {}
     drained = true
-    for path, reason in pairs(pending) do
-      if symbol_index.reindex_file then
-        symbol_index.reindex_file(path, { force = true, reason = reason or "queued-during-indexing" })
-      end
+    local paths = {}
+    for path in pairs(pending) do paths[path] = true end
+    if symbol_index.mark_watch_paths_dirty then
+      symbol_index.mark_watch_paths_dirty(index.root, paths, "queued-during-indexing", {
+        project_files_refreshed = true,
+      })
     end
   end
   return drained
@@ -286,118 +285,44 @@ local function add_coalesced_scope(scopes, path, value)
   return true
 end
 
-local function watch_dir(index, dir)
-  if not index or not index.watcher or not dir then return false end
-  dir = common.normalize_path(dir)
-  if index.watched_dirs[dir] then return false end
-  local info = system.get_file_info(dir)
-  if not info or info.type ~= "dir" then return false end
-  index.watcher:watch(dir)
-  index.watched_dirs[dir] = true
-  return true
-end
-
-local function prune_missing_watches(index, scope)
-  if not index or not index.watcher then return false end
-  scope = scope and common.normalize_path(scope)
-  local changed = false
-  for dir in pairs(index.watched_dirs or {}) do
-    if not scope or common.path_equals(dir, scope) or common.path_belongs_to(dir, scope) then
-      local info = system.get_file_info(dir)
-      if not info or info.type ~= "dir" then
-        index.watcher:unwatch(dir)
-        index.watched_dirs[dir] = nil
-        changed = true
-      end
-    end
-  end
-  return changed
-end
-
-local function refresh_watches_for_dir(index, dir)
-  if not index or not index.watcher or not dir then return false end
-  dir = common.normalize_path(dir)
-  local info = system.get_file_info(dir)
-  if not info or info.type ~= "dir" then return false end
-
-  prune_missing_watches(index, dir)
-  local changed = watch_dir(index, dir)
-  if common.path_equals(dir, index.root) then
-    local git_info = common.normalize_path(index.root .. PATHSEP .. ".git" .. PATHSEP .. "info")
-    local git_info_stat = system.get_file_info(git_info)
-    if git_info_stat and git_info_stat.type == "dir" and watch_dir(index, git_info) then
-      changed = true
-    end
-  end
-  local mode = index.watcher.monitor and index.watcher.monitor.mode and index.watcher.monitor:mode()
-  if mode == "single" then
-    log_quiet("Tree-sitter Project index: watching %s with single native watch; skipping recursive watch setup", tostring(dir))
-    return changed
-  end
-  local listed, list_error = project_files.list(index.root)
-  if not listed then
-    log_quiet("Tree-sitter Project watcher could not list files under %s: %s",
-      tostring(index.root), tostring(list_error))
-    return changed
-  end
-  local yielded = 0
-  for _, path in ipairs(project_files.directories(index.root) or {}) do
-    if (common.path_equals(path, dir) or common.path_belongs_to(path, dir))
-      and watch_dir(index, path)
-    then
-      changed = true
-    end
-    yielded = yielded + 1
-    if yielded >= DEFAULT_SCAN_YIELD_FILES * 16 then
-      yielded = 0
-      safe_yield(0)
-    end
-  end
-  return changed
-end
-
 local function start_project_watcher(index)
   if not index or index.watch_running then return false end
-  index.watcher = index.watcher or DirWatch()
-  index.watched_dirs = index.watched_dirs or {}
-  index.watch_generation = (index.watch_generation or 0) + 1
-  local generation = index.watch_generation
   index.watch_running = true
   local root = index.root
-
-  core.add_thread(function()
-    log_quiet("Tree-sitter Project index: starting filesystem watcher for %s", tostring(root))
-    local ok, err = pcall(refresh_watches_for_dir, index, root)
-    if not ok then
-      log_quiet("Tree-sitter Project index: initial filesystem watch setup failed for %s: %s", tostring(root), tostring(err))
-    elseif index.status == "ready" and symbol_index.mark_directory_dirty then
-      symbol_index.mark_directory_dirty(root, "watch-startup", { force = false })
+  project_files.subscribe(root, index, function(changed_paths, event)
+    if not index.watch_running then return end
+    if event and event.error then
+      log_quiet("Tree-sitter Project watcher reconciliation failed for %s: %s",
+        tostring(root), tostring(event.error))
     end
-
-    while index.watch_generation == generation do
-      local changed_paths = {}
-      ok, err = pcall(function()
-        index.watcher:check(function(path, changed_path)
-          changed_path = common.normalize_path(changed_path or path)
-          if changed_path and (common.path_equals(changed_path, root) or common.path_belongs_to(changed_path, root)) then
-            changed_paths[changed_path] = true
-          end
-        end, 0.02, 0.01)
-      end)
-      if not ok then
-        log_quiet("Tree-sitter Project index: filesystem watcher failed for %s: %s", tostring(root), tostring(err))
-        safe_yield(5)
-      else
-        if next(changed_paths) and symbol_index.mark_watch_paths_dirty then
-          symbol_index.mark_watch_paths_dirty(root, changed_paths, "project-watch")
-        end
-        safe_yield(0.25)
-      end
+    if next(changed_paths or {}) and symbol_index.mark_watch_paths_dirty then
+      symbol_index.mark_watch_paths_dirty(root, changed_paths, "project-watch", {
+        project_files_refreshed = true,
+        previous_membership = event and event.previous_membership,
+      })
     end
-    index.watch_running = false
-    log_quiet("Tree-sitter Project index: stopped filesystem watcher for %s", tostring(root))
   end)
+  log_quiet("Tree-sitter Project index: subscribed to Project file changes for %s", tostring(root))
   return true
+end
+
+local function coalesce_scope_candidates(candidates)
+  local scopes = {}
+  local processed = 0
+  for path, value in pairs(candidates) do
+    local ancestor = common.dirname(path)
+    local covered = false
+    while ancestor and ancestor ~= path do
+      if candidates[ancestor] then covered = true; break end
+      local parent = common.dirname(ancestor)
+      if not parent or parent == ancestor then break end
+      ancestor = parent
+    end
+    if not covered then scopes[path] = value end
+    processed = processed + 1
+    if processed % 128 == 0 then safe_yield(0) end
+  end
+  return scopes
 end
 
 local function native_project_run_languages_payload()
@@ -680,8 +605,6 @@ local function submit_native_run(index, generation, opts, phase)
     project_paths_generation = index.project_paths_generation,
     root = index.root,
   }
-  if index.watcher then refresh_watches_for_dir(index, index.root) end
-
   local run = {
     generation = generation,
     project_paths_generation = index.project_paths_generation,
@@ -836,7 +759,10 @@ submit_worker_scan = function(index, generation, opts, phase)
         return
       end
       local files = {}
-      for _, file in ipairs(listed) do files[#files + 1] = { path = file.path } end
+      for i, file in ipairs(listed) do
+        files[#files + 1] = { path = file.path }
+        if i % 128 == 0 then safe_yield(0) end
+      end
       local run_opts = common.merge(opts, { files = files })
       submit_native_run(index, generation, run_opts, phase)
     end)
@@ -2116,9 +2042,8 @@ local function submit_targeted_file_reindex(index, path, opts)
   if not index or not path then return false, "no-index" end
   if not common.path_belongs_to(path, index.root) then return false, "outside-project" end
 
-  project_files.invalidate(index.root)
-  local listed, list_error = project_files.list(index.root, { refresh = true })
-  if not listed then return false, list_error or "Project file listing failed" end
+  local reconciled, reconcile_error = project_files.reconcile(index.root, { [path] = true })
+  if not reconciled then return false, reconcile_error or "Project file reconciliation failed" end
   local included = project_files.contains(index.root, path, "file") == true
   local info = system.get_file_info(path)
   if index.native_snapshot then
@@ -2159,13 +2084,23 @@ local function submit_targeted_directories_reindex(index, dirs, opts)
     local files
     if listed then
       files = {}
-      for _, file in ipairs(listed) do
-        for _, scan_root in ipairs(scan_roots) do
-          if common.path_belongs_to(file.path, scan_root) then
+      local scan_scope_keys = {}
+      for _, scan_root in ipairs(scan_roots) do
+        scan_scope_keys[common.path_compare_key(scan_root)] = true
+      end
+      for i, file in ipairs(listed) do
+        local directory = common.dirname(file.path)
+        while directory and (common.path_equals(directory, index.root)
+          or common.path_belongs_to(directory, index.root))
+        do
+          if scan_scope_keys[common.path_compare_key(directory)] then
             files[#files + 1] = { path = file.path }
             break
           end
+          if common.path_equals(directory, index.root) then break end
+          directory = common.dirname(directory)
         end
+        if i % 128 == 0 then safe_yield(0) end
       end
     end
     index.generation = (index.generation or 0) + 1
@@ -2217,23 +2152,23 @@ end
 function symbol_index.mark_directories_dirty(dirs, reason, opts)
   opts = opts or {}
   if type(dirs) ~= "table" then return false, "no-directory" end
-  local scopes = {}
+  local candidates = {}
   for key, value in pairs(dirs) do
     local dir = type(key) == "number" and value or key
     dir = dir and common.normalize_path(dir)
-    if dir then add_coalesced_scope(scopes, dir, true) end
+    if dir then candidates[dir] = true end
   end
+  local scopes = coalesce_scope_candidates(candidates)
   if not next(scopes) then return false, "no-directory" end
   opts = common.merge(opts, { reason = reason or opts.reason or "directory-dirty" })
   local matched = false
   local ignored = false
   for _, index in pairs(indexes) do
     if not opts.project_files_refreshed then
-      project_files.invalidate(index.root)
-      local refreshed, refresh_error = project_files.list(index.root, { refresh = true })
-      if not refreshed then
-        log_quiet("Tree-sitter Project directory refresh could not list files under %s: %s",
-          tostring(index.root), tostring(refresh_error))
+      local reconciled, reconcile_error = project_files.reconcile(index.root, scopes)
+      if not reconciled then
+        log_quiet("Tree-sitter Project directory reconciliation failed under %s: %s",
+          tostring(index.root), tostring(reconcile_error))
       end
     end
     local index_dirs = {}
@@ -2251,10 +2186,10 @@ function symbol_index.mark_directories_dirty(dirs, reason, opts)
       if index.status == "indexing" then
         index.pending_reindex_dirs = index.pending_reindex_dirs or {}
         for _, dir in ipairs(index_dirs) do
-          add_coalesced_scope(index.pending_reindex_dirs, dir, {
+          index.pending_reindex_dirs[dir] = {
             reason = opts.reason or "directory-dirty",
             force = opts.force,
-          })
+          }
           log_quiet("Tree-sitter Project index: coalesced dirty directory refresh for %s under %s while worker indexing (%s)",
             tostring(dir), tostring(index.root), tostring(opts.reason))
         end
@@ -2323,44 +2258,47 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
   if not index then return false, "no-index" end
 
   local old_membership = {}
+  local processed = 0
   for key, value in pairs(paths) do
     local path = type(key) == "number" and value or key
     if path then
-      old_membership[common.normalize_path(path)] =
-        project_files.contains(root, path, "file") == true
-        or project_files.contains(root, path, "dir") == true
+      local normalized = common.normalize_path(path)
+      local previous = opts and opts.previous_membership
+      if previous and previous[normalized] ~= nil then
+        old_membership[normalized] = previous[normalized]
+      else
+        old_membership[normalized] = project_files.contains(root, path, "file") == true
+          or project_files.contains(root, path, "dir") == true
+      end
+    end
+    processed = processed + 1
+    if processed % 128 == 0 then safe_yield(0) end
+  end
+  local files_current = opts and opts.project_files_refreshed == true
+  if not files_current then
+    local reconciled, reconcile_error = project_files.reconcile(root, paths)
+    files_current = reconciled == true
+    if not reconciled then
+      log_quiet("Tree-sitter Project watcher could not reconcile Project files under %s: %s",
+        tostring(root), tostring(reconcile_error))
     end
   end
-  project_files.invalidate(root)
-  local refreshed, refresh_error = project_files.list(root, { refresh = true })
-  if not refreshed then
-    log_quiet("Tree-sitter Project watcher could not refresh Project files under %s: %s",
-      tostring(root), tostring(refresh_error))
-  end
 
-  local scopes = {}
+  local scope_candidates = {}
   local ignored, irrelevant = 0, 0
+  processed = 0
   for key, value in pairs(paths) do
     local path = type(key) == "number" and value or key
     path = path and common.normalize_path(path)
     if path and (common.path_equals(path, root) or common.path_belongs_to(path, root)) then
       local rules_scope = ignore_rules_scope(root, path)
       if rules_scope then
-        add_coalesced_scope(scopes, rules_scope, true)
+        scope_candidates[rules_scope] = true
       else
         local info = system.get_file_info(path)
         if info and info.type == "dir" then
           if watch_path_allowed(index, path, info, "dir") then
-            add_coalesced_scope(scopes, path, true)
-          else
-            ignored = ignored + 1
-          end
-        elseif has_project_index_provider(path) then
-          -- Do not size-filter source paths here. A file that grew beyond the
-          -- native scan cap may already have records in the current snapshot;
-          -- refreshing its scope is what removes those now-stale records.
-          if watch_path_allowed(index, path, info, "file") then
-            add_coalesced_scope(scopes, common.dirname(path), true)
+            scope_candidates[path] = true
           else
             ignored = ignored + 1
           end
@@ -2373,7 +2311,16 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
           if not old_membership[path] and not watch_path_allowed(index, path, nil, "dir") then
             ignored = ignored + 1
           elseif watch_path_allowed(index, parent, system.get_file_info(parent), "dir") then
-            add_coalesced_scope(scopes, parent, true)
+            scope_candidates[parent] = true
+          else
+            ignored = ignored + 1
+          end
+        elseif has_project_index_provider(path) then
+          -- Do not size-filter source paths here. A file that grew beyond the
+          -- native scan cap may already have records in the current snapshot;
+          -- refreshing its scope is what removes those now-stale records.
+          if watch_path_allowed(index, path, info, "file") then
+            scope_candidates[common.dirname(path)] = true
           else
             ignored = ignored + 1
           end
@@ -2382,7 +2329,11 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
         end
       end
     end
+    processed = processed + 1
+    if processed % 128 == 0 then safe_yield(0) end
   end
+
+  local scopes = coalesce_scope_candidates(scope_candidates)
 
   index.watch_ignored_events = (index.watch_ignored_events or 0) + ignored
   index.watch_irrelevant_events = (index.watch_irrelevant_events or 0) + irrelevant
@@ -2390,7 +2341,7 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
     return false, ignored > 0 and irrelevant == 0 and "ignored" or "irrelevant"
   end
   return symbol_index.mark_directories_dirty(scopes, reason or "project-watch",
-    common.merge(opts or {}, { project_files_refreshed = refreshed ~= nil }))
+    common.merge(opts or {}, { project_files_refreshed = files_current }))
 end
 
 function symbol_index.mark_file_dirty(path, reason)
@@ -2428,14 +2379,12 @@ end
 
 function symbol_index.reset_for_tests()
   for _, index in pairs(indexes) do
+    project_files.unsubscribe(index.root, index)
     cancel_index_work(index)
     if index.native_snapshot then pcall(index.native_snapshot.close, index.native_snapshot) end
     index.native_snapshot = nil
     index.generation = (index.generation or 0) + 1
-    index.watch_generation = (index.watch_generation or 0) + 1
     index.watch_running = false
-    index.watcher = nil
-    index.watched_dirs = {}
   end
   indexes = {}
   open_buffers = setmetatable({}, { __mode = "v" })

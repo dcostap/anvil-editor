@@ -559,24 +559,6 @@ test.describe("Markdown vault index", function()
     common.rm(root, true)
   end)
 
-  test.it("enters degraded watcher mode after its deterministic directory budget", function()
-    local root = temp_root("markdown-vault-watch-budget")
-    local child = join_path(root, "child")
-    mkdirp(child)
-    local index = vault_index.get_index(root)
-    index.watcher = { watch = function() end, scanned = {} }
-    index.watcher_mode = "native"
-    index.watch_dir_limit = 1
-
-    test.equal(index:watch_dir(root), true)
-    test.equal(index:watch_dir(child), false)
-    test.equal(index.watcher_mode, "degraded")
-    index.watcher = nil
-    index.watched_dirs = {}
-    index.watch_dir_count = 0
-    common.rm(root, true)
-  end)
-
   test.it("excludes raw HTML links from note rename plans", function()
     local root = temp_root("markdown-vault-rename-html")
     mkdirp(root)
@@ -603,27 +585,6 @@ test.describe("Markdown vault index", function()
     test.equal(index.manifest_job, nil)
     test.equal(index.vault_job, nil)
     test.ok(index.status ~= "indexing")
-    common.rm(root, true)
-  end)
-
-  test.it("adopts native manifest directories for multi-watch backends", function()
-    local root = temp_root("markdown-vault-nested-watch")
-    local nested = join_path(root, "one", "two")
-    mkdirp(nested)
-    write_file(join_path(nested, "Note.md"), "# Note\n")
-    local index = vault_index.get_index(root):rebuild("nested-watch-test")
-    local watched = {}
-    local watcher = {
-      monitor = { mode = function() return "multiple" end },
-      watch = function(_, path) watched[common.path_compare_key(path)] = true end,
-      unwatch = function() end,
-    }
-    index.watcher, index.watcher_serial = watcher, index.watcher_serial + 1
-    index:watch_dir(root)
-    index:adopt_manifest_watch_dirs(index.manifest_snapshot, watcher, index.watcher_serial)
-    test.ok(wait_until(function() return watched[common.path_compare_key(nested)] end),
-      "nested manifest directory was not watched")
-    index:stop_watcher()
     common.rm(root, true)
   end)
 

@@ -576,10 +576,16 @@ function fuzzy_searcher.file_roots_signature(roots, include_ignored)
   return table.concat(parts, "\0")
 end
 
--- Invalidate watcher services left by an older plugin load. File discovery is
--- intentionally on demand now, so no Project filesystem thread survives after
--- a picker refresh completes.
+-- Remove subscriptions left by an older plugin load.
 core.__fuzzy_file_watch_service_token = (core.__fuzzy_file_watch_service_token or 0) + 1
+if core.__fuzzy_project_file_watch then
+  for path, id in pairs(core.__fuzzy_project_file_watch) do
+    project_files.unsubscribe(path, id)
+  end
+end
+local fuzzy_file_watch_id = {}
+local fuzzy_file_watch_roots = {}
+core.__fuzzy_project_file_watch = fuzzy_file_watch_roots
 if core.__fuzzy_file_scan_proc then
   pcall(function()
     if core.__fuzzy_file_scan_proc:running() then core.__fuzzy_file_scan_proc:kill() end
@@ -643,6 +649,37 @@ local function file_scan_command(_, include_ignored)
   return project_files.scan_command(include_ignored)
 end
 
+local function sync_project_file_subscriptions(roots)
+  local wanted = {}
+  for _, root in ipairs(roots or {}) do
+    local path = common.normalize_path(root.path)
+    wanted[path] = true
+    if not fuzzy_file_watch_roots[path] then
+      fuzzy_file_watch_roots[path] = fuzzy_file_watch_id
+      project_files.subscribe(path, fuzzy_file_watch_id, function(_, event)
+        if not (event and event.refreshed) then return end
+        fuzzy_searcher.files_skip_next_picker_refresh = false
+        fuzzy_searcher.files_materialized_cache = nil
+        fuzzy_searcher.files_materialized_generation = -1
+        fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
+        fuzzy_searcher.files_cache = nil
+        clear_native_file_index()
+        if fuzzy_searcher.files_indexing then
+          fuzzy_searcher.files_refresh_requested = true
+        elseif active_view and fuzzy_searcher.refresh_file_index_for_picker_open then
+          fuzzy_searcher.refresh_file_index_for_picker_open()
+        end
+      end)
+    end
+  end
+  for path, id in pairs(fuzzy_file_watch_roots) do
+    if not wanted[path] then
+      project_files.unsubscribe(path, id)
+      fuzzy_file_watch_roots[path] = nil
+    end
+  end
+end
+
 local function start_file_index(roots, signature, reason, include_ignored)
   if fuzzy_searcher.files_indexing then return false end
 
@@ -677,7 +714,9 @@ local function start_file_index(roots, signature, reason, include_ignored)
       end
 
       local files, scan_error = project_files.list(root.path, {
-        refresh = true,
+        refresh = include_ignored or reason == "picker-open" or project_files.cached(root.path, {
+          include_ignored = include_ignored,
+        }) == nil,
         include_ignored = include_ignored,
       })
       if not files then
@@ -794,6 +833,7 @@ local function start_file_index(roots, signature, reason, include_ignored)
 end
 
 local function prepare_file_index_roots(roots, signature)
+  sync_project_file_subscriptions(roots)
   if fuzzy_searcher.files_cache_root == signature then return end
   cancel_file_index_scan()
   fuzzy_searcher.files_cache_test_override = false

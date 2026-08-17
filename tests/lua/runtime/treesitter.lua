@@ -1564,6 +1564,46 @@ class StableLeafWatcherThing
     common.rm(root, true)
   end)
 
+  test.it("Tree-sitter shared watcher removes a deleted source file", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-watcher-delete-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local path = root .. PATHSEP .. "Deleted.kt"
+    write_file(path, "package demo\n\nclass DeletedWatcherThing\n")
+    symbol_index.start_project_indexing({ root = root, reason = "test-watch", refresh_after_seconds = 0 })
+    local index = wait_index_ready(root)
+    local generation = index.generation
+    local symbols = assert(symbol_index.workspace_symbols("DeletedWatcherThing", {
+      root = root, limit = 20, refresh_after_seconds = 0,
+    }))
+    test.equal(#symbols, 1)
+
+    test.ok(os.remove(path))
+    local deadline = system.get_time() + 5
+    repeat
+      index = symbol_index.status(root)
+      if index.generation > generation and index.status == "ready" then
+        symbols = assert(symbol_index.workspace_symbols("DeletedWatcherThing", {
+          root = root, limit = 20, refresh_after_seconds = 0,
+        }))
+        if #symbols == 0 then break end
+      end
+      coroutine.yield(0.05)
+    until system.get_time() >= deadline
+
+    local project_watch = require("core.project_files").watch_status(root)
+    test.ok(index.generation > generation, string.format(
+      "shared watcher did not schedule deletion reconciliation (subscribers=%d pending=%d files_generation=%d ignored=%d irrelevant=%d)",
+      project_watch.subscribers or -1, project_watch.pending or -1,
+      project_watch.generation or -1, index.watch_ignored_events or -1,
+      index.watch_irrelevant_events or -1))
+    test.equal(index.status, "ready", index.reason)
+    test.equal(#symbols, 0)
+    symbol_index.reset_for_tests()
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter Project queries can consume a published partial native snapshot", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-partial-snapshot-query-"

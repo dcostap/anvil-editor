@@ -103,8 +103,9 @@ end
 function DirWatch:unwatch(path)
   if self.watched[path] then
     if self.monitor:mode() == "multiple" then
-      self.monitor:unwatch(self.watched[path])
-      self.reverse_watched[path] = nil
+      local watch_id = self.watched[path]
+      self.monitor:unwatch(watch_id)
+      self.reverse_watched[watch_id] = nil
     else
       self.single_watch_count = self.single_watch_count - 1
       if self.single_watch_count == 0 then
@@ -128,51 +129,65 @@ end
 function DirWatch:check(change_callback, scan_time, wait_time)
   local had_change = false
   local last_error
+  local native_events = {}
   self.monitor:check(function(id, native_watch_id)
-    had_change = true
-    if self.monitor:mode() == "single" then
-      local changed_path = id
-      if not string.match(id, "^/") and not string.match(id, "^%a:[/\\]") then
-        changed_path = self.single_watch_top .. PATHSEP .. id
-      end
-      changed_path = common.normalize_path(changed_path)
-      change_callback(common.dirname(changed_path), changed_path)
-    else
-      local watch_id = native_watch_id or id
-      local path = self.reverse_watched[watch_id]
-      if not path then return end
-      local last_modified = self.last_modified[path]
-      local info = system.get_file_info(path)
-      if last_modified then
-        self.last_modified[path] = nil
-        if info and info.modified == last_modified then
-          return
-        end
-      end
-      local changed_path = path
-      if type(id) == "string" then
-        if string.match(id, "^/") or string.match(id, "^%a:[/\\]") then
-          changed_path = id
-        else
-          changed_path = path .. PATHSEP .. id
-        end
-        changed_path = common.normalize_path(changed_path)
-      end
-      change_callback(path, changed_path)
-      -- The watch may get lost when a file is deleted and re-added, eg:
-      -- git checkout <branch>. We register modified timestamp to prevent
-      -- sending unnecessary notifications or duplicating them.
-      if info and info.type == "file" then
-        self:unwatch(path)
-        self:watch(path)
-        self.last_modified[path] = info.modified
-      end
-    end
+    native_events[#native_events + 1] = { id, native_watch_id }
   end, function(err)
     last_error = err
   end)
   if last_error ~= nil then error(last_error) end
   local start_time = system.get_time()
+  for _, event in ipairs(native_events) do
+    local id, native_watch_id = event[1], event[2]
+    had_change = true
+    if self.monitor:mode() == "single" then
+      local changed_path = id
+      local precise = type(id) == "string"
+      if precise and not string.match(id, "^/") and not string.match(id, "^%a:[/\\]") then
+        changed_path = self.single_watch_top .. PATHSEP .. id
+      end
+      if precise then
+        changed_path = common.normalize_path(changed_path)
+        change_callback(common.dirname(changed_path), changed_path, true)
+      elseif self.single_watch_top then
+        change_callback(self.single_watch_top, self.single_watch_top, false)
+      end
+    else
+      local watch_id = native_watch_id or id
+      local path = self.reverse_watched[watch_id]
+      if path then
+        local last_modified = self.last_modified[path]
+        local info = system.get_file_info(path)
+        local duplicate = last_modified and info and info.modified == last_modified
+        if last_modified then self.last_modified[path] = nil end
+        if not duplicate then
+          local changed_path = path
+          local precise = type(id) == "string"
+          if precise then
+            if string.match(id, "^/") or string.match(id, "^%a:[/\\]") then
+              changed_path = id
+            else
+              changed_path = path .. PATHSEP .. id
+            end
+            changed_path = common.normalize_path(changed_path)
+          end
+          change_callback(path, changed_path, precise)
+          -- The watch may get lost when a file is deleted and re-added, eg:
+          -- git checkout <branch>. We register modified timestamp to prevent
+          -- sending unnecessary notifications or duplicating them.
+          if info and info.type == "file" then
+            self:unwatch(path)
+            self:watch(path)
+            self.last_modified[path] = info.modified
+          end
+        end
+      end
+    end
+    if system.get_time() - start_time > (scan_time or 0.01) then
+      coroutine.yield(wait_time or 0.01)
+      start_time = system.get_time()
+    end
+  end
   for directory, old_modified in pairs(self.scanned) do
     if old_modified then
       local info = system.get_file_info(directory)

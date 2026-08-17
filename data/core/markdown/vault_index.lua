@@ -1,7 +1,6 @@
 local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
-local DirWatch = require "core.dirwatch"
 local json = require "core.json"
 local anchors = require "core.markdown.anchors"
 local links = require "core.markdown.links"
@@ -11,13 +10,18 @@ local project_files = require "core.project_files"
 
 local vault_index = {}
 
+local function cooperative_yield(wait)
+  local yieldable = coroutine.isyieldable and coroutine.isyieldable()
+    or not coroutine.isyieldable and coroutine.running() ~= nil
+  if yieldable then coroutine.yield(wait or 0) end
+end
+
 local MARKDOWN_EXTENSION_LIST = { "md", "markdown", "mdown" }
 local MARKDOWN_EXTENSIONS = {}
 for _, ext in ipairs(MARKDOWN_EXTENSION_LIST) do MARKDOWN_EXTENSIONS[ext] = true end
 
 local MAX_COOPERATIVE_NOTE_BYTES = 512 * 1024
 local DOC_UPDATE_DEBOUNCE_SECONDS = 0.03
-local MAX_NATIVE_WATCH_DIRS = 2048
 
 local ATTACHMENT_EXTENSIONS = {
   ["3gp"] = true,
@@ -211,20 +215,13 @@ function Index:new(root)
     consumers = {},
     watcher = nil,
     watcher_serial = 0,
-    watched_dirs = {},
-    pending_watch_dirs = {},
-    pending_scan_dirs = {},
-    subtree_scan_running = false,
     buffer_update_serials = setmetatable({}, { __mode = "k" }),
     buffer_overlay_serials = setmetatable({}, { __mode = "k" }),
-    watch_dir_limit = MAX_NATIVE_WATCH_DIRS,
-    watch_dir_count = 0,
     watcher_mode = "stopped",
     show_unsupported_files = obsidian_settings.showUnsupportedFiles == true,
     diagnostics = {
       buffer_updates = 0,
       buffer_updates_coalesced = 0,
-      degraded_rescans = 0,
       last_rebuild = nil,
     },
     removed_paths = {},
@@ -405,29 +402,6 @@ function Index:remove_path(path)
   return false
 end
 
-function Index:watch_dir(dir)
-  if not self.watcher or self.watched_dirs[dir] then return false end
-  local monitor = self.watcher.monitor
-  if monitor and monitor.mode and monitor:mode() == "single" and next(self.watched_dirs) then
-    return true
-  end
-  if self.watch_dir_count >= self.watch_dir_limit then
-    if self.watcher_mode ~= "degraded" then
-      self.watcher_mode = "degraded"
-      core.log_quiet(
-        "Markdown index watcher budget exhausted for %s after %d directories; enabling bounded rescans",
-        self.root, self.watch_dir_count
-      )
-    end
-    return false
-  end
-  self.watcher:watch(dir)
-  self.watched_dirs[dir] = true
-  self.watch_dir_count = self.watch_dir_count + 1
-  if self.watcher.scanned and self.watcher.scanned[dir] then self.watcher_mode = "degraded" end
-  return true
-end
-
 function Index:rebuild(reason, opts)
   opts = opts or {}
   self:rebuild_async(reason or "manual")
@@ -438,41 +412,6 @@ function Index:rebuild(reason, opts)
   return self
 end
 
-function Index:adopt_manifest_watch_dirs(manifest, watcher, watcher_serial)
-  local monitor = watcher and watcher.monitor
-  if monitor and monitor.mode and monitor:mode() == "single" then return end
-  local listed = project_files.cached(self.root)
-  if listed then
-    core.add_thread(function()
-      for _, dir in ipairs(project_files.directories(self.root) or {}) do
-        if self.watcher ~= watcher or self.watcher_serial ~= watcher_serial then return end
-        self:watch_dir(dir)
-        coroutine.yield(0)
-      end
-    end)
-    return
-  end
-  core.add_thread(function()
-    local summary, offset = manifest:summary(), 0
-    while self.watcher == watcher and self.watcher_serial == watcher_serial
-      and self.manifest_snapshot == manifest and offset < summary.records
-    do
-      local page = manifest:page(offset, 128)
-      for _, record in ipairs(page) do
-        if record.kind == "directory" then self:watch_dir(record.absolute_path) end
-      end
-      offset = page.next_offset
-      coroutine.yield(0)
-    end
-  end)
-end
-
-function Index:queue_subtree_scan(dirs, reason)
-  for _, dir in ipairs(dirs or {}) do self.pending_scan_dirs[dir] = true end
-  self.pending_scan_dirs = {}
-  return self:rebuild_async(reason or "watch-subtree")
-end
-
 function Index:reconcile_dir(dir, reason, opts)
   opts = opts or {}
   local ok, normalized = pcall(common.normalize_path, dir)
@@ -481,74 +420,74 @@ function Index:reconcile_dir(dir, reason, opts)
     and not common.path_belongs_to(normalized, self.root)
   ) then return false end
   self.dirty_manifest_scopes[path_key(normalized)] = normalized
-  if opts.cooperative then self:rebuild_async(reason or "watch")
+  if not opts.project_files_refreshed then
+    local reconciled, reconcile_error = project_files.reconcile(self.root, { [normalized] = true })
+    if not reconciled then
+      core.log_quiet("Markdown index Project file reconciliation failed for %s: %s",
+        tostring(normalized), tostring(reconcile_error))
+    end
+  end
+  if opts.cooperative then
+    self:rebuild_async(reason or "watch", {
+      project_files_refreshed = opts.project_files_refreshed == true,
+    })
   else self:rebuild(reason or "filesystem-reconcile") end
   return true
 end
 
 function Index:start_watcher()
   if self.watcher then return false end
-  local ok, watcher = pcall(DirWatch)
-  if not ok then
-    core.log_quiet("Markdown index filesystem watcher unavailable for %s: %s", self.root, tostring(watcher))
-    return false
-  end
-  self.watcher = watcher
-  self.watcher_mode = "native"
-  self.watch_dir_count = 0
+  self.watcher = true
+  self.watcher_mode = "shared"
   self.watcher_serial = self.watcher_serial + 1
   local serial = self.watcher_serial
-  self:watch_dir(self.root)
-  local git_info = join_path(self.root, ".git" .. PATHSEP .. "info")
-  local git_info_stat = system.get_file_info(git_info)
-  if git_info_stat and git_info_stat.type == "dir" then self:watch_dir(git_info) end
-  if self.manifest_snapshot then self:adopt_manifest_watch_dirs(self.manifest_snapshot, watcher, serial) end
-  core.add_thread(function()
-    local next_degraded_rescan = system.get_time() + 5
-    while self.watcher == watcher and self.watcher_serial == serial do
-      local checked, err = pcall(watcher.check, watcher, function(path)
-        self.pending_watch_dirs[path] = true
-      end)
-      if not checked then
-        core.log_quiet("Markdown index filesystem watcher failed for %s: %s", self.root, tostring(err))
-      end
-      local pending = self.pending_watch_dirs
-      self.pending_watch_dirs = {}
-      for path in pairs(pending) do
-        if self.watcher ~= watcher or self.watcher_serial ~= serial then return end
-        local reconciled, reconcile_err = pcall(
-          self.reconcile_dir, self, path, "watch", { cooperative = true }
-        )
-        if not reconciled then
-          core.log_quiet("Markdown index filesystem reconciliation failed for %s: %s", tostring(path), tostring(reconcile_err))
+  project_files.subscribe(self.root, self, function(paths, event)
+    if not self.watcher or self.watcher_serial ~= serial then return end
+    local changed = false
+    for key, value in pairs(paths or {}) do
+      local path = type(key) == "number" and value or key
+      path = path and common.normalize_path(path)
+      if path then
+        local name = common.basename(path)
+        local parent = common.dirname(path)
+        local ignore_rule = name == ".gitignore" or name == ".ignore" or name == ".rgignore"
+          or (name == "exclude" and common.basename(parent) == "info"
+            and common.basename(common.dirname(parent)) == ".git")
+        local info = system.get_file_info(path)
+        local included = project_files.contains(self.root, path, info and info.type or "file") == true
+        local indexed = self:note(path) or self:attachment(path)
+        if ignore_rule then
+          self.dirty_manifest_scopes[path_key(self.root)] = self.root
+          changed = true
+        elseif not info and indexed then
+          self:remove_path(path)
+          changed = true
+        elseif included and info and (info.type == "file" or info.type == "dir") then
+          self.dirty_manifest_scopes[path_key(path)] = path
+          changed = true
         end
-        coroutine.yield(0)
       end
-      if self.watcher_mode == "degraded" and system.get_time() >= next_degraded_rescan then
-        self.diagnostics.degraded_rescans = self.diagnostics.degraded_rescans + 1
-        self:queue_subtree_scan({ self.root }, "watcher-degraded")
-        next_degraded_rescan = system.get_time() + 5
-      end
-      coroutine.yield(0.2)
+      coroutine.yield(0)
+    end
+    if event and event.error then
+      core.log_quiet("Markdown index shared watcher reconciliation failed for %s: %s",
+        tostring(self.root), tostring(event.error))
+    end
+    if changed then
+      self:rebuild_async("watch", { project_files_refreshed = true })
     end
   end)
-  core.log_quiet("Markdown index started filesystem watcher for %s", self.root)
+  core.log_quiet("Markdown index subscribed to Project file changes for %s", self.root)
   return true
 end
 
 function Index:stop_watcher()
-  local watcher = self.watcher
-  if not watcher then return false end
+  if not self.watcher then return false end
   self.watcher = nil
   self.watcher_serial = self.watcher_serial + 1
-  for dir in pairs(self.watched_dirs) do pcall(watcher.unwatch, watcher, dir) end
-  self.watched_dirs = {}
-  self.watch_dir_count = 0
+  project_files.unsubscribe(self.root, self)
   self.watcher_mode = "stopped"
-  self.pending_watch_dirs = {}
-  self.pending_scan_dirs = {}
-  self.subtree_scan_running = false
-  core.log_quiet("Markdown index stopped filesystem watcher for %s", self.root)
+  core.log_quiet("Markdown index unsubscribed from Project file changes for %s", self.root)
   return true
 end
 
@@ -591,11 +530,19 @@ function Index:can_resolve()
   return self.status == "ready" or self.disk_snapshot ~= nil
 end
 
-function Index:rebuild_async(reason)
+function Index:rebuild_async(reason, opts)
+  opts = opts or {}
   local started_at = system.get_time()
   local rebuild_reason = reason or "async-rebuild"
+  local project_files_refreshed = opts.project_files_refreshed == true
   if self.manifest_job or self.vault_job then
     self.pending_manifest_reason = rebuild_reason
+    if self.pending_manifest_project_files_refreshed == nil then
+      self.pending_manifest_project_files_refreshed = project_files_refreshed
+    else
+      self.pending_manifest_project_files_refreshed =
+        self.pending_manifest_project_files_refreshed and project_files_refreshed
+    end
     core.log_quiet("Markdown vault index coalesced native manifest request: root=%s reason=%s",
       self.root, rebuild_reason)
     return false
@@ -611,7 +558,8 @@ function Index:rebuild_async(reason)
     rebuild_reason
   )
 
-  local function submit_scan_paths(scan_paths, previous_manifest)
+  local function submit_scan_paths(scan_paths, previous_manifest, remove_paths)
+  remove_paths = remove_paths or {}
   self.dirty_manifest_scopes = {}
   if classification_changed then
     core.log_quiet("Markdown vault attachment policy changed; forcing a full manifest rebuild: root=%s", self.root)
@@ -621,9 +569,11 @@ function Index:rebuild_async(reason)
   local function finish_error(message)
     if serial ~= self.rebuild_serial then return end
     for _, path in ipairs(scan_paths) do self.dirty_manifest_scopes[path_key(path)] = path end
+    for _, path in ipairs(remove_paths) do self.dirty_manifest_scopes[path_key(path)] = path end
     self.manifest_job = nil
     self.vault_job = nil
     self.pending_manifest_reason = nil
+    self.pending_manifest_project_files_refreshed = nil
     self.status, self.reason = "error", tostring(message and (message.error or message) or "manifest failed")
     self:notify("error", self.reason)
     core.log_quiet("Markdown native manifest failed: root=%s generation=%d error=%s",
@@ -642,6 +592,7 @@ function Index:rebuild_async(reason)
       show_unsupported_files = self.show_unsupported_files,
       manifest = previous_manifest,
       scan_paths = scan_paths,
+      remove_paths = remove_paths,
       project_scoped = true,
     },
     is_stale = function() return serial ~= self.rebuild_serial end,
@@ -709,7 +660,6 @@ function Index:rebuild_async(reason)
           if self.manifest_snapshot then self.manifest_snapshot:close() end
           self.manifest_snapshot = manifest
           manifest_adopted = true
-          if self.watcher then self:adopt_manifest_watch_dirs(manifest, self.watcher, self.watcher_serial) end
           self.status, self.reason = "ready", nil
           self.generation = self.generation + 1
           local vault_summary = snapshot:summary()
@@ -744,8 +694,16 @@ function Index:rebuild_async(reason)
             vault_summary.rebuilt_notes, vault_summary.bytes_read
           )
           local pending = self.pending_manifest_reason
+          local pending_project_files_refreshed = self.pending_manifest_project_files_refreshed
           self.pending_manifest_reason = nil
-          if pending then self:rebuild_async(pending) end
+          self.pending_manifest_project_files_refreshed = nil
+          if pending then
+            core.add_thread(function()
+              self:rebuild_async(pending, {
+                project_files_refreshed = pending_project_files_refreshed == true,
+              })
+            end)
+          end
         end,
       }
       if not vault_handle then manifest:close(); finish_error(vault_error or "native vault submission failed")
@@ -759,30 +717,39 @@ function Index:rebuild_async(reason)
   end
   end
 
-  local scoped_paths = {}
+  local scoped_paths, scoped_remove_paths = {}, {}
   local can_update_scopes = self.manifest_snapshot ~= nil and not classification_changed
+  local scoped_count = 0
   for _, path in pairs(self.dirty_manifest_scopes) do
     local info = system.get_file_info(path)
-    if not (info and info.type == "file"
-      and project_files.contains(self.root, path, "file") == true)
+    if info and info.type == "file"
+      and project_files.contains(self.root, path, "file") == true
     then
+      scoped_paths[#scoped_paths + 1] = path
+    elseif not info then
+      scoped_remove_paths[#scoped_remove_paths + 1] = path
+    else
       can_update_scopes = false
       break
     end
-    scoped_paths[#scoped_paths + 1] = path
+    scoped_count = scoped_count + 1
+    if scoped_count % 128 == 0 then cooperative_yield(0) end
   end
-  if #scoped_paths == 0 then can_update_scopes = false end
+  if #scoped_paths == 0 and #scoped_remove_paths == 0 then can_update_scopes = false end
   if can_update_scopes then
-    table.sort(scoped_paths)
     -- Keep the published snapshot available while a known file is refreshed.
     self.status, self.reason = "ready", nil
-    submit_scan_paths(scoped_paths, self.manifest_snapshot)
+    submit_scan_paths(scoped_paths, self.manifest_snapshot, scoped_remove_paths)
     return false
   end
 
   self.manifest_job = {}
   core.add_thread(function()
-    local listed, list_error = project_files.list(self.root, { refresh = true })
+    local listed = project_files_refreshed and project_files.cached(self.root) or nil
+    local list_error
+    if not listed then
+      listed, list_error = project_files.list(self.root, { refresh = true })
+    end
     if serial ~= self.rebuild_serial then return end
     self.manifest_job = nil
     if not listed then
@@ -793,7 +760,10 @@ function Index:rebuild_async(reason)
       return
     end
     local scan_paths = {}
-    for _, file in ipairs(listed) do scan_paths[#scan_paths + 1] = file.path end
+    for i, file in ipairs(listed) do
+      scan_paths[#scan_paths + 1] = file.path
+      if i % 128 == 0 then coroutine.yield(0) end
+    end
     submit_scan_paths(scan_paths, nil)
   end)
   return false
