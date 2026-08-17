@@ -205,7 +205,8 @@ function GlobalPromptBar:move_suggestion_idx(dir)
   else
     local current_suggestion = #self.suggestions > 0 and self.suggestions[self.suggestion_idx].text
     local text = self:get_text()
-    if text == current_suggestion then
+    if current_suggestion
+        and text:lower() == tostring(current_suggestion):lower() then
       local n = self.suggestion_idx + dir
       if n == 0 and self.save_suggestion then
         self:set_text(self.save_suggestion)
@@ -408,7 +409,7 @@ function GlobalPromptBar:update()
       local current_text = self:get_text()
       local suggested_text = self.suggestions[self.suggestion_idx].text or ""
       if #self.last_text < #current_text and
-         string.find(suggested_text, current_text, 1, true) == 1 then
+         string.find(suggested_text:lower(), current_text:lower(), 1, true) == 1 then
         self:set_text(suggested_text)
         self.buffer:set_selection(1, #current_text + 1, 1, math.huge)
       end

@@ -12,6 +12,33 @@ test.describe("Global Prompt Bar pointer interception", function()
   end)
 end)
 
+test.describe("Global Prompt Bar typeahead", function()
+  test.it("completes a suggestion without matching letter case", function()
+    local bar = core.global_prompt_bar
+    bar:exit(true)
+    local previous_view = core.active_view
+    local ok, err = pcall(function()
+      bar:enter("Open File", {
+        suggest = function()
+          return { "Coding-Conventions.md" }
+        end,
+      })
+      bar:on_text_input("coding")
+      bar:update()
+
+      test.equal(bar:get_text(), "Coding-Conventions.md")
+      local line1, col1, line2, col2 = bar.buffer:get_selection()
+      test.equal(line1, 1)
+      test.equal(col1, #"coding" + 1)
+      test.equal(line2, 1)
+      test.equal(col2, #"Coding-Conventions.md" + 1)
+    end)
+    bar:exit(true)
+    if previous_view then core.set_active_view(previous_view) end
+    if not ok then error(err, 0) end
+  end)
+end)
+
 local function capture_overlay_rects()
   local rects = {}
   local alphas = {}
