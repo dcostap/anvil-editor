@@ -2391,7 +2391,7 @@ poi.add_activation_provider("autocomplete-source", {
       col2 = col + 1,
       text_bounds = true,
       activate = function(_, _, opts)
-        return reveal_completion_source(opts and opts.pane == "right")
+        return reveal_completion_source(opts and opts.placement == "split")
       end,
     }
   end,

@@ -406,6 +406,31 @@ test.describe("autocomplete batch behavior", function()
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "resolve_message")
   end)
 
+  test.it("opens an autocomplete source in a new Pane through alternate POI activation", function(context)
+    local _, active_path = seed_odin_project_symbol(context, "current.odin")
+    local symbol = symbol_index.status(core.root_project().path).symbols[1]
+    symbol.name = "resolve_message"
+    symbol.text = "resolve_message"
+    symbol.kind = "function"
+    symbol.parent_name = nil
+    symbol.signature = "()"
+    write_file(active_path, "resolve")
+    local source_view = open_file_editor(context, active_path)
+    local source_pane = panes.pane_for_view(source_view)
+
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open())
+    test.ok(command.perform("poi:activate-split"))
+
+    local target_view = core.active_view
+    test.equal(panes.count(), 2)
+    test.not_equal(panes.pane_for_view(target_view), source_pane)
+    test.ok(target_view.buffer and common.path_equals(target_view.buffer.abs_filename, symbol.path))
+    if target_view.buffer ~= source_view.buffer then
+      track(context, "buffers", target_view.buffer)
+    end
+  end)
+
   test.it("does not apply automatic Buffer-word filters to Project symbols", function(context)
     local _, active_path = seed_odin_project_symbol(context, "current.odin")
     local symbol = symbol_index.status(core.root_project().path).symbols[1]
