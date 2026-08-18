@@ -2524,7 +2524,7 @@ local function build_scope(base, line, max_count)
       meta.has_more = matches.has_more == true
       meta.count = #list
       if meta.has_more then
-        core.log_quiet("Fuzzy grep scope: %q limited to %d files", tostring(base), #list)
+        core.log_quiet("Fuzzy grep scope: query_len=%d limited to %d files", #tostring(base), #list)
       end
       return list, meta
     end
@@ -2541,7 +2541,7 @@ local function build_scope(base, line, max_count)
   end
   meta.count = #list
   if meta.has_more then
-    core.log_quiet("Fuzzy grep scope: %q limited to %d files", tostring(base), #list)
+    core.log_quiet("Fuzzy grep scope: query_len=%d limited to %d files", #tostring(base), #list)
   end
   return list, meta
 end
@@ -3695,7 +3695,7 @@ function FSView:start_everything_project_search(query, offset, append)
     return
   end
   if everything.state ~= "available" then
-    core.log_quiet("Fuzzy Everything: search deferred; state=%s query=%q", tostring(everything.state), query)
+    core.log_quiet("Fuzzy Everything: search deferred; state=%s query_len=%d", tostring(everything.state), #query)
     probe_everything(self)
     return
   end
@@ -3707,7 +3707,7 @@ function FSView:start_everything_project_search(query, offset, append)
   self.everything_loading = false
   self:defer_everything_loading(offset > 0 and "Loading more Everything results…" or "Searching Everything…")
   local params = everything_project_search_params(query, count, offset)
-  core.log_quiet("Fuzzy Everything: searching query=%q everything_search=%q offset=%d count=%d append=%s", query, params.search, offset, count, tostring(append))
+  core.log_quiet("Fuzzy Everything: searching query_len=%d offset=%d count=%d append=%s", #query, offset, count, tostring(append))
 
   http.get(everything_endpoint(), params, {
     timeout = 2,
@@ -3717,7 +3717,7 @@ function FSView:start_everything_project_search(query, offset, append)
       self.everything_loading = false
       self.loading_more = false
       if not ok or type(data) ~= "table" then
-        core.log_quiet("Fuzzy Everything: search failed query=%q err=%s data_type=%s", query, tostring(_err), type(data))
+        core.log_quiet("Fuzzy Everything: search failed query_len=%d error_type=%s data_type=%s", #query, type(_err), type(data))
         everything.state = "unavailable"
         self.everything_results = {}
         self.everything_total = 0
@@ -3739,7 +3739,7 @@ function FSView:start_everything_project_search(query, offset, append)
       self.everything_total = total
       self.everything_has_more = #out < total
       self.everything_status = string.format("%d Everything folders%s", #out, self.everything_has_more and "+" or "")
-      core.log_quiet("Fuzzy Everything: search ok query=%q shown=%d total=%d has_more=%s", query, #out, total, tostring(self.everything_has_more))
+      core.log_quiet("Fuzzy Everything: search ok query_len=%d shown=%d total=%d has_more=%s", #query, #out, total, tostring(self.everything_has_more))
       self.dirty = true
       self:schedule_update(true)
     end
@@ -3758,7 +3758,7 @@ function FSView:start_everything_file_search(query, offset, append)
     return
   end
   if everything.state ~= "available" then
-    core.log_quiet("Fuzzy Everything files: search deferred; state=%s query=%q", tostring(everything.state), query)
+    core.log_quiet("Fuzzy Everything files: search deferred; state=%s query_len=%d", tostring(everything.state), #query)
     probe_everything(self)
     return
   end
@@ -3770,7 +3770,7 @@ function FSView:start_everything_file_search(query, offset, append)
   self.everything_loading = false
   self:defer_everything_loading(offset > 0 and "Loading more Everything files…" or "Searching Everything files…")
   local params = everything_file_search_params(query, count, offset)
-  core.log_quiet("Fuzzy Everything files: searching query=%q everything_search=%q offset=%d count=%d append=%s", query, params.search, offset, count, tostring(append))
+  core.log_quiet("Fuzzy Everything files: searching query_len=%d offset=%d count=%d append=%s", #query, offset, count, tostring(append))
 
   http.get(everything_endpoint(), params, {
     timeout = 2,
@@ -3780,7 +3780,7 @@ function FSView:start_everything_file_search(query, offset, append)
       self.everything_loading = false
       self.loading_more = false
       if not ok or type(data) ~= "table" then
-        core.log_quiet("Fuzzy Everything files: search failed query=%q err=%s data_type=%s", query, tostring(_err), type(data))
+        core.log_quiet("Fuzzy Everything files: search failed query_len=%d error_type=%s data_type=%s", #query, type(_err), type(data))
         everything.state = "unavailable"
         self.everything_results = {}
         self.everything_total = 0
@@ -3800,7 +3800,7 @@ function FSView:start_everything_file_search(query, offset, append)
       self.everything_total = total
       self.everything_has_more = #out < total
       self.everything_status = string.format("%d Everything files%s", #out, self.everything_has_more and "+" or "")
-      core.log_quiet("Fuzzy Everything files: search ok query=%q shown=%d total=%d has_more=%s", query, #out, total, tostring(self.everything_has_more))
+      core.log_quiet("Fuzzy Everything files: search ok query_len=%d shown=%d total=%d has_more=%s", #query, #out, total, tostring(self.everything_has_more))
       self.dirty = true
       self:schedule_update(true)
     end
@@ -3920,8 +3920,9 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     else
       if everything.state == "unknown" then probe_everything(self) end
       if everything.state == "available" then
-        if self.everything_query_key ~= file_query then
-          self.everything_query_key = file_query
+        local everything_key = "files\0" .. file_query
+        if self.everything_query_key ~= everything_key then
+          self.everything_query_key = everything_key
           self:start_everything_file_search(file_query, 0, false)
         elseif force_refresh and self.loading_more and self.everything_has_more and not self.everything_loading then
           self:start_everything_file_search(file_query, #(self.everything_results or {}), true)
@@ -3948,8 +3949,9 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
       project_limit = math.max(1, math.floor(limit * 0.35))
       if everything.state == "unknown" then probe_everything(self) end
       if everything.state == "available" then
-        if self.everything_query_key ~= project_query then
-          self.everything_query_key = project_query
+        local everything_key = "projects\0" .. project_query
+        if self.everything_query_key ~= everything_key then
+          self.everything_query_key = everything_key
           self:start_everything_project_search(project_query, 0, false)
         elseif force_refresh and self.loading_more and self.everything_has_more and not self.everything_loading then
           self:start_everything_project_search(project_query, #(self.everything_results or {}), true)
@@ -4838,7 +4840,7 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
     end
 
     if status ~= "fresh" and status ~= "stale" and lsp_enabled() then
-      core.log_quiet("Fuzzy Project symbols: Tree-sitter unavailable for %q (%s); trying LSP", tostring(query), tostring(reason))
+      core.log_quiet("Fuzzy Project symbols: Tree-sitter unavailable for query_len=%d (%s); trying LSP", #tostring(query), tostring(reason))
       self:set_pending_status("Searching LSP Project symbols…")
       local lsp_provider = require "core.lsp.provider"
       local deadline = system.get_time() + ((config.lsp and config.lsp.navigation_timeout) or 10)
@@ -5656,6 +5658,11 @@ return {
     sort_everything_project_results = sort_everything_project_results,
     everything_result_from_item = everything_result_from_item,
     everything_project_result_is_recent_duplicate = everything_project_result_is_recent_duplicate,
+    everything_state = function() return everything.state end,
+    set_everything_state = function(state)
+      everything.state = state
+      everything.search_generation = everything.search_generation + 1
+    end,
     recent_project_key_set = recent_project_key_set,
     format_recent_file_age = fuzzy_searcher.format_recent_file_age,
     git_kind_for_file = fuzzy_searcher.git_kind_for_file,
