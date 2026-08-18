@@ -1,6 +1,7 @@
 local core = require "core"
 local layout = require "core.pane_layout"
 local panes = require "core.panes"
+local style = require "core.style"
 local TitleBar = require "core.titlebar"
 local View = require "core.view"
 local test = require "core.test"
@@ -66,6 +67,51 @@ test.describe("Global title bar Pane entries", function()
     test.ok(entries[1].visible)
     test.not_ok(entries[2].active)
     test.ok(entries[2].visible)
+  end)
+
+  test.it("clusters Tabs by Pane Group", function()
+    local one = panes.create { factory = factory("one") }
+    panes.split(one, "right", { factory = factory("two") })
+    panes.create { factory = factory("three") }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local entries = title:get_pane_entries()
+
+    test.equal(entries[1].x + entries[1].w, entries[2].x)
+    test.ok(entries[2].x + entries[2].w < entries[3].x)
+  end)
+
+  test.it("draws the visible Pane Group across its inactive Tabs", function()
+    local one = panes.create { factory = factory("one") }
+    panes.split(one, "right", { factory = factory("two") })
+    panes.create { factory = factory("three") }
+    panes.focus(one)
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_rounded_rect = renderer.draw_rounded_rect
+    local old_draw_text = renderer.draw_text
+    local visible_tile = false
+    local group_indicator = false
+    renderer.draw_rect = function(_, _, _, _, color)
+      if color == style.titlebar_group_indicator then group_indicator = true end
+    end
+    renderer.draw_rounded_rect = function(_, _, _, _, _, color)
+      if color == style.titlebar_tab_visible then visible_tile = true end
+    end
+    renderer.draw_text = function() end
+    local ok, err = pcall(title.draw, title)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_rounded_rect = old_draw_rounded_rect
+    renderer.draw_text = old_draw_text
+
+    test.ok(ok, err)
+    test.not_nil(style.titlebar_tab_visible)
+    test.not_nil(style.titlebar_group_indicator)
+    test.ok(visible_tile)
+    test.ok(group_indicator)
   end)
 
   test.it("focuses a Pane from its global entry", function()

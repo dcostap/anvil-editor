@@ -13,6 +13,7 @@ local DRAG_SCROLL_INTERVAL = 0.12
 local TAB_SIDE_INSET = math.floor(3 * SCALE)
 local TAB_TOP_INSET = math.floor(4 * SCALE)
 local TAB_RADIUS = math.floor(8 * SCALE)
+local function tab_group_gap() return math.max(4, math.floor(8 * SCALE)) end
 local caption_font
 local caption_font_size
 local caption_glyphs = {
@@ -234,17 +235,28 @@ function TitleBar:update_geometry()
       if active_index and active_index < self.tab_offset then self.tab_offset = active_index end
       if active_index then
         local used = 0
-        for i = self.tab_offset, active_index do used = used + widths[i] end
+        for i = self.tab_offset, active_index do
+          if i > self.tab_offset and ordered[i - 1].group ~= ordered[i].group then
+            used = used + tab_group_gap()
+          end
+          used = used + widths[i]
+        end
         while used > available and self.tab_offset < active_index do
           used = used - widths[self.tab_offset]
+          if ordered[self.tab_offset].group ~= ordered[self.tab_offset + 1].group then
+            used = used - tab_group_gap()
+          end
           self.tab_offset = self.tab_offset + 1
         end
       end
     end
     local x = start_x
     for i = self.tab_offset, count do
+      local gap = i > self.tab_offset and ordered[i - 1].group ~= ordered[i].group
+        and tab_group_gap() or 0
       local width = math.min(widths[i], available)
-      if i > self.tab_offset and x + width > start_x + available then break end
+      if i > self.tab_offset and x + gap + width > start_x + available then break end
+      x = x + gap
       self.entries[i] = {
         x = x,
         y = self.position.y,
@@ -594,16 +606,20 @@ function TitleBar:draw()
   if self.size.y <= 0 then return end
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.titlebar)
   local font = style.font
+  local pane_entries = self:get_pane_entries()
   draw_centered_text(font,
     fit_text(font, project_name(), math.max(0, self.project_rect.w - style.padding.x * 2)),
     self.project_rect, style.text)
-  for i, entry in ipairs(self:get_pane_entries()) do
+  for i, entry in ipairs(pane_entries) do
     local rect = self.entries[i]
     if rect then
       local hovered = self.hovered_entry == i
       if entry.active then
         draw_tab_tile(rect.x, rect.y, rect.w, rect.h,
           style.titlebar_tab_active or style.background)
+      elseif entry.visible then
+        draw_tab_tile(rect.x, rect.y, rect.w, rect.h,
+          style.titlebar_tab_visible)
       end
       if hovered then
         draw_tab_tile(rect.x, rect.y, rect.w, rect.h,
@@ -614,8 +630,26 @@ function TitleBar:draw()
       local label = fit_text(font, entry.label, label_rect.w)
       renderer.draw_text(font, label, label_rect.x,
         label_rect.y + math.floor((label_rect.h - font:get_height()) / 2),
-        (entry.active or hovered) and style.text or style.dim)
+        (entry.active or entry.visible or hovered) and style.text or style.dim)
     end
+  end
+  local first_visible, last_visible
+  for i, entry in ipairs(pane_entries) do
+    local rect = entry.visible and self.entries[i] or nil
+    if rect then
+      first_visible = first_visible or rect
+      last_visible = rect
+    end
+  end
+  if first_visible then
+    local height = math.max(2, math.floor(2 * SCALE))
+    local left = first_visible.x + TAB_SIDE_INSET
+    local right = last_visible.x + last_visible.w - TAB_SIDE_INSET
+    renderer.draw_rect(
+      math.floor(left), self.position.y + self.size.y - height,
+      math.max(1, math.floor(right - left)), height,
+      style.titlebar_group_indicator
+    )
   end
   local window_focused = not core.window or not system.window_has_focus
     or system.window_has_focus(core.window)
