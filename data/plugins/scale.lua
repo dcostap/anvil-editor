@@ -21,6 +21,18 @@ local user_scale = tonumber(
   os.getenv("ANVIL_SCALE_RESTART") or os.getenv("ANVIL_SCALE")
 )
 
+local function scale_font_once(font, factor, seen)
+  if seen[font] then return end
+  seen[font] = true
+  if type(font) == "table" then
+    for _, child in ipairs(font) do
+      scale_font_once(child, factor, seen)
+    end
+  else
+    font:set_size(factor * font:get_size())
+  end
+end
+
 local function capture_active_textview_caret_y()
   local TextView = package.loaded["core.textview"]
   local view = core.active_view
@@ -90,13 +102,14 @@ function scale.set(scale)
   style.margin.tab.top              = style.margin.tab.top              * s
   config.mouse_wheel_scroll         = config.mouse_wheel_scroll         * s
 
+  local scaled_fonts = {}
   for _, name in ipairs {
     "font", "big_font", "icon_font", "icon_big_font",
     "prose_font", "prose_strong_font", "prose_emphasis_font",
     "prose_strong_emphasis_font", "prose_heading_font",
     "prose_heading_emphasis_font",
   } do
-    style[name]:set_size(s * style[name]:get_size())
+    scale_font_once(style[name], s, scaled_fonts)
   end
 
   local Tabs = package.loaded["core.tabs"]
@@ -138,9 +151,15 @@ function scale.set_code(scale)
   local s = scale / current_code_scale
   current_code_scale = scale
 
-  style.code_font:set_size(s * style.code_font:get_size())
-  for name, font in pairs(style.syntax_fonts) do
-    style.syntax_fonts[name]:set_size(s * font:get_size())
+  local scaled_fonts = {}
+  for _, name in ipairs {
+    "code_font", "terminal_font", "terminal_bold_font",
+    "terminal_italic_font", "terminal_bold_italic_font",
+  } do
+    scale_font_once(style[name], s, scaled_fonts)
+  end
+  for _, font in pairs(style.syntax_fonts) do
+    scale_font_once(font, s, scaled_fonts)
   end
 
   restore_active_textview_caret_y(active_caret_y)

@@ -219,7 +219,6 @@ local default_font_fallbacks = {
   -- Extra CJK/supplemental and common script coverage when Arial Unicode is absent/incomplete.
   { "C:/Windows/Fonts/YuGothR.ttc", "C:/Windows/Fonts/msgothic.ttc" },
   { "C:/Windows/Fonts/malgun.ttf" },
-  { "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simsun.ttc" },
   { "C:/Windows/Fonts/seguisym.ttf" },
   { "C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/NotoSans-Regular.ttf" },
   { "C:/Windows/Fonts/Nirmala.ttc" },
@@ -230,11 +229,11 @@ local default_font_fallbacks = {
   { "C:/Windows/Fonts/msjh.ttc", "C:/Windows/Fonts/mingliub.ttc" },
 }
 
-local function load_optional_font(paths, fonts, options)
-  if #fonts >= max_default_font_group then return end
+local function load_optional_font(paths, fonts)
+  if #fonts >= max_default_font_group - 1 then return end
   for _, path in ipairs(paths) do
     if system.get_file_info(path) then
-      local ok, font_or_error = pcall(renderer.font.load, path, font_size, options)
+      local ok, font_or_error = pcall(renderer.font.load, path, font_size)
       if ok and font_or_error then
         table.insert(fonts, font_or_error)
         core.log_quiet("Default font fallback loaded: %s", path)
@@ -245,49 +244,63 @@ local function load_optional_font(paths, fonts, options)
   end
 end
 
-local function load_text_font(primary_path, options, fallback_options)
+local function load_fallback_fonts(role)
+  local fonts = {}
+  for _, paths in ipairs(default_font_fallbacks) do
+    load_optional_font(paths, fonts)
+  end
+  core.log_quiet("Default %s font fallbacks loaded: %d", role, #fonts)
+  return fonts
+end
+
+local function load_text_font(primary_path, options, fallbacks)
   local fonts = {
     renderer.font.load(primary_path, font_size, options or { ligatures = true }),
   }
-  for _, paths in ipairs(default_font_fallbacks) do
-    load_optional_font(paths, fonts, fallback_options)
+  for _, font in ipairs(fallbacks) do
+    fonts[#fonts + 1] = font
   end
   return renderer.font.group(fonts)
 end
-style.font = load_text_font(font_path)
-style.code_font = load_text_font(code_font_path)
-style.terminal_font = style.code_font:copy(font_size, { ligatures = false })
-style.terminal_bold_font = style.code_font:copy(
-  font_size, { ligatures = false, bold = true }
+local interface_fallbacks = load_fallback_fonts("interface")
+local code_fallbacks = load_fallback_fonts("code")
+local terminal_fallbacks = code_fallbacks
+
+style.font = load_text_font(font_path, nil, interface_fallbacks)
+style.code_font = load_text_font(code_font_path, nil, code_fallbacks)
+style.terminal_font = load_text_font(
+  code_font_path, { ligatures = false }, terminal_fallbacks
 )
-style.terminal_italic_font = style.code_font:copy(
-  font_size, { ligatures = false, italic = true }
+style.terminal_bold_font = load_text_font(
+  code_font_path, { ligatures = false, bold = true }, terminal_fallbacks
 )
-style.terminal_bold_italic_font = style.code_font:copy(
-  font_size, { ligatures = false, bold = true, italic = true }
+style.terminal_italic_font = load_text_font(
+  code_font_path, { ligatures = false, italic = true }, terminal_fallbacks
+)
+style.terminal_bold_italic_font = load_text_font(
+  code_font_path, { ligatures = false, bold = true, italic = true },
+  terminal_fallbacks
 )
 -- Reusable proportional typography roles. Live Preview prose and compact
 -- navigation surfaces use these roles; source and diff text retain code_font.
-style.prose_font = load_text_font(prose_font_path)
+style.prose_font = load_text_font(prose_font_path, nil, interface_fallbacks)
 -- Keep the wrap arrow on Inter's monochrome text glyph instead of allowing
 -- the code-font fallback group to select Segoe UI Emoji's boxed arrow.
 style.soft_wrap_indicator_font = style.prose_font
 style.prose_strong_font = load_text_font(
-  prose_strong_font_path, nil, { ligatures = true, bold = true }
+  prose_strong_font_path, nil, interface_fallbacks
 )
 style.prose_emphasis_font = load_text_font(
-  prose_emphasis_font_path, nil, { ligatures = true, italic = true }
+  prose_emphasis_font_path, nil, interface_fallbacks
 )
 style.prose_strong_emphasis_font = load_text_font(
-  prose_strong_emphasis_font_path, nil,
-  { ligatures = true, bold = true, italic = true }
+  prose_strong_emphasis_font_path, nil, interface_fallbacks
 )
 style.prose_heading_font = load_text_font(
-  prose_heading_font_path, nil, { ligatures = true, bold = true }
+  prose_heading_font_path, nil, interface_fallbacks
 )
 style.prose_heading_emphasis_font = load_text_font(
-  prose_heading_emphasis_font_path, nil,
-  { ligatures = true, bold = true, italic = true }
+  prose_heading_emphasis_font_path, nil, interface_fallbacks
 )
 -- Keep scrollbars visible in a small/contracted form instead of expanding/fading.
 -- Set this before constructing singleton views such as the File Tree.
