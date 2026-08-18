@@ -56,7 +56,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     local split = fuzzy_searcher._test.split_mode_prefix
     test.same({ split(">commands") }, { ">", "commands" })
     test.same({ split("@projects") }, { "@", "projects" })
-    test.same({ split("@@files") }, { "@@", "files" })
+    test.same({ split("@@files") }, { "@", "@files" })
     test.same({ split("#grep") }, { "#", "grep" })
     test.same({ split("$symbols") }, { "$", "symbols" })
     test.same({ split("$$buffer symbols") }, { "$$", "buffer symbols" })
@@ -165,7 +165,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     picker.input:set_text("#typed query")
     picker.input.textview.buffer:set_selection(1, 8, 1, 8)
 
-    test.ok(command.perform("fuzzy-searcher:open-projects"), "expected project mode command to run")
+    test.ok(command.perform("fuzzy-searcher:open-paths"), "expected Path Search command to run")
 
     test.equal(picker_text(), "@typed query")
     test.equal(core.fuzzy_searcher_active_view, picker, "expected the existing picker to stay open")
@@ -347,7 +347,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     local picker = core.fuzzy_searcher_active_view
     picker.input:set_text(">build")
 
-    command.perform("fuzzy-searcher:open-projects")
+    command.perform("fuzzy-searcher:open-paths")
     picker:close()
 
     fuzzy_searcher.open(">")

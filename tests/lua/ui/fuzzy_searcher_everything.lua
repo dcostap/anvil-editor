@@ -27,15 +27,15 @@ test.describe("Fuzzy Searcher Everything search", function()
     test.equal(helpers.everything_endpoint(), "http://" .. host .. ":" .. port .. "/")
   end)
 
-  test.it("asks Everything for project-like folders by name and path", function()
-    local params = helpers.everything_project_search_params("sm64", 80, 0)
+  test.it("asks Everything for Path Search folders by name and path", function()
+    local params = helpers.everything_folder_search_params("sm64", 80, 0)
 
     test.equal(params.search, "folder: sm64")
     test.equal(params.sort, "path")
     test.equal(params.path, "1")
   end)
 
-  test.it("asks Everything for file names and paths in whole-PC file mode", function()
+  test.it("asks Everything for Path Search file names and paths", function()
     local params = helpers.everything_file_search_params("anvil lua", 80, 0)
 
     test.equal(params.search, "file: anvil lua")
@@ -49,7 +49,7 @@ test.describe("Fuzzy Searcher Everything search", function()
     test.equal(params.search, "file: ext:lua anvil")
   end)
 
-  test.it("starts a file search when a Project query gains a second at marker", function()
+  test.it("searches folders and files together in Path Search", function()
     local requests = {}
     http.get = function(_, params)
       requests[#requests + 1] = params
@@ -57,28 +57,56 @@ test.describe("Fuzzy Searcher Everything search", function()
     helpers.set_everything_state("available")
 
     fuzzy_searcher.open("@needle")
-    test.equal(requests[1].search, "folder: needle")
-
-    core.fuzzy_searcher_active_view.input:set_text("@@needle")
 
     test.equal(#requests, 2)
+    test.equal(requests[1].search, "folder: needle")
     test.equal(requests[2].search, "file: needle")
   end)
 
-  test.it("detects Everything folder results that duplicate recent projects", function()
+  test.it("shows recent Projects without querying Everything for bare Path Search", function()
+    local requests = {}
+    http.get = function(_, params)
+      requests[#requests + 1] = params
+    end
+    helpers.set_everything_state("available")
+
+    fuzzy_searcher.open("@")
+
+    test.equal(#requests, 0)
+  end)
+
+  test.it("shows recent Projects and folders above files", function()
     local previous = core.recent_projects
-    core.recent_projects = { "C:\\Projects\\anvil-editor" }
+    local recent = "C:\\Projects\\needle-project"
+    core.recent_projects = { recent }
+    local requests = {}
+    http.get = function(_, params, options)
+      requests[#requests + 1] = { params = params, options = options }
+    end
+    helpers.set_everything_state("available")
 
-    local recent_keys = helpers.recent_project_key_set()
-    local duplicate = helpers.everything_result_from_item({ type = "folder", path = "C:\\Projects", name = "anvil-editor" }, "anvil")
-    local different = helpers.everything_result_from_item({ type = "folder", path = "C:\\Projects", name = "other" }, "anvil")
-    local file = helpers.everything_result_from_item({ type = "file", path = "C:\\Projects", name = "anvil-editor" }, "anvil")
-
+    fuzzy_searcher.open("@needle")
+    requests[1].options.on_done(true, nil, {
+      totalResults = 2,
+      results = {
+        { type = "folder", path = "C:\\Projects", name = "needle-project" },
+        { type = "folder", path = "C:\\Other", name = "needle-folder" },
+      },
+    })
+    requests[2].options.on_done(true, nil, {
+      totalResults = 1,
+      results = { { type = "file", path = "C:\\Other", name = "needle-file.txt" } },
+    })
+    local picker = core.fuzzy_searcher_active_view
+    picker:refresh(picker.input:get_text())
     core.recent_projects = previous
 
-    test.equal(helpers.everything_project_result_is_recent_duplicate(duplicate, recent_keys), true)
-    test.equal(helpers.everything_project_result_is_recent_duplicate(different, recent_keys), false)
-    test.equal(helpers.everything_project_result_is_recent_duplicate(file, recent_keys), false)
+    test.equal(picker.results[1].label, "Folders")
+    test.equal(picker.results[2].project, recent)
+    test.equal(picker.results[2].kind_label, "recent project")
+    test.equal(picker.results[3].is_folder, true)
+    test.equal(picker.results[4].label, "Files")
+    test.equal(picker.results[5].file, "C:\\Other\\needle-file.txt")
   end)
 
   test.it("orders loaded Everything folders by shallow path depth", function()
@@ -88,7 +116,7 @@ test.describe("Fuzzy Searcher Everything search", function()
       { label = "C:\\Users\\Darius\\AppData\\Local\\JetBrains\\CLion2025.1\\projects\\sm64.cc376d61", path = "C:\\Users\\Darius\\AppData\\Local\\JetBrains\\CLion2025.1\\projects\\sm64.cc376d61", is_folder = true },
     }
 
-    helpers.sort_everything_project_results(results)
+    helpers.sort_path_results(results)
 
     test.equal(results[1].path, "C:\\Projects\\decomps\\sm64")
     test.equal(results[2].path, "C:\\Projects\\decomps\\sm64\\levels\\bbh")

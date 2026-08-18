@@ -429,18 +429,6 @@ local function format_size(size)
   return string.format("%.2f GB", n / (1024 * 1024 * 1024))
 end
 
-local function existing_absolute_dir(text)
-  text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
-  if text == "" then return nil end
-  text = text:gsub("^\"(.-)\"$", "%1")
-  local expanded = common.home_expand(text)
-  local normalized = common.normalize_path(expanded)
-  if not normalized or not common.is_absolute_path(normalized) then return nil end
-  local abs = system.absolute_path(normalized)
-  local info = abs and system.get_file_info(abs)
-  if info and info.type == "dir" then return common.normalize_path(abs) end
-end
-
 local function get_recent_projects()
   local out, seen = {}, {}
   for _, path in ipairs(core.recent_projects or {}) do
@@ -452,15 +440,6 @@ local function get_recent_projects()
     end
   end
   return out
-end
-
-local function recent_project_key_set()
-  local set = {}
-  for _, path in ipairs(get_recent_projects()) do
-    local key = common.path_compare_key(path)
-    if key then set[key] = true end
-  end
-  return set
 end
 
 local function load_recent_project_times()
@@ -1046,14 +1025,14 @@ local function trim_query(q)
   return tostring(q or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
-fuzzy_searcher.mode_prefixes = { ["#"] = true, ["@"] = true, ["@@"] = true, [">"] = true, ["$"] = true, ["$$"] = true }
+fuzzy_searcher.mode_prefixes = { ["#"] = true, ["@"] = true, [">"] = true, ["$"] = true, ["$$"] = true }
 fuzzy_searcher.prompt_history_loaded = false
 fuzzy_searcher.prompt_history = {}
 
 local function split_mode_prefix(text)
   text = tostring(text or "")
   local two = text:sub(1, 2)
-  if two == "$$" or two == "@@" then return two, text:sub(3) end
+  if two == "$$" then return two, text:sub(3) end
   local prefix = text:sub(1, 1)
   if fuzzy_searcher.mode_prefixes[prefix] then return prefix, text:sub(2) end
   return "", text
@@ -1105,10 +1084,10 @@ function fuzzy_searcher.normalize_prompt_history(data)
         if type(entry) == "string" then
           local text = version2 and entry or (stored_mode .. entry)
           local mode = fuzzy_searcher.prompt_mode(text)
-          if mode == "" then changed = true end
+          if mode == "" or mode == "@" then changed = true end
           seen[mode] = seen[mode] or {}
-          if mode ~= "" then normalized[mode] = normalized[mode] or {} end
-          if mode ~= "" and not seen[mode][text] and #normalized[mode] < 50 then
+          if mode ~= "" and mode ~= "@" then normalized[mode] = normalized[mode] or {} end
+          if mode ~= "" and mode ~= "@" and not seen[mode][text] and #normalized[mode] < 50 then
             normalized[mode][#normalized[mode] + 1] = text
             seen[mode][text] = true
           end
@@ -1150,7 +1129,7 @@ function fuzzy_searcher.record_prompt_history_text(text)
   text = tostring(text or "")
 
   local mode = fuzzy_searcher.prompt_mode(text)
-  if mode == "" then return end
+  if mode == "" or mode == "@" then return end
   local history = fuzzy_searcher.prompt_history_for_mode(mode)
   for i = #history, 1, -1 do
     if history[i] == text then table.remove(history, i) end
@@ -1165,6 +1144,7 @@ function fuzzy_searcher.restored_prompt_text(text)
   if query ~= "" then return text, false end
   local mode = leading_mode ~= "" and leading_mode or fuzzy_searcher.prompt_mode(text)
   if mode == "" then return "", false end
+  if mode == "@" then return "@", false end
   local latest = fuzzy_searcher.prompt_history_for_mode(mode)[1]
   if latest ~= nil then return latest, true end
   return text, false
@@ -2131,7 +2111,7 @@ function fuzzy_searcher.result_main_text(r)
     text = r.label or r.name
   elseif r.kind == "project" or r.kind == "new_project" then
     text = r.project or r.label
-  elseif r.kind == "everything" then
+  elseif r.kind == "path" then
     text = r.path or r.project or r.file or r.label
   elseif r.kind == "file" then
     text = r.file or r.label
@@ -2267,18 +2247,24 @@ local function draw_symbol_result_row(font, r, x, y, width, row_height)
   end
 end
 
-local function draw_everything_result_row(font, r, x, y, width)
+local function draw_path_result_row(font, r, x, y, width)
   local gap = style.padding.x
-  local kind_w = font:get_width("folder") + gap
+  local kind = r.kind_label or (r.is_folder and "folder" or "file")
+  local kind_w = font:get_width("recent project") + gap
   local size_w = math.max(font:get_width("999.9 MB"), font:get_width(r.size_label or "")) + gap
   local date_w = font:get_width("999w") + gap
   local meta_w = kind_w + size_w + date_w
   local path_w = math.max(0, width - meta_w)
-  local kind = r.is_folder and "folder" or "file"
   local kind_color = r.is_folder and (style.accent) or (style.dim)
+  local icon_column_width = fuzzy_searcher.file_icons.column_width(font:get_height())
+  if r.is_folder then
+    renderer.draw_text(style.icon_font, "d", x, y, style.accent)
+  else
+    fuzzy_searcher.file_icons.draw(r.path or r.label, x, y, font:get_height())
+  end
   draw_file_result_row(
-    font, r.path or r.label, r.match_spans, r.is_folder and "@ " or "",
-    x, y, path_w, nil, nil, nil, not r.is_folder
+    font, r.label or r.path, r.match_spans, "",
+    x + icon_column_width, y, math.max(0, path_w - icon_column_width), nil, nil, nil, false
   )
   local mx = x + path_w + gap
   renderer.draw_text(font, kind, mx, y, kind_color)
@@ -2570,7 +2556,7 @@ local function probe_everything(view)
       if gen ~= everything.probe_generation then return end
       everything.state = ok and "available" or "unavailable"
       core.log_quiet("Fuzzy Everything: probe %s%s", ok and "available" or "unavailable", err and (" — " .. tostring(err)) or "")
-      if view and active_view == view and (view:is_project_mode() or view:is_everything_file_mode()) then
+      if view and active_view == view and view:is_path_search() then
         view.dirty = true
         view:schedule_update(true)
       end
@@ -2588,17 +2574,31 @@ local function everything_full_path(item)
   return common.normalize_path(path)
 end
 
-local function everything_project_search_query(query)
+local function everything_folder_search_query(query)
   query = trim_query(query)
   if query == "" then return query end
   if query:lower():find("folder:", 1, true) then return query end
   return "folder: " .. query
 end
 
-local function everything_project_search_params(query, count, offset)
+local path_search = {}
+
+function path_search.everything_scope_term(scope)
+  scope = trim_query(scope)
+  if scope == "" then return nil end
+  return 'ancestor:"' .. scope:gsub('"', '""') .. '"'
+end
+
+function path_search.everything_scoped_query(query, scope)
+  local scope_term = path_search.everything_scope_term(scope)
+  if not scope_term then return query end
+  return trim_query(query) == "" and scope_term or (scope_term .. " " .. query)
+end
+
+local function everything_folder_search_params(query, count, offset, scope)
   return {
     json = "1",
-    search = everything_project_search_query(query),
+    search = everything_folder_search_query(path_search.everything_scoped_query(query, scope)),
     count = tostring(count),
     offset = tostring(offset or 0),
     path = "1",
@@ -2617,10 +2617,10 @@ local function everything_file_search_query(query)
   return "file: " .. query
 end
 
-local function everything_file_search_params(query, count, offset)
+local function everything_file_search_params(query, count, offset, scope)
   return {
     json = "1",
-    search = everything_file_search_query(query),
+    search = everything_file_search_query(path_search.everything_scoped_query(query, scope)),
     count = tostring(count),
     offset = tostring(offset or 0),
     path = "1",
@@ -2641,11 +2641,17 @@ local function everything_path_depth(path)
   return depth
 end
 
-local function sort_everything_project_results(results)
+local function sort_path_results(results)
   table.sort(results, function(a, b)
     local af = a and a.is_folder and 0 or 1
     local bf = b and b.is_folder and 0 or 1
     if af ~= bf then return af < bf end
+
+    local as = a and tonumber(a.match_score)
+    local bs = b and tonumber(b.match_score)
+    if as and bs and as ~= bs then return as > bs end
+    if as ~= nil and bs == nil then return true end
+    if as == nil and bs ~= nil then return false end
 
     local ap = tostring((a and (a.path or a.label)) or "")
     local bp = tostring((b and (b.path or b.label)) or "")
@@ -2658,29 +2664,119 @@ local function sort_everything_project_results(results)
   end)
 end
 
+function path_search.parent_path(path)
+  path = tostring(path or "")
+  local trimmed = path:gsub("[/\\]+$", "")
+  if PLATFORM == "Windows" and trimmed:match("^%a:$") then
+    return trimmed .. PATHSEP
+  end
+  local parent = trimmed:match("^(.*)[/\\][^/\\]+$")
+  if PLATFORM == "Windows" and parent and parent:match("^%a:$") then
+    parent = parent .. PATHSEP
+  end
+  return parent
+end
+
+function path_search.relative_to_scope(path, scope)
+  if not path or not scope then return path end
+  if common.path_equals(path, scope) then return "" end
+  if not common.path_belongs_to(path, scope) then return path end
+  local start = #scope + 1
+  local separator = path:sub(start, start)
+  if separator == "/" or separator == "\\" then start = start + 1 end
+  return path:sub(start)
+end
+
+function path_search.external_path_parts(path)
+  local ok, normalized = pcall(common.normalize_path, trim_query(path))
+  if not ok or not normalized or not common.is_absolute_path(normalized) then return nil end
+
+  local info = system.get_file_info(normalized)
+  if info and info.type == "dir" then
+    return { scope = normalized, query = "" }
+  end
+  if info and info.type == "file" then
+    local scope = path_search.parent_path(normalized)
+    return { scope = scope, query = common.basename(normalized), exact_file = normalized }
+  end
+
+  for index = #normalized, 1, -1 do
+    if normalized:sub(index, index):match("%s") then
+      local candidate = trim_query(normalized:sub(1, index - 1))
+      local candidate_info = common.is_absolute_path(candidate) and system.get_file_info(candidate)
+      if candidate_info and candidate_info.type == "dir" then
+        return { scope = candidate, query = trim_query(normalized:sub(index + 1)) }
+      end
+    end
+  end
+
+  local scope = path_search.parent_path(normalized)
+  while scope and common.is_absolute_path(scope) do
+    local scope_info = system.get_file_info(scope)
+    if scope_info and scope_info.type == "dir" then
+      return { scope = scope, query = path_search.relative_to_scope(normalized, scope) }
+    end
+    local parent = path_search.parent_path(scope)
+    if not parent or common.path_equals(parent, scope) then break end
+    scope = parent
+  end
+  return { scope = nil, query = normalized }
+end
+
+function path_search.plan(text)
+  text = tostring(text or "")
+  local mode, query = split_mode_prefix(text)
+  if mode ~= "" and mode ~= "@" then return { external = false, query = query, mode = mode } end
+
+  query = trim_query(query)
+  local explicit = mode == "@"
+  if not common.is_absolute_path(query) then
+    return { external = explicit, explicit = explicit, query = query, mode = mode }
+  end
+
+  local display = not explicit and project_paths.display_path(query, { home_encode = false }) or nil
+  if display and display.root_role then
+    local project_query = display.text == "." and "" or display.text
+    return { external = false, query = project_query, project_path = true, mode = mode }
+  end
+
+  local parts = path_search.external_path_parts(query) or { query = query }
+  if not explicit and parts.scope then
+    local scoped_display = project_paths.display_path(parts.scope, { home_encode = false })
+    if scoped_display and scoped_display.root_role then
+      local prefix = scoped_display.text == "." and "" or scoped_display.text
+      local project_query = trim_query(parts.query)
+      if prefix ~= "" and project_query ~= "" then project_query = prefix .. " " .. project_query
+      elseif prefix ~= "" then project_query = prefix end
+      return { external = false, query = project_query, project_path = true, mode = mode }
+    end
+  end
+  parts.external = true
+  parts.explicit = explicit
+  parts.mode = mode
+  parts.input_path = query
+  return parts
+end
+
 local function everything_result_from_item(item, query)
   local path = everything_full_path(item)
   if not path or path == "" then return nil end
   local is_folder = item.type == "folder"
   local modified_time = filetime_to_time(item.date_modified)
-  local _, spans = fuzzy_match(query or "", path)
+  local score, spans = fuzzy_match(query or "", path)
   return {
-    kind = "everything",
+    kind = "path",
     label = path,
     path = path,
     file = is_folder and nil or path,
     project = is_folder and path or nil,
     is_folder = is_folder,
     query = query,
+    match_score = score,
     match_spans = spans or {},
     size_label = is_folder and "" or format_size(item.size),
     modified_label = modified_time and compact_age(modified_time) or "",
   }
-end
-
-local function everything_project_result_is_recent_duplicate(result, recent_keys)
-  local key = result and result.path and common.path_compare_key(result.path)
-  return result and result.is_folder and key and recent_keys and recent_keys[key] or false
 end
 
 function FSView:new(prefix, opts)
@@ -2714,11 +2810,16 @@ function FSView:new(prefix, opts)
   self.preview_highlight_key = nil
   self.preview_blocked = nil
   self.preview_mouse_pressed = false
-  self.everything_results = {}
-  self.everything_total = 0
-  self.everything_has_more = false
+  self.everything_folder_results = {}
+  self.everything_file_results = {}
+  self.everything_folder_total = 0
+  self.everything_file_total = 0
+  self.everything_folder_offset = 0
+  self.everything_file_offset = 0
+  self.everything_folder_has_more = false
+  self.everything_file_has_more = false
   self.everything_loading = false
-  self.everything_query_key = nil
+  self.path_search_query_key = nil
   self.everything_status = ""
   self.static_mode = opts.static == true
   self.static_results = opts.results or {}
@@ -2834,16 +2935,14 @@ function FSView:is_command_mode()
   return text:sub(1, 1) == ">"
 end
 
-function FSView:is_project_mode()
+function FSView:is_path_search()
   if self.static_mode then return false end
+  if self.path_search_active ~= nil then return self.path_search_active end
   local text = self.input and self.input:get_text() or ""
-  return text:sub(1, 1) == "@" and text:sub(1, 2) ~= "@@"
-end
-
-function FSView:is_everything_file_mode()
-  if self.static_mode then return false end
-  local text = self.input and self.input:get_text() or ""
-  return text:sub(1, 2) == "@@"
+  local mode, query = split_mode_prefix(text)
+  if mode == "@" then return true end
+  return mode == "" and common.is_absolute_path(trim_query(query))
+    and not project_paths.resolve(trim_query(query))
 end
 
 function FSView:is_deep_code_mode()
@@ -2856,7 +2955,7 @@ function FSView:is_deep_code_mode()
 end
 
 function FSView:is_full_width_mode()
-  return self:is_command_mode() or self:is_project_mode()
+  return self:is_command_mode()
 end
 
 function FSView:list_metrics(font)
@@ -3077,6 +3176,19 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
   elseif r.kind == "command" then
     x = row_x + font:get_width("> ")
     width = math.max(0, row_text_w - font:get_width("> "))
+  elseif r.kind == "path" or r.path_search then
+    local gap = style.padding.x
+    local kind_w = font:get_width("recent project") + gap
+    local size_w = math.max(font:get_width("999.9 MB"), font:get_width(r.size_label or "")) + gap
+    local date_w = font:get_width("999w") + gap
+    local path_w = math.max(0, row_text_w - kind_w - size_w - date_w)
+    local icon_w = fuzzy_searcher.file_icons.column_width(font:get_height())
+    local marker_w = math.max(1, style.gitdiff_width or (2 * (SCALE or 1)))
+      + math.max(2 * (SCALE or 1), style.padding.x / 4)
+    x = row_x + icon_w + marker_w
+    width = math.max(0, path_w - icon_w - marker_w)
+    text = r.label or r.path or r.project or r.file or ""
+    text_font = fuzzy_searcher.project_result_font(font)
   elseif r.kind == "project" then
     local label, _, prefix = result_list_label_and_spans(r)
     local prefix_w = font:get_width(prefix)
@@ -3094,9 +3206,6 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
     width = math.max(0, row_text_w - font:get_width(prefix))
     text = r.project or r.label or ""
     text_font = fuzzy_searcher.project_result_font(font)
-  elseif r.kind == "everything" and r.is_folder then
-    x = row_x + font:get_width("@ ")
-    width = math.max(0, row_text_w - font:get_width("@ "))
   end
 
   local text_w = text_font:get_width(text)
@@ -3683,19 +3792,11 @@ function FSView:start_file_search(query, line, reset_selection)
   end)
 end
 
-function FSView:start_everything_project_search(query, offset, append)
+function FSView:start_everything_path_search(query, scope, append)
   query = trim_query(query)
-  if query == "" then
-    self:cancel_deferred_everything_loading()
-    self.everything_results = {}
-    self.everything_total = 0
-    self.everything_has_more = false
-    self.everything_loading = false
-    self.everything_status = ""
-    return
-  end
   if everything.state ~= "available" then
-    core.log_quiet("Fuzzy Everything: search deferred; state=%s query_len=%d", tostring(everything.state), #query)
+    core.log_quiet("Fuzzy Path Search: Everything search deferred; state=%s query_len=%d scoped=%s",
+      tostring(everything.state), #query, tostring(scope ~= nil))
     probe_everything(self)
     return
   end
@@ -3703,122 +3804,226 @@ function FSView:start_everything_project_search(query, offset, append)
   everything.search_generation = everything.search_generation + 1
   local gen = everything.search_generation
   local count = fuzzy_searcher.everything_page_size or 80
-  offset = offset or 0
   self.everything_loading = false
-  self:defer_everything_loading(offset > 0 and "Loading more Everything results…" or "Searching Everything…")
-  local params = everything_project_search_params(query, count, offset)
-  core.log_quiet("Fuzzy Everything: searching query_len=%d offset=%d count=%d append=%s", #query, offset, count, tostring(append))
+  self.everything_pending = 2
+  self:defer_everything_loading(append and "Loading more Path Search results…" or "Searching Everything…")
 
-  http.get(everything_endpoint(), params, {
-    timeout = 2,
-    on_done = function(ok, _err, data)
-      if gen ~= everything.search_generation or active_view ~= self then return end
+  local function finish_request(kind, ok, err, data)
+    if gen ~= everything.search_generation or active_view ~= self then return end
+    if not ok or type(data) ~= "table" then
+      core.log_quiet("Fuzzy Path Search: Everything %s search failed query_len=%d error_type=%s data_type=%s",
+        kind, #query, type(err), type(data))
+      everything.state = "unavailable"
+      everything.search_generation = everything.search_generation + 1
+      self.everything_folder_results = {}
+      self.everything_file_results = {}
+      self.everything_folder_total = 0
+      self.everything_file_total = 0
+      self.everything_folder_offset = 0
+      self.everything_file_offset = 0
+      self.everything_folder_has_more = false
+      self.everything_file_has_more = false
+      self.everything_pending = 0
       self:cancel_deferred_everything_loading()
       self.everything_loading = false
       self.loading_more = false
-      if not ok or type(data) ~= "table" then
-        core.log_quiet("Fuzzy Everything: search failed query_len=%d error_type=%s data_type=%s", #query, type(_err), type(data))
-        everything.state = "unavailable"
-        self.everything_results = {}
-        self.everything_total = 0
-        self.everything_has_more = false
-        self.everything_status = ""
-        self.dirty = true
-        self:schedule_update(true)
-        return
-      end
-      local total = tonumber(data.totalResults) or 0
-      local out = append and self.everything_results or {}
-      local recent_keys = recent_project_key_set()
-      for _, item in ipairs(data.results or {}) do
-        local r = everything_result_from_item(item, query)
-        if r and not everything_project_result_is_recent_duplicate(r, recent_keys) then out[#out+1] = r end
-      end
-      sort_everything_project_results(out)
-      self.everything_results = out
-      self.everything_total = total
-      self.everything_has_more = #out < total
-      self.everything_status = string.format("%d Everything folders%s", #out, self.everything_has_more and "+" or "")
-      core.log_quiet("Fuzzy Everything: search ok query_len=%d shown=%d total=%d has_more=%s", #query, #out, total, tostring(self.everything_has_more))
+      self.everything_status = "Everything is unavailable. Showing direct folder contents."
       self.dirty = true
       self:schedule_update(true)
+      return
     end
+
+    local total = tonumber(data.totalResults) or 0
+    local out = append and (kind == "folder" and self.everything_folder_results or self.everything_file_results) or {}
+    for _, item in ipairs(data.results or {}) do
+      local r = everything_result_from_item(item, query)
+      local wanted = r and ((kind == "folder" and r.is_folder) or (kind == "file" and not r.is_folder))
+      if wanted then out[#out+1] = r end
+    end
+    sort_path_results(out)
+    if kind == "folder" then
+      self.everything_folder_results = out
+      self.everything_folder_total = total
+      self.everything_folder_offset = (append and self.everything_folder_offset or 0) + #(data.results or {})
+      self.everything_folder_has_more = self.everything_folder_offset < total
+    else
+      self.everything_file_results = out
+      self.everything_file_total = total
+      self.everything_file_offset = (append and self.everything_file_offset or 0) + #(data.results or {})
+      self.everything_file_has_more = self.everything_file_offset < total
+    end
+    self.everything_pending = math.max(0, (self.everything_pending or 1) - 1)
+    if self.everything_pending == 0 then
+      self:cancel_deferred_everything_loading()
+      self.everything_loading = false
+      self.loading_more = false
+    end
+    self.everything_status = string.format("%d folders%s — %d files%s",
+      #(self.everything_folder_results or {}), self.everything_folder_has_more and "+" or "",
+      #(self.everything_file_results or {}), self.everything_file_has_more and "+" or "")
+    core.log_quiet("Fuzzy Path Search: Everything %s search ok query_len=%d shown=%d total=%d",
+      kind, #query, #out, total)
+    self.dirty = true
+    self:schedule_update(true)
+  end
+
+  local folder_offset = append and (self.everything_folder_offset or 0) or 0
+  local file_offset = append and (self.everything_file_offset or 0) or 0
+  core.log_quiet("Fuzzy Path Search: Everything searching query_len=%d scoped=%s append=%s",
+    #query, tostring(scope ~= nil), tostring(append))
+  http.get(everything_endpoint(), everything_folder_search_params(query, count, folder_offset, scope), {
+    timeout = 2,
+    on_done = function(ok, err, data) finish_request("folder", ok, err, data) end,
+  })
+  http.get(everything_endpoint(), everything_file_search_params(query, count, file_offset, scope), {
+    timeout = 2,
+    on_done = function(ok, err, data) finish_request("file", ok, err, data) end,
   })
 end
 
-function FSView:start_everything_file_search(query, offset, append)
-  query = trim_query(query)
-  if query == "" then
-    self:cancel_deferred_everything_loading()
-    self.everything_results = {}
-    self.everything_total = 0
-    self.everything_has_more = false
-    self.everything_loading = false
-    self.everything_status = "Type a file search to query Everything"
-    return
-  end
-  if everything.state ~= "available" then
-    core.log_quiet("Fuzzy Everything files: search deferred; state=%s query_len=%d", tostring(everything.state), #query)
-    probe_everything(self)
-    return
-  end
-
-  everything.search_generation = everything.search_generation + 1
-  local gen = everything.search_generation
-  local count = fuzzy_searcher.everything_page_size or 80
-  offset = offset or 0
+function FSView:clear_path_search_results(cancel_request)
+  if cancel_request then everything.search_generation = everything.search_generation + 1 end
+  self:cancel_deferred_everything_loading()
+  self.everything_folder_results = {}
+  self.everything_file_results = {}
+  self.everything_folder_total = 0
+  self.everything_file_total = 0
+  self.everything_folder_offset = 0
+  self.everything_file_offset = 0
+  self.everything_folder_has_more = false
+  self.everything_file_has_more = false
   self.everything_loading = false
-  self:defer_everything_loading(offset > 0 and "Loading more Everything files…" or "Searching Everything files…")
-  local params = everything_file_search_params(query, count, offset)
-  core.log_quiet("Fuzzy Everything files: searching query_len=%d offset=%d count=%d append=%s", #query, offset, count, tostring(append))
+  self.everything_pending = 0
+  self.everything_status = ""
+  self.path_search_query_key = nil
+end
 
-  http.get(everything_endpoint(), params, {
-    timeout = 2,
-    on_done = function(ok, _err, data)
-      if gen ~= everything.search_generation or active_view ~= self then return end
-      self:cancel_deferred_everything_loading()
-      self.everything_loading = false
-      self.loading_more = false
-      if not ok or type(data) ~= "table" then
-        core.log_quiet("Fuzzy Everything files: search failed query_len=%d error_type=%s data_type=%s", #query, type(_err), type(data))
-        everything.state = "unavailable"
-        self.everything_results = {}
-        self.everything_total = 0
-        self.everything_has_more = false
-        self.everything_status = "Everything is not available. Enable Everything's HTTP server on localhost:5777."
-        self.dirty = true
-        self:schedule_update(true)
-        return
-      end
-      local total = tonumber(data.totalResults) or 0
-      local out = append and self.everything_results or {}
-      for _, item in ipairs(data.results or {}) do
-        local r = everything_result_from_item(item, query)
-        if r and not r.is_folder then out[#out+1] = r end
-      end
-      self.everything_results = out
-      self.everything_total = total
-      self.everything_has_more = #out < total
-      self.everything_status = string.format("%d Everything files%s", #out, self.everything_has_more and "+" or "")
-      core.log_quiet("Fuzzy Everything files: search ok query_len=%d shown=%d total=%d has_more=%s", #query, #out, total, tostring(self.everything_has_more))
-      self.dirty = true
-      self:schedule_update(true)
+function path_search.native_results(scope, query, limit)
+  if not scope or not system.list_dir_info then return {}, {} end
+  query = trim_query(query)
+  if query:find("[/\\]", 1) then return {}, {} end
+  limit = math.max(1, limit or 30)
+  local folder_entries = system.list_dir_info(scope, limit, "dir", query)
+  local file_entries = system.list_dir_info(scope, limit, "file", query)
+  local folders, files = {}, {}
+  local function append_entries(entries, is_folder, target)
+    for _, entry in ipairs(type(entries) == "table" and entries or {}) do
+      local path = common.normalize_path(scope .. PATHSEP .. entry.name)
+      local score, spans = fuzzy_match(query, path)
+      local info = not is_folder and system.get_file_info(path) or nil
+      target[#target+1] = {
+        kind = "path",
+        label = path,
+        path = path,
+        file = is_folder and nil or path,
+        project = is_folder and path or nil,
+        is_folder = is_folder,
+        source = "filesystem",
+        query = query,
+        match_score = score,
+        match_spans = spans or {},
+        size_label = is_folder and "" or format_size(info and info.size),
+        modified_label = info and info.modified and compact_age(info.modified) or "",
+      }
     end
-  })
+  end
+  append_entries(folder_entries, true, folders)
+  append_entries(file_entries, false, files)
+  sort_path_results(folders)
+  sort_path_results(files)
+  return folders, files
+end
+
+function path_search.recent_project_results(query, scope, limit)
+  ensure_recent_project_times()
+  local candidates = {}
+  for _, path in ipairs(get_recent_projects()) do
+    if not scope or common.path_equals(path, scope) or common.path_belongs_to(path, scope) then
+      candidates[#candidates+1] = path
+    end
+  end
+
+  local matches = trim_query(query) == "" and nil or fuzzy_filter(candidates, query, limit + 1, display_root)
+  local out = {}
+  local hidden = false
+  if matches then
+    for i, match in ipairs(matches) do
+      if i > limit then hidden = true break end
+      local path = match.item
+      out[#out+1] = {
+        kind = "project", label = display_root(path), project = path, path = path,
+        query = query, match_spans = match.spans, recent = true,
+        opened_at = recent_project_times[path], modified_label = compact_age(recent_project_times[path]),
+        is_folder = true, path_search = true, kind_label = "recent project",
+      }
+    end
+  else
+    for i, path in ipairs(candidates) do
+      if i > limit then hidden = true break end
+      out[#out+1] = {
+        kind = "project", label = display_root(path), project = path, path = path,
+        query = query, match_spans = {}, recent = true,
+        opened_at = recent_project_times[path], modified_label = compact_age(recent_project_times[path]),
+        is_folder = true, path_search = true, kind_label = "recent project",
+      }
+    end
+  end
+  return out, hidden
+end
+
+function path_search.append_sections(out, projects, folders, files, limit)
+  local project_keys = {}
+  for _, project in ipairs(projects) do
+    local key = common.path_compare_key(project.path or project.project)
+    if key then project_keys[key] = true end
+  end
+  local unique_folders = {}
+  for _, folder in ipairs(folders) do
+    local key = common.path_compare_key(folder.path or folder.project)
+    if not key or not project_keys[key] then unique_folders[#unique_folders+1] = folder end
+  end
+  folders = unique_folders
+  local folder_budget = #files == 0 and limit or math.max(1, math.floor(limit * 0.4))
+  if #projects > 0 and #folders > 0 and limit >= 2 then folder_budget = math.max(2, folder_budget) end
+  local folder_count = 0
+  local hidden = false
+  if #projects > 0 or #folders > 0 then
+    out[#out+1] = { header = true, label = "Folders" }
+    local project_budget = #folders > 0 and math.max(0, folder_budget - 1) or folder_budget
+    for _, result in ipairs(projects) do
+      if folder_count >= project_budget then hidden = true break end
+      out[#out+1] = result
+      folder_count = folder_count + 1
+    end
+    for _, result in ipairs(folders) do
+      if folder_count >= folder_budget then hidden = true break end
+      out[#out+1] = result
+      folder_count = folder_count + 1
+    end
+  end
+
+  local file_budget = math.max(1, limit - folder_count)
+  if #files > 0 then
+    out[#out+1] = { header = true, label = "Files" }
+    for i = 1, math.min(file_budget, #files) do out[#out+1] = files[i] end
+    if #files > file_budget then hidden = true end
+  end
+  return hidden
 end
 
 function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   local limit = self:result_limit()
-  local mode = base:sub(1, 1)
-  if base:sub(1, 2) == "$$" or base:sub(1, 2) == "@@" then
-    mode = base:sub(1, 2)
-    base = base:sub(3):gsub("^%s+", "")
-  elseif mode == ">" or mode == "@" or mode == "$" then
-    base = base:sub(2):gsub("^%s+", "")
-  end
+  local path_plan = path_search.plan(base)
+  self.path_search_active = path_plan.external == true
+  local mode = path_plan.mode
+  base = path_plan.query or ""
 
   local out = {}
   self.has_more = false
+  local bare_path_search = false
+  if not path_plan.external and self.path_search_query_key then
+    self:clear_path_search_results(true)
+  end
 
   local function add_file_results(query, max_items)
     if max_items <= 0 then self.has_more = true; return end
@@ -3866,34 +4071,6 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     end
   end
 
-  local function add_project_results(query, max_items)
-    if max_items <= 0 then self.has_more = true; return end
-    ensure_recent_project_times()
-    local projects = get_recent_projects()
-
-    if trim_query(query) == "" then
-      for i, path in ipairs(projects) do
-        if i > max_items then self.has_more = true; break end
-        out[#out+1] = { kind = "project", label = path, project = path, query = query, match_spans = {}, recent = true, opened_at = recent_project_times[path] }
-      end
-      return
-    end
-
-    local matches = fuzzy_filter(projects, query, max_items + 1, display_root)
-    for i, match in ipairs(matches) do
-      if i > max_items then self.has_more = true; break end
-      local path = match.item
-      out[#out+1] = { kind = "project", label = path, project = path, query = query, match_spans = match.spans, recent = true, opened_at = recent_project_times[path] }
-    end
-
-    if #out == 0 then
-      local path = existing_absolute_dir(query)
-      if path then
-        out[#out+1] = { kind = "new_project", label = path, project = path, query = query }
-      end
-    end
-  end
-
   local async
   if mode == ">" then
     kill_file_search()
@@ -3906,77 +4083,53 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     kill_file_search()
     self:start_current_buffer_symbol_search(base, reset_selection)
     return
-  elseif mode == "@@" then
+  elseif path_plan.external then
     kill_file_search()
-    local file_query = base
-    if trim_query(file_query) == "" then
-      self:cancel_deferred_everything_loading()
-      self.everything_results = {}
-      self.everything_total = 0
-      self.everything_has_more = false
-      self.everything_loading = false
-      self.everything_status = "Type a file search to query Everything"
-      self.everything_query_key = nil
-    else
-      if everything.state == "unknown" then probe_everything(self) end
-      if everything.state == "available" then
-        local everything_key = "files\0" .. file_query
-        if self.everything_query_key ~= everything_key then
-          self.everything_query_key = everything_key
-          self:start_everything_file_search(file_query, 0, false)
-        elseif force_refresh and self.loading_more and self.everything_has_more and not self.everything_loading then
-          self:start_everything_file_search(file_query, #(self.everything_results or {}), true)
-        end
-      elseif everything.state == "probing" then
-        self:cancel_deferred_everything_loading()
-        self.everything_loading = false
-        self.everything_status = "Checking Everything HTTP server…"
-      else
-        self:cancel_deferred_everything_loading()
-        self.everything_loading = false
-        self.everything_status = "Everything is not available. Enable Everything's HTTP server on localhost:5777."
-      end
-    end
-    for i = 1, math.min(limit, #(self.everything_results or {})) do
-      out[#out+1] = self.everything_results[i]
-    end
-    self.has_more = self.everything_has_more
-  elseif mode == "@" then
-    kill_file_search()
-    local project_limit = limit
-    local project_query = base
-    if trim_query(project_query) ~= "" then
-      project_limit = math.max(1, math.floor(limit * 0.35))
-      if everything.state == "unknown" then probe_everything(self) end
-      if everything.state == "available" then
-        local everything_key = "projects\0" .. project_query
-        if self.everything_query_key ~= everything_key then
-          self.everything_query_key = everything_key
-          self:start_everything_project_search(project_query, 0, false)
-        elseif force_refresh and self.loading_more and self.everything_has_more and not self.everything_loading then
-          self:start_everything_project_search(project_query, #(self.everything_results or {}), true)
-        end
-      else
-        self:cancel_deferred_everything_loading()
-        self.everything_loading = false
-      end
-    else
-      self:cancel_deferred_everything_loading()
-      self.everything_results = {}
-      self.everything_total = 0
-      self.everything_has_more = false
-      self.everything_loading = false
+    local query = trim_query(base)
+    local scope = path_plan.scope
+    bare_path_search = path_plan.explicit and query == "" and not scope
+    local projects, projects_hidden = path_search.recent_project_results(query, scope, limit)
+
+    if bare_path_search then
+      if self.path_search_query_key then self:clear_path_search_results(true) end
+      for i = 1, math.min(limit, #projects) do out[#out+1] = projects[i] end
+      self.has_more = projects_hidden
       self.everything_status = ""
-      self.everything_query_key = nil
-    end
-    add_project_results(project_query, project_limit)
-    if trim_query(project_query) ~= "" and everything.state == "available" then
-      out[#out+1] = { header = true, label = self.everything_loading and "Everything — searching…" or "Everything" }
-      local remaining = math.max(0, limit - #out)
-      for i = 1, math.min(remaining, #(self.everything_results or {})) do
-        out[#out+1] = self.everything_results[i]
+    else
+      if everything.state == "unknown" then probe_everything(self) end
+      if everything.state == "available" then
+        local everything_key = table.concat({ "paths", scope or "", query }, "\0")
+        if self.path_search_query_key ~= everything_key then
+          self:clear_path_search_results(false)
+          self.path_search_query_key = everything_key
+          self:start_everything_path_search(query, scope, false)
+        elseif force_refresh and self.loading_more
+        and (self.everything_folder_has_more or self.everything_file_has_more)
+        and not self.everything_loading then
+          self:start_everything_path_search(query, scope, true)
+        elseif self.loading_more then
+          self.loading_more = false
+        end
+      else
+        if self.path_search_query_key then self:clear_path_search_results(true) end
+        self.loading_more = false
+        self.everything_status = everything.state == "probing"
+          and "Checking Everything HTTP server…"
+          or (scope and "Everything is unavailable. Showing direct folder contents."
+            or "Everything is unavailable. Type an absolute path to browse files and folders.")
       end
-      self.has_more = self.has_more or self.everything_has_more
+
+      local folders = self.everything_folder_results or {}
+      local files = self.everything_file_results or {}
+      if everything.state ~= "available" then
+        folders, files = path_search.native_results(scope, query, limit)
+      end
+      if line then
+        for _, result in ipairs(files) do result.line = line end
+      end
+      local sections_hidden = path_search.append_sections(out, projects, folders, files, limit)
+      self.has_more = projects_hidden or sections_hidden
+        or self.everything_folder_has_more or self.everything_file_has_more
     end
   else
     async = add_file_results(base, limit)
@@ -3986,11 +4139,13 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
 
   self:cancel_deferred_loading_feedback()
 
-  if mode == "@@" then
-    self.status = self.everything_status or ""
-  elseif mode == "@" then
-    local extra = self.everything_status and self.everything_status ~= "" and (" — " .. self.everything_status) or ""
-    self.status = string.format("%d recent projects%s", #get_recent_projects(), extra)
+  if path_plan.external then
+    if bare_path_search then
+      self.status = string.format("%d recent Projects", #get_recent_projects())
+    else
+      local scope_label = path_plan.scope and (" — " .. path_plan.scope) or ""
+      self.status = (self.everything_status or "") .. scope_label
+    end
   elseif fuzzy_searcher.files_indexing then
     self.status = string.format("Indexing files… %d available — %s", file_index_count(), fuzzy_searcher.project_roots_label())
   else
@@ -4951,10 +5106,14 @@ function FSView:refresh(text)
   self.last_files_scope_generation = fuzzy_searcher.files_scope_generation
 
   if grep ~= nil then
+    self.path_search_active = false
+    if self.path_search_query_key then self:clear_path_search_results(true) end
     fuzzy_searcher.cancel_symbol_search()
     local scoped_index_changed = (base ~= "" or line ~= nil) and files_scope_changed
     if query_changed or force_refresh or scoped_index_changed then self:start_grep(base, line, grep) end
   elseif symbol ~= nil then
+    self.path_search_active = false
+    if self.path_search_query_key then self:clear_path_search_results(true) end
     if fuzzy_searcher.files_indexing
     and fuzzy_searcher.files_scan_reason ~= "project-prewarm" then
       core.log_quiet("Fuzzy file index scan cancelled after switching to Project Symbol Search")
@@ -5062,12 +5221,14 @@ end
 function FSView:can_toggle_ignored_files()
   if self.static_mode then return false end
   local mode = fuzzy_searcher.prompt_mode(self.input and self.input:get_text() or "")
-  return mode == "" or mode == "#"
+  return mode == "#" or (mode == "" and not self:is_path_search())
 end
 
 function FSView:active_search_modifiers()
   local modifiers = {}
-  if self.include_ignored then modifiers[#modifiers + 1] = "Ignored files included" end
+  if self.include_ignored and self:can_toggle_ignored_files() then
+    modifiers[#modifiers + 1] = "Ignored files included"
+  end
   return modifiers
 end
 
@@ -5146,7 +5307,7 @@ function FSView:confirm(target_side)
     command.perform(cmd)
     return
   end
-  if (r.kind == "project" or r.kind == "new_project" or (r.kind == "everything" and r.is_folder)) and r.project then
+  if (r.kind == "project" or r.kind == "new_project" or (r.kind == "path" and r.is_folder)) and r.project then
     local path = r.project
     self:close()
     if target_side or r.kind == "new_project" then
@@ -5334,16 +5495,21 @@ function FSView:draw()
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
         draw_command_result_row(font, r, x + pad, row_y, row_text_w)
+      elseif r.kind == "project" and r.path_search then
+        previous_rendered_grep_file = nil
+        previous_rendered_grep_line_x = nil
+        previous_rendered_was_grep = false
+        draw_path_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "project" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
         draw_project_result_row(font, r, x + pad, row_y, row_text_w)
-      elseif r.kind == "everything" then
+      elseif r.kind == "path" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        draw_everything_result_row(font, r, x + pad, row_y, row_text_w)
+        draw_path_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "new_project" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
@@ -5389,10 +5555,10 @@ function FSView:draw()
         renderer.draw_text(font, info, px, py + lh * 2, style.dim)
       end
       core.pop_clip_rect()
-    elseif r and r.kind == "project" then
+    elseif r and (r.kind == "project" or (r.kind == "path" and r.is_folder)) then
       core.push_clip_rect(px, py, preview_w, preview_h)
-      renderer.draw_text(font, "Project", px, py, style.accent)
-      draw_highlighted_text(font, display_root(r.project), px, py + lh, preview_w, style.text, r.match_spans or {})
+      renderer.draw_text(font, r.kind == "project" and "Recent Project" or "Folder", px, py, style.accent)
+      draw_highlighted_text(font, display_root(r.project or r.path), px, py + lh, preview_w, style.text, r.match_spans or {})
       renderer.draw_text(font, "Enter: open here", px, py + lh * 3, style.dim)
       renderer.draw_text(font, "Ctrl+Enter: open in new Anvil window", px, py + lh * 4, style.dim)
       core.pop_clip_rect()
@@ -5530,8 +5696,8 @@ function open(prefix)
     if selection ~= "" then prefix = "#" .. quote_exact_query(selection) end
   end
   local initial_text, select_restored_query
-  if prefix == "" then
-    initial_text, select_restored_query = "", false
+  if prefix == "" or prefix == "@" then
+    initial_text, select_restored_query = prefix, false
   else
     initial_text, select_restored_query = fuzzy_searcher.restored_prompt_text(prefix)
   end
@@ -5559,8 +5725,7 @@ end
 command.add(nil, {
   ["fuzzy-searcher:open"] = function() open("") end,
   ["fuzzy-searcher:open-files"] = function() open("") end,
-  ["fuzzy-searcher:open-projects"] = function() open("@") end,
-  ["fuzzy-searcher:open-everything-files"] = function() open("@@") end,
+  ["fuzzy-searcher:open-paths"] = function() open("@") end,
   ["fuzzy-searcher:open-grep"] = function() open("#") end,
   ["fuzzy-searcher:open-symbols"] = function() open("$") end,
   ["fuzzy-searcher:open-current-buffer-symbols"] = function() open("$$") end,
@@ -5602,7 +5767,7 @@ end, {
 -- Global open shortcuts intentionally override conflicting defaults.
 core.fuzzy_searcher_install_global_keymaps = function()
   keymap.add({
-    ["ctrl+shift+e"] = "fuzzy-searcher:open-projects",
+    ["ctrl+shift+e"] = "fuzzy-searcher:open-paths",
     ["ctrl+e"] = "fuzzy-searcher:open-files",
     ["ctrl+shift+j"] = "fuzzy-searcher:open-symbols",
     ["ctrl+j"] = "fuzzy-searcher:open-current-buffer-symbols",
@@ -5649,21 +5814,19 @@ return {
   open = open,
   open_static_results = open_static_results,
   _test = {
-    everything_project_search_params = everything_project_search_params,
-    everything_project_search_query = everything_project_search_query,
+    everything_folder_search_params = everything_folder_search_params,
+    everything_folder_search_query = everything_folder_search_query,
     everything_file_search_params = everything_file_search_params,
     everything_file_search_query = everything_file_search_query,
     everything_endpoint = everything_endpoint,
     everything_path_depth = everything_path_depth,
-    sort_everything_project_results = sort_everything_project_results,
+    sort_path_results = sort_path_results,
     everything_result_from_item = everything_result_from_item,
-    everything_project_result_is_recent_duplicate = everything_project_result_is_recent_duplicate,
     everything_state = function() return everything.state end,
     set_everything_state = function(state)
       everything.state = state
       everything.search_generation = everything.search_generation + 1
     end,
-    recent_project_key_set = recent_project_key_set,
     format_recent_file_age = fuzzy_searcher.format_recent_file_age,
     git_kind_for_file = fuzzy_searcher.git_kind_for_file,
     draw_recent_file_metadata = fuzzy_searcher.draw_recent_file_metadata,

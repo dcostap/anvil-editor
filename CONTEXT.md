@@ -280,6 +280,10 @@ _Avoid_: terminal input, Global Prompt Bar, command palette
 The floating picker used for fuzzy navigation and search modes, such as files, projects, grep, symbols, and commands.
 _Avoid_: fuzzy searcher popup
 
+**Path Search**:
+A Fuzzy Searcher search for recent Projects, folders, and files outside the current Project Search Scope.
+_Avoid_: external mode, system search
+
 **Copy Feedback Highlight**:
 A brief visual highlight marking the text most recently copied by the user.
 _Avoid_: Copy flash, copy animation
