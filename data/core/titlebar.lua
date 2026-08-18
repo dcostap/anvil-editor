@@ -137,16 +137,51 @@ local function fit_text(font, text, max_width)
   return text:usub(1, low) .. ellipsis
 end
 
-local function pane_label(number, pane)
+local function pane_name(pane)
   local view = pane.current_view
-  local name = view.get_name and view:get_name() or "View"
-  return string.format("%d %s", number, name)
+  return view.get_name and view:get_name() or "View"
+end
+
+local function pane_label(number, pane)
+  return string.format("%d %s", number, pane_name(pane))
+end
+
+local function pane_number_font()
+  local size = math.max(common.round(8 * SCALE), common.round(style.font:get_size() * 0.8))
+  return style.get_scaled_font(style.prose_heading_font, size)
+end
+
+local function pane_number_gap()
+  return math.max(3 * SCALE, style.padding.x / 3)
+end
+
+local function pane_label_width(number, pane)
+  return pane_number_font():get_width(tostring(number)) + pane_number_gap()
+    + style.font:get_width(pane_name(pane))
+end
+
+local function draw_pane_label(number, pane, rect, name_color)
+  local number_text = tostring(number)
+  local number_font = pane_number_font()
+  local number_width = number_font:get_width(number_text)
+  renderer.draw_text(
+    number_font, number_text, rect.x,
+    rect.y + math.floor((rect.h - number_font:get_height()) / 2),
+    style.titlebar_pane_number
+  )
+  local name_x = rect.x + number_width + pane_number_gap()
+  local name = fit_text(style.font, pane_name(pane),
+    math.max(0, rect.x + rect.w - name_x))
+  renderer.draw_text(
+    style.font, name, name_x,
+    rect.y + math.floor((rect.h - style.font:get_height()) / 2), name_color
+  )
 end
 
 local function preferred_tab_width(number, pane)
   local min_width = config.integrated_titlebar_tab_min_width or 80 * SCALE
   local max_width = config.integrated_titlebar_tab_max_width or style.tab_width
-  local width = style.font:get_width(pane_label(number, pane)) + style.padding.x * 2
+  local width = pane_label_width(number, pane) + style.padding.x * 2
   return common.clamp(width, min_width, math.max(min_width, max_width))
 end
 
@@ -595,11 +630,10 @@ function TitleBar:draw_pane_drag()
     math.max(self.position.y, self.position.y + self.size.y - height)
   )
   draw_tab_tile(x, y, width, height, style.titlebar_tab_hover or style.background2)
-  local label = fit_text(style.font, pane_label(number, pane), width - style.padding.x * 2)
-  renderer.draw_text(
-    style.font, label, x + style.padding.x,
-    y + math.floor((height - style.font:get_height()) / 2), style.text
-  )
+  draw_pane_label(number, pane, {
+    x = x + style.padding.x, y = y,
+    w = math.max(0, width - style.padding.x * 2), h = height,
+  }, style.text)
 end
 
 function TitleBar:draw()
@@ -627,9 +661,7 @@ function TitleBar:draw()
       end
       local label_rect = { x = rect.x + style.padding.x, y = rect.y,
         w = math.max(0, rect.w - style.padding.x * 2), h = rect.h }
-      local label = fit_text(font, entry.label, label_rect.w)
-      renderer.draw_text(font, label, label_rect.x,
-        label_rect.y + math.floor((label_rect.h - font:get_height()) / 2),
+      draw_pane_label(entry.number, entry.pane, label_rect,
         (entry.active or entry.visible or hovered) and style.text or style.dim)
     end
   end

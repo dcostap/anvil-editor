@@ -114,6 +114,33 @@ test.describe("Global title bar Pane entries", function()
     test.ok(group_indicator)
   end)
 
+  test.it("renders Pane numbers as compact heading metadata", function()
+    panes.create { factory = factory("one") }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_rounded_rect = renderer.draw_rounded_rect
+    local old_draw_text = renderer.draw_text
+    local number
+    renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
+    renderer.draw_text = function(font, text, x, y, color)
+      if text == "1" then number = { font = font, color = color } end
+    end
+    local ok, err = pcall(title.draw, title)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_rounded_rect = old_draw_rounded_rect
+    renderer.draw_text = old_draw_text
+
+    test.ok(ok, err)
+    test.not_nil(number)
+    test.ok(number.font:get_size() < style.font:get_size())
+    test.equal(number.font,
+      style.get_scaled_font(style.prose_heading_font, number.font:get_size()))
+    test.equal(number.color, style.titlebar_pane_number)
+  end)
+
   test.it("focuses a Pane from its global entry", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.create { factory = factory("two") }
