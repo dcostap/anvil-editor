@@ -69,6 +69,15 @@ test.describe("File Tree instances", function()
     test.equal(view.root_dir, common.normalize_path(core.root_project().path))
   end)
 
+  test.it("updates after a display scale change", function()
+    local view = assert(filetree.new(root))
+    view.current_scale = SCALE / 2
+
+    view:update()
+
+    test.equal(view.current_scale, SCALE)
+  end)
+
   test.it("uses source context for relative targets and dot", function()
     local source = View()
     source.current_dir = folder

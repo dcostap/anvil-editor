@@ -788,7 +788,6 @@ function FileTreeView:new(opts)
   local buffer = Buffer()
   FileTreeView.super.new(self, buffer)
   self:add_visual_row_provider("filetree-project-path-separators", PROJECT_PATH_SEPARATOR_PROVIDER)
-  self.target_size = filetree_config.size
   self.visible = true
   self.navigation_scope_kind = "file-tree"
   file_context.exclude_content_view(self)
@@ -950,17 +949,6 @@ end
 
 function FileTreeView:git_text_color(kind)
   return path_tree.git_text_color(kind)
-end
-
-function FileTreeView:set_target_size(axis, value)
-  if axis == "x" then
-    self.target_size = value
-    return true
-  end
-end
-
-function FileTreeView:on_scale_change(new_scale, prev_scale)
-  self.target_size = self.target_size / prev_scale * new_scale
 end
 
 function FileTreeView:update()
