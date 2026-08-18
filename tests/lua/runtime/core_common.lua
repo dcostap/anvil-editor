@@ -125,6 +125,11 @@ test.describe("core.common", function()
       assert_contains(result, "test.lua")
     end)
 
+    test.test("limits file path suggestions", function(context)
+      local result = common.path_suggest("", context.temp_root, 2)
+      test.equal(#result, 2)
+    end)
+
     test.test("does not prefix relative suggestions with dot slash", function(context)
       system.chdir(context.temp_root)
       local result = common.path_suggest("test")
@@ -148,6 +153,11 @@ test.describe("core.common", function()
       test.type(result, "table")
       test.equal(#result, 1)
       assert_contains(result, join_path(context.temp_root, "testdir", "subdir"))
+    end)
+
+    test.test("limits directory path suggestions", function(context)
+      local result = common.dir_path_suggest("", context.temp_root, 1)
+      test.equal(#result, 1)
     end)
   end)
 

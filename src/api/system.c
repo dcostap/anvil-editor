@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -1060,6 +1061,141 @@ static int f_list_dir(lua_State *L) {
 }
 
 
+static void push_list_dir_info_entry(
+  lua_State *L, int index, const char *name, const char *type
+) {
+  lua_newtable(L);
+  lua_pushstring(L, name);
+  lua_setfield(L, -2, "name");
+  lua_pushstring(L, type);
+  lua_setfield(L, -2, "type");
+  lua_rawseti(L, -2, index);
+}
+
+static bool list_dir_info_type_matches(const char *filter, const char *type) {
+  return !filter || strcmp(filter, type) == 0;
+}
+
+static bool list_dir_info_name_matches(const char *prefix, const char *name) {
+  return !prefix || SDL_strncasecmp(prefix, name, strlen(prefix)) == 0;
+}
+
+
+static int f_list_dir_info(lua_State *L) {
+  const char *path = luaL_checkstring(L, 1);
+  int limit = lua_gettop(L) >= 2 ? (int) luaL_checkinteger(L, 2) : INT_MAX;
+  const char *filter = lua_gettop(L) >= 3 && !lua_isnil(L, 3)
+    ? luaL_checkstring(L, 3) : NULL;
+  const char *name_prefix = lua_gettop(L) >= 4 && !lua_isnil(L, 4)
+    ? luaL_checkstring(L, 4) : NULL;
+  if (filter && strcmp(filter, "file") != 0 && strcmp(filter, "dir") != 0
+      && strcmp(filter, "other") != 0) {
+    return luaL_error(L, "invalid directory entry type: %s", filter);
+  }
+  if (limit < 0) limit = 0;
+  lua_newtable(L);
+  if (limit == 0) return 1;
+
+#ifdef _WIN32
+  LPWSTR wpath = utfconv_utf8towc(path);
+  if (!wpath) {
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    lua_pushliteral(L, UTFCONV_ERROR_INVALID_CONVERSION);
+    return 2;
+  }
+  size_t path_len = wcslen(wpath);
+  LPWSTR pattern = SDL_malloc((path_len + 3) * sizeof(WCHAR));
+  if (!pattern) {
+    SDL_free(wpath);
+    return luaL_error(L, "out of memory");
+  }
+  wcscpy(pattern, wpath);
+  if (path_len > 0 && pattern[path_len - 1] != L'\\'
+      && pattern[path_len - 1] != L'/') {
+    pattern[path_len++] = L'\\';
+  }
+  pattern[path_len++] = L'*';
+  pattern[path_len] = L'\0';
+
+  WIN32_FIND_DATAW data;
+  HANDLE handle = FindFirstFileExW(
+    pattern, FindExInfoBasic, &data, FindExSearchNameMatch, NULL,
+    FIND_FIRST_EX_LARGE_FETCH
+  );
+  SDL_free(pattern);
+  SDL_free(wpath);
+  if (handle == INVALID_HANDLE_VALUE) {
+    DWORD error = GetLastError();
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    push_win32_error(L, error);
+    return 2;
+  }
+
+  int count = 0;
+  do {
+    if (wcscmp(data.cFileName, L".") == 0
+        || wcscmp(data.cFileName, L"..") == 0) {
+      continue;
+    }
+    char *name = utfconv_wctoutf8(data.cFileName);
+    if (!name) continue;
+    const char *type = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+      ? "dir" : "file";
+    if (list_dir_info_type_matches(filter, type)
+        && list_dir_info_name_matches(name_prefix, name)) {
+      push_list_dir_info_entry(L, ++count, name, type);
+    }
+    SDL_free(name);
+  } while (count < limit && FindNextFileW(handle, &data));
+  FindClose(handle);
+#else
+  DIR *dir = opendir(path);
+  if (!dir) {
+    int error = errno;
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    lua_pushstring(L, strerror(error));
+    return 2;
+  }
+
+  int count = 0;
+  struct dirent *entry;
+  while (count < limit && (entry = readdir(dir)) != NULL) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+    const char *type = "other";
+#ifdef DT_DIR
+    if (entry->d_type == DT_DIR) type = "dir";
+    else if (entry->d_type == DT_REG) type = "file";
+    else if (entry->d_type == DT_UNKNOWN)
+#endif
+    {
+      char *full_path = NULL;
+      SDL_asprintf(
+        &full_path, "%s%s%s", path,
+        path[0] && path[strlen(path) - 1] == '/' ? "" : "/", entry->d_name
+      );
+      struct stat info;
+      if (full_path && stat(full_path, &info) == 0) {
+        type = S_ISDIR(info.st_mode) ? "dir"
+          : S_ISREG(info.st_mode) ? "file" : "other";
+      }
+      SDL_free(full_path);
+    }
+    if (list_dir_info_type_matches(filter, type)
+        && list_dir_info_name_matches(name_prefix, entry->d_name)) {
+      push_list_dir_info_entry(L, ++count, entry->d_name, type);
+    }
+  }
+  closedir(dir);
+#endif
+  return 1;
+}
+
+
 #ifdef _WIN32
   #define realpath(x, y) _wfullpath(y, x, MAX_PATH)
 #endif
@@ -1932,6 +2068,7 @@ static const luaL_Reg lib[] = {
   { "getcwd",                f_getcwd                },
   { "mkdir",                 f_mkdir                 },
   { "list_dir",              f_list_dir              },
+  { "list_dir_info",         f_list_dir_info         },
   { "absolute_path",         f_absolute_path         },
   { "get_file_info",         f_get_file_info         },
   { "get_clipboard",         f_get_clipboard         },

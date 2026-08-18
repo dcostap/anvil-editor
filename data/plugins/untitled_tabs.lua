@@ -5,6 +5,7 @@ local core = require "core"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local common = require "core.common"
+local config = require "core.config"
 local style = require "core.style"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
@@ -581,7 +582,10 @@ command.add(nil, {
       text = default_new_file_text(),
       submit = function(text) create_empty_file(text, source_view) end,
       suggest = function(text)
-        return common.home_encode_list(common.path_suggest(common.home_expand(common.sanitize_prompt_path(text))))
+        return common.home_encode_list(common.path_suggest(
+          common.home_expand(common.sanitize_prompt_path(text)), nil,
+          config.max_visible_commands
+        ))
       end,
     })
   end,

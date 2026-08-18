@@ -346,14 +346,49 @@ local function list_dir_path_variants(path)
   return files, path
 end
 
+local function list_dir_info_path_variants(path, limit, entry_type, name_prefix)
+  if not system.list_dir_info then return nil, path end
+  local native_limit = limit or 2147483647
+  local entries = system.list_dir_info(
+    path, native_limit, entry_type, name_prefix
+  )
+  if PLATFORM ~= "Windows" then return entries, path end
+  if entries and #entries > 0 then return entries, path end
+
+  local slash_path = path:gsub("\\", "/")
+  if slash_path ~= path then
+    local slash_entries = system.list_dir_info(
+      slash_path, native_limit, entry_type, name_prefix
+    )
+    if slash_entries and #slash_entries > 0 then
+      return slash_entries, slash_path
+    end
+    entries = entries or slash_entries
+  end
+
+  local backslash_path = path:gsub("/", "\\")
+  if backslash_path ~= path then
+    local backslash_entries = system.list_dir_info(
+      backslash_path, native_limit, entry_type, name_prefix
+    )
+    if backslash_entries and #backslash_entries > 0 then
+      return backslash_entries, backslash_path
+    end
+    entries = entries or backslash_entries
+  end
+
+  return entries, path
+end
+
 ---Returns a list of paths that are relative to the input path.
 ---
 ---If a root directory is specified, the function returns paths
 ---that are relative to the root directory.
 ---@param text string The input path.
 ---@param root? string The root directory.
+---@param limit? integer Maximum suggestions to return.
 ---@return string[]
-function common.path_suggest(text, root)
+function common.path_suggest(text, root, limit)
   if root and ((PLATFORM == "Windows" and not root:match("[/\\]$")) or (PLATFORM ~= "Windows" and root:sub(-1) ~= PATHSEP)) then
     root = root .. PATHSEP
   end
@@ -362,7 +397,7 @@ function common.path_suggest(text, root)
   if PLATFORM == "Windows" then
     pathsep = "\\/"
   end
-  local path = text:match("^(.-)[^"..pathsep.."]*$")
+  local path, name = text:match("^(.-)([^"..pathsep.."]*)$")
   local clean_dotslash = false
   -- ignore root if path is absolute
   local is_absolute = common.is_absolute_path(text)
@@ -384,8 +419,14 @@ function common.path_suggest(text, root)
   end
   local input_ends_with_separator = PLATFORM == "Windows" and text:match("[/\\]$") ~= nil
     or PLATFORM ~= "Windows" and text:sub(-1) == PATHSEP
-  local files, list_path = list_dir_path_variants(path)
-  files = files or {}
+  local entries, list_path = list_dir_info_path_variants(
+    path, limit, nil, name
+  )
+  local files
+  if not entries then
+    files, list_path = list_dir_path_variants(path)
+    files = files or {}
+  end
   local compare_text = text
   local compare_root = root
   if PLATFORM == "Windows" then
@@ -393,33 +434,36 @@ function common.path_suggest(text, root)
     if compare_root then compare_root = compare_root:gsub("[/\\]", PATHSEP) end
   end
   local res = {}
-  for _, file in ipairs(files) do
-    file = list_path .. file
-    local info = system.get_file_info(file)
-    if info then
-      if info.type == "dir" then
-        file = file .. PATHSEP
+  for _, item in ipairs(entries or files) do
+    local entry_name = entries and item.name or item
+    local file = list_path .. entry_name
+    local suggestion = file
+    if compare_root then
+      local match_file = PLATFORM == "Windows"
+        and suggestion:gsub("[/\\]", PATHSEP) or suggestion
+      local s, e = match_file:find(compare_root, nil, true)
+      if s == 1 then
+        suggestion = match_file:sub(e + 1)
       end
-      if compare_root then
-        -- remove root part from file path. On Windows both `file` and `root`
-        -- can contain mixed slash styles (for example USERDIR from MSYS may
-        -- start with `C:/` while PATHSEP is `\\`), so compare normalized paths.
-        local match_file = PLATFORM == "Windows" and file:gsub("[/\\]", PATHSEP) or file
-        local s, e = match_file:find(compare_root, nil, true)
-        if s == 1 then
-          file = match_file:sub(e + 1)
-        end
-      elseif clean_dotslash then
-        -- remove added dot slash
-        local s, e = file:find("." .. PATHSEP, nil, true)
-        if s == 1 then
-          file = file:sub(e + 1)
-        end
+    elseif clean_dotslash then
+      local s, e = suggestion:find("." .. PATHSEP, nil, true)
+      if s == 1 then
+        suggestion = suggestion:sub(e + 1)
       end
-      local compare_file = file
-      if PLATFORM == "Windows" then compare_file = compare_file:gsub("[/\\]", PATHSEP) end
-      if input_ends_with_separator or compare_file:lower():find(compare_text:lower(), nil, true) == 1 then
-        table.insert(res, file)
+    end
+    local compare_suggestion = suggestion
+    if PLATFORM == "Windows" then
+      compare_suggestion = compare_suggestion:gsub("[/\\]", PATHSEP)
+    end
+    if input_ends_with_separator
+        or compare_suggestion:lower():find(compare_text:lower(), nil, true) == 1 then
+      local info = entries and item or system.get_file_info(file)
+      if info then
+        if info.type == "dir" then
+          suggestion = suggestion .. PATHSEP
+        end
+        table.insert(res, suggestion)
+        if limit and #res >= limit then break end
       end
     end
   end
@@ -430,8 +474,9 @@ end
 ---Returns a list of directories that are related to a path.
 ---@param text string The input path.
 ---@param root string The path to relate to.
+---@param limit? integer Maximum suggestions to return.
 ---@return string[]
-function common.dir_path_suggest(text, root)
+function common.dir_path_suggest(text, root, limit)
   local pathsep = PATHSEP
   if PLATFORM == "Windows" then
     pathsep = "\\/"
@@ -439,20 +484,34 @@ function common.dir_path_suggest(text, root)
   local path, name = text:match("^(.-)([^"..pathsep.."]*)$")
   path = path == "" and (root or ".") or path
   path = path:gsub("[/\\]$", "") .. PATHSEP
-  local files, list_path = list_dir_path_variants(path)
-  files = files or {}
+  local entries, list_path = list_dir_info_path_variants(
+    path, name == "" and limit or nil, "dir"
+  )
+  local files
+  if not entries then
+    files, list_path = list_dir_path_variants(path)
+    files = files or {}
+  end
   local compare_text = text
   if PLATFORM == "Windows" then
     compare_text = compare_text:gsub("[/\\]", PATHSEP)
   end
   local res = {}
-  for _, file in ipairs(files) do
-    file = list_path .. file
-    local info = system.get_file_info(file)
+  for _, item in ipairs(entries or files) do
+    local name = entries and item.name or item
+    local file = list_path .. name
     local compare_file = file
     if PLATFORM == "Windows" then compare_file = compare_file:gsub("[/\\]", PATHSEP) end
-    if info and info.type == "dir" and compare_file:lower():find(compare_text:lower(), nil, true) == 1 then
-      table.insert(res, file)
+    if compare_file:lower():find(compare_text:lower(), nil, true) == 1 then
+      local is_directory = entries ~= nil
+      if not is_directory then
+        local info = system.get_file_info(file)
+        is_directory = info and info.type == "dir"
+      end
+      if is_directory then
+        table.insert(res, file)
+        if limit and #res >= limit then break end
+      end
     end
   end
   return res

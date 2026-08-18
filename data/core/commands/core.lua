@@ -14,7 +14,9 @@ local function suggest_directory(text)
   text = common.home_expand(text)
   local basedir = common.dirname(core.root_project().path)
   return common.home_encode_list((basedir and text == basedir .. PATHSEP or text == "") and
-    core.recent_projects or common.dir_path_suggest(text, core.root_project().path))
+    core.recent_projects or common.dir_path_suggest(
+      text, core.root_project().path, config.max_visible_commands
+    ))
 end
 
 local function check_directory_path(path)
@@ -84,7 +86,10 @@ local function open_file(label, selection_callback, allow_directories)
     end,
     suggest = function(text)
       return common.home_encode_list(
-        common.path_suggest(common.home_expand(common.sanitize_prompt_path(text)), root_dir)
+        common.path_suggest(
+          common.home_expand(common.sanitize_prompt_path(text)), root_dir,
+          config.max_visible_commands
+        )
       )
     end,
     validate = function(text, suggestion)

@@ -2940,6 +2940,7 @@ local perf_last_redraw_time = nil
 local perf_smoothed_fps = 0
 local focus_diag_last_state = nil
 local focus_diag_last_anomaly_key = nil
+local MAIN_LOOP_STALL_MS = 250
 
 ---Set up the run-loop state.  Called once from C (SDL_AppInit → init_lua_state)
 ---via the init_code that also calls core.init().  SDL_AppIterate then drives the
@@ -3259,6 +3260,22 @@ function core.run_step(options)
     for _ in pairs(active_buffer.search_selections) do
       search_selection_count = search_selection_count + 1
     end
+  end
+
+  if window_has_focus and total_ms >= MAIN_LOOP_STALL_MS then
+    local work_ms = math.max(0, total_ms - sleep_actual_ms)
+    local sleep_overrun_ms = math.max(0, sleep_actual_ms - sleep_requested_ms)
+    local source = work_ms >= MAIN_LOOP_STALL_MS and "application" or "scheduler"
+    core.log_quiet(
+      "Main loop stall: source=%s total_ms=%.1f work_ms=%.1f sleep_requested_ms=%.1f sleep_actual_ms=%.1f sleep_overrun_ms=%.1f threads_ms=%.1f core_step_ms=%.1f event_count=%d event_ms=%.1f slowest_event=%s slowest_event_ms=%.1f update_ms=%.1f pre_draw_ms=%.1f draw_ms=%.1f renderer_end_ms=%.1f present_ms=%.1f gc_ms=%.1f pending=%s queue=%d active=%s",
+      source, total_ms, work_ms, sleep_requested_ms, sleep_actual_ms,
+      sleep_overrun_ms, run_threads_ms, core_step_ms, step_stats.event_count,
+      step_stats.event_ms, tostring(step_stats.slowest_event_type or ""),
+      step_stats.slowest_event_ms or 0, step_stats.update_ms,
+      step_stats.pre_draw_ms, step_stats.draw_emit_ms,
+      step_stats.renderer_end_ms, renderer_stats.present_ms or 0, gc_ms,
+      tostring(pending_events_at_start), queue_depth, active_view_name
+    )
   end
 
   if focus_diag_last_state == nil or focus_diag_last_state ~= window_has_focus then

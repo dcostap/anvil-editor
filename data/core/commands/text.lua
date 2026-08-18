@@ -176,7 +176,10 @@ function prompt_save_as(dv, text)
       end
     end,
     suggest = function (text)
-      return common.home_encode_list(common.path_suggest(common.home_expand(common.sanitize_prompt_path(text))))
+      return common.home_encode_list(common.path_suggest(
+        common.home_expand(common.sanitize_prompt_path(text)), nil,
+        config.max_visible_commands
+      ))
     end
   })
 end
@@ -2424,7 +2427,10 @@ local commands = {
         end
       end,
       suggest = function (text)
-        return common.home_encode_list(common.path_suggest(common.home_expand(common.sanitize_prompt_path(text))))
+        return common.home_encode_list(common.path_suggest(
+          common.home_expand(common.sanitize_prompt_path(text)), nil,
+          config.max_visible_commands
+        ))
       end
     })
   end,

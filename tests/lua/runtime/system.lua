@@ -52,6 +52,32 @@ test.describe("system", function()
     test.not_nil(entries, list_err)
     test.contains(entries, "sample.txt")
 
+    local root_entries, info_err = system.list_dir_info(absolute)
+    test.not_nil(root_entries, info_err)
+    local nested_info
+    for _, entry in ipairs(root_entries) do
+      if entry.name == "nested" then nested_info = entry break end
+    end
+    test.not_nil(nested_info)
+    test.equal(nested_info.type, "dir")
+
+    local limited_entries, limit_err = system.list_dir_info(absolute, 1)
+    test.not_nil(limited_entries, limit_err)
+    test.equal(#limited_entries, 1)
+
+    local directories, directories_err = system.list_dir_info(absolute, 10, "dir")
+    test.not_nil(directories, directories_err)
+    test.equal(#directories, 1)
+    test.equal(directories[1].name, "nested")
+    test.equal(directories[1].type, "dir")
+
+    local prefixed, prefixed_err = system.list_dir_info(
+      absolute, 10, nil, "NEST"
+    )
+    test.not_nil(prefixed, prefixed_err)
+    test.equal(#prefixed, 1)
+    test.equal(prefixed[1].name, "nested")
+
     local removed, remove_err = os.remove(nested .. PATHSEP .. "sample.txt")
     test.ok(removed, remove_err)
 
