@@ -316,6 +316,7 @@ keymap.add_direct {
   ["alt+1"] = "pane:focus-1",
   ["alt+2"] = "pane:focus-2",
   ["alt+3"] = "pane:focus-3",
+  ["alt+4"] = "pane:focus-4",
   ["alt+5"] = "pane:focus-5",
   ["alt+6"] = "pane:focus-6",
   ["alt+7"] = "pane:focus-7",
