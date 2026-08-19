@@ -46,9 +46,11 @@ local command = {}
 ---@field description? string
 ---@field keywords? string[]
 ---@field supports_placement? boolean
+---@field palette? boolean
 
 ---@type { [string]: core.command.command }
 command.map = {}
+command.metadata = command.metadata or {}
 
 ---@type table<string, string>
 command.aliases = command.aliases or {}
@@ -205,7 +207,7 @@ function command.add(predicate, map)
       predicate = predicate,
       perform = fn,
       status = existing and existing.status or nil,
-      metadata = existing and existing.metadata or nil,
+      metadata = existing and existing.metadata or command.metadata[name],
     }
   end
 end
@@ -226,7 +228,11 @@ end
 ---@param metadata core.command.metadata
 function command.set_metadata(name, metadata)
   name = resolve_alias(name)
-  if command.map[name] then command.map[name].metadata = metadata end
+  local merged = {}
+  for key, value in pairs(command.metadata[name] or {}) do merged[key] = value end
+  for key, value in pairs(metadata or {}) do merged[key] = value end
+  command.metadata[name] = merged
+  if command.map[name] then command.map[name].metadata = merged end
 end
 
 ---@param name core.command.command_name
@@ -234,7 +240,7 @@ end
 function command.get_metadata(name)
   name = resolve_alias(name)
   local cmd = command.map[name]
-  return cmd and cmd.metadata or nil
+  return cmd and cmd.metadata or command.metadata[name]
 end
 
 ---Return context supplied by the surface that invoked the current command.

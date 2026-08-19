@@ -277,7 +277,7 @@ The bottom-anchored, full-width prompt used for app-wide actions such as opening
 _Avoid_: Command prompt, command bar
 
 **Command Palette**:
-The Fuzzy Searcher mode used to find and run registered Anvil commands. A command can continue into another input mode when it needs an argument.
+The Fuzzy Searcher mode used to find and run curated Anvil commands available to its source View. A command can continue into another input mode when it needs an argument.
 _Avoid_: Pane Command Bar, command prompt
 
 **Shell Command Mode**:

@@ -307,6 +307,7 @@ style.prose_heading_emphasis_font = load_text_font(
 config.force_scrollbar_status = "contracted"
 -- First-party editable file tree.
 require_core_plugin "custom_nagview"
+require_core_plugin "command_palette_catalog"
 require_core_plugin "filetree"
 require_core_plugin "project_paths_view"
 require_core_plugin "terminal"

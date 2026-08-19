@@ -298,7 +298,6 @@ fuzzy_searcher.files_last_scan_diagnostics = nil
 fuzzy_searcher.files_scan_reason = nil
 fuzzy_searcher.files_skip_next_picker_refresh = false
 fuzzy_searcher.files_cache_test_override = false
-local command_cache
 local recent_commands = {}
 local recent_command_set = {}
 local recent_project_times = {}
@@ -958,13 +957,8 @@ function fuzzy_searcher.get_recent_file_entries()
   return out
 end
 
-local function get_commands()
-  if command_cache then return command_cache end
-  local t = {}
-  for name in pairs(command.map) do t[#t+1] = name end
-  table.sort(t)
-  command_cache = t
-  return t
+local function get_commands(picker)
+  return picker and picker.palette_commands or {}
 end
 
 local function save_recent_commands()
@@ -3025,6 +3019,16 @@ function FSView:new(prefix, opts)
   self.source_buffer = source_buffer
   self.source_file_path = file_context.view_file_path(source_view)
   self.source_file_line = source_buffer and source_buffer:get_selection(false) or 1
+  self.palette_commands = {}
+  self.palette_command_set = {}
+  for _, name in ipairs(command.get_all_valid()) do
+    local metadata = command.get_metadata(name)
+    if metadata and metadata.palette == true then
+      self.palette_commands[#self.palette_commands + 1] = name
+      self.palette_command_set[name] = true
+    end
+  end
+  table.sort(self.palette_commands)
 
   self.input = TextBox(self, prefix or "", "")
   self.input:set_trailing_text(function()
@@ -4293,7 +4297,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     if trim_query(query) == "" then
       local added_recent = 0
       for _, name in ipairs(recent_commands) do
-        if command.map[name] then
+        if command.map[name] and self.palette_command_set[name] then
           if added_recent >= max_items then self.has_more = true; return end
           out[#out+1] = { kind = "command", label = fuzzy_searcher.command_title(name), command = name, query = query, match_spans = {}, recent = true, info = command_preview_info(name), status = command_status_parts(name, self) }
           added_recent = added_recent + 1
@@ -4302,7 +4306,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
       return
     end
 
-    local matches = fuzzy_filter(get_commands(), query, max_items + 1, fuzzy_searcher.command_search_text)
+    local matches = fuzzy_filter(get_commands(self), query, max_items + 1, fuzzy_searcher.command_search_text)
     for i, match in ipairs(matches) do
       if i > max_items then self.has_more = true; break end
       local name = match.item

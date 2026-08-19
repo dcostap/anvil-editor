@@ -4,17 +4,21 @@ local command = require "core.command"
 test.describe("toggle commands", function()
   local saved_map
   local saved_aliases
+  local saved_metadata
 
   test.before_each(function()
     saved_map = command.map
     saved_aliases = command.aliases
+    saved_metadata = command.metadata
     command.map = {}
     command.aliases = {}
+    command.metadata = {}
   end)
 
   test.after_each(function()
     command.map = saved_map
     command.aliases = saved_aliases
+    command.metadata = saved_metadata
   end)
 
   test.it("registers one toggle command with current boolean status", function()
