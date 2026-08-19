@@ -1023,6 +1023,10 @@ end
 ---Request close approval without releasing Text View resources.
 ---@param approve function Callback to execute when close is approved.
 function TextView:can_close(approve)
+  -- A close policy can save or defer this View before the normal dirty prompt.
+  -- Returning true means that the policy owns the approval decision.
+  local close_handler = TextView.close_approval_handler
+  if close_handler and close_handler(self, approve) then return end
   local references = core.buffer_registry
     and core.buffer_registry:reference_count(self.buffer)
     or #core.get_views_referencing_buffer(self.buffer)

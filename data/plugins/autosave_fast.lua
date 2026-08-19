@@ -7,6 +7,8 @@ local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local untitled_recovery = require "plugins.untitled_recovery"
 
+TextView.close_approval_handler = nil
+
 if config.plugins.autosave_fast == false then
   return { enabled = false, save_all_dirty = function() return 0 end }
 end
@@ -471,24 +473,26 @@ function core.set_active_view(view, focus_context)
   return result
 end
 
-local textview_try_close = TextView.try_close
-function TextView:try_close(do_close)
-  if has_invalid_save_path(self.buffer) then
-    if core.log_quiet then core.log_quiet("Closing invalid saved-path tab without save prompt: %q", self.buffer.filename or self.buffer.abs_filename) end
-    do_close()
-    return
+TextView.close_approval_handler = function(view, approve)
+  local buffer = view.buffer
+  if has_invalid_save_path(buffer) then
+    if core.log_quiet then
+      local path = buffer.filename or buffer.abs_filename or ""
+      core.log_quiet("Closing invalid saved-path View without save prompt: path_len=%d", #path)
+    end
+    approve()
+    return true
   end
-  if self.buffer:is_dirty()
-     and #core.get_views_referencing_buffer(self.buffer) == 1 then
-    local saved, handled = autosave_fast.save_before_close(self.buffer, "tab close")
+  if buffer:is_dirty() then
+    local saved, handled = autosave_fast.save_before_close(buffer, "View close")
     if saved then
-      do_close()
-      return
+      approve()
+      return true
     elseif handled then
-      return
+      return true
     end
   end
-  return textview_try_close(self, do_close)
+  return false
 end
 
 local textview_get_name = TextView.get_name
