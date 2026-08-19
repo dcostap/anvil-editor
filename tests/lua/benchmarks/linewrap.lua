@@ -39,7 +39,10 @@ end
 
 local function benchmark_reconstruction(name, source, width_cells, iterations)
   local buffer, view, font, width = new_view(name, source, width_cells)
-  linewrapping.reconstruct_breaks(view, font, width)
+  collectgarbage("collect")
+  local cold_ms = elapsed_ms(function()
+    linewrapping.reconstruct_breaks(view, font, width)
+  end)
   local samples = {}
   for iteration = 1, iterations do
     collectgarbage("collect")
@@ -51,6 +54,7 @@ local function benchmark_reconstruction(name, source, width_cells, iterations)
     bytes = #source,
     lines = #buffer.lines,
     rows = linewrapping.get_total_wrapped_lines(view),
+    cold_ms = cold_ms,
     median_ms = median(samples),
   }
   close(buffer, view)
@@ -148,6 +152,30 @@ test.describe("line wrapping benchmark", function()
       80,
       5
     )
+    local binary_like_chars = {}
+    for codepoint = 0xA1, 0x120 do
+      binary_like_chars[#binary_like_chars + 1] = string.uchar(codepoint)
+    end
+    local binary_like_line = table.concat(binary_like_chars) .. "\n"
+    local binary_like_utf8 = benchmark_reconstruction(
+      "linewrap-binary-like-utf8-benchmark.txt",
+      make_source(30000, function() return binary_like_line end),
+      80,
+      3
+    )
+    local wide_binary_like_utf8 = benchmark_reconstruction(
+      "linewrap-wide-binary-like-utf8-benchmark.txt",
+      make_source(18000, function(line)
+        local chars = {}
+        for index = 1, 128 do
+          local codepoint = 0x100 + ((line * 131 + index * 257) % 0xD700)
+          chars[index] = string.uchar(codepoint)
+        end
+        return table.concat(chars) .. "\n"
+      end),
+      80,
+      3
+    )
 
     local early_edit_ms, early_rows, edit_bytes = benchmark_edit_position(20000, 1)
     local late_edit_ms, late_rows = benchmark_edit_position(20000, 20000)
@@ -173,6 +201,18 @@ test.describe("line wrapping benchmark", function()
     print(string.format(
       "Line wrap UTF-8 lines reconstruction: bytes=%d lines=%d rows=%d median_ms=%.3f",
       utf8_lines.bytes, utf8_lines.lines, utf8_lines.rows, utf8_lines.median_ms
+    ))
+    print(string.format(
+      "Line wrap binary-like UTF-8 reconstruction: bytes=%d lines=%d rows=%d cold_ms=%.3f median_ms=%.3f",
+      binary_like_utf8.bytes, binary_like_utf8.lines,
+      binary_like_utf8.rows, binary_like_utf8.cold_ms,
+      binary_like_utf8.median_ms
+    ))
+    print(string.format(
+      "Line wrap wide binary-like UTF-8 reconstruction: bytes=%d lines=%d rows=%d cold_ms=%.3f median_ms=%.3f",
+      wide_binary_like_utf8.bytes, wide_binary_like_utf8.lines,
+      wide_binary_like_utf8.rows, wide_binary_like_utf8.cold_ms,
+      wide_binary_like_utf8.median_ms
     ))
     print(string.format(
       "Line wrap row-changing edit: bytes=%d lines=%d early_ms=%.3f late_ms=%.3f early_rows=%d late_rows=%d",

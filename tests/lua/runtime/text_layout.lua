@@ -88,6 +88,17 @@ test.describe("Native text layout", function()
     ), { 0 })
   end)
 
+  test.it("invalidates cached fallback resolution after a font size change", function()
+    local base = test.not_nil(style.code_font or style.font)
+    local font = base:copy(base:get_size())
+    local text = "漢字漢字"
+    local width = font:get_width("漢字")
+
+    test.same(font:wrap_text(text, width, "letter"), { 0, 6 })
+    font:set_size(font:get_size() * 2)
+    test.same(font:wrap_text(text, width, "letter"), { 0, 3, 6, 9 })
+  end)
+
   test.it("maps monotonically increasing offsets through a retained cursor", function()
     local font = test.not_nil(style.code_font or style.font)
     local text = "alpha βeta gamma"

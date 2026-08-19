@@ -177,6 +177,12 @@ typedef struct {
   uint64_t age;
 } ShapedWidthCacheEntry;
 
+typedef struct {
+  uint64_t font_ids[FONT_FALLBACK_MAX];
+  uint32_t font_generations[FONT_FALLBACK_MAX];
+  uint8_t *rows[CHARMAP_ROW];
+} TextFontResolveCache;
+
 typedef struct RenFont {
   FT_Face face;
   hb_font_t *hb_font;
@@ -195,11 +201,15 @@ typedef struct RenFont {
   unsigned char style;
   bool ligatures;
   uint32_t generation;
+  uint64_t instance_id;
   uint64_t shaped_width_age;
   size_t shaped_width_count;
   ShapedWidthCacheEntry shaped_width_cache[SHAPED_WIDTH_CACHE_MAX];
+  TextFontResolveCache text_resolve_cache;
   char path[];
 } RenFont;
+
+static uint64_t next_font_instance_id = 1;
 
 #ifdef ANVIL_USE_SDL_RENDERER
 void update_font_scale(RenWindow *window_renderer, RenFont **fonts) {
@@ -1211,6 +1221,13 @@ static void font_clear_shaped_width_cache(RenFont *font) {
   font->shaped_width_age = 0;
 }
 
+static void font_free_text_resolve_cache(RenFont *font) {
+  for (int row = 0; row < CHARMAP_ROW; row++) {
+    SDL_free(font->text_resolve_cache.rows[row]);
+    font->text_resolve_cache.rows[row] = NULL;
+  }
+}
+
 static ShapedWidthCacheEntry *font_lookup_shaped_width_cache(RenFont *font, const char *text, size_t len, uint32_t hash_value) {
   for (size_t i = 0; i < font->shaped_width_count; i++) {
     ShapedWidthCacheEntry *entry = &font->shaped_width_cache[i];
@@ -1411,6 +1428,8 @@ RenFont* ren_font_load(const char* path, float size, ERenFontAntialiasing antial
 
   int len = strlen(path);
   font = check_alloc(SDL_calloc(1, sizeof(RenFont) + len + 1));
+  font->instance_id = next_font_instance_id++;
+  if (next_font_instance_id == 0) next_font_instance_id = 1;
   strcpy(font->path, path);
   font->size = size;
   font->antialiasing = antialiasing;
@@ -1460,6 +1479,7 @@ const char* ren_font_get_path(RenFont *font) {
 
 void ren_font_free(RenFont* font) {
   font_clear_glyph_cache(font);
+  font_free_text_resolve_cache(font);
   // free codepoint cache as well
   for (int i = 0; i < CHARMAP_ROW; i++) {
     SDL_free(font->charmap.rows[i]);
@@ -1769,6 +1789,11 @@ typedef enum {
   TEXT_STATS_RENDER
 } TextStatsPhase;
 
+static void font_group_prepare_text_resolve_cache(RenFont **fonts);
+static RenFont *font_group_resolve_text_font(
+  RenFont **fonts, unsigned int codepoint, unsigned int *glyph_id
+);
+
 static inline void text_stats_count_char(TextStatsPhase phase) {
   if (phase == TEXT_STATS_WIDTH) g_text_frame_stats.width_chars++;
   else g_text_frame_stats.render_chars++;
@@ -1781,7 +1806,16 @@ static const char *next_shaped_run(RenFont **fonts, const char *text, const char
     unsigned int codepoint, glyph_id = 0;
     p = utf8_to_codepoint(p, end, &codepoint);
     text_stats_count_char(phase);
-    RenFont *next_font = font_group_find_font(fonts, codepoint, &glyph_id);
+    RenFont *next_font;
+    if (phase == TEXT_STATS_WIDTH) {
+      bool whitespace = is_whitespace(codepoint);
+      glyph_id = font_get_glyph_id(fonts[0], codepoint);
+      next_font = fonts[0];
+      if (!glyph_id && !whitespace)
+        next_font = font_group_resolve_text_font(fonts, codepoint, &glyph_id);
+    } else {
+      next_font = font_group_find_font(fonts, codepoint, &glyph_id);
+    }
     if (is_whitespace(codepoint) || next_font != font || !next_font->ligatures || !glyph_id)
       return char_start;
   }
@@ -1864,6 +1898,7 @@ static double shaped_run_get_width(hb_buffer_t *buffer, RenFont *font, const cha
 }
 
 double ren_font_group_get_width(RenFont **fonts, const char *text, size_t len, RenTab tab, int *x_offset) {
+  font_group_prepare_text_resolve_cache(fonts);
   g_text_frame_stats.width_calls++;
   g_text_frame_stats.width_bytes += len;
   double width = 0;
@@ -1876,10 +1911,13 @@ double ren_font_group_get_width(RenFont **fonts, const char *text, size_t len, R
     const char *char_start = text;
     text = utf8_to_codepoint(text, end, &codepoint);
     g_text_frame_stats.width_chars++;
-    unsigned int glyph_id = 0;
-    RenFont *font = font_group_find_font(fonts, codepoint, &glyph_id);
+    bool whitespace = is_whitespace(codepoint);
+    unsigned int glyph_id = font_get_glyph_id(fonts[0], codepoint);
+    RenFont *font = fonts[0];
+    if (!glyph_id && !whitespace)
+      font = font_group_resolve_text_font(fonts, codepoint, &glyph_id);
 
-    if (!is_whitespace(codepoint) && font && font->ligatures && font->hb_font && glyph_id) {
+    if (!whitespace && font && font->ligatures && font->hb_font && glyph_id) {
       const char *run_end = next_shaped_run(fonts, text, end, font, TEXT_STATS_WIDTH);
       g_text_frame_stats.width_shape_probe_bytes += (uint64_t)(run_end - char_start);
       if (text_needs_shaping(char_start, run_end)) {
@@ -1894,7 +1932,9 @@ double ren_font_group_get_width(RenFont **fonts, const char *text, size_t len, R
       text = run_end;
     } else {
       GlyphMetric *metric = NULL;
-      font_group_get_glyph(fonts, codepoint, 0, NULL, &metric);
+      font_get_glyph_by_id(font, glyph_id, 0, NULL, &metric);
+      if ((!metric || !metric->flags) && codepoint != 0x25A1 && !whitespace)
+        font_group_get_glyph(fonts, 0x25A1, 0, NULL, &metric);
       width += font_get_xadvance(fonts[0], codepoint, metric, width, tab);
       if (!set_x_offset && metric) {
         set_x_offset = true;
@@ -2412,21 +2452,85 @@ size_t ren_font_group_get_advances(
   return count;
 }
 
+static void font_group_prepare_text_resolve_cache(RenFont **fonts) {
+  TextFontResolveCache *cache = &fonts[0]->text_resolve_cache;
+  bool current = true;
+  for (int index = 0; index < FONT_FALLBACK_MAX; index++) {
+    RenFont *font = fonts[index];
+    uint64_t instance_id = font ? font->instance_id : 0;
+    uint32_t generation = font ? font->generation : 0;
+    if (cache->font_ids[index] != instance_id
+      || cache->font_generations[index] != generation) {
+      current = false;
+      break;
+    }
+  }
+  if (current) return;
+
+  for (int row = 0; row < CHARMAP_ROW; row++) {
+    if (cache->rows[row])
+      memset(cache->rows[row], 0, CHARMAP_COL * sizeof(*cache->rows[row]));
+  }
+  for (int index = 0; index < FONT_FALLBACK_MAX; index++) {
+    RenFont *font = fonts[index];
+    cache->font_ids[index] = font ? font->instance_id : 0;
+    cache->font_generations[index] = font ? font->generation : 0;
+  }
+}
+
+static RenFont *font_group_resolve_text_font(
+  RenFont **fonts, unsigned int codepoint, unsigned int *glyph_id
+) {
+  if (codepoint > MAX_UNICODE) {
+    RenFont *font = fonts[0];
+    for (int index = 1; index < FONT_FALLBACK_MAX && fonts[index]; index++)
+      font = fonts[index];
+    *glyph_id = 0;
+    return font;
+  }
+  TextFontResolveCache *cache = &fonts[0]->text_resolve_cache;
+  unsigned int row = codepoint / CHARMAP_COL;
+  unsigned int col = codepoint - row * CHARMAP_COL;
+  if (!cache->rows[row])
+    cache->rows[row] = check_alloc(SDL_calloc(CHARMAP_COL, sizeof(uint8_t)));
+
+  uint8_t cached_index = cache->rows[row][col];
+  int font_index;
+  if (cached_index) {
+    font_index = cached_index - 1;
+  } else {
+    font_index = 0;
+    for (int index = 1; index < FONT_FALLBACK_MAX && fonts[index]; index++) {
+      font_index = index;
+      if (font_get_glyph_id(fonts[index], codepoint)) break;
+    }
+    cache->rows[row][col] = (uint8_t)(font_index + 1);
+  }
+
+  RenFont *font = fonts[font_index];
+  *glyph_id = font_get_glyph_id(font, codepoint);
+  return font;
+}
+
 static double font_group_get_standalone_advance(
   RenFont **fonts, const char *text, size_t len, unsigned int codepoint,
   hb_buffer_t **hb_buffer
 ) {
-  unsigned int glyph_id = 0;
-  RenFont *font = font_group_find_font(fonts, codepoint, &glyph_id);
+  bool whitespace = is_whitespace(codepoint);
+  unsigned int glyph_id = font_get_glyph_id(fonts[0], codepoint);
+  RenFont *font = fonts[0];
+  if (!glyph_id && !whitespace)
+    font = font_group_resolve_text_font(fonts, codepoint, &glyph_id);
   double advance = 0;
 
   /* Plain line wrapping historically measured each non-ASCII character with
    * font:get_width(character). Preserve that standalone shaping behavior: it
    * matters for combining marks whose nominal glyph advance may be nonzero
    * even though HarfBuzz positions the standalone mark with zero advance. */
-  if (!is_whitespace(codepoint)
+  bool needs_shaping = !is_whitespace(codepoint)
     && font && font->ligatures && font->hb_font && glyph_id
-    && text_needs_shaping(text, text + len)) {
+    && text_needs_shaping(text, text + len);
+  if (needs_shaping) {
     if (!*hb_buffer) *hb_buffer = hb_buffer_create();
     if (*hb_buffer) {
       int unused_x_offset = 0;
@@ -2445,7 +2549,9 @@ static double font_group_get_standalone_advance(
 
   GlyphMetric *metric = NULL;
   RenTab fixed_tab = { .offset = NAN };
-  font_group_get_glyph(fonts, codepoint, 0, NULL, &metric);
+  font_get_glyph_by_id(font, glyph_id, 0, NULL, &metric);
+  if ((!metric || !metric->flags) && codepoint != 0x25A1 && !whitespace)
+    font_group_get_glyph(fonts, 0x25A1, 0, NULL, &metric);
   advance = font_get_xadvance(fonts[0], codepoint, metric, 0, fixed_tab);
 #ifdef ANVIL_USE_SDL_RENDERER
   advance /= fonts[0]->scale;
@@ -2458,6 +2564,7 @@ void ren_font_group_wrap_text(
   const RenTextWrapOptions *options, RenTextWrapEmit emit, void *userdata
 ) {
   if (!fonts || !fonts[0] || !text || !options || !emit) return;
+  font_group_prepare_text_resolve_cache(fonts);
 
   if (start > text_len) start = text_len;
   if (end > text_len) end = text_len;

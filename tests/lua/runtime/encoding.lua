@@ -1,4 +1,5 @@
 local common = require "core.common"
+local Buffer = require "core.buffer"
 local test = require "core.test"
 
 local temp_root
@@ -65,5 +66,55 @@ test.describe("encoding", function()
 
     local removed, remove_err = os.remove(path)
     test.ok(removed, remove_err)
+  end)
+
+  test.test("marks invalid data beyond the detection sample as binary", function(context)
+    local path = context.temp_root .. PATHSEP .. "late-invalid-utf8.txt"
+    local file = io.open(path, "wb")
+    test.not_nil(file)
+    file:write(string.rep("a", 256 * 1024))
+    file:write("\255")
+    file:close()
+
+    local buffer = Buffer(path, path, false)
+    test.equal(buffer.encoding, "UTF-8")
+    test.ok(buffer.binary, "invalid trailing data was not marked as binary")
+  end)
+
+  test.test("accepts a utf8 sequence split by the sample boundary", function(context)
+    local path = context.temp_root .. PATHSEP .. "split-utf8.txt"
+    local file = io.open(path, "wb")
+    test.not_nil(file)
+    file:write(string.rep("a", 256 * 1024 - 1))
+    file:write("é after the sample")
+    file:close()
+
+    local charset, _, err = encoding.detect(path)
+    test.equal(charset, "UTF-8", err)
+  end)
+
+  test.test("does not accept a truncated utf8 sequence", function(context)
+    local path = context.temp_root .. PATHSEP .. "truncated-utf8.txt"
+    local file = io.open(path, "wb")
+    test.not_nil(file)
+    file:write("plain text\195")
+    file:close()
+
+    local charset = encoding.detect(path)
+    test.ok(charset ~= "UTF-8", "truncated data was reported as UTF-8")
+  end)
+
+  test.test("samples around invalid data in complete strings", function()
+    local bytes = string.rep("plain ASCII text ", 20000)
+      .. string.rep("caf\233 ", 2000)
+    local charset, _, err = encoding.detect_string(bytes)
+    test.not_nil(charset, err)
+    test.ok(charset ~= "UTF-8", "legacy text was reported as UTF-8")
+
+    local converted, convert_err = encoding.convert(
+      "UTF-8", charset, bytes, { strict = true }
+    )
+    test.not_nil(converted, convert_err)
+    test.equal(converted:sub(-6), "café ")
   end)
 end)

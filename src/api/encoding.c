@@ -11,7 +11,8 @@
   #include <windows.h>
 #endif
 
-const size_t MAX_READ_SIZE = 10 * 1024 * 1024;
+/* Keep statistical detection bounded. Buffer loading validates later bytes. */
+static const size_t DETECTION_SAMPLE_SIZE = 256 * 1024;
 
 typedef struct {
   const char* charset;
@@ -70,21 +71,28 @@ static const uint8_t utf8d[] = {
   1,3,1,1,1,1,1,3,1,3,1,1,1,1,1,1,1,3,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // s7..s8
 };
 
+static size_t utf8_validate_until_reject(
+  uint32_t *state, const char *str, size_t len
+) {
+  size_t i;
+  uint32_t type;
+
+  for (i = 0; i < len; i++) {
+    // We don't care about the codepoint, so this is
+    // a simplified version of the decode function.
+    type = utf8d[(uint8_t)str[i]];
+    *state = utf8d[256 + (*state) * 16 + type];
+
+    if (*state == UTF8_REJECT)
+      break;
+  }
+
+  return i;
+}
+
 uint32_t utf8_validate(uint32_t *state, const char *str, size_t len) {
-   size_t i;
-   uint32_t type;
-
-    for (i = 0; i < len; i++) {
-        // We don't care about the codepoint, so this is
-        // a simplified version of the decode function.
-        type = utf8d[(uint8_t)str[i]];
-        *state = utf8d[256 + (*state) * 16 + type];
-
-        if (*state == UTF8_REJECT)
-            break;
-    }
-
-    return *state;
+  utf8_validate_until_reject(state, str, len);
+  return *state;
 }
 /*************************End of UTF-8 Validation Code*************************/
 
@@ -224,67 +232,61 @@ static const char* encoding_charset_from_bom(
 }
 
 
-/* Detects the encoding of a string. */
-const char* encoding_detect(const char* string, size_t string_len, size_t* bom_len) {
+static const char* encoding_detect_statistical(
+  const char *string, size_t string_len
+) {
   static char charset[30];
+  memset(charset, 0, sizeof(charset));
 
-  if (string_len == 0) {
-		return "UTF-8";
+  uchardet_t handle = uchardet_new();
+  if (!handle)
+    return NULL;
+  int retval = uchardet_handle_data(handle, string, string_len);
+  if (retval == 0) {
+    uchardet_data_end(handle);
+    const char* ucharset = uchardet_get_charset(handle);
+    if (ucharset)
+      SDL_strlcpy(charset, ucharset, sizeof(charset));
   }
+  uchardet_delete(handle);
+  return *charset ? charset : NULL;
+}
 
-  memset(charset, 0, 30);
-
+static const char* encoding_detect_buffer(
+  const char* string, size_t string_len, size_t* bom_len, bool complete_input
+) {
   *bom_len = 0;
+  if (string_len == 0)
+    return "UTF-8";
+
   const char* bom_charset = encoding_charset_from_bom(
     string, string_len, bom_len
   );
+  if (bom_charset)
+    return bom_charset;
 
   uint32_t state = UTF8_ACCEPT;
-  bool valid_utf8 = true;
-  uchardet_t handle = uchardet_new();
-
-	int retval = uchardet_handle_data(handle, string, string_len);
-	if (retval == 0) {
-    uchardet_data_end(handle);
-    const char* ucharset = uchardet_get_charset(handle);
-    strcpy(charset, ucharset);
-	}
-	uchardet_delete(handle);
-
-	if(utf8_validate(&state, string, string_len) == UTF8_REJECT) {
-		valid_utf8 = false;
-	}
-
-  state = UTF8_ACCEPT;
-  char* utf8_output = NULL;
-  size_t utf8_len = 0;
-  if (
-    bom_charset
-    &&
-    (
-      (utf8_output = SDL_iconv_string_custom(
-        "UTF-8", bom_charset,
-        string+(*bom_len), string_len-(*bom_len),
-        &utf8_len, true
-      )) != NULL
-      &&
-      utf8_validate(&state, utf8_output, utf8_len) != UTF8_REJECT
-    )
-  ) {
-    SDL_free(utf8_output);
-    return bom_charset;
-  }
-
-  if (utf8_output)
-    SDL_free(utf8_output);
-
-  if (valid_utf8) {
+  size_t invalid_offset = utf8_validate_until_reject(
+    &state, string, string_len
+  );
+  /* A file sample can end inside a valid sequence that continues later. */
+  if (state == UTF8_ACCEPT || (!complete_input && state != UTF8_REJECT))
     return "UTF-8";
-  } else if (*charset) {
-    return charset;
-  }
 
-  return NULL;
+  size_t sample_len = string_len < DETECTION_SAMPLE_SIZE
+    ? string_len : DETECTION_SAMPLE_SIZE;
+  size_t sample_start = 0;
+  if (string_len > sample_len && invalid_offset > sample_len / 2) {
+    sample_start = invalid_offset - sample_len / 2;
+    if (sample_start > string_len - sample_len)
+      sample_start = string_len - sample_len;
+  }
+  return encoding_detect_statistical(string + sample_start, sample_len);
+}
+
+/* Detects the encoding of a complete string. */
+const char* encoding_detect(const char* string, size_t string_len, size_t* bom_len) {
+  return encoding_detect_buffer(string, string_len, bom_len, true);
 }
 
 
@@ -320,34 +322,56 @@ int f_detect(lua_State *L) {
     return 3;
   }
 
-  fseek(file, 0, SEEK_END);
-
-  /* TODO: on max_read_size if the ending byte is incomplete codepoint expand it */
-  size_t file_size = ftell(file);
-  size_t read_size = file_size > MAX_READ_SIZE ? MAX_READ_SIZE : file_size;
-  char* string = SDL_malloc(read_size);
-
-  if (!string) {
+  if (fseek(file, 0, SEEK_END) != 0) {
+    fclose(file);
     lua_pushnil(L);
     lua_pushnil(L);
-		lua_pushfstring(L, "out of ram while detecting charset of '%s'", file_name);
-		fclose(file);
-		return 3;
+    lua_pushfstring(L, "could not scan file encoding for '%s'", file_name);
+    return 3;
+  }
+  long file_size_value = ftell(file);
+  if (file_size_value < 0 || fseek(file, 0, SEEK_SET) != 0) {
+    fclose(file);
+    lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushfstring(L, "could not scan file encoding for '%s'", file_name);
+    return 3;
   }
 
-  fseek(file, 0, SEEK_SET);
-  fread(string, 1, read_size, file);
+  size_t file_size = (size_t)file_size_value;
+  size_t sample_len = file_size < DETECTION_SAMPLE_SIZE
+    ? file_size : DETECTION_SAMPLE_SIZE;
+  char *sample = sample_len ? SDL_malloc(sample_len) : NULL;
+  if (sample_len && !sample) {
+    fclose(file);
+    lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushfstring(L, "out of ram while detecting charset of '%s'", file_name);
+    return 3;
+  }
+
+  size_t sampled = fread(sample, 1, sample_len, file);
+  bool read_failed = ferror(file) != 0;
+  fclose(file);
+  if (read_failed) {
+    SDL_free(sample);
+    lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushfstring(L, "could not scan file encoding for '%s'", file_name);
+    return 3;
+  }
 
   size_t bom_len = 0;
-  const char* charset = encoding_detect(string, read_size, &bom_len);
+  const char* charset = encoding_detect_buffer(
+    sample, sampled, &bom_len, sampled == file_size
+  );
 
-  fclose(file);
   int rcount = 1;
 
   if (charset) {
     lua_pushstring(L, charset);
     if(bom_len > 0) {
-      lua_pushlstring(L, string, bom_len);
+      lua_pushlstring(L, sample, bom_len);
       rcount = 2;
     }
   } else {
@@ -356,9 +380,7 @@ int f_detect(lua_State *L) {
 		lua_pushstring(L, "could not detect the file encoding");
 		rcount = 3;
   }
-
-  SDL_free(string);
-
+  SDL_free(sample);
   return rcount;
 }
 
