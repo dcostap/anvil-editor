@@ -142,6 +142,7 @@ style.search_selection_outline = c("c47233")
 style.search_selection_secondary_outline = c("aeb3c2")
 style.fuzzy_searcher_match = c("000000")
 style.fuzzy_searcher_match_background = { 252, 212, 126, 204 }
+style.fuzzy_searcher_recent_project_icon = c("871094")
 style.selectionhighlight = c(C.identifier_under_caret_bg)
 style.copy_feedback = { common.color "rgba(255, 255, 255, 0.45)" }
 style.fuzzy_searcher_copy_feedback = { common.color "rgba(166, 210, 255, 0.60)" }

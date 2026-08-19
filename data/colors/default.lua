@@ -196,6 +196,7 @@ style.search_selection_outline = c("c8c8c8")
 style.search_selection_secondary_outline = c("777777")
 style.fuzzy_searcher_match = c("000000")
 style.fuzzy_searcher_match_background = { 186, 151, 82, 230 }
+style.fuzzy_searcher_recent_project_icon = c("ac88bf")
 style.selectionhighlight = c("274324")
 style.copy_feedback = { common.color "rgba(255, 255, 255, 0.13)" }
 style.fuzzy_searcher_copy_feedback = style.copy_feedback

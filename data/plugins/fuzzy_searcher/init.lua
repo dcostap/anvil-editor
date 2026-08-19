@@ -2253,7 +2253,8 @@ local function draw_path_result_row(font, r, x, y, width)
   local metadata_y = y + math.max(0, math.floor((font:get_height() - metadata_font:get_height()) / 2))
   local icon_column_width = fuzzy_searcher.file_icons.column_width(font:get_height())
   if r.is_folder then
-    renderer.draw_text(style.icon_font, r.path_search and "B" or "d", x, y, style.accent)
+    local icon_color = r.path_search and style.fuzzy_searcher_recent_project_icon or style.accent
+    renderer.draw_text(style.icon_font, r.path_search and "B" or "d", x, y, icon_color)
   else
     fuzzy_searcher.file_icons.draw(r.path or r.label, x, y, font:get_height())
   end
