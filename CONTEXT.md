@@ -284,6 +284,14 @@ _Avoid_: fuzzy searcher popup
 A Fuzzy Searcher search for recent Projects, folders, and files outside the current Project Search Scope.
 _Avoid_: external mode, system search
 
+**Exact Path Result**:
+The first Fuzzy Searcher result when the entered path identifies an existing file or folder.
+_Avoid_: direct path match, forced result
+
+**Create Path Result**:
+A first-position Fuzzy Searcher action that creates a missing explicit file or folder path.
+_Avoid_: new path suggestion, create match
+
 **Copy Feedback Highlight**:
 A brief visual highlight marking the text most recently copied by the user.
 _Avoid_: Copy flash, copy animation

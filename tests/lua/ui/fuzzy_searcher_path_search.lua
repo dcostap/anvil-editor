@@ -35,6 +35,7 @@ test.describe("Fuzzy Searcher Path Search", function()
     context.everything_state = helpers.everything_state()
     context.original_projects = core.projects
     context.original_recent_projects = core.recent_projects
+    context.original_open_file = core.open_file
     context.original_cwd = system.getcwd()
     context.temp_root = common.normalize_path(USERDIR
       .. PATHSEP .. "fuzzy-path-search-tests-"
@@ -58,6 +59,7 @@ test.describe("Fuzzy Searcher Path Search", function()
     project_paths.load_workspace_state(nil)
     core.projects = context.original_projects
     core.recent_projects = context.original_recent_projects
+    core.open_file = context.original_open_file
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)
@@ -170,7 +172,8 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.not_nil(file_result)
     test.equal(file_result.is_folder, false)
     test.equal(file_result.file, file)
-    test.equal(picker.results[1].label, "Folders")
+    test.equal(picker.results[1].kind, "create_path")
+    test.equal(picker.results[2].label, "Folders")
     for index, result in ipairs(picker.results) do
       if result == file_result then picker.selected = index break end
     end
@@ -179,6 +182,71 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.ok(common.path_equals(preview.buffer.abs_filename, file))
     local drawn, draw_error = pcall(function() picker:draw() end)
     test.ok(drawn, draw_error)
+  end)
+
+  test.it("puts an exact hidden Project path before indexed results", function(context)
+    local hidden_dir = join_path(context.project_root, ".hidden")
+    local hidden_file = join_path(hidden_dir, "exact.txt")
+    mkdirp(hidden_dir)
+    write_file(hidden_file)
+    helpers.set_everything_state("unavailable")
+
+    fuzzy_searcher.open(".hidden/exact.txt")
+    local result = core.fuzzy_searcher_active_view.results[1]
+
+    test.not_nil(result)
+    test.equal(result.exact_path, true)
+    test.ok(common.path_equals(result.abs_path, hidden_file))
+  end)
+
+  test.it("creates and opens an explicit missing relative file path", function(context)
+    local path = join_path(context.project_root, "new", "deep", "created.txt")
+    local opened_path, opened_options
+    core.open_file = function(file, options)
+      opened_path, opened_options = file, options
+      return { buffer = { set_selection = function() end } }
+    end
+    helpers.set_everything_state("unavailable")
+
+    fuzzy_searcher.open("./new/deep/created.txt")
+    local picker = core.fuzzy_searcher_active_view
+    test.equal(picker.results[1].kind, "create_path")
+    local drawn, draw_error = pcall(function() picker:draw() end)
+    test.ok(drawn, draw_error)
+    picker:confirm()
+
+    local info = system.get_file_info(path)
+    test.not_nil(info)
+    test.equal(info.type, "file")
+    test.ok(common.path_equals(opened_path, path))
+    test.equal(opened_options.placement, "current")
+  end)
+
+  test.it("creates an explicit folder path and refreshes it as exact", function(context)
+    local path = join_path(context.project_root, "new", "folder")
+    helpers.set_everything_state("unavailable")
+
+    fuzzy_searcher.open("./new/folder/")
+    local picker = core.fuzzy_searcher_active_view
+    test.equal(picker.results[1].kind, "create_path")
+    picker:confirm()
+
+    local info = system.get_file_info(path)
+    test.not_nil(info)
+    test.equal(info.type, "dir")
+    test.equal(core.fuzzy_searcher_active_view, picker)
+    test.equal(picker.results[1].exact_path, true)
+    test.ok(common.path_equals(picker.results[1].abs_path, path))
+  end)
+
+  test.it("does not offer creation for a missing bare name", function(context)
+    helpers.set_everything_state("unavailable")
+
+    fuzzy_searcher.open("missing.txt")
+
+    for _, result in ipairs(core.fuzzy_searcher_active_view.results) do
+      test.not_equal(result.kind, "create_path")
+    end
   end)
 
   test.it("marks matching recent Projects before ordinary folders", function(context)

@@ -2111,7 +2111,7 @@ function fuzzy_searcher.result_main_text(r)
     text = r.label or r.name
   elseif r.kind == "project" or r.kind == "new_project" then
     text = r.project or r.label
-  elseif r.kind == "path" then
+  elseif r.kind == "path" or r.kind == "create_path" then
     text = r.path or r.project or r.file or r.label
   elseif r.kind == "file" then
     text = r.file or r.label
@@ -2252,7 +2252,9 @@ local function draw_path_result_row(font, r, x, y, width)
   local metadata_font = style.get_small_font(font)
   local metadata_y = y + math.max(0, math.floor((font:get_height() - metadata_font:get_height()) / 2))
   local icon_column_width = fuzzy_searcher.file_icons.column_width(font:get_height())
-  if r.is_folder then
+  if r.create_path then
+    renderer.draw_text(style.icon_font, "]", x, y, style.good)
+  elseif r.is_folder then
     local icon_color = r.path_search and style.fuzzy_searcher_recent_project_icon or style.accent
     renderer.draw_text(style.icon_font, r.path_search and "B" or "d", x, y, icon_color)
   else
@@ -2716,7 +2718,11 @@ function path_search.external_path_parts(path)
       local candidate = trim_query(normalized:sub(1, index - 1))
       local candidate_info = common.is_absolute_path(candidate) and system.get_file_info(candidate)
       if candidate_info and candidate_info.type == "dir" then
-        return { scope = candidate, query = trim_query(normalized:sub(index + 1)) }
+        return {
+          scope = candidate,
+          query = trim_query(normalized:sub(index + 1)),
+          search_terms = true,
+        }
       end
     end
   end
@@ -2727,6 +2733,7 @@ function path_search.external_path_parts(path)
     if scope_info and scope_info.type == "dir" then
       return { scope = scope, query = path_search.relative_to_scope(normalized, scope) }
     end
+    if scope_info then return { blocked = true, query = normalized } end
     local parent = path_search.parent_path(scope)
     if not parent or common.path_equals(parent, scope) then break end
     scope = parent
@@ -2770,6 +2777,109 @@ function path_search.plan(text)
   parts.mode = mode
   parts.input_path = query
   return parts
+end
+
+function path_search.direct_result(text, line)
+  local mode, query = split_mode_prefix(tostring(text or ""))
+  if mode ~= "" and mode ~= "@" then return nil end
+  query = common.sanitize_prompt_path(query)
+  if query == "" then return nil end
+
+  local trailing_separator = query:match("[/\\]$") ~= nil
+  local home_relative = query == "~" or query:match("^~[/\\]") ~= nil
+  local expanded = home_relative and common.home_expand(query) or query
+  local absolute = common.is_absolute_path(expanded)
+  local explicit = absolute or home_relative
+    or query:match("^%.[/\\]") ~= nil
+    or query:match("^%.%.[/\\]") ~= nil
+    or query:find("[/\\]", 1) ~= nil
+  local ok, path = pcall(common.normalize_path,
+    absolute and expanded or (project_dir() .. PATHSEP .. expanded))
+  if not ok or not path then return nil end
+
+  local info = system.get_file_info(path)
+  if info then
+    ensure_recent_project_times()
+    local recent, opened_at
+    if info.type == "dir" then
+      for _, project in ipairs(get_recent_projects()) do
+        if common.path_equals(project, path) then
+          recent, opened_at = true, recent_project_times[project]
+          break
+        end
+      end
+    end
+    local label = common.home_encode(path)
+    local score, spans = fuzzy_match(query, label)
+    return {
+      kind = recent and "project" or "path",
+      label = label,
+      path = path,
+      abs_path = path,
+      file = info.type == "file" and path or nil,
+      project = info.type == "dir" and path or nil,
+      is_folder = info.type == "dir",
+      exact_path = true,
+      path_search = recent or nil,
+      opened_at = opened_at,
+      query = query,
+      line = line,
+      match_score = score,
+      match_spans = spans or {},
+      size_label = info.type == "file" and format_size(info.size) or "",
+      modified_label = (recent and compact_age(opened_at))
+        or (info.modified and compact_age(info.modified)) or "",
+    }
+  end
+
+  if not explicit then return nil end
+  local parts = path_search.external_path_parts(path)
+  if not parts or parts.blocked or parts.search_terms or not parts.scope then return nil end
+  return {
+    kind = "create_path",
+    label = common.home_encode(path),
+    path = path,
+    abs_path = path,
+    is_folder = trailing_separator,
+    create_path = true,
+    create_type = trailing_separator and "folder" or "file",
+    query = query,
+    line = line,
+    match_spans = {},
+    size_label = "",
+    modified_label = "",
+  }
+end
+
+function path_search.prepend_direct(results, direct)
+  if not direct then return results end
+  local direct_key = common.path_compare_key(direct.abs_path or direct.path)
+  local filtered = {}
+  for _, result in ipairs(results or {}) do
+    local key = common.path_compare_key(result.abs_path or result.path or result.project or result.file)
+    if result.header or not direct_key or key ~= direct_key then filtered[#filtered+1] = result end
+  end
+  local cleaned = { direct }
+  for index, result in ipairs(filtered) do
+    if not result.header or (filtered[index + 1] and not filtered[index + 1].header) then
+      cleaned[#cleaned+1] = result
+    end
+  end
+  return cleaned
+end
+
+function path_search.creation_error_label(err)
+  local text = tostring(err or ""):lower()
+  if text:find("permission", 1, true) or text:find("access is denied", 1, true) then
+    return "permission denied"
+  end
+  if text:find("not a directory", 1, true) or text:find("not a folder", 1, true) then
+    return "a parent is not a folder"
+  end
+  if text:find("no such", 1, true) or text:find("cannot find", 1, true) then
+    return "a parent path is unavailable"
+  end
+  return "filesystem operation failed"
 end
 
 local function everything_result_from_item(item, query)
@@ -3190,7 +3300,7 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
   elseif r.kind == "command" then
     x = row_x + font:get_width("> ")
     width = math.max(0, row_text_w - font:get_width("> "))
-  elseif r.kind == "path" or r.path_search then
+  elseif r.kind == "path" or r.kind == "create_path" or r.path_search then
     if r._path_copy_x and r._path_copy_width then
       x = r._path_copy_x
       width = r._path_copy_width
@@ -3674,6 +3784,7 @@ end
 function FSView:start_file_search(query, line, reset_selection)
   kill_file_search()
   local gen = file_search_generation
+  local direct = self.direct_path_result
   local keep_limit = self:max_result_limit() + 1
   local roots_label = fuzzy_searcher.project_roots_label()
   local skip_path = self.source_file_path
@@ -3682,13 +3793,21 @@ function FSView:start_file_search(query, line, reset_selection)
     and string.format("Indexing files… %d available — %s", file_index_count(), roots_label)
     or string.format("Searching %d files…", file_index_count())
   self:defer_loading_feedback(loading_status, {
-    clear_results = not self.loading_more,
+    clear_results = not direct and not self.loading_more,
     reset_selection = reset_selection,
     has_more = false,
   })
+  if direct then
+    self.results = { direct }
+    self.has_more = false
+    self.selected = 1
+    self.viewport_offset = 1
+    self:schedule_update(true)
+  end
 
   local function apply_results(out, has_more)
     self:cancel_deferred_loading_feedback()
+    out = path_search.prepend_direct(out, direct)
     self.results = out
     self.has_more = has_more
     if self.pending_select_index then
@@ -3733,7 +3852,7 @@ function FSView:start_file_search(query, line, reset_selection)
         local has_more = hidden or native_results.has_more
         local status = string.format("%d recent + %d file matches shown%s — %d files indexed — %s",
           #recent_matches, #general_matches, has_more and "+" or "", file_index_count(), roots_label)
-        if self.loading_feedback_pending and #out == 0 and not has_more then
+        if self.loading_feedback_pending and #out == 0 and not has_more and not direct then
           self.loading_feedback_status = status
           return
         end
@@ -3765,7 +3884,7 @@ function FSView:start_file_search(query, line, reset_selection)
       else
         status = string.format("%d file matches — scanning %d/%d…", #recent_matches + matched_general, scanned, #items)
       end
-      if final and self.loading_feedback_pending and #out == 0 and not has_more then
+      if final and self.loading_feedback_pending and #out == 0 and not has_more and not direct then
         self.loading_feedback_status = status
         last_publish = system.get_time()
         return true
@@ -4027,6 +4146,8 @@ end
 
 function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   local limit = self:result_limit()
+  local direct = path_search.direct_result(base, line)
+  self.direct_path_result = direct
   local path_plan = path_search.plan(base)
   self.path_search_active = path_plan.external == true
   local mode = path_plan.mode
@@ -4152,6 +4273,8 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   end
 
   self:cancel_deferred_loading_feedback()
+
+  out = path_search.prepend_direct(out, direct)
 
   if path_plan.external then
     if bare_path_search then
@@ -5311,6 +5434,81 @@ function FSView:reveal_selected_in_explorer()
   command.perform("user:reveal-active-file-in-explorer", path)
 end
 
+function FSView:open_file_result(r, target_side)
+  local path = fullpath(r)
+  local line, col, line2, col2 = r.line or 1, r.col or 1, nil, nil
+  if r.kind == "grep" then
+    line, col, line2, col2 = grep_accept_range(r)
+  end
+  local source_view = self.source_view
+  local source_pane = self.source_pane
+  self:close()
+  local view = core.open_file(path, {
+    pane = source_pane,
+    placement = target_side and "split" or "current",
+    direction = target_side and "right" or nil,
+    line = line,
+    col = col,
+    line2 = line2,
+    col2 = col2,
+    focus = true,
+  })
+  if view and view.buffer then
+    view.buffer:set_selection(line, col, line2 or line, col2 or col)
+  end
+  return view
+end
+
+function FSView:activate_create_path(r, target_side)
+  local path = common.normalize_path(r.abs_path or r.path)
+  local info = path and system.get_file_info(path)
+  if info then
+    if info.type == "dir" then
+      self:close()
+      if target_side then core.open_project_in_new_window(path)
+      else core.open_project_in_same_window(path) end
+      return
+    end
+    return self:open_file_result({ kind = "path", file = path, abs_path = path, line = r.line }, target_side)
+  end
+
+  if r.is_folder then
+    local created, err = common.mkdirp(path)
+    if not created then
+      core.error("Cannot create selected folder: %s", path_search.creation_error_label(err))
+      return
+    end
+    core.log_quiet("Fuzzy Path Search: created folder path_len=%d", #path)
+    self.force_refresh = true
+    self.dirty = true
+    self:refresh(self.input:get_text())
+    self:schedule_update(true)
+    return
+  end
+
+  local parent = common.dirname(path)
+  local parent_info = parent and system.get_file_info(parent)
+  if not parent_info then
+    local created, err = common.mkdirp(parent)
+    if not created then
+      core.error("Cannot create parent folders: %s", path_search.creation_error_label(err))
+      return
+    end
+  elseif parent_info.type ~= "dir" then
+    core.error("Cannot create file because its parent is not a folder")
+    return
+  end
+
+  local fp, err = io.open(path, "ab")
+  if not fp then
+    core.error("Cannot create selected file: %s", path_search.creation_error_label(err))
+    return
+  end
+  fp:close()
+  core.log_quiet("Fuzzy Path Search: created file path_len=%d", #path)
+  return self:open_file_result({ kind = "path", file = path, abs_path = path, line = r.line }, target_side)
+end
+
 function FSView:confirm(target_side)
   local r = self:selected_result()
   if not r then return end
@@ -5320,6 +5518,9 @@ function FSView:confirm(target_side)
     self:close()
     command.perform(cmd)
     return
+  end
+  if r.kind == "create_path" then
+    return self:activate_create_path(r, target_side)
   end
   if (r.kind == "project" or r.kind == "new_project" or (r.kind == "path" and r.is_folder)) and r.project then
     local path = r.project
@@ -5350,27 +5551,7 @@ function FSView:confirm(target_side)
     return
   end
   if r.file then
-    local path = fullpath(r)
-    local line, col, line2, col2 = r.line or 1, r.col or 1, nil, nil
-    if r.kind == "grep" then
-      line, col, line2, col2 = grep_accept_range(r)
-    end
-    local source_view = self.source_view
-    local source_pane = self.source_pane
-    self:close()
-    local view = core.open_file(path, {
-      pane = source_pane,
-      placement = target_side and "split" or "current",
-      direction = target_side and "right" or nil,
-      line = line,
-      col = col,
-      line2 = line2,
-      col2 = col2,
-      focus = true,
-    })
-    if view and view.buffer then
-      view.buffer:set_selection(line, col, line2 or line, col2 or col)
-    end
+    return self:open_file_result(r, target_side)
   end
 end
 
@@ -5519,7 +5700,7 @@ function FSView:draw()
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
         draw_project_result_row(font, r, x + pad, row_y, row_text_w)
-      elseif r.kind == "path" then
+      elseif r.kind == "path" or r.kind == "create_path" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
@@ -5567,6 +5748,16 @@ function FSView:draw()
       local info = r.info or command_preview_info(r.command)
       if info and info ~= "" then
         renderer.draw_text(font, info, px, py + lh * 2, style.dim)
+      end
+      core.pop_clip_rect()
+    elseif r and r.kind == "create_path" then
+      core.push_clip_rect(px, py, preview_w, preview_h)
+      local title = r.is_folder and "Create Folder" or "Create File"
+      renderer.draw_text(font, title, px, py, style.good)
+      draw_highlighted_text(font, display_root(r.path), px, py + lh, preview_w, style.text, {})
+      renderer.draw_text(font, "Enter: create", px, py + lh * 3, style.dim)
+      if not r.is_folder then
+        renderer.draw_text(font, "Ctrl+Enter: create and open in a split", px, py + lh * 4, style.dim)
       end
       core.pop_clip_rect()
     elseif r and (r.kind == "project" or (r.kind == "path" and r.is_folder)) then
