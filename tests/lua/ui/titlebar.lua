@@ -4,6 +4,7 @@ local panes = require "core.panes"
 local style = require "core.style"
 local TitleBar = require "core.titlebar"
 local View = require "core.view"
+local view_icons = require "core.view_icons"
 local test = require "core.test"
 
 local NamedView = View:extend()
@@ -114,7 +115,7 @@ test.describe("Global title bar Pane entries", function()
     test.ok(group_indicator)
   end)
 
-  test.it("renders Pane numbers as compact heading metadata", function()
+  test.it("renders Pane numbers and names at one size with their requested fonts", function()
     panes.create { factory = factory("one") }
     local title = TitleBar()
     title.size.x = 900
@@ -122,11 +123,12 @@ test.describe("Global title bar Pane entries", function()
     local old_draw_rect = renderer.draw_rect
     local old_draw_rounded_rect = renderer.draw_rounded_rect
     local old_draw_text = renderer.draw_text
-    local number
+    local number, name
     renderer.draw_rect = function() end
     renderer.draw_rounded_rect = function() end
     renderer.draw_text = function(font, text, x, y, color)
       if text == "1" then number = { font = font, color = color } end
+      if text == "one" then name = { font = font, color = color } end
     end
     local ok, err = pcall(title.draw, title)
     renderer.draw_rect = old_draw_rect
@@ -135,13 +137,14 @@ test.describe("Global title bar Pane entries", function()
 
     test.ok(ok, err)
     test.not_nil(number)
-    test.ok(number.font:get_size() < style.font:get_size())
-    test.equal(number.font,
-      style.get_scaled_font(style.prose_heading_font, number.font:get_size()))
+    test.not_nil(name)
+    test.equal(number.font, style.font)
+    test.equal(name.font, style.prose_font)
+    test.equal(number.font:get_size(), name.font:get_size())
     test.equal(number.color, style.titlebar_pane_number)
   end)
 
-  test.it("draws a View Icon before the Pane number", function()
+  test.it("draws the Pane number before its View Icon and name", function()
     local pane = panes.create { factory = factory("tree") }
     pane.current_view.view_icon = { font = style.icon_font, glyph = "d" }
     local title = TitleBar()
@@ -150,12 +153,13 @@ test.describe("Global title bar Pane entries", function()
     local old_draw_rect = renderer.draw_rect
     local old_draw_rounded_rect = renderer.draw_rounded_rect
     local old_draw_text = renderer.draw_text
-    local icon_x, number_x
+    local number_x, icon_x, name_x
     renderer.draw_rect = function() end
     renderer.draw_rounded_rect = function() end
     renderer.draw_text = function(font, text, x)
       if font == style.icon_font and text == "d" then icon_x = x end
       if text == "1" then number_x = x end
+      if text == "tree" then name_x = x end
     end
     local ok, err = pcall(title.draw, title)
     renderer.draw_rect = old_draw_rect
@@ -163,9 +167,36 @@ test.describe("Global title bar Pane entries", function()
     renderer.draw_text = old_draw_text
 
     test.ok(ok, err)
-    test.not_nil(icon_x)
     test.not_nil(number_x)
-    test.ok(icon_x < number_x)
+    test.not_nil(icon_x)
+    test.not_nil(name_x)
+    test.ok(number_x < icon_x)
+    test.ok(icon_x < name_x)
+  end)
+
+  test.it("draws a complete short name when its Tab has room", function()
+    local pane = panes.create { factory = factory("newfile.txt") }
+    pane.current_view.view_icon = view_icons.file("newfile.txt")
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_rounded_rect = renderer.draw_rounded_rect
+    local old_draw_text = renderer.draw_text
+    local drawn_name
+    renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
+    renderer.draw_text = function(font, text, x)
+      if text:match("^newfile") then drawn_name = text end
+      return x + font:get_width(text)
+    end
+    local ok, err = pcall(title.draw, title)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_rounded_rect = old_draw_rounded_rect
+    renderer.draw_text = old_draw_text
+
+    test.ok(ok, err)
+    test.equal(drawn_name, "newfile.txt")
   end)
 
   test.it("focuses a Pane from its global entry", function()

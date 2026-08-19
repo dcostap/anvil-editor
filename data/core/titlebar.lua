@@ -147,7 +147,7 @@ local function pane_label(number, pane)
   return string.format("%d %s", number, pane_name(pane))
 end
 
-function TitleBar.pane_number_font()
+function TitleBar.pane_marker_font()
   local size = math.max(common.round(8 * SCALE), common.round(style.font:get_size() * 0.8))
   return style.get_scaled_font(style.prose_heading_font, size)
 end
@@ -164,40 +164,56 @@ local function pane_icon_gap()
   return math.max(4 * SCALE, style.padding.x / 2)
 end
 
-local function pane_label_width(number, pane)
+local function pane_label_metrics(number, pane, row_height)
   local icon = pane_icon(pane)
-  local icon_width = icon and view_icons.width(icon, style.font:get_height()) + pane_icon_gap() or 0
-  return icon_width + TitleBar.pane_number_font():get_width(tostring(number))
-    + pane_number_gap() + style.font:get_width(pane_name(pane))
+  local number_font = style.font
+  local name_font = style.prose_font
+  local number_text = tostring(number)
+  local name = pane_name(pane)
+  local number_width = number_font:get_width(number_text)
+  local icon_width = icon and view_icons.width(icon, row_height) or 0
+  local width = number_width + pane_number_gap()
+    + icon_width + (icon and pane_icon_gap() or 0)
+    + name_font:get_width(name)
+  return {
+    icon = icon,
+    icon_width = icon_width,
+    number_font = number_font,
+    number_text = number_text,
+    number_width = number_width,
+    name_font = name_font,
+    name = name,
+    width = width,
+  }
 end
 
 local function draw_pane_label(number, pane, rect, name_color)
   local x = rect.x
-  local icon = pane_icon(pane)
-  if icon then
-    x = x + view_icons.draw(icon, x, rect.y, rect.h, name_color) + pane_icon_gap()
-  end
-  local number_text = tostring(number)
-  local number_font = TitleBar.pane_number_font()
-  local number_width = number_font:get_width(number_text)
+  local metrics = pane_label_metrics(number, pane, rect.h)
   renderer.draw_text(
-    number_font, number_text, x,
-    rect.y + math.floor((rect.h - number_font:get_height()) / 2),
+    metrics.number_font, metrics.number_text, x,
+    rect.y + math.floor((rect.h - metrics.number_font:get_height()) / 2),
     style.titlebar_pane_number
   )
-  local name_x = x + number_width + pane_number_gap()
-  local name = fit_text(style.font, pane_name(pane),
-    math.max(0, rect.x + rect.w - name_x))
+  x = x + metrics.number_width + pane_number_gap()
+  if metrics.icon then
+    view_icons.draw(metrics.icon, x, rect.y, rect.h, name_color)
+    x = x + metrics.icon_width + pane_icon_gap()
+  end
+  local name = fit_text(metrics.name_font, metrics.name,
+    math.max(0, rect.x + rect.w - x))
   renderer.draw_text(
-    style.font, name, name_x,
-    rect.y + math.floor((rect.h - style.font:get_height()) / 2), name_color
+    metrics.name_font, name, x,
+    rect.y + math.floor((rect.h - metrics.name_font:get_height()) / 2), name_color
   )
 end
 
-local function preferred_tab_width(number, pane)
+local function preferred_tab_width(number, pane, row_height)
   local min_width = config.integrated_titlebar_tab_min_width or 80 * SCALE
   local max_width = config.integrated_titlebar_tab_max_width or style.tab_width
-  local width = pane_label_width(number, pane) + style.padding.x * 2
+  local width = math.ceil(
+    pane_label_metrics(number, pane, row_height).width + style.padding.x * 2
+  )
   return common.clamp(width, min_width, math.max(min_width, max_width))
 end
 
@@ -277,7 +293,7 @@ function TitleBar:update_geometry()
   self.entries = {}
   if count > 0 and available > 0 then
     local widths = {}
-    for i, pane in ipairs(ordered) do widths[i] = preferred_tab_width(i, pane) end
+    for i, pane in ipairs(ordered) do widths[i] = preferred_tab_width(i, pane, h) end
     self.tab_offset = common.clamp(self.tab_offset or 1, 1, count)
     local active = panes().active()
     if active ~= self.last_active_pane then
@@ -633,7 +649,7 @@ function TitleBar:draw_pane_drag()
   end
 
   local number = panes().number(pane) or 1
-  local width = preferred_tab_width(number, pane)
+  local width = preferred_tab_width(number, pane, self.size.y)
   local height = self.size.y
   local x = common.clamp(
     (self.drag_x or 0) - width / 2,

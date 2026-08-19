@@ -387,7 +387,7 @@ function fuzzy_searcher.git_kind_for_file(file)
 end
 
 function fuzzy_searcher.current_file_pane_markers(max_width)
-  local font = TitleBar.pane_number_font()
+  local font = TitleBar.pane_marker_font()
   local numbers_by_path = {}
   for number, pane in ipairs(panes.ordered()) do
     local path = file_context.view_file_path(pane.current_view)
