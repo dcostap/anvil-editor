@@ -1,4 +1,3 @@
-local command = require "core.command"
 local common = require "core.common"
 local Buffer = require "core.buffer"
 local test = require "core.test"
@@ -128,7 +127,7 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
     return buffer, client, uri.path_to_uri(path)
   end
 
-  test.test("next and previous diagnostic commands navigate same-buffer current diagnostics", function(context)
+  test.test("next and previous diagnostic navigation uses current diagnostics", function(context)
     local buffer, client, buffer_uri = setup(context)
     local view = fake_view(buffer)
     publish(client, {
@@ -140,23 +139,23 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
     })
 
     buffer:set_selection(1, 1)
-    test.ok(command.perform("editor:next_diagnostic", view))
+    test.not_nil(diagnostics.navigate(view, 1))
     test.same(selection4(buffer), { 2, 1, 2, 7 })
     test.equal(view.scrolled[1].line, 2)
 
-    test.ok(command.perform("editor:next_diagnostic", view))
+    test.not_nil(diagnostics.navigate(view, 1))
     test.same(selection4(buffer), { 3, 1, 3, 6 })
 
-    test.ok(command.perform("editor:previous_diagnostic", view))
+    test.not_nil(diagnostics.navigate(view, -1))
     test.same(selection4(buffer), { 2, 1, 2, 7 })
   end)
 
-  test.test("no-diagnostic command is a no-op", function(context)
+  test.test("navigation without diagnostics is a no-op", function(context)
     local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), "first"))
     local view = fake_view(buffer)
     buffer:set_selection(1, 2)
 
-    test.ok(command.perform("editor:next_diagnostic", view))
+    test.is_nil(diagnostics.navigate(view, 1))
     test.same(selection4(buffer), { 1, 2, 1, 2 })
     test.equal(#view.scrolled, 0)
   end)
@@ -171,11 +170,11 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
     buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "new " } })
 
     buffer:set_selection(1, 1)
-    test.ok(command.perform("editor:next_diagnostic", view))
+    test.is_nil(diagnostics.navigate(view, 1))
     test.same(selection4(buffer), { 1, 1, 1, 1 })
 
     documents.flush(client, buffer)
-    test.ok(command.perform("editor:next_diagnostic", view))
+    test.is_nil(diagnostics.navigate(view, 1))
     test.same(selection4(buffer), { 1, 1, 1, 1 })
   end)
 
@@ -189,7 +188,7 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
     })
 
     buffer:set_selection(1, 1)
-    test.ok(command.perform("editor:next_diagnostic", view))
+    test.is_nil(diagnostics.navigate(view, 1))
     test.same(selection4(buffer), { 1, 1, 1, 1 })
   end)
 

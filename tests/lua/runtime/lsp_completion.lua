@@ -7,8 +7,6 @@ local completion = require "core.lsp.completion"
 local documents = require "core.lsp.documents"
 local test = require "core.test"
 
-require "core.commands.lsp"
-
 local temp_root
 
 local function join_path(...)

@@ -1,5 +1,4 @@
 local core = require "core"
-local command = require "core.command"
 local common = require "core.common"
 local position = require "core.lsp.position"
 local diagnostic_markers = require "core.lsp.diagnostic_markers"
@@ -363,34 +362,6 @@ function diagnostics.summary(buffer)
   end
   return string.format("%d current LSP diagnostic%s", #items, #items == 1 and "" or "s"), counts
 end
-
-local function is_buffer_view(value)
-  return type(value) == "table" and value.buffer ~= nil
-end
-
-local function active_or_arg_view(view)
-  if is_buffer_view(view) then return view end
-  if is_buffer_view(core.active_view) then return core.active_view end
-end
-
-local function command_predicate(view)
-  local textview = active_or_arg_view(view)
-  return textview ~= nil, textview
-end
-
-command.add(command_predicate, {
-  ["editor:next_diagnostic"] = function(view)
-    local item, reason = diagnostics.navigate(view, 1)
-    if not item and core.log then core.log("LSP diagnostics: %s", reason or "none") end
-  end,
-  ["editor:previous_diagnostic"] = function(view)
-    local item, reason = diagnostics.navigate(view, -1)
-    if not item and core.log then core.log("LSP diagnostics: %s", reason or "none") end
-  end,
-  ["editor:show_buffer_diagnostics"] = function(view)
-    if core.log then core.log("%s", diagnostics.summary(view.buffer)) end
-  end,
-})
 
 local ok, documents = pcall(require, "core.lsp.documents")
 if ok and documents and documents.register_buffer_close_handler then

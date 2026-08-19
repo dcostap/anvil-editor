@@ -5160,11 +5160,6 @@ local function set_symbol_results(view, query, results, source_label, status, re
   view:schedule_update(true)
 end
 
-local function lsp_enabled()
-  local ok, manager = pcall(require, "core.lsp.manager")
-  return ok and manager and manager.is_enabled and manager.is_enabled() ~= false
-end
-
 local function project_symbol_pending_status(reason, meta)
   if reason == "aggregate-dirty" or reason == "query-artifact-not-ready" then
     return "Finishing Project symbol index…"
@@ -5286,20 +5281,6 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
         coroutine.yield(0.05)
       end
       source_label = "Tree-sitter"
-    end
-
-    if status ~= "fresh" and status ~= "stale" and lsp_enabled() then
-      core.log_quiet("Fuzzy Project symbols: Tree-sitter unavailable for query_len=%d (%s); trying LSP", #tostring(query), tostring(reason))
-      self:set_pending_status("Searching LSP Project symbols…")
-      local lsp_provider = require "core.lsp.provider"
-      local deadline = system.get_time() + ((config.lsp and config.lsp.navigation_timeout) or 10)
-      results, reason, status = lsp_provider.workspace_symbols(query, { force = true, limit = candidate_limit })
-      while status ~= "fresh" and status ~= "stale" and status ~= "unavailable" and system.get_time() < deadline do
-        if gen ~= symbol_generation or active_view ~= self then return end
-        coroutine.yield(0.05)
-        results, reason, status = lsp_provider.workspace_symbols(query, { limit = candidate_limit })
-      end
-      source_label = (status == "fresh" or status == "stale") and "LSP" or source_label
     end
 
     if gen ~= symbol_generation or active_view ~= self then return end

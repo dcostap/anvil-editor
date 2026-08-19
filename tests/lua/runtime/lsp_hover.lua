@@ -1,4 +1,3 @@
-local command = require "core.command"
 local common = require "core.common"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
@@ -6,8 +5,6 @@ local documents = require "core.lsp.documents"
 local hover = require "core.lsp.hover"
 local json = require "core.lsp.json"
 local test = require "core.test"
-
-require "core.commands.lsp"
 
 local temp_root
 
@@ -155,14 +152,14 @@ test.describe("core.lsp.hover", function()
     test.same({ mapped.range.line1, mapped.range.col1, mapped.range.line2, mapped.range.col2 }, { 1, 2, 1, 4 })
   end)
 
-  test.test("manual command schedules textDocument/hover and logs on response", function(context)
+  test.test("manual request schedules textDocument/hover and logs on response", function(context)
     local buffer, client = attach(context)
     local view = TextView(buffer)
     core.active_view = view
     buffer:set_selection(1, 3)
     local log_start = core.log_items[#core.log_items]
 
-    test.ok(command.perform("editor:show_hover", view))
+    hover.start_current_position(view)
     test.equal(#client.requests, 1)
     test.equal(client.requests[1].method, "textDocument/hover")
     test.equal(client.requests[1].params.position.line, 0)
@@ -213,12 +210,14 @@ test.describe("core.lsp.hover", function()
     test.equal(#client.requests, 3)
   end)
 
-  test.test("no hover server is a quiet no-op", function(context)
+  test.test("no hover server is a quiet unavailable result", function(context)
     local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), "hover_target"))
     local view = TextView(buffer)
     core.active_view = view
     buffer:set_selection(1, 3)
 
-    test.ok(command.perform("editor:show_hover", view))
+    local result, _, status = hover.start_current_position(view)
+    test.is_nil(result)
+    test.equal(status, "unavailable")
   end)
 end)

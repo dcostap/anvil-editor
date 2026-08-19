@@ -1,4 +1,3 @@
-local command = require "core.command"
 local common = require "core.common"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
@@ -6,8 +5,6 @@ local documents = require "core.lsp.documents"
 local json = require "core.lsp.json"
 local signature_help = require "core.lsp.signature_help"
 local test = require "core.test"
-
-require "core.commands.lsp"
 
 local temp_root
 
@@ -174,14 +171,14 @@ test.describe("core.lsp.signature_help", function()
     test.contains(text, "Parameter: int a")
   end)
 
-  test.test("manual command schedules textDocument/signatureHelp and logs on response", function(context)
+  test.test("manual request schedules textDocument/signatureHelp and logs on response", function(context)
     local buffer, client = attach(context)
     local view = TextView(buffer)
     core.active_view = view
     buffer:set_selection(1, 4)
     local log_start = #core.log_items
 
-    test.ok(command.perform("editor:show_signature_help", view))
+    signature_help.start_current_position(view)
     test.equal(#client.requests, 1)
     test.equal(client.requests[1].method, "textDocument/signatureHelp")
     test.equal(client.requests[1].params.position.line, 0)
@@ -245,12 +242,14 @@ test.describe("core.lsp.signature_help", function()
     test.equal(#client.requests, 3)
   end)
 
-  test.test("no signature-help server is a quiet no-op", function(context)
+  test.test("no signature-help server is a quiet unavailable result", function(context)
     local buffer = track_buffer(context, new_buffer(join_path(temp_root, "main.cpp"), "fn(a)"))
     local view = TextView(buffer)
     core.active_view = view
     buffer:set_selection(1, 4)
 
-    test.ok(command.perform("editor:show_signature_help", view))
+    local result, _, status = signature_help.start_current_position(view)
+    test.is_nil(result)
+    test.equal(status, "unavailable")
   end)
 end)
