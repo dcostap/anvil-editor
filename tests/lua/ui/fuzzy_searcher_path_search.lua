@@ -63,6 +63,10 @@ test.describe("Fuzzy Searcher Path Search", function()
       local ok, err = common.rm(context.temp_root, true)
       test.ok(ok, err)
     end
+    if context.home_root and system.get_file_info(context.home_root) then
+      local ok, err = common.rm(context.home_root, true)
+      test.ok(ok, err)
+    end
   end)
 
   test.it("keeps absolute paths inside the Project in Project File Search", function(context)
@@ -124,6 +128,28 @@ test.describe("Fuzzy Searcher Path Search", function()
       'folder: ancestor:"' .. spaced_root .. '" needle')
     test.equal(requests[2].search,
       'file: ancestor:"' .. spaced_root .. '" needle')
+  end)
+
+  test.it("expands a home-relative path before starting Path Search", function(context)
+    local home = common.normalize_path(common.home_expand("~"))
+    test.not_equal(home, "~")
+    local name = "fuzzy-home-path-tests-"
+      .. system.get_process_id() .. "-"
+      .. math.floor(system.get_time() * 1000000)
+    local home_root = join_path(home, name)
+    mkdirp(home_root)
+    context.home_root = home_root
+    local requests = {}
+    http.get = function(_, params) requests[#requests+1] = params end
+    helpers.set_everything_state("available")
+
+    fuzzy_searcher.open("~/" .. name .. "/needle")
+
+    test.equal(#requests, 2)
+    test.equal(requests[1].search,
+      'folder: ancestor:"' .. home_root .. '" needle')
+    test.equal(requests[2].search,
+      'file: ancestor:"' .. home_root .. '" needle')
   end)
 
   test.it("uses bounded direct folder contents when Everything is unavailable", function(context)

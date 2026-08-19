@@ -2730,6 +2730,9 @@ function path_search.plan(text)
 
   query = trim_query(query)
   local explicit = mode == "@"
+  if query == "~" or query:match("^~[/\\]") then
+    query = common.home_expand(query)
+  end
   if not common.is_absolute_path(query) then
     return { external = explicit, explicit = explicit, query = query, mode = mode }
   end
