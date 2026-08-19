@@ -1,6 +1,41 @@
 local core = require "core"
 local config = require "core.config"
+local style = require "core.style"
 local test = require "core.test"
+
+test.describe("Global Prompt Bar drawing", function()
+  test.it("does not draw a current-line highlight while hidden", function()
+    local bar = core.global_prompt_bar
+    bar:exit(true)
+    bar.size.y = 0
+
+    local old_rect = renderer.draw_rect
+    local old_rounded_rect = renderer.draw_rounded_rect
+    local old_text = renderer.draw_text
+    local old_push = core.push_clip_rect
+    local old_pop = core.pop_clip_rect
+    local highlights = 0
+    renderer.draw_rect = function(_, _, _, _, color)
+      if color == style.line_highlight then highlights = highlights + 1 end
+    end
+    renderer.draw_rounded_rect = function() end
+    renderer.draw_text = function(font, text, x)
+      return x + (font and font:get_width(text) or 0)
+    end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+
+    local ok, err = pcall(function() bar:draw() end)
+    renderer.draw_rect = old_rect
+    renderer.draw_rounded_rect = old_rounded_rect
+    renderer.draw_text = old_text
+    core.push_clip_rect = old_push
+    core.pop_clip_rect = old_pop
+    if not ok then error(err, 0) end
+
+    test.equal(highlights, 0)
+  end)
+end)
 
 test.describe("Global Prompt Bar pointer interception", function()
   test.it("routes pointer movement when no View owns focus", function()

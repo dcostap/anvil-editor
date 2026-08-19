@@ -6084,10 +6084,7 @@ end
 ---Draw the full-width underlay before gutter and row contents. The content
 ---portion is drawn again later over semantic line decoration backgrounds.
 function TextView:draw_current_line_underlay_highlights(minline, maxline)
-  self:draw_current_line_highlights(minline, maxline, function(x, y, height)
-    local rx, ry, rw, rh = self:get_line_highlight_rect(x, y, height)
-    renderer.draw_rect(rx, ry, rw, rh, style.line_highlight)
-  end)
+  self:draw_current_line_highlights(minline, maxline)
 end
 
 
