@@ -43,7 +43,7 @@ test.describe("Fuzzy Searcher recent files", function()
     local path = make_file(context, "fuzzy-separator-main.lua")
     local slash_path = path:gsub("\\", "/")
 
-    local rows = fuzzy_searcher._test.file_search_rows("\\fuzzy-separator-main", { slash_path }, nil, 10)
+    local rows = fuzzy_searcher._test.file_search_rows("\\fuzzy-separator-main", { slash_path }, 10)
 
     test.equal(rows[1].file, slash_path)
   end)
@@ -51,7 +51,7 @@ test.describe("Fuzzy Searcher recent files", function()
   test.it("matches file names without requiring their diacritics", function(context)
     local path = make_file(context, "fuzzy-éclair.lua")
 
-    local rows = fuzzy_searcher._test.file_search_rows("fuzzy-eclair", { path }, nil, 10)
+    local rows = fuzzy_searcher._test.file_search_rows("fuzzy-eclair", { path }, 10)
 
     test.equal(rows[1].file, path)
   end)
@@ -64,7 +64,7 @@ test.describe("Fuzzy Searcher recent files", function()
     test.equal(accented, plain)
   end)
 
-  test.it("skips the current file only from recents and keeps matching recents above general matches", function(context)
+  test.it("keeps the current file in recents and keeps matching recents above general matches", function(context)
     local current = make_file(context, "fuzzy-current-needle.lua")
     local recent_newer = make_file(context, "fuzzy-recent-newer-needle.lua")
     local recent_older = make_file(context, "fuzzy-recent-older-needle.lua")
@@ -81,28 +81,27 @@ test.describe("Fuzzy Searcher recent files", function()
       recent_older,
       general,
       recent_newer,
-    }, current, 20)
+    }, 20)
 
-    test.equal(basename(rows[1].file), basename(recent_newer))
+    test.equal(basename(rows[1].file), basename(current))
     test.ok(rows[1].recent, "expected first row to be a recent file")
-    test.equal(rows[1].last_viewed, 80)
-    test.equal(rows[1].last_edited, 70)
-    test.equal(basename(rows[2].file), basename(recent_older))
+    test.equal(rows[1].last_viewed, 100)
+    test.equal(rows[1].last_edited, 90)
+    test.equal(basename(rows[2].file), basename(recent_newer))
     test.ok(rows[2].recent, "expected second row to be a recent file")
-    test.ok(rows[3] and rows[3].separator, "expected separator between recent and general sections")
+    test.equal(basename(rows[3].file), basename(recent_older))
+    test.ok(rows[3].recent, "expected third row to be a recent file")
+    test.ok(rows[4] and rows[4].separator, "expected separator between recent and general sections")
 
     local seen = {}
     for _, row in ipairs(rows) do
       if row.file then
         local name = basename(row.file)
-        if name == basename(current) then
-          test.not_ok(row.recent, "current file should not be shown as a recent file")
-        end
         test.not_ok(seen[name], "duplicate file result: " .. row.file)
         seen[name] = true
       end
     end
-    test.ok(seen[basename(current)], "expected current file to remain in the general results")
+    test.ok(seen[basename(current)], "expected current file in the recent results")
     test.ok(seen[basename(general)], "expected general match below recents")
   end)
 

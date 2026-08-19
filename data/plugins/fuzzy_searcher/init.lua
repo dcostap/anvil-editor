@@ -889,8 +889,7 @@ local function adopt_native_file_match(item)
   return item.text
 end
 
-function fuzzy_searcher.get_recent_file_entries(skip_path)
-  local current_key = skip_path and common.path_compare_key(skip_path) or nil
+function fuzzy_searcher.get_recent_file_entries()
   local out, seen = {}, {}
 
   local recent_files = core.visited_files or {}
@@ -904,7 +903,7 @@ function fuzzy_searcher.get_recent_file_entries(skip_path)
         abs = abs and common.normalize_path(abs)
       end
       local key = abs and common.path_compare_key(abs)
-      if key and key ~= current_key and not seen[key] then
+      if key and not seen[key] then
         local info = system.get_file_info(abs)
         local include_ignored = active_view and active_view.include_ignored == true
         local included = true
@@ -930,12 +929,6 @@ function fuzzy_searcher.get_recent_file_entries(skip_path)
     end
   end
 
-  return out
-end
-
-local function get_recent_files(skip_path)
-  local out = {}
-  for _, entry in ipairs(fuzzy_searcher.get_recent_file_entries(skip_path)) do out[#out+1] = entry.text end
   return out
 end
 
@@ -1170,11 +1163,11 @@ end
 
 local line_exists
 
-local function collect_recent_file_matches(query, line, skip_path)
+local function collect_recent_file_matches(query, line)
   local matches, skip_keys = {}, {}
   local empty_query = trim_query(query) == ""
 
-  for _, recent in ipairs(fuzzy_searcher.get_recent_file_entries(skip_path)) do
+  for _, recent in ipairs(fuzzy_searcher.get_recent_file_entries()) do
     local item = recent.text
     local key = file_result_key(item)
     if key then skip_keys[key] = true end
@@ -3787,8 +3780,6 @@ function FSView:start_file_search(query, line, reset_selection)
   local direct = self.direct_path_result
   local keep_limit = self:max_result_limit() + 1
   local roots_label = fuzzy_searcher.project_roots_label()
-  local skip_path = self.source_file_path
-
   local loading_status = fuzzy_searcher.files_indexing
     and string.format("Indexing files… %d available — %s", file_index_count(), roots_label)
     or string.format("Searching %d files…", file_index_count())
@@ -3824,7 +3815,7 @@ function FSView:start_file_search(query, line, reset_selection)
   end
 
   core.add_thread(function()
-    local recent_matches, skip_keys = collect_recent_file_matches(query, line, skip_path)
+    local recent_matches, skip_keys = collect_recent_file_matches(query, line)
 
     if native_file_index_ready() then
       local ok, native_results = pcall(function()
@@ -4164,7 +4155,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     if max_items <= 0 then self.has_more = true; return end
 
     if trim_query(query) == "" and not line and not native_file_index_ready() then
-      local recent_matches, skip_keys = collect_recent_file_matches(query, line, self.source_file_path)
+      local recent_matches, skip_keys = collect_recent_file_matches(query, line)
       local general_matches = {}
       for _, item in ipairs(get_files()) do
         local key = file_result_key(item)
@@ -6051,7 +6042,6 @@ return {
       local history = fuzzy_searcher.prompt_history_for_mode(mode)
       return { table.unpack(history) }
     end,
-    recent_files = get_recent_files,
     file_display_item = fuzzy_searcher.file_display_item,
     fullpath = fullpath,
     file_result_key = file_result_key,
@@ -6095,8 +6085,8 @@ return {
       fuzzy_searcher.files_cache_test_override = true
       fuzzy_searcher.files_scope_generation = fuzzy_searcher.files_scope_generation + 1
     end,
-    file_search_rows = function(query, files, skip_path, limit)
-      local recent_matches, skip_keys = collect_recent_file_matches(query or "", nil, skip_path)
+    file_search_rows = function(query, files, limit)
+      local recent_matches, skip_keys = collect_recent_file_matches(query or "", nil)
       local general_matches = {}
       local empty_query = trim_query(query or "") == ""
       for _, item in ipairs(files or {}) do
