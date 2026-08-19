@@ -163,34 +163,6 @@ test.describe("Fuzzy Searcher preview", function()
     test.ok(ph > 0)
   end)
 
-  test.it("focuses a selected buffer-backed result's file in the File Tree", function(context)
-    local path = assert(core.root_project()).path .. PATHSEP .. "fuzzy-focus-buffer-result-test.txt"
-    context.files = { path }
-    write_file(path, "buffer target\n")
-
-    local buffer = Buffer()
-    buffer:set_filename(path, path)
-    context.buffers = { buffer }
-    fuzzy_searcher.open_static_results("Buffer results", {
-      {
-        kind = "symbol",
-        label = "buffer target",
-        buffer = buffer,
-        line = 1,
-        col = 1,
-      }
-    })
-
-    test.ok(command.perform("fuzzy-searcher:focus-selected-in-tree"), "expected focus command to run")
-
-    local filetree = core.active_view
-    local line = filetree.buffer:get_selection()
-    local entry = filetree:entry_for_line(line)
-    test.is_nil(core.fuzzy_searcher_active_view, "expected picker to close after focusing its relevant file")
-    test.equal(core.active_view, filetree)
-    test.ok(entry and common.path_equals(entry.abs, path), "expected File Tree selection on the result's Buffer file")
-  end)
-
   test.it("focuses an Editor in a split Pane on alternate acceptance", function(context)
     local path = temp_file_path("fuzzy-confirm-side-focus-test.txt")
     context.files = { path }

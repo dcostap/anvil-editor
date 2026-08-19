@@ -1413,7 +1413,6 @@ keymap.add({
   ["ctrl+shift+w"] = "pane:close-all-others",
   ["alt+z"] = "pane:focus-previous",
   ["alt+x"] = "pane:focus-next",
-  ["ctrl+l"] = "filetree:focus-current-file",
   ["ctrl+shift+l"] = "user:reveal-active-file-in-explorer",
   ["ctrl+alt+t"] = "terminal:open",
   ["ctrl+up"] = "user:move-caret-previous-paragraph",

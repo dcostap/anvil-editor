@@ -5423,26 +5423,6 @@ function FSView:selected_file_path()
   if path and path ~= "" then return common.normalize_path(path) end
 end
 
-function FSView:focus_selected_in_tree()
-  local path = self:selected_file_path()
-  if not path then
-    core.log_quiet("Fuzzy Searcher: selected result has no relevant file for File Tree focus")
-    return
-  end
-
-  local resolved = project_paths.resolve(path)
-  if not resolved then
-    core.log_quiet("Fuzzy Searcher: selected file is not browsable in the File Tree: %s", path)
-    return
-  end
-
-  -- Close first so filetree remains the active view; otherwise its update() sees
-  -- the fuzzy input as active and collapses itself again.
-  self:close()
-  core.log_quiet("Fuzzy Searcher: focusing selected file in the File Tree: %s", path)
-  command.perform("filetree:focus-file", path)
-end
-
 function FSView:reveal_selected_in_explorer()
   local path = self:selected_file_path()
   if not path then return end
@@ -5859,11 +5839,6 @@ poi.add_activation_provider("fuzzy-searcher-result", {
   end,
 })
 
-local function picker_focus_selected_in_tree()
-  local view = current_picker()
-  if view then view:focus_selected_in_tree() end
-end
-
 local function picker_reveal_selected_in_explorer()
   local view = current_picker()
   if view then view:reveal_selected_in_explorer() end
@@ -5920,6 +5895,36 @@ local function switch_picker_prefix(view, prefix)
   ensure_input_focus(view, "switch-prefix")
 end
 
+local function current_file_query(path)
+  path = path and common.normalize_path(path)
+  if not path then return "" end
+  local resolved = project_paths.resolve(path)
+  if resolved and resolved.entry and resolved.entry.role == "root" then
+    return resolved.relpath
+  end
+  return path
+end
+
+local function open_current_file()
+  local view = current_picker()
+  local path = view and view.source_file_path or file_context.current_file_path()
+  if view and view.static_mode then
+    view:close()
+    view = nil
+  end
+  if view then switch_picker_prefix(view, "")
+  else open(""); view = current_picker() end
+  if not view then return nil end
+
+  view.input:set_text(current_file_query(path), false)
+  view.current_query_key = nil
+  view.force_refresh = true
+  view.dirty = true
+  view:schedule_update(true)
+  ensure_input_focus(view, "open-current-file")
+  return view
+end
+
 function open(prefix)
   prefix = prefix or ""
   local view = current_picker()
@@ -5961,6 +5966,7 @@ end
 command.add(nil, {
   ["fuzzy-searcher:open"] = function() open("") end,
   ["fuzzy-searcher:open-files"] = function() open("") end,
+  ["fuzzy-searcher:open-current-file"] = open_current_file,
   ["fuzzy-searcher:open-paths"] = function() open("@") end,
   ["fuzzy-searcher:open-grep"] = function() open("#") end,
   ["fuzzy-searcher:open-symbols"] = function() open("$") end,
@@ -5972,7 +5978,6 @@ command.add(picker_active, {
   ["fuzzy-searcher:close"] = picker_close,
   ["fuzzy-searcher:confirm"] = picker_confirm,
   ["fuzzy-searcher:confirm-side"] = picker_confirm_side,
-  ["fuzzy-searcher:focus-selected-in-tree"] = picker_focus_selected_in_tree,
   ["fuzzy-searcher:reveal-selected-in-explorer"] = picker_reveal_selected_in_explorer,
   ["fuzzy-searcher:copy-selected"] = function()
     local view = current_picker()
@@ -6005,6 +6010,7 @@ core.fuzzy_searcher_install_global_keymaps = function()
   keymap.add({
     ["ctrl+shift+e"] = "fuzzy-searcher:open-paths",
     ["ctrl+e"] = "fuzzy-searcher:open-files",
+    ["ctrl+l"] = "fuzzy-searcher:open-current-file",
     ["ctrl+shift+j"] = "fuzzy-searcher:open-symbols",
     ["ctrl+j"] = "fuzzy-searcher:open-current-buffer-symbols",
     ["ctrl+shift+f"] = "fuzzy-searcher:open-grep",
@@ -6021,7 +6027,7 @@ core.fuzzy_searcher_install_picker_keymaps = function()
     ["return"] = "fuzzy-searcher:confirm",
     ["keypad enter"] = "fuzzy-searcher:confirm",
     ["ctrl+return"] = "fuzzy-searcher:confirm-side",
-    ["ctrl+l"] = "fuzzy-searcher:focus-selected-in-tree",
+    ["ctrl+l"] = "fuzzy-searcher:open-current-file",
     ["ctrl+shift+l"] = "fuzzy-searcher:reveal-selected-in-explorer",
     ["ctrl+c"] = "fuzzy-searcher:copy-selected",
     ["ctrl+i"] = "fuzzy-searcher:toggle-ignored-files",
