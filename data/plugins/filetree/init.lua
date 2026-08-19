@@ -3429,8 +3429,13 @@ command.add(nil, {
     supports_placement = true,
     opens_view = true,
   }),
-  ["filetree:open_at_path"] = command.palette(function()
+  ["filetree:open_at_path"] = command.palette(function(path)
     local context, pane, source_view = command_context()
+    if path then
+      local view, err = open_root_in_context(path, context, pane, source_view)
+      if not view and err then core.error("Could not open File Tree: %s", err) end
+      return view ~= nil
+    end
     require("plugins.fuzzy_searcher").pick_path {
       kind = "folder",
       source_pane = pane,

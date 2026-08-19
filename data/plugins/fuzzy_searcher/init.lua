@@ -291,6 +291,8 @@ fuzzy_searcher.files_refresh_requested = false
 fuzzy_searcher.files_scan_proc = nil
 fuzzy_searcher.files_scope_generation = 0
 fuzzy_searcher.files_metadata = {}
+fuzzy_searcher.folders_cache = {}
+fuzzy_searcher.folders_fuzzy_index = nil
 fuzzy_searcher.files_fuzzy_index = nil
 fuzzy_searcher.files_fuzzy_index_generation = -1
 fuzzy_searcher.files_fuzzy_index_kind = nil
@@ -559,6 +561,11 @@ local function clear_native_file_index()
   fuzzy_searcher.files_fuzzy_index_kind = nil
   fuzzy_searcher.files_materialized_cache = nil
   fuzzy_searcher.files_materialized_generation = -1
+  fuzzy_searcher.folders_cache = {}
+  if fuzzy_searcher.folders_fuzzy_index and fuzzy_searcher.folders_fuzzy_index.free then
+    pcall(function() fuzzy_searcher.folders_fuzzy_index:free() end)
+  end
+  fuzzy_searcher.folders_fuzzy_index = nil
 end
 
 local function native_file_index_ready()
@@ -648,6 +655,10 @@ local function file_scan_command(_, include_ignored)
   return project_files.scan_command(include_ignored)
 end
 
+local function folder_index_count()
+  return #(fuzzy_searcher.folders_cache or {})
+end
+
 local function sync_project_file_subscriptions(roots)
   local wanted = {}
   for _, root in ipairs(roots or {}) do
@@ -703,6 +714,8 @@ local function start_file_index(roots, signature, reason, include_ignored)
     local scan_failed = false
     local scan_started = system.get_time()
     local native_feed_seconds = 0
+    local scanned_directories = {}
+    local scanned_directory_keys = {}
 
     for root_index, root in ipairs(roots) do
       if scan_generation ~= fuzzy_searcher.files_scan_generation
@@ -712,7 +725,7 @@ local function start_file_index(roots, signature, reason, include_ignored)
         return
       end
 
-      local files, scan_error = project_files.list(root.path, {
+      local files, scan_error, directories = project_files.list(root.path, {
         refresh = include_ignored or reason == "picker-open" or project_files.cached(root.path, {
           include_ignored = include_ignored,
         }) == nil,
@@ -725,6 +738,15 @@ local function start_file_index(roots, signature, reason, include_ignored)
           tostring(root.path), tostring(scan_error or "unknown error")
         )
         break
+      end
+      for _, directory in ipairs(directories or project_files.directories(root.path, {
+        include_ignored = include_ignored,
+      }) or {}) do
+        local key = common.path_compare_key(directory)
+        if key and not scanned_directory_keys[key] then
+          scanned_directory_keys[key] = true
+          scanned_directories[#scanned_directories + 1] = directory
+        end
       end
       local chunk, chunk_bytes = {}, 0
       for _, file in ipairs(files) do
@@ -789,6 +811,30 @@ local function start_file_index(roots, signature, reason, include_ignored)
         fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
         fuzzy_searcher.files_cache = nil
         fuzzy_searcher.files_metadata = {}
+        fuzzy_searcher.folders_cache = {}
+        local folder_texts = {}
+        for _, directory in ipairs(scanned_directories) do
+          local meta = project_paths.display_path(directory, { kind = "files" })
+          if meta then
+            if meta.relpath == "" then
+              meta.text = meta.root_label or common.basename(directory)
+            end
+            meta.is_folder = true
+            local text = fuzzy_searcher.remember_file_metadata(meta)
+            if text then
+              meta.text = text
+              fuzzy_searcher.folders_cache[#fuzzy_searcher.folders_cache + 1] = meta
+              folder_texts[#folder_texts + 1] = text
+            end
+          end
+        end
+        if fuzzy_searcher.folders_fuzzy_index and fuzzy_searcher.folders_fuzzy_index.free then
+          pcall(function() fuzzy_searcher.folders_fuzzy_index:free() end)
+        end
+        local folder_index_ok, folder_index = pcall(
+          fuzzy_native.index, folder_texts, { mode = "path" }
+        )
+        fuzzy_searcher.folders_fuzzy_index = folder_index_ok and folder_index or nil
         fuzzy_searcher.files_materialized_cache = nil
         fuzzy_searcher.files_materialized_generation = -1
         fuzzy_searcher.files_fuzzy_index = native_index
@@ -797,6 +843,7 @@ local function start_file_index(roots, signature, reason, include_ignored)
         fuzzy_searcher.files_scope_generation = fuzzy_searcher.files_scope_generation + 1
         fuzzy_searcher.files_last_scan_diagnostics = {
           files = #native_index,
+          folders = folder_index_count(),
           candidates = tonumber(native_stats and native_stats.candidates) or #native_index,
           duplicates = tonumber(native_stats and native_stats.duplicates) or 0,
           input_bytes = tonumber(native_stats and native_stats.input_bytes) or 0,
@@ -810,8 +857,9 @@ local function start_file_index(roots, signature, reason, include_ignored)
           pcall(previous_index.free, previous_index)
         end
         core.log_quiet(
-          "Fuzzy native file index scan finished files=%d candidates=%d duplicates=%d bytes=%d scan_ms=%.3f feed_ms=%.3f finish_ms=%.3f",
+          "Fuzzy native file index scan finished files=%d folders=%d candidates=%d duplicates=%d bytes=%d scan_ms=%.3f feed_ms=%.3f finish_ms=%.3f",
           #native_index,
+          folder_index_count(),
           tonumber(native_stats and native_stats.candidates) or #native_index,
           tonumber(native_stats and native_stats.duplicates) or 0,
           tonumber(native_stats and native_stats.input_bytes) or 0,
@@ -894,8 +942,7 @@ local function get_files()
         local item = fuzzy_searcher.files_fuzzy_index:entry(i)
         if item then
           item.abs_path = common.normalize_path(item.root_path .. PATHSEP .. item.relative_path)
-          fuzzy_searcher.files_metadata[item.text] = item
-          files[#files + 1] = item.text
+          files[#files + 1] = fuzzy_searcher.remember_file_metadata(item) or item.text
         end
       end
       fuzzy_searcher.files_materialized_cache = files
@@ -912,8 +959,7 @@ local function adopt_native_file_match(item)
   if not item.root_path or not item.relative_path then return item.text end
   item.abs_path = item.abs_path
     or common.normalize_path(item.root_path .. PATHSEP .. item.relative_path)
-  fuzzy_searcher.files_metadata[item.text] = item
-  return item.text
+  return fuzzy_searcher.remember_file_metadata(item) or item.text
 end
 
 function fuzzy_searcher.get_recent_file_entries()
@@ -1217,6 +1263,19 @@ function fuzzy_searcher.file_match_row(match, query, line, recent)
   local item = match.item
   local file = type(item) == "table" and (item.text or item.file or item.path) or item
   local meta = fuzzy_searcher.files_metadata[file] or (type(item) == "table" and item) or {}
+  if meta.is_folder then
+    return {
+      kind = "folder", label = file, path = meta.abs_path, abs_path = meta.abs_path,
+      is_folder = true,
+      root_label = meta.root_label,
+      root_role = meta.root_role,
+      root_id = meta.root_id,
+      prefix_span = meta.prefix_span,
+      rank_penalty = meta.rank_penalty,
+      query = query,
+      match_spans = match.spans or {},
+    }
+  end
   return {
     kind = "file", label = file, file = file,
     abs_path = meta.abs_path,
@@ -2148,6 +2207,43 @@ end
 function fuzzy_searcher.project_result_font(font)
   return style.prose_font:get_size() == font:get_size()
     and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
+end
+
+local function merge_folder_matches(matches, query, line, limit)
+  if line then return matches, 0 end
+  local index = fuzzy_searcher.folders_fuzzy_index
+  if not index then
+    local matched = 0
+    for _, folder in ipairs(fuzzy_searcher.folders_cache or {}) do
+      local score, spans = fuzzy_match_file_fast(query, folder.text)
+      if score then
+        matched = matched + 1
+        fuzzy_insert_top(matches, {
+          item = folder,
+          text = folder.text,
+          score = fuzzy_searcher.adjusted_file_score(score, folder),
+          spans = spans or {},
+        }, limit)
+      end
+    end
+    return matches, matched, matched > limit
+  end
+  local search_limit = math.min(
+    #(fuzzy_searcher.folders_cache or {}), math.max(limit + 64, limit)
+  )
+  local results = index:search(query, { limit = search_limit, spans = true })
+  for _, result in ipairs(results) do
+    local folder = fuzzy_searcher.files_metadata[result.text]
+    if folder and folder.is_folder then
+      fuzzy_insert_top(matches, {
+        item = folder,
+        text = folder.text,
+        score = fuzzy_searcher.adjusted_file_score(result.score or 0, folder),
+        spans = result.spans or {},
+      }, limit)
+    end
+  end
+  return matches, #results, results.has_more == true
 end
 
 function fuzzy_searcher.command_search_text(name)
@@ -3379,7 +3475,7 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
       + math.max(2 * (SCALE or 1), style.padding.x / 3)
     x = row_x + icon_column_width
     width = math.max(0, row_text_w - icon_column_width)
-  elseif r.kind == "path" or r.kind == "create_path" or r.path_search then
+  elseif r.kind == "folder" or r.kind == "path" or r.kind == "create_path" or r.path_search then
     if r._path_copy_x and r._path_copy_width then
       x = r._path_copy_x
       width = r._path_copy_width
@@ -3924,11 +4020,16 @@ function FSView:start_file_search(query, line, reset_selection)
             if #general_matches >= keep_limit then break end
           end
         end
+        local folder_match_count, folder_has_more
+        general_matches, folder_match_count, folder_has_more = merge_folder_matches(
+          general_matches, query, line, keep_limit
+        )
         table.sort(general_matches, function(a, b) return fuzzy_result_better(a, b) end)
         local out, hidden = build_sectioned_file_results(recent_matches, general_matches, self:result_limit(), query, line)
-        local has_more = hidden or native_results.has_more
-        local status = string.format("%d recent + %d file matches shown%s — %d files indexed — %s",
-          #recent_matches, #general_matches, has_more and "+" or "", file_index_count(), roots_label)
+        local has_more = hidden or native_results.has_more or folder_has_more
+        local status = string.format("%d recent + %d matches shown%s — %d files + %d folders indexed — %s",
+          #recent_matches, #general_matches, has_more and "+" or "",
+          file_index_count(), folder_index_count(), roots_label)
         if self.loading_feedback_pending and #out == 0 and not has_more and not direct then
           self.loading_feedback_status = status
           return
@@ -3943,6 +4044,8 @@ function FSView:start_file_search(query, line, reset_selection)
     local items = get_files()
     local general_matches = {}
     local matched_general = 0
+    local matched_folders = 0
+    local folder_has_more = false
     local scanned = 0
     local empty_query = trim_query(query) == ""
     local slice_start = system.get_time()
@@ -3951,15 +4054,17 @@ function FSView:start_file_search(query, line, reset_selection)
     local function publish(final)
       if gen ~= file_search_generation or active_view ~= self then return false end
       local out, hidden = build_sectioned_file_results(recent_matches, general_matches, self:result_limit(), query, line)
-      local has_more = hidden or matched_general > #general_matches
+      local has_more = hidden or folder_has_more
+        or matched_general + matched_folders > #general_matches
       local status
       if final then
-        local total_matches = #recent_matches + matched_general
+        local total_matches = #recent_matches + matched_general + matched_folders
         status = fuzzy_searcher.files_indexing
-          and string.format("%d file matches — refreshing with %d files available — %s", total_matches, file_index_count(), roots_label)
-          or string.format("%d file matches — %d files indexed — %s", total_matches, #items, roots_label)
+          and string.format("%d matches — refreshing with %d files available — %s", total_matches, file_index_count(), roots_label)
+          or string.format("%d matches — %d files + %d folders indexed — %s",
+            total_matches, #items, folder_index_count(), roots_label)
       else
-        status = string.format("%d file matches — scanning %d/%d…", #recent_matches + matched_general, scanned, #items)
+        status = string.format("%d matches — scanning %d/%d files…", #recent_matches + matched_general, scanned, #items)
       end
       if final and self.loading_feedback_pending and #out == 0 and not has_more and not direct then
         self.loading_feedback_status = status
@@ -3997,6 +4102,10 @@ function FSView:start_file_search(query, line, reset_selection)
       if (#recent_matches > 0 or #general_matches > 0) and system.get_time() - last_publish > 0.05 then publish(false) end
       slice_start = yield_if_over_budget(slice_start)
     end
+
+    general_matches, matched_folders, folder_has_more = merge_folder_matches(
+      general_matches, query, line, keep_limit
+    )
 
     publish(true)
   end)
@@ -4264,6 +4373,11 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   local direct = path_search.direct_result(base, line)
   self.direct_path_result = direct
   local path_plan = path_search.plan(base)
+  if direct and direct.exact_path and direct.is_folder and not path_plan.external then
+    direct.kind = "folder"
+    direct.project = nil
+    direct.path_search = nil
+  end
   self.path_search_active = path_plan.external == true
   local mode = path_plan.mode
   base = path_plan.query or ""
@@ -4288,9 +4402,14 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
           if #general_matches > max_items then break end
         end
       end
+      local folder_match_count, folder_has_more
+      general_matches, folder_match_count, folder_has_more = merge_folder_matches(
+        general_matches, query, line, max_items + 1
+      )
+      table.sort(general_matches, function(a, b) return fuzzy_result_better(a, b) end)
       local rows, hidden = build_sectioned_file_results(recent_matches, general_matches, max_items, query, line)
       out = rows
-      self.has_more = hidden or #general_matches > max_items
+      self.has_more = hidden or folder_has_more or #general_matches > max_items
       return
     end
 
@@ -4439,7 +4558,8 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   elseif fuzzy_searcher.files_indexing then
     self.status = string.format("Indexing files… %d available — %s", file_index_count(), fuzzy_searcher.project_roots_label())
   else
-    self.status = string.format("%d files indexed — %s", file_index_count(), fuzzy_searcher.project_roots_label())
+    self.status = string.format("%d files + %d folders indexed — %s",
+      file_index_count(), folder_index_count(), fuzzy_searcher.project_roots_label())
   end
   if self.path_selection then
     local label = self.path_selection.kind == "folder" and "Select a folder" or "Select a path"
@@ -5678,6 +5798,17 @@ function FSView:confirm(target_side)
   if r.kind == "create_path" then
     return self:activate_create_path(r, target_side)
   end
+  if r.kind == "folder" then
+    local path = common.normalize_path(r.abs_path or r.path)
+    local context = {
+      source_view = self.source_view,
+      source_pane = panes.find(self.source_pane) or panes.active(),
+      placement = target_side and "split" or "current",
+      direction = target_side and "right" or nil,
+    }
+    self:close()
+    return command.perform_with_context("filetree:open_at_path", context, path)
+  end
   if (r.kind == "project" or r.kind == "new_project" or (r.kind == "path" and r.is_folder)) and r.project then
     local path = r.project
     self:close()
@@ -5850,6 +5981,11 @@ function FSView:draw()
           font, r.file or r.label, r.match_spans, "", x + pad, row_y,
           file_text_w, nil, r.prefix_span, r.root_role, true
         )
+      elseif r.kind == "folder" then
+        previous_rendered_grep_file = nil
+        previous_rendered_grep_line_x = nil
+        previous_rendered_was_grep = false
+        draw_path_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "symbol" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
@@ -6297,6 +6433,7 @@ return {
         indexing = fuzzy_searcher.files_indexing,
         files = fuzzy_searcher.files_cache,
         count = file_index_count(),
+        folder_count = folder_index_count(),
         native = native_project_file_index_ready(),
         materialized = fuzzy_searcher.files_materialized_generation == fuzzy_searcher.files_generation,
         diagnostics = fuzzy_searcher.files_last_scan_diagnostics,

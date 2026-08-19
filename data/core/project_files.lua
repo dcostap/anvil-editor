@@ -79,10 +79,70 @@ function project_files.add_filter_arguments(args, include_ignored)
 end
 
 function project_files.scan_command(include_ignored)
-  local args = { ripgrep_path(), "--files", "--null" }
+  local args = { ripgrep_path(), "--files", "--null", "--debug" }
   project_files.add_filter_arguments(args, include_ignored)
   args[#args + 1] = "."
   return args
+end
+
+local function consume_ignore_debug(state, chunk, root)
+  local text = state.pending .. tostring(chunk or "")
+  local start = 1
+  while true do
+    local stop = text:find("\n", start, true)
+    if not stop then break end
+    local line = text:sub(start, stop - 1):gsub("\r$", "")
+    local ignored = line:match("ignoring (.-): Ignore%(")
+    if ignored then
+      ignored = ignored:gsub("^%.[/\\]", "")
+      local path = common.is_absolute_path(ignored)
+        and common.normalize_path(ignored)
+        or common.normalize_path(root .. PATHSEP .. ignored)
+      local key = path and common.path_compare_key(path)
+      if key then
+        if line:find("IgnoreMatch(Hidden)", 1, true) then
+          state.hidden_paths[key] = true
+        else
+          state.paths[key] = true
+        end
+      end
+    end
+    start = stop + 1
+  end
+  state.pending = text:sub(start)
+end
+
+local function scan_directories(root, ignored_paths, hidden_paths)
+  local directories = { root }
+  local pending = { root }
+  local searchable = { [common.path_compare_key(root)] = root }
+  local pruned_ignored = 0
+  local state = cooperative_state()
+  while #pending > 0 do
+    local directory = table.remove(pending)
+    local entries = system.list_dir_info
+      and system.list_dir_info(directory, 2147483647, "dir") or nil
+    for _, entry in ipairs(entries or {}) do
+      local name = entry.name
+      if name and name ~= "" and name:sub(1, 1) ~= "." then
+        local path = common.normalize_path(directory .. PATHSEP .. name)
+        local info = path and system.get_file_info(path)
+        local key = path and common.path_compare_key(path)
+        if info and info.type == "dir" and not hidden_paths[key] then
+          directories[#directories + 1] = path
+          if not info.symlink and not ignored_paths[key] then
+            searchable[key] = path
+            pending[#pending + 1] = path
+          elseif ignored_paths[key] then
+            pruned_ignored = pruned_ignored + 1
+          end
+        end
+      end
+      yield_if_due(state)
+    end
+  end
+  cooperative_sort(directories, function(a, b) return a < b end)
+  return directories, searchable, pruned_ignored
 end
 
 local function scan(root, include_ignored)
@@ -93,6 +153,21 @@ local function scan(root, include_ignored)
     stdin = process.REDIRECT_DISCARD,
   })
   if not proc then return nil, start_error or "could not start ripgrep" end
+
+  local ignore_debug = { pending = "", paths = {}, hidden_paths = {} }
+  local debug_done = false
+  core.add_thread(function()
+    while proc:running() do
+      local ok, chunk = pcall(
+        proc.stderr.read, proc.stderr, 64 * 1024,
+        { scan = 0.001, timeout = WORK_SLICE_SECONDS }
+      )
+      if ok and chunk then consume_ignore_debug(ignore_debug, chunk, root) end
+    end
+    local ok, tail = pcall(proc.stderr.read, proc.stderr, "all")
+    if ok and tail then consume_ignore_debug(ignore_debug, tail .. "\n", root) end
+    debug_done = true
+  end)
 
   local files, pending = {}, ""
   local progress_deadline = system.get_time() + 30
@@ -137,10 +212,9 @@ local function scan(root, include_ignored)
   end
 
   local exit_code = proc:wait(process.WAIT_DEADLINE)
+  while not debug_done do coroutine.yield(0) end
   if exit_code ~= 0 and exit_code ~= 1 then
-    local error_text = ""
-    pcall(function() error_text = proc.stderr:read() or "" end)
-    return nil, error_text ~= "" and error_text or ("ripgrep exited with code " .. tostring(exit_code))
+    return nil, "ripgrep exited with code " .. tostring(exit_code)
   end
   if pending ~= "" then
     pending = pending:gsub("^%.[/\\]", "")
@@ -150,7 +224,12 @@ local function scan(root, include_ignored)
     }
   end
   cooperative_sort(files, function(a, b) return a.relative < b.relative end)
-  return files
+  local directories, searchable_directories, pruned_ignored = scan_directories(
+    root, ignore_debug.paths, ignore_debug.hidden_paths
+  )
+  core.log_quiet("Project files: indexed %d folders and stopped at %d ignored folder roots",
+    #directories, pruned_ignored)
+  return files, nil, directories, searchable_directories
 end
 
 local function cache_key(root, include_ignored)
@@ -173,12 +252,18 @@ local function get_entry(root, include_ignored)
   return entry
 end
 
-local function index_paths(entry)
+local function index_paths(entry, scanned_directories, scanned_searchable_directories)
   local root = entry.root
   entry.paths, entry.directories = {}, {}
+  entry.searchable_directories = scanned_searchable_directories or {}
   local root_key = common.path_compare_key(root)
   entry.directories[root_key] = root
+  entry.searchable_directories[root_key] = root
   local state = cooperative_state()
+  for _, directory in ipairs(scanned_directories or {}) do
+    entry.directories[common.path_compare_key(directory)] = directory
+    yield_if_due(state)
+  end
   for _, file in ipairs(entry.files or {}) do
     entry.paths[common.path_compare_key(file.path)] = true
     local directory = common.dirname(file.path)
@@ -186,6 +271,7 @@ local function index_paths(entry)
       local key = common.path_compare_key(directory)
       if entry.directories[key] then break end
       entry.directories[key] = directory
+      entry.searchable_directories[key] = directory
       if common.path_equals(directory, root) then break end
       directory = common.dirname(directory)
       yield_if_due(state)
@@ -206,7 +292,7 @@ local function sync_watches(entry)
   local mode = watcher.monitor and watcher.monitor.mode and watcher.monitor:mode()
   if mode == "single" then return end
   entry.watched_dirs = entry.watched_dirs or {}
-  local wanted = entry.directories or {}
+  local wanted = entry.searchable_directories or {}
   local git_info = common.normalize_path(entry.root .. PATHSEP .. ".git" .. PATHSEP .. "info")
   local git_info_stat = system.get_file_info(git_info)
   local git_info_key = git_info_stat and git_info_stat.type == "dir"
@@ -238,20 +324,20 @@ function project_files.list(root, opts)
   opts = opts or {}
   root = common.normalize_path(root)
   local entry = get_entry(root, opts.include_ignored == true)
-  if entry.files and not opts.refresh then return entry.files end
+  if entry.files and not opts.refresh then return entry.files, nil, entry.directory_list end
   if entry.scanning then
     while entry.scanning do coroutine.yield(0.005) end
-    return entry.files, entry.error
+    return entry.files, entry.error, entry.directory_list
   end
 
   entry.scanning = true
   entry.phase = "scanning"
-  local files, err = scan(root, opts.include_ignored == true)
+  local files, err, directories, searchable_directories = scan(root, opts.include_ignored == true)
   if files then
     entry.files = files
     entry.error = nil
     entry.phase = "indexing"
-    index_paths(entry)
+    index_paths(entry, directories, searchable_directories)
     entry.generation = (entry.generation or 0) + 1
     entry.phase = "watching"
     sync_watches(entry)
@@ -260,7 +346,7 @@ function project_files.list(root, opts)
   end
   entry.phase = nil
   entry.scanning = false
-  return files, err
+  return files, err, entry.directory_list
 end
 
 function project_files.contains(root, path, kind)
@@ -269,7 +355,7 @@ function project_files.contains(root, path, kind)
   local entry = cache[cache_key(root, false)]
   if not entry or not entry.files then return nil end
   local key = common.path_compare_key(path)
-  if kind == "dir" then return entry.directories[key] ~= nil end
+  if kind == "dir" then return entry.searchable_directories[key] ~= nil end
   return entry.paths[key] == true
 end
 
@@ -315,7 +401,7 @@ function project_files.reconcile(root, paths, opts)
         if not info or info.type ~= "dir" then refresh = true end
       elseif info then
         local parent = common.dirname(path)
-        if entry.directories[common.path_compare_key(parent)] then refresh = true end
+        if entry.searchable_directories[common.path_compare_key(parent)] then refresh = true end
       end
     end
     yield_if_due(state)
@@ -462,7 +548,8 @@ function project_files.invalidate(root)
     local key = cache_key(root, include_ignored)
     local entry = cache[key]
     if entry and (entry.watcher or next(entry.subscribers or {})) then
-      entry.files, entry.paths, entry.directories, entry.directory_list = nil, nil, nil, nil
+      entry.files, entry.paths, entry.directories, entry.searchable_directories,
+        entry.directory_list = nil, nil, nil, nil, nil
       entry.error = nil
     else
       cache[key] = nil
