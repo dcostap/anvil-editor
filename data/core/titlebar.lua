@@ -146,7 +146,7 @@ local function pane_label(number, pane)
   return string.format("%d %s", number, pane_name(pane))
 end
 
-local function pane_number_font()
+function TitleBar.pane_number_font()
   local size = math.max(common.round(8 * SCALE), common.round(style.font:get_size() * 0.8))
   return style.get_scaled_font(style.prose_heading_font, size)
 end
@@ -156,13 +156,13 @@ local function pane_number_gap()
 end
 
 local function pane_label_width(number, pane)
-  return pane_number_font():get_width(tostring(number)) + pane_number_gap()
+  return TitleBar.pane_number_font():get_width(tostring(number)) + pane_number_gap()
     + style.font:get_width(pane_name(pane))
 end
 
 local function draw_pane_label(number, pane, rect, name_color)
   local number_text = tostring(number)
-  local number_font = pane_number_font()
+  local number_font = TitleBar.pane_number_font()
   local number_width = number_font:get_width(number_text)
   renderer.draw_text(
     number_font, number_text, rect.x,

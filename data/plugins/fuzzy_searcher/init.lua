@@ -13,6 +13,7 @@ local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local ImageView = require "core.imageview"
 local file_context = require "core.file_context"
+local TitleBar = require "core.titlebar"
 local poi = require "core.poi"
 local project_paths = require "core.project_paths"
 local project_files = require "core.project_files"
@@ -380,6 +381,31 @@ function fuzzy_searcher.git_kind_for_file(file)
     local info = view:get_git_info_for_entry({ abs = abs, type = "file" })
     if info then return info.kind end
   end
+end
+
+function fuzzy_searcher.current_file_pane_markers(max_width)
+  local font = TitleBar.pane_number_font()
+  local numbers_by_path = {}
+  for number, pane in ipairs(panes.ordered()) do
+    local path = file_context.view_file_path(pane.current_view)
+    local key = path and common.path_compare_key(path)
+    if key then
+      local numbers = numbers_by_path[key] or {}
+      numbers_by_path[key] = numbers
+      numbers[#numbers+1] = number
+    end
+  end
+
+  local markers = {}
+  for key, numbers in pairs(numbers_by_path) do
+    local text = table.concat(numbers, "·")
+    if font:get_width(text) > max_width and #numbers > 1 then
+      text = tostring(numbers[1]) .. "+"
+    end
+    if font:get_width(text) > max_width then text = tostring(numbers[1]) end
+    markers[key] = { text = text, font = font }
+  end
+  return markers
 end
 
 local function file_result_key(path)
@@ -5608,6 +5634,7 @@ function FSView:draw()
 
   core.push_clip_rect(x, top, list_w - divider_w, m.list_h)
   local row_text_w = list_w - (pad * 2) - divider_w
+  local pane_markers = fuzzy_searcher.current_file_pane_markers(pad)
   local arrow_color = style.dim
   local up_arrow, down_arrow = "▲", "▼"
   if self.viewport_offset > 1 then
@@ -5655,6 +5682,19 @@ function FSView:draw()
         renderer.draw_rect(x, yy, list_w, lh, style.line_highlight)
       elseif idx == self.hovered_result then
         renderer.draw_rect(x, yy, list_w, lh, style.background3 or color_with_alpha(style.text, 24))
+      end
+      if r.kind == "file" or (r.kind == "path" and r.file) then
+        local path = fullpath(r)
+        local marker = path and pane_markers[common.path_compare_key(path)]
+        if marker then
+          local marker_width = marker.font:get_width(marker.text)
+          renderer.draw_text(
+            marker.font, marker.text,
+            x + pad - marker_width,
+            yy + math.floor((lh - marker.font:get_height()) / 2),
+            style.titlebar_pane_number
+          )
+        end
       end
       if r.kind == "grep" then
         local file = tostring(r.file or "")

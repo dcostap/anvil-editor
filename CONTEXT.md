@@ -220,6 +220,10 @@ _Avoid_: priority interaction, modal popup, input-stealing View
 A numbered work area that shows one Current View and owns one Navigation History. Each Pane belongs to one Pane Group.
 _Avoid_: Left Pane, Right Pane, panel, split
 
+**Pane Number Marker**:
+A Fuzzy Searcher result marker that identifies each Pane whose Current View shows the file.
+_Avoid_: open file badge, tab number
+
 **Pane Group**:
 A contiguous sequence of one or more Panes shown together. A one-Pane group fills the available work area.
 _Avoid_: tab group, split group, workspace
