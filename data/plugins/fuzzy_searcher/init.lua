@@ -4302,18 +4302,36 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     if max_items <= 0 then self.has_more = true; return end
 
     if trim_query(query) == "" then
-      local added_recent = 0
-      for _, name in ipairs(recent_commands) do
+      local candidates = {}
+      for recent_index, name in ipairs(recent_commands) do
         if command.map[name] and self.palette_command_set[name] then
-          if added_recent >= max_items then self.has_more = true; return end
-          out[#out+1] = { kind = "command", label = name, command = name, query = query, match_spans = {}, recent = true, info = command_preview_info(name), status = command_status_parts(name, self) }
-          added_recent = added_recent + 1
+          candidates[#candidates + 1] = {
+            name = name,
+            recent_index = recent_index,
+            opens_view = command.get_metadata(name).opens_view == true,
+          }
         end
+      end
+      table.sort(candidates, function(a, b)
+        if a.opens_view ~= b.opens_view then return a.opens_view end
+        return a.recent_index < b.recent_index
+      end)
+      for index, candidate in ipairs(candidates) do
+        if index > max_items then self.has_more = true; break end
+        local name = candidate.name
+        out[#out+1] = { kind = "command", label = name, command = name, query = query, match_spans = {}, recent = true, info = command_preview_info(name), status = command_status_parts(name, self) }
       end
       return
     end
 
-    local matches = fuzzy_filter(get_commands(self), query, max_items + 1, fuzzy_searcher.command_search_text)
+    local commands = get_commands(self)
+    local matches = fuzzy_filter(commands, query, #commands, fuzzy_searcher.command_search_text)
+    table.sort(matches, function(a, b)
+      local a_opens = command.get_metadata(a.item).opens_view == true
+      local b_opens = command.get_metadata(b.item).opens_view == true
+      if a_opens ~= b_opens then return a_opens end
+      return fuzzy_result_better(a, b)
+    end)
     for i, match in ipairs(matches) do
       if i > max_items then self.has_more = true; break end
       local name = match.item

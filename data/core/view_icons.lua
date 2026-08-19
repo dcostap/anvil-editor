@@ -68,10 +68,10 @@ end
 function view_icons.draw_opener_badge(x, y, width, row_height)
   local font = style.icon_font
   local glyph = "]"
-  local badge_size = math.max(7 * (SCALE or 1), row_height * 0.48)
+  local badge_size = math.max(10 * (SCALE or 1), row_height * 0.68)
   local badge_font = style.get_scaled_font(font, common.round(badge_size))
-  local draw_x = x + width - badge_font:get_width(glyph) * 0.55
-  local draw_y = y - badge_font:get_height() * 0.12
+  local draw_x = x + width - badge_font:get_width(glyph) * 0.50
+  local draw_y = y - badge_font:get_height() * 0.08
   renderer.draw_text(badge_font, glyph, draw_x, draw_y, style.good)
 end
 

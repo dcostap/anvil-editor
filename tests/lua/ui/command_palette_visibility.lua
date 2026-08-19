@@ -23,6 +23,8 @@ test.describe("Command Palette visibility", function()
       visible = "test_palette:visible_action",
       hidden = "test_palette:hidden_primitive",
       invalid = "test_palette:wrong_context",
+      opener = "test_palette:open_target_view",
+      non_opener = "test_palette:target_action",
     }
     context.source = Editor(Buffer(nil, nil, true))
     panes.create { factory = function() return context.source end }
@@ -37,6 +39,13 @@ test.describe("Command Palette visibility", function()
     })
     command.add(function() return false end, {
       [context.names.invalid] = command.palette(function() end),
+    })
+    command.add(nil, {
+      [context.names.opener] = command.palette(function() end, {
+        keywords = { "target" },
+        opens_view = true,
+      }),
+      [context.names.non_opener] = command.palette(function() end),
     })
   end)
 
@@ -66,6 +75,18 @@ test.describe("Command Palette visibility", function()
     test.ok(shown[context.names.visible])
     test.not_ok(shown[context.names.hidden])
     test.not_ok(shown[context.names.invalid])
+  end)
+
+  test.it("ranks View Openers before other matching commands", function(context)
+    fuzzy_searcher.open(">target")
+    local positions = {}
+    for index, row in ipairs(core.fuzzy_searcher_active_view.results or {}) do
+      positions[row.command] = index
+    end
+
+    test.not_nil(positions[context.names.opener])
+    test.not_nil(positions[context.names.non_opener])
+    test.ok(positions[context.names.opener] < positions[context.names.non_opener])
   end)
 
   test.it("hides keymap primitives while retaining useful editor actions", function()
