@@ -76,4 +76,31 @@ test.describe("toggle commands", function()
     test.not_ok(enabled)
     test.equal(seen_context, "context")
   end)
+
+  test.it("keeps palette metadata when command behavior is wrapped", function()
+    command.add(nil, { ["test-feature:open"] = function() end })
+    command.set_metadata("test-feature:open", {
+      title = "Open Test Feature",
+      supports_placement = true,
+    })
+    command.add(nil, { ["test-feature:open"] = function() end })
+
+    test.equal(command.get_metadata("test-feature:open").title, "Open Test Feature")
+    test.ok(command.get_metadata("test-feature:open").supports_placement)
+  end)
+
+  test.it("limits invocation context to one command execution", function()
+    local observed
+    command.add(nil, {
+      ["test-feature:open"] = function()
+        observed = command.get_invocation_context()
+      end,
+    })
+    local context = { placement = "split" }
+
+    command.perform_with_context("test-feature:open", context)
+
+    test.equal(observed, context)
+    test.is_nil(command.get_invocation_context())
+  end)
 end)

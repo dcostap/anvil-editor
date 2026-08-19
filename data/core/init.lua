@@ -628,7 +628,6 @@ function core.init()
 
   -- Pane 1 is created only by restored state or an explicit open request.
   require "core.panes"
-  require "core.pane_command_bar"
 
   -- Shared Point of Interest navigation commands/keymaps are loaded before
   -- plugins so providers can attach themselves during plugin initialization.

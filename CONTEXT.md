@@ -276,9 +276,13 @@ _Avoid_: filetree sorting
 The bottom-anchored, full-width prompt used for app-wide actions such as opening files, opening projects, renaming, and command entry.
 _Avoid_: Command prompt, command bar
 
-**Pane Command Bar**:
-A bottom-anchored prompt scoped to one Pane. It opens internal Views or runs shell commands without requiring a Terminal View.
-_Avoid_: terminal input, Global Prompt Bar, command palette
+**Command Palette**:
+The Fuzzy Searcher mode used to find and run registered Anvil commands. A command can continue into another input mode when it needs an argument.
+_Avoid_: Pane Command Bar, command prompt
+
+**Shell Command Mode**:
+The explicit Fuzzy Searcher mode that runs entered shell text and opens its output in a Command Output View.
+_Avoid_: Pane Command Bar, Terminal View input
 
 **Fuzzy Searcher**:
 The floating picker used for fuzzy navigation and search modes, such as files, projects, grep, symbols, and commands.

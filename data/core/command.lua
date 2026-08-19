@@ -39,12 +39,21 @@ local command = {}
 ---@field predicate core.command.predicate_function
 ---@field perform fun(...: any)
 ---@field status? fun(): any
+---@field metadata? core.command.metadata
+
+---@class core.command.metadata
+---@field title? string
+---@field description? string
+---@field keywords? string[]
+---@field supports_placement? boolean
 
 ---@type { [string]: core.command.command }
 command.map = {}
 
 ---@type table<string, string>
 command.aliases = command.aliases or {}
+
+local invocation_context
 
 ---@type core.command.predicate_function
 local always_true = function() return true end
@@ -188,10 +197,16 @@ end
 function command.add(predicate, map)
   predicate = command.generate_predicate(predicate)
   for name, fn in pairs(map) do
-    if command.map[name] then
+    local existing = command.map[name]
+    if existing then
       core.log_quiet("Replacing existing command \"%s\"", name)
     end
-    command.map[name] = { predicate = predicate, perform = fn }
+    command.map[name] = {
+      predicate = predicate,
+      perform = fn,
+      status = existing and existing.status or nil,
+      metadata = existing and existing.metadata or nil,
+    }
   end
 end
 
@@ -204,6 +219,28 @@ function command.set_status(name, status)
   if command.map[name] then
     command.map[name].status = status
   end
+end
+
+---Attach user-facing Command Palette metadata to a command.
+---@param name core.command.command_name
+---@param metadata core.command.metadata
+function command.set_metadata(name, metadata)
+  name = resolve_alias(name)
+  if command.map[name] then command.map[name].metadata = metadata end
+end
+
+---@param name core.command.command_name
+---@return core.command.metadata|nil
+function command.get_metadata(name)
+  name = resolve_alias(name)
+  local cmd = command.map[name]
+  return cmd and cmd.metadata or nil
+end
+
+---Return context supplied by the surface that invoked the current command.
+---@return table|nil
+function command.get_invocation_context()
+  return invocation_context
 end
 
 ---Returns a command's dynamic status value, if one is registered.
@@ -368,6 +405,20 @@ end
 function command.perform(name, ...)
   local ok, res = core.try(perform, name, ...)
   return not ok or res
+end
+
+---Perform a command with source and placement context.
+---@param name core.command.command_name
+---@param context table
+---@param ... any
+---@return boolean
+function command.perform_with_context(name, context, ...)
+  local previous = invocation_context
+  invocation_context = context
+  local result = table.pack(pcall(command.perform, name, ...))
+  invocation_context = previous
+  if not result[1] then error(result[2], 0) end
+  return table.unpack(result, 2, result.n)
 end
 
 

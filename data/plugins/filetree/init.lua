@@ -3358,45 +3358,94 @@ function M:refresh_preserving_selection_paths(...)
   for _, view in ipairs(M.instances()) do view:refresh_preserving_selection_paths(...) end
 end
 
-local function show_filetree(target)
-  local view = active_filetree()
-  if not view then
-    local active = panes.active()
-    for _, candidate in ipairs(active and panes.views(active) or {}) do
-      if candidate.extends and candidate:extends(FileTreeView) then view = candidate; break end
+local function command_context()
+  local context = command.get_invocation_context() or {}
+  local pane = panes.find(context.source_pane or panes.active())
+  local source_view = context.source_view or (pane and pane.current_view)
+  return context, pane, source_view
+end
+
+local function open_root_in_context(target, context, pane, source_view)
+  local root, _, err = target_state(target, source_view)
+  if not root then return nil, err end
+  local placement = context.placement or "current"
+  if placement == "current" then
+    for _, candidate in ipairs(pane and panes.views(pane) or {}) do
+      if candidate.extends and candidate:extends(FileTreeView)
+          and common.path_equals(candidate.root_dir, root) then
+        panes.present(candidate, { pane = pane, focus = true })
+        return candidate
+      end
     end
   end
-  if view then
-    local pane = panes.pane_for_view(view)
-    local current = pane and pane.current_view
-    if current and current ~= view and current.can_suspend and current:can_suspend() == false then
-      return M.open(target, {
-        pane = pane,
-        placement = "current",
-        focus = true,
-        reason = "filetree-command-replacement",
-      })
+  return M.open(root, {
+    pane = pane,
+    placement = placement,
+    direction = context.direction,
+    focus = true,
+    source_view = source_view,
+    reason = "filetree-command-open-root",
+  })
+end
+
+local function reveal_path_in_context(target, context, pane, source_view)
+  local path = file_context.resolve_path(target, source_view)
+  if not path or not system.get_file_info(path) then return nil, "File Tree target does not exist" end
+  if (context.placement or "current") == "current" then
+    for _, candidate in ipairs(pane and panes.views(pane) or {}) do
+      if candidate.extends and candidate:extends(FileTreeView) and focus_file(candidate, path) then
+        panes.present(candidate, { pane = pane, focus = true })
+        return candidate
+      end
     end
-    if target and not focus_file(view, target) then
-      return M.open(target, {
-        pane = pane or panes.active(),
-        placement = "current",
-        focus = true,
-        reason = "filetree-command-target",
-      })
-    end
-    panes.present(view, { pane = pane, focus = true })
-    return view
   end
-  return M.open(target, { placement = "current", focus = true, reason = "filetree-command" })
+  return M.open(path, {
+    pane = pane,
+    placement = context.placement or "current",
+    direction = context.direction,
+    focus = true,
+    source_view = source_view,
+    reason = "filetree-command-reveal-path",
+  })
 end
 
 command.add(nil, {
-  ["filetree:focus"] = function() show_filetree() end,
-  ["filetree:focus-current-file"] = function()
-    show_filetree(file_context.current_file_path())
+  ["filetree:open-project-root"] = function()
+    local context, pane, source_view = command_context()
+    return open_root_in_context(nil, context, pane, source_view) ~= nil
   end,
-  ["filetree:focus-file"] = function(path) show_filetree(path) end,
+  ["filetree:open-path"] = function()
+    local context, pane, source_view = command_context()
+    require("plugins.fuzzy_searcher").pick_path {
+      kind = "folder",
+      source_pane = pane,
+      source_view = source_view,
+      on_accept = function(path, selection_context)
+        local view, err = open_root_in_context(path, selection_context, pane, source_view)
+        if not view and err then core.error("Could not open File Tree: %s", err) end
+      end,
+    }
+    return true
+  end,
+  ["filetree:reveal-current-file"] = function()
+    local context, pane, source_view = command_context()
+    local path = file_context.view_file_path(source_view) or file_context.current_file_path()
+    return path and reveal_path_in_context(path, context, pane, source_view) ~= nil
+  end,
+  ["filetree:reveal-path"] = function(path)
+    local context, pane, source_view = command_context()
+    if path then return reveal_path_in_context(path, context, pane, source_view) ~= nil end
+    require("plugins.fuzzy_searcher").pick_path {
+      kind = "path",
+      source_pane = pane,
+      source_view = source_view,
+      on_accept = function(selected, selection_context)
+        local view, err = reveal_path_in_context(selected, selection_context, pane, source_view)
+        if not view and err then core.error("Could not reveal path in File Tree: %s", err) end
+      end,
+    }
+    return true
+  end,
   ["filetree:sync-path"] = function(path, source_view)
     local view = source_view and source_view.extends and source_view:extends(FileTreeView)
       and source_view or active_filetree()
@@ -3410,6 +3459,31 @@ command.add(nil, {
     local view = active_filetree()
     if view then view:set_sort_mode("modified") end
   end,
+})
+
+command.set_metadata("filetree:open-project-root", {
+  title = "Open File Tree at Project Root",
+  description = "Open or reuse a File Tree rooted at the Root Project",
+  keywords = { "files", "folders", "view" },
+  supports_placement = true,
+})
+command.set_metadata("filetree:open-path", {
+  title = "Open File Tree at Path…",
+  description = "Select any existing folder without changing the Root Project",
+  keywords = { "files", "folders", "external", "view" },
+  supports_placement = true,
+})
+command.set_metadata("filetree:reveal-current-file", {
+  title = "Reveal Current File in File Tree",
+  description = "Show the current file in a File Tree",
+  keywords = { "locate", "files" },
+  supports_placement = true,
+})
+command.set_metadata("filetree:reveal-path", {
+  title = "Reveal Path in File Tree…",
+  description = "Select an existing file or folder to reveal",
+  keywords = { "locate", "files", "folders", "external" },
+  supports_placement = true,
 })
 
 command.add(function()
@@ -3433,7 +3507,7 @@ end, {
 })
 
 keymap.add {
-  ["ctrl+\\"] = "filetree:focus",
+  ["ctrl+\\"] = "filetree:open-project-root",
   ["ctrl+s"] = "filetree:apply",
   ["f5"] = "filetree:refresh",
   ["alt+home"] = "filetree:project-root",

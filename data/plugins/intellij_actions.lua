@@ -1414,7 +1414,7 @@ keymap.add({
   ["alt+z"] = "pane:focus-previous",
   ["alt+x"] = "pane:focus-next",
   ["ctrl+shift+l"] = "user:reveal-active-file-in-explorer",
-  ["ctrl+alt+t"] = "terminal:open",
+  ["ctrl+alt+t"] = "terminal:open-here",
   ["ctrl+up"] = "user:move-caret-previous-paragraph",
   ["ctrl+down"] = "user:move-caret-next-paragraph",
   ["ctrl+alt+up"] = "poi:previous",

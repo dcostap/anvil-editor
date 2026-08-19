@@ -75,7 +75,7 @@ function M.capture(command, opts)
     self.active = false
     if self.process then pcall(self.process.kill, self.process) end
     if not self.process then finish { code = nil } end
-    core.log_quiet("Shell capture cancelled: %s", command)
+    core.log_quiet("Shell capture cancelled: command_len=%d", #tostring(command or ""))
     return true
   end
 

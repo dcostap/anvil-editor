@@ -18,14 +18,17 @@ local function draw_calls(fn)
   local previous_text = renderer.draw_text
   local previous_known = renderer.draw_text_known_bounds
   local previous_rect = renderer.draw_rect
+  local previous_rounded_rect = renderer.draw_rounded_rect
   local calls = { text = {}, rect = {} }
   renderer.draw_text = function(...) calls.text[#calls.text + 1] = { ... } end
   renderer.draw_text_known_bounds = function(...) calls.text[#calls.text + 1] = { ... } end
   renderer.draw_rect = function(...) calls.rect[#calls.rect + 1] = { ... } end
+  renderer.draw_rounded_rect = function(...) calls.rect[#calls.rect + 1] = { ... } end
   local ok, err = pcall(fn, calls)
   renderer.draw_text = previous_text
   renderer.draw_text_known_bounds = previous_known
   renderer.draw_rect = previous_rect
+  renderer.draw_rounded_rect = previous_rounded_rect
   if not ok then error(err) end
   return calls
 end
@@ -151,7 +154,7 @@ test.describe("Terminal View", function()
   end)
 
   test.it("opens and focuses a Terminal View in Pane 1", function(context)
-    test.ok(command.perform("terminal:open"))
+    test.ok(command.perform("terminal:open-here"))
 
     local view = core.active_view
     test.ok(view and view.terminal_view)
@@ -258,7 +261,7 @@ test.describe("Terminal View", function()
   end)
 
   test.it("sends text and unhandled keys to the focused terminal", function(context)
-    test.ok(command.perform("terminal:open"))
+    test.ok(command.perform("terminal:open-here"))
     local session = context.sessions[1]
 
     core.on_event("textinput", "echo hello")

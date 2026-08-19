@@ -1044,7 +1044,10 @@ local function trim_query(q)
   return tostring(q or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
-fuzzy_searcher.mode_prefixes = { ["#"] = true, ["@"] = true, [">"] = true, ["$"] = true, ["$$"] = true }
+fuzzy_searcher.mode_prefixes = {
+  ["#"] = true, ["@"] = true, [">"] = true, ["!"] = true,
+  ["$"] = true, ["$$"] = true,
+}
 fuzzy_searcher.prompt_history_loaded = false
 fuzzy_searcher.prompt_history = {}
 
@@ -1148,7 +1151,7 @@ function fuzzy_searcher.record_prompt_history_text(text)
   text = tostring(text or "")
 
   local mode = fuzzy_searcher.prompt_mode(text)
-  if mode == "" or mode == "@" then return end
+  if mode == "" or mode == "@" or mode == "!" then return end
   local history = fuzzy_searcher.prompt_history_for_mode(mode)
   for i = #history, 1, -1 do
     if history[i] == text then table.remove(history, i) end
@@ -1164,6 +1167,7 @@ function fuzzy_searcher.restored_prompt_text(text)
   local mode = leading_mode ~= "" and leading_mode or fuzzy_searcher.prompt_mode(text)
   if mode == "" then return "", false end
   if mode == "@" then return "@", false end
+  if mode == "!" then return "!", false end
   local latest = fuzzy_searcher.prompt_history_for_mode(mode)[1]
   if latest ~= nil then return latest, true end
   return text, false
@@ -2050,6 +2054,8 @@ local function command_preview_parts(name)
     preview = path and basename(path)
   end
 
+  preview = preview or fuzzy_searcher.command_description(name)
+
   if binding == "" then binding = nil end
   if preview == "" then preview = nil end
   return binding, preview
@@ -2106,6 +2112,9 @@ local function result_list_label_and_spans(r)
   if r.kind == "command" then
     return r.label or r.command or "", r.match_spans or {}, "> "
   end
+  if r.kind == "shell_command" then
+    return r.label or "Run shell command", {}, "! "
+  end
   if r.kind == "project" then
     local text = r.label or r.project or ""
     return display_root(text), r.match_spans or {}, "@ "
@@ -2145,6 +2154,25 @@ end
 function fuzzy_searcher.project_result_font(font)
   return style.prose_font:get_size() == font:get_size()
     and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
+end
+
+function fuzzy_searcher.command_title(name)
+  local metadata = command.get_metadata(name)
+  return metadata and metadata.title or command.prettify_name(name)
+end
+
+function fuzzy_searcher.command_description(name)
+  local metadata = command.get_metadata(name)
+  return metadata and metadata.description or nil
+end
+
+function fuzzy_searcher.command_search_text(name)
+  local metadata = command.get_metadata(name)
+  local parts = { fuzzy_searcher.command_title(name), name }
+  for _, keyword in ipairs(metadata and metadata.keywords or {}) do
+    parts[#parts + 1] = keyword
+  end
+  return table.concat(parts, " ")
 end
 
 local function draw_project_result_row(font, r, x, y, width)
@@ -2621,6 +2649,16 @@ function path_search.everything_scope_term(scope)
   return 'ancestor:"' .. scope:gsub('"', '""') .. '"'
 end
 
+function fuzzy_searcher.draw_shell_command_result_row(font, r, x, y, width)
+  local label, spans, prefix = result_list_label_and_spans(r)
+  local cwd = "Working directory: " .. tostring(r.cwd or "")
+  local metadata_w = math.min(width * 0.55, font:get_width(cwd))
+  local gap = style.padding.x
+  local label_w = math.max(0, width - metadata_w - gap)
+  draw_prefixed_highlighted_text(font, prefix, label, x, y, label_w, style.text, spans)
+  renderer.draw_text(font, truncate_text(font, cwd, metadata_w), x + label_w + gap, y, style.dim)
+end
+
 function path_search.everything_scoped_query(query, scope)
   local scope_term = path_search.everything_scope_term(scope)
   if not scope_term then return query end
@@ -2971,6 +3009,7 @@ function FSView:new(prefix, opts)
   self.static_mode = opts.static == true
   self.static_results = opts.results or {}
   self.static_status = opts.status or ""
+  self.path_selection = opts.path_selection
   self.loading_feedback_generation = 0
   self.loading_feedback_pending = false
   self.loading_feedback_status = nil
@@ -2979,10 +3018,10 @@ function FSView:new(prefix, opts)
   self.everything_loading_status = nil
   self.include_ignored = false
 
-  local source_view = core.active_view
+  local source_view = opts.source_view or core.active_view
   local source_buffer = source_view and source_view.buffer
   self.source_view = file_context.current_content_view(source_view) or source_view
-  self.source_pane = panes.pane_for_view(source_view) or panes.active()
+  self.source_pane = opts.source_pane or panes.pane_for_view(source_view) or panes.active()
   self.source_buffer = source_buffer
   self.source_file_path = file_context.view_file_path(source_view)
   self.source_file_line = source_buffer and source_buffer:get_selection(false) or 1
@@ -3092,6 +3131,12 @@ function FSView:is_path_search()
     and not project_paths.resolve(trim_query(query))
 end
 
+function FSView:is_shell_mode()
+  if self.static_mode then return false end
+  local text = self.input and self.input:get_text() or ""
+  return text:sub(1, 1) == "!"
+end
+
 function FSView:is_deep_code_mode()
   if self.static_mode then
     local r = self:selected_result()
@@ -3102,7 +3147,7 @@ function FSView:is_deep_code_mode()
 end
 
 function FSView:is_full_width_mode()
-  return self:is_command_mode()
+  return self:is_command_mode() or self:is_shell_mode()
 end
 
 function FSView:list_metrics(font)
@@ -3958,8 +4003,15 @@ function FSView:start_everything_path_search(query, scope, append)
   everything.search_generation = everything.search_generation + 1
   local gen = everything.search_generation
   local count = fuzzy_searcher.everything_page_size or 80
+  local folder_only = self.path_selection and self.path_selection.kind == "folder"
   self.everything_loading = false
-  self.everything_pending = 2
+  self.everything_pending = folder_only and 1 or 2
+  if folder_only then
+    self.everything_file_results = {}
+    self.everything_file_total = 0
+    self.everything_file_offset = 0
+    self.everything_file_has_more = false
+  end
   self:defer_everything_loading(append and "Loading more Path Search results…" or "Searching Everything…")
 
   local function finish_request(kind, ok, err, data)
@@ -4012,9 +4064,14 @@ function FSView:start_everything_path_search(query, scope, append)
       self.everything_loading = false
       self.loading_more = false
     end
-    self.everything_status = string.format("%d folders%s — %d files%s",
-      #(self.everything_folder_results or {}), self.everything_folder_has_more and "+" or "",
-      #(self.everything_file_results or {}), self.everything_file_has_more and "+" or "")
+    if folder_only then
+      self.everything_status = string.format("%d folders%s",
+        #(self.everything_folder_results or {}), self.everything_folder_has_more and "+" or "")
+    else
+      self.everything_status = string.format("%d folders%s — %d files%s",
+        #(self.everything_folder_results or {}), self.everything_folder_has_more and "+" or "",
+        #(self.everything_file_results or {}), self.everything_file_has_more and "+" or "")
+    end
     core.log_quiet("Fuzzy Path Search: Everything %s search ok query_len=%d shown=%d total=%d",
       kind, #query, #out, total)
     self.dirty = true
@@ -4029,10 +4086,12 @@ function FSView:start_everything_path_search(query, scope, append)
     timeout = 2,
     on_done = function(ok, err, data) finish_request("folder", ok, err, data) end,
   })
-  http.get(everything_endpoint(), everything_file_search_params(query, count, file_offset, scope), {
-    timeout = 2,
-    on_done = function(ok, err, data) finish_request("file", ok, err, data) end,
-  })
+  if not folder_only then
+    http.get(everything_endpoint(), everything_file_search_params(query, count, file_offset, scope), {
+      timeout = 2,
+      on_done = function(ok, err, data) finish_request("file", ok, err, data) end,
+    })
+  end
 end
 
 function FSView:clear_path_search_results(cancel_request)
@@ -4052,13 +4111,13 @@ function FSView:clear_path_search_results(cancel_request)
   self.path_search_query_key = nil
 end
 
-function path_search.native_results(scope, query, limit)
+function path_search.native_results(scope, query, limit, kind)
   if not scope or not system.list_dir_info then return {}, {} end
   query = trim_query(query)
   if query:find("[/\\]", 1) then return {}, {} end
   limit = math.max(1, limit or 30)
   local folder_entries = system.list_dir_info(scope, limit, "dir", query)
-  local file_entries = system.list_dir_info(scope, limit, "file", query)
+  local file_entries = kind == "folder" and {} or system.list_dir_info(scope, limit, "file", query)
   local folders, files = {}, {}
   local function append_entries(entries, is_folder, target)
     for _, entry in ipairs(type(entries) == "table" and entries or {}) do
@@ -4165,6 +4224,30 @@ function path_search.append_sections(out, projects, folders, files, limit)
   return hidden
 end
 
+function path_search.selection_accepts(selection, result)
+  if not selection or not result or result.header or result.create_path then return false end
+  if result.kind ~= "path" and result.kind ~= "project" then return false end
+  if selection.kind == "folder" then return result.is_folder == true end
+  return result.is_folder == true or result.file ~= nil or result.abs_path ~= nil
+end
+
+function path_search.filter_selection_results(results, selection)
+  if not selection then return results end
+  local out, pending_header = {}, nil
+  for _, result in ipairs(results or {}) do
+    if result.header then
+      pending_header = result
+    elseif path_search.selection_accepts(selection, result) then
+      if pending_header then
+        out[#out + 1] = pending_header
+        pending_header = nil
+      end
+      out[#out + 1] = result
+    end
+  end
+  return out
+end
+
 function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   local limit = self:result_limit()
   local direct = path_search.direct_result(base, line)
@@ -4212,18 +4295,20 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
       for _, name in ipairs(recent_commands) do
         if command.map[name] then
           if added_recent >= max_items then self.has_more = true; return end
-          out[#out+1] = { kind = "command", label = name, command = name, query = query, match_spans = {}, recent = true, info = command_preview_info(name), status = command_status_parts(name, self) }
+          out[#out+1] = { kind = "command", label = fuzzy_searcher.command_title(name), command = name, query = query, match_spans = {}, recent = true, info = command_preview_info(name), status = command_status_parts(name, self) }
           added_recent = added_recent + 1
         end
       end
       return
     end
 
-    local matches = fuzzy_filter(get_commands(), query, max_items + 1)
+    local matches = fuzzy_filter(get_commands(), query, max_items + 1, fuzzy_searcher.command_search_text)
     for i, match in ipairs(matches) do
       if i > max_items then self.has_more = true; break end
       local name = match.item
-      out[#out+1] = { kind = "command", label = name, command = name, query = query, match_spans = match.spans, info = command_preview_info(name), status = command_status_parts(name, self) }
+      local title = fuzzy_searcher.command_title(name)
+      local _, title_spans = fuzzy_match(query, title)
+      out[#out+1] = { kind = "command", label = title, command = name, query = query, match_spans = title_spans or {}, info = command_preview_info(name), status = command_status_parts(name, self) }
     end
   end
 
@@ -4231,6 +4316,18 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   if mode == ">" then
     kill_file_search()
     add_command_results(base, limit)
+  elseif mode == "!" then
+    kill_file_search()
+    local shell_text = trim_query(base)
+    if shell_text ~= "" then
+      out[1] = {
+        kind = "shell_command",
+        label = "Run shell command",
+        shell_command = shell_text,
+        cwd = file_context.source_directory(self.source_view) or system.getcwd(),
+        match_spans = {},
+      }
+    end
   elseif mode == "$" then
     kill_file_search()
     self:start_symbol_search(base, reset_selection)
@@ -4278,7 +4375,9 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
       local folders = self.everything_folder_results or {}
       local files = self.everything_file_results or {}
       if everything.state ~= "available" then
-        folders, files = path_search.native_results(scope, query, limit)
+        folders, files = path_search.native_results(
+          scope, query, limit, self.path_selection and self.path_selection.kind
+        )
       end
       if line then
         for _, result in ipairs(files) do result.line = line end
@@ -4296,8 +4395,12 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   self:cancel_deferred_loading_feedback()
 
   out = path_search.prepend_direct(out, direct)
+  out = path_search.filter_selection_results(out, self.path_selection)
 
-  if path_plan.external then
+  if mode == "!" then
+    local cwd = file_context.source_directory(self.source_view) or system.getcwd()
+    self.status = "Shell Command — Working directory: " .. cwd .. " — Output: new Command Output View"
+  elseif path_plan.external then
     if bare_path_search then
       self.status = string.format("%d recent Projects", #get_recent_projects())
     else
@@ -4308,6 +4411,10 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     self.status = string.format("Indexing files… %d available — %s", file_index_count(), fuzzy_searcher.project_roots_label())
   else
     self.status = string.format("%d files indexed — %s", file_index_count(), fuzzy_searcher.project_roots_label())
+  end
+  if self.path_selection then
+    local label = self.path_selection.kind == "folder" and "Select a folder" or "Select a path"
+    self.status = label .. (self.status ~= "" and (" — " .. self.status) or "")
   end
 
   self.results = out
@@ -5513,11 +5620,49 @@ end
 function FSView:confirm(target_side)
   local r = self:selected_result()
   if not r then return end
+  if r.kind == "shell_command" then
+    local text = trim_query(r.shell_command)
+    if text == "" then return end
+    local cwd = r.cwd or file_context.source_directory(self.source_view) or system.getcwd()
+    self:close()
+    require("plugins.command_slots").run_once(text, { cwd = cwd, focus = true })
+    return
+  end
   if r.kind == "command" then
     local cmd = r.command
+    local metadata = command.get_metadata(cmd) or {}
+    local placement = target_side and metadata.supports_placement and "split" or "current"
+    local context = {
+      source_view = self.source_view,
+      source_pane = panes.find(self.source_pane) or panes.active(),
+      placement = placement,
+      direction = placement == "split" and "right" or nil,
+    }
     remember_command(cmd)
     self:close()
-    command.perform(cmd)
+    command.perform_with_context(cmd, context)
+    return
+  end
+  if self.path_selection then
+    if not path_search.selection_accepts(self.path_selection, r) then return end
+    local path = r.path or r.project or r.abs_path or r.file
+    local info = path and system.get_file_info(path)
+    if not info or (self.path_selection.kind == "folder" and info.type ~= "dir") then
+      self.force_refresh = true
+      self.dirty = true
+      self:refresh(self.input:get_text())
+      self:schedule_update(true)
+      return
+    end
+    local selection = self.path_selection
+    local context = {
+      source_view = self.source_view,
+      source_pane = panes.find(self.source_pane) or panes.active(),
+      placement = target_side and "split" or "current",
+      direction = target_side and "right" or nil,
+    }
+    self:close()
+    selection.on_accept(path, context)
     return
   end
   if r.kind == "create_path" then
@@ -5705,6 +5850,11 @@ function FSView:draw()
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
         draw_command_result_row(font, r, x + pad, row_y, row_text_w)
+      elseif r.kind == "shell_command" then
+        previous_rendered_grep_file = nil
+        previous_rendered_grep_line_x = nil
+        previous_rendered_was_grep = false
+        fuzzy_searcher.draw_shell_command_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "project" and r.path_search then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
@@ -5764,6 +5914,12 @@ function FSView:draw()
       if info and info ~= "" then
         renderer.draw_text(font, info, px, py + lh * 2, style.dim)
       end
+      core.pop_clip_rect()
+    elseif r and r.kind == "shell_command" then
+      core.push_clip_rect(px, py, preview_w, preview_h)
+      renderer.draw_text(font, "Shell Command", px, py, style.accent)
+      renderer.draw_text(font, "Working directory: " .. tostring(r.cwd or ""), px, py + lh, style.dim)
+      renderer.draw_text(font, "Output opens in a new Command Output View.", px, py + lh * 2, style.dim)
       core.pop_clip_rect()
     elseif r and r.kind == "create_path" then
       core.push_clip_rect(px, py, preview_w, preview_h)
@@ -5929,12 +6085,13 @@ local function open_current_file()
   return view
 end
 
-function open(prefix)
+function open(prefix, opts)
   prefix = prefix or ""
+  opts = opts or {}
   local view = current_picker()
   if view then
     switch_picker_prefix(view, prefix)
-    return
+    return view
   end
   if prefix == "#" then
     local selection = selected_text_for_search()
@@ -5946,11 +6103,29 @@ function open(prefix)
   else
     initial_text, select_restored_query = fuzzy_searcher.restored_prompt_text(prefix)
   end
-  active_view = FSView(initial_text)
+  active_view = FSView(initial_text, opts)
   core.fuzzy_searcher_active_view = active_view
   if select_restored_query then
     fuzzy_searcher.apply_prompt_history_text(active_view, initial_text, true)
   end
+  return active_view
+end
+
+function fuzzy_searcher.pick_path(opts)
+  opts = opts or {}
+  assert(type(opts.on_accept) == "function", "path selection requires on_accept")
+  local view = current_picker()
+  if view then view:close() end
+  active_view = FSView("@" .. tostring(opts.query or ""), {
+    source_view = opts.source_view,
+    source_pane = opts.source_pane,
+    path_selection = {
+      kind = opts.kind or "path",
+      on_accept = opts.on_accept,
+    },
+  })
+  core.fuzzy_searcher_active_view = active_view
+  return active_view
 end
 
 function open_static_results(title, results, opts)
@@ -5976,6 +6151,19 @@ command.add(nil, {
   ["fuzzy-searcher:open-symbols"] = function() open("$") end,
   ["fuzzy-searcher:open-current-buffer-symbols"] = function() open("$$") end,
   ["fuzzy-searcher:open-commands"] = function() open(">") end,
+  ["shell:run-command"] = function()
+    local context = command.get_invocation_context() or {}
+    return open("!", {
+      source_view = context.source_view,
+      source_pane = context.source_pane,
+    })
+  end,
+})
+
+command.set_metadata("shell:run-command", {
+  title = "Run Shell Command…",
+  description = "Run once and show output in a new Command Output View",
+  keywords = { "command output", "process", "terminal" },
 })
 
 command.add(picker_active, {
@@ -6058,6 +6246,7 @@ end
 
 return {
   open = open,
+  pick_path = fuzzy_searcher.pick_path,
   open_static_results = open_static_results,
   _test = {
     everything_folder_search_params = everything_folder_search_params,

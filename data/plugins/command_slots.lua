@@ -1144,7 +1144,10 @@ local function default_run_command(slot, command_text, opts)
     end,
   })
   slot.running = run
-  core.log_quiet("Command Output %s: running command in %s: %s", tostring(slot.index or "one-time"), cwd, command_text)
+  core.log_quiet(
+    "Command Output %s: running command cwd_len=%d command_len=%d",
+    tostring(slot.index or "one-time"), #tostring(cwd or ""), #tostring(command_text or "")
+  )
   return view
 end
 

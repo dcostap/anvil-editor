@@ -4,6 +4,7 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local core = require "core"
+local file_context = require "core.file_context"
 local ime = require "core.ime"
 local keymap = require "core.keymap"
 local panes = require "core.panes"
@@ -880,13 +881,70 @@ M.from_state = TerminalView.from_state
 TerminalView._module_name = "plugins.terminal"
 
 command.add(nil, {
-  ["terminal:open"] = function() return M.open() ~= nil end,
-  ["terminal:open-project-directory"] = function()
-    return M.open({ cwd = project_path("project") }) ~= nil
+  ["terminal:open-here"] = function()
+    local context = command.get_invocation_context() or {}
+    local pane = panes.find(context.source_pane or panes.active())
+    local source_view = context.source_view or (pane and pane.current_view)
+    return M.open {
+      pane = pane,
+      placement = context.placement or "current",
+      direction = context.direction,
+      focus = true,
+      cwd = file_context.source_directory(source_view) or project_path("project"),
+      reason = "terminal-open-here",
+    } ~= nil
   end,
-  ["terminal:open-buffer-directory"] = function()
-    return M.open({ cwd = project_path("buffer") }) ~= nil
+  ["terminal:open-project-root"] = function()
+    local context = command.get_invocation_context() or {}
+    return M.open {
+      pane = context.source_pane,
+      placement = context.placement or "current",
+      direction = context.direction,
+      focus = true,
+      cwd = project_path("project"),
+      reason = "terminal-open-project-root",
+    } ~= nil
   end,
+  ["terminal:open-path"] = function()
+    local context = command.get_invocation_context() or {}
+    local pane = panes.find(context.source_pane or panes.active())
+    local source_view = context.source_view or (pane and pane.current_view)
+    require("plugins.fuzzy_searcher").pick_path {
+      kind = "folder",
+      source_pane = pane,
+      source_view = source_view,
+      on_accept = function(path, selection_context)
+        M.open {
+          pane = selection_context.source_pane,
+          placement = selection_context.placement,
+          direction = selection_context.direction,
+          focus = true,
+          cwd = path,
+          reason = "terminal-open-path",
+        }
+      end,
+    }
+    return true
+  end,
+})
+
+command.set_metadata("terminal:open-here", {
+  title = "Open Terminal Here",
+  description = "Use the current View directory",
+  keywords = { "shell", "command", "view" },
+  supports_placement = true,
+})
+command.set_metadata("terminal:open-project-root", {
+  title = "Open Terminal at Project Root",
+  description = "Use the Root Project directory",
+  keywords = { "shell", "command", "view" },
+  supports_placement = true,
+})
+command.set_metadata("terminal:open-path", {
+  title = "Open Terminal at Path…",
+  description = "Select any existing folder",
+  keywords = { "shell", "command", "folder", "external", "view" },
+  supports_placement = true,
 })
 
 command.add(function()
@@ -908,10 +966,6 @@ end, {
     if not view.session:clear() then return false end
     view:refresh_snapshot()
     return true
-  end,
-  ["terminal:open-current-directory"] = function(view)
-    local cwd = terminal_pwd(view.snapshot) or view.launch_options.cwd
-    return M.open({ cwd = cwd, shell = view.launch_options.shell }) ~= nil
   end,
   ["terminal:search"] = function(view) return view:prompt_search() end,
   ["terminal:search-next"] = function(view) return view:search(view.search_query, false) end,

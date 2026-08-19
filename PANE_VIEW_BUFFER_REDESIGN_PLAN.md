@@ -8,6 +8,8 @@ It records the accepted design from the voice-design discussion. `CONTEXT.md` co
 
 When this plan conflicts with the current implementation, this plan defines the intended behavior.
 
+The current Command Palette design supersedes every Pane Command Bar section in this plan. Registered commands open Views and collect arguments through dedicated Fuzzy Searcher modes. Shell execution requires explicit Shell Command Mode. External Anvil clients use structured actions instead of this removed internal command syntax.
+
 When this plan conflicts with an older plan, this plan controls these subjects:
 
 - Buffer and Text View terminology;

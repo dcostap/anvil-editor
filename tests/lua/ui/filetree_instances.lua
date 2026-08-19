@@ -120,7 +120,7 @@ test.describe("File Tree instances", function()
     local replacement = View()
     panes.present(replacement, { pane = pane })
 
-    test.ok(command.perform("filetree:focus-file", file))
+    test.ok(command.perform("filetree:reveal-path", file))
 
     test.equal(pane.current_view, tree)
     local selected = tree:entry_for_line(tree.buffer:get_selection(true))
@@ -187,7 +187,7 @@ test.describe("File Tree instances", function()
     function blocker:can_close() self.close_requested = true end
     panes.present(blocker, { pane = pane })
 
-    test.ok(command.perform("filetree:focus"))
+    test.ok(command.perform("filetree:open-project-root"))
     test.equal(pane.current_view, blocker)
     test.ok(blocker.close_requested)
   end)
