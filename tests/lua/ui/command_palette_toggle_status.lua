@@ -55,21 +55,21 @@ test.describe("command palette toggle status", function()
     local view = open_editor(context, "wrapped text\n")
     view:set_wrapping_enabled(true)
 
-    fuzzy_searcher.open(">line-wrapping")
+    fuzzy_searcher.open(">toggle_line_wrapping")
     local picker = core.fuzzy_searcher_active_view
     test.not_nil(picker)
-    picker:refresh(">line-wrapping")
+    picker:refresh(">toggle_line_wrapping")
 
     local item
     for _, result in ipairs(picker.results or {}) do
-      if result.command == "line-wrapping:toggle" then
+      if result.command == "editor:toggle_line_wrapping" then
         item = result
         break
       end
     end
 
     test.not_nil(item)
-    test.equal(item.label, "Line Wrapping: Toggle")
+    test.equal(item.label, "editor:toggle_line_wrapping")
     test.same(item.status, {
       prefix = " [Currently: ",
       value = "ON",

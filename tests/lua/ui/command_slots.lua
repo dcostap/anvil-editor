@@ -107,7 +107,7 @@ test.describe("Command Slots", function()
     local pane = panes.pane_for_view(output)
     local pane_history_before = panes.history_length(pane)
 
-    test.ok(command.perform("command-slots:history-previous"))
+    test.ok(command.perform("command_output:history_previous"))
     test.contains(output.buffer.output_text, "first-output")
     test.equal(#command_slots.slots[1].output_history, 2)
     test.ok(panes.history_length(pane) > pane_history_before)

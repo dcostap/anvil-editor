@@ -73,7 +73,7 @@ test.describe("Root Panel Pane presentation", function()
   test.before_each(function()
     autocomplete.close()
     Widget.destroy_floating_widgets()
-    if command.is_valid("root:pick-color-cancel") then command.perform("root:pick-color-cancel") end
+    if command.is_valid("core:pick_color_cancel") then command.perform("core:pick_color_cancel") end
     panes.reset_for_tests()
     saved = {
       root_panel = core.root_panel,

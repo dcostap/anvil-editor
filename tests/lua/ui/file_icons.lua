@@ -62,7 +62,7 @@ test.describe("File-type icons", function()
     view.buffer:set_selection(line, name_col + 1)
     core.active_view = view
 
-    test.equal(command.perform("text:move-to-previous-char"), true)
+    test.equal(command.perform("core:move_to_previous_char"), true)
     local caret_line, caret_col = view.buffer:get_selection()
     test.equal(caret_line, line)
     test.equal(caret_col, name_col)

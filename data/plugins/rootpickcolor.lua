@@ -74,12 +74,12 @@ function RootPanel:draw()
 end
 
 command.add(nil, {
-  ["root:pick-rgb-color"] = function()
+  ["core:pick_rgb_color"] = function()
     pick_color = true
     mode = "rgb"
     core.log("RGB Color Picker activated")
   end,
-  ["root:pick-hex-color"] = function()
+  ["core:pick_hex_color"] = function()
     pick_color = true
     mode = "hex"
     core.log("HEX Color Picker activated")
@@ -87,13 +87,13 @@ command.add(nil, {
 })
 
 command.add(function() return pick_color end, {
-  ["root:pick-color-cancel"] = function()
+  ["core:pick_color_cancel"] = function()
     pick_color = false
   end
 })
 
 keymap.add({
-  ["ctrl+1"] = "root:pick-rgb-color",
-  ["ctrl+2"] = "root:pick-hex-color",
-  ["escape"] = "root:pick-color-cancel",
+  ["ctrl+1"] = "core:pick_rgb_color",
+  ["ctrl+2"] = "core:pick_hex_color",
+  ["escape"] = "core:pick_color_cancel",
 })

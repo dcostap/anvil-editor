@@ -30,7 +30,7 @@ end
 
 test.describe("draw-whitespace Text View drawing", function()
   test.before_each(function()
-    command.perform("draw-whitespace:toggle", true)
+    command.perform("editor:toggle_whitespace", true)
   end)
 
   test.it("draws wrapped leading space markers on continuation rows", function()

@@ -2364,11 +2364,11 @@ command.add(predicate, {
     suggestions_idx = newidx > #suggestions and 1 or newidx
   end,
 
-  ["autocomplete:go-to-declaration"] = function()
+  ["autocomplete:go_to_declaration"] = function()
     return reveal_completion_source(false)
   end,
 
-  ["autocomplete:go-to-declaration-opposite"] = function()
+  ["autocomplete:go_to_declaration_opposite"] = function()
     return reveal_completion_source(true)
   end,
 

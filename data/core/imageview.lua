@@ -3,6 +3,7 @@ local config = require "core.config"
 local style = require "core.style"
 local keymap = require "core.keymap"
 local View = require "core.view"
+local view_icons = require "core.view_icons"
 
 ---List of supported image types by extension.
 ---@type table<string,boolean>
@@ -64,6 +65,7 @@ local SUPPORTED_EXTENSIONS = {
 ---@overload fun(path:string,zoom_mode:core.imageview.zoommode,zoom_scale:number):core.imageview
 ---@diagnostic disable-next-line
 local ImageView = View:extend()
+ImageView.view_icon = view_icons.register("image", view_icons.file("view.png"))
 
 function ImageView:__tostring() return "ImageView" end
 

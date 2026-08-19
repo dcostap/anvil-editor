@@ -128,7 +128,7 @@ else
 end
 
 command.add(nil,{
-  ["find-widget:toggle"] = function()
+  ["find_widget:toggle"] = function()
     widget:toggle_visible()
   end
 })

@@ -268,22 +268,18 @@ config.plugins.scale.config_spec = {
     type = "toggle",
     default = true,
     on_apply = function(enabled)
-      keymap.unbind("ctrl+wheelup", "scale:increase")
-      keymap.unbind("ctrl+wheeldown", "scale:decrease")
-      keymap.unbind("ctrl+shift+wheelup", "scale:increase")
-      keymap.unbind("ctrl+shift+wheeldown", "scale:decrease")
       if enabled then
         keymap.add {
-          ["ctrl+wheelup"] = "editor:zoom-in",
-          ["ctrl+wheeldown"] = "editor:zoom-out",
-          ["ctrl+shift+wheelup"] = "editor:zoom-in",
-          ["ctrl+shift+wheeldown"] = "editor:zoom-out"
+          ["ctrl+wheelup"] = "editor:zoom_in",
+          ["ctrl+wheeldown"] = "editor:zoom_out",
+          ["ctrl+shift+wheelup"] = "editor:zoom_in",
+          ["ctrl+shift+wheeldown"] = "editor:zoom_out"
         }
       else
-        keymap.unbind("ctrl+wheelup", "editor:zoom-in")
-        keymap.unbind("ctrl+wheeldown", "editor:zoom-out")
-        keymap.unbind("ctrl+shift+wheelup", "editor:zoom-in")
-        keymap.unbind("ctrl+shift+wheeldown", "editor:zoom-out")
+        keymap.unbind("ctrl+wheelup", "editor:zoom_in")
+        keymap.unbind("ctrl+wheeldown", "editor:zoom_out")
+        keymap.unbind("ctrl+shift+wheelup", "editor:zoom_in")
+        keymap.unbind("ctrl+shift+wheeldown", "editor:zoom_out")
       end
     end
   }
@@ -291,45 +287,28 @@ config.plugins.scale.config_spec = {
 
 
 command.add(nil, {
-  ["editor:zoom-reset"] = command.palette(function() scale.reset() end),
-  ["editor:zoom-out"] = command.palette(function() scale.decrease() end),
-  ["editor:zoom-in"] = command.palette(function() scale.increase() end)
+  ["editor:zoom_reset"] = command.palette(function() scale.reset() end),
+  ["editor:zoom_out"] = command.palette(function() scale.decrease() end),
+  ["editor:zoom_in"] = command.palette(function() scale.increase() end)
 })
 
-command.map["scale:reset"] = nil
-command.map["scale:decrease"] = nil
-command.map["scale:increase"] = nil
-command.map["scale:reset-code"] = nil
-command.map["scale:decrease-code"] = nil
-command.map["scale:increase-code"] = nil
-
-keymap.unbind("ctrl+0", "scale:reset")
-keymap.unbind("ctrl+-", "scale:decrease")
-keymap.unbind("ctrl+=", "scale:increase")
-keymap.unbind("ctrl+shift+0", "scale:reset")
-keymap.unbind("ctrl+shift+-", "scale:decrease")
-keymap.unbind("ctrl+shift+=", "scale:increase")
-keymap.unbind("ctrl+wheelup", "scale:increase")
-keymap.unbind("ctrl+wheeldown", "scale:decrease")
-keymap.unbind("ctrl+shift+wheelup", "scale:increase")
-keymap.unbind("ctrl+shift+wheeldown", "scale:decrease")
-keymap.unbind("ctrl+shift+0", "scale:reset-code")
-keymap.unbind("ctrl+shift+-", "scale:decrease-code")
-keymap.unbind("ctrl+shift+=", "scale:increase-code")
-keymap.unbind("ctrl+shift+wheelup", "scale:increase-code")
-keymap.unbind("ctrl+shift+wheeldown", "scale:decrease-code")
+keymap.unbind("ctrl+shift+0", "editor:zoom_reset")
+keymap.unbind("ctrl+shift+-", "editor:zoom_out")
+keymap.unbind("ctrl+shift+=", "editor:zoom_in")
+keymap.unbind("ctrl+shift+wheelup", "editor:zoom_in")
+keymap.unbind("ctrl+shift+wheeldown", "editor:zoom_out")
 
 keymap.add {
-  ["ctrl+0"] = "editor:zoom-reset",
-  ["ctrl+shift+0"] = "editor:zoom-reset"
+  ["ctrl+0"] = "editor:zoom_reset",
+  ["ctrl+shift+0"] = "editor:zoom_reset"
 }
 
 if config.plugins.scale.use_mousewheel then
   keymap.add {
-    ["ctrl+wheelup"] = "editor:zoom-in",
-    ["ctrl+wheeldown"] = "editor:zoom-out",
-    ["ctrl+shift+wheelup"] = "editor:zoom-in",
-    ["ctrl+shift+wheeldown"] = "editor:zoom-out"
+    ["ctrl+wheelup"] = "editor:zoom_in",
+    ["ctrl+wheeldown"] = "editor:zoom_out",
+    ["ctrl+shift+wheelup"] = "editor:zoom_in",
+    ["ctrl+shift+wheeldown"] = "editor:zoom_out"
   }
 end
 

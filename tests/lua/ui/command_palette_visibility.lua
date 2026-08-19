@@ -20,26 +20,35 @@ test.describe("Command Palette visibility", function()
   test.before_each(function(context)
     panes.reset_for_tests()
     context.names = {
-      visible = "test-palette:visible-action",
-      hidden = "test-palette:hidden-primitive",
-      invalid = "test-palette:wrong-context",
+      visible = "test_palette:visible_action",
+      hidden = "test_palette:hidden_primitive",
+      invalid = "test_palette:wrong_context",
     }
     context.source = Editor(Buffer(nil, nil, true))
     panes.create { factory = function() return context.source end }
 
     command.add(function() return core.active_view == context.source end, {
       [context.names.visible] = command.palette(function() end, {
-        title = "Palette Probe Visible",
+        keywords = { "discoverable_alias" },
       }),
     })
     command.add(nil, {
       [context.names.hidden] = function() end,
     })
     command.add(function() return false end, {
-      [context.names.invalid] = command.palette(function() end, {
-        title = "Palette Probe Wrong Context",
-      }),
+      [context.names.invalid] = command.palette(function() end),
     })
+  end)
+
+  test.it("shows raw identifiers and matches hidden keywords", function(context)
+    fuzzy_searcher.open(">discoverable_alias")
+    local row
+    for _, candidate in ipairs(core.fuzzy_searcher_active_view.results or {}) do
+      if candidate.command == context.names.visible then row = candidate break end
+    end
+
+    test.not_nil(row)
+    test.equal(context.names.visible, row.label)
   end)
 
   test.after_each(function(context)
@@ -51,7 +60,7 @@ test.describe("Command Palette visibility", function()
   end)
 
   test.it("shows only curated commands valid for the source View", function(context)
-    fuzzy_searcher.open(">palette probe")
+    fuzzy_searcher.open(">visible_action")
     local shown = result_commands(core.fuzzy_searcher_active_view)
 
     test.ok(shown[context.names.visible])
@@ -62,13 +71,13 @@ test.describe("Command Palette visibility", function()
   test.it("hides keymap primitives while retaining useful editor actions", function()
     fuzzy_searcher.open(">previous word start")
     local movement = result_commands(core.fuzzy_searcher_active_view)
-    test.not_ok(movement["text:move-to-previous-word-start"])
-    test.not_ok(movement["text:select-to-previous-word-start"])
-    test.not_ok(movement["text:delete-to-previous-word-start"])
+    test.not_ok(movement["core:move_to_previous_word_start"])
+    test.not_ok(movement["core:select_to_previous_word_start"])
+    test.not_ok(movement["core:delete_to_previous_word_start"])
 
     core.fuzzy_searcher_active_view:close()
     fuzzy_searcher.open(">save as")
     local actions = result_commands(core.fuzzy_searcher_active_view)
-    test.ok(actions["text:save-as"])
+    test.ok(actions["editor:save_as"])
   end)
 end)

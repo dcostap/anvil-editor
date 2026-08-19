@@ -191,7 +191,7 @@ test.describe("Markdown heading leading spacing", function()
 
     local inactive_height = view:get_position_visual_row_height(1, 1)
     local _, inactive_y = view:get_line_screen_position(2)
-    command.perform("text:move-to-previous-line", view)
+    command.perform("core:move_to_previous_line", view)
 
     local active_height = view:get_position_visual_row_height(1, 1)
     local _, active_y = view:get_line_screen_position(2)
@@ -308,7 +308,7 @@ test.describe("Markdown heading leading spacing", function()
       view:get_visual_row_count_for_line(1) > 1,
       "the heading must initially occupy multiple Wrapped Visual Rows"
     )
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
 
     test.ok(
       view:get_visual_row_count_for_line(1) > 1,
@@ -353,7 +353,7 @@ test.describe("Markdown heading leading spacing", function()
 
     local inactive_height = view:get_position_visual_row_height(1, 1)
     local _, inactive_y = view:get_line_screen_position(2)
-    command.perform("text:move-to-previous-line", view)
+    command.perform("core:move_to_previous_line", view)
 
     local active_height = view:get_position_visual_row_height(1, 1)
     local _, active_y = view:get_line_screen_position(2)
@@ -437,16 +437,16 @@ test.describe("Markdown heading leading spacing", function()
       end
     end
 
-    test.equal(command.perform("text:newline"), true)
+    test.equal(command.perform("core:newline"), true)
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     assert_pending_metrics_have_one_owner("exiting the empty task")
     assert_heading_matches_fresh("exiting the empty task")
-    test.equal(command.perform("text:newline"), true)
+    test.equal(command.perform("core:newline"), true)
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     assert_pending_metrics_have_one_owner("inserting the following blank row")
     assert_heading_matches_fresh("inserting the following blank row")
     buffer:set_selection(4, 1)
-    test.equal(command.perform("text:backspace"), true)
+    test.equal(command.perform("core:backspace"), true)
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     assert_pending_metrics_have_one_owner("deleting the inserted blank row")
     assert_heading_matches_fresh("deleting the inserted blank row")

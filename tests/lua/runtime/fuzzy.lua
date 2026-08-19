@@ -4,11 +4,11 @@ local fuzzy = require "fuzzy"
 
 test.describe("native fuzzy Lua API", function()
   test.it("filters and returns source indices", function()
-    local items = { "core:open-file", "close-window", "save-all" }
+    local items = { "core:pick_file", "close-window", "save-all" }
     local results = fuzzy.filter(items, "opf", { limit = 10 })
     test.ok(#results >= 1)
     test.equal(results[1].index, 1)
-    test.equal(results[1].text, "core:open-file")
+    test.equal(results[1].text, "core:pick_file")
   end)
 
   test.it("indexes path lists with spans", function()
@@ -92,14 +92,14 @@ test.describe("native fuzzy Lua API", function()
   end)
 
   test.it("rejects medium-length scattered coincidence matches", function()
-    test.is_nil(fuzzy.score("core:add-directory-system-file-picker", "caret"))
+    test.is_nil(fuzzy.score("core:add_directory_system_file_picker", "caret"))
     local results = fuzzy.filter({
-      "core:add-directory-system-file-picker",
+      "core:add_directory_system_file_picker",
       "caret-type",
-      "core:toggle-caret-type",
+      "core:toggle_caret_type",
     }, "caret", { limit = 10 })
     test.equal(#results, 2)
     test.equal(results[1].text, "caret-type")
-    test.equal(results[2].text, "core:toggle-caret-type")
+    test.equal(results[2].text, "core:toggle_caret_type")
   end)
 end)

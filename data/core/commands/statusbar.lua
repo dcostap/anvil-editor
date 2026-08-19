@@ -17,7 +17,7 @@ local function status_bar_items_data(names)
   for _, name in ipairs(names) do
     local item = core.status_bar:get_item(name)
     table.insert(data, {
-      text = command.prettify_name(item.name),
+      text = item.name,
       info = item.alignment == StatusBar.Item.LEFT and "Left" or "Right",
       name = item.name
     })
@@ -32,7 +32,7 @@ local function status_bar_get_items(text)
   return results
 end
 
-command.add_toggle("status-bar:toggle", {
+command.add_toggle("status_bar:toggle", {
   get = function()
     return core.status_bar.visible
   end,
@@ -41,7 +41,7 @@ command.add_toggle("status-bar:toggle", {
   end,
 })
 
-command.add_toggle("status-bar:toggle-messages", {
+command.add_toggle("status_bar:toggle_messages", {
   get = function()
     return not core.status_bar.hide_messages
   end,
@@ -51,7 +51,7 @@ command.add_toggle("status-bar:toggle-messages", {
 })
 
 command.add(nil, {
-  ["status-bar:hide-item"] = function()
+  ["status_bar:hide_item"] = function()
     core.global_prompt_bar:enter("Status bar item to hide", {
       submit = function(text, item)
         core.status_bar:hide_items(item.name)
@@ -59,7 +59,7 @@ command.add(nil, {
       suggest = status_bar_get_items
     })
   end,
-  ["status-bar:show-item"] = function()
+  ["status_bar:show_item"] = function()
     core.global_prompt_bar:enter("Status bar item to show", {
       submit = function(text, item)
         core.status_bar:show_items(item.name)
@@ -67,7 +67,7 @@ command.add(nil, {
       suggest = status_bar_get_items
     })
   end,
-  ["status-bar:reset-items"] = function()
+  ["status_bar:reset_items"] = function()
     core.status_bar:show_items()
   end,
 })

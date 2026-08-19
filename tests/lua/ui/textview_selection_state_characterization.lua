@@ -148,7 +148,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "aXb\ncXd\n")
     test.equal(changes, 1)
@@ -176,7 +176,7 @@ test.describe("Text View Selection State edit characterization", function()
     }
     system.set_clipboard("A\nB")
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "aAb\ncBd\n")
     test.same(selection(main), {
@@ -204,7 +204,7 @@ test.describe("Text View Selection State edit characterization", function()
     }
     system.set_clipboard("X\nY\nP\nQ")
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
     main:with_selection_state(function() buffer:undo() end)
 
     test.equal(text(buffer), "ab\ncd\n")
@@ -230,7 +230,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "aXYb\n")
     test.equal(changes, 1)
@@ -260,7 +260,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "aXb\ncXd\n")
     test.equal(changes, 1)
@@ -289,7 +289,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "aa\nXX\nYY\nbb\n")
     test.equal(changes, 1)
@@ -318,7 +318,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "XX\naa\nXX\nbb\n")
     test.equal(changes, 1)
@@ -341,7 +341,7 @@ test.describe("Text View Selection State edit characterization", function()
     }
     system.set_clipboard("source\n")
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "source\nsource\nafter\n")
     test.same(selection(main), { 3, 1, 3, 1 })
@@ -360,7 +360,7 @@ test.describe("Text View Selection State edit characterization", function()
     }
     system.set_clipboard("LINE\n")
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "top\nLINE\nabcdef\nbottom\n")
     test.same(selection(main), { 3, 4, 3, 4 })
@@ -384,7 +384,7 @@ test.describe("Text View Selection State edit characterization", function()
     local changes = 0
     function buffer:on_text_change() changes = changes + 1 end
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "LINE\nLINE\nabcdef\n")
     test.same(selection(main), {
@@ -412,7 +412,7 @@ test.describe("Text View Selection State edit characterization", function()
     local transaction
     function buffer:on_text_change(_, tx) transaction = tx end
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     transaction = test.not_nil(transaction)
     test.equal(#transaction.changed_ranges, 1)
@@ -438,7 +438,7 @@ test.describe("Text View Selection State edit characterization", function()
     }
     system.set_clipboard("X\nY\n")
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "X\naY\nbb\ncc\n")
   end)
@@ -461,7 +461,7 @@ test.describe("Text View Selection State edit characterization", function()
     }
     system.set_clipboard("THREE\nONE\n")
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "ONE\naa\nbb\nTHREE\ncc\n")
     test.same(selection(main), {
@@ -488,7 +488,7 @@ test.describe("Text View Selection State edit characterization", function()
     }
     system.set_clipboard("A\nB\n")
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "A\nB\nabcdef\nnext\n")
     test.same(selection(main), {
@@ -509,7 +509,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:cut"))
+    test.ok(command.perform("core:cut"))
 
     test.equal(text(buffer), "bb\ndd\n")
     test.equal(changes, 1)
@@ -527,7 +527,7 @@ test.describe("Text View Selection State edit characterization", function()
     local transaction
     function buffer:on_text_change(_, tx) transaction = tx end
 
-    test.ok(command.perform("text:cut"))
+    test.ok(command.perform("core:cut"))
 
     transaction = test.not_nil(transaction)
     test.equal(#transaction.changed_ranges, 1)
@@ -548,7 +548,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "aa\n\n \n  \n  cc\n")
     test.equal(changes, 1)
@@ -568,7 +568,7 @@ test.describe("Text View Selection State edit characterization", function()
       transaction = tx
     end
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "aa\n\n \nbb\n")
     test.ok(transaction)
@@ -591,7 +591,7 @@ test.describe("Text View Selection State edit characterization", function()
       transaction = tx
     end
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "aa\n\n \nbb\n")
     test.ok(transaction)
@@ -609,7 +609,7 @@ test.describe("Text View Selection State edit characterization", function()
       2, 4, 2, 4,
     }, 3)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "a\na\n\n \nbb\n")
     test.same(selection(main), {
@@ -633,7 +633,7 @@ test.describe("Text View Selection State edit characterization", function()
       transaction = tx
     end
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.ok(transaction and transaction.changed)
     test.ok(text(buffer) ~= before)
@@ -648,7 +648,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "fun test(\n  \n) {\n}\n")
     test.equal(changes, 1)
@@ -660,7 +660,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 1, 8, 1, 8)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "  call(\n    \n  )\n")
     test.same(selection(main), { 2, 5, 2, 5 })
@@ -671,7 +671,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 1, 10, 1, 10)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "  call(\n    \n  )\n")
     test.same(selection(main), { 2, 5, 2, 5 })
@@ -686,7 +686,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "if (x) {\n  \n}\n")
     test.equal(changes, 1)
@@ -698,7 +698,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 1, 9, 1, 9)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "if (x) {\n  \n  y()\n}\n")
     test.same(selection(main), { 2, 3, 2, 3 })
@@ -709,7 +709,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 2, 4, 2, 4)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "if outer {\n  {\n    \n  }\n}\n")
     test.same(selection(main), { 3, 5, 3, 5 })
@@ -726,7 +726,7 @@ test.describe("Text View Selection State edit characterization", function()
       core.set_active_view(main)
       set_view_selection(main, 1, #case[1] + 1, 4, 1)
 
-      test.ok(command.perform("text:newline"))
+      test.ok(command.perform("core:newline"))
 
       test.equal(text(buffer), case[1] .. "\n  \n" .. case[2] .. "\n")
       test.same(selection(main), { 2, 3, 2, 3 })
@@ -738,7 +738,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 1, 13, 1, 26)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "fun test() {\n  \n}\n")
     test.same(selection(main), { 2, 3, 2, 3 })
@@ -749,7 +749,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 1, 6, 1, 19)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "call(\n  \n)\n")
     test.same(selection(main), { 2, 3, 2, 3 })
@@ -760,7 +760,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 1, 9, 1, 19)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "if (x) {\n  \n}\n")
     test.same(selection(main), { 2, 3, 2, 3 })
@@ -772,7 +772,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 1, 10, 1, 10)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "printf(\"(\n\");\n")
     test.same(selection(main), { 2, 1, 2, 1 })
@@ -784,7 +784,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 1, 5, 1, 5)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "// {\n// \n")
     test.same(selection(main), { 2, 4, 2, 4 })
@@ -796,7 +796,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 1, 9, 1, 9)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "if (x) {\n  \n}\n  printf(\"}\");\n  // } ignored\n")
     test.same(selection(main), { 2, 3, 2, 3 })
@@ -814,7 +814,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:delete"))
+    test.ok(command.perform("core:delete"))
 
     test.equal(text(buffer), "aabbcc\n")
     test.equal(changes, 1)
@@ -837,7 +837,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
 
     test.equal(text(buffer), "  aa\nb\n")
     test.equal(changes, 1)
@@ -853,7 +853,7 @@ test.describe("Text View Selection State edit characterization", function()
     config.indent_size = 4
     set_view_selection(main, 1, 7, 1, 7)
 
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
 
     test.equal(text(buffer), "    aa\n")
     test.same(selection(main), { 1, 5, 1, 5 })
@@ -865,7 +865,7 @@ test.describe("Text View Selection State edit characterization", function()
     config.indent_size = 4
     set_view_selection(main, 1, 4, 1, 4)
 
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
 
     test.equal(text(buffer), "aa\n")
     test.same(selection(main), { 1, 1, 1, 1 })
@@ -877,7 +877,7 @@ test.describe("Text View Selection State edit characterization", function()
     config.indent_size = 4
     set_view_selection(main, 1, 4, 1, 4)
 
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
 
     test.equal(text(buffer), "\taa\n")
     test.same(selection(main), { 1, 2, 1, 2 })
@@ -896,7 +896,7 @@ test.describe("Text View Selection State edit characterization", function()
       transaction = tx
     end
 
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
 
     test.ok(transaction and transaction.changed)
     test.equal(text(buffer), "\taa\n")
@@ -915,7 +915,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:join-lines"))
+    test.ok(command.perform("editor:join_lines"))
 
     test.equal(text(buffer), "aa bb\ncc dd\n")
     test.equal(changes, 1)
@@ -937,7 +937,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:newline-below"))
+    test.ok(command.perform("core:newline_below"))
 
     test.equal(text(buffer), "aa\n\nbb\ncc\n\n")
     test.equal(changes, 1)
@@ -959,7 +959,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:newline-above"))
+    test.ok(command.perform("core:newline_above"))
 
     test.equal(text(buffer), "\naa\nbb\n\ncc\n")
     test.equal(changes, 1)
@@ -987,7 +987,7 @@ test.describe("Text View Selection State edit characterization", function()
     }
     system.set_clipboard("XX\nYY\n")
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "XX\naa\nYY\nbb\n")
     test.same(selection(main), {
@@ -1005,7 +1005,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:duplicate-lines"))
+    test.ok(command.perform("editor:duplicate_lines"))
 
     test.equal(text(buffer), "aa\nbb\nbb\n")
     test.equal(changes, 1)
@@ -1019,7 +1019,7 @@ test.describe("Text View Selection State edit characterization", function()
     local transaction
     function buffer:on_text_change(_, tx) transaction = tx end
 
-    test.ok(command.perform("text:duplicate-lines"))
+    test.ok(command.perform("editor:duplicate_lines"))
 
     transaction = test.not_nil(transaction)
     test.equal(#transaction.changed_ranges, 1)
@@ -1036,7 +1036,7 @@ test.describe("Text View Selection State edit characterization", function()
     local changes = 0
     function buffer:on_text_change() changes = changes + 1 end
 
-    test.ok(command.perform("text:duplicate-lines"))
+    test.ok(command.perform("editor:duplicate_lines"))
 
     test.equal(text(buffer), "aa\nbb\nbb\ncc\n")
     test.same(selection(main), {
@@ -1054,7 +1054,7 @@ test.describe("Text View Selection State edit characterization", function()
       1, 1, 1, 1,
     })
 
-    test.ok(command.perform("text:duplicate-lines"))
+    test.ok(command.perform("editor:duplicate_lines"))
 
     test.equal(text(buffer), "aa\naa\nbb\ncc\ncc\n")
     test.same(selection(main), {
@@ -1072,7 +1072,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:delete-lines"))
+    test.ok(command.perform("editor:delete_lines"))
 
     test.equal(text(buffer), "aa\n")
     test.equal(changes, 1)
@@ -1091,7 +1091,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:move-lines-up"))
+    test.ok(command.perform("editor:move_lines_up"))
 
     test.equal(text(buffer), "aa\ncc\nbb\n")
     test.equal(changes, 1)
@@ -1113,7 +1113,7 @@ test.describe("Text View Selection State edit characterization", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:move-lines-down"))
+    test.ok(command.perform("editor:move_lines_down"))
 
     test.equal(text(buffer), "bb\naa\ncc\n")
     test.equal(changes, 1)
@@ -1133,7 +1133,7 @@ test.describe("Text View Selection State edit characterization", function()
     local transaction
     function buffer:on_text_change(_, tx) transaction = tx end
 
-    test.ok(command.perform("text:move-lines-up"))
+    test.ok(command.perform("editor:move_lines_up"))
 
     transaction = test.not_nil(transaction)
     test.equal(#transaction.changed_ranges, 1)
@@ -1149,7 +1149,7 @@ test.describe("Text View Selection State edit characterization", function()
       3, 2, 4, 2,
     })
 
-    test.ok(command.perform("text:duplicate-lines"))
+    test.ok(command.perform("editor:duplicate_lines"))
 
     test.equal(text(buffer), "aa\naa\nbb\ncc\ndd\ncc\ndd\n")
     test.same(selection(main), {
@@ -1166,7 +1166,7 @@ test.describe("Text View Selection State edit characterization", function()
       3, 1, 4, 2,
     })
 
-    test.ok(command.perform("text:delete-lines"))
+    test.ok(command.perform("editor:delete_lines"))
 
     test.equal(text(buffer), "bb\nee\n")
     test.same(selection(main), {
@@ -1183,7 +1183,7 @@ test.describe("Text View Selection State edit characterization", function()
       1, 1, 1, 1,
     })
 
-    test.ok(command.perform("text:delete-lines"))
+    test.ok(command.perform("editor:delete_lines"))
 
     test.equal(text(buffer), "bb\n")
   end)
@@ -1196,7 +1196,7 @@ test.describe("Text View Selection State edit characterization", function()
       2, 1, 3, 1,
     })
 
-    test.ok(command.perform("text:join-lines"))
+    test.ok(command.perform("editor:join_lines"))
 
     test.equal(text(buffer), "aa bb cc\n")
     test.same(selection(main), {
@@ -1215,7 +1215,7 @@ test.describe("Text View Selection State edit characterization", function()
     local changes = 0
     function buffer:on_text_change() changes = changes + 1 end
 
-    test.ok(command.perform("text:join-lines"))
+    test.ok(command.perform("editor:join_lines"))
 
     test.equal(changes, 1)
   end)
@@ -1228,7 +1228,7 @@ test.describe("Text View Selection State edit characterization", function()
       4, 1, 5, 1,
     })
 
-    test.ok(command.perform("text:join-lines"))
+    test.ok(command.perform("editor:join_lines"))
 
     test.equal(text(buffer), "aa bb\ncc\n  dd ee\n")
     test.same(selection(main), {
@@ -1245,7 +1245,7 @@ test.describe("Text View Selection State edit characterization", function()
       4, 1, 4, 1,
     })
 
-    test.ok(command.perform("text:move-lines-up"))
+    test.ok(command.perform("editor:move_lines_up"))
 
     test.equal(text(buffer), "bb\naa\ndd\ncc\n")
     test.same(selection(main), {
@@ -1262,7 +1262,7 @@ test.describe("Text View Selection State edit characterization", function()
       3, 1, 3, 1,
     })
 
-    test.ok(command.perform("text:move-lines-down"))
+    test.ok(command.perform("editor:move_lines_down"))
 
     test.equal(text(buffer), "bb\naa\ndd\ncc\n")
     test.same(selection(main), {
@@ -1279,7 +1279,7 @@ test.describe("Text View Selection State edit characterization", function()
       4, 1, 4, 1,
     })
 
-    test.ok(command.perform("text:move-lines-up"))
+    test.ok(command.perform("editor:move_lines_up"))
 
     test.equal(text(buffer), "bb\naa\ndd\ncc\nee\n")
     test.same(selection(main), {
@@ -1296,7 +1296,7 @@ test.describe("Text View Selection State edit characterization", function()
       2, 1, 2, 1,
     })
 
-    test.ok(command.perform("text:move-lines-up"))
+    test.ok(command.perform("editor:move_lines_up"))
 
     test.equal(text(buffer), "bb\naa\ndd\ncc\nee\n")
     test.same(selection(main), {
@@ -1313,7 +1313,7 @@ test.describe("Text View Selection State edit characterization", function()
       3, 1, 3, 1,
     })
 
-    test.ok(command.perform("text:move-lines-down"))
+    test.ok(command.perform("editor:move_lines_down"))
 
     test.equal(text(buffer), "bb\naa\ndd\ncc\nee\n")
     test.same(selection(main), {
@@ -1330,7 +1330,7 @@ test.describe("Text View Selection State edit characterization", function()
       1, 1, 1, 1,
     })
 
-    test.ok(command.perform("text:move-lines-down"))
+    test.ok(command.perform("editor:move_lines_down"))
 
     test.equal(text(buffer), "bb\naa\ndd\ncc\nee\n")
     test.same(selection(main), {
@@ -1345,11 +1345,11 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 1, 1, 1, 3)
 
-    test.ok(command.perform("text:toggle-block-comments"))
+    test.ok(command.perform("editor:toggle_block_comments"))
     test.equal(text(buffer), "/* aa */\n")
     test.same(selection(main), { 1, 1, 1, 9 })
 
-    test.ok(command.perform("text:toggle-block-comments"))
+    test.ok(command.perform("editor:toggle_block_comments"))
     test.equal(text(buffer), "aa\n")
     test.same(selection(main), { 1, 1, 1, 3 })
   end)
@@ -1363,14 +1363,14 @@ test.describe("Text View Selection State edit characterization", function()
       2, 1, 3, 1,
     })
 
-    test.ok(command.perform("text:toggle-line-comments"))
+    test.ok(command.perform("editor:toggle_line_comments"))
     test.equal(text(buffer), "// aa\n// bb\ncc\n")
     test.same(selection(main), {
       1, 1, 1, 1,
       2, 1, 2, 6,
     })
 
-    test.ok(command.perform("text:toggle-line-comments"))
+    test.ok(command.perform("editor:toggle_line_comments"))
     test.equal(text(buffer), "aa\nbb\ncc\n")
     test.same(selection(main), {
       1, 1, 1, 1,
@@ -1383,7 +1383,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 1, 2, 1, 2)
 
-    test.ok(command.perform("text:indent"))
+    test.ok(command.perform("core:indent"))
 
     test.equal(text(buffer), "    aa\n")
     test.same(selection(main), { 1, 5, 1, 5 })
@@ -1394,7 +1394,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.set_active_view(main)
     set_view_selection(main, 1, 2, 1, 2)
 
-    test.ok(command.perform("text:indent"))
+    test.ok(command.perform("core:indent"))
 
     test.equal(text(buffer), "a a\n")
     test.same(selection(main), { 1, 3, 1, 3 })
@@ -1408,14 +1408,14 @@ test.describe("Text View Selection State edit characterization", function()
       2, 1, 3, 1,
     })
 
-    test.ok(command.perform("text:indent"))
+    test.ok(command.perform("core:indent"))
     test.equal(text(buffer), "  aa\n  bb\ncc\n")
     test.same(selection(main), {
       1, 3, 1, 3,
       2, 3, 2, 5,
     })
 
-    test.ok(command.perform("text:unindent"))
+    test.ok(command.perform("core:unindent"))
     test.equal(text(buffer), "aa\nbb\ncc\n")
     test.same(selection(main), {
       1, 1, 1, 1,
@@ -1431,13 +1431,13 @@ test.describe("Text View Selection State edit characterization", function()
       2, 2, 2, 2,
     })
 
-    test.ok(command.perform("text:move-to-next-char"))
+    test.ok(command.perform("core:move_to_next_char"))
     test.same(selection(main), {
       1, 2, 1, 2,
       2, 3, 2, 3,
     })
 
-    test.ok(command.perform("text:select-to-next-char"))
+    test.ok(command.perform("core:select_to_next_char"))
     test.same(selection(main), {
       1, 3, 1, 2,
       2, 4, 2, 3,
@@ -1461,7 +1461,7 @@ test.describe("Text View Selection State edit characterization", function()
       2, 2, 2, 2,
     })
 
-    test.ok(command.perform("text:move-to-previous-char"))
+    test.ok(command.perform("core:move_to_previous_char"))
 
     test.same(selection(main), {
       1, 1, 1, 1,
@@ -1478,7 +1478,7 @@ test.describe("Text View Selection State edit characterization", function()
       2, 2, 2, 5,
     })
 
-    test.ok(command.perform("text:move-to-next-char"))
+    test.ok(command.perform("core:move_to_next_char"))
     test.same(selection(main), {
       1, 4, 1, 4,
       2, 5, 2, 5,
@@ -1489,7 +1489,7 @@ test.describe("Text View Selection State edit characterization", function()
       2, 2, 2, 5,
     })
 
-    test.ok(command.perform("text:move-to-previous-char"))
+    test.ok(command.perform("core:move_to_previous_char"))
     test.same(selection(main), {
       1, 2, 1, 2,
       2, 2, 2, 2,
@@ -1520,7 +1520,7 @@ test.describe("Text View Selection State edit characterization", function()
     end
 
     local ok, err = pcall(function()
-      test.ok(command.perform("text:move-to-next-char"))
+      test.ok(command.perform("core:move_to_next_char"))
       test.equal(merge_calls, 1)
       test.same(selection(main), {
         1, 2, 1, 2,
@@ -1543,7 +1543,7 @@ test.describe("Text View Selection State edit characterization", function()
       1, 2, 1, 2,
     }, 2)
 
-    test.ok(command.perform("text:move-to-previous-char"))
+    test.ok(command.perform("core:move_to_previous_char"))
 
     test.same(selection(main), { 1, 1, 1, 1 })
     test.equal(main:get_selection_state().last_selection, 1)
@@ -1558,7 +1558,7 @@ test.describe("Text View Selection State edit characterization", function()
       1, 3, 1, 3,
     }, 3)
 
-    test.ok(command.perform("text:move-to-previous-char"))
+    test.ok(command.perform("core:move_to_previous_char"))
 
     test.same(selection(main), {
       1, 1, 1, 1,
@@ -1588,7 +1588,7 @@ test.describe("Text View Selection State edit characterization", function()
     end
 
     local ok, err = pcall(function()
-      test.ok(command.perform("text:move-to-previous-line"))
+      test.ok(command.perform("core:move_to_previous_line"))
       test.equal(merge_calls, 0)
       test.same(selection(main), {
         1, 3, 1, 3,
@@ -1608,7 +1608,7 @@ test.describe("Text View Selection State edit characterization", function()
       2, 1, 2, 1,
     }, 2)
 
-    test.ok(command.perform("text:move-to-previous-line"))
+    test.ok(command.perform("core:move_to_previous_line"))
 
     test.same(selection(main), { 1, 1, 1, 1 })
     test.equal(main:get_selection_state().last_selection, 1)
@@ -1635,7 +1635,7 @@ test.describe("Text View Selection State edit characterization", function()
     end
 
     local ok, err = pcall(function()
-      test.ok(command.perform("text:move-to-end-of-line"))
+      test.ok(command.perform("core:move_to_end_of_line"))
       test.equal(merge_calls, 0)
       test.same(selection(main), {
         1, 5, 1, 5,
@@ -1651,7 +1651,7 @@ test.describe("Text View Selection State edit characterization", function()
       buffer.set_selections = function()
         error("line endpoint movement should use batched selection replacement")
       end
-      test.ok(command.perform("text:move-to-start-of-indentation"))
+      test.ok(command.perform("core:move_to_start_of_indentation"))
       test.equal(merge_calls, 0)
       test.same(selection(main), {
         1, 3, 1, 3,
@@ -1685,7 +1685,7 @@ test.describe("Text View Selection State edit characterization", function()
     end
 
     local ok, err = pcall(function()
-      test.ok(command.perform("text:select-to-previous-char"))
+      test.ok(command.perform("core:select_to_previous_char"))
       test.equal(merge_calls, 0)
       test.same(selection(main), {
         1, 1, 1, 2,
@@ -1703,7 +1703,7 @@ test.describe("Text View Selection State edit characterization", function()
         error("selection extension should use batched selection replacement")
       end
       ok, err = pcall(function()
-        test.ok(command.perform("text:select-to-previous-line"))
+        test.ok(command.perform("core:select_to_previous_line"))
         test.equal(merge_calls, 0)
         test.same(selection(main), {
           1, 2, 2, 2,
@@ -1729,7 +1729,7 @@ test.describe("Text View Selection State edit characterization", function()
     core.cursor_clipboard_whole_line = {}
     system.set_clipboard("P")
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "P Pdef ghi\none P three\n")
     test.same(selection(main), {

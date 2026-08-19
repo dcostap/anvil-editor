@@ -14,6 +14,7 @@ local TextView = require "core.textview"
 local file_context = require "core.file_context"
 local panes = require "core.panes"
 local shell = require "core.shell"
+local view_icons = require "core.view_icons"
 
 local M = core.command_slots or {}
 core.command_slots = M
@@ -575,6 +576,7 @@ function CommandOutputBuffer:append(text)
 end
 
 local CommandOutputView = TextView:extend()
+CommandOutputView.view_icon = view_icons.register("command_output", view_icons.ui("F"))
 
 function CommandOutputView:__tostring() return "CommandOutputView" end
 
@@ -1223,32 +1225,32 @@ local function install_commands()
   local map = {}
   for _, def in ipairs(SLOT_DEFS) do
     local index = def.index
-    map["command-slots:run-" .. def.key] = command.palette(function()
+    map["command_output:run_" .. def.key] = command.palette(function()
       return M.run_slot(index)
-    end)
-    map["command-slots:edit-" .. def.key] = command.palette(function()
+    end, { opens_view = true })
+    map["command_output:edit_" .. def.key] = command.palette(function()
       return M.prompt_slot(index, true)
     end)
   end
-  map["command-slots:kill-active"] = command.palette(function()
+  map["command_output:kill_active"] = command.palette(function()
     local slot = active_output_slot()
     if slot then return M.kill_slot(slot.index, "command") end
     return false
   end)
-  map["command-slots:focus-output"] = command.palette(function()
+  map["command_output:focus_output"] = command.palette(function()
     local slot = M.last_slot or slot_for_index(1)
     return slot and ensure_output_view(slot, true) ~= nil
-  end)
+  end, { opens_view = true })
   command.add(nil, map)
 
   command.add(function()
     local slot = active_output_slot()
     return slot ~= nil, slot
   end, {
-    ["command-slots:history-previous"] = function()
+    ["command_output:history_previous"] = function()
       M.navigate_output_history(-1)
     end,
-    ["command-slots:history-next"] = function()
+    ["command_output:history_next"] = function()
       M.navigate_output_history(1)
     end,
   })
@@ -1257,8 +1259,8 @@ end
 local function install_keymaps()
   local map = {}
   for _, def in ipairs(SLOT_DEFS) do
-    map["alt+" .. def.key] = "command-slots:run-" .. def.key
-    map["alt+shift+" .. def.key] = "command-slots:edit-" .. def.key
+    map["alt+" .. def.key] = "command_output:run_" .. def.key
+    map["alt+shift+" .. def.key] = "command_output:edit_" .. def.key
   end
   keymap.add_direct(map)
 end
@@ -1284,36 +1286,36 @@ end
 
 local function install_readonly_command_guards()
   local blocked = {
-    "text:cut",
-    "text:undo",
-    "text:redo",
-    "text:paste",
-    "text:paste-primary-selection",
-    "text:newline",
-    "text:newline-below",
-    "text:newline-above",
-    "text:delete",
-    "text:backspace",
-    "text:join-lines",
-    "text:indent",
-    "text:unindent",
-    "text:duplicate-lines",
-    "text:delete-lines",
-    "text:move-lines-up",
-    "text:move-lines-down",
-    "text:toggle-block-comments",
-    "text:toggle-line-comments",
-    "text:upper-case",
-    "text:lower-case",
-    "text:toggle-line-ending",
-    "text:change-encoding",
-    "text:reload-with-encoding",
-    "text:toggle-overwrite",
-    "text:save-as",
-    "text:save",
-    "text:reload",
-    "file:rename",
-    "file:delete",
+    "core:cut",
+    "core:undo",
+    "core:redo",
+    "core:paste",
+    "core:paste_primary_selection",
+    "core:newline",
+    "core:newline_below",
+    "core:newline_above",
+    "core:delete",
+    "core:backspace",
+    "editor:join_lines",
+    "core:indent",
+    "core:unindent",
+    "editor:duplicate_lines",
+    "editor:delete_lines",
+    "editor:move_lines_up",
+    "editor:move_lines_down",
+    "editor:toggle_block_comments",
+    "editor:toggle_line_comments",
+    "editor:upper_case",
+    "editor:lower_case",
+    "editor:toggle_line_ending",
+    "editor:change_encoding",
+    "editor:reload_with_encoding",
+    "core:toggle_overwrite",
+    "editor:save_as",
+    "editor:save",
+    "editor:reload",
+    "editor:rename",
+    "editor:delete",
   }
   local translations = {
     "previous-char",
@@ -1335,7 +1337,7 @@ local function install_readonly_command_guards()
     "next-page",
   }
   for _, name in ipairs(translations) do
-    blocked[#blocked + 1] = "text:delete-to-" .. name
+    blocked[#blocked + 1] = "core:delete_to_" .. name
   end
   for _, name in ipairs(blocked) do
     wrap_command_to_block_output_view(name)

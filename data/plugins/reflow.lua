@@ -24,7 +24,7 @@ end
 
 
 command.add("core.textview", {
-  ["reflow:reflow"] = command.palette(function(dv)
+  ["editor:reflow"] = command.palette(function(dv)
     if dv.can_edit and not dv:can_edit("reflow", { warn = true }) then return end
     local buffer = dv.buffer
     buffer:replace(function(text)
@@ -60,5 +60,5 @@ command.add("core.textview", {
 
 
 keymap.add_direct {
-  ["ctrl+shift+q"] = "reflow:reflow"
+  ["ctrl+shift+q"] = "editor:reflow"
 }

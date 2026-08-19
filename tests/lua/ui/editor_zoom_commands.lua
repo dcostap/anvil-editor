@@ -5,12 +5,12 @@ require "plugins.scale"
 
 test.describe("editor zoom commands", function()
   test.it("uses editor zoom command names", function()
-    test.ok(command.is_valid("editor:zoom-in"))
-    test.ok(command.is_valid("editor:zoom-out"))
-    test.ok(command.is_valid("editor:zoom-reset"))
+    test.ok(command.is_valid("editor:zoom_in"))
+    test.ok(command.is_valid("editor:zoom_out"))
+    test.ok(command.is_valid("editor:zoom_reset"))
 
-    test.not_ok(command.is_valid("scale:increase"))
-    test.not_ok(command.is_valid("scale:decrease"))
-    test.not_ok(command.is_valid("scale:reset"))
+    test.not_ok(command.is_valid("core:zoom_in"))
+    test.not_ok(command.is_valid("core:zoom_out"))
+    test.not_ok(command.is_valid("core:zoom_reset"))
   end)
 end)

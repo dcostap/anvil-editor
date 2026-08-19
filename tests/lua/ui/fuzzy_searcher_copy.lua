@@ -43,7 +43,7 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     })
     picker.selected = 2
 
-    test.ok(command.perform("fuzzy-searcher:copy-selected"), "expected copy command to run")
+    test.ok(command.perform("fuzzy:copy_selected"), "expected copy command to run")
 
     test.equal(system.get_clipboard(), "needle content")
     test.not_nil(picker.copy_flash, "expected copy feedback state")
@@ -65,12 +65,13 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     style.fuzzy_searcher_copy_feedback = probe_color
 
     local picker = fuzzy_searcher.open_static_results("Results", {
-      { kind = "command", label = "text:copy", command = "text:copy", match_spans = { { 1, 3 } } },
+      { kind = "command", label = "core:copy", command = "core:copy", match_spans = { { 1, 3 } } },
     })
     test.ok(picker:copy_selected())
     picker:update()
 
     local original_draw_rect = renderer.draw_rect
+    local original_draw_rounded_rect = renderer.draw_rounded_rect
     local original_draw_text = renderer.draw_text
     local original_draw_text_known_bounds = renderer.draw_text_known_bounds
     local original_set_clip_rect = renderer.set_clip_rect
@@ -83,6 +84,7 @@ test.describe("Fuzzy Searcher selected-result copy", function()
       end
       if same_rgb(color, probe_color) then draw_order.copy = draw_count end
     end
+    renderer.draw_rounded_rect = function() end
     renderer.draw_text = function(font, text, x)
       return x + (font and font:get_width(text) or 0)
     end
@@ -90,6 +92,7 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     renderer.set_clip_rect = function() end
     local ok, err = pcall(function() picker:draw() end)
     renderer.draw_rect = original_draw_rect
+    renderer.draw_rounded_rect = original_draw_rounded_rect
     renderer.draw_text = original_draw_text
     renderer.draw_text_known_bounds = original_draw_text_known_bounds
     renderer.set_clip_rect = original_set_clip_rect
@@ -139,7 +142,7 @@ test.describe("Fuzzy Searcher selected-result copy", function()
       { kind = "file", label = "src/app.lua", file = "src/app.lua" },
     })
 
-    test.ok(command.perform("fuzzy-searcher:copy-selected"), "expected copy command to run")
+    test.ok(command.perform("fuzzy:copy_selected"), "expected copy command to run")
 
     test.equal(system.get_clipboard(), "src/app.lua")
     test.same(core.cursor_clipboard, {})

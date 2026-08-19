@@ -18,6 +18,9 @@ local vault_index = require "core.markdown.vault_index"
 local style = require "core.style"
 
 local live = {}
+live.view_icon = require("core.view_icons").register(
+  "markdown", require("core.view_icons").file("view.md")
+)
 local pending_visual_projection = {}
 
 local PROVIDER_ID = "markdown-live"
@@ -6407,6 +6410,8 @@ local function apply_source_mode(view, enabled, reason)
   enabled = enabled == true
   if owner.source_mode == enabled then return false end
   owner.source_mode = enabled
+  view.view_icon = live.view_icon
+  if enabled then view.view_icon = nil end
   if enabled then
     callout_runtime.remove_folds(view, "markdown-callout-source-mode")
   else
@@ -7151,6 +7156,8 @@ function live.attach(view)
     invalidate_selection_lines(owner, new_state, old_state)
   end)
   view.__markdown_live_attached = true
+  view.view_icon = live.view_icon
+  if view_in_source_mode(view) then view.view_icon = nil end
   bind_semantic_model(view)
   bind_link_index(view)
   link_completion.ensure_provider()
@@ -7177,6 +7184,7 @@ function live.detach(view)
   view:remove_selection_listener(PROVIDER_ID)
   view.__markdown_task_source_affinity = nil
   view.__markdown_live_attached = nil
+  view.view_icon = nil
   core.log_quiet("Markdown Live Preview detached from %s", view.buffer and view.buffer:get_name() or tostring(view))
   return true
 end

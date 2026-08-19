@@ -106,7 +106,7 @@ test.describe("Language Mode", function()
     }
     core.save_workspace = function() workspace_saves = workspace_saves + 1 end
 
-    test.ok(command.perform("language:set-mode"))
+    test.ok(command.perform("editor:set_language_mode"))
     test.equal(captured.label, "Language Mode")
     local suggestions = captured.options.suggest("Lua")
     local lua_item

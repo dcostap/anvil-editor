@@ -3,17 +3,17 @@ local keymap = require "core.keymap"
 local panes = require "core.panes"
 
 command.add(function() return panes.is_back_available() end, {
-  ["navigation:back"] = command.palette(function() panes.back() end),
+  ["core:navigate_back"] = command.palette(function() panes.back() end),
 })
 
 command.add(function() return panes.is_forward_available() end, {
-  ["navigation:forward"] = command.palette(function() panes.forward() end),
+  ["core:navigate_forward"] = command.palette(function() panes.forward() end),
 })
 
 
 keymap.add {
-  ["alt+left"] = "navigation:back",
-  ["alt+right"] = "navigation:forward",
-  ["xclick"] = "navigation:back",
-  ["yclick"] = "navigation:forward",
+  ["alt+left"] = "core:navigate_back",
+  ["alt+right"] = "core:navigate_forward",
+  ["xclick"] = "core:navigate_back",
+  ["yclick"] = "core:navigate_forward",
 }

@@ -69,13 +69,13 @@ end
 
 test.describe("TextView selection scrolling", function()
   test.before_each(function(context)
-    if command.is_valid("user:find-close") then command.perform("user:find-close") end
+    if command.is_valid("editor:find_close") then command.perform("editor:find_close") end
     context.scroll_past_end = config.scroll_past_end
     context.scroll_context_lines = config.scroll_context_lines
   end)
 
   test.after_each(function(context)
-    if command.is_valid("user:find-close") then command.perform("user:find-close") end
+    if command.is_valid("editor:find_close") then command.perform("editor:find_close") end
     config.scroll_past_end = context.scroll_past_end
     config.scroll_context_lines = context.scroll_context_lines
     panes.reset_for_tests()
@@ -226,7 +226,7 @@ test.describe("TextView selection scrolling", function()
     local col1 = #prefix + 1
     local col2 = col1 + #"NEEDLE"
 
-    test.ok(command.perform("find-replace:find"))
+    test.ok(command.perform("editor:find"))
     core.root_panel:on_text_input("NEEDLE")
 
     local x1, x2 = range_x(view, 1, col1, col2)

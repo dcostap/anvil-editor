@@ -69,7 +69,7 @@ command.add(function()
   if not is_textview(core.active_view) then return false end
   return true, core.active_view
 end, {
-  ["text:insert-sequential-numbers-on-cursors"] = command.palette(function(dv)
+  ["editor:insert_sequential_numbers_on_cursors"] = command.palette(function(dv)
     if dv.can_edit and not dv:can_edit("insert sequential numbers", { warn = true }) then return end
     core.global_prompt_bar:enter("Sequential Numbers Initial", {
       text = "0",

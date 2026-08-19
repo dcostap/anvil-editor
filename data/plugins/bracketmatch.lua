@@ -307,13 +307,13 @@ end
 
 
 command.add("core.textview", {
-  ["bracket-match:move-to-matching"] = function(dv)
+  ["editor:move_to_matching"] = function(dv)
     update_state()
     if state.line2 then
       dv.buffer:set_selection(state.line2, state.col2)
     end
   end,
-  ["bracket-match:select-to-matching"] = function(dv)
+  ["editor:select_to_matching"] = function(dv)
     update_state()
     if state.line2 then
         dv.buffer:set_selection(state.line, state.col, state.line2, state.col2 + select_adj)
@@ -322,5 +322,5 @@ command.add("core.textview", {
 })
 
 keymap.add {
-  ["ctrl+shift+m"] = "bracket-match:select-to-matching",
+  ["ctrl+shift+m"] = "editor:select_to_matching",
 }

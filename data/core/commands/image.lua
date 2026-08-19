@@ -3,29 +3,29 @@ local command = require "core.command"
 local ImageView = require "core.imageview"
 
 command.add(ImageView, {
-  ["image-view:auto-fit"] = function(av)
+  ["image:auto_fit"] = function(av)
     ---@cast av core.imageview
     av.zoom_mode = "fit"
   end,
-  ["image-view:zoom-out"] = function(av)
+  ["image:zoom_out"] = function(av)
     ---@cast av core.imageview
     av:zoom_out()
   end,
-  ["image-view:zoom-in"] = function(av)
+  ["image:zoom_in"] = function(av)
     ---@cast av core.imageview
     av:zoom_in()
   end,
-  ["image-view:zoom-reset"] = function(av)
+  ["image:zoom_reset"] = function(av)
     ---@cast av core.imageview
     av:zoom_reset()
   end,
-  ["image-view:background-mode-solid"] = function()
+  ["image:background_mode_solid"] = function()
     config.images_background_mode = "solid"
   end,
-  ["image-view:background-mode-grid"] = function()
+  ["image:background_mode_grid"] = function()
     config.images_background_mode = "grid"
   end,
-  ["image-view:background-mode-none"] = function()
+  ["image:background_mode_none"] = function()
     config.images_background_mode = "none"
   end,
 })

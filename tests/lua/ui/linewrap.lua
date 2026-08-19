@@ -111,12 +111,14 @@ end
 
 local function with_stubbed_renderer(fn)
   local old_draw_rect = renderer.draw_rect
+  local old_draw_rounded_rect = renderer.draw_rounded_rect
   local old_draw_text = renderer.draw_text
   local old_draw_text_known_bounds = renderer.draw_text_known_bounds
   local old_set_clip_rect = renderer.set_clip_rect
   local old_common_draw_text = common.draw_text
 
   renderer.draw_rect = function() end
+  renderer.draw_rounded_rect = function() end
   renderer.draw_text = function(font, text, x)
     return x + font:get_width(text)
   end
@@ -129,6 +131,7 @@ local function with_stubbed_renderer(fn)
   local ok, a, b, c, d = pcall(fn)
 
   renderer.draw_rect = old_draw_rect
+  renderer.draw_rounded_rect = old_draw_rounded_rect
   renderer.draw_text = old_draw_text
   renderer.draw_text_known_bounds = old_draw_text_known_bounds
   renderer.set_clip_rect = old_set_clip_rect
@@ -574,17 +577,17 @@ test.describe("line wrapping visual navigation", function()
     configure_wrapping_for_test(context, view)
     buffer:set_selection(1, 1, 1, 1)
 
-    command.perform("text:move-to-next-line")
+    command.perform("core:move_to_next_line")
     local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
 
-    command.perform("text:move-to-next-line")
+    command.perform("core:move_to_next_line")
     line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 17)
 
-    command.perform("text:move-to-previous-line")
+    command.perform("core:move_to_previous_line")
     line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
@@ -598,12 +601,12 @@ test.describe("line wrapping visual navigation", function()
     LineWrapping.update_textview_breaks(view)
 
     buffer:set_selection(1, 7, 1, 7)
-    command.perform("text:move-to-next-line")
+    command.perform("core:move_to_next_line")
     local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 12)
 
-    command.perform("text:move-to-next-line")
+    command.perform("core:move_to_next_line")
     line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 18)
@@ -614,23 +617,23 @@ test.describe("line wrapping visual navigation", function()
     configure_wrapping_for_test(context, view)
 
     buffer:set_selection(1, 12, 1, 12)
-    command.perform("text:move-to-start-of-indentation")
+    command.perform("core:move_to_start_of_indentation")
     local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
 
-    command.perform("text:move-to-start-of-indentation")
+    command.perform("core:move_to_start_of_indentation")
     line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 1)
 
     buffer:set_selection(1, 12, 1, 12)
-    command.perform("text:move-to-end-of-line")
+    command.perform("core:move_to_end_of_line")
     line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 17)
 
-    command.perform("text:move-to-end-of-line")
+    command.perform("core:move_to_end_of_line")
     line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, #buffer.lines[1])
@@ -641,14 +644,14 @@ test.describe("line wrapping visual navigation", function()
     configure_wrapping_for_test(context, view)
 
     buffer:set_selection(1, 12, 1, 12)
-    command.perform("text:delete-to-end-of-line")
+    command.perform("core:delete_to_end_of_line")
     test.equal(buffer.lines[1], string.rep("x", 35) .. "\n")
     local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 12)
 
     buffer:set_selection(1, 10, 1, 10)
-    command.perform("text:delete-to-start-of-line")
+    command.perform("core:delete_to_start_of_line")
     test.equal(buffer.lines[1], string.rep("x", 34) .. "\n")
     line, col = buffer:get_selection()
     test.equal(line, 1)
@@ -660,7 +663,7 @@ test.describe("line wrapping visual navigation", function()
     configure_wrapping_for_test(context, view)
 
     local x, y = view:get_line_screen_position(1, 9, true)
-    command.perform("text:set-cursor", x, y + view:get_line_height() / 2, 1)
+    command.perform("core:set_cursor", x, y + view:get_line_height() / 2, 1)
     local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
@@ -679,7 +682,7 @@ test.describe("line wrapping visual navigation", function()
     buffer:set_selection(1, 1, 1, 1)
 
     local x, y = view:get_line_screen_position(1, 9, true)
-    command.perform("text:select-to-cursor", x, y + view:get_line_height() / 2, 1)
+    command.perform("core:select_to_cursor", x, y + view:get_line_height() / 2, 1)
     local line1, col1, line2, col2 = buffer:get_selection()
     test.equal(line1, 1)
     test.equal(col1, 9)
@@ -700,7 +703,7 @@ test.describe("line wrapping visual navigation", function()
     buffer:set_selection(1, 1, 1, 1)
 
     local x, y = view:get_line_screen_position(1, 9)
-    command.perform("text:split-cursor", x, y + view:get_line_height() / 2, 1)
+    command.perform("core:split_cursor", x, y + view:get_line_height() / 2, 1)
 
     test.equal(#buffer.selections, 8)
     test.same({ buffer.selections[1], buffer.selections[2], buffer.selections[5], buffer.selections[6] }, { 1, 1, 1, 9 })
@@ -714,7 +717,7 @@ test.describe("line wrapping visual navigation", function()
     test.equal(view.wrapping_enabled, true)
     test.equal(view.wrapped_settings, nil)
 
-    command.perform("line-wrapping:toggle")
+    command.perform("editor:toggle_line_wrapping")
     test.equal(view.wrapping_enabled, false)
     config.plugins.linewrapping.width_override = old_override
   end)
@@ -729,11 +732,11 @@ test.describe("line wrapping visual navigation", function()
     buffer:text_input(string.rep("y", 40))
     test.ok(view:get_total_visual_lines() > initial_rows, "expected insert to update wrapped row cache")
 
-    command.perform("text:undo")
+    command.perform("core:undo")
     test.equal(buffer.lines[1], string.rep("x", 40) .. "\n")
     test.equal(view:get_total_visual_lines(), initial_rows)
 
-    command.perform("text:redo")
+    command.perform("core:redo")
     test.equal(buffer.lines[1], string.rep("y", 40) .. string.rep("x", 40) .. "\n")
     test.ok(view:get_total_visual_lines() > initial_rows, "expected redo to update wrapped row cache")
   end)
@@ -772,7 +775,7 @@ test.describe("line wrapping visual navigation", function()
     local second_row_y = select(2, view:get_line_screen_position(1, 10))
 
     buffer:set_selection(1, 8, 1, 8)
-    command.perform("text:move-to-next-char")
+    command.perform("core:move_to_next_char")
     local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
@@ -783,7 +786,7 @@ test.describe("line wrapping visual navigation", function()
     test.equal(drawn_caret.y, first_row_y)
     test.equal(drawn_caret.x, first_row_x + font:get_width("xxxxxxxx"))
 
-    command.perform("text:move-to-next-char")
+    command.perform("core:move_to_next_char")
     line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 10)
@@ -800,7 +803,7 @@ test.describe("line wrapping visual navigation", function()
     local first_row_x, first_row_y = view:get_line_screen_position(1, 1)
 
     buffer:set_selection(1, 8, 1, 8)
-    command.perform("text:select-to-next-char")
+    command.perform("core:select_to_next_char")
     local line1, col1, line2, col2 = buffer:get_selection()
     test.equal(line1, 1)
     test.equal(col1, 9)
@@ -821,7 +824,7 @@ test.describe("line wrapping visual navigation", function()
     local first_row_x, first_row_y = view:get_line_screen_position(1, 1)
 
     buffer:set_selection(1, 1, 1, 1)
-    command.perform("text:move-to-next-word-end")
+    command.perform("core:move_to_next_word_end")
     local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
@@ -837,11 +840,12 @@ test.describe("line wrapping visual navigation", function()
     local view, buffer = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
     buffer:set_selection(1, 12, 1, 12)
-    command.perform("text:move-to-end-of-line")
+    command.perform("core:move_to_end_of_line")
 
     local expected_x = select(1, view:get_line_screen_position(1, 17, true))
     local events = {}
     local old_draw_rect = renderer.draw_rect
+    local old_draw_rounded_rect = renderer.draw_rounded_rect
     local old_draw_text = renderer.draw_text
     local old_draw_text_known_bounds = renderer.draw_text_known_bounds
     local old_set_clip_rect = renderer.set_clip_rect
@@ -853,6 +857,7 @@ test.describe("line wrapping visual navigation", function()
         events[#events + 1] = "guide"
       end
     end
+    renderer.draw_rounded_rect = function() end
     renderer.draw_text = function(font, text, x)
       return x + font:get_width(text)
     end
@@ -870,6 +875,7 @@ test.describe("line wrapping visual navigation", function()
     local ok, err = pcall(function() view:draw() end)
 
     renderer.draw_rect = old_draw_rect
+    renderer.draw_rounded_rect = old_draw_rounded_rect
     renderer.draw_text = old_draw_text
     renderer.draw_text_known_bounds = old_draw_text_known_bounds
     renderer.set_clip_rect = old_set_clip_rect
@@ -908,7 +914,7 @@ test.describe("line wrapping visual navigation", function()
     local _, third_row_y = view:get_line_screen_position(1, 20)
 
     buffer:set_selection(1, 12, 1, 12)
-    command.perform("text:move-to-end-of-line")
+    command.perform("core:move_to_end_of_line")
     local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 17)
@@ -926,7 +932,7 @@ test.describe("line wrapping visual navigation", function()
     test.equal(drawn_caret.y, second_row_y)
     test.equal(drawn_caret.x, select(1, view:get_line_screen_position(1, 9)) + font:get_width("xxxxxxxx"))
 
-    command.perform("text:move-to-next-char")
+    command.perform("core:move_to_next_char")
     line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 18)
@@ -942,7 +948,7 @@ test.describe("line wrapping visual navigation", function()
     local font = view:get_font()
 
     buffer:set_selection(1, 12, 1, 12)
-    command.perform("text:select-to-end-of-line")
+    command.perform("core:select_to_end_of_line")
     local line1, col1, line2, col2 = buffer:get_selection()
     test.equal(line1, 1)
     test.equal(col1, 17)
@@ -960,7 +966,7 @@ test.describe("line wrapping visual navigation", function()
     LineWrapping.reconstruct_breaks(view, view:get_font(), config.plugins.linewrapping.width_override)
 
     buffer:set_selection(1, 8, 1, 8)
-    command.perform("text:move-to-previous-line")
+    command.perform("core:move_to_previous_line")
     local line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 3)

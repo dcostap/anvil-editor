@@ -280,6 +280,22 @@ _Avoid_: Command prompt, command bar
 The Fuzzy Searcher mode used to find and run curated Anvil commands available to its source View. A command can continue into another input mode when it needs an argument.
 _Avoid_: Pane Command Bar, command prompt
 
+**Command Identifier**:
+The raw Command Palette name of a command, written as `prefix:snake_case_action`. A View owns its prefix. Commands not owned by one View use `core`.
+_Avoid_: command title, display name
+
+**Command Keyword**:
+An additional hidden search term that helps a Command Palette query match a Command Identifier.
+_Avoid_: command alias, command title
+
+**View Icon**:
+The icon shared by a View, its Tab, and Command Palette commands that use the View's prefix. Standard Editors omit the icon from their Tabs. Markdown Live Preview shows the Markdown View Icon only in Live Preview mode.
+_Avoid_: command icon, tab icon
+
+**View Opener**:
+A command that creates a View. Its Command Palette result adds a green plus badge to the View Icon.
+_Avoid_: constructor command, open badge
+
 **Shell Command Mode**:
 The explicit Fuzzy Searcher mode that runs entered shell text and opens its output in a Command Output View.
 _Avoid_: Pane Command Bar, Terminal View input

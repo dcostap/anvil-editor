@@ -275,11 +275,11 @@ test.describe("Git View command", function()
     test.equal(tab.selected_file, 1)
 
     list.buffer:set_selection(1, 1)
-    test.equal(command.perform("git:activate-selected-row"), true)
+    test.equal(command.perform("git:activate_selected_row"), true)
     test.equal(list.buffer.lines[2], "README.md\n")
     test.equal(list.buffer.lines[3], nil)
     test.equal(tab.selected_file, 1)
-    test.equal(command.perform("git:activate-selected-row"), true)
+    test.equal(command.perform("git:activate_selected_row"), true)
     test.equal(list.buffer.lines[2], "\tApp.kt\n")
     test.equal(list.buffer.lines[3], "\tUtil.kt\n")
 
@@ -320,7 +320,7 @@ test.describe("Git View command", function()
     core.active_view = list
     list.buffer:set_selection(1, 1)
 
-    test.equal(command.perform("git:activate-selected-row"), true)
+    test.equal(command.perform("git:activate_selected_row"), true)
     test.equal(tab.selected_file, 2)
     test.equal(list.buffer.lines[1], "src/main/\n")
     test.equal(list.buffer.lines[2], "README.md\n")
@@ -370,7 +370,7 @@ test.describe("Git View command", function()
     details.buffer:set_selection(line, 1)
     test.not_nil(details:get_point_of_interest_at(line))
 
-    test.equal(command.perform("poi:activate"), true)
+    test.equal(command.perform("core:activate_point_of_interest"), true)
     local opened = view.model:selected_tab()
     test.not_nil(opened)
     test.equal(opened.kind, "commit_diff")
@@ -428,13 +428,13 @@ test.describe("Git View command", function()
     local tab_view = git_view.ensure_tab_view(session, tab, true)
     core.active_view = tab_view
 
-    test.equal(command.perform("git:focus-diff-pane"), true)
+    test.equal(command.perform("git:focus_diff_pane"), true)
     test.equal(core.active_view.git_owner_view, tab_view)
     session:activate_root()
     test.equal(core.active_view.git_owner_view, tab_view)
     git_view.sync_tab_views(session, false)
     test.equal(core.active_view.git_owner_view, tab_view)
-    test.equal(command.perform("git:focus-list-pane"), true)
+    test.equal(command.perform("git:focus_list_pane"), true)
     test.equal(core.active_view.git_owner_view, tab_view)
     test.equal(core.active_view.git_pane, "file-list")
   end)
@@ -459,7 +459,7 @@ test.describe("Git View command", function()
     tab_view.position.x, tab_view.position.y = 0, 0
     tab_view.size.x, tab_view.size.y = 800, 600
 
-    test.equal(command.perform("git:focus-diff-pane"), true)
+    test.equal(command.perform("git:focus_diff_pane"), true)
     local diff = tab.diff_view
     local buffer_view = diff.buffer_view_a
     test.equal(core.active_view, buffer_view)
@@ -510,7 +510,7 @@ test.describe("Git View command", function()
     local session, view = open_fake_git_view(context.project)
     core.active_view = view
 
-    test.equal(command.perform("git:focus-next-pane"), true)
+    test.equal(command.perform("git:focus_next_pane"), true)
     test.equal(core.active_view.git_owner_view, view)
     test.equal(core.active_view.git_pane, "log-list")
     test.equal(core.active_view:get_gutter_width(), 0)
@@ -520,7 +520,7 @@ test.describe("Git View command", function()
     core.active_view.buffer:set_selection(1, 2)
     session:activate_root()
     test.equal(select(2, core.active_view.buffer:get_selection()), 2)
-    test.equal(command.perform("git:focus-next-pane"), true)
+    test.equal(command.perform("git:focus_next_pane"), true)
     test.equal(core.active_view.git_pane, "details")
   end)
 
@@ -556,11 +556,11 @@ test.describe("Git View command", function()
     local tab_view = git_view.ensure_tab_view(session, tab, true)
     core.active_view = tab_view
 
-    test.equal(command.perform("git:focus-next-pane"), true)
+    test.equal(command.perform("git:focus_next_pane"), true)
     test.equal(core.active_view.git_pane, "file-list")
     session:activate_root()
     test.equal(core.active_view.git_pane, "file-list")
-    test.equal(command.perform("git:focus-next-pane"), true)
+    test.equal(command.perform("git:focus_next_pane"), true)
     local diff = tab.diff_view
     test.equal(diff.request.kind, "git")
     test.equal(nil, diff.request.metadata)
@@ -573,25 +573,25 @@ test.describe("Git View command", function()
       return { { line = 2, col = 1, line_only_navigation = true, scroll_to_line = true } }
     end
     diff.buffer_view_a.buffer:set_selection(1, 1)
-    test.equal(command.perform("poi:next"), true)
+    test.equal(command.perform("core:next_point_of_interest"), true)
     local line = diff.buffer_view_a.buffer:get_selection()
     test.equal(line, 2)
 
-    test.equal(command.perform("git:focus-next-pane"), true)
+    test.equal(command.perform("git:focus_next_pane"), true)
     test.equal(core.active_view, diff.buffer_view_b)
-    test.equal(command.perform("git:focus-next-pane"), true)
+    test.equal(command.perform("git:focus_next_pane"), true)
     test.equal(core.active_view.git_pane, "file-list")
 
-    test.equal(command.perform("git:focus-next-pane"), true)
+    test.equal(command.perform("git:focus_next_pane"), true)
     test.equal(core.active_view, diff.buffer_view_a)
-    test.equal(command.perform("git:close-selected-tab"), true)
+    test.equal(command.perform("git:close_selected_tab"), true)
     test.ok(core.active_view ~= tab_view)
     test.ok(core.active_view.git_owner_view ~= tab_view)
-    test.equal(command.perform("git:focus-next-pane"), true)
+    test.equal(command.perform("git:focus_next_pane"), true)
     test.ok(core.active_view ~= tab_view)
 
     core.active_view = {}
-    test.equal(command.perform("git:focus-next-pane"), false)
+    test.equal(command.perform("git:focus_next_pane"), false)
   end)
 
   test.test("keyboard row commands navigate and activate Git rows", function(context)
@@ -605,16 +605,16 @@ test.describe("Git View command", function()
       { hash = "b", short_hash = "b", subject = "Second", parents = {} },
     }
 
-    test.equal(command.perform("git:select-next-row"), true)
+    test.equal(command.perform("git:select_next_row"), true)
     test.equal(view.model:selected_commit().hash, "b")
     local list = view:pane_view("log-list")
     test.equal(list.buffer:get_selection(), 2)
-    test.equal(command.perform("poi:activate"), true)
+    test.equal(command.perform("core:activate_point_of_interest"), true)
     test.equal(view.model:selected_tab().kind, "commit_diff")
     test.equal(#session_views(session), 2)
 
     core.active_view = {}
-    test.equal(command.perform("git:select-next-row"), false)
+    test.equal(command.perform("git:select_next_row"), false)
   end)
 
   test.it("does not activate a Git row while another Pane View has focus", function(context)
@@ -629,7 +629,7 @@ test.describe("Git View command", function()
     local panel = View()
     panes.create { factory = function() return panel end, focus = true }
 
-    test.equal(command.perform("git:activate-selected-row"), false)
+    test.equal(command.perform("git:activate_selected_row"), false)
     test.equal(view.model:selected_tab().kind, "log")
   end)
 
@@ -825,7 +825,7 @@ test.describe("Git View command", function()
 
     core.projects = { context.project }
     core.active_view = restored.git_view
-    command.perform("git:open-selected-commit-diff")
+    command.perform("git:open_selected_commit_diff")
 
     test.equal(log_calls, 1)
     test.equal(restored.git_view.model:selected_tab().kind, "commit_diff")
@@ -845,7 +845,7 @@ test.describe("Git View command", function()
     core.projects = { context.project }
     core.active_view = tab_view
 
-    test.equal(command.perform("git:close-selected-tab"), true)
+    test.equal(command.perform("git:close_selected_tab"), true)
     test.equal(view.model:find_tab(tab.id), nil)
     test.equal(session.git_tab_views[tab.id], nil)
     test.equal(session.hidden, false)
@@ -888,23 +888,23 @@ test.describe("Git View command", function()
     panes.reset_for_tests()
     core.active_view = {}
 
-    local ok = pcall(command.is_valid, "git:focus-list-pane")
+    local ok = pcall(command.is_valid, "git:focus_list_pane")
     system.text_input = old_text_input
     test.equal(ok, true)
   end)
 
   test.test("command is registered", function()
-    test.not_nil(command.map["git:open-view"])
-    test.not_nil(command.map["git:open-selected-commit-diff"])
-    test.not_nil(command.map["git:open-working-tree-diff"])
-    test.not_nil(command.map["git:show-file-history"])
-    test.not_nil(command.map["git:show-selection-history"])
-    test.not_nil(command.map["git:open-selected-historical-buffer"])
-    test.not_nil(command.map["git:close-selected-tab"])
-    test.not_nil(command.map["git:select-next-row"])
-    test.not_nil(command.map["git:select-previous-row"])
-    test.not_nil(command.map["git:activate-selected-row"])
-    test.not_nil(command.map["git:focus-diff-pane"])
-    test.not_nil(command.map["git:focus-list-pane"])
+    test.not_nil(command.map["git:open"])
+    test.not_nil(command.map["git:open_selected_commit_diff"])
+    test.not_nil(command.map["git:open_working_tree_diff"])
+    test.not_nil(command.map["git:show_file_history"])
+    test.not_nil(command.map["git:show_selection_history"])
+    test.not_nil(command.map["git:open_selected_historical_buffer"])
+    test.not_nil(command.map["git:close_selected_tab"])
+    test.not_nil(command.map["git:select_next_row"])
+    test.not_nil(command.map["git:select_previous_row"])
+    test.not_nil(command.map["git:activate_selected_row"])
+    test.not_nil(command.map["git:focus_diff_pane"])
+    test.not_nil(command.map["git:focus_list_pane"])
   end)
 end)

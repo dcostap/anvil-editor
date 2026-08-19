@@ -212,7 +212,7 @@ test.describe("Fuzzy Searcher file refresh", function()
     test.ok(wait_until(function() return not helpers.file_index_status().indexing end))
     test.not_ok(picker_has_path(picker, ignored_file))
 
-    test.ok(command.perform("fuzzy-searcher:toggle-ignored-files"))
+    test.ok(command.perform("fuzzy:toggle_ignored_files"))
     test.ok(wait_until(function() return picker_has_path(picker, ignored_file) end),
       "expected the ignored file after enabling the search toggle")
     test.equal(picker.include_ignored, true)
@@ -232,7 +232,7 @@ test.describe("Fuzzy Searcher file refresh", function()
     coroutine.yield(0.3)
     test.not_ok(picker_has_path(picker, ignored_file))
 
-    test.ok(command.perform("fuzzy-searcher:toggle-ignored-files"))
+    test.ok(command.perform("fuzzy:toggle_ignored_files"))
     test.ok(wait_until(function() return picker_has_path(picker, ignored_file) end, 10),
       "expected ignored text after enabling the search toggle; status="
         .. tostring(picker.status) .. " include=" .. tostring(picker.include_ignored)

@@ -114,7 +114,7 @@ local function save(filename, target)
           if target and target.buffer then
             prompt_save_as(target, save_as_prompt_text(target))
           else
-            command.perform("text:save-as")
+            command.perform("editor:save_as")
           end
         end)
       end
@@ -290,7 +290,7 @@ local function set_cursor(dv, x, y, snap_type)
   local line, col = dv:resolve_screen_position(x, y)
   dv.buffer:set_selection(line, col, line, col)
   if snap_type == "word" or snap_type == "lines" then
-    command.perform("text:select-" .. snap_type)
+    command.perform("core:select_" .. snap_type)
   end
   apply_resolved_wrap_affinity(dv)
   dv.mouse_selecting = { line, col, snap_type }
@@ -1193,7 +1193,7 @@ local function coalesce_duplicate_replacements(edits)
 end
 
 local commands = {
-  ["text:select-none"] = function(dv)
+  ["core:select_none"] = function(dv)
     local l1, c1 = dv.buffer:get_selection_idx(dv.buffer.last_selection)
     if not l1 then
       l1, c1 = dv.buffer:get_selection_idx(1)
@@ -1202,25 +1202,25 @@ local commands = {
     dv.buffer:clear_search_selections()
   end,
 
-  ["text:cut"] = function(dv)
+  ["core:cut"] = function(dv)
     cut_or_copy(dv, true)
   end,
 
-  ["text:copy"] = function(dv)
+  ["core:copy"] = function(dv)
     cut_or_copy(dv, false)
   end,
 
-  ["text:undo"] = function(dv)
+  ["core:undo"] = function(dv)
     if not can_edit(dv, "undo") then return end
     dv.buffer:undo()
   end,
 
-  ["text:redo"] = function(dv)
+  ["core:redo"] = function(dv)
     if not can_edit(dv, "redo") then return end
     dv.buffer:redo()
   end,
 
-  ["text:paste"] = function(dv)
+  ["core:paste"] = function(dv)
     if not can_edit(dv, "paste") then return end
     if dv.paste_from_provider and dv:paste_from_provider() then return end
     local clipboard = system.get_clipboard()
@@ -1266,7 +1266,7 @@ local commands = {
     end
   end,
 
-  ["text:paste-primary-selection"] = function(dv, x, y)
+  ["core:paste_primary_selection"] = function(dv, x, y)
     if not can_edit(dv, "paste") then return end
     if type(x) == "number" and type(y) == "number" then
       set_cursor(dv, x, y, "set")
@@ -1279,7 +1279,7 @@ local commands = {
     end, nil, { type = "insert" })
   end,
 
-  ["text:newline"] = function(dv)
+  ["core:newline"] = function(dv)
     if not can_edit(dv, "newline") then return end
     local text_by_idx = {}
     local edits = {}
@@ -1496,7 +1496,7 @@ local commands = {
     end
   end,
 
-  ["text:newline-below"] = function(dv)
+  ["core:newline_below"] = function(dv)
     if not can_edit(dv, "newline") then return end
     local edits = {}
     local entries = {}
@@ -1527,7 +1527,7 @@ local commands = {
     })
   end,
 
-  ["text:newline-above"] = function(dv)
+  ["core:newline_above"] = function(dv)
     if not can_edit(dv, "newline") then return end
     local edits = {}
     local entries = {}
@@ -1558,7 +1558,7 @@ local commands = {
     })
   end,
 
-  ["text:delete"] = function(dv)
+  ["core:delete"] = function(dv)
     if not can_edit(dv, "delete") then return end
     local selections = {}
     for idx, line1, col1, line2, col2 in dv.buffer:get_selections(true, true) do
@@ -1673,7 +1673,7 @@ local commands = {
     end
   end,
 
-  ["text:backspace"] = function(dv)
+  ["core:backspace"] = function(dv)
     if not can_edit(dv, "backspace") then return end
     local list_actions = {}
     local selection_count, list_action_count = 0, 0
@@ -1811,7 +1811,7 @@ local commands = {
     end
   end,
 
-  ["text:select-all"] = function(dv)
+  ["core:select_all"] = function(dv)
     dv.buffer:set_selection(1, 1, math.huge, math.huge)
     set_primary_selection(dv.buffer)
     -- avoid triggering TextView:scroll_to_make_visible
@@ -1821,7 +1821,7 @@ local commands = {
     dv.last_col2 = #dv.buffer.lines[#dv.buffer.lines]
   end,
 
-  ["text:select-lines"] = function(dv)
+  ["core:select_lines"] = function(dv)
     for idx, line1, _, line2 in dv.buffer:get_selections(true) do
       if not append_line_if_last_line(line2) then return end
       dv.buffer:set_selections(idx, line2 + 1, 1, line1, 1)
@@ -1829,7 +1829,7 @@ local commands = {
     set_primary_selection(dv.buffer)
   end,
 
-  ["text:select-word"] = function(dv)
+  ["core:select_word"] = function(dv)
     for idx, line1, col1 in dv.buffer:get_selections(true) do
       local line1, col1 = translate.start_of_word(dv.buffer, line1, col1)
       local line2, col2 = translate.end_of_word(dv.buffer, line1, col1)
@@ -1838,7 +1838,7 @@ local commands = {
     set_primary_selection(dv.buffer)
   end,
 
-  ["text:join-lines"] = command.palette(function(dv)
+  ["editor:join_lines"] = command.palette(function(dv)
     if not can_edit(dv, "join lines") then return end
     local actions = {}
     for idx, line1, col1, line2, col2 in dv.buffer:get_selections(true) do
@@ -1889,7 +1889,7 @@ local commands = {
     dv.buffer:apply_edits(edits, { type = "replace", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
   end),
 
-  ["text:indent"] = function(dv)
+  ["core:indent"] = function(dv)
     if not can_edit(dv, "indent") then return end
     local list_indent_edits, list_indent_lines = {}, {}
     local selection_count, list_indent_count = 0, 0
@@ -1998,7 +1998,7 @@ local commands = {
     end
   end,
 
-  ["text:unindent"] = function(dv)
+  ["core:unindent"] = function(dv)
     if not can_edit(dv, "unindent") then return end
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       local l1, c1, l2, c2 = dv.buffer:indent_text(true, line1, col1, line2, col2)
@@ -2008,7 +2008,7 @@ local commands = {
     end
   end,
 
-  ["text:duplicate-lines"] = command.palette(function(dv)
+  ["editor:duplicate_lines"] = command.palette(function(dv)
     if not can_edit(dv, "duplicate lines") then return end
     local actions = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
@@ -2062,7 +2062,7 @@ local commands = {
     end
   end),
 
-  ["text:delete-lines"] = command.palette(function(dv)
+  ["editor:delete_lines"] = command.palette(function(dv)
     if not can_edit(dv, "delete lines") then return end
     local actions = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
@@ -2121,7 +2121,7 @@ local commands = {
     dv.buffer:apply_edits(edits, { type = "remove", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = true })
   end),
 
-  ["text:move-lines-up"] = command.palette(function(dv)
+  ["editor:move_lines_up"] = command.palette(function(dv)
     if not can_edit(dv, "move lines") then return end
     local actions = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
@@ -2177,7 +2177,7 @@ local commands = {
     end
   end),
 
-  ["text:move-lines-down"] = command.palette(function(dv)
+  ["editor:move_lines_down"] = command.palette(function(dv)
     if not can_edit(dv, "move lines") then return end
     local actions = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
@@ -2233,7 +2233,7 @@ local commands = {
     end
   end),
 
-  ["text:toggle-block-comments"] = command.palette(function(dv)
+  ["editor:toggle_block_comments"] = command.palette(function(dv)
     if not can_edit(dv, "toggle comments") then return end
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       local current_syntax = dv.buffer.syntax
@@ -2255,7 +2255,7 @@ local commands = {
       local comment = current_syntax.block_comment
       if not comment then
         if dv.buffer.syntax.comment then
-          command.perform "text:toggle-line-comments"
+          command.perform "editor:toggle_line_comments"
         end
         return
       end
@@ -2268,7 +2268,7 @@ local commands = {
     end
   end),
 
-  ["text:toggle-line-comments"] = command.palette(function(dv)
+  ["editor:toggle_line_comments"] = command.palette(function(dv)
     if not can_edit(dv, "toggle comments") then return end
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       local current_syntax = dv.buffer.syntax
@@ -2294,17 +2294,17 @@ local commands = {
     end
   end),
 
-  ["text:upper-case"] = command.palette(function(dv)
+  ["editor:upper_case"] = command.palette(function(dv)
     if not can_edit(dv, "change case") then return end
     dv.buffer:replace(string.uupper)
   end),
 
-  ["text:lower-case"] = command.palette(function(dv)
+  ["editor:lower_case"] = command.palette(function(dv)
     if not can_edit(dv, "change case") then return end
     dv.buffer:replace(string.ulower)
   end),
 
-  ["text:go-to-line"] = command.palette(function(dv)
+  ["editor:go_to_line"] = command.palette(function(dv)
     local items
     local function init_items()
       if items then return end
@@ -2356,12 +2356,12 @@ local commands = {
     })
   end),
 
-  ["text:toggle-line-ending"] = command.palette(function(dv)
+  ["editor:toggle_line_ending"] = command.palette(function(dv)
     if not can_edit(dv, "toggle line ending") then return end
     dv.buffer.crlf = not dv.buffer.crlf
   end),
 
-  ["text:change-encoding"] = command.palette(function(dv)
+  ["editor:change_encoding"] = command.palette(function(dv)
     if not can_edit(dv, "change encoding") then return end
     encodings.select_encoding("Select Output Encoding", function(charset)
       if not can_edit(dv, "change encoding") then return end
@@ -2370,7 +2370,7 @@ local commands = {
     end)
   end),
 
-  ["text:reload-with-encoding"] = command.palette(function(dv)
+  ["editor:reload_with_encoding"] = command.palette(function(dv)
     if not can_edit(dv, "reload") then return end
     encodings.select_encoding("Reload With Encoding", function(charset)
       if not can_edit(dv, "reload") then return end
@@ -2379,31 +2379,31 @@ local commands = {
     end)
   end),
 
-  ["text:toggle-overwrite"] = function(dv)
+  ["core:toggle_overwrite"] = function(dv)
     dv.buffer.overwrite = not dv.buffer.overwrite
     core.blink_reset() -- to show the cursor has changed edit modes
   end,
 
-  ["text:save-as"] = command.palette(function(dv)
+  ["editor:save_as"] = command.palette(function(dv)
     if not can_edit(dv, "save as") then return end
     prompt_save_as(dv, save_as_prompt_text(dv))
   end),
 
-  ["text:save"] = command.palette(function(dv)
+  ["editor:save"] = command.palette(function(dv)
     if not can_edit(dv, "save") then return end
     if dv.buffer.filename then
       save(nil, dv)
     else
-      command.perform("text:save-as")
+      command.perform("editor:save_as")
     end
   end),
 
-  ["text:reload"] = command.palette(function(dv)
+  ["editor:reload"] = command.palette(function(dv)
     if not can_edit(dv, "reload") then return end
     dv.buffer:reload()
   end),
 
-  ["file:rename"] = command.palette(function(dv)
+  ["editor:rename"] = command.palette(function(dv)
     if not can_edit(dv, "rename file") then return end
     local old_filename = dv.buffer.filename
     local old_abs_filename = dv.buffer.abs_filename
@@ -2435,7 +2435,7 @@ local commands = {
     })
   end),
 
-  ["file:delete"] = command.palette(function(dv)
+  ["editor:delete"] = command.palette(function(dv)
     if not can_edit(dv, "delete file") then return end
     local filename = dv.buffer.abs_filename
     if not filename then
@@ -2450,7 +2450,7 @@ local commands = {
     core.log("Removed \"%s\"", filename)
   end),
 
-  ["text:select-to-cursor"] = function(dv, x, y, clicks)
+  ["core:select_to_cursor"] = function(dv, x, y, clicks)
     local line1, col1 = select(3, buffer():get_selection())
     local line2, col2 = dv:resolve_screen_position(x, y)
     dv.mouse_selecting = { line1, col1, nil }
@@ -2459,12 +2459,12 @@ local commands = {
     set_primary_selection(dv.buffer)
   end,
 
-  ["text:create-cursor-previous-line"] = command.palette(function(dv)
+  ["editor:create_cursor_previous_line"] = command.palette(function(dv)
     split_cursor(dv, -1)
     dv.buffer:merge_cursors()
   end),
 
-  ["text:create-cursor-next-line"] = command.palette(function(dv)
+  ["editor:create_cursor_next_line"] = command.palette(function(dv)
     split_cursor(dv, 1)
     dv.buffer:merge_cursors()
   end)
@@ -2477,19 +2477,19 @@ command.add(function(x, y)
   local x1,y1,x2,y2 = dv.position.x, dv.position.y, dv.position.x + dv.size.x, dv.position.y + dv.size.y
   return x >= x1 + dv:get_gutter_width() and x < x2 and y >= y1 and y < y2, dv, x, y
 end, {
-  ["text:set-cursor"] = function(dv, x, y)
+  ["core:set_cursor"] = function(dv, x, y)
     set_cursor(dv, x, y, "set")
   end,
 
-  ["text:set-cursor-word"] = function(dv, x, y)
+  ["core:set_cursor_word"] = function(dv, x, y)
     set_cursor(dv, x, y, "word")
   end,
 
-  ["text:set-cursor-line"] = function(dv, x, y, clicks)
+  ["core:set_cursor_line"] = function(dv, x, y, clicks)
     set_cursor(dv, x, y, "lines")
   end,
 
-  ["text:split-cursor"] = function(dv, x, y, clicks)
+  ["core:split_cursor"] = function(dv, x, y, clicks)
     if dv.begin_line_render_interaction then dv:begin_line_render_interaction("mouse-selection") end
     local line, col = dv:resolve_screen_position(x, y)
     local removal_target = nil
@@ -2517,7 +2517,7 @@ local function active_bom_buffer(view)
   return buffer, bom
 end
 
-command.add_toggle("text:toggle-bom", {
+command.add_toggle("core:toggle_bom", {
   predicate = function()
     return active_bom_buffer() ~= nil
   end,
@@ -2536,36 +2536,36 @@ command.add_toggle("text:toggle-bom", {
 })
 
 local translations = {
-  ["previous-char"] = translate,
-  ["next-char"] = translate,
-  ["previous-word-start"] = translate,
-  ["next-word-end"] = translate,
-  ["previous-block-start"] = translate,
-  ["next-block-end"] = translate,
-  ["start-of-buffer"] = translate,
-  ["end-of-buffer"] = translate,
-  ["start-of-line"] = translate,
-  ["end-of-line"] = translate,
-  ["start-of-word"] = translate,
-  ["start-of-indentation"] = translate,
-  ["end-of-word"] = translate,
-  ["previous-line"] = TextView.translate,
-  ["next-line"] = TextView.translate,
-  ["previous-page"] = TextView.translate,
-  ["next-page"] = TextView.translate,
+  previous_char = translate,
+  next_char = translate,
+  previous_word_start = translate,
+  next_word_end = translate,
+  previous_block_start = translate,
+  next_block_end = translate,
+  start_of_buffer = translate,
+  end_of_buffer = translate,
+  start_of_line = translate,
+  end_of_line = translate,
+  start_of_word = translate,
+  start_of_indentation = translate,
+  end_of_word = translate,
+  previous_line = TextView.translate,
+  next_line = TextView.translate,
+  previous_page = TextView.translate,
+  next_page = TextView.translate,
 }
 
 for name, obj in pairs(translations) do
-  commands["text:move-to-" .. name] = function(dv)
-    dv.buffer:move_to(obj[name:gsub("-", "_")], dv)
+  commands["core:move_to_" .. name] = function(dv)
+    dv.buffer:move_to(obj[name], dv)
   end
-  commands["text:select-to-" .. name] = function(dv)
-    dv.buffer:select_to(obj[name:gsub("-", "_")], dv)
+  commands["core:select_to_" .. name] = function(dv)
+    dv.buffer:select_to(obj[name], dv)
     set_primary_selection(dv.buffer)
   end
-  commands["text:delete-to-" .. name] = function(dv)
+  commands["core:delete_to_" .. name] = function(dv)
     if not can_edit(dv, "delete") then return end
-    dv.buffer:delete_to(obj[name:gsub("-", "_")], dv)
+    dv.buffer:delete_to(obj[name], dv)
   end
 end
 
@@ -2593,12 +2593,12 @@ local function move_char_batch(dv, move_fn, collapse_to_end)
   buffer:set_selection_list(selections, last_selection, { merge_cursors = true, sanitized = true })
 end
 
-commands["text:move-to-previous-char"] = function(dv)
+commands["core:move_to_previous_char"] = function(dv)
   if reveal_markdown_task_source_from_implicit_content(dv) then return end
   move_char_batch(dv, translate.previous_char, false)
 end
 
-commands["text:move-to-next-char"] = function(dv)
+commands["core:move_to_next_char"] = function(dv)
   move_char_batch(dv, translate.next_char, true)
   set_markdown_task_source_affinity(dv)
 end
@@ -2720,11 +2720,11 @@ local function move_line_batch(dv, line_offset)
   buffer:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
 end
 
-commands["text:move-to-previous-line"] = function(dv)
+commands["core:move_to_previous_line"] = function(dv)
   move_line_batch(dv, -1)
 end
 
-commands["text:move-to-next-line"] = function(dv)
+commands["core:move_to_next_line"] = function(dv)
   move_line_batch(dv, 1)
 end
 
@@ -2792,15 +2792,15 @@ local function move_to_start_of_indentation(buffer, line, col)
   return line, col > indent_col and indent_col or (col == 1 and indent_col or 1)
 end
 
-commands["text:move-to-end-of-line"] = function(dv)
+commands["core:move_to_end_of_line"] = function(dv)
   move_collapsed_carets_batch(dv, move_to_end_of_line)
 end
 
-commands["text:move-to-start-of-line"] = function(dv)
+commands["core:move_to_start_of_line"] = function(dv)
   move_collapsed_carets_batch(dv, move_to_start_of_line)
 end
 
-commands["text:move-to-start-of-indentation"] = function(dv)
+commands["core:move_to_start_of_indentation"] = function(dv)
   move_collapsed_carets_batch(dv, move_to_start_of_indentation)
 end
 
@@ -2947,47 +2947,47 @@ local function select_line_batch(dv, line_offset)
   set_primary_selection(buffer)
 end
 
-commands["text:select-to-previous-char"] = function(dv)
+commands["core:select_to_previous_char"] = function(dv)
   select_char_batch(dv, translate.previous_char)
 end
 
-commands["text:select-to-next-char"] = function(dv)
+commands["core:select_to_next_char"] = function(dv)
   select_char_batch(dv, translate.next_char)
 end
 
-commands["text:select-to-previous-line"] = function(dv)
+commands["core:select_to_previous_line"] = function(dv)
   select_line_batch(dv, -1)
 end
 
-commands["text:select-to-next-line"] = function(dv)
+commands["core:select_to_next_line"] = function(dv)
   select_line_batch(dv, 1)
 end
 
 local unwrapped_navigation_commands = {}
 for _, name in ipairs({
-  "text:move-to-previous-line",
-  "text:move-to-next-line",
-  "text:select-to-previous-line",
-  "text:select-to-next-line",
-  "text:move-to-next-char",
-  "text:select-to-next-char",
-  "text:move-to-next-word-end",
-  "text:select-to-next-word-end",
-  "text:move-to-end-of-word",
-  "text:select-to-end-of-word",
-  "text:move-to-next-block-end",
-  "text:select-to-next-block-end",
-  "text:move-to-end-of-buffer",
-  "text:select-to-end-of-buffer",
-  "text:move-to-start-of-line",
-  "text:select-to-start-of-line",
-  "text:delete-to-start-of-line",
-  "text:move-to-start-of-indentation",
-  "text:select-to-start-of-indentation",
-  "text:delete-to-start-of-indentation",
-  "text:move-to-end-of-line",
-  "text:select-to-end-of-line",
-  "text:delete-to-end-of-line",
+  "core:move_to_previous_line",
+  "core:move_to_next_line",
+  "core:select_to_previous_line",
+  "core:select_to_next_line",
+  "core:move_to_next_char",
+  "core:select_to_next_char",
+  "core:move_to_next_word_end",
+  "core:select_to_next_word_end",
+  "core:move_to_end_of_word",
+  "core:select_to_end_of_word",
+  "core:move_to_next_block_end",
+  "core:select_to_next_block_end",
+  "core:move_to_end_of_buffer",
+  "core:select_to_end_of_buffer",
+  "core:move_to_start_of_line",
+  "core:select_to_start_of_line",
+  "core:delete_to_start_of_line",
+  "core:move_to_start_of_indentation",
+  "core:select_to_start_of_indentation",
+  "core:delete_to_start_of_indentation",
+  "core:move_to_end_of_line",
+  "core:select_to_end_of_line",
+  "core:delete_to_end_of_line",
 }) do
   unwrapped_navigation_commands[name] = commands[name]
 end
@@ -3203,34 +3203,34 @@ local function move_to_wrapped_start_of_indentation(buffer, line, col, dv, logic
   )
 end
 
-commands["text:move-to-previous-line"] = function(dv)
+commands["core:move_to_previous_line"] = function(dv)
   return wrapped_move_to(
-    dv, "text:move-to-previous-line", move_to_wrapped_previous_line, dv
+    dv, "core:move_to_previous_line", move_to_wrapped_previous_line, dv
   )
 end
-commands["text:move-to-next-line"] = function(dv)
+commands["core:move_to_next_line"] = function(dv)
   return wrapped_move_to(
-    dv, "text:move-to-next-line", move_to_wrapped_next_line, dv
+    dv, "core:move_to_next_line", move_to_wrapped_next_line, dv
   )
 end
-commands["text:select-to-previous-line"] = function(dv)
-  return wrapped_select_to(dv, "text:select-to-previous-line", move_to_wrapped_previous_line, dv)
+commands["core:select_to_previous_line"] = function(dv)
+  return wrapped_select_to(dv, "core:select_to_previous_line", move_to_wrapped_previous_line, dv)
 end
-commands["text:select-to-next-line"] = function(dv)
-  return wrapped_select_to(dv, "text:select-to-next-line", move_to_wrapped_next_line, dv)
+commands["core:select_to_next_line"] = function(dv)
+  return wrapped_select_to(dv, "core:select_to_next_line", move_to_wrapped_next_line, dv)
 end
 
 for _, name in ipairs({
-  "text:move-to-next-char",
-  "text:select-to-next-char",
-  "text:move-to-next-word-end",
-  "text:select-to-next-word-end",
-  "text:move-to-end-of-word",
-  "text:select-to-end-of-word",
-  "text:move-to-next-block-end",
-  "text:select-to-next-block-end",
-  "text:move-to-end-of-buffer",
-  "text:select-to-end-of-buffer",
+  "core:move_to_next_char",
+  "core:select_to_next_char",
+  "core:move_to_next_word_end",
+  "core:select_to_next_word_end",
+  "core:move_to_end_of_word",
+  "core:select_to_end_of_word",
+  "core:move_to_next_block_end",
+  "core:select_to_next_block_end",
+  "core:move_to_end_of_buffer",
+  "core:select_to_end_of_buffer",
 }) do
   local command_name = name
   commands[command_name] = function(dv, ...)
@@ -3238,50 +3238,50 @@ for _, name in ipairs({
   end
 end
 
-commands["text:move-to-start-of-line"] = function(dv)
+commands["core:move_to_start_of_line"] = function(dv)
   return wrapped_move_to(
-    dv, "text:move-to-start-of-line",
+    dv, "core:move_to_start_of_line",
     move_to_wrapped_start_of_line, dv, move_to_start_of_line
   )
 end
-commands["text:select-to-start-of-line"] = function(dv)
-  return wrapped_select_to(dv, "text:select-to-start-of-line", move_to_wrapped_start_of_line, dv)
+commands["core:select_to_start_of_line"] = function(dv)
+  return wrapped_select_to(dv, "core:select_to_start_of_line", move_to_wrapped_start_of_line, dv)
 end
-commands["text:delete-to-start-of-line"] = function(dv)
-  return wrapped_delete_to(dv, "text:delete-to-start-of-line", move_to_wrapped_start_of_line, dv)
+commands["core:delete_to_start_of_line"] = function(dv)
+  return wrapped_delete_to(dv, "core:delete_to_start_of_line", move_to_wrapped_start_of_line, dv)
 end
-commands["text:move-to-start-of-indentation"] = function(dv)
+commands["core:move_to_start_of_indentation"] = function(dv)
   return wrapped_move_to(
-    dv, "text:move-to-start-of-indentation",
+    dv, "core:move_to_start_of_indentation",
     move_to_wrapped_start_of_indentation, dv, move_to_start_of_indentation
   )
 end
-commands["text:select-to-start-of-indentation"] = function(dv)
-  return wrapped_select_to(dv, "text:select-to-start-of-indentation", move_to_wrapped_start_of_indentation, dv)
+commands["core:select_to_start_of_indentation"] = function(dv)
+  return wrapped_select_to(dv, "core:select_to_start_of_indentation", move_to_wrapped_start_of_indentation, dv)
 end
-commands["text:delete-to-start-of-indentation"] = function(dv)
-  return wrapped_delete_to(dv, "text:delete-to-start-of-indentation", move_to_wrapped_start_of_indentation, dv)
+commands["core:delete_to_start_of_indentation"] = function(dv)
+  return wrapped_delete_to(dv, "core:delete_to_start_of_indentation", move_to_wrapped_start_of_indentation, dv)
 end
-commands["text:move-to-end-of-line"] = function(dv)
-  return wrapped_move_to(dv, "text:move-to-end-of-line", move_to_wrapped_end_of_line, dv)
+commands["core:move_to_end_of_line"] = function(dv)
+  return wrapped_move_to(dv, "core:move_to_end_of_line", move_to_wrapped_end_of_line, dv)
 end
-commands["text:select-to-end-of-line"] = function(dv)
-  return wrapped_select_to(dv, "text:select-to-end-of-line", move_to_wrapped_end_of_line, dv)
+commands["core:select_to_end_of_line"] = function(dv)
+  return wrapped_select_to(dv, "core:select_to_end_of_line", move_to_wrapped_end_of_line, dv)
 end
-commands["text:delete-to-end-of-line"] = function(dv)
-  return wrapped_delete_to(dv, "text:delete-to-end-of-line", move_to_wrapped_end_of_line, dv)
+commands["core:delete_to_end_of_line"] = function(dv)
+  return wrapped_delete_to(dv, "core:delete_to_end_of_line", move_to_wrapped_end_of_line, dv)
 end
 
-commands["text:fold-at-caret"] = command.palette(function(dv)
+commands["editor:fold_at_caret"] = command.palette(function(dv)
   local fold, err = dv:fold_at_caret()
   if not fold and err then core.log_quiet("Fold at caret skipped: %s", tostring(err)) end
 end)
 
-commands["text:unfold-at-caret"] = command.palette(function(dv)
+commands["editor:unfold_at_caret"] = command.palette(function(dv)
   dv:unfold_at_caret("command")
 end)
 
-commands["text:unfold-all"] = command.palette(function(dv)
+commands["editor:unfold_all"] = command.palette(function(dv)
   dv:unfold_all("command")
 end)
 
@@ -3306,7 +3306,7 @@ command.add(function(...)
   return not not (owned_text_view or specialized_text_view), view, ...
 end, commands)
 
-command.add_toggle("line-wrapping:toggle", {
+command.add_toggle("editor:toggle_line_wrapping", {
   palette = true,
   get = function(view)
     view = view or core.active_view
@@ -3322,14 +3322,14 @@ command.add_toggle("line-wrapping:toggle", {
 
 
 keymap.add {
-  ["f10"] = "line-wrapping:toggle",
+  ["f10"] = "editor:toggle_line_wrapping",
 }
 
 keymap.add_direct {
-  ["ctrl+-"] = "text:fold-at-caret",
-  ["ctrl+shift+-"] = "text:fold-at-caret",
-  ["ctrl+="] = "text:unfold-at-caret",
-  ["ctrl+shift+="] = "text:unfold-at-caret",
-  ["ctrl+plus"] = "text:unfold-at-caret",
-  ["ctrl+shift+plus"] = "text:unfold-at-caret",
+  ["ctrl+-"] = "editor:fold_at_caret",
+  ["ctrl+shift+-"] = "editor:fold_at_caret",
+  ["ctrl+="] = "editor:unfold_at_caret",
+  ["ctrl+shift+="] = "editor:unfold_at_caret",
+  ["ctrl+plus"] = "editor:unfold_at_caret",
+  ["ctrl+shift+plus"] = "editor:unfold_at_caret",
 }

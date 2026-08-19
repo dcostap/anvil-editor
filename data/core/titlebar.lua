@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
+local view_icons = require "core.view_icons"
 local View = require "core.view"
 
 local TitleBar = View:extend()
@@ -155,21 +156,36 @@ local function pane_number_gap()
   return math.max(3 * SCALE, style.padding.x / 3)
 end
 
+local function pane_icon(pane)
+  return view_icons.for_view(pane.current_view)
+end
+
+local function pane_icon_gap()
+  return math.max(4 * SCALE, style.padding.x / 2)
+end
+
 local function pane_label_width(number, pane)
-  return TitleBar.pane_number_font():get_width(tostring(number)) + pane_number_gap()
-    + style.font:get_width(pane_name(pane))
+  local icon = pane_icon(pane)
+  local icon_width = icon and view_icons.width(icon, style.font:get_height()) + pane_icon_gap() or 0
+  return icon_width + TitleBar.pane_number_font():get_width(tostring(number))
+    + pane_number_gap() + style.font:get_width(pane_name(pane))
 end
 
 local function draw_pane_label(number, pane, rect, name_color)
+  local x = rect.x
+  local icon = pane_icon(pane)
+  if icon then
+    x = x + view_icons.draw(icon, x, rect.y, rect.h, name_color) + pane_icon_gap()
+  end
   local number_text = tostring(number)
   local number_font = TitleBar.pane_number_font()
   local number_width = number_font:get_width(number_text)
   renderer.draw_text(
-    number_font, number_text, rect.x,
+    number_font, number_text, x,
     rect.y + math.floor((rect.h - number_font:get_height()) / 2),
     style.titlebar_pane_number
   )
-  local name_x = rect.x + number_width + pane_number_gap()
+  local name_x = x + number_width + pane_number_gap()
   local name = fit_text(style.font, pane_name(pane),
     math.max(0, rect.x + rect.w - name_x))
   renderer.draw_text(

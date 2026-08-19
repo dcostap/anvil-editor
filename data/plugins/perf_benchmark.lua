@@ -380,7 +380,7 @@ local function perform_action()
       local line = view.buffer:get_selection()
       if line ~= 1 then view.buffer:set_selection(1, 1000) end
     end
-    if not command.perform("text:move-to-next-line") then
+    if not command.perform("core:move_to_next_line") then
       error("text:move-to-next-line was unavailable")
     end
     benchmark.action_count = benchmark.action_count + 1

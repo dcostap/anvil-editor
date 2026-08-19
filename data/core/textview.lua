@@ -4631,8 +4631,8 @@ end
 
 ---Whether an unwrapped navigation command must honor rendered caret rows.
 function TextView:needs_line_render_position_navigation(command_name)
-  local direction = command_name:find("previous%-line", 1) and -1
-    or command_name:find("next%-line", 1) and 1 or nil
+  local direction = command_name:find("previous_line", 1, true) and -1
+    or command_name:find("next_line", 1, true) and 1 or nil
   for _, line in self.buffer:get_selections(false) do
     local _, rows = self:get_line_render_position_rows(line)
     if rows and #rows > 1 then return true end

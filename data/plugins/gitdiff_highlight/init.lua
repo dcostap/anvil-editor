@@ -652,16 +652,16 @@ local function jump_to_gitdiff_change(view, direction)
 end
 
 command.add(active_editor_view, {
-	["gitdiff:previous-change"] = function(view) jump_to_gitdiff_change(view, -1) end,
-	["gitdiff:next-change"] = function(view) jump_to_gitdiff_change(view, 1) end,
+	["editor:previous_git_change"] = function(view) jump_to_gitdiff_change(view, -1) end,
+	["editor:next_git_change"] = function(view) jump_to_gitdiff_change(view, 1) end,
 })
 
 command.add("core.textview", {
-	["gitdiff:refresh"] = function()
+	["editor:refresh_git_changes"] = function()
 		local view = core.active_view
 		if view and view.buffer then schedule_base_reload(view.buffer, "manual-refresh") end
 	end,
-	["gitdiff:debug-state"] = function()
+	["core:debug_git_changes"] = function()
 		local view = core.active_view
 		local buffer = view and view.buffer
 		if not buffer then return end

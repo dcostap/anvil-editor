@@ -99,7 +99,7 @@ test.describe("IntelliJ actions batch behavior", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("user:duplicate-current-line"))
+    test.ok(command.perform("editor:duplicate_current_line"))
 
     test.equal(table.concat(buffer.lines), "aa\naa\nbb\ncc\ncc\ndd\n")
     test.equal(changes, 1)
@@ -117,7 +117,7 @@ test.describe("IntelliJ actions batch behavior", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("user:comment-with-line-comment-at-start"))
+    test.ok(command.perform("editor:comment_with_line_comment_at_start"))
 
     test.equal(table.concat(buffer.lines), "//aa\n//bb\n//cc\n")
     test.equal(changes, 1)
@@ -132,7 +132,7 @@ test.describe("IntelliJ actions batch behavior", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("user:comment-with-line-comment-at-start"))
+    test.ok(command.perform("editor:comment_with_line_comment_at_start"))
 
     test.equal(table.concat(buffer.lines), "aa\nbb\ncc\n")
     test.equal(changes, 1)
@@ -143,7 +143,7 @@ test.describe("IntelliJ actions batch behavior", function()
     local view, buffer = open_editor(context, "aa\nbb\ncc\ndd")
     set_view_selections(view, { 2, 2, 2, 2 })
 
-    test.ok(command.perform("user:clone-caret-below-until-last-line-intellij"))
+    test.ok(command.perform("editor:clone_caret_below_until_last_line_intellij"))
 
     test.same(view_selections(view), {
       2, 2, 2, 2,
@@ -157,7 +157,7 @@ test.describe("IntelliJ actions batch behavior", function()
     local view = open_editor(context, "aa xx aa\naa")
     set_view_selections(view, { 1, 1, 1, 3 })
 
-    test.ok(command.perform("user:select-all-occurrences"))
+    test.ok(command.perform("editor:select_all_occurrences"))
 
     test.same(view_selections(view), {
       1, 3, 1, 1,
@@ -179,7 +179,7 @@ test.describe("IntelliJ actions batch behavior", function()
     end
 
     local ok, err = pcall(function()
-      test.ok(command.perform("user:select-all-occurrences"))
+      test.ok(command.perform("editor:select_all_occurrences"))
       local selections = view_selections(view)
       test.equal(#selections / 4, 200)
       test.same({ selections[1], selections[2], selections[3], selections[4] }, { 1, 3, 1, 1 })
@@ -213,13 +213,13 @@ test.describe("IntelliJ actions batch behavior", function()
     local external_buffer = track(context, "buffers", core.open_buffer(external_file_path))
     local external_view = track(context, "views", panes.place(function() return Editor(external_buffer) end, { placement = "new" }))
     core.set_active_view(external_view)
-    test.ok(command.perform("user:copy-project-path"))
+    test.ok(command.perform("editor:copy_project_path"))
     test.equal(copied, core.root_project().path)
 
     local project_buffer = track(context, "buffers", core.open_buffer(project_file_path))
     local project_view = track(context, "views", panes.place(function() return Editor(project_buffer) end, { placement = "new" }))
     core.set_active_view(project_view)
-    test.ok(command.perform("user:copy-project-path"))
+    test.ok(command.perform("editor:copy_project_path"))
     test.equal(copied, core.root_project().path)
   end)
 
@@ -248,7 +248,7 @@ test.describe("IntelliJ actions batch behavior", function()
       return {}
     end
 
-    test.ok(command.perform("user:open-terminal-at-active-file"))
+    test.ok(command.perform("editor:open_terminal_at_current_file"))
 
     local expected_dir = common.normalize_path(nested_dir)
     if PLATFORM == "Windows" then
@@ -292,7 +292,7 @@ test.describe("IntelliJ actions batch behavior", function()
       exec_commands[#exec_commands + 1] = cmd
     end
 
-    test.ok(command.perform("user:open-terminal-at-active-file"))
+    test.ok(command.perform("editor:open_terminal_at_current_file"))
     test.equal(#exec_commands, 1)
 
     local expected_dir = common.normalize_path(context.temp_root):gsub("/", "\\")

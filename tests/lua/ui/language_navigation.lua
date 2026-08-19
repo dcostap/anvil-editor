@@ -118,7 +118,7 @@ target :: proc() {}
       view.buffer:set_selection(4, 5)
     end)
 
-    test.ok(command.perform("language:go-to-declaration", view))
+    test.ok(command.perform("editor:go_to_declaration", view))
     test.ok(wait_until(function()
       local active = core.active_view
       return active and active.buffer and common.path_equals(active.buffer.abs_filename, defs_path)

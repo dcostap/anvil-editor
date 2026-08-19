@@ -12,7 +12,7 @@ Semantic Markdown link fragments use the hand cursor. Left click remains normal 
 
 Attached Markdown Editors publish current semantic link/image nodes through `DocView`'s generic POI provider contract. POIs carry exact source bounds, stable semantic IDs, and activation callbacks using the same normalized resolver as mouse/command activation. Tree-sitter suppression prevents code/comment lookalikes from becoming POIs.
 
-Generic `poi:next` / `poi:previous` navigation therefore steps through links without Markdown-specific key handling, and `poi:activate` opens the target through the ordinary link path. Whole-Document adoption is explicitly bounded at 32,768 inline captures; oversized/truncated snapshots quietly decline POI publication rather than presenting incomplete random navigation.
+Generic `core:next_point_of_interest` / `core:previous_point_of_interest` navigation therefore steps through links without Markdown-specific key handling, and `core:activate_point_of_interest` opens the target through the ordinary link path. Whole-Document adoption is explicitly bounded at 32,768 inline captures; oversized/truncated snapshots quietly decline POI publication rather than presenting incomplete random navigation.
 
 ## Commands
 

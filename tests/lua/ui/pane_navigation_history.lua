@@ -96,9 +96,9 @@ test.describe("Pane navigation history", function()
     local pane = panes.create { factory = factory("one", 1) }
     pane.current_view.place = 2
     panes.record_location(pane)
-    test.ok(command.perform("navigation:back"))
+    test.ok(command.perform("core:navigate_back"))
     test.equal(pane.current_view.place, 1)
-    test.ok(command.perform("navigation:forward"))
+    test.ok(command.perform("core:navigate_forward"))
     test.equal(pane.current_view.place, 2)
   end)
 end)

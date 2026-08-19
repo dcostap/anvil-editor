@@ -1103,7 +1103,7 @@ function Widget:on_mouse_moved(x, y, dx, dy)
         end
         if binding then
           if #tooltip == 0 then
-            table.insert(tooltip, command.prettify_name(self.tooltip_command))
+            table.insert(tooltip, self.tooltip_command)
           end
           table.insert(tooltip, style.dim)
           table.insert(tooltip, "  " .. binding)

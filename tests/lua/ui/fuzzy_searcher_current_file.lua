@@ -57,7 +57,7 @@ test.describe("Fuzzy Searcher current file query", function()
 
   local function perform_for(path)
     core.active_view = FileView(path)
-    test.ok(command.perform("fuzzy-searcher:open-current-file"))
+    test.ok(command.perform("fuzzy:open_current_file"))
     local picker = test.not_nil(core.fuzzy_searcher_active_view)
     picker:update()
     return picker

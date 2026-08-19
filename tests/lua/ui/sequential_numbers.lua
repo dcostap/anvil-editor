@@ -47,7 +47,7 @@ local function set_view_selections(view, selections)
 end
 
 local function run_command(initial, stride)
-  test.ok(command.perform("text:insert-sequential-numbers-on-cursors"))
+  test.ok(command.perform("editor:insert_sequential_numbers_on_cursors"))
   test.equal(core.active_view, core.global_prompt_bar)
   core.global_prompt_bar:set_text(tostring(initial))
   core.global_prompt_bar:submit()

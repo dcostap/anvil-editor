@@ -211,6 +211,7 @@ test.describe("TextView decoration providers", function()
     local old_highlight = config.highlight_current_line
     local old_text = renderer.draw_text
     local old_rect = renderer.draw_rect
+    local old_rounded_rect = renderer.draw_rounded_rect
     local old_push = core.push_clip_rect
     local old_pop = core.pop_clip_rect
     local events = {}
@@ -223,6 +224,7 @@ test.describe("TextView decoration providers", function()
         events[#events + 1] = { kind = "decoration" }
       end
     end
+    renderer.draw_rounded_rect = function() end
     core.push_clip_rect = function() end
     core.pop_clip_rect = function() end
     view.draw_overlay = function() end
@@ -233,6 +235,7 @@ test.describe("TextView decoration providers", function()
     config.highlight_current_line = old_highlight
     renderer.draw_text = old_text
     renderer.draw_rect = old_rect
+    renderer.draw_rounded_rect = old_rounded_rect
     core.push_clip_rect = old_push
     core.pop_clip_rect = old_pop
     if not ok then error(err, 0) end
@@ -280,15 +283,18 @@ test.describe("TextView decoration providers", function()
 
     local old_text = renderer.draw_text
     local old_rect = renderer.draw_rect
+    local old_rounded_rect = renderer.draw_rounded_rect
     local old_push = core.push_clip_rect
     local old_pop = core.pop_clip_rect
     renderer.draw_text = function(font, text, x, y, color) return x + (font and font:get_width(text) or 0) end
     renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
     core.push_clip_rect = function() end
     core.pop_clip_rect = function() end
     local ok, err = pcall(function() view:draw_folded() end)
     renderer.draw_text = old_text
     renderer.draw_rect = old_rect
+    renderer.draw_rounded_rect = old_rounded_rect
     core.push_clip_rect = old_push
     core.pop_clip_rect = old_pop
     if not ok then error(err, 0) end
@@ -418,15 +424,18 @@ test.describe("TextView decoration providers", function()
 
     local old_text = renderer.draw_text
     local old_rect = renderer.draw_rect
+    local old_rounded_rect = renderer.draw_rounded_rect
     local old_push = core.push_clip_rect
     local old_pop = core.pop_clip_rect
     renderer.draw_text = function(font, text, x, y, color) return x + (font and font:get_width(text) or 0) end
     renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
     core.push_clip_rect = function() end
     core.pop_clip_rect = function() end
     local ok, err = pcall(function() view:draw_folded() end)
     renderer.draw_text = old_text
     renderer.draw_rect = old_rect
+    renderer.draw_rounded_rect = old_rounded_rect
     core.push_clip_rect = old_push
     core.pop_clip_rect = old_pop
     test.ok(ok, err)

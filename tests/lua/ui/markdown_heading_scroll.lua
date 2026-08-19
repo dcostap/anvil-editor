@@ -85,13 +85,13 @@ test.describe("Markdown heading navigation scrolling", function()
     view:update()
     view.scroll.y, view.scroll.to.y = 0, 0
 
-    for _ = 2, 35 do move_and_update(view, "text:move-to-next-line") end
+    for _ = 2, 35 do move_and_update(view, "core:move_to_next_line") end
     local before_heading_y = highlight_top(view, 35)
 
-    move_and_update(view, "text:move-to-next-line")
+    move_and_update(view, "core:move_to_next_line")
     local heading_y = highlight_top(view, 36)
 
-    move_and_update(view, "text:move-to-next-line")
+    move_and_update(view, "core:move_to_next_line")
     local after_heading_y = highlight_top(view, 37)
     local context_height = view:get_line_height()
 
@@ -110,9 +110,9 @@ test.describe("Markdown heading navigation scrolling", function()
       )
     )
 
-    move_and_update(view, "text:move-to-previous-line")
+    move_and_update(view, "core:move_to_previous_line")
     local heading_up_y = highlight_top(view, 36)
-    move_and_update(view, "text:move-to-previous-line")
+    move_and_update(view, "core:move_to_previous_line")
     local before_heading_up_y = highlight_top(view, 35)
 
     test.ok(

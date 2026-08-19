@@ -42,7 +42,7 @@ test.describe("open file prompt", function()
     test.ok(common.mkdirp(dir))
     write_file(path, "select 1\n")
 
-    command.perform("core:open-file")
+    command.perform("core:pick_file")
 
     test.ok(core.global_prompt_bar.state.validate(path), errors[1])
   end)
@@ -53,13 +53,13 @@ test.describe("open file prompt", function()
     test.ok(common.mkdirp(dir))
     write_file(path, "select 1\n")
 
-    command.perform("core:open-file")
+    command.perform("core:pick_file")
 
     test.ok(core.global_prompt_bar.state.validate(path .. "\r\n"), errors[1])
   end)
 
   test.it("ignores the keyboard event payload when opened by a shortcut", function()
-    command.perform("core:open-file", { key = "o", modifiers = { "ctrl" } })
+    command.perform("core:pick_file", { key = "o", modifiers = { "ctrl" } })
 
     test.equal(core.global_prompt_bar.label, "Open File: ")
     test.equal(#errors, 0)
@@ -72,7 +72,7 @@ test.describe("open file prompt", function()
     test.ok(common.mkdirp(child))
     write_file(join_path(child, "inside.txt"), "inside\n")
 
-    command.perform("core:open-file")
+    command.perform("core:pick_file")
     local bar = core.global_prompt_bar
     bar:set_text(root .. PATHSEP)
     bar:update()
@@ -104,7 +104,7 @@ test.describe("open file prompt", function()
     local folder = join_path(root, "one", "two")
     remove_tree(root)
 
-    command.perform("core:open-file")
+    command.perform("core:pick_file")
     local bar = core.global_prompt_bar
     bar:set_text(folder .. PATHSEP)
     bar:submit()
@@ -125,7 +125,7 @@ test.describe("open file prompt", function()
     local selected
     remove_tree(root)
 
-    command.perform("core:open-file", "Select File", function(path)
+    command.perform("core:pick_file", "Select File", function(path)
       selected = path
     end)
     local bar = core.global_prompt_bar

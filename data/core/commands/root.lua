@@ -16,10 +16,10 @@ local function new_untitled_editor()
 end
 
 local commands = {
-  ["pane:close"] = command.palette(function(pane) return panes.close(pane) end),
-  ["view:close"] = function(pane) return panes.close_view(pane) end,
-  ["pane:close-all"] = command.palette(function() return panes.close_all() end),
-  ["pane:close-all-others"] = command.palette(function(pane)
+  ["core:close_pane"] = command.palette(function(pane) return panes.close(pane) end),
+  ["core:close_view"] = function(pane) return panes.close_view(pane) end,
+  ["core:close_all_panes"] = command.palette(function() return panes.close_all() end),
+  ["core:close_other_panes"] = command.palette(function(pane)
     local result = true
     for index = #panes.ordered(), 1, -1 do
       local candidate = panes.ordered()[index]
@@ -27,38 +27,38 @@ local commands = {
     end
     return result
   end),
-  ["pane:move-previous"] = command.palette(function(pane)
+  ["core:move_pane_previous"] = command.palette(function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index > 1 then return panes.move(pane, ordered[index - 1], "left") end
   end),
-  ["pane:move-next"] = command.palette(function(pane)
+  ["core:move_pane_next"] = command.palette(function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index < #ordered then return panes.move(pane, ordered[index + 1], "right") end
   end),
-  ["pane:focus-previous"] = function(pane)
+  ["core:focus_previous_pane"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if #ordered > 0 then return panes.focus_index((index - 2) % #ordered + 1) end
   end,
-  ["pane:focus-next"] = function(pane)
+  ["core:focus_next_pane"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if #ordered > 0 then return panes.focus_index(index % #ordered + 1) end
   end,
 }
 
 for _, direction in ipairs { "left", "right", "up", "down" } do
-  commands["pane:split-" .. direction] = command.palette(function(pane)
+  commands["core:split_pane_" .. direction] = command.palette(function(pane)
     return panes.split(pane, direction, { factory = new_untitled_editor })
   end)
 end
 
 for _, direction in ipairs { "left", "right", "up", "down" } do
-  commands["pane:focus-" .. direction] = function()
+  commands["core:focus_pane_" .. direction] = function()
     return panes.focus_direction(direction)
   end
 end
 
 for index = 1, 9 do
-  commands["pane:focus-" .. index] = function()
+  commands["core:focus_pane_" .. index] = function()
     return panes.focus_index(index)
   end
 end
@@ -66,15 +66,29 @@ end
 command.add(active_pane, commands)
 
 command.add(nil, {
-  ["pane:new"] = command.palette(function()
+  ["editor:open"] = command.palette(function()
+    local context = command.get_invocation_context() or {}
+    return panes.place(new_untitled_editor, {
+      pane = context.source_pane,
+      placement = context.placement or "current",
+      direction = context.direction,
+      focus = true,
+      reason = "editor-open",
+    })
+  end, {
+    keywords = { "new", "untitled", "file" },
+    supports_placement = true,
+    opens_view = true,
+  }),
+  ["core:new_pane"] = command.palette(function()
     return panes.create { factory = new_untitled_editor }
   end),
-  ["pane:close-or-quit"] = function()
+  ["core:close_pane_or_quit"] = function()
     local pane = panes.active()
     if pane then return panes.close(pane) end
     return core.quit()
   end,
-  ["root:scroll"] = function(delta)
+  ["core:scroll"] = function(delta)
     local view = core.root_panel.overlapping_view or core.active_view
     if view and view.scrollable then
       view.scroll.to.y = view.scroll.to.y + delta * -config.mouse_wheel_scroll
@@ -82,7 +96,7 @@ command.add(nil, {
     end
     return false
   end,
-  ["root:horizontal-scroll"] = function(delta)
+  ["core:horizontal_scroll"] = function(delta)
     local view = core.root_panel.overlapping_view or core.active_view
     if view and view.scrollable then
       view.scroll.to.x = view.scroll.to.x + delta * -config.mouse_wheel_scroll

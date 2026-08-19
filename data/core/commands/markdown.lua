@@ -15,34 +15,34 @@ command.add(function()
   end
   return false
 end, {
-  ["markdown-live-preview:toggle-source-mode"] = command.palette(function(view)
+  ["markdown:toggle_source_mode"] = command.palette(function(view)
     markdown_live.toggle_source_mode(view, "command-toggle")
   end),
-  ["markdown-live-preview:source-mode"] = command.palette(function(view)
+  ["markdown:source_mode"] = command.palette(function(view)
     markdown_live.set_source_mode(view, true, "command-source")
   end),
-  ["markdown-live-preview:live-mode"] = command.palette(function(view)
+  ["markdown:live_mode"] = command.palette(function(view)
     markdown_live.set_source_mode(view, false, "command-live")
   end),
-  ["markdown-live-preview:open-link"] = command.palette(function(view)
+  ["markdown:open_link"] = command.palette(function(view)
     markdown_live.open_link(view)
   end),
-  ["markdown-live-preview:create-link-target"] = command.palette(function(view)
+  ["markdown:create_link_target"] = command.palette(function(view)
     markdown_live.create_link_target(view)
   end),
-  ["markdown-live-preview:complete-link"] = command.palette(function(view)
+  ["markdown:complete_link"] = command.palette(function(view)
     markdown_completion.open(view)
   end),
-  ["markdown-live-preview:load-remote-image"] = command.palette(function(view)
+  ["markdown:load_remote_image"] = command.palette(function(view)
     markdown_live.allow_remote_image_once(view)
   end),
-  ["markdown-live-preview:trust-project-remote-images"] = command.palette(function(view)
+  ["markdown:trust_project_remote_images"] = command.palette(function(view)
     markdown_live.set_project_remote_image_trust(view, true)
   end),
-  ["markdown-live-preview:untrust-project-remote-images"] = command.palette(function(view)
+  ["markdown:untrust_project_remote_images"] = command.palette(function(view)
     markdown_live.set_project_remote_image_trust(view, false)
   end),
-  ["markdown-live-preview:review-rename-link-updates"] = command.palette(function(view)
+  ["markdown:review_rename_link_updates"] = command.palette(function(view)
     markdown_rename_links.present(markdown_vault_index.pending_rename(view.buffer.abs_filename))
   end),
 })
@@ -60,46 +60,46 @@ command.add(function()
   end
   return false
 end, {
-  ["markdown-live-preview:table-next-cell"] = function(view)
+  ["markdown:table_next_cell"] = function(view)
     markdown_tables.navigate(view, "next")
   end,
-  ["markdown-live-preview:table-previous-cell"] = function(view)
+  ["markdown:table_previous_cell"] = function(view)
     markdown_tables.navigate(view, "previous")
   end,
-  ["markdown-live-preview:table-cell-below"] = function(view)
+  ["markdown:table_cell_below"] = function(view)
     markdown_tables.navigate(view, "below")
   end,
-  ["markdown-live-preview:table-cell-up"] = function(view)
+  ["markdown:table_cell_up"] = function(view)
     markdown_tables.move_vertical(view, -1, false)
   end,
-  ["markdown-live-preview:table-cell-down"] = function(view)
+  ["markdown:table_cell_down"] = function(view)
     markdown_tables.move_vertical(view, 1, false)
   end,
-  ["markdown-live-preview:table-select-up"] = function(view)
+  ["markdown:table_select_up"] = function(view)
     markdown_tables.move_vertical(view, -1, true)
   end,
-  ["markdown-live-preview:table-select-down"] = function(view)
+  ["markdown:table_select_down"] = function(view)
     markdown_tables.move_vertical(view, 1, true)
   end,
-  ["markdown-live-preview:table-insert-cell-break"] = function(view)
+  ["markdown:table_insert_cell_break"] = function(view)
     markdown_tables.insert_cell_break(view)
   end,
-  ["markdown-live-preview:table-previous-char"] = function(view)
+  ["markdown:table_previous_char"] = function(view)
     markdown_tables.move_char(view, -1, false)
   end,
-  ["markdown-live-preview:table-next-char"] = function(view)
+  ["markdown:table_next_char"] = function(view)
     markdown_tables.move_char(view, 1, false)
   end,
-  ["markdown-live-preview:table-select-previous-char"] = function(view)
+  ["markdown:table_select_previous_char"] = function(view)
     markdown_tables.move_char(view, -1, true)
   end,
-  ["markdown-live-preview:table-select-next-char"] = function(view)
+  ["markdown:table_select_next_char"] = function(view)
     markdown_tables.move_char(view, 1, true)
   end,
-  ["markdown-live-preview:table-backspace"] = function(view)
+  ["markdown:table_backspace"] = function(view)
     markdown_tables.delete_char(view, -1)
   end,
-  ["markdown-live-preview:table-delete"] = function(view)
+  ["markdown:table_delete"] = function(view)
     markdown_tables.delete_char(view, 1)
   end,
 })
@@ -117,7 +117,7 @@ command.add(function()
   end
   return false
 end, {
-  ["markdown-live-preview:table-paste"] = function(view)
+  ["markdown:table_paste"] = function(view)
     markdown_tables.paste(view)
   end,
 })
@@ -137,7 +137,7 @@ command.add(function(x, y)
   end
   return false
 end, {
-  ["markdown-live-preview:table-paste-primary"] = function(view, x, y)
+  ["markdown:table_paste_primary"] = function(view, x, y)
     markdown_tables.paste_primary(view, x, y)
   end,
 })
@@ -152,34 +152,34 @@ command.add(function()
   end
   return false
 end, {
-  ["markdown-live-preview:table-insert-row-above"] = function(view)
+  ["markdown:table_insert_row_above"] = function(view)
     markdown_tables.insert_row(view, "above")
   end,
-  ["markdown-live-preview:table-insert-row-below"] = function(view)
+  ["markdown:table_insert_row_below"] = function(view)
     markdown_tables.insert_row(view, "below")
   end,
-  ["markdown-live-preview:table-delete-row"] = function(view)
+  ["markdown:table_delete_row"] = function(view)
     markdown_tables.delete_row(view)
   end,
-  ["markdown-live-preview:table-move-row-up"] = function(view)
+  ["markdown:table_move_row_up"] = function(view)
     markdown_tables.move_row(view, -1)
   end,
-  ["markdown-live-preview:table-move-row-down"] = function(view)
+  ["markdown:table_move_row_down"] = function(view)
     markdown_tables.move_row(view, 1)
   end,
-  ["markdown-live-preview:table-insert-column-left"] = function(view)
+  ["markdown:table_insert_column_left"] = function(view)
     markdown_tables.insert_column(view, "left")
   end,
-  ["markdown-live-preview:table-insert-column-right"] = function(view)
+  ["markdown:table_insert_column_right"] = function(view)
     markdown_tables.insert_column(view, "right")
   end,
-  ["markdown-live-preview:table-delete-column"] = function(view)
+  ["markdown:table_delete_column"] = function(view)
     markdown_tables.delete_column(view)
   end,
-  ["markdown-live-preview:table-move-column-left"] = function(view)
+  ["markdown:table_move_column_left"] = function(view)
     markdown_tables.move_column(view, -1)
   end,
-  ["markdown-live-preview:table-move-column-right"] = function(view)
+  ["markdown:table_move_column_right"] = function(view)
     markdown_tables.move_column(view, 1)
   end,
 })

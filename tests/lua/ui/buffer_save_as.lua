@@ -96,7 +96,7 @@ test.describe("Save As command", function()
       end
     }
 
-    test.ok(command.perform("text:save", view))
+    test.ok(command.perform("editor:save", view))
     test.equal(core.active_view, core.global_prompt_bar)
     core.global_prompt_bar:set_text("existing.txt")
     core.global_prompt_bar:submit()

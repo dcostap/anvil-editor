@@ -722,7 +722,7 @@ function core.init()
     -- defer LogView to after everything is initialized,
     -- so that EmptyView won't be added after LogView.
     core.add_thread(function()
-      command.perform("core:open-log")
+      command.perform("log:open")
     end)
   end
 

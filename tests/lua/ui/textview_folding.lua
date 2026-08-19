@@ -134,7 +134,7 @@ test.describe("TextView folding", function()
     view:add_fold_region { line1 = 3, line2 = 5 }
     buffer:set_selection(3, 1)
 
-    command.perform "text:move-to-next-line"
+    command.perform "core:move_to_next_line"
 
     test.same({ buffer:get_selection() }, { 6, 1, 6, 1 })
   end)
@@ -144,7 +144,7 @@ test.describe("TextView folding", function()
     view:add_fold_region { line1 = 3, line2 = 5 }
     buffer:set_selection(3, 1)
 
-    command.perform "text:select-to-next-line"
+    command.perform "core:select_to_next_line"
 
     test.same({ buffer:get_selection() }, { 6, 1, 3, 1 })
   end)
@@ -154,7 +154,7 @@ test.describe("TextView folding", function()
     view:add_fold_region { line1 = 3, line2 = 5 }
     buffer:set_selection(3, 1)
 
-    command.perform "text:move-to-next-line"
+    command.perform "core:move_to_next_line"
 
     test.same({ buffer:get_selection() }, { 6, 1, 6, 1 })
   end)
@@ -164,7 +164,7 @@ test.describe("TextView folding", function()
     view:add_fold_region { line1 = 3, line2 = 5 }
     buffer:set_selection(3, 1)
 
-    command.perform "text:move-to-next-line"
+    command.perform "core:move_to_next_line"
 
     test.same({ buffer:get_selection() }, { 3, 1, 3, 1 })
   end)
@@ -174,7 +174,7 @@ test.describe("TextView folding", function()
     view:add_fold_region { line1 = 2, line2 = 3 }
     buffer:set_selection(4, 5)
 
-    command.perform "text:move-to-previous-line"
+    command.perform "core:move_to_previous_line"
 
     test.same({ buffer:get_selection() }, { 2, 1, 2, 1 })
   end)
@@ -186,7 +186,7 @@ test.describe("TextView folding", function()
     view:add_fold_region { line1 = 2, line2 = 3 }
     buffer:set_selection(2, 1)
 
-    command.perform "text:move-to-next-line"
+    command.perform "core:move_to_next_line"
 
     test.same({ buffer:get_selection() }, { 4, 1, 4, 1 })
   end)
@@ -196,7 +196,7 @@ test.describe("TextView folding", function()
     view:add_fold_region { line1 = 3, line2 = 4 }
     buffer:set_selection(1, 5)
 
-    command.perform "text:move-to-next-line"
+    command.perform "core:move_to_next_line"
 
     local line, col = buffer:get_selection()
     test.equal(line, 2)
@@ -210,7 +210,7 @@ test.describe("TextView folding", function()
     view:add_fold_region { line1 = 2, line2 = 3 }
     buffer:set_selection(4, 30)
 
-    command.perform "text:move-to-previous-line"
+    command.perform "core:move_to_previous_line"
 
     local line = buffer:get_selection()
     test.equal(line, 4)
@@ -377,18 +377,18 @@ test.describe("TextView folding", function()
     local view, buffer = open_editor(context, "function f()\n  one\n  two\nend\nnext", { wrapping = false })
     buffer:set_selection(1, 1)
 
-    command.perform "text:fold-at-caret"
+    command.perform "editor:fold_at_caret"
 
     test.ok(view:get_collapsed_fold_at_line(2) ~= nil, "expected indentation target to fold")
-    command.perform "text:unfold-at-caret"
+    command.perform "editor:unfold_at_caret"
     test.equal(view:get_collapsed_fold_at_line(2), nil)
     local region_count = #view.fold_regions
-    command.perform "text:fold-at-caret"
+    command.perform "editor:fold_at_caret"
     test.equal(#view.fold_regions, region_count)
-    command.perform "text:unfold-at-caret"
+    command.perform "editor:unfold_at_caret"
 
     buffer:set_selection(2, 1, 4, 1)
-    command.perform "text:fold-at-caret"
+    command.perform "editor:fold_at_caret"
     local fold = view:get_collapsed_fold_at_line(2)
     test.ok(fold ~= nil, "expected explicit multi-line selection to fold")
     test.equal(fold.line1, 2)
@@ -401,7 +401,7 @@ test.describe("TextView folding", function()
     test.ok(wait_treesitter_ready(buffer), "expected Odin Tree-sitter parse to become ready")
     buffer:set_selection(1, 1)
 
-    command.perform "text:fold-at-caret"
+    command.perform "editor:fold_at_caret"
 
     local fold = view:get_collapsed_fold_at_line(2)
     test.ok(fold ~= nil, "expected syntax-aware Fold Target to fold the procedure")
@@ -422,7 +422,7 @@ test.describe("TextView folding", function()
     }, "\n"), { wrapping = false })
     buffer:set_selection(3, 7)
 
-    command.perform "text:fold-at-caret"
+    command.perform "editor:fold_at_caret"
 
     local fold = view:get_collapsed_fold_at_line(3)
     test.ok(fold ~= nil, "expected leaf bullet to fold the enclosing list block")
@@ -434,7 +434,7 @@ test.describe("TextView folding", function()
     local view, buffer = open_editor(context, "function f()\n  if x then\n    doThing()\n    doOther()\n  end\nend", { wrapping = false })
     buffer:set_selection(3, 8)
 
-    command.perform "text:fold-at-caret"
+    command.perform "editor:fold_at_caret"
 
     local fold = view:get_collapsed_fold_at_line(3)
     test.ok(fold ~= nil, "expected code leaf to fold the enclosing block")
@@ -452,17 +452,17 @@ test.describe("TextView folding", function()
     }, "\n"), { wrapping = false })
 
     buffer:set_selection(1, 1)
-    command.perform "text:fold-at-caret"
-    command.perform "text:unfold-at-caret"
+    command.perform "editor:fold_at_caret"
+    command.perform "editor:unfold_at_caret"
 
     buffer:set_selection(3, 5)
-    command.perform "text:fold-at-caret"
+    command.perform "editor:fold_at_caret"
     local child = view:get_collapsed_fold_at_line(3)
     test.ok(child ~= nil, "expected child fold")
     test.equal(child.line1, 2)
 
     buffer:set_selection(1, 1)
-    command.perform "text:fold-at-caret"
+    command.perform "editor:fold_at_caret"
     local parent = view:get_collapsed_fold_at_line(3)
     test.ok(parent ~= nil, "expected parent fold to replace child fold")
     test.equal(parent.line1, 1)
@@ -476,7 +476,7 @@ test.describe("TextView folding", function()
     view:add_fold_region { line1 = 7, line2 = 8 }
     buffer:set_selection(2, 1, 9, 1)
 
-    command.perform "text:unfold-at-caret"
+    command.perform "editor:unfold_at_caret"
 
     test.equal(view:get_collapsed_fold_at_line(3), nil)
     test.equal(view:get_collapsed_fold_at_line(7), nil)

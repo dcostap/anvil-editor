@@ -220,9 +220,11 @@ test.describe("Markdown Live Preview", function()
     local live_width = view:get_h_scrollable_size()
     local old_active = core.active_view
     core.active_view = view
+    test.not_nil(view.view_icon)
 
-    test.equal(command.perform("markdown-live-preview:source-mode"), true)
+    test.equal(command.perform("markdown:source_mode"), true)
     test.equal(markdown.live_render.is_source_mode(view), true)
+    test.equal(view.view_icon, nil)
     test.equal(view:get_line_render(1), nil)
     test.equal(view:get_line_render(2), nil)
     test.same(view:get_selection_state().selections, selection.selections)
@@ -240,13 +242,16 @@ test.describe("Markdown Live Preview", function()
     split:set_wrapping_enabled(false)
     refresh(split)
     test.equal(markdown.live_render.is_source_mode(split), false)
+    test.not_nil(split.view_icon)
     test.equal(split:get_h_scrollable_size(), live_width)
     split:restore_owned_feature_state(feature_state)
     test.equal(markdown.live_render.is_source_mode(split), true)
+    test.equal(split.view_icon, nil)
     test.equal(split:get_line_render(1), nil)
 
-    test.equal(command.perform("markdown-live-preview:live-mode"), true)
+    test.equal(command.perform("markdown:live_mode"), true)
     test.equal(markdown.live_render.is_source_mode(view), false)
+    test.not_nil(view.view_icon)
     test.not_nil(view:get_line_render(1))
     core.active_view = old_active
   end)
@@ -1259,7 +1264,7 @@ test.describe("Markdown Live Preview", function()
     refresh(view)
     local old_active = core.active_view
     core.active_view = view
-    command.perform("text:newline")
+    command.perform("core:newline")
     core.active_view = old_active
 
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
@@ -1275,7 +1280,7 @@ test.describe("Markdown Live Preview", function()
     buffer:set_selection(1, #buffer.lines[1])
     local old_active = core.active_view
     core.active_view = view
-    command.perform("text:newline")
+    command.perform("core:newline")
     core.active_view = old_active
 
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
@@ -1291,7 +1296,7 @@ test.describe("Markdown Live Preview", function()
     buffer:set_selection(1, 6)
     local old_active = core.active_view
     core.active_view = view
-    command.perform("text:newline")
+    command.perform("core:newline")
     core.active_view = old_active
 
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
@@ -1315,7 +1320,7 @@ test.describe("Markdown Live Preview", function()
       buffer:set_selection(1, #buffer.lines[1])
       local old_active = core.active_view
       core.active_view = view
-      command.perform("text:newline")
+      command.perform("core:newline")
       core.active_view = old_active
 
       test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
@@ -1371,18 +1376,18 @@ test.describe("Markdown Live Preview", function()
 
       buffer:set_selection(1, 7)
       type_text("first", 2)
-      test.equal(command.perform("text:newline"), true)
+      test.equal(command.perform("core:newline"), true)
       assert_rows("first Enter", 3)
       coroutine.yield(0.01)
       assert_rows("frame after first Enter", 3)
 
       type_text("more", 3)
-      test.equal(command.perform("text:newline"), true)
+      test.equal(command.perform("core:newline"), true)
       assert_rows("second Enter", 4)
       coroutine.yield(0.01)
       assert_rows("frame after second Enter", 4)
 
-      test.equal(command.perform("text:indent"), true)
+      test.equal(command.perform("core:indent"), true)
       assert_rows("indent at new task content start", 4)
       coroutine.yield(0.01)
       assert_rows("frame after indent", 4)
@@ -1484,7 +1489,7 @@ test.describe("Markdown Live Preview", function()
 
       assert_presented("before Enter")
       local nested_checkbox_x = checkbox_x(3)
-      test.equal(command.perform("text:newline"), true)
+      test.equal(command.perform("core:newline"), true)
       assert_presented("immediate after Enter")
       local cursor_line, cursor_col = buffer:get_selection()
       view:scroll_to_make_visible(cursor_line, cursor_col)
@@ -1584,7 +1589,7 @@ test.describe("Markdown Live Preview", function()
 
     local ok, err = pcall(function()
       buffer:set_selection(3, 1, 3, 6)
-      test.equal(command.perform("text:backspace"), true)
+      test.equal(command.perform("core:backspace"), true)
       local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_status(instance, "ready"), instance.reason)
 
@@ -1665,13 +1670,13 @@ test.describe("Markdown Live Preview", function()
       publish()
 
       buffer:set_selection(1, 13)
-      test.equal(command.perform("text:newline"), true)
+      test.equal(command.perform("core:newline"), true)
       assert_presented("Enter")
       publish()
 
       local line, _ = buffer:get_selection()
       buffer:set_selection(line, 1)
-      test.equal(command.perform("text:backspace"), true)
+      test.equal(command.perform("core:backspace"), true)
       assert_presented("Backspace")
       publish()
 
@@ -1682,10 +1687,10 @@ test.describe("Markdown Live Preview", function()
       assert_presented("paste")
       publish()
 
-      test.equal(command.perform("text:undo"), true)
+      test.equal(command.perform("core:undo"), true)
       assert_presented("undo")
       publish()
-      test.equal(command.perform("text:redo"), true)
+      test.equal(command.perform("core:redo"), true)
       assert_presented("redo")
     end)
     core.active_view = old_active
@@ -2065,7 +2070,7 @@ test.describe("Markdown Live Preview", function()
       }
     end
     local ok, err = pcall(function()
-      test.equal(command.perform("markdown-live-preview:open-link"), true)
+      test.equal(command.perform("markdown:open_link"), true)
       test.equal(opened, common.normalize_path(target_path))
       test.same(selected, { 1, 1, 1, 1 })
       test.equal(scrolled, 1)
@@ -2079,10 +2084,10 @@ test.describe("Markdown Live Preview", function()
       os.remove(target_path)
       opened = nil
       buffer:set_selection(1, 5)
-      test.equal(command.perform("markdown-live-preview:open-link"), true)
+      test.equal(command.perform("markdown:open_link"), true)
       test.equal(opened, nil)
       test.ok(common.mkdirp(target_path))
-      test.equal(command.perform("markdown-live-preview:open-link"), true)
+      test.equal(command.perform("markdown:open_link"), true)
       test.equal(opened, nil)
     end)
     core.open_file, core.active_view = old_open_file, old_active
@@ -2117,7 +2122,7 @@ test.describe("Markdown Live Preview", function()
     common.open_in_system = function(path) opened_in_system = path return true end
     core.open_file = function(path) opened_in_editor = path end
     local ok, err = pcall(function()
-      test.equal(command.perform("markdown-live-preview:open-link"), true)
+      test.equal(command.perform("markdown:open_link"), true)
       test.equal(opened_in_system, common.normalize_path(target_path))
       test.equal(opened_in_editor, nil)
     end)
@@ -2155,8 +2160,8 @@ test.describe("Markdown Live Preview", function()
       scroll_to_line = function() end,
     } end
     local ok, err = pcall(function()
-      test.equal(command.perform("poi:next"), true)
-      test.equal(command.perform("poi:activate"), true)
+      test.equal(command.perform("core:next_point_of_interest"), true)
+      test.equal(command.perform("core:activate_point_of_interest"), true)
       test.equal(opened, common.normalize_path(target_path))
       test.equal(markdown.live_render.detach(view), true)
       test.equal(#view:get_points_of_interest(), 0)
@@ -2198,7 +2203,7 @@ test.describe("Markdown Live Preview", function()
         end
         core.active_view = view
         offered = nil
-        test.equal(command.perform("markdown-live-preview:complete-link"), true)
+        test.equal(command.perform("markdown:complete_link"), true)
         return view, buffer, test.not_nil(offered, "completion was not offered for " .. text)
       end
       local function item_for(symbols, target)
@@ -2258,7 +2263,7 @@ test.describe("Markdown Live Preview", function()
       missing_buffer:set_selection(1, 5)
       refresh(missing_view)
       core.active_view = missing_view
-      test.equal(command.perform("markdown-live-preview:create-link-target"), true)
+      test.equal(command.perform("markdown:create_link_target"), true)
       test.equal(opened, common.normalize_path(
         root .. PATHSEP .. "notes" .. PATHSEP .. "folder" .. PATHSEP .. "New.md"
       ))
@@ -2268,7 +2273,7 @@ test.describe("Markdown Live Preview", function()
       root_buffer:set_selection(1, 4)
       refresh(root_view)
       core.active_view = root_view
-      test.equal(command.perform("markdown-live-preview:create-link-target"), true)
+      test.equal(command.perform("markdown:create_link_target"), true)
       test.equal(opened, common.normalize_path(root .. PATHSEP .. "NewRoot.md"))
 
       opened = nil
@@ -2279,7 +2284,7 @@ test.describe("Markdown Live Preview", function()
       query_buffer:set_selection(1, 5)
       refresh(query_view)
       core.active_view = query_view
-      test.equal(command.perform("markdown-live-preview:create-link-target"), true)
+      test.equal(command.perform("markdown:create_link_target"), true)
       test.equal(opened, common.normalize_path(
         root .. PATHSEP .. "notes" .. PATHSEP .. "folder" .. PATHSEP .. "Query.md"
       ))
@@ -2292,14 +2297,14 @@ test.describe("Markdown Live Preview", function()
       outside_buffer:set_selection(1, 5)
       refresh(outside_view)
       core.active_view = outside_view
-      test.equal(command.perform("markdown-live-preview:create-link-target"), true)
+      test.equal(command.perform("markdown:create_link_target"), true)
       test.equal(opened, nil)
 
       local ambiguous_view, ambiguous_buffer = make_view("[[Note]]\nplain", root .. PATHSEP .. "AmbiguousSource.md")
       ambiguous_buffer:set_selection(1, 4)
       refresh(ambiguous_view)
       core.active_view = ambiguous_view
-      test.equal(command.perform("markdown-live-preview:open-link"), true)
+      test.equal(command.perform("markdown:open_link"), true)
       test.equal(picker.label, "Open Markdown Link")
       test.equal(#picker.opts.suggest(""), 2)
       local filtered = picker.opts.suggest("b/Note")
@@ -2440,7 +2445,7 @@ test.describe("Markdown Live Preview", function()
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("text:indent"), true)
+      test.equal(command.perform("core:indent"), true)
       test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
 
       local indented = buffer.lines[2]:gsub("\n$", "")
@@ -2493,7 +2498,7 @@ test.describe("Markdown Live Preview", function()
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("text:indent"), true)
+      test.equal(command.perform("core:indent"), true)
       test.equal(buffer.lines[2], "    - [ ] \n")
       test.equal(test.not_nil(markdown_model.peek(buffer)).status, "ready")
 
@@ -2570,9 +2575,9 @@ test.describe("Markdown Live Preview", function()
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("text:move-to-start-of-indentation"), true)
+      test.equal(command.perform("core:move_to_start_of_indentation"), true)
       test.same({ buffer:get_selection() }, { 2, 11, 2, 11 })
-      test.equal(command.perform("text:move-to-start-of-indentation"), true)
+      test.equal(command.perform("core:move_to_start_of_indentation"), true)
       test.same({ buffer:get_selection() }, { 2, 5, 2, 5 })
 
       local prefix, checkbox
@@ -2621,7 +2626,7 @@ test.describe("Markdown Live Preview", function()
       end
       test.not_nil(implicit_checkbox)
 
-      test.equal(command.perform("text:move-to-previous-char"), true)
+      test.equal(command.perform("core:move_to_previous_char"), true)
       test.same({ buffer:get_selection() }, { 2, 10, 2, 10 })
       local active = test.not_nil(view:get_line_render(2))
       local checkbox, task_source
@@ -2721,7 +2726,7 @@ test.describe("Markdown Live Preview", function()
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("text:move-to-next-line"), true)
+      test.equal(command.perform("core:move_to_next_line"), true)
       test.same({ buffer:get_selection() }, { 3, 10, 3, 10 })
 
       local checkbox, task_source
@@ -2732,7 +2737,7 @@ test.describe("Markdown Live Preview", function()
       test.not_nil(checkbox)
       test.equal(task_source, nil)
 
-      test.equal(command.perform("text:move-to-previous-char"), true)
+      test.equal(command.perform("core:move_to_previous_char"), true)
       test.same({ buffer:get_selection() }, { 3, 10, 3, 10 })
       local revealed_source
       for _, fragment in ipairs(test.not_nil(view:get_line_render(3)).fragments or {}) do
@@ -2740,9 +2745,9 @@ test.describe("Markdown Live Preview", function()
       end
       test.equal(test.not_nil(revealed_source).text, "- [ ]")
 
-      test.equal(command.perform("text:move-to-previous-char"), true)
+      test.equal(command.perform("core:move_to_previous_char"), true)
       test.same({ buffer:get_selection() }, { 3, 9, 3, 9 })
-      test.equal(command.perform("text:move-to-next-char"), true)
+      test.equal(command.perform("core:move_to_next_char"), true)
       test.same({ buffer:get_selection() }, { 3, 10, 3, 10 })
       local right_source
       for _, fragment in ipairs(test.not_nil(view:get_line_render(3)).fragments or {}) do
@@ -2766,9 +2771,9 @@ test.describe("Markdown Live Preview", function()
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("text:move-to-next-line"), true)
+      test.equal(command.perform("core:move_to_next_line"), true)
       test.same({ buffer:get_selection() }, { 3, 10, 3, 10 })
-      test.equal(command.perform("text:move-to-start-of-indentation"), true)
+      test.equal(command.perform("core:move_to_start_of_indentation"), true)
       test.same({ buffer:get_selection() }, { 3, 5, 3, 5 })
 
       local prefix
@@ -2821,7 +2826,7 @@ test.describe("Markdown Live Preview", function()
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("text:backspace"), true)
+      test.equal(command.perform("core:backspace"), true)
       test.same({ buffer:get_selection() }, { 2, 6, 2, 6 })
       local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_status(instance, "ready"), instance.reason)
@@ -2924,7 +2929,7 @@ test.describe("Markdown Live Preview", function()
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
-      test.equal(command.perform("text:set-cursor", start_x, start_y + 2), true)
+      test.equal(command.perform("core:set_cursor", start_x, start_y + 2), true)
       view:on_mouse_moved(
         finish_x, finish_y + 2, finish_x - start_x, finish_y - start_y
       )
@@ -3646,35 +3651,35 @@ test.describe("Markdown Live Preview", function()
     local ok, err = pcall(function()
       buffer:set_selection(3, 3)
       refresh(view)
-      test.equal(command.perform("markdown-live-preview:table-insert-row-below"), true)
+      test.equal(command.perform("markdown:table_insert_row_below"), true)
       test.equal(buffer.lines[4], "|  |  |\n")
       buffer:undo(); reparse()
 
       buffer:set_selection(3, 3)
-      test.equal(command.perform("markdown-live-preview:table-delete-row"), true)
+      test.equal(command.perform("markdown:table_delete_row"), true)
       test.equal(buffer.lines[3], "| 3 | 4 |\n")
       buffer:undo(); reparse()
 
       buffer:set_selection(3, 3)
-      test.equal(command.perform("markdown-live-preview:table-move-row-down"), true)
+      test.equal(command.perform("markdown:table_move_row_down"), true)
       test.equal(buffer.lines[3], "| 3 | 4 |\n")
       test.equal(buffer.lines[4], "| 1 | 2 |\n")
       buffer:undo(); reparse()
 
       buffer:set_selection(3, 3)
-      test.equal(command.perform("markdown-live-preview:table-insert-column-right"), true)
+      test.equal(command.perform("markdown:table_insert_column_right"), true)
       test.equal(buffer.lines[1], "| A |  | B |\n")
       test.equal(buffer.lines[3], "| 1 |  | 2 |\n")
       buffer:undo(); reparse()
 
       buffer:set_selection(3, 3)
-      test.equal(command.perform("markdown-live-preview:table-delete-column"), true)
+      test.equal(command.perform("markdown:table_delete_column"), true)
       test.equal(buffer.lines[1], "| B |\n")
       test.equal(buffer.lines[3], "| 2 |\n")
       buffer:undo(); reparse()
 
       buffer:set_selection(3, 3)
-      test.equal(command.perform("markdown-live-preview:table-move-column-right"), true)
+      test.equal(command.perform("markdown:table_move_column_right"), true)
       test.equal(buffer.lines[1], "| B | A |\n")
       test.equal(buffer.lines[3], "| 2 | 1 |\n")
     end)
@@ -3794,7 +3799,7 @@ test.describe("Markdown Live Preview", function()
       if mime == "image/png" then return "png clipboard bytes" end
     end
     local ok, err = pcall(function()
-      test.equal(command.perform("text:paste"), true)
+      test.equal(command.perform("core:paste"), true)
       test.ok(buffer.lines[1]:match("^start !%[%[attachments/pasted%-image[^]]*%.png%]%]\n$"))
       local relative = buffer.lines[1]:match("!%[%[(.-)%]%]")
       test.equal(system.get_file_info(root .. PATHSEP .. relative).type, "file")
@@ -3887,13 +3892,13 @@ test.describe("Markdown Live Preview", function()
     core.active_view = view
     local ok, err = pcall(function()
       test.equal(markdown.live_render.remote_image_allowed(view, "https://example.com/image.png"), false)
-      test.equal(command.perform("markdown-live-preview:load-remote-image"), true)
+      test.equal(command.perform("markdown:load_remote_image"), true)
       test.equal(markdown.live_render.remote_image_allowed(view, "https://example.com/image.png"), true)
       test.equal(markdown.live_render.remote_image_allowed(split, "https://example.com/image.png"), false)
 
-      test.equal(command.perform("markdown-live-preview:trust-project-remote-images"), true)
+      test.equal(command.perform("markdown:trust_project_remote_images"), true)
       test.equal(markdown.live_render.remote_image_allowed(split, "https://example.com/image.png"), true)
-      test.equal(command.perform("markdown-live-preview:untrust-project-remote-images"), true)
+      test.equal(command.perform("markdown:untrust_project_remote_images"), true)
       test.equal(markdown.live_render.remote_image_allowed(split, "https://example.com/image.png"), false)
     end)
     markdown.live_render.release(split, "test-cleanup")
@@ -4029,22 +4034,22 @@ test.describe("Markdown Live Preview", function()
       local old_active = core.active_view
       core.active_view = view
       buffer:set_selection(2, 1)
-      command.perform("text:move-to-previous-line")
+      command.perform("core:move_to_previous_line")
       local line, col = buffer:get_selection()
       test.equal(line, 1)
       test.equal(col, fixture.image_end)
 
-      command.perform("text:move-to-previous-line")
+      command.perform("core:move_to_previous_line")
       line, col = buffer:get_selection()
       test.equal(line, 1)
       test.equal(col, 1)
 
-      command.perform("text:move-to-next-line")
+      command.perform("core:move_to_next_line")
       line, col = buffer:get_selection()
       test.equal(line, 1)
       test.equal(col, fixture.image_end)
 
-      command.perform("text:move-to-next-line")
+      command.perform("core:move_to_next_line")
       core.active_view = old_active
       line, col = buffer:get_selection()
       test.equal(line, 2)
@@ -4109,7 +4114,7 @@ test.describe("Markdown Live Preview", function()
       view.scroll.y, view.scroll.to.y = initial_scroll, initial_scroll
       core.active_view = view
 
-      test.equal(command.perform("text:move-to-previous-line"), true)
+      test.equal(command.perform("core:move_to_previous_line"), true)
       local line, col = buffer:get_selection()
       test.equal(line, 1)
       view:get_line_screen_position(line, col)
@@ -4176,7 +4181,7 @@ test.describe("Markdown Live Preview", function()
       local old_active = core.active_view
       core.active_view = view
       buffer:set_selection(1, #fixture.source + 1)
-      command.perform("text:select-to-start-of-indentation")
+      command.perform("core:select_to_start_of_indentation")
       core.active_view = old_active
 
       local line1, col1, line2, col2 = buffer:get_selection()
@@ -4193,13 +4198,13 @@ test.describe("Markdown Live Preview", function()
       view:set_wrapping_enabled(false)
 
       buffer:set_selection(2, 1)
-      command.perform("text:move-to-previous-line")
+      command.perform("core:move_to_previous_line")
       local line, col = buffer:get_selection()
       test.equal(line, 1)
       test.equal(col, fixture.image_end)
 
       buffer:set_selection(1, #fixture.source + 1)
-      command.perform("text:select-to-start-of-indentation")
+      command.perform("core:select_to_start_of_indentation")
       core.active_view = old_active
       local line1, col1, line2, col2 = buffer:get_selection()
       test.same({ line1, col1, line2, col2 }, {
@@ -4226,7 +4231,7 @@ test.describe("Markdown Live Preview", function()
         end
       end
 
-      command.perform("text:move-to-previous-line")
+      command.perform("core:move_to_previous_line")
       core.active_view = old_active
       local line, col = buffer:get_selection()
       test.equal(line, 1)

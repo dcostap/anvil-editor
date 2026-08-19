@@ -539,7 +539,7 @@ local function create_directory_path(normalized, abs, source_view)
   local ok, existed = ensure_directory_exists(abs, normalized)
   if not ok then return end
 
-  command.perform("filetree:sync-path", abs, source_view)
+  command.perform("filetree:sync_path", abs, source_view)
   if existed then
     core.log("Folder already exists \"%s\"", normalized)
   else
@@ -567,7 +567,7 @@ local function create_empty_file(text, source_view)
   core.root_panel:open_buffer(buffer)
   local ok, err = pcall(buffer.save, buffer, normalized, abs)
   if ok then
-    command.perform("filetree:sync-path", abs, source_view)
+    command.perform("filetree:sync_path", abs, source_view)
     core.log("Created \"%s\"", normalized)
   else
     core.error(err)
@@ -575,7 +575,7 @@ local function create_empty_file(text, source_view)
 end
 
 command.add(nil, {
-  ["user:new-file-with-path"] = function()
+  ["editor:new_file_with_path"] = function()
     local panes = require "core.panes"
     local source_view = panes.owner_for_view(core.active_view) or core.active_view
     core.global_prompt_bar:enter("New File or Folder", {
@@ -592,8 +592,8 @@ command.add(nil, {
 })
 
 keymap.add_direct {
-  ["ctrl+t"] = "pane:new",
-  ["ctrl+shift+n"] = "user:new-file-with-path",
+  ["ctrl+t"] = "core:new_pane",
+  ["ctrl+shift+n"] = "editor:new_file_with_path",
 }
 
 return M

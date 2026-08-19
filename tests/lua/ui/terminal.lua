@@ -154,7 +154,7 @@ test.describe("Terminal View", function()
   end)
 
   test.it("opens and focuses a Terminal View in Pane 1", function(context)
-    test.ok(command.perform("terminal:open-here"))
+    test.ok(command.perform("terminal:open"))
 
     local view = core.active_view
     test.ok(view and view.terminal_view)
@@ -261,7 +261,7 @@ test.describe("Terminal View", function()
   end)
 
   test.it("sends text and unhandled keys to the focused terminal", function(context)
-    test.ok(command.perform("terminal:open-here"))
+    test.ok(command.perform("terminal:open"))
     local session = context.sessions[1]
 
     core.on_event("textinput", "echo hello")
@@ -468,8 +468,8 @@ test.describe("Terminal View", function()
   test.it("searches terminal scrollback through commands", function(context)
     local view = terminal.open()
     view.search_query = "needle"
-    test.ok(command.perform("terminal:search-next"))
-    test.ok(command.perform("terminal:search-previous"))
+    test.ok(command.perform("terminal:search_next"))
+    test.ok(command.perform("terminal:search_previous"))
     test.same({ "needle", false }, context.sessions[1].searches[1])
     test.same({ "needle", true }, context.sessions[1].searches[2])
   end)

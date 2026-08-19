@@ -18,6 +18,7 @@ local poi = require "core.poi"
 local project_paths = require "core.project_paths"
 local project_files = require "core.project_files"
 local panes = require "core.panes"
+local view_icons = require "core.view_icons"
 local path_tree = require "plugins.path_tree"
 local Widget = require "widget"
 local TextBox = require "widget.textbox"
@@ -82,6 +83,7 @@ local fuzzy_searcher = {
 }
 
 local FSView = Widget:extend()
+view_icons.register("fuzzy", view_icons.ui("L"))
 local active_view
 
 function fuzzy_searcher._perf_scope_begin(name, capture_heap)
@@ -205,23 +207,23 @@ end
 
 local function modal_picker_command_allowed(cmd)
   if type(cmd) ~= "string" then return false end
-  return cmd:match("^fuzzy%-searcher:") ~= nil
-      or cmd == "poi:activate"
-      or cmd == "poi:activate-split"
+  return cmd:match("^fuzzy:") ~= nil
+      or cmd == "core:activate_point_of_interest"
+      or cmd == "core:activate_point_of_interest_split"
 end
 
 local function modal_textbox_command_allowed(cmd)
   if type(cmd) ~= "string" then return false end
-  if cmd:match("^text:move%-to%-") or cmd:match("^text:select%-to%-") then return true end
-  if cmd:match("^text:delete") then return true end
-  return cmd == "text:backspace"
-      or cmd == "text:copy"
-      or cmd == "text:cut"
-      or cmd == "text:paste"
-      or cmd == "text:undo"
-      or cmd == "text:redo"
-      or cmd == "text:select-all"
-      or cmd == "text:select-none"
+  if cmd:match("^core:move_to_") or cmd:match("^core:select_to_") then return true end
+  if cmd:match("^core:delete") then return true end
+  return cmd == "core:backspace"
+      or cmd == "core:copy"
+      or cmd == "core:cut"
+      or cmd == "core:paste"
+      or cmd == "core:undo"
+      or cmd == "core:redo"
+      or cmd == "core:select_all"
+      or cmd == "core:select_none"
 end
 
 local function modal_command(stroke, predicate)
@@ -236,9 +238,9 @@ local function modal_picker_command(stroke, picker)
   -- Ctrl+Enter is also claimed by local IntelliJ conflict disabling. Keep the
   -- picker modal command authoritative even when the global keymap was later
   -- overwritten.
-  if stroke == "ctrl+return" then return "fuzzy-searcher:confirm-side" end
+  if stroke == "ctrl+return" then return "fuzzy:confirm_side" end
   local cmd = modal_command(stroke, modal_picker_command_allowed)
-  if cmd == "fuzzy-searcher:copy-selected" then
+  if cmd == "fuzzy:copy_selected" then
     local textview = picker and picker.input and picker.input.textview
     local state = textview and textview:get_selection_state()
     for i = 1, #(state and state.selections or {}), 4 do
@@ -2027,13 +2029,13 @@ local function command_preview_parts(name)
   end
 
   local preview
-  if name == "user:copy-absolute-filepath" then
+  if name == "editor:copy_absolute_filepath" then
     preview = path
-  elseif name == "user:copy-absolute-filepath-with-line" then
+  elseif name == "editor:copy_absolute_filepath_with_line" then
     local picker = current_picker()
     local line = picker and picker.source_file_line or 1
     preview = path and string.format("%s:%d", path, line or 1)
-  elseif name == "user:copy-relative-filepath" then
+  elseif name == "editor:copy_relative_filepath" then
     local root = core.root_project and core.root_project()
     local root_path = root and common.normalize_path(root.path)
     if path and root_path and common.path_belongs_to(path, root_path) then
@@ -2041,14 +2043,12 @@ local function command_preview_parts(name)
     elseif path then
       preview = "not inside project"
     end
-  elseif name == "user:copy-project-path" then
+  elseif name == "editor:copy_project_path" then
     local project = core.root_project and core.root_project()
     preview = project and project.path
-  elseif name == "user:copy-filename" then
+  elseif name == "editor:copy_filename" then
     preview = path and basename(path)
   end
-
-  preview = preview or fuzzy_searcher.command_description(name)
 
   if binding == "" then binding = nil end
   if preview == "" then preview = nil end
@@ -2104,7 +2104,7 @@ end
 
 local function result_list_label_and_spans(r)
   if r.kind == "command" then
-    return r.label or r.command or "", r.match_spans or {}, "> "
+    return r.label or r.command or "", r.match_spans or {}, ""
   end
   if r.kind == "shell_command" then
     return r.label or "Run shell command", {}, "! "
@@ -2150,19 +2150,9 @@ function fuzzy_searcher.project_result_font(font)
     and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
 end
 
-function fuzzy_searcher.command_title(name)
-  local metadata = command.get_metadata(name)
-  return metadata and metadata.title or command.prettify_name(name)
-end
-
-function fuzzy_searcher.command_description(name)
-  local metadata = command.get_metadata(name)
-  return metadata and metadata.description or nil
-end
-
 function fuzzy_searcher.command_search_text(name)
   local metadata = command.get_metadata(name)
-  local parts = { fuzzy_searcher.command_title(name), name }
+  local parts = { name }
   for _, keyword in ipairs(metadata and metadata.keywords or {}) do
     parts[#parts + 1] = keyword
   end
@@ -2331,6 +2321,21 @@ end
 local function draw_command_result_row(font, r, x, y, width)
   local label, spans, prefix = result_list_label_and_spans(r)
   local binding, preview = command_preview_parts(r.command)
+  local row_height = font:get_height()
+  local icon_column_width = row_height + math.max(2 * (SCALE or 1), style.padding.x / 3)
+  local command_prefix = r.command and r.command:match("^([a-z][a-z0-9_]*):")
+  local icon = view_icons.get(command_prefix)
+  if icon then
+    local icon_width = view_icons.width(icon, row_height)
+    local icon_x = x + math.floor((row_height - icon_width) / 2)
+    view_icons.draw(icon, icon_x, y, row_height)
+    local metadata = command.get_metadata(r.command)
+    if metadata and metadata.opens_view then
+      view_icons.draw_opener_badge(icon_x, y, icon_width, row_height)
+    end
+  end
+  x = x + icon_column_width
+  width = math.max(0, width - icon_column_width)
   -- Keep command rows column-aligned even when a row has no shortcut or no
   -- preview text: empty cells still reserve their column width.
   -- Layout: command label | preview/info | shortcut binding.
@@ -3370,8 +3375,10 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
     x = row_x + path_w + gap
     width = math.max(0, row_text_w - path_w - gap)
   elseif r.kind == "command" then
-    x = row_x + font:get_width("> ")
-    width = math.max(0, row_text_w - font:get_width("> "))
+    local icon_column_width = font:get_height()
+      + math.max(2 * (SCALE or 1), style.padding.x / 3)
+    x = row_x + icon_column_width
+    width = math.max(0, row_text_w - icon_column_width)
   elseif r.kind == "path" or r.kind == "create_path" or r.path_search then
     if r._path_copy_x and r._path_copy_width then
       x = r._path_copy_x
@@ -3667,7 +3674,7 @@ function FSView:on_modal_key_pressed(key, ...)
       "key=" .. tostring(key) .. " stroke=" .. tostring(stroke)
         .. " cmd=" .. tostring(picker_cmd))
     command.perform(picker_cmd, ...)
-  elseif textbox_cmd and (not self.static_mode or textbox_cmd == "text:copy") then
+  elseif textbox_cmd and (not self.static_mode or textbox_cmd == "core:copy") then
     ensure_input_focus(self)
     fuzzy_focus_log("key-textbox-command", self,
       "key=" .. tostring(key) .. " stroke=" .. tostring(stroke)
@@ -4299,7 +4306,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
       for _, name in ipairs(recent_commands) do
         if command.map[name] and self.palette_command_set[name] then
           if added_recent >= max_items then self.has_more = true; return end
-          out[#out+1] = { kind = "command", label = fuzzy_searcher.command_title(name), command = name, query = query, match_spans = {}, recent = true, info = command_preview_info(name), status = command_status_parts(name, self) }
+          out[#out+1] = { kind = "command", label = name, command = name, query = query, match_spans = {}, recent = true, info = command_preview_info(name), status = command_status_parts(name, self) }
           added_recent = added_recent + 1
         end
       end
@@ -4310,9 +4317,9 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     for i, match in ipairs(matches) do
       if i > max_items then self.has_more = true; break end
       local name = match.item
-      local title = fuzzy_searcher.command_title(name)
-      local _, title_spans = fuzzy_match(query, title)
-      out[#out+1] = { kind = "command", label = title, command = name, query = query, match_spans = title_spans or {}, info = command_preview_info(name), status = command_status_parts(name, self) }
+      local identifier = name
+      local _, identifier_spans = fuzzy_match(query, identifier)
+      out[#out+1] = { kind = "command", label = identifier, command = name, query = query, match_spans = identifier_spans or {}, info = command_preview_info(name), status = command_status_parts(name, self) }
     end
   end
 
@@ -5543,7 +5550,7 @@ function FSView:reveal_selected_in_explorer()
   if not path then return end
 
   self:close()
-  command.perform("user:reveal-active-file-in-explorer", path)
+  command.perform("editor:reveal_active_file_in_explorer", path)
 end
 
 function FSView:open_file_result(r, target_side)
@@ -6147,43 +6154,42 @@ function open_static_results(title, results, opts)
 end
 
 command.add(nil, {
-  ["fuzzy-searcher:open"] = function() open("") end,
-  ["fuzzy-searcher:open-files"] = command.palette(function() open("") end),
-  ["fuzzy-searcher:open-current-file"] = command.palette(open_current_file),
-  ["fuzzy-searcher:open-paths"] = command.palette(function() open("@") end),
-  ["fuzzy-searcher:open-grep"] = command.palette(function() open("#") end),
-  ["fuzzy-searcher:open-symbols"] = command.palette(function() open("$") end),
-  ["fuzzy-searcher:open-current-buffer-symbols"] = command.palette(function() open("$$") end),
-  ["fuzzy-searcher:open-commands"] = function() open(">") end,
-  ["shell:run-command"] = command.palette(function()
+  ["fuzzy:open"] = function() open("") end,
+  ["fuzzy:open_files"] = command.palette(function() open("") end, { opens_view = true }),
+  ["fuzzy:open_current_file"] = command.palette(open_current_file, { opens_view = true }),
+  ["fuzzy:open_paths"] = command.palette(function() open("@") end, { opens_view = true }),
+  ["fuzzy:open_grep"] = command.palette(function() open("#") end, { opens_view = true }),
+  ["fuzzy:open_symbols"] = command.palette(function() open("$") end, { opens_view = true }),
+  ["fuzzy:open_current_buffer_symbols"] = command.palette(function() open("$$") end, { opens_view = true }),
+  ["fuzzy:open_commands"] = function() open(">") end,
+  ["command_output:run_shell_command"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     return open("!", {
       source_view = context.source_view,
       source_pane = context.source_pane,
     })
   end, {
-    title = "Run Shell Command…",
-    description = "Run once and show output in a new Command Output View",
     keywords = { "command output", "process", "terminal" },
+    opens_view = true,
   }),
 })
 
 command.add(picker_active, {
-  ["fuzzy-searcher:close"] = picker_close,
-  ["fuzzy-searcher:confirm"] = picker_confirm,
-  ["fuzzy-searcher:confirm-side"] = picker_confirm_side,
-  ["fuzzy-searcher:reveal-selected-in-explorer"] = picker_reveal_selected_in_explorer,
-  ["fuzzy-searcher:copy-selected"] = function()
+  ["fuzzy:close"] = picker_close,
+  ["fuzzy:confirm"] = picker_confirm,
+  ["fuzzy:confirm_side"] = picker_confirm_side,
+  ["fuzzy:reveal_selected_in_explorer"] = picker_reveal_selected_in_explorer,
+  ["fuzzy:copy_selected"] = function()
     local view = current_picker()
     if view then view:copy_selected() end
   end,
-  ["fuzzy-searcher:next"] = picker_next,
-  ["fuzzy-searcher:previous"] = picker_previous,
-  ["fuzzy-searcher:prompt-history-previous"] = function()
+  ["fuzzy:next"] = picker_next,
+  ["fuzzy:previous"] = picker_previous,
+  ["fuzzy:prompt_history_previous"] = function()
     local view = current_picker()
     if view then view:navigate_prompt_history(1) end
   end,
-  ["fuzzy-searcher:prompt-history-next"] = function()
+  ["fuzzy:prompt_history_next"] = function()
     local view = current_picker()
     if view then view:navigate_prompt_history(-1) end
   end,
@@ -6193,7 +6199,7 @@ command.add(function()
   local view = current_picker()
   return view and view:can_toggle_ignored_files()
 end, {
-  ["fuzzy-searcher:toggle-ignored-files"] = function()
+  ["fuzzy:toggle_ignored_files"] = function()
     local view = current_picker()
     if view then view:toggle_ignored_files() end
   end,
@@ -6202,13 +6208,13 @@ end, {
 -- Global open shortcuts intentionally override conflicting defaults.
 core.fuzzy_searcher_install_global_keymaps = function()
   keymap.add({
-    ["ctrl+shift+e"] = "fuzzy-searcher:open-paths",
-    ["ctrl+e"] = "fuzzy-searcher:open-files",
-    ["ctrl+l"] = "fuzzy-searcher:open-current-file",
-    ["ctrl+shift+j"] = "fuzzy-searcher:open-symbols",
-    ["ctrl+j"] = "fuzzy-searcher:open-current-buffer-symbols",
-    ["ctrl+shift+f"] = "fuzzy-searcher:open-grep",
-    ["ctrl+shift+a"] = "fuzzy-searcher:open-commands",
+    ["ctrl+shift+e"] = "fuzzy:open_paths",
+    ["ctrl+e"] = "fuzzy:open_files",
+    ["ctrl+l"] = "fuzzy:open_current_file",
+    ["ctrl+shift+j"] = "fuzzy:open_symbols",
+    ["ctrl+j"] = "fuzzy:open_current_buffer_symbols",
+    ["ctrl+shift+f"] = "fuzzy:open_grep",
+    ["ctrl+shift+a"] = "fuzzy:open_commands",
   }, true)
 end
 core.fuzzy_searcher_install_global_keymaps()
@@ -6217,18 +6223,18 @@ core.fuzzy_searcher_install_global_keymaps()
 -- picker predicate is false, Anvil falls through to the normal bindings.
 core.fuzzy_searcher_install_picker_keymaps = function()
   keymap.add({
-    ["escape"] = "fuzzy-searcher:close",
-    ["return"] = "fuzzy-searcher:confirm",
-    ["keypad enter"] = "fuzzy-searcher:confirm",
-    ["ctrl+return"] = "fuzzy-searcher:confirm-side",
-    ["ctrl+l"] = "fuzzy-searcher:open-current-file",
-    ["ctrl+shift+l"] = "fuzzy-searcher:reveal-selected-in-explorer",
-    ["ctrl+c"] = "fuzzy-searcher:copy-selected",
-    ["ctrl+i"] = "fuzzy-searcher:toggle-ignored-files",
-    ["up"] = "fuzzy-searcher:previous",
-    ["down"] = "fuzzy-searcher:next",
-    ["alt+left"] = "fuzzy-searcher:prompt-history-previous",
-    ["alt+right"] = "fuzzy-searcher:prompt-history-next",
+    ["escape"] = "fuzzy:close",
+    ["return"] = "fuzzy:confirm",
+    ["keypad enter"] = "fuzzy:confirm",
+    ["ctrl+return"] = "fuzzy:confirm_side",
+    ["ctrl+l"] = "fuzzy:open_current_file",
+    ["ctrl+shift+l"] = "fuzzy:reveal_selected_in_explorer",
+    ["ctrl+c"] = "fuzzy:copy_selected",
+    ["ctrl+i"] = "fuzzy:toggle_ignored_files",
+    ["up"] = "fuzzy:previous",
+    ["down"] = "fuzzy:next",
+    ["alt+left"] = "fuzzy:prompt_history_previous",
+    ["alt+right"] = "fuzzy:prompt_history_next",
   })
 end
 core.fuzzy_searcher_install_picker_keymaps()

@@ -188,7 +188,7 @@ test.describe("autocomplete batch behavior", function()
     core.root_panel:on_text_input("foobar")
     test.ok(autocomplete.is_open(), "expected autocomplete to open while typing")
 
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
     core.root_panel:update()
 
     test.equal(table.concat(buffer.lines), "fooba\n")
@@ -197,7 +197,7 @@ test.describe("autocomplete batch behavior", function()
     test.equal(autocomplete.get_selected_suggestion().text, "foobarx")
 
     for _ = 1, 3 do
-      test.ok(command.perform("text:backspace"))
+      test.ok(command.perform("core:backspace"))
       core.root_panel:update()
     end
     test.equal(table.concat(buffer.lines), "fo\n")
@@ -420,7 +420,7 @@ test.describe("autocomplete batch behavior", function()
 
     autocomplete.trigger()
     test.ok(autocomplete.is_open())
-    test.ok(command.perform("poi:activate-split"))
+    test.ok(command.perform("core:activate_point_of_interest_split"))
 
     local target_view = core.active_view
     test.equal(panes.count(), 2)

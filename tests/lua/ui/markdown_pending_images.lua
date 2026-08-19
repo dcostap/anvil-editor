@@ -143,7 +143,7 @@ test.describe("Markdown pending images", function()
       test.equal(image_count(view, "initial list exit"), 1)
 
       buffer:set_selection(1, 3)
-      test.ok(command.perform("text:newline"))
+      test.ok(command.perform("core:newline"))
 
       test.equal(image_count(view, "pending list exit"), 1)
       test.ok(wait_ready(instance), instance.reason)

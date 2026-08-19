@@ -47,7 +47,7 @@ end
 widget:show()
 
 command.add(nil,{
-  ["listbox-widget:toggle"] = function()
+  ["listbox_widget:toggle"] = function()
     widget:toggle_visible()
   end
 })

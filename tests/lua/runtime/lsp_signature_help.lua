@@ -181,7 +181,7 @@ test.describe("core.lsp.signature_help", function()
     buffer:set_selection(1, 4)
     local log_start = #core.log_items
 
-    test.ok(command.perform("lsp:signature-help-current-position", view))
+    test.ok(command.perform("editor:show_signature_help", view))
     test.equal(#client.requests, 1)
     test.equal(client.requests[1].method, "textDocument/signatureHelp")
     test.equal(client.requests[1].params.position.line, 0)
@@ -251,6 +251,6 @@ test.describe("core.lsp.signature_help", function()
     core.active_view = view
     buffer:set_selection(1, 4)
 
-    test.ok(command.perform("lsp:signature-help-current-position", view))
+    test.ok(command.perform("editor:show_signature_help", view))
   end)
 end)

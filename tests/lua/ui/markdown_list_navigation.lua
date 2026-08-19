@@ -29,8 +29,8 @@ end
 test.describe("Markdown list navigation", function()
   test.it("moves Home to task-list content before the physical line start", function()
     for _, name in ipairs({
-      "text:move-to-start-of-indentation",
-      "text:move-to-start-of-line",
+      "core:move_to_start_of_indentation",
+      "core:move_to_start_of_line",
     }) do
       local view, buffer = make_view("- [ ] this is a list item")
       buffer:set_selection(1, 20)
@@ -53,7 +53,7 @@ test.describe("Markdown list navigation", function()
       local view, buffer = make_view(case[1])
       buffer:set_selection(1, #buffer.lines[1])
 
-      test.equal(perform(view, "text:move-to-start-of-indentation"), true)
+      test.equal(perform(view, "core:move_to_start_of_indentation"), true)
 
       local line, col = buffer:get_selection()
       test.same({ line, col }, { 1, case[2] })
@@ -64,15 +64,15 @@ test.describe("Markdown list navigation", function()
     local view, buffer = make_view("  - [ ] nested task")
     buffer:set_selection(1, #buffer.lines[1])
 
-    test.equal(perform(view, "text:move-to-start-of-indentation"), true)
+    test.equal(perform(view, "core:move_to_start_of_indentation"), true)
     local line, col = buffer:get_selection()
     test.same({ line, col }, { 1, 9 })
 
-    test.equal(perform(view, "text:move-to-start-of-indentation"), true)
+    test.equal(perform(view, "core:move_to_start_of_indentation"), true)
     line, col = buffer:get_selection()
     test.same({ line, col }, { 1, 3 })
 
-    test.equal(perform(view, "text:move-to-start-of-indentation"), true)
+    test.equal(perform(view, "core:move_to_start_of_indentation"), true)
     line, col = buffer:get_selection()
     test.same({ line, col }, { 1, 1 })
   end)
@@ -81,7 +81,7 @@ test.describe("Markdown list navigation", function()
     local view, buffer = make_view("- [ ] source text", "list-navigation.lua")
     buffer:set_selection(1, #buffer.lines[1])
 
-    test.equal(perform(view, "text:move-to-start-of-indentation"), true)
+    test.equal(perform(view, "core:move_to_start_of_indentation"), true)
 
     local line, col = buffer:get_selection()
     test.same({ line, col }, { 1, 1 })
@@ -110,11 +110,11 @@ test.describe("Markdown list navigation", function()
       local _, _, _, wrapped_row_start = linewrapping.get_line_idx_col_count(view, 1, 20)
       test.ok(wrapped_row_start > 7, "the fixture caret should be on a continuation row")
 
-      test.equal(perform(view, "text:move-to-start-of-indentation"), true)
+      test.equal(perform(view, "core:move_to_start_of_indentation"), true)
       local line, col = buffer:get_selection()
       test.same({ line, col }, { 1, wrapped_row_start })
 
-      test.equal(perform(view, "text:move-to-start-of-indentation"), true)
+      test.equal(perform(view, "core:move_to_start_of_indentation"), true)
       line, col = buffer:get_selection()
       test.same({ line, col }, { 1, 7 })
     end)

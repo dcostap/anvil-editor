@@ -66,7 +66,7 @@ test.describe("transform plugin batch behavior", function()
     end)
     local changes = count_buffer_changes(buffer)
 
-    test.ok(command.perform("quote:quote"))
+    test.ok(command.perform("editor:quote"))
 
     test.equal(text(buffer), '"a\\tb"\n')
     test.equal(changes(), 1)
@@ -81,7 +81,7 @@ test.describe("transform plugin batch behavior", function()
     end)
     local changes = count_buffer_changes(buffer)
 
-    test.ok(command.perform("reflow:reflow"))
+    test.ok(command.perform("editor:reflow"))
 
     test.equal(text(buffer), "alpha beta\ngamma delta\n")
     test.equal(changes(), 1)
@@ -94,7 +94,7 @@ test.describe("transform plugin batch behavior", function()
     end)
     local changes = count_buffer_changes(buffer)
 
-    test.ok(command.perform("tabularize:tabularize"))
+    test.ok(command.perform("editor:tabularize"))
     test.equal(core.active_view, core.global_prompt_bar)
     core.global_prompt_bar:set_text("=")
     core.global_prompt_bar:submit()

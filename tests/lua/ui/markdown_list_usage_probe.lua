@@ -179,7 +179,7 @@ local function enter_case(label, text)
   local instance = refresh(view)
   local first_line = buffer.lines[1] or ""
   buffer:set_selection(1, #first_line)
-  local performed = perform(view, "text:newline")
+  local performed = perform(view, "core:newline")
   local immediate = buffer_summary(view, buffer, { 1, 2 })
   local pending = instance and instance.status or "<no-model>"
   if instance then
@@ -197,7 +197,7 @@ local function backspace_case(label, text, line, col)
   local view, buffer = make_view(text, "markdown-list-backspace-probe.md")
   refresh(view)
   buffer:set_selection(line, col)
-  local performed = perform(view, "text:backspace")
+  local performed = perform(view, "core:backspace")
   return string.format(
     "performed=%s at=%d:%d %s",
     tostring(performed), line, col, buffer_summary(view, buffer, { line })
@@ -208,7 +208,7 @@ local function delete_case(text, line, col)
   local view, buffer = make_view(text, "markdown-list-delete-probe.md")
   refresh(view)
   buffer:set_selection(line, col)
-  local performed = perform(view, "text:delete")
+  local performed = perform(view, "core:delete")
   return string.format(
     "performed=%s at=%d:%d %s",
     tostring(performed), line, col, buffer_summary(view, buffer, { line, line + 1 })
@@ -219,7 +219,7 @@ local function join_case(text, line, col)
   local view, buffer = make_view(text, "markdown-list-join-probe.md")
   refresh(view)
   buffer:set_selection(line, col)
-  local performed = perform(view, "text:join-lines")
+  local performed = perform(view, "editor:join_lines")
   return string.format(
     "performed=%s at=%d:%d %s",
     tostring(performed), line, col, buffer_summary(view, buffer, { line, line + 1 })
@@ -233,9 +233,9 @@ local function indent_case()
   )
   buffer:set_selection(2, 1)
   refresh(view)
-  local indent = perform(view, "text:indent")
+  local indent = perform(view, "core:indent")
   local after_indent = buffer_summary(view, buffer, { 1, 2, 3, 4 })
-  local unindent = perform(view, "text:unindent")
+  local unindent = perform(view, "core:unindent")
   return string.format(
     "indent=%s after_indent{%s} unindent=%s after_unindent{%s}",
     tostring(indent), after_indent, tostring(unindent),
@@ -290,7 +290,7 @@ local function wrapped_continuation_case()
   buffer:set_selection(1, 7)
   local positions = { selection(view) }
   for _ = 1, math.min(task_rows + continuation_rows + 2, 10) do
-    positions[#positions + 1] = tostring(perform(view, "text:move-to-next-line"))
+    positions[#positions + 1] = tostring(perform(view, "core:move_to_next_line"))
       .. " => " .. selection(view)
   end
   return string.format(
@@ -308,7 +308,7 @@ local function drag_selection_case()
   local finish_x, finish_y = view:get_line_screen_position(1, 1)
   return with_active_view(view, function()
     local pressed = command.perform(
-      "text:set-cursor", start_x, start_y + 2
+      "core:set_cursor", start_x, start_y + 2
     )
     local moved = view:on_mouse_moved(
       finish_x, finish_y + 2, finish_x - start_x, finish_y - start_y
@@ -327,7 +327,7 @@ local function selection_delete_case()
   refresh(view)
   buffer:set_selection(1, 1, 2, 3)
   local before = selection(view)
-  local performed = perform(view, "text:delete")
+  local performed = perform(view, "core:delete")
   return string.format(
     "before=%s performed=%s %s",
     before, tostring(performed), buffer_summary(view, buffer, { 1, 2, 3 })
@@ -456,7 +456,7 @@ local function wrapped_navigation_case()
   buffer:set_selection(1, 4)
   local positions = { selection(view) }
   for _ = 1, math.min(rows + 2, 8) do
-    positions[#positions + 1] = tostring(perform(view, "text:move-to-next-line")) .. " => " .. selection(view)
+    positions[#positions + 1] = tostring(perform(view, "core:move_to_next_line")) .. " => " .. selection(view)
   end
   return string.format(
     "wrapped_rows=%s positions=%s line1=%s line2=%s",
@@ -469,7 +469,7 @@ local function enter_middle_case()
   local view, buffer = make_view("- first item\n- second item\nplain", "markdown-list-enter-middle-probe.md")
   refresh(view)
   buffer:set_selection(1, 6)
-  local performed = perform(view, "text:newline")
+  local performed = perform(view, "core:newline")
   return string.format(
     "performed=%s %s",
     tostring(performed), buffer_summary(view, buffer, { 1, 2, 3, 4 })
@@ -483,9 +483,9 @@ local function enter_marker_boundary_case()
   )
   refresh(view)
   buffer:set_selection(1, 7)
-  local first = perform(view, "text:newline")
+  local first = perform(view, "core:newline")
   local after_first = buffer_summary(view, buffer, { 1, 2, 3, 4 })
-  local second = perform(view, "text:newline")
+  local second = perform(view, "core:newline")
   return string.format(
     "at-task-content-start first=%s second=%s after_first{%s} after_second{%s}",
     tostring(first), tostring(second), after_first,
@@ -500,7 +500,7 @@ local function enter_continuation_case()
   )
   refresh(view)
   buffer:set_selection(2, #buffer.lines[2])
-  local performed = perform(view, "text:newline")
+  local performed = perform(view, "core:newline")
   return string.format(
     "performed=%s %s",
     tostring(performed), buffer_summary(view, buffer, { 1, 2, 3, 4 })
@@ -511,9 +511,9 @@ local function second_enter_case()
   local view, buffer = make_view("- item\nnext", "markdown-list-second-enter-probe.md")
   refresh(view)
   buffer:set_selection(1, #buffer.lines[1])
-  local first = perform(view, "text:newline")
+  local first = perform(view, "core:newline")
   buffer:set_selection(2, #buffer.lines[2])
-  local second = perform(view, "text:newline")
+  local second = perform(view, "core:newline")
   return string.format(
     "first=%s second=%s %s",
     tostring(first), tostring(second), buffer_summary(view, buffer, { 1, 2, 3, 4 })
@@ -526,7 +526,7 @@ local function multicursor_enter_case()
   buffer:set_selection(1, #buffer.lines[1])
   buffer:add_selection(2, #buffer.lines[2])
   local before = selection(view)
-  local performed = perform(view, "text:newline")
+  local performed = perform(view, "core:newline")
   local immediate = buffer_summary(view, buffer, { 1, 2, 3, 4, 5 })
   if instance then
     drain_until(instance, "ready")
@@ -543,11 +543,11 @@ local function undo_redo_case()
   local view, buffer = make_view("- item\nnext", "markdown-list-undo-probe.md")
   refresh(view)
   buffer:set_selection(1, #buffer.lines[1])
-  perform(view, "text:newline")
+  perform(view, "core:newline")
   local edited = buffer_summary(view, buffer, { 1, 2, 3 })
-  local undo = perform(view, "text:undo")
+  local undo = perform(view, "core:undo")
   local undone = buffer_summary(view, buffer, { 1, 2 })
-  local redo = perform(view, "text:redo")
+  local redo = perform(view, "core:redo")
   local redone = buffer_summary(view, buffer, { 1, 2, 3 })
   return string.format(
     "edited{%s} undo=%s undone{%s} redo=%s redone{%s}",
@@ -564,7 +564,7 @@ local function multicursor_task_case()
   buffer:set_selection(1, 7)
   buffer:add_selection(2, 7)
   local before = selection(view)
-  local performed = perform(view, "text:newline")
+  local performed = perform(view, "core:newline")
   local immediate = buffer_summary(view, buffer, { 1, 2, 3, 4, 5 })
   if instance then
     drain_until(instance, "ready")
@@ -674,22 +674,22 @@ test.describe("Markdown list usage exploration (intentional report)", function()
     probe("Indent-unindent/list item", indent_case)
 
     probe("Navigation/list marker widths", function()
-      return move_case("- short\n- a much longer list item\n- third", 1, 5, "text:move-to-next-line", 3, { 1, 2, 3 })
+      return move_case("- short\n- a much longer list item\n- third", 1, 5, "core:move_to_next_line", 3, { 1, 2, 3 })
     end)
     probe("Navigation/continuation line", function()
-      return move_case("- parent\n  continuation\n  more continuation\n- next", 1, 5, "text:move-to-next-line", 3, { 1, 2, 3, 4 })
+      return move_case("- parent\n  continuation\n  more continuation\n- next", 1, 5, "core:move_to_next_line", 3, { 1, 2, 3, 4 })
     end)
     probe("Navigation/back across list lines", function()
-      return move_case("- first\n  continuation\n- third", 3, 5, "text:move-to-previous-line", 3, { 1, 2, 3 })
+      return move_case("- first\n  continuation\n- third", 3, 5, "core:move_to_previous_line", 3, { 1, 2, 3 })
     end)
     probe("Navigation/Home-End in task", function()
       local view, buffer = make_view("  - [ ] task text\nplain", "markdown-list-home-end-probe.md")
       buffer:set_selection(1, 10)
       refresh(view)
       local before = selection(view)
-      local home = perform(view, "text:move-to-start-of-indentation")
+      local home = perform(view, "core:move_to_start_of_indentation")
       local after_home = selection(view)
-      local ending = perform(view, "text:move-to-end-of-line")
+      local ending = perform(view, "core:move_to_end_of_line")
       return string.format(
         "before=%s home=%s=>%s end=%s=>%s %s",
         before, tostring(home), after_home, tostring(ending), selection(view),

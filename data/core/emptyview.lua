@@ -18,22 +18,22 @@ local logo_canvas
 local logo_canvas_size
 
 local buttons = {
-  { name = "open_file", icon = "D", cmd = "core:open-file",
+  { name = "open_file", icon = "D", cmd = "core:pick_file",
     label = "Open File", tooltip = "Open an existing project file"
   },
-  { name = "open_folder", icon = "d", cmd = "core:open-project-folder",
+  { name = "open_folder", icon = "d", cmd = "core:open_project_folder",
     label = "Open Project", tooltip = "Open a project in another instance"
   },
-  { name = "change_folder", icon = "s", cmd = "core:change-project-folder",
+  { name = "change_folder", icon = "s", cmd = "core:change_project_folder",
     label = "Change Project", tooltip = "Change main project of current instance"
   },
-  { name = "find_file", icon = "L", cmd = "core:find-file",
+  { name = "find_file", icon = "L", cmd = "fuzzy:open_files",
     label = "Find File", tooltip = "Search for a file from current project"
   },
-  { name = "run_command", icon = "B", cmd = "fuzzy-searcher:open-commands",
+  { name = "run_command", icon = "B", cmd = "fuzzy:open_commands",
     label = "Run Command", tooltip = "Search for a command to run"
   },
-  { name = "settings", icon = "P", cmd = "ui:settings",
+  { name = "settings", icon = "P", cmd = "settings:open",
     label = "Settings", tooltip = "Open the settings interface"
   }
 }
@@ -78,9 +78,9 @@ function EmptyView:new()
 
   self.github = Button(self.center_container, "GitHub")
   self.github:set_icon("G")
-  self.github:set_tooltip("Open the project GitHub page", "core:open-project-github-page")
+  self.github:set_tooltip("Open the project GitHub page", "core:open_project_github_page")
   self.github.on_click = function(_, pressed)
-    command.perform "core:open-project-github-page"
+    command.perform "core:open_project_github_page"
   end
 
   self.first_update = true
@@ -89,7 +89,7 @@ function EmptyView:new()
   self.plugins:set_icon("p")
   self.plugins:set_tooltip("Open the plugin manager")
   self.plugins.on_click = function(_, pressed)
-    command.perform("plugin-manager:show")
+    command.perform("plugin_manager:show")
   end
   self.plugins:hide()
 

@@ -8,6 +8,7 @@ local style = require "core.style"
 local TextView = require "core.textview"
 local Buffer = require "core.buffer"
 local View = require "core.view"
+local view_icons = require "core.view_icons"
 local panes = require "core.panes"
 local diff_model = require "plugins.diff.model"
 
@@ -106,6 +107,7 @@ local is_fold_widget_line
 ---@field compare_type plugins.diffview.view.type
 ---@overload fun(a:string,b:string,ct?:plugins.diffview.view.type,names?:plugins.diffview.view.string_names):plugins.diffview.view
 local DiffView = View:extend()
+DiffView.view_icon = view_icons.register("diff", view_icons.ui("s"))
 local MutableDiffRequestChain
 local DiffRequestController
 
@@ -1618,7 +1620,7 @@ end
 
 -- Register file compare commands
 command.add("core.textview", {
-  ["diff-view:select-file-for-compare"] = function(dv)
+  ["diff:select_file_for_compare"] = function(dv)
     if dv.buffer and dv.buffer.abs_filename then
       element_a = dv.buffer.abs_filename
     end
@@ -1630,7 +1632,7 @@ command.add(
     return element_a and core.active_view and core.active_view:is(TextView),
     core.active_view
   end, {
-  ["diff-view:compare-file-with-selected"] = function(dv)
+  ["diff:compare_file_with_selected"] = function(dv)
     if dv.buffer and dv.buffer.abs_filename then
       element_b = dv.buffer.abs_filename
     end
@@ -1639,23 +1641,29 @@ command.add(
 })
 
 command.add(nil, {
-  ["diff-view:start-files-comparison"] = command.palette(function()
-    command.perform("core:open-file", "Select File A", function(file_a)
+  ["diff:open_from_files"] = command.palette(function()
+    command.perform("core:pick_file", "Select File A", function(file_a)
       element_a = file_a
-      command.perform("core:open-file", "Select File B", function(file_b)
+      command.perform("core:pick_file", "Select File B", function(file_b)
         element_b = file_b
         start_compare()
       end)
     end)
-  end)
+  end, {
+    keywords = { "compare", "files" },
+    opens_view = true,
+  })
 })
 
 command.add(nil, {
-  ["diff-view:start-strings-comparison"] = command.palette(function()
+  ["diff:open_from_text"] = command.palette(function()
     element_a_text = ""
     element_b_text = ""
     start_compare_string()
-  end)
+  end, {
+    keywords = { "compare", "text", "strings" },
+    opens_view = true,
+  })
 })
 
 local function open_blank_diff()
@@ -1678,9 +1686,12 @@ local function open_blank_diff()
 end
 
 command.add(nil, {
-  ["diff-view:open-blank-diff"] = command.palette(function()
+  ["diff:open"] = command.palette(function()
     return open_blank_diff()
-  end),
+  end, {
+    keywords = { "compare", "blank" },
+    opens_view = true,
+  }),
 })
 
 local function active_diff_controller()
@@ -1692,7 +1703,7 @@ end
 local function replace_diff_side_with_file(side)
   local controller = active_diff_controller()
   if not controller then return end
-  command.perform("core:open-file", side == "left" and "Select Left File" or "Select Right File", function(file)
+  command.perform("core:pick_file", side == "left" and "Select Left File" or "Select Right File", function(file)
     if file then controller:replace_content(side, content_file(file), { title = common.basename(file) }) end
   end)
 end
@@ -1700,10 +1711,10 @@ end
 command.add(function()
   return active_diff_controller() ~= nil
 end, {
-  ["diff-view:replace-left-with-file"] = function()
+  ["diff:replace_left_with_file"] = function()
     replace_diff_side_with_file("left")
   end,
-  ["diff-view:replace-right-with-file"] = function()
+  ["diff:replace_right_with_file"] = function()
     replace_diff_side_with_file("right")
   end,
 })
@@ -1746,11 +1757,11 @@ command.add(
         and core.active_view.diff_view_parent,
       core.active_view
   end, {
-  ["diff-view:prev-change"] = function(dv)
+  ["diff:prev_change"] = function(dv)
     return navigate_diff_change(dv, -1)
   end,
 
-  ["diff-view:next-change"] = function(dv)
+  ["diff:next_change"] = function(dv)
     return navigate_diff_change(dv, 1)
   end
 })
@@ -1761,15 +1772,15 @@ command.add(function()
   if view and view.is and view:is(DiffView) then return true, view end
   return false
 end, {
-  ["diff-view:toggle-folding"] = function(view)
+  ["diff:toggle_folding"] = function(view)
     view:toggle_folding()
   end
 })
 
 keymap.add({
-  ["ctrl+alt+,"] = "poi:previous",
-  ["ctrl+alt+."] = "poi:next",
-  ["ctrl+r"] = "diff-view:toggle-folding",
+  ["ctrl+alt+,"] = "core:previous_point_of_interest",
+  ["ctrl+alt+."] = "core:next_point_of_interest",
+  ["ctrl+r"] = "diff:toggle_folding",
 })
 
 
@@ -1790,13 +1801,13 @@ local function text_compare_with_predicate()
 end
 
 command.add(text_select_compare_predicate, {
-  ["diff-view:select-text-for-compare"] = function(buffer)
+  ["diff:select_text_for_compare"] = function(buffer)
     element_a_text = buffer:get_selection_text()
   end
 })
 
 command.add(text_compare_with_predicate, {
-  ["diff-view:compare-text-with-selected"] = function(buffer)
+  ["diff:compare_text_with_selected"] = function(buffer)
     element_b_text = buffer:get_selection_text()
     start_compare_string()
   end

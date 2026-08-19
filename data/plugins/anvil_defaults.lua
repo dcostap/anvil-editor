@@ -338,11 +338,11 @@ if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
 keymap.add_direct({
-  ["ctrl+shift+f"] = { "terminal:search", "fuzzy-searcher:open-grep" },
+  ["ctrl+shift+f"] = { "terminal:search", "fuzzy:open_grep" },
 })
 keymap.add_direct({
-  ["ctrl+shift+d"] = "text:go-to-line",
-  ["ctrl+shift+D"] = "text:go-to-line",
+  ["ctrl+shift+d"] = "editor:go_to_line",
+  ["ctrl+shift+D"] = "editor:go_to_line",
 })
 -- Enable Markdown Live Preview by default while preserving an explicit
 -- USERDIR/project-module override loaded before first-party defaults.

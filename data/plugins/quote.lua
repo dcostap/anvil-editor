@@ -18,7 +18,7 @@ end
 
 
 command.add("core.textview", {
-  ["quote:quote"] = function(dv)
+  ["editor:quote"] = function(dv)
     if dv.can_edit and not dv:can_edit("quote", { warn = true }) then return end
     dv.buffer:replace(function(text)
       return '"' .. text:gsub("[%z\001-\031\\\"]", replace) .. '"'
@@ -27,5 +27,5 @@ command.add("core.textview", {
 })
 
 keymap.add {
-  ["ctrl+'"] = "quote:quote",
+  ["ctrl+'"] = "editor:quote",
 }

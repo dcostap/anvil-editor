@@ -250,29 +250,29 @@ local function active_view_has_activatable_poi(...)
 end
 
 command.add(nil, {
-  ["poi:previous"] = function()
+  ["core:previous_point_of_interest"] = function()
     M.navigate(core.active_view, -1)
   end,
-  ["poi:next"] = function()
+  ["core:next_point_of_interest"] = function()
     M.navigate(core.active_view, 1)
   end,
 })
 
 command.add(active_view_has_activatable_poi, {
-  ["poi:activate"] = function(view, poi)
+  ["core:activate_point_of_interest"] = function(view, poi)
     M.activate(view, poi, { preserve_focus = false })
   end,
-  ["poi:activate-split"] = function(view, poi)
+  ["core:activate_point_of_interest_split"] = function(view, poi)
     M.activate(view, poi, { placement = "split", preserve_focus = false })
   end,
 })
 
 keymap.add({
-  ["ctrl+alt+,"] = "poi:previous",
-  ["ctrl+alt+."] = "poi:next",
-  ["alt+r"] = "poi:activate",
-  ["alt+shift+r"] = "poi:activate-split",
-  ["ctrl+shift+r"] = "poi:activate-split",
+  ["ctrl+alt+,"] = "core:previous_point_of_interest",
+  ["ctrl+alt+."] = "core:next_point_of_interest",
+  ["alt+r"] = "core:activate_point_of_interest",
+  ["alt+shift+r"] = "core:activate_point_of_interest_split",
+  ["ctrl+shift+r"] = "core:activate_point_of_interest_split",
 })
 
 return M

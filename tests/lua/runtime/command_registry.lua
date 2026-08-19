@@ -3,11 +3,6 @@ local keymap = require "core.keymap"
 local test = require "core.test"
 
 local function command_exists(name)
-  local seen = {}
-  while command.aliases[name] and not seen[name] do
-    seen[name] = true
-    name = command.aliases[name]
-  end
   return command.map[name] ~= nil
 end
 
@@ -15,7 +10,7 @@ test.describe("Command Registry integrity", function()
   test.it("uses canonical command name syntax", function()
     local invalid = {}
     for name in pairs(command.map) do
-      if not name:match("^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$") then
+      if not name:match("^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$") then
         invalid[#invalid + 1] = name
       end
     end
@@ -34,6 +29,34 @@ test.describe("Command Registry integrity", function()
     test.same(stale, {})
   end)
 
+  test.it("uses only core and View prefixes", function()
+    local allowed = {
+      autocomplete = true,
+      command_output = true,
+      core = true,
+      diff = true,
+      editor = true,
+      filetree = true,
+      fuzzy = true,
+      git = true,
+      image = true,
+      log = true,
+      markdown = true,
+      project_paths = true,
+      settings = true,
+      status_bar = true,
+      terminal = true,
+      theme_editor = true,
+    }
+    local invalid = {}
+    for name in pairs(command.map) do
+      local prefix = name:match("^([^:]+):")
+      if not allowed[prefix] then invalid[#invalid + 1] = name end
+    end
+    table.sort(invalid)
+    test.same(invalid, {})
+  end)
+
   test.it("has a registered command for every key binding", function()
     local missing = {}
     for stroke, bindings in pairs(keymap.map) do
@@ -47,12 +70,4 @@ test.describe("Command Registry integrity", function()
     test.same(missing, {})
   end)
 
-  test.it("resolves every command alias to a registered command", function()
-    local missing = {}
-    for alias in pairs(command.aliases) do
-      if not command_exists(alias) then missing[#missing + 1] = alias end
-    end
-    table.sort(missing)
-    test.same(missing, {})
-  end)
 end)

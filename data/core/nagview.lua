@@ -189,7 +189,7 @@ function NagView:on_mouse_pressed(button, mx, my, clicks)
   for i, _, x,y,w,h in self:each_option() do
     if mx >= x and my >= y and mx < x + w and my < y + h then
       self:change_hovered(i)
-      command.perform "dialog:select"
+      command.perform "core:select_dialog_entry"
     end
   end
   return true
@@ -201,9 +201,9 @@ end
 function NagView:on_text_input(text)
   if not self.visible then return false end
   if text:lower() == "y" then
-    command.perform "dialog:select-yes"
+    command.perform "core:select_dialog_yes"
   elseif text:lower() == "n" then
-    command.perform "dialog:select-no"
+    command.perform "core:select_dialog_no"
   end
   return true
 end
@@ -216,13 +216,13 @@ end
 function NagView:on_key_pressed(key, event)
   if not self.visible then return false end
   if key == "return" or key == "keypad enter" then
-    command.perform "dialog:select"
+    command.perform "core:select_dialog_entry"
   elseif key == "escape" then
-    command.perform "dialog:select-no"
+    command.perform "core:select_dialog_no"
   elseif key == "left" or key == "up" or key == "tab" and event and event.shift then
-    command.perform "dialog:previous-entry"
+    command.perform "core:select_previous_dialog_entry"
   elseif key == "right" or key == "down" or key == "tab" then
-    command.perform "dialog:next-entry"
+    command.perform "core:select_next_dialog_entry"
   end
   return true
 end

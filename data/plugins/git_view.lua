@@ -365,16 +365,19 @@ function git_view.restore_state(project, state, opts)
 end
 
 command.add(nil, {
-  ["git:open-view"] = command.palette(function()
+  ["git:open"] = command.palette(function()
     git_view.open_view()
-  end),
+  end, {
+    keywords = { "version control", "history", "changes" },
+    opens_view = true,
+  }),
 
-  ["git:refresh-view"] = command.palette(function()
+  ["git:refresh"] = command.palette(function()
     local session, view = active_or_open_view()
     if view then view.model:refresh_log(function() core.redraw = true end) end
   end),
 
-  ["git:open-selected-commit-diff"] = command.palette(function()
+  ["git:open_selected_commit_diff"] = command.palette(function()
     local session, view = active_or_open_view()
     local function open_diff(v)
       if v.activate_model_tab then v:activate_model_tab(function() core.redraw = true end) end
@@ -390,7 +393,7 @@ command.add(nil, {
     when_model_ready(view, open_diff)
   end),
 
-  ["git:open-working-tree-diff"] = command.palette(function()
+  ["git:open_working_tree_diff"] = command.palette(function()
     local session, view = active_or_open_view()
     when_model_ready(view, function(v)
       local tab, err = v.model:open_working_tree_diff(function() core.redraw = true end)
@@ -399,7 +402,7 @@ command.add(nil, {
     end)
   end),
 
-  ["git:show-file-history"] = command.palette(function()
+  ["git:show_file_history"] = command.palette(function()
     local filename = active_file_path()
     if not filename then
       core.log_quiet("Git View: file history skipped; active view has no file-backed buffer")
@@ -428,7 +431,7 @@ command.add(nil, {
     end)
   end),
 
-  ["git:show-selection-history"] = command.palette(function()
+  ["git:show_selection_history"] = command.palette(function()
     local filename, start_line, end_line = active_selection_line_range()
     if not filename then
       core.log_quiet("Git View: selection history skipped; active file has no selection")
@@ -470,7 +473,7 @@ command.add(nil, {
     end)
   end),
 
-  ["git:open-selected-historical-buffer"] = command.palette(function()
+  ["git:open_selected_historical_buffer"] = command.palette(function()
     local view = active_git_view()
     if not view then
       core.log_quiet("Git View: historical buffer open skipped; Git View is not open")
@@ -503,15 +506,15 @@ command.add(function()
   if view then return true, view end
   return false
 end, {
-  ["git:select-next-row"] = function(view)
+  ["git:select_next_row"] = function(view)
     if view and view.select_relative then view:select_relative(1) end
   end,
 
-  ["git:select-previous-row"] = function(view)
+  ["git:select_previous_row"] = function(view)
     if view and view.select_relative then view:select_relative(-1) end
   end,
 
-  ["git:focus-diff-pane"] = function(view)
+  ["git:focus_diff_pane"] = function(view)
     if view and view.focus_diff_pane then view:focus_diff_pane() end
   end,
 })
@@ -558,15 +561,15 @@ command.add(function()
   if view then return true, view end
   return false
 end, {
-  ["git:focus-list-pane"] = function(view)
+  ["git:focus_list_pane"] = function(view)
     if view and view.focus_list_pane then view:focus_list_pane() end
   end,
-  ["git:activate-selected-row"] = function(view)
+  ["git:activate_selected_row"] = function(view)
     if not view then return end
     local diff_tab, err = view:activate_selected_point(function() core.redraw = true end)
     if not diff_tab and err then core.log_quiet("Git View: activate selected row skipped: %s", err.message or err.kind) end
   end,
-  ["git:close-selected-tab"] = close_git_view_tab,
+  ["git:close_selected_tab"] = close_git_view_tab,
 })
 
 command.add(function()
@@ -574,15 +577,15 @@ command.add(function()
   if view and view.can_focus_next_pane and view:can_focus_next_pane() then return true, view end
   return false
 end, {
-  ["git:focus-next-pane"] = function(view)
+  ["git:focus_next_pane"] = function(view)
     if view and view.focus_next_pane then view:focus_next_pane() end
   end,
 })
 
 keymap.add({
-  ["ctrl+k"] = "git:open-view",
-  ["return"] = "git:activate-selected-row",
-  ["alt+shift+`"] = "git:focus-diff-pane",
+  ["ctrl+k"] = "git:open",
+  ["return"] = "git:activate_selected_row",
+  ["alt+shift+`"] = "git:focus_diff_pane",
 })
 
 return git_view

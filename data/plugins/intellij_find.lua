@@ -1066,13 +1066,13 @@ install_textview_patches()
 command.add(function()
   return active_textview()
 end, {
-  ["find-replace:find"] = function(view)
+  ["editor:find"] = function(view)
     open_find(view, false)
   end,
-  ["find-replace:replace"] = function(view)
+  ["editor:replace"] = function(view)
     open_find(view, true)
   end,
-  ["user:find"] = function(view)
+  ["editor:find"] = function(view)
     open_find(view, false)
   end,
 })
@@ -1084,31 +1084,31 @@ command.add(function()
   if state and state.visible and field_text(state.find) ~= "" then return true, view, state end
   return false
 end, {
-  ["find-replace:repeat-find"] = function(view, state)
+  ["editor:repeat_find"] = function(view, state)
     navigate(view, state, false)
   end,
-  ["find-replace:previous-find"] = function(view, state)
+  ["editor:previous_find"] = function(view, state)
     navigate(view, state, true)
   end,
 })
 
 command.add(active_find_state, {
-  ["user:find-field-next"] = function(view, state)
+  ["editor:find_field_next"] = function(view, state)
     navigate(view, state, false)
   end,
-  ["user:find-field-previous"] = function(view, state)
+  ["editor:find_field_previous"] = function(view, state)
     navigate(view, state, true)
   end,
-  ["user:find-field-add-next"] = function(view, state)
+  ["editor:find_field_add_next"] = function(view, state)
     add_match_to_selection(view, state, false)
   end,
-  ["user:find-field-add-previous"] = function(view, state)
+  ["editor:find_field_add_previous"] = function(view, state)
     add_match_to_selection(view, state, true)
   end,
-  ["user:find-toggle-replace-field"] = function(view, state)
+  ["editor:find_toggle_replace_field"] = function(view, state)
     toggle_field_focus(view, state)
   end,
-  ["user:find-submit-or-replace"] = function(view, state)
+  ["editor:find_submit_or_replace"] = function(view, state)
     if state.mode == "replace" and state.focus == "replace" then
       replace_current_match(view, state)
     else
@@ -1117,15 +1117,15 @@ command.add(active_find_state, {
       core.redraw = true
     end
   end,
-  ["user:find-replace-all-confirm"] = function(view, state)
+  ["editor:find_replace_all_confirm"] = function(view, state)
     if state.mode == "replace" then confirm_replace_all(view, state) end
   end,
-  ["find-replace:toggle-sensitivity"] = function(view, state)
+  ["editor:toggle_sensitivity"] = function(view, state)
     state.case_sensitive = not state.case_sensitive
     refresh_matches(view, state, { from_origin = true, scroll = true })
     core.redraw = true
   end,
-  ["find-replace:toggle-regex"] = function(view, state)
+  ["editor:toggle_regex"] = function(view, state)
     state.regex = not state.regex
     refresh_matches(view, state, { from_origin = true, scroll = true })
     core.redraw = true
@@ -1133,7 +1133,7 @@ command.add(active_find_state, {
 })
 
 command.add(active_visible_find_state, {
-  ["user:find-close"] = function(view, state)
+  ["editor:find_close"] = function(view, state)
     close_find(view, state, true)
   end,
 })
@@ -1150,26 +1150,26 @@ end
 local function install_find_shortcut_override()
 
   keymap.add_direct {
-    ["ctrl+f"] = "find-replace:find",
-    ["ctrl+r"] = "find-replace:replace",
+    ["ctrl+f"] = "editor:find",
+    ["ctrl+r"] = "editor:replace",
   }
 
   keymap.add {
-    ["up"] = { "user:find-field-previous", "command:select-previous", "text:move-to-previous-line" },
-    ["down"] = { "user:find-field-next", "command:select-next", "text:move-to-next-line" },
-    ["shift+up"] = { "user:find-field-add-previous", "text:select-to-previous-line" },
-    ["shift+down"] = { "user:find-field-add-next", "text:select-to-next-line" },
-    ["tab"] = { "user:find-toggle-replace-field", "command:complete", "text:indent" },
-    ["return"] = { "user:find-submit-or-replace", "command:submit", "text:newline", "dialog:select" },
-    ["keypad enter"] = { "user:find-submit-or-replace", "command:submit", "text:newline", "dialog:select" },
-    ["ctrl+return"] = { "user:find-replace-all-confirm", "text:newline-below" },
+    ["up"] = { "editor:find_field_previous", "core:select_previous_prompt_item", "core:move_to_previous_line" },
+    ["down"] = { "editor:find_field_next", "core:select_next_prompt_item", "core:move_to_next_line" },
+    ["shift+up"] = { "editor:find_field_add_previous", "core:select_to_previous_line" },
+    ["shift+down"] = { "editor:find_field_add_next", "core:select_to_next_line" },
+    ["tab"] = { "editor:find_toggle_replace_field", "core:complete_prompt", "core:indent" },
+    ["return"] = { "editor:find_submit_or_replace", "core:submit_prompt", "core:newline", "core:select_dialog_entry" },
+    ["keypad enter"] = { "editor:find_submit_or_replace", "core:submit_prompt", "core:newline", "core:select_dialog_entry" },
+    ["ctrl+return"] = { "editor:find_replace_all_confirm", "core:newline_below" },
   }
 
-  prioritize_key("escape", "user:find-close")
-  prioritize_key("tab", "user:find-toggle-replace-field")
-  prioritize_key("return", "user:find-submit-or-replace")
-  prioritize_key("keypad enter", "user:find-submit-or-replace")
-  prioritize_key("ctrl+return", "user:find-replace-all-confirm")
+  prioritize_key("escape", "editor:find_close")
+  prioritize_key("tab", "editor:find_toggle_replace_field")
+  prioritize_key("return", "editor:find_submit_or_replace")
+  prioritize_key("keypad enter", "editor:find_submit_or_replace")
+  prioritize_key("ctrl+return", "editor:find_replace_all_confirm")
 end
 
 core.intellij_find_install_shortcut_override = install_find_shortcut_override

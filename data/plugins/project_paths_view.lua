@@ -6,10 +6,12 @@ local common = require "core.common"
 local command = require "core.command"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
+local view_icons = require "core.view_icons"
 local project_paths = require "core.project_paths"
 local panes = require "core.panes"
 
 local ProjectPathsView = TextView:extend()
+ProjectPathsView.view_icon = view_icons.register("project_paths", view_icons.ui("l"))
 ProjectPathsView.context = "application"
 
 local view
@@ -349,7 +351,7 @@ end
 function ProjectPathsView:open_selected()
   local entry = self:selected_entry()
   if not entry then return end
-  command.perform("filetree:reveal-path", entry.path)
+  command.perform("filetree:reveal_path", entry.path)
 end
 
 function ProjectPathsView:rename_selected(label)
@@ -426,21 +428,24 @@ local function prompt_add_directory(path, default_role, default_source)
 end
 
 command.add(nil, {
-  ["project-paths:manage"] = command.palette(function()
+  ["project_paths:open"] = command.palette(function()
     open_view()
-  end),
-  ["project-paths:add-external-directory"] = command.palette(function(path)
+  end, {
+    keywords = { "external", "vendored", "folders", "directories" },
+    opens_view = true,
+  }),
+  ["project_paths:add_external_directory"] = command.palette(function(path)
     prompt_add_directory(path, "external")
   end),
-  ["project-paths:add-external-directory-local"] = command.palette(function(path)
+  ["project_paths:add_external_directory_local"] = command.palette(function(path)
     if path then return add_entry(path, "external", "workspace") end
     prompt_add_directory(nil, "external", "workspace")
   end),
-  ["project-paths:add-external-directory-to-project-config"] = command.palette(function(path)
+  ["project_paths:add_external_directory_to_project_config"] = command.palette(function(path)
     if path then return add_entry(path, "external", "project") end
     prompt_add_directory(nil, "external", "project")
   end),
-  ["project-paths:mark-selected-folder"] = command.palette(function()
+  ["project_paths:mark_selected_folder"] = command.palette(function()
     local path, err = selected_filetree_directory()
     if not path then core.error("Project Paths: %s", tostring(err)); return end
     local resolved = project_paths.resolve(path)
@@ -457,7 +462,7 @@ command.add(nil, {
 })
 
 command.add(function() return core.active_view == view end, {
-  ["project-paths:open"] = function() view:open_selected() end,
+  ["project_paths:open_selected"] = function() view:open_selected() end,
 })
 
 local M = {

@@ -162,7 +162,7 @@ test.describe("core.lsp.hover", function()
     buffer:set_selection(1, 3)
     local log_start = core.log_items[#core.log_items]
 
-    test.ok(command.perform("lsp:hover-current-position", view))
+    test.ok(command.perform("editor:show_hover", view))
     test.equal(#client.requests, 1)
     test.equal(client.requests[1].method, "textDocument/hover")
     test.equal(client.requests[1].params.position.line, 0)
@@ -219,6 +219,6 @@ test.describe("core.lsp.hover", function()
     core.active_view = view
     buffer:set_selection(1, 3)
 
-    test.ok(command.perform("lsp:hover-current-position", view))
+    test.ok(command.perform("editor:show_hover", view))
   end)
 end)

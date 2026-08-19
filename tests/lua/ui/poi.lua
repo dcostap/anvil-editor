@@ -57,19 +57,19 @@ test.describe("Point of Interest navigation", function()
     core.set_active_view(view)
 
     view.buffer:set_selection(1, 3)
-    test.ok(command.perform("poi:next"))
+    test.ok(command.perform("core:next_point_of_interest"))
     test.same(view.buffer.selections, { 2, 3, 2, 3 })
 
-    test.ok(command.perform("poi:next"))
+    test.ok(command.perform("core:next_point_of_interest"))
     test.same(view.buffer.selections, { 4, 3, 4, 3 })
 
-    test.ok(command.perform("poi:next"))
+    test.ok(command.perform("core:next_point_of_interest"))
     test.same(view.buffer.selections, { 4, 3, 4, 3 })
 
-    test.ok(command.perform("poi:previous"))
+    test.ok(command.perform("core:previous_point_of_interest"))
     test.same(view.buffer.selections, { 2, 3, 2, 3 })
 
-    test.ok(command.perform("poi:previous"))
+    test.ok(command.perform("core:previous_point_of_interest"))
     test.same(view.buffer.selections, { 2, 3, 2, 3 })
   end)
 
@@ -81,8 +81,8 @@ test.describe("Point of Interest navigation", function()
     context.buffers = { buffer }
     core.set_active_view(view)
 
-    test.not_ok(command.is_valid("language:show-references"))
-    test.not_ok(command.is_valid("language:go-to-declaration"))
+    test.not_ok(command.is_valid("editor:show_references"))
+    test.not_ok(command.is_valid("editor:go_to_declaration"))
   end)
 
   test.it("uses language declaration as the Editor's fallback activation", function(context)
@@ -93,7 +93,7 @@ test.describe("Point of Interest navigation", function()
     context.buffers = { buffer }
     core.set_active_view(view)
 
-    test.ok(command.is_valid("poi:activate"))
+    test.ok(command.is_valid("core:activate_point_of_interest"))
   end)
 
   test.it("lets a focused context override the view's ordinary activation", function(context)
@@ -117,7 +117,7 @@ test.describe("Point of Interest navigation", function()
     })
     core.set_active_view(view)
 
-    test.ok(command.perform("poi:activate"))
+    test.ok(command.perform("core:activate_point_of_interest"))
     test.equal(activated, "context")
   end)
 
@@ -137,7 +137,7 @@ test.describe("Point of Interest navigation", function()
     })
     core.set_active_view(view)
 
-    test.ok(command.perform("poi:activate"))
+    test.ok(command.perform("core:activate_point_of_interest"))
     test.ok(activated)
   end)
 
@@ -156,7 +156,7 @@ test.describe("Point of Interest navigation", function()
     core.set_active_view(left)
     left.buffer:set_selection(4, 3)
 
-    test.ok(command.perform("poi:previous"))
+    test.ok(command.perform("core:previous_point_of_interest"))
     test.same(left.buffer.selections, { 2, 1, 2, 1 })
   end)
 
@@ -184,7 +184,7 @@ test.describe("Point of Interest navigation", function()
     core.set_active_view(view)
     left.buffer:set_selection(1, 1)
 
-    test.ok(command.perform("poi:next"))
+    test.ok(command.perform("core:next_point_of_interest"))
     test.same(left.buffer.selections, { 90, 1, 90, 1 })
     test.equal(left.scroll.to.y, right.scroll.to.y)
   end)

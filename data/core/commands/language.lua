@@ -568,16 +568,16 @@ local function symbol_buffer_view_predicate(value)
 end
 
 command.add(symbol_buffer_view_predicate, {
-  ["language:go-to-declaration"] = command.palette(function(view)
+  ["editor:go_to_declaration"] = command.palette(function(view)
     return language.goto_declaration(view)
   end),
-  ["language:show-references"] = command.palette(function(view)
+  ["editor:show_references"] = command.palette(function(view)
     return language.show_references(view)
   end),
 })
 
 command.add(buffer_view_predicate, {
-  ["language:set-mode"] = command.palette(set_language_mode_command),
+  ["editor:set_language_mode"] = command.palette(set_language_mode_command),
 })
 
 

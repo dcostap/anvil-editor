@@ -10,6 +10,7 @@ local keymap = require "core.keymap"
 local panes = require "core.panes"
 local style = require "core.style"
 local View = require "core.view"
+local view_icons = require "core.view_icons"
 
 local M = {}
 local native_override
@@ -139,6 +140,7 @@ end
 
 ---@class plugins.terminal.view : core.view
 local TerminalView = View:extend()
+TerminalView.view_icon = view_icons.register("terminal", view_icons.ui("t"))
 
 function TerminalView:__tostring() return "TerminalView" end
 
@@ -881,7 +883,7 @@ M.from_state = TerminalView.from_state
 TerminalView._module_name = "plugins.terminal"
 
 command.add(nil, {
-  ["terminal:open-here"] = command.palette(function()
+  ["terminal:open"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     local pane = panes.find(context.source_pane or panes.active())
     local source_view = context.source_view or (pane and pane.current_view)
@@ -894,12 +896,11 @@ command.add(nil, {
       reason = "terminal-open-here",
     } ~= nil
   end, {
-    title = "Open Terminal Here",
-    description = "Use the current View directory",
     keywords = { "shell", "command", "view" },
     supports_placement = true,
+    opens_view = true,
   }),
-  ["terminal:open-project-root"] = command.palette(function()
+  ["terminal:open_at_project_root"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     return M.open {
       pane = context.source_pane,
@@ -910,12 +911,11 @@ command.add(nil, {
       reason = "terminal-open-project-root",
     } ~= nil
   end, {
-    title = "Open Terminal at Project Root",
-    description = "Use the Root Project directory",
     keywords = { "shell", "command", "view" },
     supports_placement = true,
+    opens_view = true,
   }),
-  ["terminal:open-path"] = command.palette(function()
+  ["terminal:open_at_path"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     local pane = panes.find(context.source_pane or panes.active())
     local source_view = context.source_view or (pane and pane.current_view)
@@ -936,10 +936,9 @@ command.add(nil, {
     }
     return true
   end, {
-    title = "Open Terminal at Path…",
-    description = "Select any existing folder",
     keywords = { "shell", "command", "folder", "external", "view" },
     supports_placement = true,
+    opens_view = true,
   }),
 })
 
@@ -964,16 +963,16 @@ end, {
     return true
   end),
   ["terminal:search"] = command.palette(function(view) return view:prompt_search() end),
-  ["terminal:search-next"] = function(view) return view:search(view.search_query, false) end,
-  ["terminal:search-previous"] = function(view) return view:search(view.search_query, true) end,
+  ["terminal:search_next"] = function(view) return view:search(view.search_query, false) end,
+  ["terminal:search_previous"] = function(view) return view:search(view.search_query, true) end,
 })
 
 keymap.add({
   ["ctrl+shift+c"] = "terminal:copy",
   ["ctrl+shift+v"] = "terminal:paste",
-  ["ctrl+shift+f"] = { "terminal:search", "fuzzy-searcher:open-grep" },
-  ["f3"] = "terminal:search-next",
-  ["shift+f3"] = "terminal:search-previous",
+  ["ctrl+shift+f"] = { "terminal:search", "fuzzy:open_grep" },
+  ["f3"] = "terminal:search_next",
+  ["shift+f3"] = "terminal:search_previous",
   ["ctrl+shift+k"] = "terminal:clear",
 })
 

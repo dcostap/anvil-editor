@@ -40,7 +40,7 @@ test.describe("Copy Feedback Highlight", function()
       buffer:set_selection(1, 2, 1, 5)
     end)
 
-    test.ok(command.perform("text:copy"), "expected copy command to run")
+    test.ok(command.perform("core:copy"), "expected copy command to run")
     test.equal(system.get_clipboard(), "lph")
 
     local old_rect = renderer.draw_rect

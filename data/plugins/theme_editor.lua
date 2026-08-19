@@ -618,9 +618,9 @@ theme_editor.is_color = is_color
 theme_editor.ThemeEditor = ThemeEditor
 
 command.add(nil, {
-  ["theme-editor:toggle"] = theme_editor.toggle,
-  ["theme-editor:show"] = theme_editor.show,
-  ["theme-editor:hide"] = theme_editor.hide,
+  ["theme_editor:toggle"] = theme_editor.toggle,
+  ["theme_editor:show"] = theme_editor.show,
+  ["theme_editor:hide"] = theme_editor.hide,
 })
 
 return theme_editor

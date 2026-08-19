@@ -9,6 +9,7 @@ local tokenizer = require "core.tokenizer"
 local View = require "core.view"
 local TextView = require "core.textview"
 local panes = require "core.panes"
+local view_icons = require "core.view_icons"
 
 -- check if widget is installed before proceeding
 local widget_found, Widget = pcall(require, "widget")
@@ -204,7 +205,7 @@ settings.add("General",
       description = "Open your init.lua for customizations.",
       type = settings.type.BUTTON,
       icon = "F",
-      on_click = "core:open-user-module"
+      on_click = "core:open_user_module"
     },
     {
       label = "Clear Fonts Cache",
@@ -802,7 +803,7 @@ settings.add("Development",
       description = "Open the list of logged messages.",
       type = settings.type.BUTTON,
       icon = "l",
-      on_click = "core:open-log"
+      on_click = "log:open"
     },
     {
       label = "Log Items",
@@ -1527,7 +1528,7 @@ function Settings:new()
   self.plugin_sections.border.width = 0
   self.plugin_sections.scrollable = false
 
-  if command.is_valid("plugin-manager:show") then
+  if command.is_valid("plugin_manager:show") then
     ---@type widget.button
     self.plugin_button = Button(self.plugins)
     self.plugin_button:set_icon("p")
@@ -1535,7 +1536,7 @@ function Settings:new()
     self.plugin_button.padding = { x = style.padding.x / 2, y = style.padding.y / 2 }
     self.plugin_button:set_tooltip("Open Plugin Manager")
     function self.plugin_button:draw_background() end
-    function self.plugin_button:on_click() command.perform("plugin-manager:show") end
+    function self.plugin_button:on_click() command.perform("plugin_manager:show") end
   end
 
   self:load_core_settings()
@@ -2184,8 +2185,8 @@ function Settings:setup_about()
   ---@type widget.button
   local button = Button(self.about, "Open GitHub")
   button:set_icon("G")
-  button:set_tooltip("Open the project GitHub page", "core:open-project-github-page")
-  function button:on_click() command.perform "core:open-project-github-page" end
+  button:set_tooltip("Open the project GitHub page", "core:open_project_github_page")
+  function button:on_click() command.perform "core:open_project_github_page" end
 
   ---@type widget.listbox
   local contributors = ListBox(self.about)
@@ -2328,6 +2329,7 @@ end
 ---@field private sections widget.foldingbook?
 ---@field private config_spec settings.config_spec
 local ConfigView = Widget:extend()
+ConfigView.view_icon = view_icons.register("settings", view_icons.ui("P"))
 
 ---Return whether a table looks like a settings option.
 ---@param value any
@@ -2438,7 +2440,7 @@ function Settings:update()
 
   for _, section in ipairs({self.core_sections, self.plugin_sections}) do
     if section.parent:is_visible() then
-      if section == self.plugin_sections and command.is_valid("plugin-manager:show") then
+      if section == self.plugin_sections and command.is_valid("plugin_manager:show") then
         -- accomodate plugin manager button
         self.plugin_button:set_position(
           self:get_width() - self.plugin_button:get_width() - style.padding.x,
@@ -2590,7 +2592,7 @@ end
 -- Add command and keymap to load settings view
 --------------------------------------------------------------------------------
 local theme_commands = {
-  ["theme:select"] = command.palette(function()
+  ["core:select_theme"] = command.palette(function()
     core.global_prompt_bar:enter("Theme", {
       text = normalize_color_theme_name(settings.config.theme),
       select_text = true,
@@ -2610,23 +2612,19 @@ local theme_commands = {
   end),
 }
 
-for _, details in ipairs(get_installed_colors()) do
-  local name = details.name
-  theme_commands["theme:" .. name] = function()
-    apply_color_theme(name)
-  end
-end
-
 command.add(nil, theme_commands)
 
 command.add(nil, {
-  ["ui:settings"] = command.palette(function()
+  ["settings:open"] = command.palette(function()
     open_settings_view(settings.ui)
-  end),
+  end, {
+    keywords = { "preferences", "configuration", "options" },
+    opens_view = true,
+  }),
 })
 
 keymap.add {
-  ["ctrl+alt+p"] = "ui:settings"
+  ["ctrl+alt+p"] = "settings:open"
 }
 
 --------------------------------------------------------------------------------

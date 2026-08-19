@@ -53,7 +53,7 @@ $effectiveTimeoutMultiplier = [Math]::Max($MesonTimeoutMultiplier, $minimumMulti
 
 Push-Location $repo
 try {
-  & $meson.Source test -C $build "anvil:lua-runtime" --timeout-multiplier $effectiveTimeoutMultiplier --test-args "tests/lua/benchmarks/treesitter_project_index.lua" --print-errorlogs
+  & $meson.Source test -C $build "anvil:lua_runtime" --timeout-multiplier $effectiveTimeoutMultiplier --test-args "tests/lua/benchmarks/treesitter_project_index.lua" --print-errorlogs
   if ($LASTEXITCODE -ne 0) { throw "Tree-sitter Project index benchmark failed with exit code $LASTEXITCODE" }
 } finally {
   Pop-Location

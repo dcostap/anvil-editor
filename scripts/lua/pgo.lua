@@ -189,7 +189,7 @@ local function file_stress(abs_path)
     coroutine.yield()
   end
 
-  command.perform "root:close"
+  command.perform "core:close_pane"
   coroutine.yield()
 end
 
@@ -239,7 +239,7 @@ local function input_stress(abs_path)
   end
 
   dv.buffer:clear_undo_redo()
-  command.perform "root:close"
+  command.perform "core:close_pane"
 end
 
 ---Perform serialization stressing
@@ -569,7 +569,7 @@ core.add_background_thread(function()
     coroutine.yield(1)
     if os.time() - start_time >= 5 * 60 then
       print "Maximum pgo stress time exceeded, quitting..."
-      command.perform "core:force-quit"
+      command.perform "core:force_quit"
       break
     end
   end
@@ -632,7 +632,7 @@ core.add_background_thread(function()
     for _=1, 3 do
       scale_stress()
     end
-    command.perform "root:close"
+    command.perform "core:close_pane"
     coroutine.yield()
   end
 

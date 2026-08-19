@@ -121,7 +121,7 @@ local function stabilize_ui(dv)
     dv:scroll_to_line(probe.start_line, true)
   end
   pcall(function() require "plugins.drawwhitespace" end)
-  pcall(command.perform, "draw-whitespace:toggle", true)
+  pcall(command.perform, "editor:toggle_whitespace", true)
   core.redraw = true
 end
 

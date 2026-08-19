@@ -119,7 +119,7 @@ test.describe("File Tree Sorting", function()
       "zzz-new.txt",
     })
 
-    test.ok(command.perform("filetree:sort-by-date-modified"))
+    test.ok(command.perform("filetree:sort_by_date_modified"))
     test.equal(filetree:get_sort_mode(), "modified")
     assert_filetree_lines(filetree, {
       "zzz-new-dir/",
@@ -128,7 +128,7 @@ test.describe("File Tree Sorting", function()
       "aaa-old.txt",
     })
 
-    test.ok(command.perform("filetree:sort-by-name"))
+    test.ok(command.perform("filetree:sort_by_name"))
     test.equal(filetree:get_sort_mode(), "name")
     assert_filetree_lines(filetree, {
       "aaa-old-dir/",
@@ -153,7 +153,7 @@ test.describe("File Tree Sorting", function()
       filetree.buffer:set_selection(selected_line, 2)
     end)
 
-    test.ok(command.perform("filetree:sort-by-date-modified"))
+    test.ok(command.perform("filetree:sort_by_date_modified"))
 
     local moved_old_dir_line = find_filetree_line(filetree, "aaa-old-dir/")
     test.not_nil(moved_old_dir_line, "expected old directory row after sorting")
@@ -176,7 +176,7 @@ test.describe("File Tree Sorting", function()
     test.equal(line_without_newline(filetree.buffer.lines[1]), "renamed-aaa-old-dir/")
     test.ok(filetree.has_possible_edits, "expected edited File Tree to track unapplied edits")
 
-    test.ok(command.perform("filetree:sort-by-date-modified"))
+    test.ok(command.perform("filetree:sort_by_date_modified"))
 
     test.equal(filetree:get_sort_mode(), "name")
     test.equal(line_without_newline(filetree.buffer.lines[1]), "renamed-aaa-old-dir/")

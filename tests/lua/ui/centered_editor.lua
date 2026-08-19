@@ -150,11 +150,11 @@ test.describe("centered editor", function()
 
     view.wrapping_enabled = false
     view.wrapped_settings = nil
-    test.ok(command.is_valid("text:set-cursor", right_of_lane_x, y), "expected unwrapped right-side text area to be interactive")
-    test.equal(command.is_valid("text:set-cursor", left_margin_x, y), false)
+    test.ok(command.is_valid("core:set_cursor", right_of_lane_x, y), "expected unwrapped right-side text area to be interactive")
+    test.equal(command.is_valid("core:set_cursor", left_margin_x, y), false)
 
     view.wrapping_enabled = true
-    test.equal(command.is_valid("text:set-cursor", right_of_lane_x, y), false)
+    test.equal(command.is_valid("core:set_cursor", right_of_lane_x, y), false)
   end)
 
   test.it("limits sticky-line hover and clicks to the centered drawing lane", function(context)

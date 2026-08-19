@@ -17,10 +17,10 @@ local function find_child(view, class)
 end
 
 test.describe("settings", function()
-  test.it("exposes the bundled dark theme as theme:dark", function()
+  test.it("uses one theme picker instead of one command per theme", function()
     local command = require "core.command"
-    test.ok(command.is_valid("theme:dark"))
-    test.ok(not command.is_valid("theme:default"))
+    test.ok(command.is_valid("core:select_theme"))
+    test.not_ok(command.is_valid("theme:dark"))
   end)
 
   local old_test_settings

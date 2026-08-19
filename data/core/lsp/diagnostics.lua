@@ -379,15 +379,15 @@ local function command_predicate(view)
 end
 
 command.add(command_predicate, {
-  ["lsp:next-diagnostic"] = function(view)
+  ["editor:next_diagnostic"] = function(view)
     local item, reason = diagnostics.navigate(view, 1)
     if not item and core.log then core.log("LSP diagnostics: %s", reason or "none") end
   end,
-  ["lsp:previous-diagnostic"] = function(view)
+  ["editor:previous_diagnostic"] = function(view)
     local item, reason = diagnostics.navigate(view, -1)
     if not item and core.log then core.log("LSP diagnostics: %s", reason or "none") end
   end,
-  ["lsp:show-buffer-diagnostics"] = function(view)
+  ["editor:show_buffer_diagnostics"] = function(view)
     if core.log then core.log("%s", diagnostics.summary(view.buffer)) end
   end,
 })

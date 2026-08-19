@@ -9,6 +9,7 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local Buffer = require "core.buffer"
 local file_context = require "core.file_context"
+local view_icons = require "core.view_icons"
 local project_paths = require "core.project_paths"
 local panes = require "core.panes"
 local storage = require "core.storage"
@@ -758,6 +759,7 @@ local function recover_known_line_meta(view)
 end
 
 local FileTreeView = path_tree.View:extend()
+FileTreeView.view_icon = view_icons.register("filetree", view_icons.ui("d"))
 FileTreeView.context = "workspace"
 FileTreeView.show_line_numbers = false
 
@@ -2846,7 +2848,7 @@ function FileTreeView:on_file_dropped(filename)
   local path = common.normalize_path(system.absolute_path(common.home_expand(filename)) or common.home_expand(filename))
   local info = system.get_file_info(path)
   if not (info and info.type == "dir") then return false end
-  command.perform("project-paths:add-external-directory", path)
+  command.perform("project_paths:add_external_directory", path)
   return true
 end
 
@@ -3238,13 +3240,13 @@ local function wrap_buffer_command(name, filetree_handler)
   })
 end
 
-wrap_buffer_command("text:copy", function(v)
+wrap_buffer_command("core:copy", function(v)
   return v:copy_or_cut_lines(false)
 end)
-wrap_buffer_command("text:cut", function(v)
+wrap_buffer_command("core:cut", function(v)
   return v:copy_or_cut_lines(true)
 end)
-wrap_buffer_command("text:paste", function(v)
+wrap_buffer_command("core:paste", function(v)
   return v:paste_lines_with_metadata()
 end)
 
@@ -3410,16 +3412,24 @@ local function reveal_path_in_context(target, context, pane, source_view)
 end
 
 command.add(nil, {
-  ["filetree:open-project-root"] = command.palette(function()
+  ["filetree:open"] = command.palette(function()
+    local context, pane, source_view = command_context()
+    local root = file_context.source_directory(source_view)
+    return open_root_in_context(root, context, pane, source_view) ~= nil
+  end, {
+    keywords = { "files", "folders", "current", "view" },
+    supports_placement = true,
+    opens_view = true,
+  }),
+  ["filetree:open_at_project_root"] = command.palette(function()
     local context, pane, source_view = command_context()
     return open_root_in_context(nil, context, pane, source_view) ~= nil
   end, {
-    title = "Open File Tree at Project Root",
-    description = "Open or reuse a File Tree rooted at the Root Project",
     keywords = { "files", "folders", "view" },
     supports_placement = true,
+    opens_view = true,
   }),
-  ["filetree:open-path"] = command.palette(function()
+  ["filetree:open_at_path"] = command.palette(function()
     local context, pane, source_view = command_context()
     require("plugins.fuzzy_searcher").pick_path {
       kind = "folder",
@@ -3432,22 +3442,19 @@ command.add(nil, {
     }
     return true
   end, {
-    title = "Open File Tree at Path…",
-    description = "Select any existing folder without changing the Root Project",
     keywords = { "files", "folders", "external", "view" },
     supports_placement = true,
+    opens_view = true,
   }),
-  ["filetree:reveal-current-file"] = command.palette(function()
+  ["filetree:reveal_current_file"] = command.palette(function()
     local context, pane, source_view = command_context()
     local path = file_context.view_file_path(source_view) or file_context.current_file_path()
     return path and reveal_path_in_context(path, context, pane, source_view) ~= nil
   end, {
-    title = "Reveal Current File in File Tree",
-    description = "Show the current file in a File Tree",
     keywords = { "locate", "files" },
     supports_placement = true,
   }),
-  ["filetree:reveal-path"] = command.palette(function(path)
+  ["filetree:reveal_path"] = command.palette(function(path)
     local context, pane, source_view = command_context()
     if path then return reveal_path_in_context(path, context, pane, source_view) ~= nil end
     require("plugins.fuzzy_searcher").pick_path {
@@ -3461,21 +3468,19 @@ command.add(nil, {
     }
     return true
   end, {
-    title = "Reveal Path in File Tree…",
-    description = "Select an existing file or folder to reveal",
     keywords = { "locate", "files", "folders", "external" },
     supports_placement = true,
   }),
-  ["filetree:sync-path"] = function(path, source_view)
+  ["filetree:sync_path"] = function(path, source_view)
     local view = source_view and source_view.extends and source_view:extends(FileTreeView)
       and source_view or active_filetree()
     if view then view:sync_path(path, "command") end
   end,
-  ["filetree:sort-by-name"] = command.palette(function()
+  ["filetree:sort_by_name"] = command.palette(function()
     local view = active_filetree()
     if view then view:set_sort_mode("name") end
   end),
-  ["filetree:sort-by-date-modified"] = command.palette(function()
+  ["filetree:sort_by_date_modified"] = command.palette(function()
     local view = active_filetree()
     if view then view:set_sort_mode("modified") end
   end),
@@ -3490,22 +3495,22 @@ end, {
     view:schedule_git_status_refresh("manual-refresh", true)
   end),
   ["filetree:apply"] = command.palette(function(view) view:apply_edits() end),
-  ["filetree:open"] = function(view) view:open_item() end,
-  ["filetree:up-dir"] = function(view) view:up_dir() end,
-  ["filetree:project-root"] = function(view)
+  ["filetree:open_selected"] = function(view) view:open_item() end,
+  ["filetree:up_dir"] = function(view) view:up_dir() end,
+  ["filetree:project_root"] = function(view)
     view.current_dir = view.root_dir
     view:refresh(false, false)
   end,
-  ["filetree:select-all"] = function(view)
+  ["filetree:select_all"] = function(view)
     view.buffer:set_selection(1, 1, #view.buffer.lines, #view.buffer.lines[#view.buffer.lines])
   end,
 })
 
 keymap.add {
-  ["ctrl+\\"] = "filetree:open-project-root",
+  ["ctrl+\\"] = "filetree:open_at_project_root",
   ["ctrl+s"] = "filetree:apply",
   ["f5"] = "filetree:refresh",
-  ["alt+home"] = "filetree:project-root",
+  ["alt+home"] = "filetree:project_root",
 }
 
 return M

@@ -32,7 +32,7 @@ test.describe("Current Editor command routing", function()
     panes.focus(one)
     core.active_view = two.current_view
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
     test.equal(#one.current_view.buffer.lines, 2)
     test.equal(#two.current_view.buffer.lines, 1)
   end)
@@ -46,7 +46,7 @@ test.describe("Current Editor command routing", function()
     panes.present(current, { pane = pane })
     core.active_view = suspended
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
     test.equal(#current.buffer.lines, 2)
     test.equal(#suspended.buffer.lines, 1)
   end)
@@ -55,7 +55,7 @@ test.describe("Current Editor command routing", function()
     local SpecializedEditor = Editor:extend()
     local pane = panes.create { factory = function() return SpecializedEditor(Buffer()) end }
     test.equal(core.current_editor(), pane.current_view)
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
     test.equal(#pane.current_view.buffer.lines, 2)
   end)
 
@@ -63,10 +63,10 @@ test.describe("Current Editor command routing", function()
     panes.reset_for_tests()
     core.active_view = nil
     for _, name in ipairs {
-      "find-replace:repeat-find",
-      "find-replace:select-add-next",
-      "indent:switch-file-to-tabs-indentation",
-      "indent:switch-file-to-spaces-indentation",
+      "editor:repeat_find",
+      "editor:add_selection_next_match",
+      "editor:switch_file_to_tabs_indentation",
+      "editor:switch_file_to_spaces_indentation",
     } do
       local ok, err = pcall(command.is_valid, name)
       test.ok(ok, name .. ": " .. tostring(err))

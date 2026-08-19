@@ -560,7 +560,7 @@ function TextView:scroll_to_make_visible(line, col, ...)
 end
 
 -- Generic commands
-command.add_toggle("sticky-lines:toggle", {
+command.add_toggle("editor:toggle_sticky_lines", {
   palette = true,
   get = function()
     return sticky_scroll.enabled
@@ -571,7 +571,7 @@ command.add_toggle("sticky-lines:toggle", {
 })
 
 -- Per-textview commands
-command.add_toggle("sticky-lines:toggle-buffer", {
+command.add_toggle("editor:toggle_buffer_sticky_lines", {
   palette = true,
   predicate = SS.should_run,
   get = function(dv)

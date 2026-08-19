@@ -63,7 +63,7 @@ end
 test.describe("TextView Prompt Bar find", function()
   test.after_each(function(context)
     if core.active_view and core.active_view.local_find_input then
-      command.perform("user:find-close")
+      command.perform("editor:find_close")
     end
 
     panes.reset_for_tests()
@@ -85,7 +85,7 @@ test.describe("TextView Prompt Bar find", function()
       buffer:set_selection(origin_line, 1, origin_line, 1)
     end)
 
-    test.ok(command.perform("find-replace:find"))
+    test.ok(command.perform("editor:find"))
     core.root_panel:on_text_input("i")
     core.root_panel:on_text_input("n")
 
@@ -96,7 +96,7 @@ test.describe("TextView Prompt Bar find", function()
     local view, buffer = open_editor(context, "input first\ninput second\n")
     view:with_selection_state(function() buffer:set_selection(1, 6, 1, 1) end)
 
-    test.ok(command.perform("find-replace:find"))
+    test.ok(command.perform("editor:find"))
 
     assert_selection(view, 1, 1, 1, 6)
   end)
@@ -109,7 +109,7 @@ test.describe("TextView Prompt Bar find", function()
     local view, buffer = open_editor(context, table.concat(lines, "\n"))
     view:with_selection_state(function() buffer:set_selection(1, 1, 1, 1) end)
 
-    test.ok(command.perform("find-replace:find"))
+    test.ok(command.perform("editor:find"))
     type_into_active_view("NEEDLE")
     assert_selection(view, 1, 1, 1, 7)
 
@@ -120,7 +120,7 @@ test.describe("TextView Prompt Bar find", function()
     local _, maxline = view:get_visible_line_range()
     test.equal(maxline, target_line)
 
-    test.ok(command.perform("find-replace:repeat-find"))
+    test.ok(command.perform("editor:repeat_find"))
 
     assert_selection(view, target_line, 1, target_line, 7)
     test.ok(view.scroll.to.y > start_scroll, "expected bottom-edge match navigation to scroll with context")
@@ -133,10 +133,10 @@ test.describe("TextView Prompt Bar find", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("find-replace:replace"))
+    test.ok(command.perform("editor:replace"))
     active_find_input_for(view)
     type_into_active_view("alpha")
-    test.ok(command.perform("user:find-toggle-replace-field"))
+    test.ok(command.perform("editor:find_toggle_replace_field"))
     active_find_input_for(view)
     type_into_active_view("omega")
 
@@ -144,7 +144,7 @@ test.describe("TextView Prompt Bar find", function()
     MessageBox.warning = function(title, message, callback)
       callback(nil, 1)
     end
-    test.ok(command.perform("user:find-replace-all-confirm"))
+    test.ok(command.perform("editor:find_replace_all_confirm"))
     MessageBox.warning = warning
 
     test.equal(table.concat(buffer.lines), "omega beta omega\nomega\n\n")

@@ -268,11 +268,11 @@ command.add(nil, {
     core.restart()
   end),
 
-  ["core:force-quit"] = function()
+  ["core:force_quit"] = function()
     core.quit(true)
   end,
 
-  ["core:toggle-fullscreen"] = command.palette(function()
+  ["core:toggle_fullscreen"] = command.palette(function()
     local current_mode = system.get_window_mode(core.window)
     local fullscreen = current_mode == "fullscreen"
     if current_mode ~= "fullscreen" then
@@ -292,7 +292,7 @@ command.add(nil, {
     end
   end),
 
-  ["core:reload-module"] = function()
+  ["core:reload_module"] = function()
     core.global_prompt_bar:enter("Reload Module", {
       submit = function(text, item)
         text = item and item.text or text
@@ -309,66 +309,69 @@ command.add(nil, {
     })
   end,
 
-  ["core:open-file"] = function(label, selection_callback, allow_directories)
+  ["core:pick_file"] = function(label, selection_callback, allow_directories)
     if type(label) ~= "string" then
       label, selection_callback, allow_directories = nil, nil, nil
     end
     open_file(label, selection_callback, allow_directories)
   end,
 
-  ["core:open-file-system-file-picker"] = function(label, selection_callback)
+  ["core:pick_file_with_system_picker"] = function(label, selection_callback)
     open_file_with_system_file_picker(label, selection_callback)
   end,
 
-  ["core:open-log"] = command.palette(function()
+  ["log:open"] = command.palette(function()
     panes.place(function() return LogView() end, {
       placement = "current",
       focus = true,
       reason = "open-log",
     })
-  end),
+  end, {
+    keywords = { "messages", "diagnostics" },
+    opens_view = true,
+  }),
 
-  ["core:open-user-module"] = function()
+  ["core:open_user_module"] = function()
     core.open_file(USERDIR .. "/init.lua", { placement = "current", focus = true })
   end,
 
-  ["core:open-project-module"] = function()
+  ["core:open_project_module"] = function()
     if not system.get_file_info(".anvil_project.lua") then
       core.try(core.write_init_project_module, ".anvil_project.lua")
     end
     core.open_file(".anvil_project.lua", { placement = "current", focus = true })
   end,
 
-  ["core:change-project-folder"] = function()
+  ["core:change_project_folder"] = function()
     change_project_directory()
   end,
 
-  ["core:change-project-folder-system-file-picker"] = function()
+  ["core:change_project_folder_system_file_picker"] = function()
     change_project_directory_with_system_file_picker()
   end,
 
-  ["core:open-project-folder"] = function()
+  ["core:open_project_folder"] = function()
     open_project_directory()
   end,
 
-  ["core:open-project-folder-system-file-picker"] = function()
+  ["core:open_project_folder_system_file_picker"] = function()
     open_project_directory_with_system_file_picker()
   end,
 
-  ["core:add-directory"] = function()
+  ["core:add_directory"] = function()
     add_project_directory()
   end,
 
-  ["core:add-directory-system-file-picker"] = function()
+  ["core:add_directory_system_file_picker"] = function()
     add_project_directory_with_system_file_picker()
   end,
 
-  ["core:open-project-github-page"] = command.palette(function()
+  ["core:open_project_github_page"] = command.palette(function()
     common.open_in_system("https://github.com/dcostap/anvil-editor")
   end),
 })
 
-command.add_toggle("core:toggle-tabs", {
+command.add_toggle("core:toggle_tabs", {
   palette = true,
   get = function()
     return not config.hide_tabs
@@ -378,7 +381,7 @@ command.add_toggle("core:toggle-tabs", {
   end,
 })
 
-command.add_toggle("core:toggle-line-numbers", {
+command.add_toggle("core:toggle_line_numbers", {
   palette = true,
   get = function()
     return config.show_line_numbers

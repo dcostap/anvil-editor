@@ -1,23 +1,23 @@
 local command = require "core.command"
 
 command.add("core.global_prompt_bar", {
-  ["command:submit"] = function(active_view)
+  ["core:submit_prompt"] = function(active_view)
     active_view:submit()
   end,
 
-  ["command:complete"] = function(active_view)
+  ["core:complete_prompt"] = function(active_view)
     active_view:complete()
   end,
 
-  ["command:escape"] = function(active_view)
+  ["core:close_prompt"] = function(active_view)
     active_view:exit()
   end,
 
-  ["command:select-previous"] = function(active_view)
+  ["core:select_previous_prompt_item"] = function(active_view)
     active_view:move_suggestion_idx(1)
   end,
 
-  ["command:select-next"] = function(active_view)
+  ["core:select_next_prompt_item"] = function(active_view)
     active_view:move_suggestion_idx(-1)
   end,
 })

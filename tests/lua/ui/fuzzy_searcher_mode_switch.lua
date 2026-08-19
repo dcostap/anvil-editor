@@ -165,7 +165,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     picker.input:set_text("#typed query")
     picker.input.textview.buffer:set_selection(1, 8, 1, 8)
 
-    test.ok(command.perform("fuzzy-searcher:open-paths"), "expected Path Search command to run")
+    test.ok(command.perform("fuzzy:open_paths"), "expected Path Search command to run")
 
     test.equal(picker_text(), "@typed query")
     test.equal(core.fuzzy_searcher_active_view, picker, "expected the existing picker to stay open")
@@ -181,7 +181,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     local picker = core.fuzzy_searcher_active_view
     picker.input:set_text("@project query")
 
-    command.perform("fuzzy-searcher:open-grep")
+    command.perform("fuzzy:open_grep")
 
     test.equal(picker_text(), "#project query")
   end)
@@ -190,7 +190,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     fuzzy_searcher.open("")
     core.fuzzy_searcher_active_view.input:set_text("plain query")
 
-    command.perform("fuzzy-searcher:open-commands")
+    command.perform("fuzzy:open_commands")
 
     test.equal(picker_text(), ">plain query")
   end)
@@ -235,7 +235,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     local picker = core.fuzzy_searcher_active_view
     picker.input:set_text("init.lua")
 
-    command.perform("fuzzy-searcher:open-files")
+    command.perform("fuzzy:open_files")
 
     test.equal(core.fuzzy_searcher_active_view, picker)
     test.equal(picker_text(), "")
@@ -265,13 +265,13 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.equal(picker_text(), "odin/parser #parse_package")
     picker.input:set_text("#draft")
 
-    command.perform("fuzzy-searcher:prompt-history-previous")
+    command.perform("fuzzy:prompt_history_previous")
     test.equal(picker_text(), "odin/parser #parse_package")
-    command.perform("fuzzy-searcher:prompt-history-previous")
+    command.perform("fuzzy:prompt_history_previous")
     test.equal(picker_text(), "#first grep")
-    command.perform("fuzzy-searcher:prompt-history-next")
+    command.perform("fuzzy:prompt_history_next")
     test.equal(picker_text(), "odin/parser #parse_package")
-    command.perform("fuzzy-searcher:prompt-history-next")
+    command.perform("fuzzy:prompt_history_next")
     test.equal(picker_text(), "#draft")
   end)
 
@@ -280,7 +280,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     local picker = core.fuzzy_searcher_active_view
     picker.input:set_text("odin/parser #parse_package")
 
-    command.perform("fuzzy-searcher:open-grep")
+    command.perform("fuzzy:open_grep")
 
     test.equal(core.fuzzy_searcher_active_view, picker)
     test.equal(picker_text(), "odin/parser #parse_package")
@@ -323,22 +323,22 @@ test.describe("Fuzzy Searcher mode switching", function()
     local picker = core.fuzzy_searcher_active_view
     picker.input:set_text(">draft")
 
-    command.perform("fuzzy-searcher:prompt-history-previous")
+    command.perform("fuzzy:prompt_history_previous")
     test.equal(picker.input:get_text(), ">second")
 
-    command.perform("fuzzy-searcher:prompt-history-previous")
+    command.perform("fuzzy:prompt_history_previous")
     test.equal(picker.input:get_text(), ">first")
 
-    command.perform("fuzzy-searcher:prompt-history-previous")
+    command.perform("fuzzy:prompt_history_previous")
     test.equal(picker.input:get_text(), ">first")
 
-    command.perform("fuzzy-searcher:prompt-history-next")
+    command.perform("fuzzy:prompt_history_next")
     test.equal(picker.input:get_text(), ">second")
 
-    command.perform("fuzzy-searcher:prompt-history-next")
+    command.perform("fuzzy:prompt_history_next")
     test.equal(picker.input:get_text(), ">draft")
 
-    command.perform("fuzzy-searcher:prompt-history-next")
+    command.perform("fuzzy:prompt_history_next")
     test.equal(picker.input:get_text(), ">draft")
   end)
 
@@ -347,7 +347,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     local picker = core.fuzzy_searcher_active_view
     picker.input:set_text(">build")
 
-    command.perform("fuzzy-searcher:open-paths")
+    command.perform("fuzzy:open_paths")
     picker:close()
 
     fuzzy_searcher.open(">")
@@ -363,7 +363,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     core.fuzzy_searcher_active_view:close()
 
     fuzzy_searcher.open("")
-    command.perform("fuzzy-searcher:open-commands")
+    command.perform("fuzzy:open_commands")
     local picker = core.fuzzy_searcher_active_view
 
     test.equal(picker.input:get_text(), ">build")

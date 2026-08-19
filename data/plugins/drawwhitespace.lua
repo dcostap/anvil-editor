@@ -917,7 +917,7 @@ local function draw_legacy_whitespace(self, idx, x, y)
 end
 
 
-command.add_toggle("draw-whitespace:toggle", {
+command.add_toggle("editor:toggle_whitespace", {
   palette = true,
   get = function()
     return drawwhitespace.enabled

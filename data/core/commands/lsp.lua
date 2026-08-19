@@ -22,7 +22,7 @@ local function install_statusbar_item()
       local text = manager.active_progress_status()
       return text and { style.accent, text } or {}
     end,
-    command = "lsp:show-status",
+    command = "editor:show_language_server_status",
     tooltip = "language server work",
   })
 end
@@ -43,7 +43,7 @@ local function buffer_view_predicate(view)
   return textview ~= nil, textview
 end
 
-command.add_toggle("lsp:toggle", {
+command.add_toggle("editor:toggle_language_server", {
   palette = true,
   get = manager.is_enabled,
   set = function(enabled)
@@ -53,31 +53,31 @@ command.add_toggle("lsp:toggle", {
 })
 
 command.add(nil, {
-  ["lsp:show-status"] = command.palette(function()
+  ["editor:show_language_server_status"] = command.palette(function()
     if core.log then core.log("%s", manager.status()) end
   end),
 })
 
 command.add(buffer_view_predicate, {
-  ["lsp:start-current-buffer"] = command.palette(function(view)
+  ["editor:start_language_server"] = command.palette(function(view)
     local ok, err = manager.start_current_buffer(view)
     if core.log then
       core.log(ok and "LSP start scheduled" or "LSP start skipped: %s", err or "unavailable")
     end
   end),
-  ["lsp:restart-current-buffer"] = command.palette(function(view)
+  ["editor:restart_language_server"] = command.palette(function(view)
     local ok, err = manager.restart_current_buffer(view)
     if core.log then
       core.log(ok and "LSP restart scheduled" or "LSP restart skipped: %s", err or "unavailable")
     end
   end),
-  ["lsp:hover-current-position"] = command.palette(function(view)
+  ["editor:show_hover"] = command.palette(function(view)
     local _hover, reason, status = hover.start_current_position(view)
     if status ~= "fresh" and core.log_quiet then
       core.log_quiet("LSP hover: %s", tostring(reason or status or "pending"))
     end
   end),
-  ["lsp:signature-help-current-position"] = command.palette(function(view)
+  ["editor:show_signature_help"] = command.palette(function(view)
     local _signature_help, reason, status = signature_help.start_current_position(view)
     if status ~= "fresh" and core.log_quiet then
       core.log_quiet("LSP signature help: %s", tostring(reason or status or "pending"))

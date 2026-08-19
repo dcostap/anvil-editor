@@ -27,11 +27,9 @@ local command = {}
 ---@see core.command.predicate_function
 ---@alias core.command.predicate string|core.object|core.command.predicate_function
 
----A command is identified by a command name.
----The command name contains a category and the name itself, separated by a colon (':').
----
----All commands should be in lowercase and should not contain whitespaces; instead
----they should be replaced by a dash ('-').
+---A command identifier contains its owning View prefix and action.
+---Use `core` when no one View owns the action.
+---Both parts use lowercase snake_case and are separated by a colon.
 ---@alias core.command.command_name string
 
 ---The predicate and its associated function.
@@ -42,11 +40,10 @@ local command = {}
 ---@field metadata? core.command.metadata
 
 ---@class core.command.metadata
----@field title? string
----@field description? string
 ---@field keywords? string[]
 ---@field supports_placement? boolean
 ---@field palette? boolean
+---@field opens_view? boolean
 
 ---@class core.command.registration
 ---@field perform fun(...: any)
@@ -55,34 +52,23 @@ local command = {}
 ---@type { [string]: core.command.command }
 command.map = {}
 
----@type table<string, string>
-command.aliases = command.aliases or {}
+local function validate_name(name)
+  assert(
+    type(name) == "string"
+      and name:match("^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$"),
+    string.format("invalid command identifier %q; expected prefix:snake_case_action", tostring(name))
+  )
+end
+
+local function validate_metadata(metadata)
+  assert(not (metadata and (metadata.title or metadata.description)),
+    "commands use their identifier and keywords, not titles or descriptions")
+end
 
 local invocation_context
 
 ---@type core.command.predicate_function
 local always_true = function() return true end
-
----Register a compatibility alias from one command name to another.
----Aliases are resolved by `command.perform()` and `command.is_valid()` but are
----not returned by `command.get_all_valid()`, so deprecated names do not clutter
----the command picker.
----@param alias core.command.command_name Deprecated command name.
----@param target core.command.command_name Canonical command name.
-function command.add_alias(alias, target)
-  command.aliases[alias] = target
-end
-
-local function resolve_alias(name)
-  local seen
-  while command.aliases[name] do
-    seen = seen or {}
-    if seen[name] then return name end
-    seen[name] = true
-    name = command.aliases[name]
-  end
-  return name
-end
 
 local function pack(...)
   return { n = select("#", ...), ... }
@@ -202,11 +188,13 @@ end
 function command.add(predicate, map)
   predicate = command.generate_predicate(predicate)
   for name, registration in pairs(map) do
+    validate_name(name)
     local fn = registration
     local inline_metadata
     if type(registration) == "table" then
       fn = registration.perform
       inline_metadata = registration.metadata
+      validate_metadata(inline_metadata)
     end
     assert(type(fn) == "function", "command registration requires a function")
     local existing = command.map[name]
@@ -233,6 +221,7 @@ end
 ---@param metadata? core.command.metadata
 ---@return core.command.registration
 function command.palette(fn, metadata)
+  validate_metadata(metadata)
   local values = { palette = true }
   for key, value in pairs(metadata or {}) do values[key] = value end
   return { perform = fn, metadata = values }
@@ -243,7 +232,6 @@ end
 ---@param name core.command.command_name
 ---@param status fun(): any
 function command.set_status(name, status)
-  name = resolve_alias(name)
   if command.map[name] then
     command.map[name].status = status
   end
@@ -253,8 +241,8 @@ end
 ---@param name core.command.command_name
 ---@param metadata core.command.metadata
 function command.set_metadata(name, metadata)
-  name = resolve_alias(name)
   if not command.map[name] then return end
+  validate_metadata(metadata)
   local merged = {}
   for key, value in pairs(command.map[name].metadata or {}) do merged[key] = value end
   for key, value in pairs(metadata or {}) do merged[key] = value end
@@ -264,7 +252,6 @@ end
 ---@param name core.command.command_name
 ---@return core.command.metadata|nil
 function command.get_metadata(name)
-  name = resolve_alias(name)
   local cmd = command.map[name]
   return cmd and cmd.metadata or nil
 end
@@ -280,7 +267,6 @@ end
 ---@param ... any Optional context forwarded to the status callback.
 ---@return any
 function command.get_status(name, ...)
-  name = resolve_alias(name)
   local cmd = command.map[name]
   if not (cmd and cmd.status) then return nil end
   local ok, value = core.try(cmd.status, ...)
@@ -349,23 +335,6 @@ function command.add_toggle(name, options)
 end
 
 
-local function capitalize_first(str)
-  return str:sub(1, 1):upper() .. str:sub(2)
-end
-
----Prettifies the command name.
----
----This function adds a space between the colon and the command name,
----replaces dashes with spaces and capitalizes the command appropriately.
----@see core.command.command_name
----@param name core.command.command_name
----@return string
-function command.prettify_name(name)
-  name = name:gsub(":", ": "):gsub("-", " "):gsub("%S+", capitalize_first)
-  return name
-end
-
-
 ---Returns all the commands that can be executed (their predicates evaluate to true).
 ---@return core.command.command_name[]
 function command.get_all_valid()
@@ -387,12 +356,10 @@ end
 ---@param ... any
 ---@return boolean
 function command.is_valid(name, ...)
-  name = resolve_alias(name)
   return command.map[name] and command.map[name].predicate(...)
 end
 
 local function perform(name, ...)
-  name = resolve_alias(name)
   local command_start = perf_start()
   local cmd = command.map[name]
   if not cmd then return false end

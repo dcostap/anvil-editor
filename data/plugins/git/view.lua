@@ -9,10 +9,12 @@ local style = require "core.style"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local View = require "core.view"
+local view_icons = require "core.view_icons"
 local GitModel = require "plugins.git.model"
 local path_tree = require "plugins.path_tree"
 
 local GitView = View:extend()
+GitView.view_icon = view_icons.register("git", view_icons.file(".gitignore"))
 
 local function reject_read_only_edit()
   return false
@@ -419,7 +421,7 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     core.set_active_view(pane)
     local content_click = false
     if button == "left" and pane.buffer and pane.resolve_screen_position then
-      local cmd = clicks == 2 and "text:set-cursor-word" or clicks and clicks >= 3 and "text:set-cursor-line" or "text:set-cursor"
+      local cmd = clicks == 2 and "core:set_cursor_word" or clicks and clicks >= 3 and "core:set_cursor_line" or "core:set_cursor"
       content_click = command.perform(cmd, x, y, clicks)
     end
     self.mouse_pane = pane

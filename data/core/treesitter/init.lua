@@ -695,19 +695,19 @@ local function buffer_command_predicate()
 end
 
 command.add(buffer_command_predicate, {
-  ["tree-sitter:expand-selection"] = function(buffer)
+  ["editor:expand_syntax_selection"] = function(buffer)
     treesitter.expand_selection(buffer)
   end,
 
-  ["tree-sitter:shrink-selection"] = function(buffer)
+  ["editor:shrink_syntax_selection"] = function(buffer)
     treesitter.shrink_selection(buffer)
   end,
 
-  ["tree-sitter:go-to-enclosing-symbol"] = function(buffer)
+  ["editor:go_to_enclosing_symbol"] = function(buffer)
     treesitter.goto_enclosing_symbol(buffer)
   end,
 
-  ["tree-sitter:go-to-next-symbol"] = function(buffer)
+  ["editor:go_to_next_symbol"] = function(buffer)
     local ok, reason = treesitter.goto_next_symbol(buffer)
     if not ok then
       if reason == "no-symbols" or reason == "no-navigable-symbols" then
@@ -718,7 +718,7 @@ command.add(buffer_command_predicate, {
     end
   end,
 
-  ["tree-sitter:go-to-previous-symbol"] = function(buffer)
+  ["editor:go_to_previous_symbol"] = function(buffer)
     local ok, reason = treesitter.goto_previous_symbol(buffer)
     if not ok then
       if reason == "no-symbols" or reason == "no-navigable-symbols" then
@@ -729,21 +729,21 @@ command.add(buffer_command_predicate, {
     end
   end,
 
-  ["tree-sitter:go-to-local-definition"] = function(buffer)
+  ["editor:go_to_local_definition"] = function(buffer)
     treesitter.goto_local_definition(buffer)
   end,
 
-  ["tree-sitter:go-to-local-declaration"] = function(buffer)
+  ["editor:go_to_local_declaration"] = function(buffer)
     treesitter.goto_local_declaration(buffer)
   end,
 
-  ["tree-sitter:select-local-references"] = function(buffer)
+  ["editor:select_local_references"] = function(buffer)
     treesitter.select_local_references(buffer)
   end,
 })
 
 command.add(nil, {
-  ["tree-sitter:log-buffer-status"] = function()
+  ["editor:log_tree_sitter_status"] = function()
     treesitter.log_buffer_status()
   end,
 })

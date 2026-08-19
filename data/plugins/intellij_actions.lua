@@ -127,7 +127,7 @@ local function clone_caret_until_edge_intellij(dv, direction)
 end
 
 command.add(nil, {
-  ["user:disabled-intellij-conflict"] = function()
+  ["core:disabled_intellij_conflict"] = function()
     -- Intentionally no-op: reserved because the same shortcut means something
     -- unrelated in the user's IntelliJ keymap.
   end,
@@ -137,16 +137,16 @@ command.add(function()
   local TextView = require "core.textview"
   return core.active_view and core.active_view:extends(TextView), core.active_view
 end, {
-  ["user:clone-caret-above-intellij"] = function(dv)
+  ["editor:clone_caret_above_intellij"] = function(dv)
     clone_caret_intellij(dv, -1)
   end,
-  ["user:clone-caret-below-intellij"] = function(dv)
+  ["editor:clone_caret_below_intellij"] = function(dv)
     clone_caret_intellij(dv, 1)
   end,
-  ["user:clone-caret-above-until-first-line-intellij"] = function(dv)
+  ["editor:clone_caret_above_until_first_line_intellij"] = function(dv)
     clone_caret_until_edge_intellij(dv, -1)
   end,
-  ["user:clone-caret-below-until-last-line-intellij"] = function(dv)
+  ["editor:clone_caret_below_until_last_line_intellij"] = function(dv)
     clone_caret_until_edge_intellij(dv, 1)
   end,
 })
@@ -1083,7 +1083,7 @@ local function restore_selection_origin_or_select_none(dv)
     with_origin_clear_suppressed(buffer_set_selection, buffer, line, col, line, col)
     core.blink_reset()
   else
-    command.perform("text:select-none")
+    command.perform("core:select_none")
   end
 end
 
@@ -1170,7 +1170,7 @@ local function duplicate_current_line(dv)
 end
 
 local function move_to_matching_bracket_with_history(dv)
-  command.perform("bracket-match:move-to-matching")
+  command.perform("editor:move_to_matching")
 end
 
 local function reopen_last_closed_tab()
@@ -1184,7 +1184,7 @@ local function reopen_last_closed_tab()
 end
 
 command.add(nil, {
-  ["user:reopen-last-closed-tab"] = reopen_last_closed_tab,
+  ["core:reopen_last_closed_pane"] = reopen_last_closed_tab,
 })
 
 local function line_comment_at_start(dv)
@@ -1249,7 +1249,7 @@ end
 local function selection_text_for_occurrences(dv)
   local buffer = dv.buffer
   if not buffer:has_selection() then
-    command.perform("text:select-word")
+    command.perform("core:select_word")
   end
 
   local text, compare_text
@@ -1351,31 +1351,31 @@ command.add(function()
   local view = core.active_view
   return view and view:extends(TextView) and not view:is(GlobalPromptBar), view
 end, {
-  ["user:extend-selection-smart"] = extend_smart_selection,
-  ["user:shrink-selection-smart"] = shrink_smart_selection,
-  ["user:expand-selection-block"] = expand_block_selection,
-  ["user:add-selection-next-occurrence"] = add_selection_for_next_occurrence,
-  ["user:select-all-occurrences"] = select_all_occurrences,
-  ["user:comment-with-line-comment-at-start"] = line_comment_at_start,
-  ["user:restore-selection-origin-or-select-none"] = restore_selection_origin_or_select_none,
-  ["user:duplicate-current-line"] = duplicate_current_line,
-  ["user:move-to-matching-bracket-with-history"] = move_to_matching_bracket_with_history,
-  ["user:move-caret-previous-paragraph"] = function(dv)
+  ["editor:extend_selection_smart"] = extend_smart_selection,
+  ["editor:shrink_selection_smart"] = shrink_smart_selection,
+  ["editor:expand_selection_block"] = expand_block_selection,
+  ["editor:add_selection_next_occurrence"] = add_selection_for_next_occurrence,
+  ["editor:select_all_occurrences"] = select_all_occurrences,
+  ["editor:comment_with_line_comment_at_start"] = line_comment_at_start,
+  ["editor:restore_selection_origin_or_select_none"] = restore_selection_origin_or_select_none,
+  ["editor:duplicate_current_line"] = duplicate_current_line,
+  ["editor:move_to_matching_bracket_with_history"] = move_to_matching_bracket_with_history,
+  ["editor:move_caret_previous_paragraph"] = function(dv)
     move_caret_paragraph(dv, -1)
   end,
-  ["user:move-caret-next-paragraph"] = function(dv)
+  ["editor:move_caret_next_paragraph"] = function(dv)
     move_caret_paragraph(dv, 1)
   end,
-  ["user:select-previous-camel-hump"] = function(dv)
+  ["editor:select_previous_camel_hump"] = function(dv)
     move_caret_camel_word_with_selection(dv, -1)
   end,
-  ["user:select-next-camel-hump"] = function(dv)
+  ["editor:select_next_camel_hump"] = function(dv)
     move_caret_camel_word_with_selection(dv, 1)
   end,
 })
 
 command.add(nil, {
-  ["user:copy-project-path"] = copy_project_path,
+  ["editor:copy_project_path"] = copy_project_path,
 })
 
 command.add(function(target)
@@ -1383,67 +1383,67 @@ command.add(function(target)
   local view = core.active_view
   return is_file_bound_view(view), view
 end, {
-  ["user:copy-absolute-filepath"] = copy_absolute_filepath,
-  ["user:copy-absolute-filepath-with-line"] = copy_absolute_filepath_with_line,
-  ["user:copy-relative-filepath"] = copy_relative_filepath,
-  ["user:copy-filename"] = copy_filename,
-  ["user:open-file-as-raw-text"] = open_file_as_raw_text,
-  ["user:open-file-in-associated-program"] = open_file_in_associated_program,
-  ["user:reveal-active-file-in-explorer"] = reveal_active_file_in_explorer,
-  ["user:open-terminal-at-active-file"] = open_terminal_at_active_file,
+  ["editor:copy_absolute_filepath"] = copy_absolute_filepath,
+  ["editor:copy_absolute_filepath_with_line"] = copy_absolute_filepath_with_line,
+  ["editor:copy_relative_filepath"] = copy_relative_filepath,
+  ["editor:copy_filename"] = copy_filename,
+  ["editor:open_file_as_raw_text"] = open_file_as_raw_text,
+  ["editor:open_file_in_associated_program"] = open_file_in_associated_program,
+  ["editor:reveal_active_file_in_explorer"] = reveal_active_file_in_explorer,
+  ["editor:open_terminal_at_current_file"] = open_terminal_at_active_file,
 })
 
 keymap.add({
-  ["ctrl+alt+n"] = "user:clone-caret-above-intellij",
-  ["ctrl+alt+m"] = "user:clone-caret-below-intellij",
-  ["ctrl+alt+shift+n"] = "user:clone-caret-above-until-first-line-intellij",
-  ["ctrl+alt+shift+m"] = "user:clone-caret-below-until-last-line-intellij",
-  ["alt+w"] = "user:move-to-matching-bracket-with-history",
-  ["alt+shift+p"] = "user:expand-selection-block",
-  ["alt+p"] = "user:add-selection-next-occurrence",
-  ["alt+e"] = "user:comment-with-line-comment-at-start",
-  ["alt+shift+o"] = "user:extend-selection-smart",
-  ["alt+shift+u"] = "user:shrink-selection-smart",
-  ["ctrl+alt+u"] = "user:select-previous-camel-hump",
-  ["ctrl+alt+o"] = "user:select-next-camel-hump",
-  ["ctrl+d"] = "user:duplicate-current-line",
-  ["ctrl+n"] = "text:move-lines-up",
-  ["ctrl+m"] = "text:move-lines-down",
-  ["ctrl+shift+t"] = "user:reopen-last-closed-tab",
-  ["ctrl+shift+w"] = "pane:close-all-others",
-  ["alt+z"] = "pane:focus-previous",
-  ["alt+x"] = "pane:focus-next",
-  ["ctrl+shift+l"] = "user:reveal-active-file-in-explorer",
-  ["ctrl+alt+t"] = "terminal:open-here",
-  ["ctrl+up"] = "user:move-caret-previous-paragraph",
-  ["ctrl+down"] = "user:move-caret-next-paragraph",
-  ["ctrl+alt+up"] = "poi:previous",
-  ["ctrl+alt+down"] = "poi:next",
-  ["ctrl+alt+,"] = "poi:previous",
-  ["ctrl+alt+."] = "poi:next",
-  ["ctrl+pageup"] = "poi:previous",
-  ["ctrl+pagedown"] = "poi:next",
-  ["f6"] = "poi:previous",
-  ["f7"] = "poi:next",
+  ["ctrl+alt+n"] = "editor:clone_caret_above_intellij",
+  ["ctrl+alt+m"] = "editor:clone_caret_below_intellij",
+  ["ctrl+alt+shift+n"] = "editor:clone_caret_above_until_first_line_intellij",
+  ["ctrl+alt+shift+m"] = "editor:clone_caret_below_until_last_line_intellij",
+  ["alt+w"] = "editor:move_to_matching_bracket_with_history",
+  ["alt+shift+p"] = "editor:expand_selection_block",
+  ["alt+p"] = "editor:add_selection_next_occurrence",
+  ["alt+e"] = "editor:comment_with_line_comment_at_start",
+  ["alt+shift+o"] = "editor:extend_selection_smart",
+  ["alt+shift+u"] = "editor:shrink_selection_smart",
+  ["ctrl+alt+u"] = "editor:select_previous_camel_hump",
+  ["ctrl+alt+o"] = "editor:select_next_camel_hump",
+  ["ctrl+d"] = "editor:duplicate_current_line",
+  ["ctrl+n"] = "editor:move_lines_up",
+  ["ctrl+m"] = "editor:move_lines_down",
+  ["ctrl+shift+t"] = "core:reopen_last_closed_pane",
+  ["ctrl+shift+w"] = "core:close_other_panes",
+  ["alt+z"] = "core:focus_previous_pane",
+  ["alt+x"] = "core:focus_next_pane",
+  ["ctrl+shift+l"] = "editor:reveal_active_file_in_explorer",
+  ["ctrl+alt+t"] = "terminal:open",
+  ["ctrl+up"] = "editor:move_caret_previous_paragraph",
+  ["ctrl+down"] = "editor:move_caret_next_paragraph",
+  ["ctrl+alt+up"] = "core:previous_point_of_interest",
+  ["ctrl+alt+down"] = "core:next_point_of_interest",
+  ["ctrl+alt+,"] = "core:previous_point_of_interest",
+  ["ctrl+alt+."] = "core:next_point_of_interest",
+  ["ctrl+pageup"] = "core:previous_point_of_interest",
+  ["ctrl+pagedown"] = "core:next_point_of_interest",
+  ["f6"] = "core:previous_point_of_interest",
+  ["f7"] = "core:next_point_of_interest",
 }, true)
 
 -- Keep Escape cooperative: plugin panels (GlobalPromptBar, project search,
 -- search/replace, fuzzy searcher, etc.) should get their normal close handlers,
 -- and this editor-only fallback runs only when those predicates do not apply.
 keymap.add({
-  ["escape"] = "user:restore-selection-origin-or-select-none",
+  ["escape"] = "editor:restore_selection_origin_or_select_none",
 })
 
 core.intellij_actions_disable_conflict_shortcuts = function()
   keymap.add_direct({
-    ["ctrl+g"] = "user:disabled-intellij-conflict",
-    ["ctrl+shift+k"] = "user:disabled-intellij-conflict",
-    ["ctrl+return"] = "user:disabled-intellij-conflict",
-    ["ctrl+alt+p"] = "user:select-all-occurrences",
-    ["alt+return"] = "user:disabled-intellij-conflict",
-    ["ctrl+alt+r"] = "user:disabled-intellij-conflict",
-    ["shift+alt+i"] = "user:disabled-intellij-conflict",
-    ["shift+alt+k"] = "user:disabled-intellij-conflict",
+    ["ctrl+g"] = "core:disabled_intellij_conflict",
+    ["ctrl+shift+k"] = "core:disabled_intellij_conflict",
+    ["ctrl+return"] = "core:disabled_intellij_conflict",
+    ["ctrl+alt+p"] = "editor:select_all_occurrences",
+    ["alt+return"] = "core:disabled_intellij_conflict",
+    ["ctrl+alt+r"] = "core:disabled_intellij_conflict",
+    ["shift+alt+i"] = "core:disabled_intellij_conflict",
+    ["shift+alt+k"] = "core:disabled_intellij_conflict",
   })
 end
 

@@ -389,7 +389,7 @@ function TextView:scroll_to_line(...)
   end, ...)
 end
 
-command.add_toggle("centered-editor:toggle", {
+command.add_toggle("editor:toggle_centered", {
   palette = true,
   get = function()
     return settings().enabled
@@ -402,12 +402,12 @@ command.add_toggle("centered-editor:toggle", {
 })
 
 local mouse_commands = {
-  "text:set-cursor",
-  "text:set-cursor-word",
-  "text:set-cursor-line",
-  "text:split-cursor",
-  "text:select-to-cursor",
-  "text:paste-primary-selection",
+  "core:set_cursor",
+  "core:set_cursor_word",
+  "core:set_cursor_line",
+  "core:split_cursor",
+  "core:select_to_cursor",
+  "core:paste_primary_selection",
 }
 
 local function patch_mouse_command(name)

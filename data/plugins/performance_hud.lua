@@ -82,11 +82,11 @@ function RootPanel:draw()
 end
 
 command.add(nil, {
-  ["performance-hud:toggle"] = command.palette(function()
+  ["core:toggle_performance_hud"] = command.palette(function()
     hud.visible = not hud.visible
     core.redraw = true
   end),
-  ["performance-hud:toggle-recording"] = command.palette(function()
+  ["core:toggle_performance_recording"] = command.palette(function()
     local started, path = perf.toggle_recording()
     if started then
       hud.visible = true
@@ -101,8 +101,8 @@ command.add(nil, {
 })
 
 keymap.add {
-  ["f10"] = "performance-hud:toggle",
-  ["f11"] = "performance-hud:toggle-recording",
+  ["f10"] = "core:toggle_performance_hud",
+  ["f11"] = "core:toggle_performance_recording",
 }
 
 return hud

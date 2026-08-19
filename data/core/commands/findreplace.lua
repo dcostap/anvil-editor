@@ -21,9 +21,9 @@ local function buffer()
 end
 
 local function get_find_tooltip()
-  local rf = keymap.get_binding("find-replace:repeat-find")
-  local ti = keymap.get_binding("find-replace:toggle-sensitivity")
-  local tr = keymap.get_binding("find-replace:toggle-regex")
+  local rf = keymap.get_binding("editor:repeat_find")
+  local ti = keymap.get_binding("editor:toggle_sensitivity")
+  local tr = keymap.get_binding("editor:toggle_regex")
   return (find_regex and "[Regex] " or "") ..
     (case_sensitive and "[Sensitive] " or "") ..
     (rf and ("Press " .. rf .. " to select the next match.") or "") ..
@@ -253,29 +253,29 @@ local function find_replace(in_selection)
 end
 
 command.add(has_unique_selection, {
-  ["find-replace:select-next"] = select_next,
-  ["find-replace:select-previous"] = function() select_next(true) end,
-  ["find-replace:select-add-next"] = command.palette(select_add_next),
-  ["find-replace:select-add-all"] = command.palette(function() select_add_next(true) end)
+  ["editor:select_next"] = select_next,
+  ["editor:select_previous"] = function() select_next(true) end,
+  ["editor:add_selection_next_match"] = command.palette(select_add_next),
+  ["editor:add_all_matching_selections"] = command.palette(function() select_add_next(true) end)
 })
 
 command.add("core.textview!", {
-  ["find-replace:find"] = command.palette(function()
+  ["editor:find"] = command.palette(function()
     find("Find Text", function(buffer, line, col, text, case_sensitive, find_regex, find_reverse)
       local opt = { wrap = true, no_case = not case_sensitive, regex = find_regex, reverse = find_reverse }
       return search.find(buffer, line, col, text, opt)
     end)
   end),
 
-  ["find-replace:replace"] = command.palette(function()
+  ["editor:replace"] = command.palette(function()
     find_replace()
   end),
 
-  ["find-replace:replace-in-selection"] = command.palette(function()
+  ["editor:replace_in_selection"] = command.palette(function()
     find_replace(true)
   end),
 
-  ["find-replace:replace-symbol"] = command.palette(function()
+  ["editor:replace_symbol"] = command.palette(function()
     local first = ""
     if buffer():has_selection() then
       local text = buffer():get_text(buffer():get_selection())
@@ -304,7 +304,7 @@ local function valid_for_finding()
 end
 
 command.add(valid_for_finding, {
-  ["find-replace:repeat-find"] = function(dv)
+  ["editor:repeat_find"] = function(dv)
     if not last_fn then
       core.error("No find to continue from")
     else
@@ -325,7 +325,7 @@ command.add(valid_for_finding, {
     end
   end,
 
-  ["find-replace:previous-find"] = function(dv)
+  ["editor:previous_find"] = function(dv)
     if not last_fn then
       core.error("No find to continue from")
     else
@@ -348,13 +348,13 @@ command.add(valid_for_finding, {
 })
 
 command.add("core.global_prompt_bar", {
-  ["find-replace:toggle-sensitivity"] = function()
+  ["editor:toggle_sensitivity"] = function()
     case_sensitive = not case_sensitive
     core.status_bar:show_tooltip(get_find_tooltip())
     if last_sel then update_preview(last_sel, last_fn, last_text) end
   end,
 
-  ["find-replace:toggle-regex"] = function()
+  ["editor:toggle_regex"] = function()
     find_regex = not find_regex
     core.status_bar:show_tooltip(get_find_tooltip())
     if last_sel then update_preview(last_sel, last_fn, last_text) end

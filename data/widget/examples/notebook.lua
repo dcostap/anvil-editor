@@ -129,7 +129,7 @@ local inside_node = false
 
 -- You can add the widget as a pragtical node
 command.add(nil,{
-  ["notebook-widget:toggle"] = function()
+  ["notebook_widget:toggle"] = function()
     if inside_node then
       notebook:toggle_visible()
     else
@@ -147,5 +147,5 @@ command.add(nil,{
 })
 
 keymap.add {
-  ["alt+shift+m"] = "notebook-widget:toggle",
+  ["alt+shift+m"] = "notebook_widget:toggle",
 }

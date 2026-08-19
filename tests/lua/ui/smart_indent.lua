@@ -59,7 +59,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"if ok then" + 1, 1, #"if ok then" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "if ok then\n  \nend\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -70,7 +70,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"if ok:" + 1, 1, #"if ok:" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "if ok:\n  \npass\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -81,7 +81,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"begin" + 1, 1, #"begin" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "begin\n  \nselect 1\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -92,7 +92,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"-- if ok then" + 1, 1, #"-- if ok then" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "-- if ok then\n-- \n")
     test.same(view:get_selection_state().selections, { 2, 4, 2, 4 })
@@ -103,7 +103,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"# if ok:" + 1, 1, #"# if ok:" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "# if ok:\n# \n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -114,7 +114,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"puts value" + 1, 1, #"puts value" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "puts value\n\n")
     test.same(view:get_selection_state().selections, { 2, 1, 2, 1 })
@@ -125,7 +125,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"const url = \"http://example.com\" +" + 1, 1, #"const url = \"http://example.com\" +" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "const url = \"http://example.com\" +\n  \n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -140,7 +140,7 @@ test.describe("smart indentation", function()
       changes = changes + 1
     end
 
-    test.ok(command.perform("text:indent"))
+    test.ok(command.perform("core:indent"))
 
     test.equal(text(buffer), "if ok:\n  pass\n")
     test.equal(changes, 1)
@@ -152,7 +152,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(2, 1, 2, 1)
 
-    test.ok(command.perform("text:indent"))
+    test.ok(command.perform("core:indent"))
 
     test.equal(text(buffer), "if ok:\n  pass\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -168,7 +168,7 @@ test.describe("smart indentation", function()
       buffer.last_selection = 2
     end)
 
-    test.ok(command.perform("text:indent"))
+    test.ok(command.perform("core:indent"))
 
     test.equal(text(buffer), "if ok:\n  pass\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -185,7 +185,7 @@ test.describe("smart indentation", function()
       buffer.last_selection = 2
     end)
 
-    test.ok(command.perform("text:indent"))
+    test.ok(command.perform("core:indent"))
 
     test.equal(text(buffer), "if a:\n  one\nif b:\n  two\n")
     test.same(view:get_selection_state().selections, {
@@ -203,7 +203,7 @@ test.describe("smart indentation", function()
     core.cursor_clipboard = { full = "different" }
     core.cursor_clipboard_whole_line = {}
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "if ok:\n  a\n    b\n")
     test.same(view:get_selection_state().selections, { 3, 6, 3, 6 })
@@ -217,7 +217,7 @@ test.describe("smart indentation", function()
     core.cursor_clipboard = { full = "different" }
     core.cursor_clipboard_whole_line = {}
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "  a\n    b\n")
   end)
@@ -229,7 +229,7 @@ test.describe("smart indentation", function()
     buffer:set_selection(2, 3, 2, 3)
     system.set_primary_selection("a\n  b")
 
-    test.ok(command.perform("text:paste-primary-selection"))
+    test.ok(command.perform("core:paste_primary_selection"))
 
     test.equal(text(buffer), "if ok:\n  a\n    b\n")
   end)
@@ -242,7 +242,7 @@ test.describe("smart indentation", function()
     core.cursor_clipboard = { full = "payload", [1] = "x\n  y" }
     core.cursor_clipboard_whole_line = { false }
 
-    test.ok(command.perform("text:paste"))
+    test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), "x\n  ybb\ncc\n")
   end)
@@ -252,7 +252,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"-- hello" + 1, 1, #"-- hello" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "-- hello\n-- \n")
     test.same(view:get_selection_state().selections, { 2, 4, 2, 4 })
@@ -263,7 +263,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"- item" + 1, 1, #"- item" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "- item\n- \n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -274,7 +274,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"1. item" + 1, 1, #"1. item" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "1. item\n2. \n")
     test.same(view:get_selection_state().selections, { 2, 4, 2, 4 })
@@ -285,7 +285,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"- [ ] item" + 1, 1, #"- [ ] item" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "- [ ] item\n- [ ] \n")
     test.same(view:get_selection_state().selections, { 2, 7, 2, 7 })
@@ -296,7 +296,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"3) item" + 1, 1, #"3) item" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "3) item\n4) \n")
     test.same(view:get_selection_state().selections, { 2, 4, 2, 4 })
@@ -307,7 +307,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(2, 3, 2, 3)
 
-    test.ok(command.perform("text:indent"))
+    test.ok(command.perform("core:indent"))
 
     test.equal(text(buffer), "- first\n    - second\n")
     test.same(view:get_selection_state().selections, { 2, 7, 2, 7 })
@@ -318,7 +318,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(2, 7, 2, 7)
 
-    test.ok(command.perform("text:indent"))
+    test.ok(command.perform("core:indent"))
 
     test.equal(text(buffer), "- [ ] parent\n    - [ ] \n")
     test.same(view:get_selection_state().selections, { 2, 11, 2, 11 })
@@ -335,7 +335,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(3, 11, 3, 11)
 
-    test.ok(command.perform("text:indent"))
+    test.ok(command.perform("core:indent"))
 
     test.equal(
       text(buffer),
@@ -351,7 +351,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(2, 11, 2, 11)
 
-    test.ok(command.perform("text:indent"))
+    test.ok(command.perform("core:indent"))
 
     test.equal(text(buffer), source .. "\n")
     test.same(view:get_selection_state().selections, { 2, 11, 2, 11 })
@@ -365,7 +365,7 @@ test.describe("smart indentation", function()
     buffer:set_selection(2, 5, 2, 5)
 
     for _ = 1, 3 do
-      test.ok(command.perform("text:indent"))
+      test.ok(command.perform("core:indent"))
     end
 
     test.equal(text(buffer), source .. "\n")
@@ -376,10 +376,10 @@ test.describe("smart indentation", function()
     local buffer, view = new_editor(context, "- item\nnext", "sample.md")
     core.set_active_view(view)
     buffer:set_selection(1, #"- item" + 1, 1, #"- item" + 1)
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     buffer:set_selection(2, #buffer.lines[2], 2, #buffer.lines[2])
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "- item\n\nnext\n")
     test.same(view:get_selection_state().selections, { 2, 1, 2, 1 })
@@ -391,10 +391,10 @@ test.describe("smart indentation", function()
     )
     core.set_active_view(view)
     buffer:set_selection(1, 7)
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     buffer:set_selection(2, 3)
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "- [ ] \ntask text\n  continuation\nafter\n")
     test.same(view:get_selection_state().selections, { 2, 1, 2, 1 })
@@ -405,7 +405,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(2, 5, 2, 5)
 
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
 
     test.equal(text(buffer), "- parent\n  child\nafter\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -416,12 +416,12 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(2, 9, 2, 9)
 
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
 
     test.equal(text(buffer), "- parent\n  - child\nafter\n")
     test.same(view:get_selection_state().selections, { 2, 5, 2, 5 })
 
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
 
     test.equal(text(buffer), "- parent\n  child\nafter\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -432,7 +432,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(2, 5, 2, 5)
 
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
 
     test.equal(text(buffer), "- parent\n- \nafter\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -443,7 +443,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, 7, 1, 7)
 
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
 
     test.equal(text(buffer), "\nafter\n")
     test.same(view:get_selection_state().selections, { 1, 1, 1, 1 })
@@ -454,7 +454,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, 6, 1, 6)
 
-    test.ok(command.perform("text:backspace"))
+    test.ok(command.perform("core:backspace"))
 
     test.equal(text(buffer), "\nafter\n")
     test.same(view:get_selection_state().selections, { 1, 1, 1, 1 })
@@ -465,7 +465,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, 6, 1, 6)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "\nafter\n")
     test.same(view:get_selection_state().selections, { 1, 1, 1, 1 })
@@ -476,7 +476,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #buffer.lines[1])
 
-    test.ok(command.perform("text:delete"))
+    test.ok(command.perform("core:delete"))
 
     test.equal(text(buffer), "- first second\nafter\n")
   end)
@@ -486,7 +486,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(2, 3)
 
-    test.ok(command.perform("text:delete"))
+    test.ok(command.perform("core:delete"))
 
     test.equal(text(buffer), "- parent\n  child\nafter\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -497,7 +497,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, 5)
 
-    test.ok(command.perform("text:join-lines"))
+    test.ok(command.perform("editor:join_lines"))
 
     test.equal(text(buffer), "- first second\nafter\n")
   end)
@@ -507,7 +507,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"- item:" + 1, 1, #"- item:" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "- item:\n  \n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -518,7 +518,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"#!/usr/bin/env python3" + 1, 1, #"#!/usr/bin/env python3" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "#!/usr/bin/env python3\n\n")
     test.same(view:get_selection_state().selections, { 2, 1, 2, 1 })
@@ -529,7 +529,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"main :: proc() {" + 1, 1, #"main :: proc() {" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "main :: proc() {\n  \n}\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -540,7 +540,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"plain(" + 1, 1, #"plain(" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "plain(\n  \n)\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -551,7 +551,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"items [" + 1, 1, #"items [" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "items [\n  \n]\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -562,7 +562,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, 2, 1, 2)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "[\n  \n]\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -573,7 +573,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"section {" + 1, 1, #"section {" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "section {\n  \n}\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
@@ -584,7 +584,7 @@ test.describe("smart indentation", function()
     core.set_active_view(view)
     buffer:set_selection(1, #"call(" + 1, 1, #"call(" + 1)
 
-    test.ok(command.perform("text:newline"))
+    test.ok(command.perform("core:newline"))
 
     test.equal(text(buffer), "call(\n  \n)\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })

@@ -139,7 +139,7 @@ function TextView:draw_overlay(...)
   perf_scope_end(scope)
 end
 
-command.add_toggle("lineguide:toggle", {
+command.add_toggle("editor:toggle_line_guide", {
   palette = true,
   get = function()
     return config.plugins.lineguide.enabled

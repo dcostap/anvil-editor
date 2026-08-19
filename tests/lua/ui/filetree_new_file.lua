@@ -117,7 +117,7 @@ test.describe("File Tree New File integration", function()
 
     filetree.buffer:set_selection(folder_line, 1)
     core.set_active_view(filetree)
-    test.ok(command.perform("user:new-file-with-path"))
+    test.ok(command.perform("editor:new_file_with_path"))
 
     test.equal(core.global_prompt_bar:get_text(), expected_prompt_text_for(paths.folder))
   end)
@@ -128,7 +128,7 @@ test.describe("File Tree New File integration", function()
     filetree.buffer:insert(1, 1, "draft/\n")
     filetree.buffer:set_selection(1, 1)
     core.set_active_view(filetree)
-    test.ok(command.perform("user:new-file-with-path"))
+    test.ok(command.perform("editor:new_file_with_path"))
 
     test.equal(core.global_prompt_bar:get_text(), expected_prompt_text_for(context.temp_root))
   end)
@@ -140,7 +140,7 @@ test.describe("File Tree New File integration", function()
 
     filetree.buffer:set_selection(folder_line, 1)
     core.set_active_view(filetree)
-    test.ok(command.perform("user:new-file-with-path"))
+    test.ok(command.perform("editor:new_file_with_path"))
 
     local prompt_text = core.global_prompt_bar:get_text()
     test.equal(prompt_text, expected_prompt_text_for(paths.folder))
@@ -161,7 +161,7 @@ test.describe("File Tree New File integration", function()
 
     filetree.buffer:set_selection(folder_line, 1)
     core.set_active_view(filetree)
-    test.ok(command.perform("user:new-file-with-path"))
+    test.ok(command.perform("editor:new_file_with_path"))
 
     local prompt_text = core.global_prompt_bar:get_text()
     core.global_prompt_bar:set_text(prompt_text .. "alpha/beta/created.txt")
@@ -185,7 +185,7 @@ test.describe("File Tree New File integration", function()
 
     filetree.buffer:set_selection(folder_line, 1)
     core.set_active_view(filetree)
-    test.ok(command.perform("user:new-file-with-path"))
+    test.ok(command.perform("editor:new_file_with_path"))
 
     local buffer_count = #core.buffers
     local prompt_text = core.global_prompt_bar:get_text()
@@ -207,7 +207,7 @@ test.describe("File Tree New File integration", function()
 
     filetree.buffer:set_selection(folder_line, 1)
     core.set_active_view(filetree)
-    test.ok(command.perform("user:new-file-with-path"))
+    test.ok(command.perform("editor:new_file_with_path"))
 
     local log_start = core.log_items[#core.log_items]
     core.global_prompt_bar:set_text(core.global_prompt_bar:get_text() .. "   ")
@@ -225,7 +225,7 @@ test.describe("File Tree New File integration", function()
   test.it("reports an error when a trailing separator points at an existing file", function(context)
     local filetree, paths = setup_tree(context)
     core.set_active_view(filetree)
-    test.ok(command.perform("user:new-file-with-path"))
+    test.ok(command.perform("editor:new_file_with_path"))
 
     local log_start = core.log_items[#core.log_items]
     core.global_prompt_bar:set_text(expected_prompt_text_for(context.temp_root) .. "sibling.txt/")

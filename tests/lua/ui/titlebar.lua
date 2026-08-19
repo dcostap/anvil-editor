@@ -141,6 +141,33 @@ test.describe("Global title bar Pane entries", function()
     test.equal(number.color, style.titlebar_pane_number)
   end)
 
+  test.it("draws a View Icon before the Pane number", function()
+    local pane = panes.create { factory = factory("tree") }
+    pane.current_view.view_icon = { font = style.icon_font, glyph = "d" }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_rounded_rect = renderer.draw_rounded_rect
+    local old_draw_text = renderer.draw_text
+    local icon_x, number_x
+    renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
+    renderer.draw_text = function(font, text, x)
+      if font == style.icon_font and text == "d" then icon_x = x end
+      if text == "1" then number_x = x end
+    end
+    local ok, err = pcall(title.draw, title)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_rounded_rect = old_draw_rounded_rect
+    renderer.draw_text = old_draw_text
+
+    test.ok(ok, err)
+    test.not_nil(icon_x)
+    test.not_nil(number_x)
+    test.ok(icon_x < number_x)
+  end)
+
   test.it("focuses a Pane from its global entry", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.create { factory = factory("two") }

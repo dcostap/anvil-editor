@@ -1,10 +1,13 @@
 local core = require "core"
 local TextView = require "core.textview"
+local view_icons = require "core.view_icons"
 
 ---@class core.editor : core.textview
 ---@overload fun(buffer: core.buffer):core.editor
 ---@field super core.textview
 local Editor = TextView:extend()
+
+view_icons.register("editor", view_icons.ui("K"))
 
 function Editor:__tostring()
   return "Editor"

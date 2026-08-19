@@ -421,7 +421,7 @@ function StatusBar:register_textview_items()
       end
       return w
     end,
-    command = "text:go-to-line",
+    command = "editor:go_to_line",
     tooltip = "line : column"
   })
 
@@ -500,9 +500,9 @@ function StatusBar:register_textview_items()
     end,
     command = function(button, x, y)
       if button == "left" then
-        command.perform "indent:set-file-indent-size"
+        command.perform "editor:set_file_indent_size"
       elseif button == "right" then
-        command.perform "indent:set-file-indent-type"
+        command.perform "editor:set_file_indent_type"
       end
     end,
     separator = self.separator2
@@ -534,9 +534,9 @@ function StatusBar:register_textview_items()
     end,
     command = function(button)
       if button == "left" then
-        command.perform "text:change-encoding"
+        command.perform "editor:change_encoding"
       elseif button == "right" then
-        command.perform "text:reload-with-encoding"
+        command.perform "editor:reload_with_encoding"
       end
     end,
     tooltip = "encoding"
@@ -552,7 +552,7 @@ function StatusBar:register_textview_items()
         style.text, dv.buffer.crlf and "CRLF" or "LF"
       }
     end,
-    command = "text:toggle-line-ending"
+    command = "editor:toggle_line_ending"
   })
 
 end
@@ -1266,7 +1266,7 @@ function StatusBar:on_mouse_pressed(button, x, y, clicks)
     and
     not (core.active_view and core.active_view:is(LogView))
   then
-    command.perform "core:open-log"
+    command.perform "log:open"
   else
     if y >= self.position.y and button == "left" and clicks == 1 then
       self.position.dx = x

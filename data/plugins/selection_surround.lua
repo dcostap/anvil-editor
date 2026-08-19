@@ -249,17 +249,17 @@ local function surround_markdown_selection(view, opener, closer)
 end
 
 command.add(selected_markdown_view, {
-  ["markdown:surround-bold"] = command.palette(function(view)
+  ["markdown:surround_bold"] = command.palette(function(view)
     surround_markdown_selection(view, "**", "**")
   end),
-  ["markdown:surround-italic"] = command.palette(function(view)
+  ["markdown:surround_italic"] = command.palette(function(view)
     surround_markdown_selection(view, "_", "_")
   end),
 })
 
 keymap.add {
-  ["ctrl+b"] = "markdown:surround-bold",
-  ["ctrl+i"] = "markdown:surround-italic",
+  ["ctrl+b"] = "markdown:surround_bold",
+  ["ctrl+i"] = "markdown:surround_italic",
 }
 
 return {}

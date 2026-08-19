@@ -4,6 +4,7 @@ local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local View = require "core.view"
+local view_icons = require "core.view_icons"
 
 
 ---Count number of lines in text.
@@ -59,6 +60,7 @@ end
 ---@field expanding core.logview.item_height[] Queue of items currently animating
 ---@field yoffset number Vertical offset for slide-in animation of new items
 local LogView = View:extend()
+LogView.view_icon = view_icons.register("log", view_icons.ui("B"))
 
 function LogView:__tostring() return "LogView" end
 

@@ -140,14 +140,14 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
     })
 
     buffer:set_selection(1, 1)
-    test.ok(command.perform("lsp:next-diagnostic", view))
+    test.ok(command.perform("editor:next_diagnostic", view))
     test.same(selection4(buffer), { 2, 1, 2, 7 })
     test.equal(view.scrolled[1].line, 2)
 
-    test.ok(command.perform("lsp:next-diagnostic", view))
+    test.ok(command.perform("editor:next_diagnostic", view))
     test.same(selection4(buffer), { 3, 1, 3, 6 })
 
-    test.ok(command.perform("lsp:previous-diagnostic", view))
+    test.ok(command.perform("editor:previous_diagnostic", view))
     test.same(selection4(buffer), { 2, 1, 2, 7 })
   end)
 
@@ -156,7 +156,7 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
     local view = fake_view(buffer)
     buffer:set_selection(1, 2)
 
-    test.ok(command.perform("lsp:next-diagnostic", view))
+    test.ok(command.perform("editor:next_diagnostic", view))
     test.same(selection4(buffer), { 1, 2, 1, 2 })
     test.equal(#view.scrolled, 0)
   end)
@@ -171,11 +171,11 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
     buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "new " } })
 
     buffer:set_selection(1, 1)
-    test.ok(command.perform("lsp:next-diagnostic", view))
+    test.ok(command.perform("editor:next_diagnostic", view))
     test.same(selection4(buffer), { 1, 1, 1, 1 })
 
     documents.flush(client, buffer)
-    test.ok(command.perform("lsp:next-diagnostic", view))
+    test.ok(command.perform("editor:next_diagnostic", view))
     test.same(selection4(buffer), { 1, 1, 1, 1 })
   end)
 
@@ -189,7 +189,7 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
     })
 
     buffer:set_selection(1, 1)
-    test.ok(command.perform("lsp:next-diagnostic", view))
+    test.ok(command.perform("editor:next_diagnostic", view))
     test.same(selection4(buffer), { 1, 1, 1, 1 })
   end)
 
