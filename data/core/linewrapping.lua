@@ -361,6 +361,13 @@ function LineWrapping.get_tokens(buffer, line)
   return get_tokens(buffer, line)
 end
 
+local function continuation_indicator_lane_width()
+  local indicator = config.plugins.linewrapping.continuation_indicator
+  local font = style.soft_wrap_indicator_font
+  if type(indicator) ~= "string" or indicator == "" or not font then return 0 end
+  return font:get_width(indicator .. " ")
+end
+
 local function new_measurement_context(buffer, default_font, textview)
   local _, indent_size = buffer:get_indent_info()
   local default_cell_width = default_font:get_width(" ")
@@ -377,6 +384,7 @@ local function new_measurement_context(buffer, default_font, textview)
     indent = config.plugins.linewrapping.indent,
     wrapping_indent = config.plugins.linewrapping.wrapping_indent,
     continuation_indent_size = config.indent_size or 4,
+    continuation_indicator_width = continuation_indicator_lane_width(),
     require_tokenization = config.plugins.linewrapping.require_tokenization,
     syntax_fonts = syntax_fonts,
     cell_widths = { [default_font] = default_cell_width },
@@ -449,7 +457,9 @@ local function continuation_indent_width(font, text, measurement)
     width = width + extra
   end
 
-  return width
+  local indicator_width = measurement and measurement.continuation_indicator_width
+    or continuation_indicator_lane_width()
+  return math.max(width, indicator_width)
 end
 
 function LineWrapping.continuation_indent_width(font, text)
@@ -854,6 +864,7 @@ local function wrap_settings_signature(textview, default_font, width)
     indent = config.plugins.linewrapping.indent,
     wrapping_indent = config.plugins.linewrapping.wrapping_indent,
     continuation_indent_size = config.indent_size or 4,
+    continuation_indicator_width = continuation_indicator_lane_width(),
     require_tokenization = require_tokenization,
     syntax_generation = require_tokenization
       and (textview.buffer.highlighter.packet_reset_generation or 0) or 0,
@@ -873,6 +884,7 @@ local function same_wrap_settings(a, b)
     and a.indent == b.indent
     and a.wrapping_indent == b.wrapping_indent
     and a.continuation_indent_size == b.continuation_indent_size
+    and a.continuation_indicator_width == b.continuation_indicator_width
     and a.require_tokenization == b.require_tokenization
     and a.syntax_generation == b.syntax_generation
     and a.syntax_font_signature == b.syntax_font_signature

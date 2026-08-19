@@ -76,9 +76,7 @@ local function refresh(view)
 end
 
 local function live_body_font(view)
-  local font = style.prose_font
-  local size = view:get_font():get_size()
-  return font:get_size() == size and font or font:copy(size)
+  return style.markdown_body_font
 end
 
 local function with_inline_image_text_fixture(callback)
@@ -174,6 +172,19 @@ test.describe("Markdown Live Preview", function()
     test.equal(md.__markdown_live_attached, true)
     refresh(txt)
     test.equal(txt.__markdown_live_attached, nil)
+  end)
+
+  test.it("uses the dedicated Markdown body font for plain text", function()
+    local view = make_view("Plain body text", "body-font.md")
+    refresh(view)
+    local _, fragments = collect_render_fragments(view, 1)
+    local body
+    for _, fragment in ipairs(fragments) do
+      if fragment.text == "Plain body text" then body = fragment break end
+    end
+    body = test.not_nil(body)
+    test.equal(body.font, live_body_font(view))
+    test.not_equal(body.font, style.prose_font)
   end)
 
   test.it("hides gutter line numbers in Live Preview", function()

@@ -253,12 +253,13 @@ local function load_fallback_fonts(role)
   return fonts
 end
 
-local function load_text_font(primary_path, options, fallbacks)
+local function load_text_font(primary_path, options, fallbacks, size)
+  size = size or font_size
   local fonts = {
-    renderer.font.load(primary_path, font_size, options or { ligatures = true }),
+    renderer.font.load(primary_path, size, options or { ligatures = true }),
   }
   for _, font in ipairs(fallbacks) do
-    fonts[#fonts + 1] = font
+    fonts[#fonts + 1] = font:get_size() == size and font or font:copy(size)
   end
   return renderer.font.group(fonts)
 end
@@ -284,6 +285,9 @@ style.terminal_bold_italic_font = load_text_font(
 -- Reusable proportional typography roles. Live Preview prose and compact
 -- navigation surfaces use these roles; source and diff text retain code_font.
 style.prose_font = load_text_font(prose_font_path, nil, interface_fallbacks)
+style.markdown_body_font = load_text_font(
+  prose_font_path, nil, interface_fallbacks, 16 * SCALE
+)
 -- Keep the wrap arrow on Inter's monochrome text glyph instead of allowing
 -- the code-font fallback group to select Segoe UI Emoji's boxed arrow.
 style.soft_wrap_indicator_font = style.prose_font

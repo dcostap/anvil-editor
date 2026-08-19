@@ -29,7 +29,7 @@ local IMAGE_EXTENSIONS = { avif = true, bmp = true, gif = true, jpeg = true, jpg
 local AUDIO_EXTENSIONS = { flac = true, mp3 = true, ogg = true, wav = true }
 local VIDEO_EXTENSIONS = { mov = true, mp4 = true, webm = true }
 local PROSE_FONT_ROLE_NAMES = {
-  "prose_font", "prose_strong_font", "prose_emphasis_font",
+  "prose_font", "markdown_body_font", "prose_strong_font", "prose_emphasis_font",
   "prose_strong_emphasis_font", "prose_heading_font",
   "prose_heading_emphasis_font",
 }
@@ -555,7 +555,9 @@ local function markdown_live_scaled_font(view, source, size)
 end
 
 local function markdown_live_body_font(view)
-  return markdown_live_scaled_font(view, style.prose_font)
+  return markdown_live_scaled_font(
+    view, style.markdown_body_font, style.markdown_body_font:get_size()
+  )
 end
 
 local function markdown_live_body_line_height(view)
@@ -563,16 +565,16 @@ local function markdown_live_body_line_height(view)
 end
 
 local function heading_font(view, level)
-  view.__markdown_live_heading_fonts = view.__markdown_live_heading_fonts or {}
-  local cache = view.__markdown_live_heading_fonts
-  local font = markdown_live_scaled_font(view, style.prose_heading_font)
-  local size = font:get_size()
-  local scale = ({ 1.65, 1.45, 1.30, 1.18, 1.08, 1.0 })[level] or 1
-  local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(level)
-  if not cache[key] then
-    cache[key] = font:copy(math.max(1, math.floor(size * scale)))
-  end
-  return cache[key]
+  local size = level == 1 and 32
+    or level == 2 and 24
+    or level == 3 and 20
+    or level == 4 and 18
+    or level == 5 and 16
+    or 15
+  return markdown_live_scaled_font(
+    view, style.prose_heading_font,
+    math.max(1, math.floor(size * SCALE + 0.5))
+  )
 end
 
 local function heading_italic_font(view, level)
@@ -615,7 +617,7 @@ local function inline_style_font(
   elseif span_type == "emphasis" then
     font = style.prose_emphasis_font
   else
-    font = base_font or style.prose_font
+    font = base_font or style.markdown_body_font
   end
   local size = base_font and base_font:get_size() or view:get_font():get_size()
   local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(span_type)
@@ -2620,7 +2622,7 @@ local function table_geometry_signature(view)
   local font = markdown_live_body_font(view)
   return table.concat({
     tostring(table_available_width(view)),
-    tostring(style.prose_font),
+    tostring(style.markdown_body_font),
     tostring(font:get_size()),
     tostring(core.color_theme_generation or 0),
   }, ":")
@@ -5384,7 +5386,7 @@ local function provider_generation_state(view)
   -- local wrap splice look like a buffer-wide metric invalidation.
   local presentation_generation = view:get_presentation_layout_generation()
   local theme_generation = core.color_theme_generation or 0
-  local body_font = style.prose_font
+  local body_font = style.markdown_body_font
   local body_font_size = view:get_font():get_size()
   local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
   local padding_x = style.padding.x

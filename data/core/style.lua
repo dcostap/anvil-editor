@@ -58,6 +58,7 @@ style.terminal_bold_italic_font = style.terminal_font:copy(
 -- trees, and other prose-oriented surfaces may share these faces without
 -- making the fonts belong to any one feature.
 style.prose_font = renderer.font.load(DATADIR .. "/fonts/Inter-Regular.ttf", 15 * SCALE)
+style.markdown_body_font = style.prose_font
 style.prose_strong_font = renderer.font.load(DATADIR .. "/fonts/Inter-SemiBold.ttf", 15 * SCALE)
 style.prose_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Inter-Italic.ttf", 15 * SCALE)
 style.prose_strong_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Inter-SemiBoldItalic.ttf", 15 * SCALE)

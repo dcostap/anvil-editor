@@ -17,9 +17,10 @@ local style = require "core.style"
 local scale_factor = 1.1
 local current_scale = SCALE
 local current_code_scale = SCALE
-local user_scale = tonumber(
-  os.getenv("ANVIL_SCALE_RESTART") or os.getenv("ANVIL_SCALE")
-)
+local configured_scale = tonumber(os.getenv("ANVIL_SCALE"))
+local restart_scale = tonumber(os.getenv("ANVIL_SCALE_RESTART"))
+local user_scale = restart_scale or configured_scale
+local project_zoom_modified = false
 
 local function scale_font_once(font, factor, seen)
   if seen[font] then return end
@@ -55,6 +56,25 @@ end
 
 ---@class plugins.scale
 local scale = {}
+
+local function project_default_scale()
+  if configured_scale then return common.clamp(configured_scale, 0.7, 6) end
+  if config.plugins.scale.autodetect == false
+  and type(config.plugins.scale.default_scale) == "number" then
+    return common.clamp(config.plugins.scale.default_scale, 0.7, 6)
+  end
+  return DEFAULT_SCALE
+end
+
+local function at_project_default_zoom()
+  local default = project_default_scale()
+  return math.abs(current_scale - default) < 0.000001
+    and math.abs(current_code_scale - default) < 0.000001
+end
+
+local function mark_project_zoom_changed()
+  project_zoom_modified = not at_project_default_zoom()
+end
 
 function scale.set(scale)
   if current_scale == scale then return end
@@ -105,7 +125,7 @@ function scale.set(scale)
   local scaled_fonts = {}
   for _, name in ipairs {
     "font", "big_font", "icon_font", "icon_big_font",
-    "prose_font", "prose_strong_font", "prose_emphasis_font",
+    "prose_font", "markdown_body_font", "prose_strong_font", "prose_emphasis_font",
     "prose_strong_emphasis_font", "prose_heading_font",
     "prose_heading_emphasis_font",
   } do
@@ -173,24 +193,62 @@ end
 
 function scale.reset()
   local reset_code = current_scale == current_code_scale
-  scale.set(DEFAULT_SCALE)
+  scale.set(project_default_scale())
   if reset_code then
-    scale.set_code(DEFAULT_SCALE)
+    scale.set_code(project_default_scale())
   end
+  mark_project_zoom_changed()
 end
 
 function scale.increase()
   scale.set(current_scale * scale_factor)
   scale.set_code(current_code_scale * scale_factor)
+  mark_project_zoom_changed()
 end
 
 function scale.decrease()
   scale.set(current_scale / scale_factor)
   scale.set_code(current_code_scale / scale_factor)
+  mark_project_zoom_changed()
 end
 
 function scale.get_code()
   return current_code_scale
+end
+
+function scale.save_workspace_state()
+  if not project_zoom_modified or at_project_default_zoom() then
+    project_zoom_modified = false
+    return nil
+  end
+  return { interface = current_scale, code = current_code_scale }
+end
+
+function scale.load_workspace_state(state)
+  local interface, code
+  if type(state) == "table" then
+    interface = tonumber(state.interface)
+    code = tonumber(state.code) or interface
+  elseif type(state) == "number" then
+    interface, code = state, state
+  end
+  local explicit = interface ~= nil
+  if explicit then
+    interface = common.clamp(interface, 0.7, 6)
+    code = common.clamp(code or interface, 0.7, 6)
+  else
+    interface = project_default_scale()
+    code = interface
+  end
+  scale.set(interface)
+  scale.set_code(code)
+  project_zoom_modified = explicit and not at_project_default_zoom()
+  core.log_quiet(
+    "Project Zoom: %s interface=%.4f code=%.4f",
+    project_zoom_modified and "restored" or "default",
+    current_scale,
+    current_code_scale
+  )
 end
 
 function scale.reset_code()

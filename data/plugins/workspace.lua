@@ -6,6 +6,7 @@ local storage = require "core.storage"
 local project_paths = require "core.project_paths"
 local language_mode = require "core.language_mode"
 local panes = require "core.panes"
+local scale = require "plugins.scale"
 local untitled_recovery = require "plugins.untitled_recovery"
 
 local STORAGE_MODULE = "ws"
@@ -293,6 +294,7 @@ local function save_workspace()
     project_paths = project_paths.save_workspace_state(),
     language_modes = language_mode.save_workspace_state(),
     visited_files = core.prune_visited_files and core.prune_visited_files() or core.visited_files,
+    zoom = scale.save_workspace_state(),
   })
   loaded_workspace_key = key
   loaded_workspace_path = project_dir
@@ -315,6 +317,7 @@ local function load_workspace()
   core.add_thread(function()
     local function restore_workspace_state()
       local workspace = consume_workspace(core.root_project().path)
+      scale.load_workspace_state(workspace and workspace.zoom)
       language_mode.load_workspace_state(workspace and workspace.language_modes)
       local _, project_paths_changed = project_paths.load_workspace_state(
         workspace and workspace.project_paths,

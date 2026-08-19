@@ -5,6 +5,7 @@ local BufferRegistry = require "core.buffer_registry"
 local project_paths = require "core.project_paths"
 local storage = require "core.storage"
 local panes = require "core.panes"
+local scale = require "plugins.scale"
 require "plugins.workspace"
 local test = require "core.test"
 
@@ -74,6 +75,9 @@ local function make_fake_pane_host(label, state, buffer)
   end
 
   local panel = { current_views = { view } }
+  function panel:pane_views()
+    return {}
+  end
   function panel:close_all_textviews()
     self.current_views = {}
   end
@@ -97,6 +101,10 @@ test.describe("Workspace persistence", function()
     context.original_panes_save_workspace_state = panes.save_workspace_state
     context.original_panes_restore_workspace_state = panes.restore_workspace_state
     context.original_panes_count = panes.count
+    context.original_interface_scale = scale.get()
+    context.original_code_scale = scale.get_code()
+    context.original_zoom_state = scale.save_workspace_state() or false
+    scale.load_workspace_state(nil)
     panes.save_workspace_state = function(save_view)
       local views = {}
       for _, view in ipairs(core.root_panel and core.root_panel.current_views or {}) do
@@ -151,6 +159,11 @@ test.describe("Workspace persistence", function()
     panes.save_workspace_state = context.original_panes_save_workspace_state
     panes.restore_workspace_state = context.original_panes_restore_workspace_state
     panes.count = context.original_panes_count
+    scale.load_workspace_state(
+      context.original_zoom_state ~= false and context.original_zoom_state or nil
+    )
+    scale.set(context.original_interface_scale)
+    scale.set_code(context.original_code_scale)
     if context.original_cwd then
       pcall(system.chdir, context.original_cwd)
     end
@@ -276,6 +289,44 @@ test.describe("Workspace persistence", function()
     test.type(saved.project_paths, "table")
     test.equal(saved.project_paths.entries[1].label, "external-project")
     test.equal(project_paths.resolve(join_path(external_path, "file.odin")).entry.label, "external-project")
+  end)
+
+  test.test("stores only an explicit Project Zoom and restores it", function(context)
+    local source_path = join_path(context.temp_root, "source_project")
+    local project_path = join_path(context.temp_root, "test_project")
+    local panel, view = make_fake_pane_host("source")
+    core.projects = { Project(source_path) }
+    core.recent_projects = {}
+    replace_buffers()
+    core.visited_files = {}
+    core.root_panel = panel
+    core.active_view = view
+
+    core.set_project(project_path)
+    run_last_captured_thread(context)
+    local source_key = test.not_nil(workspace_keys_for_path(source_path)[1])
+    test.is_nil(storage.load("ws", source_key).zoom)
+
+    scale.increase()
+    local expected_interface = scale.get()
+    local expected_code = scale.get_code()
+    core.set_project(source_path)
+    run_last_captured_thread(context)
+    local project_key = test.not_nil(workspace_keys_for_path(project_path)[1])
+    local saved_zoom = test.not_nil(storage.load("ws", project_key).zoom)
+    test.equal(saved_zoom.interface, expected_interface)
+    test.equal(saved_zoom.code, expected_code)
+    test.not_equal(scale.get(), expected_interface)
+
+    core.set_project(project_path)
+    run_last_captured_thread(context)
+    test.equal(scale.get(), expected_interface)
+    test.equal(scale.get_code(), expected_code)
+
+    scale.reset()
+    core.set_project(source_path)
+    local reset_zoom = storage.load("ws", project_key).zoom
+    test.is_nil(reset_zoom)
   end)
 
   test.test("ignores legacy Pane layout while restoring independent Project Paths", function(context)
