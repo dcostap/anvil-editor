@@ -2251,11 +2251,9 @@ local function draw_path_result_row(font, r, x, y, width)
   local gap = style.padding.x
   local metadata_font = style.get_small_font(font)
   local metadata_y = y + math.max(0, math.floor((font:get_height() - metadata_font:get_height()) / 2))
-  local kind = r.kind_label or (r.is_folder and "folder" or "")
-  local kind_color = r.is_folder and (style.accent) or (style.dim)
   local icon_column_width = fuzzy_searcher.file_icons.column_width(font:get_height())
   if r.is_folder then
-    renderer.draw_text(style.icon_font, r.path_search and "D" or "d", x, y, style.accent)
+    renderer.draw_text(style.icon_font, r.path_search and "B" or "d", x, y, style.accent)
   else
     fuzzy_searcher.file_icons.draw(r.path or r.label, x, y, font:get_height())
   end
@@ -2278,20 +2276,9 @@ local function draw_path_result_row(font, r, x, y, width)
   if r.size_label and r.size_label ~= "" then details[#details+1] = r.size_label end
   if r.modified_label and r.modified_label ~= "" then details[#details+1] = r.modified_label end
   local detail_text = #details > 0 and table.concat(details, "  ") or ""
-  if kind ~= "" and detail_text ~= "" then detail_text = "  " .. detail_text end
-  local kind_text = kind
-  local kind_width = metadata_font:get_width(kind_text)
-  local detail_display = ""
-  if kind_width > available then
-    kind_text = truncate_text(metadata_font, kind_text, available)
-    kind_width = metadata_font:get_width(kind_text)
-  elseif detail_text ~= "" then
-    detail_display = truncate_text(metadata_font, detail_text, available - kind_width)
-  end
-
-  local metadata_width = kind_width + metadata_font:get_width(detail_display)
+  local detail_display = truncate_text(metadata_font, detail_text, available)
+  local metadata_width = metadata_font:get_width(detail_display)
   local mx = x + width - metadata_width
-  mx = renderer.draw_text(metadata_font, kind_text, mx, metadata_y, kind_color)
   if detail_display ~= "" then
     renderer.draw_text(metadata_font, detail_display, mx, metadata_y, style.dim)
   end
@@ -3980,7 +3967,7 @@ function path_search.recent_project_results(query, scope, limit)
         kind = "project", label = display_root(path), project = path, path = path,
         query = query, match_spans = match.spans, recent = true,
         opened_at = recent_project_times[path], modified_label = compact_age(recent_project_times[path]),
-        is_folder = true, path_search = true, kind_label = "recent project",
+        is_folder = true, path_search = true,
       }
     end
   else
@@ -3990,7 +3977,7 @@ function path_search.recent_project_results(query, scope, limit)
         kind = "project", label = display_root(path), project = path, path = path,
         query = query, match_spans = {}, recent = true,
         opened_at = recent_project_times[path], modified_label = compact_age(recent_project_times[path]),
-        is_folder = true, path_search = true, kind_label = "recent project",
+        is_folder = true, path_search = true,
       }
     end
   end

@@ -193,7 +193,6 @@ test.describe("Fuzzy Searcher Path Search", function()
 
     test.not_nil(result)
     test.equal(result.kind, "project")
-    test.equal(result.kind_label, "recent project")
     test.equal(result.path_search, true)
   end)
 end)

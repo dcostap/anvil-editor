@@ -103,7 +103,6 @@ test.describe("Fuzzy Searcher Everything search", function()
 
     test.equal(picker.results[1].label, "Folders")
     test.equal(picker.results[2].project, recent)
-    test.equal(picker.results[2].kind_label, "recent project")
     test.equal(picker.results[3].is_folder, true)
     test.equal(picker.results[4].label, "Files")
     test.equal(picker.results[5].file, "C:\\Other\\needle-file.txt")
