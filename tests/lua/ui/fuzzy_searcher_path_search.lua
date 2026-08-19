@@ -29,6 +29,12 @@ local function result_for_path(results, path)
   end
 end
 
+local function wait_until(predicate, timeout)
+  local deadline = system.get_time() + (timeout or 2)
+  while not predicate() and system.get_time() < deadline do coroutine.yield(0.02) end
+  return predicate()
+end
+
 test.describe("Fuzzy Searcher Path Search", function()
   test.before_each(function(context)
     context.http_get = http.get
@@ -80,6 +86,22 @@ test.describe("Fuzzy Searcher Path Search", function()
 
     test.equal(#requests, 0)
     test.equal(core.fuzzy_searcher_active_view:is_path_search(), false)
+  end)
+
+  test.it("matches Project files behind an explicit current-directory prefix", function(context)
+    local file = join_path(context.project_root, "src", "main.lua")
+    write_file(file)
+    helpers.set_file_cache_for_test({ assert(helpers.file_display_item(file)) })
+
+    fuzzy_searcher.open("./")
+    local picker = core.fuzzy_searcher_active_view
+
+    test.ok(wait_until(function()
+      for _, result in ipairs(picker.results or {}) do
+        if result.file and common.path_equals(helpers.fullpath(result), file) then return true end
+      end
+    end), "expected ./ to preserve Project file results")
+    test.ok(common.path_equals(picker.results[1].abs_path, context.project_root))
   end)
 
   test.it("keeps a Project directory prefix and search terms in Project File Search", function(context)

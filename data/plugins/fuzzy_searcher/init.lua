@@ -2771,6 +2771,10 @@ function path_search.plan(text)
     query = common.home_expand(query)
   end
   if not common.is_absolute_path(query) then
+    if not explicit then
+      while query:match("^%.[/\\]") do query = query:sub(3) end
+      query = trim_query(query)
+    end
     return { external = explicit, explicit = explicit, query = query, mode = mode }
   end
 
