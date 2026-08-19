@@ -5,12 +5,12 @@ local test = require "core.test"
 
 local function capture_thumb_color(scrollbar)
   local captured
-  local old_draw_rect = renderer.draw_rect
-  renderer.draw_rect = function(_, _, _, _, color)
+  local old_draw_rounded_rect = renderer.draw_rounded_rect
+  renderer.draw_rounded_rect = function(_, _, _, _, _, color)
     captured = { color[1], color[2], color[3], color[4] }
   end
   scrollbar:draw_thumb()
-  renderer.draw_rect = old_draw_rect
+  renderer.draw_rounded_rect = old_draw_rounded_rect
   return captured
 end
 

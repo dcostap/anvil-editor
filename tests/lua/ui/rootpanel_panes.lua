@@ -236,6 +236,19 @@ test.describe("Root Panel Pane presentation", function()
     test.is_nil(core.cursor_change_req)
   end)
 
+  test.it("uses the arrow pointer over a Pane scrollbar", function()
+    local pane = panes.create { factory = pane_factory("editor") }
+    root:update()
+    pane.current_view.cursor = "ibeam"
+    pane.current_view.scrollbar_hit = true
+
+    root:on_mouse_moved(
+      pane.position.x + 20, pane.position.y + 20, 0, 0
+    )
+
+    test.equal(core.cursor_change_req, "arrow")
+  end)
+
   test.it("lets a Pane scrollbar own presses near a divider", function()
     local one = panes.create { factory = pane_factory("one") }
     panes.split(one, "right", { factory = pane_factory("two") })

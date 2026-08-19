@@ -613,7 +613,7 @@ function Scrollbar:draw_track()
   local color = { table.unpack(style.scrollbar_track) }
   color[4] = color[4] * self.expand_percent
   local x, y, w, h = self:get_track_rect()
-  renderer.draw_rect(x, y, w, h, color)
+  renderer.draw_rounded_rect(x, y, w, h, math.min(w, h) / 3, color)
 end
 
 
@@ -642,7 +642,7 @@ function Scrollbar:draw_thumb()
     common.lerp(base_alpha, target_alpha, tint),
   }
   local x, y, w, h = self:get_thumb_rect()
-  renderer.draw_rect(x, y, w, h, color)
+  renderer.draw_rounded_rect(x, y, w, h, math.min(w, h) / 3, color)
 end
 
 
