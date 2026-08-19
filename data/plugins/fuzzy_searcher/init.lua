@@ -2249,16 +2249,18 @@ end
 
 local function draw_path_result_row(font, r, x, y, width)
   local gap = style.padding.x
+  local metadata_font = style.get_small_font(font)
+  local metadata_y = y + math.max(0, math.floor((font:get_height() - metadata_font:get_height()) / 2))
   local kind = r.kind_label or (r.is_folder and "folder" or "file")
-  local kind_w = font:get_width("recent project") + gap
-  local size_w = math.max(font:get_width("999.9 MB"), font:get_width(r.size_label or "")) + gap
-  local date_w = font:get_width("999w") + gap
+  local kind_w = metadata_font:get_width("recent project") + gap
+  local size_w = math.max(metadata_font:get_width("999.9 MB"), metadata_font:get_width(r.size_label or "")) + gap
+  local date_w = metadata_font:get_width("999w") + gap
   local meta_w = kind_w + size_w + date_w
   local path_w = math.max(0, width - meta_w)
   local kind_color = r.is_folder and (style.accent) or (style.dim)
   local icon_column_width = fuzzy_searcher.file_icons.column_width(font:get_height())
   if r.is_folder then
-    renderer.draw_text(style.icon_font, "d", x, y, style.accent)
+    renderer.draw_text(style.icon_font, r.path_search and "D" or "d", x, y, style.accent)
   else
     fuzzy_searcher.file_icons.draw(r.path or r.label, x, y, font:get_height())
   end
@@ -2267,11 +2269,11 @@ local function draw_path_result_row(font, r, x, y, width)
     x + icon_column_width, y, math.max(0, path_w - icon_column_width), nil, nil, nil, false
   )
   local mx = x + path_w + gap
-  renderer.draw_text(font, kind, mx, y, kind_color)
+  renderer.draw_text(metadata_font, kind, mx, metadata_y, kind_color)
   mx = mx + kind_w
-  renderer.draw_text(font, truncate_text(font, r.size_label or "", size_w - gap), mx, y, style.dim)
+  renderer.draw_text(metadata_font, truncate_text(metadata_font, r.size_label or "", size_w - gap), mx, metadata_y, style.dim)
   mx = mx + size_w
-  renderer.draw_text(font, truncate_text(font, r.modified_label or "", date_w - gap), mx, y, style.dim)
+  renderer.draw_text(metadata_font, truncate_text(metadata_font, r.modified_label or "", date_w - gap), mx, metadata_y, style.dim)
 end
 
 local function draw_command_result_row(font, r, x, y, width)
@@ -3181,9 +3183,10 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
     width = math.max(0, row_text_w - font:get_width("> "))
   elseif r.kind == "path" or r.path_search then
     local gap = style.padding.x
-    local kind_w = font:get_width("recent project") + gap
-    local size_w = math.max(font:get_width("999.9 MB"), font:get_width(r.size_label or "")) + gap
-    local date_w = font:get_width("999w") + gap
+    local metadata_font = style.get_small_font(font)
+    local kind_w = metadata_font:get_width("recent project") + gap
+    local size_w = math.max(metadata_font:get_width("999.9 MB"), metadata_font:get_width(r.size_label or "")) + gap
+    local date_w = metadata_font:get_width("999w") + gap
     local path_w = math.max(0, row_text_w - kind_w - size_w - date_w)
     local icon_w = fuzzy_searcher.file_icons.column_width(font:get_height())
     local marker_w = math.max(1, style.gitdiff_width or (2 * (SCALE or 1)))
