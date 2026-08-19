@@ -2211,6 +2211,9 @@ end
 
 local function merge_folder_matches(matches, query, line, limit)
   if line then return matches, 0 end
+  query = tostring(query or "")
+  local trimmed_query = query:gsub("[/\\]+$", "")
+  if trimmed_query ~= "" then query = trimmed_query end
   local index = fuzzy_searcher.folders_fuzzy_index
   if not index then
     local matched = 0

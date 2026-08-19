@@ -110,6 +110,15 @@ test.describe("Project File Search folders", function()
     test.ok(folder_index < file_index)
   end)
 
+  test.it("matches a folder when the query ends with a path separator", function(context)
+    fuzzy_searcher.open("empty/nested/")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return result_for_path(picker.results, context.empty) ~= nil end))
+
+    picker.input:set_text("empty\\nested\\")
+    test.ok(wait_until(function() return result_for_path(picker.results, context.empty) ~= nil end))
+  end)
+
   test.it("opens a folder result as a File Tree", function(context)
     fuzzy_searcher.open("empty nested")
     local picker = assert(core.fuzzy_searcher_active_view)
