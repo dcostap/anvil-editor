@@ -1639,7 +1639,7 @@ command.add(
 })
 
 command.add(nil, {
-  ["diff-view:start-files-comparison"] = function()
+  ["diff-view:start-files-comparison"] = command.palette(function()
     command.perform("core:open-file", "Select File A", function(file_a)
       element_a = file_a
       command.perform("core:open-file", "Select File B", function(file_b)
@@ -1647,15 +1647,15 @@ command.add(nil, {
         start_compare()
       end)
     end)
-  end
+  end)
 })
 
 command.add(nil, {
-  ["diff-view:start-strings-comparison"] = function()
+  ["diff-view:start-strings-comparison"] = command.palette(function()
     element_a_text = ""
     element_b_text = ""
     start_compare_string()
-  end
+  end)
 })
 
 local function open_blank_diff()
@@ -1678,9 +1678,9 @@ local function open_blank_diff()
 end
 
 command.add(nil, {
-  ["diff-view:open-blank-diff"] = function()
+  ["diff-view:open-blank-diff"] = command.palette(function()
     return open_blank_diff()
-  end,
+  end),
 })
 
 local function active_diff_controller()

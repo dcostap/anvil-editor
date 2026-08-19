@@ -475,8 +475,8 @@ end
 
 
 command.add("core.textview", {
-  ["indent:set-file-indent-type"] = set_indent_type_command,
-  ["indent:set-file-indent-size"] = set_indent_size_command
+  ["indent:set-file-indent-type"] = command.palette(set_indent_type_command),
+  ["indent:set-file-indent-size"] = command.palette(set_indent_size_command)
 })
 
 command.add(
@@ -485,9 +485,9 @@ command.add(
       and cache[core.active_view.buffer]
       and cache[core.active_view.buffer].type == "soft"
   end, {
-  ["indent:switch-file-to-tabs-indentation"] = function()
+  ["indent:switch-file-to-tabs-indentation"] = command.palette(function()
     set_indent_type(core.active_view.buffer, "hard")
-  end
+  end)
 })
 
 command.add(
@@ -496,9 +496,9 @@ command.add(
       and cache[core.active_view.buffer]
       and cache[core.active_view.buffer].type == "hard"
   end, {
-  ["indent:switch-file-to-spaces-indentation"] = function()
+  ["indent:switch-file-to-spaces-indentation"] = command.palette(function()
     set_indent_type(core.active_view.buffer, "soft")
-  end
+  end)
 })
 
 return detectindent

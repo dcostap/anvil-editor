@@ -881,7 +881,7 @@ M.from_state = TerminalView.from_state
 TerminalView._module_name = "plugins.terminal"
 
 command.add(nil, {
-  ["terminal:open-here"] = function()
+  ["terminal:open-here"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     local pane = panes.find(context.source_pane or panes.active())
     local source_view = context.source_view or (pane and pane.current_view)
@@ -893,8 +893,13 @@ command.add(nil, {
       cwd = file_context.source_directory(source_view) or project_path("project"),
       reason = "terminal-open-here",
     } ~= nil
-  end,
-  ["terminal:open-project-root"] = function()
+  end, {
+    title = "Open Terminal Here",
+    description = "Use the current View directory",
+    keywords = { "shell", "command", "view" },
+    supports_placement = true,
+  }),
+  ["terminal:open-project-root"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     return M.open {
       pane = context.source_pane,
@@ -904,8 +909,13 @@ command.add(nil, {
       cwd = project_path("project"),
       reason = "terminal-open-project-root",
     } ~= nil
-  end,
-  ["terminal:open-path"] = function()
+  end, {
+    title = "Open Terminal at Project Root",
+    description = "Use the Root Project directory",
+    keywords = { "shell", "command", "view" },
+    supports_placement = true,
+  }),
+  ["terminal:open-path"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     local pane = panes.find(context.source_pane or panes.active())
     local source_view = context.source_view or (pane and pane.current_view)
@@ -925,26 +935,12 @@ command.add(nil, {
       end,
     }
     return true
-  end,
-})
-
-command.set_metadata("terminal:open-here", {
-  title = "Open Terminal Here",
-  description = "Use the current View directory",
-  keywords = { "shell", "command", "view" },
-  supports_placement = true,
-})
-command.set_metadata("terminal:open-project-root", {
-  title = "Open Terminal at Project Root",
-  description = "Use the Root Project directory",
-  keywords = { "shell", "command", "view" },
-  supports_placement = true,
-})
-command.set_metadata("terminal:open-path", {
-  title = "Open Terminal at Path…",
-  description = "Select any existing folder",
-  keywords = { "shell", "command", "folder", "external", "view" },
-  supports_placement = true,
+  end, {
+    title = "Open Terminal at Path…",
+    description = "Select any existing folder",
+    keywords = { "shell", "command", "folder", "external", "view" },
+    supports_placement = true,
+  }),
 })
 
 command.add(function()
@@ -961,13 +957,13 @@ end, {
     system.set_clipboard(text)
     return true
   end,
-  ["terminal:restart"] = function(view) return view:restart() end,
-  ["terminal:clear"] = function(view)
+  ["terminal:restart"] = command.palette(function(view) return view:restart() end),
+  ["terminal:clear"] = command.palette(function(view)
     if not view.session:clear() then return false end
     view:refresh_snapshot()
     return true
-  end,
-  ["terminal:search"] = function(view) return view:prompt_search() end,
+  end),
+  ["terminal:search"] = command.palette(function(view) return view:prompt_search() end),
   ["terminal:search-next"] = function(view) return view:search(view.search_query, false) end,
   ["terminal:search-previous"] = function(view) return view:search(view.search_query, true) end,
 })

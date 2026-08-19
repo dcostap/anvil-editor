@@ -255,27 +255,27 @@ end
 command.add(has_unique_selection, {
   ["find-replace:select-next"] = select_next,
   ["find-replace:select-previous"] = function() select_next(true) end,
-  ["find-replace:select-add-next"] = select_add_next,
-  ["find-replace:select-add-all"] = function() select_add_next(true) end
+  ["find-replace:select-add-next"] = command.palette(select_add_next),
+  ["find-replace:select-add-all"] = command.palette(function() select_add_next(true) end)
 })
 
 command.add("core.textview!", {
-  ["find-replace:find"] = function()
+  ["find-replace:find"] = command.palette(function()
     find("Find Text", function(buffer, line, col, text, case_sensitive, find_regex, find_reverse)
       local opt = { wrap = true, no_case = not case_sensitive, regex = find_regex, reverse = find_reverse }
       return search.find(buffer, line, col, text, opt)
     end)
-  end,
+  end),
 
-  ["find-replace:replace"] = function()
+  ["find-replace:replace"] = command.palette(function()
     find_replace()
-  end,
+  end),
 
-  ["find-replace:replace-in-selection"] = function()
+  ["find-replace:replace-in-selection"] = command.palette(function()
     find_replace(true)
-  end,
+  end),
 
-  ["find-replace:replace-symbol"] = function()
+  ["find-replace:replace-symbol"] = command.palette(function()
     local first = ""
     if buffer():has_selection() then
       local text = buffer():get_text(buffer():get_selection())
@@ -291,7 +291,7 @@ command.add("core.textview!", {
       end)
       return res, n
     end)
-  end,
+  end),
 })
 
 local function valid_for_finding()

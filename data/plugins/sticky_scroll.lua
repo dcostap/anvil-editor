@@ -561,6 +561,7 @@ end
 
 -- Generic commands
 command.add_toggle("sticky-lines:toggle", {
+  palette = true,
   get = function()
     return sticky_scroll.enabled
   end,
@@ -571,6 +572,7 @@ command.add_toggle("sticky-lines:toggle", {
 
 -- Per-textview commands
 command.add_toggle("sticky-lines:toggle-buffer", {
+  palette = true,
   predicate = SS.should_run,
   get = function(dv)
     dv = dv or core.active_view

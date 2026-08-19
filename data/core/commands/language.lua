@@ -568,17 +568,18 @@ local function symbol_buffer_view_predicate(value)
 end
 
 command.add(symbol_buffer_view_predicate, {
-  ["language:go-to-declaration"] = function(view)
+  ["language:go-to-declaration"] = command.palette(function(view)
     return language.goto_declaration(view)
-  end,
-  ["language:show-references"] = function(view)
+  end),
+  ["language:show-references"] = command.palette(function(view)
     return language.show_references(view)
-  end,
+  end),
 })
 
 command.add(buffer_view_predicate, {
-  ["language:set-mode"] = set_language_mode_command,
+  ["language:set-mode"] = command.palette(set_language_mode_command),
 })
+
 
 poi.add_activation_provider("language-declaration", {
   priority = -100,

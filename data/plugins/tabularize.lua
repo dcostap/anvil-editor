@@ -41,7 +41,7 @@ end
 
 
 command.add("core.textview", {
-  ["tabularize:tabularize"] = function(dv)
+  ["tabularize:tabularize"] = command.palette(function(dv)
     if dv.can_edit and not dv:can_edit("tabularize", { warn = true }) then return end
     core.global_prompt_bar:enter("Tabularize On Delimiter", {
       submit = function(delim)
@@ -61,5 +61,5 @@ command.add("core.textview", {
         end)
       end
     })
-  end,
+  end),
 })

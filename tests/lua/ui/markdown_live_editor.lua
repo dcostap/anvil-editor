@@ -1440,11 +1440,13 @@ test.describe("Markdown Live Preview", function()
 
       local function draw_frame()
         local old_draw_rect = renderer.draw_rect
+        local old_draw_rounded_rect = renderer.draw_rounded_rect
         local old_draw_text = renderer.draw_text
         local old_push_clip_rect = core.push_clip_rect
         local old_pop_clip_rect = core.pop_clip_rect
         local drawn = {}
         renderer.draw_rect = function() end
+        renderer.draw_rounded_rect = function() end
         renderer.draw_text = function(font, text, x)
           drawn[#drawn + 1] = text
           return x + (font and font:get_width(text) or 0)
@@ -1453,6 +1455,7 @@ test.describe("Markdown Live Preview", function()
         core.pop_clip_rect = function() end
         local drew, draw_error = pcall(view.draw, view)
         renderer.draw_rect = old_draw_rect
+        renderer.draw_rounded_rect = old_draw_rounded_rect
         renderer.draw_text = old_draw_text
         core.push_clip_rect = old_push_clip_rect
         core.pop_clip_rect = old_pop_clip_rect

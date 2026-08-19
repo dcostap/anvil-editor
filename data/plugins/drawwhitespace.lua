@@ -918,6 +918,7 @@ end
 
 
 command.add_toggle("draw-whitespace:toggle", {
+  palette = true,
   get = function()
     return drawwhitespace.enabled
   end,

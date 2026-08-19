@@ -426,21 +426,21 @@ local function prompt_add_directory(path, default_role, default_source)
 end
 
 command.add(nil, {
-  ["project-paths:manage"] = function()
+  ["project-paths:manage"] = command.palette(function()
     open_view()
-  end,
-  ["project-paths:add-external-directory"] = function(path)
+  end),
+  ["project-paths:add-external-directory"] = command.palette(function(path)
     prompt_add_directory(path, "external")
-  end,
-  ["project-paths:add-external-directory-local"] = function(path)
+  end),
+  ["project-paths:add-external-directory-local"] = command.palette(function(path)
     if path then return add_entry(path, "external", "workspace") end
     prompt_add_directory(nil, "external", "workspace")
-  end,
-  ["project-paths:add-external-directory-to-project-config"] = function(path)
+  end),
+  ["project-paths:add-external-directory-to-project-config"] = command.palette(function(path)
     if path then return add_entry(path, "external", "project") end
     prompt_add_directory(nil, "external", "project")
-  end,
-  ["project-paths:mark-selected-folder"] = function()
+  end),
+  ["project-paths:mark-selected-folder"] = command.palette(function()
     local path, err = selected_filetree_directory()
     if not path then core.error("Project Paths: %s", tostring(err)); return end
     local resolved = project_paths.resolve(path)
@@ -453,7 +453,7 @@ command.add(nil, {
       and { "vendored" }
       or { "external", "vendored" }
     prompt_role(path, roles, function(role, label, source) add_entry(path, role, source, label) end)
-  end,
+  end),
 })
 
 command.add(function() return core.active_view == view end, {

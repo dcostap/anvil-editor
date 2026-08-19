@@ -7,7 +7,6 @@ local test = require "core.test"
 local View = require "core.view"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
-local catalog = require "plugins.command_palette_catalog"
 
 local function result_commands(picker)
   local result = {}
@@ -29,21 +28,17 @@ test.describe("Command Palette visibility", function()
     panes.create { factory = function() return context.source end }
 
     command.add(function() return core.active_view == context.source end, {
-      [context.names.visible] = function() end,
-    })
-    command.set_metadata(context.names.visible, {
-      palette = true,
-      title = "Palette Probe Visible",
+      [context.names.visible] = command.palette(function() end, {
+        title = "Palette Probe Visible",
+      }),
     })
     command.add(nil, {
       [context.names.hidden] = function() end,
     })
     command.add(function() return false end, {
-      [context.names.invalid] = function() end,
-    })
-    command.set_metadata(context.names.invalid, {
-      palette = true,
-      title = "Palette Probe Wrong Context",
+      [context.names.invalid] = command.palette(function() end, {
+        title = "Palette Probe Wrong Context",
+      }),
     })
   end)
 
@@ -51,7 +46,6 @@ test.describe("Command Palette visibility", function()
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     for _, name in pairs(context.names) do
       command.map[name] = nil
-      command.metadata[name] = nil
     end
     panes.reset_for_tests()
   end)
@@ -63,12 +57,6 @@ test.describe("Command Palette visibility", function()
     test.ok(shown[context.names.visible])
     test.not_ok(shown[context.names.hidden])
     test.not_ok(shown[context.names.invalid])
-  end)
-
-  test.it("contains no stale command identifiers", function()
-    for _, name in ipairs(catalog) do
-      test.not_nil(command.map[name], "missing curated command: " .. name)
-    end
   end)
 
   test.it("hides keymap primitives while retaining useful editor actions", function()

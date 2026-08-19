@@ -260,19 +260,19 @@ local function add_project_directory_with_system_file_picker()
 end
 
 command.add(nil, {
-  ["core:quit"] = function()
+  ["core:quit"] = command.palette(function()
     core.quit()
-  end,
+  end),
 
-  ["core:restart"] = function()
+  ["core:restart"] = command.palette(function()
     core.restart()
-  end,
+  end),
 
   ["core:force-quit"] = function()
     core.quit(true)
   end,
 
-  ["core:toggle-fullscreen"] = function()
+  ["core:toggle-fullscreen"] = command.palette(function()
     local current_mode = system.get_window_mode(core.window)
     local fullscreen = current_mode == "fullscreen"
     if current_mode ~= "fullscreen" then
@@ -290,7 +290,7 @@ command.add(nil, {
     if fullscreen and previous_win_mode == "normal" then
       system.set_window_size(core.window, table.unpack(previous_win_pos))
     end
-  end,
+  end),
 
   ["core:reload-module"] = function()
     core.global_prompt_bar:enter("Reload Module", {
@@ -320,13 +320,13 @@ command.add(nil, {
     open_file_with_system_file_picker(label, selection_callback)
   end,
 
-  ["core:open-log"] = function()
+  ["core:open-log"] = command.palette(function()
     panes.place(function() return LogView() end, {
       placement = "current",
       focus = true,
       reason = "open-log",
     })
-  end,
+  end),
 
   ["core:open-user-module"] = function()
     core.open_file(USERDIR .. "/init.lua", { placement = "current", focus = true })
@@ -363,12 +363,13 @@ command.add(nil, {
     add_project_directory_with_system_file_picker()
   end,
 
-  ["core:open-project-github-page"] = function()
+  ["core:open-project-github-page"] = command.palette(function()
     common.open_in_system("https://github.com/dcostap/anvil-editor")
-  end,
+  end),
 })
 
 command.add_toggle("core:toggle-tabs", {
+  palette = true,
   get = function()
     return not config.hide_tabs
   end,
@@ -378,6 +379,7 @@ command.add_toggle("core:toggle-tabs", {
 })
 
 command.add_toggle("core:toggle-line-numbers", {
+  palette = true,
   get = function()
     return config.show_line_numbers
   end,

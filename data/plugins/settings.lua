@@ -2590,7 +2590,7 @@ end
 -- Add command and keymap to load settings view
 --------------------------------------------------------------------------------
 local theme_commands = {
-  ["theme:select"] = function()
+  ["theme:select"] = command.palette(function()
     core.global_prompt_bar:enter("Theme", {
       text = normalize_color_theme_name(settings.config.theme),
       select_text = true,
@@ -2607,7 +2607,7 @@ local theme_commands = {
         end
       end,
     })
-  end,
+  end),
 }
 
 for _, details in ipairs(get_installed_colors()) do
@@ -2620,9 +2620,9 @@ end
 command.add(nil, theme_commands)
 
 command.add(nil, {
-  ["ui:settings"] = function()
+  ["ui:settings"] = command.palette(function()
     open_settings_view(settings.ui)
-  end,
+  end),
 })
 
 keymap.add {

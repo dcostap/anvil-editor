@@ -48,9 +48,12 @@ local command = {}
 ---@field supports_placement? boolean
 ---@field palette? boolean
 
+---@class core.command.registration
+---@field perform fun(...: any)
+---@field metadata core.command.metadata
+
 ---@type { [string]: core.command.command }
 command.map = {}
-command.metadata = command.metadata or {}
 
 ---@type table<string, string>
 command.aliases = command.aliases or {}
@@ -195,21 +198,44 @@ end
 ---@see core.command.predicate
 ---@see core.command.command_name
 ---@param predicate? core.command.predicate
----@param map { [core.command.command_name]: fun(...: any) }
+---@param map { [core.command.command_name]: fun(...: any)|core.command.registration }
 function command.add(predicate, map)
   predicate = command.generate_predicate(predicate)
-  for name, fn in pairs(map) do
+  for name, registration in pairs(map) do
+    local fn = registration
+    local inline_metadata
+    if type(registration) == "table" then
+      fn = registration.perform
+      inline_metadata = registration.metadata
+    end
+    assert(type(fn) == "function", "command registration requires a function")
     local existing = command.map[name]
     if existing then
       core.log_quiet("Replacing existing command \"%s\"", name)
+    end
+    local metadata = existing and existing.metadata or nil
+    if inline_metadata then
+      metadata = {}
+      for key, value in pairs(existing and existing.metadata or {}) do metadata[key] = value end
+      for key, value in pairs(inline_metadata) do metadata[key] = value end
     end
     command.map[name] = {
       predicate = predicate,
       perform = fn,
       status = existing and existing.status or nil,
-      metadata = existing and existing.metadata or command.metadata[name],
+      metadata = metadata,
     }
   end
+end
+
+---Mark a command registration as a user-facing Command Palette action.
+---@param fn fun(...: any)
+---@param metadata? core.command.metadata
+---@return core.command.registration
+function command.palette(fn, metadata)
+  local values = { palette = true }
+  for key, value in pairs(metadata or {}) do values[key] = value end
+  return { perform = fn, metadata = values }
 end
 
 ---Attach a dynamic status value to a command for command-palette display.
@@ -228,11 +254,11 @@ end
 ---@param metadata core.command.metadata
 function command.set_metadata(name, metadata)
   name = resolve_alias(name)
+  if not command.map[name] then return end
   local merged = {}
-  for key, value in pairs(command.metadata[name] or {}) do merged[key] = value end
+  for key, value in pairs(command.map[name].metadata or {}) do merged[key] = value end
   for key, value in pairs(metadata or {}) do merged[key] = value end
-  command.metadata[name] = merged
-  if command.map[name] then command.map[name].metadata = merged end
+  command.map[name].metadata = merged
 end
 
 ---@param name core.command.command_name
@@ -240,7 +266,7 @@ end
 function command.get_metadata(name)
   name = resolve_alias(name)
   local cmd = command.map[name]
-  return cmd and cmd.metadata or command.metadata[name]
+  return cmd and cmd.metadata or nil
 end
 
 ---Return context supplied by the surface that invoked the current command.
@@ -283,6 +309,8 @@ end
 ---@field predicate? core.command.predicate
 ---@field get fun(...: any): boolean
 ---@field set fun(enabled: boolean, ...: any)
+---@field palette? boolean
+---@field metadata? core.command.metadata
 
 ---@param name core.command.command_name
 ---@param options core.command.toggle_options
@@ -313,6 +341,11 @@ function command.add_toggle(name, options)
     end,
   })
   command.set_status(name, options.get)
+  if options.palette or options.metadata then
+    local metadata = options.metadata or {}
+    if options.palette then metadata.palette = true end
+    command.set_metadata(name, metadata)
+  end
 end
 
 

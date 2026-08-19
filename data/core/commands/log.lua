@@ -114,17 +114,17 @@ local function dump_logs_to_file()
 end
 
 command.add(nil, {
-  ["log:open-as-buffer"] = function()
+  ["log:open-as-buffer"] = command.palette(function()
     local buffer = core.open_buffer("logs.txt")
     core.root_panel:open_buffer(buffer)
     buffer:insert(1, 1, core.get_log())
     buffer.new_file = false
     buffer:clean()
-  end,
-  ["log:copy-to-clipboard"] = function()
+  end),
+  ["log:copy-to-clipboard"] = command.palette(function()
     system.set_clipboard(core.get_log())
-  end,
-  ["log:dump-to-file"] = function()
+  end),
+  ["log:dump-to-file"] = command.palette(function()
     dump_logs_to_file()
-  end
+  end)
 })

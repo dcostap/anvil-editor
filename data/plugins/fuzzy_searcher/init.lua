@@ -6148,26 +6148,24 @@ end
 
 command.add(nil, {
   ["fuzzy-searcher:open"] = function() open("") end,
-  ["fuzzy-searcher:open-files"] = function() open("") end,
-  ["fuzzy-searcher:open-current-file"] = open_current_file,
-  ["fuzzy-searcher:open-paths"] = function() open("@") end,
-  ["fuzzy-searcher:open-grep"] = function() open("#") end,
-  ["fuzzy-searcher:open-symbols"] = function() open("$") end,
-  ["fuzzy-searcher:open-current-buffer-symbols"] = function() open("$$") end,
+  ["fuzzy-searcher:open-files"] = command.palette(function() open("") end),
+  ["fuzzy-searcher:open-current-file"] = command.palette(open_current_file),
+  ["fuzzy-searcher:open-paths"] = command.palette(function() open("@") end),
+  ["fuzzy-searcher:open-grep"] = command.palette(function() open("#") end),
+  ["fuzzy-searcher:open-symbols"] = command.palette(function() open("$") end),
+  ["fuzzy-searcher:open-current-buffer-symbols"] = command.palette(function() open("$$") end),
   ["fuzzy-searcher:open-commands"] = function() open(">") end,
-  ["shell:run-command"] = function()
+  ["shell:run-command"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     return open("!", {
       source_view = context.source_view,
       source_pane = context.source_pane,
     })
-  end,
-})
-
-command.set_metadata("shell:run-command", {
-  title = "Run Shell Command…",
-  description = "Run once and show output in a new Command Output View",
-  keywords = { "command output", "process", "terminal" },
+  end, {
+    title = "Run Shell Command…",
+    description = "Run once and show output in a new Command Output View",
+    keywords = { "command output", "process", "terminal" },
+  }),
 })
 
 command.add(picker_active, {

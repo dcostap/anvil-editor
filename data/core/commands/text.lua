@@ -1838,7 +1838,7 @@ local commands = {
     set_primary_selection(dv.buffer)
   end,
 
-  ["text:join-lines"] = function(dv)
+  ["text:join-lines"] = command.palette(function(dv)
     if not can_edit(dv, "join lines") then return end
     local actions = {}
     for idx, line1, col1, line2, col2 in dv.buffer:get_selections(true) do
@@ -1887,7 +1887,7 @@ local commands = {
       removed_before = removed_before + action.line2 - action.line1
     end
     dv.buffer:apply_edits(edits, { type = "replace", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
-  end,
+  end),
 
   ["text:indent"] = function(dv)
     if not can_edit(dv, "indent") then return end
@@ -2008,7 +2008,7 @@ local commands = {
     end
   end,
 
-  ["text:duplicate-lines"] = function(dv)
+  ["text:duplicate-lines"] = command.palette(function(dv)
     if not can_edit(dv, "duplicate lines") then return end
     local actions = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
@@ -2060,9 +2060,9 @@ local commands = {
     if #edits > 0 then
       dv.buffer:apply_edits(edits, { type = "insert", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
     end
-  end,
+  end),
 
-  ["text:delete-lines"] = function(dv)
+  ["text:delete-lines"] = command.palette(function(dv)
     if not can_edit(dv, "delete lines") then return end
     local actions = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
@@ -2119,9 +2119,9 @@ local commands = {
       removed_before = removed_before + block.line2 - block.line1 + 1
     end
     dv.buffer:apply_edits(edits, { type = "remove", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = true })
-  end,
+  end),
 
-  ["text:move-lines-up"] = function(dv)
+  ["text:move-lines-up"] = command.palette(function(dv)
     if not can_edit(dv, "move lines") then return end
     local actions = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
@@ -2175,9 +2175,9 @@ local commands = {
     else
       dv.buffer:set_selection_list(selections, dv.buffer.last_selection)
     end
-  end,
+  end),
 
-  ["text:move-lines-down"] = function(dv)
+  ["text:move-lines-down"] = command.palette(function(dv)
     if not can_edit(dv, "move lines") then return end
     local actions = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
@@ -2231,9 +2231,9 @@ local commands = {
     else
       dv.buffer:set_selection_list(selections, dv.buffer.last_selection)
     end
-  end,
+  end),
 
-  ["text:toggle-block-comments"] = function(dv)
+  ["text:toggle-block-comments"] = command.palette(function(dv)
     if not can_edit(dv, "toggle comments") then return end
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       local current_syntax = dv.buffer.syntax
@@ -2266,9 +2266,9 @@ local commands = {
       end
       dv.buffer:set_selections(idx, block_comment(comment, line1, col1, line2, col2))
     end
-  end,
+  end),
 
-  ["text:toggle-line-comments"] = function(dv)
+  ["text:toggle-line-comments"] = command.palette(function(dv)
     if not can_edit(dv, "toggle comments") then return end
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       local current_syntax = dv.buffer.syntax
@@ -2292,19 +2292,19 @@ local commands = {
         dv.buffer:set_selections(idx, line_comment(comment, line1, col1, line2, col2))
       end
     end
-  end,
+  end),
 
-  ["text:upper-case"] = function(dv)
+  ["text:upper-case"] = command.palette(function(dv)
     if not can_edit(dv, "change case") then return end
     dv.buffer:replace(string.uupper)
-  end,
+  end),
 
-  ["text:lower-case"] = function(dv)
+  ["text:lower-case"] = command.palette(function(dv)
     if not can_edit(dv, "change case") then return end
     dv.buffer:replace(string.ulower)
-  end,
+  end),
 
-  ["text:go-to-line"] = function(dv)
+  ["text:go-to-line"] = command.palette(function(dv)
     local items
     local function init_items()
       if items then return end
@@ -2354,56 +2354,56 @@ local commands = {
         end
       end
     })
-  end,
+  end),
 
-  ["text:toggle-line-ending"] = function(dv)
+  ["text:toggle-line-ending"] = command.palette(function(dv)
     if not can_edit(dv, "toggle line ending") then return end
     dv.buffer.crlf = not dv.buffer.crlf
-  end,
+  end),
 
-  ["text:change-encoding"] = function(dv)
+  ["text:change-encoding"] = command.palette(function(dv)
     if not can_edit(dv, "change encoding") then return end
     encodings.select_encoding("Select Output Encoding", function(charset)
       if not can_edit(dv, "change encoding") then return end
       set_encoding(dv.buffer, charset)
       save_existing(dv.buffer)
     end)
-  end,
+  end),
 
-  ["text:reload-with-encoding"] = function(dv)
+  ["text:reload-with-encoding"] = command.palette(function(dv)
     if not can_edit(dv, "reload") then return end
     encodings.select_encoding("Reload With Encoding", function(charset)
       if not can_edit(dv, "reload") then return end
       set_encoding(dv.buffer, charset)
       dv.buffer:reload()
     end)
-  end,
+  end),
 
   ["text:toggle-overwrite"] = function(dv)
     dv.buffer.overwrite = not dv.buffer.overwrite
     core.blink_reset() -- to show the cursor has changed edit modes
   end,
 
-  ["text:save-as"] = function(dv)
+  ["text:save-as"] = command.palette(function(dv)
     if not can_edit(dv, "save as") then return end
     prompt_save_as(dv, save_as_prompt_text(dv))
-  end,
+  end),
 
-  ["text:save"] = function(dv)
+  ["text:save"] = command.palette(function(dv)
     if not can_edit(dv, "save") then return end
     if dv.buffer.filename then
       save(nil, dv)
     else
       command.perform("text:save-as")
     end
-  end,
+  end),
 
-  ["text:reload"] = function(dv)
+  ["text:reload"] = command.palette(function(dv)
     if not can_edit(dv, "reload") then return end
     dv.buffer:reload()
-  end,
+  end),
 
-  ["file:rename"] = function(dv)
+  ["file:rename"] = command.palette(function(dv)
     if not can_edit(dv, "rename file") then return end
     local old_filename = dv.buffer.filename
     local old_abs_filename = dv.buffer.abs_filename
@@ -2433,9 +2433,9 @@ local commands = {
         ))
       end
     })
-  end,
+  end),
 
-  ["file:delete"] = function(dv)
+  ["file:delete"] = command.palette(function(dv)
     if not can_edit(dv, "delete file") then return end
     local filename = dv.buffer.abs_filename
     if not filename then
@@ -2448,7 +2448,7 @@ local commands = {
     end
     os.remove(filename)
     core.log("Removed \"%s\"", filename)
-  end,
+  end),
 
   ["text:select-to-cursor"] = function(dv, x, y, clicks)
     local line1, col1 = select(3, buffer():get_selection())
@@ -2459,15 +2459,15 @@ local commands = {
     set_primary_selection(dv.buffer)
   end,
 
-  ["text:create-cursor-previous-line"] = function(dv)
+  ["text:create-cursor-previous-line"] = command.palette(function(dv)
     split_cursor(dv, -1)
     dv.buffer:merge_cursors()
-  end,
+  end),
 
-  ["text:create-cursor-next-line"] = function(dv)
+  ["text:create-cursor-next-line"] = command.palette(function(dv)
     split_cursor(dv, 1)
     dv.buffer:merge_cursors()
-  end
+  end)
 }
 
 command.add(function(x, y)
@@ -3272,18 +3272,18 @@ commands["text:delete-to-end-of-line"] = function(dv)
   return wrapped_delete_to(dv, "text:delete-to-end-of-line", move_to_wrapped_end_of_line, dv)
 end
 
-commands["text:fold-at-caret"] = function(dv)
+commands["text:fold-at-caret"] = command.palette(function(dv)
   local fold, err = dv:fold_at_caret()
   if not fold and err then core.log_quiet("Fold at caret skipped: %s", tostring(err)) end
-end
+end)
 
-commands["text:unfold-at-caret"] = function(dv)
+commands["text:unfold-at-caret"] = command.palette(function(dv)
   dv:unfold_at_caret("command")
-end
+end)
 
-commands["text:unfold-all"] = function(dv)
+commands["text:unfold-all"] = command.palette(function(dv)
   dv:unfold_all("command")
-end
+end)
 
 command.add(function(...)
   local view = core.active_view
@@ -3307,6 +3307,7 @@ command.add(function(...)
 end, commands)
 
 command.add_toggle("line-wrapping:toggle", {
+  palette = true,
   get = function(view)
     view = view or core.active_view
     return view and view.buffer and view.extends and view:extends(TextView) and view:is_wrapping_enabled()
@@ -3318,6 +3319,7 @@ command.add_toggle("line-wrapping:toggle", {
     end
   end,
 })
+
 
 keymap.add {
   ["f10"] = "line-wrapping:toggle",

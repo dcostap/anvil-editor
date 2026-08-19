@@ -82,11 +82,11 @@ function RootPanel:draw()
 end
 
 command.add(nil, {
-  ["performance-hud:toggle"] = function()
+  ["performance-hud:toggle"] = command.palette(function()
     hud.visible = not hud.visible
     core.redraw = true
-  end,
-  ["performance-hud:toggle-recording"] = function()
+  end),
+  ["performance-hud:toggle-recording"] = command.palette(function()
     local started, path = perf.toggle_recording()
     if started then
       hud.visible = true
@@ -97,7 +97,7 @@ command.add(nil, {
       core.log("Performance recording saved and copied to clipboard: %s", path)
     end
     core.redraw = true
-  end,
+  end),
 })
 
 keymap.add {

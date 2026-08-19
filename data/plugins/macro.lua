@@ -37,7 +37,7 @@ end
 
 
 command.add(predicate, {
-  ["macro:toggle-record"] = function()
+  ["macro:toggle-record"] = command.palette(function()
     if state == "stopped" then
       state = "recording"
       event_buffer = {}
@@ -47,9 +47,9 @@ command.add(predicate, {
       state = "stopped"
       core.log("Stopped recording macro (%d events)", #event_buffer)
     end
-  end,
+  end),
 
-  ["macro:play"] = function()
+  ["macro:play"] = command.palette(function()
     state = "playing"
     core.log("Playing macro... (%d events)", #event_buffer)
     local mk = keymap.modkeys
@@ -60,7 +60,7 @@ command.add(predicate, {
     end
     keymap.modkeys = mk
     state = "stopped"
-  end,
+  end),
 })
 
 

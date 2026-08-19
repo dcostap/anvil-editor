@@ -390,6 +390,7 @@ function TextView:scroll_to_line(...)
 end
 
 command.add_toggle("centered-editor:toggle", {
+  palette = true,
   get = function()
     return settings().enabled
   end,

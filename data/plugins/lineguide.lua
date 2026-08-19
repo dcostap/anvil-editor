@@ -140,6 +140,7 @@ function TextView:draw_overlay(...)
 end
 
 command.add_toggle("lineguide:toggle", {
+  palette = true,
   get = function()
     return config.plugins.lineguide.enabled
   end,

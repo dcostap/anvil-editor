@@ -1223,22 +1223,22 @@ local function install_commands()
   local map = {}
   for _, def in ipairs(SLOT_DEFS) do
     local index = def.index
-    map["command-slots:run-" .. def.key] = function()
+    map["command-slots:run-" .. def.key] = command.palette(function()
       return M.run_slot(index)
-    end
-    map["command-slots:edit-" .. def.key] = function()
+    end)
+    map["command-slots:edit-" .. def.key] = command.palette(function()
       return M.prompt_slot(index, true)
-    end
+    end)
   end
-  map["command-slots:kill-active"] = function()
+  map["command-slots:kill-active"] = command.palette(function()
     local slot = active_output_slot()
     if slot then return M.kill_slot(slot.index, "command") end
     return false
-  end
-  map["command-slots:focus-output"] = function()
+  end)
+  map["command-slots:focus-output"] = command.palette(function()
     local slot = M.last_slot or slot_for_index(1)
     return slot and ensure_output_view(slot, true) ~= nil
-  end
+  end)
   command.add(nil, map)
 
   command.add(function()

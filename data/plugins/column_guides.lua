@@ -123,6 +123,7 @@ function TextView:draw_current_line_highlights(...)
 end
 
 command.add_toggle("column-guides:toggle", {
+  palette = true,
   get = function()
     return config.plugins.column_guides.enabled
   end,

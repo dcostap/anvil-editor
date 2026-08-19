@@ -44,6 +44,7 @@ local function buffer_view_predicate(view)
 end
 
 command.add_toggle("lsp:toggle", {
+  palette = true,
   get = manager.is_enabled,
   set = function(enabled)
     manager.set_enabled(enabled)
@@ -52,37 +53,38 @@ command.add_toggle("lsp:toggle", {
 })
 
 command.add(nil, {
-  ["lsp:show-status"] = function()
+  ["lsp:show-status"] = command.palette(function()
     if core.log then core.log("%s", manager.status()) end
-  end,
+  end),
 })
 
 command.add(buffer_view_predicate, {
-  ["lsp:start-current-buffer"] = function(view)
+  ["lsp:start-current-buffer"] = command.palette(function(view)
     local ok, err = manager.start_current_buffer(view)
     if core.log then
       core.log(ok and "LSP start scheduled" or "LSP start skipped: %s", err or "unavailable")
     end
-  end,
-  ["lsp:restart-current-buffer"] = function(view)
+  end),
+  ["lsp:restart-current-buffer"] = command.palette(function(view)
     local ok, err = manager.restart_current_buffer(view)
     if core.log then
       core.log(ok and "LSP restart scheduled" or "LSP restart skipped: %s", err or "unavailable")
     end
-  end,
-  ["lsp:hover-current-position"] = function(view)
+  end),
+  ["lsp:hover-current-position"] = command.palette(function(view)
     local _hover, reason, status = hover.start_current_position(view)
     if status ~= "fresh" and core.log_quiet then
       core.log_quiet("LSP hover: %s", tostring(reason or status or "pending"))
     end
-  end,
-  ["lsp:signature-help-current-position"] = function(view)
+  end),
+  ["lsp:signature-help-current-position"] = command.palette(function(view)
     local _signature_help, reason, status = signature_help.start_current_position(view)
     if status ~= "fresh" and core.log_quiet then
       core.log_quiet("LSP signature help: %s", tostring(reason or status or "pending"))
     end
-  end,
+  end),
 })
+
 
 return {
   diagnostic_hints = diagnostic_hints,

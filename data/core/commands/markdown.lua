@@ -15,37 +15,38 @@ command.add(function()
   end
   return false
 end, {
-  ["markdown-live-preview:toggle-source-mode"] = function(view)
+  ["markdown-live-preview:toggle-source-mode"] = command.palette(function(view)
     markdown_live.toggle_source_mode(view, "command-toggle")
-  end,
-  ["markdown-live-preview:source-mode"] = function(view)
+  end),
+  ["markdown-live-preview:source-mode"] = command.palette(function(view)
     markdown_live.set_source_mode(view, true, "command-source")
-  end,
-  ["markdown-live-preview:live-mode"] = function(view)
+  end),
+  ["markdown-live-preview:live-mode"] = command.palette(function(view)
     markdown_live.set_source_mode(view, false, "command-live")
-  end,
-  ["markdown-live-preview:open-link"] = function(view)
+  end),
+  ["markdown-live-preview:open-link"] = command.palette(function(view)
     markdown_live.open_link(view)
-  end,
-  ["markdown-live-preview:create-link-target"] = function(view)
+  end),
+  ["markdown-live-preview:create-link-target"] = command.palette(function(view)
     markdown_live.create_link_target(view)
-  end,
-  ["markdown-live-preview:complete-link"] = function(view)
+  end),
+  ["markdown-live-preview:complete-link"] = command.palette(function(view)
     markdown_completion.open(view)
-  end,
-  ["markdown-live-preview:load-remote-image"] = function(view)
+  end),
+  ["markdown-live-preview:load-remote-image"] = command.palette(function(view)
     markdown_live.allow_remote_image_once(view)
-  end,
-  ["markdown-live-preview:trust-project-remote-images"] = function(view)
+  end),
+  ["markdown-live-preview:trust-project-remote-images"] = command.palette(function(view)
     markdown_live.set_project_remote_image_trust(view, true)
-  end,
-  ["markdown-live-preview:untrust-project-remote-images"] = function(view)
+  end),
+  ["markdown-live-preview:untrust-project-remote-images"] = command.palette(function(view)
     markdown_live.set_project_remote_image_trust(view, false)
-  end,
-  ["markdown-live-preview:review-rename-link-updates"] = function(view)
+  end),
+  ["markdown-live-preview:review-rename-link-updates"] = command.palette(function(view)
     markdown_rename_links.present(markdown_vault_index.pending_rename(view.buffer.abs_filename))
-  end,
+  end),
 })
+
 
 command.add(function()
   local view = core.active_view

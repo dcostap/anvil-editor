@@ -291,9 +291,9 @@ config.plugins.scale.config_spec = {
 
 
 command.add(nil, {
-  ["editor:zoom-reset"] = function() scale.reset() end,
-  ["editor:zoom-out"] = function() scale.decrease() end,
-  ["editor:zoom-in"] = function() scale.increase() end
+  ["editor:zoom-reset"] = command.palette(function() scale.reset() end),
+  ["editor:zoom-out"] = command.palette(function() scale.decrease() end),
+  ["editor:zoom-in"] = command.palette(function() scale.increase() end)
 })
 
 command.map["scale:reset"] = nil

@@ -24,7 +24,7 @@ end
 
 
 command.add("core.textview", {
-  ["reflow:reflow"] = function(dv)
+  ["reflow:reflow"] = command.palette(function(dv)
     if dv.can_edit and not dv:can_edit("reflow", { warn = true }) then return end
     local buffer = dv.buffer
     buffer:replace(function(text)
@@ -55,7 +55,7 @@ command.add("core.textview", {
 
       return text
     end)
-  end,
+  end),
 })
 
 

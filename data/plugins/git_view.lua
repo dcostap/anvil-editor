@@ -365,16 +365,16 @@ function git_view.restore_state(project, state, opts)
 end
 
 command.add(nil, {
-  ["git:open-view"] = function()
+  ["git:open-view"] = command.palette(function()
     git_view.open_view()
-  end,
+  end),
 
-  ["git:refresh-view"] = function()
+  ["git:refresh-view"] = command.palette(function()
     local session, view = active_or_open_view()
     if view then view.model:refresh_log(function() core.redraw = true end) end
-  end,
+  end),
 
-  ["git:open-selected-commit-diff"] = function()
+  ["git:open-selected-commit-diff"] = command.palette(function()
     local session, view = active_or_open_view()
     local function open_diff(v)
       if v.activate_model_tab then v:activate_model_tab(function() core.redraw = true end) end
@@ -388,18 +388,18 @@ command.add(nil, {
       if not tab and err then core.log_quiet("Git View: open selected commit diff skipped: %s", err.message or err.kind) end
     end
     when_model_ready(view, open_diff)
-  end,
+  end),
 
-  ["git:open-working-tree-diff"] = function()
+  ["git:open-working-tree-diff"] = command.palette(function()
     local session, view = active_or_open_view()
     when_model_ready(view, function(v)
       local tab, err = v.model:open_working_tree_diff(function() core.redraw = true end)
       if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
       if not tab and err then core.log_quiet("Git View: open working tree diff skipped: %s", err.message or err.kind) end
     end)
-  end,
+  end),
 
-  ["git:show-file-history"] = function()
+  ["git:show-file-history"] = command.palette(function()
     local filename = active_file_path()
     if not filename then
       core.log_quiet("Git View: file history skipped; active view has no file-backed buffer")
@@ -426,9 +426,9 @@ command.add(nil, {
         core.redraw = true
       end)
     end)
-  end,
+  end),
 
-  ["git:show-selection-history"] = function()
+  ["git:show-selection-history"] = command.palette(function()
     local filename, start_line, end_line = active_selection_line_range()
     if not filename then
       core.log_quiet("Git View: selection history skipped; active file has no selection")
@@ -468,9 +468,9 @@ command.add(nil, {
         end)
       end)
     end)
-  end,
+  end),
 
-  ["git:open-selected-historical-buffer"] = function()
+  ["git:open-selected-historical-buffer"] = command.palette(function()
     local view = active_git_view()
     if not view then
       core.log_quiet("Git View: historical buffer open skipped; Git View is not open")
@@ -494,7 +494,7 @@ command.add(nil, {
       historical_buffer.open(request.repo, request.rev, request.relpath, text or "")
       core.redraw = true
     end)
-  end,
+  end),
 
 })
 

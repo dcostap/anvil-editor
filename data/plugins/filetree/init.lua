@@ -3410,11 +3410,16 @@ local function reveal_path_in_context(target, context, pane, source_view)
 end
 
 command.add(nil, {
-  ["filetree:open-project-root"] = function()
+  ["filetree:open-project-root"] = command.palette(function()
     local context, pane, source_view = command_context()
     return open_root_in_context(nil, context, pane, source_view) ~= nil
-  end,
-  ["filetree:open-path"] = function()
+  end, {
+    title = "Open File Tree at Project Root",
+    description = "Open or reuse a File Tree rooted at the Root Project",
+    keywords = { "files", "folders", "view" },
+    supports_placement = true,
+  }),
+  ["filetree:open-path"] = command.palette(function()
     local context, pane, source_view = command_context()
     require("plugins.fuzzy_searcher").pick_path {
       kind = "folder",
@@ -3426,13 +3431,23 @@ command.add(nil, {
       end,
     }
     return true
-  end,
-  ["filetree:reveal-current-file"] = function()
+  end, {
+    title = "Open File Tree at Path…",
+    description = "Select any existing folder without changing the Root Project",
+    keywords = { "files", "folders", "external", "view" },
+    supports_placement = true,
+  }),
+  ["filetree:reveal-current-file"] = command.palette(function()
     local context, pane, source_view = command_context()
     local path = file_context.view_file_path(source_view) or file_context.current_file_path()
     return path and reveal_path_in_context(path, context, pane, source_view) ~= nil
-  end,
-  ["filetree:reveal-path"] = function(path)
+  end, {
+    title = "Reveal Current File in File Tree",
+    description = "Show the current file in a File Tree",
+    keywords = { "locate", "files" },
+    supports_placement = true,
+  }),
+  ["filetree:reveal-path"] = command.palette(function(path)
     local context, pane, source_view = command_context()
     if path then return reveal_path_in_context(path, context, pane, source_view) ~= nil end
     require("plugins.fuzzy_searcher").pick_path {
@@ -3445,56 +3460,36 @@ command.add(nil, {
       end,
     }
     return true
-  end,
+  end, {
+    title = "Reveal Path in File Tree…",
+    description = "Select an existing file or folder to reveal",
+    keywords = { "locate", "files", "folders", "external" },
+    supports_placement = true,
+  }),
   ["filetree:sync-path"] = function(path, source_view)
     local view = source_view and source_view.extends and source_view:extends(FileTreeView)
       and source_view or active_filetree()
     if view then view:sync_path(path, "command") end
   end,
-  ["filetree:sort-by-name"] = function()
+  ["filetree:sort-by-name"] = command.palette(function()
     local view = active_filetree()
     if view then view:set_sort_mode("name") end
-  end,
-  ["filetree:sort-by-date-modified"] = function()
+  end),
+  ["filetree:sort-by-date-modified"] = command.palette(function()
     local view = active_filetree()
     if view then view:set_sort_mode("modified") end
-  end,
-})
-
-command.set_metadata("filetree:open-project-root", {
-  title = "Open File Tree at Project Root",
-  description = "Open or reuse a File Tree rooted at the Root Project",
-  keywords = { "files", "folders", "view" },
-  supports_placement = true,
-})
-command.set_metadata("filetree:open-path", {
-  title = "Open File Tree at Path…",
-  description = "Select any existing folder without changing the Root Project",
-  keywords = { "files", "folders", "external", "view" },
-  supports_placement = true,
-})
-command.set_metadata("filetree:reveal-current-file", {
-  title = "Reveal Current File in File Tree",
-  description = "Show the current file in a File Tree",
-  keywords = { "locate", "files" },
-  supports_placement = true,
-})
-command.set_metadata("filetree:reveal-path", {
-  title = "Reveal Path in File Tree…",
-  description = "Select an existing file or folder to reveal",
-  keywords = { "locate", "files", "folders", "external" },
-  supports_placement = true,
+  end),
 })
 
 command.add(function()
   local view = active_filetree()
   return view ~= nil, view
 end, {
-  ["filetree:refresh"] = function(view)
+  ["filetree:refresh"] = command.palette(function(view)
     view:refresh_preserving_selection_paths(true)
     view:schedule_git_status_refresh("manual-refresh", true)
-  end,
-  ["filetree:apply"] = function(view) view:apply_edits() end,
+  end),
+  ["filetree:apply"] = command.palette(function(view) view:apply_edits() end),
   ["filetree:open"] = function(view) view:open_item() end,
   ["filetree:up-dir"] = function(view) view:up_dir() end,
   ["filetree:project-root"] = function(view)

@@ -4,21 +4,17 @@ local command = require "core.command"
 test.describe("toggle commands", function()
   local saved_map
   local saved_aliases
-  local saved_metadata
 
   test.before_each(function()
     saved_map = command.map
     saved_aliases = command.aliases
-    saved_metadata = command.metadata
     command.map = {}
     command.aliases = {}
-    command.metadata = {}
   end)
 
   test.after_each(function()
     command.map = saved_map
     command.aliases = saved_aliases
-    command.metadata = saved_metadata
   end)
 
   test.it("registers one toggle command with current boolean status", function()
@@ -82,15 +78,17 @@ test.describe("toggle commands", function()
   end)
 
   test.it("keeps palette metadata when command behavior is wrapped", function()
-    command.add(nil, { ["test-feature:open"] = function() end })
-    command.set_metadata("test-feature:open", {
-      title = "Open Test Feature",
-      supports_placement = true,
+    command.add(nil, {
+      ["test-feature:open"] = command.palette(function() end, {
+        title = "Open Test Feature",
+        supports_placement = true,
+      }),
     })
     command.add(nil, { ["test-feature:open"] = function() end })
 
     test.equal(command.get_metadata("test-feature:open").title, "Open Test Feature")
     test.ok(command.get_metadata("test-feature:open").supports_placement)
+    test.ok(command.get_metadata("test-feature:open").palette)
   end)
 
   test.it("limits invocation context to one command execution", function()

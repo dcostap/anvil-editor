@@ -16,25 +16,25 @@ local function new_untitled_editor()
 end
 
 local commands = {
-  ["pane:close"] = function(pane) return panes.close(pane) end,
+  ["pane:close"] = command.palette(function(pane) return panes.close(pane) end),
   ["view:close"] = function(pane) return panes.close_view(pane) end,
-  ["pane:close-all"] = function() return panes.close_all() end,
-  ["pane:close-all-others"] = function(pane)
+  ["pane:close-all"] = command.palette(function() return panes.close_all() end),
+  ["pane:close-all-others"] = command.palette(function(pane)
     local result = true
     for index = #panes.ordered(), 1, -1 do
       local candidate = panes.ordered()[index]
       if candidate ~= pane and not panes.close(candidate) then result = false end
     end
     return result
-  end,
-  ["pane:move-previous"] = function(pane)
+  end),
+  ["pane:move-previous"] = command.palette(function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index > 1 then return panes.move(pane, ordered[index - 1], "left") end
-  end,
-  ["pane:move-next"] = function(pane)
+  end),
+  ["pane:move-next"] = command.palette(function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index < #ordered then return panes.move(pane, ordered[index + 1], "right") end
-  end,
+  end),
   ["pane:focus-previous"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if #ordered > 0 then return panes.focus_index((index - 2) % #ordered + 1) end
@@ -46,9 +46,9 @@ local commands = {
 }
 
 for _, direction in ipairs { "left", "right", "up", "down" } do
-  commands["pane:split-" .. direction] = function(pane)
+  commands["pane:split-" .. direction] = command.palette(function(pane)
     return panes.split(pane, direction, { factory = new_untitled_editor })
-  end
+  end)
 end
 
 for _, direction in ipairs { "left", "right", "up", "down" } do
@@ -66,9 +66,9 @@ end
 command.add(active_pane, commands)
 
 command.add(nil, {
-  ["pane:new"] = function()
+  ["pane:new"] = command.palette(function()
     return panes.create { factory = new_untitled_editor }
-  end,
+  end),
   ["pane:close-or-quit"] = function()
     local pane = panes.active()
     if pane then return panes.close(pane) end
