@@ -554,13 +554,6 @@ function Buffer:on_text_change(change_type, transaction, ...)
 	return result
 end
 
-local old_buffer_save = Buffer.save
-function Buffer:save(...)
-	local results = pack_results(old_buffer_save(self, ...))
-	if not buffer_gitdiff_disabled(self) then schedule_base_reload(self, "save") end
-	return unpack(results, 1, results.n)
-end
-
 local old_buffer_load = Buffer.load
 function Buffer:load(...)
 	local results = pack_results(old_buffer_load(self, ...))
@@ -568,12 +561,18 @@ function Buffer:load(...)
 	return unpack(results, 1, results.n)
 end
 
+-- A save does not change the Git base. Keep the live ranges in place.
+
 local old_set_filename = Buffer.set_filename
 function Buffer:set_filename(...)
+	local old_path = self.abs_filename
+	local results = pack_results(old_set_filename(self, ...))
+	local same_path = old_path == self.abs_filename
+		or (old_path and self.abs_filename and common.path_equals(old_path, self.abs_filename))
+	if same_path then return unpack(results, 1, results.n) end
 	local state = ensure_state(self)
 	state.base_generation = state.base_generation + 1
 	state.local_generation = state.local_generation + 1
-	local results = pack_results(old_set_filename(self, ...))
 	clear_state(self, "path changed")
 	if self.abs_filename and not buffer_gitdiff_disabled(self) then schedule_base_reload(self, "path-change") end
 	return unpack(results, 1, results.n)

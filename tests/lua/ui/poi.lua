@@ -41,6 +41,7 @@ test.describe("Point of Interest navigation", function()
     for _, buffer in ipairs(context.buffers or {}) do
       buffer:on_close()
     end
+    if context.temp_path then pcall(os.remove, context.temp_path) end
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
@@ -71,6 +72,36 @@ test.describe("Point of Interest navigation", function()
 
     test.ok(command.perform("core:previous_point_of_interest"))
     test.same(view.buffer.selections, { 2, 3, 2, 3 })
+  end)
+
+  test.it("keeps Git-change navigation available across a file save", function(context)
+    local path = USERDIR .. PATHSEP .. "poi-save-" .. system.get_process_id() .. ".txt"
+    context.temp_path = path
+    local file = assert(io.open(path, "wb"))
+    file:write("one\ntwo\n")
+    file:close()
+    local buffer = Buffer(path, path, false)
+    context.buffers = { buffer }
+    local view = Editor(buffer)
+    gitdiff._set_state_for_tests(buffer, {
+      is_in_repo = true,
+      operational = true,
+      loading = false,
+      base_generation = 0,
+      local_generation = 0,
+      base_lines = { "one\n", "two\n" },
+      ranges = { { type = "modification", current_start = 1, current_end = 2 } },
+      line_index = { [1] = "modification" },
+    })
+    buffer:insert(1, 1, "changed ")
+
+    local before = view:get_points_of_interest()
+    test.equal(#before, 1)
+    buffer:save()
+    local after, unavailable = view:get_points_of_interest()
+
+    test.not_nil(after, unavailable)
+    test.equal(#after, 1)
   end)
 
   test.it("does not expose language navigation commands without a symbol at the caret", function(context)

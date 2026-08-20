@@ -2101,7 +2101,7 @@ function core.get_view_title(view)
       if prj and is_open and belongs then
         project = prj
         title = common.relative_path(project.path, view.buffer.abs_filename)
-        if view.buffer:is_dirty() then title = title .. "*" end
+        if view.buffer:should_show_dirty_marker() then title = title .. "*" end
       else
         title = view:get_filename()
       end

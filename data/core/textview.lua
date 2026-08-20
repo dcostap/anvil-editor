@@ -1068,20 +1068,20 @@ function TextView:on_close()
 end
 
 
----Get the display name for the tab (filename with * if dirty).
----@return string name Buffer name with asterisk if modified
+---Get the display name for the tab, including a visible unsaved marker.
+---@return string name Buffer display name
 function TextView:get_name()
-  local post = self.buffer:is_dirty() and "*" or ""
+  local post = self.buffer:should_show_dirty_marker() and "*" or ""
   local name = self.buffer:get_name()
   return name:match("[^/%\\]*$") .. post
 end
 
 
----Get the full filename path for display (with home directory encoded).
----@return string filename Full path or name with asterisk if modified
+---Get the full filename path for display, with the home directory encoded.
+---@return string filename Full display path or name
 function TextView:get_filename()
   if self.buffer.abs_filename then
-    local post = self.buffer:is_dirty() and "*" or ""
+    local post = self.buffer:should_show_dirty_marker() and "*" or ""
     return common.home_encode(self.buffer.abs_filename) .. post
   end
   return self:get_name()

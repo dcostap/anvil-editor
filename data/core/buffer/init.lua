@@ -8,7 +8,8 @@ local common = require "core.common"
 local language_mode = require "core.language_mode"
 local linewrapping = require "core.linewrapping"
 
--- Match IntelliJ-style default: keep a backup and restore it if writing fails.
+-- Match IntelliJ-style safe writes. Preserve file identity when replacement
+-- would break links or metadata, and use atomic replacement otherwise.
 -- Set config.safe_write = false to use the old direct truncate/write path.
 if config.safe_write == nil then config.safe_write = true end
 local tokenizer = require "core.tokenizer"
@@ -272,7 +273,11 @@ local function open_for_writing(filename)
     -- Since r+b fails if file doesn't exist, fall back to wb.
     fp = io.open(filename, "r+b")
     if fp then
-      system.ftruncate(fp)
+      local truncated, truncate_err = system.ftruncate(fp)
+      if not truncated then
+        fp:close()
+        error(truncate_err or "could not truncate file")
+      end
     else
       -- file probably doesn't exist, create one
       fp = assert ( io.open(filename, "wb") )
@@ -308,20 +313,25 @@ local function check_io(ok, err)
 end
 
 
-copy_file = function(src, dst)
+copy_file = function(src, dst, on_output_opened)
   local input = assert(io.open(src, "rb"))
-  local output, open_err = io.open(dst, "wb")
-  if not output then
+  local opened, output = pcall(open_for_writing, dst)
+  if not opened then
     input:close()
-    error(open_err or "could not open output file")
+    error(output or "could not open output file")
   end
+  if on_output_opened then on_output_opened() end
   local ok, err = pcall(function()
     while true do
-      local chunk = input:read(1024 * 1024)
-      if not chunk then break end
+      local chunk, read_err = input:read(1024 * 1024)
+      if not chunk then
+        if read_err then error(read_err) end
+        break
+      end
       check_io(output:write(chunk))
     end
     check_io(output:flush())
+    if system.sync_file then check_io(system.sync_file(output)) end
   end)
   local close_in_ok, close_in_err = input:close()
   local close_out_ok, close_out_err = output:close()
@@ -410,34 +420,142 @@ local function ensure_parent_directory(filename)
   core.log_quiet("Created parent directory hierarchy \"%s\" before saving", dir)
 end
 
-local function write_file_safely(filename, writer)
+local function write_file_safely(filename, writer, before_replace)
   ensure_parent_directory(filename)
 
-  local backup
-  if config.safe_write ~= false and system.get_file_info(filename) then
-    backup = unique_sidecar_name(filename, "anvil-bak")
-    copy_file(filename, backup)
+  local safe = config.safe_write ~= false
+  local target_info = safe and system.get_file_info(filename) or nil
+  local preserve_identity = target_info and (
+    target_info.symlink
+    or (target_info.link_count or 1) > 1
+  )
+  local atomic = safe and not preserve_identity
+  local write_path = atomic and unique_sidecar_name(filename, "anvil-tmp") or filename
+
+  local function run_guard()
+    if not before_replace then return end
+    local allowed, guard_err = before_replace()
+    if not allowed then error(guard_err or "file changed while saving") end
   end
 
-  local fp = open_for_writing(filename)
+  local function create_backup()
+    local backup_path = unique_sidecar_name(filename, "anvil-bak")
+    local backup_staging = unique_sidecar_name(filename, "anvil-bak-writing")
+    local copied, copy_err = pcall(copy_file, filename, backup_staging)
+    if not copied then
+      os.remove(backup_staging)
+      error(copy_err)
+    end
+    local installed, install_err = system.atomic_replace_file(backup_staging, backup_path, false)
+    if not installed then
+      os.remove(backup_staging)
+      error(install_err or "could not install save backup")
+    end
+    if install_err then
+      core.log_quiet("Save backup warning for %s: %s", filename, install_err)
+    end
+    return backup_path
+  end
+
+  local function restore_backup(backup_path, original_err)
+    local restored, restore_err = pcall(copy_file, backup_path, filename)
+    if not restored then
+      error(string.format(
+        "%s; additionally failed to restore backup %s: %s",
+        tostring(original_err), backup_path, tostring(restore_err)
+      ))
+    end
+    os.remove(backup_path)
+  end
+
+  local backup
+  if preserve_identity then
+    run_guard()
+    backup = create_backup()
+    local guard_ok, guard_err = pcall(run_guard)
+    if not guard_ok then
+      os.remove(backup)
+      error(guard_err)
+    end
+  elseif not atomic then
+    run_guard()
+  end
+
+  local opened, fp = pcall(open_for_writing, write_path)
+  if not opened then
+    if atomic then os.remove(write_path) end
+    if backup then os.remove(backup) end
+    error(fp)
+  end
   local ok, err = pcall(function()
     writer(fp)
     check_io(fp:flush())
+    if safe then
+      assert(system.sync_file, "durable file sync is unavailable")
+      check_io(system.sync_file(fp))
+    end
     check_io(fp:close())
   end)
 
   if not ok then
     pcall(function() fp:close() end)
+    if atomic then os.remove(write_path) end
     if backup then
-      local restored, restore_err = pcall(copy_file, backup, filename)
-      if not restored then
-        error(string.format("%s; additionally failed to restore backup %s: %s", tostring(err), backup, tostring(restore_err)))
-      end
+      restore_backup(backup, err)
     end
     error(err)
   end
 
-  if backup then
+  if atomic then
+    local guard_ok, guard_err = pcall(run_guard)
+    if not guard_ok then
+      os.remove(write_path)
+      error(guard_err)
+    end
+    if not system.atomic_replace_file then
+      os.remove(write_path)
+      error("atomic file replacement is unavailable")
+    end
+    local replaced, replace_err, replace_reason = system.atomic_replace_file(
+      write_path, filename,
+      target_info and (target_info.file_id or true) or false
+    )
+    if not replaced then
+      if replace_reason then
+        os.remove(write_path)
+        error(replace_err or "save target changed before replacement")
+      end
+      if not target_info then
+        os.remove(write_path)
+        error(replace_err or "atomic file replacement failed")
+      end
+
+      core.log_quiet(
+        "Atomic replacement unavailable for %s; using identity-preserving save: %s",
+        filename, replace_err or "unknown error"
+      )
+      local fallback_backup
+      local fallback_write_started = false
+      local fallback_ok, fallback_err = pcall(function()
+        run_guard()
+        fallback_backup = create_backup()
+        run_guard()
+        copy_file(write_path, filename, function() fallback_write_started = true end)
+      end)
+      os.remove(write_path)
+      if not fallback_ok then
+        if fallback_backup then
+          if fallback_write_started then restore_backup(fallback_backup, fallback_err)
+          else os.remove(fallback_backup) end
+        end
+        error(fallback_err)
+      end
+      local removed, remove_err = os.remove(fallback_backup)
+      if not removed then core.error("Couldn't delete save backup %s: %s", fallback_backup, remove_err) end
+      return
+    end
+    if replace_err then core.log_quiet("Safe write warning for %s: %s", filename, replace_err) end
+  elseif backup then
     local removed, remove_err = os.remove(backup)
     if not removed then core.error("Couldn't delete save backup %s: %s", backup, remove_err) end
   end
@@ -493,7 +611,7 @@ function Buffer:save(filename, abs_filename)
         check_io(fp:write(line))
       end
     end
-  end)
+  end, self.safe_write_guard)
 
   self:set_filename(filename, abs_filename)
   self.new_file = false
@@ -514,6 +632,12 @@ function Buffer:is_dirty()
   else
     return self.clean_change_id ~= self:get_change_id()
   end
+end
+
+
+---Return true when the UI must show that this Buffer has unsaved text.
+function Buffer:should_show_dirty_marker()
+  return self:is_dirty()
 end
 
 

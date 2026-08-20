@@ -21,9 +21,12 @@ end
 
 local dirty_buffers = setmetatable({}, { __mode = "k" })
 local disk_state = setmetatable({}, { __mode = "k" })
+local save_failures = setmetatable({}, { __mode = "k" })
 local save_generation = 0
 local loop_running = false
+local retry_loop_running = false
 local MAX_SNAPSHOT_CONTENT_SIZE = 5 * 1024 * 1024
+local MAX_AUTOSAVE_RETRIES = 5
 local protected_init_path = system.absolute_path(USERDIR .. PATHSEP .. "init.lua")
 local protected_project_root
 local protected_project_file
@@ -55,27 +58,47 @@ end
 
 local function read_file_contents(filename)
   local fp = io.open(filename, "rb")
-  if not fp then return nil end
+  if not fp then return nil, false end
   local contents = fp:read("*a")
   fp:close()
-  return contents
+  return contents, contents ~= nil
 end
 
-local function update_disk_state(buffer)
+local function capture_disk_state(buffer)
   if buffer and buffer.abs_filename then
     local info = system.get_file_info(buffer.abs_filename)
     if info then
-      disk_state[buffer] = {
+      local content, content_read
+      if info.size <= MAX_SNAPSHOT_CONTENT_SIZE then
+        content, content_read = read_file_contents(buffer.abs_filename)
+      end
+      return {
+        exists = true,
+        file_id = info.file_id,
         modified = info.modified,
         size = info.size,
-        content = info.size <= MAX_SNAPSHOT_CONTENT_SIZE and read_file_contents(buffer.abs_filename) or nil,
+        content = content,
+        content_read = content_read,
       }
-    else
-      disk_state[buffer] = nil
     end
-  else
-    disk_state[buffer] = nil
+    return { exists = false }
   end
+  return nil
+end
+
+local function update_disk_state(buffer)
+  disk_state[buffer] = capture_disk_state(buffer)
+end
+
+local function disk_states_differ(old, current)
+  if not old or not current then return false end
+  if old.exists ~= current.exists then return true end
+  if not old.exists then return false end
+  if old.file_id and current.file_id and old.file_id ~= current.file_id then return true end
+  if old.modified ~= current.modified or old.size ~= current.size then return true end
+  if old.content_read == false or current.content_read == false then return true end
+  if old.content_read and current.content_read then return old.content ~= current.content end
+  return false
 end
 
 local function save_target_missing(buffer)
@@ -87,19 +110,13 @@ end
 local function disk_changed_since_load_or_save(buffer)
   if not buffer or not buffer.abs_filename then return false end
   local old = disk_state[buffer]
-  local info = system.get_file_info(buffer.abs_filename)
-  if old and not info then return true end
-  if not old or not info then return false end
-  if old.modified ~= info.modified or old.size ~= info.size then return true end
-  if old.content and info.size <= MAX_SNAPSHOT_CONTENT_SIZE then
-    return read_file_contents(buffer.abs_filename) ~= old.content
-  end
-  return false
+  return disk_states_differ(old, capture_disk_state(buffer))
 end
 
 local function clear_dirty_if_clean(buffer)
   if not buffer or not buffer.is_dirty or not buffer:is_dirty() then
     dirty_buffers[buffer] = nil
+    save_failures[buffer] = nil
   end
 end
 
@@ -195,10 +212,12 @@ local function save_conflict_copy_and_reload(buffer)
   return true
 end
 
-local function save_buffer_recreating_missing_target(buffer, name)
+local function save_buffer_recreating_missing_target(buffer, name, expected_disk_state)
   buffer.autosave_allow_recreate_missing = true
+  buffer.autosave_expected_disk_state = expected_disk_state
   local ok, err = pcall(buffer.save, buffer)
   buffer.autosave_allow_recreate_missing = nil
+  buffer.autosave_expected_disk_state = nil
   if ok then
     update_disk_state(buffer)
     clear_dirty_if_clean(buffer)
@@ -237,6 +256,7 @@ local function show_conflict_prompt(buffer, explicit)
   if buffer.autosave_conflict_prompt_visible then return end
   buffer.autosave_conflict_prompt_visible = true
   local name = buffer.filename or buffer.abs_filename or "this file"
+  local prompt_disk_state = capture_disk_state(buffer)
   local missing = save_target_missing(buffer)
   local buttons
   if missing then
@@ -269,13 +289,24 @@ local function show_conflict_prompt(buffer, explicit)
     function(item)
       buffer.autosave_conflict_prompt_visible = false
       if item.text == "Save as New File" then
-        save_buffer_recreating_missing_target(buffer, name)
+        save_buffer_recreating_missing_target(buffer, name, prompt_disk_state)
       elseif item.text == "Discard File" then
         discard_missing_file_buffer(buffer, name)
       elseif item.text == "Overwrite Disk" then
+        if disk_states_differ(prompt_disk_state, capture_disk_state(buffer)) then
+          save_failures[buffer] = { conflict = true }
+          core.log_quiet(
+            "Disk changed again before overwrite approval for %s",
+            buffer.filename or name
+          )
+          show_conflict_prompt(buffer, explicit)
+          return
+        end
         buffer.autosave_ignore_next_conflict = true
+        buffer.autosave_expected_disk_state = prompt_disk_state
         local ok, err = pcall(buffer.save, buffer)
         buffer.autosave_ignore_next_conflict = nil
+        buffer.autosave_expected_disk_state = nil
         if ok then
           update_disk_state(buffer)
           clear_dirty_if_clean(buffer)
@@ -322,37 +353,121 @@ local function should_hide_dirty_marker(buffer)
     and buffer.filename
     and not has_invalid_save_path(buffer)
     and not is_protected_buffer(buffer)
+    and not save_failures[buffer]
+    and not buffer.autosave_conflict_prompt_visible
 end
 
 function autosave_fast.should_hide_dirty_marker(buffer)
   return should_hide_dirty_marker(buffer)
 end
 
-local function save_buffer(buffer, reason)
+local buffer_should_show_dirty_marker = Buffer.should_show_dirty_marker
+function Buffer:should_show_dirty_marker()
+  if self:is_dirty() and should_hide_dirty_marker(self) then return false end
+  return buffer_should_show_dirty_marker(self)
+end
+
+local save_buffer
+
+local function retry_delay(attempts)
+  local base = math.max(0.01, math.min(1, tonumber(autosave_fast.timeout) or 1))
+  return math.min(30, base * 2 ^ math.min(math.max(0, attempts - 1), 10))
+end
+
+local function has_retryable_failure()
+  for _, failure in pairs(save_failures) do
+    if not failure.conflict and failure.attempts < MAX_AUTOSAVE_RETRIES then return true end
+  end
+  return false
+end
+
+local function schedule_retry_loop()
+  if retry_loop_running then return end
+  retry_loop_running = true
+  core.add_thread(function()
+    while true do
+      local now = system.get_time()
+      local earliest
+      for buffer, failure in pairs(save_failures) do
+        if not buffer:is_dirty() then
+          save_failures[buffer] = nil
+        elseif not failure.conflict and failure.attempts < MAX_AUTOSAVE_RETRIES then
+          earliest = math.min(earliest or failure.retry_at, failure.retry_at)
+        end
+      end
+      if not earliest then break end
+      if earliest > now then coroutine.yield(math.min(earliest - now, 0.25)) end
+
+      now = system.get_time()
+      local due = {}
+      for buffer, failure in pairs(save_failures) do
+        if not failure.conflict
+            and failure.attempts < MAX_AUTOSAVE_RETRIES
+            and failure.retry_at <= now then
+          due[#due + 1] = buffer
+        end
+      end
+      for _, buffer in ipairs(due) do
+        if save_failures[buffer] and buffer:is_dirty() then
+          save_buffer(buffer, "retry")
+        end
+      end
+    end
+    retry_loop_running = false
+    if has_retryable_failure() then schedule_retry_loop() end
+  end)
+end
+
+save_buffer = function(buffer, reason)
   if is_untitled_buffer(buffer) then
     untitled_recovery.flush_buffer(buffer, reason or "autosave", true)
     dirty_buffers[buffer] = nil
     return false
   end
   if not should_autosave_buffer(buffer) then
+    dirty_buffers[buffer] = nil
+    save_failures[buffer] = nil
     clear_dirty_if_clean(buffer)
     return false
   end
 
   buffer.autosave_save_reason = reason or true
+  local recovering = save_failures[buffer] ~= nil
   local ok, err = pcall(buffer.save, buffer)
   buffer.autosave_save_reason = nil
   if ok then
+    save_failures[buffer] = nil
     update_disk_state(buffer)
     clear_dirty_if_clean(buffer)
     core.log_quiet("Autosaved \"%s\"%s", buffer.filename, reason and (" (" .. reason .. ")") or "")
+    if recovering then core.log("Autosave recovered for \"%s\"", buffer.filename) end
     return true
   end
   if disk_changed_since_load_or_save(buffer) then
+    save_failures[buffer] = { conflict = true }
     show_conflict_prompt(buffer, false)
     return false, "conflict"
   else
-    core.error("Autosave failed for %s: %s", buffer.filename or "buffer", err)
+    local previous = save_failures[buffer]
+    local attempts = (previous and previous.attempts or 0) + 1
+    save_failures[buffer] = {
+      attempts = attempts,
+      retry_at = system.get_time() + retry_delay(attempts),
+      error = err,
+    }
+    if attempts == 1 then
+      core.error("Autosave failed for %s: %s", buffer.filename or "buffer", err)
+    else
+      core.log_quiet(
+        "Autosave retry %d failed for %s: %s",
+        attempts, buffer.filename or "buffer", err
+      )
+    end
+    if attempts < MAX_AUTOSAVE_RETRIES then
+      schedule_retry_loop()
+    else
+      core.log_quiet("Autosave retries stopped for %s", buffer.filename or "buffer")
+    end
   end
   return false, err
 end
@@ -411,6 +526,10 @@ function Buffer:on_text_change(type, transaction, ...)
     if is_untitled_buffer(self) then
       dirty_buffers[self] = nil
     elseif self.filename and not is_protected_buffer(self) then
+      local failure = save_failures[self]
+      if failure and not failure.conflict and failure.attempts >= MAX_AUTOSAVE_RETRIES then
+        save_failures[self] = nil
+      end
       dirty_buffers[self] = true
       schedule_idle_save()
     end
@@ -421,8 +540,17 @@ end
 local load = Buffer.load
 function Buffer:load(...)
   local result = load(self, ...)
+  save_failures[self] = nil
   update_disk_state(self)
   clear_dirty_if_clean(self)
+  return result
+end
+
+local set_filename = Buffer.set_filename
+function Buffer:set_filename(...)
+  local old_path = self.abs_filename
+  local result = set_filename(self, ...)
+  if old_path ~= self.abs_filename then update_disk_state(self) end
   return result
 end
 
@@ -436,6 +564,7 @@ function Buffer:save(filename, abs_filename)
      and not self.autosave_ignore_next_conflict
      and not is_protected_buffer(self)
      and disk_changed_since_load_or_save(self) then
+    save_failures[self] = { conflict = true }
     if self.autosave_allow_recreate_missing and save_target_missing(self) then
       core.log_quiet("Saving missing file target as a new file: %s", self.filename)
     else
@@ -445,7 +574,43 @@ function Buffer:save(filename, abs_filename)
       error(string.format("not saving %s: file changed on disk", self.filename))
     end
   end
-  local result = save(self, filename, abs_filename)
+  local previous_guard = self.safe_write_guard
+  if saving_current_file
+      and self.filename
+      and not is_protected_buffer(self) then
+    local expected = self.autosave_expected_disk_state
+      or disk_state[self]
+      or capture_disk_state(self)
+    self.safe_write_guard = function()
+      if disk_states_differ(expected, capture_disk_state(self)) then
+        save_failures[self] = { conflict = true }
+        if not self.deferred_reload then
+          show_conflict_prompt(self, not self.autosave_save_reason)
+        end
+        return false, string.format(
+          "not saving %s: file changed on disk while saving",
+          self.filename
+        )
+      end
+      return true
+    end
+  end
+  local ok, result = pcall(save, self, filename, abs_filename)
+  self.safe_write_guard = previous_guard
+  if not ok then
+    local failure = save_failures[self]
+    if not self.autosave_save_reason and not (failure and failure.conflict) then
+      local attempts = (failure and failure.attempts or 0) + 1
+      save_failures[self] = {
+        attempts = attempts,
+        retry_at = system.get_time() + retry_delay(attempts),
+        error = result,
+      }
+      if attempts < MAX_AUTOSAVE_RETRIES then schedule_retry_loop() end
+    end
+    error(result, 0)
+  end
+  save_failures[self] = nil
   update_disk_state(self)
   clear_dirty_if_clean(self)
   if was_untitled then untitled_recovery.flush_all("save as") end
@@ -456,6 +621,7 @@ local on_close = Buffer.on_close
 function Buffer:on_close(...)
   dirty_buffers[self] = nil
   disk_state[self] = nil
+  save_failures[self] = nil
   local result = on_close(self, ...)
   return result
 end
@@ -493,34 +659,6 @@ TextView.close_approval_handler = function(view, approve)
     end
   end
   return false
-end
-
-local textview_get_name = TextView.get_name
-function TextView:get_name()
-  local name = textview_get_name(self)
-  if self.buffer and self.buffer:is_dirty() and should_hide_dirty_marker(self.buffer) then
-    return (name:gsub("%*$", ""))
-  end
-  return name
-end
-
-local textview_get_filename = TextView.get_filename
-function TextView:get_filename()
-  local filename = textview_get_filename(self)
-  if self.buffer and self.buffer:is_dirty() and should_hide_dirty_marker(self.buffer) then
-    return (filename:gsub("%*$", ""))
-  end
-  return filename
-end
-
-local core_get_view_title = core.get_view_title
-function core.get_view_title(view)
-  local title = core_get_view_title(view)
-  local buffer = view and view.buffer
-  if buffer and buffer.is_dirty and buffer:is_dirty() and should_hide_dirty_marker(buffer) then
-    title = title:gsub("%* %-", " -", 1):gsub("%*$", "")
-  end
-  return title
 end
 
 local core_confirm_close_buffers = core.confirm_close_buffers

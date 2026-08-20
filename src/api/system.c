@@ -22,6 +22,7 @@
 #include "../win32_single_instance.h"
 #ifdef _WIN32
   #include <direct.h>
+  #include <io.h>
   #include <windows.h>
   #include <fileapi.h>
   #include "../utfconv.h"
@@ -30,7 +31,11 @@
 #else
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <unistd.h>
+#if defined(__linux__) || defined(__APPLE__)
+#include <sys/xattr.h>
+#endif
 
 #ifdef __linux__
   #include <sys/vfs.h>
@@ -1238,7 +1243,6 @@ static int f_get_file_info(lua_State *L) {
     lua_pushnil(L); push_win32_error(L, GetLastError());
     return 2;
   }
-  SDL_free(wpath);
   ULARGE_INTEGER large_int = {0};
   #define TICKS_PER_MILISECOND 10000
   #define EPOCH_DIFFERENCE 11644473600000LL
@@ -1254,10 +1258,36 @@ static int f_get_file_info(lua_State *L) {
   lua_pushstring(L, data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ? "dir" : "file");
   lua_setfield(L, -2, "type");
 
-  lua_pushboolean(L, data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY && data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
+  lua_pushboolean(L, data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
   lua_setfield(L, -2, "symlink");
+
+  HANDLE handle = CreateFileW(
+    wpath, FILE_READ_ATTRIBUTES,
+    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL
+  );
+  if (handle != INVALID_HANDLE_VALUE) {
+    BY_HANDLE_FILE_INFORMATION handle_info;
+    if (GetFileInformationByHandle(handle, &handle_info)) {
+      lua_pushinteger(L, handle_info.nNumberOfLinks);
+      lua_setfield(L, -2, "link_count");
+      char file_id[40];
+      SDL_snprintf(
+        file_id, sizeof(file_id), "%08lx:%08lx%08lx",
+        (unsigned long)handle_info.dwVolumeSerialNumber,
+        (unsigned long)handle_info.nFileIndexHigh,
+        (unsigned long)handle_info.nFileIndexLow
+      );
+      lua_pushstring(L, file_id);
+      lua_setfield(L, -2, "file_id");
+    }
+    CloseHandle(handle);
+  }
+  SDL_free(wpath);
 #else
   struct stat s;
+  struct stat link_info;
+  bool is_symlink = lstat(path, &link_info) == 0 && S_ISLNK(link_info.st_mode);
   int err = stat(path, &s);
   if (err < 0) {
     lua_pushnil(L);
@@ -1292,12 +1322,17 @@ static int f_get_file_info(lua_State *L) {
   lua_pushnumber(L, mtime);
   lua_setfield(L, -2, "modified");
 
-  if (S_ISDIR(s.st_mode)) {
-    if (lstat(path, &s) == 0) {
-      lua_pushboolean(L, S_ISLNK(s.st_mode));
-      lua_setfield(L, -2, "symlink");
-    }
-  }
+  lua_pushboolean(L, is_symlink);
+  lua_setfield(L, -2, "symlink");
+  lua_pushinteger(L, s.st_nlink);
+  lua_setfield(L, -2, "link_count");
+  char file_id[64];
+  SDL_snprintf(
+    file_id, sizeof(file_id), "%llu:%llu",
+    (unsigned long long)s.st_dev, (unsigned long long)s.st_ino
+  );
+  lua_pushstring(L, file_id);
+  lua_setfield(L, -2, "file_id");
 #endif
   return 1;
 }
@@ -1355,6 +1390,250 @@ static int f_ftruncate(lua_State *L) {
   }
 
   lua_pushboolean(L, 1);
+  return 1;
+}
+
+
+static int f_sync_file(lua_State *L) {
+  luaL_Stream *stream = luaL_checkudata(L, 1, LUA_FILEHANDLE);
+  if (fflush(stream->f) != 0) {
+    lua_pushboolean(L, 0);
+    lua_pushfstring(L, "fflush(): %s", strerror(errno));
+    return 2;
+  }
+#ifdef _WIN32
+  intptr_t handle = _get_osfhandle(_fileno(stream->f));
+  if (handle == -1 || !FlushFileBuffers((HANDLE)handle)) {
+    DWORD error = handle == -1 ? ERROR_INVALID_HANDLE : GetLastError();
+    lua_pushboolean(L, 0);
+    push_win32_error(L, error);
+    return 2;
+  }
+#else
+  if (fsync(fileno(stream->f)) != 0) {
+    lua_pushboolean(L, 0);
+    lua_pushfstring(L, "fsync(): %s", strerror(errno));
+    return 2;
+  }
+#endif
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+
+static int f_atomic_replace_file(lua_State *L) {
+  const char *source = luaL_checkstring(L, 1);
+  const char *target = luaL_checkstring(L, 2);
+  const char *expected_file_id = lua_type(L, 3) == LUA_TSTRING
+    ? lua_tostring(L, 3) : NULL;
+  bool expected_existing = expected_file_id
+    ? true : (lua_isnoneornil(L, 3) || lua_toboolean(L, 3));
+#ifdef _WIN32
+  LPWSTR wsource = utfconv_utf8towc(source);
+  LPWSTR wtarget = utfconv_utf8towc(target);
+  if (!wsource || !wtarget) {
+    SDL_free(wsource);
+    SDL_free(wtarget);
+    lua_pushboolean(L, 0);
+    lua_pushliteral(L, UTFCONV_ERROR_INVALID_CONVERSION);
+    return 2;
+  }
+
+  BOOL replaced;
+  DWORD replacement_error = ERROR_SUCCESS;
+  bool target_changed = false;
+  bool target_unverified = false;
+  DWORD attributes = GetFileAttributesW(wtarget);
+  if (attributes != INVALID_FILE_ATTRIBUTES) {
+    if (!expected_existing) {
+      replaced = FALSE;
+      target_changed = true;
+      SetLastError(ERROR_FILE_EXISTS);
+    } else {
+      replaced = TRUE;
+      if (expected_file_id) {
+        HANDLE handle = CreateFileW(
+          wtarget, FILE_READ_ATTRIBUTES,
+          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+          NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL
+        );
+        if (handle == INVALID_HANDLE_VALUE) {
+          replaced = FALSE;
+          target_unverified = true;
+          replacement_error = GetLastError();
+        } else {
+          BY_HANDLE_FILE_INFORMATION handle_info;
+          if (!GetFileInformationByHandle(handle, &handle_info)) {
+            replaced = FALSE;
+            target_unverified = true;
+            replacement_error = GetLastError();
+          } else {
+            char actual_file_id[40];
+            SDL_snprintf(
+              actual_file_id, sizeof(actual_file_id), "%08lx:%08lx%08lx",
+              (unsigned long)handle_info.dwVolumeSerialNumber,
+              (unsigned long)handle_info.nFileIndexHigh,
+              (unsigned long)handle_info.nFileIndexLow
+            );
+            if (SDL_strcmp(actual_file_id, expected_file_id) != 0) {
+              replaced = FALSE;
+              target_changed = true;
+              replacement_error = ERROR_FILE_INVALID;
+            }
+          }
+          CloseHandle(handle);
+        }
+      }
+      if (replaced) replaced = ReplaceFileW(wtarget, wsource, NULL, 0, NULL, NULL);
+    }
+  } else {
+    DWORD error = GetLastError();
+    if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) {
+      SDL_free(wsource);
+      SDL_free(wtarget);
+      lua_pushboolean(L, 0);
+      push_win32_error(L, error);
+      if (expected_existing) {
+        lua_pushliteral(L, "target-unverified");
+        return 3;
+      }
+      return 2;
+    }
+    if (expected_existing) {
+      replaced = FALSE;
+      target_changed = true;
+      SetLastError(ERROR_FILE_NOT_FOUND);
+    } else {
+      replaced = MoveFileExW(wsource, wtarget, MOVEFILE_WRITE_THROUGH);
+    }
+  }
+  DWORD error = replaced ? ERROR_SUCCESS
+    : (replacement_error != ERROR_SUCCESS ? replacement_error : GetLastError());
+  if (!replaced && expected_existing
+      && (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)) {
+    target_changed = true;
+  }
+  SDL_free(wsource);
+  SDL_free(wtarget);
+  if (!replaced) {
+    lua_pushboolean(L, 0);
+    push_win32_error(L, error);
+    if (target_changed) {
+      lua_pushliteral(L, "target-changed");
+      return 3;
+    }
+    if (target_unverified) {
+      lua_pushliteral(L, "target-unverified");
+      return 3;
+    }
+    return 2;
+  }
+#else
+  struct stat target_info;
+  bool stale_source = false;
+  bool target_exists = lstat(target, &target_info) == 0;
+  if (expected_existing != target_exists) {
+    lua_pushboolean(L, 0);
+    lua_pushliteral(L, "save target existence changed before replacement");
+    lua_pushliteral(L, "target-changed");
+    return 3;
+  }
+  if (target_exists) {
+    if (stat(target, &target_info) != 0) {
+      lua_pushboolean(L, 0);
+      lua_pushfstring(L, "stat(): %s", strerror(errno));
+      lua_pushliteral(L, "target-unverified");
+      return 3;
+    }
+    if (expected_file_id) {
+      char actual_file_id[64];
+      SDL_snprintf(
+        actual_file_id, sizeof(actual_file_id), "%llu:%llu",
+        (unsigned long long)target_info.st_dev,
+        (unsigned long long)target_info.st_ino
+      );
+      if (SDL_strcmp(actual_file_id, expected_file_id) != 0) {
+        lua_pushboolean(L, 0);
+        lua_pushliteral(L, "save target identity changed before replacement");
+        lua_pushliteral(L, "target-changed");
+        return 3;
+      }
+    }
+    #if defined(__linux__)
+    ssize_t xattr_size = listxattr(target, NULL, 0);
+    #elif defined(__APPLE__)
+    ssize_t xattr_size = listxattr(target, NULL, 0, XATTR_NOFOLLOW);
+    #else
+    ssize_t xattr_size = 0;
+    #endif
+    if (xattr_size > 0) {
+      lua_pushboolean(L, 0);
+      lua_pushliteral(L, "atomic replacement would discard extended file metadata");
+      return 2;
+    }
+    #if defined(__linux__) || defined(__APPLE__)
+    if (xattr_size < 0 && errno != ENOTSUP) {
+      lua_pushboolean(L, 0);
+      lua_pushfstring(L, "listxattr(): %s", strerror(errno));
+      return 2;
+    }
+    #endif
+    if (chown(source, target_info.st_uid, target_info.st_gid) != 0) {
+      lua_pushboolean(L, 0);
+      lua_pushfstring(L, "chown(): %s", strerror(errno));
+      return 2;
+    }
+    if (chmod(source, target_info.st_mode & 07777) != 0) {
+      lua_pushboolean(L, 0);
+      lua_pushfstring(L, "chmod(): %s", strerror(errno));
+      return 2;
+    }
+  }
+  int replace_result;
+  if (expected_existing) {
+    replace_result = rename(source, target);
+  } else {
+    replace_result = link(source, target);
+    if (replace_result == 0 && unlink(source) != 0) {
+      stale_source = true;
+    }
+  }
+  if (replace_result != 0) {
+    lua_pushboolean(L, 0);
+    lua_pushfstring(L, "replace(): %s", strerror(errno));
+    return 2;
+  }
+
+  char *directory = SDL_strdup(target);
+  const char *sync_warning = stale_source ? "could not remove installed temporary link" : NULL;
+  if (!directory) {
+    sync_warning = "could not allocate parent-directory sync path";
+  } else {
+    char *slash = strrchr(directory, '/');
+    if (slash) {
+      if (slash == directory) slash[1] = '\0';
+      else *slash = '\0';
+    } else {
+      SDL_strlcpy(directory, ".", 2);
+    }
+    int directory_fd = open(directory, O_RDONLY);
+    if (directory_fd < 0) {
+      sync_warning = strerror(errno);
+    } else {
+      if (fsync(directory_fd) != 0) sync_warning = strerror(errno);
+      close(directory_fd);
+    }
+  }
+#endif
+  lua_pushboolean(L, 1);
+#ifndef _WIN32
+  if (sync_warning) {
+    lua_pushfstring(L, "parent directory sync failed: %s", sync_warning);
+    SDL_free(directory);
+    return 2;
+  }
+  SDL_free(directory);
+#endif
   return 1;
 }
 
@@ -2087,6 +2366,8 @@ static const luaL_Reg lib[] = {
   { "text_input",            f_text_input            },
   { "setenv",                f_setenv                },
   { "ftruncate",             f_ftruncate             },
+  { "sync_file",             f_sync_file             },
+  { "atomic_replace_file",   f_atomic_replace_file   },
   { "get_display_info",      f_get_display_info      },
   { "open_file_dialog",      f_open_file_dialog      },
   { "save_file_dialog",      f_save_file_dialog      },

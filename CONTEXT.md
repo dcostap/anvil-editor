@@ -88,6 +88,10 @@ _Avoid_: file history, tab history, global history
 In-memory text that can be untitled, file-backed, editable, or read-only.
 _Avoid_: Document, Doc
 
+**Autosave**:
+The default behavior that saves edits to file-backed Buffers without a manual save action. Save failures and disk conflicts remain visible.
+_Avoid_: background save, auto-save
+
 **Untitled Buffer**:
 An editable Buffer that is not linked to a filesystem file.
 _Avoid_: scratch buffer, unnamed file
