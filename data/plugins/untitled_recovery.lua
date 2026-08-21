@@ -538,6 +538,31 @@ function M.flush_all(reason, force)
   return result
 end
 
+local function report_recovery_failure(action, result)
+  local failed
+  for _, item in ipairs(result.items or {}) do
+    if item.status == "failed" then
+      failed = item
+      break
+    end
+  end
+
+  local name = failed and failed.name or "an Untitled Buffer"
+  local err = failed and failed.error or "the recovery backing is not current"
+  local count = tonumber(result.failed) or 1
+  local summary = count > 1
+    and string.format(" %d Untitled Buffers failed.", count)
+    or ""
+  core.error(
+    "%s stopped: Anvil could not recover %q: %s.%s "
+      .. "Save it as a file or discard it, then try again.",
+    action,
+    name,
+    tostring(err),
+    summary
+  )
+end
+
 local function pending_flush_delays(buffer)
   local large = estimate_buffer_bytes(buffer) >= (tonumber(cfg.large_buffer_threshold) or 1024 * 1024)
   local delay = large and cfg.large_delay or cfg.delay
@@ -1103,10 +1128,7 @@ if not core.__untitled_recovery_patched then
   function core.exit(quit_fn, force)
     local result = M.flush_all("application exit", true)
     if not result.all_safe then
-      core.error(
-        "Application exit stopped: %d Untitled Buffer recovery write(s) failed",
-        result.failed
-      )
+      report_recovery_failure("Application exit", result)
       return false
     end
     return core_exit(quit_fn, force)
@@ -1116,9 +1138,7 @@ if not core.__untitled_recovery_patched then
   function core.set_project(project)
     local result = M.flush_all("Project switch", true)
     if not result.all_safe then
-      core.error(
-        "Project switch stopped: Untitled Buffer recovery is not current"
-      )
+      report_recovery_failure("Project switch", result)
       return false
     end
     return core_set_project(project)

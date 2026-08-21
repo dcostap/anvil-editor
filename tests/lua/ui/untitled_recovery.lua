@@ -163,14 +163,21 @@ test.describe("untitled recovery integration", function()
     local buffer = tag_untitled(core.open_buffer(), "Untitled-Exit", "exit-failure")
     buffer:insert(1, 1, "memory only")
     local old_replace = recovery.safe_replace_bytes
+    local old_error = core.error
+    local message
     recovery.safe_replace_bytes = function() return false, "simulated recovery failure" end
+    core.error = function(fmt, ...) message = string.format(fmt, ...) end
     local quit_called = false
 
     core.exit(function() quit_called = true end, true)
     recovery.safe_replace_bytes = old_replace
+    core.error = old_error
 
     test.not_ok(quit_called, "application exit must not discard memory-only text")
     test.ok(buffer.intellij_untitled_backing_dirty)
+    test.ok(message:find("Untitled-Exit", 1, true), message)
+    test.ok(message:find("simulated recovery failure", 1, true), message)
+    test.ok(message:find("Save it as a file or discard it", 1, true), message)
   end)
 
   test.test("failed recovery blocks Project switching", function(context)
@@ -180,14 +187,21 @@ test.describe("untitled recovery integration", function()
     local next_project = join_path(context.temp_root, "next-project")
     test.ok(common.mkdirp(next_project))
     local old_replace = recovery.safe_replace_bytes
+    local old_error = core.error
+    local message
     recovery.safe_replace_bytes = function() return false, "simulated recovery failure" end
+    core.error = function(fmt, ...) message = string.format(fmt, ...) end
 
     local result = core.set_project(next_project)
     recovery.safe_replace_bytes = old_replace
+    core.error = old_error
 
     test.equal(result, false)
     test.equal(core.root_project().path, original_project)
     test.ok(buffer.intellij_untitled_backing_dirty)
+    test.ok(message:find("Untitled-Project", 1, true), message)
+    test.ok(message:find("simulated recovery failure", 1, true), message)
+    test.ok(message:find("Save it as a file or discard it", 1, true), message)
   end)
 
   test.test("workspace attach prefers existing manifest backing over stale workspace metadata", function(context)
