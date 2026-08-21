@@ -16,7 +16,6 @@ local MANIFEST = "manifest.lua"
 local MANIFEST_BAK = "manifest.lua.bak"
 
 local id_counter = 0
-local pending_generation = 0
 local loop_running = false
 local dirty_buffers = setmetatable({}, { __mode = "k" })
 
@@ -175,51 +174,9 @@ local function copy_file(src, dst)
 end
 M._copy_file = copy_file
 
-local function replace_existing_with_tmp(tmp, target, backup, opts)
-  opts = opts or {}
-  local had_target = system.get_file_info(target) ~= nil
-  local backup_moved = false
-  if backup then os.remove(backup) end
-  if had_target then
-    if backup then
-      local moved, move_err = os.rename(target, backup)
-      if not moved then error(move_err or "could not move existing target to backup") end
-      backup_moved = true
-    else
-      local removed, remove_err = os.remove(target)
-      if not removed then error(remove_err or "could not remove existing target") end
-    end
-  end
-  if opts.fail_after_backup then error("simulated replace failure") end
-  local renamed, rename_err = os.rename(tmp, target)
-  if not renamed then
-    if backup_moved then pcall(os.rename, backup, target) end
-    error(rename_err or "could not move temp file into place")
-  end
-end
-
-function M.safe_replace_bytes(target, bytes, opts)
-  opts = opts or {}
-  local dir = common.dirname(target)
-  if dir and not ensure_dir(dir) then return false, "could not create parent directory" end
-  local tmp = opts.tmp or (target .. ".tmp")
-  local backup = opts.backup or (target .. ".bak")
-  local fp, open_err = io.open(tmp, "wb")
-  if not fp then return false, open_err end
-  local ok, err = pcall(function()
-    check_io(fp:write(bytes or ""))
-    check_io(fp:flush())
-    check_io(fp:close())
-    replace_existing_with_tmp(tmp, target, backup, opts)
-  end)
-  if not ok then
-    pcall(function() fp:close() end)
-    os.remove(tmp)
-    if system.get_file_info(backup) and not system.get_file_info(target) then
-      pcall(os.rename, backup, target)
-    end
-    return false, err
-  end
+function M.safe_replace_bytes(target, bytes)
+  local ok, err = pcall(Buffer.write_text_safely, target, bytes or "")
+  if not ok then return false, err end
   return true
 end
 M._safe_replace_bytes = M.safe_replace_bytes
@@ -309,28 +266,15 @@ local function write_manifest_for(paths, manifest)
   manifest.buffers = manifest.buffers or {}
   table.sort(manifest.buffers, function(a, b) return tostring(a.id) < tostring(b.id) end)
 
-  local tmp = paths.manifest .. ".tmp"
   local body = "return " .. common.serialize(manifest, { pretty = true, sort = true })
-  local fp, open_err = io.open(tmp, "wb")
-  if not fp then return false, open_err end
-  local ok, err = pcall(function()
-    check_io(fp:write(body))
-    check_io(fp:flush())
-    check_io(fp:close())
-    local fn, load_err = loadfile(tmp)
-    if not fn then error(load_err) end
-    local loaded_ok, loaded = pcall(fn)
-    if not loaded_ok or type(loaded) ~= "table" or type(loaded.buffers) ~= "table" then
-      error("manifest validation failed")
-    end
-    replace_existing_with_tmp(tmp, paths.manifest, paths.manifest_bak)
-  end)
+  local fn, load_err = loadstring(body, "untitled recovery manifest")
+  if not fn then return false, load_err end
+  local loaded_ok, loaded = pcall(fn)
+  if not loaded_ok or type(loaded) ~= "table" or type(loaded.buffers) ~= "table" then
+    return false, "manifest validation failed"
+  end
+  local ok, err = M.safe_replace_bytes(paths.manifest, body)
   if not ok then
-    pcall(function() fp:close() end)
-    os.remove(tmp)
-    if system.get_file_info(paths.manifest_bak) and not system.get_file_info(paths.manifest) then
-      pcall(os.rename, paths.manifest_bak, paths.manifest)
-    end
     core.error("Couldn't write untitled recovery manifest %s: %s", paths.manifest, err)
     return false, err
   end
@@ -548,51 +492,98 @@ local function untitled_buffer_has_recovery_content(buffer)
 end
 
 function M.flush_all(reason, force)
-  local flushed = 0
+  local result = { all_safe = true, flushed = 0, failed = 0, items = {} }
+  local candidates = {}
   if force then
     for _, buffer in ipairs(core.buffers or {}) do
       if is_untitled_buffer(buffer) and untitled_buffer_has_recovery_content(buffer) then
-        local ok = M.flush_buffer(buffer, reason, force)
-        if ok then flushed = flushed + 1 end
+        candidates[#candidates + 1] = buffer
       end
     end
   else
     for buffer in pairs(dirty_buffers) do
       if is_untitled_buffer(buffer) then
-        local ok = M.flush_buffer(buffer, reason, false)
-        if ok then flushed = flushed + 1 end
+        candidates[#candidates + 1] = buffer
       else
         dirty_buffers[buffer] = nil
       end
     end
   end
-  if flushed > 0 then log_quiet("Untitled recovery: flushed %d buffer(s) (%s)", flushed, reason or "all") end
-  return flushed
-end
 
-local function pending_flush_delay(buffer)
-  local max_size = buffer and estimate_buffer_bytes(buffer) or 0
-  for pending_buffer in pairs(dirty_buffers) do
-    if is_untitled_buffer(pending_buffer) then
-      max_size = math.max(max_size, estimate_buffer_bytes(pending_buffer))
+  for _, buffer in ipairs(candidates) do
+    local flushed, err = M.flush_buffer(buffer, reason, force)
+    local safe = M.buffer_backing_current(buffer)
+    if flushed then result.flushed = result.flushed + 1 end
+    if not safe then
+      result.all_safe = false
+      result.failed = result.failed + 1
     end
+    result.items[#result.items + 1] = {
+      buffer = buffer,
+      id = buffer.intellij_untitled_id,
+      name = buffer.intellij_untitled_name or "Untitled",
+      change_id = buffer.get_change_id and buffer:get_change_id() or nil,
+      status = safe and (flushed and "saved" or "current") or "failed",
+      error = safe and nil or err or "recovery backing is not current",
+    }
   end
-  return max_size >= cfg.large_buffer_threshold and cfg.large_delay or cfg.delay
+
+  if result.flushed > 0 then
+    log_quiet(
+      "Untitled recovery: flushed %d buffer(s) (%s)",
+      result.flushed,
+      reason or "all"
+    )
+  end
+  return result
 end
 
-local function schedule_flush(buffer)
-  pending_generation = pending_generation + 1
+local function pending_flush_delays(buffer)
+  local large = estimate_buffer_bytes(buffer) >= (tonumber(cfg.large_buffer_threshold) or 1024 * 1024)
+  local delay = large and cfg.large_delay or cfg.delay
+  local max_delay = large and cfg.large_max_delay or cfg.max_delay
+  return math.max(0.01, tonumber(delay) or (large and 1 or 0.25)),
+    math.max(0.01, tonumber(max_delay) or (large and 10 or 5))
+end
+
+local function schedule_flush()
   if loop_running then return end
   loop_running = true
   core.add_thread(function()
-    local seen
-    repeat
-      seen = pending_generation
-      coroutine.yield(pending_flush_delay(buffer))
-    until seen == pending_generation
-    M.flush_all("idle")
+    while true do
+      local now = system.get_time()
+      local earliest
+      for buffer, pending in pairs(dirty_buffers) do
+        if not is_untitled_buffer(buffer) then
+          dirty_buffers[buffer] = nil
+        elseif not pending.failed then
+          local due = math.min(pending.due_at, pending.hard_due_at)
+          earliest = math.min(earliest or due, due)
+        end
+      end
+      if not earliest then break end
+
+      if earliest > now then
+        coroutine.yield(math.min(earliest - now, 0.1))
+      else
+        local due = {}
+        for buffer, pending in pairs(dirty_buffers) do
+          if not pending.failed
+              and math.min(pending.due_at, pending.hard_due_at) <= now then
+            due[#due + 1] = buffer
+          end
+        end
+        for _, buffer in ipairs(due) do
+          local flushed, err = M.flush_buffer(buffer, "idle", false)
+          local pending = dirty_buffers[buffer]
+          if not flushed and pending and not M.buffer_backing_current(buffer) then
+            pending.failed = true
+            pending.error = err
+          end
+        end
+      end
+    end
     loop_running = false
-    if seen ~= pending_generation then schedule_flush() end
   end)
 end
 
@@ -602,10 +593,18 @@ function M.mark_dirty(buffer, transaction)
   update_estimated_bytes_from_transaction(buffer, transaction)
   buffer.intellij_untitled_force_dirty = true
   buffer.intellij_untitled_backing_dirty = true
-  dirty_buffers[buffer] = true
+  local now = system.get_time()
+  local delay, max_delay = pending_flush_delays(buffer)
+  local pending = dirty_buffers[buffer]
+  local first_dirty_at = pending and not pending.failed and pending.first_dirty_at or now
+  dirty_buffers[buffer] = {
+    first_dirty_at = first_dirty_at,
+    due_at = now + delay,
+    hard_due_at = first_dirty_at + max_delay,
+  }
   buffer.intellij_untitled_pending_change_id = buffer.get_change_id and buffer:get_change_id() or nil
   log_quiet("Untitled recovery: queued snapshot for %s", buffer.intellij_untitled_name or buffer.intellij_untitled_id)
-  schedule_flush(buffer)
+  schedule_flush()
 end
 
 local function reconcile_backing(entry, paths)
@@ -1102,13 +1101,26 @@ if not core.__untitled_recovery_patched then
 
   local core_exit = core.exit
   function core.exit(quit_fn, force)
-    M.flush_all("exit", true)
+    local result = M.flush_all("application exit", true)
+    if not result.all_safe then
+      core.error(
+        "Application exit stopped: %d Untitled Buffer recovery write(s) failed",
+        result.failed
+      )
+      return false
+    end
     return core_exit(quit_fn, force)
   end
 
   local core_set_project = core.set_project
   function core.set_project(project)
-    M.flush_all("project switch", true)
+    local result = M.flush_all("Project switch", true)
+    if not result.all_safe then
+      core.error(
+        "Project switch stopped: Untitled Buffer recovery is not current"
+      )
+      return false
+    end
     return core_set_project(project)
   end
 end

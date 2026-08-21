@@ -356,13 +356,15 @@ if not core.__workspace_hooks_installed then
   function core.set_project(project)
     core.try(save_workspace)
     project = set_project(project)
+    if not project then return false end
     core.try(load_workspace)
     return project
   end
 
   local open_project_in_same_window = core.open_project_in_same_window
   function core.open_project_in_same_window(project, ...)
-    untitled_recovery.flush_all("same-window project switch", true)
+    local flush = untitled_recovery.flush_all("same-window Project switch", true)
+    if not flush.all_safe then return false end
     suppress_next_exit_workspace_save = true
     local result = table.pack(pcall(open_project_in_same_window, project, ...))
     if not result[1] then

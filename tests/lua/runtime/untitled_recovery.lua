@@ -53,24 +53,36 @@ test.describe("untitled recovery helpers", function()
     test.not_equal(recovery.project_key(a), recovery.project_key(b))
   end)
 
-  test.test("safe replace keeps the previous primary if replacement fails after backup", function(context)
+  test.test("safe replace keeps the previous primary when durable synchronization fails", function(context)
     local path = join_path(context.temp_root, "buffer.txt")
     write_file(path, "old")
 
-    local ok, err = recovery.safe_replace_bytes(path, "new", { fail_after_backup = true })
+    local sync_file = system.sync_file
+    system.sync_file = function() return false, "simulated sync failure" end
+    local ok, err = recovery.safe_replace_bytes(path, "new")
+    system.sync_file = sync_file
+
     test.equal(ok, false)
-    test.ok(tostring(err):find("simulated replace failure", 1, true), tostring(err))
+    test.ok(tostring(err):find("simulated sync failure", 1, true), tostring(err))
     test.equal(read_file(path), "old")
   end)
 
-  test.test("safe replace writes new content and retains a backup", function(context)
+  test.test("safe replace synchronizes new content", function(context)
     local path = join_path(context.temp_root, "buffer.txt")
     write_file(path, "old")
 
+    local sync_file = system.sync_file
+    local sync_calls = 0
+    system.sync_file = function(file)
+      sync_calls = sync_calls + 1
+      return sync_file(file)
+    end
     local ok, err = recovery.safe_replace_bytes(path, "new")
+    system.sync_file = sync_file
+
     test.ok(ok, err)
     test.equal(read_file(path), "new")
-    test.equal(read_file(path .. ".bak"), "old")
+    test.ok(sync_calls > 0, "expected a durable file synchronization")
   end)
 
   test.test("buffer serialization preserves LF and CRLF policy", function()

@@ -1,10 +1,12 @@
 local Buffer = require "core.buffer"
 local common = require "core.common"
+local config = require "core.config"
 local core = require "core"
 local Editor = require "core.editor"
 local test = require "core.test"
 
 local autosave_fast = require "plugins.autosave_fast"
+local untitled_recovery = require "plugins.untitled_recovery"
 
 local function read_file(path)
   local fp = assert(io.open(path, "rb"))
@@ -349,5 +351,147 @@ test.describe("Autosave save failures", function()
     test.equal(save_calls, settled_calls)
     test.ok(buffer:is_dirty())
     test.ok(view:get_name():find("*", 1, true), "persistent failure should remain visible")
+  end)
+end)
+
+test.describe("Autosave deadlines", function()
+  test.before_each(function(context)
+    local suffix = system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    context.path_a = system.absolute_path(USERDIR .. PATHSEP .. "autosave-deadline-a-" .. suffix .. ".txt")
+    context.path_b = system.absolute_path(USERDIR .. PATHSEP .. "autosave-deadline-b-" .. suffix .. ".txt")
+    context.timeout = autosave_fast.timeout
+    context.max_delay = autosave_fast.max_delay
+    write_file(context.path_a, "a\n")
+    write_file(context.path_b, "b\n")
+  end)
+
+  test.after_each(function(context)
+    autosave_fast.timeout = context.timeout
+    autosave_fast.max_delay = context.max_delay
+    if context.recovery_cfg then
+      context.recovery_cfg.delay = context.recovery_defaults.delay
+      context.recovery_cfg.max_delay = context.recovery_defaults.max_delay
+      context.recovery_cfg.large_buffer_threshold = context.recovery_defaults.large_buffer_threshold
+    end
+    for _, buffer in ipairs({ context.untitled_a, context.untitled_b }) do
+      if buffer then
+        if untitled_recovery.is_untitled_buffer(buffer) then
+          untitled_recovery.handle_confirmed_discard(buffer)
+        end
+        if core.buffer_registry then core.buffer_registry:remove(buffer, true) end
+      end
+    end
+    if context.buffer_a then context.buffer_a:on_close() end
+    if context.buffer_b then context.buffer_b:on_close() end
+    pcall(os.remove, context.path_a)
+    pcall(os.remove, context.path_b)
+  end)
+
+  test.it("saves one Buffer on its own deadline while another Buffer keeps changing", function(context)
+    context.buffer_a = Buffer(context.path_a, context.path_a, false)
+    context.buffer_b = Buffer(context.path_b, context.path_b, false)
+    autosave_fast.timeout = 0.08
+    autosave_fast.max_delay = 0.2
+    context.buffer_b:insert(1, 1, "saved ")
+
+    local started = system.get_time()
+    while system.get_time() - started < 0.32 do
+      context.buffer_a:insert(1, 1, "x")
+      coroutine.yield(0.03)
+    end
+
+    test.not_ok(context.buffer_b:is_dirty(), "another Buffer must not postpone this save")
+    test.equal(read_file(context.path_b), "saved b\n")
+  end)
+
+  test.it("checkpoints a continuously changing Buffer by its maximum wait", function(context)
+    context.buffer_a = Buffer(context.path_a, context.path_a, false)
+    autosave_fast.timeout = 0.08
+    autosave_fast.max_delay = 0.2
+    local checkpoint_seen = false
+
+    local started = system.get_time()
+    while system.get_time() - started < 0.32 do
+      context.buffer_a:insert(1, 1, "x")
+      coroutine.yield(0.03)
+      checkpoint_seen = checkpoint_seen or read_file(context.path_a) ~= "a\n"
+    end
+
+    test.ok(checkpoint_seen, "continuous edits must not postpone all checkpoints")
+  end)
+
+  test.it("checkpoints one Untitled Buffer while another Untitled Buffer keeps changing", function(context)
+    local cfg = config.plugins.untitled_recovery
+    context.recovery_cfg = cfg
+    context.recovery_defaults = {
+      delay = cfg.delay,
+      max_delay = cfg.max_delay,
+      large_buffer_threshold = cfg.large_buffer_threshold,
+    }
+    cfg.delay = 0.08
+    cfg.max_delay = 0.2
+    cfg.large_buffer_threshold = math.huge
+
+    local buffer_a = core.open_buffer()
+    local buffer_b = core.open_buffer()
+    context.untitled_a = buffer_a
+    context.untitled_b = buffer_b
+    local id_suffix = system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    buffer_a.intellij_untitled = true
+    buffer_a.intellij_untitled_name = "Untitled-Deadline-A"
+    buffer_a.intellij_untitled_id = "deadline-a-" .. id_suffix
+    buffer_b.intellij_untitled = true
+    buffer_b.intellij_untitled_name = "Untitled-Deadline-B"
+    buffer_b.intellij_untitled_id = "deadline-b-" .. id_suffix
+    untitled_recovery.ensure_buffer_backing(buffer_a)
+    untitled_recovery.ensure_buffer_backing(buffer_b)
+    buffer_b:insert(1, 1, "checkpointed ")
+
+    local started = system.get_time()
+    while system.get_time() - started < 0.32 do
+      buffer_a:insert(1, 1, "x")
+      coroutine.yield(0.03)
+    end
+
+    test.ok(
+      untitled_recovery.buffer_backing_current(buffer_b),
+      "another Untitled Buffer must not postpone this checkpoint"
+    )
+    test.equal(
+      read_file(buffer_b.intellij_untitled_backing_path):gsub("\r\n", "\n"),
+      "checkpointed \n"
+    )
+  end)
+
+  test.it("checkpoints a continuously changing Untitled Buffer by its maximum wait", function(context)
+    local cfg = config.plugins.untitled_recovery
+    context.recovery_cfg = cfg
+    context.recovery_defaults = {
+      delay = cfg.delay,
+      max_delay = cfg.max_delay,
+      large_buffer_threshold = cfg.large_buffer_threshold,
+    }
+    cfg.delay = 0.08
+    cfg.max_delay = 0.2
+    cfg.large_buffer_threshold = math.huge
+
+    local buffer = core.open_buffer()
+    context.untitled_a = buffer
+    buffer.intellij_untitled = true
+    buffer.intellij_untitled_name = "Untitled-Maximum-Wait"
+    buffer.intellij_untitled_id = "maximum-wait-" .. system.get_process_id()
+      .. "-" .. math.floor(system.get_time() * 1000000)
+    untitled_recovery.ensure_buffer_backing(buffer)
+    local checkpoint_seen = false
+
+    local started = system.get_time()
+    while system.get_time() - started < 0.32 do
+      buffer:insert(1, 1, "x")
+      coroutine.yield(0.03)
+      checkpoint_seen = checkpoint_seen
+        or system.get_file_info(buffer.intellij_untitled_backing_path) ~= nil
+    end
+
+    test.ok(checkpoint_seen, "continuous edits must not postpone all recovery checkpoints")
   end)
 end)

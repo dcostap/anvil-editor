@@ -22,7 +22,6 @@ end
 local dirty_buffers = setmetatable({}, { __mode = "k" })
 local disk_state = setmetatable({}, { __mode = "k" })
 local save_failures = setmetatable({}, { __mode = "k" })
-local save_generation = 0
 local loop_running = false
 local retry_loop_running = false
 local MAX_SNAPSHOT_CONTENT_SIZE = 5 * 1024 * 1024
@@ -431,6 +430,9 @@ save_buffer = function(buffer, reason)
     return false
   end
 
+  -- Retries and conflicts own future attempts after this save starts. A new
+  -- edit creates a new per-Buffer deadline.
+  dirty_buffers[buffer] = nil
   buffer.autosave_save_reason = reason or true
   local recovering = save_failures[buffer] ~= nil
   local ok, err = pcall(buffer.save, buffer)
@@ -475,14 +477,24 @@ end
 function autosave_fast.save_all_dirty(reason)
   -- Include buffers dirtied by commands/plugins that may not route through
   -- Buffer:on_text_change after this plugin was loaded.
+  local candidates = {}
+  local seen = setmetatable({}, { __mode = "k" })
   for _, buffer in ipairs(core.buffers or {}) do
-    if should_autosave_buffer(buffer) then dirty_buffers[buffer] = true end
+    if should_autosave_buffer(buffer) then
+      candidates[#candidates + 1] = buffer
+      seen[buffer] = true
+    end
+  end
+  for buffer in pairs(dirty_buffers) do
+    if should_autosave_buffer(buffer) and not seen[buffer] then
+      candidates[#candidates + 1] = buffer
+    end
   end
 
   untitled_recovery.flush_all(reason or "autosave all")
 
   local saved = 0
-  for buffer in pairs(dirty_buffers) do
+  for _, buffer in ipairs(candidates) do
     if save_buffer(buffer, reason) then saved = saved + 1 end
   end
   return saved
@@ -503,19 +515,35 @@ function autosave_fast.save_before_close(buffer, reason)
 end
 
 local function schedule_idle_save()
-  save_generation = save_generation + 1
   if loop_running then return end
   loop_running = true
   core.add_thread(function()
-    local seen
-    repeat
-      seen = save_generation
-      coroutine.yield(autosave_fast.timeout)
-    until seen == save_generation
+    while true do
+      local now = system.get_time()
+      local earliest
+      for buffer, pending in pairs(dirty_buffers) do
+        if not should_autosave_buffer(buffer) then
+          dirty_buffers[buffer] = nil
+        else
+          local due = math.min(pending.due_at, pending.hard_due_at)
+          earliest = math.min(earliest or due, due)
+        end
+      end
+      if not earliest then break end
 
-    autosave_fast.save_all_dirty("idle")
+      if earliest > now then
+        coroutine.yield(math.min(earliest - now, 0.1))
+      else
+        local due = {}
+        for buffer, pending in pairs(dirty_buffers) do
+          if math.min(pending.due_at, pending.hard_due_at) <= now then
+            due[#due + 1] = buffer
+          end
+        end
+        for _, buffer in ipairs(due) do save_buffer(buffer, "idle") end
+      end
+    end
     loop_running = false
-    if seen ~= save_generation then schedule_idle_save() end
   end)
 end
 
@@ -530,7 +558,16 @@ function Buffer:on_text_change(type, transaction, ...)
       if failure and not failure.conflict and failure.attempts >= MAX_AUTOSAVE_RETRIES then
         save_failures[self] = nil
       end
-      dirty_buffers[self] = true
+      local now = system.get_time()
+      local timeout = math.max(0.01, tonumber(autosave_fast.timeout) or 3)
+      local max_delay = math.max(0.01, tonumber(autosave_fast.max_delay) or 30)
+      local pending = dirty_buffers[self]
+      local first_dirty_at = pending and pending.first_dirty_at or now
+      dirty_buffers[self] = {
+        first_dirty_at = first_dirty_at,
+        due_at = now + timeout,
+        hard_due_at = first_dirty_at + max_delay,
+      }
       schedule_idle_save()
     end
   end

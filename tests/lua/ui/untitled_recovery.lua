@@ -159,6 +159,37 @@ test.describe("untitled recovery integration", function()
     test.equal(read_file(backing), "force text\n")
   end)
 
+  test.test("failed recovery blocks forced application exit", function()
+    local buffer = tag_untitled(core.open_buffer(), "Untitled-Exit", "exit-failure")
+    buffer:insert(1, 1, "memory only")
+    local old_replace = recovery.safe_replace_bytes
+    recovery.safe_replace_bytes = function() return false, "simulated recovery failure" end
+    local quit_called = false
+
+    core.exit(function() quit_called = true end, true)
+    recovery.safe_replace_bytes = old_replace
+
+    test.not_ok(quit_called, "application exit must not discard memory-only text")
+    test.ok(buffer.intellij_untitled_backing_dirty)
+  end)
+
+  test.test("failed recovery blocks Project switching", function(context)
+    local buffer = tag_untitled(core.open_buffer(), "Untitled-Project", "project-failure")
+    buffer:insert(1, 1, "memory only")
+    local original_project = core.root_project().path
+    local next_project = join_path(context.temp_root, "next-project")
+    test.ok(common.mkdirp(next_project))
+    local old_replace = recovery.safe_replace_bytes
+    recovery.safe_replace_bytes = function() return false, "simulated recovery failure" end
+
+    local result = core.set_project(next_project)
+    recovery.safe_replace_bytes = old_replace
+
+    test.equal(result, false)
+    test.equal(core.root_project().path, original_project)
+    test.ok(buffer.intellij_untitled_backing_dirty)
+  end)
+
   test.test("workspace attach prefers existing manifest backing over stale workspace metadata", function(context)
     local paths = recovery.project_paths(context.project_dir)
     test.ok(common.mkdirp(paths.buffers))

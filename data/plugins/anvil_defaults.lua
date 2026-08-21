@@ -64,11 +64,14 @@ plugin_defaults("autorestart", {
 plugin_defaults("autosave_fast", {
   enabled = true,
   timeout = 3,
+  max_delay = 30,
   hide_dirty_markers = true,
 })
 plugin_defaults("untitled_recovery", {
   delay = 0.25,
+  max_delay = 5,
   large_delay = 1.0,
+  large_max_delay = 10,
   large_buffer_threshold = 1024 * 1024,
 })
 plugin_defaults("autocomplete", {

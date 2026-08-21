@@ -193,9 +193,11 @@ end
 
 function core.open_project_in_same_window(project)
   local project = core.set_project(project)
+  if not project then return false end
   core.root_panel:close_all_textviews()
   update_recents_project("add", project.path)
   command.perform("core:restart")
+  return true
 end
 
 function core.open_project_in_new_window(project)
