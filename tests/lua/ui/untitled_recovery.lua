@@ -718,6 +718,24 @@ test.describe("untitled recovery integration", function()
     test.equal(restored_count, 0)
   end)
 
+  test.test("discarded Untitled Buffers do not trigger a later close prompt", function()
+    local buffer = tag_untitled(core.open_buffer(), "Untitled-Discarded", "discarded-buffer")
+    buffer:insert(1, 1, "discarded text")
+    test.ok(recovery.flush_buffer(buffer, "test", true))
+
+    recovery.handle_confirmed_discard(buffer)
+
+    test.equal(#core.buffers, 0)
+    local prompted = false
+    local nag_view = core.nag_view
+    core.nag_view = { show = function() prompted = true end }
+    local closed = false
+    core.confirm_close_buffers(core.buffers, function() closed = true end)
+    core.nag_view = nag_view
+    test.ok(closed)
+    test.not_ok(prompted)
+  end)
+
   test.test("Save As removes backing metadata and manifest entry after a successful file save", function(context)
     local buffer = tag_untitled(core.open_buffer(), "Untitled-1", "buffer-save-as")
     buffer:insert(1, 1, "saved text")

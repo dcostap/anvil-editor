@@ -105,7 +105,13 @@ end
 function BufferRegistry:remove(buffer, force)
   local record = self.records[buffer]
   if not record then return false end
-  if not force and (self:reference_count(buffer) > 0 or is_dirty(buffer)) then return false end
+  -- A discarded Untitled Buffer can still report dirty after its identity is cleared.
+  if not force
+      and (self:reference_count(buffer) > 0
+        or (is_dirty(buffer) and not buffer.intellij_untitled_discarded))
+  then
+    return false
+  end
   self.by_identity[record.identity] = nil
   self.records[buffer] = nil
   for i = #self.buffers, 1, -1 do

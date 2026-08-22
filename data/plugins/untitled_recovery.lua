@@ -1092,7 +1092,13 @@ function M.handle_confirmed_discard(buffer)
   buffer.intellij_untitled_backing_saved_at = nil
   buffer.intellij_untitled_force_dirty = nil
   buffer.intellij_untitled_project_path = nil
-  if core.buffer_registry then core.buffer_registry:release(buffer, M) end
+  buffer.display_name = nil
+  if core.buffer_registry then
+    core.buffer_registry:release(buffer, M)
+    if core.buffer_registry:reference_count(buffer) == 0 then
+      core.buffer_registry:remove(buffer, true)
+    end
+  end
 end
 
 if not core.__untitled_recovery_patched then
