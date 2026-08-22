@@ -87,7 +87,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.is_nil(history[""])
   end)
 
-  test.it("drops stored file queries while loading prefixed mode history", function()
+  test.it("loads stored file queries alongside prefixed mode history", function()
     local history, migrated = fuzzy_searcher._test.normalize_prompt_history({
       version = 2,
       modes = {
@@ -96,8 +96,8 @@ test.describe("Fuzzy Searcher mode switching", function()
       },
     })
 
-    test.ok(migrated)
-    test.is_nil(history[""])
+    test.ok(not migrated)
+    test.same(history[""], { "", "init.lua" })
     test.same(history[">"], { ">", ">build" })
   end)
 
@@ -222,12 +222,33 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.same(fuzzy_searcher._test.prompt_history(">"), { ">", ">line wrapping" })
   end)
 
-  test.it("does not record file search prompt history", function()
+  test.it("records file search prompt history", function()
     fuzzy_searcher.open("")
     core.fuzzy_searcher_active_view.input:set_text("init.lua")
     core.fuzzy_searcher_active_view:close()
 
-    test.same(fuzzy_searcher._test.prompt_history(""), {})
+    test.same(fuzzy_searcher._test.prompt_history(""), { "init.lua" })
+  end)
+
+  test.it("cycles file search prompt history", function()
+    fuzzy_searcher.open("")
+    core.fuzzy_searcher_active_view.input:set_text("first.lua")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("")
+    core.fuzzy_searcher_active_view.input:set_text("second.lua")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("")
+    local picker = core.fuzzy_searcher_active_view
+    picker.input:set_text("draft.lua")
+
+    command.perform("fuzzy:prompt_history_previous")
+    test.equal(picker.input:get_text(), "second.lua")
+    command.perform("fuzzy:prompt_history_previous")
+    test.equal(picker.input:get_text(), "first.lua")
+    command.perform("fuzzy:prompt_history_next")
+    test.equal(picker.input:get_text(), "second.lua")
   end)
 
   test.it("clears the file search prompt when file search is triggered again", function()
