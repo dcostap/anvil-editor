@@ -23,6 +23,19 @@ test.describe("settings", function()
     test.not_ok(command.is_valid("theme:dark"))
   end)
 
+  test.it("shows all themes before the user filters", function()
+    local core = require "core"
+    local command = require "core.command"
+    local bar = core.global_prompt_bar
+    bar:exit(true)
+
+    test.ok(command.perform("core:select_theme"))
+    test.equal(bar:get_text(), "")
+    test.ok(#bar.suggestions > 1, "expected all installed themes")
+
+    bar:exit(true)
+  end)
+
   local old_test_settings
   local old_settings_config
   local old_settings_plugins

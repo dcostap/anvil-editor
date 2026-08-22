@@ -1249,6 +1249,37 @@ test.describe("Markdown Live Preview", function()
     test.not_nil(view:get_line_render(6), "a shifted visible heading flashed as raw source")
   end)
 
+  test.it("keeps Markdown rendered content inside its visual row after a structural edit", function()
+    local lines = { "plain", "plain", "## Building UI (Swing)",
+      "We ALWAYS use MigLayout for all layouts.", "plain" }
+    for index = 1, 100 do lines[#lines + 1] = "background paragraph line " .. index end
+    local view, buffer = make_view(
+      table.concat(lines, "\n"), "structural-heading-metrics.md"
+    )
+    view:set_wrapping_enabled(true)
+    buffer:set_selection(2, #buffer.lines[2])
+    refresh(view)
+    view:get_visual_row_metric_cache()
+
+    view:on_text_input("\n")
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.equal(instance.status, "pending")
+    -- The first frame after the edit can build metrics while the semantic
+    -- model is pending. The later ready frame must replace those base rows.
+    view:get_visual_row_metric_cache()
+    test.ok(wait_status(instance, "ready"), instance.reason)
+
+    local heading = test.not_nil(view:get_line_render(4))
+    local row = view:get_visual_row(4, 1)
+    local row_height = view:get_visual_row_height(row)
+    local required_height = (heading.text_row_height or 0)
+      + math.max(0, tonumber(heading.first_row_content_y_offset) or 0)
+    test.ok(
+      row_height >= required_height,
+      string.format("heading row height=%s required=%s", row_height, required_height)
+    )
+  end)
+
   test.it("projects uncaptured lines requested while semantics are pending", function()
     local lines = { "start" }
     for line = 2, 199 do lines[line] = "prose line " .. line end

@@ -223,6 +223,19 @@ test.describe("IntelliJ actions batch behavior", function()
     test.equal(copied, core.root_project().path)
   end)
 
+  test.it("exposes file path copy actions in the Command Palette", function()
+    for _, name in ipairs({
+      "editor:copy_absolute_filepath",
+      "editor:copy_absolute_filepath_with_line",
+      "editor:copy_relative_filepath",
+      "editor:copy_project_path",
+      "editor:copy_filename",
+    }) do
+      local metadata = command.get_metadata(name)
+      test.ok(metadata and metadata.palette == true, name .. " is hidden from the palette")
+    end
+  end)
+
   test.it("open terminal command uses the active file directory", function(context)
     context.temp_root = join_path(USERDIR, "intellij-actions-terminal")
     local nested_dir = join_path(context.temp_root, "nested dir")

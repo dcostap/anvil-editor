@@ -2594,8 +2594,6 @@ end
 local theme_commands = {
   ["core:select_theme"] = command.palette(function()
     core.global_prompt_bar:enter("Theme", {
-      text = normalize_color_theme_name(settings.config.theme),
-      select_text = true,
       suggest = suggest_color_themes,
       validate = function(text, suggestion)
         return (suggestion and suggestion.name) or color_theme_exists(text)

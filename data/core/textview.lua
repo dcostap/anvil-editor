@@ -8470,7 +8470,6 @@ function TextView:draw_overlay_unwrapped()
   perf_scope_end(scope)
 end
 
-
 function TextView:draw_folded()
   local draw_scope = perf_scope_begin("draw_folded")
   self:draw_background(style.background)
@@ -8541,12 +8540,71 @@ function TextView:draw_folded()
   perf_scope_end(draw_scope)
 end
 
+local function table_key_count(values)
+  local count = 0
+  for _ in pairs(values or {}) do count = count + 1 end
+  return count
+end
+
+local function log_wrapped_geometry_mismatch(view, reason, details)
+  details = details or {}
+  local cache = view.__visual_metric_cache
+  local owner = view.__markdown_live_owner
+  local revision = view.buffer.text_revision or 0
+  local key = table.concat({
+    reason, revision, view.__wrap_layout_generation or 0,
+    details.line or "", details.first_idx or "", details.next_idx or "",
+    details.drawn_height or "", details.expected_height or "",
+  }, ":")
+  if view.__wrapped_geometry_diagnostic_key == key then return end
+  view.__wrapped_geometry_diagnostic_key = key
+
+  local semantic_status, semantic_revision
+  local markdown_model = package.loaded["core.markdown.model"]
+  if markdown_model and markdown_model.peek then
+    local instance = markdown_model.peek(view.buffer)
+    semantic_status = instance and instance.status
+    semantic_revision = instance and instance.published_revision
+  end
+
+  core.log_quiet(
+    "TextView wrapped geometry mismatch reason=%s file=%s revision=%d line=%s next_line=%s "
+      .. "idx=%s next_idx=%s y=%s next_y=%s drawn_height=%s expected_height=%s "
+      .. "wrapped_rows=%s wrapped_generation=%s wrapped_revision=%s wrapped_lines=%s "
+      .. "metric_rows=%s metric_generation=%s metric_revision=%s metric_dirty=%d "
+      .. "scroll=%s scroll_to=%s markdown=%s semantic_status=%s semantic_revision=%s "
+      .. "pending_from=%s pending_lines=%d",
+    tostring(reason), view.buffer:get_name(), revision,
+    tostring(details.line), tostring(details.next_line),
+    tostring(details.first_idx), tostring(details.next_idx),
+    tostring(details.y), tostring(details.next_y),
+    tostring(details.drawn_height), tostring(details.expected_height),
+    tostring(details.total_rows), tostring(view.__wrap_layout_generation),
+    tostring(view.wrapped_text_revision), tostring(view.wrapped_buffer_line_count),
+    tostring(cache and cache.row_count), tostring(view.__visual_metric_generation),
+    tostring(cache and cache.text_revision),
+    table_key_count(cache and cache.dirty_rows),
+    tostring(view.scroll and view.scroll.y),
+    tostring(view.scroll and view.scroll.to and view.scroll.to.y),
+    tostring(owner ~= nil), tostring(semantic_status), tostring(semantic_revision),
+    tostring(owner and owner.semantic_pending_line),
+    table_key_count(owner and owner.pending_lines)
+  )
+end
+
 function TextView:draw_wrapped()
   local draw_scope = perf_scope_begin("draw_wrapped", true)
   if self:has_composed_visual_rows() then
     local result = self:draw_folded()
     perf_scope_end(draw_scope)
     return result
+  end
+  if self.__markdown_live_owner and not self.__wrapped_geometry_diagnostics_armed then
+    self.__wrapped_geometry_diagnostics_armed = true
+    core.log_quiet(
+      "TextView wrapped geometry diagnostics active for %s",
+      self.buffer:get_name()
+    )
   end
   local phase_scope = perf_scope_begin("background")
   self:draw_background(style.background)
@@ -8578,6 +8636,29 @@ function TextView:draw_wrapped()
   local gutter_w = gpad and gw - gpad or gw
   local first_line = linewrapping.get_idx_line_col(self, minidx)
   local last_line = linewrapping.get_idx_line_col(self, maxidx)
+  local previous_line, previous_idx
+  for line = first_line, last_line do
+    local first_idx = self.wrapped_line_to_idx[line]
+    if type(first_idx) ~= "number" then
+      log_wrapped_geometry_mismatch(self, "missing-line-map", {
+        line = line,
+        total_rows = total,
+      })
+    elseif previous_idx and first_idx <= previous_idx then
+      log_wrapped_geometry_mismatch(self, "non-increasing-line-map", {
+        line = previous_line,
+        next_line = line,
+        first_idx = previous_idx,
+        next_idx = first_idx,
+        y = self:get_visual_row_y_offset(previous_idx),
+        next_y = self:get_visual_row_y_offset(first_idx),
+        total_rows = total,
+      })
+    end
+    if type(first_idx) == "number" then
+      previous_line, previous_idx = line, first_idx
+    end
+  end
   perf_scope_end(phase_scope)
 
   phase_scope = perf_scope_begin("prepare")
@@ -8601,7 +8682,41 @@ function TextView:draw_wrapped()
     local first_idx = self.wrapped_line_to_idx[line]
     if first_idx then
       local y = base_y + self:get_visual_row_y_offset(first_idx) + style.padding.y
-      self:draw_line_body(line, x + gw, y)
+      local drawn_height = self:draw_line_body(line, x + gw, y)
+      local next_idx = self.wrapped_line_to_idx[line + 1]
+      if not next_idx and line == #self.buffer.lines then next_idx = total + 1 end
+      if next_idx then
+        local line_y = self:get_visual_row_y_offset(first_idx)
+        local next_y = self:get_visual_row_y_offset(next_idx)
+        local expected_height = next_y - line_y
+        if expected_height <= 0 then
+          log_wrapped_geometry_mismatch(self, "non-positive-line-height", {
+            line = line,
+            next_line = line + 1,
+            first_idx = first_idx,
+            next_idx = next_idx,
+            y = line_y,
+            next_y = next_y,
+            drawn_height = drawn_height,
+            expected_height = expected_height,
+            total_rows = total,
+          })
+        elseif type(drawn_height) == "number"
+          and math.abs(drawn_height - expected_height) > 0.5
+        then
+          log_wrapped_geometry_mismatch(self, "draw-height-disagrees", {
+            line = line,
+            next_line = line + 1,
+            first_idx = first_idx,
+            next_idx = next_idx,
+            y = line_y,
+            next_y = next_y,
+            drawn_height = drawn_height,
+            expected_height = expected_height,
+            total_rows = total,
+          })
+        end
+      end
     end
   end
   perf_scope_end(phase_scope)

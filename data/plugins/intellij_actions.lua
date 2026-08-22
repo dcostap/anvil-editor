@@ -1375,7 +1375,7 @@ end, {
 })
 
 command.add(nil, {
-  ["editor:copy_project_path"] = copy_project_path,
+  ["editor:copy_project_path"] = command.palette(copy_project_path),
 })
 
 command.add(function(target)
@@ -1383,10 +1383,10 @@ command.add(function(target)
   local view = core.active_view
   return is_file_bound_view(view), view
 end, {
-  ["editor:copy_absolute_filepath"] = copy_absolute_filepath,
-  ["editor:copy_absolute_filepath_with_line"] = copy_absolute_filepath_with_line,
-  ["editor:copy_relative_filepath"] = copy_relative_filepath,
-  ["editor:copy_filename"] = copy_filename,
+  ["editor:copy_absolute_filepath"] = command.palette(copy_absolute_filepath),
+  ["editor:copy_absolute_filepath_with_line"] = command.palette(copy_absolute_filepath_with_line),
+  ["editor:copy_relative_filepath"] = command.palette(copy_relative_filepath),
+  ["editor:copy_filename"] = command.palette(copy_filename),
   ["editor:open_file_as_raw_text"] = open_file_as_raw_text,
   ["editor:open_file_in_associated_program"] = open_file_in_associated_program,
   ["editor:reveal_active_file_in_explorer"] = reveal_active_file_in_explorer,

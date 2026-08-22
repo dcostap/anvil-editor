@@ -123,15 +123,19 @@ test.describe("Fuzzy Searcher Path Search", function()
 
   test.it("starts scoped Path Search for an absolute path outside the Project", function(context)
     local requests = {}
-    http.get = function(_, params) requests[#requests+1] = params end
+    http.get = function(_, params, options)
+      requests[#requests+1] = { params = params, options = options }
+    end
     helpers.set_everything_state("available")
 
     fuzzy_searcher.open(join_path(context.external_root, "needle"))
 
-    test.equal(#requests, 2)
-    test.equal(requests[1].search,
+    test.equal(#requests, 1)
+    test.equal(requests[1].params.search,
       'folder: ancestor:"' .. context.external_root .. '" needle')
-    test.equal(requests[2].search,
+    requests[1].options.on_done(true, nil, { totalResults = 0, results = {} })
+    test.equal(#requests, 2)
+    test.equal(requests[2].params.search,
       'file: ancestor:"' .. context.external_root .. '" needle')
     test.equal(core.fuzzy_searcher_active_view:is_path_search(), true)
     test.ok(core.fuzzy_searcher_active_view:list_metrics().list_w
@@ -142,15 +146,19 @@ test.describe("Fuzzy Searcher Path Search", function()
     local spaced_root = join_path(context.temp_root, "outside folder")
     mkdirp(spaced_root)
     local requests = {}
-    http.get = function(_, params) requests[#requests+1] = params end
+    http.get = function(_, params, options)
+      requests[#requests+1] = { params = params, options = options }
+    end
     helpers.set_everything_state("available")
 
     fuzzy_searcher.open(spaced_root .. " needle")
 
-    test.equal(#requests, 2)
-    test.equal(requests[1].search,
+    test.equal(#requests, 1)
+    test.equal(requests[1].params.search,
       'folder: ancestor:"' .. spaced_root .. '" needle')
-    test.equal(requests[2].search,
+    requests[1].options.on_done(true, nil, { totalResults = 0, results = {} })
+    test.equal(#requests, 2)
+    test.equal(requests[2].params.search,
       'file: ancestor:"' .. spaced_root .. '" needle')
   end)
 
@@ -164,15 +172,19 @@ test.describe("Fuzzy Searcher Path Search", function()
     mkdirp(home_root)
     context.home_root = home_root
     local requests = {}
-    http.get = function(_, params) requests[#requests+1] = params end
+    http.get = function(_, params, options)
+      requests[#requests+1] = { params = params, options = options }
+    end
     helpers.set_everything_state("available")
 
     fuzzy_searcher.open("~/" .. name .. "/needle")
 
-    test.equal(#requests, 2)
-    test.equal(requests[1].search,
+    test.equal(#requests, 1)
+    test.equal(requests[1].params.search,
       'folder: ancestor:"' .. home_root .. '" needle')
-    test.equal(requests[2].search,
+    requests[1].options.on_done(true, nil, { totalResults = 0, results = {} })
+    test.equal(#requests, 2)
+    test.equal(requests[2].params.search,
       'file: ancestor:"' .. home_root .. '" needle')
   end)
 

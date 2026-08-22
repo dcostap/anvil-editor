@@ -49,18 +49,38 @@ test.describe("Fuzzy Searcher Everything search", function()
     test.equal(params.search, "file: ext:lua anvil")
   end)
 
-  test.it("searches folders and files together in Path Search", function()
+  test.it("serializes folder and file requests in Path Search", function()
     local requests = {}
-    http.get = function(_, params)
-      requests[#requests + 1] = params
+    http.get = function(_, params, options)
+      requests[#requests + 1] = { params = params, options = options }
     end
     helpers.set_everything_state("available")
 
     fuzzy_searcher.open("@needle")
 
+    test.equal(#requests, 1)
+    test.equal(requests[1].params.search, "folder: needle")
+
+    requests[1].options.on_done(true, nil, { totalResults = 0, results = {} })
+
     test.equal(#requests, 2)
-    test.equal(requests[1].search, "folder: needle")
-    test.equal(requests[2].search, "file: needle")
+    test.equal(requests[2].params.search, "file: needle")
+  end)
+
+  test.it("cancels an Everything request when the Path Search query changes", function()
+    local requests = {}
+    http.get = function(_, params, options)
+      requests[#requests + 1] = { params = params, options = options }
+    end
+    helpers.set_everything_state("available")
+
+    fuzzy_searcher.open("@first")
+    local picker = core.fuzzy_searcher_active_view
+    picker.input:set_text("@second")
+
+    test.ok(requests[1].options.is_cancelled())
+    test.equal(#requests, 2)
+    test.equal(requests[2].params.search, "folder: second")
   end)
 
   test.it("shows recent Projects without querying Everything for bare Path Search", function()

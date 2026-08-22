@@ -4137,11 +4137,15 @@ function FSView:start_everything_path_search(query, scope, append)
   end
   self:defer_everything_loading(append and "Loading more Path Search results…" or "Searching Everything…")
 
-  local function finish_request(kind, ok, err, data)
-    if gen ~= everything.search_generation or active_view ~= self then return end
+  local function request_is_cancelled()
+    return gen ~= everything.search_generation or active_view ~= self
+  end
+
+  local function finish_request(kind, ok, err, data, info)
+    if request_is_cancelled() then return false end
     if not ok or type(data) ~= "table" then
-      core.log_quiet("Fuzzy Path Search: Everything %s search failed query_len=%d error_type=%s data_type=%s",
-        kind, #query, type(err), type(data))
+      core.log_quiet("Fuzzy Path Search: Everything %s search failed query_len=%d error=%s status=%s data_type=%s",
+        kind, #query, tostring(err), tostring(info and info.status or "unknown"), type(data))
       everything.state = "unavailable"
       everything.search_generation = everything.search_generation + 1
       self.everything_folder_results = {}
@@ -4159,7 +4163,7 @@ function FSView:start_everything_path_search(query, scope, append)
       self.everything_status = "Everything is unavailable. Showing direct folder contents."
       self.dirty = true
       self:schedule_update(true)
-      return
+      return false
     end
 
     local total = tonumber(data.totalResults) or 0
@@ -4199,22 +4203,28 @@ function FSView:start_everything_path_search(query, scope, append)
       kind, #query, #out, total)
     self.dirty = true
     self:schedule_update(true)
+    return true
+  end
+
+  local function request(kind, params, on_success)
+    http.get(everything_endpoint(), params, {
+      timeout = 2,
+      is_cancelled = request_is_cancelled,
+      on_done = function(ok, err, data, info)
+        if finish_request(kind, ok, err, data, info) and on_success then on_success() end
+      end,
+    })
   end
 
   local folder_offset = append and (self.everything_folder_offset or 0) or 0
   local file_offset = append and (self.everything_file_offset or 0) or 0
   core.log_quiet("Fuzzy Path Search: Everything searching query_len=%d scoped=%s append=%s",
     #query, tostring(scope ~= nil), tostring(append))
-  http.get(everything_endpoint(), everything_folder_search_params(query, count, folder_offset, scope), {
-    timeout = 2,
-    on_done = function(ok, err, data) finish_request("folder", ok, err, data) end,
-  })
-  if not folder_only then
-    http.get(everything_endpoint(), everything_file_search_params(query, count, file_offset, scope), {
-      timeout = 2,
-      on_done = function(ok, err, data) finish_request("file", ok, err, data) end,
-    })
-  end
+  request("folder", everything_folder_search_params(query, count, folder_offset, scope), function()
+    if not folder_only then
+      request("file", everything_file_search_params(query, count, file_offset, scope))
+    end
+  end)
 end
 
 function FSView:clear_path_search_results(cancel_request)
