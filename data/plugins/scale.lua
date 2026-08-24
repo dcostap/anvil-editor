@@ -357,7 +357,6 @@ keymap.unbind("ctrl+shift+wheelup", "editor:zoom_in")
 keymap.unbind("ctrl+shift+wheeldown", "editor:zoom_out")
 
 keymap.add {
-  ["ctrl+0"] = "editor:zoom_reset",
   ["ctrl+shift+0"] = "editor:zoom_reset"
 }
 

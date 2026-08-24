@@ -670,6 +670,80 @@ local function collect_owned_views(pane)
   return result
 end
 
+function M.is_disposable(target)
+  local pane = M.find(target)
+  if not pane or #pane.history.entries ~= 1 or #(pane.retained_views or {}) ~= 0 then
+    return false
+  end
+  local view = pane.current_view
+  local buffer = view and view.buffer
+  local Editor = require "core.editor"
+  return view.extends and view:extends(Editor)
+    and buffer
+    and buffer.intellij_untitled
+    and buffer.new_file
+    and not buffer.filename
+    and not buffer.abs_filename
+    and #buffer.lines == 1
+    and buffer.lines[1] == "\n"
+end
+
+function M.move_and_merge(source_target, destination_target)
+  local source = M.find(source_target)
+  local destination = M.find(destination_target)
+  if not source or not destination then return false, "invalid source or destination Pane" end
+  if source == destination then return false, "source and destination Pane are the same" end
+
+  source.history.entries[source.history.index].state = capture_navigation_state(source.current_view)
+  destination.history.entries[destination.history.index].state =
+    capture_navigation_state(destination.current_view)
+
+  local destination_entries = destination.history.entries
+  if M.is_disposable(destination) then
+    local placeholder = destination.current_view
+    call_lifecycle(placeholder, "on_suspend")
+    release_view(destination, placeholder)
+    call_lifecycle(placeholder, "on_close")
+    destination_entries = {}
+  else
+    call_lifecycle(destination.current_view, "on_suspend")
+  end
+
+  local destination_count = #destination_entries
+  for _, view in ipairs(collect_owned_views(source)) do
+    release_view(source, view)
+    claim_view(destination, view)
+  end
+  for _, entry in ipairs(source.history.entries) do
+    destination_entries[#destination_entries + 1] = entry
+  end
+  for _, view in ipairs(source.retained_views or {}) do
+    if not retained_view_index(destination, view) then
+      destination.retained_views[#destination.retained_views + 1] = view
+    end
+  end
+
+  destination.history.entries = destination_entries
+  destination.history.index = destination_count + source.history.index
+  destination.history.limit = math.max(
+    destination.history.limit, source.history.limit, #destination_entries
+  )
+  destination.current_view = source.current_view
+
+  remove_from_group(source)
+  M.panes_by_id[source.id] = nil
+  source.history = { entries = {}, index = 0, limit = source.history.limit }
+  source.retained_views = {}
+  source.current_view = nil
+
+  M.active_pane = destination
+  M.visible_group_value = destination.group
+  focus_view(destination)
+  log_navigation_history(destination, "move-and-merge")
+  after_mutation(string.format("moved and merged %s into %s", source.id, destination.id))
+  return destination
+end
+
 ---Return each live View owned by a Pane once.
 ---This includes protected Views retained outside the current Navigation History branch.
 function M.views(target)

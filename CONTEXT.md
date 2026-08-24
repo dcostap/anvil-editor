@@ -236,6 +236,14 @@ _Avoid_: tab group, split group, workspace
 An action that moves each Pane clockwise to the next visual position in its Pane Group. The split geometry does not change. Focus follows the moved Pane.
 _Avoid_: rotate split panes, rotate tabs
 
+**Disposable Pane**:
+A Pane whose only Navigation History entry is a blank Untitled Editor and which has no retained Views. It remains disposable after its text is added and then removed.
+_Avoid_: void Pane, empty split
+
+**Pane Move and Merge**:
+An action that appends one Pane's complete Navigation History after another Pane's history, then removes the source Pane. The source Current View becomes current in the destination. A disposable destination contributes no placeholder entry.
+_Avoid_: move View, merge tabs
+
 **View**:
 The content that a Pane can show, such as an Editor, File Tree, Terminal View, or Command Output View.
 _Avoid_: Pane View, app, pane content

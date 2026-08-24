@@ -1,5 +1,6 @@
 local core = require "core"
 local command = require "core.command"
+local common = require "core.common"
 local config = require "core.config"
 local panes = require "core.panes"
 
@@ -13,6 +14,51 @@ local function new_untitled_editor()
   local buffer = core.open_buffer()
   local untitled = require "plugins.untitled_tabs"
   return Editor(untitled.tag_buffer(buffer))
+end
+
+local function move_and_merge_target(text, item, source)
+  if item and item.pane and item.pane ~= source and panes.contains(item.pane) then
+    return item.pane
+  end
+  local number = tonumber(tostring(text or ""):match("^%s*(%d+)%s*$"))
+  local target = number and panes.ordered()[number] or nil
+  return target ~= source and target or nil
+end
+
+local function move_and_merge_pane(source)
+  if #panes.ordered() < 2 then
+    core.log("There is no other Pane to move and merge into")
+    return false
+  end
+  core.global_prompt_bar:enter("Move and Merge Pane Into", {
+    suggest = function(text)
+      local items, by_text = {}, {}
+      for number, pane in ipairs(panes.ordered()) do
+        if pane ~= source then
+          local view = pane.current_view
+          local name = view and view.get_name and view:get_name() or "Pane"
+          local label = string.format("%d — %s", number, name)
+          by_text[label] = { text = label, pane = pane }
+          items[#items + 1] = label
+        end
+      end
+      local result = {}
+      for _, label in ipairs(common.fuzzy_match(items, text)) do
+        result[#result + 1] = by_text[label]
+      end
+      return result
+    end,
+    validate = function(text, item)
+      return move_and_merge_target(text, item, source) ~= nil
+    end,
+    submit = function(text, item)
+      local destination = move_and_merge_target(text, item, source)
+      if destination and panes.contains(source) then
+        panes.move_and_merge(source, destination)
+      end
+    end,
+  })
+  return true
 end
 
 local commands = {
@@ -38,6 +84,9 @@ local commands = {
   ["core:rotate_panes_clockwise"] = command.palette(function(pane)
     return panes.rotate_group_clockwise(pane)
   end, { keywords = { "split", "group" } }),
+  ["core:move_and_merge_pane"] = command.palette(function(pane)
+    return move_and_merge_pane(pane)
+  end, { keywords = { "history", "navigation" } }),
   ["core:focus_previous_pane"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if #ordered > 0 then return panes.focus_index((index - 2) % #ordered + 1) end

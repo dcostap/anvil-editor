@@ -32,16 +32,19 @@ end
 
 test.describe("Pane manager", function()
   local set_active_view
+  local global_prompt_enter
 
   test.before_each(function()
     panes.reset_for_tests()
     set_active_view = core.set_active_view
+    global_prompt_enter = core.global_prompt_bar.enter
     core.set_active_view = function(view) core.active_view = view end
   end)
 
   test.after_each(function()
     panes.reset_for_tests()
     core.set_active_view = set_active_view
+    core.global_prompt_bar.enter = global_prompt_enter
   end)
 
   test.it("accepts zero Panes", function()
@@ -130,6 +133,97 @@ test.describe("Pane manager", function()
     test.equal(layout.pane_at(group.root, 100, 100), right)
     test.equal(layout.pane_at(group.root, 300, 100), left)
     test.equal(panes.active(), left)
+  end)
+
+  test.it("moves and merges complete Pane histories through the numbered prompt", function()
+    local destination = panes.create { factory = factory("X") }
+    panes.present(FakeView("Y"), { pane = destination })
+    panes.present(FakeView("Z"), { pane = destination })
+    panes.back(destination)
+
+    local source = panes.create { factory = factory("A") }
+    panes.present(FakeView("B"), { pane = source })
+    panes.present(FakeView("C"), { pane = source })
+    panes.present(FakeView("D"), { pane = source })
+    panes.back(source)
+
+    local prompt
+    core.global_prompt_bar.enter = function(_, label, options)
+      prompt = { label = label, options = options }
+    end
+
+    test.ok(command.perform("core:move_and_merge_pane"))
+    test.equal(prompt.label, "Move and Merge Pane Into")
+    test.ok(prompt.options.validate("1"))
+    prompt.options.submit("1")
+
+    test.not_ok(panes.contains(source))
+    test.equal(panes.count(), 1)
+    test.equal(panes.active(), destination)
+    test.equal(destination.current_view:get_name(), "C")
+    for _, expected in ipairs { "B", "A", "Z", "Y", "X" } do
+      test.not_nil(panes.back(destination))
+      test.equal(destination.current_view:get_name(), expected)
+    end
+    for _, expected in ipairs { "Y", "Z", "A", "B", "C", "D" } do
+      test.not_nil(panes.forward(destination))
+      test.equal(destination.current_view:get_name(), expected)
+    end
+    test.ok(panes.validate())
+  end)
+
+  test.it("discards only a disposable destination placeholder during a merge", function()
+    test.ok(command.perform("core:new_pane"))
+    local destination = panes.active()
+    local placeholder = destination.current_view
+    local buffer = placeholder.buffer
+    buffer:insert(1, 1, "x")
+    buffer:remove(1, 1, 1, 2)
+    test.ok(panes.is_disposable(destination))
+
+    local source = panes.create { factory = factory("source") }
+    test.equal(panes.move_and_merge(source, destination), destination)
+
+    test.equal(panes.history_length(destination), 1)
+    test.equal(destination.current_view:get_name(), "source")
+    test.is_nil(panes.pane_for_view(placeholder))
+    test.not_ok(panes.contains(source))
+  end)
+
+  test.it("keeps a disposable source entry when merging it into another Pane", function()
+    local destination = panes.create { factory = factory("destination") }
+    test.ok(command.perform("core:new_pane"))
+    local source = panes.active()
+    local untitled = source.current_view
+    test.ok(panes.is_disposable(source))
+
+    test.equal(panes.move_and_merge(source, destination), destination)
+
+    test.equal(panes.history_length(destination), 2)
+    test.equal(destination.current_view, untitled)
+    test.equal(panes.back(destination):get_name(), "destination")
+    test.not_ok(panes.contains(source))
+  end)
+
+  test.it("transfers retained source Views outside Navigation History", function()
+    local destination = panes.create { factory = factory("destination") }
+    local source = panes.create { factory = factory("source") }
+    local protected = FakeView("protected")
+    protected.history_protected = true
+    panes.present(protected, { pane = source })
+    panes.back(source)
+    panes.present(FakeView("current"), { pane = source })
+    test.equal(panes.history_length(source), 2)
+
+    test.equal(panes.move_and_merge(source, destination), destination)
+
+    local found = false
+    for _, view in ipairs(panes.views(destination)) do
+      if view == protected then found = true break end
+    end
+    test.ok(found)
+    test.equal(panes.pane_for_view(protected), destination)
+    test.ok(panes.validate())
   end)
 
   test.it("focuses Panes by current number", function()
