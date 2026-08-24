@@ -311,6 +311,78 @@ function M.focus_direction(direction)
   return best and M.focus(best) or nil
 end
 
+function M.rotate_group_clockwise(target)
+  local pane = M.find(target or M.active_pane)
+  local group = pane and pane.group
+  if not group then return false end
+
+  local ordered = layout.leaves(group.root)
+  if #ordered < 2 then return false end
+
+  local slots = {}
+  local min_x, min_y, max_x, max_y
+  local min_cx, min_cy, max_cx, max_cy
+  for index, member in ipairs(ordered) do
+    local x, y = member.position.x, member.position.y
+    local w, h = member.size.x, member.size.y
+    if type(x) ~= "number" or type(y) ~= "number"
+    or type(w) ~= "number" or type(h) ~= "number" then
+      return false
+    end
+    local cx, cy = x + w / 2, y + h / 2
+    slots[#slots + 1] = { pane = member, cx = cx, cy = cy, index = index }
+    min_x, min_y = math.min(min_x or x, x), math.min(min_y or y, y)
+    max_x, max_y = math.max(max_x or x + w, x + w), math.max(max_y or y + h, y + h)
+    min_cx, min_cy = math.min(min_cx or cx, cx), math.min(min_cy or cy, cy)
+    max_cx, max_cy = math.max(max_cx or cx, cx), math.max(max_cy or cy, cy)
+  end
+
+  local center_x, center_y = (min_x + max_x) / 2, (min_y + max_y) / 2
+  local epsilon = 0.001
+  if max_cy - min_cy <= epsilon then
+    table.sort(slots, function(a, b)
+      return a.cx == b.cx and a.index < b.index or a.cx < b.cx
+    end)
+  elseif max_cx - min_cx <= epsilon then
+    table.sort(slots, function(a, b)
+      return a.cy == b.cy and a.index < b.index or a.cy < b.cy
+    end)
+  else
+    local function vector(slot)
+      return center_y - slot.cy, slot.cx - center_x
+    end
+    local function second_half(x, y)
+      return y < 0 or (y == 0 and x < 0)
+    end
+    table.sort(slots, function(a, b)
+      local ax, ay = vector(a)
+      local bx, by = vector(b)
+      local a_second, b_second = second_half(ax, ay), second_half(bx, by)
+      if a_second ~= b_second then return not a_second end
+      local cross = ax * by - ay * bx
+      if math.abs(cross) > epsilon then return cross > 0 end
+      local ad, bd = ax * ax + ay * ay, bx * bx + by * by
+      if ad ~= bd then return ad < bd end
+      return a.index < b.index
+    end)
+  end
+
+  local source_for_slot = {}
+  for index, slot in ipairs(slots) do
+    local destination = slots[index % #slots + 1]
+    source_for_slot[destination.pane] = slot.pane
+  end
+  local rotated = {}
+  for index, slot_pane in ipairs(ordered) do
+    rotated[index] = source_for_slot[slot_pane]
+  end
+  layout.reorder(group.root, rotated)
+  if group.root.rect then layout.update_rects(group.root, group.root.rect) end
+  M.visible_group_value = group
+  after_mutation("rotated Pane Group clockwise " .. group.id)
+  return true
+end
+
 local function remove_group(group)
   local index = group_index(group)
   if index then table.remove(M.groups, index) end

@@ -35,6 +35,9 @@ local commands = {
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index < #ordered then return panes.move(pane, ordered[index + 1], "right") end
   end),
+  ["core:rotate_panes_clockwise"] = command.palette(function(pane)
+    return panes.rotate_group_clockwise(pane)
+  end, { keywords = { "split", "group" } }),
   ["core:focus_previous_pane"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if #ordered > 0 then return panes.focus_index((index - 2) % #ordered + 1) end

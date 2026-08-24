@@ -300,16 +300,12 @@ keymap.add_direct {
   ["alt+return"] = "core:toggle_fullscreen",
   ["f11"] = "core:toggle_fullscreen",
 
-  ["alt+j"] = "core:focus_pane_left",
-  ["alt+l"] = "core:focus_pane_right",
-  ["alt+i"] = "core:focus_pane_up",
-  ["alt+k"] = "core:focus_pane_down",
-
   ["ctrl+w"] = "core:close_pane",
   ["ctrl+tab"] = "core:focus_next_pane",
   ["ctrl+shift+tab"] = "core:focus_previous_pane",
   ["ctrl+pageup"] = "core:move_pane_previous",
   ["ctrl+pagedown"] = "core:move_pane_next",
+  ["alt+º"] = "core:rotate_panes_clockwise",
   ["alt+1"] = "core:focus_pane_1",
   ["alt+2"] = "core:focus_pane_2",
   ["alt+3"] = "core:focus_pane_3",

@@ -200,19 +200,11 @@ function core.open_project_in_same_window(project)
   return true
 end
 
-function core.open_project_in_new_window(project)
-  local existing_project = find_open_project(project)
-  if existing_project then
-    core.log_quiet(
-      "Project %q is already open in the current window; raising instead of opening another window",
-      existing_project.path
-    )
-    if core.window then system.raise_window(core.window) end
-    return true
-  end
-
+local function launch_anvil_window(arguments, description)
   local exe = EXEFILE or (EXEDIR and (EXEDIR .. PATHSEP .. "anvil.exe")) or "anvil"
   local process_ok, process = pcall(require, "core.process")
+  local command_args = { exe }
+  for _, argument in ipairs(arguments) do command_args[#command_args + 1] = argument end
 
   -- Launch directly instead of going through system.exec's legacy
   -- WinExec -> cmd /c path. On Windows that shell handoff can stall for several
@@ -221,7 +213,7 @@ function core.open_project_in_new_window(project)
   -- its PID explicit foreground permission before its first window is shown.
   if PLATFORM == "Windows" then
     if process_ok and process and process.start then
-      local proc, start_error = process.start({ exe, project }, {
+      local proc, start_error = process.start(command_args, {
         detach = true,
         background = false,
         stdin = process.REDIRECT_DISCARD,
@@ -234,23 +226,25 @@ function core.open_project_in_new_window(project)
           and system.allow_process_foreground
           and system.allow_process_foreground(pid)
         core.log_quiet(
-          "Started Project window process pid=%s foreground_allowed=%s project=%q",
-          tostring(pid), tostring(not not foreground_allowed), tostring(project)
+          "Started Anvil window process pid=%s foreground_allowed=%s target=%s",
+          tostring(pid), tostring(not not foreground_allowed), description
         )
         return true
       end
       core.log_quiet(
-        "Direct Project window launch failed for %q; falling back to system.exec: %s",
-        tostring(project), tostring(start_error)
+        "Direct Anvil window launch failed for %s; falling back to system.exec: %s",
+        description, tostring(start_error)
       )
     end
 
-    system.exec(string.format("%q %q", exe, project))
+    local quoted = {}
+    for _, argument in ipairs(command_args) do quoted[#quoted + 1] = string.format("%q", argument) end
+    system.exec(table.concat(quoted, " "))
     return true
   end
 
   if process_ok and process and process.start then
-    local proc = process.start({ exe, project }, {
+    local proc = process.start(command_args, {
       detach = true,
       stdin = process.REDIRECT_DISCARD,
       stdout = process.REDIRECT_DISCARD,
@@ -258,8 +252,28 @@ function core.open_project_in_new_window(project)
     })
     if proc then return true end
   end
-  system.exec(string.format("%q %q", exe, project))
+  local quoted = {}
+  for _, argument in ipairs(command_args) do quoted[#quoted + 1] = string.format("%q", argument) end
+  system.exec(table.concat(quoted, " "))
   return true
+end
+
+function core.open_new_window()
+  return launch_anvil_window({ "--new-window" }, "empty window")
+end
+
+function core.open_project_in_new_window(project)
+  local existing_project = find_open_project(project)
+  if existing_project then
+    core.log_quiet(
+      "Project %q is already open in the current window; raising instead of opening another window",
+      existing_project.path
+    )
+    if core.window then system.raise_window(core.window) end
+    return true
+  end
+
+  return launch_anvil_window({ project }, string.format("Project %q", tostring(project)))
 end
 
 -- Compatibility alias for existing plugins/user configs.
@@ -551,25 +565,29 @@ function core.init()
   local files = {}
   if not RESTARTED then
     for i = 2, #ARGS do
-      local arg_filename = strip_trailing_slash(ARGS[i])
-      local info = system.get_file_info(arg_filename) or {}
-      if info.type == "dir" then
-        project_dir = arg_filename
-        project_dir_explicit = true
+      if ARGS[i] == "--new-window" then
+        core.empty_window_request = true
       else
-        -- on macOS we can get an argument like "-psn_0_52353" that we just ignore.
-        if not ARGS[i]:match("^-psn") then
-          local filename = common.normalize_path(arg_filename)
-          local abs_filename = system.absolute_path(filename or "")
-          local file_abs
-          if common.path_equals(filename, abs_filename) then
-            file_abs = abs_filename
-          else
-            file_abs = system.absolute_path(".") .. PATHSEP .. filename
-          end
-          if file_abs then
-            table.insert(files, file_abs)
-            project_dir = file_abs:match("^(.+)[/\\].+$")
+        local arg_filename = strip_trailing_slash(ARGS[i])
+        local info = system.get_file_info(arg_filename) or {}
+        if info.type == "dir" then
+          project_dir = arg_filename
+          project_dir_explicit = true
+        else
+          -- on macOS we can get an argument like "-psn_0_52353" that we just ignore.
+          if not ARGS[i]:match("^-psn") then
+            local filename = common.normalize_path(arg_filename)
+            local abs_filename = system.absolute_path(filename or "")
+            local file_abs
+            if common.path_equals(filename, abs_filename) then
+              file_abs = abs_filename
+            else
+              file_abs = system.absolute_path(".") .. PATHSEP .. filename
+            end
+            if file_abs then
+              table.insert(files, file_abs)
+              project_dir = file_abs:match("^(.+)[/\\].+$")
+            end
           end
         end
       end

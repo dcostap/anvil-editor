@@ -39,6 +39,10 @@ local loaded_workspace_key
 local loaded_workspace_path
 local suppress_next_exit_workspace_save = false
 
+local function empty_window_requested()
+  return core.empty_window_request == true
+end
+
 local function workspace_key_matches_basename(key, basename)
   local prefix = key:sub(1, #basename)
   if PATHSEP == "\\" then
@@ -274,6 +278,11 @@ end
 
 
 local function save_workspace()
+  if empty_window_requested() then
+    core.log_quiet("Workspace: skipped save for an empty Anvil window")
+    return true
+  end
+
   local project = core.root_project and core.root_project()
   if not (project and project.path) then return end
 
@@ -316,6 +325,16 @@ end
 local function load_workspace()
   core.add_thread(function()
     local function restore_workspace_state()
+      if empty_window_requested() then
+        core.visited_files = {}
+        scale.load_workspace_state(nil)
+        language_mode.load_workspace_state(nil)
+        project_paths.load_workspace_state(nil)
+        ensure_initial_filetree_pane()
+        core.log_quiet("Workspace: skipped restore for an empty Anvil window")
+        return
+      end
+
       local workspace = consume_workspace(core.root_project().path)
       scale.load_workspace_state(workspace and workspace.zoom)
       language_mode.load_workspace_state(workspace and workspace.language_modes)
@@ -354,7 +373,12 @@ if not core.__workspace_hooks_installed then
 
   local set_project = core.set_project
   function core.set_project(project)
+    local was_empty_window = empty_window_requested()
     core.try(save_workspace)
+    if was_empty_window then
+      core.empty_window_request = false
+      core.log_quiet("Workspace: enabled persistence after the empty window opened a Project")
+    end
     project = set_project(project)
     if not project then return false end
     core.try(load_workspace)

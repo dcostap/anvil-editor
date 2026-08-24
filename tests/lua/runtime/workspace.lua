@@ -97,6 +97,7 @@ test.describe("Workspace persistence", function()
     context.original_restart = core.restart
     context.original_restart_request = core.restart_request
     context.original_quit_request = core.quit_request
+    context.original_empty_window_request = core.empty_window_request
     context.original_filetree_module = package.loaded["plugins.filetree"]
     context.original_panes_save_workspace_state = panes.save_workspace_state
     context.original_panes_restore_workspace_state = panes.restore_workspace_state
@@ -155,6 +156,7 @@ test.describe("Workspace persistence", function()
     core.restart = context.original_restart
     core.restart_request = context.original_restart_request
     core.quit_request = context.original_quit_request
+    core.empty_window_request = context.original_empty_window_request
     package.loaded["plugins.filetree"] = context.original_filetree_module
     panes.save_workspace_state = context.original_panes_save_workspace_state
     panes.restore_workspace_state = context.original_panes_restore_workspace_state
@@ -289,6 +291,28 @@ test.describe("Workspace persistence", function()
     test.type(saved.project_paths, "table")
     test.equal(saved.project_paths.entries[1].label, "external-project")
     test.equal(project_paths.resolve(join_path(external_path, "file.odin")).entry.label, "external-project")
+  end)
+
+  test.test("an empty Anvil window does not replace saved Project state", function(context)
+    local project_path = join_path(context.temp_root, "test_project")
+    storage.save("ws", "test_project-10", {
+      path = project_path,
+      pane_state = leaf_state("saved"),
+      project_paths = {},
+      visited_files = {},
+    })
+
+    local panel, view = make_fake_pane_host("empty-window")
+    core.projects = { Project(project_path) }
+    core.root_panel = panel
+    core.active_view = view
+    replace_buffers()
+    core.empty_window_request = true
+
+    core.save_workspace()
+
+    local saved = test.not_nil(storage.load("ws", "test_project-10"))
+    test.equal(saved.pane_state.panes[1].view.state.label, "saved")
   end)
 
   test.test("stores only an explicit Project Zoom and restores it", function(context)

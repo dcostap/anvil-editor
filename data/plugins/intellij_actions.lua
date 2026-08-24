@@ -1411,8 +1411,6 @@ keymap.add({
   ["ctrl+m"] = "editor:move_lines_down",
   ["ctrl+shift+t"] = "core:reopen_last_closed_pane",
   ["ctrl+shift+w"] = "core:close_other_panes",
-  ["alt+z"] = "core:focus_previous_pane",
-  ["alt+x"] = "core:focus_next_pane",
   ["ctrl+shift+l"] = "editor:reveal_active_file_in_explorer",
   ["ctrl+alt+t"] = "terminal:open",
   ["ctrl+up"] = "editor:move_caret_previous_paragraph",

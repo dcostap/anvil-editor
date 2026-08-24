@@ -1,5 +1,7 @@
 local panes = require "core.panes"
 local core = require "core"
+local command = require "core.command"
+local layout = require "core.pane_layout"
 local View = require "core.view"
 local test = require "core.test"
 
@@ -91,6 +93,43 @@ test.describe("Pane manager", function()
     test.equal(panes.active(), two)
     panes.focus(three)
     test.equal(panes.visible_group(), three.group)
+  end)
+
+  test.it("rotates only the active Pane Group clockwise through fixed split positions", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.split(one, "right", { factory = factory("two") })
+    local four = panes.split(one, "down", { factory = factory("four") })
+    local three = panes.split(two, "down", { factory = factory("three") })
+    local group = one.group
+    local outside = panes.create { factory = factory("outside") }
+    layout.update_rects(group.root, { x = 0, y = 0, w = 400, h = 400 })
+    panes.focus(one)
+
+    test.ok(command.perform("core:rotate_panes_clockwise"))
+
+    test.equal(layout.pane_at(group.root, 100, 100).current_view:get_name(), "four")
+    test.equal(layout.pane_at(group.root, 300, 100).current_view:get_name(), "one")
+    test.equal(layout.pane_at(group.root, 300, 300).current_view:get_name(), "two")
+    test.equal(layout.pane_at(group.root, 100, 300).current_view:get_name(), "three")
+    test.equal(panes.active(), one)
+    test.equal(panes.visible_group(), group)
+    test.equal(outside.current_view:get_name(), "outside")
+    test.not_equal(outside.group, group)
+    test.ok(panes.validate())
+  end)
+
+  test.it("swaps the positions in a two-Pane Group rotation", function()
+    local left = panes.create { factory = factory("left") }
+    local right = panes.split(left, "right", { factory = factory("right") })
+    local group = left.group
+    layout.update_rects(group.root, { x = 0, y = 0, w = 400, h = 200 })
+    panes.focus(left)
+
+    test.ok(command.perform("core:rotate_panes_clockwise"))
+
+    test.equal(layout.pane_at(group.root, 100, 100), right)
+    test.equal(layout.pane_at(group.root, 300, 100), left)
+    test.equal(panes.active(), left)
   end)
 
   test.it("focuses Panes by current number", function()

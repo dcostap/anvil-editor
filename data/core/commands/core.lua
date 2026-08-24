@@ -268,6 +268,10 @@ command.add(nil, {
     core.restart()
   end),
 
+  ["core:new_anvil_window"] = command.palette(function()
+    return core.open_new_window()
+  end),
+
   ["core:force_quit"] = function()
     core.quit(true)
   end,

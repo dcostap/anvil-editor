@@ -232,6 +232,10 @@ _Avoid_: open file badge, tab number
 A contiguous sequence of one or more Panes shown together. A one-Pane group fills the available work area.
 _Avoid_: tab group, split group, workspace
 
+**Pane Group Rotation**:
+An action that moves each Pane clockwise to the next visual position in its Pane Group. The split geometry does not change. Focus follows the moved Pane.
+_Avoid_: rotate split panes, rotate tabs
+
 **View**:
 The content that a Pane can show, such as an Editor, File Tree, Terminal View, or Command Output View.
 _Avoid_: Pane View, app, pane content

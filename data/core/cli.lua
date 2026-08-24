@@ -624,6 +624,11 @@ cli.set_default {
       name = "fork",
       short_name = "f",
       description = "Fork the editor to the background"
+    },
+    {
+      name = "new-window",
+      description = "Open an empty Anvil window",
+      type = "empty"
     }
   },
   execute = function(flags, arguments)
@@ -642,6 +647,8 @@ cli.set_default {
         end
         system.exec(string.format("%q %s", EXEFILE, arguments_string))
         os.exit()
+      elseif flag.name == "new-window" then
+        core.empty_window_request = true
       end
     end
   end

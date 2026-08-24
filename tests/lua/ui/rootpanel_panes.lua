@@ -6,7 +6,6 @@ local RootPanel = require "core.rootpanel"
 local View = require "core.view"
 local test = require "core.test"
 local autocomplete = require "plugins.autocomplete"
-local command = require "core.command"
 local Widget = require "widget"
 
 local FakeView = View:extend()
@@ -73,7 +72,6 @@ test.describe("Root Panel Pane presentation", function()
   test.before_each(function()
     autocomplete.close()
     Widget.destroy_floating_widgets()
-    if command.is_valid("core:pick_color_cancel") then command.perform("core:pick_color_cancel") end
     panes.reset_for_tests()
     saved = {
       root_panel = core.root_panel,
