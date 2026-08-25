@@ -39,6 +39,7 @@ anvil_sources = [
     'custom_events.c',
     'system_events.c',
     'win32_single_instance.c',
+    'win32_window_handoff.c',
     'resize_diagnostics.c',
     'renderer.c',
     'display_packet.c',

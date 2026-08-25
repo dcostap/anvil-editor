@@ -26,6 +26,7 @@
 #include "rencache.h"
 #include "renwindow.h"
 #include "d3d11_backend.h"
+#include "win32_window_handoff.h"
 
 /* a cache over the software renderer -- all drawing operations are stored as
 ** commands when issued. At the end of the frame we write the commands to a grid
@@ -754,14 +755,17 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
   }
 
   if (!anvil_d3d11_end_frame(ren_cache->window)) return false;
-  SDL_ShowWindow(ren_cache->window);
-  if (!ren_cache->window_shown) {
+  if (anvil_window_handoff_allow_show(ren_cache->window)) {
+    SDL_ShowWindow(ren_cache->window);
+  }
+  if (!ren_cache->window_shown && anvil_window_handoff_allow_show(ren_cache->window)) {
     SDL_RaiseWindow(ren_cache->window);
 #ifdef _WIN32
     rencache_activate_window(ren_cache->window);
 #endif
     ren_cache->window_shown = true;
   }
+  anvil_window_handoff_frame_presented(ren_cache->window);
   ren_text_stats_end_frame();
   g_rencache_last_frame_stats = g_rencache_frame_stats;
   ren_cache->command_buf_idx = 0;
@@ -968,7 +972,7 @@ void rencache_update_rects(RenCache *rc, RenRect *rects, int count) {
 #else
     SDL_UpdateWindowSurfaceRects(rc->window, (SDL_Rect*) rects, count);
 #endif
-    if (initial_window) {
+    if (initial_window && anvil_window_handoff_allow_show(rc->window)) {
       SDL_ShowWindow(rc->window);
       if (!rc->window_shown) {
         SDL_RaiseWindow(rc->window);
@@ -979,5 +983,6 @@ void rencache_update_rects(RenCache *rc, RenRect *rects, int count) {
       }
       initial_window = false;
     }
+    anvil_window_handoff_frame_presented(rc->window);
   }
 }

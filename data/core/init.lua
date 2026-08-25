@@ -2514,6 +2514,13 @@ function core.step(next_frame_time, options)
   end
   step_stats.update_ms = (system.get_time() - update_start_time) * 1000
 
+  -- A hidden Project keeps its background threads and event loop active, but
+  -- it does not emit or present editor frames until the manager selects it.
+  if system.project_is_selected and not system.project_is_selected() then
+    core.ui_snapshot_active = false
+    return false
+  end
+
   -- Skip drawing if there is time left before next frame, unless, an event is
   -- received or benchmarking. Skipping helps keep FPS near to the value set on
   ---config.fps when core.redraw is set from a coroutine and not by user

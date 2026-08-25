@@ -11,6 +11,7 @@
 #include "custom_events.h"
 #include "resize_diagnostics.h"
 #include "win32_single_instance.h"
+#include "win32_window_handoff.h"
 #include "treesitter/service.h"
 
 #ifdef _WIN32
@@ -316,8 +317,14 @@ static bool init_lua_state(AppState *app) {
 
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
+  int handoff_manager_result = anvil_window_handoff_run_probe_manager(argc, argv);
+  if (handoff_manager_result >= 0) {
+    return handoff_manager_result == 0 ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
+  }
+  anvil_window_handoff_init_child();
 #ifdef _WIN32
-  if (anvil_single_instance_forward_or_own(argc, argv)) {
+  if (!anvil_window_handoff_is_probe_child() &&
+      anvil_single_instance_forward_or_own(argc, argv)) {
     return SDL_APP_SUCCESS;
   }
 #endif
@@ -364,7 +371,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   }
   custom_events_initialized = true;
 
-  if (!anvil_single_instance_start_server()) {
+  if (!anvil_window_handoff_is_probe_child() &&
+      !anvil_single_instance_start_server()) {
     /* Non-fatal: release native ownership so secondaries do not wait on a
      * pipe server that is unavailable. Existing Lua IPC remains fallback. */
     anvil_single_instance_stop();

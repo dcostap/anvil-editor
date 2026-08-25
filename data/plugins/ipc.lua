@@ -896,7 +896,8 @@ system.get_time = function()
     return system_get_time()
   end
 
-  if config.plugins.ipc.single_instance then
+  if config.plugins.ipc.single_instance
+      and not (system.is_project_child and system.is_project_child()) then
     system.get_time = system_get_time
 
     local primary_instance = ipc:get_primary_instance()
@@ -966,7 +967,8 @@ end
 --------------------------------------------------------------------------------
 local core_open_project_in_new_window = core.open_project_in_new_window
 function core.open_project_in_new_window(project, ...)
-  if config.plugins.ipc.single_instance then
+  if config.plugins.ipc.single_instance
+      and not (system.is_project_child and system.is_project_child()) then
     local project_path = type(project) == "table" and project.path or project
     project_path = type(project_path) == "string" and (system.absolute_path(project_path) or project_path) or nil
     local project_instance = project_path and ipc:find_instance_with_project(project_path)

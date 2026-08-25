@@ -20,6 +20,7 @@
 #include "../win32_frame.h"
 #include "../resize_diagnostics.h"
 #include "../win32_single_instance.h"
+#include "../win32_window_handoff.h"
 #ifdef _WIN32
   #include <direct.h>
   #include <io.h>
@@ -1741,6 +1742,16 @@ static int f_set_native_single_instance_enabled(lua_State *L) {
   return 0;
 }
 
+static int f_project_is_selected(lua_State *L) {
+  lua_pushboolean(L, anvil_window_handoff_project_is_selected());
+  return 1;
+}
+
+static int f_is_project_child(lua_State *L) {
+  lua_pushboolean(L, anvil_window_handoff_is_probe_child());
+  return 1;
+}
+
 
 static int f_sleep(lua_State *L) {
   double n = luaL_checknumber(L, 1);
@@ -2358,6 +2369,8 @@ static const luaL_Reg lib[] = {
   { "get_process_id",        f_get_process_id        },
   { "get_time",              f_get_time              },
   { "set_native_single_instance_enabled", f_set_native_single_instance_enabled },
+  { "project_is_selected", f_project_is_selected },
+  { "is_project_child",    f_is_project_child    },
   { "sleep",                 f_sleep                 },
   { "exec",                  f_exec                  },
   { "set_window_opacity",    f_set_window_opacity    },
