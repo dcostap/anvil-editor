@@ -2896,7 +2896,19 @@ function path_search.external_path_parts(path)
   return { scope = nil, query = normalized }
 end
 
-function path_search.plan(text)
+function path_search.ignored_project_path_parts(query)
+  if not query:find("[/\\]") then return nil end
+  local root = common.normalize_path(project_dir())
+  local ok, path = pcall(common.normalize_path, root .. PATHSEP .. query)
+  if not ok or not path or not common.path_belongs_to(path, root) then return nil end
+  local parts = path_search.external_path_parts(path)
+  if not parts or parts.blocked or not parts.scope then return nil end
+  parts.external = false
+  parts.project_scope = true
+  return parts
+end
+
+function path_search.plan(text, options)
   text = tostring(text or "")
   local mode, query = split_mode_prefix(text)
   if mode ~= "" and mode ~= "@" then return { external = false, query = query, mode = mode } end
@@ -2910,6 +2922,13 @@ function path_search.plan(text)
     if not explicit then
       while query:match("^%.[/\\]") do query = query:sub(3) end
       query = trim_query(query)
+    end
+    if options and options.include_ignored and not explicit then
+      local parts = path_search.ignored_project_path_parts(query)
+      if parts then
+        parts.mode = mode
+        return parts
+      end
     end
     return { external = explicit, explicit = explicit, query = query, mode = mode }
   end
@@ -4385,7 +4404,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   local limit = self:result_limit()
   local direct = path_search.direct_result(base, line)
   self.direct_path_result = direct
-  local path_plan = path_search.plan(base)
+  local path_plan = path_search.plan(base, { include_ignored = self.include_ignored })
   if direct and direct.exact_path and direct.is_folder and not path_plan.external then
     direct.kind = "folder"
     direct.project = nil
@@ -4398,7 +4417,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   local out = {}
   self.has_more = false
   local bare_path_search = false
-  if not path_plan.external and self.path_search_query_key then
+  if not path_plan.external and not path_plan.project_scope and self.path_search_query_key then
     self:clear_path_search_results(true)
   end
 
@@ -4497,12 +4516,15 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     kill_file_search()
     self:start_current_buffer_symbol_search(base, reset_selection)
     return
-  elseif path_plan.external then
+  elseif path_plan.external or path_plan.project_scope then
     kill_file_search()
     local query = trim_query(base)
     local scope = path_plan.scope
     bare_path_search = path_plan.explicit and query == "" and not scope
-    local projects, projects_hidden = path_search.recent_project_results(query, scope, limit)
+    local projects, projects_hidden = {}, false
+    if not path_plan.project_scope then
+      projects, projects_hidden = path_search.recent_project_results(query, scope, limit)
+    end
 
     if bare_path_search then
       if self.path_search_query_key then self:clear_path_search_results(true) end
@@ -4539,6 +4561,13 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
         folders, files = path_search.native_results(
           scope, query, limit, self.path_selection and self.path_selection.kind
         )
+      end
+      if path_plan.project_scope then
+        for _, result in ipairs(folders) do
+          result.kind = "folder"
+          result.project = nil
+          result.path_search = nil
+        end
       end
       if line then
         for _, result in ipairs(files) do result.line = line end
@@ -5651,7 +5680,8 @@ function FSView:toggle_ignored_files()
   kill_fuzzy_grep_jobs()
   local text = self.input and self.input:get_text() or ""
   local base, _, grep = parse_query(text)
-  if grep == nil or base ~= "" then
+  local path_plan = path_search.plan(base, { include_ignored = self.include_ignored })
+  if (grep == nil or base ~= "") and not path_plan.project_scope then
     cancel_file_index_scan()
     fuzzy_searcher.files_cache_root = nil
     fuzzy_searcher.refresh_file_index_for_picker_open()

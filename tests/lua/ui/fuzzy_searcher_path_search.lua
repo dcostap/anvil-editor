@@ -121,6 +121,38 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.equal(core.fuzzy_searcher_active_view:is_path_search(), false)
   end)
 
+  test.it("scopes included ignored files to an existing Project directory", function(context)
+    local build = join_path(context.project_root, "build")
+    mkdirp(build)
+    local requests = {}
+    http.get = function(_, params, options)
+      requests[#requests+1] = { params = params, options = options }
+    end
+    helpers.set_everything_state("available")
+
+    fuzzy_searcher.open("build" .. PATHSEP)
+    local picker = core.fuzzy_searcher_active_view
+    test.ok(picker:toggle_ignored_files())
+
+    test.ok(wait_until(function() return #requests == 1 end),
+      "expected a scoped Everything folder request")
+    test.equal(#requests, 1)
+    test.equal(requests[1].params.search, 'folder: ancestor:"' .. build .. '"')
+    local analysis = join_path(build, "analysis")
+    requests[1].options.on_done(true, nil, {
+      totalResults = 1,
+      results = { { type = "folder", path = build, name = "analysis" } },
+    })
+    test.equal(#requests, 2)
+    test.equal(requests[2].params.search, 'file: ancestor:"' .. build .. '"')
+    requests[2].options.on_done(true, nil, { totalResults = 0, results = {} })
+    test.ok(wait_until(function() return result_for_path(picker.results, analysis) end),
+      "expected the ignored Project folder result")
+    test.equal(result_for_path(picker.results, analysis).kind, "folder")
+    test.equal(picker:is_path_search(), false)
+    test.equal(picker:search_modifier_text(), "Ignored files included")
+  end)
+
   test.it("starts scoped Path Search for an absolute path outside the Project", function(context)
     local requests = {}
     http.get = function(_, params, options)
