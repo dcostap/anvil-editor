@@ -875,6 +875,10 @@ function FileTreeView.from_state(state)
   return view
 end
 
+function FileTreeView:duplicate()
+  return FileTreeView.from_state(self:get_state())
+end
+
 function FileTreeView:on_close()
   self.filesystem_watch_running = false
   if self.git_status_controller then self.git_status_controller:close() end

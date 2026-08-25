@@ -261,7 +261,7 @@ The View that a Pane currently shows.
 _Avoid_: Selected View, Active View, Open View
 
 **Copy View Split**:
-A Pane split that tries to duplicate the source Current View as the new Pane's only Navigation Place. Editor duplication shares the Buffer and copies View state. Terminal View duplication starts a new terminal in the source working directory. Unsupported Views use the normal blank Untitled split.
+A Pane split that tries to duplicate the source Current View as the new Pane's only Navigation Place. Editor duplication shares the Buffer and copies View state. Terminal View duplication starts a new terminal in the source working directory. File Tree duplication copies its root, expansion, selection, and scroll state into an independent File Tree. Unsupported Views use the normal blank Untitled split.
 _Avoid_: copy Pane, copy Navigation History
 
 **View Suspension**:

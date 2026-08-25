@@ -164,6 +164,27 @@ test.describe("File Tree instances", function()
     test.not_ok(file_context.is_content_view(restored))
   end)
 
+  test.it("copy-splits into an independent File Tree with the same state", function()
+    local tree = assert(filetree.new(file))
+    local source = panes.create { factory = function() return tree end }
+    tree.scroll.x, tree.scroll.y = 12, 34
+
+    test.ok(command.perform("core:split_pane_right_copy_view"))
+
+    local copy = panes.active().current_view
+    test.not_equal(copy, tree)
+    test.equal(copy.root_dir, tree.root_dir)
+    test.equal(copy.current_dir, tree.current_dir)
+    local selected = copy:entry_for_line(copy.buffer:get_selection(true))
+    test.ok(selected and common.path_equals(selected.abs, file))
+    test.equal(copy.scroll.x, 12)
+    test.equal(copy.scroll.y, 34)
+    test.not_equal(copy.buffer, tree.buffer)
+    test.not_equal(copy.filesystem_watch, tree.filesystem_watch)
+    test.not_equal(copy.git_status_controller, tree.git_status_controller)
+    test.equal(source.current_view, tree)
+  end)
+
   test.it("drops Workspace state whose root is missing", function()
     local tree = assert(filetree.new(root))
     local state = tree:get_state()
