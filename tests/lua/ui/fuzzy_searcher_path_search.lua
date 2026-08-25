@@ -265,6 +265,28 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.ok(common.path_equals(result.abs_path, hidden_file))
   end)
 
+  test.it("opens compiler file links at their line and column", function(context)
+    local file = join_path(context.project_root, "src", "main.lua")
+    write_file(file)
+    helpers.set_everything_state("unavailable")
+    local opened_path, opened_options
+    core.open_file = function(path, options)
+      opened_path, opened_options = path, options
+      return { buffer = { set_selection = function() end } }
+    end
+
+    for _, suffix in ipairs({ ":4801,5", ":6:1", ":1:10" }) do
+      fuzzy_searcher.open("src/main.lua" .. suffix)
+      local picker = test.not_nil(core.fuzzy_searcher_active_view)
+      picker:confirm()
+
+      local line, col = suffix:match(":(%d+)[,:](%d+)")
+      test.ok(common.path_equals(opened_path, file))
+      test.equal(opened_options.line, tonumber(line))
+      test.equal(opened_options.col, tonumber(col))
+    end
+  end)
+
   test.it("creates and opens an explicit missing relative file path", function(context)
     local path = join_path(context.project_root, "new", "deep", "created.txt")
     local opened_path, opened_options

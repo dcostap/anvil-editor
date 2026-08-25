@@ -177,16 +177,22 @@ local function add_line_matches(pois, seen, root, line, line_no)
   for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+):(%d+)()") do
     add(s, e, path, target_line, target_col)
   end
+  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+),(%d+)()") do
+    add(s, e, path, target_line, target_col)
+  end
   for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+)()") do
-    if not line:sub(e):match("^:%d") then
+    if not line:sub(e):match("^[:,]%d") then
       add(s, e, path, target_line, 1)
     end
   end
   for s, path, target_line, target_col, e in line:gmatch("()([^%s:\"'()<>|]+):(%d+):(%d+)()") do
     add(s, e, path, target_line, target_col)
   end
+  for s, path, target_line, target_col, e in line:gmatch("()([^%s:\"'()<>|]+):(%d+),(%d+)()") do
+    add(s, e, path, target_line, target_col)
+  end
   for s, path, target_line, e in line:gmatch("()([^%s:\"'()<>|]+):(%d+)()") do
-    if not line:sub(e):match("^:%d") then
+    if not line:sub(e):match("^[:,]%d") then
       add(s, e, path, target_line, 1)
     end
   end

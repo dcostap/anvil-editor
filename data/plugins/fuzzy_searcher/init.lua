@@ -1073,13 +1073,15 @@ local function parse_query(s)
     symbol = s:sub(symbol_pos + 1):gsub("^%s+", "")
   end
 
-  local base, line = before, nil
-  local b, n = before:match("^(.-)%s*:%s*(%d+)%s*$")
+  local base, line, col = before, nil, nil
+  local b, n, c = before:match("^(.-)%s*:%s*(%d+)%s*[:,]%s*(%d+)%s*$")
+  if not n then b, n = before:match("^(.-)%s*:%s*(%d+)%s*$") end
   if n then
     base = b:gsub("%s+$", "")
     line = tonumber(n)
+    col = tonumber(c)
   end
-  return base:gsub("^%s+", ""):gsub("%s+$", ""), line, grep, symbol
+  return base:gsub("^%s+", ""):gsub("%s+$", ""), line, col, grep, symbol
 end
 
 local function trim_query(q)
@@ -2957,7 +2959,7 @@ function path_search.plan(text, options)
   return parts
 end
 
-function path_search.direct_result(text, line)
+function path_search.direct_result(text, line, col)
   local mode, query = split_mode_prefix(tostring(text or ""))
   if mode ~= "" and mode ~= "@" then return nil end
   query = common.sanitize_prompt_path(query)
@@ -3002,6 +3004,7 @@ function path_search.direct_result(text, line)
       opened_at = opened_at,
       query = query,
       line = line,
+      col = col,
       match_score = score,
       match_spans = spans or {},
       size_label = info.type == "file" and format_size(info.size) or "",
@@ -4401,9 +4404,9 @@ function path_search.filter_selection_results(results, selection)
   return out
 end
 
-function FSView:refresh_normal(base, line, reset_selection, force_refresh)
+function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
   local limit = self:result_limit()
-  local direct = path_search.direct_result(base, line)
+  local direct = path_search.direct_result(base, line, col)
   self.direct_path_result = direct
   local path_plan = path_search.plan(base, { include_ignored = self.include_ignored })
   if direct and direct.exact_path and direct.is_folder and not path_plan.external then
@@ -5527,8 +5530,8 @@ function FSView:refresh(text)
   text = text or self.input:get_text()
   local files_changed = self.last_files_generation ~= fuzzy_searcher.files_generation
   local files_scope_changed = self.last_files_scope_generation ~= fuzzy_searcher.files_scope_generation
-  local base, line, grep, symbol = parse_query(text)
-  local query_key = table.concat({ base, tostring(line or ""), tostring(grep or ""), tostring(symbol or "") }, "\0")
+  local base, line, col, grep, symbol = parse_query(text)
+  local query_key = table.concat({ base, tostring(line or ""), tostring(col or ""), tostring(grep or ""), tostring(symbol or "") }, "\0")
   local query_changed = query_key ~= self.current_query_key
 
   if query_changed then
@@ -5565,7 +5568,7 @@ function FSView:refresh(text)
     fuzzy_searcher.cancel_symbol_search()
     kill_grep()
     kill_fuzzy_grep_jobs()
-    self:refresh_normal(base, line, query_changed, force_refresh)
+    self:refresh_normal(base, line, col, query_changed, force_refresh)
   end
 end
 
@@ -5680,7 +5683,7 @@ function FSView:toggle_ignored_files()
   kill_grep()
   kill_fuzzy_grep_jobs()
   local text = self.input and self.input:get_text() or ""
-  local base, _, grep = parse_query(text)
+  local base, _, _, grep = parse_query(text)
   local path_plan = path_search.plan(base, { include_ignored = self.include_ignored })
   if (grep == nil or base ~= "") and not path_plan.project_scope then
     cancel_file_index_scan()

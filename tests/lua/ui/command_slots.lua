@@ -1,4 +1,5 @@
 local command = require "core.command"
+local common = require "core.common"
 local core = require "core"
 local panes = require "core.panes"
 local shell = require "core.shell"
@@ -39,6 +40,10 @@ test.describe("Command Slots", function()
   test.after_each(function(context)
     shell.capture = context.original_capture
     if context.original_root_project then core.root_project = context.original_root_project end
+    if context.link_root and system.get_file_info(context.link_root) then
+      local ok, err = common.rm(context.link_root, true)
+      test.ok(ok, err)
+    end
     panes.reset_for_tests()
     command_slots._reset_for_tests()
     storage.clear("command-slots")
@@ -126,5 +131,34 @@ test.describe("Command Slots", function()
 
     test.not_equal(first_view, second_view)
     test.equal(command_slots.slots[1].project_path, "C:/project-two")
+  end)
+
+  test.it("detects JAI, rustc, and clang file links", function(context)
+    context.original_root_project = core.root_project
+    local root = USERDIR .. PATHSEP .. "command-slot-links-" .. system.get_process_id()
+    context.link_root = root
+    test.ok(common.mkdirp(root .. PATHSEP .. "game_platform_windows"))
+    local files = {
+      root .. PATHSEP .. "editor.jai",
+      root .. PATHSEP .. "game_platform_windows" .. PATHSEP .. "main.rs",
+      root .. PATHSEP .. "sdl_asteroids.cpp",
+    }
+    for _, path in ipairs(files) do
+      local fp = assert(io.open(path, "wb"))
+      fp:write("test\n")
+      fp:close()
+    end
+    core.root_project = function() return { path = root } end
+
+    local points = command_slots.extract_output_location_pois(table.concat({
+      "// JAI link format:   " .. files[1]:gsub("\\", "/") .. ":4801,5",
+      "// rustc link format: game_platform_windows/main.rs:6:1",
+      "// clang link format: sdl_asteroids.cpp:1:10",
+    }, "\n"), { root = root })
+
+    test.equal(#points, 3)
+    test.same({ points[1].target_line, points[1].target_col }, { 4801, 5 })
+    test.same({ points[2].target_line, points[2].target_col }, { 6, 1 })
+    test.same({ points[3].target_line, points[3].target_col }, { 1, 10 })
   end)
 end)
