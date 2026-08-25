@@ -6266,7 +6266,14 @@ local function open_current_file()
   else open(""); view = current_picker() end
   if not view then return nil end
 
-  view.input:set_text(current_file_query(path), false)
+  local query = current_file_query(path)
+  view.input:set_text(query, false)
+  local info = path and system.get_file_info(path)
+  if info and info.type == "file" then
+    local name = common.basename(query)
+    local start_col = #query - #name + 1
+    view.input.textview.buffer:set_selection(1, #query + 1, 1, start_col)
+  end
   view.current_query_key = nil
   view.force_refresh = true
   view.dirty = true

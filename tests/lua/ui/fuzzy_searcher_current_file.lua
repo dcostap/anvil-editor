@@ -86,7 +86,10 @@ test.describe("Fuzzy Searcher current file query", function()
     local picker = test.not_nil(core.fuzzy_searcher_active_view)
     picker:update()
 
-    test.equal(picker.input:get_text(), join_path("build", "module.obj"))
+    local query = join_path("build", "module.obj")
+    test.equal(picker.input:get_text(), query)
+    local line1, col1, line2, col2 = picker.input.textview.buffer:get_selection(true)
+    test.same({ line1, col1, line2, col2 }, { 1, #query - #"module.obj" + 1, 1, #query + 1 })
     test.ok(common.path_equals(picker.results[1].abs_path, path))
   end)
 
