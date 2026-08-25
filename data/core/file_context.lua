@@ -15,6 +15,13 @@ function M.view_file_path(view)
   if path and path ~= "" then return common.normalize_path(path) end
 end
 
+function M.view_context_path(view)
+  local path = M.view_file_path(view)
+  if path then return path end
+  if view and view.get_context_path then path = view:get_context_path() end
+  if type(path) == "string" and path ~= "" then return common.normalize_path(path) end
+end
+
 M.excluded_content_views = M.excluded_content_views or setmetatable({}, { __mode = "k" })
 function M.exclude_content_view(view)
   if view then M.excluded_content_views[view] = true end
@@ -47,6 +54,12 @@ end
 
 function M.current_file_path(fallback_view)
   return M.active_file_path() or M.view_file_path(current_pane_view()) or M.view_file_path(fallback_view)
+end
+
+function M.current_context_path(fallback_view)
+  return M.view_context_path(core.active_view)
+    or M.view_context_path(current_pane_view())
+    or M.view_context_path(fallback_view)
 end
 
 function M.current_file_view(fallback_view)

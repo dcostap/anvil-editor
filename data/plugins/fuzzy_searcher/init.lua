@@ -3141,6 +3141,7 @@ function FSView:new(prefix, opts)
   self.source_pane = opts.source_pane or panes.pane_for_view(source_view) or panes.active()
   self.source_buffer = source_buffer
   self.source_file_path = file_context.view_file_path(source_view)
+  self.source_context_path = file_context.view_context_path(source_view)
   self.source_file_line = source_buffer and source_buffer:get_selection(false) or 1
   self.palette_commands = {}
   self.palette_command_set = {}
@@ -6256,7 +6257,7 @@ end
 
 local function open_current_file()
   local view = current_picker()
-  local path = view and view.source_file_path or file_context.current_file_path()
+  local path = view and view.source_context_path or file_context.current_context_path()
   if view and view.static_mode then
     view:close()
     view = nil

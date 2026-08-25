@@ -7,6 +7,7 @@ local test = require "core.test"
 local View = require "core.view"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
+local filetree = require "plugins.filetree"
 
 local FileView = View:extend()
 function FileView:new(path)
@@ -72,6 +73,20 @@ test.describe("Fuzzy Searcher current file query", function()
 
     test.equal(picker.input:get_text(), join_path("src", "main.lua"))
     test.equal(system.get_clipboard(), "keep me")
+    test.ok(common.path_equals(picker.results[1].abs_path, path))
+  end)
+
+  test.it("uses the selected File Tree path", function(context)
+    local path = join_path(context.root, "build", "module.obj")
+    write_file(path)
+    local tree = test.not_nil(filetree.new(path))
+    core.active_view = tree
+
+    test.ok(command.perform("fuzzy:open_current_file"))
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker:update()
+
+    test.equal(picker.input:get_text(), join_path("build", "module.obj"))
     test.ok(common.path_equals(picker.results[1].abs_path, path))
   end)
 

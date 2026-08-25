@@ -1307,6 +1307,12 @@ function FileTreeView:capture_selection_paths()
   }
 end
 
+function FileTreeView:get_context_path()
+  local snapshot = self:capture_selection_paths()
+  local selection = snapshot and snapshot.selections[snapshot.last_selection or 1]
+  return selection and selection.line1_abs or nil
+end
+
 function FileTreeView:restore_selection_paths(snapshot)
   if not snapshot or not snapshot.selections then return false end
 
