@@ -43,6 +43,12 @@ typedef struct {
 
 typedef void (*RenTextWrapEmit)(size_t byte_offset, void *userdata);
 
+/* Returns true when word wrapping may start a new row after one source
+ * character. Pass -1 when an adjacent source byte does not exist. */
+bool ren_text_wrap_opportunity_after(
+  unsigned int codepoint, int previous_byte, int next_byte
+);
+
 typedef struct {
   uint64_t width_calls;
   uint64_t width_bytes;

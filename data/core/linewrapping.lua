@@ -327,28 +327,70 @@ local function append_ascii_letter_splits_with_tabs(splits, text, start_col, xof
   return xoffset
 end
 
-local function find_last_space(text, first, last)
+local function ascii_letter(byte)
+  return byte and ((byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122))
+end
+
+local function ascii_digit(byte)
+  return byte and byte >= 48 and byte <= 57
+end
+
+local function is_word_wrap_opportunity(text, position, byte)
+  if not byte or byte > 127 then return false end
+  if byte == 32 or byte == 44 or byte == 59
+    or byte == 40 or byte == 91 or byte == 123
+    or byte == 47 or byte == 92 or byte == 58
+  then
+    return true
+  end
+  if byte == 46 then
+    return not (ascii_digit(text:byte(position - 1)) and ascii_digit(text:byte(position + 1)))
+  end
+  if byte == 45 then
+    return ascii_letter(text:byte(position - 1)) and ascii_letter(text:byte(position + 1))
+  end
+  return false
+end
+
+local function find_last_word_wrap_opportunity(text, first, last)
   for i = last, first, -1 do
-    if text:byte(i) == 32 then return i end
+    if is_word_wrap_opportunity(text, i, text:byte(i)) then return i end
   end
 end
 
-local function append_plain_ascii_word_splits(splits, text, start_col, byte_len, xoffset, cell_width, width, begin_width)
-  local pos = 1
-  while pos <= byte_len do
-    local remaining = byte_len - pos + 1
+local WORD_WRAP_OPPORTUNITY_PATTERN = [=[[ ,;%(%[%{%/\%.:%-]]=]
+
+local function has_word_wrap_opportunity(token_text, line_text, line_start)
+  local position = token_text:find(WORD_WRAP_OPPORTUNITY_PATTERN)
+  while position do
+    local line_position = line_start + position - 1
+    if is_word_wrap_opportunity(
+      line_text, line_position, token_text:byte(position)
+    ) then
+      return true
+    end
+    position = token_text:find(WORD_WRAP_OPPORTUNITY_PATTERN, position + 1)
+  end
+  return false
+end
+
+local function append_plain_ascii_word_splits(splits, line_text, start_col, byte_len, xoffset, cell_width, width, begin_width)
+  local pos = start_col
+  local token_end = start_col + byte_len - 1
+  while pos <= token_end do
+    local remaining = token_end - pos + 1
     local capacity = math.max(1, math.floor((width - xoffset) / cell_width))
     if remaining <= capacity then
       return xoffset + remaining * cell_width, nil, nil
     else
       local segment_end = pos + capacity - 1
-      local space = find_last_space(text, pos, segment_end)
-      if space and space >= pos then
-        splits[#splits + 1] = start_col + space
-        pos = space + 1
+      local opportunity = find_last_word_wrap_opportunity(line_text, pos, segment_end)
+      if opportunity and opportunity >= pos then
+        splits[#splits + 1] = opportunity + 1
+        pos = opportunity + 1
         xoffset = begin_width
       else
-        splits[#splits + 1] = start_col + segment_end
+        splits[#splits + 1] = segment_end + 1
         pos = segment_end + 1
         xoffset = begin_width
       end
@@ -498,8 +540,8 @@ local function compute_rendered_line_breaks(
   local splits = { start_col }
   local row_start = start_col
   local row_start_x
-  local last_space
-  local last_space_next_x
+  local last_opportunity
+  local last_opportunity_next_x
   local line_x_offset = render_line.x_offset or 0
   if render_line.continuation_indent_col then
     begin_width = textview:get_line_render_col_x_offset(
@@ -523,20 +565,18 @@ local function compute_rendered_line_breaks(
   for char in common.utf8_chars(text:sub(start_col, visible_end)) do
     local next_col = col + #char
     local next_x = rendered_x(next_col)
-    if char == " " then
-      last_space = col
-      last_space_next_x = next_x
-    end
     local leading = line_x_offset + (row_start > 1 and begin_width or 0)
     local row_width = leading + next_x - row_start_x
     if row_width > width and col > row_start then
       local split = col
-      if mode == "word" and last_space and last_space >= row_start then split = last_space + 1 end
+      if mode == "word" and last_opportunity and last_opportunity >= row_start then
+        split = last_opportunity + 1
+      end
       if split <= row_start then split = col end
       if split > splits[#splits] then splits[#splits + 1] = split end
       row_start = split
-      row_start_x = split == col and col_x or last_space_next_x or col_x
-      if last_space and last_space < row_start then last_space = nil end
+      row_start_x = split == col and col_x or last_opportunity_next_x or col_x
+      if last_opportunity and last_opportunity < row_start then last_opportunity = nil end
       leading = line_x_offset + (row_start > 1 and begin_width or 0)
       row_width = leading + next_x - row_start_x
       if row_width > width and col > row_start then
@@ -544,6 +584,11 @@ local function compute_rendered_line_breaks(
         row_start = col
         row_start_x = col_x
       end
+    elseif mode == "word"
+      and is_word_wrap_opportunity(text, col, char:byte())
+    then
+      last_opportunity = col
+      last_opportunity_next_x = next_x
     end
     col_x = next_x
     col = next_col
@@ -578,7 +623,7 @@ function LineWrapping.compute_line_breaks_from_col(
   if start_col > 1 and begin_width == nil then
     begin_width = line_continuation_indent_width(buffer, default_font, line, measurement)
   end
-  local xoffset, i, last_space, last_width = start_col > 1 and begin_width or 0, start_col, nil, 0
+  local xoffset, i, last_opportunity, last_width = start_col > 1 and begin_width or 0, start_col, nil, 0
   local splits = { start_col }
   local line_text = buffer:get_utf8_line(line)
   local visible_end_col = #line_text
@@ -681,7 +726,8 @@ function LineWrapping.compute_line_breaks_from_col(
     )
     local ascii_cell_width = ascii_font and cell_width or nil
     local ascii_tab_width = ascii_font and tab_width or nil
-    local has_space = ascii_font and text:find(" ", 1, true) ~= nil
+    local has_space = perf_active and ascii_font
+      and text:find(" ", 1, true) ~= nil
     if perf_active then
       perf_ascii = perf_ascii and ascii_font
       perf_has_space = perf_has_space or has_space
@@ -695,6 +741,9 @@ function LineWrapping.compute_line_breaks_from_col(
     local force_incremental_width = (not ascii_font) and #text > 4096
     local w = force_incremental_width and (width + 1)
       or (ascii_font and (has_tab and fast_ascii_width(text, ascii_cell_width, ascii_tab_width) or (#text * ascii_cell_width)) or font:get_width(text))
+    local token_has_word_wrap_opportunity = mode == "word"
+      and (idx ~= math.huge or xoffset + w > width)
+      and has_word_wrap_opportunity(text, line_text, i)
     if xoffset + w > width then
       if ascii_font and mode ~= "word" then
         if note_branch then
@@ -704,55 +753,56 @@ function LineWrapping.compute_line_breaks_from_col(
           and append_ascii_letter_splits_with_tabs(splits, text, i, xoffset, ascii_cell_width, ascii_tab_width, width, begin_width)
           or append_plain_ascii_letter_splits(splits, i, #text, xoffset, ascii_cell_width, width, begin_width)
         i = i + #text
-        last_space = nil
+        last_opportunity = nil
       elseif ascii_font and idx == math.huge then
-        if has_space and not has_tab then
+        if token_has_word_wrap_opportunity and not has_tab then
           if note_branch then
             note_branch(font == default_font and "plain_ascii_word_row" or "plain_ascii_syntax_word_row")
           end
-          xoffset, last_space, last_width = append_plain_ascii_word_splits(
-            splits, text, i, #text, xoffset, ascii_cell_width, width, begin_width
+          xoffset, last_opportunity, last_width = append_plain_ascii_word_splits(
+            splits, line_text, i, #text, xoffset, ascii_cell_width, width, begin_width
           )
-        elseif not has_space then
+          i = i + #text
+        elseif not token_has_word_wrap_opportunity then
           if note_branch then
             note_branch(font == default_font and (has_tab and "ascii_tabs_word_longword_letter" or "plain_ascii_word_longword_letter") or (has_tab and "ascii_tabs_syntax_word_longword_letter" or "plain_ascii_syntax_word_longword_letter"))
           end
           xoffset = has_tab
             and append_ascii_letter_splits_with_tabs(splits, text, i, xoffset, ascii_cell_width, ascii_tab_width, width, begin_width)
             or append_plain_ascii_letter_splits(splits, i, #text, xoffset, ascii_cell_width, width, begin_width)
-          last_space = nil
+          last_opportunity = nil
           last_width = nil
+          i = i + #text
         else
-          if note_branch then note_branch("ascii_tabs_word_spaces_slow") end
-          ascii_font = false
+          if note_branch then note_branch("ascii_tabs_word_opportunities_slow") end
           for char in common.utf8_chars(text) do
-            w = font:get_width(char)
+            w = char == "\t" and ascii_tab_width or ascii_cell_width
             xoffset = xoffset + w
             if xoffset > width then
-              if last_space then
-                table.insert(splits, last_space + 1)
+              if last_opportunity then
+                table.insert(splits, last_opportunity + 1)
                 xoffset = begin_width + (xoffset - last_width)
               else
                 table.insert(splits, i)
                 xoffset = w + begin_width
               end
-              last_space = nil
-            elseif char == " " then
-              last_space = i
+              last_opportunity = nil
+            elseif is_word_wrap_opportunity(line_text, i, char:byte()) then
+              last_opportunity = i
               last_width = xoffset
             end
             i = i + #char
           end
         end
-        i = ascii_font and (i + #text) or i
       elseif idx == math.huge and font.wrap_text then
         if note_branch then note_branch("plain_utf8_native") end
         local native_splits = font:wrap_text(
-          text, width, mode, 0, #text, xoffset, begin_width,
+          line_text, width, mode, i - 1, visible_end_col,
+          xoffset, begin_width,
           cell_width, tab_width
         )
         for index = 2, #native_splits do
-          splits[#splits + 1] = i + native_splits[index]
+          splits[#splits + 1] = native_splits[index] + 1
         end
         return finish(splits, begin_width, "plain_utf8_native")
       else
@@ -777,16 +827,18 @@ function LineWrapping.compute_line_breaks_from_col(
           end
           xoffset = xoffset + w
           if xoffset > width then
-            if mode == "word" and last_space then
-              table.insert(splits, last_space + 1)
+            if mode == "word" and last_opportunity then
+              table.insert(splits, last_opportunity + 1)
               xoffset = begin_width + (xoffset - last_width)
             else
               table.insert(splits, i)
               xoffset = w + begin_width
             end
-            last_space = nil
-          elseif char == " " then
-            last_space = i
+            last_opportunity = nil
+          elseif mode == "word"
+            and is_word_wrap_opportunity(line_text, i, char:byte())
+          then
+            last_opportunity = i
             last_width = xoffset
           end
           i = i + #char
@@ -795,6 +847,24 @@ function LineWrapping.compute_line_breaks_from_col(
     else
       if note_branch then
         note_branch(ascii_font and (font == default_font and (has_tab and "fits_ascii_tabs" or "fits_plain_ascii") or (has_tab and "fits_ascii_tabs_syntax" or "fits_plain_ascii_syntax")) or "fits_utf8")
+      end
+      if mode == "word" and idx ~= math.huge
+        and token_has_word_wrap_opportunity
+      then
+        local opportunity = find_last_word_wrap_opportunity(
+          line_text, i, i + #text - 1
+        )
+        if opportunity then
+          local opportunity_bytes = opportunity - i + 1
+          last_opportunity = opportunity
+          last_width = xoffset + (
+            ascii_font
+              and fast_ascii_width(
+                text:sub(1, opportunity_bytes), ascii_cell_width, ascii_tab_width
+              )
+              or font:get_width(text:sub(1, opportunity_bytes))
+          )
+        end
       end
       xoffset = xoffset + w
       i = i + #text

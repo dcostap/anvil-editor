@@ -216,6 +216,10 @@ _Avoid_: Line highlighting, active line highlight
 A visual row produced when one Buffer line wraps; it is not a separate Buffer line.
 _Avoid_: Fake line, wrapped file line
 
+**Soft-Wrap Opportunity**:
+A preferred position where a Buffer line can start a new Wrapped Visual Row without inserting text.
+_Avoid_: Break point, separator
+
 **Soft-Wrap Indicator**:
 A visual prefix marking a Wrapped Visual Row that continues the same Buffer line.
 _Avoid_: Continuation arrow, wrapped-line marker

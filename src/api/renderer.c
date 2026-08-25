@@ -599,32 +599,44 @@ static int f_text_layout_wrap(lua_State *L) {
   LuaTextLayout *layout = check_text_layout(L, 1);
   double wrap_width = luaL_checknumber(L, 2);
   const char *mode = luaL_optstring(L, 3, "letter");
+  bool word_mode = strcmp(mode, "word") == 0;
   lua_Integer raw_start = luaL_optinteger(L, 4, 0);
   double first_leading = luaL_optnumber(L, 5, 0);
   double continuation_leading = luaL_optnumber(L, 6, 0);
   size_t start_byte = raw_start <= 0 ? 0 : (size_t)raw_start;
   if (start_byte > layout->text_len) start_byte = layout->text_len;
   size_t start = text_layout_boundary_at_or_before(layout, start_byte);
-  size_t row_start = start, last_space = SIZE_MAX;
+  size_t row_start = start, last_opportunity = SIZE_MAX;
   int out = 1;
   lua_createtable(L, 8, 0);
   lua_pushinteger(L, (lua_Integer)layout->byte_offsets[start]);
   lua_rawseti(L, -2, out++);
   for (size_t index = start + 1; index < layout->count; index++) {
     size_t char_start = layout->byte_offsets[index - 1];
-    if (layout->text[char_start] == ' ' && layout->byte_offsets[index] == char_start + 1)
-      last_space = index - 1;
+    size_t char_end = layout->byte_offsets[index];
     double leading = row_start == start ? first_leading : continuation_leading;
     double row_width = leading + layout->advances[index] - layout->advances[row_start];
     if (wrap_width > 0 && row_width > wrap_width && index - 1 > row_start) {
       size_t split = index - 1;
-      if (strcmp(mode, "word") == 0 && last_space != SIZE_MAX && last_space >= row_start)
-        split = last_space + 1;
+      if (word_mode && last_opportunity != SIZE_MAX
+          && last_opportunity >= row_start)
+        split = last_opportunity + 1;
       if (split <= row_start) split = index - 1;
       lua_pushinteger(L, (lua_Integer)layout->byte_offsets[split]);
       lua_rawseti(L, -2, out++);
       row_start = split;
-      if (last_space != SIZE_MAX && last_space < row_start) last_space = SIZE_MAX;
+      if (last_opportunity != SIZE_MAX && last_opportunity < row_start)
+        last_opportunity = SIZE_MAX;
+    } else if (word_mode) {
+      unsigned int codepoint = char_end == char_start + 1
+        ? (unsigned char)layout->text[char_start] : 0;
+      if (ren_text_wrap_opportunity_after(
+        codepoint,
+        char_start > 0 ? (unsigned char)layout->text[char_start - 1] : -1,
+        char_end < layout->text_len ? (unsigned char)layout->text[char_end] : -1
+      )) {
+        last_opportunity = index - 1;
+      }
     }
   }
   return 1;
@@ -639,10 +651,10 @@ static int f_wrap_text_layouts(lua_State *L) {
   size_t layout_count = lua_rawlen(L, 1);
   double wrap_width = luaL_checknumber(L, 2);
   const char *mode = luaL_optstring(L, 3, "letter");
+  bool word_mode = strcmp(mode, "word") == 0;
   lua_Integer raw_start = luaL_optinteger(L, 4, 0);
   double first_leading = luaL_optnumber(L, 5, 0);
   double continuation_leading = luaL_optnumber(L, 6, 0);
-  bool word_mode = strcmp(mode, "word") == 0;
 
   size_t total_len = 0;
   for (size_t item = 1; item <= layout_count; item++) {
@@ -689,36 +701,50 @@ static int f_wrap_text_layouts(lua_State *L) {
 
   size_t row_start_byte = start_byte;
   double row_start_advance = start_advance;
-  size_t last_space_start = SIZE_MAX;
-  size_t last_space_next = SIZE_MAX;
-  double last_space_next_advance = 0;
+  size_t last_opportunity_start = SIZE_MAX;
+  size_t last_opportunity_next = SIZE_MAX;
+  double last_opportunity_next_advance = 0;
   byte_base = 0;
   advance_base = 0;
+  int previous_layout_byte = -1;
+  bool pending_opportunity = false;
+  unsigned int pending_codepoint = 0;
+  int pending_previous_byte = -1;
+  size_t pending_start = 0;
+  size_t pending_next = 0;
+  double pending_next_advance = 0;
   for (size_t item = 1; item <= layout_count; item++) {
     lua_rawgeti(L, 1, (lua_Integer)item);
     LuaTextLayout *layout = check_text_layout(L, -1);
+    if (word_mode && pending_opportunity && layout->text_len > 0) {
+      if (ren_text_wrap_opportunity_after(
+        pending_codepoint, pending_previous_byte,
+        (unsigned char)layout->text[0]
+      )) {
+        last_opportunity_start = pending_start;
+        last_opportunity_next = pending_next;
+        last_opportunity_next_advance = pending_next_advance;
+      }
+      pending_opportunity = false;
+    }
     for (size_t index = 1; index < layout->count; index++) {
-      size_t char_start = byte_base + layout->byte_offsets[index - 1];
-      size_t boundary_byte = byte_base + layout->byte_offsets[index];
+      size_t local_start = layout->byte_offsets[index - 1];
+      size_t local_end = layout->byte_offsets[index];
+      size_t char_start = byte_base + local_start;
+      size_t boundary_byte = byte_base + local_end;
       double previous_advance = advance_base + layout->advances[index - 1];
       double boundary_advance = advance_base + layout->advances[index];
       if (boundary_byte <= start_byte) continue;
-      if (layout->text[layout->byte_offsets[index - 1]] == ' '
-          && layout->byte_offsets[index] == layout->byte_offsets[index - 1] + 1) {
-        last_space_start = char_start;
-        last_space_next = boundary_byte;
-        last_space_next_advance = boundary_advance;
-      }
       double leading = row_start_byte == start_byte
         ? first_leading : continuation_leading;
       double row_width = leading + boundary_advance - row_start_advance;
       if (wrap_width > 0 && row_width > wrap_width && char_start > row_start_byte) {
         size_t split_byte = char_start;
         double split_advance = previous_advance;
-        if (word_mode && last_space_start != SIZE_MAX
-            && last_space_start >= row_start_byte) {
-          split_byte = last_space_next;
-          split_advance = last_space_next_advance;
+        if (word_mode && last_opportunity_start != SIZE_MAX
+            && last_opportunity_start >= row_start_byte) {
+          split_byte = last_opportunity_next;
+          split_advance = last_opportunity_next_advance;
         }
         if (split_byte <= row_start_byte) {
           split_byte = char_start;
@@ -728,12 +754,41 @@ static int f_wrap_text_layouts(lua_State *L) {
         lua_rawseti(L, output_table, output_index++);
         row_start_byte = split_byte;
         row_start_advance = split_advance;
-        if (last_space_next <= row_start_byte) {
-          last_space_start = SIZE_MAX;
-          last_space_next = SIZE_MAX;
+        if (last_opportunity_next <= row_start_byte) {
+          last_opportunity_start = SIZE_MAX;
+          last_opportunity_next = SIZE_MAX;
+        }
+      } else if (word_mode) {
+        unsigned int codepoint = local_end == local_start + 1
+          ? (unsigned char)layout->text[local_start] : 0;
+        int previous_byte = local_start > 0
+          ? (unsigned char)layout->text[local_start - 1] : previous_layout_byte;
+        if (local_end < layout->text_len) {
+          if (ren_text_wrap_opportunity_after(
+            codepoint, previous_byte, (unsigned char)layout->text[local_end]
+          )) {
+            last_opportunity_start = char_start;
+            last_opportunity_next = boundary_byte;
+            last_opportunity_next_advance = boundary_advance;
+          }
+        } else if (codepoint == '.' || codepoint == '-') {
+          pending_opportunity = true;
+          pending_codepoint = codepoint;
+          pending_previous_byte = previous_byte;
+          pending_start = char_start;
+          pending_next = boundary_byte;
+          pending_next_advance = boundary_advance;
+        } else if (ren_text_wrap_opportunity_after(
+          codepoint, previous_byte, -1
+        )) {
+          last_opportunity_start = char_start;
+          last_opportunity_next = boundary_byte;
+          last_opportunity_next_advance = boundary_advance;
         }
       }
     }
+    if (layout->text_len > 0)
+      previous_layout_byte = (unsigned char)layout->text[layout->text_len - 1];
     byte_base += layout->text_len;
     advance_base += layout->count ? layout->advances[layout->count - 1] : 0;
     lua_pop(L, 1);

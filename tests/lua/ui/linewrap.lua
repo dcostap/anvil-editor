@@ -439,6 +439,40 @@ test.describe("line wrapping visual navigation", function()
     test.equal(view.wrapped_line_to_idx[1], 1)
   end)
 
+  test.it("prefers punctuation separators when word wrapping", function(context)
+    local cases = {
+      { "aaa,bbb", { 1, 5 } },
+      { "aaa;bbb", { 1, 5 } },
+      { "aaa(bbb", { 1, 5 } },
+      { "aaa[bbb", { 1, 5 } },
+      { "aaa{bbb", { 1, 5 } },
+      { "aaa/bbb", { 1, 5 } },
+      { "aaa\\bbb", { 1, 5 } },
+      { "aaa.bbb", { 1, 5 } },
+      { "aaa:bbb", { 1, 5 } },
+      { "aaa-bbb", { 1, 5 } },
+      { "12.34567", { 1, 6 } },
+    }
+    local lines = {}
+    for _, case in ipairs(cases) do lines[#lines + 1] = case[1] end
+    local view = open_editor(context, table.concat(lines, "\n"))
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.mode = "word"
+    config.plugins.linewrapping.width_override = view:get_font():get_width("xxxxx")
+    LineWrapping.update_textview_breaks(view)
+
+    for line, case in ipairs(cases) do
+      local first_idx, _, count = LineWrapping.get_line_idx_col_count(view, line)
+      local starts = {}
+      for idx = first_idx, first_idx + count - 1 do
+        local row_line, col = LineWrapping.get_idx_line_col(view, idx)
+        test.equal(row_line, line)
+        starts[#starts + 1] = col
+      end
+      test.same(starts, case[2], "unexpected wrap starts for " .. case[1])
+    end
+  end)
+
   test.it("uses letter fast path for long no-space ASCII in word mode", function(context)
     local view, buffer = open_editor(context, string.rep("f", 80))
     configure_wrapping_for_test(context, view)

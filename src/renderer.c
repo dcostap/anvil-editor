@@ -2559,6 +2559,36 @@ static double font_group_get_standalone_advance(
   return advance;
 }
 
+static bool ascii_letter(unsigned char byte) {
+  return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z');
+}
+
+static bool ascii_digit(unsigned char byte) {
+  return byte >= '0' && byte <= '9';
+}
+
+bool ren_text_wrap_opportunity_after(
+  unsigned int codepoint, int previous_byte, int next_byte
+) {
+  switch (codepoint) {
+    case ' ':
+    case ',': case ';':
+    case '(': case '[': case '{':
+    case '/': case '\\': case ':':
+      return true;
+    case '.':
+      return !(previous_byte >= 0 && next_byte >= 0
+        && ascii_digit((unsigned char)previous_byte)
+        && ascii_digit((unsigned char)next_byte));
+    case '-':
+      return previous_byte >= 0 && next_byte >= 0
+        && ascii_letter((unsigned char)previous_byte)
+        && ascii_letter((unsigned char)next_byte);
+    default:
+      return false;
+  }
+}
+
 void ren_font_group_wrap_text(
   RenFont **fonts, const char *text, size_t text_len, size_t start, size_t end,
   const RenTextWrapOptions *options, RenTextWrapEmit emit, void *userdata
@@ -2580,8 +2610,8 @@ void ren_font_group_wrap_text(
   const char *range_end = text + end;
   const char *cursor = range_start;
   const char *row_start = range_start;
-  size_t last_space = SIZE_MAX;
-  double last_space_width = 0;
+  size_t last_opportunity = SIZE_MAX;
+  double last_opportunity_width = 0;
   double row_width = options->first_leading;
   hb_buffer_t *hb_buffer = NULL;
 
@@ -2610,22 +2640,26 @@ void ren_font_group_wrap_text(
     if (options->width > 0
       && row_width > options->width
       && char_start > row_start) {
-      if (options->word_mode && last_space != SIZE_MAX) {
-        emit(last_space, userdata);
-        row_start = text + last_space;
-        /* `row_width - last_space_width` already contains the current
+      if (options->word_mode && last_opportunity != SIZE_MAX) {
+        emit(last_opportunity, userdata);
+        row_start = text + last_opportunity;
+        /* `row_width - last_opportunity_width` already contains the current
          * character. Do not add its advance a second time. */
         row_width = options->continuation_leading
-          + (row_width - last_space_width);
+          + (row_width - last_opportunity_width);
       } else {
         emit((size_t)(char_start - text), userdata);
         row_start = char_start;
         row_width = options->continuation_leading + advance;
       }
-      last_space = SIZE_MAX;
-    } else if (codepoint == ' ' && cursor == char_start + 1) {
-      last_space = (size_t)(cursor - text);
-      last_space_width = row_width;
+      last_opportunity = SIZE_MAX;
+    } else if (options->word_mode && ren_text_wrap_opportunity_after(
+      codepoint,
+      char_start > text ? (unsigned char)char_start[-1] : -1,
+      cursor < text + text_len ? (unsigned char)*cursor : -1
+    )) {
+      last_opportunity = (size_t)(cursor - text);
+      last_opportunity_width = row_width;
     }
   }
   if (hb_buffer) hb_buffer_destroy(hb_buffer);

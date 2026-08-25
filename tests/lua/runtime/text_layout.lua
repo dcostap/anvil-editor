@@ -34,6 +34,78 @@ test.describe("Native text layout", function()
     test.same(breaks, { 0, 6, 11 })
   end)
 
+  test.it("uses punctuation separators as word-wrap opportunities", function()
+    local font = test.not_nil(style.code_font or style.font)
+    local delimiters = { ",", ";", "(", "[", "{", "/", "\\", ".", ":", "-" }
+    for _, delimiter in ipairs(delimiters) do
+      local text = "aaa" .. delimiter .. "bbb"
+      local width = font:get_width("aaa" .. delimiter .. "b")
+      test.same(
+        font:wrap_text(text, width, "word"),
+        { 0, 4 },
+        "expected a wrap opportunity after " .. delimiter
+      )
+    end
+  end)
+
+  test.it("does not use a decimal point as a word-wrap opportunity", function()
+    local font = test.not_nil(style.code_font or style.font)
+    local text = "12.34567"
+    local breaks = font:wrap_text(text, font:get_width("12.3"), "word")
+    test.same(breaks, { 0, 4 })
+
+    local layouts = {
+      font:text_layout("12"),
+      font:text_layout("."),
+      font:text_layout("34567"),
+    }
+    test.same(
+      renderer.wrap_text_layouts(layouts, font:get_width("12.3"), "word"),
+      { 0, 4 }
+    )
+  end)
+
+  test.it("does not use arithmetic minus signs as word-wrap opportunities", function()
+    local font = test.not_nil(style.code_font or style.font)
+    local arithmetic = "12-34567"
+    test.same(
+      font:wrap_text(arithmetic, font:get_width("12-3"), "word"),
+      { 0, 4 }
+    )
+  end)
+
+  test.it("uses punctuation opportunities in retained text layouts", function()
+    local font = test.not_nil(style.code_font or style.font)
+    local text = "alpha,beta,gamma"
+    local layout = font:text_layout(text)
+    test.same(layout:wrap(font:get_width("alpha,b"), "word"), { 0, 6, 11 })
+
+    local layouts = {
+      font:text_layout("alpha,"),
+      font:text_layout("beta,"),
+      font:text_layout("gamma"),
+    }
+    test.same(
+      renderer.wrap_text_layouts(layouts, font:get_width("alpha,b"), "word"),
+      { 0, 6, 11 }
+    )
+  end)
+
+  test.it("does not keep an overflowing delimiter on the previous row", function()
+    local font = test.not_nil(style.code_font or style.font)
+    local text = "aaa,bbb"
+    local width = font:get_width("aaa")
+    local expected = { 0, 3, 6 }
+
+    test.same(font:wrap_text(text, width, "word"), expected)
+    test.same(font:text_layout(text):wrap(width, "word"), expected)
+    test.same(renderer.wrap_text_layouts({
+      font:text_layout("aaa"),
+      font:text_layout(","),
+      font:text_layout("bbb"),
+    }, width, "word"), expected)
+  end)
+
   test.it("wraps UTF-8 directly without retaining a text layout", function()
     local font = test.not_nil(style.code_font or style.font)
     local cell = font:get_width(" ")
