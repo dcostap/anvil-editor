@@ -4,6 +4,8 @@ local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
 local panes = require "core.panes"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local View = require "core.view"
 local RootPanel = require "core.rootpanel"
 local git_view = require "plugins.git_view"
@@ -73,6 +75,7 @@ test.describe("Git View command", function()
     context.original_projects = core.projects
     context.original_active_view = core.active_view
     context.original_active_window = core.active_window
+    context.original_nag_show = core.nag_view.show
     context.original_linewrapping_default = config.plugins.linewrapping.enable_by_default
     panes.git_sessions = {}
     context.project = { path = "C:/repo" }
@@ -83,6 +86,7 @@ test.describe("Git View command", function()
     core.projects = context.original_projects
     core.active_view = context.original_active_view
     core.active_window = context.original_active_window
+    core.nag_view.show = context.original_nag_show
     config.plugins.linewrapping.enable_by_default = context.original_linewrapping_default
     panes.git_sessions = {}
   end)
@@ -464,6 +468,22 @@ test.describe("Git View command", function()
     local buffer_view = diff.buffer_view_a
     test.equal(core.active_view, buffer_view)
     test.equal(core.active_view.git_owner_view, tab_view)
+  end)
+
+  test.test("opening Git over a dirty Untitled requests one close confirmation", function(context)
+    local buffer = Buffer(nil, nil, true)
+    buffer.intellij_untitled = true
+    buffer.intellij_untitled_name = "Untitled-Git-Open"
+    buffer:insert(1, 1, "keep me")
+    panes.create { factory = function() return Editor(buffer) end }
+    local prompts = 0
+    core.nag_view.show = function()
+      prompts = prompts + 1
+    end
+
+    open_fake_git_view(context.project)
+
+    test.equal(prompts, 1)
   end)
 
   test.it("updates an embedded commit diff before drawing", function(context)

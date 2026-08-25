@@ -181,12 +181,14 @@ function git_view.ensure_tab_view(session, tab, focus, target_pane)
       git_view.ensure_tab_view(session, opened_tab, true)
     end
     session.git_tab_views[tab.id] = view
-    if target_pane then panes.present(view, { pane = target_pane, focus = false })
-    elseif focus then activate_git_tab_view(session, view) end
+    if target_pane then
+      panes.present(view, { pane = target_pane, focus = false })
+    end
   end
   if view and not panes.pane_for_view(view) then
-    if target_pane then panes.present(view, { pane = target_pane, focus = false })
-    elseif focus then activate_git_tab_view(session, view) end
+    if target_pane then
+      panes.present(view, { pane = target_pane, focus = false })
+    end
   end
   if focus then
     tab = session.git_model:select_tab(tab.id, function() core.redraw = true end) or tab
@@ -262,8 +264,8 @@ function git_view.open_view(project, opts)
     session.hidden = opts.state and opts.state.hidden or false
     install_model_update_hook(session)
     local focus = not session.hidden and opts.focus ~= false
-    git_view.ensure_tab_view(session, view.model:log_tab(), focus)
-    git_view.sync_tab_views(session, focus)
+    git_view.ensure_tab_view(session, view.model:log_tab(), false)
+    git_view.sync_tab_views(session, false)
     if focus then focus_model_active_tab(session) end
   elseif session.git_view then
     view = (session.git_tab_views and session.git_tab_views[session.git_model.active_tab]) or session.git_view
