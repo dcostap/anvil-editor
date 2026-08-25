@@ -526,6 +526,19 @@ test.describe("Git View command", function()
     test.equal(details:is_wrapping_enabled(), false)
   end)
 
+  test.it("uses the rendered Git commit fonts for caret geometry", function(context)
+    local _, view = open_fake_git_view(context.project)
+    local commit = { hash = "abcdef0", short_hash = "abcdef0", subject = "Variable width subject" }
+    view.model:log_tab().commits = { commit }
+    view:update_pane_buffers()
+    local list = view:pane_view("log-list")
+    local line = list.buffer.lines[1]:gsub("\n$", "")
+    local expected = style.code_font:get_width(commit.short_hash)
+      + list:get_font():get_width("  " .. commit.subject)
+
+    test.equal(list:get_col_x_offset(1, #line + 1), expected)
+  end)
+
   test.test("Local Focus Cycle enters and wraps through Git Log targets", function(context)
     local session, view = open_fake_git_view(context.project)
     core.active_view = view

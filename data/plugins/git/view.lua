@@ -81,6 +81,35 @@ local function draw_segments(view, x, y, segments)
   return view:get_line_height()
 end
 
+local COMMIT_LINE_RENDER_PROVIDER = {
+  line_generation = function(_, view, line)
+    return view.git_commit_line_meta and view.git_commit_line_meta[line]
+  end,
+  render_line = function(_, view, line)
+    local meta = view.git_commit_line_meta and view.git_commit_line_meta[line]
+    if not (meta and meta.role == "commit") then return nil end
+    local hash = meta.hash or ""
+    local subject = meta.subject or ""
+    local subject_col = #hash + 3
+    return {
+      fragments = {
+        {
+          source_col1 = 1, source_col2 = #hash + 1,
+          text = hash, color = style.accent, font = style.code_font,
+        },
+        {
+          source_col1 = #hash + 1, source_col2 = subject_col,
+          text = "  ", color = style.dim,
+        },
+        {
+          source_col1 = subject_col, source_col2 = subject_col + #subject,
+          text = subject, color = style.text,
+        },
+      },
+    }
+  end,
+}
+
 function GitView:new(project, opts)
   self.__hide_right_pane_on_focus = true
   GitView.super.new(self)
@@ -121,17 +150,12 @@ function GitView:pane_view(name)
     if ViewType == TextView then
       view.get_gutter_width = function() return 0 end
       view.draw_line_gutter = function(v) return v:get_line_height() end
+      view:add_line_render_provider("git-commit-line", COMMIT_LINE_RENDER_PROVIDER)
     end
     local draw_line_text = view.draw_line_text
     view.draw_line_text = function(v, line, x, y)
       local commit_meta = v.git_commit_line_meta and v.git_commit_line_meta[line]
-      if commit_meta and commit_meta.role == "commit" then
-        return draw_segments(v, x, y, {
-          { text = commit_meta.hash or "", color = style.accent, font = style.code_font },
-          { text = "  ", color = style.dim },
-          { text = commit_meta.subject or "", color = style.text },
-        })
-      elseif commit_meta and commit_meta.role == "message" then
+      if commit_meta and commit_meta.role == "message" then
         return draw_segments(v, x, y, { { text = commit_meta.text or "", color = commit_meta.error and style.error or style.dim } })
       end
       local detail_meta = v.git_detail_line_meta and v.git_detail_line_meta[line]
