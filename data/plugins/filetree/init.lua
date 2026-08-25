@@ -3432,15 +3432,6 @@ local function open_path_in_context(target, context, pane, source_view)
 end
 
 command.add(nil, {
-  ["filetree:open"] = command.palette(function()
-    local context, pane, source_view = command_context()
-    local root = file_context.source_directory(source_view)
-    return open_root_in_context(root, context, pane, source_view) ~= nil
-  end, {
-    keywords = { "files", "folders", "current", "view" },
-    supports_placement = true,
-    opens_view = true,
-  }),
   ["filetree:open_at_project_root"] = command.palette(function()
     local context, pane, source_view = command_context()
     return open_root_in_context(nil, context, pane, source_view) ~= nil
@@ -3449,7 +3440,7 @@ command.add(nil, {
     supports_placement = true,
     opens_view = true,
   }),
-  ["filetree:open_at_path"] = command.palette(function(path)
+  ["filetree:open_at_choose_path"] = command.palette(function(path)
     local context, pane, source_view = command_context()
     if path then
       local view, err = open_path_in_context(path, context, pane, source_view)
@@ -3471,12 +3462,16 @@ command.add(nil, {
     supports_placement = true,
     opens_view = true,
   }),
-  ["filetree:open_at_current_file"] = command.palette(function()
+  ["filetree:open_at_current_path"] = command.palette(function()
     local context, pane, source_view = command_context()
-    local path = file_context.view_file_path(source_view) or file_context.current_file_path()
-    return path and reveal_path_in_context(path, context, pane, source_view) ~= nil
+    local path = file_context.view_context_path(source_view)
+    if path then
+      return open_path_in_context(path, context, pane, source_view) ~= nil
+    end
+    local root = file_context.source_directory(source_view)
+    return open_root_in_context(root, context, pane, source_view) ~= nil
   end, {
-    keywords = { "reveal", "locate", "files" },
+    keywords = { "reveal", "locate", "current", "files", "folders", "view" },
     supports_placement = true,
     opens_view = true,
   }),

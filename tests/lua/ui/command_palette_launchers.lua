@@ -62,10 +62,10 @@ test.describe("Command Palette View launchers", function()
     local picker = core.fuzzy_searcher_active_view
     local found
     for _, result in ipairs(picker.results) do
-      if result.command == "filetree:open_at_path" then found = result; break end
+      if result.command == "filetree:open_at_choose_path" then found = result; break end
     end
     test.not_nil(found)
-    test.equal(found.label, "filetree:open_at_path")
+    test.equal(found.label, "filetree:open_at_choose_path")
     test.equal(found.info, nil)
     test.equal(command.get_metadata(found.command).supports_placement, true)
     test.ok(command.get_metadata(found.command).opens_view)
@@ -88,8 +88,7 @@ test.describe("Command Palette View launchers", function()
       "command_output:run_shell_command",
       "diff:open",
       "editor:open",
-      "filetree:open",
-      "filetree:open_at_current_file",
+      "filetree:open_at_current_path",
       "fuzzy:open_files",
       "git:open",
       "log:open",
@@ -107,15 +106,63 @@ test.describe("Command Palette View launchers", function()
   test.it("uses the current File Tree command names and search keywords", function()
     test.not_nil(command.map["filetree:apply_changes"])
     test.is_nil(command.map["filetree:apply"])
-    test.not_nil(command.map["filetree:open_at_current_file"])
+    test.not_nil(command.map["filetree:open_at_current_path"])
+    test.is_nil(command.map["filetree:open"])
+    test.is_nil(command.map["filetree:open_at_path"])
+    test.is_nil(command.map["filetree:open_at_current_file"])
     test.is_nil(command.map["filetree:reveal_current_file"])
     test.is_nil(command.map["filetree:reveal_path"])
 
-    local metadata = test.not_nil(command.get_metadata("filetree:open_at_current_file"))
+    local metadata = test.not_nil(command.get_metadata("filetree:open_at_current_path"))
     test.ok(metadata.opens_view)
     local keywords = {}
     for _, keyword in ipairs(metadata.keywords or {}) do keywords[keyword] = true end
     test.ok(keywords.reveal)
+  end)
+
+  test.it("reveals an Editor file with open at current path", function(context)
+    local source = View()
+    source.path = context.file
+    local pane = panes.create { factory = function() return source end }
+
+    test.ok(command.perform_with_context("filetree:open_at_current_path", {
+      source_pane = pane, source_view = source, placement = "current",
+    }))
+
+    local tree = pane.current_view
+    test.equal(tree.root_dir, common.normalize_path(context.folder))
+    local entry = tree:entry_for_line(tree.buffer:get_selection(true))
+    test.ok(entry and common.path_equals(entry.abs, context.file))
+  end)
+
+  test.it("opens a source directory with open at current path", function(context)
+    local source = View()
+    source.current_dir = context.folder
+    local pane = panes.create { factory = function() return source end }
+
+    test.ok(command.perform_with_context("filetree:open_at_current_path", {
+      source_pane = pane, source_view = source, placement = "current",
+    }))
+
+    test.equal(pane.current_view.root_dir, common.normalize_path(context.folder))
+  end)
+
+  test.it("opens a selected File Tree folder as the root", function(context)
+    local source = test.not_nil(filetree.new(context.root))
+    local _, _, snapshot = source:build_entries(false)
+    local selected
+    for _, entry in pairs(snapshot.by_line) do
+      if common.path_equals(entry.abs, context.folder) then selected = entry; break end
+    end
+    selected = test.not_nil(selected)
+    source.buffer:set_selection(selected.line, 1)
+    local pane = panes.create { factory = function() return source end }
+
+    test.ok(command.perform_with_context("filetree:open_at_current_path", {
+      source_pane = pane, source_view = source, placement = "current",
+    }))
+
+    test.equal(pane.current_view.root_dir, common.normalize_path(context.folder))
   end)
 
   test.it("opens a Standard Editor without a Tab icon", function()
@@ -184,7 +231,7 @@ test.describe("Command Palette View launchers", function()
     local source = View()
     source.current_dir = context.root
     local pane = panes.create { factory = function() return source end }
-    test.ok(command.perform_with_context("filetree:open_at_path", {
+    test.ok(command.perform_with_context("filetree:open_at_choose_path", {
       source_pane = pane, source_view = source, placement = "current",
     }))
 

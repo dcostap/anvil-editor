@@ -120,7 +120,7 @@ test.describe("File Tree instances", function()
     local replacement = View()
     panes.present(replacement, { pane = pane })
 
-    test.ok(command.perform("filetree:open_at_path", file))
+    test.ok(command.perform("filetree:open_at_choose_path", file))
 
     test.equal(pane.current_view, tree)
     local selected = tree:entry_for_line(tree.buffer:get_selection(true))

@@ -351,7 +351,7 @@ end
 function ProjectPathsView:open_selected()
   local entry = self:selected_entry()
   if not entry then return end
-  command.perform("filetree:open_at_path", entry.path)
+  command.perform("filetree:open_at_choose_path", entry.path)
 end
 
 function ProjectPathsView:rename_selected(label)

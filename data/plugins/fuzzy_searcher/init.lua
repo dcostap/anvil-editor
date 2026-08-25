@@ -5851,7 +5851,7 @@ function FSView:confirm(target_side)
       direction = target_side and "right" or nil,
     }
     self:close()
-    return command.perform_with_context("filetree:open_at_path", context, path)
+    return command.perform_with_context("filetree:open_at_choose_path", context, path)
   end
   if (r.kind == "project" or r.kind == "new_project" or (r.kind == "path" and r.is_folder)) and r.project then
     local path = r.project

@@ -1333,10 +1333,9 @@ Do not classify the File Tree as an Editor merely because it uses a Buffer.
 Replace toggle and side-specific commands with direct commands:
 
 ```text
-filetree:open
 filetree:open_at_project_root
-filetree:open_at_path
-filetree:open_at_current_file
+filetree:open_at_choose_path
+filetree:open_at_current_path
 filetree:refresh
 filetree:apply_changes
 filetree:up_dir
