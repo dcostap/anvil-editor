@@ -34,9 +34,15 @@ test.describe("Command Palette View launchers", function()
       .. math.floor(system.get_time() * 1000000))
     context.folder = context.root .. PATHSEP .. "outside"
     context.file = context.folder .. PATHSEP .. "file.txt"
+    context.detached = context.root .. "-detached"
+    context.detached_file = context.detached .. PATHSEP .. "detached.txt"
     test.ok(common.mkdirp(context.folder))
+    test.ok(common.mkdirp(context.detached))
     local fp = assert(io.open(context.file, "wb"))
     fp:write("test\n")
+    fp:close()
+    fp = assert(io.open(context.detached_file, "wb"))
+    fp:write("detached\n")
     fp:close()
     core.projects = { Project(context.root) }
     project_paths.configure_project {}
@@ -53,6 +59,10 @@ test.describe("Command Palette View launchers", function()
     if context.cwd then pcall(system.chdir, context.cwd) end
     if system.get_file_info(context.root) then
       local ok, err = common.rm(context.root, true)
+      test.ok(ok, err)
+    end
+    if system.get_file_info(context.detached) then
+      local ok, err = common.rm(context.detached, true)
       test.ok(ok, err)
     end
   end)
@@ -130,7 +140,7 @@ test.describe("Command Palette View launchers", function()
     }))
 
     local tree = pane.current_view
-    test.equal(tree.root_dir, common.normalize_path(context.folder))
+    test.equal(tree.root_dir, common.normalize_path(context.root))
     local entry = tree:entry_for_line(tree.buffer:get_selection(true))
     test.ok(entry and common.path_equals(entry.abs, context.file))
   end)
@@ -144,7 +154,10 @@ test.describe("Command Palette View launchers", function()
       source_pane = pane, source_view = source, placement = "current",
     }))
 
-    test.equal(pane.current_view.root_dir, common.normalize_path(context.folder))
+    local tree = pane.current_view
+    test.equal(tree.root_dir, common.normalize_path(context.root))
+    local entry = tree:entry_for_line(tree.buffer:get_selection(true))
+    test.ok(entry and common.path_equals(entry.abs, context.folder))
   end)
 
   test.it("opens a selected File Tree folder as the root", function(context)
@@ -162,7 +175,57 @@ test.describe("Command Palette View launchers", function()
       source_pane = pane, source_view = source, placement = "current",
     }))
 
-    test.equal(pane.current_view.root_dir, common.normalize_path(context.folder))
+    local tree = pane.current_view
+    test.equal(tree.root_dir, common.normalize_path(context.root))
+    local entry = tree:entry_for_line(tree.buffer:get_selection(true))
+    test.ok(entry and common.path_equals(entry.abs, context.folder))
+  end)
+
+  test.it("keeps an outside file rooted at its parent", function(context)
+    local source = View()
+    source.path = context.detached_file
+    local pane = panes.create { factory = function() return source end }
+
+    test.ok(command.perform_with_context("filetree:open_at_current_path", {
+      source_pane = pane, source_view = source, placement = "current",
+    }))
+
+    local tree = pane.current_view
+    test.equal(tree.root_dir, common.normalize_path(context.detached))
+    local entry = tree:entry_for_line(tree.buffer:get_selection(true))
+    test.ok(entry and common.path_equals(entry.abs, context.detached_file))
+  end)
+
+  test.it("reveals External and Vendored Project Directory files from the Root Project", function(context)
+    local targets = {}
+    local spec = { external = {}, vendored = {} }
+    for _, role in ipairs({ "external", "vendored" }) do
+      local folder = context.root .. PATHSEP .. role
+      local path = folder .. PATHSEP .. role .. ".lua"
+      test.ok(common.mkdirp(folder))
+      local fp = assert(io.open(path, "wb"))
+      fp:write("return true\n")
+      fp:close()
+      spec[role][1] = { path = folder, label = role }
+      targets[#targets + 1] = path
+    end
+    project_paths.configure_project(spec)
+
+    for _, path in ipairs(targets) do
+      panes.reset_for_tests()
+      local source = View()
+      source.path = path
+      local pane = panes.create { factory = function() return source end }
+
+      test.ok(command.perform_with_context("filetree:open_at_current_path", {
+        source_pane = pane, source_view = source, placement = "current",
+      }))
+
+      local tree = pane.current_view
+      test.equal(tree.root_dir, common.normalize_path(context.root))
+      local entry = tree:entry_for_line(tree.buffer:get_selection(true))
+      test.ok(entry and common.path_equals(entry.abs, path))
+    end
   end)
 
   test.it("opens a Standard Editor without a Tab icon", function()

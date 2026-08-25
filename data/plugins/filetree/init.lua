@@ -3290,7 +3290,7 @@ local function focus_entry(view, entry, filename)
   return true
 end
 
-local function focus_file(view, filename)
+local function focus_path(view, filename)
   filename = filename and common.normalize_path(filename)
   local root = core.root_project and core.root_project()
   local resolved = filename and project_paths.resolve(filename)
@@ -3338,7 +3338,7 @@ function M.new(target, opts)
   local root, selected, err = target_state(target, opts.source_view)
   if not root then return nil, err end
   local view = FileTreeView { root = root, select_path = selected }
-  if selected then focus_file(view, selected) end
+  if selected then focus_path(view, selected) end
   return view
 end
 
@@ -3348,7 +3348,7 @@ function M.open(target, opts)
   if not root then return nil, err end
   return panes.place(function()
     local view = FileTreeView { root = root, select_path = selected }
-    if selected then focus_file(view, selected) end
+    if selected then focus_path(view, selected) end
     return view
   end, opts)
 end
@@ -3405,7 +3405,7 @@ local function reveal_path_in_context(target, context, pane, source_view)
   if not path or not system.get_file_info(path) then return nil, "File Tree target does not exist" end
   if (context.placement or "current") == "current" then
     for _, candidate in ipairs(pane and panes.views(pane) or {}) do
-      if candidate.extends and candidate:extends(FileTreeView) and focus_file(candidate, path) then
+      if candidate.extends and candidate:extends(FileTreeView) and focus_path(candidate, path) then
         panes.present(candidate, { pane = pane, focus = true })
         return candidate
       end
@@ -3465,11 +3465,14 @@ command.add(nil, {
   ["filetree:open_at_current_path"] = command.palette(function()
     local context, pane, source_view = command_context()
     local path = file_context.view_context_path(source_view)
-    if path then
-      return open_path_in_context(path, context, pane, source_view) ~= nil
+      or file_context.source_directory(source_view)
+    if path and project_paths.resolve(path) then
+      local project = core.root_project and core.root_project()
+      local view = project and open_root_in_context(project.path, context, pane, source_view)
+      if view and not common.path_equals(path, project.path) then focus_path(view, path) end
+      return view ~= nil
     end
-    local root = file_context.source_directory(source_view)
-    return open_root_in_context(root, context, pane, source_view) ~= nil
+    return path and open_path_in_context(path, context, pane, source_view) ~= nil
   end, {
     keywords = { "reveal", "locate", "current", "files", "folders", "view" },
     supports_placement = true,
