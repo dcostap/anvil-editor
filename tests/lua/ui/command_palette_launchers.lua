@@ -299,7 +299,7 @@ test.describe("Command Palette View launchers", function()
     }))
 
     local picker = core.fuzzy_searcher_active_view
-    set_query(picker, "@" .. context.file)
+    set_query(picker, context.file)
     local selected
     for index, result in ipairs(picker.results) do
       local path = result.abs_path or result.file or result.path
@@ -319,6 +319,30 @@ test.describe("Command Palette View launchers", function()
     test.equal(core.root_project().path, common.normalize_path(context.root))
   end)
 
+  test.it("keeps File Picker mode independent of its query text", function(context)
+    local source = View()
+    local pane = panes.create { factory = function() return source end }
+    test.ok(command.perform_with_context("filetree:open_at_choose_path", {
+      source_pane = pane, source_view = source, placement = "current",
+    }))
+
+    local picker = core.fuzzy_searcher_active_view
+    set_query(picker, context.folder)
+    local selected
+    for index, result in ipairs(picker.results) do
+      local path = result.abs_path or result.file or result.path
+      if path and common.path_equals(path, context.folder) then
+        selected = result
+        picker.selected = index
+        break
+      end
+    end
+    test.not_nil(selected)
+    picker:confirm(false)
+
+    test.equal(pane.current_view.root_dir, common.normalize_path(context.folder))
+  end)
+
   test.it("opens a Terminal at a selected folder with split placement", function(context)
     local source = View()
     local pane = panes.create { factory = function() return source end }
@@ -329,7 +353,7 @@ test.describe("Command Palette View launchers", function()
     }))
 
     local picker = core.fuzzy_searcher_active_view
-    set_query(picker, "@" .. context.folder)
+    set_query(picker, context.folder)
     picker.selected = 1
     picker:confirm(true)
 

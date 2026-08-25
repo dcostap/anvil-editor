@@ -3129,7 +3129,7 @@ function FSView:new(prefix, opts)
   self.static_mode = opts.static == true
   self.static_results = opts.results or {}
   self.static_status = opts.status or ""
-  self.path_selection = opts.path_selection
+  self.file_picker = opts.file_picker
   self.loading_feedback_generation = 0
   self.loading_feedback_pending = false
   self.loading_feedback_status = nil
@@ -3208,7 +3208,7 @@ function FSView:new(prefix, opts)
     self.input.textview.buffer.readonly = true
   end
 
-  if not self.static_mode and prompt_uses_file_index(prefix) then
+  if not self.static_mode and not self.file_picker and prompt_uses_file_index(prefix) then
     fuzzy_searcher.refresh_file_index_for_picker_open()
   end
   self:show()
@@ -3254,6 +3254,7 @@ end
 
 function FSView:is_path_search()
   if self.static_mode then return false end
+  if self.file_picker then return true end
   if self.path_search_active ~= nil then return self.path_search_active end
   local text = self.input and self.input:get_text() or ""
   local mode, query = split_mode_prefix(text)
@@ -4149,7 +4150,7 @@ function FSView:start_everything_path_search(query, scope, append)
   everything.search_generation = everything.search_generation + 1
   local gen = everything.search_generation
   local count = fuzzy_searcher.everything_page_size or 80
-  local folder_only = self.path_selection and self.path_selection.kind == "folder"
+  local folder_only = self.file_picker and self.file_picker.select == "folder"
   self.everything_loading = false
   self.everything_pending = folder_only and 1 or 2
   if folder_only then
@@ -4245,7 +4246,11 @@ function FSView:start_everything_path_search(query, scope, append)
     #query, tostring(scope ~= nil), tostring(append))
   request("folder", everything_folder_search_params(query, count, folder_offset, scope), function()
     if not folder_only then
-      request("file", everything_file_search_params(query, count, file_offset, scope))
+      local file_query = query
+      if self.file_picker and self.file_picker.extension_query then
+        file_query = trim_query(file_query .. " " .. self.file_picker.extension_query)
+      end
+      request("file", everything_file_search_params(file_query, count, file_offset, scope))
     end
   end)
 end
@@ -4267,33 +4272,40 @@ function FSView:clear_path_search_results(cancel_request)
   self.path_search_query_key = nil
 end
 
-function path_search.native_results(scope, query, limit, kind)
+function path_search.native_results(scope, query, limit, picker)
   if not scope or not system.list_dir_info then return {}, {} end
   query = trim_query(query)
   if query:find("[/\\]", 1) then return {}, {} end
   limit = math.max(1, limit or 30)
   local folder_entries = system.list_dir_info(scope, limit, "dir", query)
-  local file_entries = kind == "folder" and {} or system.list_dir_info(scope, limit, "file", query)
+  local file_limit = picker and picker.extensions and 2147483647 or limit
+  local file_entries = picker and picker.select == "folder"
+    and {} or system.list_dir_info(scope, file_limit, "file", query)
   local folders, files = {}, {}
   local function append_entries(entries, is_folder, target)
     for _, entry in ipairs(type(entries) == "table" and entries or {}) do
       local path = common.normalize_path(scope .. PATHSEP .. entry.name)
       local score, spans = fuzzy_match(query, path)
       local info = not is_folder and system.get_file_info(path) or nil
-      target[#target+1] = {
-        kind = "path",
-        label = path,
-        path = path,
-        file = is_folder and nil or path,
-        project = is_folder and path or nil,
-        is_folder = is_folder,
-        source = "filesystem",
-        query = query,
-        match_score = score,
-        match_spans = spans or {},
-        size_label = is_folder and "" or format_size(info and info.size),
-        modified_label = info and info.modified and compact_age(info.modified) or "",
-      }
+      local extension = not is_folder and entry.name:match("%.([^./\\]+)$")
+      local allowed = is_folder or not (picker and picker.extensions)
+        or picker.extensions[tostring(extension or ""):lower()]
+      if allowed then
+        target[#target+1] = {
+          kind = "path",
+          label = path,
+          path = path,
+          file = is_folder and nil or path,
+          project = is_folder and path or nil,
+          is_folder = is_folder,
+          source = "filesystem",
+          query = query,
+          match_score = score,
+          match_spans = spans or {},
+          size_label = is_folder and "" or format_size(info and info.size),
+          modified_label = info and info.modified and compact_age(info.modified) or "",
+        }
+      end
     end
   end
   append_entries(folder_entries, true, folders)
@@ -4380,20 +4392,31 @@ function path_search.append_sections(out, projects, folders, files, limit)
   return hidden
 end
 
-function path_search.selection_accepts(selection, result)
-  if not selection or not result or result.header or result.create_path then return false end
-  if result.kind ~= "path" and result.kind ~= "project" then return false end
-  if selection.kind == "folder" then return result.is_folder == true end
-  return result.is_folder == true or result.file ~= nil or result.abs_path ~= nil
+function path_search.file_picker_candidate(picker, result)
+  if not picker or not result or result.header or result.create_path then return nil end
+  local path = result.path or result.project or result.abs_path or result.file
+  if not path then return nil end
+  local is_folder = result.is_folder == true
+    or result.kind == "folder" or result.kind == "project"
+  if not is_folder and picker.select == "folder" then return nil end
+  if not is_folder and picker.extensions then
+    local extension = tostring(path):match("%.([^./\\]+)$")
+    if not picker.extensions[tostring(extension or ""):lower()] then return nil end
+  end
+  return { path = path, type = is_folder and "folder" or "file" }
 end
 
-function path_search.filter_selection_results(results, selection)
-  if not selection then return results end
+function path_search.file_picker_accepts(picker, candidate)
+  return candidate and (picker.select == "any" or picker.select == candidate.type)
+end
+
+function path_search.filter_file_picker_results(results, picker)
+  if not picker then return results end
   local out, pending_header = {}, nil
   for _, result in ipairs(results or {}) do
     if result.header then
       pending_header = result
-    elseif path_search.selection_accepts(selection, result) then
+    elseif path_search.file_picker_candidate(picker, result) then
       if pending_header then
         out[#out + 1] = pending_header
         pending_header = nil
@@ -4562,9 +4585,7 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
       local folders = self.everything_folder_results or {}
       local files = self.everything_file_results or {}
       if everything.state ~= "available" then
-        folders, files = path_search.native_results(
-          scope, query, limit, self.path_selection and self.path_selection.kind
-        )
+        folders, files = path_search.native_results(scope, query, limit, self.file_picker)
       end
       if path_plan.project_scope then
         for _, result in ipairs(folders) do
@@ -4589,7 +4610,7 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
   self:cancel_deferred_loading_feedback()
 
   out = path_search.prepend_direct(out, direct)
-  out = path_search.filter_selection_results(out, self.path_selection)
+  out = path_search.filter_file_picker_results(out, self.file_picker)
 
   if mode == "!" then
     local cwd = file_context.source_directory(self.source_view) or system.getcwd()
@@ -4607,8 +4628,9 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
     self.status = string.format("%d files + %d folders indexed — %s",
       file_index_count(), folder_index_count(), fuzzy_searcher.project_roots_label())
   end
-  if self.path_selection then
-    local label = self.path_selection.kind == "folder" and "Select a folder" or "Select a path"
+  if self.file_picker then
+    local labels = { any = "Select a file or folder", file = "Select a file", folder = "Select a folder" }
+    local label = self.file_picker.label or labels[self.file_picker.select]
     self.status = label .. (self.status ~= "" and (" — " .. self.status) or "")
   end
 
@@ -5530,7 +5552,13 @@ function FSView:refresh(text)
   text = text or self.input:get_text()
   local files_changed = self.last_files_generation ~= fuzzy_searcher.files_generation
   local files_scope_changed = self.last_files_scope_generation ~= fuzzy_searcher.files_scope_generation
-  local base, line, col, grep, symbol = parse_query(text)
+  local base, line, col, grep, symbol
+  if self.file_picker then
+    -- A File Picker has one fixed mode. Its input is only a path query.
+    base = "@" .. tostring(text or "")
+  else
+    base, line, col, grep, symbol = parse_query(text)
+  end
   local query_key = table.concat({ base, tostring(line or ""), tostring(col or ""), tostring(grep or ""), tostring(symbol or "") }, "\0")
   local query_changed = query_key ~= self.current_query_key
 
@@ -5606,7 +5634,7 @@ function fuzzy_searcher.apply_prompt_history_text(view, text, select_query)
 end
 
 function FSView:record_prompt_history()
-  if self.static_mode or self._prompt_history_recorded then return end
+  if self.static_mode or self.file_picker or self._prompt_history_recorded then return end
   self._prompt_history_recorded = true
   if self.input then fuzzy_searcher.record_prompt_history_text(self.input:get_text()) end
 end
@@ -5627,7 +5655,7 @@ function FSView:prompt_history_session()
 end
 
 function FSView:navigate_prompt_history(delta)
-  if self.static_mode or not self.input then return false end
+  if self.static_mode or self.file_picker or not self.input then return false end
   local session = self:prompt_history_session()
   local index = common.clamp(session.index + delta, 1, #session.entries)
   if index == session.index then return false end
@@ -5636,7 +5664,14 @@ function FSView:navigate_prompt_history(delta)
   return true
 end
 
-function FSView:close()
+function FSView:close(reason)
+  if self.closed then return end
+  self.closed = true
+  local cancel
+  if self.file_picker and not self.file_picker_finished then
+    self.file_picker_finished = true
+    cancel = self.file_picker.cancel
+  end
   fuzzy_focus_log("close", self)
   local input_view = self.input and self.input.textview
   core.root_panel:pop_modal_input(self)
@@ -5657,10 +5692,14 @@ function FSView:close()
       and (core.active_view == self or core.active_view == input_view) then
     core.clear_active_view(core.active_view)
   end
+  if cancel then
+    core.log_quiet("File Picker: cancelled reason=%s", tostring(reason or "cancelled"))
+    cancel(reason or "cancelled")
+  end
 end
 
 function FSView:can_toggle_ignored_files()
-  if self.static_mode then return false end
+  if self.static_mode or self.file_picker then return false end
   local mode = fuzzy_searcher.prompt_mode(self.input and self.input:get_text() or "")
   return mode == "#" or (mode == "" and not self:is_path_search())
 end
@@ -5820,26 +5859,37 @@ function FSView:confirm(target_side)
     command.perform_with_context(cmd, context)
     return
   end
-  if self.path_selection then
-    if not path_search.selection_accepts(self.path_selection, r) then return end
-    local path = r.path or r.project or r.abs_path or r.file
-    local info = path and system.get_file_info(path)
-    if not info or (self.path_selection.kind == "folder" and info.type ~= "dir") then
+  if self.file_picker then
+    local candidate = path_search.file_picker_candidate(self.file_picker, r)
+    if not candidate then return end
+    local path = candidate.path
+    local info = system.get_file_info(path)
+    if not info or (candidate.type == "folder" and info.type ~= "dir")
+        or (candidate.type == "file" and info.type ~= "file") then
       self.force_refresh = true
       self.dirty = true
       self:refresh(self.input:get_text())
       self:schedule_update(true)
       return
     end
-    local selection = self.path_selection
+    if not path_search.file_picker_accepts(self.file_picker, candidate) then
+      if candidate.type == "folder" and self.file_picker.select == "file" then
+        self.input:set_text(common.normalize_path(path) .. PATHSEP)
+        ensure_input_focus(self, "file-picker-browse-folder")
+      end
+      return
+    end
+    local picker = self.file_picker
     local context = {
       source_view = self.source_view,
       source_pane = panes.find(self.source_pane) or panes.active(),
       placement = target_side and "split" or "current",
       direction = target_side and "right" or nil,
     }
+    self.file_picker_finished = true
     self:close()
-    selection.on_accept(path, context)
+    core.log_quiet("File Picker: selected type=%s", candidate.type)
+    picker.submit(common.normalize_path(path), context)
     return
   end
   if r.kind == "create_path" then
@@ -6222,6 +6272,10 @@ end
 
 local function switch_picker_prefix(view, prefix)
   prefix = prefix or ""
+  if view.file_picker then
+    ensure_input_focus(view, "file-picker-fixed-mode")
+    return false
+  end
   local old_text = view.input and view.input:get_text() or ""
   local _, query = split_mode_prefix(old_text)
   if prefix == "" then
@@ -6289,6 +6343,10 @@ function open(prefix, opts)
   prefix = prefix or ""
   opts = opts or {}
   local view = current_picker()
+  if view and view.file_picker then
+    view:close("replaced")
+    view = nil
+  end
   if view then
     switch_picker_prefix(view, prefix)
     return view
@@ -6311,18 +6369,52 @@ function open(prefix, opts)
   return active_view
 end
 
-function fuzzy_searcher.pick_path(opts)
+function fuzzy_searcher.normalize_file_picker_options(opts)
   opts = opts or {}
-  assert(type(opts.on_accept) == "function", "path selection requires on_accept")
+  local select_type = opts.select or "any"
+  assert(select_type == "any" or select_type == "file" or select_type == "folder",
+    "File Picker select must be 'any', 'file', or 'folder'")
+  assert(type(opts.submit) == "function", "File Picker requires submit")
+  assert(opts.cancel == nil or type(opts.cancel) == "function", "File Picker cancel must be a function")
+
+  local extensions, extension_list
+  if opts.extensions ~= nil then
+    assert(select_type ~= "folder", "a folder File Picker cannot filter file extensions")
+    assert(type(opts.extensions) == "table", "File Picker extensions must be a list")
+    extensions, extension_list = {}, {}
+    for _, value in ipairs(opts.extensions) do
+      local extension = tostring(value):lower():gsub("^%.", "")
+      assert(extension ~= "" and not extension:find("[/\\]", 1),
+        "File Picker extensions must contain extension names")
+      if not extensions[extension] then
+        extensions[extension] = true
+        extension_list[#extension_list + 1] = extension
+      end
+    end
+    assert(#extension_list > 0, "File Picker extensions must not be empty")
+  end
+
+  return {
+    select = select_type,
+    submit = opts.submit,
+    cancel = opts.cancel,
+    label = opts.label,
+    extensions = extensions,
+    extension_query = extension_list and ("ext:" .. table.concat(extension_list, ";")) or nil,
+  }
+end
+
+function fuzzy_searcher.open_file_picker(opts)
+  opts = opts or {}
+  local picker = fuzzy_searcher.normalize_file_picker_options(opts)
   local view = current_picker()
-  if view then view:close() end
-  active_view = FSView("@" .. tostring(opts.query or ""), {
+  if view then view:close("replaced") end
+  core.log_quiet("File Picker: open select=%s extensions=%s", picker.select,
+    tostring(picker.extension_query or "none"))
+  active_view = FSView(tostring(opts.query or ""), {
     source_view = opts.source_view,
     source_pane = opts.source_pane,
-    path_selection = {
-      kind = opts.kind or "path",
-      on_accept = opts.on_accept,
-    },
+    file_picker = picker,
   })
   core.fuzzy_searcher_active_view = active_view
   return active_view
@@ -6443,7 +6535,7 @@ end
 
 return {
   open = open,
-  pick_path = fuzzy_searcher.pick_path,
+  open_file_picker = fuzzy_searcher.open_file_picker,
   open_static_results = open_static_results,
   _test = {
     everything_folder_search_params = everything_folder_search_params,

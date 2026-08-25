@@ -926,11 +926,11 @@ command.add(nil, {
     local context = command.get_invocation_context() or {}
     local pane = panes.find(context.source_pane or panes.active())
     local source_view = context.source_view or (pane and pane.current_view)
-    require("plugins.fuzzy_searcher").pick_path {
-      kind = "folder",
+    require("plugins.file_picker").open {
+      select = "folder",
       source_pane = pane,
       source_view = source_view,
-      on_accept = function(path, selection_context)
+      submit = function(path, selection_context)
         M.open {
           pane = selection_context.source_pane,
           placement = selection_context.placement,

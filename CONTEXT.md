@@ -352,9 +352,13 @@ _Avoid_: Pane Command Bar, Terminal View input
 The floating picker used for fuzzy navigation and search modes, such as files, projects, grep, symbols, and commands.
 _Avoid_: fuzzy searcher popup
 
+**File Picker**:
+A temporary Fuzzy Searcher interface for selecting an existing file, folder, or either under fixed filters.
+_Avoid_: Path Picker, path selector, Path Selection session
+
 **Project File Search**:
 A Fuzzy Searcher search for files and folders under loaded Project Paths. Files follow Project Search Scope. Empty folders appear. Ignored folder roots appear, but Project File Search does not enter them.
-_Avoid_: fuzzy file searcher, file picker
+_Avoid_: fuzzy file searcher
 
 **Project Folder Result**:
 A Project File Search result for a folder. Activating it opens a File Tree rooted at that folder.

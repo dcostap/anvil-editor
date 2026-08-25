@@ -3447,11 +3447,11 @@ command.add(nil, {
       if not view and err then core.error("Could not open File Tree: %s", err) end
       return view ~= nil
     end
-    require("plugins.fuzzy_searcher").pick_path {
-      kind = "path",
+    require("plugins.file_picker").open {
+      select = "any",
       source_pane = pane,
       source_view = source_view,
-      on_accept = function(selected, selection_context)
+      submit = function(selected, selection_context)
         local view, err = open_path_in_context(selected, selection_context, pane, source_view)
         if not view and err then core.error("Could not open File Tree: %s", err) end
       end,
