@@ -89,6 +89,7 @@ test.describe("Command Palette View launchers", function()
       "diff:open",
       "editor:open",
       "filetree:open",
+      "filetree:open_at_current_file",
       "fuzzy:open_files",
       "git:open",
       "log:open",
@@ -101,6 +102,20 @@ test.describe("Command Palette View launchers", function()
       test.ok(metadata.opens_view, name)
       test.not_nil(view_icons.get(name:match("^([^:]+):")), name)
     end
+  end)
+
+  test.it("uses the current File Tree command names and search keywords", function()
+    test.not_nil(command.map["filetree:apply_changes"])
+    test.is_nil(command.map["filetree:apply"])
+    test.not_nil(command.map["filetree:open_at_current_file"])
+    test.is_nil(command.map["filetree:reveal_current_file"])
+    test.is_nil(command.map["filetree:reveal_path"])
+
+    local metadata = test.not_nil(command.get_metadata("filetree:open_at_current_file"))
+    test.ok(metadata.opens_view)
+    local keywords = {}
+    for _, keyword in ipairs(metadata.keywords or {}) do keywords[keyword] = true end
+    test.ok(keywords.reveal)
   end)
 
   test.it("opens a Standard Editor without a Tab icon", function()
@@ -165,7 +180,7 @@ test.describe("Command Palette View launchers", function()
     test.not_nil(found)
   end)
 
-  test.it("selects only existing folders for a File Tree root", function(context)
+  test.it("opens a File Tree at a selected file path", function(context)
     local source = View()
     source.current_dir = context.root
     local pane = panes.create { factory = function() return source end }
@@ -174,18 +189,23 @@ test.describe("Command Palette View launchers", function()
     }))
 
     local picker = core.fuzzy_searcher_active_view
-    set_query(picker, "@" .. context.folder)
-    for _, result in ipairs(picker.results) do
-      if not result.header then
-        test.ok(result.is_folder)
-        test.not_equal(result.kind, "create_path")
+    set_query(picker, "@" .. context.file)
+    local selected
+    for index, result in ipairs(picker.results) do
+      local path = result.abs_path or result.file or result.path
+      if path and common.path_equals(path, context.file) then
+        selected = result
+        picker.selected = index
+        break
       end
     end
-    test.ok(#picker.results > 0)
-    picker.selected = 1
+    test.not_nil(selected)
+    test.equal(selected.is_folder, false)
     picker:confirm(false)
 
     test.equal(pane.current_view.root_dir, common.normalize_path(context.folder))
+    local entry = pane.current_view:entry_for_line(pane.current_view.buffer:get_selection(true))
+    test.ok(entry and common.path_equals(entry.abs, context.file))
     test.equal(core.root_project().path, common.normalize_path(context.root))
   end)
 

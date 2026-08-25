@@ -114,13 +114,13 @@ test.describe("File Tree instances", function()
     test.equal(tree.root_dir, common.normalize_path(root))
   end)
 
-  test.it("records a new Navigation Place when an existing File Tree is shown again", function()
+  test.it("opens a file path in an existing File Tree", function()
     local tree = assert(filetree.new(root))
     local pane = panes.create { factory = function() return tree end }
     local replacement = View()
     panes.present(replacement, { pane = pane })
 
-    test.ok(command.perform("filetree:reveal_path", file))
+    test.ok(command.perform("filetree:open_at_path", file))
 
     test.equal(pane.current_view, tree)
     local selected = tree:entry_for_line(tree.buffer:get_selection(true))

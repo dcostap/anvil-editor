@@ -1334,12 +1334,13 @@ Replace toggle and side-specific commands with direct commands:
 
 ```text
 filetree:open
-filetree:open-root-project
-filetree:open-at-current-file
+filetree:open_at_project_root
+filetree:open_at_path
+filetree:open_at_current_file
 filetree:refresh
-filetree:apply
-filetree:up-dir
-filetree:select-all
+filetree:apply_changes
+filetree:up_dir
+filetree:select_all
 ```
 
 A generic `view:close` or Navigation Back replaces hide-and-focus-left behavior.

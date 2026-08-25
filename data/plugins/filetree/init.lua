@@ -3415,6 +3415,16 @@ local function reveal_path_in_context(target, context, pane, source_view)
   })
 end
 
+local function open_path_in_context(target, context, pane, source_view)
+  local path = file_context.resolve_path(target, source_view)
+  local info = path and system.get_file_info(path)
+  if not info then return nil, "File Tree target does not exist" end
+  if info.type == "dir" then
+    return open_root_in_context(path, context, pane, source_view)
+  end
+  return reveal_path_in_context(path, context, pane, source_view)
+end
+
 command.add(nil, {
   ["filetree:open"] = command.palette(function()
     local context, pane, source_view = command_context()
@@ -3436,16 +3446,16 @@ command.add(nil, {
   ["filetree:open_at_path"] = command.palette(function(path)
     local context, pane, source_view = command_context()
     if path then
-      local view, err = open_root_in_context(path, context, pane, source_view)
+      local view, err = open_path_in_context(path, context, pane, source_view)
       if not view and err then core.error("Could not open File Tree: %s", err) end
       return view ~= nil
     end
     require("plugins.fuzzy_searcher").pick_path {
-      kind = "folder",
+      kind = "path",
       source_pane = pane,
       source_view = source_view,
-      on_accept = function(path, selection_context)
-        local view, err = open_root_in_context(path, selection_context, pane, source_view)
+      on_accept = function(selected, selection_context)
+        local view, err = open_path_in_context(selected, selection_context, pane, source_view)
         if not view and err then core.error("Could not open File Tree: %s", err) end
       end,
     }
@@ -3455,30 +3465,14 @@ command.add(nil, {
     supports_placement = true,
     opens_view = true,
   }),
-  ["filetree:reveal_current_file"] = command.palette(function()
+  ["filetree:open_at_current_file"] = command.palette(function()
     local context, pane, source_view = command_context()
     local path = file_context.view_file_path(source_view) or file_context.current_file_path()
     return path and reveal_path_in_context(path, context, pane, source_view) ~= nil
   end, {
-    keywords = { "locate", "files" },
+    keywords = { "reveal", "locate", "files" },
     supports_placement = true,
-  }),
-  ["filetree:reveal_path"] = command.palette(function(path)
-    local context, pane, source_view = command_context()
-    if path then return reveal_path_in_context(path, context, pane, source_view) ~= nil end
-    require("plugins.fuzzy_searcher").pick_path {
-      kind = "path",
-      source_pane = pane,
-      source_view = source_view,
-      on_accept = function(selected, selection_context)
-        local view, err = reveal_path_in_context(selected, selection_context, pane, source_view)
-        if not view and err then core.error("Could not reveal path in File Tree: %s", err) end
-      end,
-    }
-    return true
-  end, {
-    keywords = { "locate", "files", "folders", "external" },
-    supports_placement = true,
+    opens_view = true,
   }),
   ["filetree:sync_path"] = function(path, source_view)
     local view = source_view and source_view.extends and source_view:extends(FileTreeView)
@@ -3503,7 +3497,7 @@ end, {
     view:refresh_preserving_selection_paths(true)
     view:schedule_git_status_refresh("manual-refresh", true)
   end),
-  ["filetree:apply"] = command.palette(function(view) view:apply_edits() end),
+  ["filetree:apply_changes"] = command.palette(function(view) view:apply_edits() end),
   ["filetree:open_selected"] = function(view) view:open_item() end,
   ["filetree:up_dir"] = function(view) view:up_dir() end,
   ["filetree:project_root"] = function(view)
@@ -3517,7 +3511,7 @@ end, {
 
 keymap.add {
   ["ctrl+\\"] = "filetree:open_at_project_root",
-  ["ctrl+s"] = "filetree:apply",
+  ["ctrl+s"] = "filetree:apply_changes",
   ["f5"] = "filetree:refresh",
   ["alt+home"] = "filetree:project_root",
 }
