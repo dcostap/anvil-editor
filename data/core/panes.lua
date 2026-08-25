@@ -1029,11 +1029,11 @@ local function commit_close(pane)
   end
   assert(old_group_index, "closed Pane is not in its Pane Group")
   group.root = layout.remove(group.root, pane)
+  M.panes_by_id[pane.id] = nil
   for _, view in ipairs(collect_owned_views(pane)) do
     release_view(pane, view)
     call_lifecycle(view, "on_close")
   end
-  M.panes_by_id[pane.id] = nil
   pane.group = nil
   if not group.root then
     local index = group_index(group)

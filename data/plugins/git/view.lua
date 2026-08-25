@@ -1128,62 +1128,36 @@ function GitView:focus_pane_view(name)
   end)
 end
 
-function GitView:focus_next_surface()
-  local tab = self:activate_model_tab(function() core.redraw = true end) or self:model_tab()
-  if not tab then return false end
-  local active = core.active_view
-  if active ~= self and not (active and active.git_owner_view == self) then active = nil end
+function GitView:get_surface_focus_targets()
+  self:update_pane_buffers()
+  local tab = self:model_tab()
+  if not tab then return {} end
   if tab.kind == "commit_diff" then
-    local list = self:pane_view("file-list")
-    if tab.loading_file or tab.file_error or (tab.left_text == nil and tab.right_text == nil) then
-      return active == list and false or self:focus_pane_view("file-list")
+    local targets = { self:pane_view("file-list") }
+    if not tab.loading_file and not tab.file_error
+        and (tab.left_text ~= nil or tab.right_text ~= nil) then
+      local diff = self:ensure_diff_view(tab)
+      targets[#targets + 1] = diff.buffer_view_a
+      targets[#targets + 1] = diff.buffer_view_b
     end
-    local diff = self:ensure_diff_view(tab)
-    if active == self then
-      return self:focus_pane_view("file-list")
-    elseif active == list then
-      return self:focus_diff_pane("left")
-    elseif active == diff.buffer_view_a then
-      return self:focus_diff_pane("right")
-    elseif active == diff.buffer_view_b then
-      return self:focus_pane_view("file-list")
-    end
-    return self:focus_pane_view("file-list")
+    return targets
   elseif tab.kind == "file_history" then
-    local list = self:pane_view("history-list")
-    return self:focus_pane_view(active == list and "details" or "history-list")
-  else
-    local list = self:pane_view("log-list")
-    return self:focus_pane_view(active == list and "details" or "log-list")
+    return { self:pane_view("history-list"), self:pane_view("details") }
   end
+  return { self:pane_view("log-list"), self:pane_view("details") }
 end
 
-function GitView:focus_previous_surface()
-  local tab = self:activate_model_tab(function() core.redraw = true end) or self:model_tab()
-  if not tab then return false end
-  local active = core.active_view
-  if active ~= self and not (active and active.git_owner_view == self) then active = nil end
-  if tab.kind == "commit_diff" then
-    local list = self:pane_view("file-list")
-    if tab.loading_file or tab.file_error or (tab.left_text == nil and tab.right_text == nil) then
-      return self:focus_pane_view("file-list")
-    end
-    local diff = self:ensure_diff_view(tab)
-    if active == diff.buffer_view_b then
-      return self:focus_diff_pane("left")
-    elseif active == diff.buffer_view_a then
-      return self:focus_pane_view("file-list")
-    end
-    return self:focus_diff_pane("right")
-  elseif tab.kind == "file_history" then
-    local list, details = self:pane_view("history-list"), self:pane_view("details")
-    return self:focus_pane_view(active == list and "details"
-      or active == details and "history-list" or "details")
-  else
-    local list, details = self:pane_view("log-list"), self:pane_view("details")
-    return self:focus_pane_view(active == list and "details"
-      or active == details and "log-list" or "details")
+function GitView:focus_surface_target(target)
+  self:activate_model_tab(function() core.redraw = true end)
+  if target and target.git_owner_view == self and target.git_pane then
+    return self:focus_pane_view(target.git_pane)
   end
+  local tab = self:model_tab()
+  if tab and tab.kind == "commit_diff" and tab.diff_view then
+    if target == tab.diff_view.buffer_view_a then return self:focus_diff_pane("left") end
+    if target == tab.diff_view.buffer_view_b then return self:focus_diff_pane("right") end
+  end
+  return false
 end
 
 function GitView:focus_list_pane()

@@ -506,11 +506,11 @@ test.describe("Git View command", function()
     test.equal(details:is_wrapping_enabled(), false)
   end)
 
-  test.test("Surface Focus Cycle enters and wraps through Git Log targets", function(context)
+  test.test("Local Focus Cycle enters and wraps through Git Log targets", function(context)
     local session, view = open_fake_git_view(context.project)
     core.active_view = view
 
-    test.equal(command.perform("core:focus_next_surface"), true)
+    test.equal(command.perform("core:focus_next_local"), true)
     test.equal(core.active_view.git_owner_view, view)
     test.equal(core.active_view.git_pane, "log-list")
     test.equal(core.active_view:get_gutter_width(), 0)
@@ -520,12 +520,38 @@ test.describe("Git View command", function()
     core.active_view.buffer:set_selection(1, 2)
     session:activate_root()
     test.equal(select(2, core.active_view.buffer:get_selection()), 2)
-    test.equal(command.perform("core:focus_next_surface"), true)
+    test.equal(command.perform("core:focus_next_local"), true)
     test.equal(core.active_view.git_pane, "details")
-    test.equal(command.perform("core:focus_next_surface"), true)
+    test.equal(command.perform("core:focus_next_local"), true)
     test.equal(core.active_view.git_pane, "log-list")
-    test.equal(command.perform("core:focus_previous_surface"), true)
+    test.equal(command.perform("core:focus_previous_local"), true)
     test.equal(core.active_view.git_pane, "details")
+  end)
+
+  test.it("flattens Git surfaces and an ordinary sibling Pane into one local cycle", function(context)
+    local _, view = open_fake_git_view(context.project)
+    local git_pane = panes.pane_for_view(view)
+    local editor_pane = panes.split(git_pane, "right", {
+      factory = function() return View() end,
+      focus = false,
+    })
+    panes.focus(git_pane)
+    view:focus_list_pane()
+
+    test.ok(command.perform("core:focus_next_local"))
+    test.equal(core.active_view.git_pane, "details")
+    test.ok(command.perform("core:focus_next_local"))
+    test.equal(panes.active(), editor_pane)
+    test.equal(core.active_view, editor_pane.current_view)
+    test.ok(command.perform("core:focus_next_local"))
+    test.equal(panes.active(), git_pane)
+    test.equal(core.active_view.git_pane, "log-list")
+
+    test.ok(command.perform("core:focus_previous_local"))
+    test.equal(panes.active(), editor_pane)
+    test.ok(command.perform("core:focus_previous_local"))
+    test.equal(core.active_view.git_pane, "details")
+    test.ok(panes.validate())
   end)
 
   test.it("opens and restores a Git View through Pane history", function(context)
@@ -541,7 +567,7 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_owner_view, view)
   end)
 
-  test.it("Surface Focus Cycle wraps through Git diff targets in both directions", function(context)
+  test.it("Local Focus Cycle wraps through Git diff targets in both directions", function(context)
     local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-panes",
@@ -560,11 +586,11 @@ test.describe("Git View command", function()
     local tab_view = git_view.ensure_tab_view(session, tab, true)
     core.active_view = tab_view
 
-    test.equal(command.perform("core:focus_next_surface"), true)
+    test.equal(command.perform("core:focus_next_local"), true)
     test.equal(core.active_view.git_pane, "file-list")
     session:activate_root()
     test.equal(core.active_view.git_pane, "file-list")
-    test.equal(command.perform("core:focus_next_surface"), true)
+    test.equal(command.perform("core:focus_next_local"), true)
     local diff = tab.diff_view
     test.equal(diff.request.kind, "git")
     test.equal(nil, diff.request.metadata)
@@ -581,24 +607,24 @@ test.describe("Git View command", function()
     local line = diff.buffer_view_a.buffer:get_selection()
     test.equal(line, 2)
 
-    test.equal(command.perform("core:focus_next_surface"), true)
+    test.equal(command.perform("core:focus_next_local"), true)
     test.equal(core.active_view, diff.buffer_view_b)
-    test.equal(command.perform("core:focus_next_surface"), true)
+    test.equal(command.perform("core:focus_next_local"), true)
     test.equal(core.active_view.git_pane, "file-list")
 
-    test.equal(command.perform("core:focus_previous_surface"), true)
+    test.equal(command.perform("core:focus_previous_local"), true)
     test.equal(core.active_view, diff.buffer_view_b)
-    test.equal(command.perform("core:focus_previous_surface"), true)
+    test.equal(command.perform("core:focus_previous_local"), true)
     test.equal(core.active_view, diff.buffer_view_a)
-    test.equal(command.perform("core:focus_previous_surface"), true)
+    test.equal(command.perform("core:focus_previous_local"), true)
     test.equal(core.active_view.git_pane, "file-list")
 
-    test.equal(command.perform("core:focus_next_surface"), true)
+    test.equal(command.perform("core:focus_next_local"), true)
     test.equal(core.active_view, diff.buffer_view_a)
     test.equal(command.perform("git:close_selected_tab"), true)
     test.ok(core.active_view ~= tab_view)
     test.ok(core.active_view.git_owner_view ~= tab_view)
-    test.equal(command.perform("core:focus_next_surface"), true)
+    test.equal(command.perform("core:focus_next_local"), true)
     test.ok(core.active_view ~= tab_view)
 
   end)
@@ -888,6 +914,32 @@ test.describe("Git View command", function()
     test.equal(panes.git_sessions[context.project.path], nil)
     test.equal(#session_views(session), 0)
     test.ok(core.active_view ~= sibling)
+    test.ok(panes.validate())
+  end)
+
+  test.test("closing a Git Pane with sibling tabs focuses a remaining Pane", function(context)
+    local session, view = open_fake_git_view(context.project)
+    local tab = {
+      id = "diff-close-pane",
+      kind = "commit_diff",
+      title = "Diff close Pane",
+      closable = true,
+      changed_files = {},
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    git_view.ensure_tab_view(session, tab, true)
+    local git_pane = panes.pane_for_view(view)
+    local remaining = panes.split(git_pane, "right", {
+      factory = function() return View() end,
+      focus = false,
+    })
+    panes.focus(git_pane)
+
+    test.ok(command.perform("core:close_pane"))
+
+    test.not_ok(panes.contains(git_pane))
+    test.equal(panes.active(), remaining)
+    test.equal(core.active_view, remaining.current_view)
     test.ok(panes.validate())
   end)
 

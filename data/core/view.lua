@@ -109,16 +109,20 @@ function View:duplicate()
   return nil
 end
 
----Move focus through this View's Surface Focus Targets.
----Compound Views override these methods when they own such targets.
----@return boolean focused
-function View:focus_next_surface()
-  return false
+---Return this View's ordered Surface Focus Targets.
+---An empty result makes the View itself one Local Focus Cycle target.
+---@return core.view[]? targets
+function View:get_surface_focus_targets()
+  return nil
 end
 
+---Focus one target returned by get_surface_focus_targets().
+---@param target core.view
 ---@return boolean focused
-function View:focus_previous_surface()
-  return false
+function View:focus_surface_target(target)
+  if not target then return false end
+  core.set_active_view(target)
+  return true
 end
 
 

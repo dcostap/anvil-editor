@@ -149,14 +149,27 @@ test.describe("Pane manager", function()
     test.equal(panes.visible_group(), three.group)
   end)
 
-  test.it("does not leave a Pane when its Current View has no Surface Focus Targets", function()
+  test.it("does not leave a Pane Group with no other local focus target", function()
     local one = panes.create { factory = factory("one") }
     panes.create { factory = factory("two") }
     panes.focus(one)
 
-    test.ok(command.perform("core:focus_next_surface"))
-    test.ok(command.perform("core:focus_previous_surface"))
+    test.ok(command.perform("core:focus_next_local"))
+    test.ok(command.perform("core:focus_previous_local"))
     test.equal(panes.active(), one)
+  end)
+
+  test.it("wraps Local Focus Cycle through ordinary Panes in one Pane Group", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.split(one, "right", { factory = factory("two") })
+    panes.focus(one)
+
+    test.ok(command.perform("core:focus_next_local"))
+    test.equal(panes.active(), two)
+    test.ok(command.perform("core:focus_next_local"))
+    test.equal(panes.active(), one)
+    test.ok(command.perform("core:focus_previous_local"))
+    test.equal(panes.active(), two)
   end)
 
   test.it("rotates only the active Pane Group clockwise through fixed split positions", function()

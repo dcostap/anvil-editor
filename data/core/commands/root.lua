@@ -73,6 +73,42 @@ local function move_and_merge_pane(source)
   return true
 end
 
+local function focus_local(pane, step)
+  local targets = {}
+  for _, member in ipairs(panes.ordered()) do
+    if member.group == pane.group then
+      local owner = member.current_view
+      local surfaces = owner and owner:get_surface_focus_targets()
+      if type(surfaces) == "table" and #surfaces > 0 then
+        for _, target in ipairs(surfaces) do
+          targets[#targets + 1] = { pane = member, owner = owner, target = target }
+        end
+      elseif owner then
+        targets[#targets + 1] = { pane = member, owner = owner, target = owner }
+      end
+    end
+  end
+  if #targets == 0 then return false end
+
+  local current
+  for index, entry in ipairs(targets) do
+    if entry.target == core.active_view then current = index break end
+  end
+  local destination_index
+  if current then
+    destination_index = (current - 1 + step) % #targets + 1
+  else
+    destination_index = step > 0 and 1 or #targets
+  end
+  local destination = targets[destination_index]
+  panes.focus(destination.pane)
+  if destination.target ~= destination.owner then
+    panes.register_focus_target(destination.owner, destination.target)
+    return destination.owner:focus_surface_target(destination.target)
+  end
+  return true
+end
+
 local commands = {
   ["core:close_pane"] = command.palette(function(pane) return panes.close(pane) end),
   ["core:close_view"] = function(pane) return panes.close_view(pane) end,
@@ -107,13 +143,11 @@ local commands = {
     local ordered, index = panes.ordered(), panes.number(pane)
     if #ordered > 0 then return panes.focus_index(index % #ordered + 1) end
   end,
-  ["core:focus_next_surface"] = command.palette(function(pane)
-    local view = pane.current_view
-    return view and view:focus_next_surface() or false
+  ["core:focus_next_local"] = command.palette(function(pane)
+    return focus_local(pane, 1)
   end),
-  ["core:focus_previous_surface"] = command.palette(function(pane)
-    local view = pane.current_view
-    return view and view:focus_previous_surface() or false
+  ["core:focus_previous_local"] = command.palette(function(pane)
+    return focus_local(pane, -1)
   end),
 }
 
