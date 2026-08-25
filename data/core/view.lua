@@ -109,6 +109,18 @@ function View:duplicate()
   return nil
 end
 
+---Move focus through this View's Surface Focus Targets.
+---Compound Views override these methods when they own such targets.
+---@return boolean focused
+function View:focus_next_surface()
+  return false
+end
+
+---@return boolean focused
+function View:focus_previous_surface()
+  return false
+end
+
 
 ---Returns the module path of this view.
 ---

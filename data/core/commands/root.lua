@@ -107,6 +107,14 @@ local commands = {
     local ordered, index = panes.ordered(), panes.number(pane)
     if #ordered > 0 then return panes.focus_index(index % #ordered + 1) end
   end,
+  ["core:focus_next_surface"] = command.palette(function(pane)
+    local view = pane.current_view
+    return view and view:focus_next_surface() or false
+  end),
+  ["core:focus_previous_surface"] = command.palette(function(pane)
+    local view = pane.current_view
+    return view and view:focus_previous_surface() or false
+  end),
 }
 
 for _, direction in ipairs { "left", "right", "up", "down" } do

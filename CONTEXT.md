@@ -184,6 +184,10 @@ _Avoid_: Code context, editor context
 A focusable sub-area inside a View, such as a Git list or Git diff text area.
 _Avoid_: listener, split
 
+**Surface Focus Cycle**:
+An action that moves focus forward or backward through one Current View's Surface Focus Targets and wraps at each end. It never changes the Current View or Pane.
+_Avoid_: focus Pane cycle, internal split focus
+
 **Selection State**:
 The caret and selection state owned by a Text View.
 _Avoid_: Buffer selection, shared selection

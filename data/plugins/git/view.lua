@@ -1116,13 +1116,6 @@ function GitView:focus_diff_pane(side)
   end)
 end
 
-function GitView:can_focus_next_pane()
-  local tab = self:model_tab()
-  if not tab then return false end
-  if tab.kind == "commit_diff" then return true end
-  return tab.kind == "log" or tab.kind == "file_history"
-end
-
 function GitView:focus_pane_view(name)
   self:update_pane_buffers()
   local view = self:pane_view(name)
@@ -1135,7 +1128,7 @@ function GitView:focus_pane_view(name)
   end)
 end
 
-function GitView:focus_next_pane()
+function GitView:focus_next_surface()
   local tab = self:activate_model_tab(function() core.redraw = true end) or self:model_tab()
   if not tab then return false end
   local active = core.active_view
@@ -1157,11 +1150,39 @@ function GitView:focus_next_pane()
     end
     return self:focus_pane_view("file-list")
   elseif tab.kind == "file_history" then
-    local list, details = self:pane_view("history-list"), self:pane_view("details")
+    local list = self:pane_view("history-list")
     return self:focus_pane_view(active == list and "details" or "history-list")
   else
-    local list, details = self:pane_view("log-list"), self:pane_view("details")
+    local list = self:pane_view("log-list")
     return self:focus_pane_view(active == list and "details" or "log-list")
+  end
+end
+
+function GitView:focus_previous_surface()
+  local tab = self:activate_model_tab(function() core.redraw = true end) or self:model_tab()
+  if not tab then return false end
+  local active = core.active_view
+  if active ~= self and not (active and active.git_owner_view == self) then active = nil end
+  if tab.kind == "commit_diff" then
+    local list = self:pane_view("file-list")
+    if tab.loading_file or tab.file_error or (tab.left_text == nil and tab.right_text == nil) then
+      return self:focus_pane_view("file-list")
+    end
+    local diff = self:ensure_diff_view(tab)
+    if active == diff.buffer_view_b then
+      return self:focus_diff_pane("left")
+    elseif active == diff.buffer_view_a then
+      return self:focus_pane_view("file-list")
+    end
+    return self:focus_diff_pane("right")
+  elseif tab.kind == "file_history" then
+    local list, details = self:pane_view("history-list"), self:pane_view("details")
+    return self:focus_pane_view(active == list and "details"
+      or active == details and "history-list" or "details")
+  else
+    local list, details = self:pane_view("log-list"), self:pane_view("details")
+    return self:focus_pane_view(active == list and "details"
+      or active == details and "log-list" or "details")
   end
 end
 

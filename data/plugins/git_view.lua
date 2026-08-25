@@ -572,20 +572,9 @@ end, {
   ["git:close_selected_tab"] = close_git_view_tab,
 })
 
-command.add(function()
-  local view = focused_git_view()
-  if view and view.can_focus_next_pane and view:can_focus_next_pane() then return true, view end
-  return false
-end, {
-  ["git:focus_next_pane"] = function(view)
-    if view and view.focus_next_pane then view:focus_next_pane() end
-  end,
-})
-
 keymap.add({
   ["ctrl+k"] = "git:open",
   ["return"] = "git:activate_selected_row",
-  ["alt+shift+`"] = "git:focus_diff_pane",
 })
 
 return git_view

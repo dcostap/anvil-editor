@@ -149,6 +149,16 @@ test.describe("Pane manager", function()
     test.equal(panes.visible_group(), three.group)
   end)
 
+  test.it("does not leave a Pane when its Current View has no Surface Focus Targets", function()
+    local one = panes.create { factory = factory("one") }
+    panes.create { factory = factory("two") }
+    panes.focus(one)
+
+    test.ok(command.perform("core:focus_next_surface"))
+    test.ok(command.perform("core:focus_previous_surface"))
+    test.equal(panes.active(), one)
+  end)
+
   test.it("rotates only the active Pane Group clockwise through fixed split positions", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.split(one, "right", { factory = factory("two") })
