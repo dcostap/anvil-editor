@@ -1937,8 +1937,39 @@ local function dispatch_modal_input(event, ...)
   return root:dispatch_modal_input(event, ...)
 end
 
+local function record_focus_input_event(type, ...)
+  if type ~= "focusgained" and type ~= "keypressed" and type ~= "textinput" then return end
+  local state = core.focus_diagnostics_event_state
+  if not state then
+    state = {
+      focus_generation = 0,
+      keypressed_since_focusgained = 0,
+      textinput_since_focusgained = 0,
+    }
+    core.focus_diagnostics_event_state = state
+  end
+
+  if type == "focusgained" then
+    state.focus_generation = state.focus_generation + 1
+    state.last_focusgained_time = system.get_time()
+    state.keypressed_since_focusgained = 0
+    state.textinput_since_focusgained = 0
+    state.last_key = nil
+    state.last_textinput_bytes = nil
+  elseif type == "keypressed" then
+    local key = ...
+    state.keypressed_since_focusgained = state.keypressed_since_focusgained + 1
+    state.last_key = tostring(key)
+  elseif type == "textinput" then
+    local text = ...
+    state.textinput_since_focusgained = state.textinput_since_focusgained + 1
+    state.last_textinput_bytes = #tostring(text or "")
+  end
+end
+
 function core.on_event(type, ...)
   core.current_event_context = event_summary(type, ...)
+  record_focus_input_event(type, ...)
   local did_keymap = false
   local active = core.active_view
   local active_type = active and active.type_name
@@ -2959,7 +2990,50 @@ local perf_last_redraw_time = nil
 local perf_smoothed_fps = 0
 local focus_diag_last_state = nil
 local focus_diag_last_anomaly_key = nil
+local focus_diag_unfocused_since = nil
+local focus_diag_next_native_poll = 0
+local focus_diag_next_heartbeat = 0
+local focus_diag_last_native_key = nil
+local FOCUS_DIAG_NATIVE_POLL_SECONDS = 0.5
+local FOCUS_DIAG_HEARTBEAT_SECONDS = 10
 local MAIN_LOOP_STALL_MS = 250
+
+local function focus_native_diagnostics()
+  if not (system.window_focus_diagnostics and core.window) then return "unavailable" end
+  return system.window_focus_diagnostics(core.window)
+end
+
+local function focus_native_state_key(diagnostics)
+  -- Window titles can contain timers and progress spinners. Ignore only the
+  -- title while detecting native focus changes, but keep it in each log line.
+  return tostring(diagnostics):gsub(
+    "foreground_title='.-' foreground_class=",
+    "foreground_title=<dynamic> foreground_class="
+  )
+end
+
+local function focus_runtime_diagnostics(active_view)
+  local root = core.root_panel
+  local modal_inputs = root and root.modal_inputs or {}
+  local modal = modal_inputs[#modal_inputs]
+  local events = core.focus_diagnostics_event_state or {}
+  local supports_text_input = false
+  if active_view and active_view.supports_text_input then
+    local ok, result = pcall(active_view.supports_text_input, active_view)
+    supports_text_input = ok and result or false
+  end
+  return string.format(
+    "active_window_is_main=%s active_window=%s event_window=%s supports_text_input=%s " ..
+    "modal_depth=%d modal_owner=%s focus_generation=%s keys_since_gain=%s textinputs_since_gain=%s " ..
+    "last_key=%s last_textinput_bytes=%s",
+    tostring(core.active_window == core.window), tostring(core.active_window),
+    tostring(core.event_window), tostring(supports_text_input), #modal_inputs,
+    tostring(modal and modal.label or "none"), tostring(events.focus_generation or 0),
+    tostring(events.keypressed_since_focusgained or 0),
+    tostring(events.textinput_since_focusgained or 0), tostring(events.last_key or "none"),
+    tostring(events.last_textinput_bytes or "none")
+  )
+end
 
 ---Set up the run-loop state.  Called once from C (SDL_AppInit → init_lua_state)
 ---via the init_code that also calls core.init().  SDL_AppIterate then drives the
@@ -3297,20 +3371,77 @@ function core.run_step(options)
     )
   end
 
+  local focus_diag_now = system.get_time()
+  local native_diagnostics
+  local function current_native_diagnostics()
+    if native_diagnostics == nil then native_diagnostics = focus_native_diagnostics() end
+    return native_diagnostics
+  end
+
   if focus_diag_last_state == nil or focus_diag_last_state ~= window_has_focus then
+    local unfocused_ms = focus_diag_unfocused_since
+      and math.max(0, (focus_diag_now - focus_diag_unfocused_since) * 1000)
+      or 0
+    local events = core.focus_diagnostics_event_state or {}
+    local focusgained_after_loss = focus_diag_unfocused_since
+      and events.last_focusgained_time
+      and events.last_focusgained_time >= focus_diag_unfocused_since
+      or false
+    local native = current_native_diagnostics()
     core.log_quiet(
-      "Focus diagnostics: window_has_focus=%s active=%s textview=%s redraw=%s event_count=%d pending=%s queue=%d run_mode=%s native={%s}",
-      tostring(window_has_focus), active_view_name, tostring(active_view_is_textview),
-      tostring(did_redraw), step_stats.event_count, tostring(pending_events_at_start),
-      queue_depth, tostring(run_threads_mode),
-      system.window_focus_diagnostics and core.window and system.window_focus_diagnostics(core.window) or "unavailable"
+      "Focus diagnostics: window_has_focus=%s transition=true unfocused_ms=%.1f focusgained_after_loss=%s " ..
+      "active=%s textview=%s redraw=%s event_count=%d pending=%s queue=%d run_mode=%s runtime={%s} native={%s}",
+      tostring(window_has_focus), unfocused_ms, tostring(focusgained_after_loss),
+      active_view_name, tostring(active_view_is_textview), tostring(did_redraw),
+      step_stats.event_count, tostring(pending_events_at_start), queue_depth,
+      tostring(run_threads_mode), focus_runtime_diagnostics(active_view), native
     )
     focus_diag_last_state = window_has_focus
+    focus_diag_last_native_key = focus_native_state_key(native)
+    if window_has_focus then
+      focus_diag_unfocused_since = nil
+      focus_diag_next_native_poll = 0
+      focus_diag_next_heartbeat = 0
+    else
+      focus_diag_unfocused_since = focus_diag_now
+      focus_diag_next_native_poll = focus_diag_now + FOCUS_DIAG_NATIVE_POLL_SECONDS
+      focus_diag_next_heartbeat = focus_diag_now + FOCUS_DIAG_HEARTBEAT_SECONDS
+    end
   end
 
   if window_has_focus then
     focus_diag_last_anomaly_key = nil
-  elseif active_view_is_textview then
+  else
+    if not focus_diag_unfocused_since then
+      focus_diag_unfocused_since = focus_diag_now
+      focus_diag_next_native_poll = focus_diag_now
+      focus_diag_next_heartbeat = focus_diag_now + FOCUS_DIAG_HEARTBEAT_SECONDS
+    end
+    if focus_diag_now >= focus_diag_next_native_poll then
+      local native = current_native_diagnostics()
+      local native_key = focus_native_state_key(native)
+      local native_changed = focus_diag_last_native_key ~= native_key
+      local heartbeat = focus_diag_now >= focus_diag_next_heartbeat
+      if native_changed or heartbeat then
+        core.log_quiet(
+          "Focus diagnostics: still_unfocused=true reason=%s unfocused_ms=%.1f active=%s textview=%s " ..
+          "event_count=%d pending=%s queue=%d run_mode=%s runtime={%s} native={%s}",
+          native_changed and "native-state-change" or "heartbeat",
+          math.max(0, (focus_diag_now - focus_diag_unfocused_since) * 1000),
+          active_view_name, tostring(active_view_is_textview), step_stats.event_count,
+          tostring(pending_events_at_start), queue_depth, tostring(run_threads_mode),
+          focus_runtime_diagnostics(active_view), native
+        )
+        focus_diag_last_native_key = native_key
+        if heartbeat then
+          focus_diag_next_heartbeat = focus_diag_now + FOCUS_DIAG_HEARTBEAT_SECONDS
+        end
+      end
+      focus_diag_next_native_poll = focus_diag_now + FOCUS_DIAG_NATIVE_POLL_SECONDS
+    end
+  end
+
+  if not window_has_focus and active_view_is_textview then
     local anomaly_key = string.format(
       "%s:%s",
       tostring(active_view),
@@ -3322,12 +3453,12 @@ function core.run_step(options)
         line1, col1, line2, col2 = active_buffer:get_selection()
       end
       core.log_quiet(
-        "Focus diagnostics: active TextView while window_has_focus=false file=%s selection_count=%s selection=%s,%s-%s,%s redraw=%s blink=%.3f event_count=%d pending=%s queue=%d native={%s}",
+        "Focus diagnostics: active TextView while window_has_focus=false file=%s selection_count=%s " ..
+        "selection=%s,%s-%s,%s redraw=%s blink=%.3f event_count=%d pending=%s queue=%d runtime={%s}",
         tostring(active_buffer and (active_buffer.abs_filename or active_buffer.filename) or ""),
         tostring(selection_count), tostring(line1), tostring(col1), tostring(line2), tostring(col2),
         tostring(did_redraw), core.blink_timer or 0, step_stats.event_count,
-        tostring(pending_events_at_start), queue_depth,
-        system.window_focus_diagnostics and core.window and system.window_focus_diagnostics(core.window) or "unavailable"
+        tostring(pending_events_at_start), queue_depth, focus_runtime_diagnostics(active_view)
       )
       focus_diag_last_anomaly_key = anomaly_key
     end
