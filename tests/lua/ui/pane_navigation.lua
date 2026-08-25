@@ -63,8 +63,8 @@ test.describe("Pane navigation and movement", function()
     panes.move(three, one, "left")
     test.same(names(), { "three", "one", "two" })
     test.equal(three.group, one.group)
-    test.equal(one.group.root.ratio, 0.35)
-    test.equal(one.group.root.b.ratio, 0.7)
+    test.equal(one.group.root.ratio, 1 / 3)
+    test.equal(one.group.root.b.ratio, 0.5)
   end)
 
   test.it("detaches one Pane as a new singleton group", function()
@@ -88,19 +88,40 @@ test.describe("Pane navigation and movement", function()
     test.same(names(), { "one", "two" })
   end)
 
-  test.it("uses the work-area center as a focus-only drop target", function()
+  test.it("swaps split positions through the work-area center", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.split(one, "right", { factory = factory("two") })
+    local group = one.group
+    group.root.ratio = 0.35
+    layout.update_rects(group.root, { x = 0, y = 0, w = 200, h = 100 })
+
+    local target, direction = panes.drop_target_at(50, 50)
+    test.equal(target, one)
+    test.equal(direction, "center")
+    test.equal(panes.drop(two, 50, 50), two)
+    test.same(names(), { "two", "one" })
+    test.equal(group.root.ratio, 0.35)
+    test.equal(panes.active(), two)
+    test.equal(panes.visible_group(), group)
+  end)
+
+  test.it("swaps complete Panes across Pane Groups through the work-area center", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.create { factory = factory("two") }
+    local one_group, two_group = one.group, two.group
     panes.focus(one)
     layout.update_rects(one.group.root, { x = 0, y = 0, w = 200, h = 100 })
 
     local target, direction = panes.drop_target_at(100, 50)
     test.equal(target, one)
     test.equal(direction, "center")
-    test.equal(panes.drop(two, 100, 50), one)
-    test.same(names(), { "one", "two" })
+    test.equal(panes.drop(two, 100, 50), two)
+    test.same(names(), { "two", "one" })
     test.not_equal(one.group, two.group)
-    test.equal(panes.active(), one)
+    test.equal(two.group, one_group)
+    test.equal(one.group, two_group)
+    test.equal(panes.active(), two)
+    test.equal(panes.visible_group(), one_group)
   end)
 
   test.it("moves a Pane to a Pane Group boundary as a singleton", function()

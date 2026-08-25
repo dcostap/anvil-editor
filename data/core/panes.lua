@@ -438,6 +438,49 @@ function M.move(source_target, destination_target, direction)
   return source
 end
 
+function M.swap(source_target, destination_target)
+  local source = M.find(source_target)
+  local destination = M.find(destination_target)
+  if not source or not destination then return nil, "invalid source or target Pane" end
+  if source == destination then return source end
+
+  local source_group = source.group
+  local destination_group = destination.group
+  local source_order = layout.leaves(source_group.root)
+  local destination_order = source_group == destination_group
+    and source_order or layout.leaves(destination_group.root)
+  local source_index, destination_index
+  for index, pane in ipairs(source_order) do
+    if pane == source then source_index = index end
+    if pane == destination then destination_index = index end
+  end
+  if source_group ~= destination_group then
+    for index, pane in ipairs(destination_order) do
+      if pane == destination then destination_index = index break end
+    end
+  end
+  assert(source_index and destination_index, "Pane swap target is missing from its layout")
+
+  source_order[source_index] = destination
+  destination_order[destination_index] = source
+  layout.reorder(source_group.root, source_order)
+  if source_group ~= destination_group then
+    layout.reorder(destination_group.root, destination_order)
+    source.group = destination_group
+    destination.group = source_group
+  end
+  if source_group.root.rect then layout.update_rects(source_group.root, source_group.root.rect) end
+  if destination_group ~= source_group and destination_group.root.rect then
+    layout.update_rects(destination_group.root, destination_group.root.rect)
+  end
+
+  M.active_pane = source
+  M.visible_group_value = source.group
+  focus_view(source)
+  after_mutation(string.format("swapped %s with %s", source.id, destination.id))
+  return source
+end
+
 function M.detach(target)
   local pane = M.find(target)
   if not pane then return nil, "invalid Pane" end
@@ -509,8 +552,7 @@ function M.drop(source, x, y)
   local destination, direction = M.drop_target_at(x, y)
   if not destination then return nil, "no Pane drop target" end
   if direction == "center" then
-    M.focus(destination)
-    return destination
+    return M.swap(source, destination)
   end
   return M.move(source, destination, direction)
 end

@@ -449,7 +449,7 @@ function TitleBar:resolve_pane_drag_target(x, y)
   if not source then return nil end
   local destination, direction = panes().drop_target_at(x, y)
   if destination then
-    if destination == source and direction ~= "center" then return nil end
+    if destination == source then return nil end
     local rect = {
       x = destination.position.x, y = destination.position.y,
       w = destination.size.x, h = destination.size.y,

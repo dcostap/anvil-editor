@@ -240,6 +240,10 @@ _Avoid_: rotate split panes, rotate tabs
 An automatic layout update after a Pane is split, closed, or moved. A left or right change distributes width without changing height ratios. An up or down change distributes height without changing width ratios.
 _Avoid_: equalize splits, resize all Panes
 
+**Pane Swap**:
+A center drop that exchanges two complete Panes between their visual positions, including positions in different Pane Groups. Each Pane keeps its Current View and Navigation History. Split geometry stays fixed. Focus follows the dragged Pane.
+_Avoid_: swap Views, swap histories
+
 **Disposable Pane**:
 A Pane whose only Navigation History entry is a blank Untitled Editor and which has no retained Views. It remains disposable after its text is added and then removed.
 _Avoid_: void Pane, empty split

@@ -234,7 +234,7 @@ test.describe("Global title bar Pane entries", function()
     test.equal(panes.count(), 2)
   end)
 
-  test.it("drags a Pane to reorder leaves without changing split ratios", function()
+  test.it("drags a Pane to reorder leaves and rebalance the changed axis", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.split(one, "right", { factory = factory("two") })
     one.group.root.ratio = 0.35
@@ -251,7 +251,7 @@ test.describe("Global title bar Pane entries", function()
     local ordered = panes.ordered()
     test.equal(ordered[1], two)
     test.equal(ordered[2], one)
-    test.equal(one.group.root.ratio, 0.35)
+    test.equal(one.group.root.ratio, 0.5)
   end)
 
   test.it("drags a hidden Pane onto a visible work-area edge", function()
@@ -272,6 +272,25 @@ test.describe("Global title bar Pane entries", function()
     test.equal(ordered[1], target_pane)
     test.equal(ordered[2], source_pane)
     test.equal(panes.active(), source_pane)
+  end)
+
+  test.it("swaps Panes through the work-area center target", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.split(one, "right", { factory = factory("two") })
+    layout.update_rects(one.group.root, { x = 0, y = 50, w = 400, h = 100 })
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local source = title.entries[2]
+
+    title:on_mouse_pressed("left", source.x + source.w / 2, source.y + 2, 1)
+    title:on_mouse_moved(100, 100, 100 - source.x, 50)
+    title:on_mouse_released("left", 100, 100)
+
+    local ordered = panes.ordered()
+    test.equal(ordered[1], two)
+    test.equal(ordered[2], one)
+    test.equal(panes.active(), two)
   end)
 
   test.it("drags a Pane to a title boundary as a singleton group", function()
