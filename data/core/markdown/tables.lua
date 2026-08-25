@@ -248,16 +248,39 @@ function tables.extend_semantic_table(view, line, table_node)
   then
     return table_node
   end
-  if not table_node then
-    local nodes = instance:nodes_for_lines(line1, line1, { limit = 1024 })
-    for _, node in ipairs(nodes or {}) do
-      if node.type == "table" and node.source.line1 == line1 then
+  local nodes = instance:nodes_for_lines(line1, line1, { limit = 1024 })
+  local enclosing_table, has_header = nil, false
+  if table_node and table_node.source.line1 ~= line1 then table_node = nil end
+  for _, node in ipairs(nodes or {}) do
+    if node.type == "table" then
+      if node.source.line1 == line1 then
         table_node = node
         break
       end
+      enclosing_table = enclosing_table or node
+    elseif node.type == "table_header" and node.source.line1 == line1 then
+      has_header = true
     end
   end
-  if not table_node or table_node.source.line1 ~= line1 then return table_node end
+  if not table_node and has_header and enclosing_table then
+    -- An empty row can make Tree-sitter merge the remaining rows, intervening
+    -- prose, and a later table into one malformed semantic table. The header
+    -- capture still confirms the canonical source table at this line.
+    table_node = {}
+    for key, value in pairs(enclosing_table) do table_node[key] = value end
+    table_node.source = {
+      line1 = line1,
+      col1 = 1,
+      line2 = source_line2,
+      col2 = #line_text(view.buffer, source_line2) + 1,
+    }
+    table_node.id = table.concat({
+      tostring(enclosing_table.id), "source-table", tostring(line1),
+      tostring(view.buffer.text_revision), tostring(source_line2),
+    }, ":")
+    return table_node
+  end
+  if not table_node then return nil end
   local semantic_line2 = effective_line2(table_node)
   if source_line2 <= semantic_line2 then return table_node end
   local has_empty_body_row = false

@@ -100,6 +100,35 @@ test.describe("Markdown Interactive Table Editing", function()
     test.equal(view:get_line_render(3), nil)
   end)
 
+  test.it("keeps tables separate across empty rows and prose", function()
+    local view = make_view(table.concat({
+      "| Measure | Current value |",
+      "|---|---:|",
+      "| Original PDB C/C++ modules | 224 |",
+      "| Modules with registered exact coverage | 224 |",
+      "|  |  |",
+      "| Registered groups | 239 |",
+      "",
+      "The Phase 0 integration audit is current.",
+      "",
+      "## Current integration backlog",
+      "",
+      "| Category | Functions |",
+      "|---|---:|",
+      "| Grouped exact, not registered | 193 |",
+      "",
+      "plain",
+    }, "\n"))
+    refresh(view)
+
+    test.ok(test.not_nil(view:get_line_render(1)).table_row)
+    test.ok(test.not_nil(view:get_line_render(4)).table_row)
+    test.ok(test.not_nil(view:get_line_render(6)).table_row)
+    test.equal(test.not_nil(view:get_line_render(7)).table_row, nil)
+    test.ok(test.not_nil(view:get_line_render(12)).table_row)
+    test.ok(test.not_nil(view:get_line_render(14)).table_row)
+  end)
+
   test.it("does not intercept table commands in Markdown Source Mode", function()
     local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two |\n")
     local old_active = core.active_view
