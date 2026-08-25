@@ -8,6 +8,10 @@ Shared domain language for the Anvil editor fork. This glossary records user-fac
 The editor application developed in this repository.
 _Avoid_: Pragtical, Lite XL
 
+**Anvil Window**:
+A top-level application window that contains one or more open Projects and presents one Selected Project.
+_Avoid_: Host window, Project window
+
 **App State**:
 Global editor state that persists across launches, such as recent projects, window placement, and previous find/replace text.
 _Avoid_: Session
@@ -15,6 +19,14 @@ _Avoid_: Session
 **Project**:
 A loaded directory root in Anvil. A project is not the whole visible editor state.
 _Avoid_: Workspace, session, folder
+
+**Selected Project**:
+The Project currently presented in an Anvil Window.
+_Avoid_: Active Project, Current Project, hosted app
+
+**Project Sidebar**:
+The optional application sidebar for viewing, selecting, opening, and closing Projects in one Anvil Window.
+_Avoid_: Project panel, app switcher, side panel
 
 **Root Project**:
 The first project loaded into Anvil, used as the default base for relative paths and project-level behavior.
