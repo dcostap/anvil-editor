@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
@@ -14,21 +15,6 @@ end
 local function mkdirp(path)
   local ok, err = common.mkdirp(path)
   test.ok(ok, err)
-end
-
-local function write_file(path, text)
-  local fp, err = io.open(path, "wb")
-  test.not_nil(fp, err)
-  fp:write(text or "")
-  fp:close()
-end
-
-local function read_file(path)
-  local fp, err = io.open(path, "rb")
-  test.not_nil(fp, err)
-  local text = fp:read("*a")
-  fp:close()
-  return text
 end
 
 local function setup_project(context)
@@ -76,7 +62,7 @@ test.describe("Project Paths View", function()
     end
   end)
 
-  test.it("lists label, role, path, and storage for effective Project Path entries", function(context)
+  test.it("lists the label, role, and path without storage controls", function(context)
     local view = setup_project(context)
     local _, root_entry = find_row(view, common.basename(context.root))
     local _, external_entry = find_row(view, "jdk-src")
@@ -89,8 +75,10 @@ test.describe("Project Paths View", function()
     test.equal(vendored_entry.role, "vendored")
 
     local text = table.concat(view.buffer.lines)
-    test.ok(text:find("project config", 1, true), "expected project config storage column")
-    test.ok(text:find("automatic", 1, true), "expected automatic root storage")
+    test.not_ok(text:find("Storage", 1, true))
+    test.not_ok(view.change_selected_storage)
+    test.is_nil(command.map["project_paths:add_external_directory_local"])
+    test.is_nil(command.map["project_paths:add_external_directory_to_project_config"])
   end)
 
   test.it("renames labels and changes display paths without touching files", function(context)
@@ -121,38 +109,9 @@ test.describe("Project Paths View", function()
     test.ok(system.get_file_info(context.vendor), "removing Project Path Role must not delete files")
   end)
 
-  test.it("moves entries between local Workspace state and Project config state", function(context)
-    local view = setup_project(context)
-    local local_dir = join_path(context.temp_root, "local-lib")
-    mkdirp(local_dir)
-    local entry = project_paths_view.add_entry(local_dir, "external", "workspace", "local-lib")
-    test.not_nil(entry)
-    view:refresh()
-
-    local line = assert(find_row(view, "local-lib"))
-    view.buffer:set_selection(line, 1)
-    test.ok(view:change_selected_storage("project"))
-    local moved = project_paths.resolve(local_dir).entry
-    test.equal(moved.source, "project")
-
-    local project_file = join_path(context.root, ".anvil_project.lua")
-    local text = read_file(project_file)
-    test.ok(text:find("ANVIL PROJECT PATHS BEGIN", 1, true), "expected generated project config block")
-    test.ok(text:find("local%-lib") or text:find("local-lib", 1, true), "expected moved Project Path in project config")
-
-    view:refresh()
-    line = assert(find_row(view, "local-lib"))
-    view.buffer:set_selection(line, 1)
-    test.ok(view:change_selected_storage("workspace"))
-    moved = project_paths.resolve(local_dir).entry
-    test.equal(moved.source, "workspace")
-    text = read_file(project_file)
-    test.not_ok(text:find("local%-lib") or text:find("local-lib", 1, true), "expected moved-local Project Path removed from project config")
-  end)
-
-  test.it("replaces duplicate paths across storage layers instead of leaving stale hidden entries", function(context)
+  test.it("replaces a matching Project Path without leaving a duplicate", function(context)
     setup_project(context)
-    local entry = project_paths_view.add_entry(context.external, "external", "workspace", "jdk-local")
+    local entry = project_paths_view.add_entry(context.external, "external", "jdk-local")
     test.not_nil(entry)
     local matches = 0
     for _, candidate in ipairs(project_paths.entries({ include_root = false })) do
@@ -165,17 +124,6 @@ test.describe("Project Paths View", function()
     test.equal(matches, 1)
   end)
 
-  test.it("adds Project config entries through command helpers", function(context)
-    setup_project(context)
-    local shared = join_path(context.temp_root, "shared-src")
-    mkdirp(shared)
-    local entry = project_paths_view.add_entry(shared, "external", "project", "shared-src")
-    test.not_nil(entry)
-    test.equal(entry.source, "project")
-    local text = read_file(join_path(context.root, ".anvil_project.lua"))
-    test.ok(text:find("shared%-src") or text:find("shared-src", 1, true))
-  end)
-
   test.it("saves local-only Project Path changes immediately", function(context)
     setup_project(context)
     context.original_save_workspace = core.save_workspace
@@ -185,7 +133,7 @@ test.describe("Project Paths View", function()
     local local_dir = join_path(context.temp_root, "instant-local-lib")
     mkdirp(local_dir)
 
-    local entry = project_paths_view.add_entry(local_dir, "external", "workspace", "instant-local-lib")
+    local entry = project_paths_view.add_entry(local_dir, "external", "instant-local-lib")
     test.not_nil(entry)
     test.equal(entry.source, "workspace")
     test.equal(save_count, 1)

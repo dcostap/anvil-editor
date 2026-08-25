@@ -28,12 +28,6 @@ local ROLE_FROM_LABEL = {
   vendored = "vendored",
 }
 
-local STORAGE_LABELS = {
-  implicit = "automatic",
-  project = "project config",
-  workspace = "local only",
-}
-
 local function path_key(path)
   return common.path_compare_key(path) or tostring(path)
 end
@@ -43,25 +37,12 @@ local function root_path()
   return project and project.path
 end
 
-local function project_file_path()
-  local root = root_path()
-  return root and (root .. PATHSEP .. ".anvil_project.lua")
-end
-
-local function quote(value)
-  return string.format("%q", tostring(value or ""))
-end
-
 local function relative_or_home(path)
   local root = root_path()
   if root and (common.path_equals(path, root) or common.path_belongs_to(path, root)) then
     return common.relative_path(root, path)
   end
   return common.home_encode(path)
-end
-
-local function storage_label(entry)
-  return STORAGE_LABELS[entry.source] or tostring(entry.source or "")
 end
 
 local function role_label(role)
@@ -87,72 +68,6 @@ local function set_buffer_lines(buffer, lines)
   buffer:set_selection(1, 1)
 end
 
-local function serialize_project_config_block()
-  local state = project_paths.save_project_state()
-  local by_role = { external = {}, vendored = {} }
-  for _, entry in ipairs(state.entries or {}) do
-    if by_role[entry.role] then by_role[entry.role][#by_role[entry.role] + 1] = entry end
-  end
-
-  local lines = {
-    "-- ANVIL PROJECT PATHS BEGIN\n",
-    "local project_paths = require \"core.project_paths\"\n",
-    "project_paths.configure_project {\n",
-  }
-  for _, role in ipairs({ "external", "vendored" }) do
-    lines[#lines + 1] = "  " .. role .. " = {\n"
-    for _, entry in ipairs(by_role[role]) do
-      local pieces = { "path = " .. quote(entry.path) }
-      if entry.label and entry.label ~= "" then pieces[#pieces + 1] = "label = " .. quote(entry.label) end
-      for _, field in ipairs({ "rank_penalty", "filetree_style" }) do
-        if entry[field] ~= nil then
-          local value = entry[field]
-          local text = type(value) == "string" and quote(value) or tostring(value)
-          pieces[#pieces + 1] = field .. " = " .. text
-        end
-      end
-      lines[#lines + 1] = "    { " .. table.concat(pieces, ", ") .. " },\n"
-    end
-    lines[#lines + 1] = "  },\n"
-  end
-  lines[#lines + 1] = "}\n"
-  lines[#lines + 1] = "-- ANVIL PROJECT PATHS END\n"
-  return table.concat(lines)
-end
-
-local function read_file(path)
-  local fp = io.open(path, "rb")
-  if not fp then return "" end
-  local text = fp:read("*a") or ""
-  fp:close()
-  return text
-end
-
-local function write_file(path, text)
-  local fp, err = io.open(path, "wb")
-  if not fp then return false, err end
-  fp:write(text)
-  fp:close()
-  return true
-end
-
-local function write_project_config()
-  local path = project_file_path()
-  if not path then return false, "no Root Project" end
-  local text = read_file(path)
-  local block = serialize_project_config_block()
-  local begin = "%-%- ANVIL PROJECT PATHS BEGIN"
-  local finish = "%-%- ANVIL PROJECT PATHS END\n?"
-  local pattern = begin .. ".-" .. finish
-  if text:find(begin) then
-    text = text:gsub(pattern, block, 1)
-  else
-    if text ~= "" and text:sub(-1) ~= "\n" then text = text .. "\n" end
-    text = text .. (text ~= "" and "\n" or "") .. block
-  end
-  return write_file(path, text)
-end
-
 local function refresh_surfaces()
   if view then view:refresh() end
   local ok, filetree = pcall(require, "plugins.filetree")
@@ -161,8 +76,7 @@ local function refresh_surfaces()
   end
 end
 
-local function persist_workspace_if_needed(source)
-  if source ~= "workspace" then return true end
+local function persist_workspace()
   if core.save_workspace then
     core.save_workspace()
   else
@@ -171,44 +85,16 @@ local function persist_workspace_if_needed(source)
   return true
 end
 
-local function persist_sources(...)
-  local needs_project = false
-  local needs_workspace = false
-  for i = 1, select("#", ...) do
-    local source = select(i, ...)
-    needs_project = needs_project or source == "project"
-    needs_workspace = needs_workspace or source == "workspace"
-  end
-  if needs_project then
-    local ok, err = write_project_config()
-    if not ok then core.error("Project Paths: could not update .anvil_project.lua: %s", tostring(err)); return false end
-  end
-  if needs_workspace then persist_workspace_if_needed("workspace") end
-  return true
-end
-
-local function persist_project_if_needed(source)
-  return persist_sources(source)
-end
-
 local function normalize_role_text(text)
   text = tostring(text or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
   return ROLE_FROM_LABEL[text] or text
 end
 
-local function normalize_storage_text(text)
-  text = tostring(text or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
-  if text == "project" or text == "project config" then return "project" end
-  if text == "local" or text == "local only" or text == "workspace" then return "workspace" end
-  return nil
-end
-
 local function remove_entry(id_or_path)
   local entry = find_effective_entry(id_or_path)
   if not entry then return false end
-  local source = entry.source
   if not project_paths.remove_entry(entry.id) then return false end
-  persist_sources(source)
+  persist_workspace()
   refresh_surfaces()
   return true
 end
@@ -217,23 +103,20 @@ local function set_label(id_or_path, label)
   local entry = find_effective_entry(id_or_path)
   if not entry or entry.role == "root" then return false end
   if not project_paths.set_label(entry.id, label) then return false end
-  persist_project_if_needed(entry.source)
+  persist_workspace()
   refresh_surfaces()
   return true
 end
 
-local function add_entry(path, role, source, label)
+local function add_entry(path, role, label)
   if type(path) ~= "string" or path == "" then core.error("Project Paths: missing path"); return nil end
   path = common.normalize_path(system.absolute_path(common.home_expand(path)) or common.home_expand(path))
   local info = system.get_file_info(path)
   if not (info and info.type == "dir") then core.error("Project Paths: not a directory: %s", path); return nil end
   role = role or "external"
-  source = source or "workspace"
   label = label and label ~= "" and label or common.basename(path)
-  local existing = find_effective_entry(path)
-  local old_source = existing and existing.source
-  local entry = project_paths.add_external({ path = path, label = label, role = role }, { source = source })
-  if entry and persist_sources(old_source, source) then
+  local entry = project_paths.add_external({ path = path, label = label, role = role })
+  if entry and persist_workspace() then
     core.log("Project Paths: marked %s as %s", common.home_encode(path), role_label(role))
     refresh_surfaces()
     return entry
@@ -279,19 +162,6 @@ local function suggest_choices(choices, default_text)
   end
 end
 
-local function prompt_storage(callback)
-  local choices = {
-    { text = "Local only", source = "workspace" },
-    { text = "Project config", source = "project" },
-  }
-  local default_text = choices[1].text
-  prompt("Project Path Storage", {
-    text = default_text,
-    suggest = suggest_choices(choices, default_text),
-    submit = function(text, item) callback((item and item.source) or normalize_storage_text(text) or "workspace") end,
-  })
-end
-
 local function prompt_role(path, roles, callback)
   local choices = {}
   for _, role in ipairs(roles or { "external", "vendored" }) do
@@ -304,11 +174,7 @@ local function prompt_role(path, roles, callback)
     submit = function(text, item)
       local role = (item and item.role) or normalize_role_text(text)
       if not role or role == "root" then core.error("Project Paths: unknown role: %s", tostring(text)); return end
-      prompt_label(path, function(label)
-        prompt_storage(function(source)
-          callback(role, label, source)
-        end)
-      end)
+      prompt_label(path, function(label) callback(role, label) end)
     end,
   })
 end
@@ -325,17 +191,16 @@ end
 
 function ProjectPathsView:refresh()
   local lines = {
-    string.format("%-18s %-10s %-42s %s\n", "Alias", "Role", "Path", "Storage"),
-    "────────────────────────────────────────────────────────────────────────────────\n",
+    string.format("%-18s %-10s %s\n", "Alias", "Role", "Path"),
+    "──────────────────────────────────────────────────────────────────────\n",
   }
   self.entries_by_line = {}
   for _, entry in ipairs(project_paths.entries()) do
     local line = string.format(
-      "%-18s %-10s %-42s %s\n",
+      "%-18s %-10s %s\n",
       entry.label or "",
       role_label(entry.role),
-      relative_or_home(entry.path),
-      storage_label(entry)
+      relative_or_home(entry.path)
     )
     lines[#lines + 1] = line
     self.entries_by_line[#lines] = entry
@@ -364,7 +229,7 @@ function ProjectPathsView:change_selected_role(role)
   local entry = self:selected_entry()
   if not entry or entry.role == "root" then return false end
   if not project_paths.change_role(entry.id, role) then return false end
-  persist_project_if_needed(entry.source)
+  persist_workspace()
   refresh_surfaces()
   return true
 end
@@ -373,16 +238,6 @@ function ProjectPathsView:remove_selected()
   local entry = self:selected_entry()
   if not entry or entry.role == "root" then return false end
   return remove_entry(entry.id)
-end
-
-function ProjectPathsView:change_selected_storage(source)
-  local entry = self:selected_entry()
-  if not entry or entry.role == "root" then return false end
-  local old_source = entry.source
-  if not project_paths.change_storage(entry.id, source) then return false end
-  persist_sources(old_source, source)
-  refresh_surfaces()
-  return true
 end
 
 local function open_view()
@@ -402,7 +257,7 @@ local function open_view()
   return view
 end
 
-local function prompt_add_directory(path, default_role, default_source)
+local function prompt_add_directory(path, default_role)
   if path then
     path = common.normalize_path(system.absolute_path(common.home_expand(path)) or common.home_expand(path))
   end
@@ -410,14 +265,10 @@ local function prompt_add_directory(path, default_role, default_source)
     if not target or target == "" then return end
     target = common.normalize_path(system.absolute_path(common.home_expand(target)) or common.home_expand(target))
     local roles = default_role and { default_role } or { "external", "vendored" }
-    if default_role and default_source then
-      prompt_label(target, function(label) add_entry(target, default_role, default_source, label) end)
-    elseif default_role then
-      prompt_label(target, function(label)
-        prompt_storage(function(source) add_entry(target, default_role, source, label) end)
-      end)
+    if default_role then
+      prompt_label(target, function(label) add_entry(target, default_role, label) end)
     else
-      prompt_role(target, roles, function(role, label, source) add_entry(target, role, source, label) end)
+      prompt_role(target, roles, function(role, label) add_entry(target, role, label) end)
     end
   end
   if path then return with_path(path) end
@@ -437,14 +288,6 @@ command.add(nil, {
   ["project_paths:add_external_directory"] = command.palette(function(path)
     prompt_add_directory(path, "external")
   end),
-  ["project_paths:add_external_directory_local"] = command.palette(function(path)
-    if path then return add_entry(path, "external", "workspace") end
-    prompt_add_directory(nil, "external", "workspace")
-  end),
-  ["project_paths:add_external_directory_to_project_config"] = command.palette(function(path)
-    if path then return add_entry(path, "external", "project") end
-    prompt_add_directory(nil, "external", "project")
-  end),
   ["project_paths:mark_selected_folder"] = command.palette(function()
     local path, err = selected_filetree_directory()
     if not path then core.error("Project Paths: %s", tostring(err)); return end
@@ -457,7 +300,7 @@ command.add(nil, {
     local roles = root and (common.path_equals(path, root) or common.path_belongs_to(path, root))
       and { "vendored" }
       or { "external", "vendored" }
-    prompt_role(path, roles, function(role, label, source) add_entry(path, role, source, label) end)
+    prompt_role(path, roles, function(role, label) add_entry(path, role, label) end)
   end),
 })
 
@@ -471,10 +314,7 @@ local M = {
   add_entry = add_entry,
   remove_entry = remove_entry,
   set_label = set_label,
-  write_project_config = write_project_config,
   _test = {
-    serialize_project_config_block = serialize_project_config_block,
-    write_project_config = write_project_config,
     open_view = open_view,
   },
 }
