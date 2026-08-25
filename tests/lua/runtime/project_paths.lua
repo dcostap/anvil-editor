@@ -217,4 +217,35 @@ test.describe("Project path roles", function()
     context.project_paths.load_workspace_state(state)
     test.equal(context.project_paths.resolve(join_path(context.external, "java", "lang", "String.java")).entry.role, "external")
   end)
+
+  test.test("adding an external project directory updates compatibility Projects immediately", function(context)
+    context.project_paths.add_external({ path = context.external, label = "jdk-src" })
+
+    local project, is_open = core.current_project(join_path(context.external, "java"))
+    test.ok(is_open)
+    test.ok(common.path_equals(project.path, context.external))
+  end)
+
+  test.test("removing a restored external project directory also removes its compatibility Project", function(context)
+    core.add_project(context.external)
+    context.project_paths.load_workspace_state {
+      entries = {
+        { path = context.external, label = "jdk-src", role = "external" },
+      },
+    }
+
+    test.ok(context.project_paths.remove_entry(context.external))
+    local _, is_open = core.current_project(join_path(context.external, "java"))
+    test.not_ok(is_open)
+    test.is_nil(context.project_paths.resolve(join_path(context.external, "java", "lang", "String.java")))
+    test.equal(#context.project_paths.save_workspace_state().entries, 0)
+  end)
+
+  test.test("project path labels must be one safe path component", function(context)
+    local entry = context.project_paths.add_external({ path = context.external, label = "jdk-src" })
+
+    test.not_ok(context.project_paths.set_label(entry.id, "jdk/src"))
+    test.not_ok(context.project_paths.set_label(entry.id, "C:"))
+    test.equal(context.project_paths.resolve(context.external).entry.label, "jdk-src")
+  end)
 end)

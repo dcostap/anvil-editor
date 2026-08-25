@@ -3301,9 +3301,9 @@ command.add(function(...)
   local pane = owner and panes.pane_for_view(owner)
   local owned_text_view = owner and owner ~= view and pane and pane.current_view == owner
     and view and view.extends and view:extends(TextView)
-  local specialized_text_view = view and view.accepts_text_commands
-    and view.extends and view:extends(TextView)
-  return not not (owned_text_view or specialized_text_view), view, ...
+  local current_text_view = owner == view and pane and pane.current_view == view
+    and view and view.extends and view:extends(TextView)
+  return not not (owned_text_view or current_text_view), view, ...
 end, commands)
 
 command.add_toggle("editor:toggle_line_wrapping", {

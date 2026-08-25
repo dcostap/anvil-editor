@@ -1,3 +1,4 @@
+-- mod-version:3
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 
 local file_picker = {}

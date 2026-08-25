@@ -245,16 +245,18 @@ end
 
 local function add_project_directory()
   open_directory("Add Directory", true, function(abs_path)
+    local project_paths_view = require "plugins.project_paths_view"
     for _, dir in ipairs(abs_path) do
-      core.add_project(system.absolute_path(dir))
+      project_paths_view.add_entry(system.absolute_path(dir), "external")
     end
   end)
 end
 
 local function add_project_directory_with_system_file_picker()
   open_directory_with_system_file_picker("Add Directory", true, function(abs_path)
+    local project_paths_view = require "plugins.project_paths_view"
     for _, dir in ipairs(abs_path) do
-      core.add_project(system.absolute_path(dir))
+      project_paths_view.add_entry(system.absolute_path(dir), "external")
     end
   end)
 end

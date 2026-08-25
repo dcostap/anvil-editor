@@ -7,6 +7,9 @@ local test = require "core.test"
 
 local project_paths_view = require "plugins.project_paths_view"
 local panes = require "core.panes"
+local fuzzy_searcher = require "plugins.fuzzy_searcher"
+
+local fuzzy_helpers = fuzzy_searcher._test
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
@@ -48,8 +51,23 @@ local function find_row(view, label)
   end
 end
 
+local function set_picker_query(picker, text)
+  picker.input:set_text(text)
+  picker.current_query_key = nil
+  picker.force_refresh = true
+  picker.dirty = true
+  picker:refresh(text)
+end
+
+local function result_path(result)
+  return result and (result.path or result.project or result.abs_path or result.file)
+end
+
 test.describe("Project Paths View", function()
   test.after_each(function(context)
+    if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
+    if core.active_view == core.global_prompt_bar then core.global_prompt_bar:exit(false) end
+    if context.everything_state then fuzzy_helpers.set_everything_state(context.everything_state) end
     panes.reset_for_tests()
     project_paths.configure_workspace {}
     project_paths.load_workspace_state(nil)
@@ -79,6 +97,17 @@ test.describe("Project Paths View", function()
     test.not_ok(view.change_selected_storage)
     test.is_nil(command.map["project_paths:add_external_directory_local"])
     test.is_nil(command.map["project_paths:add_external_directory_to_project_config"])
+  end)
+
+  test.it("moves the caret through Project Path rows with Text View navigation", function(context)
+    local view = setup_project(context)
+    local line = test.not_nil(find_row(view, common.basename(context.root)))
+    view.buffer:set_selection(line, 1)
+
+    test.ok(command.perform("core:move_to_next_line"))
+    test.equal(view.buffer:get_selection(), line + 1)
+    test.ok(command.perform("core:move_to_previous_line"))
+    test.equal(view.buffer:get_selection(), line)
   end)
 
   test.it("renames labels and changes display paths without touching files", function(context)
@@ -137,5 +166,55 @@ test.describe("Project Paths View", function()
     test.not_nil(entry)
     test.equal(entry.source, "workspace")
     test.equal(save_count, 1)
+  end)
+
+  test.it("adds an External Project Directory through the folder File Picker and label prompt", function(context)
+    setup_project(context)
+    context.everything_state = fuzzy_helpers.everything_state()
+    fuzzy_helpers.set_everything_state("unavailable")
+    local selected_path = join_path(context.temp_root, "selected-external")
+    mkdirp(selected_path)
+
+    test.ok(command.perform("project_paths:add_external_directory"))
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.equal(picker.file_picker.select, "folder")
+    set_picker_query(picker, context.temp_root .. PATHSEP)
+    local selected_index
+    for index, result in ipairs(picker.results) do
+      if common.path_equals(result_path(result), selected_path) then selected_index = index; break end
+    end
+    picker.selected = test.not_nil(selected_index)
+    picker:confirm(false)
+
+    test.equal(core.active_view, core.global_prompt_bar)
+    test.equal(core.global_prompt_bar:get_text(), "selected-external")
+    core.global_prompt_bar:set_text("Selected Sources")
+    core.global_prompt_bar:submit()
+
+    local resolved = test.not_nil(project_paths.resolve(selected_path))
+    test.equal(resolved.entry.role, "external")
+    test.equal(resolved.entry.label, "Selected Sources")
+  end)
+
+  test.it("lists and immediately removes External and Vendored Project Directories", function(context)
+    setup_project(context)
+
+    test.ok(command.perform("project_paths:remove_directory"))
+    local prompt_bar = core.global_prompt_bar
+    test.equal(core.active_view, prompt_bar)
+    local roles = {}
+    for _, suggestion in ipairs(prompt_bar.suggestions) do
+      roles[suggestion.role] = true
+    end
+    test.ok(roles.external)
+    test.ok(roles.vendored)
+    test.equal(#prompt_bar.suggestions, 2)
+
+    prompt_bar:set_text("library1")
+    prompt_bar:submit()
+
+    test.equal(project_paths.resolve(context.vendor).entry.role, "root")
+    test.equal(project_paths.resolve(context.external).entry.role, "external")
+    test.ok(system.get_file_info(context.vendor), "removing the Project Path must not delete its directory")
   end)
 end)

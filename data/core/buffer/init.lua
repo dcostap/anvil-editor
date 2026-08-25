@@ -15,6 +15,8 @@ if config.safe_write == nil then config.safe_write = true end
 local tokenizer = require "core.tokenizer"
 
 ---@class core.buffer : core.object
+---@field read_only? boolean Prevent user edits in each Text View that presents this Buffer
+---@field read_only_reason? string Message shown when the user tries to edit this Buffer
 local Buffer = Object:extend()
 
 function Buffer:__tostring() return "Buffer" end

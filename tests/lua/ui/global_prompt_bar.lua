@@ -72,6 +72,29 @@ test.describe("Global Prompt Bar pointer interception", function()
   end)
 end)
 
+test.describe("Global Prompt Bar focus restoration", function()
+  test.it("closes safely when no previous View exists", function()
+    local bar = core.global_prompt_bar
+    bar:exit(true)
+    local previous_view = core.active_view
+    local previous_last_view = core.last_active_view
+    if core.active_view then core.clear_active_view(core.active_view) end
+    core.last_active_view = nil
+    bar:enter("No Source View", { show_suggestions = false })
+
+    local ok, err = pcall(bar.exit, bar, false)
+    if not ok then
+      core.last_active_view = previous_view
+      pcall(bar.exit, bar, true)
+    end
+    if previous_view then core.set_active_view(previous_view) end
+    core.last_active_view = previous_last_view
+
+    test.ok(ok, err)
+    test.not_equal(core.active_view, bar)
+  end)
+end)
+
 test.describe("Global Prompt Bar typeahead", function()
   test.it("completes a suggestion without matching letter case", function()
     local bar = core.global_prompt_bar

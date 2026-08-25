@@ -588,7 +588,6 @@ function CommandOutputView:__tostring() return "CommandOutputView" end
 
 function CommandOutputView:new(slot)
   CommandOutputView.super.new(self, CommandOutputBuffer())
-  self.accepts_text_commands = true
   self.slot = slot
   self.command_output_view = true
   self.poi_cache = nil

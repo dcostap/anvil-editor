@@ -102,6 +102,10 @@ end
 local function set_label(id_or_path, label)
   local entry = find_effective_entry(id_or_path)
   if not entry or entry.role == "root" then return false end
+  if not project_paths.valid_label(label) then
+    core.error("Project Paths: labels must be one path component")
+    return false
+  end
   if not project_paths.set_label(entry.id, label) then return false end
   persist_workspace()
   refresh_surfaces()
@@ -115,6 +119,10 @@ local function add_entry(path, role, label)
   if not (info and info.type == "dir") then core.error("Project Paths: not a directory: %s", path); return nil end
   role = role or "external"
   label = label and label ~= "" and label or common.basename(path)
+  if not project_paths.valid_label(label) then
+    core.error("Project Paths: labels must be one path component")
+    return nil
+  end
   local entry = project_paths.add_external({ path = path, label = label, role = role })
   if entry and persist_workspace() then
     core.log("Project Paths: marked %s as %s", common.home_encode(path), role_label(role))
@@ -179,8 +187,49 @@ local function prompt_role(path, roles, callback)
   })
 end
 
+local function removable_choices(text)
+  local query = tostring(text or ""):lower()
+  local choices = {}
+  for _, entry in ipairs(project_paths.entries({ include_root = false })) do
+    if entry.role == "external" or entry.role == "vendored" then
+      local path = relative_or_home(entry.path)
+      local search_text = table.concat({ entry.label or "", role_label(entry.role), path }, " "):lower()
+      if query == "" or search_text:find(query, 1, true) then
+        choices[#choices + 1] = {
+          text = entry.label,
+          info = role_label(entry.role) .. " — " .. path,
+          entry_id = entry.id,
+          role = entry.role,
+        }
+      end
+    end
+  end
+  table.sort(choices, function(a, b) return a.text:lower() < b.text:lower() end)
+  return choices
+end
+
+local function prompt_remove_directory()
+  prompt("Remove Project Directory", {
+    text = "",
+    suggest = removable_choices,
+    submit = function(_, item)
+      if not (item and item.entry_id) then
+        core.error("Project Paths: select a directory to remove")
+        return
+      end
+      local entry = find_effective_entry(item.entry_id)
+      if not entry then return end
+      if remove_entry(entry.id) then
+        core.log("Project Paths: removed %s", entry.label or common.home_encode(entry.path))
+      end
+    end,
+  })
+end
+
 function ProjectPathsView:new()
   ProjectPathsView.super.new(self, Buffer())
+  self.buffer.read_only = true
+  self.buffer.read_only_reason = "Project Paths is read-only"
   self.entries_by_line = {}
   self:refresh()
 end
@@ -272,10 +321,16 @@ local function prompt_add_directory(path, default_role)
     end
   end
   if path then return with_path(path) end
-  prompt("Project Directory Path", {
-    show_suggestions = false,
+  local context = command.get_invocation_context() or {}
+  local source_view = context.source_view or core.active_view
+  local source_pane = panes.find(context.source_pane) or panes.pane_for_view(source_view) or panes.active()
+  return require("plugins.file_picker").open {
+    select = "folder",
+    label = "Add External Project Directory",
+    source_view = source_view,
+    source_pane = source_pane,
     submit = with_path,
-  })
+  }
 end
 
 command.add(nil, {
@@ -287,7 +342,14 @@ command.add(nil, {
   }),
   ["project_paths:add_external_directory"] = command.palette(function(path)
     prompt_add_directory(path, "external")
-  end),
+  end, {
+    keywords = { "folder", "path", "attach" },
+  }),
+  ["project_paths:remove_directory"] = command.palette(function()
+    prompt_remove_directory()
+  end, {
+    keywords = { "external", "vendored", "folders", "list" },
+  }),
   ["project_paths:mark_selected_folder"] = command.palette(function()
     local path, err = selected_filetree_directory()
     if not path then core.error("Project Paths: %s", tostring(err)); return end

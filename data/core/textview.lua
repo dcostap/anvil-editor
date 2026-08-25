@@ -922,6 +922,23 @@ function TextView:new(buffer)
 end
 
 
+---Create a plain read-only Text View from generated text.
+---@param text string Text to present
+---@param opts? { name?: string, read_only_reason?: string }
+---@return core.textview view
+function TextView.from_text(text, opts)
+  opts = opts or {}
+  local buffer = Buffer()
+  buffer.display_name = opts.name or "Text"
+  buffer:insert(1, 1, tostring(text or ""))
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer.read_only = true
+  buffer.read_only_reason = opts.read_only_reason or "This Buffer is read-only"
+  return TextView(buffer)
+end
+
+
 function TextView:get_owned_feature_state()
   local state = {}
   for id, value in pairs(self.__pending_owned_feature_state or {}) do state[id] = value end
@@ -2296,6 +2313,11 @@ end
 
 function TextView:can_edit(reason, opts)
   opts = opts or {}
+  if self.buffer.read_only then
+    local why = self.buffer.read_only_reason or "This Buffer is read-only"
+    if opts.warn then core.warn(why) end
+    return false, why
+  end
   for id, guard in pairs(self.edit_guards or {}) do
     local is_table = type(guard) == "table"
     local fn = is_table and guard.can_edit or guard
@@ -5380,9 +5402,9 @@ end
 
 
 ---Check if this view accepts text input.
----@return boolean accepts Always returns true for TextView
+---@return boolean accepts False for a read-only Buffer
 function TextView:supports_text_input()
-  return true
+  return not self.buffer.read_only
 end
 
 

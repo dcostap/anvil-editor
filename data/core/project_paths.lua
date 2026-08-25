@@ -115,8 +115,17 @@ local function defaults_for_role(role)
   return ROLE_DEFAULTS[role] or ROLE_DEFAULTS.external
 end
 
+local function valid_label(label)
+  return type(label) == "string"
+    and label ~= ""
+    and label ~= "."
+    and label ~= ".."
+    and label ~= "~"
+    and not label:find("[/\\:%z\1-\31]")
+end
+
 local function label_for(path, label)
-  if type(label) == "string" and label ~= "" then return label end
+  if valid_label(label) then return label end
   return common.basename(path)
 end
 
@@ -412,8 +421,11 @@ function project_paths.rank_penalty(path)
   return tonumber(resolved.entry.rank_penalty) or 0
 end
 
+local sync_compatibility_projects
+
 function project_paths.configure_workspace(spec)
   spec = spec or {}
+  local previous_entries = workspace_entries
   local entries = {}
   for _, role in ipairs({ "external", "vendored" }) do
     for _, entry in ipairs(role_entries_from_spec(spec, role)) do
@@ -422,12 +434,56 @@ function project_paths.configure_workspace(spec)
   end
   workspace_entries = normalize_entries(entries, { source = "workspace", base = root_path() })
   workspace_entries_root_key = path_key(root_path()) or ""
+  sync_compatibility_projects(previous_entries, workspace_entries)
   invalidate("workspace config")
   return project_paths.entries()
 end
 
+local function is_outside_root(path)
+  local root = root_path()
+  return root
+    and not common.path_equals(path, root)
+    and not common.path_belongs_to(path, root)
+end
+
+local function ensure_compatibility_project(path)
+  if not is_outside_root(path) then return false end
+  for _, project in ipairs(core.projects or {}) do
+    if project.path and common.path_equals(project.path, path) then return false end
+  end
+  core.add_project(path)
+  if core.log_quiet then
+    core.log_quiet("Project Paths: added compatibility Project for %s", common.home_encode(path))
+  end
+  return true
+end
+
+local function remove_compatibility_project(path)
+  if not (path and core.remove_project) then return false end
+  local removed = core.remove_project(path) ~= false
+  if removed and core.log_quiet then
+    core.log_quiet("Project Paths: removed compatibility Project for %s", common.home_encode(path))
+  end
+  return removed
+end
+
+sync_compatibility_projects = function(previous_entries, entries)
+  local wanted = {}
+  for _, entry in ipairs(entries or {}) do
+    if is_outside_root(entry.path) then wanted[path_key(entry.path)] = entry.path end
+  end
+  for _, entry in ipairs(previous_entries or {}) do
+    local key = path_key(entry.path)
+    if is_outside_root(entry.path) and not wanted[key] then
+      remove_compatibility_project(entry.path)
+    end
+  end
+  for _, path in pairs(wanted) do ensure_compatibility_project(path) end
+end
+
 function project_paths.add_external(entry)
   local copy = copy_entry(entry or {})
+  if copy.label ~= nil and not valid_label(copy.label) then return nil end
   copy.role = copy.role or "external"
   copy.source = "workspace"
   local normalized = normalize_entry(copy, { source = "workspace", role = copy.role, base = root_path() })
@@ -437,6 +493,7 @@ function project_paths.add_external(entry)
     if path_key(workspace_entries[i].path) == key then table.remove(workspace_entries, i) end
   end
   workspace_entries[#workspace_entries + 1] = normalized
+  ensure_compatibility_project(normalized.path)
   invalidate("add " .. normalized.role)
   return normalized
 end
@@ -453,14 +510,30 @@ end
 
 function project_paths.remove_entry(id_or_path)
   local list, index, entry = find_mutable_entry(id_or_path)
-  if not list then return false end
-  table.remove(list, index)
-  invalidate("remove " .. tostring(entry.id))
+  local path = entry and entry.path
+  if not path then
+    local normalized = type(id_or_path) == "string" and normalize_abs(id_or_path) or nil
+    for _, effective in ipairs(merged_entries()) do
+      if effective.id == id_or_path
+      or (normalized and common.path_equals(effective.path, normalized)) then
+        path = effective.path
+        break
+      end
+    end
+  end
+  local removed = false
+  if list then
+    table.remove(list, index)
+    removed = true
+  end
+  if remove_compatibility_project(path) then removed = true end
+  if not removed then return false end
+  invalidate("remove " .. tostring(entry and entry.id or id_or_path))
   return true
 end
 
 function project_paths.set_label(id_or_path, label)
-  if type(label) ~= "string" or label == "" then return false end
+  if not valid_label(label) then return false end
   local _, _, entry = find_mutable_entry(id_or_path)
   if not entry then return false end
   entry.label = label
@@ -485,6 +558,7 @@ end
 function project_paths.load_workspace_state(state, legacy_directories)
   local current_root_key = path_key(root_path()) or ""
   local previous_signature = entries_signature(workspace_entries, workspace_entries_root_key or "")
+  local previous_entries = workspace_entries
   local entries = {}
   if type(state) == "table" then
     for _, entry in ipairs(state.entries or state) do
@@ -506,6 +580,7 @@ function project_paths.load_workspace_state(state, legacy_directories)
     end
   end
   workspace_entries = normalize_entries(entries, { source = "workspace", base = root_path() })
+  sync_compatibility_projects(previous_entries, workspace_entries)
   local changed = previous_signature ~= entries_signature(workspace_entries, current_root_key)
   workspace_entries_root_key = current_root_key
   if changed then invalidate("workspace load") end
@@ -552,5 +627,6 @@ function project_paths.generation()
 end
 
 project_paths.invalidate = invalidate
+project_paths.valid_label = valid_label
 
 return project_paths

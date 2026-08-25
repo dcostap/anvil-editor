@@ -243,19 +243,6 @@ function core.refresh_project_path_consumers(reason)
   return refresh_project_path_consumers(reason)
 end
 
-local function sync_workspace_project_paths_to_core_projects()
-  local root_project = core.root_project()
-  local root_path = root_project and root_project.path
-  for _, entry in ipairs(project_paths.entries({ include_root = false })) do
-    if entry.source == "workspace"
-    and root_path
-    and not common.path_equals(entry.path, root_path)
-    and not common.path_belongs_to(entry.path, root_path) then
-      core.add_project(entry.path)
-    end
-  end
-end
-
 local function ensure_initial_filetree_pane()
   if panes.count() > 0 then return false end
   local ok, filetree = pcall(require, "plugins.filetree")
@@ -357,7 +344,6 @@ local function load_workspace()
           end
         end
         panes.restore_workspace_state(workspace.pane_state, load_view)
-        sync_workspace_project_paths_to_core_projects()
       end
       untitled_recovery.restore_project(core.root_project().path)
       ensure_initial_filetree_pane()

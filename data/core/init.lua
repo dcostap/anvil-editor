@@ -1710,6 +1710,23 @@ function core.open_buffer(filename)
 end
 
 
+---Open generated text in a named read-only Text View.
+---@param text string Text to present
+---@param opts? table View name and Pane placement options
+---@return core.textview? view
+---@return core.pane|string? pane_or_error
+function core.open_text(text, opts)
+  opts = opts or {}
+  local view, pane_or_error = require("core.panes").place(function()
+    return TextView.from_text(text, opts)
+  end, opts)
+  if view then
+    core.log_quiet("Opened read-only text %q", view:get_name())
+  end
+  return view, pane_or_error
+end
+
+
 function core.get_views_referencing_buffer(buffer)
   local res = {}
   local seen = {}

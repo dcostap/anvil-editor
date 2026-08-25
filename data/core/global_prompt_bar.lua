@@ -315,8 +315,17 @@ function GlobalPromptBar:exit(submitted, inexplicit)
     local panes = pane and (core.panes or require "core.panes")
     if pane and panes.contains(pane) then
       panes.focus(pane)
-    else
+    elseif core.last_active_view then
       core.set_active_view(core.last_active_view)
+    else
+      panes = core.panes or require "core.panes"
+      local active_pane = panes.active()
+      if active_pane and panes.contains(active_pane) and active_pane.current_view then
+        panes.focus(active_pane)
+      else
+        core.clear_active_view(self)
+        if core.last_active_view == self then core.last_active_view = nil end
+      end
     end
   end
   if not self.pane_scope then core.root_panel:hide_app_overlay(self) end
