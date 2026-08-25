@@ -102,6 +102,13 @@ function View.from_state(state)
   return nil
 end
 
+---Create an independent View for a Copy View Split.
+---Returning nil requests the normal blank Untitled split.
+---@return core.view? duplicate
+function View:duplicate()
+  return nil
+end
+
 
 ---Returns the module path of this view.
 ---

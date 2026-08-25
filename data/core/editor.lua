@@ -56,6 +56,30 @@ function Editor:set_navigation_state(state)
   end
 end
 
+function Editor:duplicate()
+  local copy = Editor(self.buffer)
+  copy:set_navigation_state(self:get_navigation_state())
+  copy:set_wrapping_enabled(self:is_wrapping_enabled())
+  copy:restore_owned_feature_state(self:get_owned_feature_state())
+  for _, fold in ipairs(self.fold_regions or {}) do
+    if fold.kind ~= "markdown-callout" then
+      copy:add_fold_region {
+        line1 = fold.line1,
+        col1 = fold.col1,
+        line2 = fold.line2,
+        col2 = fold.col2,
+        collapsed = fold.collapsed,
+        placeholder = fold.placeholder,
+        show_widget = fold.show_widget,
+        allow_nested = fold.allow_nested,
+        kind = fold.kind,
+        metadata = fold.metadata,
+      }
+    end
+  end
+  return copy
+end
+
 function Editor.from_state(state)
   local editor
   if not state.filename then

@@ -1,6 +1,8 @@
 local panes = require "core.panes"
 local core = require "core"
 local command = require "core.command"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local layout = require "core.pane_layout"
 local View = require "core.view"
 local test = require "core.test"
@@ -83,6 +85,55 @@ test.describe("Pane manager", function()
     test.equal(one.group, two.group)
     test.equal(one.group, zero.group)
     test.equal(panes.visible_group(), one.group)
+  end)
+
+  test.it("rebalances a Pane Group after moving a Pane", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.split(one, "right", { factory = factory("two") })
+    local three = panes.split(one, "down", { factory = factory("three") })
+    local group = one.group
+    group.root.a.ratio = 0.2
+
+    test.equal(panes.move(two, one, "left"), two)
+
+    layout.update_rects(group.root, { x = 0, y = 0, w = 200, h = 100 })
+    test.equal(two.size.x, 100)
+    test.equal(two.size.y, 20)
+    test.equal(one.size.x, 100)
+    test.equal(one.size.y, 80)
+    test.equal(three.size.x, 100)
+    test.equal(three.size.y, 100)
+  end)
+
+  test.it("splits with an independent Editor for the same Buffer", function()
+    local buffer = Buffer(nil, nil, true)
+    buffer:insert(1, 1, "line one\nline two")
+    local source = panes.create { factory = function() return Editor(buffer) end }
+    source.current_view:set_selection_state { selections = { 2, 5, 2, 5 } }
+    source.current_view.scroll.x, source.current_view.scroll.y = 12, 34
+
+    test.ok(command.perform("core:split_pane_right_copy_view"))
+
+    local destination = panes.active()
+    local copy = destination.current_view
+    test.not_equal(copy, source.current_view)
+    test.equal(copy.buffer, buffer)
+    test.same(copy:get_selection_state().selections, { 2, 5, 2, 5 })
+    test.equal(copy.scroll.x, 12)
+    test.equal(copy.scroll.y, 34)
+    test.equal(panes.history_length(source), 1)
+    test.equal(panes.history_length(destination), 1)
+  end)
+
+  test.it("falls back to a normal split for a View without safe duplication", function()
+    local source = panes.create { factory = factory("source") }
+
+    test.ok(command.perform("core:split_pane_down_copy_view"))
+
+    local destination = panes.active()
+    test.ok(destination.current_view:extends(Editor))
+    test.equal(source.current_view:get_name(), "source")
+    test.equal(panes.history_length(destination), 1)
   end)
 
   test.it("focuses one member while presenting its complete group", function()

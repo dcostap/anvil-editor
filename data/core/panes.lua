@@ -420,6 +420,8 @@ function M.move(source_target, destination_target, direction)
       and destination_index or destination_index + 1
     table.insert(ordered, insertion, source)
     layout.reorder(destination_group.root, ordered)
+    layout.rebalance(destination_group.root,
+      (direction == "left" or direction == "right") and "x" or "y")
     M.active_pane = source
     M.visible_group_value = destination_group
     focus_view(source)

@@ -223,6 +223,21 @@ test.describe("Terminal View", function()
     restored:on_close()
   end)
 
+  test.it("copy-splits into a new terminal at the current directory", function(context)
+    local source = terminal.open { cwd = "C:/initial", shell = "pwsh.exe" }
+    source.snapshot.pwd = "C:/changed"
+
+    test.ok(command.perform("core:split_pane_right_copy_view"))
+
+    local copy = panes.active().current_view
+    test.ok(copy.terminal_view)
+    test.not_equal(copy, source)
+    test.not_equal(copy.session, source.session)
+    test.equal(#context.sessions, 2)
+    test.equal(context.sessions[2].options.cwd, "C:/changed")
+    test.equal(copy.launch_options.shell, "pwsh.exe")
+  end)
+
   test.it("uses the exact font advance for terminal cells", function()
     local view = terminal.open()
     local advance = style.terminal_font:get_width("M")

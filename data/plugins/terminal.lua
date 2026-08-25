@@ -199,6 +199,13 @@ function TerminalView:get_state()
   }
 end
 
+function TerminalView:duplicate()
+  return TerminalView {
+    cwd = self:get_cwd(),
+    shell = self.launch_options.shell,
+  }
+end
+
 function TerminalView.from_state(state)
   if type(state) ~= "table" then return nil end
   local ok, view = pcall(TerminalView, { cwd = state.cwd, shell = state.shell })

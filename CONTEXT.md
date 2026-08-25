@@ -236,6 +236,10 @@ _Avoid_: tab group, split group, workspace
 An action that moves each Pane clockwise to the next visual position in its Pane Group. The split geometry does not change. Focus follows the moved Pane.
 _Avoid_: rotate split panes, rotate tabs
 
+**Pane Group Rebalance**:
+An automatic layout update after a Pane is split, closed, or moved. A left or right change distributes width without changing height ratios. An up or down change distributes height without changing width ratios.
+_Avoid_: equalize splits, resize all Panes
+
 **Disposable Pane**:
 A Pane whose only Navigation History entry is a blank Untitled Editor and which has no retained Views. It remains disposable after its text is added and then removed.
 _Avoid_: void Pane, empty split
@@ -251,6 +255,10 @@ _Avoid_: Pane View, app, pane content
 **Current View**:
 The View that a Pane currently shows.
 _Avoid_: Selected View, Active View, Open View
+
+**Copy View Split**:
+A Pane split that tries to duplicate the source Current View as the new Pane's only Navigation Place. Editor duplication shares the Buffer and copies View state. Terminal View duplication starts a new terminal in the source working directory. Unsupported Views use the normal blank Untitled split.
+_Avoid_: copy Pane, copy Navigation History
 
 **View Suspension**:
 The retention of a non-current View through Pane Navigation History without closing it. An Untitled Editor cannot be suspended.

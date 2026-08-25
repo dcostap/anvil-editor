@@ -75,6 +75,24 @@ function layout.find(root, pane)
   return find_node(root, pane)
 end
 
+local function rebalance_node(node, axis)
+  if is_leaf(node) then return 1 end
+  assert(is_split(node), "invalid Pane layout node")
+  local first = rebalance_node(node.a, axis)
+  local second = rebalance_node(node.b, axis)
+  if node.axis == axis then
+    node.ratio = first / (first + second)
+    return first + second
+  end
+  return math.max(first, second)
+end
+
+function layout.rebalance(root, axis)
+  assert(axis == "x" or axis == "y", "invalid Pane rebalance axis")
+  if root then rebalance_node(root, axis) end
+  return root
+end
+
 local function replace_node(root, target, replacement)
   if root == target then return replacement, true end
   if not is_split(root) then return root, false end
@@ -100,7 +118,8 @@ function layout.split(root, pane, direction, new_pane)
     a = before and new_leaf or target,
     b = before and target or new_leaf,
   }
-  return (replace_node(root, target, replacement))
+  root = replace_node(root, target, replacement)
+  return layout.rebalance(root, axis)
 end
 
 local function remove_node(node, pane)
@@ -120,9 +139,10 @@ local function remove_node(node, pane)
 end
 
 function layout.remove(root, pane)
+  local _, parent = layout.find(root, pane)
   local result, changed = remove_node(root, pane)
   assert(changed, "Pane is not in this layout")
-  return result
+  return parent and layout.rebalance(result, parent.axis) or result
 end
 
 local function set_pane_rect(pane, x, y, w, h)
@@ -139,7 +159,10 @@ local function update_rect(node, x, y, w, h)
     return
   end
   assert(is_split(node), "invalid Pane layout node")
-  node.ratio = common.clamp(tonumber(node.ratio) or 0.5, MIN_RATIO, MAX_RATIO)
+  node.ratio = tonumber(node.ratio) or 0.5
+  if node.ratio <= 0 or node.ratio >= 1 then
+    node.ratio = common.clamp(node.ratio, MIN_RATIO, MAX_RATIO)
+  end
   if node.axis == "x" then
     local first = w * node.ratio
     update_rect(node.a, x, y, first, h)
@@ -246,7 +269,9 @@ local function validate_node(node, seen)
   assert(is_split(node), "invalid Pane layout node kind")
   assert(node.axis == "x" or node.axis == "y", "invalid Pane split axis")
   assert(type(node.ratio) == "number" and node.ratio == node.ratio, "invalid Pane split ratio")
-  node.ratio = common.clamp(node.ratio, MIN_RATIO, MAX_RATIO)
+  if node.ratio <= 0 or node.ratio >= 1 then
+    node.ratio = common.clamp(node.ratio, MIN_RATIO, MAX_RATIO)
+  end
   assert(node.a and node.b, "Pane split requires two children")
   validate_node(node.a, seen)
   validate_node(node.b, seen)

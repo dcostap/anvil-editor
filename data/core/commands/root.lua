@@ -16,6 +16,18 @@ local function new_untitled_editor()
   return Editor(untitled.tag_buffer(buffer))
 end
 
+local function duplicate_or_untitled(view)
+  if not (view and view.duplicate) then
+    core.log_quiet("Copy View Split used normal split: Current View does not support duplication")
+    return new_untitled_editor()
+  end
+  local ok, duplicate = pcall(view.duplicate, view)
+  if ok and duplicate and duplicate ~= view then return duplicate end
+  core.log_quiet("Copy View Split used normal split for %s: %s",
+    tostring(view), ok and "duplication returned no new View" or tostring(duplicate))
+  return new_untitled_editor()
+end
+
 local function move_and_merge_target(text, item, source)
   if item and item.pane and item.pane ~= source and panes.contains(item.pane) then
     return item.pane
@@ -101,6 +113,12 @@ for _, direction in ipairs { "left", "right", "up", "down" } do
   commands["core:split_pane_" .. direction] = command.palette(function(pane)
     return panes.split(pane, direction, { factory = new_untitled_editor })
   end)
+  commands["core:split_pane_" .. direction .. "_copy_view"] = command.palette(function(pane)
+    local source_view = pane.current_view
+    return panes.split(pane, direction, {
+      factory = function() return duplicate_or_untitled(source_view) end,
+    })
+  end, { keywords = { "duplicate", "current" } })
 end
 
 for _, direction in ipairs { "left", "right", "up", "down" } do

@@ -41,12 +41,40 @@ test.describe("Pane layout", function()
     test.same(ids(root), { "one", "three", "two" })
   end)
 
+  test.it("rebalances only the axis added by a split", function()
+    local one, two, three = pane("one"), pane("two"), pane("three")
+    local root = layout.split(leaf(one), one, "right", two)
+    root.ratio = 0.2
+    root = layout.split(root, two, "down", three)
+    layout.update_rects(root, { x = 0, y = 0, w = 300, h = 200 })
+
+    test.equal(one.size.x, 60)
+    test.equal(one.size.y, 200)
+    test.equal(two.size.x, 240)
+    test.equal(two.size.y, 100)
+    test.equal(three.size.x, 240)
+    test.equal(three.size.y, 100)
+  end)
+
   test.it("collapses a removed leaf and permits an empty result", function()
     local one, two = pane("one"), pane("two")
     local root = layout.split(leaf(one), one, "right", two)
     root = layout.remove(root, one)
     test.same(ids(root), { "two" })
     test.is_nil(layout.remove(root, two))
+  end)
+
+  test.it("gives every remaining Pane equal area after removal", function()
+    local one, two, three = pane("one"), pane("two"), pane("three")
+    local root = layout.split(leaf(one), one, "right", two)
+    root = layout.split(root, two, "right", three)
+    root.ratio = 0.8
+
+    root = layout.remove(root, three)
+    layout.update_rects(root, { x = 0, y = 0, w = 200, h = 100 })
+
+    test.equal(one.size.x, 100)
+    test.equal(two.size.x, 100)
   end)
 
   test.it("lays out Panes and hit-tests final rectangles", function()
@@ -75,8 +103,8 @@ test.describe("Pane layout", function()
   test.it("round-trips serialized shape and ratios", function()
     local one, two, three = pane("one"), pane("two"), pane("three")
     local root = layout.split(leaf(one), one, "right", two)
-    root.ratio = 0.3
     root = layout.split(root, two, "down", three)
+    root.ratio = 0.3
     local state = layout.serialize(root)
     local restored = layout.deserialize(state, { one = one, two = two, three = three })
     test.same(ids(restored), { "one", "two", "three" })
