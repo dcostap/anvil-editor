@@ -3,10 +3,8 @@ local common = require "core.common"
 
 local project_paths = {}
 
-local project_entries = {}
 local workspace_entries = {}
 local workspace_entries_root_key
-local project_config_snapshot
 local generation = 0
 local merged_entries_cache
 local merged_entries_cache_root_key
@@ -20,8 +18,7 @@ local ROLE_ORDER = {
 
 local SOURCE_ORDER = {
   implicit = 0,
-  project = 1,
-  workspace = 2,
+  workspace = 1,
 }
 
 local ROLE_DEFAULTS = {
@@ -211,7 +208,6 @@ local function build_merged_entries()
     if key then explicit_keys[key] = true end
   end
   explicit_keys[path_key(root.path)] = true
-  for _, entry in ipairs(project_entries) do append_explicit(entry) end
   for _, entry in ipairs(workspace_entries) do append_explicit(entry) end
 
   -- Extra open projects are first-class search roots even before/without an
@@ -416,7 +412,7 @@ function project_paths.rank_penalty(path)
   return tonumber(resolved.entry.rank_penalty) or 0
 end
 
-function project_paths.configure_project(spec)
+function project_paths.configure_workspace(spec)
   spec = spec or {}
   local entries = {}
   for _, role in ipairs({ "external", "vendored" }) do
@@ -424,47 +420,23 @@ function project_paths.configure_project(spec)
       entries[#entries + 1] = entry
     end
   end
-  project_entries = normalize_entries(entries, { source = "project", base = root_path() })
-  invalidate("project config")
+  workspace_entries = normalize_entries(entries, { source = "workspace", base = root_path() })
+  workspace_entries_root_key = path_key(root_path()) or ""
+  invalidate("workspace config")
   return project_paths.entries()
 end
 
-function project_paths.begin_project_config_load()
-  project_config_snapshot = copy_list(project_entries)
-  project_entries = {}
-  merged_entries_cache = nil
-  merged_entries_cache_root_key = nil
-  merged_entries_cache_projects_key = nil
-end
-
-function project_paths.commit_project_config_load()
-  project_config_snapshot = nil
-  invalidate("project config reload")
-end
-
-function project_paths.rollback_project_config_load()
-  if project_config_snapshot then
-    project_entries = project_config_snapshot
-    project_config_snapshot = nil
-    invalidate("project config rollback")
-  end
-end
-
-function project_paths.add_external(entry, opts)
-  opts = opts or {}
+function project_paths.add_external(entry)
   local copy = copy_entry(entry or {})
   copy.role = copy.role or "external"
-  copy.source = opts.source or copy.source or "workspace"
-  local normalized = normalize_entry(copy, { source = copy.source, role = copy.role, base = root_path() })
+  copy.source = "workspace"
+  local normalized = normalize_entry(copy, { source = "workspace", role = copy.role, base = root_path() })
   if not normalized then return nil end
-  local target = normalized.source == "project" and project_entries or workspace_entries
   local key = path_key(normalized.path)
-  for _, list in ipairs({ project_entries, workspace_entries }) do
-    for i = #list, 1, -1 do
-      if path_key(list[i].path) == key then table.remove(list, i) end
-    end
+  for i = #workspace_entries, 1, -1 do
+    if path_key(workspace_entries[i].path) == key then table.remove(workspace_entries, i) end
   end
-  target[#target + 1] = normalized
+  workspace_entries[#workspace_entries + 1] = normalized
   invalidate("add " .. normalized.role)
   return normalized
 end
@@ -472,11 +444,9 @@ end
 local function find_mutable_entry(id_or_path)
   local normalized_path = type(id_or_path) == "string" and normalize_abs(id_or_path) or nil
   local normalized_key = normalized_path and path_key(normalized_path)
-  for _, list in ipairs({ project_entries, workspace_entries }) do
-    for index, entry in ipairs(list) do
-      if entry.id == id_or_path or (normalized_key and path_key(entry.path) == normalized_key) then
-        return list, index, entry
-      end
+  for index, entry in ipairs(workspace_entries) do
+    if entry.id == id_or_path or (normalized_key and path_key(entry.path) == normalized_key) then
+      return workspace_entries, index, entry
     end
   end
 end
@@ -510,50 +480,6 @@ function project_paths.change_role(id_or_path, role)
   entry.id = make_id(entry.source, entry.role, entry.path)
   invalidate("change role")
   return true
-end
-
-function project_paths.change_storage(id_or_path, source)
-  if source ~= "project" and source ~= "workspace" then return false end
-  local list, index, entry = find_mutable_entry(id_or_path)
-  if not entry or entry.source == source then return entry ~= nil end
-  table.remove(list, index)
-  entry.source = source
-  entry.id = make_id(entry.source, entry.role, entry.path)
-  local target = source == "project" and project_entries or workspace_entries
-  local key = path_key(entry.path)
-  for i = #target, 1, -1 do
-    if path_key(target[i].path) == key then table.remove(target, i) end
-  end
-  target[#target + 1] = entry
-  invalidate("change storage")
-  return true
-end
-
-local function save_entries_state(source_entries)
-  local entries = {}
-  local root = root_path()
-  local seen = {}
-  local function save_entry(entry)
-    local key = path_key(entry.path)
-    if not key or seen[key] then return end
-    seen[key] = true
-    local saved = {
-      path = root and common.relative_path(root, entry.path) or entry.path,
-      label = entry.label,
-      role = entry.role,
-    }
-    local defaults = ROLE_DEFAULTS[entry.role] or {}
-    for _, field in ipairs({ "rank_penalty", "filetree_style" }) do
-      if entry[field] ~= defaults[field] then saved[field] = entry[field] end
-    end
-    entries[#entries + 1] = saved
-  end
-  for _, entry in ipairs(source_entries or {}) do save_entry(entry) end
-  return entries
-end
-
-function project_paths.save_project_state()
-  return { entries = save_entries_state(project_entries) }
 end
 
 function project_paths.load_workspace_state(state, legacy_directories)

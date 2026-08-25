@@ -54,14 +54,14 @@ test.describe("Fuzzy Searcher Path Search", function()
     core.projects = { Project(context.project_root) }
     core.recent_projects = {}
     system.chdir(context.project_root)
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
   end)
 
   test.after_each(function(context)
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     http.get = context.http_get
     helpers.set_everything_state(context.everything_state)
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     project_paths.load_workspace_state(nil)
     core.projects = context.original_projects
     core.recent_projects = context.original_recent_projects

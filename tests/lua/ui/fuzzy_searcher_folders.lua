@@ -52,7 +52,7 @@ test.describe("Project File Search folders", function()
     write_file(context.ignored_deep .. PATHSEP .. "generated.lua")
     core.projects = { Project(context.root) }
     core.visited_files = {}
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     system.chdir(context.root)
     context.source = View()
     context.pane = panes.create { factory = function() return context.source end }
@@ -62,7 +62,7 @@ test.describe("Project File Search folders", function()
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     fuzzy_searcher._test.cancel_file_index_for_test()
     project_files.invalidate(context.root)
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     panes.reset_for_tests()
     core.projects = context.projects
     core.visited_files = context.visited_files

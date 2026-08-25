@@ -136,7 +136,7 @@ test.describe("Workspace persistence", function()
     test.ok(common.mkdirp(join_path(context.temp_root, "other_project")))
     storage.clear("ws")
     project_paths.load_workspace_state(nil)
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     core.add_thread = function(fn, ...)
       context.captured_threads = context.captured_threads or {}
       context.captured_threads[#context.captured_threads + 1] = { fn = fn, args = { ... } }
@@ -170,7 +170,7 @@ test.describe("Workspace persistence", function()
       pcall(system.chdir, context.original_cwd)
     end
     project_paths.load_workspace_state(nil)
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     storage.clear("ws")
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)

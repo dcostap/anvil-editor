@@ -867,37 +867,9 @@ local function require_lua_plugin(plugin)
 end
 
 
-local function is_project_module_file(filename)
-  return type(filename) == "string" and common.basename(filename) == ".anvil_project.lua"
-end
-
-local function project_paths_module()
-  local ok, project_paths = pcall(require, "core.project_paths")
-  return ok and project_paths or nil
-end
-
-local function run_with_project_config_transaction(filename, fn)
-  if not is_project_module_file(filename) then return fn() end
-  local project_paths = project_paths_module()
-  if not project_paths then return fn() end
-
-  if project_paths.begin_project_config_load then project_paths.begin_project_config_load() end
-  local result = table.pack(xpcall(function()
-    return table.pack(fn())
-  end, debug.traceback))
-  if result[1] then
-    if project_paths.commit_project_config_load then project_paths.commit_project_config_load() end
-    return table.unpack(result[2], 1, result[2].n)
-  end
-  if project_paths.rollback_project_config_load then project_paths.rollback_project_config_load() end
-  error(result[2], 0)
-end
-
 local function load_lua_plugin_if_exists(plugin)
   if system.get_file_info(plugin.file) then
-    return run_with_project_config_transaction(plugin.file, function()
-      return dofile(plugin.file)
-    end)
+    return dofile(plugin.file)
   end
 end
 

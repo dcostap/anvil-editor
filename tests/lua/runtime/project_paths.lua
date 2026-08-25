@@ -31,7 +31,7 @@ test.describe("Project path roles", function()
     system.chdir(context.root)
 
     context.project_paths = project_paths
-    context.project_paths.configure_project {}
+    context.project_paths.configure_workspace {}
     context.project_paths.load_workspace_state(nil)
   end)
 
@@ -41,7 +41,7 @@ test.describe("Project path roles", function()
       context.original_get_file_info = nil
     end
     if context.project_paths then
-      context.project_paths.configure_project {}
+      context.project_paths.configure_workspace {}
       context.project_paths.load_workspace_state(nil)
     end
     core.projects = context.original_projects
@@ -72,7 +72,7 @@ test.describe("Project path roles", function()
       return context.original_get_file_info(path)
     end
 
-    context.project_paths.configure_project {}
+    context.project_paths.configure_workspace {}
     for _ = 1, 5 do
       context.project_paths.entries()
       context.project_paths.resolve(join_path(context.root, "src", "main.lua"))
@@ -82,7 +82,7 @@ test.describe("Project path roles", function()
 
     test.equal(root_stat_calls, 1)
 
-    context.project_paths.configure_project {
+    context.project_paths.configure_workspace {
       external = {
         { path = "../jdk-src", label = "jdk-src" },
       },
@@ -91,8 +91,8 @@ test.describe("Project path roles", function()
     test.equal(root_stat_calls, 2)
   end)
 
-  test.test("project config entries normalize paths and resolve relative paths against the root project", function(context)
-    context.project_paths.configure_project {
+  test.test("Workspace entries normalize paths and resolve relative paths against the Root Project", function(context)
+    context.project_paths.configure_workspace {
       external = {
         { path = "../jdk-src", label = "jdk-src" },
       },
@@ -113,7 +113,7 @@ test.describe("Project path roles", function()
   end)
 
   test.test("duplicate labels are disambiguated in effective order", function(context)
-    context.project_paths.configure_project {
+    context.project_paths.configure_workspace {
       external = {
         { path = "../jdk-src", label = "src" },
       },
@@ -131,7 +131,7 @@ test.describe("Project path roles", function()
   end)
 
   test.test("longest matching project path role wins", function(context)
-    context.project_paths.configure_project {
+    context.project_paths.configure_workspace {
       vendored = {
         { path = "src/vendor", label = "vendor" },
         { path = "src/vendor/library1", label = "library1" },
@@ -145,7 +145,7 @@ test.describe("Project path roles", function()
   end)
 
   test.test("display path metadata and reverse resolution use role labels", function(context)
-    context.project_paths.configure_project {
+    context.project_paths.configure_workspace {
       external = {
         { path = "../jdk-src", label = "jdk-src" },
       },
@@ -169,36 +169,17 @@ test.describe("Project path roles", function()
     test.ok(common.path_equals(context.project_paths.absolute_path(vendored_display.text), vendored_abs))
   end)
 
-  test.test("reconfiguring project entries removes stale project-sourced entries", function(context)
-    context.project_paths.configure_project {
+  test.test("reconfiguring Workspace entries removes stale entries", function(context)
+    context.project_paths.configure_workspace {
       external = {
         { path = "../jdk-src", label = "jdk-src" },
       },
     }
     test.equal(context.project_paths.resolve(join_path(context.external, "java", "lang", "String.java")).entry.role, "external")
 
-    context.project_paths.configure_project {}
+    context.project_paths.configure_workspace {}
 
     test.is_nil(context.project_paths.resolve(join_path(context.external, "java", "lang", "String.java")))
-  end)
-
-  test.test("failed project config transactions restore the previous project path entries", function(context)
-    context.project_paths.configure_project {
-      external = {
-        { path = "../jdk-src", label = "jdk-src" },
-      },
-    }
-    context.project_paths.begin_project_config_load()
-    context.project_paths.configure_project {
-      vendored = {
-        { path = "src/vendor/library1", label = "library1" },
-      },
-    }
-
-    context.project_paths.rollback_project_config_load()
-
-    test.equal(context.project_paths.resolve(join_path(context.external, "java", "lang", "String.java")).entry.role, "external")
-    test.equal(context.project_paths.resolve(join_path(context.root, "src", "vendor", "library1", "foo", "Baz.java")).entry.role, "root")
   end)
 
   test.test("workspace state imports legacy directories as local external project directories", function(context)
@@ -227,7 +208,7 @@ test.describe("Project path roles", function()
   end)
 
   test.test("workspace state round-trips local project path entries", function(context)
-    context.project_paths.add_external({ path = context.external, label = "jdk-src" }, { source = "workspace" })
+    context.project_paths.add_external({ path = context.external, label = "jdk-src" })
 
     local state = context.project_paths.save_workspace_state()
     context.project_paths.load_workspace_state(nil)

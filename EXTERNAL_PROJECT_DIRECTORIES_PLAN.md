@@ -18,7 +18,7 @@ The canonical user-facing terms are recorded in `CONTEXT.md`:
 - **Vendored Project Directory**: a directory in or attached to a Project that contains third-party or dependency source code and is presented as a distinct named source area.
 - **Excluded Project Path**: a Project path that remains visible as part of the Project context but is intentionally left out of project-wide search and navigation.
 - **Project Path Role**: the user-facing classification assigned to a Project path.
-- **Project Paths View**: a Project tool for reviewing and changing Project Path Roles, labels, locations, and storage scope.
+- **Project Paths View**: a Project tool for reviewing and changing Project Path Roles, labels, and locations.
 - **Workspace**: per-project editor state; not the same thing as global App State.
 
 Avoid user-facing language like “external folder”, “linked folder”, “ignored folder”, or “marker” once the feature is implemented.
@@ -35,7 +35,6 @@ Useful current behavior:
 - `data/plugins/findfile.lua` already has older multi-project behavior and can be used as reference for result prefixing, but it should not become the new source of truth.
 - `data/plugins/fuzzy_searcher/init.lua` currently indexes only `core.root_project().path` through `project_dir()` and root-relative `fd` results.
 - `data/plugins/filetree/init.lua` currently assumes a single `current_dir`, initialized to `core.root_project().path`, and clamps navigation back into the Root Project.
-- `.anvil_project.lua` already exists as git-trackable project-level configuration.
 
 This feature should build on those pieces instead of inventing a totally separate project concept.
 
@@ -73,7 +72,6 @@ The prompt flow is:
 
 1. choose a role, for example `Vendored` or `Excluded`;
 2. choose a label, defaulting to the folder basename; pressing Enter accepts the default;
-3. choose storage: `Local only` or `Project config`.
 
 Example: selecting `src/vendor/library1/`, choosing `Vendored`, and accepting label `library1` makes results display as:
 
@@ -104,15 +102,15 @@ Project Paths: Manage
 opens a simple list view:
 
 ```text
-Alias              Role        Path                         Storage
-────────────────────────────────────────────────────────────────────────
-my-app             Root        C:/code/my-app               automatic
-jdk-src            External    D:/sources/jdk               local only
-library1           Vendored    src/vendor/library1          project config
-generated          Excluded    build/generated              project config
+Alias              Role        Path
+────────────────────────────────────────────────────────────
+my-app             Root        C:/code/my-app
+jdk-src            External    D:/sources/jdk
+library1           Vendored    src/vendor/library1
+generated          Excluded    build/generated
 ```
 
-From a selected row, the user can edit the label, change the role, remove the rule, reveal/open the directory, or switch storage between local-only and project config when possible. Removing a rule never deletes files; it only stops applying the Project Path Role.
+From a selected row, the user can edit the label, change the role, remove the rule, or reveal the directory. Removing a rule never deletes files; it only stops applying the Project Path Role.
 
 ## Proposed module
 
@@ -125,14 +123,13 @@ data/core/project_paths.lua
 Responsibilities:
 
 - Store and normalize Project path entries.
-- Merge project-config entries and local Workspace entries.
+- Store entries in local Workspace state.
 - Assign stable labels/aliases.
 - Resolve an absolute path to its owning Project path entry.
 - Convert absolute paths into display paths.
 - Decide whether a path participates in file search, grep, symbols, usages, autocomplete, and File Tree.
 - Apply Excluded Project Path rules.
 - Expose change generation so indexers can invalidate caches.
-- Make project-config reloads idempotent so removing an entry from `.anvil_project.lua` removes it from the effective Project path entries.
 
 This module should be lightweight and not depend on UI plugins.
 
@@ -224,8 +221,8 @@ project_paths.display_path(path, opts)  -- display string + prefix span/meta
 project_paths.absolute_path(display)    -- reverse display path when possible
 project_paths.is_excluded(path, kind)   -- kind-aware exclusion
 project_paths.rank_penalty(path, kind)  -- numeric penalty
-project_paths.configure_project(spec)    -- declarative project-config entries; replaces prior project-sourced entries
-project_paths.add_external(entry, opts)  -- imperative helper, mainly for local/command flows
+project_paths.configure_workspace(spec)  -- replace local Workspace entries
+project_paths.add_external(entry)        -- add a local Workspace entry
 project_paths.remove_entry(id_or_path)
 project_paths.set_label(id_or_path, label)
 project_paths.add_excluded_path(entry)
@@ -256,44 +253,7 @@ Important display behavior:
 
 This lets widgets color the `jdk-src` prefix without reparsing strings.
 
-## Storage strategy
-
-Use two storage layers.
-
-### Shared project configuration
-
-For entries intended to travel with the repo, use `.anvil_project.lua`.
-
-Preferred declarative example:
-
-```lua
-local project_paths = require "core.project_paths"
-
-project_paths.configure_project {
-  external = {
-    { path = "../jdk-src", label = "jdk-src" },
-  },
-  vendored = {
-    { path = "src/vendor/library1", label = "library1" },
-  },
-  excluded = {
-    { path = "generated" },
-  },
-}
-```
-
-Relative paths in `.anvil_project.lua` should resolve against the Root Project.
-
-Prefer a declarative `configure_project` API over append-style project config calls. `.anvil_project.lua` can be reloaded in-place; append-style calls make stale entries easy when the user deletes a line and reloads. If imperative helpers are allowed inside project config, the loader must wrap the Project Module load in a transaction that clears/replaces project-sourced entries for that Root Project.
-
-Pros:
-
-- Already supported by Anvil.
-- Git-trackable.
-- No new `.anvil/` format required initially.
-- Can use Lua for conditional per-machine logic when needed.
-
-### Local Workspace state
+## Workspace storage
 
 For machine-specific absolute paths and quick drag/drop additions, store local entries in Workspace state.
 
@@ -311,16 +271,15 @@ project_paths = project_paths.save_workspace_state()
 
 Keep compatibility for existing `directories` by importing them as External Project Directories with generated labels.
 
-Local entries should not be written into `.anvil_project.lua` automatically. The add/edit prompts should make storage explicit: `Local only` for machine-specific paths, or `Project config` for shared repo-relative rules. Provide an explicit “Save to Project Config” action for existing local entries.
+Project Path entries stay in local Workspace state. Project configuration files do not own Project Paths.
 
 ## Ordering and conflict rules
 
 Effective order should be stable:
 
 1. Root Project
-2. Project-config External Project Directories and Vendored Project Directories
-3. Local Workspace External Project Directories and local role entries
-4. Excluded Project Path rules, applied as overlays
+2. Workspace External Project Directories and Vendored Project Directories
+3. Excluded Project Path rules, applied as overlays
 
 Conflict handling:
 
@@ -591,12 +550,9 @@ Commands to add:
 - `project-paths:manage`
 - `project-paths:mark-selected-folder`
 - `project-paths:add-external-directory`
-- `project-paths:add-external-directory-local`
-- `project-paths:add-external-directory-to-project-config`
 - `project-paths:remove-entry`
 - `project-paths:rename-label`
 - `project-paths:change-role`
-- `project-paths:change-storage`
 - `project-paths:add-excluded-project-path`
 - `project-paths:remove-excluded-project-path`
 
@@ -605,22 +561,21 @@ File Tree mark behavior:
 1. Selecting a directory in the File Tree and running `project-paths:mark-selected-folder` opens a role prompt.
 2. For a Root Project subdirectory, offer at least `Vendored` and `Excluded`.
 3. Prompt for an optional label, defaulting to `common.basename(path)`. Pressing Enter accepts the default.
-4. Prompt for storage: `Local only` or `Project config`.
-5. Apply immediately and refresh File Tree/fuzzy/tree-sitter indexes.
-6. If the path already has a Project Path Role, offer edit/remove actions instead of creating a duplicate.
+4. Apply immediately and refresh File Tree/fuzzy/tree-sitter indexes.
+5. If the path already has a Project Path Role, offer edit/remove actions instead of creating a duplicate.
 
 Drag/drop behavior:
 
 1. Dropping a directory onto the File Tree or project surface prompts to add it as an External Project Directory.
-2. Default storage should be local Workspace state, but the prompt should allow `Project config` when the path can be represented portably.
+2. Store the entry in local Workspace state.
 3. Prompt for an optional label, defaulting to `common.basename(path)`.
 4. If path is already present, reveal it or open it in Project Paths View instead of adding a duplicate.
 
 Project Paths View behavior:
 
 - Show rows for Root Project, External Project Directories, Vendored Project Directories, Excluded Project Paths, missing entries, and other future roles.
-- Columns: label, role, path, storage.
-- Row actions: rename label, change role, remove rule, reveal/open folder, change storage.
+- Columns: label, role, and path.
+- Row actions: rename label, change role, remove rule, and reveal/open folder.
 - Removing a row removes only the role/config entry, never files on disk.
 
 ## Rendering and style defaults
@@ -712,7 +667,6 @@ Because this is a personal fork, prefer clean refactors over carrying old aliase
 ## Risks and guardrails
 
 - **Display path vs activation path**: `jdk-src/java/lang/String.java` and `library1/foo/bar/Baz.java` are UI text, not necessarily filesystem paths. Store and open absolute paths everywhere.
-- **Project config reload staleness**: deleting an entry from `.anvil_project.lua` must remove it after reload. Prefer declarative replacement semantics and test this explicitly.
 - **File Tree mutation risk**: the editable DocView tree currently assumes one root. External sections should be browse/open first; writable operations require a deliberate absolute-path refactor.
 - **Huge External Project Directories**: library source trees can be large. Keep per-kind capability flags, quiet logs, status text, and future caps/disable switches.
 - **Overlapping roots and exclusions**: use normalized path keys and longest-prefix matching. Warn quietly on surprising overlaps.
@@ -738,13 +692,12 @@ Test:
 
 - Root Project entry is implicit.
 - External Project Directory and Vendored Project Directory entries normalize paths.
-- Relative project-config paths resolve against Root Project.
+- Relative Workspace paths resolve against the Root Project.
 - Duplicate labels are disambiguated.
 - Longest root match wins.
 - Excluded Project Path rules suppress search/symbol capabilities.
 - Display path metadata includes root label and prefix span.
 - Display path reverse resolution opens the correct absolute path.
-- Reloading project-config entries removes stale project-sourced External Project Directories and Excluded Project Paths.
 
 ### Fuzzy Searcher tests
 
@@ -803,11 +756,10 @@ Add UI tests for the management surface.
 
 Test:
 
-- rows list label, role, path, and storage for root, external, vendored, and excluded entries;
+- rows list the label, role, and path for root, external, vendored, and excluded entries;
 - renaming a label updates display paths without touching files;
 - changing role updates behavior flags and style metadata;
 - removing a row removes only the Project Path Role entry and leaves files on disk;
-- changing storage moves an entry between local Workspace state and project config state when possible.
 
 ## Implementation phases
 
@@ -816,7 +768,6 @@ Test:
 - Add `data/core/project_paths.lua`.
 - Add tests for normalization, display, resolution, roles, and exclusions.
 - Add minimal style defaults for role rendering.
-- Wire declarative project config from `.anvil_project.lua` into the module with stale-entry replacement semantics.
 - Extend Workspace save/load with new project path state and legacy `directories` import.
 
 Deliverable: no major UI changes yet, but `project_paths.entries()` returns correct effective state.
@@ -865,11 +816,11 @@ Deliverable: File Tree provides the main discoverable UI for External Project Di
 
 - Add command palette commands.
 - Add File Tree `Mark Selected Folder…` flow.
-- Add prompt flows for adding/removing/renaming entries, changing role, and changing storage.
+- Add prompt flows for adding, removing, and renaming entries, and changing roles.
 - Add directory drag/drop flow.
 - Add the Project Paths View as the management surface.
 
-Deliverable: feature is usable without manually editing `.anvil_project.lua`.
+Deliverable: the feature is usable through direct UI actions.
 
 ### Phase 7: LSP follow-up
 

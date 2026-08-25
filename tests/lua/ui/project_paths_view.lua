@@ -33,7 +33,7 @@ local function setup_project(context)
   mkdirp(context.vendor)
   core.projects = { Project(context.root) }
   system.chdir(context.root)
-  project_paths.configure_project {
+  project_paths.configure_workspace {
     external = { { path = "../jdk-src", label = "jdk-src" } },
     vendored = { { path = "src/vendor/library1", label = "library1" } },
   }
@@ -51,7 +51,7 @@ end
 test.describe("Project Paths View", function()
   test.after_each(function(context)
     panes.reset_for_tests()
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     project_paths.load_workspace_state(nil)
     if context.save_workspace_was_stubbed then core.save_workspace = context.original_save_workspace end
     core.projects = context.original_projects

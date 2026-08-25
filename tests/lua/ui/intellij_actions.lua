@@ -64,7 +64,7 @@ test.describe("IntelliJ actions batch behavior", function()
       context.original_set_clipboard = nil
     end
     if context.project_paths_configured then
-      project_paths.configure_project {}
+      project_paths.configure_workspace {}
       context.project_paths_configured = nil
     end
     if context.original_system_exec then
@@ -199,7 +199,7 @@ test.describe("IntelliJ actions batch behavior", function()
     write_file(external_file_path, "return true\n")
     write_file(project_file_path, "return true\n")
 
-    project_paths.configure_project {
+    project_paths.configure_workspace {
       external = {
         { path = shared_root, label = "shared" },
       },

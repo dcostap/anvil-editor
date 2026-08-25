@@ -122,7 +122,7 @@ test.describe("Fuzzy Searcher file-index benchmark", function()
     helpers.cancel_file_index_for_test()
     core.projects = { Project(root) }
     system.chdir(root)
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
 
     local started = system.get_time()
     local expected_root = common.normalize_path(root)
@@ -151,7 +151,7 @@ test.describe("Fuzzy Searcher file-index benchmark", function()
 
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     helpers.cancel_file_index_for_test()
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     core.projects = original_projects
     if original_cwd then system.chdir(original_cwd) end
   end)

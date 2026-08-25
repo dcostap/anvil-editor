@@ -41,13 +41,13 @@ test.describe("Fuzzy Searcher current file query", function()
     assert(common.mkdirp(context.external))
     core.projects = { Project(context.root) }
     system.chdir(context.root)
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     fuzzy_searcher._test.set_everything_state("unavailable")
   end)
 
   test.after_each(function(context)
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     core.projects = context.projects
     core.active_view = context.active_view
     system.chdir(context.cwd)
@@ -97,7 +97,7 @@ test.describe("Fuzzy Searcher current file query", function()
     local vendor = join_path(context.root, "vendor", "library")
     local path = join_path(vendor, "src", "dependency.lua")
     write_file(path)
-    project_paths.configure_project {
+    project_paths.configure_workspace {
       vendored = { { path = vendor, label = "library" } },
     }
 

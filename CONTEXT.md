@@ -297,7 +297,7 @@ A Path Tree row that presents consecutive single-child directories as one slash-
 _Avoid_: merged folder
 
 **Project Paths View**:
-A Project tool for reviewing and changing Project Path Roles, labels, locations, and storage scope.
+A Project tool for reviewing and changing Project Path Roles, labels, and locations.
 _Avoid_: external folder manager, path rules dialog
 
 **File Tree Sort Mode**:

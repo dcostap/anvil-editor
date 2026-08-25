@@ -46,7 +46,7 @@ test.describe("status bar buffer file item", function()
     mkdirp(join_path(context.external, "java", "lang"))
     core.projects = { Project(context.root) }
     system.chdir(context.root)
-    project_paths.configure_project {
+    project_paths.configure_workspace {
       external = {
         { path = "../jdk-src", label = "Java Sources" },
       },
@@ -57,7 +57,7 @@ test.describe("status bar buffer file item", function()
   end)
 
   test.after_each(function(context)
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     project_paths.load_workspace_state(nil)
     core.projects = context.original_projects
     core.active_view = context.original_active_view

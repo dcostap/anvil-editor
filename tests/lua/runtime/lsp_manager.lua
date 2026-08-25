@@ -101,7 +101,7 @@ test.describe("core.lsp.manager", function()
 
   test.after_each(function(context)
     manager.reset_for_tests()
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     project_paths.load_workspace_state(nil)
     core_config.lsp = context.original_lsp_config
     if context.added_project then core.remove_project(context.added_project) end
@@ -218,7 +218,7 @@ test.describe("core.lsp.manager", function()
     local root = mkdir(join_path(context.temp_root, "app"))
     local external = mkdir(join_path(context.temp_root, "external-src"))
     core.projects = { Project(root) }
-    project_paths.configure_project {
+    project_paths.configure_workspace {
       external = { { path = "../external-src", label = "external-src" } },
     }
     local buffer = track_buffer(context, new_buffer(join_path(external, "main.fakecpp"), "abcd"))
@@ -237,7 +237,7 @@ test.describe("core.lsp.manager", function()
     local root = setup_project(context)
     local external = mkdir(join_path(context.temp_root, "external-src"))
     core.projects = { Project(root) }
-    project_paths.configure_project {
+    project_paths.configure_workspace {
       external = { { path = "../external-src", label = "external-src" } },
     }
     local buffer = track_buffer(context, new_buffer(join_path(root, "main.fakecpp"), "abcd"))
@@ -271,7 +271,7 @@ test.describe("core.lsp.manager", function()
     for _, folder in ipairs(first_folders or {}) do first_names[folder.name] = true end
     test.not_ok(first_names["late-external-src"])
 
-    project_paths.configure_project {
+    project_paths.configure_workspace {
       external = { { path = "../late-external-src", label = "late-external-src" } },
     }
     local buffer2 = track_buffer(context, new_buffer(join_path(root, "two.fakecpp"), "two"))

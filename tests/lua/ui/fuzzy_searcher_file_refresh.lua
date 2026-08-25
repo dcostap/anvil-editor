@@ -41,14 +41,14 @@ test.describe("Fuzzy Searcher file refresh", function()
     core.projects = { Project(context.root) }
     core.visited_files = {}
     system.chdir(context.root)
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
   end)
 
   test.after_each(function(context)
     helpers.cancel_file_index_for_test()
     if context.original_process_start then process.start = context.original_process_start end
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     project_paths.load_workspace_state(nil)
     core.projects = context.original_projects
     core.visited_files = context.original_visited_files
@@ -274,7 +274,7 @@ test.describe("Fuzzy Searcher file refresh", function()
     write_file(new_file)
     core.projects = { Project(context.secondary_root) }
     system.chdir(context.secondary_root)
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
 
     fuzzy_searcher.open("new-project-file")
     local picker = assert(core.fuzzy_searcher_active_view)

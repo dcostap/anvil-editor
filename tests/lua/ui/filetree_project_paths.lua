@@ -59,7 +59,7 @@ local function setup_project_paths(context)
 
   core.projects = { Project(context.root) }
   system.chdir(context.root)
-  project_paths.configure_project {
+  project_paths.configure_workspace {
     external = {
       { path = "../jdk-src", label = "jdk-src" },
       { path = "../missing-src", label = "missing-src" },
@@ -80,7 +80,7 @@ end
 test.describe("File Tree Project Path Roles", function()
   test.after_each(function(context)
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     project_paths.load_workspace_state(nil)
     if context.filetree then
       context.filetree.current_dir = context.previous_dir or context.filetree.current_dir

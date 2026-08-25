@@ -50,7 +50,7 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     core.projects = { Project(context.root) }
     core.visited_files = {}
     system.chdir(context.root)
-    project_paths.configure_project {
+    project_paths.configure_workspace {
       external = {
         { path = "../jdk-src", label = "Java Sources" },
       },
@@ -62,7 +62,7 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
 
   test.after_each(function(context)
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     project_paths.load_workspace_state(nil)
     core.projects = context.original_projects
     core.visited_files = context.original_visited_files

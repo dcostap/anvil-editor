@@ -673,7 +673,7 @@ class VendorThing
 ]])
     core.projects = { Project(root) }
     project_paths.load_workspace_state(nil)
-    project_paths.configure_project {
+    project_paths.configure_workspace {
       external = {
         { path = external, label = "external-src" },
       },
@@ -710,7 +710,7 @@ class VendorThing
       or vendor_symbol.file == "src" .. PATHSEP .. "vendor" .. PATHSEP .. "library1" .. PATHSEP .. "Vendor.kt",
       "unexpected vendored display path: " .. tostring(vendor_symbol.file)
     )
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     core.projects = original_projects
     common.rm(root, true)
     common.rm(external, true)
@@ -940,7 +940,7 @@ class VendorThing
     mkdir(external)
     core.projects = { Project(root) }
     project_paths.load_workspace_state(nil)
-    project_paths.configure_project {
+    project_paths.configure_workspace {
       external = {
         { path = external, label = "external-src" },
       },
@@ -959,7 +959,7 @@ class VendorThing
     test.equal(external_index.status, "ready")
     test.equal(external_index.generation, external_generation)
 
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     core.projects = original_projects
     common.rm(root, true)
     common.rm(external, true)
@@ -976,7 +976,7 @@ class VendorThing
     mkdir(external)
     core.projects = { Project(root), Project(external) }
     project_paths.load_workspace_state(nil)
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     seed_ready_symbol_index(root, { "RootThing" })
     seed_ready_symbol_index(external, { "ExternalOpenProjectThing" })
 
@@ -990,7 +990,7 @@ class VendorThing
     test.not_nil(resolved)
     test.equal(resolved.entry.path, common.normalize_path(external))
 
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     project_paths.load_workspace_state(nil)
     core.projects = original_projects
     common.rm(root, true)
@@ -1009,7 +1009,7 @@ class VendorThing
     mkdir(root .. PATHSEP .. "vendor")
     core.projects = { Project(root) }
     project_paths.load_workspace_state(nil)
-    project_paths.configure_project {
+    project_paths.configure_workspace {
       external = {
         { path = external, label = "external-src" },
       },
@@ -1055,7 +1055,7 @@ class VendorThing
     test.equal(status, "fresh", reason)
     test.ok(find_symbol(symbols, "VendorThing", "class"))
 
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     core.projects = original_projects
     common.rm(root, true)
     common.rm(external, true)

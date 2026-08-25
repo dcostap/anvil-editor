@@ -45,7 +45,7 @@ test.describe("Command Palette View launchers", function()
     fp:write("detached\n")
     fp:close()
     core.projects = { Project(context.root) }
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     fuzzy_searcher._test.clear_prompt_history()
   end)
 
@@ -54,7 +54,7 @@ test.describe("Command Palette View launchers", function()
     terminal.open = context.terminal_open
     command_slots.run_once = context.run_once
     panes.reset_for_tests()
-    project_paths.configure_project {}
+    project_paths.configure_workspace {}
     core.projects = context.projects
     if context.cwd then pcall(system.chdir, context.cwd) end
     if system.get_file_info(context.root) then
@@ -209,7 +209,7 @@ test.describe("Command Palette View launchers", function()
       spec[role][1] = { path = folder, label = role }
       targets[#targets + 1] = path
     end
-    project_paths.configure_project(spec)
+    project_paths.configure_workspace(spec)
 
     for _, path in ipairs(targets) do
       panes.reset_for_tests()
