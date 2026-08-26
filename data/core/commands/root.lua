@@ -16,19 +16,14 @@ local function new_untitled_editor()
   return Editor(untitled.tag_buffer(buffer))
 end
 
-local function duplicate_or_untitled(view)
-  if not (view and view.duplicate) then
-    core.log_quiet("Copy View Split used normal split: Current View does not support duplication")
-    return new_untitled_editor()
-  end
+local function duplicate_view(view)
+  if not (view and view.duplicate) then return nil, "Current View does not support copying" end
   local ok, duplicate = pcall(view.duplicate, view)
   if ok and duplicate and duplicate ~= view then return duplicate end
-  core.log_quiet("Copy View Split used normal split for %s: %s",
-    tostring(view), ok and "duplication returned no new View" or tostring(duplicate))
-  return new_untitled_editor()
+  return nil, ok and "Current View does not support copying" or tostring(duplicate)
 end
 
-local function move_and_merge_target(text, item, source)
+local function existing_pane_target(text, item, source)
   if item and item.pane and item.pane ~= source and panes.contains(item.pane) then
     return item.pane
   end
@@ -37,40 +32,116 @@ local function move_and_merge_target(text, item, source)
   return target ~= source and target or nil
 end
 
-local function move_and_merge_pane(source)
-  if #panes.ordered() < 2 then
-    core.log("There is no other Pane to move and merge into")
-    return false
+local function view_copy_factory(view)
+  return function()
+    local duplicate, err = duplicate_view(view)
+    if not duplicate then error(err, 0) end
+    return duplicate
   end
-  core.global_prompt_bar:enter("Move and Merge Pane Into", {
+end
+
+local function copy_view_to_split(source, direction)
+  local view = source and source.current_view
+  if not view then return nil, "There is no Current View" end
+  return panes.split(source, direction, { factory = view_copy_factory(view) })
+end
+
+local function report_failure(action, result, err)
+  if result or err == "View replacement is pending or was canceled" then return end
+  core.error("Cannot %s: %s", action, tostring(err or "operation failed"))
+end
+
+local function destination_items(source, include_splits)
+  local items = {}
+  if include_splits then
+    for _, direction in ipairs { "right", "left", "down", "up" } do
+      items[#items + 1] = {
+        text = "New Split — " .. direction:gsub("^%l", string.upper),
+        kind = "split",
+        direction = direction,
+      }
+    end
+  end
+  items[#items + 1] = { text = "New Pane Group", kind = "new_group" }
+  for number, pane in ipairs(panes.ordered()) do
+    if pane ~= source then
+      local view = pane.current_view
+      local name = view and view.get_name and view:get_name() or "Pane"
+      items[#items + 1] = {
+        text = string.format("Pane %d — %s", number, name),
+        kind = "pane",
+        pane = pane,
+      }
+    end
+  end
+  return items
+end
+
+local function destination_prompt(label, source, include_splits, submit)
+  local items = destination_items(source, include_splits)
+  local by_text = {}
+  for _, item in ipairs(items) do by_text[item.text] = item end
+  core.global_prompt_bar:enter(label, {
     suggest = function(text)
-      local items, by_text = {}, {}
-      for number, pane in ipairs(panes.ordered()) do
-        if pane ~= source then
-          local view = pane.current_view
-          local name = view and view.get_name and view:get_name() or "Pane"
-          local label = string.format("%d — %s", number, name)
-          by_text[label] = { text = label, pane = pane }
-          items[#items + 1] = label
-        end
-      end
       local result = {}
-      for _, label in ipairs(common.fuzzy_match(items, text)) do
-        result[#result + 1] = by_text[label]
+      local labels = {}
+      for _, item in ipairs(items) do labels[#labels + 1] = item.text end
+      for _, item_label in ipairs(common.fuzzy_match(labels, text)) do
+        result[#result + 1] = by_text[item_label]
       end
       return result
     end,
     validate = function(text, item)
-      return move_and_merge_target(text, item, source) ~= nil
+      return item ~= nil or existing_pane_target(text, nil, source) ~= nil
     end,
     submit = function(text, item)
-      local destination = move_and_merge_target(text, item, source)
-      if destination and panes.contains(source) then
-        panes.move_and_merge(source, destination)
-      end
+      item = item or { kind = "pane", pane = existing_pane_target(text, nil, source) }
+      if item.pane and not panes.contains(item.pane) then return end
+      if panes.contains(source) then submit(item) end
     end,
   })
   return true
+end
+
+local function copy_view_to(source)
+  local view = source.current_view
+  return destination_prompt("Copy Current View To", source, true, function(item)
+    local result, err
+    if item.kind == "split" then
+      result, err = copy_view_to_split(source, item.direction)
+    elseif item.kind == "new_group" then
+      result, err = panes.create { factory = view_copy_factory(view) }
+    elseif item.kind == "pane" then
+      result, err = panes.place(view_copy_factory(view), {
+        pane = item.pane, placement = "current", focus = true,
+      })
+    end
+    report_failure("copy Current View", result, err)
+  end)
+end
+
+local function move_view_to(source)
+  return destination_prompt("Move Current View To", source, false, function(item)
+    local result, err
+    if item.kind == "new_group" then
+      result, err = panes.move_current_view_to_new_group(source)
+    elseif item.kind == "pane" then
+      result, err = panes.move_current_view(source, item.pane)
+    end
+    report_failure("move Current View", result, err)
+  end)
+end
+
+local function move_pane_to(source)
+  return destination_prompt("Move Current Pane To", source, false, function(item)
+    local result, err
+    if item.kind == "new_group" then
+      result, err = panes.detach(source)
+    elseif item.kind == "pane" then
+      result, err = panes.move_and_merge(source, item.pane)
+    end
+    report_failure("move Current Pane", result, err)
+  end)
 end
 
 local function focus_local(pane, step)
@@ -132,8 +203,14 @@ local commands = {
   ["core:rotate_panes_clockwise"] = command.palette(function(pane)
     return panes.rotate_group_clockwise(pane)
   end, { keywords = { "split", "group" } }),
-  ["core:move_and_merge_pane"] = command.palette(function(pane)
-    return move_and_merge_pane(pane)
+  ["core:copy_view_to"] = command.palette(function(pane)
+    return copy_view_to(pane)
+  end, { keywords = { "duplicate", "split", "pane", "group" } }),
+  ["core:move_view_to"] = command.palette(function(pane)
+    return move_view_to(pane)
+  end, { keywords = { "pane", "group" } }),
+  ["core:move_pane_to"] = command.palette(function(pane)
+    return move_pane_to(pane)
   end, { keywords = { "history", "navigation" } }),
   ["core:focus_previous_pane"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
@@ -155,11 +232,10 @@ for _, direction in ipairs { "left", "right", "up", "down" } do
   commands["core:split_pane_" .. direction] = command.palette(function(pane)
     return panes.split(pane, direction, { factory = new_untitled_editor })
   end)
-  commands["core:split_pane_" .. direction .. "_copy_view"] = command.palette(function(pane)
-    local source_view = pane.current_view
-    return panes.split(pane, direction, {
-      factory = function() return duplicate_or_untitled(source_view) end,
-    })
+  commands["core:copy_view_to_split_" .. direction] = command.palette(function(pane)
+    local result, err = copy_view_to_split(pane, direction)
+    report_failure("copy Current View", result, err)
+    return result
   end, { keywords = { "duplicate", "current" } })
 end
 
@@ -192,7 +268,7 @@ command.add(nil, {
     supports_placement = true,
     opens_view = true,
   }),
-  ["core:new_pane"] = command.palette(function()
+  ["core:new_pane_group"] = command.palette(function()
     return panes.create { factory = new_untitled_editor }
   end),
   ["core:close_pane_or_quit"] = function()

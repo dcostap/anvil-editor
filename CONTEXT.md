@@ -280,9 +280,17 @@ _Avoid_: Pane View, app, pane content
 The View that a Pane currently shows.
 _Avoid_: Selected View, Active View, Open View
 
-**Copy View Split**:
-A Pane split that tries to duplicate the source Current View as the new Pane's only Navigation Place. Editor duplication shares the Buffer and copies View state. Terminal View duplication starts a new terminal in the source working directory. File Tree duplication copies its root, expansion, selection, and scroll state into an independent File Tree. Unsupported Views use the normal blank Untitled split.
+**Copy View**:
+An action that duplicates the Current View in another Pane without copying Navigation History. The source View and Pane stay unchanged. A View that cannot provide an independent duplicate cannot be copied.
 _Avoid_: copy Pane, copy Navigation History
+
+**Move View**:
+An action that transfers the Current View to another Pane without moving Navigation History. The source Pane shows another retained View or closes when no View remains.
+_Avoid_: move Pane, merge histories
+
+**Pane Detach**:
+An action that moves one complete Pane from a multi-Pane Pane Group into its own Pane Group. The Pane keeps its Current View and Navigation History.
+_Avoid_: move View to new tab, copy Pane
 
 **View Suspension**:
 The retention of a non-current View through Pane Navigation History without closing it. An Untitled Editor cannot be suspended.

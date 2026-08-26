@@ -18,6 +18,10 @@ function FakeView:get_name()
   return self.name
 end
 
+function FakeView:duplicate()
+  return self.copy_name and FakeView(self.copy_name) or nil
+end
+
 function FakeView:try_close(close)
   close()
 end
@@ -112,7 +116,7 @@ test.describe("Pane manager", function()
     source.current_view:set_selection_state { selections = { 2, 5, 2, 5 } }
     source.current_view.scroll.x, source.current_view.scroll.y = 12, 34
 
-    test.ok(command.perform("core:split_pane_right_copy_view"))
+    test.ok(command.perform("core:copy_view_to_split_right"))
 
     local destination = panes.active()
     local copy = destination.current_view
@@ -125,15 +129,115 @@ test.describe("Pane manager", function()
     test.equal(panes.history_length(destination), 1)
   end)
 
-  test.it("falls back to a normal split for a View without safe duplication", function()
+  test.it("does not create a split for a View that cannot be copied", function()
     local source = panes.create { factory = factory("source") }
 
-    test.ok(command.perform("core:split_pane_down_copy_view"))
+    test.ok(command.perform("core:copy_view_to_split_down"))
 
-    local destination = panes.active()
-    test.ok(destination.current_view:extends(Editor))
+    test.equal(panes.count(), 1)
+    test.equal(panes.active(), source)
     test.equal(source.current_view:get_name(), "source")
-    test.equal(panes.history_length(destination), 1)
+  end)
+
+  test.it("moves the Current View and reveals the source history", function()
+    local source = panes.create { factory = factory("source") }
+    local moved = FakeView("moved")
+    panes.present(moved, { pane = source })
+    local destination = panes.create { factory = factory("destination") }
+
+    test.equal(panes.move_current_view(source, destination), moved)
+
+    test.equal(source.current_view:get_name(), "source")
+    test.equal(destination.current_view, moved)
+    test.equal(panes.pane_for_view(moved), destination)
+    test.equal(panes.history_length(source), 1)
+    test.equal(panes.history_length(destination), 2)
+    test.equal(panes.back(destination):get_name(), "destination")
+    test.ok(panes.validate())
+  end)
+
+  test.it("closes the source Pane after moving its only View", function()
+    local source = panes.create { factory = factory("source") }
+    local moved = source.current_view
+    local destination = panes.create { factory = factory("destination") }
+
+    test.equal(panes.move_current_view(source, destination), moved)
+
+    test.not_ok(panes.contains(source))
+    test.equal(panes.count(), 1)
+    test.equal(destination.current_view, moved)
+    test.equal(panes.pane_for_view(moved), destination)
+    test.equal(panes.back(destination):get_name(), "destination")
+  end)
+
+  test.it("keeps both Panes unchanged when the destination cancels replacement", function()
+    local source = panes.create { factory = factory("source") }
+    local destination = panes.create { factory = factory("destination") }
+    local blocker = destination.current_view
+    function blocker:can_suspend() return false end
+    function blocker:can_close() end
+
+    local result = panes.move_current_view(source, destination)
+
+    test.is_nil(result)
+    test.equal(source.current_view:get_name(), "source")
+    test.equal(destination.current_view, blocker)
+    test.equal(panes.count(), 2)
+    test.ok(panes.validate())
+  end)
+
+  test.it("moves the Current View into a new Pane Group", function()
+    local source = panes.create { factory = factory("source") }
+    local moved = FakeView("moved")
+    panes.present(moved, { pane = source })
+
+    local destination = panes.move_current_view_to_new_group(source)
+
+    test.equal(source.current_view:get_name(), "source")
+    test.equal(destination.current_view, moved)
+    test.not_equal(source.group, destination.group)
+    test.equal(panes.active(), destination)
+    test.equal(panes.pane_for_view(moved), destination)
+    test.ok(panes.validate())
+  end)
+
+  test.it("copies the Current View to a numbered destination Pane", function()
+    local destination = panes.create { factory = factory("destination") }
+    local source = panes.create { factory = factory("source") }
+    source.current_view.copy_name = "source copy"
+    local prompt
+    core.global_prompt_bar.enter = function(_, label, options)
+      prompt = { label = label, options = options }
+    end
+
+    test.ok(command.perform("core:copy_view_to"))
+    test.equal(prompt.label, "Copy Current View To")
+    test.ok(prompt.options.validate("1"))
+    prompt.options.submit("1")
+
+    test.equal(source.current_view:get_name(), "source")
+    test.equal(destination.current_view:get_name(), "source copy")
+    test.equal(panes.history_length(source), 1)
+    test.equal(panes.history_length(destination), 2)
+  end)
+
+  test.it("moves the Current View to a new Pane Group from the destination prompt", function()
+    local source = panes.create { factory = factory("source") }
+    local moved = FakeView("moved")
+    panes.present(moved, { pane = source })
+    local prompt
+    core.global_prompt_bar.enter = function(_, label, options)
+      prompt = { label = label, options = options }
+    end
+
+    test.ok(command.perform("core:move_view_to"))
+    test.equal(prompt.label, "Move Current View To")
+    local item = test.not_nil(prompt.options.suggest("New Pane Group")[1])
+    prompt.options.submit(item.text, item)
+
+    test.equal(source.current_view:get_name(), "source")
+    test.equal(panes.active().current_view, moved)
+    test.not_equal(source.group, panes.active().group)
   end)
 
   test.it("focuses one member while presenting its complete group", function()
@@ -209,7 +313,7 @@ test.describe("Pane manager", function()
     test.equal(panes.active(), left)
   end)
 
-  test.it("moves and merges complete Pane histories through the numbered prompt", function()
+  test.it("moves a complete Pane to an existing Pane through the destination prompt", function()
     local destination = panes.create { factory = factory("X") }
     panes.present(FakeView("Y"), { pane = destination })
     panes.present(FakeView("Z"), { pane = destination })
@@ -226,8 +330,8 @@ test.describe("Pane manager", function()
       prompt = { label = label, options = options }
     end
 
-    test.ok(command.perform("core:move_and_merge_pane"))
-    test.equal(prompt.label, "Move and Merge Pane Into")
+    test.ok(command.perform("core:move_pane_to"))
+    test.equal(prompt.label, "Move Current Pane To")
     test.ok(prompt.options.validate("1"))
     prompt.options.submit("1")
 
@@ -247,7 +351,7 @@ test.describe("Pane manager", function()
   end)
 
   test.it("discards only a disposable destination placeholder during a merge", function()
-    test.ok(command.perform("core:new_pane"))
+    test.ok(command.perform("core:new_pane_group"))
     local destination = panes.active()
     local placeholder = destination.current_view
     local buffer = placeholder.buffer
@@ -266,7 +370,7 @@ test.describe("Pane manager", function()
 
   test.it("keeps a disposable source entry when merging it into another Pane", function()
     local destination = panes.create { factory = factory("destination") }
-    test.ok(command.perform("core:new_pane"))
+    test.ok(command.perform("core:new_pane_group"))
     local source = panes.active()
     local untitled = source.current_view
     test.ok(panes.is_disposable(source))

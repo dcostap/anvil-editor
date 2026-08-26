@@ -102,8 +102,8 @@ function View.from_state(state)
   return nil
 end
 
----Create an independent View for a Copy View Split.
----Returning nil requests the normal blank Untitled split.
+---Create an independent View for Copy View.
+---Returning nil means that this View does not support copying.
 ---@return core.view? duplicate
 function View:duplicate()
   return nil

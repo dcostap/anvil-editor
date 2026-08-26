@@ -262,6 +262,36 @@ test.describe("Terminal View", function()
     test.equal(capture.terminal_source_view, terminal_view)
   end)
 
+  test.it("copies a frozen terminal text capture into an independent split", function(context)
+    local terminal_view = terminal.open()
+    context.sessions[1].capture = {
+      text = "plain\ncolored\n",
+      cursor_line = 2,
+      cursor_col = 3,
+      viewport_line = 1,
+      foreground = 0x102030,
+      background = 0x010203,
+      styles = {
+        [2] = { { col1 = 1, col2 = 8, fg = 0xa1b2c3, bold = true } },
+      },
+    }
+    test.ok(command.perform("terminal:open_text_capture"))
+    local source_pane = panes.active()
+    local capture = source_pane.current_view
+
+    test.ok(command.perform("core:copy_view_to_split_right"))
+
+    local copy_pane = panes.active()
+    local copy = copy_pane.current_view
+    test.not_equal(copy, capture)
+    test.not_equal(copy.buffer, capture.buffer)
+    test.same(copy.buffer.lines, capture.buffer.lines)
+    test.equal(copy.terminal_source_view, terminal_view)
+    test.same(copy:get_line_render(2).fragments[1].color, { 0xa1, 0xb2, 0xc3, 255 })
+    test.equal(panes.history_length(source_pane), 2)
+    test.equal(panes.history_length(copy_pane), 1)
+  end)
+
   test.it("updates live and captured terminal row geometry after a font scale change", function(context)
     local terminal_view = terminal.open()
     local session = context.sessions[1]
@@ -339,7 +369,7 @@ test.describe("Terminal View", function()
     local source = terminal.open { cwd = "C:/initial", shell = "pwsh.exe" }
     source.snapshot.pwd = "C:/changed"
 
-    test.ok(command.perform("core:split_pane_right_copy_view"))
+    test.ok(command.perform("core:copy_view_to_split_right"))
 
     local copy = panes.active().current_view
     test.ok(copy.terminal_view)

@@ -268,9 +268,22 @@ function terminal_capture_style_provider:render_line(view, line, context)
 end
 
 function TerminalTextCaptureView:new(source, capture)
+  local terminal_title = capture.title
+    or source and source.get_name and source:get_name()
+    or "Terminal"
+  capture = {
+    text = tostring(capture.text or ""),
+    cursor_line = capture.cursor_line,
+    cursor_col = capture.cursor_col,
+    viewport_line = capture.viewport_line,
+    foreground = capture.foreground,
+    background = capture.background,
+    styles = capture.styles or {},
+    title = terminal_title,
+  }
   local buffer = Buffer()
   buffer.display_name = "Terminal Text"
-  buffer:insert(1, 1, tostring(capture.text or ""))
+  buffer:insert(1, 1, capture.text)
   buffer:clear_undo_redo()
   buffer:clean()
   local line = common.clamp(
@@ -287,7 +300,8 @@ function TerminalTextCaptureView:new(source, capture)
   self.context = "workspace"
   self.terminal_text_capture = true
   self.terminal_source_view = source
-  self.terminal_title = source:get_name()
+  self.terminal_title = terminal_title
+  self.terminal_capture = capture
   self.font = "terminal_font"
   self.color_cache = {}
   self.terminal_foreground = rgb(self, capture.foreground, style.text)
@@ -327,6 +341,24 @@ end
 function TerminalTextCaptureView:get_content_offset()
   local x, y = TerminalTextCaptureView.super.get_content_offset(self)
   return x, y + PADDING - style.padding.y
+end
+
+function TerminalTextCaptureView:duplicate()
+  local line, col = self.buffer:get_selection()
+  local capture = {
+    text = self.terminal_capture.text,
+    cursor_line = line,
+    cursor_col = col,
+    viewport_line = math.floor(self.scroll.y / self:get_line_height()) + 1,
+    foreground = self.terminal_capture.foreground,
+    background = self.terminal_capture.background,
+    styles = self.terminal_capture.styles,
+    title = self.terminal_title,
+  }
+  local duplicate = TerminalTextCaptureView(self.terminal_source_view, capture)
+  duplicate.scroll.x, duplicate.scroll.y = self.scroll.x, self.scroll.y
+  duplicate.scroll.to.x, duplicate.scroll.to.y = self.scroll.to.x, self.scroll.to.y
+  return duplicate
 end
 
 function TerminalView:get_cwd()

@@ -894,6 +894,91 @@ local function commit_non_suspendable_replacement(pane, old, view, opts)
   return pane
 end
 
+local function detach_current_view_for_move(source)
+  local view = source.current_view
+  call_lifecycle(view, "on_suspend")
+
+  unretain_view(source, view)
+  local kept = {}
+  local before = 0
+  for index, entry in ipairs(source.history.entries) do
+    if entry.view ~= view then
+      kept[#kept + 1] = entry
+      if index < source.history.index then before = before + 1 end
+    end
+  end
+  source.history.entries = kept
+  source.history.index = math.min(#kept, math.max(1, before))
+
+  if #kept == 0 and #source.retained_views > 0 then
+    local fallback = table.remove(source.retained_views)
+    kept[1] = { view = fallback, state = capture_navigation_state(fallback) }
+    source.history.index = 1
+  end
+
+  release_view(source, view)
+  if #kept > 0 then
+    source.current_view = kept[source.history.index].view
+    restore_navigation_state(
+      source.current_view, kept[source.history.index].state
+    )
+    call_lifecycle(source.current_view, "on_resume")
+  else
+    remove_from_group(source)
+    M.panes_by_id[source.id] = nil
+    source.current_view = nil
+    source.history.index = 0
+  end
+  return view
+end
+
+---Move a Pane's Current View into an existing Pane.
+---The source Pane closes when it owns no other View.
+function M.move_current_view(source_target, destination_target, opts)
+  opts = opts or {}
+  local source = M.find(source_target or M.active_pane)
+  local destination = M.find(destination_target)
+  if not source or not destination then return nil, "invalid source or destination Pane" end
+  if source == destination then return nil, "source and destination Pane are the same" end
+
+  local old = destination.current_view
+  local suspendable = not old.can_suspend or old:can_suspend() ~= false
+  local result
+  local function approved()
+    if not M.contains(source) or not M.contains(destination) then return end
+    local moved = detach_current_view_for_move(source)
+    if suspendable then
+      local pane, err = M.present(moved, { pane = destination, focus = opts.focus })
+      if pane then result = moved else result = nil; quiet("View move failed: %s", tostring(err)) end
+    else
+      commit_non_suspendable_replacement(destination, old, moved, opts)
+      result = moved
+    end
+  end
+  if suspendable or opts.force or not old.can_close then
+    approved()
+  else
+    old:can_close(approved)
+  end
+  return result, result and nil or "View move is pending or was canceled"
+end
+
+---Move a Pane's Current View into a new singleton Pane Group.
+function M.move_current_view_to_new_group(source_target, opts)
+  opts = opts or {}
+  local source = M.find(source_target or M.active_pane)
+  if not source then return nil, "invalid source Pane" end
+  local moved = detach_current_view_for_move(source)
+  local destination = create_identity(moved, opts)
+  local group = create_group(destination)
+  M.active_pane = destination
+  M.visible_group_value = group
+  call_lifecycle(moved, "on_resume")
+  if opts.focus ~= false then focus_view(destination) end
+  after_mutation(string.format("moved Current View from %s into %s", source.id, destination.id))
+  return destination
+end
+
 function M.replace_view(target, factory, opts)
   opts = opts or {}
   local pane = M.find(target or opts.pane or M.active_pane)
