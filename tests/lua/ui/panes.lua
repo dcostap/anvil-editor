@@ -53,6 +53,18 @@ test.describe("Pane manager", function()
     core.global_prompt_bar.enter = global_prompt_enter
   end)
 
+  test.it("owns Pane commands under the pane prefix", function()
+    for _, name in ipairs {
+      "pane:close", "pane:new_group", "pane:split_right",
+      "pane:copy_view_to", "pane:move_view_to", "pane:move_to",
+      "pane:focus_next",
+    } do
+      test.not_nil(command.map[name], name)
+    end
+    test.is_nil(command.map["core:split_pane_right"])
+    test.is_nil(command.map["core:copy_view_to"])
+  end)
+
   test.it("accepts zero Panes", function()
     test.equal(panes.count(), 0)
     test.same(panes.ordered(), {})
@@ -116,7 +128,7 @@ test.describe("Pane manager", function()
     source.current_view:set_selection_state { selections = { 2, 5, 2, 5 } }
     source.current_view.scroll.x, source.current_view.scroll.y = 12, 34
 
-    test.ok(command.perform("core:copy_view_to_split_right"))
+    test.ok(command.perform("pane:copy_view_to_split_right"))
 
     local destination = panes.active()
     local copy = destination.current_view
@@ -132,7 +144,7 @@ test.describe("Pane manager", function()
   test.it("does not create a split for a View that cannot be copied", function()
     local source = panes.create { factory = factory("source") }
 
-    test.ok(command.perform("core:copy_view_to_split_down"))
+    test.ok(command.perform("pane:copy_view_to_split_down"))
 
     test.equal(panes.count(), 1)
     test.equal(panes.active(), source)
@@ -210,7 +222,7 @@ test.describe("Pane manager", function()
       prompt = { label = label, options = options }
     end
 
-    test.ok(command.perform("core:copy_view_to"))
+    test.ok(command.perform("pane:copy_view_to"))
     test.equal(prompt.label, "Copy Current View To")
     test.ok(prompt.options.validate("1"))
     prompt.options.submit("1")
@@ -230,7 +242,7 @@ test.describe("Pane manager", function()
       prompt = { label = label, options = options }
     end
 
-    test.ok(command.perform("core:move_view_to"))
+    test.ok(command.perform("pane:move_view_to"))
     test.equal(prompt.label, "Move Current View To")
     local item = test.not_nil(prompt.options.suggest("New Pane Group")[1])
     prompt.options.submit(item.text, item)
@@ -258,8 +270,8 @@ test.describe("Pane manager", function()
     panes.create { factory = factory("two") }
     panes.focus(one)
 
-    test.ok(command.perform("core:focus_next_local"))
-    test.ok(command.perform("core:focus_previous_local"))
+    test.ok(command.perform("pane:focus_local_next"))
+    test.ok(command.perform("pane:focus_local_previous"))
     test.equal(panes.active(), one)
   end)
 
@@ -268,11 +280,11 @@ test.describe("Pane manager", function()
     local two = panes.split(one, "right", { factory = factory("two") })
     panes.focus(one)
 
-    test.ok(command.perform("core:focus_next_local"))
+    test.ok(command.perform("pane:focus_local_next"))
     test.equal(panes.active(), two)
-    test.ok(command.perform("core:focus_next_local"))
+    test.ok(command.perform("pane:focus_local_next"))
     test.equal(panes.active(), one)
-    test.ok(command.perform("core:focus_previous_local"))
+    test.ok(command.perform("pane:focus_local_previous"))
     test.equal(panes.active(), two)
   end)
 
@@ -286,7 +298,7 @@ test.describe("Pane manager", function()
     layout.update_rects(group.root, { x = 0, y = 0, w = 400, h = 400 })
     panes.focus(one)
 
-    test.ok(command.perform("core:rotate_panes_clockwise"))
+    test.ok(command.perform("pane:rotate_group_clockwise"))
 
     test.equal(layout.pane_at(group.root, 100, 100).current_view:get_name(), "four")
     test.equal(layout.pane_at(group.root, 300, 100).current_view:get_name(), "one")
@@ -306,7 +318,7 @@ test.describe("Pane manager", function()
     layout.update_rects(group.root, { x = 0, y = 0, w = 400, h = 200 })
     panes.focus(left)
 
-    test.ok(command.perform("core:rotate_panes_clockwise"))
+    test.ok(command.perform("pane:rotate_group_clockwise"))
 
     test.equal(layout.pane_at(group.root, 100, 100), right)
     test.equal(layout.pane_at(group.root, 300, 100), left)
@@ -330,7 +342,7 @@ test.describe("Pane manager", function()
       prompt = { label = label, options = options }
     end
 
-    test.ok(command.perform("core:move_pane_to"))
+    test.ok(command.perform("pane:move_to"))
     test.equal(prompt.label, "Move Current Pane To")
     test.ok(prompt.options.validate("1"))
     prompt.options.submit("1")
@@ -351,7 +363,7 @@ test.describe("Pane manager", function()
   end)
 
   test.it("discards only a disposable destination placeholder during a merge", function()
-    test.ok(command.perform("core:new_pane_group"))
+    test.ok(command.perform("pane:new_group"))
     local destination = panes.active()
     local placeholder = destination.current_view
     local buffer = placeholder.buffer
@@ -370,7 +382,7 @@ test.describe("Pane manager", function()
 
   test.it("keeps a disposable source entry when merging it into another Pane", function()
     local destination = panes.create { factory = factory("destination") }
-    test.ok(command.perform("core:new_pane_group"))
+    test.ok(command.perform("pane:new_group"))
     local source = panes.active()
     local untitled = source.current_view
     test.ok(panes.is_disposable(source))

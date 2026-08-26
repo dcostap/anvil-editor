@@ -163,7 +163,7 @@ test.describe("Pane navigation and movement", function()
 
   test.it("creates a new singleton Pane through the canonical command", function()
     local first = panes.create { factory = factory("one") }
-    test.ok(command.perform("core:new_pane_group"))
+    test.ok(command.perform("pane:new_group"))
     local created = panes.active()
     test.not_equal(created, first)
     test.equal(panes.count(), 2)
@@ -173,7 +173,7 @@ test.describe("Pane navigation and movement", function()
 
   test.it("splits the active Pane through the canonical command", function()
     local first = panes.create { factory = factory("one") }
-    test.ok(command.perform("core:split_pane_right"))
+    test.ok(command.perform("pane:split_right"))
     local created = panes.active()
     test.not_equal(created, first)
     test.equal(panes.count(), 2)

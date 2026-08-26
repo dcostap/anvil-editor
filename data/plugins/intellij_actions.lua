@@ -1410,7 +1410,7 @@ keymap.add({
   ["ctrl+n"] = "editor:move_lines_up",
   ["ctrl+m"] = "editor:move_lines_down",
   ["ctrl+shift+t"] = "core:reopen_last_closed_pane",
-  ["ctrl+shift+w"] = "core:close_other_panes",
+  ["ctrl+shift+w"] = "pane:close_others",
   ["ctrl+shift+l"] = "editor:reveal_active_file_in_explorer",
   ["ctrl+alt+t"] = "terminal:open",
   ["ctrl+up"] = "editor:move_caret_previous_paragraph",

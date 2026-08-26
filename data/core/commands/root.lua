@@ -181,10 +181,10 @@ local function focus_local(pane, step)
 end
 
 local commands = {
-  ["core:close_pane"] = command.palette(function(pane) return panes.close(pane) end),
-  ["core:close_view"] = function(pane) return panes.close_view(pane) end,
-  ["core:close_all_panes"] = command.palette(function() return panes.close_all() end),
-  ["core:close_other_panes"] = command.palette(function(pane)
+  ["pane:close"] = command.palette(function(pane) return panes.close(pane) end),
+  ["pane:close_view"] = function(pane) return panes.close_view(pane) end,
+  ["pane:close_all"] = command.palette(function() return panes.close_all() end),
+  ["pane:close_others"] = command.palette(function(pane)
     local result = true
     for index = #panes.ordered(), 1, -1 do
       local candidate = panes.ordered()[index]
@@ -192,47 +192,47 @@ local commands = {
     end
     return result
   end),
-  ["core:move_pane_previous"] = command.palette(function(pane)
+  ["pane:move_previous"] = command.palette(function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index > 1 then return panes.move(pane, ordered[index - 1], "left") end
   end),
-  ["core:move_pane_next"] = command.palette(function(pane)
+  ["pane:move_next"] = command.palette(function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index < #ordered then return panes.move(pane, ordered[index + 1], "right") end
   end),
-  ["core:rotate_panes_clockwise"] = command.palette(function(pane)
+  ["pane:rotate_group_clockwise"] = command.palette(function(pane)
     return panes.rotate_group_clockwise(pane)
   end, { keywords = { "split", "group" } }),
-  ["core:copy_view_to"] = command.palette(function(pane)
+  ["pane:copy_view_to"] = command.palette(function(pane)
     return copy_view_to(pane)
   end, { keywords = { "duplicate", "split", "pane", "group" } }),
-  ["core:move_view_to"] = command.palette(function(pane)
+  ["pane:move_view_to"] = command.palette(function(pane)
     return move_view_to(pane)
   end, { keywords = { "pane", "group" } }),
-  ["core:move_pane_to"] = command.palette(function(pane)
+  ["pane:move_to"] = command.palette(function(pane)
     return move_pane_to(pane)
   end, { keywords = { "history", "navigation" } }),
-  ["core:focus_previous_pane"] = function(pane)
+  ["pane:focus_previous"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if #ordered > 0 then return panes.focus_index((index - 2) % #ordered + 1) end
   end,
-  ["core:focus_next_pane"] = function(pane)
+  ["pane:focus_next"] = function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if #ordered > 0 then return panes.focus_index(index % #ordered + 1) end
   end,
-  ["core:focus_next_local"] = command.palette(function(pane)
+  ["pane:focus_local_next"] = command.palette(function(pane)
     return focus_local(pane, 1)
   end),
-  ["core:focus_previous_local"] = command.palette(function(pane)
+  ["pane:focus_local_previous"] = command.palette(function(pane)
     return focus_local(pane, -1)
   end),
 }
 
 for _, direction in ipairs { "left", "right", "up", "down" } do
-  commands["core:split_pane_" .. direction] = command.palette(function(pane)
+  commands["pane:split_" .. direction] = command.palette(function(pane)
     return panes.split(pane, direction, { factory = new_untitled_editor })
   end)
-  commands["core:copy_view_to_split_" .. direction] = command.palette(function(pane)
+  commands["pane:copy_view_to_split_" .. direction] = command.palette(function(pane)
     local result, err = copy_view_to_split(pane, direction)
     report_failure("copy Current View", result, err)
     return result
@@ -240,13 +240,13 @@ for _, direction in ipairs { "left", "right", "up", "down" } do
 end
 
 for _, direction in ipairs { "left", "right", "up", "down" } do
-  commands["core:focus_pane_" .. direction] = function()
+  commands["pane:focus_" .. direction] = function()
     return panes.focus_direction(direction)
   end
 end
 
 for index = 1, 9 do
-  commands["core:focus_pane_" .. index] = function()
+  commands["pane:focus_" .. index] = function()
     return panes.focus_index(index)
   end
 end
@@ -268,7 +268,7 @@ command.add(nil, {
     supports_placement = true,
     opens_view = true,
   }),
-  ["core:new_pane_group"] = command.palette(function()
+  ["pane:new_group"] = command.palette(function()
     return panes.create { factory = new_untitled_editor }
   end),
   ["core:close_pane_or_quit"] = function()

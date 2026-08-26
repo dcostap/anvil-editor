@@ -169,7 +169,7 @@ test.describe("File Tree instances", function()
     local source = panes.create { factory = function() return tree end }
     tree.scroll.x, tree.scroll.y = 12, 34
 
-    test.ok(command.perform("core:copy_view_to_split_right"))
+    test.ok(command.perform("pane:copy_view_to_split_right"))
 
     local copy = panes.active().current_view
     test.not_equal(copy, tree)

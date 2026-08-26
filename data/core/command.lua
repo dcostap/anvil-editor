@@ -27,8 +27,8 @@ local command = {}
 ---@see core.command.predicate_function
 ---@alias core.command.predicate string|core.object|core.command.predicate_function
 
----A command identifier contains its owning View prefix and action.
----Use `core` when no one View owns the action.
+---A command identifier contains its owning View, feature, or domain prefix and action.
+---Use `core` when no more specific owner exists.
 ---Both parts use lowercase snake_case and are separated by a colon.
 ---@alias core.command.command_name string
 

@@ -170,12 +170,12 @@ test.describe("Command Slots", function()
     test.equal(#targets, 4)
     test.ok(quick_output:focus_surface_target(targets[1]))
     for index = 2, 4 do
-      test.ok(command.perform("core:focus_next_local"))
+      test.ok(command.perform("pane:focus_local_next"))
       test.equal(core.active_view, targets[index])
     end
-    test.ok(command.perform("core:focus_next_local"))
+    test.ok(command.perform("pane:focus_local_next"))
     test.equal(panes.active(), sibling)
-    test.ok(command.perform("core:focus_next_local"))
+    test.ok(command.perform("pane:focus_local_next"))
     test.equal(core.active_view, targets[1])
   end)
 

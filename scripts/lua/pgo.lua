@@ -189,7 +189,7 @@ local function file_stress(abs_path)
     coroutine.yield()
   end
 
-  command.perform "core:close_pane"
+  command.perform "pane:close"
   coroutine.yield()
 end
 
@@ -239,7 +239,7 @@ local function input_stress(abs_path)
   end
 
   dv.buffer:clear_undo_redo()
-  command.perform "core:close_pane"
+  command.perform "pane:close"
 end
 
 ---Perform serialization stressing
@@ -632,7 +632,7 @@ core.add_background_thread(function()
     for _=1, 3 do
       scale_stress()
     end
-    command.perform "core:close_pane"
+    command.perform "pane:close"
     coroutine.yield()
   end
 

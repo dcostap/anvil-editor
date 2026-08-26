@@ -279,7 +279,7 @@ test.describe("Terminal View", function()
     local source_pane = panes.active()
     local capture = source_pane.current_view
 
-    test.ok(command.perform("core:copy_view_to_split_right"))
+    test.ok(command.perform("pane:copy_view_to_split_right"))
 
     local copy_pane = panes.active()
     local copy = copy_pane.current_view
@@ -369,7 +369,7 @@ test.describe("Terminal View", function()
     local source = terminal.open { cwd = "C:/initial", shell = "pwsh.exe" }
     source.snapshot.pwd = "C:/changed"
 
-    test.ok(command.perform("core:copy_view_to_split_right"))
+    test.ok(command.perform("pane:copy_view_to_split_right"))
 
     local copy = panes.active().current_view
     test.ok(copy.terminal_view)
