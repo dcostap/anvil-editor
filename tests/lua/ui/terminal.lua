@@ -306,7 +306,22 @@ test.describe("Terminal View", function()
     test.equal(#context.sessions[1].writes, 0)
   end)
 
-  test.it("owns shell control keys before global editor shortcuts", function(context)
+  test.it("runs valid Anvil shortcuts before terminal input", function(context)
+    local first = panes.create { factory = function() return View() end }
+    local second = panes.create { factory = function() return View() end }
+    terminal.open { pane = second }
+    keymap.modkeys.alt = true
+
+    core.on_event("keypressed", "1", {
+      alt = true, modifiers = 0, scancode = 30,
+    })
+    keymap.modkeys.alt = false
+
+    test.equal(panes.active(), first)
+    test.equal(#context.sessions[1].keys, 0)
+  end)
+
+  test.it("sends unhandled shell control keys to the terminal", function(context)
     local view = terminal.open()
     local event = { ctrl = true, modifiers = 0, scancode = 19 }
     test.ok(core.on_event("keypressed", "p", event))
@@ -320,9 +335,6 @@ test.describe("Terminal View", function()
       ctrl = true, alt = true, altgr = true, modifiers = 0, scancode = 80,
     })
     test.equal(#context.sessions[1].keys, key_count + 1)
-    test.equal(view:on_key_pressed_before_keymap("f", {
-      ctrl = true, shift = true, modifiers = 0,
-    }), false)
   end)
 
   test.it("sends Shift Home and End to terminal applications", function(context)
@@ -337,12 +349,16 @@ test.describe("Terminal View", function()
     test.equal(session.keys[#session.keys][1], "end")
     test.equal(#session.scrolls, 2)
 
-    test.ok(view:on_key_pressed_before_keymap("home", {
+    keymap.modkeys.ctrl = true
+    keymap.modkeys.shift = true
+    test.ok(core.on_event("keypressed", "home", {
       ctrl = true, shift = true, modifiers = 3,
     }))
-    test.ok(view:on_key_pressed_before_keymap("end", {
+    test.ok(core.on_event("keypressed", "end", {
       ctrl = true, shift = true, modifiers = 3,
     }))
+    keymap.modkeys.ctrl = false
+    keymap.modkeys.shift = false
     test.equal(session.scrolls[#session.scrolls - 1][1], "top")
     test.equal(session.scrolls[#session.scrolls][1], "bottom")
   end)

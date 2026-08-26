@@ -706,22 +706,6 @@ function TerminalView:on_key_pressed(key, event)
   return encoded
 end
 
-function TerminalView:on_key_pressed_before_keymap(key, event)
-  if not self.session or self.running == false or not event then return false end
-  if event.altgr then
-    if #key == 1 or key == "space" or key:find("alt", 1, true) then return false end
-    return self:on_key_pressed(key, event) == true
-  end
-  local control = event.ctrl or event.alt
-  if not control then return false end
-  if event.ctrl and event.shift and
-      (key == "c" or key == "v" or key == "f" or key == "p" or key == "k") then
-    return false
-  end
-  if event.ctrl and (key == "tab" or key == "f3") then return false end
-  return self:on_key_pressed(key, event) == true
-end
-
 function TerminalView:on_key_released(key, event)
   if not self.session or self.running == false then return false end
   if event and event.altgr and (#key == 1 or key == "space") then return false end

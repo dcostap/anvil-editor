@@ -492,10 +492,6 @@ function RootPanel:on_key_pressed(...)
   return call_view(self:keyboard_target(), "on_key_pressed", ...)
 end
 
-function RootPanel:on_key_pressed_before_keymap(...)
-  return call_view(self:keyboard_target(), "on_key_pressed_before_keymap", ...)
-end
-
 function RootPanel:on_key_released(...)
   return call_view(self:keyboard_target(), "on_key_released", ...)
 end
