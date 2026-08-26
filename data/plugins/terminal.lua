@@ -155,6 +155,27 @@ TerminalView.view_icon = view_icons.register("terminal", view_icons.ui("t"))
 
 function TerminalView:__tostring() return "TerminalView" end
 
+function TerminalView:refresh_cell_metrics()
+  local font = style.terminal_font or style.code_font
+  local cell_width = math.max(1, font:get_width("M"))
+  local native_cell_width = math.max(1, math.ceil(cell_width))
+  local cell_height = math.max(1, math.ceil(font:get_height()))
+  local changed = self.font ~= font or self.cell_width ~= cell_width
+    or self.native_cell_width ~= native_cell_width
+    or self.cell_height ~= cell_height
+  if changed and self.cell_width then
+    core.log_quiet(
+      "Terminal cell geometry changed: %.2fx%d -> %.2fx%d",
+      self.cell_width, self.cell_height, cell_width, cell_height
+    )
+  end
+  self.font = font
+  self.cell_width = cell_width
+  self.native_cell_width = native_cell_width
+  self.cell_height = cell_height
+  return changed
+end
+
 function TerminalView:new(options)
   TerminalView.super.new(self)
   options = options or {}
@@ -162,10 +183,7 @@ function TerminalView:new(options)
   self.terminal_view = true
   self.scrollable = true
   self.cursor = "ibeam"
-  self.font = style.terminal_font or style.code_font
-  self.cell_width = math.max(1, self.font:get_width("M"))
-  self.native_cell_width = math.max(1, math.ceil(self.cell_width))
-  self.cell_height = math.max(1, math.ceil(self.font:get_height()))
+  self:refresh_cell_metrics()
   self.cols, self.rows = 80, 24
   self.color_cache = {}
   self.launch_options = {
@@ -183,6 +201,8 @@ function TerminalView:new(options)
   local session, start_error = native.new(native_options)
   if not session then error(start_error or "Could not start the terminal.") end
   self.session = session
+  self.session_cell_width = self.native_cell_width
+  self.session_cell_height = self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
   self.running = true
@@ -279,7 +299,6 @@ function TerminalTextCaptureView:new(source, capture)
   self:add_line_render_provider(
     "terminal-text-capture-styles", terminal_capture_style_provider
   )
-  self.terminal_cell_height = source.cell_height
   self.last_line1, self.last_col1 = line, col
   self.last_line2, self.last_col2 = line, col
   local viewport_line = common.clamp(
@@ -302,7 +321,7 @@ function TerminalTextCaptureView:get_name()
 end
 
 function TerminalTextCaptureView:get_line_height()
-  return self.terminal_cell_height or TerminalTextCaptureView.super.get_line_height(self)
+  return math.max(1, math.ceil(self:get_font():get_height()))
 end
 
 function TerminalTextCaptureView:get_content_offset()
@@ -345,6 +364,7 @@ function TerminalView:create_session()
   native_options.cols, native_options.rows = self.cols, self.rows
   native_options.cell_width, native_options.cell_height = self.native_cell_width, self.cell_height
   native_options.cwd, native_options.shell = self.launch_options.cwd, self.launch_options.shell
+  native_options.scrollback_lines = terminal_config.scrollback_lines
   local session, start_error = native.new(native_options)
   if not session then return false, start_error or "Could not start the terminal." end
   return session
@@ -352,6 +372,8 @@ end
 
 function TerminalView:adopt_session(session)
   self.session = session
+  self.session_cell_width = self.native_cell_width
+  self.session_cell_height = self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
   self.running = true
@@ -386,6 +408,30 @@ function TerminalView:cell_geometry()
   local height = math.max(1, self.size.y - PADDING * 2)
   return math.max(2, math.floor(width / self.cell_width)),
     math.max(1, math.floor(height / self.cell_height))
+end
+
+function TerminalView:sync_geometry()
+  if not self.session then return false end
+  self:refresh_cell_metrics()
+  local cols, rows = self:cell_geometry()
+  if cols == self.cols and rows == self.rows
+    and self.session_cell_width == self.native_cell_width
+    and self.session_cell_height == self.cell_height
+  then
+    return false
+  end
+  if not self.session:resize(
+      cols, rows, self.native_cell_width, self.cell_height
+    )
+  then
+    return false
+  end
+  self.cols, self.rows = cols, rows
+  self.session_cell_width = self.native_cell_width
+  self.session_cell_height = self.cell_height
+  self.snapshot = self.session:snapshot(self.snapshot)
+  core.redraw = true
+  return true
 end
 
 function TerminalView:get_scrollable_size()
@@ -468,15 +514,7 @@ function TerminalView:update()
     self.session:focus(focused)
   end
 
-  local cols, rows = self:cell_geometry()
-  if cols ~= self.cols or rows ~= self.rows then
-    local ok = self.session:resize(cols, rows, self.native_cell_width, self.cell_height)
-    if ok then
-      self.cols, self.rows = cols, rows
-      self.snapshot = self.session:snapshot(self.snapshot)
-      core.redraw = true
-    end
-  end
+  self:sync_geometry()
 
   local was_running = self.running
   local record_perf = perf_is_recording()
@@ -529,6 +567,7 @@ end
 
 function TerminalView:update_suspended()
   if not self.session then return end
+  self:sync_geometry()
   local changed, running, status = self.session:update()
   self.running = running ~= false
   self.exit_code = status and status.exit_code or self.exit_code

@@ -147,6 +147,13 @@ test.describe("Terminal View", function()
   test.before_each(function(context)
     panes.reset_for_tests()
     context.previous_active_view = core.active_view
+    context.terminal_font_sizes = {}
+    for _, font in ipairs({
+      style.terminal_font, style.terminal_bold_font,
+      style.terminal_italic_font, style.terminal_bold_italic_font,
+    }) do
+      context.terminal_font_sizes[font] = font:get_size()
+    end
     context.native, context.sessions = fake_native()
     terminal._set_native_for_tests(context.native)
   end)
@@ -158,6 +165,7 @@ test.describe("Terminal View", function()
     end
     panes.reset_for_tests()
     terminal._set_native_for_tests(nil)
+    for font, size in pairs(context.terminal_font_sizes) do font:set_size(size) end
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
@@ -252,6 +260,32 @@ test.describe("Terminal View", function()
     test.ok(fragment.strikethrough)
     test.same(capture.terminal_background, { 1, 2, 3, 255 })
     test.equal(capture.terminal_source_view, terminal_view)
+  end)
+
+  test.it("updates live and captured terminal row geometry after a font scale change", function(context)
+    local terminal_view = terminal.open()
+    local session = context.sessions[1]
+    session.capture = {
+      text = "first\nsecond\n",
+      cursor_line = 1,
+      cursor_col = 1,
+      viewport_line = 1,
+    }
+    test.ok(command.perform("terminal:open_text_capture"))
+    local capture = panes.active().current_view
+    local old_cell_width = terminal_view.cell_width
+    local old_cell_height = terminal_view.cell_height
+    local old_line_height = capture:get_line_height()
+
+    style.terminal_font:set_size(style.terminal_font:get_size() * 1.5)
+    core.root_panel:update()
+
+    test.ok(terminal_view.cell_width > old_cell_width)
+    test.ok(terminal_view.cell_height > old_cell_height)
+    test.ok(capture:get_line_height() > old_line_height)
+    local resize = test.not_nil(session.resizes[#session.resizes])
+    test.equal(resize[3], terminal_view.native_cell_width)
+    test.equal(resize[4], terminal_view.cell_height)
   end)
 
   test.it("services a terminal while its Pane Group is hidden", function(context)
