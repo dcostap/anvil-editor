@@ -342,6 +342,41 @@ test.describe("Native terminal session", function()
     test.equal(capture.viewport_line, 1)
   end)
 
+  test.it("captures terminal text colors and font styles", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 4, cell_width = 8, cell_height = 16,
+      foreground = 0x112233,
+      background = 0x010203,
+      palette = {
+        0x000000, 0xa1b2c3, 0x020202, 0x030303,
+        0x040404, 0x050505, 0x060606, 0x070707,
+        0x080808, 0x090909, 0x0a0a0a, 0x0b0b0b,
+        0x0c0c0c, 0x0d0d0d, 0x0e0e0e, 0x0f0f0f,
+      },
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$e=[char]27; [Console]::Write($e+'[1;31mANVIL_CAPTURE_COLOR'+$e+'[0m')"]],
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "ANVIL_CAPTURE_COLOR", 5)
+    test.ok(text:find("ANVIL_CAPTURE_COLOR", 1, true), text)
+
+    local capture, capture_error = session:text_capture()
+    session:close()
+
+    test.ok(capture, capture_error)
+    test.equal(capture.foreground, 0x112233)
+    test.equal(capture.background, 0x010203)
+    local colored
+    for _, line_styles in pairs(capture.styles or {}) do
+      for _, span in ipairs(line_styles) do
+        if span.fg == 0xa1b2c3 and span.bold then colored = span end
+      end
+    end
+    test.ok(colored, "Captured terminal color and bold style were missing")
+  end)
+
   test.it("retains output within a configured larger scrollback limit", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"

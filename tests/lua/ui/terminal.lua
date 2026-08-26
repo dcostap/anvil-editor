@@ -221,6 +221,39 @@ test.describe("Terminal View", function()
     test.not_ok(session.closed)
   end)
 
+  test.it("renders captured terminal text with its terminal colors and font style", function(context)
+    local terminal_view = terminal.open()
+    local session = context.sessions[1]
+    session.capture = {
+      text = "plain\ncolored\n",
+      cursor_line = 2,
+      cursor_col = 1,
+      viewport_line = 1,
+      foreground = 0x102030,
+      background = 0x010203,
+      styles = {
+        [1] = { { col1 = 1, col2 = 6, fg = 0x102030 } },
+        [2] = { {
+          col1 = 1, col2 = 8, fg = 0xa1b2c3, background = 0x112233,
+          bold = true, italic = true, underline = 1, strikethrough = true,
+        } },
+      },
+    }
+
+    test.ok(command.perform("terminal:open_text_capture"))
+
+    local capture = panes.active().current_view
+    local render_line = test.not_nil(capture:get_line_render(2))
+    local fragment = test.not_nil(render_line.fragments[1])
+    test.same(fragment.color, { 0xa1, 0xb2, 0xc3, 255 })
+    test.same(fragment.background, { 0x11, 0x22, 0x33, 255 })
+    test.equal(fragment.font, style.terminal_bold_italic_font)
+    test.ok(fragment.underline)
+    test.ok(fragment.strikethrough)
+    test.same(capture.terminal_background, { 1, 2, 3, 255 })
+    test.equal(capture.terminal_source_view, terminal_view)
+  end)
+
   test.it("services a terminal while its Pane Group is hidden", function(context)
     local view = terminal.open()
     local session = view.session

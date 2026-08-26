@@ -118,6 +118,8 @@ typedef struct {
 
 static void push_status(lua_State *L, TerminalSession *session);
 static void set_integer_field(lua_State *L, const char *name, lua_Integer value);
+static void set_boolean_field(lua_State *L, const char *name, bool value);
+static uint32_t color_value(GhosttyColorRgb color);
 
 static void wake_for_terminal_output(TerminalSession *session) {
   if (InterlockedCompareExchange(&session->output_event_pending, 1, 0) != 0) return;
@@ -1710,6 +1712,188 @@ static size_t capture_line_length(
   return end - start;
 }
 
+typedef struct {
+  size_t start_offset;
+  size_t end_offset;
+  uint32_t foreground;
+  uint32_t background;
+  uint32_t underline_color;
+  int underline;
+  bool active;
+  bool has_background;
+  bool has_underline_color;
+  bool bold;
+  bool italic;
+  bool faint;
+  bool strikethrough;
+} TerminalCaptureStyleRun;
+
+static GhosttyColorRgb capture_style_color(
+  GhosttyStyleColor color, GhosttyColorRgb fallback,
+  const GhosttyRenderStateColors *colors
+) {
+  if (color.tag == GHOSTTY_STYLE_COLOR_RGB) return color.value.rgb;
+  if (color.tag == GHOSTTY_STYLE_COLOR_PALETTE) {
+    return colors->palette[color.value.palette];
+  }
+  return fallback;
+}
+
+static void read_capture_style(
+  const GhosttyGridRef *ref, const GhosttyRenderStateColors *colors,
+  TerminalCaptureStyleRun *run
+) {
+  GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
+  if (ghostty_grid_ref_style(ref, &style) != GHOSTTY_SUCCESS) {
+    ghostty_style_default(&style);
+  }
+  GhosttyColorRgb foreground = capture_style_color(
+    style.fg_color, colors->foreground, colors
+  );
+  GhosttyColorRgb background = capture_style_color(
+    style.bg_color, colors->background, colors
+  );
+  run->has_background = style.bg_color.tag != GHOSTTY_STYLE_COLOR_NONE;
+  if (style.inverse) {
+    GhosttyColorRgb swap = foreground;
+    foreground = background;
+    background = swap;
+    run->has_background = true;
+  }
+  run->foreground = color_value(foreground);
+  run->background = color_value(background);
+  run->bold = style.bold;
+  run->italic = style.italic;
+  run->faint = style.faint;
+  run->underline = style.underline;
+  run->strikethrough = style.strikethrough;
+  if (style.underline_color.tag != GHOSTTY_STYLE_COLOR_NONE) {
+    run->has_underline_color = true;
+    run->underline_color = color_value(capture_style_color(
+      style.underline_color, foreground, colors
+    ));
+  }
+}
+
+static bool same_capture_style(
+  const TerminalCaptureStyleRun *left, const TerminalCaptureStyleRun *right
+) {
+  return left->foreground == right->foreground &&
+    left->has_background == right->has_background &&
+    (!left->has_background || left->background == right->background) &&
+    left->bold == right->bold && left->italic == right->italic &&
+    left->faint == right->faint && left->underline == right->underline &&
+    left->strikethrough == right->strikethrough &&
+    left->has_underline_color == right->has_underline_color &&
+    (!left->has_underline_color ||
+      left->underline_color == right->underline_color);
+}
+
+static void flush_capture_style(
+  lua_State *L, int line_styles_index, int *run_count,
+  TerminalCaptureStyleRun *run
+) {
+  if (!run->active || run->end_offset <= run->start_offset) return;
+  lua_createtable(L, 0, 11);
+  set_integer_field(L, "col1", (lua_Integer)run->start_offset + 1);
+  set_integer_field(L, "col2", (lua_Integer)run->end_offset + 1);
+  set_integer_field(L, "fg", run->foreground);
+  if (run->has_background) {
+    set_integer_field(L, "background", run->background);
+  }
+  if (run->bold) set_boolean_field(L, "bold", true);
+  if (run->italic) set_boolean_field(L, "italic", true);
+  if (run->faint) set_boolean_field(L, "faint", true);
+  if (run->underline) set_integer_field(L, "underline", run->underline);
+  if (run->strikethrough) set_boolean_field(L, "strikethrough", true);
+  if (run->has_underline_color) {
+    set_integer_field(L, "underline_color", run->underline_color);
+  }
+  lua_rawseti(L, line_styles_index, ++*run_count);
+  run->active = false;
+}
+
+static void push_capture_styles(
+  lua_State *L, TerminalSession *session,
+  const GhosttyRenderStateColors *colors,
+  const uint8_t *text, size_t length, size_t total_rows
+) {
+  lua_createtable(L, 0, 0);
+  int styles_index = lua_absindex(L, -1);
+  size_t text_offset = 0;
+
+  for (size_t row = 0; row < total_rows; row++) {
+    size_t line_start = text_offset;
+    const uint8_t *newline = line_start < length
+      ? memchr(text + line_start, '\n', length - line_start) : NULL;
+    size_t line_end = newline ? (size_t)(newline - text) : length;
+    if (line_end > line_start && text[line_end - 1] == '\r') line_end--;
+    size_t line_length = line_end - line_start;
+    text_offset = newline ? (size_t)(newline - text) + 1 : length;
+    if (line_length == 0) continue;
+
+    lua_createtable(L, 4, 0);
+    int line_styles_index = lua_absindex(L, -1);
+    TerminalCaptureStyleRun active = {0};
+    int run_count = 0;
+    size_t byte_offset = 0;
+
+    for (uint16_t col = 0;
+         col < session->cols && byte_offset < line_length; col++) {
+      GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+      GhosttyPoint point = {
+        .tag = GHOSTTY_POINT_TAG_SCREEN,
+        .value = { .coordinate = { .x = col, .y = (uint32_t)row } },
+      };
+      if (ghostty_terminal_grid_ref(
+          session->terminal, point, &ref
+        ) != GHOSTTY_SUCCESS) continue;
+
+      GhosttyCell cell = 0;
+      GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
+      if (ghostty_grid_ref_cell(&ref, &cell) == GHOSTTY_SUCCESS) {
+        ghostty_cell_get(cell, GHOSTTY_CELL_DATA_WIDE, &wide);
+      }
+      if (wide == GHOSTTY_CELL_WIDE_SPACER_TAIL ||
+          wide == GHOSTTY_CELL_WIDE_SPACER_HEAD) continue;
+
+      uint32_t graphemes[16];
+      size_t grapheme_count = 0;
+      size_t cell_length = 0;
+      if (ghostty_grid_ref_graphemes(
+          &ref, graphemes, 16, &grapheme_count
+        ) == GHOSTTY_SUCCESS && grapheme_count > 0) {
+        for (size_t index = 0; index < grapheme_count; index++) {
+          cell_length += utf8_length_for_codepoint(graphemes[index]);
+        }
+      } else {
+        cell_length = 1;
+      }
+      if (cell_length > line_length - byte_offset) {
+        cell_length = line_length - byte_offset;
+      }
+
+      TerminalCaptureStyleRun current = {
+        .start_offset = byte_offset,
+        .end_offset = byte_offset + cell_length,
+        .active = true,
+      };
+      read_capture_style(&ref, colors, &current);
+      if (!active.active || !same_capture_style(&active, &current)) {
+        flush_capture_style(
+          L, line_styles_index, &run_count, &active
+        );
+        active = current;
+      } else {
+        active.end_offset = current.end_offset;
+      }
+      byte_offset += cell_length;
+    }
+    flush_capture_style(L, line_styles_index, &run_count, &active);
+    lua_rawseti(L, styles_index, (lua_Integer)row + 1);
+  }
+}
+
 static int f_terminal_text_capture(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
   if (session->closed || !session->terminal) {
@@ -1722,6 +1906,7 @@ static int f_terminal_text_capture(lua_State *L) {
   uint16_t cursor_y = 0;
   bool pending_wrap = false;
   GhosttyTerminalScrollbar scrollbar = {0};
+  GhosttyRenderStateColors colors = GHOSTTY_INIT_SIZED(GhosttyRenderStateColors);
   if (ghostty_terminal_get(
       session->terminal, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total_rows
     ) != GHOSTTY_SUCCESS || total_rows == 0 ||
@@ -1739,6 +1924,9 @@ static int f_terminal_text_capture(lua_State *L) {
       ) != GHOSTTY_SUCCESS ||
       ghostty_terminal_get(
         session->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &scrollbar
+      ) != GHOSTTY_SUCCESS ||
+      ghostty_render_state_colors_get(
+        session->render_state, &colors
       ) != GHOSTTY_SUCCESS) {
     return push_capture_error(L, "Could not read terminal capture state");
   }
@@ -1806,15 +1994,23 @@ static int f_terminal_text_capture(lua_State *L) {
   );
   if (cursor_offset > line_length) cursor_offset = line_length;
 
-  lua_createtable(L, 0, 7);
+  lua_createtable(L, 0, 10);
+  int capture_index = lua_absindex(L, -1);
   lua_pushlstring(L, text ? (const char *)text : "", length);
   lua_setfield(L, -2, "text");
+  set_integer_field(L, "foreground", color_value(colors.foreground));
+  set_integer_field(L, "background", color_value(colors.background));
   set_integer_field(L, "cursor_line", (lua_Integer)capture_cursor_row + 1);
   set_integer_field(L, "cursor_col", (lua_Integer)cursor_offset + 1);
   set_integer_field(L, "viewport_line", (lua_Integer)scrollbar.offset + 1);
   set_integer_field(L, "columns", session->cols);
   set_integer_field(L, "rows", session->rows);
   set_integer_field(L, "total_rows", (lua_Integer)total_rows);
+  push_capture_styles(
+    L, session, &colors, text ? text : (const uint8_t *)"", length,
+    total_rows
+  );
+  lua_setfield(L, capture_index, "styles");
   if (text) HeapFree(GetProcessHeap(), 0, text);
   return 1;
 }

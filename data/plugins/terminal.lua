@@ -205,6 +205,48 @@ local TerminalTextCaptureView = TextView:extend()
 
 function TerminalTextCaptureView:__tostring() return "TerminalTextCaptureView" end
 
+local function terminal_capture_font(view, span)
+  if span.bold and span.italic then
+    return style.terminal_bold_italic_font or view:get_font()
+  end
+  if span.bold then return style.terminal_bold_font or view:get_font() end
+  if span.italic then return style.terminal_italic_font or view:get_font() end
+  return view:get_font()
+end
+
+local terminal_capture_style_provider = {}
+
+function terminal_capture_style_provider:render_line(view, line, context)
+  local spans = view.terminal_capture_styles[line]
+  if type(spans) ~= "table" or #spans == 0 then return nil end
+  local fragments = {}
+  for _, span in ipairs(spans) do
+    local col1 = common.clamp(math.floor(span.col1 or 1), 1, #context.source_text + 1)
+    local col2 = common.clamp(
+      math.floor(span.col2 or col1), col1, #context.source_text + 1
+    )
+    if col2 > col1 then
+      fragments[#fragments + 1] = {
+        source_col1 = col1,
+        source_col2 = col2,
+        text = context.source_text:sub(col1, col2 - 1),
+        color = rgb(
+          view, span.fg, view.terminal_foreground or style.text,
+          span.faint and 140 or 255
+        ),
+        background = span.background and rgb(
+          view, span.background, view.terminal_background or style.background
+        ) or nil,
+        background_full_height = span.background ~= nil,
+        font = terminal_capture_font(view, span),
+        underline = span.underline and span.underline ~= 0,
+        strikethrough = span.strikethrough == true,
+      }
+    end
+  end
+  return #fragments > 0 and { fragments = fragments } or nil
+end
+
 function TerminalTextCaptureView:new(source, capture)
   local buffer = Buffer()
   buffer.display_name = "Terminal Text"
@@ -227,9 +269,16 @@ function TerminalTextCaptureView:new(source, capture)
   self.terminal_source_view = source
   self.terminal_title = source:get_name()
   self.font = "terminal_font"
+  self.color_cache = {}
+  self.terminal_foreground = rgb(self, capture.foreground, style.text)
+  self.terminal_background = rgb(self, capture.background, style.background)
+  self.terminal_capture_styles = capture.styles or {}
   self.show_line_numbers = false
   self.gutter_padding = PADDING
   self:set_wrapping_enabled(false)
+  self:add_line_render_provider(
+    "terminal-text-capture-styles", terminal_capture_style_provider
+  )
   self.terminal_cell_height = source.cell_height
   self.last_line1, self.last_col1 = line, col
   self.last_line2, self.last_col2 = line, col
@@ -242,6 +291,10 @@ function TerminalTextCaptureView:new(source, capture)
     "Terminal text capture opened: lines=%d cursor=%d:%d viewport=%d",
     #buffer.lines, line, col, viewport_line
   )
+end
+
+function TerminalTextCaptureView:draw_background(color)
+  return View.draw_background(self, self.terminal_background or color)
 end
 
 function TerminalTextCaptureView:get_name()
