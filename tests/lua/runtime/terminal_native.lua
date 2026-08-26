@@ -342,6 +342,27 @@ test.describe("Native terminal session", function()
     test.equal(capture.viewport_line, 1)
   end)
 
+  test.it("retains output within a configured larger scrollback limit", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 4, cell_width = 8, cell_height = 16,
+      scrollback_lines = 10000,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "1..1500 | ForEach-Object { Write-Output ('ANVIL_SCROLLBACK_ROW_'+$_) }; [Console]::Write('ANVIL_SCROLLBACK_DONE'); Start-Sleep -Seconds 1"]],
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "ANVIL_SCROLLBACK_DONE", 8)
+    test.ok(text:find("ANVIL_SCROLLBACK_DONE", 1, true), text)
+
+    local capture, capture_error = session:text_capture()
+    session:close()
+
+    test.ok(capture, capture_error)
+    test.ok(capture.text:find("ANVIL_SCROLLBACK_ROW_1\n", 1, true), capture.text)
+    test.ok(capture.text:find("ANVIL_SCROLLBACK_ROW_1500", 1, true), capture.text)
+  end)
+
   test.it("reports bounded terminal bell and clipboard effects", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"

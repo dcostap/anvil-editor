@@ -42,6 +42,15 @@ terminal_config.config_spec = {
       { "Active Buffer", "buffer" },
     },
   },
+  {
+    label = "Scrollback Lines",
+    description = "Target number of physical output rows retained by new terminal sessions.",
+    path = "scrollback_lines",
+    type = "number",
+    default = 10000,
+    min = 1000,
+    max = 1000000,
+  },
 }
 
 local function buffer_path()
@@ -170,6 +179,7 @@ function TerminalView:new(options)
   native_options.cols, native_options.rows = self.cols, self.rows
   native_options.cell_width, native_options.cell_height = self.native_cell_width, self.cell_height
   native_options.cwd, native_options.shell = self.launch_options.cwd, self.launch_options.shell
+  native_options.scrollback_lines = terminal_config.scrollback_lines
   local session, start_error = native.new(native_options)
   if not session then error(start_error or "Could not start the terminal.") end
   self.session = session

@@ -106,6 +106,7 @@ plugin_defaults("command_slots", {
 plugin_defaults("terminal", {
   shell = nil,
   cwd_mode = "project",
+  scrollback_lines = 10000,
 })
 plugin_defaults("diffview", {
   log_times = false,

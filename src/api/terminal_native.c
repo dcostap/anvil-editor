@@ -641,10 +641,22 @@ static bool set_terminal_colors(TerminalSession *session, const TerminalColors *
   return true;
 }
 
-static bool initialize_terminal(TerminalSession *session, const TerminalColors *colors) {
+static bool initialize_terminal(
+  TerminalSession *session, const TerminalColors *colors,
+  const size_t *scrollback_max_lines
+) {
   if (ghostty_terminal_new(NULL, &session->terminal, session->cols, session->rows) != GHOSTTY_SUCCESS) {
     return false;
   }
+  if (scrollback_max_lines && (
+      ghostty_terminal_set(
+        session->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, NULL
+      ) != GHOSTTY_SUCCESS ||
+      ghostty_terminal_set(
+        session->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,
+        scrollback_max_lines
+      ) != GHOSTTY_SUCCESS
+    )) return false;
   if (ghostty_render_state_new(NULL, &session->render_state) != GHOSTTY_SUCCESS) return false;
   if (ghostty_render_state_row_iterator_new(NULL, &session->row_iterator) != GHOSTTY_SUCCESS) return false;
   if (ghostty_render_state_row_cells_new(NULL, &session->row_cells) != GHOSTTY_SUCCESS) return false;
@@ -901,6 +913,16 @@ static bool create_pseudoconsole(
 static int f_terminal_new(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   TerminalColors colors = read_terminal_colors(L, 1);
+  size_t scrollback_max_lines = 0;
+  bool has_scrollback_max_lines = false;
+  lua_getfield(L, 1, "scrollback_lines");
+  if (!lua_isnil(L, -1)) {
+    lua_Integer value = luaL_checkinteger(L, -1);
+    luaL_argcheck(L, value >= 0, 1, "terminal scrollback line limit is out of range");
+    scrollback_max_lines = (size_t)value;
+    has_scrollback_max_lines = true;
+  }
+  lua_pop(L, 1);
   TerminalSession *session = (TerminalSession *)lua_newuserdata(L, sizeof(*session));
   memset(session, 0, sizeof(*session));
   luaL_setmetatable(L, API_TYPE_TERMINAL_SESSION);
@@ -946,7 +968,10 @@ static int f_terminal_new(lua_State *L) {
     return 2;
   }
 
-  if (!initialize_terminal(session, &colors)) {
+  if (!initialize_terminal(
+      session, &colors,
+      has_scrollback_max_lines ? &scrollback_max_lines : NULL
+    )) {
     close_session(session);
     lua_pop(L, 1);
     lua_pushnil(L);
