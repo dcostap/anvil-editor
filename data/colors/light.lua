@@ -184,7 +184,6 @@ style.titlebar_control_hover = { 0, 0, 0, 13 }
 style.titlebar_control_pressed = { 0, 0, 0, 29 }
 style.titlebar_close_text = { 0, 0, 0, 255 }
 style.titlebar_tab_active = style.background
-style.titlebar_tab_visible = { 0, 0, 0, 7 }
 style.titlebar_tab_hover = { 0, 0, 0, 12 }
 style.titlebar_pane_number = style.dim
 style.titlebar_group_indicator = { common.color "rgba(53, 116, 240, 0.60)" }

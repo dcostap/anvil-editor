@@ -83,7 +83,7 @@ test.describe("Global title bar Pane entries", function()
     test.ok(entries[2].x + entries[2].w < entries[3].x)
   end)
 
-  test.it("draws the visible Pane Group across its inactive Tabs", function()
+  test.it("does not paint inactive Tabs specially", function()
     local one = panes.create { factory = factory("one") }
     panes.split(one, "right", { factory = factory("two") })
     panes.create { factory = factory("three") }
@@ -94,13 +94,15 @@ test.describe("Global title bar Pane entries", function()
     local old_draw_rect = renderer.draw_rect
     local old_draw_rounded_rect = renderer.draw_rounded_rect
     local old_draw_text = renderer.draw_text
-    local visible_tile = false
+    local active_tile = false
+    local rounded_tile_count = 0
     local group_indicator = false
     renderer.draw_rect = function(_, _, _, _, color)
       if color == style.titlebar_group_indicator then group_indicator = true end
     end
     renderer.draw_rounded_rect = function(_, _, _, _, _, color)
-      if color == style.titlebar_tab_visible then visible_tile = true end
+      rounded_tile_count = rounded_tile_count + 1
+      if color == style.titlebar_tab_active then active_tile = true end
     end
     renderer.draw_text = function() end
     local ok, err = pcall(title.draw, title)
@@ -109,9 +111,9 @@ test.describe("Global title bar Pane entries", function()
     renderer.draw_text = old_draw_text
 
     test.ok(ok, err)
-    test.not_nil(style.titlebar_tab_visible)
     test.not_nil(style.titlebar_group_indicator)
-    test.ok(visible_tile)
+    test.ok(active_tile)
+    test.equal(rounded_tile_count, 1)
     test.ok(group_indicator)
   end)
 

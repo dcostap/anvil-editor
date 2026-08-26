@@ -683,9 +683,6 @@ function TitleBar:draw()
       if entry.active then
         draw_tab_tile(rect.x, rect.y, rect.w, rect.h,
           style.titlebar_tab_active or style.background)
-      elseif entry.visible then
-        draw_tab_tile(rect.x, rect.y, rect.w, rect.h,
-          style.titlebar_tab_visible)
       end
       if hovered then
         draw_tab_tile(rect.x, rect.y, rect.w, rect.h,
