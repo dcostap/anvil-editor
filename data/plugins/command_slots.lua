@@ -839,7 +839,11 @@ local function ensure_output_view(slot, focus)
   local pane = slot.pane_id and panes.find(slot.pane_id) or nil
   local view = slot.view
   if pane and view and panes.pane_for_view(view) == pane then
-    if pane.current_view ~= view then panes.present(view, { pane = pane, focus = focus ~= false }) end
+    if pane.current_view ~= view then
+      panes.present(view, { pane = pane, focus = focus ~= false })
+    elseif focus ~= false then
+      panes.focus(pane)
+    end
     return view
   end
 
@@ -847,7 +851,7 @@ local function ensure_output_view(slot, focus)
   if view and not panes.pane_for_view(view) then view:on_close(); view = nil end
   view = view or CommandOutputView(slot)
   local placed = panes.place(function() return view end, {
-    placement = "new",
+    placement = "current",
     focus = focus ~= false,
     reason = "command-output",
   })
@@ -1242,7 +1246,7 @@ local function install_commands()
     if slot then return M.kill_slot(slot.index, "command") end
     return false
   end)
-  map["command_output:focus_output"] = command.palette(function()
+  map["command_output:open"] = command.palette(function()
     local slot = M.last_slot or slot_for_index(1)
     return slot and ensure_output_view(slot, true) ~= nil
   end, { opens_view = true })

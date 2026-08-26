@@ -1,4 +1,5 @@
 local common = require "core.common"
+local command = require "core.command"
 local panes = require "core.panes"
 local shell = require "core.shell"
 local test = require "core.test"
@@ -41,15 +42,15 @@ test.describe("Command Output Views", function()
     if context.file then pcall(os.remove, context.file) end
   end)
 
-  test.it("creates one end Pane in its own Pane Group for a one-time run", function(context)
-    panes.create { factory = function() return View() end }
-    local source_group = panes.active().group
+  test.it("presents a one-time run in the focused Pane", function(context)
+    local source_pane = panes.create { factory = function() return View() end }
     local view = command_output.run_once("Write-Output hello", { cwd = "C:/work" })
 
     test.not_nil(view)
-    test.equal(panes.count(), 2)
-    test.equal(#panes.groups, 2)
-    test.not_equal(panes.pane_for_view(view).group, source_group)
+    test.equal(panes.count(), 1)
+    test.equal(#panes.groups, 1)
+    test.equal(panes.pane_for_view(view), source_pane)
+    test.equal(source_pane.current_view, view)
     test.contains(view.buffer.output_text, "C:/work")
     test.contains(view.buffer.output_text, "Write-Output hello")
   end)
@@ -90,6 +91,16 @@ test.describe("Command Output Views", function()
 
     test.not_equal(pane.current_view, view)
     test.contains(view.buffer.output_text, "background output")
+  end)
+
+  test.it("opens an existing output View", function(context)
+    local view = command_output.run_once("long run")
+    local output_pane = panes.pane_for_view(view)
+    panes.create { factory = function() return View() end }
+
+    test.ok(command.perform("command_output:open"))
+    test.equal(panes.active(), output_pane)
+    test.equal(core.active_view, view)
   end)
 
   test.it("cancels an active run when its Pane closes", function(context)
