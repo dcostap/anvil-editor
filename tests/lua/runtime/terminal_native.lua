@@ -308,6 +308,40 @@ test.describe("Native terminal session", function()
     test.equal(second, "needle")
   end)
 
+  test.it("captures complete scrollback without changing the terminal selection", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 4, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); 1..12 | ForEach-Object { Write-Output ('ANVIL_CAPTURE_ROW_'+$_) }; [Console]::Write('ANVIL_CURSOR_'+[char]0x754c); Start-Sleep -Seconds 1"]],
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "ANVIL_CURSOR_界", 5)
+    test.ok(text:find("ANVIL_CURSOR_界", 1, true), text)
+    local cursor_capture, cursor_capture_error = session:text_capture()
+    test.ok(cursor_capture, cursor_capture_error)
+    test.ok(cursor_capture.text:find("ANVIL_CURSOR_界", 1, true), cursor_capture.text)
+    test.equal(cursor_capture.cursor_col, 17)
+
+    test.ok(session:scroll("top"))
+    test.ok(session:select(0, 1, 8, 1, false))
+    local selected_before = session:selected_text()
+
+    local capture, capture_error = session:text_capture()
+
+    local selected_after = session:selected_text()
+    session:close()
+    test.ok(capture, capture_error)
+    test.ok(capture.text:find("ANVIL_CAPTURE_ROW_1", 1, true), capture.text)
+    test.ok(capture.text:find("ANVIL_CAPTURE_ROW_12", 1, true), capture.text)
+    test.ok(capture.text:find("ANVIL_CURSOR_界", 1, true), capture.text)
+    test.equal(selected_after, selected_before)
+    test.equal(capture.cursor_line, 1)
+    test.equal(capture.cursor_col, 1)
+    test.equal(capture.viewport_line, 1)
+  end)
+
   test.it("reports bounded terminal bell and clipboard effects", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"

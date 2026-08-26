@@ -4,11 +4,13 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local core = require "core"
+local Buffer = require "core.buffer"
 local file_context = require "core.file_context"
 local ime = require "core.ime"
 local keymap = require "core.keymap"
 local panes = require "core.panes"
 local style = require "core.style"
+local TextView = require "core.textview"
 local View = require "core.view"
 local view_icons = require "core.view_icons"
 
@@ -186,6 +188,63 @@ function TerminalView:get_name()
       or string.format("Terminal (%s)", status)
   end
   return title and title ~= "" and title or "Terminal"
+end
+
+---@class plugins.terminal.text_capture_view : core.textview
+local TerminalTextCaptureView = TextView:extend()
+
+function TerminalTextCaptureView:__tostring() return "TerminalTextCaptureView" end
+
+function TerminalTextCaptureView:new(source, capture)
+  local buffer = Buffer()
+  buffer.display_name = "Terminal Text"
+  buffer:insert(1, 1, tostring(capture.text or ""))
+  buffer:clear_undo_redo()
+  buffer:clean()
+  local line = common.clamp(
+    math.floor(tonumber(capture.cursor_line) or 1), 1, #buffer.lines
+  )
+  local col = common.clamp(
+    math.floor(tonumber(capture.cursor_col) or 1), 1, #buffer.lines[line]
+  )
+  buffer:set_selection(line, col)
+  buffer.read_only = true
+  buffer.read_only_reason = "Terminal text captures are read-only"
+
+  TerminalTextCaptureView.super.new(self, buffer)
+  self.context = "workspace"
+  self.terminal_text_capture = true
+  self.terminal_source_view = source
+  self.terminal_title = source:get_name()
+  self.font = "terminal_font"
+  self.show_line_numbers = false
+  self.gutter_padding = PADDING
+  self:set_wrapping_enabled(false)
+  self.terminal_cell_height = source.cell_height
+  self.last_line1, self.last_col1 = line, col
+  self.last_line2, self.last_col2 = line, col
+  local viewport_line = common.clamp(
+    math.floor(tonumber(capture.viewport_line) or 1), 1, #buffer.lines
+  )
+  self.scroll.y = (viewport_line - 1) * self:get_line_height()
+  self.scroll.to.y = self.scroll.y
+  core.log_quiet(
+    "Terminal text capture opened: lines=%d cursor=%d:%d viewport=%d",
+    #buffer.lines, line, col, viewport_line
+  )
+end
+
+function TerminalTextCaptureView:get_name()
+  return string.format("Terminal Text — %s", self.terminal_title or "Terminal")
+end
+
+function TerminalTextCaptureView:get_line_height()
+  return self.terminal_cell_height or TerminalTextCaptureView.super.get_line_height(self)
+end
+
+function TerminalTextCaptureView:get_content_offset()
+  local x, y = TerminalTextCaptureView.super.get_content_offset(self)
+  return x, y + PADDING - style.padding.y
 end
 
 function TerminalView:get_cwd()
@@ -379,6 +438,30 @@ function TerminalView:update()
     end
     core.redraw = true
   end
+end
+
+function TerminalView:open_text_capture()
+  if not self.session then return false end
+  local capture, err = self.session:text_capture()
+  if not capture then
+    core.error("Could not capture terminal text: %s", tostring(err or "unknown error"))
+    return false
+  end
+  local pane = panes.pane_for_view(self)
+  if not pane then return false end
+  local view, place_error = panes.place(function()
+    return TerminalTextCaptureView(self, capture)
+  end, {
+    pane = pane,
+    placement = "current",
+    focus = true,
+    reason = "terminal-text-capture",
+  })
+  if not view then
+    core.error("Could not open terminal text: %s", tostring(place_error or "unknown error"))
+    return false
+  end
+  return true
 end
 
 function TerminalView:update_suspended()
@@ -870,6 +953,7 @@ function M._set_native_for_tests(native)
 end
 
 M.TerminalView = TerminalView
+M.TerminalTextCaptureView = TerminalTextCaptureView
 M.from_state = TerminalView.from_state
 TerminalView._module_name = "plugins.terminal"
 
@@ -953,6 +1037,12 @@ end, {
     view:refresh_snapshot()
     return true
   end),
+  ["terminal:open_text_capture"] = command.palette(function(view)
+    return view:open_text_capture()
+  end, {
+    keywords = { "navigate", "buffer", "scrollback", "text" },
+    opens_view = true,
+  }),
   ["terminal:search"] = command.palette(function(view) return view:prompt_search() end),
   ["terminal:search_next"] = function(view) return view:search(view.search_query, false) end,
   ["terminal:search_previous"] = function(view) return view:search(view.search_query, true) end,

@@ -117,6 +117,7 @@ typedef struct {
 } TerminalColors;
 
 static void push_status(lua_State *L, TerminalSession *session);
+static void set_integer_field(lua_State *L, const char *name, lua_Integer value);
 
 static void wake_for_terminal_output(TerminalSession *session) {
   if (InterlockedCompareExchange(&session->output_event_pending, 1, 0) != 0) return;
@@ -1614,6 +1615,185 @@ static int f_terminal_selected_text(lua_State *L) {
   return 1;
 }
 
+static int push_capture_error(lua_State *L, const char *message) {
+  lua_pushnil(L);
+  lua_pushstring(L, message);
+  return 2;
+}
+
+static size_t utf8_length_for_codepoint(uint32_t codepoint) {
+  if (codepoint <= 0x7f) return 1;
+  if (codepoint <= 0x7ff) return 2;
+  if (codepoint <= 0xffff) return 3;
+  return codepoint <= 0x10ffff ? 4 : 0;
+}
+
+static size_t terminal_cursor_byte_offset(
+  TerminalSession *session, size_t screen_row, uint16_t cursor_x, bool pending_wrap
+) {
+  size_t offset = 0;
+  uint16_t end = cursor_x;
+  if (pending_wrap && end < session->cols) end++;
+  for (uint16_t col = 0; col < end && col < session->cols; col++) {
+    GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+    GhosttyPoint point = {
+      .tag = GHOSTTY_POINT_TAG_SCREEN,
+      .value = { .coordinate = { .x = col, .y = (uint32_t)screen_row } },
+    };
+    if (ghostty_terminal_grid_ref(session->terminal, point, &ref) != GHOSTTY_SUCCESS) {
+      continue;
+    }
+    GhosttyCell cell = 0;
+    GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
+    if (ghostty_grid_ref_cell(&ref, &cell) == GHOSTTY_SUCCESS) {
+      ghostty_cell_get(cell, GHOSTTY_CELL_DATA_WIDE, &wide);
+    }
+    if (wide == GHOSTTY_CELL_WIDE_SPACER_TAIL ||
+        wide == GHOSTTY_CELL_WIDE_SPACER_HEAD) continue;
+    uint32_t graphemes[16];
+    size_t grapheme_count = 0;
+    if (ghostty_grid_ref_graphemes(
+        &ref, graphemes, 16, &grapheme_count
+      ) == GHOSTTY_SUCCESS && grapheme_count > 0) {
+      for (size_t index = 0; index < grapheme_count; index++) {
+        offset += utf8_length_for_codepoint(graphemes[index]);
+      }
+    } else {
+      offset++;
+    }
+  }
+  return offset;
+}
+
+static size_t capture_line_length(
+  const uint8_t *text, size_t length, size_t target_line
+) {
+  size_t start = 0;
+  size_t line = 1;
+  while (line < target_line && start < length) {
+    const uint8_t *newline = memchr(text + start, '\n', length - start);
+    if (!newline) {
+      start = length;
+      break;
+    }
+    start = (size_t)(newline - text) + 1;
+    line++;
+  }
+  size_t end = start;
+  while (end < length && text[end] != '\n') end++;
+  if (end > start && text[end - 1] == '\r') end--;
+  return end - start;
+}
+
+static int f_terminal_text_capture(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  if (session->closed || !session->terminal) {
+    return push_capture_error(L, "Terminal session is closed");
+  }
+
+  size_t total_rows = 0;
+  size_t scrollback_rows = 0;
+  uint16_t cursor_x = 0;
+  uint16_t cursor_y = 0;
+  bool pending_wrap = false;
+  GhosttyTerminalScrollbar scrollbar = {0};
+  if (ghostty_terminal_get(
+      session->terminal, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total_rows
+    ) != GHOSTTY_SUCCESS || total_rows == 0 ||
+      ghostty_terminal_get(
+        session->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS, &scrollback_rows
+      ) != GHOSTTY_SUCCESS ||
+      ghostty_terminal_get(
+        session->terminal, GHOSTTY_TERMINAL_DATA_CURSOR_X, &cursor_x
+      ) != GHOSTTY_SUCCESS ||
+      ghostty_terminal_get(
+        session->terminal, GHOSTTY_TERMINAL_DATA_CURSOR_Y, &cursor_y
+      ) != GHOSTTY_SUCCESS ||
+      ghostty_terminal_get(
+        session->terminal, GHOSTTY_TERMINAL_DATA_CURSOR_PENDING_WRAP, &pending_wrap
+      ) != GHOSTTY_SUCCESS ||
+      ghostty_terminal_get(
+        session->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &scrollbar
+      ) != GHOSTTY_SUCCESS) {
+    return push_capture_error(L, "Could not read terminal capture state");
+  }
+
+  GhosttyPoint start_point = {
+    .tag = GHOSTTY_POINT_TAG_SCREEN,
+    .value = { .coordinate = { .x = 0, .y = 0 } },
+  };
+  GhosttyPoint end_point = {
+    .tag = GHOSTTY_POINT_TAG_SCREEN,
+    .value = { .coordinate = {
+      .x = (uint16_t)(session->cols - 1),
+      .y = (uint32_t)(total_rows - 1),
+    } },
+  };
+  GhosttySelection selection = GHOSTTY_INIT_SIZED(GhosttySelection);
+  if (ghostty_terminal_grid_ref(
+      session->terminal, start_point, &selection.start
+    ) != GHOSTTY_SUCCESS ||
+      ghostty_terminal_grid_ref(
+        session->terminal, end_point, &selection.end
+      ) != GHOSTTY_SUCCESS) {
+    return push_capture_error(L, "Could not resolve terminal capture rows");
+  }
+
+  GhosttyTerminalSelectionFormatOptions options =
+    GHOSTTY_INIT_SIZED(GhosttyTerminalSelectionFormatOptions);
+  options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
+  options.unwrap = false;
+  options.trim = true;
+  options.selection = &selection;
+  size_t length = 0;
+  GhosttyResult result = ghostty_terminal_selection_format_buf(
+    session->terminal, options, NULL, 0, &length
+  );
+  if (result != GHOSTTY_OUT_OF_SPACE && result != GHOSTTY_SUCCESS) {
+    return push_capture_error(L, "Could not measure terminal text");
+  }
+  uint8_t *text = NULL;
+  if (length > 0) {
+    text = (uint8_t *)HeapAlloc(GetProcessHeap(), 0, length);
+    if (!text) return push_capture_error(L, "Could not allocate terminal text");
+    result = ghostty_terminal_selection_format_buf(
+      session->terminal, options, text, length, &length
+    );
+    if (result != GHOSTTY_SUCCESS) {
+      HeapFree(GetProcessHeap(), 0, text);
+      return push_capture_error(L, "Could not format terminal text");
+    }
+  }
+
+  size_t cursor_screen_row = scrollback_rows + cursor_y;
+  if (cursor_screen_row >= total_rows) cursor_screen_row = total_rows - 1;
+  bool cursor_in_viewport = cursor_screen_row >= scrollbar.offset &&
+    cursor_screen_row < scrollbar.offset + scrollbar.len;
+  size_t capture_cursor_row = cursor_in_viewport
+    ? cursor_screen_row : (size_t)scrollbar.offset;
+  uint16_t capture_cursor_x = cursor_in_viewport ? cursor_x : 0;
+  size_t line_length = capture_line_length(
+    text ? text : (const uint8_t *)"", length, capture_cursor_row + 1
+  );
+  size_t cursor_offset = terminal_cursor_byte_offset(
+    session, capture_cursor_row, capture_cursor_x,
+    cursor_in_viewport && pending_wrap
+  );
+  if (cursor_offset > line_length) cursor_offset = line_length;
+
+  lua_createtable(L, 0, 7);
+  lua_pushlstring(L, text ? (const char *)text : "", length);
+  lua_setfield(L, -2, "text");
+  set_integer_field(L, "cursor_line", (lua_Integer)capture_cursor_row + 1);
+  set_integer_field(L, "cursor_col", (lua_Integer)cursor_offset + 1);
+  set_integer_field(L, "viewport_line", (lua_Integer)scrollbar.offset + 1);
+  set_integer_field(L, "columns", session->cols);
+  set_integer_field(L, "rows", session->rows);
+  set_integer_field(L, "total_rows", (lua_Integer)total_rows);
+  if (text) HeapFree(GetProcessHeap(), 0, text);
+  return 1;
+}
+
 static bool byte_match(
   const uint8_t *text, size_t text_length, const char *query, size_t query_length,
   size_t begin, size_t end, bool reverse, size_t *match_col
@@ -2435,6 +2615,7 @@ static const luaL_Reg terminal_methods[] = {
   { "clear_selection", f_terminal_clear_selection },
   { "reset_selection_gesture", f_terminal_reset_selection_gesture },
   { "selected_text", f_terminal_selected_text },
+  { "text_capture", f_terminal_text_capture },
   { "search", f_terminal_search },
   { "mouse", f_terminal_mouse },
   { "hyperlink", f_terminal_hyperlink },

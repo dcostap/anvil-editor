@@ -396,6 +396,10 @@ _Avoid_: Command Output panel, slot output panel, tabbed Command Output View
 An interactive View connected to a running shell or terminal application.
 _Avoid_: Terminal panel, terminal buffer, console
 
+**Terminal Text Capture**:
+A read-only Text View containing stable text captured from a Terminal View while that terminal continues to run.
+_Avoid_: terminal buffer, copy mode
+
 **Command Output History**:
 A Command Slot's sequence of captured output from its runs, navigated within that slot's Quick Command Output View tab.
 _Avoid_: terminal scrollback, output buffer history

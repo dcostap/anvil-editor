@@ -95,6 +95,14 @@ local function fake_native()
     function session:clear_selection() self.selection_cleared = true; return true end
     function session:reset_selection_gesture() self.gesture_reset = true; return true end
     function session:selected_text() return self.selection_text end
+    function session:text_capture()
+      return self.capture or {
+        text = "",
+        cursor_line = 1,
+        cursor_col = 1,
+        viewport_line = 1,
+      }
+    end
     function session:mouse(...)
       self.mouse_events[#self.mouse_events + 1] = { ... }
       return true, true
@@ -174,6 +182,43 @@ test.describe("Terminal View", function()
     test.not_ok(session.closed)
     test.equal(panes.forward(pane), view)
     test.equal(view.session, session)
+  end)
+
+  test.it("opens terminal output as navigable text while the session keeps running", function(context)
+    local terminal_view = terminal.open()
+    local pane = panes.active()
+    local session = context.sessions[1]
+    session.capture = {
+      text = "first row\nsecond row\nthird row\nfourth row\nfifth row\n",
+      cursor_line = 4,
+      cursor_col = 3,
+      viewport_line = 2,
+    }
+    terminal_view.position.x, terminal_view.position.y = 0, 0
+    terminal_view.size.x, terminal_view.size.y = 800, 64
+
+    test.ok(command.perform("terminal:open_text_capture"))
+
+    local capture = pane.current_view
+    test.ok(capture and capture:extends(require "core.textview"))
+    test.ok(capture.buffer.read_only)
+    test.equal(capture.buffer:get_selection(), 4)
+    local line, col = capture.buffer:get_selection()
+    test.equal(line, 4)
+    test.equal(col, 3)
+    test.equal(capture.terminal_source_view, terminal_view)
+    test.equal(capture.scroll.y, capture:get_line_height())
+
+    local updates = session.update_calls or 0
+    core.root_panel:update()
+    test.ok((session.update_calls or 0) > updates)
+    test.equal(capture.buffer:get_selection(), 4)
+    test.ok(command.perform("core:move_to_previous_line"))
+    test.equal(capture.buffer:get_selection(), 3)
+
+    test.equal(panes.back(pane), terminal_view)
+    test.equal(terminal_view.session, session)
+    test.not_ok(session.closed)
   end)
 
   test.it("services a terminal while its Pane Group is hidden", function(context)
