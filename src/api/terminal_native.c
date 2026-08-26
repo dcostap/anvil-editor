@@ -1397,8 +1397,11 @@ static int f_terminal_key(lua_State *L) {
   const char *action_name = luaL_optstring(L, 4, "press");
   if (strcmp(action_name, "repeat") == 0) action = GHOSTTY_KEY_ACTION_REPEAT;
   else if (strcmp(action_name, "release") == 0) action = GHOSTTY_KEY_ACTION_RELEASE;
+  GhosttyMods encoding_mods = mods & (
+    GHOSTTY_MODS_SHIFT | GHOSTTY_MODS_CTRL | GHOSTTY_MODS_ALT | GHOSTTY_MODS_SUPER
+  );
   if (key == GHOSTTY_KEY_UNIDENTIFIED ||
-      (printable && mods == 0 && action != GHOSTTY_KEY_ACTION_RELEASE)) {
+      (printable && encoding_mods == 0 && action != GHOSTTY_KEY_ACTION_RELEASE)) {
     lua_pushboolean(L, false);
     return 1;
   }

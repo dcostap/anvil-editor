@@ -225,6 +225,41 @@ test.describe("Native terminal session", function()
     test.ok(text:find("ANVIL_TERMINAL_INPUT", 1, true), text)
   end)
 
+  test.it("lets text input handle keys with only lock modifiers", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80,
+      rows = 8,
+      cell_width = 8,
+      cell_height = 16,
+      cwd = system.getcwd(),
+    })
+    test.ok(session, start_error)
+
+    local num_lock = 0x1000
+    local caps_lock = 0x2000
+    test.not_ok(session:key("o", { raw = num_lock }, "press", {
+      scancode = 18,
+      text = "O",
+      unshifted_codepoint = string.byte("o"),
+      consumed_modifiers = 0,
+    }))
+    test.not_ok(session:key("space", { raw = num_lock }, "press", {
+      scancode = 44,
+      text = "Space",
+      unshifted_codepoint = string.byte(" "),
+      consumed_modifiers = 0,
+    }))
+    test.not_ok(session:key("o", { raw = caps_lock }, "press", {
+      scancode = 18,
+      text = "O",
+      unshifted_codepoint = string.byte("o"),
+      consumed_modifiers = caps_lock,
+    }))
+    session:close()
+  end)
+
   test.it("reports shifted layout text through the Kitty keyboard protocol", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"
