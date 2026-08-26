@@ -43,6 +43,7 @@ test.describe("Command Registry integrity", function()
       log = true,
       markdown = true,
       project_paths = true,
+      quick_command_output = true,
       settings = true,
       status_bar = true,
       terminal = true,

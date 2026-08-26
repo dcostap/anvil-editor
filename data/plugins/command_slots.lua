@@ -1,5 +1,5 @@
 -- mod-version:3 priority:250
--- Project-scoped shell command slots with reusable Command Output Views.
+-- Project-scoped shell command slots and one-time shell output Views.
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
@@ -11,9 +11,11 @@ local storage = require "core.storage"
 local style = require "core.style"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
+local View = require "core.view"
 local file_context = require "core.file_context"
 local panes = require "core.panes"
 local shell = require "core.shell"
+local Tabs = require "core.tabs"
 local view_icons = require "core.view_icons"
 
 local M = core.command_slots or {}
@@ -36,6 +38,8 @@ local IDLE_WORKER_POLL_SECONDS = 1
 M.slots = M.slots or {}
 M.project_slots = M.project_slots or {}
 M.project_state_cache = M.project_state_cache or {}
+M.quick_output_views = M.quick_output_views or {}
+M.last_quick_slots = M.last_quick_slots or {}
 M.token_counter = M.token_counter or 0
 
 local function running_lua_tests()
@@ -611,7 +615,7 @@ end
 
 function CommandOutputView:try_close(do_close)
   if self.slot and self.slot.running then
-    M.kill_slot(self.slot.index, "closed")
+    M.kill_slot(self.slot, "closed")
   end
   do_close()
 end
@@ -625,7 +629,6 @@ function CommandOutputView:on_close()
   if slot and slot.running then slot.running:cancel() end
   if slot and slot.view == self then
     slot.view = nil
-    slot.pane_id = nil
   end
   CommandOutputView.super.on_close(self)
 end
@@ -835,10 +838,287 @@ end
 
 M.CommandOutputBuffer = CommandOutputBuffer
 M.CommandOutputView = CommandOutputView
-local function ensure_output_view(slot, focus)
-  local pane = slot.pane_id and panes.find(slot.pane_id) or nil
+
+local QuickCommandOutputView = View:extend()
+QuickCommandOutputView.view_icon = view_icons.register("quick_command_output", view_icons.ui("F"))
+
+local function new_quick_output_tab_bar(owner)
+  return Tabs(owner, {
+    should_show = function() return true end,
+    log_prefix = "Quick Command Output tabs",
+  })
+end
+
+function QuickCommandOutputView:__tostring() return "QuickCommandOutputView" end
+
+function QuickCommandOutputView:new(project_path)
+  QuickCommandOutputView.super.new(self)
+  self.project_path = project_path or root_project_path()
+  self.quick_command_output_view = true
+  self.active_slot_index = 1
+  self.views = {}
+  self.tab_offset = 1
+  self.tab_shift = 0
+  self.hovered_tab = nil
+  self.hovered_scroll_button = 0
+  self.tab_bar = new_quick_output_tab_bar(self)
+  self.cursor = "arrow"
+  file_context.exclude_content_view(self)
+  self:sync_slot_views()
+end
+
+function QuickCommandOutputView:get_name()
+  return "Quick Command Output"
+end
+
+function QuickCommandOutputView:get_tab_bar()
+  if not self.tab_bar or self.tab_bar.owner ~= self then
+    self.tab_bar = new_quick_output_tab_bar(self)
+  end
+  return self.tab_bar
+end
+
+function QuickCommandOutputView:slots()
+  return slots_for_project(self.project_path)
+end
+
+function QuickCommandOutputView:slot_view(slot)
+  if not slot then return nil end
   local view = slot.view
-  if pane and view and panes.pane_for_view(view) == pane then
+  if not view then
+    view = CommandOutputView(slot)
+    slot.view = view
+  end
+  view.quick_command_output_owner = self
+  self.views[slot.index] = view
+  panes.register_focus_target(self, view)
+  return view
+end
+
+function QuickCommandOutputView:sync_slot_views()
+  local slots = self:slots()
+  for _, def in ipairs(SLOT_DEFS) do
+    self.views[def.index] = self:slot_view(slots[def.index])
+  end
+  self.active_slot_index = common.clamp(
+    math.floor(tonumber(self.active_slot_index) or 1), 1, #SLOT_DEFS
+  )
+  self.active_view = self.views[self.active_slot_index]
+  return self.views
+end
+
+function QuickCommandOutputView:active_slot()
+  return self:slots()[self.active_slot_index]
+end
+
+function QuickCommandOutputView:active_output_view()
+  self:sync_slot_views()
+  return self.active_view
+end
+
+function QuickCommandOutputView:get_focus_view()
+  return self:active_output_view()
+end
+
+function QuickCommandOutputView:get_surface_focus_targets()
+  return self:sync_slot_views()
+end
+
+function QuickCommandOutputView:focus_surface_target(target)
+  self:sync_slot_views()
+  for index, view in ipairs(self.views) do
+    if view == target then return self:select_slot(index, { focus = true }) ~= nil end
+  end
+  return false
+end
+
+function QuickCommandOutputView:layout_active_view()
+  local view = self:active_output_view()
+  if not view then return end
+  local tab_height = self:get_tab_bar():get_height()
+  view.position.x = self.position.x
+  view.position.y = self.position.y + tab_height
+  view.size.x = self.size.x
+  view.size.y = math.max(0, self.size.y - tab_height)
+end
+
+function QuickCommandOutputView:select_slot(index, opts)
+  opts = opts or {}
+  self:sync_slot_views()
+  index = common.clamp(math.floor(tonumber(index) or 1), 1, #SLOT_DEFS)
+  local old_view = self.active_view
+  if old_view then old_view:save_displayed_entry_state() end
+  self.active_slot_index = index
+  self.active_view = self.views[index]
+  self.manual_tab_scroll = nil
+  if old_view and old_view ~= self.active_view and old_view.on_mouse_left then
+    old_view:on_mouse_left()
+  end
+  local slot = self:active_slot()
+  self.active_view:show_entry(current_output_entry(slot), { follow_end = opts.follow_end == true })
+  self:layout_active_view()
+  self:get_tab_bar():scroll_to_visible(index)
+  if opts.focus == true then core.set_active_view(self.active_view) end
+  core.redraw = true
+  return self.active_view
+end
+
+function QuickCommandOutputView:get_navigation_state()
+  local slot_states = {}
+  for index, view in ipairs(self:sync_slot_views()) do
+    slot_states[index] = view:get_navigation_state()
+  end
+  return {
+    active_slot_index = self.active_slot_index,
+    slot_states = slot_states,
+  }
+end
+
+function QuickCommandOutputView:set_navigation_state(state)
+  for index, slot_state in ipairs(state and state.slot_states or {}) do
+    local view = self:sync_slot_views()[index]
+    if view then view:set_navigation_state(slot_state) end
+  end
+  if state and state.active_slot_index then
+    self:select_slot(state.active_slot_index, { focus = false })
+  end
+end
+
+function QuickCommandOutputView:update()
+  self:sync_slot_views()
+  self:layout_active_view()
+  if self.active_view then self.active_view:update() end
+  local mouse = core.root_panel and core.root_panel.mouse
+  if mouse then
+    self:get_tab_bar():update(mouse.x, mouse.y)
+  else
+    self:get_tab_bar():update()
+  end
+end
+
+function QuickCommandOutputView:draw()
+  self:draw_background(style.background)
+  self:get_tab_bar():draw_tabs()
+  self:layout_active_view()
+  if self.active_view then
+    core.push_clip_rect(
+      self.active_view.position.x, self.active_view.position.y,
+      self.active_view.size.x, self.active_view.size.y
+    )
+    self.active_view:draw()
+    core.pop_clip_rect()
+  end
+end
+
+function QuickCommandOutputView:on_mouse_pressed(button, x, y, clicks)
+  local tab_bar = self:get_tab_bar()
+  local scroll_button = tab_bar:get_scroll_button_index(x, y)
+  if scroll_button then tab_bar:scroll_tabs(scroll_button); return true end
+  local tab = tab_bar:get_tab_overlapping_point(x, y)
+  if tab then self:select_slot(tab, { focus = true }); return true end
+  local view = self:active_output_view()
+  if view then
+    core.set_active_view(view)
+    return view:on_mouse_pressed(button, x, y, clicks)
+  end
+  return true
+end
+
+function QuickCommandOutputView:on_mouse_released(button, x, y, ...)
+  if self:get_tab_bar():is_in_tab_area(x, y) then return true end
+  local view = self:active_output_view()
+  if view then return view:on_mouse_released(button, x, y, ...) end
+end
+
+function QuickCommandOutputView:on_mouse_moved(x, y, dx, dy)
+  local tab_bar = self:get_tab_bar()
+  tab_bar:update_hover(x, y)
+  local view = self:active_output_view()
+  if view and not tab_bar:is_in_tab_area(x, y) then
+    local result = view:on_mouse_moved(x, y, dx, dy)
+    self.cursor = view.cursor or "ibeam"
+    return result
+  end
+  self.cursor = "arrow"
+end
+
+function QuickCommandOutputView:on_mouse_left()
+  self.hovered_tab = nil
+  self.hovered_scroll_button = 0
+  local view = self:active_output_view()
+  if view then view:on_mouse_left() end
+end
+
+function QuickCommandOutputView:on_mouse_wheel(delta_y, delta_x, ...)
+  local mouse = core.root_panel and core.root_panel.mouse
+  local tab_bar = self:get_tab_bar()
+  if mouse and tab_bar:is_in_tab_area(mouse.x, mouse.y) then
+    local dir
+    if math.abs(delta_x or 0) > math.abs(delta_y or 0) then
+      dir = delta_x > 0 and 1 or 2
+    elseif delta_y ~= 0 then
+      dir = delta_y > 0 and 1 or 2
+    end
+    if dir and tab_bar:can_scroll_tabs(dir) then tab_bar:scroll_tabs(dir) end
+    return true
+  end
+  local view = self:active_output_view()
+  if view then return view:on_mouse_wheel(delta_y, delta_x, ...) end
+end
+
+function QuickCommandOutputView:can_discard_from_history()
+  for _, slot in ipairs(self:slots()) do
+    if slot.running then return false end
+  end
+  return true
+end
+
+function QuickCommandOutputView:on_close()
+  for _, view in ipairs(self:sync_slot_views()) do
+    panes.unregister_focus_target(view)
+    view:on_close()
+  end
+  if M.quick_output_views[self.project_path] == self then
+    M.quick_output_views[self.project_path] = nil
+  end
+  QuickCommandOutputView.super.on_close(self)
+end
+
+M.QuickCommandOutputView = QuickCommandOutputView
+
+local function ensure_quick_output_view(slot, focus)
+  local quick_output = M.quick_output_views[slot.project_path]
+  local pane = quick_output and panes.pane_for_view(quick_output) or nil
+  if quick_output and not pane then
+    quick_output:on_close()
+    quick_output = nil
+  end
+  if not quick_output then
+    quick_output = QuickCommandOutputView(slot.project_path)
+    quick_output:select_slot(slot.index, { focus = false })
+    local placed = panes.place(function() return quick_output end, {
+      placement = "current",
+      focus = focus ~= false,
+      reason = "quick-command-output",
+    })
+    if not placed then quick_output:on_close(); return nil end
+    M.quick_output_views[slot.project_path] = quick_output
+    pane = panes.pane_for_view(quick_output)
+  else
+    if pane.current_view ~= quick_output then
+      panes.present(quick_output, { pane = pane, focus = focus ~= false })
+    elseif focus ~= false then
+      panes.focus(pane)
+    end
+    quick_output:select_slot(slot.index, { focus = focus ~= false })
+  end
+  return quick_output:slot_view(slot)
+end
+
+local function ensure_one_time_output_view(slot, focus)
+  local view = slot.view or CommandOutputView(slot)
+  local pane = panes.pane_for_view(view)
+  if pane then
     if pane.current_view ~= view then
       panes.present(view, { pane = pane, focus = focus ~= false })
     elseif focus ~= false then
@@ -846,10 +1126,6 @@ local function ensure_output_view(slot, focus)
     end
     return view
   end
-
-  slot.pane_id = nil
-  if view and not panes.pane_for_view(view) then view:on_close(); view = nil end
-  view = view or CommandOutputView(slot)
   local placed = panes.place(function() return view end, {
     placement = "current",
     focus = focus ~= false,
@@ -857,9 +1133,12 @@ local function ensure_output_view(slot, focus)
   })
   if not placed then return nil end
   slot.view = placed
-  pane = panes.pane_for_view(placed)
-  slot.pane_id = pane and pane.id or nil
   return placed
+end
+
+local function ensure_output_view(slot, focus)
+  if slot.index then return ensure_quick_output_view(slot, focus) end
+  return ensure_one_time_output_view(slot, focus)
 end
 
 local function strip_ansi(text)
@@ -1093,12 +1372,12 @@ local function ensure_worker(slot)
   return start_worker(slot)
 end
 
-function M.kill_slot(index, reason)
-  local slot = slot_for_index(index)
+function M.kill_slot(index_or_slot, reason)
+  local slot = type(index_or_slot) == "table" and index_or_slot or slot_for_index(index_or_slot)
   if not slot then return false end
   local run = slot.running
   if not run then return false end
-  core.log_quiet("Command Slot %d: cancelling run reason=%s", index, tostring(reason or "manual"))
+  core.log_quiet("Command Slot %s: cancelling run reason=%s", tostring(slot.index or "one-time"), tostring(reason or "manual"))
   return run:cancel()
 end
 
@@ -1109,7 +1388,7 @@ end
 
 local function default_run_command(slot, command_text, opts)
   opts = opts or {}
-  if slot.running then M.kill_slot(slot.index, "rerun") end
+  if slot.running then M.kill_slot(slot, "rerun") end
 
   local cwd = opts.cwd or root_project_path()
   local shell_name = opts.shell
@@ -1129,7 +1408,7 @@ local function default_run_command(slot, command_text, opts)
   slot.last_cwd = cwd
   slot.run_generation = (slot.run_generation or 0) + 1
   local generation = slot.run_generation
-  M.last_slot = slot
+  if slot.index then M.last_quick_slots[slot.project_path] = slot end
   M.record_history(command_text, opts.project_path)
 
   local run
@@ -1212,13 +1491,13 @@ function M.prompt_slot(index, select_existing)
   })
 end
 
-local function active_output_slot()
+local function active_quick_output_slot()
   local view = core.active_view
-  if view and view.command_output_view and view.slot then return view.slot end
+  if view and view.command_output_view and view.slot and view.slot.index then return view.slot end
 end
 
 function M.navigate_output_history(delta)
-  local slot = active_output_slot()
+  local slot = active_quick_output_slot()
   if not slot or not slot.view or #(slot.output_history or {}) == 0 then return false end
   local current = slot.output_history_index or #slot.output_history
   local next_index = common.clamp(current + delta, 1, #slot.output_history)
@@ -1234,32 +1513,33 @@ local function install_commands()
   local map = {}
   for _, def in ipairs(SLOT_DEFS) do
     local index = def.index
-    map["command_output:run_" .. def.key] = command.palette(function()
+    map["quick_command_output:run_" .. def.key] = command.palette(function()
       return M.run_slot(index)
     end, { opens_view = true })
-    map["command_output:edit_" .. def.key] = command.palette(function()
+    map["quick_command_output:edit_" .. def.key] = command.palette(function()
       return M.prompt_slot(index, true)
     end)
   end
-  map["command_output:kill_active"] = command.palette(function()
-    local slot = active_output_slot()
-    if slot then return M.kill_slot(slot.index, "command") end
+  map["quick_command_output:kill_active"] = command.palette(function()
+    local slot = active_quick_output_slot()
+    if slot then return M.kill_slot(slot, "command") end
     return false
   end)
-  map["command_output:open"] = command.palette(function()
-    local slot = M.last_slot or slot_for_index(1)
+  map["quick_command_output:open"] = command.palette(function()
+    local project_path = root_project_path()
+    local slot = M.last_quick_slots[project_path] or slot_for_index(1, project_path)
     return slot and ensure_output_view(slot, true) ~= nil
   end, { opens_view = true })
   command.add(nil, map)
 
   command.add(function()
-    local slot = active_output_slot()
+    local slot = active_quick_output_slot()
     return slot ~= nil, slot
   end, {
-    ["command_output:history_previous"] = function()
+    ["quick_command_output:history_previous"] = function()
       M.navigate_output_history(-1)
     end,
-    ["command_output:history_next"] = function()
+    ["quick_command_output:history_next"] = function()
       M.navigate_output_history(1)
     end,
   })
@@ -1268,8 +1548,8 @@ end
 local function install_keymaps()
   local map = {}
   for _, def in ipairs(SLOT_DEFS) do
-    map["alt+" .. def.key] = "command_output:run_" .. def.key
-    map["alt+shift+" .. def.key] = "command_output:edit_" .. def.key
+    map["alt+" .. def.key] = "quick_command_output:run_" .. def.key
+    map["alt+shift+" .. def.key] = "quick_command_output:edit_" .. def.key
   end
   keymap.add_direct(map)
 end
@@ -1366,7 +1646,8 @@ function M._reset_for_tests()
   end
   M.project_slots = {}
   M.slots = slots_for_project()
-  M.last_slot = nil
+  M.quick_output_views = {}
+  M.last_quick_slots = {}
   M.project_state_cache = {}
   M._run_command_impl = default_run_command
 end

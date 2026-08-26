@@ -1,5 +1,4 @@
 local common = require "core.common"
-local command = require "core.command"
 local panes = require "core.panes"
 local shell = require "core.shell"
 local test = require "core.test"
@@ -51,6 +50,8 @@ test.describe("Command Output Views", function()
     test.equal(#panes.groups, 1)
     test.equal(panes.pane_for_view(view), source_pane)
     test.equal(source_pane.current_view, view)
+    test.equal(view.command_output_view, true)
+    test.not_ok(view.quick_command_output_view)
     test.contains(view.buffer.output_text, "C:/work")
     test.contains(view.buffer.output_text, "Write-Output hello")
   end)
@@ -91,16 +92,6 @@ test.describe("Command Output Views", function()
 
     test.not_equal(pane.current_view, view)
     test.contains(view.buffer.output_text, "background output")
-  end)
-
-  test.it("opens an existing output View", function(context)
-    local view = command_output.run_once("long run")
-    local output_pane = panes.pane_for_view(view)
-    panes.create { factory = function() return View() end }
-
-    test.ok(command.perform("command_output:open"))
-    test.equal(panes.active(), output_pane)
-    test.equal(core.active_view, view)
   end)
 
   test.it("cancels an active run when its Pane closes", function(context)

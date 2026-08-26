@@ -273,7 +273,7 @@ An action that appends one Pane's complete Navigation History after another Pane
 _Avoid_: move View, merge tabs
 
 **View**:
-The content that a Pane can show, such as an Editor, File Tree, Terminal View, or Command Output View.
+The content that a Pane can show, such as an Editor, File Tree, Terminal View, or Quick Command Output View.
 _Avoid_: Pane View, app, pane content
 
 **Current View**:
@@ -385,15 +385,19 @@ A project-scoped shortcut slot that stores one shell command for quick reruns.
 _Avoid_: Command preset, command macro
 
 **Command Output View**:
-A read-only Text View showing the text output from a command run.
+A read-only Text View showing the output from one arbitrary Shell Command Mode run.
 _Avoid_: Command buffer, terminal buffer, output buffer
+
+**Quick Command Output View**:
+A project-scoped compound View for Command Slots A, S, D, and F. One exists per Project. Each permanent tab shows one slot's Command Output History and is a Surface Focus Target.
+_Avoid_: Command Output panel, slot output panel, tabbed Command Output View
 
 **Terminal View**:
 An interactive View connected to a running shell or terminal application.
 _Avoid_: Terminal panel, terminal buffer, console
 
 **Command Output History**:
-The per-Command Slot sequence of Command Output View contents from command runs, navigated within that slot.
+A Command Slot's sequence of captured output from its runs, navigated within that slot's Quick Command Output View tab.
 _Avoid_: terminal scrollback, output buffer history
 
 **Text View Prompt Bar**:

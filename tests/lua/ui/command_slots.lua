@@ -58,14 +58,19 @@ test.describe("Command Slots", function()
     test.equal(#suggestions, 2)
   end)
 
-  test.it("creates one Pane for Slot A and reuses its View", function(context)
+  test.it("creates one Quick Command Output View and reuses Slot A", function(context)
     local first = command_slots.run_command(1, "first")
     local pane = panes.pane_for_view(first)
+    local quick_output = pane.current_view
     finish(context.runs[1], "one\n")
     local second = command_slots.run_command(1, "second")
 
     test.equal(second, first)
     test.equal(panes.pane_for_view(second), pane)
+    test.equal(pane.current_view, quick_output)
+    test.equal(quick_output.quick_command_output_view, true)
+    test.equal(quick_output:get_name(), "Quick Command Output")
+    test.contains(quick_output:get_tab_bar():get_item_title(first), "A: second")
     test.equal(panes.count(), 1)
     test.equal(#command_slots.slots[1].output_history, 2)
   end)
@@ -76,22 +81,28 @@ test.describe("Command Slots", function()
     command_slots.run_command(2, "s-one")
     local s_first = context.runs[2]
     command_slots.run_command(1, "a-two")
+    local quick_output = panes.pane_for_view(command_slots.slots[1].view).current_view
 
     test.ok(a_first.cancelled)
     test.not_ok(s_first.cancelled)
     test.not_equal(command_slots.slots[1].view, command_slots.slots[2].view)
-    test.equal(panes.count(), 2)
+    test.equal(panes.pane_for_view(command_slots.slots[1].view), panes.pane_for_view(command_slots.slots[2].view))
+    test.equal(quick_output:get_surface_focus_targets()[1], command_slots.slots[1].view)
+    test.equal(quick_output:get_surface_focus_targets()[2], command_slots.slots[2].view)
+    test.equal(panes.count(), 1)
   end)
 
-  test.it("restores a suspended Slot View when rerun", function(context)
+  test.it("restores a suspended Quick Command Output View when rerun", function(context)
     local output = command_slots.run_command(1, "first")
     local pane = panes.pane_for_view(output)
+    local quick_output = pane.current_view
     finish(context.runs[1], "done\n")
     panes.present(View(), { pane = pane })
 
     local restored = command_slots.run_command(1, "second")
     test.equal(restored, output)
-    test.equal(pane.current_view, output)
+    test.equal(pane.current_view, quick_output)
+    test.equal(core.active_view, output)
   end)
 
   test.it("clears stale Pane identity after close and recreates it", function(context)
@@ -112,7 +123,7 @@ test.describe("Command Slots", function()
     local pane = panes.pane_for_view(output)
     local pane_history_before = panes.history_length(pane)
 
-    test.ok(command.perform("command_output:history_previous"))
+    test.ok(command.perform("quick_command_output:history_previous"))
     test.contains(output.buffer.output_text, "first-output")
     test.equal(#command_slots.slots[1].output_history, 2)
     test.ok(panes.history_length(pane) > pane_history_before)
@@ -131,6 +142,53 @@ test.describe("Command Slots", function()
 
     test.not_equal(first_view, second_view)
     test.equal(command_slots.slots[1].project_path, "C:/project-two")
+  end)
+
+  test.it("opens the project Quick Command Output View without rerunning", function(context)
+    local output = command_slots.run_command(1, "first")
+    local output_pane = panes.pane_for_view(output)
+    local quick_output = output_pane.current_view
+    panes.create { factory = function() return View() end }
+
+    test.ok(command.perform("quick_command_output:open"))
+    test.equal(#context.runs, 1)
+    test.equal(panes.active(), output_pane)
+    test.equal(output_pane.current_view, quick_output)
+    test.equal(core.active_view, output)
+  end)
+
+  test.it("cycles through all permanent Slot tabs and the sibling Pane", function(context)
+    local output = command_slots.run_command(1, "first")
+    local output_pane = panes.pane_for_view(output)
+    local quick_output = output_pane.current_view
+    local sibling = panes.split(output_pane, "right", {
+      factory = function() return View() end,
+      focus = false,
+    })
+    local targets = quick_output:get_surface_focus_targets()
+
+    test.equal(#targets, 4)
+    test.ok(quick_output:focus_surface_target(targets[1]))
+    for index = 2, 4 do
+      test.ok(command.perform("core:focus_next_local"))
+      test.equal(core.active_view, targets[index])
+    end
+    test.ok(command.perform("core:focus_next_local"))
+    test.equal(panes.active(), sibling)
+    test.ok(command.perform("core:focus_next_local"))
+    test.equal(core.active_view, targets[1])
+  end)
+
+  test.it("selects a permanent Slot tab with the mouse", function(context)
+    local output = command_slots.run_command(1, "first")
+    local quick_output = panes.pane_for_view(output).current_view
+    quick_output.position.x, quick_output.position.y = 10, 20
+    quick_output.size.x, quick_output.size.y = 800, 500
+    quick_output:update()
+    local x, y, w, h = quick_output:get_tab_bar():get_tab_rect(3)
+
+    test.ok(quick_output:on_mouse_pressed(1, x + w / 2, y + h / 2, 1))
+    test.equal(core.active_view, quick_output:get_surface_focus_targets()[3])
   end)
 
   test.it("detects JAI, rustc, and clang file links", function(context)
