@@ -1062,6 +1062,7 @@ keymap.add({
   ["ctrl+shift+c"] = "terminal:copy",
   ["ctrl+shift+v"] = "terminal:paste",
   ["ctrl+shift+f"] = { "terminal:search", "fuzzy:open_grep" },
+  ["f2"] = "terminal:open_text_capture",
   ["f3"] = "terminal:search_next",
   ["shift+f3"] = "terminal:search_previous",
   ["ctrl+shift+k"] = "terminal:clear",
