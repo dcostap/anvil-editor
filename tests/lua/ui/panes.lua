@@ -57,12 +57,14 @@ test.describe("Pane manager", function()
     for _, name in ipairs {
       "pane:close", "pane:new_group", "pane:split_right",
       "pane:copy_view_to", "pane:move_view_to", "pane:move_to",
-      "pane:focus_next",
+      "pane:move_before", "pane:move_after", "pane:focus_next",
     } do
       test.not_nil(command.map[name], name)
     end
     test.is_nil(command.map["core:split_pane_right"])
     test.is_nil(command.map["core:copy_view_to"])
+    test.is_nil(command.map["pane:move_previous"])
+    test.is_nil(command.map["pane:move_next"])
   end)
 
   test.it("accepts zero Panes", function()

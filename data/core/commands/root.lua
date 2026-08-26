@@ -192,11 +192,11 @@ local commands = {
     end
     return result
   end),
-  ["pane:move_previous"] = command.palette(function(pane)
+  ["pane:move_before"] = command.palette(function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index > 1 then return panes.move(pane, ordered[index - 1], "left") end
   end),
-  ["pane:move_next"] = command.palette(function(pane)
+  ["pane:move_after"] = command.palette(function(pane)
     local ordered, index = panes.ordered(), panes.number(pane)
     if index and index < #ordered then return panes.move(pane, ordered[index + 1], "right") end
   end),
