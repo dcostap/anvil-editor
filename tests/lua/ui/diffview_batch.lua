@@ -813,7 +813,68 @@ test.describe("DiffView batch behavior", function()
     end
   end)
 
-  test.it("keeps later lines aligned when paired replacements wrap to different row counts", function(context)
+  test.it("keeps small insert-only hunks compact", function(context)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      "before\nafter",
+      "before\ninsert one\ninsert two\nafter",
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 300
+    view:update()
+
+    local _, left_after_y = view.buffer_view_a:get_line_screen_position(2, 1)
+    local _, right_after_y = view.buffer_view_b:get_line_screen_position(4, 1)
+    test.ok(left_after_y < right_after_y, "a small hunk should not add Diff Gap Rows")
+  end)
+
+  test.it("keeps a large final hunk compact", function(context)
+    local inserted = { "before" }
+    for i = 1, 6 do inserted[#inserted + 1] = "insert " .. i end
+    inserted[#inserted + 1] = "after"
+    local view = track(context, "diffviews", diffview.string_to_string(
+      "before\nafter",
+      table.concat(inserted, "\n"),
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 300
+    view:update()
+
+    local _, left_after_y = view.buffer_view_a:get_line_screen_position(2, 1)
+    local _, right_after_y = view.buffer_view_b:get_line_screen_position(8, 1)
+    test.ok(left_after_y < right_after_y, "a final hunk should not add Diff Gap Rows")
+    test.ok(view.buffer_view_a:get_scrollable_line_count() < view.buffer_view_b:get_scrollable_line_count())
+  end)
+
+  test.it("aligns later lines after a large insert-only hunk", function(context)
+    local inserted = { "before" }
+    for i = 1, 12 do inserted[#inserted + 1] = "insert " .. i end
+    for i = 1, 4 do inserted[#inserted + 1] = "shared " .. i end
+    local view = track(context, "diffviews", diffview.string_to_string(
+      "before\nshared 1\nshared 2\nshared 3\nshared 4",
+      table.concat(inserted, "\n"),
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 300
+    view:update()
+
+    local _, left_shared_y = view.buffer_view_a:get_line_screen_position(2, 1)
+    local _, right_shared_y = view.buffer_view_b:get_line_screen_position(14, 1)
+    test.equal(left_shared_y, right_shared_y, "a large hunk should align a substantial shared section")
+  end)
+
+  test.it("keeps minor wrapped replacement offsets compact", function(context)
     local old_message = '    message = "Pi rechazó el mensaje, pero no confirmó la retirada de su correlación.",'
     local new_message = '    message = "El asistente IA rechazó el mensaje, pero no confirmó la retirada de su correlación.",'
     local view = track(context, "diffviews", diffview.string_to_string(
@@ -835,11 +896,10 @@ test.describe("DiffView batch behavior", function()
     test.ok(left_rows ~= right_rows, "fixture should wrap the replacement to different heights")
     local _, left_y = view.buffer_view_a:get_line_screen_position(3, 1)
     local _, right_y = view.buffer_view_b:get_line_screen_position(3, 1)
-    test.equal(left_y, right_y, "the line after a differently wrapped replacement should remain aligned")
-    test.equal(view.buffer_view_a:get_scrollable_line_count(), view.buffer_view_b:get_scrollable_line_count())
+    test.ok(left_y < right_y, "a minor wrap difference should not add Diff Gap Rows")
   end)
 
-  test.it("keeps folded panes synchronized around insert-only hunks", function(context)
+  test.it("builds matching folds around insert-only hunks", function(context)
     local old_context = config.plugins.diffview.fold_context_lines
     local old_min = config.plugins.diffview.fold_min_lines
     local old_default = config.plugins.diffview.fold_unchanged_by_default
@@ -868,7 +928,6 @@ test.describe("DiffView batch behavior", function()
 
     test.equal(#view.diff_folds_a, #view.diff_folds_b)
     test.equal(view.diff_folds_a[1].hidden_count, view.diff_folds_b[1].hidden_count)
-    test.equal(view.buffer_view_a:get_scrollable_size(), view.buffer_view_b:get_scrollable_size())
   end)
 
   test.it("wraps diff change navigation across file boundaries", function(context)

@@ -492,6 +492,10 @@ _Avoid_: diffviewer
 One text surface in a Diff View, representing one of the compared sources. A file-backed Diff Side presents the same Buffer as that file's Editors.
 _Avoid_: diff pane, side view
 
+**Diff Gap Row**:
+An empty visual row that reduces a large vertical offset between corresponding content in two Diff Sides. It is not part of either Buffer.
+_Avoid_: blank line, inserted line, spacer line
+
 **Text Diff View**:
 A View comparing arbitrary text selections or generated text, independent of whether the text came from Git.
 _Avoid_: string comparison

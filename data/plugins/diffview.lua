@@ -660,23 +660,15 @@ local function line_for_visual_row(buffer_view, row)
   return common.clamp(line or 1, 1, #buffer_view.buffer.lines)
 end
 
-local function install_core_gap_rows_for_textview(buffer_view, gaps, trailing_gap)
+local function install_core_gap_rows_for_textview(buffer_view, gaps)
   if not buffer_view or not buffer_view.add_visual_row_provider then return end
-  local before, after, any = {}, {}, false
+  local before, any = {}, false
   for line, gap in pairs(gaps or {}) do
     local cumulative = math.max(0, math.floor(tonumber(gap[2]) or 0))
     if cumulative > 0 then before[line], any = cumulative, true end
   end
-  trailing_gap = math.max(0, math.floor(tonumber(trailing_gap) or 0))
-  if trailing_gap > 0 then
-    local last_visible = #buffer_view.buffer.lines
-    while last_visible > 1 and buffer_view:get_visual_row_count_for_line(last_visible) == 0 do
-      last_visible = last_visible - 1
-    end
-    after[last_visible], any = trailing_gap, true
-  end
   if any then
-    buffer_view:add_visual_row_provider("diff-gaps", { before = before, after = after }, { priority = 50 })
+    buffer_view:add_visual_row_provider("diff-gaps", { before = before }, { priority = 50 })
   else
     buffer_view:remove_visual_row_provider("diff-gaps")
   end
@@ -692,6 +684,23 @@ local function gap_layout_signature(buffer_view)
   }, ":")
 end
 
+-- Let connectors show small offsets and short shared tails without empty space.
+-- Add Diff Gap Rows only when substantial shared content benefits from alignment.
+local MAX_UNPADDED_DIFF_ROWS = 8
+local MIN_SHARED_ROWS_FOR_DIFF_GAP = 3
+
+local function has_shared_alignment_context(view, alignment, index)
+  local a_rows, b_rows = 0, 0
+  for i = index, #alignment do
+    local pair = alignment[i]
+    if pair.tag ~= "equal" or not pair.a or not pair.b then break end
+    a_rows = a_rows + view.buffer_view_a:get_visual_row_count_for_line(pair.a)
+    b_rows = b_rows + view.buffer_view_b:get_visual_row_count_for_line(pair.b)
+    if math.min(a_rows, b_rows) >= MIN_SHARED_ROWS_FOR_DIFF_GAP then return true end
+  end
+  return false
+end
+
 function DiffView:refresh_core_gap_rows(force)
   local model = self.diff_model
   if not model then return end
@@ -702,15 +711,24 @@ function DiffView:refresh_core_gap_rows(force)
   local a_height, b_height = 0, 0
   local a_gap_total, b_gap_total = 0, 0
 
-  for _, pair in ipairs(model.alignment or {}) do
+  local alignment = model.alignment or {}
+  for index, pair in ipairs(alignment) do
     if a_height < b_height and pair.a then
       local delta = b_height - a_height
-      a_gap_total = a_gap_total + delta
-      a_height = b_height
+      if delta > MAX_UNPADDED_DIFF_ROWS
+        and has_shared_alignment_context(self, alignment, index)
+      then
+        a_gap_total = a_gap_total + delta
+        a_height = b_height
+      end
     elseif b_height < a_height and pair.b then
       local delta = a_height - b_height
-      b_gap_total = b_gap_total + delta
-      b_height = a_height
+      if delta > MAX_UNPADDED_DIFF_ROWS
+        and has_shared_alignment_context(self, alignment, index)
+      then
+        b_gap_total = b_gap_total + delta
+        b_height = a_height
+      end
     end
 
     if pair.a then
@@ -723,11 +741,9 @@ function DiffView:refresh_core_gap_rows(force)
     end
   end
 
-  local a_trailing = math.max(0, b_height - a_height)
-  local b_trailing = math.max(0, a_height - b_height)
   self.a_gaps, self.b_gaps = a_gaps, b_gaps
-  install_core_gap_rows_for_textview(self.buffer_view_a, a_gaps, a_trailing)
-  install_core_gap_rows_for_textview(self.buffer_view_b, b_gaps, b_trailing)
+  install_core_gap_rows_for_textview(self.buffer_view_a, a_gaps)
+  install_core_gap_rows_for_textview(self.buffer_view_b, b_gaps)
   -- Installing providers changes fold generations, so retain the post-install
   -- signature rather than triggering another identical rebuild next frame.
   self.__diff_gap_layout_signature = gap_layout_signature(self.buffer_view_a)
