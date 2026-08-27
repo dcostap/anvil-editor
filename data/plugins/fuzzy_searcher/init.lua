@@ -1165,10 +1165,9 @@ function fuzzy_searcher.normalize_prompt_history(data)
         if type(entry) == "string" then
           local text = version2 and entry or (stored_mode .. entry)
           local mode = fuzzy_searcher.prompt_mode(text)
-          if mode == "@" then changed = true end
           seen[mode] = seen[mode] or {}
-          if mode ~= "@" then normalized[mode] = normalized[mode] or {} end
-          if mode ~= "@" and not seen[mode][text] and #normalized[mode] < 50 then
+          normalized[mode] = normalized[mode] or {}
+          if not seen[mode][text] and #normalized[mode] < 50 then
             normalized[mode][#normalized[mode] + 1] = text
             seen[mode][text] = true
           end
@@ -1210,7 +1209,7 @@ function fuzzy_searcher.record_prompt_history_text(text)
   text = tostring(text or "")
 
   local mode = fuzzy_searcher.prompt_mode(text)
-  if mode == "@" or mode == "!" then return end
+  if mode == "!" then return end
   local history = fuzzy_searcher.prompt_history_for_mode(mode)
   for i = #history, 1, -1 do
     if history[i] == text then table.remove(history, i) end

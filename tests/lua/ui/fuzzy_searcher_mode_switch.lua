@@ -251,6 +251,27 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.equal(picker.input:get_text(), "second.lua")
   end)
 
+  test.it("cycles Path Search prompt history", function()
+    fuzzy_searcher.open("@")
+    core.fuzzy_searcher_active_view.input:set_text("@first path")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("@")
+    core.fuzzy_searcher_active_view.input:set_text("@second path")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("@")
+    local picker = core.fuzzy_searcher_active_view
+    picker.input:set_text("@draft path")
+
+    command.perform("fuzzy:prompt_history_previous")
+    test.equal(picker.input:get_text(), "@second path")
+    command.perform("fuzzy:prompt_history_previous")
+    test.equal(picker.input:get_text(), "@first path")
+    command.perform("fuzzy:prompt_history_next")
+    test.equal(picker.input:get_text(), "@second path")
+  end)
+
   test.it("clears the file search prompt when file search is triggered again", function()
     fuzzy_searcher.open("")
     local picker = core.fuzzy_searcher_active_view
