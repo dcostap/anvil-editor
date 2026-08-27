@@ -515,6 +515,53 @@ test.describe("plugins.git.model", function()
     test.equal(tab.left_name, "b.lua")
   end)
 
+  test.it("keeps displayed diff content until its replacement finishes", function()
+    local callbacks = {}
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      callbacks[#callbacks + 1] = callback
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    local tab = {
+      kind = "commit_diff",
+      left = "old-revision",
+      right = "new-revision",
+      changed_files = {
+        { status = "modified", old_path = "new.lua", new_path = "new.lua" },
+      },
+      selected_file = 1,
+      left_text = "displayed left",
+      right_text = "displayed right",
+      diff_generation = 4,
+    }
+
+    test.ok(model:load_selected_diff_file(tab))
+    test.equal(tab.loading_file, true)
+    test.equal(tab.left_text, "displayed left")
+    test.equal(tab.right_text, "displayed right")
+    test.equal(tab.diff_generation, 4)
+    test.equal(type(tab.file_loading_started_at), "number")
+
+    callbacks[1]("replacement left", nil)
+    callbacks[2]("replacement right", nil)
+    test.equal(tab.loading_file, false)
+    test.equal(tab.left_text, "replacement left")
+    test.equal(tab.right_text, "replacement right")
+    test.equal(tab.diff_generation, 5)
+    test.equal(tab.file_loading_started_at, nil)
+
+    test.ok(model:load_selected_diff_file(tab))
+    local load_error = { kind = "git", message = "load failed" }
+    callbacks[3](nil, load_error)
+    callbacks[4]("ignored replacement", nil)
+    test.equal(tab.loading_file, false)
+    test.equal(tab.file_error, load_error)
+    test.equal(tab.left_text, "replacement left")
+    test.equal(tab.right_text, "replacement right")
+    test.equal(tab.diff_generation, 5)
+  end)
+
   test.test("normalizes CRLF before storing diff text", function()
     local status = table.concat({ " M src/app.lua", "" }, "\0")
     local backend = fake_backend(status, log_output())

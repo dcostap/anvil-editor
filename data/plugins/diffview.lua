@@ -4,6 +4,7 @@ local config = require "core.config"
 local command = require "core.command"
 local common = require "core.common"
 local keymap = require "core.keymap"
+local MouseRouter = require "core.mouse_router"
 local style = require "core.style"
 local TextView = require "core.textview"
 local Buffer = require "core.buffer"
@@ -417,6 +418,9 @@ function DiffView:new(a, b, compare_type, names)
 
   self.buffer_view_a = TextView(buffer_a)
   self.buffer_view_b = TextView(buffer_b)
+  self.mouse_router = MouseRouter(self, function(owner, x, y)
+    return owner:mouse_side_at(x, y)
+  end)
   -- IntelliJ-style Diff Views put both line-number lanes in the center so the
   -- compared text starts at the outer edges instead of wasting two gutters.
   self.buffer_view_a.show_line_numbers = false
@@ -550,86 +554,56 @@ function DiffView:update_diff()
   diff_updater_idx = diff_updater_idx + 1
 end
 
+local function point_in_diff_side(view, x, y)
+  return x >= view.position.x and y >= view.position.y
+    and x < view.position.x + view.size.x
+    and y < view.position.y + view.size.y
+end
+
+function DiffView:mouse_side_at(x, y)
+  if point_in_diff_side(self.buffer_view_a, x, y) then return self.buffer_view_a, true end
+  if point_in_diff_side(self.buffer_view_b, x, y) then return self.buffer_view_b, false end
+end
+
 function DiffView:on_mouse_pressed(button, x, y, clicks)
-  if DiffView.super.on_mouse_pressed(self, button, x, y, clicks) then
-    self.scroll.y = self.scroll.to.y
-    self.buffer_view_a.scroll.to.y = self.scroll.y
-    self.buffer_view_a.scroll.y = self.scroll.y
-    self.buffer_view_b.scroll.to.y = self.scroll.y
-    self.buffer_view_b.scroll.y = self.scroll.y
-    return true
-  elseif call_textview_method(self.buffer_view_a, self.buffer_view_a.on_mouse_pressed, button, x, y, clicks) then
-    self.buffer_view_a.scroll.y = self.buffer_view_a.scroll.to.y
-    self.scroll.to.y = self.buffer_view_a.scroll.y
-    self.scroll.y = self.buffer_view_a.scroll.y
-    self.buffer_view_b.scroll.to.y = self.buffer_view_a.scroll.y
-    self.buffer_view_b.scroll.y = self.buffer_view_a.scroll.y
-    return true
-  elseif call_textview_method(self.buffer_view_b, self.buffer_view_b.on_mouse_pressed, button, x, y, clicks) then
-    self.buffer_view_b.scroll.y = self.buffer_view_b.scroll.to.y
-    self.scroll.to.y = self.buffer_view_b.scroll.y
-    self.scroll.y = self.buffer_view_b.scroll.y
-    self.buffer_view_a.scroll.to.y = self.buffer_view_b.scroll.y
-    self.buffer_view_a.scroll.y = self.buffer_view_b.scroll.y
-    return true
+  local side = self.mouse_router:press_target(x, y)
+  if not side then return nil end
+  local is_a = side == self.buffer_view_a
+  local scrollbar, handled = self.mouse_router:press_scrollbar(side, button, x, y, clicks)
+  if scrollbar then
+    side.scroll.y = side.scroll.to.y
+    self:sync_scroll_from(side, is_a)
+    return handled
   end
-  for _, view in ipairs({self.buffer_view_a, self.buffer_view_b}) do
-    if
-      x >= view.position.x
-      and
-      x <= view.position.x + view.size.x
-    then
-      core.set_active_view(view)
-      break
-    end
+  self.mouse_router:capture(side)
+  core.set_active_view(side)
+  handled = self.mouse_router:call(side, "on_mouse_pressed", button, x, y, clicks)
+  if side:scrollbar_dragging() then
+    side.scroll.y = side.scroll.to.y
+    self:sync_scroll_from(side, is_a)
   end
+  return handled
 end
 
-function DiffView:on_mouse_released(...)
-  DiffView.super.on_mouse_released(self, ...)
-  call_textview_method(self.buffer_view_a, self.buffer_view_a.on_mouse_released, ...)
-  call_textview_method(self.buffer_view_b, self.buffer_view_b.on_mouse_released, ...)
+function DiffView:on_mouse_released(button, x, y, ...)
+  local handled = self.mouse_router:release(button, x, y, ...)
+  return handled
 end
 
-function DiffView:on_mouse_moved(...)
-  -- ignore config.animate_drag_scroll by setting scroll.y to scroll.to.y
-  -- since views would end in different positions, also scrolling two
-  -- views at the same time with animation on would be more cpu demanding.
-
-  if DiffView.super.on_mouse_moved(self, ...) then
-    if self.v_scrollbar.dragging then
-      self.scroll.y = self.scroll.to.y
-      self.buffer_view_a.scroll.to.y = self.scroll.y
-      self.buffer_view_a.scroll.y = self.scroll.y
-      self.buffer_view_b.scroll.to.y = self.scroll.y
-      self.buffer_view_b.scroll.y = self.scroll.y
-      return true
-    end
-  end
-  call_textview_method(self.buffer_view_a, self.buffer_view_a.on_mouse_moved, ...)
-  if self.buffer_view_a:scrollbar_dragging() then
-    self.buffer_view_a.scroll.y = self.buffer_view_a.scroll.to.y
-    self.scroll.to.y = self.buffer_view_a.scroll.y
-    self.scroll.y = self.buffer_view_a.scroll.y
-    self.buffer_view_b.scroll.y = self.buffer_view_a.scroll.y
-    self.buffer_view_b.scroll.to.y = self.buffer_view_a.scroll.y
+function DiffView:on_mouse_moved(x, y, dx, dy)
+  local handled, side = self.mouse_router:move(x, y, dx, dy)
+  if not side then return nil end
+  local is_a = side == self.buffer_view_a
+  if side:scrollbar_dragging() then
+    side.scroll.y = side.scroll.to.y
+    self:sync_scroll_from(side, is_a)
     return true
   end
-  call_textview_method(self.buffer_view_b, self.buffer_view_b.on_mouse_moved, ...)
-  if self.buffer_view_b:scrollbar_dragging() then
-    self.buffer_view_b.scroll.y = self.buffer_view_b.scroll.to.y
-    self.scroll.to.y = self.buffer_view_b.scroll.y
-    self.scroll.y = self.buffer_view_b.scroll.y
-    self.buffer_view_a.scroll.y = self.buffer_view_b.scroll.y
-    self.buffer_view_a.scroll.to.y = self.buffer_view_b.scroll.y
-    return true
-  end
+  return handled
 end
 
 function DiffView:on_mouse_left()
-  DiffView.super.on_mouse_left(self)
-  self.buffer_view_a:on_mouse_left()
-  self.buffer_view_b:on_mouse_left()
+  self.mouse_router:leave()
 end
 
 function DiffView:on_mouse_wheel(y, x)
@@ -642,9 +616,13 @@ function DiffView:on_mouse_wheel(y, x)
     self.buffer_view_b.scroll.to.y = self.buffer_view_b.scroll.to.y + y * -config.mouse_wheel_scroll
   end
   if x and x ~= 0 then
-    self.buffer_view_a.scroll.to.x = self.buffer_view_a.scroll.to.x + x * -config.mouse_wheel_scroll
-    self.buffer_view_b.scroll.to.x = self.buffer_view_b.scroll.to.x + x * -config.mouse_wheel_scroll
+    local side = self.mouse_router:wheel_target()
+    if side ~= self.buffer_view_a and side ~= self.buffer_view_b then
+      side = core.active_view == self.buffer_view_b and self.buffer_view_b or self.buffer_view_a
+    end
+    side.scroll.to.x = side.scroll.to.x + x * -config.mouse_wheel_scroll
   end
+  return (y and y ~= 0) or (x and x ~= 0) or false
 end
 
 function DiffView:on_scale_change(...)

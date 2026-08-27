@@ -389,6 +389,40 @@ test.describe("Git View command", function()
     test.equal(list.buffer:get_selection(), 1)
   end)
 
+  test.it("keeps folder collapse state with its commit when changed-file data is shared", function(context)
+    local session, view = open_fake_git_view(context.project)
+    local files = {
+      { status = "modified", old_path = "src/App.kt", new_path = "src/App.kt" },
+      { status = "modified", old_path = "src/Util.kt", new_path = "src/Util.kt" },
+    }
+    local first = {
+      hash = "first-shared-tree",
+      subject = "First",
+      changed_files = files,
+      changed_files_loaded = true,
+    }
+    local second = {
+      hash = "second-shared-tree",
+      subject = "Second",
+      changed_files = files,
+      changed_files_loaded = true,
+    }
+    local log = view.model:log_tab()
+    log.commits = { first, second }
+    log.selected_commit = 1
+    view:update_pane_buffers()
+
+    local details = view:pane_view("details")
+    local folder_line = details.path_tree_line_offset + details.path_tree:line_for_path("src", "dir")
+    test.equal(view:toggle_details_tree_folder(details, folder_line), true)
+    test.equal(details.path_tree:is_expanded("src"), false)
+
+    log.selected_commit = 2
+    view:update_pane_buffers()
+
+    test.equal(details.path_tree:is_expanded("src"), true)
+  end)
+
   test.it("activates a changed file from Git Log details with that file preselected", function(context)
     local session, view = open_fake_git_view(context.project)
     local commit = {
@@ -607,6 +641,41 @@ test.describe("Git View command", function()
     tab_view:update()
 
     test.equal(updates, 1)
+  end)
+
+  test.it("keeps the previous Diff View visible while the next file loads", function(context)
+    local session, view = open_fake_git_view(context.project)
+    local tab = {
+      id = "diff-loading-presentation",
+      kind = "commit_diff",
+      title = "Diff loading presentation",
+      closable = true,
+      changed_files = {
+        { status = "modified", old_path = "a.lua", new_path = "a.lua" },
+        { status = "modified", old_path = "b.lua", new_path = "b.lua" },
+      },
+      selected_file = 1,
+      left_text = "old a\n",
+      right_text = "new a\n",
+      left_name = "a.lua",
+      right_name = "a.lua",
+      diff_generation = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
+    tab_view.position.x, tab_view.position.y = 0, 0
+    tab_view.size.x, tab_view.size.y = 800, 300
+    tab_view:update()
+    local previous = test.not_nil(tab.diff_view)
+
+    tab.selected_file = 2
+    tab.loading_file = true
+    tab.file_loading_started_at = system.get_time()
+    local presented = select(7, tab_view:layout_diff_tab(tab, tab_view.position.x + style.padding.x))
+
+    test.equal(presented, previous)
+    test.equal(tab_view:file_loading_indicator_visible(tab, tab.file_loading_started_at + 0.999), false)
+    test.equal(tab_view:file_loading_indicator_visible(tab, tab.file_loading_started_at + 1.001), true)
   end)
 
   test.it("keeps Git Log pane TextViews unwrapped", function(context)
@@ -838,9 +907,89 @@ test.describe("Git View command", function()
     test.ok(list.scroll.y > 0)
 
     local before = list.scroll.to.y
-    tab.file_list_hover = true
+    tab_view:on_mouse_moved(list.position.x + 1, list.position.y + 1, 0, 0)
     test.equal(tab_view:on_mouse_wheel(-1, 0), true)
     test.ok(list.scroll.to.y > before)
+  end)
+
+  test.it("lets the changed-file Path Tree scrollbar own pointer input", function(context)
+    local session, view = open_fake_git_view(context.project)
+    local files = {}
+    for index = 1, 40 do
+      local path = string.format("src/file-%03d.lua", index)
+      files[index] = { status = "modified", old_path = path, new_path = path }
+    end
+    local tab = {
+      id = "diff-path-tree-scrollbar",
+      kind = "commit_diff",
+      title = "Diff Path Tree scrollbar",
+      closable = true,
+      changed_files = files,
+      selected_file = 1,
+      left_text = "old\n",
+      right_text = "new\n",
+      left_name = "old",
+      right_name = "new",
+      diff_generation = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
+    tab_view.position.x, tab_view.position.y = 0, 0
+    tab_view.size.x, tab_view.size.y = 800, 120
+    tab_view:update()
+
+    local list = tab_view:pane_view("file-list")
+    local x, y, width, height = list.v_scrollbar:get_thumb_rect()
+    test.ok(width > 0 and height > 0)
+    local selected_line = list.buffer:get_selection()
+    core.active_view = test.not_nil(tab.diff_view).buffer_view_b
+
+    test.equal(tab_view:on_mouse_pressed("left", x + width / 2, y + height / 2, 1), true)
+    test.equal(list.v_scrollbar.dragging, true)
+    test.equal(core.active_view, list)
+    test.equal(list.buffer:get_selection(), selected_line)
+
+    local before = list.scroll.to.y
+    tab_view:on_mouse_moved(x + width / 2, y + height / 2 + 20, 0, 20)
+    test.ok(list.scroll.to.y > before)
+    tab_view:on_mouse_released("left", x + width / 2, y + height / 2 + 20)
+    test.equal(list.v_scrollbar.dragging, false)
+  end)
+
+  test.it("routes wheel input to the hovered Diff View instead of the focused Path Tree", function(context)
+    local session, view = open_fake_git_view(context.project)
+    local lines = {}
+    for index = 1, 40 do lines[index] = "line " .. index end
+    local tab = {
+      id = "diff-hover-scroll",
+      kind = "commit_diff",
+      title = "Diff hover scroll",
+      closable = true,
+      changed_files = {
+        { status = "modified", old_path = "a.lua", new_path = "a.lua" },
+      },
+      selected_file = 1,
+      left_text = table.concat(lines, "\n"),
+      right_text = table.concat(lines, "\n") .. "\nadded",
+      left_name = "a.lua",
+      right_name = "a.lua",
+      diff_generation = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
+    tab_view.position.x, tab_view.position.y = 0, 0
+    tab_view.size.x, tab_view.size.y = 800, 120
+    tab_view:update()
+
+    local list = tab_view:pane_view("file-list")
+    local diff = test.not_nil(tab.diff_view)
+    core.active_view = list
+    tab_view:on_mouse_moved(diff.position.x + 10, diff.position.y + 10, 0, 0)
+
+    test.equal(tab_view:on_mouse_wheel(-1, 0), true)
+    test.equal(list.scroll.to.y, 0)
+    test.ok(diff.buffer_view_a.scroll.to.y > 0)
+    test.ok(diff.buffer_view_b.scroll.to.y > 0)
   end)
 
   test.test("saves and restores hidden Git View Pane Tab state", function(context)

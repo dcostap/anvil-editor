@@ -882,6 +882,30 @@ test.describe("DiffView batch behavior", function()
     test.equal(0, highlight_count)
   end)
 
+  test.it("routes horizontal wheel input to the hovered Diff Side", function(context)
+    local long_left = "left " .. string.rep("a", 200)
+    local long_right = "right " .. string.rep("b", 200)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      long_left,
+      long_right,
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 600, 120
+    view:update()
+
+    local right = view.buffer_view_b
+    view:on_mouse_moved(right.position.x + 10, right.position.y + 10, 0, 0)
+    local handled = view:on_mouse_wheel(0, -1)
+
+    test.equal(view.buffer_view_a.scroll.to.x, 0)
+    test.ok(right.scroll.to.x > 0)
+    test.equal(handled, true)
+  end)
+
   test.it("keeps a large final hunk compact", function(context)
     local inserted = { "before" }
     for i = 1, 6 do inserted[#inserted + 1] = "insert " .. i end

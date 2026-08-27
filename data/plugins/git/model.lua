@@ -598,6 +598,7 @@ end
 function Model:clear_diff_content(tab)
   tab.file_generation = (tab.file_generation or 0) + 1
   tab.loading_file = false
+  tab.file_loading_started_at = nil
   tab.file_error = nil
   tab.left_text, tab.right_text = nil, nil
   tab.left_name, tab.right_name = nil, nil
@@ -750,6 +751,7 @@ function Model:load_selected_diff_file(tab, callback)
   tab.file_generation = (tab.file_generation or 0) + 1
   local generation = tab.file_generation
   tab.loading_file = true
+  tab.file_loading_started_at = system.get_time()
   tab.file_error = nil
   local pending = 2
   local left_text, right_text, file_err
@@ -758,12 +760,15 @@ function Model:load_selected_diff_file(tab, callback)
     if pending ~= 0 then return end
     if generation ~= tab.file_generation then return end
     tab.loading_file = false
+    tab.file_loading_started_at = nil
     tab.file_error = file_err
-    tab.left_text = normalize_for_diff(left_text)
-    tab.right_text = normalize_for_diff(right_text)
-    tab.left_name = path_for_file(file, "left") or "<empty>"
-    tab.right_name = path_for_file(file, "right") or "<empty>"
-    tab.diff_generation = (tab.diff_generation or 0) + 1
+    if not file_err then
+      tab.left_text = normalize_for_diff(left_text)
+      tab.right_text = normalize_for_diff(right_text)
+      tab.left_name = path_for_file(file, "left") or "<empty>"
+      tab.right_name = path_for_file(file, "right") or "<empty>"
+      tab.diff_generation = (tab.diff_generation or 0) + 1
+    end
     if callback then callback(self, file_err) end
     if self.on_update then self.on_update(self) end
   end
@@ -951,6 +956,7 @@ function Model:mark_diff_tabs_error(err)
     if tab.kind == "commit_diff" then
       tab.loading = false
       tab.loading_file = false
+      tab.file_loading_started_at = nil
       tab.error = err
     end
   end
@@ -973,6 +979,7 @@ function Model:invalidate_diff_loads()
       tab.list_generation = (tab.list_generation or 0) + 1
       tab.loading = false
       tab.loading_file = false
+      tab.file_loading_started_at = nil
       if was_loading then self:clear_diff_content(tab) end
     end
   end
