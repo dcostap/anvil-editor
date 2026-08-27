@@ -1,6 +1,40 @@
 local test = require "core.test"
 
 test.describe("File-type icons", function()
+  local function has_visible_glyph_pixels(font, glyph)
+    local width, height = 64 * SCALE, 48 * SCALE
+    local surface = canvas.new(width, height, { 0, 0, 0, 255 }, true)
+    surface:draw_text(font, glyph, 4 * SCALE, 4 * SCALE, { 255, 255, 255, 255 })
+    surface:render()
+    local pixels = surface:get_pixels(0, 0, width, height)
+    for index = 1, #pixels, 4 do
+      if pixels:byte(index) ~= 0
+        or pixels:byte(index + 1) ~= 0
+        or pixels:byte(index + 2) ~= 0
+      then
+        return true
+      end
+    end
+    return false
+  end
+
+  test.it("renders first-party UI and file icon glyphs", function()
+    local style = require "core.style"
+    local file_icons = require "core.file_icons"
+    local file_font, file_glyph = file_icons.get("plugin.lua", 24 * SCALE, false)
+
+    test.ok(
+      has_visible_glyph_pixels(style.icon_font, "d"),
+      "the first-party UI icon font must render visible pixels"
+    )
+    test.not_nil(file_font, "the first-party Seti icon font must load")
+    test.not_nil(file_glyph)
+    test.ok(
+      has_visible_glyph_pixels(file_font, file_glyph),
+      "the first-party Seti icon font must render visible pixels"
+    )
+  end)
+
   test.it("resolves common file types to Seti icons", function()
     local file_icons = require "core.file_icons"
 
