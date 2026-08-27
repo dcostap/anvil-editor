@@ -105,10 +105,42 @@ test.describe("File Tree instances", function()
     test.equal(from_terminal.root_dir, common.normalize_path(folder))
   end)
 
-  test.it("clamps Up Directory at the instance root", function()
+  test.it("opens the parent and expands the previous directory", function()
     local view = assert(filetree.new(folder))
-    view:up_dir()
+    test.equal(view.buffer.lines[1], "../\n")
+    local plan, err = view:plan_changes(false)
+    test.not_nil(plan, err)
+    test.equal(view:operation_count(plan), 0)
+
+    view.buffer:set_selection(1, 1)
+    test.ok(view:open_item())
+
+    test.equal(view.current_dir, common.normalize_path(root))
+    local _, _, snapshot = view:build_entries(false)
+    local previous = snapshot.by_abs[common.path_compare_key(folder)]
+    test.not_nil(previous)
+    test.ok(view.line_meta[previous.line].expanded)
+    test.equal(view.buffer:get_selection(true), previous.line)
+  end)
+
+  test.it("keeps pending edits when parent navigation is requested", function()
+    local view = assert(filetree.new(folder))
+    view.buffer:insert(2, 1, "renamed-")
+    local edited = view.buffer.lines[2]
+    view.buffer:set_selection(1, 1)
+
+    test.not_ok(view:open_item())
+
     test.equal(view.current_dir, common.normalize_path(folder))
+    test.equal(view.buffer.lines[2], edited)
+  end)
+
+  test.it("omits the parent row at the filesystem root", function()
+    local filesystem_root = PLATFORM == "Windows" and root:sub(1, 3) or PATHSEP
+
+    local view = assert(filetree.new(filesystem_root))
+    test.not_equal(view.buffer.lines[1], "../\n")
+    test.not_ok(view:up_dir())
   end)
 
   test.it("suspends and restores the same instance with Back", function()

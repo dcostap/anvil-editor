@@ -352,6 +352,13 @@ local function parent_dir(path)
   return common.dirname(path)
 end
 
+local function parent_navigation_target(path)
+  if PLATFORM == "Windows" and path:match("^%a:[\\/]?$") then return nil end
+  local parent = parent_dir(path)
+  if not parent or common.path_equals(parent, path) then return nil end
+  return parent
+end
+
 local function rel_path(path)
   local root = core.root_project and core.root_project()
   if root and in_project(path, root.path) then
@@ -1464,6 +1471,15 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
   self.line_hint_reference_time = os.time()
 
   local out = {}
+  local parent = parent_navigation_target(self.current_dir)
+  if parent then
+    out[#out + 1] = "../\n"
+    self.line_meta[#out] = {
+      parent_directory = true,
+      parent_abs = parent,
+      original_type = "dir",
+    }
+  end
   for i, item in ipairs(self.original_entries) do
     local role, display = project_path_role_for_abs(item.abs)
     item.project_path_role = role
@@ -1473,7 +1489,7 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
     self.original_by_name[item.name] = i
     self:remember_original(item)
     out[#out + 1] = item.display .. "\n"
-    self.line_meta[i] = make_meta(item)
+    self.line_meta[#out] = make_meta(item)
   end
   self:append_project_path_sections(out)
   set_buffer_lines(self.buffer, out)
@@ -1657,6 +1673,15 @@ function FileTreeView:copy_or_cut_lines(delete)
   if not slots or #slots == 0 then
     core.filetree_clipboard = nil
     return false
+  end
+  for _, slot in ipairs(slots) do
+    for line = slot.first, slot.last do
+      local meta = self.line_meta[line]
+      if type(meta) == "table" and meta.parent_directory then
+        core.warn("File Tree: the parent directory row cannot be copied or cut")
+        return true
+      end
+    end
   end
   local ranges = merge_line_ranges(slots)
   local payload = self:copy_line_payload(slots)
@@ -2112,6 +2137,20 @@ function FileTreeView:build_entries(include_hidden)
     local meta = type(row.meta) == "table" and row.meta or nil
     if meta and meta.project_path_separator then goto continue end
 
+    if meta and meta.parent_directory then
+      entries[#entries + 1] = {
+        line = row.line,
+        text = "..",
+        abs = meta.parent_abs,
+        type = "dir",
+        level = 0,
+        meta = meta,
+        parent_directory = true,
+        readonly = true,
+      }
+      goto continue
+    end
+
     local parsed, err = parse_text(row.text)
     if err then
       errors[row.line] = err
@@ -2239,7 +2278,9 @@ function FileTreeView:plan_changes(status_only)
   local seen_project_path_roots = {}
   local project_path_label_updates = {}
   for _, e in ipairs(entries) do
-    if e.project_path_root then
+    if e.parent_directory then
+      -- The parent row is navigation, not an editable filesystem entry.
+    elseif e.project_path_root then
       local id = e.meta and e.meta.project_path_id
       if id then seen_project_path_roots[id] = true end
       if id and e.original_type == e.type and common.path_equals(e.abs, e.original_abs) then
@@ -2277,9 +2318,18 @@ function FileTreeView:plan_changes(status_only)
     by_abs[key] = by_abs[key] or {}
     table.insert(by_abs[key], e)
   end
-  for _, list in pairs(by_abs) do
+  local merged_dir_targets = {}
+  for key, list in pairs(by_abs) do
     if #list > 1 then
-      for _, e in ipairs(list) do mark_invalid(e, "duplicate target path: " .. op_path(e.abs)) end
+      local directories_only = true
+      for _, e in ipairs(list) do
+        if e.type ~= "dir" then directories_only = false; break end
+      end
+      if directories_only then
+        merged_dir_targets[key] = true
+      else
+        for _, e in ipairs(list) do mark_invalid(e, "duplicate target path: " .. op_path(e.abs)) end
+      end
     end
   end
 
@@ -2403,17 +2453,21 @@ function FileTreeView:plan_changes(status_only)
       -- from stale/off-screen filetree clipboard metadata. Extra occurrences are
       -- copies; never delete/move a source that this buffer did not own.
       for _, e in ipairs(changed) do
-        local op = {
-          from = src,
-          to = e.abs,
-          type = source_type,
-          line = e.line,
-          hidden = e.hidden,
-          parent_line = e.parent_line,
-        }
-        if check_target(op, e, false) then
-          copies[#copies + 1] = op
+        if source_type == "dir" and merged_dir_targets[path_key(e.abs)] then
           status[draw_line(e)] = status[draw_line(e)] or "addition"
+        else
+          local op = {
+            from = src,
+            to = e.abs,
+            type = source_type,
+            line = e.line,
+            hidden = e.hidden,
+            parent_line = e.parent_line,
+          }
+          if check_target(op, e, false) then
+            copies[#copies + 1] = op
+            status[draw_line(e)] = status[draw_line(e)] or "addition"
+          end
         end
       end
     else
@@ -2421,21 +2475,30 @@ function FileTreeView:plan_changes(status_only)
       -- move; additional destinations are copies, matching Oil's convention of
       -- making the final occurrence the move.
       for i, e in ipairs(changed) do
-        local op = {
-          from = src,
-          to = e.abs,
-          type = source_type,
-          line = e.line,
-          hidden = e.hidden,
-          parent_line = e.parent_line,
-        }
-        if check_target(op, e, i == #changed) then
+        if source_type == "dir" and merged_dir_targets[path_key(e.abs)] then
           if i == #changed then
-            moves[#moves + 1] = op
+            trashes[#trashes + 1] = { abs = src, type = source_type }
             status[draw_line(e)] = status[draw_line(e)] or "modification"
           else
-            copies[#copies + 1] = op
             status[draw_line(e)] = status[draw_line(e)] or "addition"
+          end
+        else
+          local op = {
+            from = src,
+            to = e.abs,
+            type = source_type,
+            line = e.line,
+            hidden = e.hidden,
+            parent_line = e.parent_line,
+          }
+          if check_target(op, e, i == #changed) then
+            if i == #changed then
+              moves[#moves + 1] = op
+              status[draw_line(e)] = status[draw_line(e)] or "modification"
+            else
+              copies[#copies + 1] = op
+              status[draw_line(e)] = status[draw_line(e)] or "addition"
+            end
           end
         end
       end
@@ -2814,6 +2877,8 @@ function FileTreeView:open_item(opts)
     return false
   end
 
+  if entry.parent_directory then return self:up_dir() end
+
   local info = system.get_file_info(entry.abs)
   if entry.type == "dir" then
     -- Opening folders is a pure UI operation. It deliberately discards/reveals
@@ -2868,12 +2933,30 @@ function FileTreeView:on_file_dropped(filename)
 end
 
 function FileTreeView:up_dir()
-  self.current_dir = parent_dir(self.current_dir)
-  if not in_project(self.current_dir, self.root_dir) then
-    self.current_dir = self.root_dir
+  if self.has_possible_edits then
+    core.warn("File Tree: apply or reload edits before opening the parent directory")
+    core.log_quiet("File Tree parent navigation blocked because the editable tree has unapplied edits")
+    return false
   end
+
+  local previous = self.current_dir
+  local parent = parent_navigation_target(previous)
+  if not parent then return false end
+
+  self.root_dir = parent
+  self.current_dir = parent
   self.scroll.to.y, self.scroll.y = 0, 0
   self:refresh(false, false)
+  self:restore_expanded_paths({ [previous] = true })
+
+  local _, _, snapshot = self:build_entries(false)
+  local entry = snapshot.by_abs[path_key(previous)]
+  if entry then
+    self.buffer:set_selection(entry.line, 1)
+    self:scroll_to_make_visible(entry.line, 1)
+  end
+  core.log_quiet("File Tree opened parent directory: %s", parent)
+  return true
 end
 
 function FileTreeView:apply_plan(plan)
@@ -3502,7 +3585,7 @@ command.add(function()
   local view = active_filetree()
   return view ~= nil, view
 end, {
-  ["filetree:refresh"] = command.palette(function(view)
+  ["filetree:reload"] = command.palette(function(view)
     view:refresh_preserving_selection_paths(true)
     view:schedule_git_status_refresh("manual-refresh", true)
   end),
@@ -3521,7 +3604,7 @@ end, {
 keymap.add {
   ["ctrl+\\"] = "filetree:open_at_project_root",
   ["ctrl+s"] = "filetree:apply_changes",
-  ["f5"] = "filetree:refresh",
+  ["f5"] = "filetree:reload",
   ["alt+home"] = "filetree:project_root",
 }
 

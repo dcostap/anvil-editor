@@ -1295,7 +1295,7 @@ Each File Tree owns:
 - Git status controller;
 - pending edits.
 
-`up-dir` clamps at `root_path`, not the Root Project.
+`up-dir` promotes the parent to `root_path` and stops at the filesystem root.
 
 A default Root Project File Tree can include configured Project path sections.
 
@@ -1336,7 +1336,7 @@ Replace toggle and side-specific commands with direct commands:
 filetree:open_at_project_root
 filetree:open_at_choose_path
 filetree:open_at_current_path
-filetree:refresh
+filetree:reload
 filetree:apply_changes
 filetree:up_dir
 filetree:select_all
@@ -2490,7 +2490,7 @@ Red tests:
 - file target selects file under parent root;
 - relative paths use Editor, Terminal, File Tree, and Root Project contexts;
 - dot always means context directory;
-- up-dir clamps at instance root;
+- up-dir opens the parent and expands the previous directory;
 - replacing File Tree suspends it;
 - Back restores same instance and state;
 - Workspace restores current File Tree state;

@@ -312,6 +312,15 @@ _Avoid_: Pane Tab, file tab, buffer tab, View tab, Node tab
 A Text View for viewing and editing files and directories beneath one selected root. Several File Trees can exist at the same time.
 _Avoid_: file panel, singleton file tree
 
+**Directory Merge**:
+A File Tree action that combines directories when their edited rows target one path. Conflicting file targets prevent the action.
+_Avoid_: folder overwrite
+
+**Parent Directory Row**:
+The first File Tree row, shown as `../`, which opens the parent directory in the same File Tree.
+The previous directory remains expanded after navigation.
+_Avoid_: up folder, parent link
+
 **Path Tree**:
 A hierarchical presentation of a scoped set of file and directory paths, such as files changed by a Git revision.
 _Avoid_: file list, mini File Tree
