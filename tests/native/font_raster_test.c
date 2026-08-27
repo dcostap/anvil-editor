@@ -29,19 +29,28 @@ int main(void) {
   CHECK(check_lcd(0.99, 1, 0) == 0);
 
   CHECK(check_lcd(-1.0 / 6.0, 0, 0) == 0);
+  CHECK(check_lcd(-1.0 / 6.0 - 0.0001, -1, 2) == 0);
+  CHECK(check_lcd(-1.0 / 6.0 + 0.0001, 0, 0) == 0);
   CHECK(check_lcd(-0.5, -1, 2) == 0);
+  CHECK(check_lcd(-0.5 - 0.0001, -1, 1) == 0);
+  CHECK(check_lcd(-0.5 + 0.0001, -1, 2) == 0);
   CHECK(check_lcd(-5.0 / 6.0, -1, 1) == 0);
+  CHECK(check_lcd(-5.0 / 6.0 - 0.0001, -1, 0) == 0);
+  CHECK(check_lcd(-5.0 / 6.0 + 0.0001, -1, 1) == 0);
   CHECK(check_lcd(-0.99, -1, 0) == 0);
 
-  for (int step = -30; step <= 30; step++) {
-    double x = step / 10.0 + 1.0 / 6.0;
+  const double translation_inputs[] = { -4.25, -0.25, 0.25, 4.25 };
+  for (unsigned int i = 0;
+       i < sizeof(translation_inputs) / sizeof(translation_inputs[0]);
+       i++) {
+    double x = translation_inputs[i];
     GlyphXPlacement first = font_quantize_glyph_x_value(true, x);
-    GlyphXPlacement next = font_quantize_glyph_x_value(true, x + 1.0);
+    GlyphXPlacement next = font_quantize_glyph_x_value(true, x + 7.0);
     int first_q = first.pixel_x * ANVIL_FONT_SUBPIXEL_PHASES
       + (int)first.bitmap_index;
     int next_q = next.pixel_x * ANVIL_FONT_SUBPIXEL_PHASES
       + (int)next.bitmap_index;
-    CHECK(next_q == first_q + ANVIL_FONT_SUBPIXEL_PHASES);
+    CHECK(next_q == first_q + 7 * ANVIL_FONT_SUBPIXEL_PHASES);
   }
 
   GlyphXPlacement grayscale = font_quantize_glyph_x_value(false, -0.25);

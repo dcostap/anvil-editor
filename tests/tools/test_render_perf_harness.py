@@ -27,6 +27,20 @@ def load_gate():
 gate = load_gate()
 
 
+class PerformanceBaselinePolicyTests(unittest.TestCase):
+    def test_only_d3d11_uses_the_performance_baseline(self):
+        self.assertTrue(gate.uses_performance_baseline("d3d11"))
+        self.assertFalse(gate.uses_performance_baseline("software"))
+
+    def test_reference_notes_do_not_change_the_performance_workload(self):
+        old = {"frames": 600, "directwrite_reference": {"first_stable_stroke_ppem": 15}}
+        current = {"frames": 600, "directwrite_reference": {"continuous_at_ppem": [15]}}
+        self.assertEqual(
+            gate.performance_workload_settings(old),
+            gate.performance_workload_settings(current),
+        )
+
+
 class MetricsSummaryTests(unittest.TestCase):
     def test_reports_stutter_budgets_consecutive_misses_and_progression(self):
         with tempfile.TemporaryDirectory() as temp:

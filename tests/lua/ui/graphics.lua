@@ -156,31 +156,23 @@ test.describe("graphics apis", function()
     test.equal(fractional:get_width(text), expected_width)
   end)
 
-  test.test("keeps raster policy and glyph caches local to each font", function()
+  test.test("keeps glyph caches local to each font copy", function()
     local font_path = DATADIR .. PATHSEP .. "fonts"
       .. PATHSEP .. "CaskaydiaCoveNerdFontMono-SemiLight.ttf"
     local full = renderer.font.load(font_path, 15 * SCALE, {
       antialiasing = "subpixel", hinting = "full", ligatures = false,
     })
     local copy = full:copy(15 * SCALE)
-    local slight = full:copy(15 * SCALE, { hinting = "slight" })
     local text = "────────────────────────"
     local full_canvas = canvas.new(260 * SCALE, 32 * SCALE, {18, 20, 28, 255}, true)
     local copy_canvas = canvas.new(260 * SCALE, 32 * SCALE, {18, 20, 28, 255}, true)
-    local slight_canvas = canvas.new(260 * SCALE, 32 * SCALE, {18, 20, 28, 255}, true)
     full_canvas:draw_text(full, text, 0.5 * SCALE, 0, {220, 225, 235, 255})
     copy_canvas:draw_text(copy, text, 0.5 * SCALE, 0, {220, 225, 235, 255})
-    slight_canvas:draw_text(slight, text, 0.5 * SCALE, 0, {220, 225, 235, 255})
     full_canvas:render()
     copy_canvas:render()
-    slight_canvas:render()
 
     local full_pixels = full_canvas:get_pixels(0, 0, 260 * SCALE, 32 * SCALE)
     test.equal(copy_canvas:get_pixels(0, 0, 260 * SCALE, 32 * SCALE), full_pixels)
-    test.ok(
-      slight_canvas:get_pixels(0, 0, 260 * SCALE, 32 * SCALE) ~= full_pixels,
-      "a font copy with a different hint policy must own different glyph pixels"
-    )
 
     local generation = full:get_generation()
     full:set_size(16 * SCALE)

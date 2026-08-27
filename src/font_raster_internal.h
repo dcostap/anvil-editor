@@ -17,11 +17,7 @@ static inline GlyphXPlacement font_quantize_glyph_x_value(
   if (!uses_lcd_coverage)
     return (GlyphXPlacement) { .pixel_x = (int)floor(x), .bitmap_index = 0 };
 
-  double biased = x * ANVIL_FONT_SUBPIXEL_PHASES + 0.5;
-  double nearest_integer = round(biased);
-  if (fabs(biased - nearest_integer) < 1e-9)
-    biased = nearest_integer;
-  int q = (int)floor(biased);
+  int q = (int)floor(x * ANVIL_FONT_SUBPIXEL_PHASES + 0.5);
   int pixel_x = q / ANVIL_FONT_SUBPIXEL_PHASES;
   int remainder = q % ANVIL_FONT_SUBPIXEL_PHASES;
   if (remainder < 0) {

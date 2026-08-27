@@ -99,12 +99,23 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "directwrite_reference": {
             "source": "recorded Edge comparison; not repeated by this gate",
             "continuous_at_ppem": [15, 16, 18, 24],
-            "first_stable_stroke_ppem": 15,
         },
     },
 }
 
 STANDARD_SCENARIOS = tuple(SCENARIOS)
+
+
+def uses_performance_baseline(renderer: str) -> bool:
+    return renderer == "d3d11"
+
+
+def performance_workload_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(settings)
+    normalized.pop("directwrite_reference", None)
+    return normalized
+
+
 SPECIMEN_SCENARIOS: dict[str, dict[str, Any]] = {
     "specimen-startup": {
         "fixture": "external",
@@ -818,8 +829,8 @@ def run_case(
         raise RuntimeError(f"workload mismatch: expected {frames}, got {result['measured_frames']}")
     if renderer == "d3d11" and result["renderer_path"] != "commands":
         raise RuntimeError(f"expected D3D11 command renderer, got {result['renderer_path']!r}")
-    if renderer == "software" and result["renderer_path"] == "commands":
-        raise RuntimeError("software benchmark unexpectedly used the D3D11 command renderer")
+    if renderer == "software" and result["renderer_path"] != "none":
+        raise RuntimeError(f"expected software renderer path 'none', got {result['renderer_path']!r}")
     if mode in ("metrics", "paced-metrics"):
         result["metrics"] = summarize_metrics(metrics_file)
         result["metrics_file"] = str(metrics_file)
@@ -847,17 +858,6 @@ def run_case(
             result["font_raster"] = analyze_font_raster_seams(
                 screenshot_file, fixtures, int(settings["seam_channel_threshold"]),
             )
-            reference_ppem = int(
-                settings["directwrite_reference"]["first_stable_stroke_ppem"]
-            )
-            stable_ppem = result["font_raster"]["first_stable_stroke_ppem"]
-            if stable_ppem is None or stable_ppem > reference_ppem + 1:
-                result["font_raster"]["passed"] = False
-                result["font_raster"]["failures"].append({
-                    "error": "stable stroke starts too late",
-                    "anvil_ppem": stable_ppem,
-                    "directwrite_ppem": reference_ppem,
-                })
             if (renderer == "d3d11" and mode == "metrics"
                     and result["metrics"].get("texture_uploads_max", 0) > 0):
                 result["font_raster"]["passed"] = False
@@ -1053,6 +1053,7 @@ def markdown_report(report: dict[str, Any]) -> str:
         "",
         f"- Suite: `{report['suite']}`",
         f"- Renderer: `{report.get('renderer', 'd3d11')}`",
+        f"- Performance baseline: `{report.get('baseline_status', 'compared')}`",
         f"- Result: **{verdict}**",
         f"- Run directory: `{report['run_dir']}`",
         "",
@@ -1151,6 +1152,8 @@ def main() -> int:
         parser.error("watchdog timeouts must be positive")
     if args.max_runs < runs:
         parser.error("--max-runs must be greater than or equal to --runs")
+    if args.update_baseline and not uses_performance_baseline(args.renderer):
+        parser.error("software runs do not use a performance baseline")
 
     selected_scenarios = [args.scenario] if args.scenario else SUITES[args.suite]
     suite_label = f"scenario:{args.scenario}" if args.scenario else args.suite
@@ -1239,7 +1242,9 @@ def main() -> int:
         if baseline.get("renderer", "d3d11") != args.renderer:
             incompatible.append("renderer")
         if any(
-            baseline_scenarios.get(name, {}).get("settings") != SCENARIOS[name]
+            performance_workload_settings(
+                baseline_scenarios.get(name, {}).get("settings", {})
+            ) != performance_workload_settings(SCENARIOS[name])
             for name in untouched_scenarios
         ):
             incompatible.append("untouched scenario settings")
@@ -1309,7 +1314,8 @@ def main() -> int:
             if len(throughput_runs) < runs:
                 continue
             noise = relative_mad([item["active_fps"] for item in throughput_runs])
-            if noise <= 0.06 or len(throughput_runs) >= args.max_runs:
+            if (not uses_performance_baseline(args.renderer)
+                    or noise <= 0.06 or len(throughput_runs) >= args.max_runs):
                 break
             print(f"  throughput noise {noise:.1%}; automatically adding a repetition", flush=True)
 
@@ -1397,7 +1403,8 @@ def main() -> int:
             scenario_report["active_fps_runs"]
         )
         scenario_report["throughput_stable"] = scenario_report["throughput_relative_mad"] <= 0.06
-        if not scenario_report["throughput_stable"]:
+        if (uses_performance_baseline(args.renderer)
+                and not scenario_report["throughput_stable"]):
             report["passed"] = False
         scenario_report["telemetry_overhead_fraction"] = (
             (scenario_report["active_fps"] - scenario_report["metrics_active_fps"])
@@ -1483,12 +1490,18 @@ def main() -> int:
                     report["passed"] = False
         report["scenarios"][scenario] = scenario_report
 
-    report["inconclusive"] = any(
-        not scenario.get("throughput_stable", True)
-        for scenario in report["scenarios"].values()
+    report["inconclusive"] = (
+        uses_performance_baseline(args.renderer)
+        and any(
+            not scenario.get("throughput_stable", True)
+            for scenario in report["scenarios"].values()
+        )
     )
 
-    if baseline and not args.update_baseline:
+    if not uses_performance_baseline(args.renderer):
+        report["performance_findings"] = []
+        report["baseline_status"] = "not_applicable"
+    elif baseline and not args.update_baseline:
         same_machine = baseline.get("machine", {}).get("node") == report["machine"]["node"]
         same_fixture = (
             baseline.get("machine", {}).get("fixture_sha256")
@@ -1499,8 +1512,9 @@ def main() -> int:
             and baseline.get("warmup_frames") == report["warmup_frames"]
         )
         same_scenario_settings = all(
-            baseline.get("scenarios", {}).get(name, {}).get("settings")
-            == scenario.get("settings")
+            performance_workload_settings(
+                baseline.get("scenarios", {}).get(name, {}).get("settings", {})
+            ) == performance_workload_settings(scenario.get("settings", {}))
             for name, scenario in report["scenarios"].items()
         )
         same_user_state_mode = (

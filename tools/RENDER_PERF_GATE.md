@@ -136,6 +136,10 @@ case.
 - `renderer-primitives` — deterministic clipping, alpha, text, and shape scene
 - `font-raster-correctness` — connected glyph continuity across sizes, phases, hinting, antialiasing, and backgrounds
 
+The prior Edge comparison showed continuity at 15, 16, 18, and 24 ppem. It did
+not establish the first stable DirectWrite size. That threshold remains
+unverified. The report gives Anvil's first stable sampled fixture size only.
+
 Private specimen scenarios are selected by `--suite specimen` and require
 `--specimen`:
 
@@ -183,6 +187,11 @@ The tracked performance baseline is:
 ```text
 tools/baselines/render_perf_windows.json
 ```
+
+Only D3D11 runs compare results with this performance baseline. Software runs
+still report timing, image stability, and seam results. Their performance
+baseline status is `not_applicable`. Software timing variation does not change
+the command exit status.
 
 Tracked renderer-specific visual goldens live under:
 
