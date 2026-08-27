@@ -866,6 +866,7 @@ function TextView:new(buffer)
   self.ime_selection = { from = 0, size = 0 }
   self.ime_status = false
   self.hovering_gutter = false
+  self.show_current_line_highlight = true
   self.v_scrollbar:set_forced_status(config.force_scrollbar_status)
   self.h_scrollbar:set_forced_status(config.force_scrollbar_status)
   self.cache_font = self:get_font()
@@ -6024,11 +6025,16 @@ function TextView:draw_content_left_edge()
   renderer.draw_rect(x, self.position.y, edge_w, self.size.y, style.textview_content_left_edge)
 end
 
+function TextView:get_current_line_highlight_mode()
+  if self.show_current_line_highlight == false then return false end
+  return config.highlight_current_line
+end
+
 function TextView:line_has_current_line_highlight(line)
   local highlight_cache = self.__line_body_highlight_cache
   if highlight_cache then return highlight_cache[line] or false end
 
-  local hcl = config.highlight_current_line
+  local hcl = self:get_current_line_highlight_mode()
   if hcl == false then return false end
   for lidx, line1, col1, line2, col2 in self.buffer:get_selections(false) do
     if line1 > line then break end
@@ -6046,10 +6052,10 @@ function TextView:draw_current_line_highlights(minline, maxline, draw_highlight)
   draw_highlight = draw_highlight or function(x, y, height)
     self:draw_line_highlight(x, y, height)
   end
+  local hcl = self:get_current_line_highlight_mode()
+  if hcl == false then return end
   if self:has_composed_visual_rows() then
-    if config.highlight_current_line == false then return end
     local highlighted_rows = {}
-    local hcl = config.highlight_current_line
     for _, line1, col1, line2, col2 in self.buffer:get_selections(false) do
       if line1 > maxline then break end
       if line1 >= minline and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
@@ -6074,8 +6080,6 @@ function TextView:draw_current_line_highlights(minline, maxline, draw_highlight)
     return
   end
   if self.wrapped_settings then
-    if config.highlight_current_line == false then return end
-    local hcl = config.highlight_current_line
     for _, line1, col1, line2, col2 in self.buffer:get_selections(false) do
       if line1 > maxline then break end
       if line1 >= minline and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
@@ -6089,8 +6093,6 @@ function TextView:draw_current_line_highlights(minline, maxline, draw_highlight)
     self:draw_content_left_edge()
     return
   end
-  if config.highlight_current_line == false then return end
-  local hcl = config.highlight_current_line
   for _, line1, col1, line2, col2 in self.buffer:get_selections(false) do
     if line1 > maxline then break end
     if line1 >= minline
@@ -7674,7 +7676,7 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
   local search_match_cache = {}
   local gutter_selection_cache = {}
   local visible_caret_cache = {}
-  local hcl = config.highlight_current_line
+  local hcl = self:get_current_line_highlight_mode()
 
   local phase_start = stats and system.get_time()
   if hcl ~= false then
@@ -8118,7 +8120,7 @@ function TextView:draw_line_body(line, x, y)
     body_phase_scope = perf_scope_begin("backgrounds_and_selections")
     draw_decoration_line_backgrounds(self, line, x, y)
     local highlight_rows
-    local hcl = config.highlight_current_line
+    local hcl = self:get_current_line_highlight_mode()
     if hcl ~= false then
       for _, line1, col1, line2, col2 in self.buffer:get_selections(false) do
         if line1 == line and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
@@ -8231,7 +8233,7 @@ function TextView:draw_line_body(line, x, y)
   if self:line_has_current_line_highlight(line) then
     for _, line1, col1, line2, col2 in self.buffer:get_selections(false) do
       if line1 == line
-      and (config.highlight_current_line ~= "no_selection"
+      and (self:get_current_line_highlight_mode() ~= "no_selection"
         or (line1 == line2 and col1 == col2))
       then
         local highlight_y, highlight_height =

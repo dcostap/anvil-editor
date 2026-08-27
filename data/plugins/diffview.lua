@@ -421,6 +421,10 @@ function DiffView:new(a, b, compare_type, names)
   -- compared text starts at the outer edges instead of wasting two gutters.
   self.buffer_view_a.show_line_numbers = false
   self.buffer_view_b.show_line_numbers = false
+  -- Current Line Highlights cover the Diff View's change colors. The caret
+  -- already identifies its row on each synchronized Diff Side.
+  self.buffer_view_a.show_current_line_highlight = false
+  self.buffer_view_b.show_current_line_highlight = false
   self.buffer_view_a.gutter_padding = 0
   self.buffer_view_b.gutter_padding = 0
   self.buffer_view_a.suppress_gitdiff_gutter = true

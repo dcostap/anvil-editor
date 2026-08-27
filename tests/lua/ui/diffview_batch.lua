@@ -855,6 +855,33 @@ test.describe("DiffView batch behavior", function()
     test.ok(left_after_y < right_after_y, "a small hunk should not add Diff Gap Rows")
   end)
 
+  test.it("keeps diff colors visible on the current line", function(context)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      "before",
+      "before\ninserted",
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+
+    local right = view.buffer_view_b
+    right:with_selection_state(function() right.buffer:set_selection(2, 1) end)
+    local highlight_count = 0
+    local old_draw_rect = renderer.draw_rect
+    renderer.draw_rect = function() end
+    local ok, err = pcall(function()
+      right:draw_current_line_highlights(1, 2, function()
+        highlight_count = highlight_count + 1
+      end)
+    end)
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err, 0) end
+
+    test.equal("insert", view.diff_model:line_state("b", 2))
+    test.equal(0, highlight_count)
+  end)
+
   test.it("keeps a large final hunk compact", function(context)
     local inserted = { "before" }
     for i = 1, 6 do inserted[#inserted + 1] = "insert " .. i end
