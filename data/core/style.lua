@@ -2,8 +2,8 @@ local common = require "core.common"
 local style = {}
 
 style.divider_size = common.round(1 * SCALE)
-style.scrollbar_size = common.round(18 * SCALE)
-style.expanded_scrollbar_size = common.round(36 * SCALE)
+style.scrollbar_size = common.round(12.6 * SCALE)
+style.expanded_scrollbar_size = common.round(25.2 * SCALE)
 style.minimum_thumb_size = common.round(28 * SCALE)
 style.contracted_scrollbar_margin = common.round(8 * SCALE)
 style.expanded_scrollbar_margin = common.round(12 * SCALE)
