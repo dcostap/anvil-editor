@@ -26,16 +26,17 @@ style.margin = {
 }
 
 -- The function renderer.font.load can accept an option table as a second optional argument.
--- It shoud be like the following:
+-- It should be like the following:
 --
 -- {antialiasing= "grayscale", hinting = "full"}
 --
 -- The possible values for each option are:
--- - for antialiasing: grayscale, subpixel
+-- - for antialiasing: none, grayscale, subpixel
 -- - for hinting: none, slight, full
 --
--- The defaults values are antialiasing subpixel and hinting slight for optimal visualization
--- on ordinary LCD monitor with RGB patterns.
+-- Antialiasing selects the glyph bitmap format. Hinting controls bitmap fitting.
+-- Hinting does not change text layout, caret positions, or wrapping.
+-- The defaults are subpixel antialiasing and slight hinting for ordinary RGB LCDs.
 --
 -- On High DPI monitor or non RGB monitor you may consider using antialiasing grayscale instead.
 -- The antialiasing grayscale with full hinting is interesting for crisp font rendering.

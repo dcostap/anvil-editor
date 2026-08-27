@@ -11,6 +11,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -25,6 +26,11 @@ try:
     import msvcrt
 except ImportError:  # Unit-testable metric/specimen helpers on non-Windows hosts.
     msvcrt = None  # type: ignore[assignment]
+
+try:
+    from PIL import Image
+except ImportError:  # The non-visual harness remains usable without Pillow.
+    Image = None  # type: ignore[assignment]
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build-windows-x86_64"
@@ -82,9 +88,34 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "visual": True,
         "paced": False,
     },
+    "font-raster-correctness": {
+        "start_line": 1,
+        "window_width": 1400,
+        "window_height": 1400,
+        "visual": True,
+        "paced": False,
+        # This limit is a continuity limit. It does not lock one theme color.
+        "seam_channel_threshold": 12,
+        "directwrite_reference": {
+            "source": "recorded Edge comparison; not repeated by this gate",
+            "continuous_at_ppem": [15, 16, 18, 24],
+        },
+    },
 }
 
 STANDARD_SCENARIOS = tuple(SCENARIOS)
+
+
+def uses_performance_baseline(renderer: str) -> bool:
+    return renderer == "d3d11"
+
+
+def performance_workload_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(settings)
+    normalized.pop("directwrite_reference", None)
+    return normalized
+
+
 SPECIMEN_SCENARIOS: dict[str, dict[str, Any]] = {
     "specimen-startup": {
         "fixture": "external",
@@ -173,6 +204,147 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def read_font_raster_metadata(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        raise RuntimeError(f"font raster metadata missing: {path}")
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    numeric_float = {"origin_x", "text_top", "baseline", "requested_size", "advance"}
+    numeric_int = {
+        "run_length", "background_r", "background_g", "background_b",
+        "foreground_r", "foreground_g", "foreground_b",
+        "assert_continuity",
+    }
+    for row in rows:
+        for key in numeric_float:
+            row[key] = float(row[key])
+        for key in numeric_int:
+            row[key] = int(row[key])
+    return rows
+
+
+def analyze_font_raster_seams(
+    screenshot: Path, fixtures: list[dict[str, Any]], threshold: int,
+) -> dict[str, Any]:
+    """Measure connected-line continuity without requiring exact pixels."""
+    if Image is None:
+        raise RuntimeError("Pillow is required for font raster seam analysis")
+    image = Image.open(screenshot).convert("RGB")
+    width, height = image.size
+    analyses: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+
+    for fixture in fixtures:
+        if fixture.get("kind") != "connected-line":
+            continue
+        origin = float(fixture["origin_x"])
+        advance = float(fixture["advance"])
+        run_length = int(fixture["run_length"])
+        background = tuple(int(fixture[f"background_{channel}"]) for channel in "rgb")
+        top = max(0, int(float(fixture["text_top"]) - 2))
+        bottom = min(height, int(float(fixture["baseline"]) + float(fixture["requested_size"]) * 0.5 + 3))
+        first_x = max(0, int(origin + advance))
+        last_x = min(width - 1, int(origin + advance * (run_length - 1)))
+        if last_x <= first_x or bottom <= top:
+            raise RuntimeError(f"invalid font raster fixture geometry: {fixture}")
+
+        stroke_rows = []
+        for y in range(top, bottom):
+            covered = 0
+            for x in range(first_x, last_x + 1):
+                pixel = image.getpixel((x, y))
+                if max(abs(pixel[channel] - background[channel]) for channel in range(3)) > 4:
+                    covered += 1
+            if covered >= max(2, int((last_x - first_x + 1) * 0.75)):
+                stroke_rows.append(y)
+
+        row_results = []
+        for y in stroke_rows:
+            boundary_differences = []
+            boundary_pixels = []
+            control_pixels = []
+            for index in range(2, run_length - 2):
+                boundary_x = min(width - 1, max(0, int(math.floor(origin + index * advance + 0.5))))
+                control_x = min(width - 1, max(0, int(math.floor(origin + (index + 0.5) * advance + 0.5))))
+                boundary = image.getpixel((boundary_x, y))
+                control = image.getpixel((control_x, y))
+                boundary_pixels.append(boundary)
+                control_pixels.append(control)
+                boundary_differences.append(max(
+                    abs(boundary[channel] - control[channel]) for channel in range(3)
+                ))
+            max_contrast = max(boundary_differences, default=0)
+            shift = max(1, int(math.floor(advance + 0.5)))
+            periodic_differences = []
+            for x in range(first_x, last_x - shift + 1):
+                first = image.getpixel((x, y))
+                second = image.getpixel((x + shift, y))
+                periodic_differences.append(sum(
+                    abs(first[channel] - second[channel]) for channel in range(3)
+                ) / 3.0)
+            periodic_energy = (
+                sum(periodic_differences) / len(periodic_differences)
+                if periodic_differences else 0.0
+            )
+            row_result = {
+                "y": y,
+                "max_boundary_contrast": max_contrast,
+                "periodic_energy": periodic_energy,
+                "boundary_channel_range": [
+                    min((pixel[channel] for pixel in boundary_pixels), default=0)
+                    for channel in range(3)
+                ] + [
+                    max((pixel[channel] for pixel in boundary_pixels), default=0)
+                    for channel in range(3)
+                ],
+            }
+            row_results.append(row_result)
+        asserted = bool(int(fixture.get("assert_continuity", 1)))
+        analysis = {
+            "fixture": fixture["id"],
+            "renderer": fixture.get("renderer", ""),
+            "asserted": asserted,
+            "stroke_rows": row_results,
+            "max_boundary_contrast": max(
+                (row["max_boundary_contrast"] for row in row_results), default=0
+            ),
+            "passed": bool(row_results) and all(
+                row["max_boundary_contrast"] <= threshold for row in row_results
+            ),
+        }
+        if not row_results and asserted:
+            failures.append({"fixture": fixture["id"], "error": "no stroke rows found"})
+        elif asserted:
+            for row in row_results:
+                if row["max_boundary_contrast"] > threshold:
+                    failures.append({
+                        "fixture": fixture["id"], "row": row["y"],
+                        "max_boundary_contrast": row["max_boundary_contrast"],
+                    })
+        analyses.append(analysis)
+
+    stable_sizes = []
+    for requested_size in sorted({
+        int(float(fixture["requested_size"]))
+        for fixture in fixtures
+        if str(fixture.get("id", "")).startswith("size-")
+    }):
+        size_results = [
+            analysis for analysis in analyses
+            if analysis["fixture"].startswith(f"size-{requested_size}-")
+        ]
+        if len(size_results) >= 2 and all(result["passed"] for result in size_results):
+            stable_sizes.append(requested_size)
+
+    return {
+        "threshold": threshold,
+        "passed": bool(analyses) and not failures,
+        "first_stable_stroke_ppem": min(stable_sizes) if stable_sizes else None,
+        "fixtures": analyses,
+        "failures": failures,
+    }
 
 
 def copy_external_specimen(source: Path, destination: Path) -> tuple[Path, dict[str, Any]]:
@@ -354,7 +526,7 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         "action_ms", "update_ms", "draw_emit_ms", "renderer_end_ms", "frame_ms",
         "present_ms", "core_step_ms", "total_ms", "draw_calls", "quad_instances",
         "texture_batch_breaks", "quad_batches", "unique_batch_srvs",
-        "repeated_batch_srvs", "rencache_commands", "rencache_text_commands",
+        "repeated_batch_srvs", "texture_uploads", "rencache_commands", "rencache_text_commands",
         "rencache_command_bytes", "display_packet_replays",
         "display_packet_commands_replayed", "display_packet_frame_bytes_copied",
         "display_packet_replay_ms", "text_render_calls", "text_render_glyphs",
@@ -365,6 +537,8 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         result[f"{key}_p50"] = percentile(vals, 0.50)
         result[f"{key}_p95"] = percentile(vals, 0.95)
         result[f"{key}_p99"] = percentile(vals, 0.99)
+        if key == "texture_uploads":
+            result["texture_uploads_max"] = max(vals)
         if key.endswith("_ms") or key.endswith("_kib"):
             add_progression_metrics(result, key, vals)
     draws = result["draw_calls_avg"]
@@ -521,6 +695,7 @@ def run_case(
     *, exe: Path, work: Path, user: Path, fixture: Path, tab_dir: Path,
     external_fixture: Path | None = None,
     scenario: str, settings: dict[str, Any], mode: str, run_dir: Path,
+    renderer: str,
     frames: int, warmup_frames: int, screenshot: bool,
     total_timeout_seconds: int | None = None, startup_timeout_seconds: int = 30,
     heartbeat_timeout_seconds: int = 15,
@@ -533,6 +708,7 @@ def run_case(
     resource_samples_file = run_dir / "resources.csv"
     timeout_dump_file = run_dir / "timeout.dmp"
     screenshot_file = run_dir / "screenshot.png"
+    raster_metadata_file = run_dir / "font-raster-metadata.csv"
     case_fixture = (
         work / "fixtures" / "markdown-long-link.md"
         if settings.get("fixture") == "markdown-long-link" else fixture
@@ -544,7 +720,7 @@ def run_case(
     environment = {
         "ANVIL_USERDIR": str(user),
         "USERPROFILE": str(user),
-        "ANVIL_RENDERER": "d3d11",
+        "ANVIL_RENDERER": renderer,
         # The IPC plugin uses a process-global shared-memory channel. Disable
         # it before startup so a benchmark can never hand its fixture to the
         # user's interactive Anvil instance.
@@ -560,6 +736,7 @@ def run_case(
         "ANVIL_PERF_BENCHMARK_HEARTBEAT": str(heartbeat_file),
         "ANVIL_PERF_BENCHMARK_LIFECYCLE": str(lifecycle_file),
         "ANVIL_PERF_BENCHMARK_SCREENSHOT": str(screenshot_file) if screenshot else "",
+        "ANVIL_PERF_BENCHMARK_RASTER_METADATA": str(raster_metadata_file),
         "ANVIL_PERF_BENCHMARK_CAPTURE_FRAMES": "3",
         "ANVIL_PERF_BENCHMARK_CAPTURE_SETTLE_FRAMES": "5",
         "ANVIL_PERF_BENCHMARK_WARMUP_FRAMES": str(warmup_frames),
@@ -612,6 +789,7 @@ def run_case(
         )
     result: dict[str, Any] = {
         "scenario": scenario,
+        "renderer": renderer,
         "mode": mode,
         "run_dir": str(run_dir),
         "active_fps": float(values["active_fps"]),
@@ -649,8 +827,10 @@ def run_case(
     }
     if result["measured_frames"] != frames:
         raise RuntimeError(f"workload mismatch: expected {frames}, got {result['measured_frames']}")
-    if result["renderer_path"] != "commands":
+    if renderer == "d3d11" and result["renderer_path"] != "commands":
         raise RuntimeError(f"expected D3D11 command renderer, got {result['renderer_path']!r}")
+    if renderer == "software" and result["renderer_path"] != "none":
+        raise RuntimeError(f"expected software renderer path 'none', got {result['renderer_path']!r}")
     if mode in ("metrics", "paced-metrics"):
         result["metrics"] = summarize_metrics(metrics_file)
         result["metrics_file"] = str(metrics_file)
@@ -673,6 +853,19 @@ def run_case(
             )
         result["screenshot"] = str(screenshot_file)
         result["stability_screenshots"] = [str(path) for path in stability_files]
+        if scenario == "font-raster-correctness":
+            fixtures = read_font_raster_metadata(raster_metadata_file)
+            result["font_raster"] = analyze_font_raster_seams(
+                screenshot_file, fixtures, int(settings["seam_channel_threshold"]),
+            )
+            if (renderer == "d3d11" and mode == "metrics"
+                    and result["metrics"].get("texture_uploads_max", 0) > 0):
+                result["font_raster"]["passed"] = False
+                result["font_raster"]["failures"].append({
+                    "error": "glyph texture uploads continued after warm-up",
+                    "texture_uploads_max": result["metrics"]["texture_uploads_max"],
+                })
+            result["font_raster_metadata"] = str(raster_metadata_file)
     return result
 
 
@@ -859,6 +1052,8 @@ def markdown_report(report: dict[str, Any]) -> str:
         "# Anvil render performance gate",
         "",
         f"- Suite: `{report['suite']}`",
+        f"- Renderer: `{report.get('renderer', 'd3d11')}`",
+        f"- Performance baseline: `{report.get('baseline_status', 'compared')}`",
         f"- Result: **{verdict}**",
         f"- Run directory: `{report['run_dir']}`",
         "",
@@ -913,6 +1108,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", choices=sorted(SUITES), default="quick")
     parser.add_argument("--scenario", choices=sorted(SCENARIOS))
+    parser.add_argument("--renderer", choices=("d3d11", "software"), default="d3d11")
     parser.add_argument("--runs", type=int)
     parser.add_argument("--metrics-runs", type=int)
     parser.add_argument("--paced-runs", type=int)
@@ -956,6 +1152,8 @@ def main() -> int:
         parser.error("watchdog timeouts must be positive")
     if args.max_runs < runs:
         parser.error("--max-runs must be greater than or equal to --runs")
+    if args.update_baseline and not uses_performance_baseline(args.renderer):
+        parser.error("software runs do not use a performance baseline")
 
     selected_scenarios = [args.scenario] if args.scenario else SUITES[args.suite]
     suite_label = f"scenario:{args.scenario}" if args.scenario else args.suite
@@ -1017,6 +1215,7 @@ def main() -> int:
         "frames": frames,
         "warmup_frames": warmup_frames,
         "user_state_mode": args.user_state_mode,
+        "renderer": args.renderer,
         "machine": machine_info(exe, external_fixture or fixture),
         "specimen": specimen_metadata,
         "repository": repository_info(),
@@ -1040,8 +1239,12 @@ def main() -> int:
             incompatible.append("frame counts")
         if baseline.get("user_state_mode", "clean") != args.user_state_mode:
             incompatible.append("user state mode")
+        if baseline.get("renderer", "d3d11") != args.renderer:
+            incompatible.append("renderer")
         if any(
-            baseline_scenarios.get(name, {}).get("settings") != SCENARIOS[name]
+            performance_workload_settings(
+                baseline_scenarios.get(name, {}).get("settings", {})
+            ) != performance_workload_settings(SCENARIOS[name])
             for name in untouched_scenarios
         ):
             incompatible.append("untouched scenario settings")
@@ -1071,6 +1274,7 @@ def main() -> int:
                 exe=exe, work=work, user=case_user("primer", 0),
                 fixture=fixture, external_fixture=external_fixture,
                 tab_dir=tab_dir, scenario=scenario, settings=settings,
+                renderer=args.renderer,
                 mode="throughput", run_dir=run_root / scenario / "state-primer",
                 frames=2, warmup_frames=1, screenshot=False,
                 **case_watchdogs,
@@ -1093,6 +1297,7 @@ def main() -> int:
                 exe=exe, work=work, user=case_user("throughput", index),
                 fixture=fixture, external_fixture=external_fixture,
                 tab_dir=tab_dir, scenario=scenario, settings=settings,
+                renderer=args.renderer,
                 mode="throughput", run_dir=run_root / scenario / f"throughput-{index}",
                 frames=frames, warmup_frames=warmup_frames, screenshot=False,
                 **case_watchdogs,
@@ -1109,7 +1314,8 @@ def main() -> int:
             if len(throughput_runs) < runs:
                 continue
             noise = relative_mad([item["active_fps"] for item in throughput_runs])
-            if noise <= 0.06 or len(throughput_runs) >= args.max_runs:
+            if (not uses_performance_baseline(args.renderer)
+                    or noise <= 0.06 or len(throughput_runs) >= args.max_runs):
                 break
             print(f"  throughput noise {noise:.1%}; automatically adding a repetition", flush=True)
 
@@ -1132,6 +1338,7 @@ def main() -> int:
                 exe=exe, work=work, user=case_user("metrics", index),
                 fixture=fixture, external_fixture=external_fixture,
                 tab_dir=tab_dir, scenario=scenario, settings=settings,
+                renderer=args.renderer,
                 mode="metrics", run_dir=run_root / scenario / f"metrics-{index}",
                 frames=frames, warmup_frames=warmup_frames,
                 screenshot=take_screenshot,
@@ -1196,7 +1403,8 @@ def main() -> int:
             scenario_report["active_fps_runs"]
         )
         scenario_report["throughput_stable"] = scenario_report["throughput_relative_mad"] <= 0.06
-        if not scenario_report["throughput_stable"]:
+        if (uses_performance_baseline(args.renderer)
+                and not scenario_report["throughput_stable"]):
             report["passed"] = False
         scenario_report["telemetry_overhead_fraction"] = (
             (scenario_report["active_fps"] - scenario_report["metrics_active_fps"])
@@ -1211,6 +1419,7 @@ def main() -> int:
                     exe=exe, work=work, user=case_user("paced", index),
                     fixture=fixture, external_fixture=external_fixture,
                     tab_dir=tab_dir, scenario=scenario, settings=settings,
+                    renderer=args.renderer,
                     mode="paced-metrics", run_dir=run_root / scenario / f"paced-{index}",
                     frames=frames, warmup_frames=warmup_frames, screenshot=False,
                     **case_watchdogs,
@@ -1248,7 +1457,16 @@ def main() -> int:
             )
         if visual_run:
             current = Path(visual_run["screenshot"])
-            golden = golden_root / f"{scenario}-d3d11.png"
+            golden = golden_root / f"{scenario}-{args.renderer}.png"
+            if scenario == "font-raster-correctness":
+                scenario_report["font_raster"] = visual_run["font_raster"]
+                if not visual_run["font_raster"]["passed"]:
+                    scenario_report["status"] = "failed"
+                    scenario_report.setdefault("failures", []).append({
+                        "failure_kind": "font_raster_seam",
+                        "details": visual_run["font_raster"]["failures"],
+                    })
+                    report["passed"] = False
             if args.update_goldens:
                 scenario_report["visual"] = {
                     "status": "pending_update",
@@ -1272,12 +1490,18 @@ def main() -> int:
                     report["passed"] = False
         report["scenarios"][scenario] = scenario_report
 
-    report["inconclusive"] = any(
-        not scenario.get("throughput_stable", True)
-        for scenario in report["scenarios"].values()
+    report["inconclusive"] = (
+        uses_performance_baseline(args.renderer)
+        and any(
+            not scenario.get("throughput_stable", True)
+            for scenario in report["scenarios"].values()
+        )
     )
 
-    if baseline and not args.update_baseline:
+    if not uses_performance_baseline(args.renderer):
+        report["performance_findings"] = []
+        report["baseline_status"] = "not_applicable"
+    elif baseline and not args.update_baseline:
         same_machine = baseline.get("machine", {}).get("node") == report["machine"]["node"]
         same_fixture = (
             baseline.get("machine", {}).get("fixture_sha256")
@@ -1288,13 +1512,15 @@ def main() -> int:
             and baseline.get("warmup_frames") == report["warmup_frames"]
         )
         same_scenario_settings = all(
-            baseline.get("scenarios", {}).get(name, {}).get("settings")
-            == scenario.get("settings")
+            performance_workload_settings(
+                baseline.get("scenarios", {}).get(name, {}).get("settings", {})
+            ) == performance_workload_settings(scenario.get("settings", {}))
             for name, scenario in report["scenarios"].items()
         )
         same_user_state_mode = (
             baseline.get("user_state_mode", "clean") == report["user_state_mode"]
         )
+        same_renderer = baseline.get("renderer", "d3d11") == report["renderer"]
         same_workload = same_frame_counts and same_scenario_settings and same_user_state_mode
         report["baseline_compatibility"] = {
             "same_machine": same_machine,
@@ -1302,14 +1528,15 @@ def main() -> int:
             "same_frame_counts": same_frame_counts,
             "same_scenario_settings": same_scenario_settings,
             "same_user_state_mode": same_user_state_mode,
+            "same_renderer": same_renderer,
             "same_workload": same_workload,
         }
         findings = (
             compare_performance(report, baseline)
-            if same_machine and same_fixture and same_workload else []
+            if same_machine and same_fixture and same_workload and same_renderer else []
         )
         report["performance_findings"] = findings
-        if (not same_machine or not same_fixture or not same_workload
+        if (not same_machine or not same_fixture or not same_workload or not same_renderer
                 or any(item["status"] in ("regression", "missing", "inconclusive")
                        for item in findings)):
             report["passed"] = False
@@ -1354,6 +1581,7 @@ def main() -> int:
             "frames": frames,
             "warmup_frames": warmup_frames,
             "user_state_mode": args.user_state_mode,
+            "renderer": args.renderer,
             "scenarios": {
                 name: {
                     "active_fps": item["active_fps"],

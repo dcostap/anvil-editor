@@ -213,6 +213,13 @@ fuzzy_test = executable('fuzzy_test',
 )
 test('fuzzy', fuzzy_test, env: anvil_test_env)
 
+font_raster_test = executable('font_raster_test',
+    ['../tests/native/font_raster_test.c'],
+    include_directories: anvil_includes,
+    c_args: anvil_cargs,
+)
+test('font-raster', font_raster_test, env: anvil_test_env)
+
 git_status_index_test = executable('git_status_index_test',
     ['../tests/native/git_status_index_test.c', 'git_status_index.c'],
     include_directories: anvil_includes,

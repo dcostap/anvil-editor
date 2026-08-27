@@ -18,6 +18,7 @@
 
 #include "renderer.h"
 #include "d3d11_backend.h"
+#include "font_raster_internal.h"
 #include "renwindow.h"
 
 // uncomment the line below for more debugging information through printf
@@ -112,6 +113,10 @@ typedef struct {
 
 // number of subpixel bitmaps
 #define SUBPIXEL_BITMAPS_CACHED 3
+_Static_assert(
+  SUBPIXEL_BITMAPS_CACHED == ANVIL_FONT_SUBPIXEL_PHASES,
+  "glyph cache and placement phase counts must match"
+);
 // number of shaped width entries cached per font
 #define SHAPED_WIDTH_CACHE_MAX 512
 // maximum shaped run byte length to copy into the width cache
@@ -183,6 +188,13 @@ typedef struct {
   uint8_t *rows[CHARMAP_ROW];
 } TextFontResolveCache;
 
+typedef struct {
+  FT_Int32 layout_load_flags;
+  FT_Int32 bitmap_load_flags;
+  FT_Render_Mode render_mode;
+  bool uses_lcd_coverage;
+} FontRasterPolicy;
+
 typedef struct RenFont {
   FT_Face face;
   hb_font_t *hb_font;
@@ -206,6 +218,9 @@ typedef struct RenFont {
   size_t shaped_width_count;
   ShapedWidthCacheEntry shaped_width_cache[SHAPED_WIDTH_CACHE_MAX];
   TextFontResolveCache text_resolve_cache;
+  FontRasterPolicy raster_policy;
+  FT_F26Dot6 requested_size_26_6;
+  unsigned short x_ppem, y_ppem;
   char path[];
 } RenFont;
 
@@ -288,34 +303,39 @@ static const char *utf8_to_codepoint_bounded(
   return p + length;
 }
 
-static int font_set_load_options(RenFont* font) {
-  int load_target = font->antialiasing == FONT_ANTIALIASING_NONE ? FT_LOAD_TARGET_MONO
-    : (font->hinting == FONT_HINTING_SLIGHT ? FT_LOAD_TARGET_LIGHT : FT_LOAD_TARGET_NORMAL);
-  int hinting = font->hinting == FONT_HINTING_NONE ? FT_LOAD_NO_HINTING : FT_LOAD_FORCE_AUTOHINT;
-  int color = FT_HAS_COLOR(font->face) ? FT_LOAD_COLOR : 0;
-  return load_target | hinting | color;
-}
+static FontRasterPolicy font_build_raster_policy(
+  ERenFontAntialiasing antialiasing, ERenFontHinting hinting, bool has_color
+) {
+  FontRasterPolicy policy = {
+    .layout_load_flags = FT_LOAD_DEFAULT | FT_LOAD_NO_HINTING,
+    .bitmap_load_flags = FT_LOAD_DEFAULT,
+    .render_mode = FT_RENDER_MODE_NORMAL,
+    .uses_lcd_coverage = false,
+  };
 
-static int font_set_render_options(RenFont* font) {
-  if (FT_HAS_COLOR(font->face))
-    return FT_RENDER_MODE_NORMAL;
-  if (font->antialiasing == FONT_ANTIALIASING_NONE)
-    return FT_RENDER_MODE_MONO;
-  if (font->antialiasing == FONT_ANTIALIASING_SUBPIXEL) {
-    switch (font->hinting) {
-      case FONT_HINTING_NONE: FT_Library_SetLcdFilter(library, FT_LCD_FILTER_DEFAULT); break;
-      case FONT_HINTING_SLIGHT: FT_Library_SetLcdFilter(library, FT_LCD_FILTER_LIGHT); break;
-      case FONT_HINTING_FULL: FT_Library_SetLcdFilter(library, FT_LCD_FILTER_LEGACY); break;
-    }
-    return FT_RENDER_MODE_LCD;
+  if (antialiasing == FONT_ANTIALIASING_NONE) {
+    policy.bitmap_load_flags |= FT_LOAD_TARGET_MONO;
+    policy.render_mode = FT_RENDER_MODE_MONO;
+  } else if (antialiasing == FONT_ANTIALIASING_SUBPIXEL
+      && hinting == FONT_HINTING_NONE) {
+    policy.bitmap_load_flags |= FT_LOAD_TARGET_LCD;
+  } else if (hinting == FONT_HINTING_SLIGHT) {
+    policy.bitmap_load_flags |= FT_LOAD_TARGET_LIGHT;
   } else {
-    switch (font->hinting) {
-      case FONT_HINTING_NONE:   return FT_RENDER_MODE_NORMAL; break;
-      case FONT_HINTING_SLIGHT: return FT_RENDER_MODE_LIGHT; break;
-      case FONT_HINTING_FULL:   return FT_RENDER_MODE_LIGHT; break;
-    }
+    policy.bitmap_load_flags |= FT_LOAD_TARGET_NORMAL;
   }
-  return 0;
+  if (hinting == FONT_HINTING_NONE)
+    policy.bitmap_load_flags |= FT_LOAD_NO_HINTING | FT_LOAD_NO_AUTOHINT;
+
+  if (antialiasing == FONT_ANTIALIASING_SUBPIXEL && !has_color) {
+    policy.render_mode = FT_RENDER_MODE_LCD;
+    policy.uses_lcd_coverage = true;
+  }
+  if (has_color) {
+    policy.bitmap_load_flags |= FT_LOAD_COLOR;
+    policy.render_mode = FT_RENDER_MODE_NORMAL;
+  }
+  return policy;
 }
 
 static int font_set_style(FT_Outline* outline, int x_translation, unsigned char style) {
@@ -347,6 +367,10 @@ static unsigned int font_get_glyph_id(RenFont *font, unsigned int codepoint) {
 
 #define FONT_IS_SUBPIXEL(F) ((F)->antialiasing == FONT_ANTIALIASING_SUBPIXEL)
 #define FONT_BITMAP_COUNT(F) ((F)->antialiasing == FONT_ANTIALIASING_SUBPIXEL ? SUBPIXEL_BITMAPS_CACHED : 1)
+
+static GlyphXPlacement font_quantize_glyph_x(const RenFont *font, double x) {
+  return font_quantize_glyph_x_value(font->raster_policy.uses_lcd_coverage, x);
+}
 
 static inline ERenGlyphFormat bitmap_to_glyph_format(FT_Bitmap bitmap) {
   if (bitmap.pixel_mode == FT_PIXEL_MODE_BGRA)
@@ -860,7 +884,9 @@ static bool colr_paint_glyph_to_surface(RenFont *font, FT_PaintGlyph *glyph_pain
   if (!FT_Get_Paint(font->face, glyph_paint->paint, &fill_paint))
     return false;
 
-  int load_options = (font_set_load_options(font) & ~FT_LOAD_COLOR) | FT_LOAD_NO_BITMAP;
+  /* COLR outline layers use the bitmap hint policy. They render grayscale
+     masks because color composition consumes one coverage value per pixel. */
+  int load_options = (font->raster_policy.bitmap_load_flags & ~FT_LOAD_COLOR) | FT_LOAD_NO_BITMAP;
   FT_Set_Transform(font->face, &ctx->matrix, &ctx->delta);
   if (FT_Load_Glyph(font->face, glyph_paint->glyphID, load_options) != 0 || FT_Render_Glyph(font->face->glyph, FT_RENDER_MODE_NORMAL) != 0)
     goto failure;
@@ -1024,7 +1050,7 @@ static SDL_Surface *font_load_colr_bitmap(RenFont *font, unsigned int glyph_id, 
 }
 
 static GlyphMetric *font_load_glyph_metric(RenFont *font, unsigned int glyph_id, unsigned int bitmap_idx) {
-  unsigned int load_option = font_set_load_options(font);
+  FT_Int32 load_option = font->raster_policy.layout_load_flags;
   int row = glyph_id / GLYPHMAP_COL, col = glyph_id - (row * GLYPHMAP_COL);
   int bitmaps = FONT_BITMAP_COUNT(font);
 
@@ -1033,7 +1059,7 @@ static GlyphMetric *font_load_glyph_metric(RenFont *font, unsigned int glyph_id,
     // load the font without hinting to fix an issue with monospaced fonts,
     // because freetype doesn't report the correct LSB and RSB delta. Transformation & subpixel positioning don't affect
     // the xadvance, so we can save some time by not doing this step multiple times
-    if (FT_Load_Glyph(font->face, glyph_id, (load_option | FT_LOAD_BITMAP_METRICS_ONLY | FT_LOAD_NO_HINTING) & ~FT_LOAD_FORCE_AUTOHINT) != 0)
+    if (FT_Load_Glyph(font->face, glyph_id, load_option | FT_LOAD_BITMAP_METRICS_ONLY) != 0)
       return NULL;
     for (int i = 0; i < bitmaps; i++) {
       // save the metrics for all subpixel indexes
@@ -1055,7 +1081,8 @@ static SDL_Surface *font_load_glyph_bitmap(RenFont *font, unsigned int glyph_id,
   if (metric->flags & EGlyphBitmap) return font->glyphs.atlas[metric->format][metric->atlas_idx].surfaces[metric->surface_idx];
 
   // render the glyph for a bitmap_idx
-  unsigned int load_option = font_set_load_options(font), render_option = font_set_render_options(font);
+  FT_Int32 load_option = font->raster_policy.bitmap_load_flags;
+  FT_Render_Mode render_option = font->raster_policy.render_mode;
   FT_GlyphSlot slot = font->face->glyph;
   FT_OpaquePaint colr_paint = { 0 };
   if (FT_HAS_COLOR(font->face) && FT_Get_Color_Glyph_Paint(font->face, glyph_id, FT_COLOR_NO_ROOT_TRANSFORM, &colr_paint)) {
@@ -1349,7 +1376,12 @@ static int font_set_face_metrics(RenFont *font, FT_Face face) {
   #ifdef ANVIL_USE_SDL_RENDERER
   pixel_size *= font->scale;
   #endif
+  font->face = face;
+  font->raster_policy = font_build_raster_policy(
+    font->antialiasing, font->hinting, FT_HAS_COLOR(face)
+  );
   font->color_scale = 1.0f;
+  font->requested_size_26_6 = 0;
   if (FT_HAS_COLOR(face) && FT_HAS_FIXED_SIZES(face) && face->num_fixed_sizes > 0) {
     FT_Pos target = (FT_Pos)(pixel_size * 64.0f);
     int best_match = 0;
@@ -1366,7 +1398,10 @@ static int font_set_face_metrics(RenFont *font, FT_Face face) {
     if (selected_size > 0.0f)
       font->color_scale = pixel_size / selected_size;
   } else {
-    err = FT_Set_Pixel_Sizes(face, 0, (int) pixel_size);
+    long rounded_26_6 = lroundf(pixel_size * 64.0f);
+    FT_F26Dot6 requested_26_6 = (FT_F26Dot6)(rounded_26_6 < 64 ? 64 : rounded_26_6);
+    font->requested_size_26_6 = requested_26_6;
+    err = FT_Set_Char_Size(face, 0, requested_26_6, 72, 72);
     if (err != 0 && FT_HAS_FIXED_SIZES(face) && face->num_fixed_sizes > 0) {
       FT_Pos target = (FT_Pos)(pixel_size * 64.0f);
       int best_match = 0;
@@ -1384,7 +1419,9 @@ static int font_set_face_metrics(RenFont *font, FT_Face face) {
   if (err != 0)
     return err;
 
-  font->face = face;
+  font->x_ppem = face->size ? face->size->metrics.x_ppem : 0;
+  font->y_ppem = face->size ? face->size->metrics.y_ppem : 0;
+
   font->palette = NULL;
   font->palette_count = 0;
   if (FT_HAS_COLOR(face)) {
@@ -1408,13 +1445,17 @@ static int font_set_face_metrics(RenFont *font, FT_Face face) {
   if(!font->underline_thickness)
     font->underline_thickness = ceil((double) font->height / 14.0);
 
-  if ((err = FT_Load_Char(face, ' ', (font_set_load_options(font) | FT_LOAD_BITMAP_METRICS_ONLY | FT_LOAD_NO_HINTING) & ~FT_LOAD_FORCE_AUTOHINT)) != 0)
+  if ((err = FT_Load_Char(
+      face, ' ', font->raster_policy.layout_load_flags | FT_LOAD_BITMAP_METRICS_ONLY
+    )) != 0)
     return err;
   font->space_advance = face->glyph->advance.x / 64.0f;
 
   if (font->hb_font)
     hb_font_destroy(font->hb_font);
   font->hb_font = hb_ft_font_create_referenced(face);
+  if (font->hb_font)
+    hb_ft_font_set_load_flags(font->hb_font, font->raster_policy.layout_load_flags);
   return 0;
 }
 
@@ -1967,9 +2008,9 @@ typedef struct {
   RenRect d3d11_clip;
 } DrawGlyphContext;
 
-static void draw_glyph_bitmap(DrawGlyphContext *ctx, RenFont **fonts, RenFont *font, SDL_Surface *font_surface, GlyphMetric *metric, double draw_x, double y, double y_offset, bool draw_missing) {
+static void draw_glyph_bitmap(DrawGlyphContext *ctx, RenFont **fonts, RenFont *font, SDL_Surface *font_surface, GlyphMetric *metric, int pixel_x, double y, double y_offset, bool draw_missing) {
   unsigned int r, g, b;
-  int start_x = floor(draw_x) + metric->bitmap_left;
+  int start_x = pixel_x + metric->bitmap_left;
   int end_x = metric->x1 + start_x; // x0 is assumed to be 0
   bool has_bitmap = font_surface && metric->x1 > 0 && metric->y1 > metric->y0;
 
@@ -2069,6 +2110,40 @@ static void draw_glyph_bitmap(DrawGlyphContext *ctx, RenFont **fonts, RenFont *f
   }
 }
 
+static GlyphMetric *draw_resolved_glyph(
+  DrawGlyphContext *ctx, RenFont **fonts, RenFont *font,
+  unsigned int glyph_id, double glyph_x, double y, double y_offset,
+  bool draw_missing
+) {
+  GlyphXPlacement placement = font_quantize_glyph_x(font, glyph_x);
+  SDL_Surface *font_surface = NULL;
+  GlyphMetric *metric = NULL;
+  font_get_glyph_by_id(
+    font, glyph_id, placement.bitmap_index, &font_surface, &metric
+  );
+
+  if ((!metric || !metric->flags) && glyph_id == 0) {
+    unsigned int fallback_id = 0;
+    RenFont *fallback_font = font_group_find_font(fonts, 0x25A1, &fallback_id);
+    placement = font_quantize_glyph_x(fallback_font, glyph_x);
+    font_surface = NULL;
+    metric = NULL;
+    font_get_glyph_by_id(
+      fallback_font, fallback_id, placement.bitmap_index, &font_surface, &metric
+    );
+    font = fallback_font;
+  }
+
+  if (metric) {
+    g_text_frame_stats.render_glyphs++;
+    draw_glyph_bitmap(
+      ctx, fonts, font, font_surface, metric, placement.pixel_x,
+      y, y_offset, draw_missing
+    );
+  }
+  return metric;
+}
+
 static double draw_shaped_run(hb_buffer_t *buffer, DrawGlyphContext *ctx, RenFont **fonts, RenFont *font, const char *text, size_t len, double pen_x, double y) {
   g_text_frame_stats.render_shaped_runs++;
   unsigned int glyph_count = 0;
@@ -2106,13 +2181,10 @@ static double draw_shaped_run(hb_buffer_t *buffer, DrawGlyphContext *ctx, RenFon
     double x_offset = hb_position_to_font_pixels(font, positions[i].x_offset);
     double y_offset = hb_position_to_font_pixels(font, positions[i].y_offset);
     double glyph_x = pen_x + x_offset;
-    SDL_Surface *font_surface = NULL;
-    GlyphMetric *metric = NULL;
-    font_get_glyph_by_id(font, infos[i].codepoint, (int)(fmod(glyph_x, 1.0) * SUBPIXEL_BITMAPS_CACHED), &font_surface, &metric);
-    if (metric) {
-      g_text_frame_stats.render_glyphs++;
-      draw_glyph_bitmap(ctx, fonts, font, font_surface, metric, glyph_x, y, y_offset, infos[i].codepoint == 0);
-    }
+    draw_resolved_glyph(
+      ctx, fonts, font, infos[i].codepoint, glyph_x, y, y_offset,
+      infos[i].codepoint == 0
+    );
     pen_x += hb_position_to_font_pixels(font, positions[i].x_advance);
   }
 
@@ -2130,16 +2202,19 @@ static double draw_unshaped_run(DrawGlyphContext *ctx, RenFont **fonts, const ch
     unsigned int codepoint;
     text = utf8_to_codepoint(text, end, &codepoint);
     g_text_frame_stats.render_chars++;
-    SDL_Surface *font_surface = NULL; GlyphMetric *metric = NULL;
-    RenFont *font = font_group_get_glyph(fonts, codepoint, (int)(fmod(pen_x, 1.0) * SUBPIXEL_BITMAPS_CACHED), &font_surface, &metric);
-    if (!metric)
-      break;
+    unsigned int glyph_id = 0;
+    RenFont *font = font_group_find_font(fonts, codepoint, &glyph_id);
+    GlyphMetric *metric = NULL;
     if (is_whitespace(codepoint)) {
+      font_get_glyph_by_id(font, glyph_id, 0, NULL, &metric);
       g_text_frame_stats.render_whitespace_chars++;
     } else {
-      g_text_frame_stats.render_glyphs++;
-      draw_glyph_bitmap(ctx, fonts, font, font_surface, metric, pen_x, y, 0, true);
+      metric = draw_resolved_glyph(
+        ctx, fonts, font, glyph_id, pen_x, y, 0, true
+      );
     }
+    if (!metric)
+      break;
     pen_x += font_get_xadvance(fonts[0], codepoint, metric, pen_x - original_pen_x, tab);
   }
   return pen_x;
@@ -2232,17 +2307,18 @@ double ren_draw_text(RenSurface *rs, RenFont **fonts, const char *text, size_t l
       }
       text = run_end;
     } else {
-      SDL_Surface *font_surface = NULL; GlyphMetric *metric = NULL;
-      font = font_group_get_glyph(fonts, codepoint, (int)(fmod(pen_x, 1.0) * SUBPIXEL_BITMAPS_CACHED), &font_surface, &metric);
-      if (!metric)
-        break;
+      GlyphMetric *metric = NULL;
       bool white_space = is_whitespace(codepoint);
       if (white_space) {
+        font_get_glyph_by_id(font, glyph_id, 0, NULL, &metric);
         g_text_frame_stats.render_whitespace_chars++;
       } else {
-        g_text_frame_stats.render_glyphs++;
-        draw_glyph_bitmap(&draw_context, fonts, font, font_surface, metric, pen_x, y, 0, true);
+        metric = draw_resolved_glyph(
+          &draw_context, fonts, font, glyph_id, pen_x, y, 0, true
+        );
       }
+      if (!metric)
+        break;
       float adv = font_get_xadvance(fonts[0], codepoint, metric, pen_x - original_pen_x, tab);
 
       if(!last) last = font;
@@ -2317,17 +2393,18 @@ bool ren_draw_text_d3d11(SDL_Window *window, RenRect clip, RenFont **fonts, cons
       }
       text = run_end;
     } else {
-      SDL_Surface *font_surface = NULL; GlyphMetric *metric = NULL;
-      font = font_group_get_glyph(fonts, codepoint, (int)(fmod(pen_x, 1.0) * SUBPIXEL_BITMAPS_CACHED), &font_surface, &metric);
-      if (!metric)
-        break;
+      GlyphMetric *metric = NULL;
       bool white_space = is_whitespace(codepoint);
       if (white_space) {
+        font_get_glyph_by_id(font, glyph_id, 0, NULL, &metric);
         g_text_frame_stats.render_whitespace_chars++;
       } else {
-        g_text_frame_stats.render_glyphs++;
-        draw_glyph_bitmap(&draw_context, fonts, font, font_surface, metric, pen_x, y, 0, true);
+        metric = draw_resolved_glyph(
+          &draw_context, fonts, font, glyph_id, pen_x, y, 0, true
+        );
       }
+      if (!metric)
+        break;
       pen_x += font_get_xadvance(fonts[0], codepoint, metric, pen_x - original_pen_x, tab);
     }
   }
@@ -2820,6 +2897,20 @@ int ren_init(void) {
 
   if ((err = FT_Init_FreeType(&library)) != 0)
     return SDL_SetError("%s", get_ft_error(err));
+
+  FT_Vector lcd_geometry[3] = {
+    { -21, 0 }, { 0, 0 }, { 21, 0 }
+  };
+  err = FT_Library_SetLcdGeometry(library, lcd_geometry);
+  if (err == FT_Err_Unimplemented_Feature)
+    err = FT_Library_SetLcdFilter(library, FT_LCD_FILTER_LIGHT);
+  if (err != FT_Err_Ok) {
+    FT_Done_FreeType(library);
+    library = NULL;
+    SDL_DestroySurface(draw_rect_surface);
+    draw_rect_surface = NULL;
+    return SDL_SetError("failed to initialize LCD rendering policy: %s", get_ft_error(err));
+  }
 
   return 0;
 }

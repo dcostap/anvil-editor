@@ -100,6 +100,86 @@ test.describe("graphics apis", function()
     test.ok(pixels_plain ~= pixels_liga, "ligature-enabled rendering should differ from plain glyph rendering")
   end)
 
+  test.test("keeps raster quality options out of text layout", function()
+    local font_path = DATADIR .. PATHSEP .. "fonts"
+      .. PATHSEP .. "CaskaydiaCoveNerdFontMono-SemiLight.ttf"
+    local natural = renderer.font.load(font_path, 15 * SCALE, {
+      antialiasing = "subpixel", hinting = "none", ligatures = true,
+    })
+    local hinted = renderer.font.load(font_path, 15 * SCALE, {
+      antialiasing = "subpixel", hinting = "full", ligatures = true,
+    })
+    local grayscale = renderer.font.load(font_path, 15 * SCALE, {
+      antialiasing = "grayscale", hinting = "slight", ligatures = true,
+    })
+    local samples = {
+      "ASCII iiii ====", "────────", "tabs\talign", "é λ Ελληνικά",
+    }
+
+    for _, text in ipairs(samples) do
+      local expected_width = natural:get_width(text)
+      test.equal(hinted:get_width(text), expected_width)
+      test.equal(grayscale:get_width(text), expected_width)
+      test.equal(hinted:text_layout(text):width(), natural:text_layout(text):width())
+      test.equal(grayscale:text_layout(text):width(), natural:text_layout(text):width())
+      local wrap_width = math.max(1, expected_width * 0.55)
+      test.same(hinted:wrap_text(text, wrap_width), natural:wrap_text(text, wrap_width))
+      test.same(grayscale:wrap_text(text, wrap_width), natural:wrap_text(text, wrap_width))
+    end
+  end)
+
+  test.test("uses fractional nominal font sizes for deterministic layout", function()
+    local font_path = DATADIR .. PATHSEP .. "fonts"
+      .. PATHSEP .. "CaskaydiaCoveNerdFontMono-SemiLight.ttf"
+    local integer = renderer.font.load(font_path, 15 * SCALE, { ligatures = true })
+    local fractional = renderer.font.load(font_path, 15.5 * SCALE, { ligatures = true })
+    local repeated = renderer.font.load(font_path, 15.5 * SCALE, { ligatures = true })
+    local text = "office ──────── Ελληνικά"
+
+    test.ok(
+      math.abs(fractional:get_width(text) - integer:get_width(text)) > 0.01,
+      "fractional font size must not use the lower integer scale"
+    )
+    test.equal(fractional:get_width(text), repeated:get_width(text))
+    test.equal(fractional:text_layout(text):width(), repeated:text_layout(text):width())
+    test.same(
+      fractional:wrap_text(text, fractional:get_width(text) * 0.55),
+      repeated:wrap_text(text, repeated:get_width(text) * 0.55)
+    )
+
+    local expected_width = fractional:get_width(text)
+    fractional:set_size(16 * SCALE)
+    fractional:set_size(15.5 * SCALE)
+    test.equal(fractional:get_width(text), expected_width)
+    fractional:set_size(14 * SCALE)
+    fractional:set_size(15.5 * SCALE)
+    test.equal(fractional:get_width(text), expected_width)
+  end)
+
+  test.test("keeps glyph caches local to each font copy", function()
+    local font_path = DATADIR .. PATHSEP .. "fonts"
+      .. PATHSEP .. "CaskaydiaCoveNerdFontMono-SemiLight.ttf"
+    local full = renderer.font.load(font_path, 15 * SCALE, {
+      antialiasing = "subpixel", hinting = "full", ligatures = false,
+    })
+    local copy = full:copy(15 * SCALE)
+    local text = "────────────────────────"
+    local full_canvas = canvas.new(260 * SCALE, 32 * SCALE, {18, 20, 28, 255}, true)
+    local copy_canvas = canvas.new(260 * SCALE, 32 * SCALE, {18, 20, 28, 255}, true)
+    full_canvas:draw_text(full, text, 0.5 * SCALE, 0, {220, 225, 235, 255})
+    copy_canvas:draw_text(copy, text, 0.5 * SCALE, 0, {220, 225, 235, 255})
+    full_canvas:render()
+    copy_canvas:render()
+
+    local full_pixels = full_canvas:get_pixels(0, 0, 260 * SCALE, 32 * SCALE)
+    test.equal(copy_canvas:get_pixels(0, 0, 260 * SCALE, 32 * SCALE), full_pixels)
+
+    local generation = full:get_generation()
+    full:set_size(16 * SCALE)
+    test.ok(full:get_generation() > generation)
+    test.equal(copy:get_size(), 15 * SCALE)
+  end)
+
   test.test("supports canvas pixel, copy and image loading operations", function(context)
     local c = canvas.new(2, 2, {0, 0, 0, 255}, true)
     local width, height = c:get_size()

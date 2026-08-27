@@ -27,6 +27,20 @@ def load_gate():
 gate = load_gate()
 
 
+class PerformanceBaselinePolicyTests(unittest.TestCase):
+    def test_only_d3d11_uses_the_performance_baseline(self):
+        self.assertTrue(gate.uses_performance_baseline("d3d11"))
+        self.assertFalse(gate.uses_performance_baseline("software"))
+
+    def test_reference_notes_do_not_change_the_performance_workload(self):
+        old = {"frames": 600, "directwrite_reference": {"first_stable_stroke_ppem": 15}}
+        current = {"frames": 600, "directwrite_reference": {"continuous_at_ppem": [15]}}
+        self.assertEqual(
+            gate.performance_workload_settings(old),
+            gate.performance_workload_settings(current),
+        )
+
+
 class MetricsSummaryTests(unittest.TestCase):
     def test_reports_stutter_budgets_consecutive_misses_and_progression(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -85,6 +99,78 @@ class MetricsSummaryTests(unittest.TestCase):
             if item["metric"] == "paced_interval_over_33_33_fraction"
         )
         self.assertEqual(stutter["status"], "regression")
+
+
+@unittest.skipIf(gate.Image is None, "Pillow is required")
+class FontRasterAnalyzerTests(unittest.TestCase):
+    def fixture(self):
+        return {
+            "id": "line-dark",
+            "kind": "connected-line",
+            "renderer": "d3d11",
+            "origin_x": 10.0,
+            "text_top": 6.0,
+            "baseline": 14.0,
+            "requested_size": 15.0,
+            "advance": 9.0,
+            "run_length": 8,
+            "background_r": 18,
+            "background_g": 20,
+            "background_b": 28,
+            "foreground_r": 220,
+            "foreground_g": 225,
+            "foreground_b": 235,
+        }
+
+    def render_fixture(self, path: Path, seam_delta: int = 0):
+        image = gate.Image.new("RGB", (100, 30), (18, 20, 28))
+        for y in (12, 13, 14):
+            for x in range(10, 82):
+                image.putpixel((x, y), (220, 225, 235))
+            if seam_delta:
+                for boundary in range(19, 82, 9):
+                    image.putpixel(
+                        (boundary, y),
+                        (220 - seam_delta, 225 - seam_delta, 235 - seam_delta),
+                    )
+        image.save(path)
+
+    def test_continuous_connected_rows_pass_without_exact_color_matching(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "continuous.png"
+            self.render_fixture(path)
+
+            result = gate.analyze_font_raster_seams(path, [self.fixture()], threshold=12)
+
+            self.assertTrue(result["passed"], result)
+            self.assertEqual(result["fixtures"][0]["max_boundary_contrast"], 0)
+
+    def test_periodic_boundary_contrast_fails_the_fixed_threshold(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "seams.png"
+            self.render_fixture(path, seam_delta=30)
+
+            result = gate.analyze_font_raster_seams(path, [self.fixture()], threshold=12)
+
+            self.assertFalse(result["passed"], result)
+            self.assertGreater(result["fixtures"][0]["max_boundary_contrast"], 12)
+
+    def test_reports_first_stable_size_and_keeps_diagnostics_non_gating(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "sizes.png"
+            self.render_fixture(path)
+            dark = dict(self.fixture(), id="size-15-dark", assert_continuity=1)
+            light = dict(self.fixture(), id="size-15-light", assert_continuity=1)
+            diagnostic = dict(
+                self.fixture(), id="slight-diagnostic-15-dark", assert_continuity=0,
+            )
+
+            result = gate.analyze_font_raster_seams(
+                path, [dark, light, diagnostic], threshold=12,
+            )
+
+            self.assertTrue(result["passed"], result)
+            self.assertEqual(result["first_stable_stroke_ppem"], 15)
 
 
 class StateValidationTests(unittest.TestCase):

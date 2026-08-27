@@ -97,6 +97,7 @@ copy_anvil_build () {
   for module_name in core compat plugins colors fonts widget treesitter; do
     cp -r "data/$module_name" "$datadir"
   done
+  cp -r "resources/icons" "$datadir"
   if [ -d "subprojects/colors" ]; then
     cp -a "subprojects/colors/colors" "$datadir"
   fi
