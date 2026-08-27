@@ -67,6 +67,32 @@ test.describe("Fuzzy Searcher Everything search", function()
     test.equal(requests[2].params.search, "file: needle")
   end)
 
+  test.it("includes a folder named by a query with a trailing separator", function()
+    local requests = {}
+    http.get = function(_, params, options)
+      requests[#requests + 1] = { params = params, options = options }
+    end
+    helpers.set_everything_state("available")
+
+    fuzzy_searcher.open("@odin\\src\\")
+
+    test.equal(requests[1].params.search, "folder: odin\\src")
+    requests[1].options.on_done(true, nil, {
+      totalResults = 1,
+      results = { { type = "folder", path = "C:\\code\\odin", name = "src" } },
+    })
+    test.equal(requests[2].params.search, "file: odin\\src")
+    requests[2].options.on_done(true, nil, { totalResults = 0, results = {} })
+
+    local picker = core.fuzzy_searcher_active_view
+    picker:refresh(picker.input:get_text())
+    local folder
+    for _, result in ipairs(picker.results) do
+      if result.project == "C:\\code\\odin\\src" then folder = result break end
+    end
+    test.not_nil(folder)
+  end)
+
   test.it("cancels an Everything request when the Path Search query changes", function()
     local requests = {}
     http.get = function(_, params, options)

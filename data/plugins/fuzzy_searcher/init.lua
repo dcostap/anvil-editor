@@ -1097,6 +1097,12 @@ local function trim_query(q)
   return tostring(q or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+function fuzzy_searcher.path_match_query(query)
+  query = trim_query(query)
+  local without_trailing_separator = query:gsub("[/\\]+$", "")
+  return without_trailing_separator ~= "" and without_trailing_separator or query
+end
+
 fuzzy_searcher.mode_prefixes = {
   ["#"] = true, ["@"] = true, [">"] = true, ["!"] = true,
   ["$"] = true, ["$$"] = true,
@@ -2222,9 +2228,7 @@ end
 
 local function merge_folder_matches(matches, query, line, limit)
   if line then return matches, 0 end
-  query = tostring(query or "")
-  local trimmed_query = query:gsub("[/\\]+$", "")
-  if trimmed_query ~= "" then query = trimmed_query end
+  query = fuzzy_searcher.path_match_query(query)
   local index = fuzzy_searcher.folders_fuzzy_index
   if not index then
     local matched = 0
@@ -4562,7 +4566,7 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
     return
   elseif path_plan.external or path_plan.project_scope then
     kill_file_search()
-    local query = trim_query(base)
+    local query = fuzzy_searcher.path_match_query(base)
     local scope = path_plan.scope
     bare_path_search = path_plan.explicit and query == "" and not scope
     local projects, projects_hidden = {}, false
