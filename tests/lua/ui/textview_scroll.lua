@@ -5,6 +5,7 @@ local style = require "core.style"
 local test = require "core.test"
 local Editor = require "core.editor"
 local panes = require "core.panes"
+local line_packets = require "core.textview_line_packets"
 
 require "plugins.intellij_find"
 
@@ -36,15 +37,18 @@ local function open_editor(context, text)
   return view, buffer
 end
 
-local function visible_text_right(view)
+local function visible_text_screen_edges(view)
+  local gw = view:get_gutter_width()
   local _, _, scroll_w = view.v_scrollbar:get_track_rect()
-  return view.scroll.x + math.max(0, view.size.x - scroll_w)
+  return view.position.x + gw, view.position.x + view.size.x - scroll_w
 end
 
-local function range_x(view, line, col1, col2)
+local function range_screen_x(view, line, col1, col2, target_scroll)
   local gw = view:get_gutter_width()
-  local x1 = view:get_col_x_offset(line, col1) + gw
-  local x2 = view:get_col_x_offset(line, col2) + gw
+  local scroll_x = target_scroll == nil and view.scroll.x or target_scroll
+  local text_origin = view.position.x - scroll_x + gw
+  local x1 = text_origin + view:get_col_x_offset(line, col1)
+  local x2 = text_origin + view:get_col_x_offset(line, col2)
   return math.min(x1, x2), math.max(x1, x2)
 end
 
@@ -65,6 +69,48 @@ end
 local function disable_wrapping(view)
   view:set_wrapping_enabled(false)
   view.scroll.x, view.scroll.to.x = 0, 0
+end
+
+local function wait_for_horizontal_extent(view)
+  view:get_h_scrollable_size()
+  return wait_until(function()
+    view:get_h_scrollable_size()
+    return not view:is_horizontal_extent_scan_pending()
+  end, 2)
+end
+
+local function expected_horizontal_extent(view, text, opts)
+  local font = view:get_font()
+  local _, indent_size = view.buffer:get_indent_info()
+  font:set_tab_size(indent_size)
+  local gutter = view:get_gutter_width()
+  local _, _, scroll_w = view.v_scrollbar:get_track_rect()
+  return math.max(
+    view.size.x,
+    gutter + font:get_width(text, opts)
+      + math.max(style.padding.x, scroll_w or 0)
+  )
+end
+
+local function capture_unwrapped_line_draw(view, scroll_x)
+  local old_draw_text = renderer.draw_text
+  local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+  local submitted = {}
+  renderer.draw_text = function(font, text, x, _, _, opts)
+    submitted[#submitted + 1] = text
+    return x + font:get_width(text, opts)
+  end
+  renderer.draw_text_known_bounds = function(_, text)
+    submitted[#submitted + 1] = text
+  end
+  view.__test_force_known_bounds = true
+  view.scroll.x, view.scroll.to.x = scroll_x, scroll_x
+  local x, y = view:get_line_screen_position(1)
+  local ok, err = pcall(view.draw_line_text, view, 1, x, y)
+  renderer.draw_text = old_draw_text
+  renderer.draw_text_known_bounds = old_draw_text_known_bounds
+  if not ok then error(err, 0) end
+  return table.concat(submitted)
 end
 
 test.describe("TextView selection scrolling", function()
@@ -191,19 +237,302 @@ test.describe("TextView selection scrolling", function()
     end, 1), "expected the deferred horizontal extent scan to complete")
   end)
 
-  test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)
-    local prefix = string.rep("x", 120)
-    local view = open_editor(context, prefix .. "NEEDLE\n")
+  test.it("keeps the previous exact width as a finite provisional edit range", function(context)
+    local view, buffer = open_editor(context, string.rep("x", 500) .. "\n")
     disable_wrapping(view)
+    test.ok(wait_for_horizontal_extent(view))
+    local previous_width = view:get_h_scrollable_size()
+
+    buffer:remove(1, 11, 1, #buffer.lines[1])
+    test.equal(view:get_h_scrollable_size(), previous_width)
+    test.ok(view:is_horizontal_extent_scan_pending())
+
+    view.scroll.to.x = previous_width * 10
+    view:clamp_scroll_position()
+    test.equal(view.scroll.to.x, previous_width - view.size.x)
+  end)
+
+  test.it("keeps reveal targets valid while an edit width scan is pending", function(context)
+    local view, buffer = open_editor(context, "short\n")
+    disable_wrapping(view)
+    test.ok(wait_for_horizontal_extent(view))
+    local prefix = string.rep("x", 2000)
+    buffer:insert(1, 1, prefix .. "NEEDLE")
+    view:get_h_scrollable_size()
+
     local col1 = #prefix + 1
     local col2 = col1 + #"NEEDLE"
+    view:scroll_to_make_visible(1, col1, false, { line2 = 1, col2 = col2 })
+    view:clamp_scroll_position()
 
-    view:scroll_to_make_visible(1, col1, true, { line2 = 1, col2 = col2 })
+    test.ok(view:is_horizontal_extent_scan_pending())
+    test.ok(view.scroll.to.x > 0)
+    test.ok(view.scroll.to.x <= view:get_h_scrollable_size() - view.size.x)
+  end)
 
-    local x1, x2 = range_x(view, 1, col1, col2)
+  test.it("publishes exact edit widths and clamps only invalid targets", function(context)
+    local view, buffer = open_editor(context, string.rep("x", 500) .. "\n")
+    disable_wrapping(view)
+    test.ok(wait_for_horizontal_extent(view))
+    local old_max = view:get_h_scrollable_size() - view.size.x
+
+    buffer:remove(1, 21, 1, #buffer.lines[1])
+    view:get_h_scrollable_size()
+    view.scroll.to.x = old_max
+    test.ok(wait_for_horizontal_extent(view))
+    test.equal(
+      view.scroll.to.x,
+      view:get_h_scrollable_size() - view.size.x
+    )
+
+    buffer:insert(1, 1, string.rep("y", 200))
+    view:get_h_scrollable_size()
+    view.scroll.to.x = 5
+    test.ok(wait_for_horizontal_extent(view))
+    test.equal(view.scroll.to.x, 5)
+  end)
+
+  test.it("does not publish a stale horizontal width scan", function(context)
+    local huge = string.rep("abc\t", 5000)
+    local view, buffer = open_editor(context,
+      table.concat({ huge, numbered_lines(120) }, "\n"))
+    disable_wrapping(view)
+    view.size.x = 40
+    view.__test_horizontal_extent_chunk_bytes = 16
+    view.__test_horizontal_extent_chunks_per_slice = 1
+    view:get_h_scrollable_size()
+    test.ok(wait_until(function()
+      return view:is_horizontal_extent_scan_pending()
+        and view:get_h_scrollable_size() > view.size.x
+    end, 1), "expected stale scan work before the edit")
+
+    buffer:remove(1, 1, 1, #buffer.lines[1])
+    buffer:insert(1, 1, string.rep("z", 20))
+    view:get_h_scrollable_size()
+    test.ok(wait_for_horizontal_extent(view))
+
+    local gutter = view:get_gutter_width()
+    local _, _, scroll_w = view.v_scrollbar:get_track_rect()
+    local expected = math.max(
+      view.size.x,
+      gutter + view:get_col_x_offset(1, #buffer.lines[1])
+        + math.max(style.padding.x, scroll_w or 0)
+    )
+    test.equal(view:get_h_scrollable_size(), expected)
+  end)
+
+  test.it("remeasures the horizontal range after a Font size change", function(context)
+    local view = open_editor(context, string.rep("x", 300) .. "\n")
+    disable_wrapping(view)
+    test.ok(wait_for_horizontal_extent(view))
+    local font = view:get_font()
+    local old_size = font:get_size()
+    local old_width = view:get_h_scrollable_size()
+    local retained_target = math.min(20, old_width - view.size.x)
+    view.scroll.x, view.scroll.to.x = retained_target, retained_target
+
+    font:set_size(old_size * 1.25)
+    local ok, err = pcall(function()
+      view:get_h_scrollable_size()
+      test.ok(view:is_horizontal_extent_scan_pending())
+      view:clamp_scroll_position()
+      test.equal(view.scroll.to.x, retained_target)
+      test.ok(wait_for_horizontal_extent(view))
+      test.ok(view:get_h_scrollable_size() > old_width)
+      test.equal(view.scroll.to.x, retained_target)
+    end)
+    font:set_size(old_size)
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("publishes exact plain ASCII and tabbed widths", function(context)
+    local ascii = string.rep("x", 500)
+    local view = open_editor(context, ascii .. "\n")
+    disable_wrapping(view)
+    test.ok(wait_for_horizontal_extent(view))
+    test.equal(view:get_h_scrollable_size(), expected_horizontal_extent(view, ascii))
+
+    local tabbed = table.concat({
+      string.rep("a", 17), "\t", string.rep("b", 19), "\t",
+      string.rep("c", 23),
+    })
+    local buffer = view.buffer
+    buffer:remove(1, 1, 1, #buffer.lines[1])
+    buffer:insert(1, 1, tabbed)
+    view.__test_horizontal_extent_chunk_bytes = 7
+    view.__test_horizontal_extent_chunks_per_slice = 1
+    test.ok(wait_for_horizontal_extent(view))
+    test.equal(
+      view:get_h_scrollable_size(),
+      expected_horizontal_extent(view, tabbed, { tab_offset = 0 })
+    )
+  end)
+
+  test.it("keeps multibyte width exact during deferred measurement", function(context)
+    local text = string.rep("é日 word ", 400)
+    local view = open_editor(context, text .. "\n")
+    disable_wrapping(view)
+    view.size.x = 40
+    view.__test_horizontal_extent_chunk_bytes = 32
+    view.__test_horizontal_extent_chunks_per_slice = 1
+
+    view:get_h_scrollable_size()
+    test.ok(wait_until(function()
+      return view:is_horizontal_extent_scan_pending()
+        and view:get_h_scrollable_size() > view.size.x
+    end, 1), "expected a partial multibyte width before completion")
+    test.ok(wait_for_horizontal_extent(view))
+    test.equal(view:get_h_scrollable_size(), expected_horizontal_extent(view, text))
+  end)
+
+  test.it("yields within one huge ASCII line with tabs", function(context)
+    local text = string.rep("abc\t", 20000)
+    local view = open_editor(context, text .. "\n")
+    disable_wrapping(view)
+    view.size.x = 40
+    view.__test_horizontal_extent_chunk_bytes = 16
+    view.__test_horizontal_extent_chunks_per_slice = 1
+
+    view:get_h_scrollable_size()
+    test.ok(wait_until(function()
+      return view:is_horizontal_extent_scan_pending()
+        and view:get_h_scrollable_size() > view.size.x
+    end, 1), "expected a partial in-line width before scan completion")
+    test.ok(view:is_horizontal_extent_scan_pending())
+    test.ok(view:get_h_scrollable_size() >= view.size.x)
+  end)
+
+  test.it("cancels an in-line measurement before exact publication", function(context)
+    local text = string.rep("abc\t", 5000)
+    local view, buffer = open_editor(context, text .. "\n")
+    disable_wrapping(view)
+    view.__test_horizontal_extent_chunk_bytes = 16
+    view.__test_horizontal_extent_chunks_per_slice = 1
+    view:get_h_scrollable_size()
+    coroutine.yield(0.01)
+    test.ok(view:is_horizontal_extent_scan_pending())
+
+    buffer:remove(1, 6, 1, #buffer.lines[1])
+    view:get_h_scrollable_size()
+    test.ok(wait_for_horizontal_extent(view))
+    test.equal(
+      view:get_h_scrollable_size(),
+      expected_horizontal_extent(view, "abc\t", { tab_offset = 0 })
+    )
+  end)
+
+  test.it("maps plain ASCII x offsets to nearest caret columns", function(context)
+    local text = string.rep("x", 10000)
+    local view = open_editor(context, text .. "\n")
+    disable_wrapping(view)
+    local cell = view:get_font():get_width(" ")
+
+    test.equal(view:get_x_offset_col(1, 0), 1)
+    test.equal(view:get_x_offset_col(1, 100 * cell), 101)
+    test.equal(view:get_x_offset_col(1, cell * 0.5), 1)
+    test.equal(view:get_x_offset_col(1, cell * 0.5 + 0.01), 2)
+    test.equal(view:get_x_offset_col(1, cell * 9999.5), 10000)
+    test.equal(view:get_x_offset_col(1, cell * 20000), #view.buffer.lines[1])
+  end)
+
+  test.it("keeps tab and multibyte hit testing on the exact fallback", function(context)
+    local view, buffer = open_editor(context, "a\tb\n")
+    disable_wrapping(view)
+    local font = view:get_font()
+    local _, indent_size = buffer:get_indent_info()
+    font:set_tab_size(indent_size)
+    local after_a = font:get_width("a")
+    local after_tab = font:get_width("a\t", { tab_offset = 0 })
+    test.equal(view:get_x_offset_col(1, (after_a + after_tab) / 2), 2)
+    test.equal(view:get_x_offset_col(1, (after_a + after_tab) / 2 + 0.01), 3)
+
+    buffer:remove(1, 1, 1, #buffer.lines[1])
+    buffer:insert(1, 1, "aé日b")
+    local after_ascii = font:get_width("a")
+    local after_multibyte = font:get_width("aé")
+    test.equal(
+      view:get_x_offset_col(1, (after_ascii + after_multibyte) / 2 + 0.01),
+      4
+    )
+  end)
+
+  test.it("draws bounded source ranges for a huge unwrapped line", function(context)
+    local prefix = string.rep("x", 200000)
+    local suffix = "UNIQUE-DISTANT-SUFFIX"
+    local view = open_editor(context, prefix .. suffix .. "\n")
+    disable_wrapping(view)
+    view.__test_force_line_packets = true
+
+    local left = capture_unwrapped_line_draw(view, 0)
+    local suffix_x = view:get_col_x_offset(1, #prefix + 1)
+    local right = capture_unwrapped_line_draw(
+      view, math.max(0, suffix_x - view.size.x / 2)
+    )
+    local diagnostics = line_packets.diagnostics(view)
+
+    test.equal(diagnostics.builds, 0)
+    test.ok((diagnostics.fallbacks.unwrapped or 0) >= 2)
+    test.ok(not left:find(suffix, 1, true))
+    test.ok(right:find(suffix, 1, true) ~= nil)
+    test.ok(#left < #prefix)
+    test.ok(#right < #prefix)
+  end)
+
+  test.it("draws the correct far-right tabbed UTF-8 source range", function(context)
+    local prefix = string.rep("a\té", 2000)
+    local suffix = "TABBED-UTF8-SUFFIX"
+    local view = open_editor(context, prefix .. suffix .. "\n")
+    disable_wrapping(view)
+    view.__test_force_line_packets = true
+
+    local left = capture_unwrapped_line_draw(view, 0)
+    local suffix_x = view:get_col_x_offset(1, #prefix + 1)
+    local right = capture_unwrapped_line_draw(
+      view, math.max(0, suffix_x - view.size.x / 2)
+    )
+
+    test.ok(not left:find(suffix, 1, true))
+    test.ok(right:find(suffix, 1, true) ~= nil)
+    test.ok(#right < #prefix)
+  end)
+
+  test.it("builds and reuses wrapped Display Packets", function(context)
+    local view = open_editor(context, string.rep("wrapped words ", 40) .. "\n")
+    view.__test_force_line_packets = true
+    view:update_wrap_cache()
+
+    capture_unwrapped_line_draw(view, 0)
+    capture_unwrapped_line_draw(view, 0)
+    local diagnostics = line_packets.diagnostics(view)
+
+    test.equal(diagnostics.builds, 1)
+    test.ok(diagnostics.hits >= 1)
+    test.ok(diagnostics.resident_packets > 0)
+
+    disable_wrapping(view)
+    test.equal(line_packets.diagnostics(view).resident_packets, 0)
+  end)
+
+  test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)
+    local prefix = string.rep("x", 120)
+    local target = "NEEDLE"
+    local view = open_editor(context, prefix .. target .. "\n")
+    disable_wrapping(view)
+    local col1 = #prefix + 1
+    local col2 = col1 + #target
+    local target_x = view:get_col_x_offset(1, col1)
+    view.scroll.x, view.scroll.to.x = target_x + view.size.x,
+      target_x + view.size.x
+
+    view:scroll_to_make_visible(1, col1, true, {
+      line2 = 1, col2 = col2, horizontal_grace = 0,
+    })
+
+    local x1, x2 = range_screen_x(view, 1, col1, col2)
+    local text_left, text_right = visible_text_screen_edges(view)
     test.ok(view.scroll.x > 0, "expected horizontal scroll to move right for an off-screen match")
-    test.ok(x1 >= view.scroll.x, "expected match start to be visible after horizontal reveal")
-    test.ok(x2 <= visible_text_right(view) + 1, "expected match end to be visible after horizontal reveal")
+    test.ok(x1 >= text_left, "expected match start to stay outside the fixed gutter")
+    test.ok(x2 <= text_right + 1, "expected match end to stay left of the vertical scrollbar")
   end)
 
   test.it("scroll_to_make_visible resets horizontal scroll when a range fits from baseline", function(context)
@@ -228,10 +557,14 @@ test.describe("TextView selection scrolling", function()
 
     test.ok(command.perform("editor:find"))
     core.root_panel:on_text_input("NEEDLE")
+    view:get_h_scrollable_size()
+    test.ok(view:is_horizontal_extent_scan_pending())
+    view:clamp_scroll_position()
 
-    local x1, x2 = range_x(view, 1, col1, col2)
+    local x1, x2 = range_screen_x(view, 1, col1, col2, view.scroll.to.x)
+    local text_left, text_right = visible_text_screen_edges(view)
     test.ok(view.scroll.to.x > 0, "expected local find to horizontally scroll the owning Text View")
-    test.ok(x1 >= view.scroll.to.x, "expected local find match start to be visible")
-    test.ok(x2 <= (view.scroll.to.x + (visible_text_right(view) - view.scroll.x)) + 1, "expected local find match end to be visible")
+    test.ok(x1 >= text_left, "expected local find match to stay outside the fixed gutter")
+    test.ok(x2 <= text_right + 1, "expected local find match to stay left of the vertical scrollbar")
   end)
 end)

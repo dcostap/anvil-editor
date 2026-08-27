@@ -71,6 +71,13 @@ end
 local function fallback(view, reason)
   local cache = stats_for(view)
   cache.fallbacks[reason] = (cache.fallbacks[reason] or 0) + 1
+  if reason == "unwrapped" and not cache.logged_unwrapped_fallback then
+    cache.logged_unwrapped_fallback = true
+    core.log_quiet(
+      "Text View line packets use bounded unwrapped drawing for %s",
+      view.buffer:get_name()
+    )
+  end
   perf_add("textview_line_packet_fallback_" .. tostring(reason), 1)
   return nil, reason
 end
@@ -219,6 +226,7 @@ local function eligible(view, line)
     return false, "native_api_missing"
   end
   if not standard_textview(view) then return false, "nonstandard_textview" end
+  if not view.wrapped_settings then return false, "unwrapped" end
   if view.has_visual_metric_providers and view:has_visual_metric_providers() then
     return false, "variable_visual_metrics"
   end

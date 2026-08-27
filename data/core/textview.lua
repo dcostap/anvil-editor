@@ -128,6 +128,7 @@ function TextView:set_wrapping_enabled(enabled)
     if self.size and self.size.x > 0 then self:update_wrap_cache() end
   else
     self:clear_wrap_cache()
+    line_packets.clear(self)
   end
 end
 
@@ -292,10 +293,17 @@ local function has_relevant_syntax_fonts(buffer)
   return false
 end
 
+local ASCII_LIGATURE_SENSITIVE_PATTERN = "[=><!/*:.|&f%-]"
+
+local function ascii_ligature_sensitive_byte(byte)
+  return byte ~= nil
+    and string.char(byte):find(ASCII_LIGATURE_SENSITIVE_PATTERN) ~= nil
+end
+
 local function has_ligature_sensitive_ascii(text)
   -- Keep this in sync with the renderer's text_needs_shaping() probes.
   -- Known monospace cell bounds are not exact for these shaped runs.
-  return text:find("[=><!/*:.|&f%-]") ~= nil
+  return text:find(ASCII_LIGATURE_SENSITIVE_PATTERN) ~= nil
 end
 
 local function draw_text_known_advance(font, text, x, y, width, height, color, opts)
@@ -1206,13 +1214,72 @@ end
 -- still uses the normal renderer thread, but it is sliced between UI frames.
 local UNWRAPPED_WIDTH_SCAN_BUDGET_MS = 2
 local UNWRAPPED_WIDTH_SCAN_YIELD = 0.005
+local UNWRAPPED_WIDTH_CHUNK_BYTES = 512
+local UNWRAPPED_WIDTH_CHUNKS_PER_SLICE = 50
+
+local function font_measurement_value(font, method, fallback)
+  if type(font) == "table" then
+    local parts = { "group", tostring(#font) }
+    for _, child in ipairs(font) do
+      parts[#parts + 1] = font_measurement_value(child, method, fallback)
+    end
+    return table.concat(parts, ":")
+  end
+  if not (font and font[method]) then return tostring(fallback) end
+  local value = font[method](font)
+  if type(value) ~= "table" then return tostring(value) end
+  local parts = {}
+  for i, item in ipairs(value) do parts[i] = tostring(item) end
+  return table.concat(parts, ":")
+end
+
+local function append_measurement_font(parts, font)
+  parts[#parts + 1] = tostring(font)
+  parts[#parts + 1] = tostring(font and font:get_size())
+  parts[#parts + 1] = font_measurement_value(font, "get_generation", 0)
+  parts[#parts + 1] = font_measurement_value(font, "get_surface_scale", 1)
+end
 
 local function get_unwrapped_width_settings(self)
-  local font = self:get_font()
+  local default_font = self:get_font()
   local _, indent_size = self.buffer:get_indent_info()
+  local parts = {}
+  append_measurement_font(parts, default_font)
+  local names = {}
+  if has_relevant_syntax_fonts(self.buffer) then
+    for name in pairs(style.syntax_fonts) do names[#names + 1] = name end
+    table.sort(names)
+  end
+  for _, name in ipairs(names) do
+    parts[#parts + 1] = name
+    append_measurement_font(parts, style.syntax_fonts[name])
+  end
+  local highlighter = self.buffer.highlighter
+  parts[#parts + 1] = tostring(indent_size)
+  parts[#parts + 1] = tostring(SCALE or 1)
+  parts[#parts + 1] = tostring(highlighter.packet_reset_generation or 0)
+  parts[#parts + 1] = tostring(core.render_style_generation or 0)
+  parts[#parts + 1] = tostring(self.__line_render_generation or 0)
+  parts[#parts + 1] = tostring(
+    self.__line_render_invalidation_generation or 0
+  )
+  if self.has_line_render_providers and self:has_line_render_providers() then
+    parts[#parts + 1] = tostring(self:get_presentation_layout_generation())
+    for _, entry in ipairs(self:line_render_provider_entries()) do
+      local provider = entry.provider
+      local generation = provider and provider.generation
+      if type(generation) == "function" then
+        local ok, value = pcall(generation, provider, self)
+        generation = ok and value or "generation-error"
+      end
+      parts[#parts + 1] = tostring(entry.id)
+      parts[#parts + 1] = tostring(generation or 0)
+    end
+  end
   return {
-    font = font,
-    font_size = font:get_size(),
+    key = table.concat(parts, "\0"),
+    font = default_font,
+    font_size = default_font:get_size(),
     indent_size = indent_size,
     line_render_generation = self.__line_render_generation or 0,
     line_render_invalidation_generation =
@@ -1220,119 +1287,295 @@ local function get_unwrapped_width_settings(self)
   }
 end
 
-local function unwrapped_width_cache_is_current(self, cache, settings)
-  settings = settings or get_unwrapped_width_settings(self)
-  return cache
-    and cache.font == settings.font
-    and cache.font_size == settings.font_size
-    and cache.indent_size == settings.indent_size
-    and cache.line_count == #self.buffer.lines
-    and cache.text_revision == (self.buffer.text_revision or 0)
-    and cache.line_render_generation == settings.line_render_generation
-    and cache.line_render_invalidation_generation
-      == settings.line_render_invalidation_generation
-    and cache.line
-    and self.buffer.lines[cache.line] == cache.line_text
-end
-
-local function unwrapped_width_scan_is_current(self, token)
-  if not token or token.cancelled
-  or self.__async_horizontal_extent_scan ~= token
-  or self.buffer ~= token.buffer
-  then
-    return false
-  end
-  local settings = get_unwrapped_width_settings(self)
-  return settings.font == token.font
-    and settings.font_size == token.font_size
-    and settings.indent_size == token.indent_size
-    and settings.line_render_generation == token.line_render_generation
-    and settings.line_render_invalidation_generation
-      == token.line_render_invalidation_generation
-    and #self.buffer.lines == token.line_count
-    and (self.buffer.text_revision or 0) == token.text_revision
-end
-
-local function get_unwrapped_line_width(self, line)
-  local cache = self.__line_width_cache
-  if not cache then
-    cache = {}
-    self.__line_width_cache = cache
-  end
-
-  local text = self.buffer.lines[line] or ""
-  local font = self:get_font()
-  local _, indent_size = self.buffer:get_indent_info()
-  local font_size = font:get_size()
-  local markdown_owner = self.__markdown_live_owner
-  local semantic_model = markdown_owner and markdown_owner.semantic_model
-  local semantic_pending = markdown_owner and (
-    markdown_owner.semantic_pending_line ~= nil
-    or semantic_model and (
-      semantic_model.status == "pending"
-      or semantic_model.published_revision ~= self.buffer.text_revision
-    )
-  )
-  local skip_render = semantic_pending and (
-    not markdown_owner.semantic_pending_line
-    or line >= markdown_owner.semantic_pending_line
-  ) or false
-  local entry = cache[line]
-  if entry
-    and entry.text == text
-    and entry.font == font
-    and entry.font_size == font_size
-    and entry.indent_size == indent_size
-    and entry.skip_render == skip_render
-  then
-    return entry.width
-  end
-
-  local width = self:get_col_x_offset(line, #text + 1, nil, skip_render == true)
-  cache[line] = {
-    text = text,
-    font = font,
-    font_size = font_size,
-    indent_size = indent_size,
-    skip_render = skip_render,
-    width = width,
-  }
-  return width
-end
-
-local function cache_unwrapped_max_line(cache, buffer, line, width)
-  cache.line = line
-  cache.line_text = buffer.lines[line] or ""
-  cache.width = width
-  cache.line_count = #buffer.lines
-end
-
-function TextView:cancel_horizontal_extent_scan()
-  local token = self.__async_horizontal_extent_scan
+local function cancel_horizontal_extent_token(self, token)
   if not token then return false end
   token.cancelled = true
-  self.__async_horizontal_extent_scan = nil
+  local state = self.__horizontal_extent_state
+  if state and state.scan == token then state.scan = nil end
   if token.thread_key then core.wake_thread(token.thread_key) end
   perf_frame_add("textview_async_horizontal_extent_cancellations", 1)
+  core.log_quiet("Cancelled horizontal extent scan for %s", self.buffer:get_name())
   return true
 end
 
-function TextView:is_horizontal_extent_scan_pending()
-  return self.__async_horizontal_extent_scan ~= nil
+local function horizontal_extent_state(self)
+  local settings = get_unwrapped_width_settings(self)
+  local revision = self.buffer.text_revision or 0
+  local state = self.__horizontal_extent_state
+  if not state or state.buffer ~= self.buffer or state.measurement_key ~= settings.key then
+    local required_width = 0
+    if state and self.scroll and self.size then
+      local _, _, scroll_w = self.v_scrollbar:get_track_rect()
+      local right_padding = math.max(style.padding.x, scroll_w or 0)
+      local scroll_target = math.max(
+        0, self.scroll.to.x or self.scroll.x or 0
+      )
+      required_width = math.max(
+        0,
+        scroll_target + self.size.x - self:get_gutter_width() - right_padding
+      )
+    end
+    if state and state.scan then cancel_horizontal_extent_token(self, state.scan) end
+    state = {
+      buffer = self.buffer,
+      measurement_key = settings.key,
+      revision = revision,
+      measured_width = 0,
+      required_width = required_width,
+    }
+    self.__horizontal_extent_state = state
+  elseif state.revision ~= revision then
+    if state.scan then cancel_horizontal_extent_token(self, state.scan) end
+    if state.exact_revision == state.revision then
+      state.previous_exact_width = state.exact_width
+    end
+    state.revision = revision
+    state.exact_width = nil
+    state.exact_revision = nil
+    state.measured_width = 0
+    state.required_width = 0
+    state.next_line = nil
+    state.measurement = nil
+  end
+  state.settings = settings
+  return state
 end
 
-local function start_unwrapped_width_scan(self)
-  if self.__async_horizontal_extent_scan then return end
-
+local function unwrapped_width_scan_is_current(self, token)
+  if not token or token.cancelled or self.buffer ~= token.buffer then return false end
+  local state = self.__horizontal_extent_state
+  if not state or state.scan ~= token or state.revision ~= token.text_revision
+  or state.measurement_key ~= token.measurement_key then
+    return false
+  end
   local settings = get_unwrapped_width_settings(self)
+  return settings.key == token.measurement_key
+    and (self.buffer.text_revision or 0) == token.text_revision
+end
+
+local function line_source_end(text)
+  return text:sub(-1) == "\n" and math.max(0, #text - 1) or #text
+end
+
+local function skip_pending_line_render(self, line)
+  local owner = self.__markdown_live_owner
+  local model = owner and owner.semantic_model
+  local pending = owner and (
+    owner.semantic_pending_line ~= nil
+    or model and (
+      model.status == "pending"
+      or model.published_revision ~= self.buffer.text_revision
+    )
+  )
+  return pending and (
+    not owner.semantic_pending_line or line >= owner.semantic_pending_line
+  ) or false
+end
+
+local function make_line_width_cursor(self, line, token)
+  local text = self.buffer.lines[line] or ""
+  local source_end = line_source_end(text)
+  local default_font = token.font
+  default_font:set_tab_size(token.indent_size)
+  local skip_render = skip_pending_line_render(self, line)
+  local render_line = not skip_render and self:get_line_render(line) or nil
+  if render_line then
+    local started = system.get_time()
+    local width = self:get_col_x_offset(line, source_end + 1, nil, false)
+    local elapsed = (system.get_time() - started) * 1000
+    if elapsed >= UNWRAPPED_WIDTH_SCAN_BUDGET_MS then
+      core.log_quiet(
+        "Atomic custom Text View width measurement for %s:%d used %.1f ms",
+        self.buffer:get_name(), line, elapsed
+      )
+    end
+    return { done = true, width = width, source_bytes = source_end }
+  end
+
+  local fast_width = get_fast_ascii_monospace_x_offset(
+    self, line, source_end + 1, text, default_font
+  )
+  if fast_width then
+    return { done = true, width = fast_width, source_bytes = source_end }
+  end
+
+  local syntax_line = self.buffer.highlighter:get_line(line)
+  if syntax_line.resume then
+    return { waiting_for_tokens = true, width = 0 }
+  end
+
+  local token_started = system.get_time()
+  local render_tokens = self.buffer.highlighter:get_render_line(line).tokens
+  local token_ms = (system.get_time() - token_started) * 1000
+  if token_ms >= UNWRAPPED_WIDTH_SCAN_BUDGET_MS then
+    core.log_quiet(
+      "Atomic Text View render-token production for %s:%d used %.1f ms",
+      self.buffer:get_name(), line, token_ms
+    )
+  end
+  return {
+    done = source_end == 0,
+    width = 0,
+    source_end = source_end,
+    source_col = 1,
+    tokens = render_tokens,
+    token_index = 1,
+    token_byte = 1,
+    default_font = default_font,
+  }
+end
+
+local function ascii_measurement_boundary(text, index)
+  local byte, next_byte = text:byte(index), text:byte(index + 1)
+  return byte == 9 or byte == 32 or next_byte == 9 or next_byte == 32
+    or not ascii_ligature_sensitive_byte(byte)
+      and not ascii_ligature_sensitive_byte(next_byte)
+end
+
+local function ascii_measurement_chunk_end(text, first, limit, last)
+  limit = math.min(last, limit)
+  if limit >= last then return last end
+  for i = limit, first, -1 do
+    if ascii_measurement_boundary(text, i) then return i end
+  end
+  local normal_size = limit - first + 1
+  local forward_limit = math.min(last - 1, first + normal_size * 4 - 1)
+  for i = limit + 1, forward_limit do
+    if ascii_measurement_boundary(text, i) then return i end
+  end
+  return nil
+end
+
+local function multibyte_measurement_chunk_end(text, first, limit, last)
+  limit = math.min(last, limit)
+  if limit >= last then return last end
+  local function is_boundary(index)
+    local byte, next_byte = text:byte(index), text:byte(index + 1)
+    return byte == 9 or byte == 32 or next_byte == 9 or next_byte == 32
+  end
+  for i = limit, first, -1 do
+    if is_boundary(i) then return i end
+  end
+  local normal_size = limit - first + 1
+  local forward_limit = math.min(last - 1, first + normal_size * 4 - 1)
+  for i = limit + 1, forward_limit do
+    if is_boundary(i) then return i end
+  end
+  return nil
+end
+
+local function measure_line_width_chunk(self, line, token)
+  local cursor = token.measurement
+  if not cursor then
+    cursor = make_line_width_cursor(self, line, token)
+    token.measurement = cursor
+    if cursor.done then return cursor.width, true, cursor.source_bytes or 0 end
+    if cursor.waiting_for_tokens then return 0, false, 0, true end
+  elseif cursor.waiting_for_tokens then
+    local syntax_line = self.buffer.highlighter:get_line(line)
+    if syntax_line.resume then return 0, false, 0, true end
+    token.measurement = nil
+    return measure_line_width_chunk(self, line, token)
+  end
+
+  while cursor.token_index <= #cursor.tokens do
+    local token_type = cursor.tokens[cursor.token_index]
+    local text = cursor.tokens[cursor.token_index + 1] or ""
+    local available = math.max(0, cursor.source_end - cursor.source_col + 1)
+    local remaining = math.min(#text - cursor.token_byte + 1, available)
+    if remaining <= 0 then
+      cursor.token_index = cursor.token_index + 2
+      cursor.token_byte = 1
+      if available <= 0 then
+        cursor.done = true
+        return cursor.width, true, 0
+      end
+    else
+      local font = style.syntax_fonts[token_type] or cursor.default_font
+      if font ~= cursor.default_font then font:set_tab_size(token.indent_size) end
+      local first = cursor.token_byte
+      local last = first + remaining - 1
+      local chunk_limit = math.max(
+        1, tonumber(self.__test_horizontal_extent_chunk_bytes)
+          or UNWRAPPED_WIDTH_CHUNK_BYTES
+      )
+      local candidate = math.min(last, first + chunk_limit - 1)
+      local chunk_end
+      local multibyte_at = text:find("[\128-\255]", first)
+      if multibyte_at and multibyte_at <= last then
+        chunk_end = multibyte_measurement_chunk_end(
+          text, first, candidate, last
+        )
+        if not chunk_end then
+          chunk_end = last
+        end
+        if chunk_end - first + 1 > chunk_limit
+        and not token.logged_atomic_multibyte then
+          token.logged_atomic_multibyte = true
+          core.log_quiet(
+            "Atomic multibyte Text View width run for %s:%d has %d bytes",
+            self.buffer:get_name(), line, chunk_end - first + 1
+          )
+        end
+      else
+        chunk_end = ascii_measurement_chunk_end(text, first, candidate, last)
+        if not chunk_end then
+          chunk_end = last
+          if not token.logged_atomic_shaping then
+            token.logged_atomic_shaping = true
+            core.log_quiet(
+              "Atomic shaping-sensitive Text View width run for %s:%d has %d bytes",
+              self.buffer:get_name(), line, chunk_end - first + 1
+            )
+          end
+        end
+      end
+      local chunk = text:sub(first, chunk_end)
+      cursor.width = cursor.width + font:get_width(
+        chunk, { tab_offset = cursor.width }
+      )
+      local bytes = #chunk
+      cursor.token_byte = chunk_end + 1
+      cursor.source_col = cursor.source_col + bytes
+      if cursor.token_byte > #text then
+        cursor.token_index = cursor.token_index + 2
+        cursor.token_byte = 1
+      end
+      if cursor.source_col > cursor.source_end then cursor.done = true end
+      return cursor.width, cursor.done, bytes
+    end
+  end
+  cursor.done = true
+  return cursor.width, true, 0
+end
+
+function TextView:cancel_horizontal_extent_scan()
+  local state = self.__horizontal_extent_state
+  return cancel_horizontal_extent_token(self, state and state.scan)
+end
+
+function TextView:is_horizontal_extent_scan_pending()
+  local state = self.__horizontal_extent_state
+  if state and state.scan
+  and not unwrapped_width_scan_is_current(self, state.scan) then
+    cancel_horizontal_extent_token(self, state.scan)
+  end
+  return state ~= nil and state.scan ~= nil
+end
+
+local function start_unwrapped_width_scan(self, state)
+  if state.scan then return end
+  local settings = state.settings
   local token = {
     buffer = self.buffer,
+    state = state,
+    measurement_key = state.measurement_key,
     font = settings.font,
     font_size = settings.font_size,
     indent_size = settings.indent_size,
     line_render_generation = settings.line_render_generation,
     line_render_invalidation_generation = settings.line_render_invalidation_generation,
-    text_revision = self.buffer.text_revision or 0,
+    text_revision = state.revision,
     line_count = #self.buffer.lines,
     next_line = 1,
     max_line = 1,
@@ -1340,24 +1583,41 @@ local function start_unwrapped_width_scan(self)
     work_ms = 0,
     yields = 0,
   }
-  self.__async_horizontal_extent_scan = token
+  state.scan = token
+  state.next_line = 1
+  state.measured_width = 0
   perf_frame_add("textview_async_horizontal_extent_scans", 1)
+  core.log_quiet("Started horizontal extent scan for %s", self.buffer:get_name())
 
   token.thread_key = core.add_background_thread(function()
     while unwrapped_width_scan_is_current(self, token) do
       local started = system.get_time()
-      local lines = 0
+      local lines, chunks = 0, 0
+      local max_chunks = math.max(
+        1, tonumber(self.__test_horizontal_extent_chunks_per_slice)
+          or UNWRAPPED_WIDTH_CHUNKS_PER_SLICE
+      )
       while token.next_line <= token.line_count do
         if not unwrapped_width_scan_is_current(self, token) then return end
         local line = token.next_line
-        local width = get_unwrapped_line_width(self, line)
-        if width > token.width then
-          token.width = width
-          token.max_line = line
+        local width, done, bytes, blocked = measure_line_width_chunk(
+          self, line, token
+        )
+        chunks = chunks + 1
+        token.longest_chunk = math.max(token.longest_chunk or 0, bytes or 0)
+        if width > state.measured_width then state.measured_width = width end
+        if done then
+          if width > token.width then
+            token.width = width
+            token.max_line = line
+          end
+          token.measurement = nil
+          token.next_line = line + 1
+          state.next_line = token.next_line
+          lines = lines + 1
         end
-        token.next_line = line + 1
-        lines = lines + 1
-        if lines >= 50
+        if chunks >= max_chunks
+        or blocked
         or (system.get_time() - started) * 1000 >= UNWRAPPED_WIDTH_SCAN_BUDGET_MS
         then
           break
@@ -1368,22 +1628,18 @@ local function start_unwrapped_width_scan(self)
 
       if not unwrapped_width_scan_is_current(self, token) then return end
       if token.next_line > token.line_count then
-        local line = token.max_line
-        self.__unwrapped_content_width_cache = {
-          font = token.font,
-          font_size = token.font_size,
-          indent_size = token.indent_size,
-          width = token.width,
-          line = line,
-          line_text = self.buffer.lines[line] or "",
-          line_count = token.line_count,
-          text_revision = token.text_revision,
-          line_render_generation = token.line_render_generation,
-          line_render_invalidation_generation = token.line_render_invalidation_generation,
-        }
-        self.__async_horizontal_extent_scan = nil
+        state.exact_width = token.width
+        state.exact_revision = token.text_revision
+        state.previous_exact_width = token.width
+        state.measured_width = token.width
+        state.required_width = 0
+        state.scan = nil
         perf_frame_add("textview_async_horizontal_extent_commits", 1)
         perf_frame_add("textview_async_horizontal_extent_ms", token.work_ms)
+        perf_frame_add(
+          "textview_async_horizontal_extent_longest_chunk",
+          token.longest_chunk or 0
+        )
         if token.yields > 0 then
           core.log_quiet(
             "Committed async horizontal extent for %s: lines=%d width=%.1f work_ms=%.1f yields=%d",
@@ -1391,6 +1647,8 @@ local function start_unwrapped_width_scan(self)
             token.work_ms, token.yields
           )
         end
+        self:clamp_scroll_position()
+        self:sync_scrollbar_geometry()
         core.redraw = true
         return
       end
@@ -1399,40 +1657,41 @@ local function start_unwrapped_width_scan(self)
       perf_frame_add("textview_async_horizontal_extent_yields", 1)
       coroutine.yield(UNWRAPPED_WIDTH_SCAN_YIELD)
     end
+    if state.scan == token then
+      state.scan = nil
+      core.redraw = true
+    end
   end, token)
 end
 
-local function update_unwrapped_width_from_active_lines(self, cache)
-  local function consider(line)
-    if not line or line < 1 or line > #self.buffer.lines then return end
-    local width = get_unwrapped_line_width(self, line)
-    if width > cache.width then
-      cache_unwrapped_max_line(cache, self.buffer, line, width)
-    end
+local function get_max_unwrapped_line_width(self)
+  local state = horizontal_extent_state(self)
+  if state.exact_revision == state.revision and state.exact_width then
+    return state.exact_width
   end
-
-  for _, line1, _, line2 in self.buffer:get_selections() do
-    consider(line1)
-    consider(line2)
+  if state.scan and not unwrapped_width_scan_is_current(self, state.scan) then
+    cancel_horizontal_extent_token(self, state.scan)
   end
+  if not state.scan then start_unwrapped_width_scan(self, state) end
+  return math.max(
+    state.measured_width or 0,
+    state.previous_exact_width or 0,
+    state.required_width or 0
+  )
 end
 
-local function get_max_unwrapped_line_width(self)
-  local cache = self.__unwrapped_content_width_cache
-  if unwrapped_width_cache_is_current(self, cache) then
-    update_unwrapped_width_from_active_lines(self, cache)
-    return cache.width
+local function require_unwrapped_horizontal_width(self, width)
+  if self.wrapping_enabled then return end
+  local state = horizontal_extent_state(self)
+  if state.exact_revision == state.revision then return end
+  width = math.max(0, tonumber(width) or 0)
+  if width > (state.required_width or 0) then
+    state.required_width = width
+    core.log_quiet(
+      "Expanded pending horizontal reveal for %s to %.1f",
+      self.buffer:get_name(), width
+    )
   end
-
-  local pending = self.__async_horizontal_extent_scan
-  if pending and not unwrapped_width_scan_is_current(self, pending) then
-    self:cancel_horizontal_extent_scan()
-  end
-  if not self.__async_horizontal_extent_scan then
-    start_unwrapped_width_scan(self)
-  end
-
-  return nil
 end
 
 local function get_max_line_render_horizontal_extent(self)
@@ -1470,20 +1729,12 @@ function TextView:get_h_scrollable_size()
   return math.max(self.size.x, content_width)
 end
 
----Clamp vertical scrolling immediately, but leave horizontal scrolling
----uncapped while an unwrapped extent scan is pending.  The scan reports the
----real bound later; clamping to the temporary viewport-sized fallback here
----would discard a match reveal requested by a preview or find operation.
+---Clamp scrolling to the current exact or finite provisional range.
 function TextView:clamp_scroll_position()
   local max = self:get_scrollable_size() - self.size.y
   self.scroll.to.y = common.clamp(self.scroll.to.y, 0, max)
 
   local horizontal = self:get_h_scrollable_size()
-  if self:is_horizontal_extent_scan_pending() then
-    self.scroll.to.x = math.max(0, self.scroll.to.x or 0)
-    return
-  end
-
   max = horizontal - self.size.x
   self.scroll.to.x = common.clamp(self.scroll.to.x, 0, max)
 end
@@ -1795,7 +2046,6 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
     for line in pairs(self.__line_width_cache or {}) do
       if line >= requested_line1 and line <= requested_line2 then self.__line_width_cache[line] = nil end
     end
-    self.__unwrapped_content_width_cache = nil
     cache.invalidated_lines = (cache.invalidated_lines or 0) + requested_line2 - requested_line1 + 1
     self.render_cache_diagnostics.line_invalidations =
       self.render_cache_diagnostics.line_invalidations + requested_line2 - requested_line1 + 1
@@ -1834,7 +2084,6 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
   self.__line_render_wrap_change = nil
   self.__line_render_cache = nil
   self.__line_width_cache = {}
-  self.__unwrapped_content_width_cache = nil
   if self.wrapped_settings and not self.__line_render_wrap_invalidating then
     self.__line_render_wrap_invalidating = true
     if opts.defer_wrapped_reconstruction
@@ -5204,6 +5453,17 @@ function TextView:get_x_offset_col(line, x)
   end
   local line_text = self.buffer.lines[line]
   local line_len = #line_text
+  local default_font = self:get_font()
+  local cell_width = get_fast_ascii_monospace_x_offset(
+    self, line, 2, line_text, default_font
+  )
+  if cell_width and cell_width > 0 then
+    local cell = math.max(0, x) / cell_width
+    local cell_index = math.floor(cell)
+    if cell - cell_index > 0.5 then cell_index = cell_index + 1 end
+    perf_frame_add("textview_get_x_offset_col_fast_ascii_calls", 1)
+    return common.clamp(cell_index + 1, 1, line_len)
+  end
 
   -- we leverage the caching already present on col_x, this works on all lines,
   -- but for the moment lets do it only on the cached lines and keep original
@@ -5222,7 +5482,6 @@ function TextView:get_x_offset_col(line, x)
   end
 
   local xoffset, i = 0, 1
-  local default_font = self:get_font()
   local _, indent_size = self.buffer:get_indent_info()
   default_font:set_tab_size(indent_size)
   for _, type, text in self.buffer.highlighter:each_render_token(line) do
@@ -5498,15 +5757,20 @@ function TextView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
     self.scroll.to.y = math.max(0, common.clamp(self.scroll.to.y, below, above))
   end
 
-  local gw = self:get_gutter_width()
+  local fixed_gutter_right = self:get_gutter_width()
   local _, _, scroll_w = self.v_scrollbar:get_track_rect()
-  local size_x = math.max(0, self.size.x - scroll_w)
+  local viewport_left = 0
+  local vertical_scrollbar_left = math.max(0, self.size.x - scroll_w)
+  local text_origin = fixed_gutter_right
+  local text_viewport_width = math.max(
+    0, vertical_scrollbar_left - text_origin
+  )
   local line2, col2 = opts.line2, opts.col2
   local range_line = line2 == line and col2 and line
   local xmargin = opts.horizontal_grace
   if xmargin == nil then
     if range_line then
-      xmargin = math.min(80 * (SCALE or 1), size_x * 0.25)
+      xmargin = math.min(80 * (SCALE or 1), text_viewport_width * 0.25)
     else
       xmargin = 3 * self:get_font():get_width(' ')
     end
@@ -5514,31 +5778,41 @@ function TextView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
 
   local xinf, xsup
   if range_line then
-    local x1 = self:get_col_x_offset(line, math.min(col, col2)) + gw
-    local x2 = self:get_col_x_offset(line, math.max(col, col2)) + gw
+    local x1 = self:get_col_x_offset(line, math.min(col, col2))
+    local x2 = self:get_col_x_offset(line, math.max(col, col2))
     xinf, xsup = math.min(x1, x2), math.max(x1, x2)
   else
     local xoffset = self:get_col_x_offset(line, col)
-    xsup = xoffset + gw
-    xinf = xoffset
+    xinf, xsup = xoffset, xoffset
   end
 
-  local desired_left = math.max(0, xinf - xmargin)
+  local desired_left = math.max(viewport_left, xinf - xmargin)
   local desired_right = xsup + xmargin
-  if range_line and opts.reset_x_if_fits_at_zero ~= false and desired_right <= size_x then
-    self.scroll.to.x = 0
+  local next_scroll_x = self.scroll.to.x or self.scroll.x or 0
+  if range_line and opts.reset_x_if_fits_at_zero ~= false
+  and desired_right <= text_viewport_width then
+    next_scroll_x = 0
   else
-    local current_x = self.scroll.to.x or self.scroll.x or 0
-    if (xsup + xmargin) > current_x + size_x then
-      if xsup - xinf > size_x then
-        self.scroll.to.x = desired_left
+    local current_x = next_scroll_x
+    if desired_right > current_x + text_viewport_width then
+      if xsup - xinf > text_viewport_width then
+        next_scroll_x = desired_left
       else
-        self.scroll.to.x = math.max(0, xsup + xmargin - size_x)
+        next_scroll_x = math.max(
+          viewport_left, desired_right - text_viewport_width
+        )
       end
     elseif desired_left < current_x then
-      self.scroll.to.x = desired_left
+      next_scroll_x = desired_left
     end
   end
+
+  local right_padding = math.max(style.padding.x, scroll_w or 0)
+  require_unwrapped_horizontal_width(self, math.max(
+    xsup,
+    next_scroll_x + self.size.x - fixed_gutter_right - right_padding
+  ))
+  self.scroll.to.x = next_scroll_x
 
   if instant then
     self.scroll.y = self.scroll.to.y
@@ -5942,7 +6216,6 @@ function TextView:update()
     self.buffer.cache.col_x = {}
     self.buffer.cache.line_width = {}
     self.__line_width_cache = {}
-    self.__unwrapped_content_width_cache = nil
     self.cache_font = font
     self.cache_font_size = font:get_size()
     self.cache_indent_size = indent_size
@@ -6414,36 +6687,6 @@ local function fast_ascii_monospace_width(text, space_width, tab_width, tab_offs
     end
   end
   return x - start_x
-end
-
-local function cached_fast_ascii_monospace_width(self, line, text, font, indent_size)
-  local font_size = font:get_size()
-  local change_id = self.buffer:get_change_id()
-  local cache = self.__fast_ascii_monospace_width_cache
-  if
-    not cache
-    or cache.change_id ~= change_id
-    or cache.font ~= font
-    or cache.font_size ~= font_size
-    or cache.indent_size ~= indent_size
-  then
-    cache = {
-      change_id = change_id,
-      font = font,
-      font_size = font_size,
-      indent_size = indent_size,
-      space_width = font:get_width(" "),
-      lines = {},
-    }
-    cache.tab_width = cache.space_width * (indent_size or 2)
-    self.__fast_ascii_monospace_width_cache = cache
-  end
-
-  local entry = cache.lines[line]
-  if entry and entry.text == text then return entry.width end
-  local width = fast_ascii_monospace_width(text, cache.space_width, cache.tab_width, 0)
-  cache.lines[line] = { text = text, width = width }
-  return width
 end
 
 local function draw_render_fragment_background(fragment, x, y, width, height, force)
@@ -7256,20 +7499,6 @@ function TextView:draw_line_text(line, x, y)
     end
     pending_font, pending_color, pending_chunks, pending_len, pending_has_tabs = nil, nil, nil, nil, nil
     return tx > self.position.x + self.size.x
-  end
-  local function ascii_ligature_sensitive_byte(byte)
-    return byte == 45  -- -
-        or byte == 46  -- .
-        or byte == 47  -- /
-        or byte == 58  -- :
-        or byte == 60  -- <
-        or byte == 61  -- =
-        or byte == 62  -- >
-        or byte == 33  -- !
-        or byte == 38  -- &
-        or byte == 42  -- *
-        or byte == 102 -- f
-        or byte == 124 -- |
   end
   local function ascii_strong_boundary(text, j)
     local byte = text:byte(j)
