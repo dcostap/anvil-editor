@@ -100,4 +100,17 @@ test.describe("Modal input routing", function()
     test.is_nil(root:modal_input_owner())
     test.equal(core.active_view, previous)
   end)
+
+  test.it("updates a confirmation without an affirmative default", function()
+    local nag = NagView()
+    core.nag_view = nag
+
+    nag:show("Unsaved Content", "Discard changes?", {
+      { text = "Discard Changes" },
+      { text = "Cancel", default_no = true },
+    })
+
+    local ok, err = pcall(nag.update, nag)
+    test.ok(ok, err)
+  end)
 end)
