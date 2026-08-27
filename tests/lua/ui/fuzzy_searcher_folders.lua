@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
 local panes = require "core.panes"
 local project_files = require "core.project_files"
@@ -29,11 +30,25 @@ local function wait_until(predicate, timeout)
   return predicate()
 end
 
+local function select_folder_action(action)
+  local nag = core.nag_view
+  for index, option in ipairs(nag.options or {}) do
+    if option.action == action then
+      nag:change_hovered(index)
+      test.ok(command.perform("core:select_dialog_entry"))
+      return
+    end
+  end
+  test.fail("missing folder action: " .. tostring(action))
+end
+
 test.describe("Project File Search folders", function()
   test.before_each(function(context)
     panes.reset_for_tests()
     context.projects = core.projects
     context.visited_files = core.visited_files
+    context.open_project_in_same_window = core.open_project_in_same_window
+    context.open_project_in_new_window = core.open_project_in_new_window
     context.cwd = system.getcwd()
     context.root = USERDIR .. PATHSEP .. "fuzzy-folders-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
@@ -64,12 +79,15 @@ test.describe("Project File Search folders", function()
     project_files.invalidate(context.root)
     project_paths.configure_workspace {}
     panes.reset_for_tests()
+    if context.filetree_was_opened then coroutine.yield(0.3) end
     core.projects = context.projects
     core.visited_files = context.visited_files
+    core.open_project_in_same_window = context.open_project_in_same_window
+    core.open_project_in_new_window = context.open_project_in_new_window
     if context.cwd then pcall(system.chdir, context.cwd) end
     if context.root and system.get_file_info(context.root) then
-      local ok, err = common.rm(context.root, true)
-      test.ok(ok, err)
+      local ok, err, path = common.rm(context.root, true)
+      test.ok(ok, string.format("%s: %s", tostring(path), tostring(err)))
     end
   end)
 
@@ -119,6 +137,30 @@ test.describe("Project File Search folders", function()
     test.ok(wait_until(function() return result_for_path(picker.results, context.empty) ~= nil end))
   end)
 
+  test.it("asks whether to open a folder as a File Tree or Project", function(context)
+    fuzzy_searcher.open("empty nested")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    local index
+    test.ok(wait_until(function()
+      local result
+      result, index = result_for_path(picker.results, context.empty)
+      return index ~= nil
+    end))
+
+    picker.selected = index
+    picker:confirm(false)
+
+    test.equal(core.nag_view:get_title(), "Open Folder")
+    test.same({
+      core.nag_view.options[1].action,
+      core.nag_view.options[2].action,
+      core.nag_view.options[3].action,
+      core.nag_view.options[4].action,
+    }, { "filetree", "project_here", "project_new", "cancel" })
+    select_folder_action("cancel")
+    test.equal(core.fuzzy_searcher_active_view, picker)
+  end)
+
   test.it("opens a folder result as a File Tree", function(context)
     fuzzy_searcher.open("empty nested")
     local picker = assert(core.fuzzy_searcher_active_view)
@@ -130,7 +172,11 @@ test.describe("Project File Search folders", function()
     end))
     picker.selected = index
     picker:confirm(false)
-    test.equal(context.pane.current_view.root_dir, common.normalize_path(context.empty))
+    context.filetree_was_opened = true
+    select_folder_action("filetree")
+    test.ok(wait_until(function()
+      return context.pane.current_view.root_dir == common.normalize_path(context.empty)
+    end))
   end)
 
   test.it("opens a folder result in a split with alternate activation", function(context)
@@ -144,9 +190,51 @@ test.describe("Project File Search folders", function()
     end))
     picker.selected = index
     picker:confirm(true)
-    test.equal(panes.count(), 2)
+    context.filetree_was_opened = true
+    select_folder_action("filetree")
+    test.ok(wait_until(function() return panes.count() == 2 end))
     test.equal(context.pane.current_view, context.source)
     test.equal(panes.active().current_view.root_dir, common.normalize_path(context.empty))
+  end)
+
+  test.it("opens a folder as a Project in this window", function(context)
+    local opened
+    core.open_project_in_same_window = function(path) opened = path; return true end
+
+    fuzzy_searcher.open("empty nested")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    local index
+    test.ok(wait_until(function()
+      local result
+      result, index = result_for_path(picker.results, context.empty)
+      return index ~= nil
+    end))
+    picker.selected = index
+    picker:confirm(false)
+    select_folder_action("project_here")
+
+    test.ok(wait_until(function() return opened ~= nil end))
+    test.ok(common.path_equals(opened, context.empty))
+  end)
+
+  test.it("opens a folder as a Project in a new window", function(context)
+    local opened
+    core.open_project_in_new_window = function(path) opened = path; return true end
+
+    fuzzy_searcher.open("empty nested")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    local index
+    test.ok(wait_until(function()
+      local result
+      result, index = result_for_path(picker.results, context.empty)
+      return index ~= nil
+    end))
+    picker.selected = index
+    picker:confirm(false)
+    select_folder_action("project_new")
+
+    test.ok(wait_until(function() return opened ~= nil end))
+    test.ok(common.path_equals(opened, context.empty))
   end)
 
   test.it("opens an exact Project folder path as a File Tree", function(context)
@@ -156,6 +244,10 @@ test.describe("Project File Search folders", function()
     local _, index = result_for_path(picker.results, context.empty)
     picker.selected = index
     picker:confirm(false)
-    test.equal(context.pane.current_view.root_dir, common.normalize_path(context.empty))
+    context.filetree_was_opened = true
+    select_folder_action("filetree")
+    test.ok(wait_until(function()
+      return context.pane.current_view.root_dir == common.normalize_path(context.empty)
+    end))
   end)
 end)

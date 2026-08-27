@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
 local http = require "core.http"
 local Project = require "core.project"
@@ -248,6 +249,34 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.ok(common.path_equals(preview.buffer.abs_filename, file))
     local drawn, draw_error = pcall(function() picker:draw() end)
     test.ok(drawn, draw_error)
+  end)
+
+  test.it("asks how to open a Path Search folder", function(context)
+    local folder = join_path(context.external_root, "alpha-folder")
+    mkdirp(folder)
+    helpers.set_everything_state("unavailable")
+
+    fuzzy_searcher.open("@" .. join_path(context.external_root, "alpha"))
+    local picker = core.fuzzy_searcher_active_view
+    local index
+    for candidate_index, result in ipairs(picker.results) do
+      if result.path and common.path_equals(result.path, folder) then
+        index = candidate_index
+        break
+      end
+    end
+    picker.selected = test.not_nil(index)
+    picker:confirm(false)
+
+    test.equal(core.nag_view:get_title(), "Open Folder")
+    for option_index, option in ipairs(core.nag_view.options) do
+      if option.action == "cancel" then
+        core.nag_view:change_hovered(option_index)
+        break
+      end
+    end
+    test.ok(command.perform("core:select_dialog_entry"))
+    test.equal(core.fuzzy_searcher_active_view, picker)
   end)
 
   test.it("puts an exact hidden Project path before indexed results", function(context)

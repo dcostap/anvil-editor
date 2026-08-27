@@ -543,10 +543,6 @@ load_recent_project_times()
 ensure_recent_project_times()
 wrap_project_openers()
 
-local function open_anvil_window(path)
-  core.open_project_in_new_window(path)
-end
-
 local function kill_grep()
   if grep_proc then
     local proc = grep_proc
@@ -5853,6 +5849,47 @@ function FSView:activate_create_path(r, target_side)
   return self:open_file_result({ kind = "path", file = path, abs_path = path, line = r.line }, target_side)
 end
 
+function FSView:confirm_folder_open(r, target_side)
+  local path = common.normalize_path(r.abs_path or r.path or r.project)
+  if not path then return false end
+  local default_action = r.kind == "folder" and "filetree"
+    or ((target_side or r.kind == "new_project") and "project_new" or "project_here")
+  local context = {
+    source_view = self.source_view,
+    source_pane = panes.find(self.source_pane) or panes.active(),
+    placement = target_side and "split" or "current",
+    direction = target_side and "right" or nil,
+  }
+  local options = {
+    { text = "Open File Tree", action = "filetree", default_yes = default_action == "filetree" },
+    { text = "Open Project in This Window", action = "project_here", default_yes = default_action == "project_here" },
+    { text = "Open Project in New Window", action = "project_new", default_yes = default_action == "project_new" },
+    { text = "Cancel", action = "cancel", default_no = true },
+  }
+
+  core.nag_view:show(
+    "Open Folder",
+    string.format("How do you want to open \"%s\"?", common.home_encode(path)),
+    options,
+    function(option)
+      if option.action == "cancel" then return end
+      if self.closed then return end
+      self:close()
+      core.add_thread(function()
+        core.log_quiet("Fuzzy Searcher: selected folder action=%s", tostring(option.action))
+        if option.action == "filetree" then
+          command.perform_with_context("filetree:open_at_choose_path", context, path)
+        elseif option.action == "project_here" then
+          core.open_project_in_same_window(path)
+        elseif option.action == "project_new" then
+          core.open_project_in_new_window(path)
+        end
+      end)
+    end
+  )
+  return true
+end
+
 function FSView:confirm(target_side)
   local r = self:selected_result()
   if not r then return end
@@ -5915,26 +5952,9 @@ function FSView:confirm(target_side)
   if r.kind == "create_path" then
     return self:activate_create_path(r, target_side)
   end
-  if r.kind == "folder" then
-    local path = common.normalize_path(r.abs_path or r.path)
-    local context = {
-      source_view = self.source_view,
-      source_pane = panes.find(self.source_pane) or panes.active(),
-      placement = target_side and "split" or "current",
-      direction = target_side and "right" or nil,
-    }
-    self:close()
-    return command.perform_with_context("filetree:open_at_choose_path", context, path)
-  end
-  if (r.kind == "project" or r.kind == "new_project" or (r.kind == "path" and r.is_folder)) and r.project then
-    local path = r.project
-    self:close()
-    if target_side or r.kind == "new_project" then
-      open_anvil_window(path)
-    else
-      core.open_project_in_same_window(path)
-    end
-    return
+  if r.kind == "folder" or r.kind == "project" or r.kind == "new_project"
+      or (r.kind == "path" and r.is_folder and r.project) then
+    return self:confirm_folder_open(r, target_side)
   end
   if r.buffer and r.line then
     local buffer = r.buffer
