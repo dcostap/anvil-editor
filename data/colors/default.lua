@@ -178,12 +178,12 @@ style.markdown_live_hidden_syntax = style.dim
 
 -- Diff/search/selection-like colors
 style.diff_delete = c(C.deleted_bg)
-style.diff_insert = c(C.identifier_under_caret_bg)
-style.diff_modify = c(C.warning_stripe)
+style.diff_insert = c("294436")
+style.diff_modify = c("273444")
 style.diff_delete_background = c(C.deleted_bg)
-style.diff_insert_background = c(C.identifier_under_caret_bg)
-style.diff_modify_background = c(C.write_identifier_under_caret_bg)
-style.diff_modify_inline = c("3f4d78")
+style.diff_insert_background = c("294436")
+style.diff_modify_background = c("273444")
+style.diff_modify_inline = c("385570")
 style.diff_marker_delete = { common.color "rgba(210, 105, 115, 0.72)" }
 style.diff_marker_insert = { common.color "rgba(105, 170, 120, 0.68)" }
 style.diff_marker_modify = { common.color "rgba(100, 145, 195, 0.68)" }
