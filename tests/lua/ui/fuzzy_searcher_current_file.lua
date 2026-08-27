@@ -93,6 +93,24 @@ test.describe("Fuzzy Searcher current file query", function()
     test.ok(common.path_equals(picker.results[1].abs_path, path))
   end)
 
+  test.it("keeps the source Path Target for path-aware commands", function(context)
+    local path = join_path(context.root, "src", "target.lua")
+    write_file(path)
+    local view = View()
+    function view:get_path_target()
+      return { path = path, line = 37 }
+    end
+    core.active_view = view
+
+    test.ok(command.perform("fuzzy:open_current_file"))
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker:update()
+
+    test.equal(picker.source_file_path, common.normalize_path(path))
+    test.equal(picker.source_file_line, 37)
+    test.ok(common.path_equals(picker.results[1].abs_path, path))
+  end)
+
   test.it("uses an absolute query for a Vendored Project Directory file", function(context)
     local vendor = join_path(context.root, "vendor", "library")
     local path = join_path(vendor, "src", "dependency.lua")

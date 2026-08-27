@@ -1,6 +1,8 @@
 local core = require "core"
 local command = require "core.command"
+local common = require "core.common"
 local config = require "core.config"
+local file_context = require "core.file_context"
 local style = require "core.style"
 local test = require "core.test"
 local panes = require "core.panes"
@@ -12,6 +14,7 @@ local git_view = require "plugins.git_view"
 local path_tree = require "plugins.path_tree"
 local real_backend = require "plugins.git.backend"
 require "core.poi"
+require "plugins.intellij_actions"
 
 local function fake_window(id)
   return { get_size = function() return 640, 480 end, id = id }
@@ -76,6 +79,7 @@ test.describe("Git View command", function()
     context.original_active_view = core.active_view
     context.original_active_window = core.active_window
     context.original_nag_show = core.nag_view.show
+    context.original_set_clipboard = system.set_clipboard
     context.original_linewrapping_default = config.plugins.linewrapping.enable_by_default
     panes.git_sessions = {}
     context.project = { path = "C:/repo" }
@@ -87,6 +91,7 @@ test.describe("Git View command", function()
     core.active_view = context.original_active_view
     core.active_window = context.original_active_window
     core.nag_view.show = context.original_nag_show
+    system.set_clipboard = context.original_set_clipboard
     config.plugins.linewrapping.enable_by_default = context.original_linewrapping_default
     panes.git_sessions = {}
   end)
@@ -189,6 +194,26 @@ test.describe("Git View command", function()
     history_view:clamp_history_scroll(tab)
     test.ok(tab.scroll < 999999)
     test.equal(session.hidden, false)
+  end)
+
+  test.it("uses the represented file as a File History Path Target", function(context)
+    local session, view = open_fake_git_view(context.project)
+    local tab = {
+      id = "history-path-target",
+      kind = "file_history",
+      title = "History: src/app.lua",
+      closable = true,
+      relpath = "src/app.lua",
+      commits = {},
+      selected_commit = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
+    tab_view:update_pane_buffers()
+
+    local target = test.not_nil(file_context.view_path_target(tab_view:pane_view("history-list")))
+    test.equal(target.path, common.normalize_path(context.project.path .. PATHSEP .. "src/app.lua"))
+    test.is_nil(target.line)
   end)
 
   test.test("selecting a history commit loads changed files for details", function(context)
@@ -302,6 +327,36 @@ test.describe("Git View command", function()
     local details = view:pane_view("details")
     test.ok(details:extends(path_tree.View))
     test.same(details.path_tree:lines(), list.path_tree:lines())
+  end)
+
+  test.it("uses changed-file rows as Git Path Targets", function(context)
+    local session, view = open_fake_git_view(context.project)
+    local changed = { status = "modified", old_path = "src/App.kt", new_path = "src/App.kt" }
+    local tab = {
+      id = "diff-path-target",
+      kind = "commit_diff",
+      title = "Diff Path Target",
+      closable = true,
+      changed_files = { changed },
+      selected_file = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
+    tab_view:update_pane_buffers()
+    local list = tab_view:pane_view("file-list")
+    list.buffer:set_selection(list.path_tree:line_for_record(1), 1)
+
+    view.model:log_tab().commits = {
+      { hash = "target", subject = "Target", changed_files = { changed }, changed_files_loaded = true },
+    }
+    view.model:log_tab().selected_commit = 1
+    view:update_pane_buffers()
+    local details = view:pane_view("details")
+    details.buffer:set_selection(details.path_tree_line_offset + details.path_tree:line_for_record(1), 1)
+
+    local expected = common.normalize_path(context.project.path .. PATHSEP .. "src/App.kt")
+    test.equal(test.not_nil(file_context.view_path_target(list)).path, expected)
+    test.equal(test.not_nil(file_context.view_path_target(details)).path, expected)
   end)
 
   test.it("keeps an inactive list caret on the collapsed ancestor of its selected file", function(context)
@@ -441,6 +496,44 @@ test.describe("Git View command", function()
     test.equal(command.perform("git:focus_list_pane"), true)
     test.equal(core.active_view.git_owner_view, tab_view)
     test.equal(core.active_view.git_pane, "file-list")
+  end)
+
+  test.it("uses old and new paths for renamed Git Diff Sides", function(context)
+    local session, view = open_fake_git_view(context.project)
+    local tab = {
+      id = "diff-side-path-targets",
+      kind = "commit_diff",
+      title = "Renamed Diff",
+      closable = true,
+      changed_files = {
+        { status = "renamed", old_path = "src/old.lua", new_path = "src/new.lua" },
+      },
+      selected_file = 1,
+      left_text = "old one\nold two\n",
+      right_text = "new one\nnew two\n",
+      left_name = "src/old.lua",
+      right_name = "src/new.lua",
+      diff_generation = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local tab_view = git_view.ensure_tab_view(session, tab, true)
+    local diff = tab_view:ensure_diff_view(tab)
+    diff.buffer_view_b:with_selection_state(function()
+      diff.buffer_view_b.buffer:set_selection(2, 1)
+    end)
+
+    local left = test.not_nil(file_context.view_path_target(diff.buffer_view_a))
+    local right = test.not_nil(file_context.view_path_target(diff.buffer_view_b))
+    test.equal(left.path, common.normalize_path(context.project.path .. PATHSEP .. "src/old.lua"))
+    test.equal(right.path, common.normalize_path(context.project.path .. PATHSEP .. "src/new.lua"))
+    test.equal(left.line, 2)
+    test.equal(right.line, 2)
+
+    local copied
+    system.set_clipboard = function(text) copied = text end
+    core.active_view = diff.buffer_view_b
+    test.ok(command.perform("editor:copy_absolute_filepath_with_line"))
+    test.equal(copied, right.path .. ":2")
   end)
 
   test.it("focused Git diff TextView becomes the active Git pane", function(context)

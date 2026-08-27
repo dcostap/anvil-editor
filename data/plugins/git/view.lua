@@ -5,6 +5,7 @@ local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
+local file_context = require "core.file_context"
 local style = require "core.style"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
@@ -144,6 +145,7 @@ function GitView:pane_view(name)
     view:set_wrapping_enabled(false)
     view.git_owner_view = self
     view.git_pane = name
+    view.get_path_target = function(v) return self:path_target_for_pane(v) end
     view.get_point_of_interest_at = function(v, line)
       return self:point_of_interest_for_pane(v, line)
     end
@@ -544,6 +546,44 @@ end
 
 local function changed_file_path(file)
   return file and (file.path or file.new_path or file.old_path) or ""
+end
+
+local function changed_file_side_path(file, side)
+  if not file then return nil end
+  if side == "left" then return file.old_path or file.path or file.new_path end
+  return file.new_path or file.path or file.old_path
+end
+
+function GitView:absolute_repo_path(path)
+  if not path or path == "" then return nil end
+  if common.is_absolute_path(path) then return common.normalize_path(path) end
+  local repo = self.model and self.model.repo
+  local root = repo and repo.root or self.project and self.project.path
+  if not root or root == "" then return nil end
+  return common.normalize_path(root .. PATHSEP .. path)
+end
+
+function GitView:path_target_for_pane(view)
+  if not (view and view.git_owner_view == self and view.git_pane) then return nil end
+  local tab = self:model_tab()
+  if view.git_pane == "history-list" and tab and tab.kind == "file_history" then
+    local path = self:absolute_repo_path(tab.relpath)
+    return path and { path = path } or nil
+  end
+  if view.git_pane ~= "file-list" and view.git_pane ~= "details" then return nil end
+
+  local line = view.buffer and view.buffer:get_selection() or 1
+  local row = view.path_tree_row and view:path_tree_row(line)
+  local record = view.path_tree_record_for_line and view:path_tree_record_for_line(line)
+  local relpath = record and changed_file_path(record) or row and row.path
+  local path = self:absolute_repo_path(relpath)
+  return path and { path = path } or nil
+end
+
+function GitView:get_path_target()
+  local focus = self:get_focus_view()
+  if not focus or focus == self then return nil end
+  return file_context.view_path_target(focus)
 end
 
 local function changed_file_tree(files, collapsed)
@@ -1067,13 +1107,25 @@ function GitView:ensure_diff_view(tab)
   end
   local diffview = require "plugins.diffview"
   local selected_file = tab.changed_files and tab.changed_files[tab.selected_file]
+  local left_source_path = self:absolute_repo_path(changed_file_side_path(selected_file, "left"))
+  local right_source_path = self:absolute_repo_path(changed_file_side_path(selected_file, "right"))
   local view = diffview.open({
     title = tab.title or "Commit Diff View",
     kind = "git",
     compare_type = diffview.Viewer.type.STRING_STRING,
     contents = {
-      left = diffview.content.text(tab.left_text or "", { name = tab.left_name, editable = false, read_only_reason = "Git commit diff is read-only" }),
-      right = diffview.content.text(tab.right_text or "", { name = tab.right_name, editable = false, read_only_reason = "Git commit diff is read-only" }),
+      left = diffview.content.text(tab.left_text or "", {
+        name = tab.left_name,
+        editable = false,
+        read_only_reason = "Git commit diff is read-only",
+        source_path = left_source_path,
+      }),
+      right = diffview.content.text(tab.right_text or "", {
+        name = tab.right_name,
+        editable = false,
+        read_only_reason = "Git commit diff is read-only",
+        source_path = right_source_path,
+      }),
     },
     content_titles = { left = tab.left_name, right = tab.right_name },
     editable_policy = "read-only",

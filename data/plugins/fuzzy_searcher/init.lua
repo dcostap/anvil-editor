@@ -2084,17 +2084,17 @@ end
 local function command_preview_parts(name)
   local binding = keymap.get_binding(name)
   local picker = current_picker()
-  local path = picker and picker.source_file_path
-  if not path then
-    path = file_context.view_file_path(core.active_view)
-  end
+  local target = picker and {
+    path = picker.source_file_path,
+    line = picker.source_file_line,
+  } or file_context.view_path_target(core.active_view)
+  local path = target and target.path
 
   local preview
   if name == "editor:copy_absolute_filepath" then
     preview = path
   elseif name == "editor:copy_absolute_filepath_with_line" then
-    local picker = current_picker()
-    local line = picker and picker.source_file_line or 1
+    local line = target and target.line or 1
     preview = path and string.format("%s:%d", path, line or 1)
   elseif name == "editor:copy_relative_filepath" then
     local root = core.root_project and core.root_project()
@@ -3140,12 +3140,15 @@ function FSView:new(prefix, opts)
 
   local source_view = opts.source_view or core.active_view
   local source_buffer = source_view and source_view.buffer
+  local source_target = file_context.view_path_target(source_view)
   self.source_view = file_context.current_content_view(source_view) or source_view
   self.source_pane = opts.source_pane or panes.pane_for_view(source_view) or panes.active()
   self.source_buffer = source_buffer
-  self.source_file_path = file_context.view_file_path(source_view)
+  self.source_file_path = source_target and source_target.path
   self.source_context_path = file_context.view_context_path(source_view)
-  self.source_file_line = source_buffer and source_buffer:get_selection(false) or 1
+  self.source_file_line = source_target and source_target.line
+    or source_buffer and source_buffer:get_selection(false)
+    or 1
   self.palette_commands = {}
   self.palette_command_set = {}
   for _, name in ipairs(command.get_all_valid()) do

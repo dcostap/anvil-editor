@@ -64,6 +64,13 @@ test.describe("File Tree instances", function()
     test.ok(entry and common.path_equals(entry.abs, file))
   end)
 
+  test.it("uses the selected entry as its Path Target", function()
+    local view = assert(filetree.new(file))
+    local target = test.not_nil(file_context.view_path_target(view))
+    test.ok(common.path_equals(target.path, file))
+    test.is_nil(target.line)
+  end)
+
   test.it("uses the Root Project when no target is given", function()
     local view = assert(filetree.new())
     test.equal(view.root_dir, common.normalize_path(core.root_project().path))

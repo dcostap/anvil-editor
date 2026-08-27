@@ -496,6 +496,10 @@ _Avoid_: diff pane, side view
 An empty visual row that reduces a large vertical offset between corresponding content in two Diff Sides. It is not part of either Buffer.
 _Avoid_: blank line, inserted line, spacer line
 
+**Path Target**:
+A filesystem path and optional source line that a focused View or selected row represents. Path-aware commands use this target.
+_Avoid_: active file, current file
+
 **Text Diff View**:
 A View comparing arbitrary text selections or generated text, independent of whether the text came from Git.
 _Avoid_: string comparison

@@ -1,6 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
+local file_context = require "core.file_context"
 local test = require "core.test"
 local diffview = require "plugins.diffview"
 local Buffer = require "core.buffer"
@@ -88,6 +89,29 @@ test.describe("DiffView batch behavior", function()
     test.equal("right\n", text(view.buffer_view_b.buffer))
     test.equal("Old", view.request.content_titles[1])
     test.equal("New", view.request.content_titles[2])
+  end)
+
+  test.it("gives generated Diff Sides their source Path Targets", function(context)
+    local left_path = system.absolute_path("old-name.lua")
+    local right_path = system.absolute_path("new-name.lua")
+    local view = track(context, "diffviews", diffview.open({
+      title = "Generated Diff",
+      contents = {
+        diffview.content.text("old one\nold two", { source_path = left_path }),
+        diffview.content.text("new one\nnew two", { source_path = right_path }),
+      },
+      editable_policy = "read-only",
+    }, true))
+
+    view.buffer_view_b:with_selection_state(function() view.buffer_view_b.buffer:set_selection(2, 1) end)
+    local left = test.not_nil(file_context.view_path_target(view.buffer_view_a))
+    local right = test.not_nil(file_context.view_path_target(view.buffer_view_b))
+    local outer = test.not_nil(file_context.view_path_target(view))
+    test.equal(left.path, left_path)
+    test.equal(left.line, 2)
+    test.equal(right.path, right_path)
+    test.equal(right.line, 2)
+    test.equal(outer.path, left_path)
   end)
 
   test.it("rejects invalid diff requests deterministically", function()

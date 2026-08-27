@@ -272,27 +272,15 @@ function Buffer:remove(...)
 end
 
 local function active_file_path(view)
-  local path = file_context.view_file_path(view)
-  if path then return path end
-  -- FileTreeView: the view's buffer is the filetree listing, not a file; extract
-  -- the path from the filetree entry at the cursor line instead.
-  if view and view.entry_for_line then
-    local line = view.buffer and view.buffer:get_selection(true)
-    if line then
-      local entry = view:entry_for_line(line)
-      if entry then return entry.abs end
-    end
-  end
+  local target = file_context.view_path_target(view)
+  return target and target.path or nil
 end
 
 local function is_file_bound_view(view)
   if not view then return false end
   local GlobalPromptBar = require "core.global_prompt_bar"
   if view:is(GlobalPromptBar) then return false end
-  -- FileTreeView: the view's buffer is the filetree listing; treat it as file-bound
-  -- so commands like reveal-in-explorer work from the filetree cursor.
-  if view.entry_for_line then return true end
-  return file_context.is_file_view(view)
+  return file_context.view_path_target(view) ~= nil
 end
 
 local function active_file_or_error(dv)
@@ -315,11 +303,15 @@ local function copy_absolute_filepath(dv)
 end
 
 local function copy_absolute_filepath_with_line(dv)
-  local path = active_file_or_error(dv)
-  if not path then return end
-  local buffer = dv and dv.buffer
-  local line = buffer and buffer:get_selection(false) or 1
-  copy_text_to_clipboard("absolute filepath with line", string.format("%s:%d", path, line or 1))
+  local target = file_context.view_path_target(dv)
+  if not target then
+    core.error("No active file")
+    return
+  end
+  copy_text_to_clipboard(
+    "absolute filepath with line",
+    string.format("%s:%d", target.path, target.line or 1)
+  )
 end
 
 local function copy_relative_filepath(dv)

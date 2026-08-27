@@ -5,6 +5,7 @@ local project_paths = require "core.project_paths"
 local test = require "core.test"
 local Editor = require "core.editor"
 local panes = require "core.panes"
+local View = require "core.view"
 
 require "plugins.intellij_actions"
 
@@ -234,6 +235,22 @@ test.describe("IntelliJ actions batch behavior", function()
       local metadata = command.get_metadata(name)
       test.ok(metadata and metadata.palette == true, name .. " is hidden from the palette")
     end
+  end)
+
+  test.it("copies a View Path Target with its source line", function(context)
+    local path = join_path(core.root_project().path, "path-target.lua")
+    local copied
+    context.original_set_clipboard = system.set_clipboard
+    system.set_clipboard = function(text) copied = text end
+
+    local view = View()
+    function view:get_path_target()
+      return { path = path, line = 37 }
+    end
+    core.set_active_view(view)
+
+    test.ok(command.perform("editor:copy_absolute_filepath_with_line"))
+    test.equal(copied, path .. ":37")
   end)
 
   test.it("open terminal command uses the active file directory", function(context)

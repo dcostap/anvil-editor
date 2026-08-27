@@ -126,17 +126,33 @@ DiffView.type = {
 
 local function content_text(text, opts)
   opts = opts or {}
-  return { kind = "text", text = text or "", name = opts.name, editable = opts.editable, owns_buffer = true, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
+  return {
+    kind = "text", text = text or "", name = opts.name,
+    editable = opts.editable, owns_buffer = true,
+    read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint,
+    source_path = opts.source_path,
+  }
 end
 
 local function content_file(path, opts)
   opts = opts or {}
-  return { kind = "file", filename = path, name = opts.name or (path and common.basename(path) or nil), editable = opts.editable, owns_buffer = false, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
+  return {
+    kind = "file", filename = path,
+    name = opts.name or (path and common.basename(path) or nil),
+    editable = opts.editable, owns_buffer = false,
+    read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint,
+    source_path = opts.source_path,
+  }
 end
 
 local function content_buffer(buffer, opts)
   opts = opts or {}
-  return { kind = "buffer", buffer = buffer, name = opts.name, editable = opts.editable, owns_buffer = opts.owns_buffer == true, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
+  return {
+    kind = "buffer", buffer = buffer, name = opts.name,
+    editable = opts.editable, owns_buffer = opts.owns_buffer == true,
+    read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint,
+    source_path = opts.source_path,
+  }
 end
 
 local function content_blank(opts)
@@ -202,6 +218,9 @@ local function validate_content(content, index)
   end
   if content.editable ~= nil and type(content.editable) ~= "boolean" then
     return nil, string.format("diff content %d editable must be a boolean", index)
+  end
+  if content.source_path ~= nil and (type(content.source_path) ~= "string" or content.source_path == "") then
+    return nil, string.format("diff content %d source_path must be a non-empty string", index)
   end
   local kind = content.kind
   if kind == "text" then
@@ -344,6 +363,22 @@ local function buffer_for_content(content, title)
   return buffer, true
 end
 
+local function source_path_for_content(content)
+  local path = content and content.source_path
+  if not path and content then
+    if content.kind == "file" then
+      path = content.filename
+    elseif content.kind == "buffer" then
+      path = content.buffer and content.buffer.abs_filename
+    end
+  end
+  if path and not common.is_absolute_path(path) then
+    local ok, absolute = pcall(core.project_absolute_path, path)
+    if ok then path = absolute end
+  end
+  return path and common.normalize_path(path) or nil
+end
+
 function DiffView:assign_request()
   if self.request_assigned then return end
   self.request_assigned = true
@@ -397,6 +432,10 @@ function DiffView:new(a, b, compare_type, names)
 
   self.buffer_view_a.diff_view_parent = self
   self.buffer_view_b.diff_view_parent = self
+  self.buffer_view_a.diff_view_side_index = 1
+  self.buffer_view_b.diff_view_side_index = 2
+  self.buffer_view_a.get_path_target = function(view) return self:get_side_path_target(1, view) end
+  self.buffer_view_b.get_path_target = function(view) return self:get_side_path_target(2, view) end
 
   if not self.request._defer_assignment then self:assign_request() end
 
@@ -417,6 +456,14 @@ end
 
 function DiffView:get_focus_view()
   return self.buffer_view_a
+end
+
+function DiffView:get_path_target()
+  local focus = core.active_view
+  if focus ~= self.buffer_view_a and focus ~= self.buffer_view_b then
+    focus = self:get_focus_view()
+  end
+  return focus and focus.get_path_target and focus:get_path_target() or nil
 end
 
 function DiffView:get_name()
@@ -682,6 +729,16 @@ local function gap_layout_signature(buffer_view)
     tostring(buffer_view.fold_generation or 0),
     tostring(buffer_view.wrapping_enabled),
   }, ":")
+end
+
+function DiffView:get_side_path_target(index, side_view)
+  local content = self.request and self.request.contents and self.request.contents[index]
+  local path = source_path_for_content(content)
+  if not path then return nil end
+  local line = with_textview_selection(side_view, function()
+    return side_view.buffer:get_selection(false)
+  end)
+  return { path = path, line = line }
 end
 
 -- Let connectors show small offsets and short shared tails without empty space.
@@ -1967,6 +2024,7 @@ function DiffRequestController:adopt_current_side(side)
     editable = old_content and old_content.editable,
     read_only_reason = old_content and old_content.read_only_reason,
     syntax_hint = old_content and old_content.syntax_hint,
+    source_path = old_content and old_content.source_path,
   })
   if old_content and (old_content.kind == "file" or old_content.requires_dirty_confirmation) then
     adopted.requires_dirty_confirmation = true

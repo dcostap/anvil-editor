@@ -15,9 +15,41 @@ function M.view_file_path(view)
   if path and path ~= "" then return common.normalize_path(path) end
 end
 
-function M.view_context_path(view)
+local function normalize_path_target(target)
+  if type(target) == "string" then target = { path = target } end
+  if type(target) ~= "table" or type(target.path) ~= "string" or target.path == "" then return nil end
+  local line = tonumber(target.line)
+  return {
+    path = common.normalize_path(target.path),
+    line = line and math.max(1, math.floor(line)) or nil,
+  }
+end
+
+---Get the filesystem path and optional source line represented by a View.
+---@param view core.view|string?
+---@return { path:string, line:integer? }?
+function M.view_path_target(view)
+  if type(view) == "string" then return normalize_path_target(view) end
+  if view and view.get_path_target then
+    local target = normalize_path_target(view:get_path_target())
+    if target then return target end
+  end
+
   local path = M.view_file_path(view)
-  if path then return path end
+  if not path then return nil end
+  local buffer = view and view.buffer
+  local line
+  if buffer and buffer.get_selection then
+    local function get_line() return buffer:get_selection(false) end
+    line = view.with_selection_state and view:with_selection_state(get_line) or get_line()
+  end
+  return normalize_path_target { path = path, line = line }
+end
+
+function M.view_context_path(view)
+  local target = M.view_path_target(view)
+  if target then return target.path end
+  local path
   if view and view.get_context_path then path = view:get_context_path() end
   if type(path) == "string" and path ~= "" then return common.normalize_path(path) end
 end
@@ -56,6 +88,12 @@ function M.current_file_path(fallback_view)
   return M.active_file_path() or M.view_file_path(current_pane_view()) or M.view_file_path(fallback_view)
 end
 
+function M.current_path_target(fallback_view)
+  return M.view_path_target(core.active_view)
+    or M.view_path_target(current_pane_view())
+    or M.view_path_target(fallback_view)
+end
+
 function M.current_context_path(fallback_view)
   return M.view_context_path(core.active_view)
     or M.view_context_path(current_pane_view())
@@ -80,11 +118,15 @@ function M.source_directory(view)
     if type(view.cwd) == "string" and view.cwd ~= "" then
       return common.normalize_path(view.cwd)
     end
+    local target = M.view_path_target(view)
+    if target then
+      local info = system.get_file_info(target.path)
+      if info and info.type == "dir" then return target.path end
+      return common.dirname(target.path)
+    end
     if type(view.current_dir) == "string" and view.current_dir ~= "" then
       return common.normalize_path(view.current_dir)
     end
-    local path = M.view_file_path(view)
-    if path then return common.dirname(path) end
   end
   local project = core.root_project and core.root_project()
   return project and project.path or nil
