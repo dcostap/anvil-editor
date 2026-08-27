@@ -284,6 +284,17 @@ function keymap.on_key_released(k)
   end
 end
 
+---Clear modifier keys that can remain pressed when a window focus event is lost.
+---@return boolean cleared True when at least one modifier was pressed
+function keymap.clear_modkeys()
+  local cleared = false
+  for _, mk in ipairs(modkeys) do
+    if keymap.modkeys[mk] then cleared = true end
+    keymap.modkeys[mk] = false
+  end
+  return cleared
+end
+
 
 --------------------------------------------------------------------------------
 -- Register default bindings

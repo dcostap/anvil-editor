@@ -847,17 +847,11 @@ static int f_window_has_focus(lua_State *L) {
   bool has_focus = (flags & SDL_WINDOW_INPUT_FOCUS) != 0;
 
 #ifdef _WIN32
-  /* SDL can get stuck with SDL_WINDOW_INPUT_FOCUS unset even though Win32 says
-  ** our HWND is foreground, active, and focused.  In that state Anvil hid the
-  ** caret forever until an alt-tab produced a fresh SDL focus-gained event.
-  ** Treat native Win32 focus as authoritative when SDL's cached flag is stale. */
-  if (!has_focus) {
-    SDL_PropertiesID props = SDL_GetWindowProperties(window);
-    HWND hwnd = (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
-    if (hwnd && (GetForegroundWindow() == hwnd || GetActiveWindow() == hwnd || GetFocus() == hwnd)) {
-      has_focus = true;
-    }
-  }
+  /* SDL can retain either focus state after an Alt-Tab transition. Use the
+  ** foreground HWND in both directions so Lua can repair stale input state. */
+  SDL_PropertiesID props = SDL_GetWindowProperties(window);
+  HWND hwnd = (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+  if (hwnd) has_focus = GetForegroundWindow() == hwnd;
 #endif
 
   lua_pushboolean(L, has_focus);

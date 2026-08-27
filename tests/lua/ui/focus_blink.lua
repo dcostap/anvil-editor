@@ -1,4 +1,5 @@
 local core = require "core"
+local keymap = require "core.keymap"
 local test = require "core.test"
 local View = require "core.view"
 
@@ -51,5 +52,23 @@ test.describe("focus blink", function()
       test.ok(core.blink_start ~= -100)
       test.equal(core.blink_timer, core.blink_start)
     end)
+  end)
+
+  test.test("window focus gained clears a stale modifier before the next input", function()
+    local invoked = false
+    local binding = function() invoked = true end
+    local old_alt = keymap.modkeys.alt
+    keymap.add({ f13 = { binding } })
+
+    local ok, err = pcall(function()
+      keymap.modkeys.alt = true
+      core.on_event("focusgained")
+      core.on_event("keypressed", "f13", {})
+    end)
+
+    keymap.unbind("f13", binding)
+    keymap.modkeys.alt = old_alt
+    if not ok then error(err, 0) end
+    test.ok(invoked, "expected unmodified input after window focus returned")
   end)
 end)

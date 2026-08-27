@@ -1926,6 +1926,21 @@ local function dispatch_modal_input(event, ...)
   return root:dispatch_modal_input(event, ...)
 end
 
+local input_window_has_focus
+
+local function reset_input_modifiers(reason)
+  if not (keymap and keymap.clear_modkeys) then return end
+  if keymap.clear_modkeys() then
+    core.log_quiet("Input focus: cleared stale modifiers reason=%s", tostring(reason))
+  end
+end
+
+local function record_input_window_focus(has_focus, reason, force_reset)
+  local changed = input_window_has_focus ~= nil and input_window_has_focus ~= has_focus
+  input_window_has_focus = has_focus
+  if changed or force_reset then reset_input_modifiers(reason) end
+end
+
 local function record_focus_input_event(type, ...)
   if type ~= "focusgained" and type ~= "keypressed" and type ~= "textinput" then return end
   local state = core.focus_diagnostics_event_state
@@ -2079,6 +2094,7 @@ function core.on_event(type, ...)
       callback(status, result)
     end
   elseif type == "focusgained" then
+    record_input_window_focus(true, "focusgained", true)
     core.log_quiet(
       "Focus diagnostics: received focusgained event active=%s window_has_focus=%s",
       tostring(core.active_view), tostring(core.window and system.window_has_focus(core.window))
@@ -2113,6 +2129,7 @@ function core.on_event(type, ...)
     core.log_quiet("Focus diagnostics: reset caret blink on focusgained")
     core.request_window_reactivation_repaint("focusgained")
   elseif type == "focuslost" then
+    record_input_window_focus(false, "focuslost", true)
     core.log_quiet(
       "Focus diagnostics: received focuslost event active=%s window_has_focus=%s",
       tostring(core.active_view), tostring(core.window and system.window_has_focus(core.window))
@@ -3081,6 +3098,12 @@ function core.run_step(options)
     end
   end
   core.frame_start = now
+
+  -- Win32 focus is authoritative in system.window_has_focus(). Poll it before
+  -- input dispatch because SDL can omit both events during an Alt-Tab cycle.
+  if core.window then
+    record_input_window_focus(system.window_has_focus(core.window), "native-focus-transition", false)
+  end
 
   local function run_step_sleep(seconds)
     seconds = seconds or 0
