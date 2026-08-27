@@ -4,6 +4,14 @@ local function max_line(lines)
   return math.max(1, #(lines or {}))
 end
 
+local function comparable_lines(lines)
+  lines = lines or {}
+  -- A Buffer always keeps one newline-only placeholder line. It is not file
+  -- content and must not become an equality anchor against a real blank line.
+  if #lines == 1 and lines[1] == "\n" then return {} end
+  return lines
+end
+
 local function clamp_line(line, max)
   return math.max(1, math.min(math.max(1, max or 1), math.floor(tonumber(line) or 1)))
 end
@@ -170,6 +178,8 @@ end
 
 function M.compute(a_lines, b_lines, opts)
   opts = opts or {}
+  local comparable_a = comparable_lines(a_lines)
+  local comparable_b = comparable_lines(b_lines)
   local ai, bi = 1, 1
   local a_offset, b_offset = 0, 0
   local a_offset_total, b_offset_total = 0, 0
@@ -189,7 +199,7 @@ function M.compute(a_lines, b_lines, opts)
     equal_block = nil
   end
 
-  for edit in diff.diff_iter(a_lines, b_lines) do
+  for edit in diff.diff_iter(comparable_a, comparable_b) do
     alignment[#alignment + 1] = {
       tag = edit.tag,
       a = edit.a and ai or nil,

@@ -28,6 +28,18 @@ test.describe("DiffModel", function()
     test.same({ hunk.tag, hunk.start_line, hunk.end_line }, { "insert", 2, 2 })
   end)
 
+  test.it("does not align an empty Buffer placeholder with content blank lines", function()
+    local added = model.compute(lines(""), lines("header\n\nbody"))
+    test.equal("insert", added:line_state("b", 1))
+    test.equal("insert", added:line_state("b", 2))
+    test.equal("insert", added:line_state("b", 3))
+
+    local removed = model.compute(lines("header\n\nbody"), lines(""))
+    test.equal("delete", removed:line_state("a", 1))
+    test.equal("delete", removed:line_state("a", 2))
+    test.equal("delete", removed:line_state("a", 3))
+  end)
+
   test.it("uses whole-word inline ranges for modified tokens", function()
     local m = model.compute(lines("cat"), lines("cot"))
     test.equal(m:line_state("a", 1), "modify")
