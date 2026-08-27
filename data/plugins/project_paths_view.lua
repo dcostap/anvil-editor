@@ -228,6 +228,7 @@ end
 
 function ProjectPathsView:new()
   ProjectPathsView.super.new(self, Buffer())
+  self:set_wrapping_enabled(false)
   self.buffer.read_only = true
   self.buffer.read_only_reason = "Project Paths is read-only"
   self.entries_by_line = {}

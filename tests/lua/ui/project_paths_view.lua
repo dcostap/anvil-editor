@@ -1,6 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
+local config = require "core.config"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local test = require "core.test"
@@ -78,6 +79,19 @@ test.describe("Project Paths View", function()
       local ok, err = common.rm(context.temp_root, true)
       test.ok(ok, err)
     end
+  end)
+
+  test.it("starts with line wrapping off", function(context)
+    context.original_projects = core.projects
+    context.original_cwd = system.getcwd()
+    local old_default = config.plugins.linewrapping.enable_by_default
+    config.plugins.linewrapping.enable_by_default = true
+    local view = project_paths_view.view_class()
+    config.plugins.linewrapping.enable_by_default = old_default
+
+    local wrapping_enabled = view:is_wrapping_enabled()
+    view:on_close()
+    test.equal(wrapping_enabled, false)
   end)
 
   test.it("lists the label, role, and path without storage controls", function(context)
