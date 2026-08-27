@@ -126,10 +126,10 @@ style.terminal_palette = {
 style.diff_delete = c("ffe5e5")
 style.diff_insert = c("e3f7e7")
 style.diff_modify = c("edf3ff")
-style.diff_delete_background = c("ffe5e5")
+style.diff_delete_background = { common.color "rgba(255, 229, 229, 0.80)" }
 style.diff_insert_background = c("e3f7e7")
 style.diff_modify_background = c("edf3ff")
-style.diff_modify_inline = c("d2dbff")
+style.diff_modify_inline = { common.color "rgba(210, 219, 255, 0.85)" }
 style.diff_marker_delete = { common.color "rgba(196, 88, 99, 0.58)" }
 style.diff_marker_insert = { common.color "rgba(65, 137, 82, 0.52)" }
 style.diff_marker_modify = { common.color "rgba(76, 116, 164, 0.50)" }
@@ -215,7 +215,7 @@ style.filetree_git_status_modified = c("0053ff")
 style.filetree_git_status_deleted = c("f04460")
 style.filetree_git_line_additions = style.git_change_addition
 style.filetree_git_line_deletions = style.git_change_deletion
-style.filetree_folder = c("6c707e")
+style.filetree_folder = c("5c5f6b")
 
 -- Anvil's common syntax slots.
 style.syntax["normal"] = c(C.text_fg)
