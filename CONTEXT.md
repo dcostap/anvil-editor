@@ -321,6 +321,11 @@ The first File Tree row, shown as `../`, which opens the parent directory in the
 The previous directory remains expanded after navigation.
 _Avoid_: up folder, parent link
 
+**Enter Directory**:
+A File Tree action that makes the selected directory the File Tree's displayed root without creating another View.
+The action adds a Navigation Place to the current Pane.
+_Avoid_: expand directory, open new File Tree
+
 **Path Tree**:
 A hierarchical presentation of a scoped set of file and directory paths, such as files changed by a Git revision.
 _Avoid_: file list, mini File Tree

@@ -107,6 +107,7 @@ test.describe("File Tree instances", function()
 
   test.it("opens the parent and expands the previous directory", function()
     local view = assert(filetree.new(folder))
+    local pane = panes.create { factory = function() return view end }
     test.equal(view.buffer.lines[1], "../\n")
     local plan, err = view:plan_changes(false)
     test.not_nil(plan, err)
@@ -121,6 +122,30 @@ test.describe("File Tree instances", function()
     test.not_nil(previous)
     test.ok(view.line_meta[previous.line].expanded)
     test.equal(view.buffer:get_selection(true), previous.line)
+    test.equal(panes.history_length(pane), 2)
+    test.equal(panes.back(pane), view)
+    test.equal(view.current_dir, common.normalize_path(folder))
+    test.equal(panes.forward(pane), view)
+    test.equal(view.current_dir, common.normalize_path(root))
+  end)
+
+  test.it("enters a folder and records both folders in Navigation History", function()
+    local view = assert(filetree.new(root))
+    local pane = panes.create { factory = function() return view end }
+    local _, _, snapshot = view:build_entries(false)
+    local entry = snapshot.by_abs[common.path_compare_key(folder)]
+    test.not_nil(entry)
+    view.buffer:set_selection(entry.line, 1)
+
+    test.ok(command.perform("filetree:enter_selected"))
+
+    test.equal(pane.current_view, view)
+    test.equal(view.current_dir, common.normalize_path(folder))
+    test.equal(panes.history_length(pane), 2)
+    test.equal(panes.back(pane), view)
+    test.equal(view.current_dir, common.normalize_path(root))
+    test.equal(panes.forward(pane), view)
+    test.equal(view.current_dir, common.normalize_path(folder))
   end)
 
   test.it("keeps pending edits when parent navigation is requested", function()

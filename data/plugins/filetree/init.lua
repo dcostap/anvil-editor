@@ -863,6 +863,31 @@ function FileTreeView:get_state()
   }
 end
 
+function FileTreeView:get_navigation_state()
+  return self:get_state()
+end
+
+function FileTreeView:set_navigation_state(state)
+  if type(state) ~= "table" or type(state.root) ~= "string" then return false end
+  local root_info = system.get_file_info(state.root)
+  local current_info = state.current_dir and system.get_file_info(state.current_dir)
+  if not (root_info and root_info.type == "dir" and current_info and current_info.type == "dir") then
+    core.log_quiet("File Tree could not restore a missing Navigation Place")
+    return false
+  end
+
+  self.root_dir = common.normalize_path(state.root)
+  self.current_dir = common.normalize_path(state.current_dir)
+  self:refresh(false, false)
+  self:restore_expanded_paths(state.expanded_paths)
+  if state.selection_paths then self:restore_selection_paths(state.selection_paths) end
+  if state.scroll then
+    self.scroll.x, self.scroll.to.x = state.scroll.x or 0, state.scroll.x or 0
+    self.scroll.y, self.scroll.to.y = state.scroll.y or 0, state.scroll.y or 0
+  end
+  return true
+end
+
 function FileTreeView.from_state(state)
   if type(state) ~= "table" or type(state.root) ~= "string"
       or not system.get_file_info(state.root) then return nil end
@@ -2932,31 +2957,52 @@ function FileTreeView:on_file_dropped(filename)
   return true
 end
 
-function FileTreeView:up_dir()
+function FileTreeView:change_directory(directory, opts)
+  opts = opts or {}
   if self.has_possible_edits then
-    core.warn("File Tree: apply or reload edits before opening the parent directory")
-    core.log_quiet("File Tree parent navigation blocked because the editable tree has unapplied edits")
+    core.warn("File Tree: apply or reload edits before changing the current directory")
+    core.log_quiet("File Tree directory change blocked because the editable tree has unapplied edits")
     return false
   end
 
+  directory = directory and common.normalize_path(directory)
+  local info = directory and system.get_file_info(directory)
+  if not (info and info.type == "dir") then return false end
+  if common.path_equals(directory, self.current_dir) then return false end
+
+  self.root_dir = directory
+  self.current_dir = directory
+  self.scroll.to.x, self.scroll.x = 0, 0
+  self.scroll.to.y, self.scroll.y = 0, 0
+  self:refresh(false, false)
+  if opts.expand_path then self:restore_expanded_paths({ [opts.expand_path] = true }) end
+
+  if opts.select_path then
+    local _, _, snapshot = self:build_entries(false)
+    local entry = snapshot.by_abs[path_key(opts.select_path)]
+    if entry then
+      self.buffer:set_selection(entry.line, 1)
+      self:scroll_to_make_visible(entry.line, 1)
+    end
+  end
+
+  local pane = panes.pane_for_view(self)
+  if pane and pane.current_view == self then panes.record_location(pane) end
+  core.log_quiet("File Tree changed current directory: %s", directory)
+  return true
+end
+
+function FileTreeView:up_dir()
   local previous = self.current_dir
   local parent = parent_navigation_target(previous)
   if not parent then return false end
+  return self:change_directory(parent, { expand_path = previous, select_path = previous })
+end
 
-  self.root_dir = parent
-  self.current_dir = parent
-  self.scroll.to.y, self.scroll.y = 0, 0
-  self:refresh(false, false)
-  self:restore_expanded_paths({ [previous] = true })
-
-  local _, _, snapshot = self:build_entries(false)
-  local entry = snapshot.by_abs[path_key(previous)]
-  if entry then
-    self.buffer:set_selection(entry.line, 1)
-    self:scroll_to_make_visible(entry.line, 1)
-  end
-  core.log_quiet("File Tree opened parent directory: %s", parent)
-  return true
+function FileTreeView:enter_directory(entry)
+  if not entry or entry.type ~= "dir" then return false end
+  if entry.parent_directory then return self:up_dir() end
+  return self:change_directory(entry.abs)
 end
 
 function FileTreeView:apply_plan(plan)
@@ -3601,10 +3647,22 @@ end, {
   end,
 })
 
+command.add(function()
+  local view = active_filetree()
+  if not view then return false end
+  local entry = view:entry_for_line(view.buffer:get_selection(true))
+  return entry and entry.type == "dir", view, entry
+end, {
+  ["filetree:enter_selected"] = command.palette(function(view, entry)
+    return view:enter_directory(entry)
+  end),
+})
+
 keymap.add {
   ["ctrl+\\"] = "filetree:open_at_project_root",
   ["ctrl+s"] = "filetree:apply_changes",
   ["f5"] = "filetree:reload",
+  ["alt+shift+r"] = "filetree:enter_selected",
   ["alt+home"] = "filetree:project_root",
 }
 

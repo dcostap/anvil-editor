@@ -1338,6 +1338,7 @@ filetree:open_at_choose_path
 filetree:open_at_current_path
 filetree:reload
 filetree:apply_changes
+filetree:enter_selected
 filetree:up_dir
 filetree:select_all
 ```
@@ -2491,6 +2492,7 @@ Red tests:
 - relative paths use Editor, Terminal, File Tree, and Root Project contexts;
 - dot always means context directory;
 - up-dir opens the parent and expands the previous directory;
+- Enter Directory and up-dir record File Tree Navigation Places;
 - replacing File Tree suspends it;
 - Back restores same instance and state;
 - Workspace restores current File Tree state;
