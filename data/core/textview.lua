@@ -927,7 +927,9 @@ function TextView:new(buffer)
   })
   register_fold_view(self)
   linewrapping.register_textview(self)
-  self:set_wrapping_enabled(config.plugins.linewrapping.enable_by_default)
+  self:set_wrapping_enabled(
+    config.plugins.linewrapping.enable_by_default and not self.buffer.binary
+  )
 end
 
 
@@ -7463,7 +7465,7 @@ function TextView:draw_line_text(line, x, y)
 
   local start_tx = line_start_tx
   local pending_font, pending_color, pending_chunks, pending_len, pending_has_tabs
-  local max_pending_bytes = 512
+  local max_pending_bytes = self.buffer.binary and 256 or 512
   local function flush_pending_text()
     if not pending_font then return false end
     local draw_text_start = stats and system.get_time()
@@ -7565,12 +7567,13 @@ function TextView:draw_line_text(line, x, y)
       local font = syntax_fonts[type] or default_font
       if font ~= default_font then font:set_tab_size(indent_size) end
       if text ~= "" then
-        local ascii_chunkable = (#text > max_pending_bytes * 4)
+        local text_chunkable = self.buffer.binary
+          or (#text > max_pending_bytes * 4)
           or text:find("[\128-\255]") == nil
-        if not ascii_chunkable then
+        if not text_chunkable then
         -- Avoid splitting complex/shaped scripts across draw calls; HarfBuzz
         -- needs the full run to preserve joining and ligatures. Pathological
-        -- ASCII tokens are the common long-line case we chunk aggressively.
+        -- ASCII tokens and binary data can use bounded chunks.
         if pending_font ~= font or pending_color ~= color or (pending_len or 0) + #text > max_pending_bytes then
           if flush_pending_text() then break end
         end

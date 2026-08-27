@@ -127,6 +127,7 @@ end
 ---return boolean
 function SS.should_run(dv)
   if dv and not (dv:is(TextView) or dv:is(Editor)) then return false end
+  if dv and dv.buffer and dv.buffer.binary then return false end
   if dv and markdown_live_mode(dv) then return false end
   if dv and not SS.managed_textviews[dv].enabled then return false end
   if not sticky_scroll.enabled then return false end

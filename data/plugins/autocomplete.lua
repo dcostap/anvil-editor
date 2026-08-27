@@ -364,6 +364,7 @@ core.add_thread(function()
   ---@param buffer core.buffer
   ---@return table<string,boolean>
   local function get_symbols(buffer)
+    if buffer.binary then return {} end
     local s = {}
     local syntax_symbols = load_syntax_symbols(buffer)
     local max_symbols = config.plugins.autocomplete.max_symbols
