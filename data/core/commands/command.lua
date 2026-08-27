@@ -1,4 +1,5 @@
 local command = require "core.command"
+local keymap = require "core.keymap"
 
 command.add("core.global_prompt_bar", {
   ["core:submit_prompt"] = function(active_view)
@@ -21,3 +22,7 @@ command.add("core.global_prompt_bar", {
     active_view:move_suggestion_idx(-1)
   end,
 })
+
+keymap.add {
+  ["alt+r"] = "core:submit_prompt",
+}

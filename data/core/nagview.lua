@@ -218,6 +218,9 @@ function NagView:on_key_pressed(key, event)
   if not self.visible then return false end
   if key == "return" or key == "keypad enter" then
     command.perform "core:select_dialog_entry"
+  elseif key == "r" and event and event.alt
+      and not event.altgr and not event.ctrl and not event.shift and not event.gui then
+    command.perform "core:select_dialog_entry"
   elseif key == "escape" then
     command.perform "core:select_dialog_no"
   elseif key == "left" or key == "up" or key == "tab" and event and event.shift then
