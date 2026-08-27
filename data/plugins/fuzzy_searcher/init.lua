@@ -4511,7 +4511,12 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
       local a_opens = command.get_metadata(a.item).opens_view == true
       local b_opens = command.get_metadata(b.item).opens_view == true
       if a_opens ~= b_opens then return a_opens end
-      return fuzzy_result_better(a, b)
+      -- Use match quality, then identifier order. Command and keyword length
+      -- must not break an otherwise equal match.
+      local a_score = a.score + math.floor(#a.text / 8)
+      local b_score = b.score + math.floor(#b.text / 8)
+      if a_score == b_score then return a.item < b.item end
+      return a_score > b_score
     end)
     for i, match in ipairs(matches) do
       if i > max_items then self.has_more = true; break end

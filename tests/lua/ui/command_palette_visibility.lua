@@ -25,6 +25,10 @@ test.describe("Command Palette visibility", function()
       invalid = "test_palette:wrong_context",
       opener = "test_palette:open_target_view",
       non_opener = "test_palette:target_action",
+      alphabetic_first = "test_palette:alpha_extremely_long_command",
+      alphabetic_second = "test_palette:beta_command",
+      fuzzy_compact = "test_palette:alpha_a_b_c_command",
+      fuzzy_contiguous = "test_palette:zeta_abc",
     }
     context.source = Editor(Buffer(nil, nil, true))
     panes.create { factory = function() return context.source end }
@@ -46,6 +50,12 @@ test.describe("Command Palette visibility", function()
         opens_view = true,
       }),
       [context.names.non_opener] = command.palette(function() end),
+      [context.names.alphabetic_first] = command.palette(function() end, {
+        keywords = { "extra hidden command search words" },
+      }),
+      [context.names.alphabetic_second] = command.palette(function() end),
+      [context.names.fuzzy_compact] = command.palette(function() end),
+      [context.names.fuzzy_contiguous] = command.palette(function() end),
     })
   end)
 
@@ -87,6 +97,32 @@ test.describe("Command Palette visibility", function()
     test.not_nil(positions[context.names.opener])
     test.not_nil(positions[context.names.non_opener])
     test.ok(positions[context.names.opener] < positions[context.names.non_opener])
+  end)
+
+  test.it("sorts equal command matches by identifier", function(context)
+    fuzzy_searcher.open(">test_palette:")
+    local positions = {}
+    for index, row in ipairs(core.fuzzy_searcher_active_view.results or {}) do
+      positions[row.command] = index
+    end
+
+    test.not_nil(positions[context.names.alphabetic_first])
+    test.not_nil(positions[context.names.alphabetic_second])
+    test.ok(positions[context.names.alphabetic_first]
+      < positions[context.names.alphabetic_second])
+  end)
+
+  test.it("keeps stronger fuzzy command matches above alphabetical matches", function(context)
+    fuzzy_searcher.open(">abc")
+    local positions = {}
+    for index, row in ipairs(core.fuzzy_searcher_active_view.results or {}) do
+      positions[row.command] = index
+    end
+
+    test.not_nil(positions[context.names.fuzzy_compact])
+    test.not_nil(positions[context.names.fuzzy_contiguous])
+    test.ok(positions[context.names.fuzzy_contiguous]
+      < positions[context.names.fuzzy_compact])
   end)
 
   test.it("hides keymap primitives while retaining useful editor actions", function()
