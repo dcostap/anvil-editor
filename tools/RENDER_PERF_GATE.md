@@ -1,6 +1,6 @@
 # Autonomous render performance gate
 
-`run_render_perf_gate.py` measures the D3D11 command renderer and checks deterministic frame captures without touching the interactive desktop.
+`run_render_perf_gate.py` measures the D3D11 command renderer and its software fallback. It checks deterministic captures without touching the interactive desktop.
 
 ## Isolation guarantees
 
@@ -12,7 +12,7 @@ Every benchmark process receives:
 - internal deterministic actions rather than mouse or keyboard injection
 - a Windows Job Object that owns and reaps the complete benchmark process tree
 
-The runner never finds, focuses, moves, closes, or reuses an existing Anvil process. Frame captures come directly from the D3D11 backbuffer, not from the screen. The normal portable app and its user state are not used.
+The runner never finds, focuses, moves, closes, or reuses an existing Anvil process. D3D11 captures come from the backbuffer. Software captures come from the renderer surface. The runner does not capture the screen. It does not use the normal portable app or its user state.
 
 The benchmark writes an atomic heartbeat and lifecycle timeline. The hidden
 launcher enforces three independent watchdogs:
@@ -64,6 +64,7 @@ From MSYS/bash:
 ```sh
 python tools/run_render_perf_gate.py --suite quick
 python tools/run_render_perf_gate.py --suite full
+python tools/run_render_perf_gate.py --scenario font-raster-correctness --renderer software
 ```
 
 Run a private pathological specimen without opening or modifying the original:
@@ -112,6 +113,7 @@ Useful development options:
 --user-state-mode clean|reuse
                      fresh USERDIR per process or reuse across repetitions
 --scenario NAME      run or update one scenario
+--renderer NAME      use d3d11 or software output (default d3d11)
 --specimen PATH      copy a private local specimen into the isolated run
 --baseline PATH      override the performance baseline
 --golden-root PATH   override the exact-pixel golden directory
@@ -132,6 +134,7 @@ case.
 - `caret-repeat` — one `doc:move-to-next-line` command per redraw in an unwrapped Document View
 - `markdown-long-link-caret-repeat` — one wrapped-row caret move per redraw inside a long revealed Markdown link
 - `renderer-primitives` — deterministic clipping, alpha, text, and shape scene
+- `font-raster-correctness` — connected glyph continuity across sizes, phases, hinting, antialiasing, and backgrounds
 
 Private specimen scenarios are selected by `--suite specimen` and require
 `--specimen`:
@@ -171,7 +174,7 @@ Important files:
 - `<scenario>/*/heartbeat.txt` — last atomic progress marker
 - `<scenario>/*/resources.csv` — external working-set/private-byte progression
 - `<scenario>/*/timeout.dmp` — local minidump when a watchdog terminates a run
-- `<scenario>/metrics-*/screenshot.png` — D3D11 backbuffer checkpoint
+- `<scenario>/metrics-*/screenshot.png` — D3D11 backbuffer or software-surface checkpoint
 - `<scenario>/metrics-*/screenshot-stability-*.png` — consecutive static-frame checks
 - `<scenario>/metrics-*/visual_diff.json` — exact pixel comparison
 
@@ -181,7 +184,7 @@ The tracked performance baseline is:
 tools/baselines/render_perf_windows.json
 ```
 
-Tracked D3D11 visual goldens live under:
+Tracked renderer-specific visual goldens live under:
 
 ```text
 tools/baselines/render/

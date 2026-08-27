@@ -1,4 +1,5 @@
 #include <lua.h>
+#include <SDL3_image/SDL_image.h>
 #include <SDL3/SDL.h>
 #include "api.h"
 #include "../renwindow.h"
@@ -165,13 +166,24 @@ static int f_get_color(lua_State *L) {
 static int f_request_frame_capture(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   const char *path = luaL_checkstring(L, 2);
-  if (!anvil_d3d11_request_frame_capture(window_renderer->cache.window, path)) {
+  if (anvil_d3d11_request_frame_capture(window_renderer->cache.window, path)) {
+    lua_pushboolean(L, true);
+    return 1;
+  }
+  if (!anvil_d3d11_enabled()) {
+    RenSurface surface = rencache_get_surface(&window_renderer->cache);
+    if (surface.surface && IMG_SavePNG(surface.surface, path)) {
+      lua_pushboolean(L, true);
+      return 1;
+    }
+    lua_pushboolean(L, false);
+    lua_pushliteral(L, "software_capture_failed");
+    return 2;
+  } else {
     lua_pushboolean(L, false);
     lua_pushliteral(L, "d3d11_unavailable");
     return 2;
   }
-  lua_pushboolean(L, true);
-  return 1;
 }
 
 static const luaL_Reg renwindow_lib[] = {

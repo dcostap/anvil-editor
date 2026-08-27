@@ -40,6 +40,7 @@ local benchmark = {
   heartbeat_file = env_string("ANVIL_PERF_BENCHMARK_HEARTBEAT"),
   lifecycle_file = env_string("ANVIL_PERF_BENCHMARK_LIFECYCLE"),
   screenshot_file = env_string("ANVIL_PERF_BENCHMARK_SCREENSHOT"),
+  raster_metadata_file = env_string("ANVIL_PERF_BENCHMARK_RASTER_METADATA"),
   capture_frames = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_CAPTURE_FRAMES", 3))),
   capture_settle_frames = math.max(0, math.floor(env_number("ANVIL_PERF_BENCHMARK_CAPTURE_SETTLE_FRAMES", 5))),
   warmup_frames = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_WARMUP_FRAMES", 120))),
@@ -74,7 +75,7 @@ local metric_fields = {
   "completion_ms", "action_ms", "event_ms", "update_ms", "pre_draw_ms",
   "draw_emit_ms", "renderer_end_ms", "frame_ms", "present_ms", "core_step_ms",
   "total_ms", "draw_calls", "quad_instances", "texture_batch_breaks",
-  "quad_batches", "unique_batch_srvs", "repeated_batch_srvs",
+  "quad_batches", "unique_batch_srvs", "repeated_batch_srvs", "texture_uploads",
   "rencache_commands", "rencache_text_commands", "rencache_command_bytes",
   "display_packet_replays", "display_packet_commands_replayed",
   "display_packet_frame_bytes_copied", "display_packet_replay_ms",
@@ -293,6 +294,181 @@ local function open_primitive_view()
   return view
 end
 
+local FontRasterView = View:extend()
+
+local FONT_RASTER_PATH = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-SemiLight.ttf"
+local FONT_RASTER_REGULAR_PATH = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
+local FONT_RASTER_RUN = string.rep("─", 36)
+local FONT_RASTER_DARK = { 18, 20, 28, 255 }
+local FONT_RASTER_LIGHT = { 242, 244, 248, 255 }
+local FONT_RASTER_DARK_TEXT = { 220, 225, 235, 255 }
+local FONT_RASTER_LIGHT_TEXT = { 35, 42, 55, 255 }
+
+local function font_raster_font(size, antialiasing, ligatures, hinting, path)
+  return renderer.font.load(path or FONT_RASTER_PATH, size / SCALE, {
+    antialiasing = antialiasing,
+    hinting = hinting or "slight",
+    ligatures = ligatures,
+  })
+end
+
+function FontRasterView:new()
+  FontRasterView.super.new(self)
+  self.scrollable = false
+  self.fonts = {}
+  for _, size in ipairs { 10, 12, 14, 15, 16, 18, 20, 24 } do
+    self.fonts["subpixel-" .. size] = font_raster_font(size, "subpixel", true, "full")
+  end
+  self.fonts["subpixel-15-plain"] = font_raster_font(15, "subpixel", false, "full")
+  self.fonts["subpixel-15-slight"] = font_raster_font(15, "subpixel", false, "slight")
+  self.fonts["subpixel-15-full"] = font_raster_font(15, "subpixel", false, "full")
+  self.fonts["grayscale-15"] = font_raster_font(15, "grayscale", false, "full")
+  self.fonts["grayscale-24"] = font_raster_font(24, "grayscale", false, "full")
+  self.fonts["regular-15-full"] = font_raster_font(
+    15, "subpixel", false, "full", FONT_RASTER_REGULAR_PATH
+  )
+end
+
+function FontRasterView:get_name()
+  return "Font Raster Correctness"
+end
+
+local function font_raster_csv_escape(value)
+  value = tostring(value)
+  if value:find('[,"\r\n]') then
+    return '"' .. value:gsub('"', '""') .. '"'
+  end
+  return value
+end
+
+function FontRasterView:write_metadata(rows)
+  if self.metadata_written or benchmark.raster_metadata_file == "" then return end
+  local fields = {
+    "id", "kind", "renderer", "antialiasing", "hinting", "ligatures", "phase",
+    "assert_continuity",
+    "origin_x", "text_top", "baseline", "requested_size", "advance", "run_length",
+    "background_r", "background_g", "background_b",
+    "foreground_r", "foreground_g", "foreground_b",
+  }
+  local output = { table.concat(fields, ",") }
+  for _, row in ipairs(rows) do
+    local values = {}
+    for index, field in ipairs(fields) do
+      values[index] = font_raster_csv_escape(row[field])
+    end
+    output[#output + 1] = table.concat(values, ",")
+  end
+  local ok, err = write_atomic(benchmark.raster_metadata_file, table.concat(output, "\n") .. "\n")
+  if not ok then error("font raster metadata write failed: " .. tostring(err)) end
+  self.metadata_written = true
+end
+
+function FontRasterView:draw()
+  local x, y, w, h = self.position.x, self.position.y, self.size.x, self.size.y
+  renderer.draw_rect(x, y, w, h, FONT_RASTER_DARK)
+
+  local gutter = 20 * SCALE
+  local column_gap = 18 * SCALE
+  local column_width = (w - gutter * 2 - column_gap) / 2
+  local columns = {
+    { id = "dark", x = x + gutter, background = FONT_RASTER_DARK, text = FONT_RASTER_DARK_TEXT },
+    { id = "light", x = x + gutter + column_width + column_gap,
+      background = FONT_RASTER_LIGHT, text = FONT_RASTER_LIGHT_TEXT },
+  }
+  for _, column in ipairs(columns) do
+    renderer.draw_rect(column.x, y + gutter, column_width, h - gutter * 2, column.background)
+  end
+
+  local rows = {}
+  local row_y = y + 28 * SCALE
+  local row_step = 30 * SCALE
+  local phases = {
+    { "cached-0", 0 }, { "cached-1-3", 1 / 3 }, { "cached-2-3", 2 / 3 },
+    { "below-1-6", 1 / 6 - 0.01 }, { "at-1-6", 1 / 6 }, { "above-1-6", 1 / 6 + 0.01 },
+    { "below-1-2", 1 / 2 - 0.01 }, { "at-1-2", 1 / 2 }, { "above-1-2", 1 / 2 + 0.01 },
+    { "below-5-6", 5 / 6 - 0.01 }, { "at-5-6", 5 / 6 }, { "above-5-6", 5 / 6 + 0.01 },
+  }
+
+  local function add_connected_row(
+    id, font, requested_size, antialiasing, hinting, ligatures, phase, assert_continuity
+  )
+    for _, column in ipairs(columns) do
+      local origin_x = column.x + 24 * SCALE + phase * SCALE
+      if id:find("^negative%-origin") and column.id == "dark" then
+        origin_x = phase * SCALE
+      end
+      renderer.draw_text(font, FONT_RASTER_RUN, origin_x, row_y, column.text)
+      local baseline = row_y + math.floor((1900 / 2048) * (requested_size / SCALE)) * SCALE
+      rows[#rows + 1] = {
+        id = id .. "-" .. column.id,
+        kind = "connected-line",
+        renderer = env_string("ANVIL_RENDERER", "d3d11"),
+        antialiasing = antialiasing,
+        hinting = hinting,
+        ligatures = ligatures and 1 or 0,
+        phase = phase,
+        assert_continuity = assert_continuity and 1 or 0,
+        origin_x = origin_x * SCALE,
+        text_top = row_y * SCALE,
+        baseline = baseline * SCALE,
+        requested_size = requested_size,
+        advance = font:get_width(FONT_RASTER_RUN) * SCALE / 36,
+        run_length = 36,
+        background_r = column.background[1],
+        background_g = column.background[2],
+        background_b = column.background[3],
+        foreground_r = column.text[1],
+        foreground_g = column.text[2],
+        foreground_b = column.text[3],
+      }
+    end
+    row_y = row_y + row_step
+  end
+
+  for _, phase in ipairs(phases) do
+    add_connected_row(
+      "phase-" .. phase[1], self.fonts["subpixel-15-plain"], 15,
+      "subpixel", "full", false, phase[2], true
+    )
+  end
+  for _, size in ipairs { 10, 12, 14, 15, 16, 18, 20, 24 } do
+    add_connected_row(
+      "size-" .. size, self.fonts["subpixel-" .. size], size,
+      "subpixel", "full", true, 0, size >= 14
+    )
+  end
+  add_connected_row("grayscale-15", self.fonts["grayscale-15"], 15, "grayscale", "full", false, 0, true)
+  add_connected_row("grayscale-24", self.fonts["grayscale-24"], 24, "grayscale", "full", false, 2 / 3, true)
+  add_connected_row("subpixel-full-15", self.fonts["subpixel-15-full"], 15, "subpixel", "full", false, 0, true)
+  add_connected_row("regular-full-15", self.fonts["regular-15-full"], 15, "subpixel", "full", false, 0, true)
+  add_connected_row("slight-diagnostic-15", self.fonts["subpixel-15-slight"], 15, "subpixel", "slight", false, 0, false)
+  add_connected_row("negative-origin", self.fonts["subpixel-15-plain"], 15, "subpixel", "full", false, -0.49, true)
+  add_connected_row("negative-origin-plus-one", self.fonts["subpixel-15-plain"], 15, "subpixel", "full", false, 0.51, true)
+
+  local sample_font = self.fonts["subpixel-15-plain"]
+  for _, column in ipairs(columns) do
+    renderer.draw_text(sample_font, "┌──────────────────────────────┐", column.x + 24 * SCALE, row_y, column.text)
+    renderer.draw_text(sample_font, "iiiiiiiiiiiiiiiiiiiiiiii ========", column.x + 24 * SCALE, row_y + row_step, column.text)
+    local stress_font = self.fonts["subpixel-10"]
+    local stress_y = row_y + row_step * 2
+    while stress_y + 10 * SCALE < y + h - gutter do
+      renderer.draw_text(
+        stress_font, FONT_RASTER_RUN, column.x + 24 * SCALE, stress_y, column.text
+      )
+      stress_y = stress_y + 8 * SCALE
+    end
+  end
+  self:write_metadata(rows)
+end
+
+local function open_font_raster_view()
+  local view = FontRasterView()
+  require("core.panes").place(function() return view end, {
+    placement = "current", focus = true, reason = "perf-font-raster",
+  })
+  return view
+end
+
 local function setup_scenario()
   set_phase("setup", "setup_started")
   assert(benchmark.fixture ~= "", "ANVIL_PERF_BENCHMARK_FILE is required")
@@ -314,6 +490,8 @@ local function setup_scenario()
   setup_tabs(view)
   if benchmark.scenario == "renderer-primitives" then
     view = open_primitive_view()
+  elseif benchmark.scenario == "font-raster-correctness" then
+    view = open_font_raster_view()
   else
     activate_view(view)
     set_position(view, benchmark.start_line)
