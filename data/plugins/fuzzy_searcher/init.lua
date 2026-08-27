@@ -214,6 +214,15 @@ end
 
 local function modal_textbox_command_allowed(cmd)
   if type(cmd) ~= "string" then return false end
+  if cmd == "editor:select_previous_camel_hump"
+      or cmd == "editor:select_next_camel_hump"
+      or cmd == "editor:extend_selection_smart"
+      or cmd == "editor:shrink_selection_smart"
+      or cmd == "editor:expand_selection_block"
+      or cmd == "editor:select_to_matching"
+  then
+    return true
+  end
   if cmd:match("^core:move_to_") or cmd:match("^core:select_to_") then return true end
   if cmd:match("^core:delete") then return true end
   return cmd == "core:backspace"

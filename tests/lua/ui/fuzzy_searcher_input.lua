@@ -23,6 +23,12 @@ test.describe("Fuzzy Searcher input", function()
     config.transitions = context.transitions
   end)
 
+  local function perform_prompt_command(command_name)
+    keymap.add({ f24 = command_name })
+    core.on_event("keypressed", "f24", {})
+    keymap.unbind("f24", command_name)
+  end
+
   test.it("moves the query caret with Left", function()
     fuzzy_searcher.open(">")
     local picker = test.not_nil(core.fuzzy_searcher_active_view)
@@ -45,5 +51,18 @@ test.describe("Fuzzy Searcher input", function()
 
     test.not_ok(consumed)
     test.equal(picker.input:get_text(), "x")
+  end)
+
+  test.it("routes local selection commands to the query input", function()
+    fuzzy_searcher.open("")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker.input:set_text("camelCase")
+    picker.input.textview.buffer:set_selection(1, 1)
+
+    perform_prompt_command("editor:select_next_camel_hump")
+
+    local buffer = picker.input.textview.buffer
+    local line1, column1, line2, column2 = buffer:get_selection(true)
+    test.equal(buffer:get_text(line1, column1, line2, column2), "camel")
   end)
 end)
