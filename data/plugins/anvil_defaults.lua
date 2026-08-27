@@ -263,7 +263,8 @@ local function load_text_font(primary_path, options, fallbacks, size)
     renderer.font.load(primary_path, size, options or { ligatures = true }),
   }
   for _, font in ipairs(fallbacks) do
-    fonts[#fonts + 1] = font:get_size() == size and font or font:copy(size)
+    fonts[#fonts + 1] = options and font:copy(size, options)
+      or (font:get_size() == size and font or font:copy(size))
   end
   return renderer.font.group(fonts)
 end
@@ -271,19 +272,25 @@ local interface_fallbacks = load_fallback_fonts("interface")
 local code_fallbacks = load_fallback_fonts("code")
 local terminal_fallbacks = code_fallbacks
 
-style.font = load_text_font(font_path, nil, interface_fallbacks)
-style.code_font = load_text_font(code_font_path, nil, code_fallbacks)
+style.font = load_text_font(
+  font_path, { ligatures = true, hinting = "full" }, interface_fallbacks
+)
+style.code_font = load_text_font(
+  code_font_path, { ligatures = true, hinting = "full" }, code_fallbacks
+)
 style.terminal_font = load_text_font(
-  code_font_path, { ligatures = false }, terminal_fallbacks
+  code_font_path, { ligatures = false, hinting = "full" }, terminal_fallbacks
 )
 style.terminal_bold_font = load_text_font(
-  code_font_path, { ligatures = false, bold = true }, terminal_fallbacks
+  code_font_path, { ligatures = false, hinting = "full", bold = true }, terminal_fallbacks
 )
 style.terminal_italic_font = load_text_font(
-  code_font_path, { ligatures = false, italic = true }, terminal_fallbacks
+  code_font_path, { ligatures = false, hinting = "full", italic = true }, terminal_fallbacks
 )
 style.terminal_bold_italic_font = load_text_font(
-  code_font_path, { ligatures = false, bold = true, italic = true },
+  code_font_path, {
+    ligatures = false, hinting = "full", bold = true, italic = true,
+  },
   terminal_fallbacks
 )
 -- Reusable proportional typography roles. Live Preview prose and compact
