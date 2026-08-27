@@ -263,6 +263,11 @@ end
 ---@return integer line
 ---@return integer col
 local ROW_PREVIEW_MAX_CHARS = 90
+-- Text metrics and clip rectangles use fractional and pixel-aligned geometry,
+-- respectively. Keep a physical pixel outside the measured content so an
+-- unconstrained popup does not truncate text because of rounding.
+local TEXT_FIT_RESERVE = 1
+local TEXT_OVERFLOW_TOLERANCE = 0.5
 
 local function max_symbol_length()
   return math.max(1, tonumber(config.plugins.autocomplete.max_symbol_length) or 256)
@@ -1538,7 +1543,10 @@ local function get_suggestions_rect(av)
     rect_y = above_bottom - (max_items * lh + style.padding.y)
   end
 
-  local rect_width = math.max(150, content_width + icon_column_width + style.padding.x * 2)
+  local desired_width = math.ceil(
+    content_width + icon_column_width + style.padding.x * 2 + TEXT_FIT_RESERVE
+  )
+  local rect_width = math.max(150, desired_width)
   rect_width = math.min(rect_width, available_width)
 
   return
@@ -1665,7 +1673,7 @@ end
 local function clipped_preview_around_name(font, text, span, width)
   text = tostring(text or "")
   if text == "" or width <= 0 then return "", nil end
-  if font:get_width(text) <= width then return text, span end
+  if font:get_width(text) <= width + TEXT_OVERFLOW_TOLERANCE then return text, span end
   span = span or { 1, math.min(#text, #(tostring(text):match("%S+") or text)) }
   local name_start = common.clamp(tonumber(span[1]) or 1, 1, #text)
   local name_end = common.clamp(tonumber(span[2]) or name_start, name_start, #text)
@@ -1704,12 +1712,18 @@ local function clipped_preview_around_name(font, text, span, width)
   local leading = clipped_before ~= before and ellipsis or ""
   local trailing = clipped_after ~= after and ellipsis or ""
   local clipped = leading .. clipped_before .. name .. clipped_after .. trailing
-  while #clipped > 0 and font:get_width(clipped) > width and clipped_after ~= "" do
+  while #clipped > 0
+    and font:get_width(clipped) > width + TEXT_OVERFLOW_TOLERANCE
+    and clipped_after ~= ""
+  do
     clipped_after = clipped_after:sub(1, -2)
     trailing = clipped_after ~= after and ellipsis or ""
     clipped = leading .. clipped_before .. name .. clipped_after .. trailing
   end
-  while #clipped > 0 and font:get_width(clipped) > width and clipped_before ~= "" do
+  while #clipped > 0
+    and font:get_width(clipped) > width + TEXT_OVERFLOW_TOLERANCE
+    and clipped_before ~= ""
+  do
     clipped_before = clipped_before:sub(2)
     leading = clipped_before ~= before and ellipsis or ""
     clipped = leading .. clipped_before .. name .. clipped_after .. trailing
@@ -1830,7 +1844,7 @@ local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_
         math.max(0, text_width - (label_end - text_padding) - style.padding.x), lh
       )
     end
-    if content_width > text_width then
+    if content_width > text_width + TEXT_OVERFLOW_TOLERANCE then
       renderer.draw_rect(
         text_padding + math.max(0, text_width - dots_width), y,
         math.min(dots_width, text_width), lh,
@@ -1883,7 +1897,10 @@ local function draw_suggestions_box(av)
     local full_width = row_text_width(font, style.font, selected_item, hide_info)
     full_width = full_width + icon_column_width
     local ww = system.get_window_size(core.window)
-    local overlay_width = math.max(rw, full_width + style.padding.x * 2)
+    local desired_overlay_width = math.ceil(
+      full_width + style.padding.x * 2 + TEXT_FIT_RESERVE
+    )
+    local overlay_width = math.max(rw, desired_overlay_width)
     overlay_width = math.min(overlay_width, math.max(rw, ww - rx - style.padding.x))
     draw_suggestion_row(font, selected_item, rx, selected_y, overlay_width, lh, icon_column_width, true)
     if selected_desc and #selected_desc > 0 then
