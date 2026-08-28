@@ -115,6 +115,71 @@ function language_mode.set_buffer_mode(buffer, mode, opts)
   return changed or syntax_changed, nil
 end
 
+---Sets or clears the sticky Language Mode inferred from Buffer content.
+---@param buffer core.buffer
+---@param mode string|nil
+---@param opts? { reason?:string }
+---@return boolean changed
+---@return string? error
+function language_mode.set_buffer_inference(buffer, mode, opts)
+  opts = opts or {}
+  local _, canonical_name, err = language_mode.resolve(mode)
+  if err then return false, err end
+
+  local old_mode = buffer.language_mode_inferred
+  buffer.language_mode_inferred = canonical_name
+  local syntax_changed = buffer:reset_syntax({ reason = opts.reason or "language-mode-inference" })
+  core.log_quiet(
+    "Language Mode inference: %s %s -> %s (syntax_changed=%s)",
+    tostring(buffer.get_name and buffer:get_name() or buffer),
+    tostring(old_mode or "none"),
+    tostring(canonical_name or "none"),
+    tostring(syntax_changed)
+  )
+  return old_mode ~= canonical_name or syntax_changed
+end
+
+---Returns whether one selection covers a complete Automatic Untitled Buffer.
+---@param buffer core.buffer
+---@return boolean
+function language_mode.can_infer_complete_paste(buffer)
+  if not buffer or not buffer.intellij_untitled or not buffer.new_file or buffer.filename
+      or buffer.language_mode_override then
+    return false
+  end
+
+  local selection
+  for _, line1, col1, line2, col2 in buffer:get_selections(true) do
+    if selection then return false end
+    selection = { line1, col1, line2, col2 }
+  end
+  if not selection then return false end
+  local last_line = #buffer.lines
+  local last_col = #(buffer.lines[last_line] or "\n")
+  return selection[1] == 1 and selection[2] == 1
+     and selection[3] == last_line and selection[4] == last_col
+end
+
+---Replaces the sticky content inference with the strongest current detector result.
+---@param buffer core.buffer
+---@return boolean changed
+---@return table? detected
+---@return number? confidence
+function language_mode.infer_from_content(buffer)
+  local text = buffer:get_text(1, 1, math.huge, math.huge)
+  local detected, confidence = syntax.detect_content(text)
+  local changed = language_mode.set_buffer_inference(buffer, detected and detected.name or nil, {
+    reason = "complete-buffer-paste",
+  })
+  core.log_quiet(
+    "Language Mode content detection: %s result=%s confidence=%s",
+    buffer:get_name(),
+    detected and detected.name or "none",
+    confidence and string.format("%.2f", confidence) or "none"
+  )
+  return changed, detected, confidence
+end
+
 ---Returns picker-ready Language Mode choices.
 ---@return table[] choices
 function language_mode.choices()

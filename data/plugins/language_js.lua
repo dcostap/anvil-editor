@@ -53,7 +53,7 @@ local inner_regex_syntax = {
 
 syntax.add {
   name = "JavaScript",
-  files = { "%.js$", "%.json$", "%.cson$", "%.mjs$", "%.cjs$" },
+  files = { "%.js$", "%.cson$", "%.mjs$", "%.cjs$" },
   comment = "//",
   block_comment = { "/*", "*/" },
   patterns = {

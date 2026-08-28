@@ -992,6 +992,7 @@ function TextView:get_state()
     crlf = self.buffer.crlf,
     text = self.buffer.new_file and self.buffer:get_text(1, 1, math.huge, math.huge),
     language_mode = self.buffer.language_mode_override,
+    inferred_language_mode = self.buffer.language_mode_inferred,
     owned_features = self:get_owned_feature_state(),
   }
 end

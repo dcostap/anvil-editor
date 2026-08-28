@@ -1,4 +1,5 @@
 local core = require "core"
+local language_mode = require "core.language_mode"
 local TextView = require "core.textview"
 local view_icons = require "core.view_icons"
 
@@ -93,6 +94,11 @@ function Editor.from_state(state)
   if editor.buffer.new_file and state.text then
     editor.buffer:insert(1, 1, state.text)
     editor.buffer.crlf = state.crlf
+  end
+  if state.inferred_language_mode then
+    language_mode.set_buffer_inference(editor.buffer, state.inferred_language_mode, {
+      reason = "workspace-restore",
+    })
   end
   if state.language_mode then
     editor.buffer:set_language_mode(state.language_mode, { reason = "workspace-restore" })

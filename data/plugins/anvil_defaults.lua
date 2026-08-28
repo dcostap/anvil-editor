@@ -22,6 +22,7 @@ local core_plugins = {
   global_prompt_bar_sanitize = true,
   intellij_actions = true,
   intellij_find = true,
+  anvil_language_json = true,
   scale_debug_log = true,
   selection_surround = true,
   smart_indent_rules = true,

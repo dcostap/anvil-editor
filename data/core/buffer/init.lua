@@ -131,7 +131,17 @@ function Buffer:reset_syntax(opts)
       core.log_quiet("Language Mode: waiting for unavailable mode %s on %s", override, self:get_name())
     end
   end
-  syn = syn or syntax.get(path, header)
+  syn = syn or syntax.find(path, header)
+  if not syn and self.language_mode_inferred then
+    syn = language_mode.resolve(self.language_mode_inferred)
+    if not syn then
+      core.log_quiet(
+        "Language Mode: waiting for unavailable inference %s on %s",
+        self.language_mode_inferred, self:get_name()
+      )
+    end
+  end
+  syn = syn or syntax.plain_text_syntax
   return self:set_syntax(syn, opts.reason or "reset-syntax", opts)
 end
 

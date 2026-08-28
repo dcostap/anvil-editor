@@ -8,6 +8,7 @@ local syntax = {}
 syntax.items = {}
 
 syntax.plain_text_syntax = { name = "Plain Text", patterns = {}, symbols = {} }
+syntax.min_content_confidence = 0.8
 
 local language_aliases = {}
 local language_cache = {}
@@ -125,6 +126,57 @@ end
 
 function syntax.get(filename, header)
   return syntax.find(filename, header) or syntax.plain_text_syntax
+end
+
+---Finds one language from strong content evidence.
+---Detectors return confidence from 0 to 1. The strongest unique result wins.
+---@param text string
+---@return table? syntax_definition
+---@return number? confidence
+function syntax.detect_content(text)
+  local best, best_confidence, tied_with
+  for _, item in ipairs(syntax.items) do
+    local confidence
+    local header_start = common.match_pattern(text, item.headers or {})
+    if header_start then confidence = 1 end
+
+    if item.detect_content then
+      local ok, detected_confidence = pcall(item.detect_content, text)
+      if not ok then
+        core.log_quiet(
+          "Content detector failed for %s: %s", tostring(item.name), tostring(detected_confidence)
+        )
+      elseif detected_confidence ~= nil then
+        if type(detected_confidence) ~= "number"
+            or detected_confidence ~= detected_confidence
+            or detected_confidence < 0 or detected_confidence > 1 then
+          core.log_quiet(
+            "Content detector returned invalid confidence for %s: %s",
+            tostring(item.name), tostring(detected_confidence)
+          )
+        else
+          confidence = math.max(confidence or 0, detected_confidence)
+        end
+      end
+    end
+
+    if confidence and confidence >= syntax.min_content_confidence then
+      if not best_confidence or confidence > best_confidence then
+        best, best_confidence, tied_with = item, confidence, nil
+      elseif confidence == best_confidence and item ~= best then
+        tied_with = item
+      end
+    end
+  end
+
+  if tied_with then
+    core.log_quiet(
+      "Content detection tied at %.2f between %s and %s",
+      best_confidence, tostring(best.name), tostring(tied_with.name)
+    )
+    return nil
+  end
+  return best, best_confidence
 end
 
 

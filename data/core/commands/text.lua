@@ -3,6 +3,7 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local keymap = require "core.keymap"
+local language_mode = require "core.language_mode"
 local linewrapping = require "core.linewrapping"
 local intelligence = require "core.language_intelligence"
 local encodings = require "core.buffer.encodings"
@@ -1108,6 +1109,18 @@ local function paste_matching_whole_lines(buffer, text_by_idx)
   return paste_whole_lines_by_selection(buffer, function(idx) return text_by_idx[idx] end)
 end
 
+local function finish_text_paste(buffer, infer_language, transaction)
+  if not (infer_language and transaction and transaction.changed) then return transaction end
+  local changed = language_mode.infer_from_content(buffer)
+  if changed then
+    local ok, recovery = pcall(require, "plugins.untitled_recovery")
+    if ok and recovery.update_buffer_metadata then
+      recovery.update_buffer_metadata(buffer, "Language Mode inference")
+    end
+  end
+  return transaction
+end
+
 local function previous_indent_stop_start_col(buffer, line, col, indent_size)
   if col <= 1 then return nil end
   indent_size = math.max(1, tonumber(indent_size) or 1)
@@ -1227,43 +1240,46 @@ local commands = {
     if not clipboard or clipboard == "" then
     	return
     end
+    local infer_language = language_mode.can_infer_complete_paste(dv.buffer)
+    local transaction
     -- If the clipboard has changed since our last look, use that instead
     if core.cursor_clipboard["full"] ~= clipboard then
       core.cursor_clipboard = {}
       core.cursor_clipboard_whole_line = {}
       local text = clipboard:gsub("\r", "")
-      dv.buffer:text_input_by_selection(function(_, line1, col1)
+      transaction = dv.buffer:text_input_by_selection(function(_, line1, col1)
         return smart_paste_text(dv.buffer, line1, col1, text)
       end, nil, { type = "insert" })
-      return
-    end
-    -- Use internal clipboard(s)
-    -- If there are mixed whole lines and normal lines, consider them all as normal
-    local only_whole_lines = true
-    for _,whole_line in pairs(core.cursor_clipboard_whole_line) do
-      if not whole_line then
-        only_whole_lines = false
-        break
-      end
-    end
-    if #core.cursor_clipboard_whole_line == (#dv.buffer.selections/4) then
-    -- If we have the same number of clipboards and selections,
-    -- paste each clipboard into its corresponding selection
-      if only_whole_lines then
-        paste_matching_whole_lines(dv.buffer, core.cursor_clipboard)
-      else
-        dv.buffer:text_input_by_selection(function(idx, line1, col1)
-          return smart_paste_text(dv.buffer, line1, col1, tostring(core.cursor_clipboard[idx] or ""):gsub("\r", ""))
-        end, nil, { type = "insert" })
-      end
     else
-      -- Paste every clipboard and add a selection at the end of each one
-      if not only_whole_lines then
-        paste_all_normal_clipboards(dv.buffer)
-        return
+      -- Use internal clipboard(s)
+      -- If there are mixed whole lines and normal lines, consider them all as normal
+      local only_whole_lines = true
+      for _,whole_line in pairs(core.cursor_clipboard_whole_line) do
+        if not whole_line then
+          only_whole_lines = false
+          break
+        end
       end
-      paste_all_whole_line_clipboards(dv.buffer)
+      if #core.cursor_clipboard_whole_line == (#dv.buffer.selections/4) then
+        -- If we have the same number of clipboards and selections,
+        -- paste each clipboard into its corresponding selection
+        if only_whole_lines then
+          transaction = paste_matching_whole_lines(dv.buffer, core.cursor_clipboard)
+        else
+          transaction = dv.buffer:text_input_by_selection(function(idx, line1, col1)
+            return smart_paste_text(dv.buffer, line1, col1, tostring(core.cursor_clipboard[idx] or ""):gsub("\r", ""))
+          end, nil, { type = "insert" })
+        end
+      else
+        -- Paste every clipboard and add a selection at the end of each one
+        if not only_whole_lines then
+          transaction = paste_all_normal_clipboards(dv.buffer)
+        else
+          transaction = paste_all_whole_line_clipboards(dv.buffer)
+        end
+      end
     end
+    return finish_text_paste(dv.buffer, infer_language, transaction)
   end,
 
   ["core:paste_primary_selection"] = function(dv, x, y)
@@ -1273,10 +1289,12 @@ local commands = {
       -- Workaround to avoid that a middle mouse drag starts selecting
       dv.mouse_selecting = nil
     end
+    local infer_language = language_mode.can_infer_complete_paste(dv.buffer)
     local text = tostring(system.get_primary_selection() or ""):gsub("\r", "")
-    dv.buffer:text_input_by_selection(function(_, line1, col1)
+    local transaction = dv.buffer:text_input_by_selection(function(_, line1, col1)
       return smart_paste_text(dv.buffer, line1, col1, text)
     end, nil, { type = "insert" })
+    return finish_text_paste(dv.buffer, infer_language, transaction)
   end,
 
   ["core:newline"] = function(dv)

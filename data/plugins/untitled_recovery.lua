@@ -4,6 +4,7 @@
 local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
+local language_mode = require "core.language_mode"
 local Buffer = require "core.buffer"
 
 local M = {}
@@ -401,6 +402,7 @@ function M.ensure_buffer_backing(buffer, opts)
       backing = buffer.intellij_untitled_backing_rel,
       crlf = buffer.crlf or false,
       language_mode = buffer.language_mode_override or false,
+      inferred_language_mode = buffer.language_mode_inferred or false,
       last_snapshot_change_id = buffer.intellij_untitled_last_snapshot_change_id,
     })
     log_quiet("Untitled recovery: ensured backing %s for %s", buffer.intellij_untitled_backing_path, buffer.intellij_untitled_name)
@@ -430,6 +432,7 @@ function M.state_for_buffer(buffer)
     intellij_untitled_backing_saved_at = buffer.intellij_untitled_backing_saved_at,
     intellij_untitled_workspace_saved_at = system.get_time(),
     language_mode = buffer.language_mode_override,
+    inferred_language_mode = buffer.language_mode_inferred,
   }
 end
 
@@ -442,6 +445,7 @@ function M.update_buffer_metadata(buffer, reason)
     crlf = buffer.crlf or false,
     encoding = buffer.encoding,
     language_mode = buffer.language_mode_override or false,
+    inferred_language_mode = buffer.language_mode_inferred or false,
     last_snapshot_change_id = buffer.intellij_untitled_last_snapshot_change_id,
   })
   log_quiet(
@@ -480,6 +484,7 @@ function M.flush_buffer(buffer, reason, force)
     crlf = buffer.crlf or false,
     encoding = buffer.encoding,
     language_mode = buffer.language_mode_override or false,
+    inferred_language_mode = buffer.language_mode_inferred or false,
     last_snapshot_change_id = change_id,
   })
   log_quiet("Untitled recovery: flushed %s (%s)", buffer.intellij_untitled_name or buffer.intellij_untitled_id, reason or "snapshot")
@@ -700,6 +705,13 @@ function M.attach_from_workspace_state(buffer, state)
   local manifest = load_manifest_for(paths)
   local manifest_buffer = manifest_entry(manifest, buffer.intellij_untitled_id)
   local restored_language_mode = state.language_mode or (manifest_buffer and manifest_buffer.language_mode)
+  local restored_inference = state.inferred_language_mode
+      or (manifest_buffer and manifest_buffer.inferred_language_mode)
+  if type(restored_inference) == "string" then
+    language_mode.set_buffer_inference(buffer, restored_inference, {
+      reason = "untitled-workspace-restore",
+    })
+  end
   if type(restored_language_mode) == "string" then
     buffer:set_language_mode(restored_language_mode, { persist = false, reason = "untitled-workspace-restore" })
   end
@@ -760,6 +772,7 @@ function M.attach_from_workspace_state(buffer, state)
         crlf = buffer.crlf or false,
         encoding = buffer.encoding,
         language_mode = buffer.language_mode_override or false,
+        inferred_language_mode = buffer.language_mode_inferred or false,
         last_snapshot_change_id = buffer.intellij_untitled_last_snapshot_change_id,
       })
       log_quiet("Untitled recovery: attached workspace buffer %s from backing", buffer.intellij_untitled_name or buffer.intellij_untitled_id)
@@ -801,6 +814,11 @@ local function open_recovered_buffer(entry, paths, backing, reason)
   buffer.intellij_untitled_project_path = paths.project
   buffer.intellij_untitled_backing_rel = entry.backing or backing_rel_for_id(buffer.intellij_untitled_id)
   buffer.intellij_untitled_backing_path, buffer.intellij_untitled_backing_rel = backing_abs_for(paths.project, buffer.intellij_untitled_id, buffer.intellij_untitled_backing_rel)
+  if type(entry.inferred_language_mode) == "string" then
+    language_mode.set_buffer_inference(buffer, entry.inferred_language_mode, {
+      reason = "untitled-manifest-restore",
+    })
+  end
   if type(entry.language_mode) == "string" then
     buffer:set_language_mode(entry.language_mode, { persist = false, reason = "untitled-manifest-restore" })
   end

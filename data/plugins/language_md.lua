@@ -101,7 +101,7 @@ syntax.add {
     { pattern = { "```perl", "```" },       type = "string", syntax = ".pl" },
     { pattern = { "```php", "```" },        type = "string", syntax = ".php" },
     { pattern = { "```javascript", "```" }, type = "string", syntax = ".js" },
-    { pattern = { "```json", "```" },       type = "string", syntax = ".js" },
+    { pattern = { "```json", "```" },       type = "string", syntax = ".json" },
     { pattern = { "```html", "```" },       type = "string", syntax = ".html" },
     { pattern = { "```ini", "```" },        type = "string", syntax = ".ini" },
     { pattern = { "```xml", "```" },        type = "string", syntax = ".xml" },
