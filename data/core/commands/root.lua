@@ -237,6 +237,13 @@ for _, direction in ipairs { "left", "right", "up", "down" } do
     report_failure("copy Current View", result, err)
     return result
   end, { keywords = { "duplicate", "current" } })
+  commands["pane:move_view_to_split_" .. direction] = command.palette(function(pane)
+    local result, err = panes.move_current_view_to_split(pane, direction, {
+      replacement_factory = new_untitled_editor,
+    })
+    report_failure("move Current View", result, err)
+    return result
+  end, { keywords = { "current" } })
 end
 
 for _, direction in ipairs { "left", "right", "up", "down" } do

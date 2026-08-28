@@ -56,7 +56,8 @@ test.describe("Pane manager", function()
   test.it("owns Pane commands under the pane prefix", function()
     for _, name in ipairs {
       "pane:close", "pane:new_group", "pane:split_right",
-      "pane:copy_view_to", "pane:move_view_to", "pane:move_to",
+      "pane:copy_view_to", "pane:move_view_to", "pane:move_view_to_split_right",
+      "pane:move_view_to_split_down", "pane:move_to",
       "pane:move_before", "pane:move_after", "pane:focus_next",
     } do
       test.not_nil(command.map[name], name)
@@ -151,6 +152,39 @@ test.describe("Pane manager", function()
     test.equal(panes.count(), 1)
     test.equal(panes.active(), source)
     test.equal(source.current_view:get_name(), "source")
+  end)
+
+  test.it("moves the Current View to a new split and keeps the source Pane", function()
+    local source = panes.create { factory = factory("source") }
+    local moved = source.current_view
+
+    test.ok(command.perform("pane:move_view_to_split_down"))
+
+    local destination = panes.active()
+    test.equal(panes.count(), 2)
+    test.ok(panes.contains(source))
+    test.not_equal(destination, source)
+    test.equal(destination.current_view, moved)
+    test.equal(panes.pane_for_view(moved), destination)
+    test.equal(source.group, destination.group)
+    test.ok(source.current_view:extends(Editor))
+    test.not_equal(source.current_view, moved)
+    test.ok(panes.validate())
+  end)
+
+  test.it("reveals source history when moving the Current View to a split", function()
+    local source = panes.create { factory = factory("source") }
+    local moved = FakeView("moved")
+    panes.present(moved, { pane = source })
+
+    test.ok(command.perform("pane:move_view_to_split_right"))
+
+    local destination = panes.active()
+    test.equal(source.current_view:get_name(), "source")
+    test.equal(destination.current_view, moved)
+    test.equal(panes.history_length(source), 1)
+    test.equal(panes.history_length(destination), 1)
+    test.ok(panes.validate())
   end)
 
   test.it("moves the Current View and reveals the source history", function()

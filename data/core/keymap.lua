@@ -316,6 +316,8 @@ keymap.add_direct {
   ["ctrl+shift+tab"] = "pane:focus_previous",
   ["ctrl+0"] = "pane:copy_view_to_split_right",
   ["ctrl+9"] = "pane:copy_view_to_split_down",
+  ["ctrl+shift+0"] = "pane:move_view_to_split_right",
+  ["ctrl+shift+9"] = "pane:move_view_to_split_down",
   ["ctrl+pageup"] = "pane:move_before",
   ["ctrl+pagedown"] = "pane:move_after",
   ["alt+`"] = "pane:focus_local_next",

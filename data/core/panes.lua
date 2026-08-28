@@ -963,6 +963,38 @@ function M.move_current_view(source_target, destination_target, opts)
   return result, result and nil or "View move is pending or was canceled"
 end
 
+---Move a Pane's Current View into a new split next to that Pane.
+---The source Pane reveals another owned View or receives a replacement View.
+function M.move_current_view_to_split(source_target, direction, opts)
+  opts = opts or {}
+  local source = M.find(source_target or M.active_pane)
+  if not source then return nil, "invalid source Pane" end
+  if direction ~= "left" and direction ~= "right"
+      and direction ~= "up" and direction ~= "down" then
+    return nil, "invalid split direction"
+  end
+
+  if #collect_owned_views(source) == 1 then
+    local replacement, err = make_view { factory = opts.replacement_factory }
+    if not replacement then return nil, err end
+    claim_view(source, replacement)
+    source.retained_views[#source.retained_views + 1] = replacement
+  end
+
+  local moved = detach_current_view_for_move(source)
+  local destination = create_identity(moved, opts)
+  destination.group = source.group
+  source.group.root = layout.split(source.group.root, source, direction, destination)
+  M.active_pane = destination
+  M.visible_group_value = source.group
+  call_lifecycle(moved, "on_resume")
+  if opts.focus ~= false then focus_view(destination) end
+  after_mutation(string.format(
+    "moved Current View from %s into split %s %s", source.id, direction, destination.id
+  ))
+  return destination
+end
+
 ---Move a Pane's Current View into a new singleton Pane Group.
 function M.move_current_view_to_new_group(source_target, opts)
   opts = opts or {}

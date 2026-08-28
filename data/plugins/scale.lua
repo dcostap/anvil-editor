@@ -356,10 +356,6 @@ keymap.unbind("ctrl+shift+=", "editor:zoom_in")
 keymap.unbind("ctrl+shift+wheelup", "editor:zoom_in")
 keymap.unbind("ctrl+shift+wheeldown", "editor:zoom_out")
 
-keymap.add {
-  ["ctrl+shift+0"] = "editor:zoom_reset"
-}
-
 if config.plugins.scale.use_mousewheel then
   keymap.add {
     ["ctrl+wheelup"] = "editor:zoom_in",
