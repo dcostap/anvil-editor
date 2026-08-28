@@ -1765,14 +1765,11 @@ function core.open_image(filename, opts)
 end
 
 
----Opens the given file path in the Root Panel.
----If the given file is a supported image, it will open it in the image viewer;
----otherwise, it will open it as a normal text file.
+---Opens the given file path in an Editor in the Root Panel.
 ---@param filename string Path to the file to open
 ---@param opts? table
----@return core.imageview|core.editor
+---@return core.editor
 function core.open_file(filename, opts)
-  if ImageView.is_supported(filename) then return core.open_image(filename, opts) end
   local info = system.get_file_info(filename)
   if info and info.type == "dir" then return nil, "cannot open a directory as a file" end
   return core.root_panel:open_file(filename, opts)
