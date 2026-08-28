@@ -246,6 +246,43 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     test.equal(meta.has_more, true)
   end)
 
+  test.it("searches fuzzy path matches beyond the first scope batch", function(context)
+    local headers = join_path(context.root, "headers")
+    mkdirp(headers)
+    local files = {}
+    for i = 1, 405 do
+      local path = join_path(headers, string.format("header_%03d.h", i))
+      write_file(path, "ordinary text\n")
+      files[#files+1] = helpers.file_display_item(path)
+    end
+    helpers.set_file_cache_for_test(files)
+
+    local complete_scope = helpers.build_scope(".h", nil, #files)
+    test.equal(#complete_scope, #files)
+    local target = complete_scope[#complete_scope]
+    write_file(target, "GENERAL SCOPE NEEDLE\n")
+
+    local first_scope, first_meta = helpers.build_scope(".h", nil, 400)
+    test.equal(#first_scope, 400)
+    test.equal(first_meta.has_more, true)
+    for _, path in ipairs(first_scope) do
+      test.not_ok(common.path_equals(path, target), "expected target after the first scope batch")
+    end
+
+    fuzzy_searcher.open('.h #"GENERAL SCOPE NEEDLE"')
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return picker_result_for_path(picker, target) end, 15),
+      "expected exact grep to continue through all fuzzy path matches: " .. tostring(picker.status))
+    test.ok(wait_until(function() return picker.status == "1 exact matches" end, 15),
+      "expected exact grep to finish every path batch: " .. tostring(picker.status))
+
+    picker.input:set_text(".h #GENERAL SCOPE")
+    test.ok(wait_until(function()
+      local result = picker_result_for_path(picker, target)
+      return result and result.exact == false
+    end, 15), "expected fuzzy grep to continue through all fuzzy path matches: " .. tostring(picker.status))
+  end)
+
   test.it("restarts an unchanged scoped grep when the file scope finishes changing", function()
     fuzzy_searcher.open("fmt#")
     local picker = core.fuzzy_searcher_active_view

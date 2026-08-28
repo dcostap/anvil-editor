@@ -1622,7 +1622,7 @@ local function scope_for_root(scope, root)
   for _, filename in ipairs(scope) do
     local abs = fullpath(filename)
     if abs and (common.path_equals(abs, root) or common.path_belongs_to(abs, root)) then
-      out[#out + 1] = abs
+      out[#out + 1] = common.relative_path(root, abs)
     end
   end
   return out
@@ -1687,6 +1687,10 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored)
     fuzzy_grep_jobs[key] = job
 
     core.add_thread(function()
+      core.log_quiet(
+        "Fuzzy grep batch started seed=%s files=%s",
+        tostring(seed), scope and tostring(#scope) or "all"
+      )
       local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F" }
       project_files.add_filter_arguments(args, include_ignored)
       args[#args + 1], args[#args + 2] = "-e", seed
@@ -1698,25 +1702,36 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored)
       end
       local proc = process.start(args, { cwd = root, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_DISCARD, stdin = process.REDIRECT_DISCARD })
       job.proc = proc
-      if not proc then job.done = true; job.version = job.version + 1; return end
+      if not proc then
+        job.done = true
+        job.version = job.version + 1
+        for thread_key in pairs(job.wake_threads or {}) do core.wake_thread(thread_key) end
+        return
+      end
 
       local max_scanned = fuzzy_searcher.fuzzy_scan_limit or 10000
       local max_line_chars = fuzzy_searcher.fuzzy_line_max_chars or 1200
       local slice_start = system.get_time()
       while not job.cancelled and job.scanned < max_scanned do
-        local l = proc.stdout:read("line", { scan = 1 / config.fps })
-        if l then
+        local ok, line_or_error = pcall(
+          proc.stdout.read, proc.stdout, "line", { scan = 0.001, timeout = 0.1 }
+        )
+        if ok and line_or_error then
           job.scanned = job.scanned + 1
-          local r = decorate_grep_result(parse_vimgrep(l), root)
+          local r = decorate_grep_result(parse_vimgrep(line_or_error), root)
           if r and #(r.text or "") <= max_line_chars then
             local key = r.file .. ":" .. tostring(r.line)
             if not job.seen[key] then
               job.seen[key] = true
               job.lines[#job.lines+1] = r
               job.version = job.version + 1
+              for thread_key in pairs(job.wake_threads or {}) do core.wake_thread(thread_key) end
             end
           end
           slice_start = yield_if_over_budget(slice_start)
+        elseif not ok and not tostring(line_or_error):find("timeout expired", 1, true) then
+          core.log_quiet("Fuzzy grep read failed under %s: %s", tostring(root), tostring(line_or_error))
+          break
         elseif not proc:running() then
           break
         else
@@ -1730,6 +1745,11 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored)
       proc:wait(process.WAIT_DEADLINE)
       job.done = true
       job.version = job.version + 1
+      for thread_key in pairs(job.wake_threads or {}) do core.wake_thread(thread_key) end
+      core.log_quiet(
+        "Fuzzy grep batch finished seed=%s files=%s lines=%d truncated=%s",
+        tostring(seed), scope and tostring(#scope) or "all", job.scanned, tostring(job.truncated)
+      )
       if active_view then active_view:schedule_update(true) end
     end)
 
@@ -2698,6 +2718,54 @@ local function build_scope(base, line, max_count)
     core.log_quiet("Fuzzy grep scope: query_len=%d limited to %d files", #tostring(base), #list)
   end
   return list, meta
+end
+
+function fuzzy_searcher.new_grep_scope_plan(base, line)
+  return {
+    base = base,
+    line = line,
+    files = {},
+    meta = nil,
+    request_limit = 0,
+    next_index = 1,
+    searched = 0,
+    complete = false,
+  }
+end
+
+function fuzzy_searcher.next_grep_scope_batch(plan)
+  while plan.next_index > #plan.files and not plan.complete do
+    plan.request_limit = plan.request_limit == 0
+      and 400
+      or plan.request_limit * 2
+    plan.files, plan.meta = build_scope(plan.base, plan.line, plan.request_limit)
+    plan.complete = not (plan.meta and plan.meta.has_more)
+  end
+
+  if plan.next_index > #plan.files then return nil end
+
+  local batch = {}
+  while plan.next_index <= #plan.files and #batch < 400 do
+    local path = plan.files[plan.next_index]
+    batch[#batch+1] = path
+    plan.next_index = plan.next_index + 1
+  end
+  return batch
+end
+
+function fuzzy_searcher.grep_argument_batches(paths)
+  local batches, batch, argument_chars = {}, {}, 0
+  for _, path in ipairs(paths or {}) do
+    local path_chars = #tostring(path) + 3
+    if #batch > 0 and argument_chars + path_chars > 7000 then
+      batches[#batches+1] = batch
+      batch, argument_chars = {}, 0
+    end
+    batch[#batch+1] = path
+    argument_chars = argument_chars + path_chars
+  end
+  if #batch > 0 then batches[#batches+1] = batch end
+  return batches
 end
 
 local everything = {
@@ -4771,7 +4839,7 @@ function fuzzy_searcher.grep_order.retain_top(heap, candidate, limit)
   return true
 end
 
-function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen, preserve_results, scope_meta)
+function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen, preserve_results, scope_meta, scope_plan)
   -- Grep results are streamed asynchronously. Do not page them by clearing and
   -- restarting the search while the user scrolls; publish a growing stable
   -- prefix and let selection stop naturally at the currently available end.
@@ -4779,22 +4847,38 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
   local tokens = terms_to_legacy_tokens(terms)
   local roots = type(root) == "table" and root or { { path = root } }
   local jobs, added_jobs = {}, {}
+  local processed
+  local stream_thread_key
   local function add_job(job)
     if job and not added_jobs[job.key] then
       jobs[#jobs + 1] = job
       added_jobs[job.key] = true
+      if processed then processed[job.key] = processed[job.key] or 0 end
+      if stream_thread_key then
+        job.wake_threads = job.wake_threads or {}
+        job.wake_threads[stream_thread_key] = true
+        if job.done then core.wake_thread(stream_thread_key) end
+      end
     end
   end
-  for _, root_entry in ipairs(roots) do
-    local root_scope = scope_for_root(scope, root_entry.path)
-    if not scope or #root_scope > 0 then
-      local job, preferred_job = ensure_fuzzy_grep_job(
-        root_entry.path, root_scope, tokens, self.include_ignored == true
-      )
-      add_job(job)
-      add_job(preferred_job)
+  local function add_scope_jobs(batch)
+    for _, root_entry in ipairs(roots) do
+      local root_scope = scope_for_root(batch, root_entry.path)
+      if not batch or #root_scope > 0 then
+        local argument_batches = batch and fuzzy_searcher.grep_argument_batches(root_scope)
+          or { false }
+        for _, argument_scope in ipairs(argument_batches) do
+          if argument_scope == false then argument_scope = nil end
+          local job, preferred_job = ensure_fuzzy_grep_job(
+            root_entry.path, argument_scope, tokens, self.include_ignored == true
+          )
+          add_job(job)
+          add_job(preferred_job)
+        end
+      end
     end
   end
+  add_scope_jobs(scope)
   if #jobs == 0 then return end
 
   -- A job is useful only while it contributes to the active query. Retaining
@@ -4814,9 +4898,13 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
   local initial_settle_visible_multiplier = 2
 
   local function jobs_label()
-    if #jobs == 1 then return jobs[1].seed end
-    local names = {}
-    for _, s in ipairs(jobs) do names[#names+1] = s.seed end
+    local names, seen = {}, {}
+    for _, s in ipairs(jobs) do
+      if not seen[s.seed] then
+        names[#names+1] = s.seed
+        seen[s.seed] = true
+      end
+    end
     return table.concat(names, "/")
   end
 
@@ -4828,10 +4916,11 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
     has_more = true,
   })
 
-  core.add_thread(function()
+  stream_thread_key = core.add_thread(function()
+    core.log_quiet("Fuzzy grep stream started generation=%d jobs=%d", gen, #jobs)
     local base_query = base:sub(1, 1) == ">" and "" or base
     local candidates, candidate_seen = {}, {}
-    local processed = {}
+    processed = {}
     for _, s in ipairs(jobs) do processed[s.key] = 0 end
     local max_candidates = fuzzy_searcher.fuzzy_candidate_limit or 500
     max_candidates = math.max(1, max_candidates, limit)
@@ -4918,8 +5007,10 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         content_match_start = content_match_start,
         base_query = base_query,
       }
+      local current_scope_meta = scope_plan and scope_plan.meta or scope_meta
       local scope_key = source.abs_path and common.path_compare_key(source.abs_path)
-      local path_info = scope_key and scope_meta and scope_meta.by_path and scope_meta.by_path[scope_key]
+      local path_info = scope_key and current_scope_meta and current_scope_meta.by_path
+        and current_scope_meta.by_path[scope_key]
       if path_info then
         r.path_match_class = path_info.match_class
         r.path_score = path_info.score
@@ -4994,8 +5085,10 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         end
       end
 
-      local scope_limited = scope_meta and scope_meta.has_more
-      local has_more = matched_candidate_count > limit or running or truncated or scope_limited
+      local scope_pending = scope_plan and (
+        not scope_plan.complete or scope_plan.searched < #scope_plan.files
+      )
+      local has_more = matched_candidate_count > limit or running or truncated or scope_pending
       local fuzzy_count = matched_candidate_count
       local status
       if exact_results then
@@ -5013,8 +5106,14 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       else
         status = string.format("%d fuzzy matches — scanning '%s'… %d lines", fuzzy_count, jobs_label(), scanned)
       end
-      if final and scope_limited then
-        status = status .. string.format(" — path scope limited to %d files", tonumber(scope_meta.count) or 0)
+      if scope_plan and not final then
+        if scope_plan.complete then
+          status = status .. string.format(
+            " — searched %d of %d files", scope_plan.searched, #scope_plan.files
+          )
+        else
+          status = status .. string.format(" — searched %d+ files", scope_plan.searched)
+        end
       end
       if final and self.loading_feedback_pending and #out == 0 and not has_more then
         self.loading_feedback_status = status
@@ -5073,14 +5172,45 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         and initial_publish_ready(false) then
         publish(false)
       end
+      if all_done and scope_plan then
+        scope_plan.searched = scope_plan.next_index - 1
+        local next_scope = fuzzy_searcher.next_grep_scope_batch(scope_plan)
+        scope_meta = scope_plan.meta
+        if next_scope then
+          core.log_quiet(
+            "Fuzzy grep stream continuing generation=%d searched=%d next=%d",
+            gen, scope_plan.searched, #next_scope
+          )
+          add_scope_jobs(next_scope)
+          all_done = false
+        end
+      end
       if all_done then break end
       coroutine.yield(1 / config.fps)
       slice_start = system.get_time()
     end
 
-    if gen ~= grep_generation or active_view ~= self then return end
+    if gen ~= grep_generation or active_view ~= self then
+      core.log_quiet(
+        "Fuzzy grep stream stopped generation=%d current=%d active=%s",
+        gen, grep_generation, tostring(active_view == self)
+      )
+      for _, job in ipairs(jobs) do
+        if job.wake_threads then job.wake_threads[stream_thread_key] = nil end
+      end
+      return
+    end
+    core.log_quiet("Fuzzy grep stream finished generation=%d matches=%d", gen, matched_candidate_count)
     publish(true)
+    for _, job in ipairs(jobs) do
+      if job.wake_threads then job.wake_threads[stream_thread_key] = nil end
+    end
   end)
+  for _, job in ipairs(jobs) do
+    job.wake_threads = job.wake_threads or {}
+    job.wake_threads[stream_thread_key] = true
+    if job.done then core.wake_thread(stream_thread_key) end
+  end
 end
 
 function FSView:start_grep(base, line, grep)
@@ -5111,10 +5241,12 @@ function FSView:start_grep(base, line, grep)
 
   local limit = self:max_result_limit()
   local roots = project_paths.search_roots("grep")
-  local scope, scope_meta = nil, nil
+  local scope, scope_meta, scope_plan = nil, nil, nil
   if base ~= "" or line then
-    scope, scope_meta = build_scope(base, line, 200)
-    if #scope == 0 then
+    scope_plan = fuzzy_searcher.new_grep_scope_plan(base, line)
+    scope = fuzzy_searcher.next_grep_scope_batch(scope_plan)
+    scope_meta = scope_plan.meta
+    if not scope then
       self:cancel_deferred_loading_feedback()
       self.results = {}
       self.selected = 1
@@ -5132,12 +5264,16 @@ function FSView:start_grep(base, line, grep)
 
   local terms = parse_code_search_terms(grep)
   if not exact_query and #terms > 1 then
-    self:start_grep_fuzzy_stream(base, line, grep, terms, scope, roots, gen, preserve_results, scope_meta)
+    self:start_grep_fuzzy_stream(
+      base, line, grep, terms, scope, roots, gen, preserve_results, scope_meta, scope_plan
+    )
     return
   end
 
   core.add_thread(function()
     local results_started = false
+    local candidates = {}
+    local matched_count = 0
     local function begin_results()
       if results_started then return end
       results_started = true
@@ -5154,12 +5290,6 @@ function FSView:start_grep(base, line, grep)
       if line and not line_exists(r.file, line) then return true end
       local key = tostring(r.abs_path or r.file) .. ":" .. r.line .. ":" .. r.col
       if seen[key] then return true end
-      begin_results()
-      if #self.results >= limit then
-        self.has_more = true
-        self:schedule_update(true)
-        return false
-      end
       seen[key] = true
       r.exact = exact
       r.grep_query = grep
@@ -5184,26 +5314,35 @@ function FSView:start_grep(base, line, grep)
         local _, file_spans = fuzzy_match(r.base_query, r.file)
         r.file_spans = file_spans or {}
       end
-      self.results[#self.results+1] = r
-      if #self.results == 1 then self.selected = 1; self.viewport_offset = 1 end
-      if self.pending_select_index and #self.results >= self.pending_select_index then
-        self.selected = self.pending_select_index
-        self.pending_select_index = nil
+      begin_results()
+      matched_count = matched_count + 1
+      fuzzy_searcher.grep_order.retain_top(candidates, r, limit)
+      if #self.results < limit then
+        self.results[#self.results+1] = r
+        if #self.results == 1 then self.selected = 1; self.viewport_offset = 1 end
+        if self.pending_select_index and #self.results >= self.pending_select_index then
+          self.selected = self.pending_select_index
+          self.pending_select_index = nil
+        end
+        self:ensure_selection_visible()
+        self:schedule_update(true)
+      else
+        self.has_more = true
       end
-      self:ensure_selection_visible()
-      self:schedule_update(true)
       return true
     end
 
     local seen = {}
-    for _, root in ipairs(roots) do
-      if gen ~= grep_generation or active_view ~= self then return end
-      local root_scope = scope_for_root(scope, root.path)
-      if not scope or #root_scope > 0 then
+    local function search_root(root, root_scope)
+      if gen ~= grep_generation or active_view ~= self then return false end
+      if not root_scope or #root_scope > 0 then
+        core.log_quiet(
+          "Exact grep batch started files=%s", root_scope and tostring(#root_scope) or "all"
+        )
         local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F" }
         project_files.add_filter_arguments(args, self.include_ignored == true)
         args[#args + 1], args[#args + 2] = "-e", grep
-        if scope then
+        if root_scope then
           args[#args+1] = "--"
           for _, f in ipairs(root_scope) do args[#args+1] = f end
         else
@@ -5219,7 +5358,7 @@ function FSView:start_grep(base, line, grep)
             )
             if ok and line_or_error then
               local result = decorate_grep_result(parse_vimgrep(line_or_error), root.path)
-              if result and not add_result(result, seen, true) then break end
+              if result then add_result(result, seen, true) end
             elseif not ok and not tostring(line_or_error):find("timeout expired", 1, true) then
               core.log_quiet("Fuzzy grep read failed under %s: %s", tostring(root.path), tostring(line_or_error))
               break
@@ -5233,8 +5372,52 @@ function FSView:start_grep(base, line, grep)
           proc:wait(process.WAIT_DEADLINE)
           if grep_proc == proc then grep_proc = nil end
         end
+        core.log_quiet(
+          "Exact grep batch finished files=%s matches=%d",
+          root_scope and tostring(#root_scope) or "all", matched_count
+        )
       end
+      return gen == grep_generation and active_view == self
     end
+
+    local batch = scope
+    repeat
+      for _, root in ipairs(roots) do
+        if batch then
+          local root_scope = scope_for_root(batch, root.path)
+          for _, argument_scope in ipairs(fuzzy_searcher.grep_argument_batches(root_scope)) do
+            if not search_root(root, argument_scope) then return end
+          end
+        elseif not search_root(root, nil) then
+          return
+        end
+      end
+      if scope_plan then
+        scope_plan.searched = scope_plan.searched + #batch
+        local progress_status
+        if scope_plan.complete then
+          progress_status = string.format(
+            "%d exact matches — searched %d of %d files",
+            matched_count, scope_plan.searched, #scope_plan.files
+          )
+        else
+          progress_status = string.format(
+            "%d exact matches — searched %d+ files", matched_count, scope_plan.searched
+          )
+        end
+        if results_started then
+          self.status = progress_status
+          self.has_more = matched_count > limit or scope_plan.searched < #scope_plan.files
+          self:schedule_update(true)
+        elseif self.loading_feedback_pending then
+          self.loading_feedback_status = progress_status
+        end
+        batch = fuzzy_searcher.next_grep_scope_batch(scope_plan)
+        scope_meta = scope_plan.meta
+      else
+        batch = nil
+      end
+    until not batch
 
     if gen ~= grep_generation or active_view ~= self then return end
     if not results_started and self.loading_feedback_pending then
@@ -5243,17 +5426,14 @@ function FSView:start_grep(base, line, grep)
     end
     if not results_started then begin_results() end
     local selected_key = fuzzy_searcher.grep_order.result_key(self.results and self.results[self.selected])
-    self.results = fuzzy_searcher.grep_order.results(self.results)
+    self.results = fuzzy_searcher.grep_order.results(candidates)
     if selected_key then
       for i, result in ipairs(self.results) do
         if fuzzy_searcher.grep_order.result_key(result) == selected_key then self.selected = i; break end
       end
     end
-    self.status = string.format("%d exact matches", #self.results)
-    if scope_meta and scope_meta.has_more then
-      self.has_more = true
-      self.status = self.status .. string.format(" — path scope limited to %d files", tonumber(scope_meta.count) or 0)
-    end
+    self.has_more = matched_count > #self.results
+    self.status = string.format("%d exact matches", matched_count)
     self:schedule_update(true)
   end)
 end
