@@ -272,7 +272,6 @@ keymap.add({
   ["ctrl+alt+."] = "core:next_point_of_interest",
   ["alt+r"] = "core:activate_point_of_interest",
   ["alt+shift+r"] = "core:activate_point_of_interest_split",
-  ["ctrl+shift+r"] = "core:activate_point_of_interest_split",
 })
 
 return M

@@ -358,6 +358,8 @@ keymap.add_direct({
 keymap.add_direct({
   ["ctrl+shift+d"] = "editor:go_to_line",
   ["ctrl+shift+D"] = "editor:go_to_line",
+  ["alt+8"] = "editor:previous_git_change",
+  ["alt+9"] = "editor:next_git_change",
 })
 -- Enable Markdown Live Preview by default while preserving an explicit
 -- USERDIR/project-module override loaded before first-party defaults.
