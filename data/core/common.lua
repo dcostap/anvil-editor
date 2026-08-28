@@ -748,6 +748,25 @@ local windows_reserved_filenames = {
   LPT6 = true, LPT7 = true, LPT8 = true, LPT9 = true,
 }
 
+---Returns true when a filename uses a reserved Windows device name.
+---@param filename string
+---@return boolean
+function common.is_windows_reserved_filename(filename)
+  local normalized = tostring(filename or ""):gsub("[ .]+$", "")
+  local stem = normalized:match("^([^.]+)") or normalized
+  return windows_reserved_filenames[stem:upper()] == true
+end
+
+---Returns true when a path contains a reserved Windows device name.
+---@param path string
+---@return boolean
+function common.path_has_windows_reserved_filename(path)
+  for component in tostring(path or ""):gmatch("[^/\\]+") do
+    if common.is_windows_reserved_filename(component) then return true end
+  end
+  return false
+end
+
 local function percent_encode_byte(ch)
   return string.format("%%%02X", ch:byte())
 end
@@ -764,8 +783,7 @@ function common.encode_filename_component(text)
     return (s:gsub(".", percent_encode_byte))
   end)
   if encoded == "" then return "%00" end
-  local stem = encoded:match("^([^.]+)") or encoded
-  if windows_reserved_filenames[stem:upper()] then
+  if common.is_windows_reserved_filename(encoded) then
     encoded = percent_encode_byte(encoded:sub(1, 1)) .. encoded:sub(2)
   end
   return encoded

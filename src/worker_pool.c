@@ -2380,8 +2380,11 @@ typedef struct ProjectRunWalk {
   ProjectRunFile *files;
   uint32_t file_count;
   uint32_t file_capacity;
+  uint32_t metadata_skipped;
   uint64_t path_bytes;
   char *error;
+  char *first_skipped_path;
+  char *first_skipped_reason;
 } ProjectRunWalk;
 
 static char *lua_pattern_to_regex(const char *pattern) {
@@ -2493,6 +2496,14 @@ static bool project_run_path_has_parent_component(const char *path) {
   return false;
 }
 
+static void project_run_record_metadata_skip(ProjectRunWalk *walk, const char *path, const char *reason) {
+  if (walk->metadata_skipped < UINT32_MAX) walk->metadata_skipped++;
+  if (!walk->first_skipped_path) {
+    walk->first_skipped_path = pool_strdup(path ? path : "");
+    walk->first_skipped_reason = pool_strdup(reason && reason[0] ? reason : "native Project path metadata failed");
+  }
+}
+
 static uint64_t project_run_language_fingerprint(const AnvilWorkerProjectRunLanguageSpec *language) {
   uint64_t hash = UINT64_C(1469598103934665603);
 #define HASH_BYTES(value, length) do { \
@@ -2589,19 +2600,17 @@ static SDL_EnumerationResult SDLCALL project_run_walk_callback(void *userdata, c
   memcpy(path + dir_len, fname, name_len + 1);
   SDL_PathInfo info;
   if (!SDL_GetPathInfo(path, &info)) {
-    if (walk->job->project_scoped && !walk->error) {
-      walk->error = pool_strdup(SDL_GetError()[0] ? SDL_GetError() : "native Project path metadata failed");
-    }
+    project_run_record_metadata_skip(walk, path, SDL_GetError());
     SDL_free(path);
-    return walk->job->project_scoped ? SDL_ENUM_FAILURE : SDL_ENUM_CONTINUE;
+    return SDL_ENUM_CONTINUE;
   }
   bool ok = true;
   if (info.type == SDL_PATHTYPE_DIRECTORY) {
     bool enumerated = SDL_EnumerateDirectory(path, project_run_walk_callback, walk);
-    if (!enumerated && walk->job->project_scoped && !walk->error) {
-      walk->error = pool_strdup(SDL_GetError()[0] ? SDL_GetError() : "native Project directory enumeration failed");
+    if (!enumerated) {
+      if (walk->error) ok = false;
+      else project_run_record_metadata_skip(walk, path, SDL_GetError());
     }
-    ok = enumerated || !walk->job->project_scoped;
   }
   else if (info.type == SDL_PATHTYPE_FILE && info.size <= walk->job->max_file_bytes) ok = project_run_add_file(walk, path, &info);
   SDL_free(path);
@@ -2616,15 +2625,15 @@ static bool project_run_scan_path(ProjectRunWalk *walk, const char *path) {
   }
   SDL_PathInfo info;
   if (!SDL_GetPathInfo(path, &info)) {
-    if (!walk->error) walk->error = pool_strdup(SDL_GetError()[0] ? SDL_GetError() : "native Project scoped path metadata failed");
-    return false;
+    project_run_record_metadata_skip(walk, path, SDL_GetError());
+    return true;
   }
   if (info.type == SDL_PATHTYPE_DIRECTORY) {
     bool enumerated = SDL_EnumerateDirectory(path, project_run_walk_callback, walk);
-    if (!enumerated && !walk->error) {
-      walk->error = pool_strdup(SDL_GetError()[0] ? SDL_GetError() : "native Project scoped directory enumeration failed");
-    }
-    return enumerated;
+    if (enumerated) return true;
+    if (walk->error) return false;
+    project_run_record_metadata_skip(walk, path, SDL_GetError());
+    return true;
   }
   if (info.type == SDL_PATHTYPE_FILE && info.size <= walk->job->max_file_bytes) {
     return project_run_add_file(walk, path, &info);
@@ -2655,6 +2664,8 @@ static void project_run_walk_free(ProjectRunWalk *walk) {
   }
   SDL_free(walk->languages);
   SDL_free(walk->error);
+  SDL_free(walk->first_skipped_path);
+  SDL_free(walk->first_skipped_reason);
   memset(walk, 0, sizeof(*walk));
 }
 
@@ -2990,9 +3001,13 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     .walk = &walk,
     .builder = builder,
     .mutex = SDL_CreateMutex(),
+    .skipped = walk.metadata_skipped,
+    .io_skipped = walk.metadata_skipped,
     .file_usage_counts = walk.file_count ? (uint32_t *)SDL_calloc(walk.file_count, sizeof(uint32_t)) : NULL,
     .file_usage_retry = walk.file_count ? (bool *)SDL_calloc(walk.file_count, sizeof(bool)) : NULL,
     .file_skipped = walk.file_count ? (bool *)SDL_calloc(walk.file_count, sizeof(bool)) : NULL,
+    .first_skipped_path = walk.first_skipped_path ? pool_strdup(walk.first_skipped_path) : NULL,
+    .first_skipped_reason = walk.first_skipped_reason ? pool_strdup(walk.first_skipped_reason) : NULL,
   };
   if (!enumerated && !job_cancelled(job)) {
     execution.fatal_error = walk.error ? pool_strdup(walk.error) : pool_strdup(SDL_GetError());

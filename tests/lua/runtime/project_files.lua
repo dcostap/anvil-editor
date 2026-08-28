@@ -27,7 +27,53 @@ local function directory_names(root, directories)
   return out
 end
 
+local function windows_extended_file(path, create)
+  local ffi = require "ffi"
+  ffi.cdef[[
+    typedef void *HANDLE;
+    HANDLE CreateFileW(const wchar_t *name, unsigned long access,
+      unsigned long share, void *security, unsigned long creation,
+      unsigned long attributes, HANDLE template_file);
+    int CloseHandle(HANDLE handle);
+    int DeleteFileW(const wchar_t *name);
+    int MultiByteToWideChar(unsigned int code_page, unsigned long flags,
+      const char *input, int input_size, wchar_t *output, int output_size);
+  ]]
+  local kernel32 = ffi.load("kernel32")
+  local extended = [[\\?\]] .. common.normalize_path(path):gsub("/", "\\")
+  local length = kernel32.MultiByteToWideChar(65001, 0, extended, #extended, nil, 0)
+  local wide = ffi.new("wchar_t[?]", length + 1)
+  assert(kernel32.MultiByteToWideChar(65001, 0, extended, #extended, wide, length) == length)
+  if create then
+    local handle = kernel32.CreateFileW(wide, 0, 7, nil, 2, 0x80, nil)
+    assert(handle ~= ffi.cast("HANDLE", -1))
+    assert(kernel32.CloseHandle(handle) ~= 0)
+  else
+    assert(kernel32.DeleteFileW(wide) ~= 0)
+  end
+end
+
 test.describe("Project files", function()
+  test.it("skips Windows device-name files that normal filesystem APIs cannot open", function(context)
+    test.skip_if(PLATFORM ~= "Windows", "Windows device names are platform-specific")
+    local project_files = require "core.project_files"
+    local root = join(USERDIR, "project-files-device-name-" .. system.get_process_id())
+    assert(common.mkdirp(root))
+    write(join(root, "visible.lua"), "return true\n")
+    local reserved = join(root, "NUL")
+    windows_extended_file(reserved, true)
+    context.cleanup = function()
+      project_files.invalidate(root)
+      windows_extended_file(reserved, false)
+      common.rm(root, true)
+    end
+
+    local listed, err = project_files.list(root, { refresh = true })
+    local found = names(assert(listed, err))
+    test.ok(found["visible.lua"])
+    test.not_ok(found["NUL"])
+  end)
+
   test.it("uses ripgrep defaults and can include ignored files", function(context)
     local project_files = require "core.project_files"
     local root = join(USERDIR, "project-files-" .. system.get_process_id())

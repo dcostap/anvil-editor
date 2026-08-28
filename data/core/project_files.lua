@@ -170,6 +170,17 @@ local function scan(root, include_ignored)
   end)
 
   local files, pending = {}, ""
+  local invalid_windows_paths = 0
+  local function add_file(relative)
+    if PLATFORM == "Windows" and common.path_has_windows_reserved_filename(relative) then
+      invalid_windows_paths = invalid_windows_paths + 1
+      return
+    end
+    files[#files + 1] = {
+      relative = relative,
+      path = common.normalize_path(root .. PATHSEP .. relative),
+    }
+  end
   local progress_deadline = system.get_time() + 30
   local state = cooperative_state()
   while true do
@@ -190,12 +201,7 @@ local function scan(root, include_ignored)
         local stop = text:find("\0", start, true)
         if not stop then break end
         local relative = text:sub(start, stop - 1):gsub("^%.[/\\]", "")
-        if relative ~= "" then
-          files[#files + 1] = {
-            relative = relative,
-            path = common.normalize_path(root .. PATHSEP .. relative),
-          }
-        end
+        if relative ~= "" then add_file(relative) end
         start = stop + 1
         yield_if_due(state)
       end
@@ -218,10 +224,11 @@ local function scan(root, include_ignored)
   end
   if pending ~= "" then
     pending = pending:gsub("^%.[/\\]", "")
-    files[#files + 1] = {
-      relative = pending,
-      path = common.normalize_path(root .. PATHSEP .. pending),
-    }
+    add_file(pending)
+  end
+  if invalid_windows_paths > 0 then
+    core.log_quiet("Project files: skipped %d path(s) with reserved Windows device names",
+      invalid_windows_paths)
   end
   cooperative_sort(files, function(a, b) return a.relative < b.relative end)
   local directories, searchable_directories, pruned_ignored = scan_directories(

@@ -826,25 +826,33 @@ Route_Message_Type :: enum c.uchar {
     timeout_builder:close()
     languages[1].parse_timeout_ms = 1000
 
-    local failed_builder = native_pool.new_project_builder({ usage_cap = 100, base_snapshot = snapshot })
-    local failed_handle = test.not_nil(pool:submit({
+    os.remove(root .. PATHSEP .. "a.c")
+    local missing_builder = native_pool.new_project_builder({ usage_cap = 100, base_snapshot = snapshot })
+    local missing_handle = test.not_nil(pool:submit({
       kind = "treesitter_project_run",
-      project_builder_id = failed_builder:id(),
+      project_builder_id = missing_builder:id(),
       project_root = root,
       project_scoped = true,
-      scan_paths = { root .. PATHSEP .. "missing" },
+      scan_paths = { root .. PATHSEP .. "a.c" },
       project_usage_cap = 100,
       max_file_bytes = 1024 * 1024,
       languages = languages,
     }))
-    local scan_error
+    local missing_payload, missing_error
     test.ok(drain_until(pool, function(message)
-      if message.job_id == failed_handle:status().id and message.type == "error" then scan_error = message.error end
-      return scan_error ~= nil
+      if message.job_id == missing_handle:status().id and message.type == "result" then
+        missing_payload = message.payload
+      elseif message.job_id == missing_handle:status().id and message.type == "error" then
+        missing_error = message.error
+      end
+      return message.job_id == missing_handle:status().id and message.type == "final"
     end, 10000))
-    test.not_nil(scan_error)
-    test.equal(failed_builder:snapshot({ status = "partial" }):summary().files, 2)
-    failed_builder:close()
+    test.is_nil(missing_error)
+    test.not_nil(missing_payload)
+    test.equal(missing_payload.files_skipped, 1)
+    test.equal(missing_payload.io_files_skipped, 1)
+    test.equal(missing_payload.snapshot:summary().files, 1)
+    missing_builder:close()
 
     local outside_builder = native_pool.new_project_builder({ usage_cap = 100 })
     local outside_handle, outside_error = pool:submit({
