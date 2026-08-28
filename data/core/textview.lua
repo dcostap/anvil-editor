@@ -7624,13 +7624,14 @@ function TextView:draw_line_text(line, x, y)
             pending_chunks[#pending_chunks + 1] = chunk
             i = utf8_end + 1
             if flush_pending_text() then stop_drawing = true; break end
-          end
-          pending_len = pending_len + #chunk
-          if chunk:find("\t", 1, true) then pending_has_tabs = true end
-          pending_chunks[#pending_chunks + 1] = chunk
-          i = j + 1
-          if pending_len >= max_pending_bytes then
-            if flush_pending_text() then stop_drawing = true; break end
+          else
+            pending_len = pending_len + #chunk
+            if chunk:find("\t", 1, true) then pending_has_tabs = true end
+            pending_chunks[#pending_chunks + 1] = chunk
+            i = j + 1
+            if pending_len >= max_pending_bytes then
+              if flush_pending_text() then stop_drawing = true; break end
+            end
           end
         end
         end

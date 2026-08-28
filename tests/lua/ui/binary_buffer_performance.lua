@@ -104,6 +104,20 @@ test.describe("binary Buffer performance guards", function()
     test.is_nil(table.concat(submitted):find(suffix, 1, true))
   end)
 
+  test.it("draws a short binary line containing UTF-8 text", function(context)
+    local view = open_binary_view(context, "é")
+    view:set_wrapping_enabled(false)
+
+    local old_draw_text = renderer.draw_text
+    renderer.draw_text = function(font, text, x, _, _, opts)
+      return x + font:get_width(text, opts)
+    end
+    local x, y = view:get_line_screen_position(1)
+    local ok, err = pcall(view.draw_line_text, view, 1, x, y)
+    renderer.draw_text = old_draw_text
+    test.ok(ok, err)
+  end)
+
   test.it("does not offer Buffer words from a binary Buffer", function(context)
     config.plugins.autocomplete.suggestions_scope = "local"
     local view, buffer = open_binary_view(
