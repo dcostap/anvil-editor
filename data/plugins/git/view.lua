@@ -312,12 +312,6 @@ function GitView:set_pane_lines(name, lines)
   return view
 end
 
-function GitView:activate_model_tab(callback)
-  local tab = self:model_tab()
-  if tab and self.model.active_tab ~= tab.id then self.model:select_tab(tab.id, callback) end
-  return tab
-end
-
 function GitView:get_name()
   local tab = self:model_tab()
   if not tab then return "Git" end
@@ -451,19 +445,6 @@ function GitView:on_close()
       if self.git_session and self.git_session.git_tab_views then
         self.git_session.git_tab_views[self.tab_id] = nil
       end
-      if self.model.active_tab == self.tab_id then
-        local active = core.active_view and (core.active_view.git_owner_view or core.active_view)
-        if not (active and active.model == self.model and active.tab_id and self.model:find_tab(active.tab_id)) then
-          local session = self.git_session
-          local selected = session and session.git_model and session.git_model:selected_tab()
-          active = selected and session.git_tab_views and session.git_tab_views[selected.id]
-        end
-        if active and active.model == self.model and active.tab_id and self.model:find_tab(active.tab_id) then
-          self.model.active_tab = active.tab_id
-        else
-          self.model.active_tab = "log"
-        end
-      end
       core.redraw = true
       return true
     end
@@ -535,7 +516,6 @@ function GitView:mouse_surface_at(x, y)
 end
 
 function GitView:on_mouse_wheel(y, x)
-  self:activate_model_tab(function() core.redraw = true end)
   local tab = self:model_tab()
   local has_pointer = self.mouse_router:has_pointer()
   local surface = self.mouse_router:wheel_target()
@@ -578,7 +558,6 @@ function GitView:on_mouse_wheel(y, x)
 end
 
 function GitView:on_mouse_moved(x, y, dx, dy)
-  self:activate_model_tab(function() core.redraw = true end)
   local handled, surface = self.mouse_router:move(x, y, dx, dy)
   if surface then
     return handled ~= false
@@ -588,7 +567,6 @@ function GitView:on_mouse_moved(x, y, dx, dy)
 end
 
 function GitView:on_mouse_released(button, x, y)
-  self:activate_model_tab(function() core.redraw = true end)
   if self.mouse_router:captured_target() then
     local result = self.mouse_router:release(button, x, y)
     return result ~= false
@@ -602,7 +580,6 @@ function GitView:on_mouse_left()
 end
 
 function GitView:on_mouse_pressed(button, x, y, clicks)
-  self:activate_model_tab(function() core.redraw = true end)
   self:update_pane_buffers()
   local hovered = self.mouse_router:press_target(x, y)
   local pane = hovered and hovered.git_pane and hovered or nil
@@ -627,14 +604,14 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
       and self:toggle_details_tree_folder(pane, pane.buffer:get_selection())
     if clicks and clicks > 1 and pane.git_pane ~= "history-list"
         and not toggled_details_folder and self.activate_selected then
-      local active_tab = self.model:selected_tab()
+      local source_tab = self:model_tab()
       local diff_tab = self:activate_selected(function() core.redraw = true end)
-      if active_tab.kind ~= "commit_diff" and diff_tab and self.on_model_tab_open then self:on_model_tab_open(diff_tab) end
+      if source_tab.kind ~= "commit_diff" and diff_tab and self.on_model_tab_open then self:on_model_tab_open(diff_tab) end
     end
     core.redraw = true
     return true
   end
-  local selected_tab = self.model:selected_tab()
+  local selected_tab = self:model_tab()
   local list_width = math.floor(self.size.x * 0.45)
   if selected_tab and selected_tab.kind == "file_history" then
     local diff = selected_tab.history_diff_view
@@ -734,10 +711,6 @@ local function commit_line_metadata(commit)
     date = date,
     ref_labels = commit.ref_labels or {},
   }
-end
-
-local function tab_label(tab)
-  return (tab.id == "log" and "Log" or tab.title or tab.kind or "Tab")
 end
 
 local function changed_file_path(file)
@@ -988,8 +961,7 @@ function GitView:activate_selected(callback)
     return nil
   end
   local details_path = details_record and changed_file_path(details_record)
-  self:activate_model_tab(function() core.redraw = true end)
-  local tab = self.model:selected_tab()
+  local tab = self:model_tab()
   if tab.kind == "file_history" then
     self.model:load_history_preview(tab, callback or function() core.redraw = true end)
     return tab
@@ -1022,13 +994,13 @@ function GitView:activate_selected(callback)
       selected_file_path = details_path or details_commit.selected_changed_file_path,
     })
   end
-  return self.model:open_selected_commit_diff(callback or function() core.redraw = true end)
+  return self.model:open_selected_commit_diff(tab, callback or function() core.redraw = true end)
 end
 
 function GitView:activate_selected_point(callback)
-  local active_tab = self.model:selected_tab()
+  local source_tab = self:model_tab()
   local diff_tab, err = self:activate_selected(callback)
-  if active_tab.kind == "log" and diff_tab and self.on_model_tab_open then
+  if source_tab.kind == "log" and diff_tab and self.on_model_tab_open then
     self:on_model_tab_open(diff_tab)
   end
   return diff_tab, err
@@ -1213,8 +1185,7 @@ function GitView:update()
 end
 
 function GitView:select_relative(delta)
-  self:activate_model_tab(function() core.redraw = true end)
-  local tab = self.model:selected_tab()
+  local tab = self:model_tab()
   delta = tonumber(delta) or 0
   if tab.kind == "log" then
     if #tab.commits == 0 then return nil end
@@ -1270,41 +1241,6 @@ function GitView:select_relative(delta)
     tab.file_scroll = list.scroll.y
     core.redraw = true
     return file
-  end
-end
-
-function GitView:tab_rects(x, y)
-  local rects = {}
-  local font = style.prose_font
-  local cursor = x + font:get_width("Tabs: ")
-  for _, tab in ipairs(self.model.tabs) do
-    local label = tab_label(tab)
-    if tab.id == self.model.active_tab then label = "[" .. label .. "]" end
-    local width = font:get_width(label)
-    rects[#rects + 1] = { tab = tab, x = cursor, y = y, w = width, h = font:get_height() }
-    cursor = cursor + width + font:get_width(" ")
-  end
-  return rects
-end
-
-function GitView:tab_at_point(px, py)
-  local x = self.position.x + style.padding.x
-  local y = self.position.y + style.padding.y + style.prose_font:get_height() + style.padding.y
-  for _, rect in ipairs(self:tab_rects(x, y)) do
-    if px >= rect.x and px <= rect.x + rect.w and py >= rect.y and py <= rect.y + rect.h then
-      return rect.tab
-    end
-  end
-end
-
-function GitView:draw_tabs(x, y)
-  local font = style.prose_font
-  renderer.draw_text(font, "Tabs:", x, y, style.dim)
-  for _, rect in ipairs(self:tab_rects(x, y)) do
-    local color = rect.tab.id == self.model.active_tab and style.accent or style.dim
-    local label = tab_label(rect.tab)
-    if rect.tab.id == self.model.active_tab then label = "[" .. label .. "]" end
-    renderer.draw_text(font, label, rect.x, y, color)
   end
 end
 
@@ -1564,7 +1500,7 @@ local function with_git_session_event_window(session, fn)
 end
 
 function GitView:focus_diff_pane(side)
-  local tab = self:activate_model_tab(function() core.redraw = true end) or self:model_tab()
+  local tab = self:model_tab()
   if not tab then return false end
   local view
   if tab.kind == "commit_diff" then
@@ -1638,7 +1574,6 @@ function GitView:get_surface_focus_targets()
 end
 
 function GitView:focus_surface_target(target)
-  self:activate_model_tab(function() core.redraw = true end)
   if target and target.git_owner_view == self and target.git_pane then
     return self:focus_pane_view(target.git_pane)
   end

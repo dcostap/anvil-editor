@@ -21,8 +21,6 @@ local git_view = {
   View = GitView,
 }
 
-local sync_model_active_from_focus
-
 local function current_project()
   return core.projects and core.projects[1] or core.root_project and core.root_project()
 end
@@ -78,14 +76,11 @@ local function make_git_session(project, opts)
   end
   function session:show()
     self.hidden = false
-    local tab = self.git_model and self.git_model:selected_tab()
-    local view = self.git_tab_views and tab and self.git_tab_views[tab.id] or self.git_view
-    if view then git_view.ensure_tab_view(self, tab or self.git_model:log_tab(), true) end
+    if self.git_view then git_view.ensure_tab_view(self, self.git_model:log_tab(), true) end
     return self
   end
   function session:activate_root()
-    local tab = self.git_model and self.git_model:selected_tab()
-    local view = self.git_tab_views and tab and self.git_tab_views[tab.id] or self.git_view
+    local view = self.git_view
     if view then
       local pane = panes.pane_for_view(view)
       if pane then panes.present(view, { pane = pane, focus = true }) end
@@ -118,11 +113,7 @@ local function active_git_view()
     local project = current_project()
     local session = project and panes.git_sessions[project_key(project)]
     if not session or session.hidden then return nil end
-    sync_model_active_from_focus(session)
-    local pane = panes.active()
-    local pane_view = pane and pane.current_view
-    if pane_view and pane_view.model and pane_view.model.log_tab then return pane_view end
-    return (session.git_tab_views and session.git_model and session.git_tab_views[session.git_model.active_tab]) or session.git_view
+    return session.git_view
   end)()
 end
 
@@ -133,8 +124,7 @@ local function copy_options(options)
 end
 
 local function pane_for_session(session)
-  local tab = session and session.git_model and session.git_model:selected_tab()
-  local view = session and session.git_tab_views and tab and session.git_tab_views[tab.id] or session and session.git_view
+  local view = session and session.git_view
   return panes.pane_for_view(view) or panes.active()
 end
 
@@ -146,7 +136,7 @@ end
 local function install_model_update_hook(session)
   if not session or not session.git_model then return end
   session.git_model.on_update = function()
-    git_view.sync_tab_views(session, false)
+    git_view.sync_tab_views(session)
     core.redraw = true
   end
 end
@@ -180,14 +170,6 @@ local function activate_git_tab_view(session, view)
   core.event_window = previous_event_window
 end
 
-function sync_model_active_from_focus(session)
-  if not (session and session.git_model) or session.hidden then return end
-  local view = focused_git_view()
-  if view and view.git_session == session and view.tab_id and session.git_model:find_tab(view.tab_id) then
-    session.git_model.active_tab = view.tab_id
-  end
-end
-
 function git_view.ensure_tab_view(session, tab, focus, target_pane)
   if not session or not tab then return nil end
   session.git_tab_views = session.git_tab_views or {}
@@ -198,11 +180,12 @@ function git_view.ensure_tab_view(session, tab, focus, target_pane)
       tab_id = tab.id,
       defer_refresh = true,
       on_update = function()
-        git_view.sync_tab_views(session, false)
+        git_view.sync_tab_views(session)
         core.redraw = true
       end,
     })
     view.git_session = session
+    view.git_model_tab = tab
     function view:on_model_tab_open(opened_tab)
       git_view.ensure_tab_view(session, opened_tab, true)
     end
@@ -211,61 +194,45 @@ function git_view.ensure_tab_view(session, tab, focus, target_pane)
       panes.present(view, { pane = target_pane, focus = false })
     end
   end
+  view.git_model_tab = tab
   if view and not panes.pane_for_view(view) then
     if target_pane then
       panes.present(view, { pane = target_pane, focus = false })
     end
   end
   if focus then
-    tab = session.git_model:select_tab(tab.id, function() core.redraw = true end) or tab
+    session.git_model:load_view(tab, function() core.redraw = true end)
     activate_git_tab_view(session, view)
   end
   return view
 end
 
-local function focus_model_active_tab(session)
-  if not session or not session.git_model then return end
-  local tab = session.git_model:selected_tab()
-  return git_view.ensure_tab_view(session, tab, true)
-end
-
-function git_view.sync_tab_views(session, focus_active)
+function git_view.sync_tab_views(session)
   if not session or not session.git_model then return end
   session.syncing_tabs = true
   session.git_tab_views = session.git_tab_views or {}
   local valid = {}
   for _, tab in ipairs(session.git_model.tabs or {}) do valid[tab.id] = tab end
-  local preserve_focus, preserve_view, preserve_pane
   for id, view in pairs(session.git_tab_views) do
     if not valid[id] then
-      local owner_pane = panes.pane_for_view(view)
-      if core.active_view == view or (core.active_view and core.active_view.git_owner_view == view)
-          or (owner_pane and owner_pane.current_view == view) then
-        preserve_focus = true
-        preserve_view = view
-        preserve_pane = owner_pane
+      local moved_tab = view.git_model_tab
+      if moved_tab and valid[moved_tab.id] == moved_tab then
+        session.git_tab_views[id] = nil
+        view.tab_id = moved_tab.id
+        session.git_tab_views[moved_tab.id] = view
+      else
+        remove_pane_view(view)
+        session.git_tab_views[id] = nil
       end
-      remove_pane_view(view)
-      session.git_tab_views[id] = nil
     end
   end
   for _, tab in ipairs(session.git_model.tabs or {}) do
-    local target_pane = preserve_focus and tab.id == session.git_model.active_tab
-      and panes.contains(preserve_pane) and preserve_pane or nil
-    local view = git_view.ensure_tab_view(session, tab, false, target_pane)
-    if preserve_focus and preserve_view and tab.id == session.git_model.active_tab and view then
-      view.focus_pane = preserve_view.focus_pane
-      view.focused_diff_buffer_view = nil
-    end
+    git_view.ensure_tab_view(session, tab, false)
   end
-  local tab = session.git_model:selected_tab()
-  local view = session.git_tab_views and tab and session.git_tab_views[tab.id]
-  if view and (focus_active or preserve_focus) and not session.hidden then session:activate_root() end
   session.syncing_tabs = false
-  return view
 end
 
-function git_view.open_view(project, opts)
+function git_view.open_log(project, opts)
   opts = opts or {}
   project = project or current_project()
   if not project then
@@ -293,12 +260,12 @@ function git_view.open_view(project, opts)
     install_model_update_hook(session)
     local focus = not session.hidden and opts.focus ~= false
     git_view.ensure_tab_view(session, view.model:log_tab(), false)
-    git_view.sync_tab_views(session, false)
-    if focus then focus_model_active_tab(session) end
+    git_view.sync_tab_views(session)
+    if focus then git_view.ensure_tab_view(session, view.model:log_tab(), true) end
   elseif session.git_view then
-    view = (session.git_tab_views and session.git_tab_views[session.git_model.active_tab]) or session.git_view
+    view = session.git_view
     view:set_refresh_pending()
-    git_view.ensure_tab_view(session, view:model_tab(), opts.focus ~= false)
+    git_view.ensure_tab_view(session, session.git_model:log_tab(), opts.focus ~= false)
   end
   return session, view
 end
@@ -357,10 +324,9 @@ end
 local function active_or_open_view()
   local view = active_git_view()
   if view then
-    if view.git_session then view.git_session:show() end
     return view.git_session, view
   end
-  return git_view.open_view(current_project())
+  return git_view.open_log(current_project())
 end
 
 local function when_model_ready(view, action)
@@ -379,7 +345,6 @@ end
 
 function git_view.save_state(session)
   if not session or not session.git_view or not session.git_view.model then return nil end
-  sync_model_active_from_focus(session)
   return {
     kind = "git",
     hidden = session.hidden and true or false,
@@ -400,7 +365,7 @@ function git_view.restore_state(project, state, opts)
     if state and state.model then existing.git_view.model:apply_state(state.model) end
     existing.git_model = existing.git_view.model
     install_model_update_hook(existing)
-    git_view.sync_tab_views(existing, not (state and state.hidden))
+    git_view.sync_tab_views(existing)
     existing.git_view.refresh_started = false
     existing.git_view.refresh_inflight = false
     existing.git_view.refresh_callbacks = nil
@@ -414,12 +379,12 @@ function git_view.restore_state(project, state, opts)
   end
   opts = copy_options(opts)
   opts.state = state
-  return git_view.open_view(project, opts)
+  return git_view.open_log(project, opts)
 end
 
 command.add(nil, {
-  ["git:open"] = command.palette(function()
-    git_view.open_view()
+  ["git:open_log"] = command.palette(function()
+    git_view.open_log()
   end, {
     keywords = { "version control", "history", "changes" },
     opens_view = true,
@@ -433,13 +398,12 @@ command.add(nil, {
   ["git:open_selected_commit_diff"] = command.palette(function()
     local session, view = active_or_open_view()
     local function open_diff(v)
-      if v.activate_model_tab then v:activate_model_tab(function() core.redraw = true end) end
-      local selected = v.model:selected_tab()
-      if selected and selected.kind == "file_history" and selected.loading then
-        v.model:load_file_history(selected, function() open_diff(v) end)
+      local source = v:model_tab()
+      if source and source.kind == "file_history" and source.loading then
+        v.model:load_file_history(source, function() open_diff(v) end)
         return
       end
-      local tab, err = v.model:open_selected_commit_diff(function() core.redraw = true end)
+      local tab, err = v.model:open_selected_commit_diff(source, function() core.redraw = true end)
       if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
       if not tab and err then core.log_quiet("Git View: open selected commit diff skipped: %s", err.message or err.kind) end
     end
@@ -472,22 +436,21 @@ command.add(nil, {
           or (not common.path_equals(project.path, repo.root) and not common.path_belongs_to(project.path, repo.root)) then
         project = { path = repo.root }
       end
-      local session, view = git_view.open_view(project, { focus = false })
+      local session, view = git_view.open_log(project, { focus = false })
       when_model_ready(view, function(v)
         if v.model.repo and not common.path_equals(repo.root, v.model.repo.root) then
           v.model.repo = repo
         end
         local presented = false
-        local function present_history()
+        local function present_history(_, _, ready)
           if presented then return end
-          local ready = v.model:selected_tab()
           if not (ready and ready.kind == "file_history") then return end
           presented = true
           git_view.ensure_tab_view(v.git_session, ready, true)
           core.redraw = true
         end
         local tab, tab_err = v.model:open_file_history(repo.relpath, present_history)
-        if tab and not tab.loading and not tab.preview_loading then present_history() end
+        if tab and not tab.loading and not tab.preview_loading then present_history(nil, nil, tab) end
         if not tab and tab_err then core.log_quiet("Git View: file history skipped: %s", tab_err.message or tab_err.kind) end
         core.redraw = true
       end)
@@ -511,13 +474,12 @@ command.add(nil, {
           or (not common.path_equals(project.path, repo.root) and not common.path_belongs_to(project.path, repo.root)) then
         project = { path = repo.root }
       end
-      local session, view = git_view.open_view(project, { focus = false })
+      local session, view = git_view.open_log(project, { focus = false })
       when_model_ready(view, function(v)
         if v.model.repo and not common.path_equals(repo.root, v.model.repo.root) then v.model.repo = repo end
         local presented = false
-        local function present_history()
+        local function present_history(_, _, ready)
           if presented then return end
-          local ready = v.model:selected_tab()
           if not (ready and ready.kind == "file_history") then return end
           presented = true
           git_view.ensure_tab_view(v.git_session, ready, true)
@@ -526,7 +488,7 @@ command.add(nil, {
         local tab, tab_err = v.model:open_selection_history(
           repo.relpath, start_line, end_line, present_history
         )
-        if tab and not tab.loading and not tab.preview_loading then present_history() end
+        if tab and not tab.loading and not tab.preview_loading then present_history(nil, nil, tab) end
         if not tab and tab_err then core.log_quiet("Git View: selection history skipped: %s", tab_err.message or tab_err.kind) end
         core.redraw = true
       end)
@@ -546,7 +508,7 @@ command.add(nil, {
         return
       end
       local project = current_project()
-      local session, view = git_view.open_view(project, { focus = false })
+      local session, view = git_view.open_log(project, { focus = false })
       when_model_ready(view, function(v)
         v.model.repo = repo
         local tab, tab_err = v.model:open_working_tree_diff(function() core.redraw = true end, {
@@ -560,7 +522,7 @@ command.add(nil, {
 
   ["git:copy_selected_commit_hash"] = command.palette(function()
     local view = active_git_view()
-    local commit = view and view.model:selected_commit()
+    local commit = view and view.model:selected_commit(view:model_tab())
     if not (commit and commit.hash) then return false end
     system.set_clipboard(commit.hash)
     return true
@@ -568,7 +530,7 @@ command.add(nil, {
 
   ["git:copy_selected_commit_message"] = command.palette(function()
     local view = active_git_view()
-    local commit = view and view.model:selected_commit()
+    local commit = view and view.model:selected_commit(view:model_tab())
     if not commit then return false end
     local message = commit.subject or ""
     if commit.body and commit.body ~= "" then message = message .. "\n\n" .. commit.body end
@@ -582,8 +544,7 @@ command.add(nil, {
       core.log_quiet("Git View: historical buffer open skipped; Git View is not open")
       return
     end
-    if view.activate_model_tab then view:activate_model_tab(function() core.redraw = true end) end
-    local request, request_err = view.model:selected_historical_buffer()
+    local request, request_err = view.model:selected_historical_buffer(view:model_tab())
     if not request then
       core.log_quiet("Git View: historical buffer open skipped: %s", request_err.message or request_err.kind)
       return
@@ -653,11 +614,6 @@ local function close_git_view_tab(view)
       focus_target:focus_list_pane()
     end
   end
-  if active and active.model == view.model and active.tab_id and view.model:find_tab(active.tab_id) then
-    view.model.active_tab = active.tab_id
-  elseif view.model:find_tab("log") then
-    view.model.active_tab = "log"
-  end
   core.redraw = true
 end
 
@@ -678,7 +634,7 @@ end, {
 })
 
 keymap.add({
-  ["ctrl+k"] = "git:open",
+  ["ctrl+k"] = "git:open_log",
   ["return"] = "git:activate_selected_row",
 })
 

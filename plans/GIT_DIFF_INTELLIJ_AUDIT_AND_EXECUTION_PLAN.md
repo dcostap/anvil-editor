@@ -708,7 +708,7 @@ Fix:
 
 - Closing Log removes only its Pane View.
 - Keep the project Git service and sibling Views.
-- `git:open` restores or creates the singleton Log.
+- `git:open_log` restores or creates the singleton Log.
 - Update the old tests instead of preserving this behavior.
 
 ### P1: Git refresh does not follow activation
@@ -1191,7 +1191,7 @@ Recommended final commands:
 
 ### Git
 
-- `git:open`
+- `git:open_log`
 - `git:refresh`
 - `git:show_history`
 - `git:show_selection_history`

@@ -100,7 +100,7 @@ test.describe("Command Palette View launchers", function()
       "editor:open",
       "filetree:open_at_current_path",
       "fuzzy:open_files",
-      "git:open",
+      "git:open_log",
       "log:open",
       "project_paths:open",
       "settings:open",

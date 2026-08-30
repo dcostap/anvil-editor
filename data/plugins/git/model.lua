@@ -36,7 +36,6 @@ function Model.new(project, opts)
     backend = opts.backend or backend_default,
     generation = 0,
     tabs = { new_log_tab() },
-    active_tab = "log",
     repo = nil,
     error = nil,
     active_jobs = {},
@@ -127,7 +126,6 @@ end
 function Model:get_state()
   local state = {
     repo = self.repo and { root = self.repo.root },
-    active_tab = self.active_tab,
     details_tree_collapsed = clone_boolean_maps(self.details_tree_collapsed),
     tabs = {},
   }
@@ -231,43 +229,32 @@ function Model:apply_state(state)
       }
     end
   end
-  self.active_tab = self:find_tab(state.active_tab) and state.active_tab or "log"
 end
 
 function Model:log_tab()
   return self.tabs[1]
 end
 
-function Model:selected_tab()
-  for _, tab in ipairs(self.tabs) do
-    if tab.id == self.active_tab then return tab end
-  end
-  return self.tabs[1]
-end
-
-function Model:select_tab(id, callback)
-  local tab = self:find_tab(id)
-  if tab then
-    self.active_tab = id
-    if tab.kind == "commit_diff" then
-      if #(tab.changed_files or {}) == 0 and not tab.loading then
-        self:load_changed_files(tab, callback)
-      elseif tab.left_text == nil and tab.right_text == nil and not tab.loading_file then
-        self:load_selected_diff_file(tab, callback)
-      end
-    elseif tab.kind == "file_history" then
-      if #(tab.commits or {}) == 0 and not tab.loading then
-        self:load_file_history(tab, callback)
-      else
-        self:load_history_preview(tab, callback)
-      end
+function Model:load_view(tab, callback)
+  if not tab then return nil end
+  if tab.kind == "commit_diff" then
+    if #(tab.changed_files or {}) == 0 and not tab.loading then
+      self:load_changed_files(tab, callback)
+    elseif tab.left_text == nil and tab.right_text == nil and not tab.loading_file then
+      self:load_selected_diff_file(tab, callback)
     end
-    return tab
+  elseif tab.kind == "file_history" then
+    if #(tab.commits or {}) == 0 and not tab.loading then
+      self:load_file_history(tab, callback)
+    else
+      self:load_history_preview(tab, callback)
+    end
   end
+  return tab
 end
 
-function Model:selected_commit()
-  local tab = self:selected_tab()
+function Model:selected_commit(tab)
+  tab = tab or self:log_tab()
   if tab and tab.kind == "file_history" then
     local commit = tab.commits[tab.selected_commit]
     if tab.selected_commit_hash and (not commit or commit.hash ~= tab.selected_commit_hash) then return nil end
@@ -308,20 +295,6 @@ function Model:dispose_tab(tab)
     range_marker.remove(tab.history_range_marker)
     tab.history_range_marker = nil
   end
-end
-
-function Model:close_selected_tab()
-  local tab = self:selected_tab()
-  if not tab or not tab.closable then return false end
-  self:dispose_tab(tab)
-  for i, candidate in ipairs(self.tabs) do
-    if candidate == tab then
-      table.remove(self.tabs, i)
-      self.active_tab = "log"
-      return true
-    end
-  end
-  return false
 end
 
 function Model:find_tab(id)
@@ -535,7 +508,6 @@ function Model:open_commit_diff(commit, callback, opts)
     local selected = changed_file_index_by_path(tab.changed_files, tab.selected_file_path)
     if selected then tab.selected_file = selected end
   end
-  self.active_tab = tab.id
   if commit.kind == "working_tree" then
     self:load_changed_files(tab, callback)
   elseif tab.changed_files and #tab.changed_files > 0 then
@@ -546,8 +518,8 @@ function Model:open_commit_diff(commit, callback, opts)
   return tab
 end
 
-function Model:open_selected_commit_diff(callback, opts)
-  return self:open_commit_diff(self:selected_commit(), callback, opts)
+function Model:open_selected_commit_diff(source_tab, callback, opts)
+  return self:open_commit_diff(self:selected_commit(source_tab), callback, opts)
 end
 
 function Model:open_working_tree_diff(callback, opts)
@@ -578,9 +550,12 @@ function Model:open_history_tab(relpath, context, callback)
     }
     self.tabs[#self.tabs + 1] = tab
   end
-  self.active_tab = tab.id
   self:attach_history_buffer(tab)
-  if #tab.commits == 0 then self:load_file_history(tab, callback) end
+  if #tab.commits == 0 then
+    self:load_file_history(tab, function(model, err)
+      if callback then callback(model, err, tab) end
+    end)
+  end
   return tab
 end
 
@@ -784,7 +759,7 @@ function Model:update_local_changes_from_buffer(tab)
   end
   apply_commit_anchor(tab)
   if tab.selected_commit > #tab.commits then tab.selected_commit = math.max(1, #tab.commits) end
-  if self:selected_tab() == tab then self:load_history_preview(tab) end
+  self:load_history_preview(tab)
   if self.on_update then self.on_update(self) end
   return changed ~= had_local
 end
@@ -824,7 +799,6 @@ function Model:attach_history_buffer(tab)
 end
 
 function Model:select_history_index(tab, index, callback)
-  tab = tab or self:selected_tab()
   if not tab or tab.kind ~= "file_history" or #(tab.commits or {}) == 0 then return nil end
   index = math.max(1, math.min(#tab.commits, tonumber(index) or 1))
   tab.selected_commit = index
@@ -835,7 +809,6 @@ function Model:select_history_index(tab, index, callback)
 end
 
 function Model:load_history_preview(tab, callback)
-  tab = tab or self:selected_tab()
   if not tab or tab.kind ~= "file_history" then return false end
   local commit = tab.commits and tab.commits[tab.selected_commit]
   if not commit then return false end
@@ -1071,7 +1044,6 @@ function Model:load_changed_files(tab, callback)
 end
 
 function Model:select_diff_file(tab, index, callback)
-  tab = tab or self:selected_tab()
   if not tab or tab.kind ~= "commit_diff" then return nil end
   if #tab.changed_files == 0 then return nil end
   tab.change_boundary_arm = nil
@@ -1090,10 +1062,9 @@ function Model:resolve_historical_rev(rev)
   return rev
 end
 
-function Model:selected_historical_buffer()
-  local tab = self:selected_tab()
+function Model:selected_historical_buffer(tab)
   if not tab or tab.kind ~= "commit_diff" then
-    return nil, { kind = "no_diff_tab", message = "No commit diff tab is active" }
+    return nil, { kind = "no_diff_view", message = "This is not a Commit Diff View" }
   end
   local file = tab.changed_files and tab.changed_files[tab.selected_file]
   if not file then return nil, { kind = "no_file", message = "No changed file is selected" } end
@@ -1112,7 +1083,6 @@ function Model:selected_historical_buffer()
 end
 
 function Model:load_selected_diff_file(tab, callback)
-  tab = tab or self:selected_tab()
   if not tab or tab.kind ~= "commit_diff" then return false end
   local file = tab.changed_files and tab.changed_files[tab.selected_file]
   if not file then return false end
@@ -1237,12 +1207,10 @@ end
 function Model:sync_working_tree_diff_tabs()
   for _, tab in ipairs(self.tabs) do
     if tab.kind == "commit_diff" and tab.right == self.backend.WORKING_TREE then
-      local old_id = tab.id
       local new_left = self:working_tree_left_revision()
       tab.left = new_left
       tab.id = diff_tab_id(self.repo, tab.left, tab.right)
       tab.title = diff_tab_title(tab.commit, tab.left, tab.right)
-      if self.active_tab == old_id then self.active_tab = tab.id end
       self:load_changed_files(tab)
     end
   end
@@ -1278,10 +1246,6 @@ function Model:_finish_refresh(generation, status_records, log_page, err, callba
   apply_commit_anchor(tab)
   if tab.selected_commit > #tab.commits then tab.selected_commit = math.max(1, #tab.commits) end
   self:load_commit_changed_files(tab.commits[tab.selected_commit])
-  local active = self:selected_tab()
-  if self.repo and active and active.kind == "commit_diff" and #(active.changed_files or {}) == 0 and not active.loading then
-    self:load_changed_files(active)
-  end
   if callback then callback(self, err) end
 end
 
