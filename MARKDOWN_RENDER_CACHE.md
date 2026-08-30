@@ -1,6 +1,6 @@
 # Markdown Live Preview Render Caching
 
-Implemented July 10, 2026 as the second Phase 2 slice in `MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as the second Phase 2 slice in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Line render cache
 

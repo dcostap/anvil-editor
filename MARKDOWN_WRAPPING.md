@@ -1,6 +1,6 @@
 # Rendered Markdown Wrapping
 
-Implemented July 10, 2026 as the third Phase 2 slice in `MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as the third Phase 2 slice in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Source-preserving rendered breaks
 

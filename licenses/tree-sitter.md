@@ -26,7 +26,7 @@ The build uses tracked Meson wraps plus tracked packagefile Meson build definiti
 
 ## API notes
 
-Runtime `0.27.0` provides the APIs assumed by `TREE_SITTER_PLAN.md` for Phase 1:
+Runtime `0.27.0` provides the APIs assumed by `plans/TREE_SITTER_PLAN.md` for Phase 1:
 
 - `ts_parser_parse_with_options` and `TSParseOptions.progress_callback` for parse cancellation.
 - `ts_query_cursor_exec_with_options` and `TSQueryCursorOptions.progress_callback` for query progress/cancellation.

@@ -1,6 +1,6 @@
 # Markdown Block Presentation
 
-Implemented July 10, 2026 as the first Phase 6 slice in `MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as the first Phase 6 slice in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Semantic marker fragments
 

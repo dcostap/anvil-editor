@@ -1,6 +1,6 @@
 # Render Widget Input Contract
 
-Implemented July 10, 2026 as the fifth Phase 2 slice in `MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as the fifth Phase 2 slice in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Generic DocView routing
 

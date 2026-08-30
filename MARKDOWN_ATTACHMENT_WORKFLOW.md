@@ -1,6 +1,6 @@
 # Markdown Attachment Workflow
 
-Implemented July 10, 2026 as a Phase 5 slice in `MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as a Phase 5 slice in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Generic drop routing
 

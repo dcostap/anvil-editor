@@ -1,6 +1,6 @@
 # Semantic Inline Markdown Rendering
 
-Implemented July 10, 2026 as the first Phase 3 slice in `MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as the first Phase 3 slice in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Snapshot continuity
 
