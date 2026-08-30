@@ -46,6 +46,7 @@ typedef struct {
   HANDLE job;
   HANDLE reader_thread;
   HANDLE writer_thread;
+  HANDLE pseudoconsole_close_thread;
   CRITICAL_SECTION read_lock;
   CONDITION_VARIABLE read_ready;
   uint8_t *read_queue;
@@ -64,8 +65,8 @@ typedef struct {
   bool transport_released;
   volatile LONG write_failed;
   volatile LONG read_failed;
-  volatile LONG reader_waiting;
   volatile LONG reader_done;
+  volatile LONG discard_output;
   volatile LONG output_event_pending;
   DWORD read_error;
   DWORD write_error;
@@ -191,9 +192,7 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
 
   while (InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
     DWORD read = 0;
-    InterlockedExchange(&session->reader_waiting, 1);
     BOOL read_ok = ReadFile(session->output_read, buffer, sizeof(buffer), &read, NULL);
-    InterlockedExchange(&session->reader_waiting, 0);
     if (!read_ok || read == 0) {
       DWORD error = GetLastError();
       if (InterlockedCompareExchange(&session->closing, 0, 0) == 0 &&
@@ -206,13 +205,20 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
     InterlockedExchange64(&session->last_output_ms, (LONG64)GetTickCount64());
     InterlockedAdd64(&session->output_bytes_read, (LONG64)read);
 
+    if (InterlockedCompareExchange(&session->discard_output, 0, 0) != 0) continue;
+
     size_t offset = 0;
     EnterCriticalSection(&session->read_lock);
     bool queue_was_empty = session->read_queue_count == 0;
     while (offset < read && InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
       while (session->read_queue_count == TERMINAL_READ_QUEUE_CAPACITY &&
-             InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
+             InterlockedCompareExchange(&session->closing, 0, 0) == 0 &&
+             InterlockedCompareExchange(&session->discard_output, 0, 0) == 0) {
         SleepConditionVariableCS(&session->read_ready, &session->read_lock, INFINITE);
+      }
+      if (InterlockedCompareExchange(&session->discard_output, 0, 0) != 0) {
+        offset = read;
+        break;
       }
       if (InterlockedCompareExchange(&session->closing, 0, 0) != 0) break;
 
@@ -236,6 +242,23 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
   InterlockedExchange(&session->reader_done, 1);
   wake_for_terminal_output(session);
   return 0;
+}
+
+static DWORD WINAPI terminal_pseudoconsole_close_main(void *userdata) {
+  TerminalSession *session = (TerminalSession *)userdata;
+  HPCON pseudoconsole = (HPCON)InterlockedExchangePointer(
+    (PVOID volatile *)&session->pseudoconsole, NULL
+  );
+  if (pseudoconsole) ClosePseudoConsole(pseudoconsole);
+  wake_for_terminal_output(session);
+  return 0;
+}
+
+static void start_pseudoconsole_close(TerminalSession *session) {
+  if (!session->pseudoconsole || session->pseudoconsole_close_thread) return;
+  session->pseudoconsole_close_thread = CreateThread(
+    NULL, 0, terminal_pseudoconsole_close_main, session, 0, NULL
+  );
 }
 
 static DWORD WINAPI terminal_writer_main(void *userdata) {
@@ -582,6 +605,18 @@ static void free_terminal_objects(TerminalSession *session) {
 static void release_terminal_transport(TerminalSession *session) {
   if (!session || session->transport_released) return;
   session->transport_released = true;
+  if (session->pseudoconsole_close_thread) {
+    InterlockedExchange(&session->discard_output, 1);
+    if (session->read_lock_initialized) {
+      EnterCriticalSection(&session->read_lock);
+      session->read_queue_count = 0;
+      session->read_queue_head = 0;
+      WakeAllConditionVariable(&session->read_ready);
+      LeaveCriticalSection(&session->read_lock);
+    }
+    WaitForSingleObject(session->pseudoconsole_close_thread, INFINITE);
+    close_handle(&session->pseudoconsole_close_thread);
+  }
   InterlockedExchange(&session->closing, 1);
   if (session->read_lock_initialized) {
     EnterCriticalSection(&session->read_lock);
@@ -1136,9 +1171,7 @@ static bool output_drained(TerminalSession *session) {
   EnterCriticalSection(&session->read_lock);
   empty = session->read_queue_count == 0;
   LeaveCriticalSection(&session->read_lock);
-  bool reader_idle = InterlockedCompareExchange(&session->reader_waiting, 0, 0) != 0 ||
-    InterlockedCompareExchange(&session->reader_done, 0, 0) != 0;
-  return empty && reader_idle;
+  return empty && InterlockedCompareExchange(&session->reader_done, 0, 0) != 0;
 }
 
 static void push_status(lua_State *L, TerminalSession *session) {
@@ -1238,6 +1271,7 @@ static int f_terminal_update(lua_State *L) {
       InterlockedExchange64(&session->last_output_ms, (LONG64)now);
     }
     set_terminal_state(session, TERMINAL_STATE_DRAINING);
+    start_pseudoconsole_close(session);
   }
   bool read_failed = InterlockedCompareExchange(&session->read_failed, 0, 0) != 0;
   bool write_failed = InterlockedCompareExchange(&session->write_failed, 0, 0) != 0;
@@ -1342,12 +1376,12 @@ static int f_terminal_paste(lua_State *L) {
 
 static int f_terminal_stats(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
-  uint64_t read_queue_high_water = session->read_queue_high_water;
+  uint64_t read_queue_high_water = 0;
   if (session->read_lock_initialized) {
     EnterCriticalSection(&session->read_lock);
     read_queue_high_water = session->read_queue_high_water;
     LeaveCriticalSection(&session->read_lock);
-  }
+  } else read_queue_high_water = session->read_queue_high_water;
   lua_createtable(L, 0, 9);
   set_integer_field(L, "output_bytes_read", (lua_Integer)InterlockedCompareExchange64(
     &session->output_bytes_read, 0, 0));

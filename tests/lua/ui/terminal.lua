@@ -106,6 +106,10 @@ local function fake_native()
     function session:clear() self.cleared = true; return true end
     function session:key(key, mods, action, event)
       self.keys[#self.keys + 1] = { key, mods, action, event }
+      if self.key_failures and self.key_failures > 0 then
+        self.key_failures = self.key_failures - 1
+        return false, "queue_full"
+      end
       return true
     end
     function session:paste(text, allow_unsafe)
@@ -406,11 +410,15 @@ test.describe("Terminal View", function()
     session.snapshot_calls = 0
     session.snapshot_requests = {}
     session.next_changed = true
+    view.hover_point = { uri = "https://old.test" }
+    view.hover_cell = "0:0"
+    view.cursor = "hand"
     view.snapshot.events = { { type = "bell", count = 2 } }
     view:service_session(false)
     test.equal(session.snapshot_calls, 1)
     test.equal(session.snapshot_requests[1], false)
     test.equal(view.bell_count, 2)
+    test.equal(view.cursor, "ibeam")
 
     view:service_session(true)
     test.equal(session.snapshot_calls, 2)
@@ -615,6 +623,15 @@ test.describe("Terminal View", function()
     test.same({ "x" }, context.sessions[1].writes)
   end)
 
+  test.it("expires encoded text ownership when its key is released", function(context)
+    local view = terminal.open()
+    local event = { modifiers = 0, scancode = 36, text = "/" }
+    test.ok(view:on_key_pressed("/", event))
+    test.ok(view:on_key_released("/", event))
+    test.ok(view:on_text_input("/"))
+    test.same({ "/" }, context.sessions[1].writes)
+  end)
+
   test.it("runs valid Anvil shortcuts before terminal input", function(context)
     local first = panes.create { factory = function() return View() end }
     local second = panes.create { factory = function() return View() end }
@@ -641,10 +658,22 @@ test.describe("Terminal View", function()
     local view = terminal.open({ focus = true })
     local event = { ctrl = true, modifiers = 2, scancode = 14 }
     test.ok(view:on_key_pressed("k", event))
-    view:sync_focus()
     core.set_active_view(context.previous_active_view)
     view:sync_focus()
     test.equal(context.sessions[1].keys[#context.sessions[1].keys][3], "release")
+  end)
+
+  test.it("retries a terminal-owned release after input backpressure", function(context)
+    local view = terminal.open({ focus = true })
+    local session = context.sessions[1]
+    local event = { ctrl = true, modifiers = 2, scancode = 14 }
+    test.ok(view:on_key_pressed("k", event))
+    session.key_failures = 1
+    test.ok(view:on_key_released("k", event))
+    test.equal(#view.pending_key_releases, 1)
+    view:service_session(true)
+    test.equal(#view.pending_key_releases, 0)
+    test.equal(session.keys[#session.keys][3], "release")
   end)
 
   test.it("sends unhandled shell control keys to the terminal", function(context)
@@ -864,6 +893,17 @@ test.describe("Terminal View", function()
     test.equal(view.search_query, "needle")
   end)
 
+  test.it("cancels pending terminal search when the query is cleared", function(context)
+    local view = terminal.open()
+    context.sessions[1].search = function() return false, "pending" end
+    test.ok(view:search("needle", false))
+    test.ok(view.search_pending)
+    test.not_ok(view:search("", false))
+    test.equal(view.search_pending, nil)
+    view:update()
+    test.equal(view.search_query, nil)
+  end)
+
   test.it("reports mouse input when the terminal enables mouse tracking", function(context)
     local view = terminal.open()
     view.position.x, view.position.y = 0, 0
@@ -933,6 +973,24 @@ test.describe("Terminal View", function()
     system.open_in_system = previous_open
   end)
 
+  test.it("accepts URI schemes without case-sensitive matching", function(context)
+    local previous_open = system.open_in_system
+    local opened
+    system.open_in_system = function(uri) opened = uri return true end
+    local view = terminal.open()
+    local session = context.sessions[1]
+    session.hyperlink_uri = "HTTPS://example.test/path"
+    test.ok(view:activate_point_of_interest(view:point_of_interest_at(0, 0)))
+    session.hyperlink_uri = nil
+    local text = "HTTP://example.test/text"
+    local columns = {}
+    for index = 1, #text do columns[index] = index - 1 end
+    session.row_text_data = { text = text, columns = columns, generation = 1 }
+    test.equal(view:point_of_interest_at(0, 0).uri, text)
+    system.open_in_system = previous_open
+    test.equal(opened, "HTTPS://example.test/path")
+  end)
+
   test.it("detects plain HTTP text and clears its hover when Ctrl is released", function(context)
     local view = terminal.open()
     local text = "http://example.test/path"
@@ -945,9 +1003,27 @@ test.describe("Terminal View", function()
     view:on_mouse_moved(7, 7, 0, 0)
     test.equal(view.cursor, "hand")
     keymap.modkeys.ctrl = false
-    view:on_key_released("lctrl", { scancode = 224 })
+    view:on_key_released("left ctrl", { scancode = 224 })
     test.equal(view.hover_point, nil)
     test.equal(view.cursor, "ibeam")
+  end)
+
+  test.it("cancels URI activation when the pointer leaves terminal cells", function(context)
+    local previous_open = system.open_in_system
+    local opened = 0
+    system.open_in_system = function() opened = opened + 1 return true end
+    local view = terminal.open()
+    context.sessions[1].hyperlink_uri = "https://example.test/path"
+    keymap.modkeys.ctrl = true
+    view:on_mouse_pressed("left", 7, 7)
+    view:on_mouse_moved(-10, 7, -17, 0)
+    view:on_mouse_released("left", 7, 7)
+    view:on_mouse_pressed("left", 7, 7)
+    view:on_mouse_left()
+    keymap.modkeys.ctrl = false
+    view:on_mouse_released("left", 7, 7)
+    system.open_in_system = previous_open
+    test.equal(opened, 0)
   end)
 
   test.it("ignores malformed file locations during hover", function(context)

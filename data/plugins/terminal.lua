@@ -476,6 +476,7 @@ function TerminalView:adopt_session(session)
   self.search_state = nil
   self.key_owners = {}
   self.encoded_text_queue = {}
+  self.pending_key_releases = {}
   self.composition = nil
   self.focused = nil
   self:sync_focus()
@@ -531,8 +532,7 @@ function TerminalView:sync_geometry()
     self.session_id, cols, rows)
   self.search_pending = nil
   self.search_state = nil
-  self.hover_point = nil
-  self.hover_cell = nil
+  self:clear_point_hover()
   local pane = panes.pane_for_view(self)
   local include_rows = pane ~= nil and pane.current_view == self and panes.is_visible(pane)
   self.snapshot = self.session:snapshot(self.snapshot, include_rows)
@@ -601,6 +601,7 @@ end
 
 function TerminalView:service_session(include_rows)
   if not self.session then return false end
+  self:retry_pending_key_releases()
   local record_perf = include_rows and perf_is_recording()
   local update_started = record_perf and system.get_time()
   local changed, status = self.session:update()
@@ -609,8 +610,7 @@ function TerminalView:service_session(include_rows)
   end
   local state_changed = self:apply_status(status)
   if changed then
-    self.hover_point = nil
-    self.hover_cell = nil
+    self:clear_point_hover()
     if not include_rows then self.rows_dirty = true end
   end
   local needs_snapshot = changed or state_changed or (include_rows and self.rows_dirty)
@@ -634,18 +634,19 @@ function TerminalView:sync_focus()
   local window_focused = not system.window_has_focus or system.window_has_focus(core.window)
   local focused = pane ~= nil and pane.current_view == self and panes.is_visible(pane)
     and core.active_view == self and window_focused
-  if focused == self.focused then return false end
+  local focus_changed = focused ~= self.focused
   self.focused = focused
   if not focused then
     self.composition = nil
     for _, owned in pairs(self.key_owners or {}) do
       if type(owned) == "table" and owned.owner == "ghostty" then
-        self.session:key(owned.key, owned.modifiers, "release", owned.event)
+        self:send_key_release(owned)
       end
     end
     self.key_owners = {}
     self.encoded_text_queue = {}
   end
+  if not focus_changed then return false end
   self.session:focus(focused)
   return true
 end
@@ -985,7 +986,7 @@ function TerminalView:on_text_input(text)
   core.blink_reset()
   self.session:scroll("bottom")
   local encoded = self.encoded_text_queue and self.encoded_text_queue[1]
-  if encoded and text == encoded then
+  if encoded and text == encoded.text then
     table.remove(self.encoded_text_queue, 1)
     return true
   end
@@ -1029,7 +1030,14 @@ function TerminalView:paste(text, allow_unsafe)
 end
 
 function TerminalView:search(query, reverse)
-  if not self.session or not query or query == "" then return false end
+  if not self.session then return false end
+  if not query or query == "" then
+    self.search_pending = nil
+    self.search_query = nil
+    self.search_state = nil
+    core.redraw = true
+    return false
+  end
   self.search_query = query
   self.search_state = "searching"
   local found, state = self.session:search(query, reverse == true)
@@ -1070,8 +1078,41 @@ local function physical_key_id(key, event)
   return "key:" .. tostring(key)
 end
 
+local function remove_encoded_key(view, key_id)
+  local kept = {}
+  for _, encoded in ipairs(view.encoded_text_queue or {}) do
+    if encoded.key_id ~= key_id then kept[#kept + 1] = encoded end
+  end
+  view.encoded_text_queue = kept
+end
+
+function TerminalView:send_key_release(owned)
+  local ok, reason = self.session:key(
+    owned.key, owned.modifiers, "release", owned.event
+  )
+  if not ok and reason == "queue_full" then
+    self.pending_key_releases = self.pending_key_releases or {}
+    self.pending_key_releases[#self.pending_key_releases + 1] = owned
+  end
+  return ok == true
+end
+
+function TerminalView:retry_pending_key_releases()
+  if not self.session or self.running == false or not self.pending_key_releases
+      or #self.pending_key_releases == 0 then return false end
+  local pending = self.pending_key_releases
+  self.pending_key_releases = {}
+  local sent = false
+  for _, owned in ipairs(pending) do
+    sent = self:send_key_release(owned) or sent
+  end
+  return sent
+end
+
 function TerminalView:on_key_pressed(key, event)
   if not self.session or self.running == false then return false end
+  self:sync_focus()
+  self:retry_pending_key_releases()
   self.key_owners = self.key_owners or {}
   self.encoded_text_queue = self.encoded_text_queue or {}
   local key_id = physical_key_id(key, event)
@@ -1112,7 +1153,10 @@ function TerminalView:on_key_pressed(key, event)
     event = event,
   }
   if encoded and event and type(event.text) == "string" and event.text ~= "" then
-    self.encoded_text_queue[#self.encoded_text_queue + 1] = event.text
+    self.encoded_text_queue[#self.encoded_text_queue + 1] = {
+      text = event.text,
+      key_id = key_id,
+    }
   end
   return encoded
 end
@@ -1123,10 +1167,12 @@ function TerminalView:on_key_released(key, event)
   local key_id = physical_key_id(key, event)
   local owned = self.key_owners[key_id]
   self.key_owners[key_id] = nil
+  remove_encoded_key(self, key_id)
   local owner = type(owned) == "table" and owned.owner or owned
-  if key == "lctrl" or key == "rctrl" then self:clear_point_hover() end
+  if key == "left ctrl" or key == "right ctrl" then self:clear_point_hover() end
   if owner ~= "ghostty" then return true end
-  return self.session:key(key, key_modifiers(event), "release", event) == true
+  self:send_key_release(owned)
+  return true
 end
 
 local function mouse_modifiers()
@@ -1148,7 +1194,7 @@ function TerminalView:mouse_position(x, y)
 end
 
 local function local_file_from_uri(uri)
-  local authority, path = uri:match("^file://([^/]*)(/.*)$")
+  local authority, path = uri:match("^[Ff][Ii][Ll][Ee]://([^/]*)(/.*)$")
   if not path then return nil end
   path = path:gsub("%%(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end)
   if authority ~= "" and authority:lower() ~= "localhost" then
@@ -1201,7 +1247,11 @@ function TerminalView:point_of_interest_at(col, row)
     return first_col and last_col and col >= first_col and col <= last_col,
       first_col, last_col
   end
-  for _, pattern in ipairs({ "http://[^%s<>]+", "https://[^%s<>]+", "mailto:[^%s<>]+" }) do
+  for _, pattern in ipairs({
+    "[Hh][Tt][Tt][Pp]://[^%s<>]+",
+    "[Hh][Tt][Tt][Pp][Ss]://[^%s<>]+",
+    "[Mm][Aa][Ii][Ll][Tt][Oo]:[^%s<>]+",
+  }) do
     for first, value, last in data.text:gmatch("()(" .. pattern .. ")()") do
       local hit, first_col, last_col = covers(first, last)
       if hit then
@@ -1245,7 +1295,16 @@ end
 
 function TerminalView:on_mouse_left()
   TerminalView.super.on_mouse_left(self)
+  if self.uri_gesture then self.uri_gesture.cancelled = true end
   self:clear_point_hover()
+end
+
+function TerminalView:contains_terminal_cell(x, y)
+  local left = self.position.x + PADDING
+  local top = self.position.y + PADDING
+  return x >= left and y >= top
+    and x < left + self.cols * self.cell_width
+    and y < top + self.rows * self.cell_height
 end
 
 function TerminalView:activate_point_of_interest(point)
@@ -1262,6 +1321,7 @@ end
 
 function TerminalView:refresh_snapshot()
   if not self.session then return end
+  self:clear_point_hover()
   self.snapshot = self.session:snapshot(self.snapshot)
   core.redraw = true
 end
@@ -1275,7 +1335,7 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
   end
   core.set_active_view(self)
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
-  if button == "left" and keymap.modkeys.ctrl then
+  if button == "left" and keymap.modkeys.ctrl and self:contains_terminal_cell(x, y) then
     local point = self:point_of_interest_at(col, row)
     if point then
       self.uri_gesture = { point = point, col = col, row = row, cancelled = false }
@@ -1304,6 +1364,10 @@ end
 function TerminalView:on_mouse_moved(x, y, dx, dy)
   if not self.session then return false end
   if self.uri_gesture then
+    if not self:contains_terminal_cell(x, y) then
+      self.uri_gesture.cancelled = true
+      return true
+    end
     local col, row = self:mouse_position(x, y)
     local point = self:point_of_interest_at(col, row)
     local target = self.uri_gesture.point
@@ -1352,10 +1416,11 @@ function TerminalView:on_mouse_released(button, x, y)
   if self.uri_gesture and button == "left" then
     local gesture = self.uri_gesture
     self.uri_gesture = nil
+    local inside = self:contains_terminal_cell(x, y)
     local col, row = self:mouse_position(x, y)
     local point = self:point_of_interest_at(col, row)
     local target = gesture.point
-    if not gesture.cancelled and col == gesture.col and row == gesture.row
+    if inside and not gesture.cancelled and col == gesture.col and row == gesture.row
         and same_point(point, target) then
       self:activate_point_of_interest(target)
     end
@@ -1392,6 +1457,7 @@ function TerminalView:on_mouse_wheel(delta_y)
   end
   local delta = delta_y > 0 and -3 or 3
   if self.session:scroll("delta", delta) then
+    self:clear_point_hover()
     self.snapshot = self.session:snapshot(self.snapshot)
     core.redraw = true
     return true
