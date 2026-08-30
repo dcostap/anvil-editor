@@ -118,6 +118,7 @@ local function commit_line_hint(view, line)
   local meta = view.git_commit_line_meta and view.git_commit_line_meta[line]
   if not (meta and meta.role == "commit") then return nil end
   local font = style.get_small_font(view:get_font())
+  local date_font = style.get_small_font(style.code_font)
   local segments = { truncate = "left", gap_spaces = 2 }
   if meta.author and meta.author ~= "" then
     segments[#segments + 1] = { text = meta.author, font = font, color = style.dim }
@@ -126,7 +127,7 @@ local function commit_line_hint(view, line)
     if #segments > 0 then
       segments[#segments + 1] = { text = "   ", font = font, color = style.dim }
     end
-    segments[#segments + 1] = { text = meta.date, font = font, color = style.dim }
+    segments[#segments + 1] = { text = meta.date, font = date_font, color = style.dim }
   end
   return #segments > 0 and segments or nil
 end
