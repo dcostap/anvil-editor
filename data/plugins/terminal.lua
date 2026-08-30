@@ -11,12 +11,13 @@ local keymap = require "core.keymap"
 local panes = require "core.panes"
 local style = require "core.style"
 local TextView = require "core.textview"
+local text_poi_locations = require "core.text_poi_locations"
 local View = require "core.view"
 local view_icons = require "core.view_icons"
 
 local M = {}
 local native_override
-local views = {}
+local next_session_id = 0
 
 local PADDING = 6
 
@@ -49,7 +50,7 @@ terminal_config.config_spec = {
     type = "number",
     default = 10000,
     min = 1000,
-    max = 1000000,
+    max = 100000,
   },
 }
 
@@ -136,17 +137,24 @@ end
 local function terminal_pwd(snapshot)
   local pwd = snapshot and snapshot.pwd
   if type(pwd) ~= "string" or pwd == "" then return nil end
+  if pwd:find("[%z%c]") then return nil end
   if pwd:match("^file://") then
     local authority, path = pwd:match("^file://([^/]*)(/.*)$")
+    if not path then return nil end
     if authority and authority ~= "" and authority:lower() ~= "localhost" then
       pwd = "\\\\" .. authority .. path:gsub("/", "\\")
     else
-      pwd = path or pwd:gsub("^file:///?", "")
+      pwd = path
       if pwd:match("^/[A-Za-z]:") then pwd = pwd:sub(2) end
     end
     pwd = pwd:gsub("%%(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end)
   end
-  return pwd ~= "" and pwd or nil
+  if pwd == "" or pwd:find("[%z%c]") then return nil end
+  local local_path = pwd:match("^[A-Za-z]:[\\/]") ~= nil
+    or pwd:match("^\\\\[^\\]+\\[^\\]+") ~= nil
+  if not local_path then return nil end
+  local info = system.get_file_info(pwd)
+  return info and info.type == "dir" and pwd or nil
 end
 
 ---@class plugins.terminal.view : core.view
@@ -165,8 +173,8 @@ function TerminalView:refresh_cell_metrics()
     or self.cell_height ~= cell_height
   if changed and self.cell_width then
     core.log_quiet(
-      "Terminal cell geometry changed: %.2fx%d -> %.2fx%d",
-      self.cell_width, self.cell_height, cell_width, cell_height
+      "Terminal session %d cell geometry changed: %.2fx%d -> %.2fx%d",
+      self.session_id or 0, self.cell_width, self.cell_height, cell_width, cell_height
     )
   end
   self.font = font
@@ -174,6 +182,20 @@ function TerminalView:refresh_cell_metrics()
   self.native_cell_width = native_cell_width
   self.cell_height = cell_height
   return changed
+end
+
+local function sanitize_title(title)
+  if type(title) ~= "string" then return nil end
+  title = title:gsub("%c+", " "):gsub("%s+", " ")
+    :gsub("^%s+", ""):gsub("%s+$", "")
+  if title == "" then return nil end
+  local parts, bytes = {}, 0
+  for char in common.utf8_chars(title) do
+    if bytes + #char > 200 then break end
+    parts[#parts + 1] = char
+    bytes = bytes + #char
+  end
+  return table.concat(parts)
 end
 
 function TerminalView:new(options)
@@ -190,29 +212,52 @@ function TerminalView:new(options)
     cwd = options.cwd or project_path(options.cwd_mode or terminal_config.cwd_mode),
     shell = options.shell or terminal_config.shell,
   }
+  next_session_id = next_session_id + 1
+  self.session_id = next_session_id
+  self.state = "new"
+  core.log_quiet("Terminal session %d start requested: shell=%s cwd=%s",
+    self.session_id, self.launch_options.shell ~= "" and "custom" or "default",
+    self.launch_options.cwd)
 
   local native, load_error = terminal_native()
-  if not native then error(load_error) end
+  if not native then
+    self.state = "failed"
+    self.running = false
+    self.launch_error = tostring(load_error or "The native terminal is unavailable.")
+    core.log_quiet("Terminal session %d start failed: %s", self.session_id, self.launch_error)
+    return
+  end
   local native_options = session_colors()
   native_options.cols, native_options.rows = self.cols, self.rows
   native_options.cell_width, native_options.cell_height = self.native_cell_width, self.cell_height
   native_options.cwd, native_options.shell = self.launch_options.cwd, self.launch_options.shell
   native_options.scrollback_lines = terminal_config.scrollback_lines
   local session, start_error = native.new(native_options)
-  if not session then error(start_error or "Could not start the terminal.") end
+  if not session then
+    self.state = "failed"
+    self.running = false
+    self.launch_error = tostring(start_error or "Could not start the terminal.")
+    self.theme_generation = core.color_theme_generation or 0
+    core.log_quiet("Terminal session %d start failed: %s", self.session_id, self.launch_error)
+    return
+  end
   self.session = session
   self.session_cell_width = self.native_cell_width
   self.session_cell_height = self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
+  self.state = "running"
   self.running = true
-  views[#views + 1] = self
-  core.log_quiet("Terminal View started: cwd=%s cols=%d rows=%d", self.launch_options.cwd, self.cols, self.rows)
+  core.log_quiet("Terminal session %d started: cwd=%s cols=%d rows=%d",
+    self.session_id, self.launch_options.cwd, self.cols, self.rows)
 end
 
 function TerminalView:get_name()
-  local title = self.snapshot and self.snapshot.title
-  if self.running == false then
+  local title = sanitize_title(self.snapshot and self.snapshot.title)
+  if self.state == "failed" then
+    return title and title ~= "" and string.format("%s (failed)", title)
+      or "Terminal (failed)"
+  elseif self.state == "exited" then
     local status = self.exit_code ~= nil and string.format("exit %d", self.exit_code) or "exited"
     return title and title ~= "" and string.format("%s (%s)", title, status)
       or string.format("Terminal (%s)", status)
@@ -299,7 +344,6 @@ function TerminalTextCaptureView:new(source, capture)
   TerminalTextCaptureView.super.new(self, buffer)
   self.context = "workspace"
   self.terminal_text_capture = true
-  self.terminal_source_view = source
   self.terminal_title = terminal_title
   self.terminal_capture = capture
   self.font = "terminal_font"
@@ -355,14 +399,20 @@ function TerminalTextCaptureView:duplicate()
     styles = self.terminal_capture.styles,
     title = self.terminal_title,
   }
-  local duplicate = TerminalTextCaptureView(self.terminal_source_view, capture)
+  local duplicate = TerminalTextCaptureView(nil, capture)
   duplicate.scroll.x, duplicate.scroll.y = self.scroll.x, self.scroll.y
   duplicate.scroll.to.x, duplicate.scroll.to.y = self.scroll.to.x, self.scroll.to.y
   return duplicate
 end
 
 function TerminalView:get_cwd()
-  return terminal_pwd(self.snapshot) or self.launch_options.cwd
+  local validated = terminal_pwd(self.snapshot)
+  local reported = self.snapshot and self.snapshot.pwd
+  if not validated and reported and reported ~= "" and reported ~= self.invalid_reported_directory then
+    self.invalid_reported_directory = reported
+    core.log_quiet("Terminal session %d ignored an unusable reported directory", self.session_id)
+  end
+  return validated or self.launch_options.cwd
 end
 
 function TerminalView:get_state()
@@ -381,12 +431,11 @@ end
 
 function TerminalView.from_state(state)
   if type(state) ~= "table" then return nil end
-  local ok, view = pcall(TerminalView, { cwd = state.cwd, shell = state.shell })
-  return ok and view or nil
+  return TerminalView { cwd = state.cwd, shell = state.shell }
 end
 
 function TerminalView:can_discard_from_history()
-  return self.session == nil or self.running == false
+  return self.session == nil or self.state == "exited" or self.state == "failed"
 end
 
 function TerminalView:create_session()
@@ -408,26 +457,32 @@ function TerminalView:adopt_session(session)
   self.session_cell_height = self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
+  self.state = "running"
   self.running = true
   self.exit_code = nil
   self.reported_error = nil
+  self.launch_error = nil
+  self.status_revision = nil
+  self.search_pending = nil
+  self.search_query = nil
+  self.search_state = nil
   self.focused = nil
-  if core.active_view == self then
-    self.focused = true
-    session:focus(true)
-  end
+  self:sync_focus()
   core.redraw = true
 end
 
 function TerminalView:restart()
+  if self.state ~= "exited" and self.state ~= "failed" then return false end
   local replacement, err = self:create_session()
   if not replacement then
+    core.log_quiet("Terminal session %d restart failed", self.session_id)
     core.error("Could not restart terminal: %s", tostring(err))
     return false
   end
   local previous = self.session
   self:adopt_session(replacement)
   if previous then previous:close() end
+  core.log_quiet("Terminal session %d restarted", self.session_id)
   return true
 end
 
@@ -461,6 +516,12 @@ function TerminalView:sync_geometry()
   self.cols, self.rows = cols, rows
   self.session_cell_width = self.native_cell_width
   self.session_cell_height = self.cell_height
+  core.log_quiet("Terminal session %d resized: cols=%d rows=%d",
+    self.session_id, cols, rows)
+  self.search_pending = nil
+  self.search_state = nil
+  self.hover_point = nil
+  self.hover_cell = nil
   self.snapshot = self.session:snapshot(self.snapshot)
   core.redraw = true
   return true
@@ -504,6 +565,73 @@ function TerminalView:scroll_to_percent(percent)
   return true
 end
 
+function TerminalView:apply_status(status)
+  if type(status) ~= "table" then return false end
+  local revision = tonumber(status.revision)
+  local kind = type(status.kind) == "string" and status.kind or self.state
+  local changed = kind ~= self.state or revision ~= self.status_revision
+  if not changed then return false end
+  local previous = self.state
+  self.state = kind
+  self.status_revision = revision
+  self.running = kind == "running"
+  if kind == "exited" then self.exit_code = status.exit_code end
+  if status.error and status.error ~= self.reported_error then
+    self.reported_error = status.error
+    if kind == "failed" then self.launch_error = status.error end
+    core.error(status.error)
+  end
+  core.log_quiet("Terminal session %d state: %s -> %s",
+    self.session_id, tostring(previous), tostring(kind))
+  return true
+end
+
+function TerminalView:service_session(include_rows)
+  if not self.session then return false end
+  local record_perf = include_rows and perf_is_recording()
+  local update_started = record_perf and system.get_time()
+  local changed, status = self.session:update()
+  if record_perf then
+    perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
+  end
+  local state_changed = self:apply_status(status)
+  if changed then
+    self.hover_point = nil
+    self.hover_cell = nil
+    if not include_rows then self.rows_dirty = true end
+  end
+  local needs_snapshot = changed or state_changed or (include_rows and self.rows_dirty)
+  if needs_snapshot then
+    local snapshot_started = record_perf and system.get_time()
+    self.snapshot = self.session:snapshot(self.snapshot, include_rows)
+    self:handle_events()
+    if include_rows then self.rows_dirty = nil end
+    if record_perf then
+      perf_detail("terminal_snapshot_ms", (system.get_time() - snapshot_started) * 1000)
+      perf_detail("terminal_snapshot_calls", 1)
+    end
+    if include_rows then core.redraw = true end
+  end
+  return needs_snapshot
+end
+
+function TerminalView:sync_focus()
+  if not self.session then return false end
+  local pane = panes.pane_for_view(self)
+  local window_focused = not system.window_has_focus or system.window_has_focus(core.window)
+  local focused = pane ~= nil and pane.current_view == self and panes.is_visible(pane)
+    and core.active_view == self and window_focused
+  if focused == self.focused then return false end
+  self.focused = focused
+  if not focused then
+    self.composition = nil
+    self.key_owners = {}
+    self.encoded_text_queue = {}
+  end
+  self.session:focus(focused)
+  return true
+end
+
 function TerminalView:update()
   TerminalView.super.update(self)
   if not self.session then return end
@@ -540,37 +668,11 @@ function TerminalView:update()
     end
   end
 
-  local focused = core.active_view == self
-  if focused ~= self.focused then
-    self.focused = focused
-    self.session:focus(focused)
-  end
+  self:sync_focus()
 
   self:sync_geometry()
 
-  local was_running = self.running
-  local record_perf = perf_is_recording()
-  local update_started = record_perf and system.get_time()
-  local changed, running, status = self.session:update()
-  if record_perf then
-    perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
-  end
-  self.running = running ~= false
-  self.exit_code = status and status.exit_code or self.exit_code
-  if status and status.error and status.error ~= self.reported_error then
-    self.reported_error = status.error
-    core.error(status.error)
-  end
-  if changed or self.running ~= was_running then
-    local snapshot_started = record_perf and system.get_time()
-    self.snapshot = self.session:snapshot(self.snapshot)
-    self:handle_events()
-    if record_perf then
-      perf_detail("terminal_snapshot_ms", (system.get_time() - snapshot_started) * 1000)
-      perf_detail("terminal_snapshot_calls", 1)
-    end
-    core.redraw = true
-  end
+  self:service_session(true)
 end
 
 function TerminalView:open_text_capture()
@@ -599,19 +701,37 @@ end
 
 function TerminalView:update_suspended()
   if not self.session then return end
+  self:sync_focus()
   self:sync_geometry()
-  local changed, running, status = self.session:update()
-  self.running = running ~= false
-  self.exit_code = status and status.exit_code or self.exit_code
-  if status and status.error and status.error ~= self.reported_error then
-    self.reported_error = status.error
-    core.error(status.error)
-  end
-  if changed or status then
-    self.snapshot = self.session:snapshot(self.snapshot)
-    self:handle_events()
-    core.redraw = true
-  end
+  self:service_session(false)
+end
+
+function TerminalView:prompt_clipboard_request(request)
+  self.active_clipboard_request = request
+  local preview = tostring(request.text or ""):gsub("[%c]", " "):sub(1, 80)
+  local message = string.format(
+    "A terminal program wants to replace the clipboard (%d bytes).\n\n%s",
+    #tostring(request.text or ""), preview
+  )
+  core.nag_view:show(
+    "Terminal Clipboard Request",
+    message,
+    {
+      { text = "Allow", default_yes = false },
+      { text = "Deny", default_no = true },
+    },
+    function(item)
+      if item.text == "Allow" and self.active_clipboard_request == request then
+        system.set_clipboard(request.text)
+      end
+      if self.active_clipboard_request == request then
+        self.active_clipboard_request = nil
+      end
+      local queued = self.queued_clipboard_request
+      self.queued_clipboard_request = nil
+      if queued and self.session then self:prompt_clipboard_request(queued) end
+    end
+  )
 end
 
 function TerminalView:handle_events()
@@ -625,25 +745,12 @@ function TerminalView:handle_events()
       end
       core.redraw = true
     elseif event.type == "clipboard" and event.text ~= nil then
-      self.pending_clipboard = { text = event.text, clear = event.clear == true }
-      if self.clipboard_prompt_open then goto continue end
-      self.clipboard_prompt_open = true
-      core.nag_view:show(
-        "Terminal Clipboard Request",
-        "A terminal program wants to replace the clipboard. Allow it?",
-        {
-          { text = "Allow", default_yes = false },
-          { text = "Deny", default_no = true },
-        },
-        function(item)
-          local pending = self.pending_clipboard
-          if item.text == "Allow" and pending and self.session then
-            system.set_clipboard(pending.text)
-          end
-          self.pending_clipboard = nil
-          self.clipboard_prompt_open = false
-        end
-      )
+      local request = { text = event.text, clear = event.clear == true }
+      if self.active_clipboard_request then
+        self.queued_clipboard_request = request
+      else
+        self:prompt_clipboard_request(request)
+      end
     elseif event.type == "notification" then
       self.notification_count = (self.notification_count or 0) + (event.count or 1)
       local title = event.title ~= "" and event.title or "Terminal"
@@ -675,6 +782,19 @@ function TerminalView:draw()
   end
   self:draw_background(background)
   if not snapshot then
+    if self.state == "failed" then
+      local x = self.position.x + PADDING
+      local y = self.position.y + PADDING
+      local line_height = self.cell_height
+      local shell = self.launch_options.shell ~= "" and "custom shell" or "default shell"
+      renderer.draw_text(self.font, "Terminal start failed", x, y, style.text)
+      renderer.draw_text(self.font, string.format("Directory: %s", self.launch_options.cwd),
+        x, y + line_height, style.dim or style.text)
+      renderer.draw_text(self.font, string.format("Shell: %s", shell),
+        x, y + line_height * 2, style.dim or style.text)
+      renderer.draw_text(self.font, tostring(self.launch_error or "Unknown terminal error"),
+        x, y + line_height * 3, style.text)
+    end
     perf_scope_end(draw_scope)
     return
   end
@@ -761,6 +881,17 @@ function TerminalView:draw()
   end
   perf_scope_end(phase_scope)
 
+  local hover = self.hover_point
+  if hover and hover.row ~= nil and hover.col ~= nil then
+    renderer.draw_rect(
+      origin_x + hover.col * self.cell_width,
+      origin_y + hover.row * self.cell_height + self.cell_height - math.max(1, SCALE),
+      math.max(self.cell_width,
+        ((hover.end_col or hover.col) - hover.col + 1) * self.cell_width),
+      math.max(1, SCALE), style.link or style.text
+    )
+  end
+
   phase_scope = perf_scope_begin("cursor")
   local cursor = snapshot.cursor
   local cursor_on = not (cursor and cursor.blinking) or blink_on
@@ -769,11 +900,12 @@ function TerminalView:draw()
     local y = origin_y + (cursor.y or 0) * self.cell_height
     local value = cursor.color or snapshot.foreground
     local color = rgb(self, value, style.caret)
-    if cursor.style == "bar" then
+    local cursor_style = self.focused and cursor.style or "hollow"
+    if cursor_style == "bar" then
       renderer.draw_rect(x, y, math.max(1, style.caret_width or SCALE), self.cell_height, color)
-    elseif cursor.style == "underline" then
+    elseif cursor_style == "underline" then
       renderer.draw_rect(x, y + self.cell_height - math.max(2, 2 * SCALE), self.cell_width, math.max(2, 2 * SCALE), color)
-    elseif cursor.style == "hollow" then
+    elseif cursor_style == "hollow" then
       local thickness = math.max(1, SCALE)
       renderer.draw_rect(x, y, self.cell_width, thickness, color)
       renderer.draw_rect(x, y + self.cell_height - thickness, self.cell_width, thickness, color)
@@ -810,6 +942,19 @@ function TerminalView:draw()
     )
     ime.set_location(x, y, width, self.cell_height)
   end
+  if self.search_state and self.search_query then
+    local label = self.search_state == "no_match"
+      and string.format("No match: %s", self.search_query)
+      or self.search_state == "searching"
+        and string.format("Searching: %s", self.search_query)
+        or string.format("Found: %s", self.search_query)
+    renderer.draw_text(
+      self.font, label,
+      origin_x, self.position.y + self.size.y - self.cell_height - PADDING,
+      self.search_state == "no_match" and (style.error or style.text)
+        or (style.dim or style.text)
+    )
+  end
   self:draw_scrollbar()
   perf_scope_end(draw_scope)
 end
@@ -819,10 +964,9 @@ function TerminalView:on_text_input(text)
   self.composition = nil
   core.blink_reset()
   self.session:scroll("bottom")
-  if self.encoded_text_input then
-    local encoded = self.encoded_text_input
-    self.encoded_text_input = nil
-    if text == encoded then return true end
+  local encoded = self.encoded_text_queue and table.remove(self.encoded_text_queue, 1)
+  if encoded and text == encoded then
+    return true
   end
   return self.session:write(text) == true
 end
@@ -841,6 +985,10 @@ function TerminalView:paste(text, allow_unsafe)
   if not self.session or self.running == false or not text or text == "" then return false end
   local ok, reason = self.session:paste(text, allow_unsafe == true)
   if ok then return true end
+  if reason == "queue_full" then
+    core.error("The terminal input queue is full. Try the paste again.")
+    return false
+  end
   if reason ~= "unsafe" then return false end
 
   core.nag_view:show(
@@ -862,13 +1010,17 @@ end
 function TerminalView:search(query, reverse)
   if not self.session or not query or query == "" then return false end
   self.search_query = query
+  self.search_state = "searching"
   local found, state = self.session:search(query, reverse == true)
   if state == "pending" then
     self.search_pending = { query = query, reverse = reverse == true }
+    self.search_state = "searching"
+    core.redraw = true
     return true
   end
   self.search_pending = nil
-  if found then self:refresh_snapshot() end
+  self.search_state = found and "found" or "no_match"
+  if found then self:refresh_snapshot() else core.redraw = true end
   return found == true
 end
 
@@ -892,13 +1044,24 @@ local function key_modifiers(event)
   }
 end
 
+local function physical_key_id(key, event)
+  if event and event.scancode ~= nil then return "scan:" .. tostring(event.scancode) end
+  return "key:" .. tostring(key)
+end
+
 function TerminalView:on_key_pressed(key, event)
   if not self.session or self.running == false then return false end
-  self.encoded_text_input = nil
-  if event and event.altgr and (#key == 1 or key == "space") then return false end
+  self.key_owners = self.key_owners or {}
+  self.encoded_text_queue = self.encoded_text_queue or {}
+  local key_id = physical_key_id(key, event)
+  if event and event.altgr and (#key == 1 or key == "space") then
+    self.key_owners[key_id] = "text"
+    return false
+  end
   local function scroll(kind, value)
     if not self.session:scroll(kind, value) then return false end
     self:refresh_snapshot()
+    self.key_owners[key_id] = "anvil"
     return true
   end
   if key == "pageup" and event and event.shift then
@@ -916,16 +1079,25 @@ function TerminalView:on_key_pressed(key, event)
     self.session:scroll("bottom")
   end
   local action = event and event["repeat"] and "repeat" or "press"
-  local encoded = self.session:key(key, key_modifiers(event), action, event) == true
+  local encoded, reason = self.session:key(key, key_modifiers(event), action, event)
+  encoded = encoded == true
+  if reason == "queue_full" then
+    core.log_quiet("Terminal session %d input queue is full", self.session_id)
+  end
+  self.key_owners[key_id] = encoded and "ghostty" or "text"
   if encoded and event and type(event.text) == "string" and event.text ~= "" then
-    self.encoded_text_input = event.text
+    self.encoded_text_queue[#self.encoded_text_queue + 1] = event.text
   end
   return encoded
 end
 
 function TerminalView:on_key_released(key, event)
   if not self.session or self.running == false then return false end
-  if event and event.altgr and (#key == 1 or key == "space") then return false end
+  self.key_owners = self.key_owners or {}
+  local key_id = physical_key_id(key, event)
+  local owner = self.key_owners[key_id]
+  self.key_owners[key_id] = nil
+  if owner ~= "ghostty" then return true end
   return self.session:key(key, key_modifiers(event), "release", event) == true
 end
 
@@ -943,7 +1115,87 @@ function TerminalView:mouse_position(x, y)
   local local_y = y - self.position.y - PADDING
   local col = math.max(0, math.min(self.cols - 1, math.floor(local_x / self.cell_width)))
   local row = math.max(0, math.min(self.rows - 1, math.floor(local_y / self.cell_height)))
-  return col, row, math.max(0, local_x), math.max(0, local_y)
+  local native_x = math.max(0, local_x) * self.native_cell_width / self.cell_width
+  return col, row, native_x, math.max(0, local_y)
+end
+
+local function local_file_from_uri(uri)
+  local authority, path = uri:match("^file://([^/]*)(/.*)$")
+  if not path then return nil end
+  path = path:gsub("%%(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end)
+  if authority ~= "" and authority:lower() ~= "localhost" then
+    path = "\\\\" .. authority .. path:gsub("/", "\\")
+  elseif path:match("^/[A-Za-z]:") then
+    path = path:sub(2)
+  end
+  if path:find("[%z%c]") then return nil end
+  local info = system.get_file_info(path)
+  return info and info.type == "file" and path or nil
+end
+
+function TerminalView:activate_uri(uri)
+  if type(uri) ~= "string" or #uri > 32768 or uri:find("[%z%c]") then return false end
+  local scheme = uri:match("^([%a][%w+.-]*):")
+  scheme = scheme and scheme:lower()
+  if scheme == "http" or scheme == "https" or scheme == "mailto" then
+    return common.open_in_system(uri)
+  elseif scheme == "file" then
+    local path = local_file_from_uri(uri)
+    if not path then return false end
+    return core.open_file(path) ~= nil
+  end
+  return false
+end
+
+function TerminalView:point_of_interest_at(col, row)
+  local uri = self.session:hyperlink(col, row)
+  if uri then return { kind = "uri", uri = uri, col = col, row = row } end
+  if not self.session.row_text then return nil end
+  local data = self.session:row_text(row)
+  if type(data) ~= "table" or type(data.text) ~= "string" then return nil end
+  local function covers(first, last)
+    local columns = data.columns or {}
+    local first_col = columns[first]
+    local last_col = columns[math.max(first, last - 1)]
+    return first_col and last_col and col >= first_col and col <= last_col,
+      first_col, last_col
+  end
+  for _, pattern in ipairs({ "https?://[^%s<>]+", "mailto:[^%s<>]+" }) do
+    for first, value, last in data.text:gmatch("()(" .. pattern .. ")()") do
+      local hit, first_col, last_col = covers(first, last)
+      if hit then
+        return {
+          kind = "uri", uri = value:gsub("[%),%.%;]+$", ""),
+          col = first_col, end_col = last_col, row = row, generation = data.generation,
+        }
+      end
+    end
+  end
+  for _, candidate in ipairs(text_poi_locations.extract_candidates(data.text)) do
+    local point = text_poi_locations.resolve_candidate(
+      candidate, self:get_cwd(), "terminal-location"
+    )
+    if point then
+      local hit, first_col, last_col = covers(candidate.col, candidate.col2)
+      if hit then
+        point.col, point.end_col, point.row = first_col, last_col, row
+        point.generation = data.generation
+        return point
+      end
+    end
+  end
+end
+
+function TerminalView:activate_point_of_interest(point)
+  if not point then return false end
+  if point.uri then return self:activate_uri(point.uri) end
+  if point.path then
+    return core.open_file(point.path, {
+      line = point.target_line or 1,
+      col = point.target_col or 1,
+    }) ~= nil
+  end
+  return false
 end
 
 function TerminalView:refresh_snapshot()
@@ -961,6 +1213,13 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
   end
   core.set_active_view(self)
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
+  if button == "left" and keymap.modkeys.ctrl then
+    local point = self:point_of_interest_at(col, row)
+    if point then
+      self.uri_gesture = { point = point, col = col, row = row, cancelled = false }
+      return true
+    end
+  end
   local tracking = self.snapshot and self.snapshot.mouse_tracking
   if tracking and not keymap.modkeys.shift then
     self.selection_start = nil
@@ -970,9 +1229,6 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
     self.session:clear_selection()
     self.session:mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
   elseif button == "left" then
-    if keymap.modkeys.ctrl then
-      return self.session:open_hyperlink(col, row) == true
-    end
     self.selection_start = true
     self.session:selection_gesture(
       "press", col, row, pixel_x, pixel_y, clicks or 1,
@@ -985,12 +1241,37 @@ end
 
 function TerminalView:on_mouse_moved(x, y, dx, dy)
   if not self.session then return false end
+  if self.uri_gesture then
+    local col, row = self:mouse_position(x, y)
+    local point = self:point_of_interest_at(col, row)
+    local target = self.uri_gesture.point
+    if col ~= self.uri_gesture.col or row ~= self.uri_gesture.row
+        or not point or point.uri ~= target.uri or point.path ~= target.path then
+      self.uri_gesture.cancelled = true
+    end
+    return true
+  end
   local scrollbar = self.v_scrollbar:on_mouse_moved(x, y, dx or 0, dy or 0)
   if scrollbar then
     if scrollbar ~= true then self:scroll_to_percent(scrollbar) end
     return true
   end
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
+  if keymap.modkeys.ctrl then
+    local cell = string.format("%d:%d", col, row)
+    if cell ~= self.hover_cell then
+      self.hover_cell = cell
+      self.hover_point = self:point_of_interest_at(col, row)
+      self.cursor = self.hover_point and "hand" or "ibeam"
+      core.redraw = true
+    end
+    return self.hover_point ~= nil
+  elseif self.hover_point then
+    self.hover_point = nil
+    self.hover_cell = nil
+    self.cursor = "ibeam"
+    core.redraw = true
+  end
   if self.selection_start then
     local _, autoscroll = self.session:selection_gesture(
       "drag", col, row, pixel_x, pixel_y, 1,
@@ -1009,6 +1290,18 @@ end
 
 function TerminalView:on_mouse_released(button, x, y)
   if not self.session then return false end
+  if self.uri_gesture and button == "left" then
+    local gesture = self.uri_gesture
+    self.uri_gesture = nil
+    local col, row = self:mouse_position(x, y)
+    local point = self:point_of_interest_at(col, row)
+    local target = gesture.point
+    if not gesture.cancelled and col == gesture.col and row == gesture.row
+        and point and point.uri == target.uri and point.path == target.path then
+      self:activate_point_of_interest(target)
+    end
+    return true
+  end
   local _, _, pixel_x, pixel_y = self:mouse_position(x, y)
   if self.selection_start and button == "left" then
     local col, row = self:mouse_position(x, y)
@@ -1052,11 +1345,17 @@ function TerminalView:can_close(approve)
 end
 
 function TerminalView:on_close()
-  self.pending_clipboard = nil
+  self.active_clipboard_request = nil
+  self.queued_clipboard_request = nil
   if self.session then
+    local stats = self.session.stats and self.session:stats() or {}
     self.session:close()
     self.session = nil
-    core.log_quiet("Terminal View closed")
+    core.log_quiet(
+      "Terminal session %d closed: read=%d parsed=%d queued=%d rejected=%d",
+      self.session_id, stats.output_bytes_read or 0, stats.output_bytes_parsed or 0,
+      stats.input_bytes_queued or 0, stats.rejected_writes or 0
+    )
   end
   TerminalView.super.on_close(self)
 end
@@ -1075,10 +1374,11 @@ end
 
 function M.open_views()
   local open = {}
-  for _, view in ipairs(views) do
-    if view.session or panes.pane_for_view(view) then open[#open + 1] = view end
+  for _, pane in ipairs(panes.ordered()) do
+    for _, view in ipairs(panes.views(pane)) do
+      if view.terminal_view then open[#open + 1] = view end
+    end
   end
-  views = open
   return open
 end
 
@@ -1092,6 +1392,20 @@ M.from_state = TerminalView.from_state
 TerminalView._module_name = "plugins.terminal"
 
 command.add(nil, {
+  ["terminal:focus_next"] = command.palette(function()
+    local terminals = M.open_views()
+    if #terminals == 0 then return false end
+    local current = 0
+    for index, view in ipairs(terminals) do
+      if view == core.active_view then current = index break end
+    end
+    local view = terminals[current % #terminals + 1]
+    local pane = panes.pane_for_view(view)
+    return pane ~= nil and panes.present(view, { pane = pane, focus = true }) ~= nil
+  end, {
+    keywords = { "terminal", "focus", "next", "session" },
+    opens_view = true,
+  }),
   ["terminal:open"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     local pane = panes.find(context.source_pane or panes.active())
@@ -1167,6 +1481,7 @@ end, {
   end,
   ["terminal:restart"] = command.palette(function(view) return view:restart() end),
   ["terminal:clear"] = command.palette(function(view)
+    if not view.session then return false end
     if not view.session:clear() then return false end
     view:refresh_snapshot()
     return true

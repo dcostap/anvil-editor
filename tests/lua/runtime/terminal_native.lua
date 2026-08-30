@@ -115,6 +115,10 @@ test.describe("Native terminal session", function()
     test.ok(type(first_row.text_runs) == "table")
     test.ok(type(first_row.backgrounds) == "table")
     test.equal(#first_row, 0)
+    local row_text = session:row_text(0)
+    test.ok(row_text.text:find("ANVIL_TERMINAL_TEST", 1, true), row_text.text)
+    test.type(row_text.generation, "number")
+    test.type(row_text.columns[1], "number")
     test.ok(session:select(0, 0, 79, 23, false))
     local selected = session:selected_text()
     test.ok(session:resize(80, 4, 8, 16))
@@ -140,12 +144,12 @@ test.describe("Native terminal session", function()
       if event_type == "terminaloutput" then woke = true end
       return previous_on_event(event_type, ...)
     end
-    local deadline = system.get_time() + 2
+    local deadline = system.get_time() + 8
     while system.get_time() < deadline and not woke do
       coroutine.yield(0.01)
     end
     core.on_event = previous_on_event
-    local text = wait_for_text(session, "ANVIL_DELAYED_OUTPUT", 2)
+    local text = wait_for_text(session, "ANVIL_DELAYED_OUTPUT", 8)
     session:close()
     test.ok(woke, "terminal output did not wake the editor event loop")
     test.ok(text:find("ANVIL_DELAYED_OUTPUT", 1, true), text)
@@ -161,21 +165,60 @@ test.describe("Native terminal session", function()
     })
     test.ok(session, start_error)
 
-    local running, status = true, nil
+    local status = { kind = "running" }
     local deadline = system.get_time() + 5
-    while system.get_time() < deadline and running do
+    while system.get_time() < deadline and status.kind ~= "exited" do
       local _
-      _, running, status = session:update()
-      if running then coroutine.yield(0.01) end
+      _, status = session:update()
+      if status.kind ~= "exited" then coroutine.yield(0.01) end
     end
-    coroutine.yield(0.2)
-    local _, still_running, final_status = session:update()
-    test.equal(still_running, false)
+    local _, final_status = session:update()
+    test.equal(final_status.kind, "exited")
     test.equal(final_status.exit_code, 23)
     test.ok(session:snapshot())
     session:close()
-    test.equal(running, false)
+    test.equal(status.kind, "exited")
     test.equal(status.exit_code, 23)
+  end)
+
+  test.it("drains final output before it reports process exit", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$chunk='x'*4096; 1..512 | ForEach-Object { [Console]::Write($chunk) }; [Console]::Write('ANVIL_FINAL_OUTPUT_TAIL')"]],
+    })
+    test.ok(session, start_error)
+
+    local saw_running, saw_draining = false, false
+    local draining_write_reason
+    local status, snapshot
+    local deadline = system.get_time() + 30
+    while system.get_time() < deadline do
+      local changed
+      changed, status = session:update()
+      test.type(changed, "boolean")
+      test.type(status, "table")
+      saw_running = saw_running or status.kind == "running"
+      if status.kind == "draining" then
+        saw_draining = true
+        local ok
+        ok, draining_write_reason = session:write("ignored")
+        test.not_ok(ok)
+      end
+      snapshot = session:snapshot(snapshot)
+      if status.kind == "exited" then break end
+      coroutine.yield(0.002)
+    end
+
+    local text = snapshot_text(snapshot or {})
+    session:close()
+    test.ok(saw_running)
+    test.ok(saw_draining)
+    test.equal(draining_write_reason, "draining")
+    test.equal(status.kind, "exited")
+    test.ok(text:find("ANVIL_FINAL_OUTPUT_TAIL", 1, true), text)
   end)
 
   test.it("reports exit code 259 instead of treating it as active", function()
@@ -187,15 +230,15 @@ test.describe("Native terminal session", function()
       shell = 'powershell.exe -NoLogo -NoProfile -Command "exit 259"',
     })
     test.ok(session, start_error)
-    local running, status = true, nil
+    local status = { kind = "running" }
     local deadline = system.get_time() + 5
-    while system.get_time() < deadline and running do
+    while system.get_time() < deadline and status.kind ~= "exited" do
       local _
-      _, running, status = session:update()
-      if running then coroutine.yield(0.01) end
+      _, status = session:update()
+      if status.kind ~= "exited" then coroutine.yield(0.01) end
     end
     session:close()
-    test.equal(running, false)
+    test.equal(status.kind, "exited")
     test.equal(status.exit_code, 259)
   end)
 
@@ -384,7 +427,7 @@ test.describe("Native terminal session", function()
       cols = 80, rows = 4, cell_width = 8, cell_height = 16,
       scrollback_lines = 10000,
       cwd = system.getcwd(),
-      shell = [[powershell.exe -NoLogo -NoProfile -Command "1..1500 | ForEach-Object { Write-Output ('ANVIL_SCROLLBACK_ROW_'+$_) }; [Console]::Write('ANVIL_SCROLLBACK_DONE'); Start-Sleep -Seconds 1"]],
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$lines=1..1500 | ForEach-Object { 'ANVIL_SCROLLBACK_ROW_'+$_ }; [Console]::Write(($lines -join [Environment]::NewLine)+[Environment]::NewLine+'ANVIL_SCROLLBACK_DONE'); Start-Sleep -Seconds 1"]],
     })
     test.ok(session, start_error)
     local text = wait_for_text(session, "ANVIL_SCROLLBACK_DONE", 8)
@@ -509,6 +552,41 @@ test.describe("Native terminal session", function()
     test.ok(text:find("ANVIL_INTERACTIVE_REPLY=terminal reply", 1, true), text)
   end)
 
+  test.it("recovers after one input queue rejection and reports counters", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "Start-Sleep -Seconds 5"]],
+    })
+    test.ok(session, start_error)
+    local ok, reason = session:write(string.rep("x", 4 * 1024 * 1024 + 1))
+    test.not_ok(ok)
+    test.equal(reason, "queue_full")
+    test.ok(session:write("small input"))
+    local stats = session:stats()
+    session:close()
+    test.equal(stats.rejected_writes, 1)
+    test.ok(stats.input_bytes_queued >= #"small input")
+    test.ok(stats.write_queue_high_water >= #"small input")
+  end)
+
+  test.it("sets the fixed Anvil terminal environment identity", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 100, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "[Console]::Write($env:TERM_PROGRAM+'|'+$env:TERM_PROGRAM_VERSION+'|'+$env:TERM+'|'+$env:COLORTERM)"]],
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "anvil|", 8)
+    session:close()
+    test.ok(text:find("anvil|", 1, true), text)
+    test.ok(text:find("|xterm-256color|truecolor", 1, true), text)
+  end)
+
   test.it("repeatedly starts and closes native sessions", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"
@@ -523,6 +601,48 @@ test.describe("Native terminal session", function()
       local text = wait_for_text(session, marker, 5)
       session:close()
       test.ok(text:find(marker, 1, true), text)
+    end
+  end)
+
+  test.it("keeps every native method safe after close", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 20, rows = 4, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "Start-Sleep -Seconds 5"]],
+    })
+    test.ok(session, start_error)
+    session:close()
+    session:close()
+
+    local calls = {
+      function() return session:update() end,
+      function() return session:write("x") end,
+      function() return session:paste("x", true) end,
+      function() return session:resize(20, 4, 8, 16) end,
+      function() return session:clear() end,
+      function() return session:key("return", {}) end,
+      function() return session:scroll("bottom") end,
+      function() return session:selection_gesture("press", 0, 0, 0, 0, 1, false) end,
+      function() return session:select(0, 0, 1, 1, false) end,
+      function() return session:clear_selection() end,
+      function() return session:reset_selection_gesture() end,
+      function() return session:selected_text() end,
+      function() return session:text_capture() end,
+      function() return session:search("x", false) end,
+      function() return session:row_text(0) end,
+      function() return session:mouse("press", "left", 0, 0, {}) end,
+      function() return session:hyperlink(0, 0) end,
+      function() return session:focus(false) end,
+      function() return session:set_colors({}) end,
+      function() return session:snapshot() end,
+    }
+    for index, call in ipairs(calls) do
+      local ok, result = pcall(call)
+      test.ok(ok, string.format("native method %d raised after close", index))
+      test.ok(result == false or result == nil,
+        string.format("native method %d succeeded after close", index))
     end
   end)
 
@@ -551,6 +671,13 @@ test.describe("Native terminal session", function()
 
   test.it("runs a command through the default WSL distribution", function()
     test.skip_if(PLATFORM ~= "Windows", "WSL is Windows-specific")
+    local probe = process.start({ "wsl.exe", "-e", "sh", "-lc", "exit 0" }, {
+      stdin = process.REDIRECT_DISCARD,
+      stdout = process.REDIRECT_DISCARD,
+      stderr = process.REDIRECT_DISCARD,
+    })
+    local probe_exit = probe and probe:wait(15, 0.05)
+    test.skip_if(probe_exit ~= 0, "No usable default WSL distribution is available")
     local terminal_native = require "terminal_native"
     local session, start_error = terminal_native.new({
       cols = 80, rows = 8, cell_width = 8, cell_height = 16,

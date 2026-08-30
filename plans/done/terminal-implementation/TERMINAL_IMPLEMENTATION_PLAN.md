@@ -1152,52 +1152,52 @@ The Terminal View reaches the target when all items below are true.
 
 ### Lifecycle
 
-- [ ] Start success and failure both leave clear View state.
-- [ ] Native states use one vocabulary.
-- [ ] Final output precedes exited state.
-- [ ] Close is idempotent.
-- [ ] Native methods remain safe after close.
-- [ ] Restart cannot kill a running session.
-- [ ] Exited output remains readable.
+- [x] Start success and failure both leave clear View state.
+- [x] Native states use one vocabulary.
+- [x] Final output precedes exited state.
+- [x] Close is idempotent.
+- [x] Native methods remain safe after close.
+- [x] Restart cannot kill a running session.
+- [x] Exited output remains readable.
 
 ### Focus and input
 
-- [ ] Focus includes Pane, View, and window focus.
-- [ ] Suspended Terminal Views send focus-out.
-- [ ] Each physical key has one owner.
-- [ ] Key releases match terminal-owned presses.
-- [ ] IME input sends committed text once.
-- [ ] Fractional-scale mouse reports use the correct cell.
+- [x] Focus includes Pane, View, and window focus.
+- [x] Suspended Terminal Views send focus-out.
+- [x] Each physical key has one owner.
+- [x] Key releases match terminal-owned presses.
+- [x] IME input sends committed text once.
+- [x] Fractional-scale mouse reports use the correct cell.
 
 ### Hidden sessions and ownership
 
-- [ ] Hidden sessions keep draining output.
-- [ ] Hidden sessions do not build Lua row snapshots.
-- [ ] Exited hidden sessions do not request repeated redraws.
-- [ ] Closed Terminal Views have no module registry retention.
-- [ ] Terminal Text Capture does not retain its source View.
-- [ ] A command can reach every retained running Terminal View.
+- [x] Hidden sessions keep draining output.
+- [x] Hidden sessions do not build Lua row snapshots.
+- [x] Exited hidden sessions do not request repeated redraws.
+- [x] Closed Terminal Views have no module registry retention.
+- [x] Terminal Text Capture does not retain its source View.
+- [x] A command can reach every retained running Terminal View.
 
 ### Trust and daily behavior
 
-- [ ] Clipboard approval applies to one immutable request.
-- [ ] Titles are safe for one-line UI.
-- [ ] Reported directories require local validation.
-- [ ] OSC 8 activation uses fixed safe schemes.
-- [ ] URI gestures never leak partial PTY mouse events.
-- [ ] File-location Text POIs validate before activation.
-- [ ] Search shows found or no-match feedback.
+- [x] Clipboard approval applies to one immutable request.
+- [x] Titles are safe for one-line UI.
+- [x] Reported directories require local validation.
+- [x] OSC 8 activation uses fixed safe schemes.
+- [x] URI gestures never leak partial PTY mouse events.
+- [x] File-location Text POIs validate before activation.
+- [x] Search shows found or no-match feedback.
 
 ### Resources and diagnostics
 
-- [ ] Output and input queues stay bounded.
-- [ ] Queue rejection recovers.
-- [ ] Idle readers do not poll every two milliseconds.
-- [ ] Scrollback has line and byte limits.
-- [ ] Terminal child environment identifies Anvil and true color.
-- [ ] Logs contain session state and counters.
-- [ ] Logs never contain terminal data or commands.
-- [ ] Focused native, UI, and benchmark targets pass.
+- [x] Output and input queues stay bounded.
+- [x] Queue rejection recovers.
+- [x] Idle readers do not poll every two milliseconds.
+- [x] Scrollback has line and byte limits.
+- [x] Terminal child environment identifies Anvil and true color.
+- [x] Logs contain session state and counters.
+- [x] Logs never contain terminal data or commands.
+- [x] Focused native, UI, and benchmark targets pass.
 
 ## Deferred work
 

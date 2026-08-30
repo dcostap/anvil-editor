@@ -1,4 +1,5 @@
 local command = require "core.command"
+local common = require "core.common"
 local core = require "core"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
@@ -56,6 +57,8 @@ local function fake_native()
       gesture_events = {},
       searches = {},
       closed = false,
+      state = "running",
+      revision = 1,
     }
     function session:update()
       self.update_calls = (self.update_calls or 0) + 1
@@ -65,10 +68,29 @@ local function fake_native()
       self.next_running = nil
       local status = self.next_status
       self.next_status = nil
-      return changed, running == nil and not self.closed or running, status
+      if running == false then
+        self.state = "exited"
+        self.revision = self.revision + 1
+      end
+      if status then
+        self.state = status.kind or self.state
+        self.revision = status.revision or (self.revision + 1)
+        self.status = {
+          kind = self.state,
+          revision = self.revision,
+          exit_code = status.exit_code,
+          error = status.error,
+        }
+      end
+      self.status = self.status or { kind = self.state, revision = self.revision }
+      return changed, self.status
     end
-    function session:snapshot()
-      return {
+    function session:snapshot(previous, include_rows)
+      self.snapshot_calls = (self.snapshot_calls or 0) + 1
+      self.snapshot_include_rows = include_rows
+      self.snapshot_requests = self.snapshot_requests or {}
+      self.snapshot_requests[#self.snapshot_requests + 1] = include_rows
+      local snapshot = previous or {
         rows = {},
         cols = 80,
         row_count = 24,
@@ -77,6 +99,8 @@ local function fake_native()
         cursor = { visible = true, x = 0, y = 0, style = "block" },
         events = {},
       }
+      snapshot.state = self.state
+      return snapshot
     end
     function session:write(text) self.writes[#self.writes + 1] = text; return true end
     function session:clear() self.cleared = true; return true end
@@ -134,7 +158,7 @@ local function fake_native()
       return query == "needle"
     end
     function session:hyperlink() return self.hyperlink_uri end
-    function session:open_hyperlink() return self.hyperlink_uri ~= nil end
+    function session:row_text() return self.row_text_data end
     function session:close() self.closed = true end
     sessions[#sessions + 1] = session
     return session
@@ -179,6 +203,28 @@ test.describe("Terminal View", function()
     test.equal(#context.sessions, 1)
   end)
 
+  test.it("keeps a failed shell start visible in the requested Pane", function(context)
+    context.native.next_error = "The shell executable was not found"
+    local pane = panes.create()
+    local view, err = terminal.open({
+      pane = pane,
+      focus = true,
+      cwd = "C:/missing-shell-test",
+      shell = "missing-shell.exe",
+    })
+
+    test.ok(view, err)
+    test.equal(pane.current_view, view)
+    test.equal(view.state, "failed")
+    test.contains(view:get_name(), "failed")
+    test.contains(view.launch_error, "not found")
+    local calls = draw_calls(function() view:draw() end)
+    local text = {}
+    for _, call in ipairs(calls.text) do text[#text + 1] = tostring(call[2] or "") end
+    test.contains(table.concat(text, " "), "not found")
+    test.ok(command.perform("terminal:restart"))
+  end)
+
   test.it("suspends an Editor and restores the exact terminal session", function(context)
     local pane = panes.create { factory = function() return Editor(Buffer(nil, nil, true)) end }
     pane.current_view.buffer:set_filename("saved.lua", "C:/saved.lua")
@@ -214,7 +260,7 @@ test.describe("Terminal View", function()
     local line, col = capture.buffer:get_selection()
     test.equal(line, 4)
     test.equal(col, 3)
-    test.equal(capture.terminal_source_view, terminal_view)
+    test.equal(capture.terminal_source_view, nil)
     test.equal(capture.scroll.y, capture:get_line_height())
 
     local updates = session.update_calls or 0
@@ -259,7 +305,7 @@ test.describe("Terminal View", function()
     test.ok(fragment.underline)
     test.ok(fragment.strikethrough)
     test.same(capture.terminal_background, { 1, 2, 3, 255 })
-    test.equal(capture.terminal_source_view, terminal_view)
+    test.equal(capture.terminal_source_view, nil)
   end)
 
   test.it("copies a frozen terminal text capture into an independent split", function(context)
@@ -286,10 +332,31 @@ test.describe("Terminal View", function()
     test.not_equal(copy, capture)
     test.not_equal(copy.buffer, capture.buffer)
     test.same(copy.buffer.lines, capture.buffer.lines)
-    test.equal(copy.terminal_source_view, terminal_view)
+    test.equal(copy.terminal_source_view, nil)
     test.same(copy:get_line_render(2).fragments[1].color, { 0xa1, 0xb2, 0xc3, 255 })
     test.equal(panes.history_length(source_pane), 2)
     test.equal(panes.history_length(copy_pane), 1)
+  end)
+
+  test.it("does not retain a closed Terminal View through its text capture", function(context)
+    local source = terminal.TerminalView()
+    context.sessions[1].capture = {
+      text = "frozen output",
+      cursor_line = 1,
+      cursor_col = 1,
+      viewport_line = 1,
+      title = "Frozen Terminal",
+    }
+    local capture = terminal.TerminalTextCaptureView(source, context.sessions[1].capture)
+    local weak = setmetatable({ source }, { __mode = "v" })
+    source:on_close()
+    source = nil
+    collectgarbage("collect")
+    collectgarbage("collect")
+
+    test.equal(weak[1], nil)
+    test.equal(capture.buffer.lines[1]:gsub("\n$", ""), "frozen output")
+    test.equal(capture:get_name(), "Terminal Text — Frozen Terminal")
   end)
 
   test.it("updates live and captured terminal row geometry after a font scale change", function(context)
@@ -328,6 +395,37 @@ test.describe("Terminal View", function()
     test.not_ok(session.closed)
   end)
 
+  test.it("services hidden output without rebuilding rows or repeating state work", function(context)
+    local view = terminal.open()
+    local session = context.sessions[1]
+
+    view:service_session(false)
+    session.snapshot_calls = 0
+    session.snapshot_requests = {}
+    session.next_changed = true
+    view.snapshot.events = { { type = "bell", count = 2 } }
+    view:service_session(false)
+    test.equal(session.snapshot_calls, 1)
+    test.equal(session.snapshot_requests[1], false)
+    test.equal(view.bell_count, 2)
+
+    view:service_session(true)
+    test.equal(session.snapshot_calls, 2)
+    test.equal(session.snapshot_requests[2], true)
+    view:service_session(true)
+    test.equal(session.snapshot_calls, 2)
+
+    session.state = "exited"
+    session.revision = 2
+    session.status = { kind = "exited", revision = 2, exit_code = 0 }
+    view:service_session(false)
+    local after_exit = session.snapshot_calls
+    core.redraw = false
+    view:service_session(false)
+    test.equal(session.snapshot_calls, after_exit)
+    test.not_ok(core.redraw)
+  end)
+
   test.it("allows Pane history to discard an exited Terminal", function(context)
     local view = terminal.open()
     local session = view.session
@@ -352,6 +450,25 @@ test.describe("Terminal View", function()
     test.ok(second_session.closed)
   end)
 
+  test.it("focuses every Pane-owned Terminal View through one command", function()
+    local first = terminal.open({ focus = true })
+    local pane = panes.pane_for_view(first)
+    local second = terminal.open({ pane = pane, focus = true })
+    local other_pane = panes.create()
+    local third = terminal.open({ pane = other_pane, focus = true })
+    local expected = { [first] = true, [second] = true, [third] = true }
+    local seen = {}
+
+    for _ = 1, 6 do
+      test.ok(command.perform("terminal:focus_next"))
+      seen[core.active_view] = true
+      test.equal(panes.pane_for_view(core.active_view).current_view, core.active_view)
+    end
+    for view in pairs(expected) do
+      test.ok(seen[view], "a Pane-owned Terminal View was not reachable")
+    end
+  end)
+
   test.it("restores Workspace launch state as a new shell session", function(context)
     local view = terminal.open { cwd = "C:/workspace", shell = "pwsh.exe" }
     local first_session = view.session
@@ -367,7 +484,7 @@ test.describe("Terminal View", function()
 
   test.it("copy-splits into a new terminal at the current directory", function(context)
     local source = terminal.open { cwd = "C:/initial", shell = "pwsh.exe" }
-    source.snapshot.pwd = "C:/changed"
+    source.snapshot.pwd = system.getcwd()
 
     test.ok(command.perform("pane:copy_view_to_split_right"))
 
@@ -376,8 +493,29 @@ test.describe("Terminal View", function()
     test.not_equal(copy, source)
     test.not_equal(copy.session, source.session)
     test.equal(#context.sessions, 2)
-    test.equal(context.sessions[2].options.cwd, "C:/changed")
+    test.equal(context.sessions[2].options.cwd, system.getcwd())
     test.equal(copy.launch_options.shell, "pwsh.exe")
+  end)
+
+  test.it("uses only validated local terminal directories", function()
+    local previous_info = system.get_file_info
+    system.get_file_info = function(path)
+      if path == "C:/valid" or path == [[\\server\share]] then return { type = "dir" } end
+      return nil
+    end
+    local view = terminal.open({ cwd = "C:/fallback" })
+
+    view.snapshot.pwd = "file:///C:/valid"
+    test.equal(view:get_cwd(), "C:/valid")
+    view.snapshot.pwd = "file://server/share"
+    test.equal(view:get_cwd(), [[\\server\share]])
+    for _, reported in ipairs({
+      "file://bad/C:/missing", "/home/user", "C:/missing", "C:/bad\0path",
+    }) do
+      view.snapshot.pwd = reported
+      test.equal(view:get_cwd(), "C:/fallback")
+    end
+    system.get_file_info = previous_info
   end)
 
   test.it("uses the exact font advance for terminal cells", function()
@@ -415,6 +553,15 @@ test.describe("Terminal View", function()
     test.equal(colors.background, packed_color(style.terminal_background))
     test.equal(colors.cursor_color, packed_color(style.terminal_cursor))
     test.equal(#colors.palette, 16)
+  end)
+
+  test.it("sanitizes terminal titles before showing them in the UI", function()
+    local view = terminal.open()
+    view.snapshot.title = "  build\n\tstatus\0" .. string.rep("x", 1000) .. "  "
+    local title = view:get_name()
+    test.equal(title:find("[%c]"), nil)
+    test.contains(title, "build status")
+    test.ok(#title < 1000)
   end)
 
   test.it("sends text and unhandled keys to the focused terminal", function(context)
@@ -460,6 +607,13 @@ test.describe("Terminal View", function()
     keymap.modkeys.alt = false
 
     test.equal(panes.active(), first)
+    test.equal(#context.sessions[1].keys, 0)
+  end)
+
+  test.it("does not send a key release for a press owned by Anvil", function(context)
+    local view = terminal.open({ focus = true })
+    local event = { ctrl = true, modifiers = 2, scancode = 14 }
+    test.ok(view:on_key_released("k", event))
     test.equal(#context.sessions[1].keys, 0)
   end)
 
@@ -540,7 +694,9 @@ test.describe("Terminal View", function()
 
   test.it("restarts an exited terminal with the same launch options", function(context)
     local view = terminal.open({ cwd = "C:/terminal-test", shell = "cmd.exe" })
-    context.sessions[1].update = function() return false, false, { exit_code = 7 } end
+    context.sessions[1].update = function()
+      return false, { kind = "exited", revision = 2, exit_code = 7 }
+    end
     view:update()
 
     test.equal(view:get_name(), "Terminal (exit 7)")
@@ -553,10 +709,20 @@ test.describe("Terminal View", function()
     test.same({ true }, context.sessions[2].focus_events)
   end)
 
+  test.it("does not restart a running terminal", function(context)
+    local view = terminal.open({ focus = true })
+    local session = context.sessions[1]
+    test.not_ok(view:restart())
+    test.equal(#context.sessions, 1)
+    test.not_ok(session.closed)
+  end)
+
   test.it("keeps the exited session when restart fails", function(context)
     local view = terminal.open()
     local previous = context.sessions[1]
-    previous.update = function() return false, false, { exit_code = 2 } end
+    previous.update = function()
+      return false, { kind = "exited", revision = 2, exit_code = 2 }
+    end
     view:update()
     context.native.next_error = "missing shell"
     local previous_error = core.error
@@ -572,7 +738,7 @@ test.describe("Terminal View", function()
   test.it("shows terminal transport failures once", function(context)
     local view = terminal.open()
     context.sessions[1].update = function()
-      return false, true, { error = "ConPTY input failed" }
+      return false, { kind = "failed", revision = 2, error = "ConPTY input failed" }
     end
     local previous_error = core.error
     local errors = {}
@@ -647,6 +813,15 @@ test.describe("Terminal View", function()
     test.same({ "needle", true }, context.sessions[1].searches[2])
   end)
 
+  test.it("shows found and no-match terminal search states", function()
+    local view = terminal.open()
+    test.not_ok(view:search("missing", false))
+    test.equal(view.search_state, "no_match")
+    test.ok(view:search("needle", false))
+    test.equal(view.search_state, "found")
+    test.equal(view.search_query, "needle")
+  end)
+
   test.it("reports mouse input when the terminal enables mouse tracking", function(context)
     local view = terminal.open()
     view.position.x, view.position.y = 0, 0
@@ -663,6 +838,86 @@ test.describe("Terminal View", function()
     test.ok(session.selection_cleared)
   end)
 
+  test.it("maps fractional mouse geometry to the same native cell", function(context)
+    local view = terminal.open()
+    view.position.x, view.position.y = 0, 0
+    view.cell_width = 7.5
+    view.native_cell_width = 8
+    view.cols = 80
+    view.snapshot.mouse_tracking = true
+    local x = 6 + view.cell_width * 70 + 1
+    local y = 6 + view.cell_height * 2 + 1
+    local expected_col, expected_row = view:mouse_position(x, y)
+    view:on_mouse_pressed("left", x, y)
+    local mouse = context.sessions[1].mouse_events[1]
+    test.equal(math.floor(mouse[3] / view.native_cell_width), expected_col)
+    test.equal(math.floor(mouse[4] / view.cell_height), expected_row)
+  end)
+
+  test.it("activates only a safe URI after one complete mouse gesture", function(context)
+    local previous_open = common.open_in_system
+    local opened = {}
+    common.open_in_system = function(uri) opened[#opened + 1] = uri; return true end
+    local view = terminal.open()
+    local session = context.sessions[1]
+    session.hyperlink_uri = "https://example.test/path"
+    view.snapshot.mouse_tracking = true
+    keymap.modkeys.ctrl = true
+
+    local x, y = 7, 7
+    view:on_mouse_pressed("left", x, y)
+    test.equal(#opened, 0)
+    view:on_mouse_moved(x + view.cell_width * 3, y, view.cell_width * 3, 0)
+    view:on_mouse_released("left", x + view.cell_width * 3, y)
+    test.equal(#opened, 0)
+    test.equal(#session.mouse_events, 0)
+
+    view:on_mouse_pressed("left", x, y)
+    view:on_mouse_released("left", x, y)
+    test.same(opened, { "https://example.test/path" })
+    test.equal(#session.mouse_events, 0)
+
+    session.hyperlink_uri = "javascript:alert(1)"
+    view:on_mouse_pressed("left", x, y)
+    view:on_mouse_released("left", x, y)
+    test.equal(#opened, 1)
+    keymap.modkeys.ctrl = false
+    common.open_in_system = previous_open
+  end)
+
+  test.it("opens a validated file location from one terminal row", function(context)
+    local previous_info = system.get_file_info
+    local previous_open = core.open_file
+    local target = common.normalize_path("C:/valid/file.lua")
+    system.get_file_info = function(path)
+      if common.path_equals(path, target) then return { type = "file" } end
+    end
+    local opened
+    core.open_file = function(path, options)
+      opened = { path = path, options = options }
+      return View()
+    end
+    local view = terminal.open({ cwd = "C:/root" })
+    local text = "C:/valid/file.lua:12:3"
+    local columns = {}
+    for index = 1, #text do columns[index] = index - 1 end
+    context.sessions[1].row_text_data = {
+      text = text, columns = columns, generation = 3,
+    }
+    keymap.modkeys.ctrl = true
+    local x, y = 6 + view.cell_width * 5 + 1, 7
+    view:on_mouse_pressed("left", x, y)
+    view:on_mouse_released("left", x, y)
+    keymap.modkeys.ctrl = false
+
+    core.open_file = previous_open
+    system.get_file_info = previous_info
+    test.ok(opened)
+    test.ok(common.path_equals(opened.path, target))
+    test.equal(opened.options.line, 12)
+    test.equal(opened.options.col, 3)
+  end)
+
   test.it("reports Terminal View focus changes", function(context)
     local view = terminal.open()
     local session = context.sessions[1]
@@ -671,6 +926,42 @@ test.describe("Terminal View", function()
     view:update()
 
     test.same({ true, false }, session.focus_events)
+  end)
+
+  test.it("reports exact View, Pane, and application focus", function(context)
+    local previous_window_has_focus = system.window_has_focus
+    local window_focused = true
+    system.window_has_focus = function() return window_focused end
+
+    local view = terminal.open({ focus = true })
+    local pane = panes.pane_for_view(view)
+    local session = context.sessions[1]
+    view:update()
+
+    panes.place(function() return Editor(Buffer(nil, nil, true)) end, {
+      pane = pane, placement = "current", focus = true,
+    })
+    view:update_suspended()
+
+    panes.back(pane)
+    core.set_active_view(view)
+    view:update()
+
+    local other = panes.split(pane, "right", { factory = function()
+      return Editor(Buffer(nil, nil, true))
+    end, focus = true })
+    core.set_active_view(other.current_view)
+    view:update_suspended()
+    panes.focus(pane)
+    view:update()
+
+    window_focused = false
+    view:update()
+    window_focused = true
+    view:update()
+    system.window_has_focus = previous_window_has_focus
+
+    test.same({ true, false, true, false, true, false, true }, session.focus_events)
   end)
 
   test.it("draws native terminal text runs with their exact columns", function()
@@ -744,7 +1035,31 @@ test.describe("Terminal View", function()
     view:handle_events()
     core.nag_view.show = previous_show
     test.equal(view.bell_count, 1)
-    test.equal(view.pending_clipboard.text, "terminal clipboard")
+    test.equal(view.active_clipboard_request.text, "terminal clipboard")
+  end)
+
+  test.it("binds clipboard approval to one immutable request", function()
+    local view = terminal.open()
+    local previous_show = core.nag_view.show
+    local previous_clipboard = system.get_clipboard()
+    local prompts = {}
+    core.nag_view.show = function(_, title, message, buttons, callback)
+      prompts[#prompts + 1] = { title, message, buttons, callback }
+    end
+
+    view.snapshot.events = { { type = "clipboard", text = "first request" } }
+    view:handle_events()
+    view.snapshot.events = { { type = "clipboard", text = "second request" } }
+    view:handle_events()
+    test.equal(#prompts, 1)
+    prompts[1][4]({ text = "Allow" })
+    test.equal(system.get_clipboard(), "first request")
+    test.equal(#prompts, 2)
+    prompts[2][4]({ text = "Allow" })
+    test.equal(system.get_clipboard(), "second request")
+
+    core.nag_view.show = previous_show
+    system.set_clipboard(previous_clipboard or "")
   end)
 
   test.it("renders real ConPTY output through Terminal View", function(context)

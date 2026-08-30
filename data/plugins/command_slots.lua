@@ -15,6 +15,7 @@ local View = require "core.view"
 local file_context = require "core.file_context"
 local panes = require "core.panes"
 local shell = require "core.shell"
+local text_poi_locations = require "core.text_poi_locations"
 local Tabs = require "core.tabs"
 local view_icons = require "core.view_icons"
 
@@ -54,198 +55,14 @@ local function root_project_path()
   return project and project.path or system.getcwd()
 end
 
-local function is_uri_like_path(path)
-  path = tostring(path or "")
-  if path:match("^%a[%w+.-]*://") then return true end
-  if path:match("^%a[%w+.-]*:") and not path:match("^%a:[/\\]") then return true end
-  return false
-end
-
-local function clean_candidate_path(path)
-  path = tostring(path or ""):match("^%s*(.-)%s*$") or ""
-  path = path:gsub("^[\"']", ""):gsub("[\"']$", "")
-  path = path:gsub("^[%-%>:%s]+", "")
-  path = path:gsub("[%s,;]+$", "")
-  while #path > 1 and path:match("[%.%)]$") do
-    path = path:sub(1, -2)
-  end
-  return path
-end
-
 local function existing_file(path)
   local info = path and system.get_file_info(path)
   return info and info.type ~= "dir"
 end
 
-local function resolve_output_path(path, root)
-  path = clean_candidate_path(path)
-  if path == "" or is_uri_like_path(path) then return nil end
-  local candidate
-  if common.is_absolute_path(path) then
-    candidate = common.normalize_path(path)
-  else
-    candidate = common.normalize_path((root or root_project_path()) .. PATHSEP .. path)
-  end
-  if existing_file(candidate) then return candidate end
-end
-
-local function resolve_output_candidate(candidate, root)
-  local resolved = resolve_output_path(candidate and candidate.source_path, root)
-  if not resolved then return nil end
-  return {
-    line = candidate.line,
-    col = candidate.col,
-    line2 = candidate.line2,
-    col2 = candidate.col2,
-    kind = "command-output-location",
-    label = candidate.label or resolved,
-    path = resolved,
-    target_line = candidate.target_line,
-    target_col = candidate.target_col,
-    text_bounds = true,
-  }
-end
-
-local function add_output_poi(list, seen, root, line_no, col1, col2, path, target_line, target_col, label)
-  path = clean_candidate_path(path)
-  if path == "" or is_uri_like_path(path) then return end
-  target_line = math.max(1, math.floor(tonumber(target_line) or 1))
-  target_col = math.max(1, math.floor(tonumber(target_col) or 1))
-  col1 = math.max(1, math.floor(tonumber(col1) or 1))
-  col2 = math.max(col1 + 1, math.floor(tonumber(col2) or col1 + 1))
-  local key = table.concat({ line_no, col1, col2, path, target_line, target_col }, "\0")
-  if seen[key] then return end
-  seen[key] = true
-  list[#list + 1] = {
-    line = line_no,
-    col = col1,
-    line2 = line_no,
-    col2 = col2,
-    source_path = path,
-    label = label or path,
-    target_line = target_line,
-    target_col = target_col,
-  }
-end
-
-local function candidate_starts_in_uri(line, col1)
-  local prefix = line:sub(1, math.max(0, (col1 or 1) - 1))
-  local token_prefix = prefix:match("([^%s\"']*)$") or ""
-  token_prefix = token_prefix:gsub("^[%(%[%{%<]+", "")
-  return token_prefix:match("%a[%w+.-]*:") ~= nil
-end
-
-local function add_line_matches(pois, seen, root, line, line_no)
-  local function add(col1, col2, path, target_line, target_col, label)
-    if candidate_starts_in_uri(line, col1) then return end
-    return add_output_poi(pois, seen, root, line_no, col1, col2, path, target_line, target_col, label)
-  end
-
-  local init = 1
-  while true do
-    local s, e, path, target_line, target_col = line:find("File%s+\"([^\"]+)\"%,%s+line%s+(%d+)", init)
-    if not s then break end
-    if not line:sub(e + 1):match("^,%s*column") then
-      add(s, e + 1, path, target_line, 1, line:sub(s, e))
-    end
-    init = e + 1
-  end
-
-  init = 1
-  while true do
-    local s, e, path, target_line, target_col = line:find("\"([^\"]+)\"%,%s+line%s+(%d+)%,%s+column%s+(%d+)", init)
-    if not s then break end
-    if line:sub(math.max(1, s - 5), s - 1) ~= "File " then
-      add(s, e + 1, path, target_line, target_col, line:sub(s, e))
-    end
-    init = e + 1
-  end
-
-  init = 1
-  while true do
-    local s, e, path, target_line, target_col = line:find("File%s+\"([^\"]+)\"%,%s+line%s+(%d+)%,%s+column%s+(%d+)", init)
-    if not s then break end
-    add(s, e + 1, path, target_line, target_col, line:sub(s, e))
-    init = e + 1
-  end
-
-  init = 1
-  while true do
-    local s, e, path, target_line, target_col = line:find("%-%-%>%s*([^:%s][^:\r\n]-):(%d+):(%d+)", init)
-    if not s then break end
-    local path_offset = line:find(path, s, true) or s
-    add(path_offset, e + 1, path, target_line, target_col, line:sub(path_offset, e))
-    init = e + 1
-  end
-
-  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+):(%d+)()") do
-    add(s, e, path, target_line, target_col)
-  end
-  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+),(%d+)()") do
-    add(s, e, path, target_line, target_col)
-  end
-  for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+)()") do
-    if not line:sub(e):match("^[:,]%d") then
-      add(s, e, path, target_line, 1)
-    end
-  end
-  for s, path, target_line, target_col, e in line:gmatch("()([^%s:\"'()<>|]+):(%d+):(%d+)()") do
-    add(s, e, path, target_line, target_col)
-  end
-  for s, path, target_line, target_col, e in line:gmatch("()([^%s:\"'()<>|]+):(%d+),(%d+)()") do
-    add(s, e, path, target_line, target_col)
-  end
-  for s, path, target_line, e in line:gmatch("()([^%s:\"'()<>|]+):(%d+)()") do
-    if not line:sub(e):match("^[:,]%d") then
-      add(s, e, path, target_line, 1)
-    end
-  end
-
-  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%,(%d+)%)()") do
-    add(s, e, path, target_line, target_col)
-  end
-  for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%)()") do
-    if line:sub(e, e) ~= "," then
-      add(s, e, path, target_line, 1)
-    end
-  end
-  for s, path, target_line, target_col, e in line:gmatch("()([^%s:\"'<>|]+)%((%d+)%,(%d+)%)()") do
-    add(s, e, path, target_line, target_col)
-  end
-  for s, path, target_line, e in line:gmatch("()([^%s:\"'<>|]+)%((%d+)%)()") do
-    if line:sub(e, e) ~= "," then
-      add(s, e, path, target_line, 1)
-    end
-  end
-end
-
-local function sort_output_points(points)
-  table.sort(points, function(a, b)
-    if a.line ~= b.line then return a.line < b.line end
-    return a.col < b.col
-  end)
-  return points
-end
-
-local function extract_output_location_candidates(text)
-  local candidates, seen = {}, {}
-  local line_no = 1
-  text = tostring(text or "")
-  for line in (text .. "\n"):gmatch("(.-)\n") do
-    line = line:gsub("\r$", "")
-    add_line_matches(candidates, seen, nil, line, line_no)
-    line_no = line_no + 1
-  end
-  return sort_output_points(candidates)
-end
-
+local extract_output_location_candidates = text_poi_locations.extract_candidates
 local function resolve_output_candidates(candidates, root)
-  local points = {}
-  for _, candidate in ipairs(candidates or {}) do
-    local poi = resolve_output_candidate(candidate, root)
-    if poi then points[#points + 1] = poi end
-  end
-  return sort_output_points(points)
+  return text_poi_locations.resolve_candidates(candidates, root, "command-output-location")
 end
 
 local function extract_output_location_pois(text, opts)

@@ -58,6 +58,7 @@ test.describe("Terminal native benchmark", function()
       search_calls = search_calls + 1
       search_state = state
     end
+    local native_stats = session:stats()
     session:close()
     test.ok(text:find("ANVIL_TERMINAL_BENCHMARK_TAIL", 1, true), text)
 
@@ -80,6 +81,7 @@ test.describe("Terminal native benchmark", function()
         max = percentile(snapshots, 1.00),
       },
       no_match_search = { calls = search_calls, max_step_ms = search_max_ms },
+      native = native_stats,
       lua_heap_kib = {
         before = heap_before,
         after = collectgarbage("count"),
@@ -91,5 +93,52 @@ test.describe("Terminal native benchmark", function()
       "terminal search step exceeded the UI responsiveness limit")
     test.ok(report.elapsed_ms < 30000, "terminal output benchmark exceeded 30 seconds")
     print("terminal-native-benchmark " .. common.serialize(report))
+  end)
+
+  test.it("records bounded work across several sessions", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local sessions = {}
+    for index = 1, 10 do
+      local output = index <= 3
+        and string.format("1..1000 | ForEach-Object { [Console]::WriteLine('hidden-%d-'+$_) }", index)
+        or "Start-Sleep -Seconds 2"
+      local session, err = terminal_native.new({
+        cols = 80, rows = 12, cell_width = 8, cell_height = 16,
+        cwd = system.getcwd(),
+        shell = string.format('powershell.exe -NoLogo -NoProfile -Command "%s"', output),
+      })
+      test.ok(session, err)
+      sessions[#sessions + 1] = session
+    end
+    local started = system.get_time()
+    local update_ms, update_calls = 0, 0
+    while system.get_time() - started < 1 do
+      for _, session in ipairs(sessions) do
+        local step = system.get_time()
+        local changed = session:update()
+        update_ms = update_ms + (system.get_time() - step) * 1000
+        update_calls = update_calls + 1
+        if changed then session:snapshot(nil, false) end
+      end
+      coroutine.yield(0.002)
+    end
+    local high_water, rejected = 0, 0
+    for _, session in ipairs(sessions) do
+      local stats = session:stats()
+      high_water = math.max(high_water, stats.read_queue_high_water or 0)
+      rejected = rejected + (stats.rejected_writes or 0)
+      session:close()
+    end
+    local report = {
+      benchmark = "terminal-native-multi-session",
+      sessions = #sessions,
+      update_calls = update_calls,
+      update_ms = update_ms,
+      read_queue_high_water = high_water,
+      rejected_writes = rejected,
+    }
+    test.ok(update_calls > 0)
+    print("terminal-native-multi-session " .. common.serialize(report))
   end)
 end)
