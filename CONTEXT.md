@@ -148,6 +148,10 @@ _Avoid_: Buffer, editor tab, Text View
 An Editor that presents ordinary Buffer source without a specialized presentation mode such as Markdown Live Preview.
 _Avoid_: Standard Editor Text View, normal Editor, plain Editor
 
+**Tabular Data Preview**:
+A read-only View that presents a delimiter-separated Buffer as rows and columns while the Buffer remains the source data.
+_Avoid_: CSV Editor, grid editor, table editor
+
 **Markdown Live Preview**:
 An Editor mode that presents formatted Markdown inline while keeping the underlying Markdown source directly editable.
 _Avoid_: Live Markdown Editor, Markdown Live Editor

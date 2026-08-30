@@ -6,9 +6,9 @@ This document is an implementation plan.
 
 It does not change Anvil behavior.
 
-The working feature name is **Tabular Data Preview**.
+The feature name is **Tabular Data Preview**.
 
-Do not add this term to `CONTEXT.md` until the name is confirmed.
+`CONTEXT.md` defines this term.
 
 ## Decision summary
 
@@ -43,6 +43,9 @@ Include the useful Zed behavior:
 - text sorting by one column
 - value filters on several columns
 - right-click copy for cells and headers
+- cell-range selection
+- keyboard grid navigation
+- selected-range copy as TSV
 - full support for quotes, escaped quotes, and multiline fields
 - same-Pane and side-Pane opening commands
 - Workspace restore
@@ -1012,6 +1015,8 @@ The first version is complete when all items are true:
 - [ ] One column can sort ascending, descending, or not at all.
 - [ ] Exact-value filters work across several columns.
 - [ ] Right-click copies complete cell and header text.
+- [ ] Mouse and keyboard input select cells and cell ranges.
+- [ ] Copy writes the selected range as TSV.
 - [ ] Each data column resizes independently.
 - [ ] Source Buffer edits refresh the Preview.
 - [ ] Stale parse results never publish.
@@ -1027,9 +1032,7 @@ Do not include these functions in the first implementation:
 - inline grid editing
 - row insertion or deletion
 - column insertion or deletion
-- cell-range selection
-- keyboard spreadsheet navigation
-- multi-cell copy formats
+- copy as CSV or Markdown
 - automatic delimiter detection
 - custom delimiter entry
 - numeric or date type inference

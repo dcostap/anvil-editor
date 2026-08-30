@@ -26,6 +26,7 @@ local core_plugins = {
   scale_debug_log = true,
   selection_surround = true,
   smart_indent_rules = true,
+  tabular_data_preview = true,
   theme_editor = true,
   terminal = true,
   untitled_recovery = true,
@@ -190,6 +191,7 @@ require_core_plugin "untitled_tabs"
 reload_core_plugin "scale_debug_log"
 require_core_plugin "selection_surround"
 require_core_plugin "smart_indent_rules"
+require_core_plugin "tabular_data_preview"
 -- require_core_plugin "editor_wallpaper"
 require_core_plugin "centered_editor"
 require_core_plugin "custom_welcome"
