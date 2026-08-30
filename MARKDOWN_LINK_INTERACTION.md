@@ -1,6 +1,6 @@
 # Markdown Link Interaction
 
-Implemented July 10, 2026 as the second Phase 4 slice in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as the second Phase 4 slice in `plans/done/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Generic rendered-fragment input
 

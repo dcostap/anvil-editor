@@ -1,6 +1,6 @@
 # Markdown Live Preview Lifecycle
 
-Implemented July 10, 2026 as the first Phase 2 slice in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as the first Phase 2 slice in `plans/done/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Document metadata contract
 

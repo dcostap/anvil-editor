@@ -865,7 +865,7 @@ SQL results have structured rows, columns, batches, and messages.
 
 ### Existing table View plan
 
-`TABULAR_DATA_PREVIEW_PLAN.md` already defines a simple custom table View.
+`../done/TABULAR_DATA_PREVIEW_PLAN.md` already defines a simple custom table View.
 
 Its useful rendering rules also apply here:
 

@@ -1,6 +1,6 @@
 # Markdown Semantic Model Foundation
 
-Implemented July 10, 2026 as the worker/publication portion of Phase 1 in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as the worker/publication portion of Phase 1 in `plans/done/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Implemented path
 

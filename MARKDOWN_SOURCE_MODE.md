@@ -1,6 +1,6 @@
 # Markdown Source Mode
 
-Implemented July 10, 2026 as the third Phase 3 slice in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as the third Phase 3 slice in `plans/done/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## View-local override
 

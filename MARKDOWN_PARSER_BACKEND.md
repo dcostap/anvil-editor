@@ -1,6 +1,6 @@
 # Markdown Parser Backend Selection
 
-Decision recorded July 10, 2026 for Phase 1 of `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Decision recorded July 10, 2026 for Phase 1 of `plans/done/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Selection
 

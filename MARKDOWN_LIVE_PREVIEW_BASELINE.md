@@ -2,7 +2,7 @@
 
 Captured July 10, 2026 before the Markdown Live Preview rebuild.
 
-This is a temporary comparison record for Phase 0 of `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`. The characterization tests named below intentionally describe prototype limitations. Later milestones must replace those assertions with tests for the required behavior rather than preserve the limitations.
+This is a temporary comparison record for Phase 0 of `plans/done/MARKDOWN_LIVE_EDITOR_PLAN.md`. The characterization tests named below intentionally describe prototype limitations. Later milestones must replace those assertions with tests for the required behavior rather than preserve the limitations.
 
 ## Product state
 

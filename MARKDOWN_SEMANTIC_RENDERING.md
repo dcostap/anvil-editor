@@ -1,6 +1,6 @@
 # Semantic Markdown Rendering Bridge
 
-Implemented July 10, 2026 as the sixth Phase 2 slice in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as the sixth Phase 2 slice in `plans/done/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Shared model ownership
 

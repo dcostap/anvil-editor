@@ -4,7 +4,7 @@
 
 This is the authoritative product and implementation plan for Anvil's Git and Diff workflows.
 
-`PANE_VIEW_BUFFER_REDESIGN_PLAN.md` controls Pane placement, View lifecycle, and Buffer or Text View names. Interpret this plan through that model.
+`done/PANE_VIEW_BUFFER_REDESIGN_PLAN.md` controls Pane placement, View lifecycle, and Buffer or Text View names. Interpret this plan through that model.
 
 It replaces the obsolete `GIT_VIEW_PLAN.md` and `DIFF_VIEWER_CORE_PLAN.md`. Those plans were useful during the first implementation, but they describe a superseded secondary-window/nested-tab design and an already-committed Diff View refactor as unfinished work.
 

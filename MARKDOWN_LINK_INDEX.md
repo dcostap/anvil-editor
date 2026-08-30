@@ -1,6 +1,6 @@
 # Markdown Link Index and Status Presentation
 
-Implemented July 10, 2026 as the first Phase 4 slice in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as the first Phase 4 slice in `plans/done/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Cooperative cold-start index
 

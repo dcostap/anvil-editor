@@ -1,6 +1,6 @@
 # Markdown Link Completion and Serialization
 
-Implemented July 10, 2026 as a Phase 4 Markdown Live Preview slice in `plans/MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026 as a Phase 4 Markdown Live Preview slice in `plans/done/MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 ## Completion states
 
