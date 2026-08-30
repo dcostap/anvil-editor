@@ -61,6 +61,17 @@ test.describe("system", function()
     test.not_nil(nested_info)
     test.equal(nested_info.type, "dir")
 
+    local file_entries, file_entries_err = system.list_dir_info(
+      nested, 10, nil, nil, true
+    )
+    test.not_nil(file_entries, file_entries_err)
+    test.equal(#file_entries, 1)
+    test.equal(file_entries[1].name, "sample.txt")
+    test.equal(file_entries[1].type, "file")
+    test.equal(file_entries[1].size, 5)
+    test.type(file_entries[1].modified, "number")
+    test.type(file_entries[1].symlink, "boolean")
+
     local limited_entries, limit_err = system.list_dir_info(absolute, 1)
     test.not_nil(limited_entries, limit_err)
     test.equal(#limited_entries, 1)

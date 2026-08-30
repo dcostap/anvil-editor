@@ -1062,15 +1062,47 @@ static int f_list_dir(lua_State *L) {
 
 
 static void push_list_dir_info_entry(
-  lua_State *L, int index, const char *name, const char *type
+  lua_State *L, int index, const char *name, const char *type,
+  bool has_metadata, lua_Integer size, double modified, bool symlink
 ) {
   lua_newtable(L);
   lua_pushstring(L, name);
   lua_setfield(L, -2, "name");
   lua_pushstring(L, type);
   lua_setfield(L, -2, "type");
+  if (has_metadata) {
+    lua_pushinteger(L, size);
+    lua_setfield(L, -2, "size");
+    lua_pushnumber(L, modified);
+    lua_setfield(L, -2, "modified");
+    lua_pushboolean(L, symlink);
+    lua_setfield(L, -2, "symlink");
+  }
   lua_rawseti(L, -2, index);
 }
+
+#ifdef _WIN32
+static double win32_filetime_seconds(FILETIME filetime) {
+  ULARGE_INTEGER value = {0};
+  value.HighPart = filetime.dwHighDateTime;
+  value.LowPart = filetime.dwLowDateTime;
+  return (double)((value.QuadPart / 10000 - 11644473600000LL) / 1000.0);
+}
+#else
+static double stat_modified_seconds(const struct stat *info) {
+  #if _BSD_SOURCE || _SVID_SOURCE || _XOPEN_SOURCE > 700 || _POSIX_C_SOURCE >= 200809L
+    return (double)info->st_mtim.tv_sec + (info->st_mtim.tv_nsec / 1000000000.0);
+  #elif __APPLE__
+    #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+      return (double)info->st_mtimespec.tv_sec + (info->st_mtimespec.tv_nsec / 1000000000.0);
+    #else
+      return (double)info->st_mtime + (info->st_atimensec / 1000000000.0);
+    #endif
+  #else
+    return info->st_mtime;
+  #endif
+}
+#endif
 
 static bool list_dir_info_type_matches(const char *filter, const char *type) {
   return !filter || strcmp(filter, type) == 0;
@@ -1088,6 +1120,9 @@ static int f_list_dir_info(lua_State *L) {
     ? luaL_checkstring(L, 3) : NULL;
   const char *name_prefix = lua_gettop(L) >= 4 && !lua_isnil(L, 4)
     ? luaL_checkstring(L, 4) : NULL;
+  /* POSIX directory entries do not include size and modified time. Keep the
+     extra stat work optional for callers that only need names and types. */
+  bool include_metadata = lua_gettop(L) >= 5 && lua_toboolean(L, 5);
   if (filter && strcmp(filter, "file") != 0 && strcmp(filter, "dir") != 0
       && strcmp(filter, "other") != 0) {
     return luaL_error(L, "invalid directory entry type: %s", filter);
@@ -1145,7 +1180,14 @@ static int f_list_dir_info(lua_State *L) {
       ? "dir" : "file";
     if (list_dir_info_type_matches(filter, type)
         && list_dir_info_name_matches(name_prefix, name)) {
-      push_list_dir_info_entry(L, ++count, name, type);
+      ULARGE_INTEGER size = {0};
+      size.HighPart = data.nFileSizeHigh;
+      size.LowPart = data.nFileSizeLow;
+      push_list_dir_info_entry(
+        L, ++count, name, type, include_metadata, (lua_Integer)size.QuadPart,
+        win32_filetime_seconds(data.ftLastWriteTime),
+        (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+      );
     }
     SDL_free(name);
   } while (count < limit && FindNextFileW(handle, &data));
@@ -1167,28 +1209,44 @@ static int f_list_dir_info(lua_State *L) {
       continue;
     }
     const char *type = "other";
+    bool need_stat = include_metadata;
 #ifdef DT_DIR
     if (entry->d_type == DT_DIR) type = "dir";
     else if (entry->d_type == DT_REG) type = "file";
-    else if (entry->d_type == DT_UNKNOWN)
+    else if (entry->d_type == DT_UNKNOWN) need_stat = true;
+#else
+    need_stat = true;
 #endif
-    {
-      char *full_path = NULL;
+    char *full_path = NULL;
+    struct stat info;
+    struct stat link_info;
+    bool has_metadata = false;
+    bool symlink = false;
+    if (need_stat) {
       SDL_asprintf(
         &full_path, "%s%s%s", path,
         path[0] && path[strlen(path) - 1] == '/' ? "" : "/", entry->d_name
       );
-      struct stat info;
-      if (full_path && stat(full_path, &info) == 0) {
+      has_metadata = full_path && stat(full_path, &info) == 0;
+      if (has_metadata) {
         type = S_ISDIR(info.st_mode) ? "dir"
           : S_ISREG(info.st_mode) ? "file" : "other";
       }
-      SDL_free(full_path);
+      if (include_metadata) {
+        symlink = full_path && lstat(full_path, &link_info) == 0
+          && S_ISLNK(link_info.st_mode);
+      }
     }
     if (list_dir_info_type_matches(filter, type)
         && list_dir_info_name_matches(name_prefix, entry->d_name)) {
-      push_list_dir_info_entry(L, ++count, entry->d_name, type);
+      push_list_dir_info_entry(
+        L, ++count, entry->d_name, type, include_metadata && has_metadata,
+        has_metadata ? (lua_Integer)info.st_size : 0,
+        has_metadata ? stat_modified_seconds(&info) : 0,
+        symlink
+      );
     }
+    SDL_free(full_path);
   }
   closedir(dir);
 #endif
@@ -1238,14 +1296,10 @@ static int f_get_file_info(lua_State *L) {
     lua_pushnil(L); push_win32_error(L, GetLastError());
     return 2;
   }
-  ULARGE_INTEGER large_int = {0};
-  #define TICKS_PER_MILISECOND 10000
-  #define EPOCH_DIFFERENCE 11644473600000LL
-  // https://stackoverflow.com/questions/6161776/convert-windows-filetime-to-second-in-unix-linux
-  large_int.HighPart = data.ftLastWriteTime.dwHighDateTime; large_int.LowPart = data.ftLastWriteTime.dwLowDateTime;
-  lua_pushnumber(L, (double)((large_int.QuadPart / TICKS_PER_MILISECOND - EPOCH_DIFFERENCE)/1000.0));
+  lua_pushnumber(L, win32_filetime_seconds(data.ftLastWriteTime));
   lua_setfield(L, -2, "modified");
 
+  ULARGE_INTEGER large_int = {0};
   large_int.HighPart = data.nFileSizeHigh; large_int.LowPart = data.nFileSizeLow;
   lua_pushinteger(L, large_int.QuadPart);
   lua_setfield(L, -2, "size");
@@ -1302,19 +1356,7 @@ static int f_get_file_info(lua_State *L) {
   }
   lua_setfield(L, -2, "type");
 
-  double mtime;
-  #if _BSD_SOURCE || _SVID_SOURCE || _XOPEN_SOURCE > 700 || _POSIX_C_SOURCE >= 200809L
-    mtime = (double)s.st_mtim.tv_sec + (s.st_mtim.tv_nsec / 1000000000.0);
-  #elif __APPLE__
-    #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-      mtime = (double)s.st_mtimespec.tv_sec + (s.st_mtimespec.tv_nsec / 1000000000.0);
-    #else
-      mtime = (double)s.st_mtime + (s.st_atimensec / 1000000000.0);
-    #endif
-  #else
-    mtime = s.st_mtime;
-  #endif
-  lua_pushnumber(L, mtime);
+  lua_pushnumber(L, stat_modified_seconds(&s));
   lua_setfield(L, -2, "modified");
 
   lua_pushboolean(L, is_symlink);
