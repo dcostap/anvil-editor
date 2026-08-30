@@ -92,6 +92,40 @@ test.describe("plugins.git.model", function()
     test.equal(model:selected_commit().subject, "Initial")
   end)
 
+  test.it("loads the repository commit total without scanning working-tree status", function()
+    local backend = fake_backend("", log_output())
+    local status_calls = 0
+    local run_git = backend.run_git
+    backend.run_git = function(repo, args, opts, callback)
+      if args[1] == "status" then status_calls = status_calls + 1 end
+      return run_git(repo, args, opts, callback)
+    end
+    backend.commit_count = function(repo, opts, callback)
+      callback(1234, nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+
+    model:refresh_log()
+
+    test.equal(model:log_tab().total_commits, 1234)
+    test.equal(status_calls, 0)
+  end)
+
+  test.it("keeps a valid Git Log when commit counting fails", function()
+    local backend = fake_backend("", log_output())
+    backend.commit_count = function(repo, opts, callback)
+      callback(nil, { kind = "output_too_large", message = "count failed" })
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+
+    model:refresh_log()
+
+    test.equal(model:log_tab().error, nil)
+    test.equal(model:log_tab().commits[1].hash, "abc123")
+  end)
+
   test.test("refresh loads changed files for initially selected log commit details", function()
     local backend = fake_backend("", log_output())
     local changed_file_calls = 0
@@ -136,11 +170,9 @@ test.describe("plugins.git.model", function()
     local model = Model.new({ path = "C:/repo" }, { backend = backend })
     model:refresh_log()
     model:refresh_log()
-    test.equal(cancelled, 2)
-    callbacks[1].callback({ code = 0, stdout = " M stale.lua\0" }, nil)
+    test.equal(cancelled, 1)
+    callbacks[1].callback({ code = 0, stdout = "" }, nil)
     callbacks[2].callback({ code = 0, stdout = log_output() }, nil)
-    callbacks[3].callback({ code = 0, stdout = "" }, nil)
-    callbacks[4].callback({ code = 0, stdout = log_output() }, nil)
 
     local commits = model:log_tab().commits
     test.equal(#commits, 1)
@@ -213,6 +245,70 @@ test.describe("plugins.git.model", function()
     callbacks[2](real_backend.parse_log_page(log_output(), { limit = 500 }), nil)
     test.equal(tab.loading, false)
     test.equal(tab.commits[1].hash, "abc123")
+  end)
+
+  test.it("ignores a File History result after its View is disposed", function()
+    local history_callback
+    local backend = fake_backend("", log_output())
+    backend.file_history = function(repo, relpath, opts, callback)
+      history_callback = callback
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local presented = 0
+    local tab = model:open_file_history("src/app.lua", function() presented = presented + 1 end)
+
+    model:dispose_tab(tab)
+    history_callback(real_backend.parse_log_page(log_output(), { limit = 500 }), nil)
+
+    test.equal(presented, 0)
+    test.equal(#tab.commits, 0)
+  end)
+
+  test.it("ignores cancelled File History preview callbacks after refresh invalidation", function()
+    local callbacks = {}
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      callbacks[#callbacks + 1] = callback
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model.repo = { root = "C:/repo" }
+    local tab = {
+      id = "history-preview-race",
+      kind = "file_history",
+      relpath = "src/app.lua",
+      commits = { { hash = "abc123", parents = { "parent" } } },
+      selected_commit = 1,
+    }
+    model.tabs[#model.tabs + 1] = tab
+    model:load_history_preview(tab)
+
+    model:invalidate_history_loads()
+    for _, callback in ipairs(callbacks) do
+      callback(nil, { kind = "cancelled", message = "cancelled" })
+    end
+
+    test.equal(tab.preview_error, nil)
+  end)
+
+  test.it("restarts an interrupted Commit Diff load after Log refresh", function()
+    local file_callbacks = {}
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      file_callbacks[#file_callbacks + 1] = callback
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_selected_commit_diff()
+    test.equal(#file_callbacks, 2)
+
+    model:refresh_log()
+
+    test.equal(tab.loading_file, true)
+    test.equal(#file_callbacks, 4)
   end)
 
   test.test("serializes and restores lightweight tab state", function()
@@ -507,6 +603,21 @@ test.describe("plugins.git.model", function()
     test.equal(tab.commits[1].hash, "def456")
   end)
 
+  test.it("reports an existing File History View while its preview loads", function()
+    local model = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()) })
+    model:refresh_log()
+    local tab = model:open_file_history("src/app.lua")
+    tab.preview_loading = true
+    local ready
+
+    local again = model:open_file_history("src/app.lua", function(_, _, candidate)
+      ready = candidate
+    end)
+
+    test.equal(again, tab)
+    test.equal(ready, tab)
+  end)
+
   test.it("loads both historical paths across a File History rename", function()
     local requested = {}
     local backend = fake_backend("", log_output())
@@ -557,6 +668,30 @@ test.describe("plugins.git.model", function()
     end
     test.equal(local_rows, 1)
     model:dispose_tab(tab)
+    buffer:on_close()
+  end)
+
+  test.it("ignores a Local Changes Revision result after View disposal", function()
+    local head_callback
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      if rev == "HEAD" then head_callback = callback else callback("", nil) end
+      return { cancel = function() end }
+    end
+    local path = "C:/repo/src/disposed.lua"
+    local buffer = Buffer("src/disposed.lua", path, true)
+    buffer:insert(1, 1, "edited")
+    core.buffer_registry:register(buffer, path)
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/disposed.lua")
+
+    model:dispose_tab(tab)
+    head_callback("committed\n", nil)
+
+    for _, commit in ipairs(tab.commits) do
+      test.not_equal(commit.kind, "local_changes")
+    end
     buffer:on_close()
   end)
 
@@ -856,7 +991,7 @@ test.describe("plugins.git.model", function()
       if args[1] == "status" then
         status_args = args
         status_calls = status_calls + 1
-        local stdout = status_calls == 1 and "" or table.concat({ "?? new.lua", "" }, "\0")
+        local stdout = table.concat({ "?? new.lua", "" }, "\0")
         callback({ code = 0, stdout = stdout }, nil)
       else
         callback({ code = 0, stdout = log_output() }, nil)
@@ -866,13 +1001,14 @@ test.describe("plugins.git.model", function()
     local model = Model.new({ path = "C:/repo" }, { backend = backend })
     model:refresh_log()
     local tab = model:open_working_tree_diff()
+    test.equal(status_calls, 1)
     test.equal(#tab.changed_files, 1)
     test.ok(real_backend._contains_arg(status_args, "--untracked-files=all"), "diff-tab status should expand untracked directories")
     test.equal(tab.changed_files[1].kind, "untracked")
     test.equal(tab.changed_files[1].path, "new.lua")
   end)
 
-  test.test("refresh invalidation clears stale content from in-flight commit diff loads", function()
+  test.test("refresh invalidation replaces stale Commit Diff content", function()
     local model = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()) })
     model:refresh_log()
     local tab = model:open_selected_commit_diff()
@@ -882,8 +1018,8 @@ test.describe("plugins.git.model", function()
     tab.loading_file = true
     model:refresh_log()
     test.equal(tab.loading_file, false)
-    test.equal(tab.left_text, nil)
-    test.equal(tab.right_text, nil)
+    test.equal(tab.left_text, real_backend.EMPTY_TREE .. ":src/app.lua")
+    test.equal(tab.right_text, "abc123:src/app.lua")
   end)
 
   test.test("refresh callback runs once while active working-tree diff reloads", function()

@@ -126,6 +126,63 @@ test.describe("Git View command", function()
     test.equal(panes.active().current_view, log_view)
   end)
 
+  test.it("reuses the retained Git Log Navigation History entry", function(context)
+    local _, log_view = open_fake_git_view(context.project)
+    local pane = panes.pane_for_view(log_view)
+    panes.present(View(), { pane = pane })
+    local before = panes.history_length(pane)
+    core.projects = { context.project }
+
+    command.perform("git:open_log")
+
+    test.equal(pane.current_view, log_view)
+    test.equal(panes.history_length(pane), before)
+  end)
+
+  test.it("loads a Commit Diff View created without focus", function(context)
+    local session, log_view = open_fake_git_view(context.project)
+    local tab = {
+      id = "restored-diff-load",
+      kind = "commit_diff",
+      title = "Restored Diff",
+      closable = true,
+      left = "parent",
+      right = "commit",
+      changed_files = {},
+      selected_file = 1,
+    }
+    log_view.model.tabs[#log_view.model.tabs + 1] = tab
+    local calls = 0
+    local old_load = log_view.model.load_view
+    log_view.model.load_view = function(model, candidate, callback)
+      calls = calls + 1
+      return old_load(model, candidate, callback)
+    end
+
+    git_view.ensure_tab_view(session, tab, false)
+
+    test.equal(calls, 1)
+  end)
+
+  test.it("uses a nested repository session for the current-file Diff", function(context)
+    local parent_session, parent_log = open_fake_git_view(context.project)
+    local target = View()
+    target.get_path_target = function() return { path = "C:/repo/vendor/src/app.lua" } end
+    core.active_view = target
+    core.projects = { context.project }
+    local old_lookup = real_backend.repo_for_path_async
+    real_backend.repo_for_path_async = function(path, callback)
+      callback({ root = "C:/repo/vendor", relpath = "src/app.lua" }, nil)
+    end
+
+    command.perform("git:open_current_file_diff")
+    real_backend.repo_for_path_async = old_lookup
+
+    test.not_nil(panes.git_sessions["C:/repo/vendor"])
+    test.equal(parent_session.git_model.repo.root, "C:/repo")
+    test.equal(parent_log.model.repo.root, "C:/repo")
+  end)
+
   test.test("opening a Git Pane Tab focuses the visible list TextView", function(context)
     local session, view = open_fake_git_view(context.project)
     test.equal(core.active_view.git_owner_view, view)
@@ -166,6 +223,78 @@ test.describe("Git View command", function()
     view:update_pane_buffers()
 
     test.ok(view:pane_view("log-list").buffer:get_utf8_line(1):find("Existing commit", 1, true))
+  end)
+
+  test.it("shows the repository commit total instead of the loaded page size", function(context)
+    local _, view = open_fake_git_view(context.project)
+    local tab = view.model:log_tab()
+    tab.commits = {}
+    for index = 1, 500 do tab.commits[index] = { hash = tostring(index) } end
+    tab.has_more = true
+    tab.total_commits = 1234
+
+    test.equal(view:log_commit_count_text(tab), "1234 commits")
+  end)
+
+  test.it("loads the next Log page when scrolling near the loaded end", function(context)
+    local _, view = open_fake_git_view(context.project)
+    local tab = view.model:log_tab()
+    tab.commits = {}
+    for index = 1, 500 do
+      tab.commits[index] = { hash = tostring(index), short_hash = tostring(index), subject = "Commit" }
+    end
+    tab.has_more = true
+    tab.next_offset = 500
+    local list = view:pane_view("log-list")
+    view:update_pane_buffers()
+    list.size.y = 200
+    list.scroll.y = 500 * view:row_height()
+    list.scroll.to.y = list.scroll.y
+    local calls = 0
+    view.model.load_more_log = function()
+      calls = calls + 1
+      tab.loading_more = true
+      return true
+    end
+
+    view:update()
+
+    test.equal(calls, 1)
+  end)
+
+  test.it("loads the next File History page near its loaded end", function(context)
+    local session, log_view = open_fake_git_view(context.project)
+    local tab = {
+      id = "history-auto-page",
+      kind = "file_history",
+      title = "History: src/app.lua",
+      closable = true,
+      relpath = "src/app.lua",
+      commits = {},
+      selected_commit = 1,
+      has_more = true,
+      next_offset = 100,
+    }
+    for index = 1, 100 do
+      tab.commits[index] = { hash = tostring(index), short_hash = tostring(index), subject = "Revision" }
+    end
+    log_view.model.tabs[#log_view.model.tabs + 1] = tab
+    local history_view = git_view.ensure_tab_view(session, tab, true)
+    history_view:update_pane_buffers()
+    local list = history_view:pane_view("history-list")
+    list.size.y = 200
+    list.scroll.y = 100 * history_view:row_height()
+    list.scroll.to.y = list.scroll.y
+    local calls = 0
+    log_view.model.load_file_history = function()
+      calls = calls + 1
+      tab.loading = true
+      return true
+    end
+
+    history_view:update()
+
+    test.equal(calls, 1)
   end)
 
   test.it("keeps File History refreshes invisible when commits are already visible", function(context)
@@ -242,6 +371,38 @@ test.describe("Git View command", function()
     history_view:clamp_history_scroll(tab)
     test.ok(tab.scroll < 999999)
     test.equal(session.hidden, false)
+  end)
+
+  test.it("persists File History Text View scroll state", function(context)
+    local session, log_view = open_fake_git_view(context.project)
+    local tab = {
+      id = "history-scroll-state",
+      kind = "file_history",
+      title = "History: src/app.lua",
+      closable = true,
+      relpath = "src/app.lua",
+      commits = {},
+      selected_commit = 1,
+    }
+    for index = 1, 100 do
+      tab.commits[index] = { hash = tostring(index), short_hash = tostring(index), subject = "Revision" }
+    end
+    log_view.model.tabs[#log_view.model.tabs + 1] = tab
+    local history_view = git_view.ensure_tab_view(session, tab, true)
+    history_view:update_pane_buffers()
+    local list = history_view:pane_view("history-list")
+    list.size.y = 100
+    core.active_view = list
+
+    list.scroll.y = 250
+    list.scroll.to.y = 250
+    history_view:update()
+
+    local saved
+    for _, item in ipairs(log_view.model:get_state().tabs) do
+      if item.id == tab.id then saved = item end
+    end
+    test.ok(saved.scroll > 0)
   end)
 
   test.it("refreshes the current Git View when application focus returns", function(context)
@@ -1473,5 +1634,16 @@ test.describe("Git View command", function()
     test.not_nil(command.map["git:activate_selected_row"])
     test.not_nil(command.map["git:focus_diff_pane"])
     test.not_nil(command.map["git:focus_list_pane"])
+    for _, name in ipairs {
+      "git:open_log",
+      "git:open_selected_commit_diff",
+      "git:open_working_tree_diff",
+      "git:show_history",
+      "git:show_selection_history",
+      "git:open_current_file_diff",
+      "git:open_selected_historical_buffer",
+    } do
+      test.ok(command.get_metadata(name).opens_view, name)
+    end
   end)
 end)

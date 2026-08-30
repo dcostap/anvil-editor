@@ -25,6 +25,16 @@ local function current_project()
   return core.projects and core.projects[1] or core.root_project and core.root_project()
 end
 
+local function project_for_repo(repo)
+  local project = current_project()
+  if not project or not project.path
+      or (not common.path_equals(project.path, repo.root)
+        and not common.path_belongs_to(project.path, repo.root)) then
+    return { path = repo.root }
+  end
+  return project
+end
+
 local function project_key(project)
   if type(project) == "table" then return project.path or tostring(project) end
   return tostring(project or "")
@@ -83,7 +93,7 @@ local function make_git_session(project, opts)
     local view = self.git_view
     if view then
       local pane = panes.pane_for_view(view)
-      if pane then panes.present(view, { pane = pane, focus = true }) end
+      if pane then panes.present(view, { pane = pane, focus = true, reuse = true }) end
       local focus = view.get_focus_view and (view:get_focus_view() or view) or view
       core.set_active_view(focus)
       return view
@@ -145,7 +155,7 @@ local function activate_git_tab_view(session, view)
   if not session or not view then return end
   local pane = panes.pane_for_view(view) or pane_for_session(session)
   if panes.pane_for_view(view) then
-    panes.present(view, { pane = pane, focus = true })
+    panes.present(view, { pane = pane, focus = true, reuse = true })
   else
     panes.place(function() return view end, {
       pane = pane,
@@ -174,6 +184,7 @@ function git_view.ensure_tab_view(session, tab, focus, target_pane)
   if not session or not tab then return nil end
   session.git_tab_views = session.git_tab_views or {}
   local view = session.git_tab_views[tab.id]
+  local created = false
   if not view then
     view = GitView(session.project, {
       model = session.git_model,
@@ -186,6 +197,7 @@ function git_view.ensure_tab_view(session, tab, focus, target_pane)
     })
     view.git_session = session
     view.git_model_tab = tab
+    created = true
     function view:on_model_tab_open(opened_tab)
       git_view.ensure_tab_view(session, opened_tab, true)
     end
@@ -195,6 +207,7 @@ function git_view.ensure_tab_view(session, tab, focus, target_pane)
     end
   end
   view.git_model_tab = tab
+  if created then session.git_model:load_view(tab, function() core.redraw = true end) end
   if view and not panes.pane_for_view(view) then
     if target_pane then
       panes.present(view, { pane = target_pane, focus = false })
@@ -408,7 +421,7 @@ command.add(nil, {
       if not tab and err then core.log_quiet("Git View: open selected commit diff skipped: %s", err.message or err.kind) end
     end
     when_model_ready(view, open_diff)
-  end),
+  end, { opens_view = true }),
 
   ["git:open_working_tree_diff"] = command.palette(function()
     local session, view = active_or_open_view()
@@ -417,7 +430,7 @@ command.add(nil, {
       if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
       if not tab and err then core.log_quiet("Git View: open working tree diff skipped: %s", err.message or err.kind) end
     end)
-  end),
+  end, { opens_view = true }),
 
   ["git:show_history"] = command.palette(function()
     local filename = active_file_path()
@@ -431,11 +444,7 @@ command.add(nil, {
         core.log_quiet("Git View: file history repo lookup failed: %s", err and (err.message or err.kind) or "unknown")
         return
       end
-      local project = current_project()
-      if not project or not project.path
-          or (not common.path_equals(project.path, repo.root) and not common.path_belongs_to(project.path, repo.root)) then
-        project = { path = repo.root }
-      end
+      local project = project_for_repo(repo)
       local session, view = git_view.open_log(project, { focus = false })
       when_model_ready(view, function(v)
         if v.model.repo and not common.path_equals(repo.root, v.model.repo.root) then
@@ -455,7 +464,7 @@ command.add(nil, {
         core.redraw = true
       end)
     end)
-  end),
+  end, { opens_view = true }),
 
   ["git:show_selection_history"] = command.palette(function()
     local filename, start_line, end_line = active_selection_line_range()
@@ -469,11 +478,7 @@ command.add(nil, {
         core.log_quiet("Git View: selection history repo lookup failed: %s", err and (err.message or err.kind) or "unknown")
         return
       end
-      local project = current_project()
-      if not project or not project.path
-          or (not common.path_equals(project.path, repo.root) and not common.path_belongs_to(project.path, repo.root)) then
-        project = { path = repo.root }
-      end
+      local project = project_for_repo(repo)
       local session, view = git_view.open_log(project, { focus = false })
       when_model_ready(view, function(v)
         if v.model.repo and not common.path_equals(repo.root, v.model.repo.root) then v.model.repo = repo end
@@ -493,7 +498,7 @@ command.add(nil, {
         core.redraw = true
       end)
     end)
-  end),
+  end, { opens_view = true }),
 
   ["git:open_current_file_diff"] = command.palette(function()
     local filename = active_file_path()
@@ -507,7 +512,7 @@ command.add(nil, {
         core.log_quiet("Git View: current file diff repo lookup failed: %s", err and (err.message or err.kind) or "unknown")
         return
       end
-      local project = current_project()
+      local project = project_for_repo(repo)
       local session, view = git_view.open_log(project, { focus = false })
       when_model_ready(view, function(v)
         v.model.repo = repo
@@ -518,7 +523,7 @@ command.add(nil, {
         if not tab and tab_err then core.log_quiet("Git View: current file diff skipped: %s", tab_err.message or tab_err.kind) end
       end)
     end)
-  end),
+  end, { opens_view = true }),
 
   ["git:copy_selected_commit_hash"] = command.palette(function()
     local view = active_git_view()
@@ -561,7 +566,7 @@ command.add(nil, {
       historical_buffer.open(request.repo, request.rev, request.relpath, text or "")
       core.redraw = true
     end)
-  end),
+  end, { opens_view = true }),
 
 })
 

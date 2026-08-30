@@ -528,13 +528,19 @@ function GitView:on_mouse_wheel(y, x)
     local handled = scroll_pane_view(surface, y, x)
     if tab and tab.kind == "commit_diff" and surface.git_pane == "file-list" then
       tab.file_scroll = surface.scroll.to.y
+    elseif tab and tab.kind == "file_history" and surface.git_pane == "history-list" then
+      tab.scroll = surface.scroll.to.y
     end
     return handled
   end
   if has_pointer then return false end
   local active = core.active_view
   if active and active.git_owner_view == self and active.git_pane and active.on_mouse_wheel then
-    return scroll_pane_view(active, y, x)
+    local handled = scroll_pane_view(active, y, x)
+    if tab and tab.kind == "file_history" and active.git_pane == "history-list" then
+      tab.scroll = active.scroll.to.y
+    end
+    return handled
   end
   tab = self:model_tab()
   if tab and tab.kind == "file_history" then
@@ -1069,13 +1075,16 @@ function GitView:update_pane_buffers()
       if tab.loading and not tab.refreshing then
         lines[#lines + 1] = "Loading more commits..."
         line_meta[#lines] = { role = "message", text = lines[#lines] }
-      elseif tab.has_more then
-        lines[#lines + 1] = "Load more commits..."
-        line_meta[#lines] = { role = "message", text = lines[#lines] }
       end
     end
     local list_view = self:set_pane_lines("history-list", lines)
     list_view.git_commit_line_meta = line_meta
+    if tab.restored_scroll ~= nil then
+      list_view.scroll.y = tab.restored_scroll
+      list_view.scroll.to.y = tab.restored_scroll
+      tab.restored_scroll = nil
+    end
+    tab.scroll = list_view.scroll.to.y
     sync_inactive_pane_line(list_view, tab.selected_commit)
   elseif tab.kind == "commit_diff" then
     local lines = {}
@@ -1115,13 +1124,7 @@ function GitView:update_pane_buffers()
     local log_tab = self.model:log_tab()
     local lines = {}
     local line_meta = {}
-    local first_commit = log_tab.commits[1]
-    local last_commit = log_tab.commits[#log_tab.commits]
-    local graph_key = table.concat({
-      tostring(#log_tab.commits),
-      first_commit and first_commit.hash or "",
-      last_commit and last_commit.hash or "",
-    }, "\0")
+    local graph_key = tostring(log_tab.commits) .. ":" .. tostring(log_tab.graph_revision or 0)
     if log_tab.graph_layout_key ~= graph_key then
       log_tab.graph_rows = git_graph.layout(log_tab.commits)
       log_tab.graph_layout_key = graph_key
@@ -1144,9 +1147,6 @@ function GitView:update_pane_buffers()
       if log_tab.loading_more then
         lines[#lines + 1] = "Loading more commits..."
         line_meta[#lines] = { role = "message", text = lines[#lines] }
-      elseif log_tab.has_more then
-        lines[#lines + 1] = "Load more commits..."
-        line_meta[#lines] = { role = "message", text = lines[#lines] }
       end
     end
     local list_view = self:set_pane_lines("log-list", lines)
@@ -1165,8 +1165,28 @@ function GitView:update_pane_buffers()
   end
 end
 
+function GitView:maybe_load_more_commits()
+  local tab = self:model_tab()
+  if not (tab and (tab.kind == "log" or tab.kind == "file_history")
+      and tab.has_more and not tab.loading and not tab.loading_more) then
+    return false
+  end
+  local list_name = tab.kind == "file_history" and "history-list" or "log-list"
+  local list = self.pane_views and self.pane_views[list_name]
+  if not (list and list.size.y > 0) then return false end
+  local row_height = list:get_line_height()
+  local viewport_bottom = math.max(list.scroll.y or 0, list.scroll.to.y or 0) + list.size.y
+  local trigger_y = math.max(0, (#tab.commits - 10) * row_height)
+  if viewport_bottom < trigger_y then return false end
+  if tab.kind == "file_history" then
+    return self.model:load_file_history(tab, function() core.redraw = true end)
+  end
+  return self.model:load_more_log(function() core.redraw = true end)
+end
+
 function GitView:update()
   self:update_pane_buffers()
+  self:maybe_load_more_commits()
   self:sync_selection_from_pane()
   local tab = self:model_tab()
   local diff_view
@@ -1207,9 +1227,8 @@ function GitView:select_relative(delta)
     self:update_pane_buffers()
     local list = self:pane_view("history-list")
     list.buffer:set_selection(index, 1, index, 1)
-    local row_y = (index - 1) * self:row_height()
-    local visible = self:history_visible_height()
-    tab.scroll = common.clamp(tab.scroll or 0, math.max(0, row_y - visible + self:row_height()), row_y)
+    list:scroll_to_make_visible(index, 1, true)
+    tab.scroll = list.scroll.to.y
     core.redraw = true
     return tab.commits[index]
   elseif tab.kind == "commit_diff" then
@@ -1244,51 +1263,10 @@ function GitView:select_relative(delta)
   end
 end
 
-function GitView:draw_commit_details(commit, x, y, width)
-  local font = style.prose_font
-  renderer.draw_text(font, "Details", x, y, style.text)
-  y = y + font:get_height() + style.padding.y
-  if not commit then
-    renderer.draw_text(font, "Select a commit", x, y, style.dim)
-    return
-  end
-  renderer.draw_text(font, commit.subject or "", x, y, style.text)
-  y = y + font:get_height() + 2 * SCALE
-  local hash_label = "Hash: "
-  local hash_x = renderer.draw_text(font, hash_label, x, y, style.dim)
-  local hash_y = y + math.max(0, (font:get_height() - style.code_font:get_height()) / 2)
-  renderer.draw_text(style.code_font, tostring(commit.hash or ""), hash_x, hash_y, style.accent)
-  y = y + font:get_height() + 2 * SCALE
-  if commit.author_name and commit.author_name ~= "" then
-    renderer.draw_text(font, "Author: " .. commit.author_name, x, y, style.dim)
-    y = y + font:get_height() + 2 * SCALE
-  end
-  if commit.refs and commit.refs ~= "" then
-    renderer.draw_text(font, "Refs: " .. commit.refs, x, y, style.dim)
-    y = y + font:get_height() + 2 * SCALE
-  end
-  y = y + style.padding.y
-  renderer.draw_text(font, "Changed files", x, y, style.text)
-  y = y + font:get_height() + style.padding.y
-  if commit.changed_files_loading then
-    renderer.draw_text(font, "Loading changed files...", x, y, style.dim)
-    return
-  end
-  if commit.changed_files_error then
-    renderer.draw_text(font, "Git error: " .. tostring(commit.changed_files_error.message or commit.changed_files_error.kind or commit.changed_files_error), x, y, style.error)
-    return
-  end
-  local files = commit.changed_files or {}
-  if #files == 0 then
-    renderer.draw_text(font, commit.changed_files_loaded and "No changed files" or "Select a commit to load changed files", x, y, style.dim)
-    return
-  end
-  for _, file in ipairs(files) do
-    local label = file.path or file.new_path or file.old_path or ""
-    renderer.draw_text(font, string.format("%s  %s", file.kind or file.status or file.xy or "", label), x, y, style.text)
-    y = y + font:get_height() + 2 * SCALE
-    if y > self.position.y + self.size.y - font:get_height() then break end
-  end
+function GitView:log_commit_count_text(tab)
+  local count = tab and tonumber(tab.total_commits)
+  if not count then return "" end
+  return count == 1 and "1 commit" or string.format("%d commits", count)
 end
 
 function GitView:draw_log_tab(tab, x, y)
@@ -1306,13 +1284,15 @@ function GitView:draw_log_tab(tab, x, y)
   local header_y = self.position.y + (header_height - style.prose_font:get_height()) / 2
   renderer.draw_rect(self.position.x, self.position.y, list_width, header_height, style.background2)
   renderer.draw_text(style.prose_font, "Commits", x, header_y, style.text)
-  local status = string.format("%d commits", #tab.commits)
-  renderer.draw_text(
-    style.prose_font, status,
-    list.position.x + list.size.x - style.prose_font:get_width(status) - style.padding.x,
-    header_y,
-    style.dim
-  )
+  local status = self:log_commit_count_text(tab)
+  if status ~= "" then
+    renderer.draw_text(
+      style.prose_font, status,
+      list.position.x + list.size.x - style.prose_font:get_width(status) - style.padding.x,
+      header_y,
+      style.dim
+    )
+  end
   list:draw()
   renderer.draw_rect(list_right, self.position.y, 1 * SCALE, self.size.y, style.divider)
   details:draw()
@@ -1610,6 +1590,9 @@ function GitView:clamp_history_scroll(tab)
   local rows = #(tab.commits or {}) + ((tab.has_more or (tab.loading and not tab.refreshing)) and 1 or 0)
   local max_scroll = math.max(0, rows * self:row_height() - self:history_visible_height())
   tab.scroll = common.clamp(tab.scroll or 0, 0, max_scroll)
+  local list = self:pane_view("history-list")
+  list.scroll.y = tab.scroll
+  list.scroll.to.y = tab.scroll
 end
 
 function GitView:draw_history_tab(tab, x, y)

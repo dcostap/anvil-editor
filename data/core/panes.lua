@@ -594,6 +594,16 @@ local function history_has_view(pane, view)
   return false
 end
 
+local function history_view_index(pane, view)
+  local current = pane.history.index
+  for index = current, 1, -1 do
+    if pane.history.entries[index].view == view then return index end
+  end
+  for index = current + 1, #pane.history.entries do
+    if pane.history.entries[index].view == view then return index end
+  end
+end
+
 local function retained_view_index(pane, view)
   for index, candidate in ipairs(pane.retained_views or {}) do
     if candidate == view then return index end
@@ -835,6 +845,17 @@ function M.present(view, opts)
   local existing = M.pane_for_view(view)
   if existing and existing ~= pane then
     return nil, "View is owned by another Pane"
+  end
+  if existing == pane and opts.reuse then
+    local index = history_view_index(pane, view)
+    if index then
+      if index ~= pane.history.index then
+        set_history_index(pane, index, opts)
+        return pane
+      end
+      if opts.focus ~= false then M.focus(pane) end
+      return pane
+    end
   end
   local current = pane.current_view
   if current ~= view and current.can_suspend and current:can_suspend() == false then

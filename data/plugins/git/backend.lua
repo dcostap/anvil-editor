@@ -372,6 +372,25 @@ function backend.build_log_args(opts)
   return args
 end
 
+function backend.commit_count(repo, opts, callback)
+  opts = opts or {}
+  return backend.run_git(repo, { "rev-list", "--count", "HEAD" }, opts, function(result, err)
+    if not result then
+      if callback then callback(nil, err) end
+      return
+    end
+    local count = tonumber((result.stdout or ""):match("%d+"))
+    local parse_err
+    if not count then
+      parse_err = {
+        kind = "parse",
+        message = "Git commit count is invalid",
+      }
+    end
+    if callback then callback(count, parse_err) end
+  end)
+end
+
 function backend.build_file_history_args(relpath, opts)
   opts = opts or {}
   local limit = opts.limit or default_log_limit()

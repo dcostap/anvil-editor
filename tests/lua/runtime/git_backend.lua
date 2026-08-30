@@ -240,6 +240,26 @@ test.describe("plugins.git.backend", function()
   end)
 
   test.describe("command builders", function()
+    test.it("counts commits with a lightweight revision query", function()
+      local old_run_git = backend.run_git
+      local captured_args
+      backend.run_git = function(repo, args, opts, callback)
+        captured_args = args
+        callback({ code = 0, stdout = "1234\n" }, nil)
+        return { cancel = function() end }
+      end
+      local count, count_err
+
+      backend.commit_count({ root = "C:/repo" }, {}, function(value, err)
+        count, count_err = value, err
+      end)
+      backend.run_git = old_run_git
+
+      test.same(captured_args, { "rev-list", "--count", "HEAD" })
+      test.equal(count, 1234)
+      test.equal(count_err, nil)
+    end)
+
     test.test("builds selection history commands with line range", function()
       local args = backend.build_selection_history_args("src/app.lua", 10, 20, { limit = 3 })
       test.equal(args[1], "log")

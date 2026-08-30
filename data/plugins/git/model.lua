@@ -26,6 +26,7 @@ local function new_log_tab()
     error = nil,
     has_more = false,
     next_offset = nil,
+    graph_revision = 0,
   }
 end
 
@@ -282,19 +283,40 @@ end
 
 function Model:dispose_tab(tab)
   if not tab then return end
+  tab.disposed = true
+  tab.history_generation = (tab.history_generation or 0) + 1
+  tab.preview_generation = (tab.preview_generation or 0) + 1
+  tab.local_changes_generation = (tab.local_changes_generation or 0) + 1
+  tab.pending_history_callbacks = nil
+  tab.pending_load_callbacks = nil
+  for _, job in ipairs { tab.history_job, tab.local_changes_job } do
+    if job and job.cancel then pcall(job.cancel, job) end
+    self:_untrack_job(job)
+  end
+  tab.history_job, tab.local_changes_job = nil, nil
   if tab.history_buffer and tab.history_listener_id then
     tab.history_buffer:remove_text_change_listener(tab.history_listener_id)
     tab.history_buffer, tab.history_listener_id = nil, nil
   end
-  tab.preview_generation = (tab.preview_generation or 0) + 1
   for _, job in ipairs(tab.preview_jobs or {}) do
     if job and job.cancel then pcall(job.cancel, job) end
+    self:_untrack_job(job)
   end
   tab.preview_jobs = nil
+  tab.loading = false
+  tab.refreshing = false
+  tab.preview_loading = false
   if tab.history_range_marker then
     range_marker.remove(tab.history_range_marker)
     tab.history_range_marker = nil
   end
+  for _, child in ipairs { tab.diff_view, tab.history_diff_view } do
+    if child then
+      child:dispose_integrations()
+      child:dispose_owned_buffers()
+    end
+  end
+  tab.diff_view, tab.history_diff_view = nil, nil
 end
 
 function Model:find_tab(id)
@@ -416,20 +438,6 @@ local function untracked_directory_summary(record)
   if not record or record.kind ~= "untracked" then return false end
   local path = record.path or record.new_path or record.old_path or ""
   return path:sub(-1) == "/"
-end
-
-local function working_tree_diff_records(records)
-  local filtered = {}
-  for _, record in ipairs(records or {}) do
-    -- A path staged as added and then deleted from the worktree has no
-    -- HEAD-to-worktree file content to compare in this diff tab.
-    -- Default porcelain status reports untracked directories as summary
-    -- entries (`?? dir/`); do not auto-load those summaries as files.
-    if record.xy ~= "AD" and not untracked_directory_summary(record) then
-      filtered[#filtered + 1] = record
-    end
-  end
-  return filtered
 end
 
 local function add_dirty_buffer_records(repo, records, seen)
@@ -555,6 +563,8 @@ function Model:open_history_tab(relpath, context, callback)
     self:load_file_history(tab, function(model, err)
       if callback then callback(model, err, tab) end
     end)
+  elseif callback then
+    callback(self, nil, tab)
   end
   return tab
 end
@@ -619,7 +629,7 @@ function Model:load_selected_commit_changed_files(callback)
 end
 
 function Model:load_file_history(tab, callback)
-  if not tab then return false end
+  if not tab or tab.disposed then return false end
   if tab.loading then
     if callback then
       tab.pending_history_callbacks = tab.pending_history_callbacks or {}
@@ -643,7 +653,8 @@ function Model:load_file_history(tab, callback)
   local function on_page(page, err)
     done = true
     self:_untrack_job(job)
-    if generation ~= tab.history_generation then return end
+    tab.history_job = nil
+    if tab.disposed or generation ~= tab.history_generation then return end
     tab.loading = false
     tab.refreshing = false
     tab.error = err
@@ -681,12 +692,17 @@ function Model:load_file_history(tab, callback)
   else
     job = self.backend.file_history(self.repo, tab.relpath, opts, on_page)
   end
-  if not done then self:_track_job(job) end
+  if not done then
+    tab.history_job = job
+    self:_track_job(job)
+  end
   return true
 end
 
 function Model:refresh_local_changes_revision(tab, callback)
-  if not (tab and self.repo and self.repo.root) then return false end
+  if not (tab and not tab.disposed and self.repo and self.repo.root) then return false end
+  tab.local_changes_generation = (tab.local_changes_generation or 0) + 1
+  local generation = tab.local_changes_generation
   local path = common.normalize_path(self.repo.root .. PATHSEP .. tab.relpath)
   local buffer = core.buffer_registry and core.buffer_registry:find(path)
   if not buffer then return false end
@@ -696,6 +712,8 @@ function Model:refresh_local_changes_revision(tab, callback)
   job = self.backend.file_at(self.repo, "HEAD", tab.relpath, {}, function(text, err)
     done = true
     self:_untrack_job(job)
+    tab.local_changes_job = nil
+    if tab.disposed or generation ~= tab.local_changes_generation then return end
     if err and self.backend.is_missing_path_error and self.backend.is_missing_path_error(err) then
       text, err = "", nil
     end
@@ -729,7 +747,10 @@ function Model:refresh_local_changes_revision(tab, callback)
     end
     callback()
   end)
-  if not done then self:_track_job(job) end
+  if not done then
+    tab.local_changes_job = job
+    self:_track_job(job)
+  end
   return true
 end
 
@@ -809,7 +830,7 @@ function Model:select_history_index(tab, index, callback)
 end
 
 function Model:load_history_preview(tab, callback)
-  if not tab or tab.kind ~= "file_history" then return false end
+  if not tab or tab.disposed or tab.kind ~= "file_history" then return false end
   local commit = tab.commits and tab.commits[tab.selected_commit]
   if not commit then return false end
   tab.preview_generation = (tab.preview_generation or 0) + 1
@@ -1202,11 +1223,13 @@ local function append_log_commits(tab, log_page)
   end
   tab.has_more = log_page.has_more
   tab.next_offset = log_page.next_offset
+  tab.graph_revision = (tab.graph_revision or 0) + 1
 end
 
 function Model:sync_working_tree_diff_tabs()
   for _, tab in ipairs(self.tabs) do
     if tab.kind == "commit_diff" and tab.right == self.backend.WORKING_TREE then
+      tab.reload_after_refresh = nil
       local new_left = self:working_tree_left_revision()
       tab.left = new_left
       tab.id = diff_tab_id(self.repo, tab.left, tab.right)
@@ -1216,7 +1239,7 @@ function Model:sync_working_tree_diff_tabs()
   end
 end
 
-function Model:_finish_refresh(generation, status_records, log_page, err, callback)
+function Model:_finish_refresh(generation, total_commits, log_page, err, callback)
   if generation ~= self.generation then return end
   local tab = self:log_tab()
   local retained_commits = {}
@@ -1228,6 +1251,10 @@ function Model:_finish_refresh(generation, status_records, log_page, err, callba
   tab.error = err
   tab.commits = {}
   append_log_commits(tab, log_page)
+  tab.total_commits = total_commits
+  if tab.total_commits == nil and log_page and not log_page.has_more then
+    tab.total_commits = #tab.commits
+  end
   for _, commit in ipairs(tab.commits) do
     local retained = retained_commits[commit.hash]
     if retained and retained.changed_files_loaded then
@@ -1238,6 +1265,12 @@ function Model:_finish_refresh(generation, status_records, log_page, err, callba
   end
   if self.repo then
     self:sync_working_tree_diff_tabs()
+    for _, candidate in ipairs(self.tabs) do
+      if candidate.kind == "commit_diff" and candidate.reload_after_refresh then
+        candidate.reload_after_refresh = nil
+        self:load_view(candidate)
+      end
+    end
     self:reload_file_history_tabs()
   else
     self:mark_diff_tabs_error(err)
@@ -1250,25 +1283,27 @@ function Model:_finish_refresh(generation, status_records, log_page, err, callba
 end
 
 function Model:_start_refresh_jobs(repo, generation, callback)
-  local pending = 2
-  local status_records, log_page, final_err
+  local pending = self.backend.commit_count and 2 or 1
+  local total_commits, log_page, final_err
   local function done()
     pending = pending - 1
     if pending == 0 then
-      self:_finish_refresh(generation, status_records, log_page, final_err, callback)
+      self:_finish_refresh(generation, total_commits, log_page, final_err, callback)
     end
   end
 
-  local status_job, status_done
-  status_job = self.backend.run_git(repo, { "status", "--porcelain=v1", "-z", "--untracked-files=all" }, {}, function(result, err)
-    status_done = true
-    self:_untrack_job(status_job)
-    if generation ~= self.generation then return end
-    if err and not final_err then final_err = err end
-    status_records = result and self.backend.parse_status_z(result.stdout) or {}
-    done()
-  end)
-  if not status_done then self:_track_job(status_job) end
+  if self.backend.commit_count then
+    local count_job, count_done
+    count_job = self.backend.commit_count(repo, {}, function(count, err)
+      count_done = true
+      self:_untrack_job(count_job)
+      if generation ~= self.generation then return end
+      total_commits = count
+      if err then core.log_quiet("Git Log commit count unavailable: %s", err.message or err.kind) end
+      done()
+    end)
+    if not count_done then self:_track_job(count_job) end
+  end
 
   local limit = log_limit()
   local args = self.backend.build_log_args({ limit = limit })
@@ -1321,8 +1356,11 @@ function Model:invalidate_history_loads()
   for _, tab in ipairs(self.tabs) do
     if tab.kind == "file_history" then
       tab.history_generation = (tab.history_generation or 0) + 1
+      tab.preview_generation = (tab.preview_generation or 0) + 1
+      tab.local_changes_generation = (tab.local_changes_generation or 0) + 1
       tab.loading = false
       tab.refreshing = false
+      tab.preview_loading = false
     end
   end
 end
@@ -1336,7 +1374,10 @@ function Model:invalidate_diff_loads()
       tab.loading = false
       tab.loading_file = false
       tab.file_loading_started_at = nil
-      if was_loading then self:clear_diff_content(tab) end
+      if was_loading then
+        tab.reload_after_refresh = true
+        self:clear_diff_content(tab)
+      end
     end
   end
 end
