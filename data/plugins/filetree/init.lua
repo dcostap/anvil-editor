@@ -223,26 +223,37 @@ local function filetree_item_less(a, b)
   return item_name_less(a, b)
 end
 
+local function list_dir_metadata(path)
+  return system.list_dir_info(path, 2147483647, nil, nil, true)
+end
+
 local function sorted_dir(path, show_hidden)
+  local started = system.get_time()
   local items = {}
-  for _, name in ipairs(system.list_dir(path) or {}) do
-    if show_hidden or name:sub(1, 1) ~= "." then
+  local entries = list_dir_metadata(path) or {}
+  for _, info in ipairs(entries) do
+    local name = info.name
+    if info.modified ~= nil and (show_hidden or name:sub(1, 1) ~= ".") then
       local abs = path_join(path, name)
-      local info = system.get_file_info(abs)
-      if info then
-        table.insert(items, {
-          name = name,
-          sort_name = name:lower(),
-          abs = abs,
-          type = info.type,
-          size = info.size,
-          modified = info.modified,
-          display = name .. (info.type == "dir" and "/" or "")
-        })
-      end
+      table.insert(items, {
+        name = name,
+        sort_name = name:lower(),
+        abs = abs,
+        type = info.type,
+        size = info.size,
+        modified = info.modified,
+        display = name .. (info.type == "dir" and "/" or "")
+      })
     end
   end
   table.sort(items, filetree_item_less)
+  local elapsed_ms = (system.get_time() - started) * 1000
+  if elapsed_ms >= 25 then
+    core.log_quiet(
+      "File Tree directory loaded entries=%d elapsed=%.1fms path=%s",
+      #entries, elapsed_ms, path
+    )
+  end
   return items
 end
 
@@ -302,17 +313,17 @@ local function format_relative_time(modified, reference_time)
 end
 
 local function count_direct_children(path, show_hidden, yield_budget)
-  local names, err = system.list_dir(path)
-  if not names then return nil, nil, err or "unable to list directory" end
+  local entries, err = list_dir_metadata(path)
+  if not entries then return nil, nil, err or "unable to list directory" end
 
   local folders, files = 0, 0
   local start_time = system.get_time()
-  for _, name in ipairs(names) do
-    if show_hidden or name:sub(1, 1) ~= "." then
-      local info = system.get_file_info(path_join(path, name))
-      if info and info.type == "dir" then
+  for _, info in ipairs(entries) do
+    local name = info.name
+    if info.modified ~= nil and (show_hidden or name:sub(1, 1) ~= ".") then
+      if info.type == "dir" then
         folders = folders + 1
-      elseif info and info.type == "file" then
+      elseif info.type == "file" then
         files = files + 1
       end
     end
@@ -1028,26 +1039,59 @@ function FileTreeView:sync_path(path, reason)
 end
 
 function FileTreeView:filesystem_dir_signature(dir)
-  local names = system.list_dir(dir)
-  if not names then return nil end
-  table.sort(names)
+  local started = system.get_time()
+  local entries = list_dir_metadata(dir)
+  if not entries then return nil end
+  table.sort(entries, function(a, b) return a.name < b.name end)
 
   local parts = {}
-  for _, name in ipairs(names) do
-    if filetree_config.show_hidden or name:sub(1, 1) ~= "." then
-      local abs = path_join(dir, name)
-      local info = system.get_file_info(abs)
-      if info then
-        parts[#parts + 1] = table.concat({
-          name,
-          info.type or "",
-          tostring(info.size or ""),
-          tostring(info.modified or ""),
-        }, "\0")
-      end
+  for _, info in ipairs(entries) do
+    local name = info.name
+    if info.modified ~= nil
+        and (filetree_config.show_hidden or name:sub(1, 1) ~= ".") then
+      parts[#parts + 1] = table.concat({
+        name,
+        info.type or "",
+        tostring(info.size or ""),
+        tostring(info.modified or ""),
+      }, "\0")
     end
   end
+  local elapsed_ms = (system.get_time() - started) * 1000
+  if elapsed_ms >= 25 then
+    core.log_quiet(
+      "File Tree directory signature scanned entries=%d elapsed=%.1fms path=%s",
+      #entries, elapsed_ms, dir
+    )
+  end
   return table.concat(parts, "\1")
+end
+
+function FileTreeView:watch_filesystem_dir(dir)
+  if not self.filesystem_watch or self.filesystem_watched_dirs[dir] then return end
+  if not system.get_file_info(dir) then return end
+  self.filesystem_watch:watch(dir)
+  self.filesystem_watched_dirs[dir] = true
+  self.filesystem_dir_signatures[dir] = self:filesystem_dir_signature(dir)
+end
+
+function FileTreeView:update_folder_filesystem_watch(dir, expanded)
+  if not self.filesystem_watch then return end
+  if (self.filesystem_watch_update_suppressed or 0) > 0 then
+    self.filesystem_watch_update_deferred = true
+    return
+  end
+  if expanded then
+    self:watch_filesystem_dir(dir)
+    return
+  end
+  for watched_dir in pairs(self.filesystem_watched_dirs) do
+    if in_project(watched_dir, dir) then
+      self.filesystem_watch:unwatch(watched_dir)
+      self.filesystem_watched_dirs[watched_dir] = nil
+      self.filesystem_dir_signatures[watched_dir] = nil
+    end
+  end
 end
 
 function FileTreeView:update_filesystem_watches()
@@ -1075,13 +1119,7 @@ function FileTreeView:update_filesystem_watches()
     end
   end
   for dir in pairs(wanted) do
-    if system.get_file_info(dir) then
-      if not self.filesystem_watched_dirs[dir] then
-        self.filesystem_watch:watch(dir)
-        self.filesystem_watched_dirs[dir] = true
-      end
-      self.filesystem_dir_signatures[dir] = self:filesystem_dir_signature(dir)
-    end
+    self:watch_filesystem_dir(dir)
   end
 end
 
@@ -2805,7 +2843,7 @@ function FileTreeView:collapse_folder(line, entry)
     self:snapshot_lines()
     self.status_cache = nil
   end
-  self:update_filesystem_watches()
+  self:update_folder_filesystem_watch(entry.abs, false)
 end
 
 function FileTreeView:auto_expand_single_child_folder(parent_line, seen)
@@ -2854,10 +2892,10 @@ function FileTreeView:expand_folder(line, entry, auto_single, seen)
   end
   meta.expanded = true
   self:buffer_splice(line + 1, 0, lines, metas)
-  if auto_single then
+  self:update_folder_filesystem_watch(entry.abs, true)
+  if auto_single and #lines == 1 then
     self:auto_expand_single_child_folder(line, seen)
   end
-  self:update_filesystem_watches()
 end
 
 function FileTreeView:open_selected_files()
