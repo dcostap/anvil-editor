@@ -137,6 +137,10 @@ test.describe("plugins.git.backend", function()
       test.equal(page.commits[1].hash, "aaa111")
       test.equal(page.commits[1].parents[2], "p2")
       test.equal(page.commits[1].subject, "Subject A")
+      test.equal(page.commits[1].ref_labels[1].kind, "branch")
+      test.equal(page.commits[1].ref_labels[1].label, "main")
+      test.equal(page.commits[1].ref_labels[2].kind, "tag")
+      test.equal(page.commits[1].ref_labels[2].label, "v1")
       test.equal(page.has_more, true)
       test.equal(page.next_offset, 11)
       test.equal(page.next_cursor, "aaa111")
@@ -159,6 +163,23 @@ test.describe("plugins.git.backend", function()
       test.equal(#page.commits, 1)
       test.equal(page.has_more, true)
       test.ok(backend._contains_arg(args, "--max-count=2"), "expected configured limit plus one")
+    end)
+
+    test.it("classifies full Git decorations without duplicating the HEAD branch", function()
+      local labels = backend.parse_ref_labels(table.concat({
+        "HEAD -> refs/heads/main",
+        "refs/heads/main",
+        "tag: refs/tags/v1",
+        "refs/remotes/origin/main",
+      }, ", "))
+
+      test.equal(#labels, 3)
+      test.equal(labels[1].kind, "head")
+      test.equal(labels[1].label, "main")
+      test.equal(labels[2].kind, "tag")
+      test.equal(labels[2].label, "v1")
+      test.equal(labels[3].kind, "remote")
+      test.equal(labels[3].label, "origin/main")
     end)
   end)
 

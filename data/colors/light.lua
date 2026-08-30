@@ -206,6 +206,13 @@ style.git_change_modification = {47, 169, 255, 255}
 style.git_change_deletion = c("ff5065")
 style.gitdiff_width = 2 * SCALE
 style.gitdiff_overview_min_height = math.max(2, 2 * SCALE)
+style.git_graph_colors = {
+  c("0053ff"), c("08a91f"), c("7c3aed"), c("b66a00"), c("d82f55"), c("008c86"),
+}
+style.git_ref_head = c("087b19")
+style.git_ref_branch = c("0053ff")
+style.git_ref_remote = c("7c3aed")
+style.git_ref_tag = c("9a5700")
 
 -- File tree Git status and line-count colors
 style.filetree_git_status_ignored = c("bd6b00")

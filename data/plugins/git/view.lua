@@ -13,6 +13,7 @@ local TextView = require "core.textview"
 local View = require "core.view"
 local view_icons = require "core.view_icons"
 local GitModel = require "plugins.git.model"
+local git_graph = require "plugins.git.graph"
 local path_tree = require "plugins.path_tree"
 local panes = require "core.panes"
 
@@ -85,6 +86,18 @@ local function draw_segments(view, x, y, segments)
   return view:get_line_height()
 end
 
+local function ref_color(kind)
+  if kind == "head" then return style.git_ref_head or style.good end
+  if kind == "tag" then return style.git_ref_tag or style.warn end
+  if kind == "remote" then return style.git_ref_remote or style.accent end
+  return style.git_ref_branch or style.accent
+end
+
+local function ref_text(ref)
+  local marker = (ref.kind == "tag" or ref.kind == "remote") and "◇ " or "● "
+  return marker .. tostring(ref.label or "")
+end
+
 local COMMIT_LINE_RENDER_PROVIDER = {
   line_generation = function(_, view, line)
     return view.git_commit_line_meta and view.git_commit_line_meta[line]
@@ -95,24 +108,100 @@ local COMMIT_LINE_RENDER_PROVIDER = {
     local hash = meta.hash or ""
     local subject = meta.subject or ""
     local subject_col = #hash + 3
-    return {
-      fragments = {
-        {
-          source_col1 = 1, source_col2 = #hash + 1,
-          text = hash, color = style.accent, font = style.code_font,
-        },
-        {
-          source_col1 = #hash + 1, source_col2 = subject_col,
-          text = "  ", color = style.dim,
-        },
-        {
-          source_col1 = subject_col, source_col2 = subject_col + #subject,
-          text = subject, color = style.text,
-        },
+    local fragments = {
+      {
+        source_col1 = 1, source_col2 = #hash + 1,
+        text = hash, color = style.accent, font = style.code_font,
+      },
+      {
+        source_col1 = #hash + 1, source_col2 = subject_col,
+        text = "  ", color = style.dim,
+      },
+      {
+        source_col1 = subject_col, source_col2 = subject_col + #subject,
+        text = subject, color = style.text,
       },
     }
+    local col = subject_col + #subject
+    for _, ref in ipairs(meta.ref_labels or {}) do
+      local label = ref_text(ref)
+      fragments[#fragments + 1] = {
+        source_col1 = col, source_col2 = col + 2,
+        text = "  ", color = style.dim,
+      }
+      col = col + 2
+      fragments[#fragments + 1] = {
+        source_col1 = col, source_col2 = col + #label,
+        text = label, color = ref_color(ref.kind), font = style.get_small_font(view:get_font()),
+      }
+      col = col + #label
+    end
+    return { fragments = fragments }
   end,
 }
+
+local MAX_GRAPH_LANES = 16
+
+local function graph_lane_x(x, lane)
+  local spacing = math.max(8, 10 * SCALE)
+  return x + style.padding.x * 0.4 + (math.min(lane, MAX_GRAPH_LANES) - 0.5) * spacing
+end
+
+local function graph_color(index)
+  local colors = style.git_graph_colors or { style.accent, style.good, style.warn, style.error }
+  return colors[((tonumber(index) or 1) - 1) % #colors + 1]
+end
+
+local function draw_graph_line(x1, y1, x2, y2, color)
+  local dx, dy = x2 - x1, y2 - y1
+  local length = math.sqrt(dx * dx + dy * dy)
+  if length <= 0 then return end
+  local half = math.max(0.65, SCALE * 0.65)
+  local px, py = -dy / length * half, dx / length * half
+  renderer.draw_poly({
+    { x1 + px, y1 + py }, { x2 + px, y2 + py },
+    { x2 - px, y2 - py }, { x1 - px, y1 - py },
+  }, color)
+end
+
+local function draw_graph_node(x, y, color)
+  local radius = math.max(3, 3 * SCALE)
+  local points = {}
+  for index = 0, 7 do
+    local angle = index * math.pi / 4
+    points[#points + 1] = { x + math.cos(angle) * radius, y + math.sin(angle) * radius }
+  end
+  renderer.draw_poly(points, color)
+end
+
+local function graph_gutter_width(view)
+  local rows = view.git_graph_rows
+  if not rows then return 0 end
+  local lanes = math.min(rows.max_lanes or 0, MAX_GRAPH_LANES)
+  if lanes < 1 then return 0 end
+  return style.padding.x * 0.8 + lanes * math.max(8, 10 * SCALE)
+end
+
+local function draw_graph_gutter(view, line, x, y)
+  local row = view.git_graph_rows and view.git_graph_rows[line]
+  local height = view:get_line_height()
+  if not row then return height end
+  local top, middle, bottom = y, y + height / 2, y + height
+  for _, segment in ipairs(row.segments or {}) do
+    local from_x = graph_lane_x(x, segment.from_lane)
+    local to_x = graph_lane_x(x, segment.to_lane)
+    local color = graph_color(segment.color)
+    if segment.kind == "continuation" then
+      draw_graph_line(from_x, top, to_x, bottom, color)
+    else
+      draw_graph_line(from_x, middle, to_x, bottom, color)
+    end
+  end
+  local node_x = graph_lane_x(x, row.node_lane)
+  if row.incoming then draw_graph_line(node_x, top, node_x, middle, graph_color(row.node_color)) end
+  draw_graph_node(node_x, middle, graph_color(row.node_color))
+  return height
+end
 
 local function commit_line_hint(view, line)
   local meta = view.git_commit_line_meta and view.git_commit_line_meta[line]
@@ -174,8 +263,13 @@ function GitView:pane_view(name)
       return self:point_of_interest_for_pane(v, line)
     end
     if ViewType == TextView then
-      view.get_gutter_width = function() return 0 end
-      view.draw_line_gutter = function(v) return v:get_line_height() end
+      if name == "log-list" then
+        view.get_gutter_width = graph_gutter_width
+        view.draw_line_gutter = draw_graph_gutter
+      else
+        view.get_gutter_width = function() return 0 end
+        view.draw_line_gutter = function(v) return v:get_line_height() end
+      end
       view.get_line_hint = commit_line_hint
       view:add_line_render_provider("git-commit-line", COMMIT_LINE_RENDER_PROVIDER)
     end
@@ -622,7 +716,11 @@ end
 local function commit_label(commit)
   local hash = commit.short_hash or commit.hash or ""
   local subject = commit.subject or ""
-  return string.format("%s  %s", hash, subject)
+  local parts = { string.format("%s  %s", hash, subject) }
+  for _, ref in ipairs(commit.ref_labels or {}) do
+    if ref.label and ref.label ~= "" then parts[#parts + 1] = "  " .. ref_text(ref) end
+  end
+  return table.concat(parts)
 end
 
 local function commit_line_metadata(commit)
@@ -634,6 +732,7 @@ local function commit_line_metadata(commit)
     subject = commit.subject or "",
     author = commit.author_name or "",
     date = date,
+    ref_labels = commit.ref_labels or {},
   }
 end
 
@@ -771,8 +870,11 @@ local function commit_details_lines(commit, view)
       and commit.committer_name ~= commit.author_name then
     add("Committer: " .. commit.committer_name, { role = "field", label = "Committer: ", value = commit.committer_name })
   end
-  if commit.refs and commit.refs ~= "" then
-    add("Refs: " .. commit.refs, { role = "field", label = "Refs: ", value = commit.refs, value_color = style.good })
+  if commit.ref_labels and #commit.ref_labels > 0 then
+    local refs = {}
+    for _, ref in ipairs(commit.ref_labels) do refs[#refs + 1] = ref.label end
+    local value = table.concat(refs, ", ")
+    add("Refs: " .. value, { role = "field", label = "Refs: ", value = value, value_color = style.good })
   end
   if commit.body and commit.body ~= "" then
     add("", nil)
@@ -1041,6 +1143,18 @@ function GitView:update_pane_buffers()
     local log_tab = self.model:log_tab()
     local lines = {}
     local line_meta = {}
+    local first_commit = log_tab.commits[1]
+    local last_commit = log_tab.commits[#log_tab.commits]
+    local graph_key = table.concat({
+      tostring(#log_tab.commits),
+      first_commit and first_commit.hash or "",
+      last_commit and last_commit.hash or "",
+    }, "\0")
+    if log_tab.graph_layout_key ~= graph_key then
+      log_tab.graph_rows = git_graph.layout(log_tab.commits)
+      log_tab.graph_layout_key = graph_key
+    end
+    local graph_rows = log_tab.graph_rows or git_graph.layout(log_tab.commits)
     if log_tab.loading and #log_tab.commits == 0 then
       lines[1] = "Loading Git log..."
       line_meta[1] = { role = "message", text = lines[1] }
@@ -1065,6 +1179,7 @@ function GitView:update_pane_buffers()
     end
     local list_view = self:set_pane_lines("log-list", lines)
     list_view.git_commit_line_meta = line_meta
+    list_view.git_graph_rows = graph_rows
     sync_inactive_pane_line(list_view, log_tab.selected_commit)
     local details = self:pane_view("details")
     local detail_lines, detail_meta, detail_tree, detail_tree_offset = commit_details_lines(

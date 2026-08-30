@@ -244,18 +244,57 @@ local function parse_parents(text)
   return parents
 end
 
+local function display_ref(ref)
+  return tostring(ref or "")
+    :gsub("^refs/heads/", "")
+    :gsub("^refs/remotes/", "")
+    :gsub("^refs/tags/", "")
+    :gsub("^refs/", "")
+end
+
+function backend.parse_ref_labels(text)
+  local labels, seen = {}, {}
+  for token in (tostring(text or "") .. ","):gmatch("(.-),") do
+    token = token:gsub("^%s+", ""):gsub("%s+$", "")
+    local head_target = token:match("^HEAD%s+%-%>%s+(.+)$")
+    local kind, ref, label
+    if head_target then
+      kind, ref, label = "head", head_target, display_ref(head_target)
+    elseif token == "HEAD" then
+      kind, ref, label = "head", token, token
+    elseif token:match("^tag:%s*") then
+      ref = token:gsub("^tag:%s*", "")
+      kind, label = "tag", display_ref(ref)
+    elseif token:match("^refs/heads/") then
+      kind, ref, label = "branch", token, display_ref(token)
+    elseif token:match("^refs/remotes/") then
+      kind, ref, label = "remote", token, display_ref(token)
+    elseif token ~= "" then
+      kind, ref, label = token:find("/", 1, true) and "remote" or "branch", token, token
+    end
+    if kind and not seen[ref] then
+      labels[#labels + 1] = { kind = kind, ref = ref, label = label }
+      seen[ref] = true
+    end
+  end
+  return labels
+end
+
 local function parse_log_record(record)
   record = tostring(record or ""):gsub("^\r?\n", "")
   if record == "" or record:match("^%s*$") then return nil end
   local fields = split_nul(record)
   if #fields == 0 or not fields[1] or fields[1] == "" then return nil end
+  local refs = fields[6] or ""
+  local ref_labels = backend.parse_ref_labels(refs)
   return {
     hash = fields[1],
     parents = parse_parents(fields[2]),
     author_name = fields[3] or "",
     author_email = fields[4] or "",
     author_time = tonumber(fields[5]) or 0,
-    refs = fields[6] or "",
+    refs = refs,
+    ref_labels = ref_labels,
     subject = fields[7] or "",
     body = fields[8] or "",
     committer_name = fields[9] or "",
@@ -311,6 +350,7 @@ local function build_base_log_args(opts)
   return {
     "log",
     "--date-order",
+    "--decorate=full",
     "--max-count=" .. tostring(limit + 1),
     "--format=" .. LOG_FORMAT_WITH_BODY,
   }, limit
@@ -337,6 +377,7 @@ function backend.build_file_history_args(relpath, opts)
   local limit = opts.limit or default_log_limit()
   local args = {
     "log", "--date-order", "--max-count=" .. tostring(limit + 1),
+    "--decorate=full",
     "--format=" .. SELECTION_LOG_FORMAT,
     "--name-status", "-z", "-M",
   }
@@ -400,6 +441,7 @@ function backend.build_selection_history_args(relpath, start_line, end_line, opt
   local limit = opts.limit or default_log_limit()
   local args = {
     "log", "--date-order", "--max-count=" .. tostring(limit + 1),
+    "--decorate=full",
     "--format=" .. SELECTION_LOG_FORMAT,
   }
   if opts.offset and opts.offset > 0 then args[#args + 1] = "--skip=" .. tostring(opts.offset) end

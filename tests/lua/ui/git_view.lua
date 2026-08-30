@@ -880,6 +880,30 @@ test.describe("Git View command", function()
     test.equal(list:get_col_x_offset(1, #line + 1), expected)
   end)
 
+  test.it("lays out commit graph lanes and ref indicators in Git Log rows", function(context)
+    local _, view = open_fake_git_view(context.project)
+    view.model:log_tab().commits = {
+      {
+        hash = "merge", short_hash = "merge", subject = "Merge work",
+        parents = { "left", "right" },
+        ref_labels = { { kind = "head", label = "main" }, { kind = "tag", label = "v1" } },
+      },
+      { hash = "left", short_hash = "left", subject = "Left", parents = { "base" } },
+      { hash = "right", short_hash = "right", subject = "Right", parents = { "base" } },
+      { hash = "base", short_hash = "base", subject = "Base", parents = {} },
+    }
+
+    view:update_pane_buffers()
+
+    local list = view:pane_view("log-list")
+    test.ok(list:get_gutter_width() > 0)
+    test.equal(list.git_graph_rows.max_lanes, 2)
+    test.equal(list.git_graph_rows[3].node_lane, 2)
+    local line = list.buffer:get_utf8_line(1)
+    test.ok(line:find("main", 1, true))
+    test.ok(line:find("v1", 1, true))
+  end)
+
   test.test("Local Focus Cycle enters and wraps through Git Log targets", function(context)
     local session, view = open_fake_git_view(context.project)
     core.active_view = view

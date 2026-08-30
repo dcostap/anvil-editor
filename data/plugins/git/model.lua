@@ -84,6 +84,7 @@ local function lightweight_commit(commit)
     commit_time = commit.commit_time,
     body = commit.body,
     refs = commit.refs,
+    ref_labels = clone_table(commit.ref_labels),
     parents = clone_table(commit.parents),
   }
 end
