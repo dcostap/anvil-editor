@@ -84,6 +84,13 @@ test.describe("plugins.git.backend", function()
       test.equal(stats["new/name.lua"].additions, 1)
       test.equal(stats["new/name.lua"].deletions, 0)
     end)
+
+    test.it("marks binary paths", function()
+      local stats = backend.parse_numstat_z("-\t-\timage.png\0")
+      test.equal(stats["image.png"].binary, true)
+      test.equal(stats["image.png"].additions, nil)
+      test.equal(stats["image.png"].deletions, nil)
+    end)
   end)
 
   test.describe("parse_status_z", function()
@@ -184,6 +191,31 @@ test.describe("plugins.git.backend", function()
       test.equal(working.left, backend.EMPTY_TREE)
       test.equal(working.right, backend.WORKING_TREE)
     end)
+
+    test.it("cancels every changed-file child job", function()
+      local old_run_git = backend.run_git
+      local callbacks, cancelled = {}, 0
+      backend.run_git = function(repo, args, opts, callback)
+        callbacks[#callbacks + 1] = callback
+        return {
+          cancel = function()
+            cancelled = cancelled + 1
+            callback(nil, { kind = "cancelled" })
+          end,
+        }
+      end
+      local calls, callback_err = 0, nil
+      local job = backend.changed_files({ root = "repo" }, "left", "right", {}, function(_, err)
+        calls, callback_err = calls + 1, err
+      end)
+      callbacks[1]({ stdout = "M\0src/app.lua\0" }, nil)
+      job:cancel()
+      backend.run_git = old_run_git
+
+      test.equal(cancelled, 2)
+      test.equal(calls, 1)
+      test.equal(callback_err.kind, "cancelled")
+    end)
   end)
 
   test.describe("command builders", function()
@@ -191,9 +223,27 @@ test.describe("plugins.git.backend", function()
       local args = backend.build_selection_history_args("src/app.lua", 10, 20, { limit = 3 })
       test.equal(args[1], "log")
       test.ok(backend._contains_arg(args, "--max-count=4"), "missing limit plus one")
-      test.ok(backend._contains_arg(args, "--no-patch"), "missing no-patch")
       test.ok(backend._contains_arg(args, "-L"), "missing -L")
       test.ok(backend._contains_arg(args, "10,20:src/app.lua"), "missing line range path")
+    end)
+
+    test.it("parses tracked Selection History blocks from Git patches", function()
+      local fields = {
+        "abc123", "parent", "Ada", "ada@example.test", "1710000000", "", "Change block", "",
+        "Ada", "ada@example.test", "1710000001",
+      }
+      local patch = table.concat({
+        "", "diff --git a/src/app.lua b/src/app.lua",
+        "@@ -10,2 +12,3 @@", " keep", "-old", "+new", "+extra", "",
+      }, "\n")
+      local output = backend.LOG_RECORD_SEPARATOR .. table.concat(fields, "\0") .. "\0" .. patch
+
+      local page = backend.parse_selection_history_page(output, { limit = 10 })
+
+      test.equal(page.commits[1].selection_diff.left_text, "keep\nold")
+      test.equal(page.commits[1].selection_diff.right_text, "keep\nnew\nextra")
+      test.equal(page.commits[1].selection_diff.left_start_line, 10)
+      test.equal(page.commits[1].selection_diff.right_start_line, 12)
     end)
 
     test.test("builds file history commands with follow and pathspec terminator", function()
@@ -206,6 +256,20 @@ test.describe("plugins.git.backend", function()
       test.equal(args[#args], "src/app.lua")
     end)
 
+    test.it("tracks old and new paths in renamed File History records", function()
+      local fields = {
+        "abc123", "parent", "Ada", "ada@example.test", "1710000000", "", "Rename file", "",
+        "Ada", "ada@example.test", "1710000001",
+      }
+      local output = backend.LOG_RECORD_SEPARATOR .. table.concat(fields, "\0")
+        .. "\0\nR100\0src/old.lua\0src/new.lua\0"
+
+      local page = backend.parse_file_history_page(output, { limit = 10 })
+
+      test.equal(page.commits[1].history_parent_path, "src/old.lua")
+      test.equal(page.commits[1].history_path, "src/new.lua")
+    end)
+
     test.test("builds paged log commands with bounded count and pathspec terminator", function()
       local args = backend.build_log_args({ limit = 51, offset = 25, relpath = "src/app.lua" })
       test.equal(args[1], "log")
@@ -215,7 +279,7 @@ test.describe("plugins.git.backend", function()
       test.equal(args[#args], "src/app.lua")
       for _, arg in ipairs(args) do
         if arg:find("^%-%-format=") then
-          test.ok(not arg:find("%%b", 1, true), "shell log format should not request full commit bodies")
+          test.ok(arg:find("%b", 1, true), "Git Log details should include the full commit message")
         end
       end
     end)

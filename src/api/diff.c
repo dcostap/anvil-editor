@@ -36,7 +36,7 @@ static bool is_token_char(char c) {
           c == '_');
 }
 
-static int tokenize(const char *src, int len, const char **tokens, int max_tokens, char *scratch, int scratch_len) {
+static int tokenize(const char *src, size_t len, const char **tokens, int max_tokens, char *scratch, int scratch_len) {
   int count = 0, si = 0, ti = 0;
 
   while (si < len && count < max_tokens && ti < scratch_len - 1) {
@@ -59,7 +59,7 @@ static int tokenize(const char *src, int len, const char **tokens, int max_token
   return count;
 }
 
-static double token_similarity(const char *a, const char *b, int len_a, int len_b) {
+static double token_similarity(const char *a, const char *b, size_t len_a, size_t len_b) {
   const char *tokensA[MAX_TOKENS], *tokensB[MAX_TOKENS];
   char scratchA[SCRATCH_SIZE], scratchB[SCRATCH_SIZE];
 
@@ -81,14 +81,15 @@ static double token_similarity(const char *a, const char *b, int len_a, int len_
   return 2.0 * matches / (countA + countB);
 }
 
-static int structural_prefix_key(const char *src, char *key, int key_size) {
+static int structural_prefix_key(const char *src, size_t len, char *key, int key_size) {
   int out = 0;
+  size_t pos = 0;
   bool found_boundary = false;
   bool found_identifier = false;
 
-  while (*src == ' ' || *src == '\t') src++;
-  while (*src && *src != '\r' && *src != '\n') {
-    char c = *src++;
+  while (pos < len && (src[pos] == ' ' || src[pos] == '\t')) pos++;
+  while (pos < len && src[pos] != '\r' && src[pos] != '\n') {
+    char c = src[pos++];
     if (c == '"' || c == '\'' || c == '(' || c == '=') {
       found_boundary = true;
       break;
@@ -102,46 +103,44 @@ static int structural_prefix_key(const char *src, char *key, int key_size) {
   return found_boundary && found_identifier && out >= 4 ? out : 0;
 }
 
-static bool has_matching_structural_prefix(const char *a, const char *b) {
+static bool has_matching_structural_prefix(const char *a, size_t len_a, const char *b, size_t len_b) {
   char key_a[256], key_b[256];
-  int len_a = structural_prefix_key(a, key_a, (int)sizeof(key_a));
-  int len_b = structural_prefix_key(b, key_b, (int)sizeof(key_b));
-  return len_a > 0 && len_a == len_b && strcmp(key_a, key_b) == 0;
+  int key_len_a = structural_prefix_key(a, len_a, key_a, (int)sizeof(key_a));
+  int key_len_b = structural_prefix_key(b, len_b, key_b, (int)sizeof(key_b));
+  return key_len_a > 0 && key_len_a == key_len_b && memcmp(key_a, key_b, (size_t)key_len_a) == 0;
 }
 
-static const char *comment_marker(const char *src) {
-  while (*src == ' ' || *src == '\t') src++;
-  if (src[0] == '/' && src[1] == '/') return "//";
-  if (src[0] == '/' && src[1] == '*') return "/*";
-  if (src[0] == '-' && src[1] == '-') return "--";
-  if (src[0] == '#') return "#";
-  if (src[0] == '*') return "*";
+static const char *comment_marker(const char *src, size_t len) {
+  size_t pos = 0;
+  while (pos < len && (src[pos] == ' ' || src[pos] == '\t')) pos++;
+  if (pos + 1 < len && src[pos] == '/' && src[pos + 1] == '/') return "//";
+  if (pos + 1 < len && src[pos] == '/' && src[pos + 1] == '*') return "/*";
+  if (pos + 1 < len && src[pos] == '-' && src[pos + 1] == '-') return "--";
+  if (pos < len && src[pos] == '#') return "#";
+  if (pos < len && src[pos] == '*') return "*";
   return NULL;
 }
 
-static bool has_matching_comment_marker(const char *a, const char *b) {
-  const char *marker_a = comment_marker(a);
-  const char *marker_b = comment_marker(b);
+static bool has_matching_comment_marker(const char *a, size_t len_a, const char *b, size_t len_b) {
+  const char *marker_a = comment_marker(a, len_a);
+  const char *marker_b = comment_marker(b, len_b);
   return marker_a && marker_b && strcmp(marker_a, marker_b) == 0;
 }
 
 
-static double similarity(const char *a, const char *b) {
-  if (strcmp(a, b) == 0) return 1.0;
-
-  int la = (int)strlen(a);
-  int lb = (int)strlen(b);
+static double similarity(const char *a, size_t la, const char *b, size_t lb) {
+  if (la == lb && memcmp(a, b, la) == 0) return 1.0;
   if (la == 0 || lb == 0) return 0.0;
 
   // Fast prefix/suffix heuristic
-  int prefix = 0;
+  size_t prefix = 0;
   while (prefix < la && prefix < lb && a[prefix] == b[prefix]) prefix++;
 
-  int suffix = 0;
+  size_t suffix = 0;
   while (suffix < la && suffix < lb && a[la - 1 - suffix] == b[lb - 1 - suffix]) suffix++;
 
   double fast_score = (double)(prefix + suffix) / (la > lb ? la : lb);
-  if (has_matching_structural_prefix(a, b) || has_matching_comment_marker(a, b)) {
+  if (has_matching_structural_prefix(a, la, b, lb) || has_matching_comment_marker(a, la, b, lb)) {
     double token_score = token_similarity(a, b, la, lb);
     return token_score > 0.5 ? token_score : 0.5;
   }
@@ -153,11 +152,12 @@ static double similarity(const char *a, const char *b) {
 }
 
 static double table_line_similarity(lua_State *L, int Aidx, int ai, int Bidx, int bi) {
+  size_t len_a = 0, len_b = 0;
   lua_rawgeti(L, Aidx, ai);
-  const char *a = lua_tostring(L, -1);
+  const char *a = lua_tolstring(L, -1, &len_a);
   lua_rawgeti(L, Bidx, bi);
-  const char *b = lua_tostring(L, -1);
-  double score = similarity(a, b);
+  const char *b = lua_tolstring(L, -1, &len_b);
+  double score = similarity(a, len_a, b, len_b);
   lua_pop(L, 2);
   return score;
 }
@@ -196,12 +196,12 @@ static Pair *build_equal_pairs(lua_State *L, int Aidx, int Bidx, int *npairs) {
 }
 
 
-static void push_edit(lua_State *L, const char *tag, const char *key, const char *val) {
+static void push_edit(lua_State *L, const char *tag, const char *key, const char *val, size_t val_len) {
   lua_newtable(L);
   lua_pushstring(L, tag);
   lua_setfield(L, -2, "tag");
   if (val != NULL && key != NULL) {
-    lua_pushstring(L, val);
+    lua_pushlstring(L, val, val_len);
     lua_setfield(L, -2, key);
   }
 }
@@ -268,23 +268,36 @@ static int f_split(lua_State *L) {
  *  A table with the differences in the two strings
  */
 static int f_inline_diff(lua_State *L) {
-  const char *a = luaL_checkstring(L, 1);
-  const char *b = luaL_checkstring(L, 2);
-  if (strcmp(a, b) == 0) {
+  size_t a_len = 0, b_len = 0;
+  const char *a = luaL_checklstring(L, 1, &a_len);
+  const char *b = luaL_checklstring(L, 2, &b_len);
+  lua_Integer budget = luaL_optinteger(L, 3, 4 * 1024 * 1024);
+  if (budget < 0 || (a_len + 1) > (size_t)budget / (b_len + 1)) {
+    lua_pushnil(L);
+    lua_pushliteral(L, "inline diff input is too large");
+    return 2;
+  }
+  if (a_len == b_len && memcmp(a, b, a_len) == 0) {
     lua_newtable(L);
     lua_pushstring(L, "equal");
     lua_setfield(L, -2, "tag");
-    lua_pushstring(L, a);
+    lua_pushlstring(L, a, a_len);
     lua_setfield(L, -2, "val");
     lua_newtable(L);
     lua_rawseti(L, -2, 1); // { {tag="equal", val=a} }
     return 1;
   }
 
-  int m = strlen(a), n = strlen(b);
-  int **dp = SDL_malloc((m+1) * sizeof(int*));
+  int m = (int)a_len, n = (int)b_len;
+  int **dp = SDL_calloc((size_t)m + 1, sizeof(int*));
+  if (!dp) return luaL_error(L, "out of memory preparing inline diff");
   for (int i = 0; i <= m; i++) {
     dp[i] = SDL_calloc(n+1, sizeof(int));
+    if (!dp[i]) {
+      for (int k = 0; k < i; k++) SDL_free(dp[k]);
+      SDL_free(dp);
+      return luaL_error(L, "out of memory preparing inline diff");
+    }
   }
 
   for (int i = 1; i <= m; i++) {
@@ -395,13 +408,14 @@ static int f_diff(lua_State *L) {
     int mj = (pi < npairs) ? pairs[pi].j : lenB + 1;
 
     if (ai == mi && bi == mj) {
+      size_t a_len = 0, b_len = 0;
       lua_rawgeti(L, Aidx, ai);
-      const char *a = lua_tostring(L, -1);
+      const char *a = lua_tolstring(L, -1, &a_len);
       lua_rawgeti(L, Bidx, bi);
-      const char *b = lua_tostring(L, -1);
+      const char *b = lua_tolstring(L, -1, &b_len);
 
-      push_edit(L, "equal", "a", a);
-      lua_pushstring(L, b);
+      push_edit(L, "equal", "a", a, a_len);
+      lua_pushlstring(L, b, b_len);
       lua_setfield(L, -2, "b");
       lua_rawseti(L, result_idx, out_i++);
 
@@ -410,16 +424,17 @@ static int f_diff(lua_State *L) {
     }
     else if (mi > ai && mj > bi) {
       // fallback similarity check for modifications
+      size_t a_len = 0, b_len = 0;
       lua_rawgeti(L, Aidx, ai);
-      const char *a = lua_tostring(L, -1);
+      const char *a = lua_tolstring(L, -1, &a_len);
       lua_rawgeti(L, Bidx, bi);
-      const char *b = lua_tostring(L, -1);
-      double sim_val = similarity(a, b);
+      const char *b = lua_tolstring(L, -1, &b_len);
+      double sim_val = similarity(a, a_len, b, b_len);
       lua_pop(L, 2);
 
       if (sim_val >= 0.4) {
-        push_edit(L, "modify", "a", a);
-        lua_pushstring(L, b);
+        push_edit(L, "modify", "a", a, a_len);
+        lua_pushlstring(L, b, b_len);
         lua_setfield(L, -2, "b");
         lua_rawseti(L, result_idx, out_i++);
 
@@ -435,9 +450,10 @@ static int f_diff(lua_State *L) {
       double skip_a = ai + 1 < mi
         ? table_line_similarity(L, Aidx, ai + 1, Bidx, bi) : 0.0;
       if (skip_b >= 0.4 && skip_b > skip_a) {
+        size_t inserted_len = 0;
         lua_rawgeti(L, Bidx, bi);
-        const char *inserted = lua_tostring(L, -1);
-        push_edit(L, "insert", "b", inserted);
+        const char *inserted = lua_tolstring(L, -1, &inserted_len);
+        push_edit(L, "insert", "b", inserted, inserted_len);
         lua_rawseti(L, result_idx, out_i++);
         lua_pop(L, 1);
         bi++;
@@ -446,16 +462,18 @@ static int f_diff(lua_State *L) {
     }
 
     if (mi > ai) {
+      size_t a_len = 0;
       lua_rawgeti(L, Aidx, ai);
-      const char *a = lua_tostring(L, -1);
-      push_edit(L, "delete", "a", a);
+      const char *a = lua_tolstring(L, -1, &a_len);
+      push_edit(L, "delete", "a", a, a_len);
       lua_rawseti(L, result_idx, out_i++);
       lua_pop(L, 1);
       ai++;
     } else if (mj > bi) {
+      size_t b_len = 0;
       lua_rawgeti(L, Bidx, bi);
-      const char *b = lua_tostring(L, -1);
-      push_edit(L, "insert", "b", b);
+      const char *b = lua_tolstring(L, -1, &b_len);
+      push_edit(L, "insert", "b", b, b_len);
       lua_rawseti(L, result_idx, out_i++);
       lua_pop(L, 1);
       bi++;
@@ -483,16 +501,17 @@ static int diff_iterator(lua_State *L) {
     int mj = (state->pi < npairs) ? pairs[state->pi].j : lenB + 1;
 
     if (state->ai == mi && state->bi == mj) {
+      size_t a_len = 0, b_len = 0;
       lua_rawgeti(L, Aidx, state->ai);
-      const char *a = lua_tostring(L, -1);
+      const char *a = lua_tolstring(L, -1, &a_len);
       lua_pop(L, 1);
 
       lua_rawgeti(L, Bidx, state->bi);
-      const char *b = lua_tostring(L, -1);
+      const char *b = lua_tolstring(L, -1, &b_len);
       lua_pop(L, 1);
 
-      push_edit(L, "equal", "a", a);
-      lua_pushstring(L, b);
+      push_edit(L, "equal", "a", a, a_len);
+      lua_pushlstring(L, b, b_len);
       lua_setfield(L, -2, "b");
 
       state->ai++; state->bi++; state->pi++;
@@ -500,18 +519,19 @@ static int diff_iterator(lua_State *L) {
     }
 
     if (state->ai < mi && state->bi < mj) {
+      size_t a_len = 0, b_len = 0;
       lua_rawgeti(L, Aidx, state->ai);
-      const char *a = lua_tostring(L, -1);
+      const char *a = lua_tolstring(L, -1, &a_len);
       lua_pop(L, 1);
 
       lua_rawgeti(L, Bidx, state->bi);
-      const char *b = lua_tostring(L, -1);
+      const char *b = lua_tolstring(L, -1, &b_len);
       lua_pop(L, 1);
 
-      double sim_val = similarity(a, b);
+      double sim_val = similarity(a, a_len, b, b_len);
       if (sim_val >= 0.4) {
-        push_edit(L, "modify", "a", a);
-        lua_pushstring(L, b);
+        push_edit(L, "modify", "a", a, a_len);
+        lua_pushlstring(L, b, b_len);
         lua_setfield(L, -2, "b");
 
         state->ai++; state->bi++;
@@ -523,31 +543,34 @@ static int diff_iterator(lua_State *L) {
       double skip_a = state->ai + 1 < mi
         ? table_line_similarity(L, Aidx, state->ai + 1, Bidx, state->bi) : 0.0;
       if (skip_b >= 0.4 && skip_b > skip_a) {
+        size_t inserted_len = 0;
         lua_rawgeti(L, Bidx, state->bi);
-        const char *inserted = lua_tostring(L, -1);
+        const char *inserted = lua_tolstring(L, -1, &inserted_len);
         lua_pop(L, 1);
-        push_edit(L, "insert", "b", inserted);
+        push_edit(L, "insert", "b", inserted, inserted_len);
         state->bi++;
         return 1;
       }
     }
 
     if (state->ai < mi) {
+      size_t a_len = 0;
       lua_rawgeti(L, Aidx, state->ai);
-      const char *a = lua_tostring(L, -1);
+      const char *a = lua_tolstring(L, -1, &a_len);
       lua_pop(L, 1);
 
-      push_edit(L, "delete", "a", a);
+      push_edit(L, "delete", "a", a, a_len);
       state->ai++;
       return 1;
     }
 
     if (state->bi < mj) {
+      size_t b_len = 0;
       lua_rawgeti(L, Bidx, state->bi);
-      const char *b = lua_tostring(L, -1);
+      const char *b = lua_tolstring(L, -1, &b_len);
       lua_pop(L, 1);
 
-      push_edit(L, "insert", "b", b);
+      push_edit(L, "insert", "b", b, b_len);
       state->bi++;
       return 1;
     }

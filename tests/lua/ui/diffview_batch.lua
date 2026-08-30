@@ -6,6 +6,7 @@ local test = require "core.test"
 local diffview = require "plugins.diffview"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
+local Editor = require "core.editor"
 local panes = require "core.panes"
 
 local function track(context, kind, value)
@@ -64,6 +65,7 @@ test.describe("DiffView batch behavior", function()
     if context.cleanup_dirty_file_close then pcall(os.remove, context.cleanup_dirty_file_close) end
     if context.cleanup_adopt_left then pcall(os.remove, context.cleanup_adopt_left) end
     if context.cleanup_adopt_right then pcall(os.remove, context.cleanup_adopt_right) end
+    if context.cleanup_shared_file then pcall(os.remove, context.cleanup_shared_file) end
     for _, view in ipairs(context.diffviews or {}) do
       local pane = panes.pane_for_view(view)
       if pane then panes.close_view(pane, { view = view, force = true }) end
@@ -91,6 +93,165 @@ test.describe("DiffView batch behavior", function()
     test.equal("New", view.request.content_titles[2])
   end)
 
+  test.it("reuses the canonical Buffer for a file-backed Diff Side", function(context)
+    local path = core.project_absolute_path("tmp-diff-shared-buffer.txt")
+    pcall(os.remove, path)
+    write_file(path, "original\n")
+    context.cleanup_shared_file = path
+    local canonical = core.open_buffer(path)
+    local editor = TextView(canonical)
+    local view = track(context, "diffviews", diffview.open({
+      contents = {
+        diffview.content.file(path),
+        diffview.content.text("comparison", { editable = false }),
+      },
+      editable_policy = "content",
+    }, true))
+
+    test.equal(view.buffer_view_a.buffer, canonical)
+    view.buffer_view_a:on_text_input("diff ")
+    test.equal(text(editor.buffer), "diff original\n")
+    editor.buffer:apply_edits({ {
+      line1 = 1, col1 = 1, line2 = 1, col2 = 6, text = "editor ",
+    } }, { type = "test" })
+    test.equal(text(view.buffer_view_a.buffer), "editor original\n")
+  end)
+
+  test.it("keeps a selected fragment connected to its source Buffer", function(context)
+    local source = Buffer(nil, nil, true)
+    source:insert(1, 1, "one target three")
+    source:clean()
+    local view = track(context, "diffviews", diffview.open({
+      contents = {
+        diffview.content.text("comparison", { editable = false }),
+        diffview.content.fragment(source, 1, 5, 1, 11, { name = "Selection" }),
+      },
+      editable_policy = "content",
+    }, true))
+
+    view.buffer_view_b:with_selection_state(function()
+      view.buffer_view_b.buffer:set_selection(1, 1, 1, 7)
+    end)
+    view.buffer_view_b:on_text_input("new")
+    test.equal(text(source), "one new three\n")
+
+    source:apply_edits({ {
+      line1 = 1, col1 = 5, line2 = 1, col2 = 8, text = "fresh",
+    } }, { type = "test" })
+    test.equal(text(view.buffer_view_b.buffer), "fresh\n")
+  end)
+
+  test.it("keeps a selected fragment mapped after source text is inserted before it", function(context)
+    local source = Buffer("source.lua", core.project_absolute_path("source.lua"), true)
+    source:insert(1, 1, "before\nselected\nafter")
+    local view = track(context, "diffviews", diffview.open({
+      contents = {
+        diffview.content.text("old"),
+        diffview.content.fragment(source, 2, 1, 2, 9),
+      },
+    }, true))
+
+    source:insert(1, 1, "new first line\n")
+    test.equal(text(view.buffer_view_b.buffer), "selected\n")
+    test.equal(view.buffer_view_b:get_path_target().line, 3)
+    view.buffer_view_b.buffer:remove(1, 1, 1, 9)
+    view.buffer_view_b.buffer:insert(1, 1, "updated")
+    test.equal(source:get_utf8_line(3), "updated\n")
+    view:dispose_integrations()
+    view:dispose_owned_buffers()
+    source:on_close()
+  end)
+
+  test.it("swaps Diff Sides while keeping focus with its source", function(context)
+    local left = Buffer(nil, nil, true)
+    local right = Buffer(nil, nil, true)
+    left:insert(1, 1, "left")
+    right:insert(1, 1, "right")
+    local view = track(context, "diffviews", diffview.open({
+      contents = {
+        diffview.content.buffer(left),
+        diffview.content.buffer(right),
+      },
+    }, true))
+    core.active_view = view.buffer_view_b
+
+    test.ok(command.perform("diff:swap_sides"))
+    test.equal(view.buffer_view_a.buffer, right)
+    test.equal(view.buffer_view_b.buffer, left)
+    test.equal(core.active_view.buffer, right)
+  end)
+
+  test.it("keeps controller side order after a swap and reload", function(context)
+    local chain = diffview.MutableDiffRequestChain({
+      title = "Swap",
+      contents = {
+        diffview.content.text("left", { name = "Left" }),
+        diffview.content.text("right", { name = "Right" }),
+      },
+      content_titles = { "Left", "Right" },
+    })
+    local controller = diffview.DiffRequestController(chain, { noshow = true })
+    local view = track(context, "diffviews", controller:get_view())
+    view.buffer_view_a.diff_view_parent = view
+    core.active_view = view.buffer_view_a
+
+    test.ok(command.perform("diff:swap_sides"))
+    local swapped = controller:get_view()
+    test.equal(text(swapped.buffer_view_a.buffer), "right\n")
+    local reloaded = controller:reload({ noshow = true })
+    test.equal(text(reloaded.buffer_view_a.buffer), "right\n")
+    controller:dispose()
+  end)
+
+  test.it("opens the current Diff source at its mapped line", function(context)
+    local path = core.project_absolute_path("tmp-diff-open-source.txt")
+    pcall(os.remove, path)
+    write_file(path, "one\ntwo\nthree\n")
+    context.cleanup_shared_file = path
+    local view = track(context, "diffviews", diffview.open({
+      contents = {
+        diffview.content.file(path),
+        diffview.content.text("other", { editable = false }),
+      },
+    }, true))
+    panes.place(function() return view end, { placement = "current", focus = true })
+    view.buffer_view_a:with_selection_state(function()
+      view.buffer_view_a.buffer:set_selection(2, 1)
+    end)
+    core.set_active_view(view.buffer_view_a)
+
+    test.ok(command.perform("diff:open_file_at_caret"))
+    local editor = panes.active().current_view
+    test.ok(editor:is(Editor))
+    test.equal(editor.buffer, core.open_buffer(path))
+    local line = editor:with_selection_state(function() return editor.buffer:get_selection() end)
+    test.equal(line, 2)
+  end)
+
+  test.it("compares clipboard text with an editable mapped selection", function(context)
+    local source = Buffer("source.lua", "C:/virtual/source.lua", true)
+    source:insert(1, 1, "before selected after")
+    local editor = TextView(source)
+    editor:with_selection_state(function()
+      source:set_selection(1, 8, 1, 16)
+    end)
+    core.active_view = editor
+    local old_clipboard = system.get_clipboard()
+    system.set_clipboard("clipboard text")
+
+    test.ok(command.perform("diff:compare_selection_with_clipboard"))
+    system.set_clipboard(old_clipboard or "")
+    local view = core.active_view.diff_view_parent
+    track(context, "diffviews", view)
+    test.equal(text(view.buffer_view_a.buffer), "clipboard text\n")
+    test.equal(text(view.buffer_view_b.buffer), "selected\n")
+    view.buffer_view_b:with_selection_state(function()
+      view.buffer_view_b.buffer:set_selection(1, 1, 1, 9)
+    end)
+    view.buffer_view_b:on_text_input("changed")
+    test.equal(text(source), "before changed after\n")
+  end)
+
   test.it("gives generated Diff Sides their source Path Targets", function(context)
     local left_path = system.absolute_path("old-name.lua")
     local right_path = system.absolute_path("new-name.lua")
@@ -112,6 +273,50 @@ test.describe("DiffView batch behavior", function()
     test.equal(right.path, right_path)
     test.equal(right.line, 2)
     test.equal(outer.path, left_path)
+  end)
+
+  test.it("shows a non-text state instead of diffing binary content", function(context)
+    local view = track(context, "diffviews", diffview.open({
+      contents = {
+        diffview.content.text("text\0binary"),
+        diffview.content.text("other"),
+      },
+    }, true))
+    test.equal(view.comparison_message, "Binary content cannot use the text Diff View")
+    test.equal(view.diff_model, nil)
+  end)
+
+  test.it("clears an in-flight updater when edited content becomes binary", function(context)
+    local view = track(context, "diffviews", diffview.open({
+      contents = {
+        diffview.content.text(string.rep("left line\n", 200)),
+        diffview.content.text(string.rep("right line\n", 200)),
+      },
+    }, true))
+    test.not_nil(view.updater_idx)
+
+    view.buffer_view_b.buffer:insert(1, 1, "\0")
+
+    test.equal(view.comparison_message, "Binary content cannot use the text Diff View")
+    test.equal(view.updater_idx, nil)
+  end)
+
+  test.it("reveals the first change when a Diff View opens", function(context)
+    local prefix = {}
+    for i = 1, 40 do prefix[i] = "unchanged " .. i end
+    local left = table.concat(prefix, "\n") .. "\nold value\n"
+    local right = table.concat(prefix, "\n") .. "\nnew value\n"
+    local view = track(context, "diffviews", diffview.open({
+      contents = { diffview.content.text(left), diffview.content.text(right) },
+    }, true))
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 200
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    view:update()
+
+    local line = view.buffer_view_b.buffer:get_selection()
+    test.equal(line, 41)
+    test.ok(view.buffer_view_b.scroll.to.y > 0)
   end)
 
   test.it("rejects invalid diff requests deterministically", function()
@@ -232,13 +437,8 @@ test.describe("DiffView batch behavior", function()
     test.equal(panes.active(), panes.pane_for_view(view))
     test.equal(view.buffer_view_a, core.active_view)
 
-    view.buffer_view_a:on_text_input("left")
-    wait_until(function() return view.updater_idx == nil end, 1, "expected initial diff computation to finish")
-    local before_generation = view.diff_generation
     view.buffer_view_b:on_text_input("right")
-    wait_until(function() return view.diff_generation > before_generation and view.updater_idx == nil end, 1, "expected edit to schedule one rediff")
-
-    view.buffer_view_a.buffer:clean()
+    wait_until(function() return view.updater_idx == nil end, 1, "expected edited diff computation to finish")
 
     local path = core.project_absolute_path("tmp-diff-replace-left.txt")
     pcall(os.remove, path)
@@ -837,6 +1037,29 @@ test.describe("DiffView batch behavior", function()
     end
   end)
 
+  test.it("restores both Blank Diff Buffers from Workspace state", function(context)
+    local controller = diffview.DiffRequestController(diffview.MutableDiffRequestChain({
+      title = "Blank Diff View",
+      kind = "blank",
+      contents = { diffview.content.blank({ name = "Left" }), diffview.content.blank({ name = "Right" }) },
+      content_titles = { "Left", "Right" },
+      editable_policy = "editable",
+      user_data = { blank_diff = true },
+    }, { blank_diff = true }), { noshow = true })
+    local view = track(context, "diffviews", controller:get_view())
+    view.buffer_view_a:on_text_input("left restored")
+    view.buffer_view_b:on_text_input("right restored")
+
+    local state = test.not_nil(view:get_state())
+    local restored = track(context, "diffviews", diffview.from_state(state))
+    test.equal(restored:get_module(), "plugins.diffview")
+    test.equal(text(restored.buffer_view_a.buffer), "left restored\n")
+    test.equal(text(restored.buffer_view_b.buffer), "right restored\n")
+    test.equal(restored.buffer_view_a.buffer.intellij_untitled, true)
+    test.equal(restored.buffer_view_a.buffer.new_file, true)
+    test.not_nil(restored.buffer_view_a.buffer.intellij_untitled_backing_path)
+  end)
+
   test.it("keeps small insert-only hunks compact", function(context)
     local view = track(context, "diffviews", diffview.string_to_string(
       "before\nafter",
@@ -1005,7 +1228,7 @@ test.describe("DiffView batch behavior", function()
     test.equal(view.diff_folds_a[1].hidden_count, view.diff_folds_b[1].hidden_count)
   end)
 
-  test.it("wraps diff change navigation across file boundaries", function(context)
+  test.it("does not wrap change navigation within one file", function(context)
     local view = track(context, "diffviews", diffview.string_to_string(
       "aa\nleft-one\nbb\nleft-two\ncc",
       "aa\nbb\ncc",
@@ -1019,9 +1242,9 @@ test.describe("DiffView batch behavior", function()
     core.set_active_view(left)
     left.buffer:set_selection(4, 1)
     test.ok(command.perform("diff:next_change"))
-    test.equal(left.buffer:get_selection(), 2)
-    test.ok(command.perform("diff:prev_change"))
     test.equal(left.buffer:get_selection(), 4)
+    test.ok(command.perform("diff:prev_change"))
+    test.equal(left.buffer:get_selection(), 2)
   end)
 
   test.it("uses providers and listeners without replacing child TextView or Buffer methods", function(context)

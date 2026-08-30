@@ -11,6 +11,7 @@ local Editor = require "core.editor"
 local View = require "core.view"
 local RootPanel = require "core.rootpanel"
 local git_view = require "plugins.git_view"
+local diffview = require "plugins.diffview"
 local path_tree = require "plugins.path_tree"
 local real_backend = require "plugins.git.backend"
 require "core.poi"
@@ -135,10 +136,15 @@ test.describe("Git View command", function()
     test.equal(session.hidden, false)
   end)
 
-  test.it("does not repeat the Git Pane Tab title inside the Git screen", function(context)
+  test.it("keeps existing commits visible while the Git Log refreshes", function(context)
     local session, view = open_fake_git_view(context.project)
-    view.position.y = 30
-    test.equal(view:commit_list_y(), view.position.y + style.padding.y)
+    local tab = view.model:log_tab()
+    tab.commits = { { hash = "abc", short_hash = "abc", subject = "Existing commit" } }
+    tab.loading = true
+
+    view:update_pane_buffers()
+
+    test.ok(view:pane_view("log-list").buffer:get_utf8_line(1):find("Existing commit", 1, true))
   end)
 
   test.test("opened Git items become Pane history Views", function(context)
@@ -196,6 +202,22 @@ test.describe("Git View command", function()
     test.equal(session.hidden, false)
   end)
 
+  test.it("refreshes the current Git View when application focus returns", function(context)
+    local session, view = open_fake_git_view(context.project)
+    local calls = 0
+    view.model.refresh_log = function(_, callback)
+      calls = calls + 1
+      if callback then callback(view.model, nil) end
+    end
+    core.active_view = view:pane_view("log-list")
+    core.active_window = core.window
+
+    core.on_event("focuslost")
+    core.on_event("focusgained")
+
+    test.equal(calls, 1)
+  end)
+
   test.it("uses the represented file as a File History Path Target", function(context)
     local session, view = open_fake_git_view(context.project)
     local tab = {
@@ -216,19 +238,74 @@ test.describe("Git View command", function()
     test.is_nil(target.line)
   end)
 
-  test.test("selecting a history commit loads changed files for details", function(context)
+  test.it("opens File History from a selected Path Target", function(context)
+    local session = open_fake_git_view(context.project)
+    local target = View()
+    target.get_path_target = function()
+      return { path = "C:/repo/src/from-tree.lua" }
+    end
+    core.active_view = target
+    local old_lookup = real_backend.repo_for_path_async
+    real_backend.repo_for_path_async = function(path, callback)
+      callback({ root = "C:/repo", relpath = "src/from-tree.lua" }, nil)
+    end
+
+    command.perform("git:show_history")
+    real_backend.repo_for_path_async = old_lookup
+
+    local found
+    for _, tab in ipairs(session.git_model.tabs) do
+      if tab.relpath == "src/from-tree.lua" then found = tab end
+    end
+    test.not_nil(found)
+  end)
+
+  test.it("opens Selection History from a file-backed Diff fragment", function(context)
+    local session = open_fake_git_view(context.project)
+    local source = Buffer("src/source.lua", "C:/repo/src/source.lua", true)
+    source:insert(1, 1, "before\nselected\nafter")
+    local diff = diffview.open({
+      contents = {
+        diffview.content.text("old"),
+        diffview.content.fragment(source, 2, 1, 2, 9),
+      },
+    }, true)
+    core.active_view = diff.buffer_view_b
+    diff.buffer_view_b:with_selection_state(function()
+      diff.buffer_view_b.buffer:set_selection(1, 1, 1, 5)
+    end)
+    local old_lookup = real_backend.repo_for_path_async
+    real_backend.repo_for_path_async = function(path, callback)
+      callback({ root = "C:/repo", relpath = "src/source.lua" }, nil)
+    end
+
+    command.perform("git:show_selection_history")
+    real_backend.repo_for_path_async = old_lookup
+
+    local found
+    for _, tab in ipairs(session.git_model.tabs) do
+      if tab.relpath == "src/source.lua" and tab.history_context then found = tab end
+    end
+    test.equal(found.history_context.start_line, 2)
+    test.equal(found.history_context.end_line, 2)
+    diff:dispose_integrations()
+    diff:dispose_owned_buffers()
+    source:on_close()
+  end)
+
+  test.test("selecting a history commit loads its embedded Diff preview", function(context)
     local session, view = open_fake_git_view(context.project)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 600
-    local changed_file_calls = 0
+    local file_at_calls = 0
     view.model.repo = { root = "C:/repo" }
     view.model.backend = {
       WORKING_TREE = real_backend.WORKING_TREE,
       EMPTY_TREE = real_backend.EMPTY_TREE,
       diff_endpoint_for_commit = real_backend.diff_endpoint_for_commit,
-      changed_files = function(repo, left, right, opts, callback)
-        changed_file_calls = changed_file_calls + 1
-        callback({ { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" } }, nil)
+      file_at = function(repo, rev, relpath, opts, callback)
+        file_at_calls = file_at_calls + 1
+        callback(rev .. ":" .. relpath, nil)
         return { cancel = function() end }
       end,
     }
@@ -249,17 +326,34 @@ test.describe("Git View command", function()
     local history_view = git_view.ensure_tab_view(session, tab, true)
     history_view.position.x, history_view.position.y = 0, 0
     history_view.size.x, history_view.size.y = 800, 600
-    changed_file_calls = 0
+    file_at_calls = 0
 
     history_view:on_mouse_pressed("left", 10, history_view:history_commits_y() + history_view:row_height() + 1, 1)
 
     test.equal(tab.selected_commit, 2)
-    test.equal(changed_file_calls, 1)
-    test.equal(tab.commits[2].changed_files[1].new_path, "src/app.lua")
+    test.equal(file_at_calls, 1)
+    test.equal(tab.preview_right_text, "b:src/app.lua")
 
+    local tab_count = #view.model.tabs
+    history_view:on_mouse_pressed(
+      "left", 10,
+      history_view:history_commits_y() + history_view:row_height() + 1,
+      2
+    )
+    test.equal(#view.model.tabs, tab_count)
+
+    local preview = history_view:ensure_history_diff_view(tab)
+    preview.position.x = math.floor(history_view.size.x * 0.34) + style.padding.x
+    preview.position.y = history_view:history_commits_y()
+    preview.size.x = history_view.size.x - preview.position.x
+    preview.size.y = history_view.size.y - preview.position.y
+    preview:update()
+    local calls_before_diff_click = file_at_calls
     history_view:on_mouse_pressed("left", 700, history_view:history_commits_y() + 1, 1)
     test.equal(tab.selected_commit, 2)
-    test.equal(changed_file_calls, 1)
+    test.equal(file_at_calls, calls_before_diff_click)
+    test.ok(core.active_view == tab.history_diff_view.buffer_view_a
+      or core.active_view == tab.history_diff_view.buffer_view_b)
   end)
 
   test.it("commit diff file list renders changed files as a project-relative tree", function(context)
@@ -597,6 +691,69 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_owner_view, tab_view)
   end)
 
+  test.it("uses the canonical editable Buffer for a working-tree Diff Side", function(context)
+    local session, view = open_fake_git_view(context.project)
+    view.model.repo = { root = "C:/repo" }
+    local path = common.normalize_path("C:/repo/src/app.lua")
+    local buffer = Buffer("src/app.lua", path, true)
+    buffer:insert(1, 1, "unsaved current")
+    core.buffer_registry:register(buffer, path)
+    local tab = {
+      id = "working-buffer",
+      kind = "commit_diff",
+      title = "Working Diff",
+      left = "HEAD",
+      right = real_backend.WORKING_TREE,
+      changed_files = { { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" } },
+      selected_file = 1,
+      left_text = "committed\n",
+      right_text = "",
+      right_current_path = "src/app.lua",
+      left_name = "src/app.lua",
+      right_name = "src/app.lua",
+      diff_generation = 1,
+    }
+    local diff = view:ensure_diff_view(tab)
+
+    test.equal(diff.buffer_view_b.buffer, buffer)
+    test.equal(table.concat(diff.buffer_view_b.buffer.lines), "unsaved current\n")
+    diff.buffer_view_b:on_text_input("edited ")
+    test.equal(table.concat(buffer.lines), "edited unsaved current\n")
+    buffer:on_close()
+  end)
+
+  test.it("continues change navigation into the next changed file on repeat", function(context)
+    local session, view = open_fake_git_view(context.project)
+    view.model.repo = { root = "C:/repo" }
+    local tab = {
+      id = "cross-file-navigation",
+      kind = "commit_diff",
+      title = "Diff",
+      left = "parent",
+      right = "commit",
+      changed_files = {
+        { status = "modified", old_path = "a.lua", new_path = "a.lua" },
+        { status = "modified", old_path = "b.lua", new_path = "b.lua" },
+      },
+      selected_file = 1,
+      left_text = "old\n",
+      right_text = "new\n",
+      left_name = "a.lua",
+      right_name = "a.lua",
+      diff_generation = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    view.model.active_tab = tab.id
+    local diff = view:ensure_diff_view(tab)
+    local boundary = diff.request.user_data.on_change_boundary
+    test.equal(type(boundary), "function")
+
+    boundary(1, diff.buffer_view_b)
+    test.equal(tab.selected_file, 1)
+    boundary(1, diff.buffer_view_b)
+    test.equal(tab.selected_file, 2)
+  end)
+
   test.test("opening Git over a dirty Untitled requests one close confirmation", function(context)
     local buffer = Buffer(nil, nil, true)
     buffer.intellij_untitled = true
@@ -791,8 +948,8 @@ test.describe("Git View command", function()
     test.equal(nil, diff.request.metadata)
     test.equal(diff.request.user_data.selected_file_path, "a.lua")
     test.equal(diff.request.user_data.source, "git")
-    test.equal(diff.request.user_data.read_only_reason, "Git commit diff is read-only")
-    test.equal(diff.request.editable_policy, "read-only")
+    test.equal(diff.request.user_data.read_only_reason, "Historical Git content is read-only")
+    test.equal(diff.request.editable_policy, "content")
     test.equal(core.active_view, diff.buffer_view_a)
     diff.buffer_view_a.get_points_of_interest = function()
       return { { line = 2, col = 1, line_only_navigation = true, scroll_to_line = true } }
@@ -998,6 +1155,7 @@ test.describe("Git View command", function()
     view.model.active_tab = history_tab.id
     session:hide()
 
+    test.equal(view:get_state().session.hidden, true)
     local state = git_view.save_state(session)
     panes.git_sessions = {}
     git_view.restore_state(context.project, state, {
@@ -1024,7 +1182,7 @@ test.describe("Git View command", function()
     test.equal(state.panes[1].view.state.tab_id, history_tab.id)
 
     panes.reset_for_tests()
-    panes.git_sessions = {}
+    test.equal(panes.git_sessions[context.project.path], session)
     test.ok(panes.restore_workspace_state(state, function(saved)
       return require(saved.module).from_state(saved.state)
     end))
@@ -1161,18 +1319,18 @@ test.describe("Git View command", function()
     test.equal(session.hidden, false)
   end)
 
-  test.test("closing the Git Log Pane Tab removes the owning Git session", function(context)
+  test.test("closing the Git Log hides it while retaining project Git state", function(context)
     local session, view = open_fake_git_view(context.project)
     local closed = false
     local pane = panes.pane_for_view(view)
     closed = panes.close_view(pane, { view = view })
     test.equal(closed, true)
     test.equal(session.hidden, true)
-    test.equal(session.git_view, nil)
-    test.equal(panes.git_sessions[context.project.path], nil)
+    test.equal(session.git_view, view)
+    test.equal(panes.git_sessions[context.project.path], session)
   end)
 
-  test.test("closing the Git Log Pane Tab removes sibling Git tabs and repairs focus", function(context)
+  test.test("closing the Git Log leaves sibling Git Views open", function(context)
     local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-sibling",
@@ -1186,9 +1344,9 @@ test.describe("Git View command", function()
     core.active_view = sibling
     local pane = panes.pane_for_view(view)
     panes.close_view(pane, { view = view })
-    test.equal(panes.git_sessions[context.project.path], nil)
-    test.equal(#session_views(session), 0)
-    test.ok(core.active_view ~= sibling)
+    test.equal(panes.git_sessions[context.project.path], session)
+    test.ok(panes.pane_for_view(sibling) ~= nil)
+    test.ok(core.active_view == sibling or core.active_view.git_owner_view == sibling)
     test.ok(panes.validate())
   end)
 
@@ -1233,7 +1391,10 @@ test.describe("Git View command", function()
     test.not_nil(command.map["git:open"])
     test.not_nil(command.map["git:open_selected_commit_diff"])
     test.not_nil(command.map["git:open_working_tree_diff"])
-    test.not_nil(command.map["git:show_file_history"])
+    test.not_nil(command.map["git:show_history"])
+    test.not_nil(command.map["git:open_current_file_diff"])
+    test.not_nil(command.map["git:copy_selected_commit_hash"])
+    test.not_nil(command.map["git:copy_selected_commit_message"])
     test.not_nil(command.map["git:show_selection_history"])
     test.not_nil(command.map["git:open_selected_historical_buffer"])
     test.not_nil(command.map["git:close_selected_tab"])

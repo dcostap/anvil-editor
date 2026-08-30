@@ -2,7 +2,11 @@
 -- UI-independent model for the project Git View.
 
 local config = require "core.config"
+local core = require "core"
+local common = require "core.common"
+local range_marker = require "core.range_marker"
 local backend_default = require "plugins.git.backend"
+local diff_model = require "plugins.diff.model"
 
 local Model = {}
 Model.__index = Model
@@ -74,7 +78,11 @@ local function lightweight_commit(commit)
     subject = commit.subject,
     author_name = commit.author_name,
     author_email = commit.author_email,
-    time = commit.time,
+    author_time = commit.author_time,
+    committer_name = commit.committer_name,
+    committer_email = commit.committer_email,
+    commit_time = commit.commit_time,
+    body = commit.body,
     refs = commit.refs,
     parents = clone_table(commit.parents),
   }
@@ -141,6 +149,7 @@ function Model:get_state()
         commit = lightweight_commit(tab.commit),
         selected_file = tab.selected_file,
         selected_file_path = tab.selected_file_path or selected_file and changed_file_path(selected_file),
+        file_scroll = tab.file_scroll,
         file_tree_collapsed = clone_boolean_map(tab.file_tree_collapsed),
       }
     elseif tab.kind == "file_history" then
@@ -168,6 +177,7 @@ function Model:apply_state(state)
   for _, tab in ipairs(self.tabs or {}) do
     tab.pending_history_callbacks = nil
     tab.pending_load_callbacks = nil
+    self:dispose_tab(tab)
   end
   self:cancel_jobs()
   self.repo = type(state.repo) == "table" and state.repo.root and { root = state.repo.root } or nil
@@ -189,6 +199,7 @@ function Model:apply_state(state)
         changed_files = {},
         selected_file = tonumber(saved.selected_file) or 1,
         selected_file_path = saved.selected_file_path,
+        file_scroll = tonumber(saved.file_scroll) or 0,
         file_tree_collapsed = clone_boolean_map(saved.file_tree_collapsed) or {},
         loading = false,
         loading_file = false,
@@ -247,7 +258,7 @@ function Model:select_tab(id, callback)
       if #(tab.commits or {}) == 0 and not tab.loading then
         self:load_file_history(tab, callback)
       else
-        self:load_commit_changed_files(tab.commits and tab.commits[tab.selected_commit], callback)
+        self:load_history_preview(tab, callback)
       end
     end
     return tab
@@ -281,9 +292,27 @@ function Model:select_log_index(index, callback)
   return tab.commits[index]
 end
 
+function Model:dispose_tab(tab)
+  if not tab then return end
+  if tab.history_buffer and tab.history_listener_id then
+    tab.history_buffer:remove_text_change_listener(tab.history_listener_id)
+    tab.history_buffer, tab.history_listener_id = nil, nil
+  end
+  tab.preview_generation = (tab.preview_generation or 0) + 1
+  for _, job in ipairs(tab.preview_jobs or {}) do
+    if job and job.cancel then pcall(job.cancel, job) end
+  end
+  tab.preview_jobs = nil
+  if tab.history_range_marker then
+    range_marker.remove(tab.history_range_marker)
+    tab.history_range_marker = nil
+  end
+end
+
 function Model:close_selected_tab()
   local tab = self:selected_tab()
   if not tab or not tab.closable then return false end
+  self:dispose_tab(tab)
   for i, candidate in ipairs(self.tabs) do
     if candidate == tab then
       table.remove(self.tabs, i)
@@ -345,6 +374,58 @@ local function normalize_for_diff(text)
   return tostring(text or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
 end
 
+local function dispose_diff_view(tab)
+  if not (tab and tab.diff_view) then return end
+  tab.diff_view:dispose_integrations()
+  tab.diff_view:dispose_owned_buffers()
+  tab.diff_view = nil
+end
+
+local function line_fragment(text, start_line, end_line)
+  local lines = {}
+  for line in (normalize_for_diff(text) .. "\n"):gmatch("(.-\n)") do lines[#lines + 1] = line end
+  local out = {}
+  start_line = math.max(1, tonumber(start_line) or 1)
+  end_line = math.max(start_line, tonumber(end_line) or start_line)
+  for line = start_line, math.min(end_line, #lines) do out[#out + 1] = lines[line] end
+  return table.concat(out):gsub("\n$", "")
+end
+
+local function text_lines(text)
+  local lines = {}
+  text = normalize_for_diff(text)
+  if text == "" then return { "\n" } end
+  if text:sub(-1) ~= "\n" then text = text .. "\n" end
+  for line in text:gmatch("(.-\n)") do lines[#lines + 1] = line end
+  return lines
+end
+
+local function update_local_selection_diff(tab, current_text, head_text)
+  local context = tab.history_context
+  if not (context and context.type == "selection") then return nil end
+  local previous = tab.local_selection_diff
+  local left_start, left_end
+  if previous and previous.head_text == head_text then
+    left_start = previous.left_start_line
+    left_end = previous.left_end_line
+  else
+    local mapping = diff_model.compute(text_lines(head_text), text_lines(current_text))
+    local start_mapping = { mapping:map_range("b", context.start_line) }
+    local end_mapping = { mapping:map_range("b", context.end_line) }
+    left_start, left_end = start_mapping[3], end_mapping[4]
+  end
+  local tracked = {
+    left_text = line_fragment(head_text, left_start, left_end),
+    right_text = line_fragment(current_text, context.start_line, context.end_line),
+    left_start_line = left_start,
+    left_end_line = left_end,
+    right_start_line = context.start_line,
+    head_text = head_text,
+  }
+  tab.local_selection_diff = tracked
+  return tracked.left_text ~= tracked.right_text
+end
+
 local function path_for_file(file, side)
   if not file then return nil end
   if side == "left" then return file.old_path or file.path end
@@ -375,6 +456,30 @@ local function working_tree_diff_records(records)
     end
   end
   return filtered
+end
+
+local function add_dirty_buffer_records(repo, records, seen)
+  if not (repo and repo.root and core.buffer_registry) then return end
+  for _, buffer in ipairs(core.buffer_registry:list()) do
+    local path = buffer.abs_filename and common.normalize_path(buffer.abs_filename)
+    if path and buffer.is_dirty and buffer:is_dirty()
+        and core.buffer_registry:reference_count(buffer) > 0
+        and (common.path_equals(path, repo.root) or common.path_belongs_to(path, repo.root)) then
+      local root = common.normalize_path(repo.root):gsub("[\\/]+$", "")
+      local relpath = path:sub(#root + 2):gsub("\\", "/")
+      if relpath ~= "" and not seen[relpath] then
+        local untracked = system.get_file_info(path) == nil
+        records[#records + 1] = {
+          status = untracked and "untracked" or "modified",
+          kind = untracked and "untracked" or "modified",
+          old_path = relpath,
+          new_path = relpath,
+          path = relpath,
+        }
+        seen[relpath] = true
+      end
+    end
+  end
 end
 
 function Model:_new_diff_tab(commit, endpoint)
@@ -444,12 +549,8 @@ function Model:open_selected_commit_diff(callback, opts)
   return self:open_commit_diff(self:selected_commit(), callback, opts)
 end
 
-function Model:open_working_tree_diff(callback)
-  local log_tab = self:log_tab()
-  for _, commit in ipairs(log_tab.commits) do
-    if commit.kind == "working_tree" then return self:open_commit_diff(commit, callback) end
-  end
-  return self:open_commit_diff({ kind = "working_tree", changed_files = {} }, callback)
+function Model:open_working_tree_diff(callback, opts)
+  return self:open_commit_diff({ kind = "working_tree", changed_files = {} }, callback, opts)
 end
 
 function Model:open_history_tab(relpath, context, callback)
@@ -477,6 +578,7 @@ function Model:open_history_tab(relpath, context, callback)
     self.tabs[#self.tabs + 1] = tab
   end
   self.active_tab = tab.id
+  self:attach_history_buffer(tab)
   if #tab.commits == 0 then self:load_file_history(tab, callback) end
   return tab
 end
@@ -553,6 +655,8 @@ function Model:load_file_history(tab, callback)
   local generation = tab.history_generation
   tab.loading = true
   tab.error = nil
+  local replace_existing = tab.replace_history_on_load == true
+  tab.replace_history_on_load = nil
   local limit = log_limit()
   local job, done
   local opts = {
@@ -566,7 +670,20 @@ function Model:load_file_history(tab, callback)
     if generation ~= tab.history_generation then return end
     tab.loading = false
     tab.error = err
+    local function notify(_, preview_err)
+      local final_err = err or preview_err
+      local callbacks = tab.pending_history_callbacks or {}
+      tab.pending_history_callbacks = nil
+      if callback then callback(self, final_err) end
+      for _, cb in ipairs(callbacks) do cb(self, final_err) end
+      if self.on_update then self.on_update(self) end
+    end
+    local function publish()
+      if self:load_history_preview(tab, notify) then return end
+      notify()
+    end
     if page and page.commits then
+      if replace_existing then tab.commits = {} end
       for _, commit in ipairs(page.commits) do
         commit.kind = commit.kind or "commit"
         commit.short_hash = commit.hash and commit.hash:sub(1, 8) or ""
@@ -576,13 +693,9 @@ function Model:load_file_history(tab, callback)
       tab.next_offset = page.next_offset
       apply_commit_anchor(tab)
       if tab.selected_commit > #tab.commits then tab.selected_commit = math.max(1, #tab.commits) end
-      self:load_commit_changed_files(tab.commits[tab.selected_commit])
+      if not err and self:refresh_local_changes_revision(tab, publish) then return end
     end
-    local callbacks = tab.pending_history_callbacks or {}
-    tab.pending_history_callbacks = nil
-    if callback then callback(self, err) end
-    for _, cb in ipairs(callbacks) do cb(self, err) end
-    if self.on_update then self.on_update(self) end
+    publish()
   end
   if tab.history_context and tab.history_context.type == "selection" then
     job = self.backend.selection_history(
@@ -595,12 +708,263 @@ function Model:load_file_history(tab, callback)
   return true
 end
 
+function Model:refresh_local_changes_revision(tab, callback)
+  if not (tab and self.repo and self.repo.root) then return false end
+  local path = common.normalize_path(self.repo.root .. PATHSEP .. tab.relpath)
+  local buffer = core.buffer_registry and core.buffer_registry:find(path)
+  if not buffer then return false end
+  self:attach_history_buffer(tab)
+  local current_text = normalize_for_diff(table.concat(buffer.lines or {}))
+  local job, done
+  job = self.backend.file_at(self.repo, "HEAD", tab.relpath, {}, function(text, err)
+    done = true
+    self:_untrack_job(job)
+    if err and self.backend.is_missing_path_error and self.backend.is_missing_path_error(err) then
+      text, err = "", nil
+    end
+    local head_text = normalize_for_diff(text)
+    tab.history_head_text = not err and head_text or tab.history_head_text
+    for index = #tab.commits, 1, -1 do
+      if tab.commits[index].kind == "local_changes" then table.remove(tab.commits, index) end
+    end
+    local context = tab.history_context
+    local changed
+    if context and context.type == "selection" then
+      changed = update_local_selection_diff(tab, current_text, head_text)
+    else
+      changed = current_text ~= head_text
+    end
+    if not err and changed then
+      table.insert(tab.commits, 1, {
+        kind = "local_changes",
+        subject = "Local Changes",
+        short_hash = "local",
+        hash = nil,
+        author_name = "",
+        refs = "",
+      })
+      if tab.selected_commit_hash then
+        apply_commit_anchor(tab)
+      else
+        tab.selected_commit = 1
+      end
+      core.log_quiet("Git File History added Local Changes Revision for %s", tab.relpath)
+    end
+    callback()
+  end)
+  if not done then self:_track_job(job) end
+  return true
+end
+
+function Model:update_local_changes_from_buffer(tab)
+  local buffer = tab and tab.history_buffer
+  if not (buffer and tab.history_head_text ~= nil) then return false end
+  local current_text = normalize_for_diff(table.concat(buffer.lines or {}))
+  local context = tab.history_context
+  local changed
+  if context and context.type == "selection" then
+    changed = update_local_selection_diff(tab, current_text, tab.history_head_text)
+  else
+    changed = current_text ~= tab.history_head_text
+  end
+  local had_local = false
+  for index = #tab.commits, 1, -1 do
+    if tab.commits[index].kind == "local_changes" then
+      had_local = true
+      if not changed then table.remove(tab.commits, index) end
+    end
+  end
+  if changed and not had_local then
+    table.insert(tab.commits, 1, {
+      kind = "local_changes", subject = "Local Changes", short_hash = "local",
+      hash = nil, author_name = "", refs = "",
+    })
+  end
+  apply_commit_anchor(tab)
+  if tab.selected_commit > #tab.commits then tab.selected_commit = math.max(1, #tab.commits) end
+  if self:selected_tab() == tab then self:load_history_preview(tab) end
+  if self.on_update then self.on_update(self) end
+  return changed ~= had_local
+end
+
+function Model:attach_history_buffer(tab)
+  if not (tab and self.repo and self.repo.root and core.buffer_registry) then return false end
+  local path = common.normalize_path(self.repo.root .. PATHSEP .. tab.relpath)
+  local buffer = core.buffer_registry:find(path)
+  if not buffer then return false end
+  if tab.history_buffer == buffer and tab.history_listener_id then return true end
+  if tab.history_buffer and tab.history_listener_id then
+    tab.history_buffer:remove_text_change_listener(tab.history_listener_id)
+  end
+  local id = "git-history-" .. tab.id
+  tab.history_buffer, tab.history_listener_id = buffer, id
+  local context = tab.history_context
+  if context and context.type == "selection" and not tab.history_range_marker then
+    local end_line = math.min(#buffer.lines, context.end_line)
+    tab.history_range_marker = range_marker.new(buffer, {
+      line1 = context.start_line, col1 = 1,
+      line2 = end_line, col2 = #(buffer.lines[end_line] or ""),
+      sticky_right = true,
+      preserve_on_replace = true,
+      kind = "git-selection-history",
+    })
+  end
+  buffer:add_text_change_listener(id, {
+    after_change = function()
+      local tracked = tab.history_range_marker and tab.history_range_marker:range()
+      if tracked then
+        context.start_line, context.end_line = tracked.line1, tracked.line2
+      end
+      self:update_local_changes_from_buffer(tab)
+    end,
+  })
+  return true
+end
+
+function Model:select_history_index(tab, index, callback)
+  tab = tab or self:selected_tab()
+  if not tab or tab.kind ~= "file_history" or #(tab.commits or {}) == 0 then return nil end
+  index = math.max(1, math.min(#tab.commits, tonumber(index) or 1))
+  tab.selected_commit = index
+  local commit = tab.commits[index]
+  tab.selected_commit_hash = commit and commit.hash or nil
+  self:load_history_preview(tab, callback)
+  return commit
+end
+
+function Model:load_history_preview(tab, callback)
+  tab = tab or self:selected_tab()
+  if not tab or tab.kind ~= "file_history" then return false end
+  local commit = tab.commits and tab.commits[tab.selected_commit]
+  if not commit then return false end
+  tab.preview_generation = (tab.preview_generation or 0) + 1
+  local generation = tab.preview_generation
+  for _, job in ipairs(tab.preview_jobs or {}) do
+    if job and job.cancel then pcall(job.cancel, job) end
+  end
+  tab.preview_jobs = {}
+  tab.preview_loading = true
+  tab.preview_error = nil
+  local left_rev, right_rev
+  if commit.kind == "local_changes" then
+    left_rev, right_rev = "HEAD", self.backend.WORKING_TREE
+  else
+    right_rev = commit.hash
+    local older = tab.commits[tab.selected_commit + 1]
+    left_rev = older and older.hash or commit.parents and commit.parents[1] or self.backend.EMPTY_TREE
+  end
+  local right_path = commit.kind == "local_changes" and tab.relpath
+    or commit.history_path or tab.relpath
+  local left_path = commit.kind == "local_changes" and tab.relpath
+    or commit.history_parent_path or right_path
+  local context = tab.history_context
+  local tracked = context and context.type == "selection" and commit.selection_diff
+  if tracked and commit.kind ~= "local_changes" then
+    tab.preview_loading = false
+    tab.preview_left_text = tracked.left_text or ""
+    tab.preview_right_text = tracked.right_text or ""
+    tab.preview_source_line = math.max(1, tracked.right_start_line or context.start_line)
+    tab.preview_right_fragment = nil
+    tab.preview_right_current_path = nil
+    tab.preview_left_name = (tracked.left_start_line == 0 and tracked.left_text == "")
+      and "File did not exist" or short_rev(left_rev) .. ":" .. left_path
+    tab.preview_right_name = short_rev(right_rev) .. ":" .. right_path
+    tab.preview_generation_value = (tab.preview_generation_value or 0) + 1
+    if callback then callback(self, nil) end
+    if self.on_update then self.on_update(self) end
+    return true
+  end
+  local pending = 2
+  local left_text, right_text, right_current_path, preview_err
+  local left_missing, right_missing = false, false
+  local function finish()
+    pending = pending - 1
+    if pending ~= 0 or generation ~= tab.preview_generation then return end
+    tab.preview_loading = false
+    tab.preview_jobs = {}
+    tab.preview_error = preview_err
+    if not preview_err then
+      local context = tab.history_context
+      if context and context.type == "selection" then
+        local local_tracked = commit.kind == "local_changes" and tab.local_selection_diff
+        tab.preview_left_text = local_tracked and local_tracked.left_text
+          or line_fragment(left_text, context.start_line, context.end_line)
+        tab.preview_right_text = local_tracked and local_tracked.right_text
+          or line_fragment(right_text, context.start_line, context.end_line)
+        tab.preview_source_line = local_tracked and local_tracked.right_start_line or context.start_line
+        tab.preview_right_fragment = right_current_path and {
+          start_line = local_tracked and local_tracked.right_start_line or context.start_line,
+          end_line = local_tracked
+            and (local_tracked.right_start_line + math.max(0, context.end_line - context.start_line))
+            or context.end_line,
+        } or nil
+        right_current_path = nil
+      else
+        tab.preview_left_text = normalize_for_diff(left_text)
+        tab.preview_right_text = normalize_for_diff(right_text)
+        tab.preview_source_line = nil
+        tab.preview_right_fragment = nil
+      end
+      tab.preview_right_current_path = right_current_path
+      tab.preview_left_name = short_rev(left_rev) .. ":" .. left_path
+      tab.preview_right_name = right_rev == self.backend.WORKING_TREE
+        and right_path or short_rev(right_rev) .. ":" .. right_path
+      if left_missing then tab.preview_left_name = "File did not exist" end
+      if right_missing then tab.preview_right_name = "File did not exist" end
+      tab.preview_generation_value = (tab.preview_generation_value or 0) + 1
+    end
+    if callback then callback(self, preview_err) end
+    if self.on_update then self.on_update(self) end
+  end
+  local function load(rev, side, relpath)
+    if rev == self.backend.EMPTY_TREE then
+      if side == "left" then left_text = "" else right_text = "" end
+      finish()
+      return
+    end
+    if rev == self.backend.WORKING_TREE then
+      right_text = ""
+      right_current_path = relpath
+      finish()
+      return
+    end
+    if rev == "HEAD" and tab.history_head_text ~= nil then
+      if side == "left" then left_text = tab.history_head_text else right_text = tab.history_head_text end
+      finish()
+      return
+    end
+    local job, done
+    job = self.backend.file_at(self.repo, rev, relpath, {}, function(text, err)
+      done = true
+      self:_untrack_job(job)
+      if generation ~= tab.preview_generation then return end
+      if err and self.backend.is_missing_path_error and self.backend.is_missing_path_error(err) then
+        if side == "left" then left_missing = true else right_missing = true end
+        text, err = "", nil
+      end
+      if err and not preview_err then preview_err = err end
+      if side == "left" then left_text = text or "" else right_text = text or "" end
+      finish()
+    end)
+    if not done then
+      self:_track_job(job)
+      tab.preview_jobs[#tab.preview_jobs + 1] = job
+    end
+  end
+  load(left_rev, "left", left_path)
+  load(right_rev, "right", right_path)
+  return true
+end
+
 function Model:clear_diff_content(tab)
   tab.file_generation = (tab.file_generation or 0) + 1
+  dispose_diff_view(tab)
   tab.loading_file = false
   tab.file_loading_started_at = nil
   tab.file_error = nil
   tab.left_text, tab.right_text = nil, nil
+  tab.left_current_path, tab.right_current_path = nil, nil
+  tab.non_text = nil
   tab.left_name, tab.right_name = nil, nil
   tab.diff_view = nil
   tab.diff_generation = (tab.diff_generation or 0) + 1
@@ -624,7 +988,7 @@ function Model:load_changed_files(tab, callback)
     tab.loading = false
     tab.error = err
     tab.changed_files = files or {}
-    tab.file_scroll = 0
+    if #tab.changed_files == 0 then tab.file_scroll = 0 end
     if tab.selected_file_path then
       local selected_file = changed_file_index_by_path(tab.changed_files, tab.selected_file_path)
       tab.selected_file = selected_file or math.min(tab.selected_file or 1, math.max(1, #tab.changed_files))
@@ -664,6 +1028,7 @@ function Model:load_changed_files(tab, callback)
         local path = record.path or record.new_path or record.old_path
         if path and not seen[path] then records[#records + 1] = record end
       end
+      add_dirty_buffer_records(self.repo, records, seen)
       finish(records, (#records == 0) and final_err or nil)
     end
     local diff_job, diff_done
@@ -707,6 +1072,7 @@ function Model:select_diff_file(tab, index, callback)
   tab = tab or self:selected_tab()
   if not tab or tab.kind ~= "commit_diff" then return nil end
   if #tab.changed_files == 0 then return nil end
+  tab.change_boundary_arm = nil
   tab.selected_file = math.max(1, math.min(#tab.changed_files, tonumber(index) or 1))
   tab.selected_file_path = changed_file_path(tab.changed_files[tab.selected_file])
   self:load_selected_diff_file(tab, callback)
@@ -748,13 +1114,28 @@ function Model:load_selected_diff_file(tab, callback)
   if not tab or tab.kind ~= "commit_diff" then return false end
   local file = tab.changed_files and tab.changed_files[tab.selected_file]
   if not file then return false end
+  if file.binary or (file.stat and file.stat.binary) then
+    tab.file_generation = (tab.file_generation or 0) + 1
+    dispose_diff_view(tab)
+    tab.loading_file = false
+    tab.file_loading_started_at = nil
+    tab.file_error = nil
+    tab.left_text, tab.right_text = nil, nil
+    tab.left_current_path, tab.right_current_path = nil, nil
+    tab.non_text = { kind = "binary", message = "Binary files differ" }
+    tab.diff_view = nil
+    tab.diff_generation = (tab.diff_generation or 0) + 1
+    if callback then callback(self, nil) end
+    if self.on_update then self.on_update(self) end
+    return true
+  end
   tab.file_generation = (tab.file_generation or 0) + 1
   local generation = tab.file_generation
   tab.loading_file = true
   tab.file_loading_started_at = system.get_time()
   tab.file_error = nil
   local pending = 2
-  local left_text, right_text, file_err
+  local left_text, right_text, left_current_path, right_current_path, file_err
   local function finish()
     pending = pending - 1
     if pending ~= 0 then return end
@@ -765,6 +1146,9 @@ function Model:load_selected_diff_file(tab, callback)
     if not file_err then
       tab.left_text = normalize_for_diff(left_text)
       tab.right_text = normalize_for_diff(right_text)
+      tab.left_current_path = left_current_path
+      tab.right_current_path = right_current_path
+      tab.non_text = nil
       tab.left_name = path_for_file(file, "left") or "<empty>"
       tab.right_name = path_for_file(file, "right") or "<empty>"
       tab.diff_generation = (tab.diff_generation or 0) + 1
@@ -774,6 +1158,12 @@ function Model:load_selected_diff_file(tab, callback)
   end
   local function load(side, rev, relpath)
     if missing_side_for_status(file, side) or not relpath then
+      if side == "left" then left_text = "" else right_text = "" end
+      finish()
+      return
+    end
+    if rev == self.backend.WORKING_TREE then
+      if side == "left" then left_current_path = relpath else right_current_path = relpath end
       if side == "left" then left_text = "" else right_text = "" end
       finish()
       return
@@ -795,10 +1185,11 @@ function Model:load_selected_diff_file(tab, callback)
 end
 
 function Model:cancel_jobs()
-  for _, job in ipairs(self.active_jobs) do
+  local jobs = self.active_jobs
+  self.active_jobs = {}
+  for _, job in ipairs(jobs) do
     if job and job.cancel then pcall(job.cancel, job) end
   end
-  self.active_jobs = {}
 end
 
 function Model:_track_job(job)
@@ -862,18 +1253,6 @@ function Model:_finish_refresh(generation, status_records, log_page, err, callba
   tab.loading_more = false
   tab.error = err
   tab.commits = {}
-  local working_records = working_tree_diff_records(status_records)
-  if #working_records > 0 then
-    tab.commits[#tab.commits + 1] = {
-      kind = "working_tree",
-      hash = "WORKING_TREE",
-      short_hash = "working",
-      subject = "Working Tree",
-      author_name = "",
-      refs = "",
-      changed_files = working_records,
-    }
-  end
   append_log_commits(tab, log_page)
   if self.repo then
     self:sync_working_tree_diff_tabs()
@@ -930,10 +1309,7 @@ end
 function Model:reload_file_history_tabs()
   for _, tab in ipairs(self.tabs) do
     if tab.kind == "file_history" then
-      tab.commits = {}
-      tab.selected_commit = 1
-      tab.scroll = tab.restored_scroll or 0
-      tab.restored_scroll = nil
+      tab.replace_history_on_load = true
       tab.has_more = false
       tab.next_offset = nil
       tab.error = nil

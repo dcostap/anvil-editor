@@ -7,11 +7,13 @@ local keymap = require "core.keymap"
 local MouseRouter = require "core.mouse_router"
 local style = require "core.style"
 local TextView = require "core.textview"
+local Editor = require "core.editor"
 local Buffer = require "core.buffer"
 local View = require "core.view"
 local view_icons = require "core.view_icons"
 local panes = require "core.panes"
 local diff_model = require "plugins.diff.model"
+local FragmentBuffer = require "plugins.diff.fragment_buffer"
 
 ---Configuration options for `diffview` plugin.
 ---@class config.plugins.diffview
@@ -108,9 +110,11 @@ local is_fold_widget_line
 ---@field compare_type plugins.diffview.view.type
 ---@overload fun(a:string,b:string,ct?:plugins.diffview.view.type,names?:plugins.diffview.view.string_names):plugins.diffview.view
 local DiffView = View:extend()
+DiffView._module_name = "plugins.diffview"
 DiffView.view_icon = view_icons.register("diff", view_icons.ui("s"))
 local MutableDiffRequestChain
 local DiffRequestController
+local diff_status
 
 ---@enum plugins.diffview.view.type
 DiffView.type = {
@@ -131,7 +135,7 @@ local function content_text(text, opts)
     kind = "text", text = text or "", name = opts.name,
     editable = opts.editable, owns_buffer = true,
     read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint,
-    source_path = opts.source_path,
+    source_path = opts.source_path, source_line = opts.source_line,
   }
 end
 
@@ -156,9 +160,25 @@ local function content_buffer(buffer, opts)
   }
 end
 
+local function content_fragment(buffer, line1, col1, line2, col2, opts)
+  opts = opts or {}
+  return {
+    kind = "fragment", buffer = buffer,
+    line1 = line1, col1 = col1, line2 = line2, col2 = col2,
+    name = opts.name, editable = opts.editable, owns_buffer = true,
+    read_only_reason = opts.read_only_reason,
+    source_path = opts.source_path or buffer.abs_filename,
+  }
+end
+
 local function content_blank(opts)
   opts = opts or {}
-  return { kind = "blank", name = opts.name, editable = opts.editable ~= false, owns_buffer = true, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
+  return {
+    kind = "blank", text = opts.text or "", name = opts.name,
+    editable = opts.editable ~= false, owns_buffer = true,
+    read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint,
+    untitled_id = opts.untitled_id,
+  }
 end
 
 local function content_empty(opts)
@@ -241,6 +261,15 @@ local function validate_content(content, index)
     if not (content.buffer.is and content.buffer:is(Buffer)) then
       return nil, string.format("diff content %d buffer content requires a Buffer", index)
     end
+  elseif kind == "fragment" then
+    if not content.buffer or not (content.buffer.is and content.buffer:is(Buffer)) then
+      return nil, string.format("diff content %d fragment content requires a Buffer", index)
+    end
+    for _, field in ipairs { "line1", "col1", "line2", "col2" } do
+      if type(content[field]) ~= "number" then
+        return nil, string.format("diff content %d fragment content requires %s", index, field)
+      end
+    end
   else
     return nil, string.format("unknown diff content kind '%s'", tostring(kind))
   end
@@ -284,7 +313,7 @@ local function validate_request(request)
     local path
     if content.kind == "file" then
       path = content.filename
-    elseif content.kind == "buffer" then
+    elseif content.kind == "buffer" or content.kind == "fragment" then
       path = content.buffer.abs_filename
     end
     if path and not common.is_absolute_path(path) then
@@ -328,10 +357,16 @@ local function content_read_only_reason(content)
   return content.read_only_reason or "This Diff View side is read-only"
 end
 
+local function buffer_needs_dirty_prompt(buffer)
+  if not (buffer and buffer.is_dirty and buffer:is_dirty()) then return false end
+  if buffer.intellij_untitled and table.concat(buffer.lines or {}):gsub("\n$", "") == "" then return false end
+  return true
+end
+
 local function prompt_dirty_buffers(buffers, callback)
   local dirty = {}
   for _, buffer in ipairs(buffers or {}) do
-    if buffer and buffer.is_dirty and buffer:is_dirty() then dirty[#dirty + 1] = buffer end
+    if buffer_needs_dirty_prompt(buffer) then dirty[#dirty + 1] = buffer end
   end
   if #dirty == 0 then callback(true); return end
   local names = {}
@@ -353,14 +388,24 @@ end
 local function buffer_for_content(content, title)
   local buffer_name = title_for_content(content, title)
   if content.kind == "buffer" then return assert(content.buffer), content.owns_buffer == true end
-  if content.kind == "file" then return Buffer(buffer_name, content.filename), false end
+  if content.kind == "file" then return core.open_buffer(content.filename), false end
+  if content.kind == "fragment" then
+    return FragmentBuffer.new(
+      content.buffer, content.line1, content.col1, content.line2, content.col2,
+      { name = buffer_name }
+    ), true
+  end
   local buffer = Buffer(nil, nil, true)
   buffer.display_name = buffer_name
-  local text = (content.kind == "empty" or content.kind == "blank") and "" or (content.text or "")
+  local text = content.kind == "empty" and "" or (content.text or "")
   if text ~= "" then buffer:insert(1, 1, text) end
   buffer:clear_undo_redo()
   buffer:clean()
-  buffer.new_file = false
+  if content.kind == "blank" then
+    require("plugins.untitled_tabs").tag_buffer(buffer, buffer_name, content.untitled_id)
+  else
+    buffer.new_file = false
+  end
   return buffer, true
 end
 
@@ -369,7 +414,7 @@ local function source_path_for_content(content)
   if not path and content then
     if content.kind == "file" then
       path = content.filename
-    elseif content.kind == "buffer" then
+    elseif content.kind == "buffer" or content.kind == "fragment" then
       path = content.buffer and content.buffer.abs_filename
     end
   end
@@ -378,6 +423,20 @@ local function source_path_for_content(content)
     if ok then path = absolute end
   end
   return path and common.normalize_path(path) or nil
+end
+
+local function comparison_rejection(buffers)
+  local total_bytes, total_lines = 0, 0
+  for _, buffer in ipairs(buffers or {}) do
+    total_lines = total_lines + #(buffer.lines or {})
+    for _, line in ipairs(buffer.lines or {}) do
+      total_bytes = total_bytes + #line
+      if line:find("\0", 1, true) then return "Binary content cannot use the text Diff View" end
+    end
+  end
+  if total_bytes > 8 * 1024 * 1024 or total_lines > 200000 then
+    return "Content is too large for the text Diff View"
+  end
 end
 
 function DiffView:assign_request()
@@ -415,6 +474,7 @@ function DiffView:new(a, b, compare_type, names)
   self.side_buffers = { buffer_a, buffer_b }
   self.side_owns = { owns_a, owns_b }
   self.owned_buffers = { [buffer_a] = owns_a, [buffer_b] = owns_b }
+  self.comparison_message = comparison_rejection(self.side_buffers)
 
   self.buffer_view_a = TextView(buffer_a)
   self.buffer_view_b = TextView(buffer_b)
@@ -459,6 +519,8 @@ function DiffView:new(a, b, compare_type, names)
 
   self:install_view_integrations()
   self:update_diff()
+  self.pending_first_change_reveal = not self.comparison_message
+    and self.request.auto_reveal_first_change ~= false
 
 end
 
@@ -472,6 +534,34 @@ function DiffView:get_path_target()
     focus = self:get_focus_view()
   end
   return focus and focus.get_path_target and focus:get_path_target() or nil
+end
+
+function DiffView:swap_sides()
+  if self.disposed then return false end
+  self:dispose_integrations()
+  self.disposed = false
+  self.request.contents[1], self.request.contents[2] = self.request.contents[2], self.request.contents[1]
+  if self.request.content_titles then
+    self.request.content_titles[1], self.request.content_titles[2] =
+      self.request.content_titles[2], self.request.content_titles[1]
+  end
+  self.buffer_view_a, self.buffer_view_b = self.buffer_view_b, self.buffer_view_a
+  self.side_buffers[1], self.side_buffers[2] = self.side_buffers[2], self.side_buffers[1]
+  self.side_owns[1], self.side_owns[2] = self.side_owns[2], self.side_owns[1]
+  self.side_editable.a, self.side_editable.b = self.side_editable.b, self.side_editable.a
+  self.buffer_view_a.diff_view_side_index = 1
+  self.buffer_view_b.diff_view_side_index = 2
+  self.buffer_view_a.get_path_target = function(view) return self:get_side_path_target(1, view) end
+  self.buffer_view_b.get_path_target = function(view) return self:get_side_path_target(2, view) end
+  self.request.user_data = self.request.user_data or {}
+  self.request.user_data.diff_fold_state = nil
+  self.request_assigned = false
+  self.views_patched = false
+  self:install_view_integrations()
+  self:assign_request()
+  self:update_diff()
+  core.log_quiet("Diff View swapped sides: %s", self:get_name())
+  return true
 end
 
 function DiffView:get_name()
@@ -489,17 +579,30 @@ function DiffView:get_name()
 end
 
 ---Updates the registered differences between current side A and B.
-function DiffView:update_diff()
-  if self.skip_update_diff then self.skip_update_diff = false return end
-
-  -- stop previous update if still running.
-  if self.updater_idx then
-    for _, thread in pairs(core.threads) do
-      if thread.diff_viewer and thread.diff_viewer == self.updater_idx then
-        thread.cr = coroutine.create(function() end)
-      end
+function DiffView:cancel_diff_update()
+  if not self.updater_idx then return end
+  for _, thread in pairs(core.threads) do
+    if thread.diff_viewer == self.updater_idx then
+      thread.cr = coroutine.create(function() end)
     end
   end
+  self.updater_idx = nil
+end
+
+function DiffView:update_diff()
+  if self.skip_update_diff then self.skip_update_diff = false return end
+  self.comparison_message = comparison_rejection(self.side_buffers)
+  if self.comparison_message then
+    self.diff_generation = (self.diff_generation or 0) + 1
+    self:cancel_diff_update()
+    self.a_changes, self.b_changes = {}, {}
+    self.a_gaps, self.b_gaps = {}, {}
+    self.diff_model = nil
+    return
+  end
+
+  -- stop previous update if still running.
+  self:cancel_diff_update()
 
   local start_time = system.get_time()
 
@@ -558,6 +661,21 @@ local function point_in_diff_side(view, x, y)
   return x >= view.position.x and y >= view.position.y
     and x < view.position.x + view.size.x
     and y < view.position.y + view.size.y
+end
+
+function DiffView:get_state()
+  local data = self.request and self.request.user_data
+  if not (data and data.blank_diff) then return nil end
+  return {
+    kind = "blank_diff",
+    title = self.request.title,
+    left_text = table.concat(self.buffer_view_a.buffer.lines or {}):gsub("\n$", ""),
+    right_text = table.concat(self.buffer_view_b.buffer.lines or {}):gsub("\n$", ""),
+    left_untitled_id = self.buffer_view_a.buffer.intellij_untitled_id,
+    right_untitled_id = self.buffer_view_b.buffer.intellij_untitled_id,
+    content_titles = self.request.content_titles,
+    preferred_focus_side = core.active_view == self.buffer_view_b and "right" or "left",
+  }
 end
 
 function DiffView:mouse_side_at(x, y)
@@ -720,6 +838,11 @@ function DiffView:get_side_path_target(index, side_view)
   local line = with_textview_selection(side_view, function()
     return side_view.buffer:get_selection(false)
   end)
+  if content and content.kind == "fragment" then
+    line = FragmentBuffer.map_line(side_view.buffer, line)
+  elseif content and content.source_line then
+    line = content.source_line + line - 1
+  end
   return { path = path, line = line }
 end
 
@@ -1387,6 +1510,8 @@ function DiffView:install_view_integrations()
     }, { priority = 50 })
     side.view:add_selection_listener(provider_id, function(view)
       if not self.syncing_diff_caret then self:sync_caret_from(view, side.is_a) end
+      local reset = self.request.user_data and self.request.user_data.on_navigation_state_change
+      if reset then reset() end
     end)
     side.view:add_scroll_listener(provider_id, function(view)
       self:sync_scroll_from(view, side.is_a)
@@ -1403,6 +1528,8 @@ function DiffView:install_view_integrations()
     end)
     side.view.buffer:add_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self), {
       after_change = function()
+        local reset = self.request.user_data and self.request.user_data.on_navigation_state_change
+        if reset then reset() end
         self:update_diff()
       end,
     })
@@ -1426,6 +1553,7 @@ function DiffView:dispose_integrations()
     side.view.buffer:remove_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self))
   end
   self.diff_generation = (self.diff_generation or 0) + 1
+  self:cancel_diff_update()
   if self.request_assigned then
     if self.request and self.request.contents then
       call_assignment_hook(self.request.contents[1], "on_assigned", false, self.request, "left")
@@ -1620,28 +1748,70 @@ function DiffView:draw_scrollbar()
   redraw_thumb(self.buffer_view_b.v_scrollbar)
 end
 
+function DiffView:reveal_first_change()
+  local points = self:diff_points_of_interest(false)
+  local view, is_a = self.buffer_view_b, false
+  if #points == 0 then
+    points = self:diff_points_of_interest(true)
+    view, is_a = self.buffer_view_a, true
+  end
+  local point = points[1]
+  if not point then return false end
+  view.buffer:set_selection(point.line, point.col or 1, point.line, point.col or 1)
+  if view.scroll_to_line then
+    view:scroll_to_line(point.line, false, true)
+  else
+    view:scroll_to_make_visible(point.line, point.col or 1)
+  end
+  self:sync_scroll_from(view, is_a)
+  core.log_quiet("Diff View revealed first change at line %d", point.line)
+  return true
+end
+
 function DiffView:update()
   DiffView.super.update(self)
   local divider_half = self:get_divider_width() / 2
 
   self.buffer_view_a.position.x = self.position.x
-  self.buffer_view_a.position.y = self.position.y
+  local titles = self.request and self.request.content_titles
+  local header_height = titles and style.prose_font:get_height() + style.padding.y or 0
+  self.diff_header_height = header_height
+  self.buffer_view_a.position.y = self.position.y + header_height
   self.buffer_view_a.size.x = math.max(0, (self.size.x / 2) - divider_half)
-  self.buffer_view_a.size.y = self.size.y
+  self.buffer_view_a.size.y = math.max(0, self.size.y - header_height)
 
   self.buffer_view_b.position.x = (self.position.x + self.size.x / 2) + divider_half
-  self.buffer_view_b.position.y = self.position.y
+  self.buffer_view_b.position.y = self.position.y + header_height
   self.buffer_view_b.size.x = math.max(0, (self.size.x / 2) - divider_half)
-  self.buffer_view_b.size.y = self.size.y
+  self.buffer_view_b.size.y = math.max(0, self.size.y - header_height)
 
   call_textview_method(self.buffer_view_a, self.buffer_view_a.update)
   call_textview_method(self.buffer_view_b, self.buffer_view_b.update)
   self:refresh_core_gap_rows(false)
+  if self.pending_first_change_reveal and self.diff_model then
+    self.pending_first_change_reveal = false
+    self:reveal_first_change()
+  end
 end
 
 function DiffView:draw()
   DiffView.super.draw(self)
   self:draw_background(style.background)
+  local titles = self.request and self.request.content_titles
+  if titles and self.diff_header_height and self.diff_header_height > 0 then
+    local y = self.position.y + (self.diff_header_height - style.prose_font:get_height()) / 2
+    renderer.draw_text(style.prose_font, titles[1] or "Left", self.buffer_view_a.position.x + style.padding.x, y, style.dim)
+    renderer.draw_text(style.prose_font, titles[2] or "Right", self.buffer_view_b.position.x + style.padding.x, y, style.dim)
+  end
+  if self.comparison_message then
+    renderer.draw_text(
+      style.prose_font, self.comparison_message,
+      self.position.x + style.padding.x,
+      self.position.y + (self.diff_header_height or 0) + style.padding.y,
+      style.dim
+    )
+    return
+  end
   call_textview_method(self.buffer_view_a, self.buffer_view_a.draw)
   call_textview_method(self.buffer_view_b, self.buffer_view_b.draw)
   self:draw_divider_changes()
@@ -1787,12 +1957,18 @@ local function navigate_diff_change(dv, direction)
       for _, point in ipairs(points) do
         if point.line > line then selected = point; break end
       end
-      selected = selected or points[1]
     else
       for i = #points, 1, -1 do
         if points[i].line < line then selected = points[i]; break end
       end
-      selected = selected or points[#points]
+    end
+    if not selected then
+      local callback = dv.diff_view_parent and dv.diff_view_parent.request
+        and dv.diff_view_parent.request.user_data
+        and dv.diff_view_parent.request.user_data.on_change_boundary
+      if callback then return callback(direction, dv) end
+      diff_status(direction > 0 and "No next change" or "No previous change")
+      return true
     end
     dv.buffer:set_selection(selected.line, selected.col or 1, selected.line, selected.col or 1)
     if selected.scroll_to_line and dv.scroll_to_line then
@@ -1829,13 +2005,70 @@ command.add(function()
 end, {
   ["diff:toggle_folding"] = function(view)
     view:toggle_folding()
+  end,
+  ["diff:swap_sides"] = function(view)
+    if view.request_controller then return view.request_controller:swap_sides() end
+    return view:swap_sides()
+  end,
+})
+
+local function active_diff_side()
+  local side_view = core.active_view
+  local parent = side_view and side_view.diff_view_parent
+  if not parent then return nil end
+  local index = side_view == parent.buffer_view_b and 2 or 1
+  return parent, side_view, index, parent.request.contents[index]
+end
+
+diff_status = function(message)
+  if core.status_bar and core.status_bar.show_message then
+    core.status_bar:show_message("i", style.dim, message)
+  else
+    core.log_quiet("Diff View: %s", message)
   end
+end
+
+local function open_diff_source_at_caret()
+  local _, side_view, _, content = active_diff_side()
+  if not content or (content.kind ~= "file" and content.kind ~= "buffer" and content.kind ~= "fragment") then
+    diff_status("This Diff Side has no current file")
+    return false
+  end
+  local path = source_path_for_content(content)
+  if not path then
+    diff_status("This Diff Side has no current file")
+    return false
+  end
+  local line, col = with_textview_selection(side_view, function()
+    return side_view.buffer:get_selection(false)
+  end)
+  if content.kind == "fragment" then line = FragmentBuffer.map_line(side_view.buffer, line) end
+  local buffer = content.kind == "buffer" and content.buffer
+    or content.kind == "fragment" and content.buffer
+    or core.open_buffer(path)
+  local editor = Editor(buffer)
+  panes.place(function() return editor end, {
+    placement = "current", focus = true, reason = "diff-open-source",
+  })
+  editor:with_selection_state(function()
+    buffer:set_selection(line, col or 1, line, col or 1)
+  end)
+  core.set_active_view(editor)
+  return true
+end
+
+command.add(function()
+  return active_diff_side() ~= nil
+end, {
+  ["diff:open_file_at_caret"] = open_diff_source_at_caret,
 })
 
 keymap.add({
   ["ctrl+alt+,"] = "core:previous_point_of_interest",
   ["ctrl+alt+."] = "core:next_point_of_interest",
   ["ctrl+r"] = "diff:toggle_folding",
+  ["ctrl+return"] = "diff:open_file_at_caret",
+  ["ctrl+keypad enter"] = "diff:open_file_at_caret",
 })
 
 
@@ -1866,6 +2099,69 @@ command.add(text_compare_with_predicate, {
     element_b_text = buffer:get_selection_text()
     start_compare_string()
   end
+})
+
+local function current_file_side(require_selection)
+  local view = core.active_view
+  if not (view and view.is and view:is(TextView) and view.buffer and view.buffer.abs_filename) then
+    return nil
+  end
+  if require_selection and not view.buffer:has_any_selection() then return nil end
+  return view
+end
+
+local function selection_fragment_content(view)
+  local line1, col1, line2, col2 = view:with_selection_state(function()
+    return view.buffer:get_selection(true)
+  end)
+  if line2 < line1 or (line1 == line2 and col2 < col1) then
+    line1, col1, line2, col2 = line2, col2, line1, col1
+  end
+  return content_fragment(view.buffer, line1, col1, line2, col2, {
+    name = common.basename(view.buffer.abs_filename) .. " selection",
+  })
+end
+
+local function open_clipboard_comparison(view, selection_only)
+  if not view then return false end
+  local clipboard = (system.get_clipboard() or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+  local current = selection_only and selection_fragment_content(view)
+    or content_buffer(view.buffer, {
+      name = common.basename(view.buffer.abs_filename),
+      source_path = view.buffer.abs_filename,
+    })
+  local chain = MutableDiffRequestChain({
+    title = "Clipboard Comparison",
+    kind = "clipboard",
+    contents = {
+      content_text(clipboard, { name = "Clipboard", editable = true }),
+      current,
+    },
+    content_titles = { "Clipboard", current.name },
+    editable_policy = "content",
+    preferred_focus_side = "left",
+    user_data = { clipboard_comparison = true },
+  })
+  DiffRequestController(chain)
+  return true
+end
+
+command.add(function()
+  local view = current_file_side(true)
+  return view ~= nil, view
+end, {
+  ["diff:compare_selection_with_clipboard"] = function(view)
+    return open_clipboard_comparison(view, true)
+  end,
+})
+
+command.add(function()
+  local view = current_file_side(false)
+  return view ~= nil, view
+end, {
+  ["diff:compare_file_with_clipboard"] = function(view)
+    return open_clipboard_comparison(view, false)
+  end,
 })
 
 
@@ -2000,6 +2296,21 @@ function DiffRequestController:adopt_current_side(side)
   local owns = view.side_owns and view.side_owns[idx]
   local title = view.request.content_titles and view.request.content_titles[idx]
   local old_content = view.request.contents and view.request.contents[idx]
+  if old_content and old_content.kind == "fragment" then
+    local range = FragmentBuffer.source_range(buffer)
+    if range then
+      self.chain:set_content(idx, content_fragment(
+        old_content.buffer,
+        range.line1, range.col1, range.line2, range.col2,
+        {
+          name = title or buffer:get_name(), editable = old_content.editable,
+          read_only_reason = old_content.read_only_reason,
+          source_path = old_content.source_path,
+        }
+      ))
+      return
+    end
+  end
   local adopted = content_buffer(buffer, {
     name = title or buffer:get_name(),
     owns_buffer = owns == true,
@@ -2028,7 +2339,7 @@ function DiffRequestController:replace_content(side, content, opts)
   local old_content = view and view.request and view.request.contents and view.request.contents[idx]
   local owns = view and view.side_owns and view.side_owns[idx]
   local needs_confirmation = owns or (old_content and (old_content.kind == "file" or old_content.requires_dirty_confirmation))
-  if needs_confirmation and buffer and buffer:is_dirty() then
+  if needs_confirmation and buffer_needs_dirty_prompt(buffer) then
     prompt_dirty_buffers({ buffer }, function(confirmed)
       if confirmed then finish() end
     end)
@@ -2071,6 +2382,7 @@ diffview = {
 diffview.content.text = content_text
 diffview.content.file = content_file
 diffview.content.buffer = content_buffer
+diffview.content.fragment = content_fragment
 diffview.content.blank = content_blank
 diffview.content.empty = content_empty
 
@@ -2095,6 +2407,42 @@ present_diff_view = function(view)
     focus = true,
     reason = "diff-open",
   })
+end
+
+function DiffRequestController:swap_sides()
+  if self.disposed then return false end
+  self:adopt_current_side(1)
+  self:adopt_current_side(2)
+  self.chain.contents[1], self.chain.contents[2] = self.chain.contents[2], self.chain.contents[1]
+  if self.chain.content_titles then
+    self.chain.content_titles[1], self.chain.content_titles[2] =
+      self.chain.content_titles[2], self.chain.content_titles[1]
+  end
+  return self:reload() ~= nil
+end
+
+function diffview.from_state(state)
+  if not (state and state.kind == "blank_diff") then return nil end
+  local chain = MutableDiffRequestChain({
+    title = state.title or "Blank Diff View",
+    kind = "blank",
+    contents = {
+      content_blank({
+        text = state.left_text or "", name = state.content_titles and state.content_titles[1] or "Left",
+        untitled_id = state.left_untitled_id,
+      }),
+      content_blank({
+        text = state.right_text or "", name = state.content_titles and state.content_titles[2] or "Right",
+        untitled_id = state.right_untitled_id,
+      }),
+    },
+    content_titles = state.content_titles or { "Left", "Right" },
+    editable_policy = "editable",
+    preferred_focus_side = state.preferred_focus_side,
+    user_data = { blank_diff = true, suppress_equal_contents_notification = true },
+  }, { blank_diff = true })
+  local controller = DiffRequestController(chain, { noshow = true })
+  return controller:get_view()
 end
 
 ---Helper differences starter.

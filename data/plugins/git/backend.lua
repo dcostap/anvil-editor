@@ -172,7 +172,9 @@ function backend.parse_numstat_z(output)
         path = normalize_relpath(path)
         local additions = tonumber(added_text)
         local deletions = tonumber(deleted_text)
-        if path and additions and deletions then
+        if path and added_text == "-" and deleted_text == "-" then
+          stats[path] = { binary = true }
+        elseif path and additions and deletions then
           stats[path] = { additions = additions, deletions = deletions }
         end
       end
@@ -256,6 +258,9 @@ local function parse_log_record(record)
     refs = fields[6] or "",
     subject = fields[7] or "",
     body = fields[8] or "",
+    committer_name = fields[9] or "",
+    committer_email = fields[10] or "",
+    commit_time = tonumber(fields[11]) or tonumber(fields[5]) or 0,
   }
 end
 
@@ -292,13 +297,13 @@ function backend._contains_arg(args, expected)
   return false
 end
 
-local LOG_FORMAT = table.concat({
-  "%H", "%P", "%an", "%ae", "%at", "%D", "%s"
+local LOG_FORMAT_WITH_BODY = table.concat({
+  "%H", "%P", "%an", "%ae", "%at", "%D", "%s", "%b", "%cn", "%ce", "%ct"
 }, "%x00") .. "%x00%x1e"
 
-local LOG_FORMAT_WITH_BODY = table.concat({
-  "%H", "%P", "%an", "%ae", "%at", "%D", "%s", "%b"
-}, "%x00") .. "%x00%x1e"
+local SELECTION_LOG_FORMAT = "%x1e" .. table.concat({
+  "%H", "%P", "%an", "%ae", "%at", "%D", "%s", "", "%cn", "%ce", "%ct"
+}, "%x00") .. "%x00"
 
 local function build_base_log_args(opts)
   opts = opts or {}
@@ -307,7 +312,7 @@ local function build_base_log_args(opts)
     "log",
     "--date-order",
     "--max-count=" .. tostring(limit + 1),
-    "--format=" .. (opts.include_body and LOG_FORMAT_WITH_BODY or LOG_FORMAT),
+    "--format=" .. LOG_FORMAT_WITH_BODY,
   }, limit
 end
 
@@ -329,12 +334,47 @@ end
 
 function backend.build_file_history_args(relpath, opts)
   opts = opts or {}
-  local args = build_base_log_args(opts)
+  local limit = opts.limit or default_log_limit()
+  local args = {
+    "log", "--date-order", "--max-count=" .. tostring(limit + 1),
+    "--format=" .. SELECTION_LOG_FORMAT,
+    "--name-status", "-z", "-M",
+  }
   if opts.follow ~= false then args[#args + 1] = "--follow" end
   if opts.offset and opts.offset > 0 then args[#args + 1] = "--skip=" .. tostring(opts.offset) end
   args[#args + 1] = "--"
   args[#args + 1] = normalize_relpath(relpath)
   return args
+end
+
+function backend.parse_file_history_page(output, opts)
+  opts = opts or {}
+  local limit = opts.limit or default_log_limit()
+  local commits = {}
+  for _, raw in ipairs(split_char(output or "", backend.LOG_RECORD_SEPARATOR)) do
+    raw = raw:gsub("^%s+", "")
+    local commit = parse_log_record(raw)
+    if commit then
+      local fields = split_nul(raw)
+      local status = tostring(fields[12] or ""):gsub("^%s+", "")
+      if status:match("^[RC]") then
+        commit.history_parent_path = normalize_relpath(fields[13])
+        commit.history_path = normalize_relpath(fields[14])
+      else
+        commit.history_path = normalize_relpath(fields[13])
+        commit.history_parent_path = commit.history_path
+      end
+      commits[#commits + 1] = commit
+    end
+  end
+  local has_more = #commits > limit
+  while #commits > limit do commits[#commits] = nil end
+  local offset = opts.offset or 0
+  return {
+    commits = commits,
+    has_more = has_more,
+    next_offset = has_more and (offset + #commits) or nil,
+  }
 end
 
 function backend.file_history(repo, relpath, opts, callback)
@@ -344,18 +384,78 @@ function backend.file_history(repo, relpath, opts, callback)
       if callback then callback(nil, err) end
       return
     end
-    if callback then callback(backend.parse_log_page(result.stdout, opts), nil) end
+    if callback then callback(backend.parse_file_history_page(result.stdout, opts), nil) end
   end)
 end
 
 function backend.build_selection_history_args(relpath, start_line, end_line, opts)
   opts = opts or {}
-  local args = build_base_log_args(opts)
-  args[#args + 1] = "--no-patch"
+  local limit = opts.limit or default_log_limit()
+  local args = {
+    "log", "--date-order", "--max-count=" .. tostring(limit + 1),
+    "--format=" .. SELECTION_LOG_FORMAT,
+  }
   if opts.offset and opts.offset > 0 then args[#args + 1] = "--skip=" .. tostring(opts.offset) end
   args[#args + 1] = "-L"
   args[#args + 1] = string.format("%d,%d:%s", start_line, end_line, normalize_relpath(relpath))
   return args
+end
+
+local function parse_selection_patch(patch)
+  patch = tostring(patch or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+  local old_start, new_start = patch:match("@@ %-(%d+),?%d* %+(%d+),?%d* @@")
+  if not old_start then return nil end
+  local old_lines, new_lines, in_hunk = {}, {}, false
+  for line in (patch .. "\n"):gmatch("(.-)\n") do
+    if line:match("^@@ ") then
+      if in_hunk then break end
+      in_hunk = true
+    elseif in_hunk then
+      local marker = line:sub(1, 1)
+      local text = line:sub(2)
+      if marker == " " then
+        old_lines[#old_lines + 1] = text
+        new_lines[#new_lines + 1] = text
+      elseif marker == "-" then
+        old_lines[#old_lines + 1] = text
+      elseif marker == "+" then
+        new_lines[#new_lines + 1] = text
+      elseif marker == "\\" then
+        -- Ignore Git's no-newline marker.
+      else
+        break
+      end
+    end
+  end
+  return {
+    left_text = table.concat(old_lines, "\n"),
+    right_text = table.concat(new_lines, "\n"),
+    left_start_line = tonumber(old_start) or 1,
+    right_start_line = tonumber(new_start) or 1,
+  }
+end
+
+function backend.parse_selection_history_page(output, opts)
+  opts = opts or {}
+  local limit = opts.limit or default_log_limit()
+  local commits = {}
+  for _, raw in ipairs(split_char(output or "", backend.LOG_RECORD_SEPARATOR)) do
+    raw = raw:gsub("^%s+", "")
+    local commit = parse_log_record(raw)
+    if commit then
+      local fields = split_nul(raw)
+      commit.selection_diff = parse_selection_patch(fields[12])
+      commits[#commits + 1] = commit
+    end
+  end
+  local has_more = #commits > limit
+  while #commits > limit do commits[#commits] = nil end
+  local offset = opts.offset or 0
+  return {
+    commits = commits,
+    has_more = has_more,
+    next_offset = has_more and (offset + #commits) or nil,
+  }
 end
 
 function backend.selection_history(repo, relpath, start_line, end_line, opts, callback)
@@ -365,7 +465,7 @@ function backend.selection_history(repo, relpath, start_line, end_line, opts, ca
       if callback then callback(nil, err) end
       return
     end
-    if callback then callback(backend.parse_log_page(result.stdout, opts), nil) end
+    if callback then callback(backend.parse_selection_history_page(result.stdout, opts), nil) end
   end)
 end
 
@@ -426,19 +526,41 @@ end
 
 function backend.changed_files(repo, left, right, opts, callback)
   opts = opts or {}
-  return backend.run_git(repo, backend.build_changed_files_args(left, right, opts), opts, function(result, err)
+  local composite = { jobs = {}, cancelled = false, finished = false }
+  local function complete(records, err)
+    if composite.finished then return end
+    composite.finished = true
+    if callback then callback(records, err) end
+  end
+  function composite:cancel()
+    if self.cancelled then return end
+    self.cancelled = true
+    for _, job in ipairs(self.jobs) do
+      if job and job.cancel then pcall(job.cancel, job) end
+    end
+    complete(nil, { kind = "cancelled", message = "Git command cancelled" })
+  end
+  local name_job
+  name_job = backend.run_git(repo, backend.build_changed_files_args(left, right, opts), opts, function(result, err)
     if not result then
-      if callback then callback(nil, err) end
+      complete(nil, err)
       return
     end
+    if composite.cancelled then return end
     local records = backend.parse_name_status_z(result.stdout)
-    backend.run_git(repo, backend.build_changed_file_stats_args(left, right, opts), opts, function(stat_result)
+    local stats_job = backend.run_git(repo, backend.build_changed_file_stats_args(left, right, opts), opts, function(stat_result, stat_err)
+      if composite.cancelled then return end
       if stat_result then
         merge_changed_file_stats(records, backend.parse_numstat_z(stat_result.stdout))
+      elseif stat_err then
+        core.log_quiet("Git backend: changed-file statistics unavailable: %s", stat_err.message or stat_err.kind)
       end
-      if callback then callback(records, nil) end
+      complete(records, nil)
     end)
+    composite.jobs[#composite.jobs + 1] = stats_job
   end)
+  composite.jobs[#composite.jobs + 1] = name_job
+  return composite
 end
 
 local function read_file_contents(filename, max_output)
@@ -475,6 +597,14 @@ function backend.file_at(repo, rev, relpath, opts, callback)
     end
     if callback then callback(result.stdout or "", nil) end
   end)
+end
+
+function backend.is_missing_path_error(err)
+  if not (err and err.kind == "exit") then return false end
+  local text = tostring(err.stderr or err.message or ""):lower()
+  return text:find("exists on disk, but not in", 1, true) ~= nil
+    or text:find("does not exist in", 1, true) ~= nil
+    or text:find("path '", 1, true) ~= nil and text:find("not in", 1, true) ~= nil
 end
 
 local function append_args(dst, src)

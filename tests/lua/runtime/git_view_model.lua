@@ -1,5 +1,8 @@
 local test = require "core.test"
 local config = require "core.config"
+local core = require "core"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 
 local Model = require "plugins.git.model"
 
@@ -72,7 +75,7 @@ test.describe("plugins.git.model", function()
     test.equal(model:close_selected_tab(), false)
   end)
 
-  test.test("refreshes log with working tree row and commits", function()
+  test.test("keeps local changes out of the commit log", function()
     local status = table.concat({ " M src/app.lua", "" }, "\0")
     local model = Model.new({ path = "C:/repo" }, { backend = fake_backend(status, log_output()) })
     local done = false
@@ -80,15 +83,13 @@ test.describe("plugins.git.model", function()
 
     test.equal(done, true)
     local commits = model:log_tab().commits
-    test.equal(#commits, 2)
-    test.equal(commits[1].kind, "working_tree")
-    test.equal(commits[1].subject, "Working Tree")
-    test.equal(commits[2].hash, "abc123")
-    test.equal(commits[2].subject, "Initial")
-    test.equal(model:selected_commit().kind, "working_tree")
+    test.equal(#commits, 1)
+    test.equal(commits[1].hash, "abc123")
+    test.equal(commits[1].subject, "Initial")
+    test.equal(model:selected_commit().hash, "abc123")
     model:select_log_index(1)
-    test.equal(model:get_state().tabs[1].selected_commit_hash, nil)
-    test.equal(model:select_log_index(2).hash, "abc123")
+    test.equal(model:get_state().tabs[1].selected_commit_hash, "abc123")
+    test.equal(model:select_log_index(1).hash, "abc123")
     test.equal(model:selected_commit().subject, "Initial")
   end)
 
@@ -209,6 +210,7 @@ test.describe("plugins.git.model", function()
     diff_tab.left_text = "large content must not persist"
     diff_tab.right_text = "large content must not persist"
     diff_tab.file_tree_collapsed = { src = true }
+    diff_tab.file_scroll = 55
     model.details_tree_collapsed = { abc123 = { src = true } }
     model.active_tab = selection_tab.id
 
@@ -220,6 +222,7 @@ test.describe("plugins.git.model", function()
     test.equal(restored:find_tab(diff_tab.id).left_text, nil)
     test.equal(restored:find_tab(diff_tab.id).right_text, nil)
     test.equal(restored:find_tab(diff_tab.id).file_tree_collapsed.src, true)
+    test.equal(restored:find_tab(diff_tab.id).file_scroll, 55)
     test.equal(restored.details_tree_collapsed.abc123.src, true)
     test.equal(restored:find_tab(selection_tab.id).history_context.type, "selection")
     test.equal(restored:find_tab(selection_tab.id).history_context.start_line, 3)
@@ -351,7 +354,7 @@ test.describe("plugins.git.model", function()
     test.equal(#restored:find_tab(diff_tab.id).changed_files, 1)
   end)
 
-  test.test("selection history loads changed files for initially selected commit details", function()
+  test.test("selection history loads a Diff preview for the selected revision", function()
     local backend = fake_backend("", log_output())
     local changed_file_calls = 0
     backend.changed_files = function(repo, left, right, opts, callback)
@@ -365,8 +368,37 @@ test.describe("plugins.git.model", function()
 
     local tab = model:open_selection_history("src/app.lua", 1, 1)
 
-    test.equal(changed_file_calls, 1)
-    test.equal(tab.commits[1].changed_files[1].new_path, "src/app.lua")
+    test.equal(changed_file_calls, 0)
+    test.equal(tab.preview_right_text, "sel789:src/app.lua")
+  end)
+
+  test.it("uses Git-tracked block coordinates for historical Selection previews", function()
+    local backend = fake_backend("", log_output())
+    local file_at_calls = 0
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      file_at_calls = file_at_calls + 1
+      callback("wrong fixed-line content", nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_selection_history("src/app.lua", 20, 21)
+    tab.commits = { {
+      hash = "tracked", parents = { "parent" }, subject = "Move block",
+      selection_diff = {
+        left_text = "old block", right_text = "moved block",
+        left_start_line = 20, right_start_line = 42,
+      },
+    } }
+    tab.selected_commit = 1
+    file_at_calls = 0
+
+    model:load_history_preview(tab)
+
+    test.equal(tab.preview_left_text, "old block")
+    test.equal(tab.preview_right_text, "moved block")
+    test.equal(tab.preview_source_line, 42)
+    test.equal(file_at_calls, 0)
   end)
 
   test.test("opens and reuses selection history tabs distinct from file history", function()
@@ -427,7 +459,7 @@ test.describe("plugins.git.model", function()
     test.equal(diff_tab.error.kind, "not_in_repository")
   end)
 
-  test.test("refresh reloads existing file history tabs", function()
+  test.test("refresh replaces file history without resetting its scroll", function()
     local history_calls = 0
     local backend = fake_backend("", log_output())
     backend.file_history = function(repo, relpath, opts, callback)
@@ -447,7 +479,7 @@ test.describe("plugins.git.model", function()
     test.equal(tab.commits[1].hash, "old111")
     model:refresh_log()
     test.equal(tab.commits[1].hash, "new222")
-    test.equal(tab.scroll, 0)
+    test.equal(tab.scroll, 999)
   end)
 
   test.test("opens and reuses file history tabs", function()
@@ -463,6 +495,170 @@ test.describe("plugins.git.model", function()
     test.equal(model:selected_tab(), tab)
     test.equal(#tab.commits, 1)
     test.equal(tab.commits[1].hash, "def456")
+  end)
+
+  test.it("loads both historical paths across a File History rename", function()
+    local requested = {}
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      requested[#requested + 1] = rev .. ":" .. relpath
+      callback(rev .. ":" .. relpath, nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/new.lua")
+    tab.commits = { {
+      hash = "renamed", parents = { "parent" }, subject = "Rename",
+      history_parent_path = "src/old.lua", history_path = "src/new.lua",
+    } }
+    tab.selected_commit = 1
+    requested = {}
+
+    model:load_history_preview(tab)
+
+    test.same(requested, { "parent:src/old.lua", "renamed:src/new.lua" })
+    test.equal(tab.preview_left_name, "parent:src/old.lua")
+    test.equal(tab.preview_right_name, "renamed:src/new.lua")
+  end)
+
+  test.test("adds a live Local Changes Revision for an open changed Buffer", function()
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      callback(rev == "HEAD" and "committed\n" or tostring(rev) .. ":" .. relpath, nil)
+      return { cancel = function() end }
+    end
+    local path = "C:/repo/src/app.lua"
+    local buffer = Buffer("src/app.lua", path, true)
+    buffer:insert(1, 1, "edited")
+    core.buffer_registry:register(buffer, path)
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/app.lua")
+
+    test.equal(tab.commits[1].kind, "local_changes")
+    test.equal(tab.commits[1].subject, "Local Changes")
+    test.equal(tab.preview_left_text, "committed\n")
+    test.equal(tab.preview_right_current_path, "src/app.lua")
+    model:load_file_history(tab)
+    local local_rows = 0
+    for _, commit in ipairs(tab.commits) do
+      if commit.kind == "local_changes" then local_rows = local_rows + 1 end
+    end
+    test.equal(local_rows, 1)
+    model.active_tab = tab.id
+    model:close_selected_tab()
+    buffer:on_close()
+  end)
+
+  test.it("adds and removes Local Changes when an open Buffer changes", function()
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      callback("committed\n", nil)
+      return { cancel = function() end }
+    end
+    local path = "C:/repo/src/live.lua"
+    local buffer = Buffer("src/live.lua", path, true)
+    buffer:insert(1, 1, "committed")
+    buffer:clear_undo_redo()
+    buffer.new_file = false
+    buffer:clean()
+    core.buffer_registry:register(buffer, path)
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/live.lua")
+    test.not_equal(tab.commits[1].kind, "local_changes")
+
+    buffer:insert(1, 1, "edited ")
+    test.equal(tab.commits[1].kind, "local_changes")
+    buffer:undo()
+    test.not_equal(tab.commits[1].kind, "local_changes")
+    model.active_tab = tab.id
+    model:close_selected_tab()
+    buffer:on_close()
+  end)
+
+  test.test("limits Selection History previews to the selected block", function()
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      callback("one\nold\nthree\n", nil)
+      return { cancel = function() end }
+    end
+    local path = "C:/repo/src/selection.lua"
+    local buffer = Buffer("src/selection.lua", path, true)
+    buffer:insert(1, 1, "one\nedited\nthree")
+    core.buffer_registry:register(buffer, path)
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_selection_history("src/selection.lua", 2, 2)
+
+    test.equal(tab.commits[1].kind, "local_changes")
+    test.equal(tab.preview_left_text, "old")
+    test.equal(tab.preview_right_fragment.start_line, 2)
+    test.equal(tab.preview_right_fragment.end_line, 2)
+    buffer:on_close()
+  end)
+
+  test.it("tracks a Selection History block when lines are inserted before it", function()
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      callback("before\nselected\nafter\n", nil)
+      return { cancel = function() end }
+    end
+    local path = "C:/repo/src/tracked.lua"
+    local buffer = Buffer("src/tracked.lua", path, true)
+    buffer:insert(1, 1, "before\nselected\nafter")
+    buffer:clear_undo_redo()
+    buffer.new_file = false
+    buffer:clean()
+    core.buffer_registry:register(buffer, path)
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_selection_history("src/tracked.lua", 2, 2)
+
+    buffer:insert(1, 1, "new line\n")
+    test.equal(tab.history_context.start_line, 3)
+    test.not_equal(tab.commits[1].kind, "local_changes")
+    buffer:remove(3, 1, 3, 9)
+    buffer:insert(3, 1, "updated")
+    test.equal(tab.commits[1].kind, "local_changes")
+    test.equal(tab.preview_left_text, "selected")
+    test.equal(tab.preview_right_text, "updated")
+    model.active_tab = tab.id
+    model:close_selected_tab()
+    buffer:on_close()
+  end)
+
+  test.it("shows an empty side when selected code was introduced with its file", function()
+    local backend = fake_backend("", log_output())
+    backend.is_missing_path_error = real_backend.is_missing_path_error
+    backend.selection_history = function(repo, relpath, start_line, end_line, opts, callback)
+      local stdout = table.concat({
+        table.concat({"introduced", "parent", "Ada", "ada@example.test", "1710000000", "", "Add file", ""}, "\0"),
+        "",
+      }, "\30")
+      callback(real_backend.parse_log_page(stdout, { limit = 500 }), nil)
+      return { cancel = function() end }
+    end
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      if rev == "parent" then
+        callback(nil, {
+          kind = "exit",
+          stderr = "fatal: path 'src/new.lua' exists on disk, but not in 'parent'",
+        })
+      else
+        callback("one\nintroduced code\nthree\n", nil)
+      end
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_selection_history("src/new.lua", 2, 2)
+
+    test.equal(tab.preview_error, nil)
+    test.equal(tab.preview_left_text, "")
+    test.equal(tab.preview_right_text, "introduced code")
+    test.equal(tab.preview_left_name, "File did not exist")
   end)
 
   test.test("builds selected historical buffer request from a commit diff tab", function()
@@ -513,6 +709,33 @@ test.describe("plugins.git.model", function()
     test.equal(tab.left_text, "left b")
     test.equal(tab.right_text, "right b")
     test.equal(tab.left_name, "b.lua")
+  end)
+
+  test.it("keeps a binary selection after stale text loads complete", function()
+    local callbacks = {}
+    local backend = fake_backend("", log_output())
+    backend.changed_files = function(repo, left, right, opts, callback)
+      callback({
+        { status = "modified", old_path = "a.lua", new_path = "a.lua" },
+        { status = "modified", old_path = "image.bin", new_path = "image.bin", binary = true },
+      }, nil)
+      return { cancel = function() end }
+    end
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      callbacks[#callbacks + 1] = callback
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_selected_commit_diff()
+
+    model:select_diff_file(tab, 2)
+    callbacks[1]("old left", nil)
+    callbacks[2]("old right", nil)
+
+    test.equal(tab.non_text.kind, "binary")
+    test.equal(tab.left_text, nil)
+    test.equal(tab.right_text, nil)
   end)
 
   test.it("keeps displayed diff content until its replacement finishes", function()
@@ -573,7 +796,8 @@ test.describe("plugins.git.model", function()
     model:refresh_log()
     local tab = model:open_working_tree_diff()
     test.equal(tab.left_text, "one\ntwo\n")
-    test.equal(tab.right_text, "one\ntwo\n")
+    test.equal(tab.right_text, "")
+    test.equal(tab.right_current_path, "src/app.lua")
   end)
 
   test.test("historical request from working-tree diff resolves HEAD to commit hash", function()
@@ -586,7 +810,7 @@ test.describe("plugins.git.model", function()
     test.equal(request.relpath, "src/app.lua")
   end)
 
-  test.test("opens working tree diff from the synthetic row", function()
+  test.test("opens working tree diff independently from the commit log", function()
     local status = table.concat({ " M src/app.lua", "" }, "\0")
     local model = Model.new({ path = "C:/repo" }, { backend = fake_backend(status, log_output()) })
     model:refresh_log()
@@ -594,7 +818,33 @@ test.describe("plugins.git.model", function()
     test.equal(tab.left, "HEAD")
     test.equal(tab.right, real_backend.WORKING_TREE)
     test.equal(tab.changed_files[1].new_path, "src/app.lua")
-    test.equal(tab.right_text, real_backend.WORKING_TREE .. ":src/app.lua")
+    test.equal(tab.right_current_path, "src/app.lua")
+  end)
+
+  test.it("includes an open Buffer with unsaved-only working-tree changes", function()
+    local backend = fake_backend("", log_output())
+    backend.changed_files = function(repo, left, right, opts, callback)
+      callback({}, nil)
+      return { cancel = function() end }
+    end
+    local path = "C:/repo/src/unsaved.lua"
+    local buffer = Buffer("src/unsaved.lua", path, true)
+    buffer:insert(1, 1, "unsaved")
+    buffer.new_file = false
+    buffer:clean()
+    core.buffer_registry:register(buffer, path)
+    local editor = Editor(buffer)
+    buffer:insert(1, 1, "edited ")
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+
+    local tab = model:open_working_tree_diff()
+
+    test.equal(#tab.changed_files, 1)
+    test.equal(tab.changed_files[1].new_path, "src/unsaved.lua")
+    test.equal(tab.right_current_path, "src/unsaved.lua")
+    editor:on_close()
+    core.buffer_registry:remove(buffer, true)
   end)
 
   test.test("working tree fallback refreshes status so untracked files appear", function()
@@ -665,10 +915,11 @@ test.describe("plugins.git.model", function()
   test.test("refresh synchronizes working tree diff tabs with clean status", function()
     local status_calls = 0
     local backend = fake_backend(table.concat({ " M src/app.lua", "" }, "\0"), log_output())
-    local diff_calls = 0
+    local working_diff_calls = 0
     backend.changed_files = function(repo, left, right, opts, callback)
-      diff_calls = diff_calls + 1
-      local files = diff_calls == 1 and { { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" } } or {}
+      if right == real_backend.WORKING_TREE then working_diff_calls = working_diff_calls + 1 end
+      local files = right == real_backend.WORKING_TREE and working_diff_calls == 1
+        and { { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" } } or {}
       callback(files, nil)
       return { cancel = function() end }
     end
@@ -686,7 +937,7 @@ test.describe("plugins.git.model", function()
     model:refresh_log()
     local tab = model:open_working_tree_diff()
     tab.file_scroll = 999
-    test.not_nil(tab.left_text)
+    test.not_nil(tab.right_current_path)
     model:refresh_log()
     test.equal(#tab.changed_files, 0)
     test.equal(tab.left_text, nil)
@@ -775,7 +1026,7 @@ test.describe("plugins.git.model", function()
     test.equal(tab.right, real_backend.WORKING_TREE)
   end)
 
-  test.test("shows working tree row when log fails because repo has no commits", function()
+  test.test("keeps an unborn repository commit log empty", function()
     local backend = fake_backend(table.concat({ "?? new.lua", "" }, "\0"), "")
     backend.run_git = function(repo, args, opts, callback)
       if args[1] == "status" then
@@ -788,8 +1039,7 @@ test.describe("plugins.git.model", function()
     local model = Model.new({ path = "C:/repo" }, { backend = backend })
     model:refresh_log()
     test.equal(model:log_tab().error, nil)
-    test.equal(#model:log_tab().commits, 1)
-    test.equal(model:log_tab().commits[1].kind, "working_tree")
+    test.equal(#model:log_tab().commits, 0)
   end)
 
   test.test("loads more commits from the next log page", function()

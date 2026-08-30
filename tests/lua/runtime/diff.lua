@@ -31,6 +31,20 @@ test.describe("diff", function()
     })
   end)
 
+  test.test("keeps embedded NUL bytes in diff records", function()
+    local before = { "a\0old" }
+    local after = { "a\0new" }
+    local changes = diff.diff(before, after)
+    test.equal(changes[1].a or changes[2].a, before[1])
+    test.equal(changes[#changes].b, after[1])
+  end)
+
+  test.test("rejects inline diff work above its cell budget", function()
+    local result, err = diff.inline_diff(string.rep("a", 200), string.rep("b", 200), 1000)
+    test.equal(result, nil)
+    test.equal(err, "inline diff input is too large")
+  end)
+
   test.test("uses histogram anchors to keep low-occurrence code lines stable", function()
     local before = {
       "Dinosaur* getDinosaur(char* name)",

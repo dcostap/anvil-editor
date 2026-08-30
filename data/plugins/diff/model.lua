@@ -124,9 +124,8 @@ end
 
 local function inline_change(from, to)
   from, to = from or "", to or ""
-  local edits = diff.inline_diff(from, to)
-  if from == to then return edits, {} end
-  return edits, token_inline_ranges(from, to)
+  if from == to then return nil, {} end
+  return nil, token_inline_ranges(from, to)
 end
 
 function DiffModel:hunk_at(side, line)
@@ -161,6 +160,30 @@ end
 
 function DiffModel:map_line(source_side, line)
   line = math.max(1, math.floor(tonumber(line) or 1))
+  local source_key = (source_side == "left" or source_side == "a") and "a" or "b"
+  local target_key = source_key == "a" and "b" or "a"
+  for index, pair in ipairs(self.alignment or {}) do
+    if pair[source_key] == line and pair.tag ~= "equal" then
+      if pair[target_key] then return pair[target_key] end
+      local first, last = index, index
+      while first > 1 and self.alignment[first - 1].tag ~= "equal" do first = first - 1 end
+      while last < #self.alignment and self.alignment[last + 1].tag ~= "equal" do last = last + 1 end
+      local source_lines, target_lines = {}, {}
+      for i = first, last do
+        local item = self.alignment[i]
+        if item[source_key] then source_lines[#source_lines + 1] = item[source_key] end
+        if item[target_key] then target_lines[#target_lines + 1] = item[target_key] end
+      end
+      if #target_lines > 0 then
+        for source_index, source_line in ipairs(source_lines) do
+          if source_line == line then
+            return target_lines[math.min(source_index, #target_lines)]
+          end
+        end
+      end
+      break
+    end
+  end
   if source_side == "left" or source_side == "a" then
     return self.a_to_b[line] or math.max(1, math.min(self.b_len, line))
   end
