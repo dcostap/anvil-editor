@@ -1145,6 +1145,7 @@ end
 ---@param resource string
 ---@return boolean success
 function common.open_in_system(resource)
+  if system.open_in_system then return system.open_in_system(resource) end
   -- Detect platforms
   local function detect_platform()
     if PLATFORM:lower():find("unknown", 1, true) then

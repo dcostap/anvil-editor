@@ -24,9 +24,12 @@ end
 function locations.resolve_path(path, root)
   path = clean_path(path)
   if path == "" or is_uri_like_path(path) then return nil end
-  local candidate = common.is_absolute_path(path)
-    and common.normalize_path(path)
-    or common.normalize_path((root or system.getcwd()) .. PATHSEP .. path)
+  local ok, candidate = pcall(function()
+    return common.is_absolute_path(path)
+      and common.normalize_path(path)
+      or common.normalize_path((root or system.getcwd()) .. PATHSEP .. path)
+  end)
+  if not ok then return nil end
   return existing_file(candidate) and candidate or nil
 end
 
@@ -47,7 +50,10 @@ function locations.resolve_candidate(candidate, root, kind)
   }
 end
 
-local function add_candidate(list, seen, line_no, col1, col2, path, target_line, target_col, label)
+local function add_candidate(
+  list, seen, limit, line_no, col1, col2, path, target_line, target_col, label
+)
+  if #list >= limit then return end
   path = clean_path(path)
   if path == "" or is_uri_like_path(path) then return end
   target_line = math.max(1, math.floor(tonumber(target_line) or 1))
@@ -70,10 +76,12 @@ local function starts_in_uri(line, col)
   return token:match("%a[%w+.-]*:") ~= nil
 end
 
-local function add_line_matches(list, seen, line, line_no)
+local function add_line_matches(list, seen, limit, line, line_no)
   local function add(col1, col2, path, target_line, target_col, label)
-    if not starts_in_uri(line, col1) then
-      add_candidate(list, seen, line_no, col1, col2, path, target_line, target_col, label)
+    if #list < limit and not starts_in_uri(line, col1) then
+      add_candidate(
+        list, seen, limit, line_no, col1, col2, path, target_line, target_col, label
+      )
     end
   end
   local init = 1
@@ -124,10 +132,12 @@ local function sort(candidates)
   return candidates
 end
 
-function locations.extract_candidates(text)
+function locations.extract_candidates(text, limit)
+  limit = math.max(0, math.floor(tonumber(limit) or math.huge))
   local candidates, seen, line_no = {}, {}, 1
   for line in (tostring(text or "") .. "\n"):gmatch("(.-)\n") do
-    add_line_matches(candidates, seen, line:gsub("\r$", ""), line_no)
+    if #candidates >= limit then break end
+    add_line_matches(candidates, seen, limit, line:gsub("\r$", ""), line_no)
     line_no = line_no + 1
   end
   return sort(candidates)

@@ -25,6 +25,7 @@
   #include <direct.h>
   #include <io.h>
   #include <windows.h>
+  #include <shellapi.h>
   #include <fileapi.h>
   #include "../utfconv.h"
   #define fileno _fileno
@@ -1824,6 +1825,21 @@ static int f_exec(lua_State *L) {
   return 0;
 }
 
+#ifdef _WIN32
+static int f_open_in_system(lua_State *L) {
+  const char *resource = luaL_checkstring(L, 1);
+  LPWSTR wide = utfconv_utf8towc(resource);
+  if (!wide) {
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  HINSTANCE result = ShellExecuteW(NULL, L"open", wide, NULL, NULL, SW_SHOWNORMAL);
+  SDL_free(wide);
+  lua_pushboolean(L, (INT_PTR)result > 32);
+  return 1;
+}
+#endif
+
 static int f_set_window_opacity(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   double n = luaL_checknumber(L, 2);
@@ -2409,6 +2425,9 @@ static const luaL_Reg lib[] = {
   { "is_project_child",    f_is_project_child    },
   { "sleep",                 f_sleep                 },
   { "exec",                  f_exec                  },
+#ifdef _WIN32
+  { "open_in_system",        f_open_in_system        },
+#endif
   { "set_window_opacity",    f_set_window_opacity    },
   { "load_native_plugin",    f_load_native_plugin    },
   { "get_fs_type",           f_get_fs_type           },

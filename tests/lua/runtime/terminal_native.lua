@@ -90,7 +90,7 @@ test.describe("Native terminal session", function()
       cell_width = 8,
       cell_height = 16,
       cwd = system.getcwd(),
-      shell = 'cmd.exe /d /s /c "echo ANVIL_TERMINAL_TEST"',
+      shell = 'powershell.exe -NoLogo -NoProfile -Command "Write-Output ANVIL_TERMINAL_TEST; Start-Sleep -Seconds 1"',
     })
     test.ok(session, start_error)
 
@@ -206,6 +206,7 @@ test.describe("Native terminal session", function()
         local ok
         ok, draining_write_reason = session:write("ignored")
         test.not_ok(ok)
+        test.not_ok(session:resize(40, 4, 8, 16))
       end
       snapshot = session:snapshot(snapshot)
       if status.kind == "exited" then break end

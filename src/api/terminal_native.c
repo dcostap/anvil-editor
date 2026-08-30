@@ -22,6 +22,7 @@
 #define TERMINAL_WRITE_QUEUE_CAPACITY (4u * 1024u * 1024u)
 #define TERMINAL_CLIPBOARD_MAX_BYTES (1024u * 1024u)
 #define TERMINAL_NOTIFICATION_MAX_BYTES (64u * 1024u)
+#define TERMINAL_HYPERLINK_MAX_BYTES (32u * 1024u)
 #define TERMINAL_SCROLLBACK_MAX_BYTES (64u * 1024u * 1024u)
 #define TERMINAL_DRAIN_QUIET_MS 250u
 #define TERMINAL_DRAIN_MAX_MS 5000u
@@ -63,6 +64,8 @@ typedef struct {
   bool transport_released;
   volatile LONG write_failed;
   volatile LONG read_failed;
+  volatile LONG reader_waiting;
+  volatile LONG reader_done;
   volatile LONG output_event_pending;
   DWORD read_error;
   DWORD write_error;
@@ -91,6 +94,7 @@ typedef struct {
   TerminalState state;
   uint64_t state_revision;
   uint64_t process_exit_seen_ms;
+  uint64_t drain_empty_seen_ms;
   volatile LONG64 last_output_ms;
   volatile LONG64 output_bytes_read;
   uint64_t output_bytes_parsed;
@@ -123,6 +127,7 @@ typedef struct {
   bool search_scan_active;
   bool search_scan_reverse;
   bool search_scan_continuing;
+  uint64_t search_scan_generation;
 } TerminalSession;
 
 typedef struct {
@@ -159,6 +164,10 @@ static void set_terminal_state(TerminalSession *session, TerminalState state) {
   session->state_revision++;
 }
 
+static void invalidate_search_scan(TerminalSession *session) {
+  session->search_scan_active = false;
+}
+
 static bool terminal_is_live(const TerminalSession *session) {
   return session && session->state == TERMINAL_STATE_RUNNING;
 }
@@ -182,7 +191,10 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
 
   while (InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
     DWORD read = 0;
-    if (!ReadFile(session->output_read, buffer, sizeof(buffer), &read, NULL) || read == 0) {
+    InterlockedExchange(&session->reader_waiting, 1);
+    BOOL read_ok = ReadFile(session->output_read, buffer, sizeof(buffer), &read, NULL);
+    InterlockedExchange(&session->reader_waiting, 0);
+    if (!read_ok || read == 0) {
       DWORD error = GetLastError();
       if (InterlockedCompareExchange(&session->closing, 0, 0) == 0 &&
           error != ERROR_BROKEN_PIPE && error != ERROR_PIPE_NOT_CONNECTED) {
@@ -221,6 +233,7 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
     LeaveCriticalSection(&session->read_lock);
     if (queue_was_empty && offset > 0) wake_for_terminal_output(session);
   }
+  InterlockedExchange(&session->reader_done, 1);
   wake_for_terminal_output(session);
   return 0;
 }
@@ -614,10 +627,7 @@ static void release_terminal_transport(TerminalSession *session) {
   }
 }
 
-static void close_session(TerminalSession *session) {
-  if (!session || session->closed) return;
-  session->closed = true;
-  set_terminal_state(session, TERMINAL_STATE_CLOSED);
+static void terminate_terminal_process(TerminalSession *session) {
   if (session->job) {
     close_handle(&session->job);
   } else if (session->process) {
@@ -626,10 +636,16 @@ static void close_session(TerminalSession *session) {
       TerminateProcess(session->process, 1);
     }
   }
-  release_terminal_transport(session);
-
   close_handle(&session->process_thread);
   close_handle(&session->process);
+}
+
+static void close_session(TerminalSession *session) {
+  if (!session || session->closed) return;
+  session->closed = true;
+  set_terminal_state(session, TERMINAL_STATE_CLOSED);
+  terminate_terminal_process(session);
+  release_terminal_transport(session);
   free_terminal_objects(session);
   if (session->snapshot_text) {
     HeapFree(GetProcessHeap(), 0, session->snapshot_text);
@@ -1120,7 +1136,9 @@ static bool output_drained(TerminalSession *session) {
   EnterCriticalSection(&session->read_lock);
   empty = session->read_queue_count == 0;
   LeaveCriticalSection(&session->read_lock);
-  return empty;
+  bool reader_idle = InterlockedCompareExchange(&session->reader_waiting, 0, 0) != 0 ||
+    InterlockedCompareExchange(&session->reader_done, 0, 0) != 0;
+  return empty && reader_idle;
 }
 
 static void push_status(lua_State *L, TerminalSession *session) {
@@ -1200,7 +1218,10 @@ static int f_terminal_update(lua_State *L) {
   if (changed) {
     if (ghostty_render_state_update(session->render_state, session->terminal) != GHOSTTY_SUCCESS) {
       changed = false;
-    } else session->render_generation++;
+    } else {
+      session->render_generation++;
+      invalidate_search_scan(session);
+    }
   }
   bool output_remains = false;
   EnterCriticalSection(&session->read_lock);
@@ -1211,6 +1232,7 @@ static int f_terminal_update(lua_State *L) {
   uint64_t now = GetTickCount64();
   if (session->state == TERMINAL_STATE_RUNNING && !process_running(session)) {
     session->process_exit_seen_ms = now;
+    session->drain_empty_seen_ms = 0;
     LONG64 last_output = InterlockedCompareExchange64(&session->last_output_ms, 0, 0);
     if ((uint64_t)last_output < now) {
       InterlockedExchange64(&session->last_output_ms, (LONG64)now);
@@ -1222,15 +1244,22 @@ static int f_terminal_update(lua_State *L) {
   if ((session->state == TERMINAL_STATE_RUNNING ||
        session->state == TERMINAL_STATE_DRAINING) && (read_failed || write_failed)) {
     set_terminal_state(session, TERMINAL_STATE_FAILED);
+    terminate_terminal_process(session);
     release_terminal_transport(session);
   }
   uint64_t last_output = (uint64_t)InterlockedCompareExchange64(
     &session->last_output_ms, 0, 0
   );
-  if (session->state == TERMINAL_STATE_DRAINING && output_drained(session) &&
-      (now - last_output >= TERMINAL_DRAIN_QUIET_MS ||
-       now - session->process_exit_seen_ms >= TERMINAL_DRAIN_MAX_MS)) {
-    if (now - session->process_exit_seen_ms >= TERMINAL_DRAIN_MAX_MS) {
+  bool drained = session->state == TERMINAL_STATE_DRAINING && output_drained(session);
+  if (drained && session->drain_empty_seen_ms == 0) session->drain_empty_seen_ms = now;
+  if (!drained) session->drain_empty_seen_ms = 0;
+  bool drain_expired = session->state == TERMINAL_STATE_DRAINING &&
+    now - session->process_exit_seen_ms >= TERMINAL_DRAIN_MAX_MS;
+  bool drain_complete = session->state == TERMINAL_STATE_DRAINING &&
+    drained && now - last_output >= TERMINAL_DRAIN_QUIET_MS &&
+    now - session->drain_empty_seen_ms >= TERMINAL_DRAIN_QUIET_MS;
+  if (drain_complete || drain_expired) {
+    if (drain_expired) {
       session->forced_drain_finalizations++;
     }
     if (session->job) close_handle(&session->job);
@@ -1313,12 +1342,18 @@ static int f_terminal_paste(lua_State *L) {
 
 static int f_terminal_stats(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
+  uint64_t read_queue_high_water = session->read_queue_high_water;
+  if (session->read_lock_initialized) {
+    EnterCriticalSection(&session->read_lock);
+    read_queue_high_water = session->read_queue_high_water;
+    LeaveCriticalSection(&session->read_lock);
+  }
   lua_createtable(L, 0, 9);
   set_integer_field(L, "output_bytes_read", (lua_Integer)InterlockedCompareExchange64(
     &session->output_bytes_read, 0, 0));
   set_integer_field(L, "output_bytes_parsed", (lua_Integer)session->output_bytes_parsed);
   set_integer_field(L, "input_bytes_queued", (lua_Integer)session->input_bytes_queued);
-  set_integer_field(L, "read_queue_high_water", (lua_Integer)session->read_queue_high_water);
+  set_integer_field(L, "read_queue_high_water", (lua_Integer)read_queue_high_water);
   set_integer_field(L, "write_queue_high_water", (lua_Integer)session->write_queue_high_water);
   set_integer_field(L, "rejected_writes", (lua_Integer)session->rejected_writes);
   set_integer_field(L, "forced_drain_finalizations",
@@ -1333,7 +1368,7 @@ static int f_terminal_resize(lua_State *L) {
   uint16_t rows = (uint16_t)luaL_checkinteger(L, 3);
   uint32_t cell_width = (uint32_t)luaL_checkinteger(L, 4);
   uint32_t cell_height = (uint32_t)luaL_checkinteger(L, 5);
-  if (session->closed || session->transport_released || !session->pseudoconsole ||
+  if (!terminal_is_live(session) || session->transport_released || !session->pseudoconsole ||
       cols == 0 || rows == 0 || cell_width == 0 || cell_height == 0) {
     lua_pushboolean(L, false);
     return 1;
@@ -1355,6 +1390,8 @@ static int f_terminal_resize(lua_State *L) {
   session->cell_width = cell_width;
   session->cell_height = cell_height;
   ghostty_render_state_update(session->render_state, session->terminal);
+  session->render_generation++;
+  invalidate_search_scan(session);
   lua_pushboolean(L, true);
   return 1;
 }
@@ -1370,6 +1407,8 @@ static int f_terminal_clear(lua_State *L) {
     session->terminal, clear_sequence, sizeof(clear_sequence) - 1
   );
   ghostty_render_state_update(session->render_state, session->terminal);
+  session->render_generation++;
+  invalidate_search_scan(session);
   lua_pushboolean(L, true);
   return 1;
 }
@@ -2316,7 +2355,9 @@ static int f_terminal_search(lua_State *L) {
     lua_pushboolean(L, false);
     return 1;
   }
-  bool resume = session->search_scan_active && session->search_scan_reverse == reverse &&
+  bool resume = session->search_scan_active &&
+    session->search_scan_generation == session->render_generation &&
+    session->search_scan_reverse == reverse &&
     session->search_scan_query_length == query_length &&
     memcmp(session->search_scan_query, query, query_length) == 0;
   if (!resume) {
@@ -2342,6 +2383,7 @@ static int f_terminal_search(lua_State *L) {
           ? session->search_scan_total_rows - 1 : 0);
     session->search_scan_step = 0;
     session->search_scan_active = true;
+    session->search_scan_generation = session->render_generation;
   }
   size_t total_rows = session->search_scan_total_rows;
   bool continuing = session->search_scan_continuing;
@@ -2559,7 +2601,8 @@ static int f_terminal_hyperlink(lua_State *L) {
   }
   size_t length = 0;
   GhosttyResult result = ghostty_grid_ref_hyperlink_uri(&ref, NULL, 0, &length);
-  if (result != GHOSTTY_OUT_OF_SPACE || length == 0) {
+  if (result != GHOSTTY_OUT_OF_SPACE || length == 0 ||
+      length > TERMINAL_HYPERLINK_MAX_BYTES) {
     lua_pushnil(L);
     return 1;
   }

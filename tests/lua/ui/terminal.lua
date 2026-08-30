@@ -389,9 +389,12 @@ test.describe("Terminal View", function()
     local view = terminal.open()
     local session = view.session
     panes.create { factory = function() return View() end }
+    session.snapshot_requests = {}
+    view.size.x = view.size.x + 100
     local before = session.update_calls or 0
     core.root_panel:update()
     test.ok((session.update_calls or 0) > before)
+    test.equal(session.snapshot_requests[#session.snapshot_requests], false)
     test.not_ok(session.closed)
   end)
 
@@ -470,6 +473,11 @@ test.describe("Terminal View", function()
   end)
 
   test.it("restores Workspace launch state as a new shell session", function(context)
+    local previous_info = system.get_file_info
+    system.get_file_info = function(path)
+      if path == "C:/workspace" then return { type = "dir" } end
+      return previous_info(path)
+    end
     local view = terminal.open { cwd = "C:/workspace", shell = "pwsh.exe" }
     local first_session = view.session
     local state = view:get_state()
@@ -480,6 +488,7 @@ test.describe("Terminal View", function()
     test.equal(restored.launch_options.cwd, "C:/workspace")
     test.equal(restored.launch_options.shell, "pwsh.exe")
     restored:on_close()
+    system.get_file_info = previous_info
   end)
 
   test.it("copy-splits into a new terminal at the current directory", function(context)
@@ -513,7 +522,7 @@ test.describe("Terminal View", function()
       "file://bad/C:/missing", "/home/user", "C:/missing", "C:/bad\0path",
     }) do
       view.snapshot.pwd = reported
-      test.equal(view:get_cwd(), "C:/fallback")
+      test.equal(view:get_cwd(), system.getcwd())
     end
     system.get_file_info = previous_info
   end)
@@ -595,6 +604,17 @@ test.describe("Terminal View", function()
     test.equal(#context.sessions[1].writes, 0)
   end)
 
+  test.it("keeps encoded text ownership when another text event arrives first", function(context)
+    local view = terminal.open()
+    test.ok(view:on_key_pressed("/", {
+      shift = true, modifiers = 1, scancode = 36, text = "/",
+      unshifted_codepoint = string.byte("7"), consumed_modifiers = 1,
+    }))
+    test.ok(view:on_text_input("x"))
+    test.ok(view:on_text_input("/"))
+    test.same({ "x" }, context.sessions[1].writes)
+  end)
+
   test.it("runs valid Anvil shortcuts before terminal input", function(context)
     local first = panes.create { factory = function() return View() end }
     local second = panes.create { factory = function() return View() end }
@@ -615,6 +635,16 @@ test.describe("Terminal View", function()
     local event = { ctrl = true, modifiers = 2, scancode = 14 }
     test.ok(view:on_key_released("k", event))
     test.equal(#context.sessions[1].keys, 0)
+  end)
+
+  test.it("releases terminal-owned keys when focus leaves the View", function(context)
+    local view = terminal.open({ focus = true })
+    local event = { ctrl = true, modifiers = 2, scancode = 14 }
+    test.ok(view:on_key_pressed("k", event))
+    view:sync_focus()
+    core.set_active_view(context.previous_active_view)
+    view:sync_focus()
+    test.equal(context.sessions[1].keys[#context.sessions[1].keys][3], "release")
   end)
 
   test.it("sends unhandled shell control keys to the terminal", function(context)
@@ -707,6 +737,18 @@ test.describe("Terminal View", function()
     test.ok(context.sessions[1].closed)
     test.ok(view.running)
     test.same({ true }, context.sessions[2].focus_events)
+  end)
+
+  test.it("clears transient input state when it restarts", function(context)
+    local view = terminal.open()
+    view.key_owners = { stale = "ghostty" }
+    view.encoded_text_queue = { "stale" }
+    view.composition = { text = "stale", start = 0, length = 0 }
+    view.state = "exited"
+    test.ok(view:restart())
+    test.same({}, view.key_owners)
+    test.same({}, view.encoded_text_queue)
+    test.equal(view.composition, nil)
   end)
 
   test.it("does not restart a running terminal", function(context)
@@ -855,9 +897,9 @@ test.describe("Terminal View", function()
   end)
 
   test.it("activates only a safe URI after one complete mouse gesture", function(context)
-    local previous_open = common.open_in_system
+    local previous_open = system.open_in_system
     local opened = {}
-    common.open_in_system = function(uri) opened[#opened + 1] = uri; return true end
+    system.open_in_system = function(uri) opened[#opened + 1] = uri; return true end
     local view = terminal.open()
     local session = context.sessions[1]
     session.hyperlink_uri = "https://example.test/path"
@@ -877,12 +919,55 @@ test.describe("Terminal View", function()
     test.same(opened, { "https://example.test/path" })
     test.equal(#session.mouse_events, 0)
 
-    session.hyperlink_uri = "javascript:alert(1)"
+    session.hyperlink_uri = [[https://example.test/" & echo unsafe]]
     view:on_mouse_pressed("left", x, y)
     view:on_mouse_released("left", x, y)
-    test.equal(#opened, 1)
+    test.equal(opened[2], session.hyperlink_uri)
+
+    session.hyperlink_uri = "javascript:alert(1)"
+    test.equal(view:point_of_interest_at(0, 0), nil)
+    view:on_mouse_pressed("left", x, y)
+    view:on_mouse_released("left", x, y)
+    test.equal(#opened, 2)
     keymap.modkeys.ctrl = false
-    common.open_in_system = previous_open
+    system.open_in_system = previous_open
+  end)
+
+  test.it("detects plain HTTP text and clears its hover when Ctrl is released", function(context)
+    local view = terminal.open()
+    local text = "http://example.test/path"
+    local columns = {}
+    for index = 1, #text do columns[index] = index - 1 end
+    context.sessions[1].row_text_data = {
+      text = text, columns = columns, generation = 1,
+    }
+    keymap.modkeys.ctrl = true
+    view:on_mouse_moved(7, 7, 0, 0)
+    test.equal(view.cursor, "hand")
+    keymap.modkeys.ctrl = false
+    view:on_key_released("lctrl", { scancode = 224 })
+    test.equal(view.hover_point, nil)
+    test.equal(view.cursor, "ibeam")
+  end)
+
+  test.it("ignores malformed file locations during hover", function(context)
+    local view = terminal.open({ cwd = system.getcwd() })
+    local text = "C:/../../file.lua:1"
+    local columns = {}
+    for index = 1, #text do columns[index] = index - 1 end
+    context.sessions[1].row_text_data = {
+      text = text, columns = columns, generation = 1,
+    }
+    local ok, point = pcall(view.point_of_interest_at, view, 1, 0)
+    test.ok(ok)
+    test.equal(point, nil)
+  end)
+
+  test.it("bounds terminal location candidates before filesystem probes", function()
+    local locations = require "core.text_poi_locations"
+    local rows = {}
+    for index = 1, 300 do rows[index] = "file" .. index .. ".lua:1" end
+    test.equal(#locations.extract_candidates(table.concat(rows, " "), 32), 32)
   end)
 
   test.it("opens a validated file location from one terminal row", function(context)
@@ -916,6 +1001,43 @@ test.describe("Terminal View", function()
     test.ok(common.path_equals(opened.path, target))
     test.equal(opened.options.line, 12)
     test.equal(opened.options.col, 3)
+  end)
+
+  test.it("cancels a file gesture when its target position changes", function(context)
+    local previous_info = system.get_file_info
+    local previous_open = core.open_file
+    system.get_file_info = function() return { type = "file" } end
+    local opened = 0
+    core.open_file = function() opened = opened + 1 return View() end
+    local view = terminal.open({ cwd = system.getcwd() })
+    local session = context.sessions[1]
+    local function set_row(line)
+      local text = "file.lua:" .. line .. ":1"
+      local columns = {}
+      for index = 1, #text do columns[index] = index - 1 end
+      session.row_text_data = { text = text, columns = columns, generation = line }
+    end
+    keymap.modkeys.ctrl = true
+    set_row(1)
+    view:on_mouse_pressed("left", 7, 7)
+    set_row(999)
+    view:on_mouse_released("left", 7, 7)
+    keymap.modkeys.ctrl = false
+    core.open_file = previous_open
+    system.get_file_info = previous_info
+    test.equal(opened, 0)
+  end)
+
+  test.it("sanitizes Terminal Text Capture titles", function(context)
+    local source = terminal.open()
+    context.sessions[1].capture = {
+      text = "output", cursor_line = 1, cursor_col = 1, viewport_line = 1,
+      title = "bad\n\ttitle\0" .. string.rep("x", 1000),
+    }
+    test.ok(source:open_text_capture())
+    local name = panes.active().current_view:get_name()
+    test.equal(name:find("[%c]"), nil)
+    test.ok(#name < 300)
   end)
 
   test.it("reports Terminal View focus changes", function(context)
