@@ -69,6 +69,8 @@ echo   %APP%
 
 echo.
 echo === Restarting Anvil ===
+rem Prefer Git's Windows command wrappers over extensionless MSYS scripts.
+if exist "%ProgramFiles%\Git\cmd\gitk.exe" set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
 start "" "%APP%"
 exit /b 0
 

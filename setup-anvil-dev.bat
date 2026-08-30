@@ -67,6 +67,8 @@ echo Dev portable Anvil is ready:
 echo   %APP%
 echo.
 echo Launching Anvil...
+rem Prefer Git's Windows command wrappers over extensionless MSYS scripts.
+if exist "%ProgramFiles%\Git\cmd\gitk.exe" set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
 start "Anvil" "%APP%"
 exit /b 0
 
