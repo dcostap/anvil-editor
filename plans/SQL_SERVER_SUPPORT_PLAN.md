@@ -2,17 +2,31 @@
 
 ## Status
 
-This document records research and an implementation plan.
+This document records research, a realistic implementation plan, and a deferred product roadmap.
 
 It does not change Anvil behavior.
 
-The research used these revisions:
+The first research pass used these revisions:
 
 - Anvil commit `0a7e55729ac76f7f21472e1ce46bf730249f5bc8`
 - `microsoft/vscode-mssql` `main` tree `59c8ea50c21e968d8ecb10ba3a14b96bfd471adf`
 - `microsoft/sqltoolsservice` `main` tree `890bbef6fa481cbb99e1ed1df085ba0e2ec1ca0a`
 
-Both Microsoft repositories change often. Recheck their contracts before implementation.
+The plan update used these revisions:
+
+- Anvil commit `8309d6de834f7699e21f4be42c67b39df0ada1d1`
+- Anvil Tabular Data Preview commit `fa76f7a676f45a562f9d0b71ca0f48d7108ba666`
+- `microsoft/vscode-mssql` `main` tree `3f40c4a05a00ff37aeed445b8f16c449d2b6a8c6`
+- `microsoft/sqltoolsservice` `main` tree `890bbef6fa481cbb99e1ed1df085ba0e2ec1ca0a`
+- SQL Tools Service release `6.0.20260827.1`
+
+Both Microsoft repositories change often.
+
+Recheck the exact service release before implementation.
+
+The **Realistic implementation plan** is the active execution plan.
+
+The **Deferred broad implementation plan** preserves the earlier roadmap for reference.
 
 ## Terminology
 
@@ -51,15 +65,25 @@ Do not port the VS Code extension or its React webviews.
 
 Use one SQL Tools Service process for the Anvil process.
 
-Use its existing JSON-RPC protocol for these features:
+Use its existing JSON-RPC protocol for the first product:
 
 - connections
-- T-SQL completion and diagnostics
-- go-to-definition
 - query execution and cancellation
 - lazy result retrieval
-- Object Explorer
+
+Reuse Anvil's Tabular Data Preview table surface for SQL result presentation.
+
+Extract only the narrow table-source seam needed for remote row pages.
+
+Do not build a second SQL-only grid.
+
+Defer these features until the query product proves useful:
+
+- T-SQL completion and diagnostics
+- go-to-definition
+- Object Explorer and object search
 - table data editing
+- automatic service installation
 
 Keep arbitrary query results read-only.
 
@@ -72,21 +96,31 @@ Start with these authentication methods:
 
 Do not save passwords in Anvil's current storage system.
 
-Download SQL Tools Service only after an explicit user action.
+The first implementation requires an existing SQL Tools Service executable.
 
-Pin the package version and SHA-256 digest.
+Add download and installation only after the query workflow proves useful.
+
+Any later download requires explicit user action.
+
+Any later installer must pin the package version and SHA-256 digest.
 
 Do not commit the service binary into this repository.
 
-Use the classic SQL Tools Service query protocol first.
+Use the classic SQL Tools Service query protocol for the query pilot.
 
 Do not target the new STS2 query protocol in the first version.
 
-This design gives the requested value without copying VS Code architecture.
+The current classic query contracts remain in SQL Tools Service source without deprecation markers.
 
-## The 90 percent product
+The current VS Code MSSQL extension keeps its SQL Data Plane disabled by default.
 
-The useful first product has five connected workflows.
+This design proves the central workflow before Anvil builds a complete database toolset.
+
+## Long-term product direction
+
+The useful long-term product has five connected workflows.
+
+Only the first three belong to the query pilot.
 
 ### 1. Add and select a connection
 
@@ -675,6 +709,16 @@ The current extension has a new SQL Data Plane abstraction.
 
 Its local provider uses an STS2 protocol inside SQL Tools Service.
 
+In `vscode-mssql` `1.46.0`, `mssql.sqlDataPlane.enabled` defaults to `false`.
+
+When enabled, its configured local backend defaults to `sts2-local`.
+
+The extension adds `--enable-sts2` only for service version `6.0.20260825.2` or newer.
+
+The STS2 client starts with `v2/initialize` and requests protocol version `2.0`.
+
+It enables only capabilities that the service explicitly reports.
+
 STS2 adds these query features:
 
 - streamed row pages
@@ -694,9 +738,19 @@ Important operations include:
 - query execute, acknowledge, cancel, and dispose
 - result-set, row, message, complete, and fatal notifications
 
-STS2 is capability-gated and still maturing.
+STS2 is opt-in, capability-gated, and still changing.
 
 It does not replace the classic language, Object Explorer, and edit protocols.
+
+The classic query contracts remain active in current source.
+
+The source has no deprecation marker on these methods:
+
+- `query/executeString`
+- `query/subset`
+- `query/cancel`
+- `query/dispose`
+- `query/complete`
 
 The first Anvil version needs those classic protocols anyway.
 
@@ -704,7 +758,7 @@ Use the classic query protocol for one coherent implementation.
 
 Keep method names and result decoding in one module.
 
-Add STS2 only after a measured need or classic protocol deprecation.
+Reconsider STS2 after the pilot or after Microsoft announces classic protocol deprecation.
 
 ## License and distribution findings
 
@@ -732,7 +786,13 @@ This document is not legal advice.
 
 Before public distribution, review the exact package notices and terms again.
 
-The safest first approach is an explicit first-use download.
+An explicit first-use download reduces bundling risk.
+
+It does not prove that Anvil has no distribution or license duties.
+
+The query pilot avoids this question by requiring a user-supplied executable.
+
+Review the package terms before adding an installer or public SQL integration release.
 
 Do not vendor the service archive inside Anvil releases initially.
 
@@ -742,12 +802,16 @@ Record the accepted service version in machine-local state.
 
 ## Service package facts
 
-At the inspected revision, VS Code pins SQL Tools Service `6.0.20260827.1`.
+At the updated research revision, VS Code pins SQL Tools Service `6.0.20260827.1`.
+
+GitHub also reports this tag as the latest release on 2026-08-30.
+
+The release uses .NET 10 packages.
 
 Its Windows x64 package is:
 
 ```text
-microsoft.sqltools.servicelayer-win-x64-net10.0.zip
+Microsoft.SqlTools.ServiceLayer-win-x64-net10.0.zip
 ```
 
 The package URL pattern is:
@@ -756,6 +820,10 @@ The package URL pattern is:
 https://github.com/Microsoft/sqltoolsservice/releases/download/{version}/
   microsoft.sqltools.servicelayer-{fileName}
 ```
+
+The VS Code configuration uses a lowercase URL path.
+
+The GitHub release asset records the capitalized filename above.
 
 The Windows x64 archive size is `91,257,645` bytes.
 
@@ -775,7 +843,7 @@ The package also contains `SqlToolsResourceProviderService.exe`.
 
 The first Anvil scope does not need the Resource Provider service.
 
-Pinning this exact future package is not a permanent decision.
+This release fact is research data, not an implementation pin.
 
 Select a stable release again when implementation starts.
 
@@ -863,29 +931,52 @@ Do not subclass the Command Output View.
 
 SQL results have structured rows, columns, batches, and messages.
 
-### Existing table View plan
+### Existing Tabular Data Preview
 
-`../done/TABULAR_DATA_PREVIEW_PLAN.md` already defines a simple custom table View.
+`done/TABULAR_DATA_PREVIEW_PLAN.md` now describes an implemented first-party feature.
 
-Its useful rendering rules also apply here:
+The implementation is in `data/plugins/tabular_data_preview/init.lua`.
 
-- fixed-height rows
-- fixed headers
-- visible-row drawing
-- visible-column drawing
+It already provides these required result-table behaviors:
+
+- fixed-height rows and headers
+- visible-row and visible-column drawing
+- horizontal and vertical scrolling
 - independent column widths
-- one custom View
-- no widget object per cell
+- rectangular cell selection
+- keyboard cell navigation
+- tab-separated copy
+- single-line display for multiline values
+- View placement and lifecycle behavior
 
-Do not create a general table framework before implementation.
+The current View is concrete rather than reusable.
 
-SQL results and SQL table editing need two grids immediately.
+It owns delimiter parsing, Buffer listeners, local rows, sorting, filtering, and drawing.
 
-A small private `sql_server/grid.lua` module is therefore justified.
+SQL results cannot instantiate it unchanged.
 
-Do not move that module into `core` initially.
+Extract a narrow table-source seam from this implementation.
 
-Extract shared table code only after another implemented feature needs it.
+Keep CSV parsing, live Buffer updates, local sorting, and filtering in Tabular Data Preview.
+
+Let SQL results supply these values through callbacks or an adapter:
+
+- columns
+- total row count
+- row labels
+- loaded cell values
+- missing-page requests
+- cell display and copy text
+
+Keep shared selection, scrolling, resizing, clipping, drawing, and copy behavior in one implementation.
+
+The SQL table source must preserve `NULL` separately from empty text.
+
+The source must request pages without blocking `draw()`.
+
+Do not add a generic table module to `core`.
+
+This is now a justified extraction because two first-party features need the same table surface.
 
 ### Existing tree and generated text seams
 
@@ -961,7 +1052,408 @@ The cost is a large downloaded service and Microsoft component terms.
 
 That trade is favorable for this personal SQL Server workflow.
 
-## Proposed architecture
+## Realistic implementation plan
+
+This section is the active implementation plan.
+
+It replaces the earlier all-features sequence below.
+
+The goal is one useful query workflow, not a complete database IDE.
+
+### Product scope
+
+The pilot supports this path:
+
+1. Select an existing SQL Tools Service executable.
+2. Enter one connection for the current Anvil session.
+3. Connect the current SQL Buffer.
+4. Execute selected text or the complete Buffer.
+5. View messages and paged result sets.
+6. Cancel the active query.
+
+Anvil stores the selected executable path in machine-local state under `USERDIR`.
+
+Later sessions reuse that path until the user changes or removes it.
+
+The pilot supports Windows integrated authentication first.
+
+Add SQL login during the same milestone only after integrated connection works.
+
+Keep SQL login passwords in memory.
+
+The pilot does not include these features:
+
+- saved profile management
+- service download or extraction
+- connected completion or diagnostics
+- go-to-definition
+- SQL Explorer or object search
+- table data editing
+- persisted query history
+- result sorting or filtering
+
+### Accuracy gate: test the exact service release first
+
+Do not change Anvil core from the old `4.0.1.1` probe alone.
+
+Run a focused protocol probe against the exact selected release.
+
+Use the same Windows x64 executable that the pilot will launch.
+
+The probe must test these operations:
+
+1. `initialize`
+2. `connection/connect` and `connection/complete`
+3. `query/executeString`
+4. result-set notifications
+5. `query/subset`
+6. `query/cancel`
+7. `query/dispose`
+8. shutdown and process exit
+
+Record the request and response ID types.
+
+Record process behavior when shutdown receives no response.
+
+Record the exact launch arguments accepted by that release.
+
+Do not add string-ID or shutdown exceptions unless this probe proves they are required.
+
+The current classic contracts remain present and have no deprecation markers.
+
+This fact supports the pilot choice, but the exact binary remains the final contract.
+
+### Result table reuse
+
+Reuse the implemented Tabular Data Preview table surface.
+
+Do not create `sql_server/grid.lua`.
+
+First extract a narrow reusable table View from `tabular_data_preview/init.lua`.
+
+Keep the shared code under the existing first-party plugin initially.
+
+A suitable internal file is:
+
+```text
+data/plugins/tabular_data_preview/table_view.lua
+```
+
+The shared View owns these behaviors:
+
+- fixed headers and row labels
+- visible-row and visible-column drawing
+- both scroll axes
+- column resizing
+- rectangular selection
+- keyboard navigation
+- tab-separated copy
+- clipped single-line cell presentation
+
+The caller supplies a small table source.
+
+The source reports these values:
+
+```text
+column_count
+column_label(column)
+row_count
+row_label(row)
+cell(row, column)
+request_rows(first_row, last_row)
+```
+
+`cell` can report a loaded value, `NULL`, or a loading state.
+
+`request_rows` schedules work and returns immediately.
+
+The draw path must never wait for service input.
+
+Tabular Data Preview keeps these local-only behaviors:
+
+- delimiter parsing
+- Buffer listeners
+- source row ranges
+- local sorting
+- local value filters
+- Workspace state for file previews
+
+SQL results do not offer sorting or filtering in the pilot.
+
+Those actions require server semantics or complete local data.
+
+SQL copy uses service display values.
+
+It preserves `NULL` separately from an empty string.
+
+Limit copy to loaded cells during the first slice.
+
+Do not make Select All fetch an unbounded result.
+
+### Small production structure
+
+Create only these SQL files for the pilot:
+
+```text
+data/plugins/sql_server/init.lua
+data/plugins/sql_server/service.lua
+data/plugins/sql_server/query.lua
+data/plugins/sql_server/results_view.lua
+```
+
+Update these existing files only when required:
+
+```text
+data/plugins/tabular_data_preview/init.lua
+data/plugins/tabular_data_preview/table_view.lua
+data/plugins/anvil_defaults.lua
+```
+
+Do not create connection, explorer, or table-edit subsystems yet.
+
+`init.lua` owns commands and one session connection per Project.
+
+`service.lua` owns process launch, JSON-RPC methods, and secret redaction.
+
+It also validates and stores the selected executable path in machine-local SQL state.
+
+`query.lua` owns one active query generation and page cache.
+
+`results_view.lua` combines result tables, messages, and query state.
+
+### Owner and process model
+
+Use one SQL Tools Service process for Anvil during the pilot.
+
+Start it after an explicit connect or execute action.
+
+Use the SQL Buffer file URI as the owner URI.
+
+Require a saved SQL Buffer during the pilot.
+
+Defer synthetic owners and untitled SQL execution.
+
+Allow one active query per owner URI.
+
+Dispose the old query before another execution for that owner.
+
+Stop the service during Anvil shutdown.
+
+Treat a service crash as one failed backend state.
+
+Keep Anvil responsive and offer a later restart action.
+
+### Connection model
+
+The pilot has one session connection per Project.
+
+Do not add add, edit, delete, group, or import profile flows.
+
+The connection form contains only these fields:
+
+- server
+- database
+- authentication type
+- user name for SQL login
+- password for SQL login
+- encryption mode
+- trust server certificate
+- connection timeout
+
+Do not persist the password or complete connection string.
+
+Do not read connection settings from Project files.
+
+Do not read the service executable path from Project files.
+
+Profile persistence can follow measured daily use.
+
+### Query and result model
+
+Use `query/executeString` for selected and complete Buffer text.
+
+Store the selection start for error-line mapping.
+
+Keep one result model with ordered batches and result sets.
+
+Each result set stores metadata, row count, and a bounded page cache.
+
+Start with 200 rows per subset request.
+
+Start with 16 cached pages per visible result set.
+
+Treat both values as tuning defaults.
+
+Route notifications by owner URI and query generation.
+
+Ignore stale notifications after disposal.
+
+Request missing visible pages after drawing identifies them.
+
+Coalesce duplicate page requests.
+
+Dispose service result data when the Results View closes.
+
+### Results View
+
+Use one Project-owned SQL Results View.
+
+Opening results replaces the SQL Editor in its current Pane.
+
+Navigation Back returns to the source Editor.
+
+Show these surfaces:
+
+- one selected result-set table
+- result-set selector when several sets exist
+- Messages
+- running, elapsed, row-count, error, and cancellation state
+
+Use a generated read-only Text View for Messages.
+
+Keep only the newest run in the pilot.
+
+Do not persist results or messages.
+
+### Vertical implementation slices
+
+#### Slice A: exact-release contract probe
+
+Run the accuracy gate against a real SQL Server.
+
+Acceptance:
+
+- The exact release initializes.
+- Connection completion arrives for the owner URI.
+- One scalar query returns through `query/subset`.
+- Cancellation and disposal complete.
+- Request ID and shutdown behavior are recorded.
+
+Stop if this slice exposes an unstable or unsuitable contract.
+
+#### Slice B: reusable table surface
+
+Add one failing UI test through the existing Tabular Data Preview seam.
+
+Extract the shared table View without changing preview behavior.
+
+Add a fake paged source test.
+
+Acceptance:
+
+- Existing Tabular Data Preview tests pass.
+- The Preview still parses, sorts, filters, selects, resizes, and copies.
+- A fake source requests only missing visible rows.
+- Loading cells never block drawing.
+- `NULL`, empty text, and loading remain different states.
+
+#### Slice C: service lifecycle and integrated connection
+
+Use an injected executable path in tests.
+
+Start one service and connect one saved SQL Buffer.
+
+Use a real framed fake process for automated tests.
+
+Acceptance:
+
+- Repeated ensure calls reuse one process.
+- Integrated authentication reaches connected or actionable failure state.
+- No secret appears in storage or logs.
+- Process exit fails pending work once.
+- Anvil stays responsive.
+
+#### Slice D: execute, messages, and cancellation
+
+Execute exact selected text or exact complete Buffer text.
+
+Open the Results View before completion.
+
+Acceptance:
+
+- Selection and Buffer behavior uses exact source text.
+- `GO` remains service-owned.
+- Messages and errors stay ordered.
+- Cancellation reaches a final state.
+- A new run disposes the old run.
+
+#### Slice E: paged result sets through the reused table
+
+Connect the SQL page source to the shared table View.
+
+Acceptance:
+
+- Missing visible rows cause bounded `query/subset` requests.
+- Duplicate page requests coalesce.
+- Several batches and result sets stay ordered.
+- Large row counts do not allocate all rows in Lua.
+- Horizontal drawing touches visible columns only.
+- Rectangular copy works for loaded cells.
+- `NULL` differs from empty text.
+
+#### Slice F: SQL login and pilot hardening
+
+Add masked SQL login password input.
+
+Run the manual query scenarios below.
+
+Acceptance:
+
+- SQL login passwords remain memory-only.
+- Disconnect clears the password reference.
+- Large or malformed service messages fail safely.
+- Service restart restores a clear disconnected state.
+- Focused SQL and Tabular Data Preview tests pass.
+
+### Pilot completion and stop gate
+
+Stop after Slice F.
+
+Use the pilot before adding another SQL subsystem.
+
+Promote it only if it improves a real daily query workflow.
+
+Choose one next feature from measured use:
+
+1. saved non-secret profiles
+2. connected completion and diagnostics
+3. SQL Explorer
+4. table data editing
+5. service installation
+
+Do not start several choices together.
+
+### Focused tests
+
+Add or update these tests:
+
+```text
+tests/lua/ui/tabular_data_preview.lua
+tests/lua/ui/tabular_table_view.lua
+tests/lua/runtime/sql_server_service.lua
+tests/lua/runtime/sql_server_query.lua
+tests/lua/ui/sql_server_results_view.lua
+```
+
+Use real Content-Length framing at the fake service boundary.
+
+Do not mock the shared table View inside SQL Results View tests.
+
+Run the existing Tabular Data Preview UI test after each shared extraction change.
+
+Keep a real SQL Server integration probe opt-in.
+
+Do not require SQL Server for normal Meson tests.
+
+## Deferred broad implementation plan
+
+The sections below preserve the earlier full-product roadmap.
+
+They are not the current execution sequence.
+
+Revalidate each section before promoting one deferred feature.
+
+### Proposed architecture
 
 ```text
 SQL Editor Buffer
@@ -984,7 +1476,7 @@ MicrosoftSqlToolsServiceLayer.exe
 SQL Server-family database
 ```
 
-### Process ownership
+#### Process ownership
 
 Use one service process for Anvil.
 
@@ -1000,7 +1492,7 @@ Stop it during Anvil shutdown.
 
 Do not start one service process per Project or Buffer.
 
-### Owner URI model
+#### Owner URI model
 
 SQL Tools Service keys connections and query sessions by owner URI.
 
@@ -1027,7 +1519,7 @@ anvil-sql://project/<project-id>/edit/<session-id>
 
 Do not use filesystem paths for synthetic owners.
 
-### Project model
+#### Project model
 
 The first version has one Selected SQL Connection per Project.
 
@@ -1041,7 +1533,7 @@ Do not add per-folder, per-query, and per-language connection rules initially.
 
 Add a temporary per-Buffer override only after a real need appears.
 
-### Backend boundary for PostgreSQL
+#### Backend boundary for PostgreSQL
 
 Do not build a driver registry now.
 
@@ -1068,7 +1560,7 @@ Do not force SQL Server protocol types into the grid model.
 
 Do not generalize authentication or metadata before PostgreSQL work starts.
 
-## Proposed modules
+### Proposed modules
 
 Create these first-party plugin files:
 
@@ -1077,10 +1569,10 @@ data/plugins/sql_server/init.lua
 data/plugins/sql_server/service.lua
 data/plugins/sql_server/connections.lua
 data/plugins/sql_server/query.lua
-data/plugins/sql_server/grid.lua
 data/plugins/sql_server/results_view.lua
 data/plugins/sql_server/explorer_view.lua
 data/plugins/sql_server/table_data_view.lua
+data/plugins/tabular_data_preview/table_view.lua
 ```
 
 Add focused tests:
@@ -1099,6 +1591,7 @@ Update these existing files:
 ```text
 data/core/lsp/jsonrpc.lua
 data/core/lsp/client.lua
+data/plugins/tabular_data_preview/init.lua
 data/plugins/anvil_defaults.lua
 data/colors/default.lua, only if existing colors are insufficient
 ```
@@ -1107,9 +1600,9 @@ A later secret store would add native files.
 
 Do not include that native change in the first query slice.
 
-### Module responsibilities
+#### Module responsibilities
 
-#### `init.lua`
+##### `init.lua`
 
 Own command registration and first-party integration.
 
@@ -1119,7 +1612,7 @@ Start the service only when required.
 
 Attach SQL Buffers after a Project selects a connection.
 
-#### `service.lua`
+##### `service.lua`
 
 Own the SQL Tools Service process and JSON-RPC client.
 
@@ -1131,7 +1624,7 @@ Own installation discovery and service version checks.
 
 Redact secrets from all logs.
 
-#### `connections.lua`
+##### `connections.lua`
 
 Store non-secret profiles.
 
@@ -1145,7 +1638,7 @@ Resolve connect completion and disconnection.
 
 Use `core.storage` with the normalized Project path as the selection key.
 
-#### `query.lua`
+##### `query.lua`
 
 Own one query session and its finite state.
 
@@ -1155,19 +1648,19 @@ Request and cache row pages.
 
 Cancel and dispose sessions.
 
-#### `grid.lua`
+##### Shared table View
 
-Draw one virtualized grid.
+Reuse `tabular_data_preview/table_view.lua`.
 
-Own cell selection, scrolling, column widths, and copy behavior.
+Let it own selection, scrolling, column widths, drawing, and copy behavior.
 
-Request missing rows through a caller callback.
+Supply SQL columns, row counts, cells, and missing-page requests through a table source.
 
-Expose edit callbacks without knowing SQL Tools Service contracts.
+Add edit callbacks only when the table-data milestone starts.
 
-Keep this module private to `sql_server`.
+Do not duplicate this behavior under `sql_server`.
 
-#### `results_view.lua`
+##### `results_view.lua`
 
 Own one Project's current run presentation.
 
@@ -1175,7 +1668,7 @@ Present result-set grids and the Messages Text View.
 
 Map query errors back to source lines where possible.
 
-#### `explorer_view.lua`
+##### `explorer_view.lua`
 
 Own one Object Explorer session.
 
@@ -1183,7 +1676,7 @@ Render the lazy node tree through a read-only Text View.
 
 Open definitions, table results, and table editing commands.
 
-#### `table_data_view.lua`
+##### `table_data_view.lua`
 
 Own one `edit/*` session.
 
@@ -1191,11 +1684,13 @@ Track dirty cells and row states.
 
 Provide commit, revert, script, and close behavior.
 
-## Required small core changes
+### Required small core changes
 
-### String request IDs
+#### String request IDs
 
-Add a request tracker option that emits string IDs.
+Make this change only if the exact target release returns changed ID types.
+
+If required, add a request tracker option that emits string IDs.
 
 Keep numeric IDs as the LSP default.
 
@@ -1211,9 +1706,13 @@ Do not normalize every response ID globally without tests.
 
 A server can legally use both number and string IDs.
 
-### Optional shutdown response
+#### Optional shutdown response
 
-Allow a client option for clean EOF during shutdown.
+First test the current client against the exact target release.
+
+The current shutdown path already tolerates process exit while it waits.
+
+Add an option only if the exact-release test shows a remaining failure.
 
 Example option:
 
@@ -1223,7 +1722,7 @@ shutdown_response_optional = true
 
 Do not weaken normal LSP process failure detection.
 
-### Client log label
+#### Client log label
 
 A small `log_label` option would prevent misleading “LSP” logs.
 
@@ -1231,9 +1730,9 @@ This is useful but not required for the first vertical slice.
 
 Do not refactor all LSP modules only for naming.
 
-## Service installation design
+### Service installation design
 
-### First-use behavior
+#### First-use behavior
 
 The first SQL command checks for the pinned executable.
 
@@ -1247,7 +1746,7 @@ The install action shows package size and license links.
 
 It requires explicit confirmation.
 
-### Install location
+#### Install location
 
 Use a machine-local path under `USERDIR`:
 
@@ -1259,7 +1758,7 @@ Keep downloads and temporary extraction outside the final directory.
 
 Rename the complete extracted directory into place atomically.
 
-### Download and verification
+#### Download and verification
 
 Use `core.http.download` for HTTPS transfer.
 
@@ -1277,7 +1776,7 @@ Delete partial archives after failure.
 
 Do not run any downloaded executable before digest verification.
 
-### Service start arguments
+#### Service start arguments
 
 Use an argument array.
 
@@ -1297,7 +1796,7 @@ Do not enable STS2 initially.
 
 Do not start the Resource Provider service.
 
-## Connection profile design
+### Connection profile design
 
 Use this small persistent shape:
 
@@ -1319,7 +1818,7 @@ A SQL login profile adds `user`.
 
 It never adds `password` to persistent data.
 
-### Connection form
+#### Connection form
 
 Use one small modal form built from existing widgets.
 
@@ -1331,7 +1830,7 @@ Show advanced TLS fields only when requested.
 
 Do not copy the VS Code connection webview.
 
-### TLS behavior
+#### TLS behavior
 
 Do not silently set `trustServerCertificate = true`.
 
@@ -1343,7 +1842,7 @@ Offer a session retry that trusts the certificate.
 
 Saving the trust choice requires a separate explicit action.
 
-### Authentication scope
+#### Authentication scope
 
 Implement these modes first:
 
@@ -1362,7 +1861,7 @@ Defer these modes:
 
 These flows create most of the VS Code connection complexity.
 
-## Query model
+### Query model
 
 Use an explicit state machine:
 
@@ -1401,7 +1900,7 @@ Each batch contains ordered result sets.
 
 Each result set contains metadata and a page cache.
 
-### Execute selected or complete text
+#### Execute selected or complete text
 
 Read query text directly from the Buffer.
 
@@ -1415,7 +1914,7 @@ Store the source selection start for error-line mapping.
 
 Flush pending LSP document changes before execution.
 
-### Notification ordering
+#### Notification ordering
 
 Route every notification by owner URI.
 
@@ -1427,7 +1926,7 @@ Throttle visual updates to one update per short frame interval.
 
 Do not throttle final completion.
 
-### Row paging
+#### Row paging
 
 Start with a page size of 200 rows.
 
@@ -1441,7 +1940,7 @@ A practical start is 16 pages per visible result set.
 
 Do not request all rows for sorting or display.
 
-### Large cells
+#### Large cells
 
 The current JSON-RPC parser defaults to a 16 MiB body limit.
 
@@ -1455,7 +1954,7 @@ Show a clear truncation marker in the grid.
 
 Provide full-value retrieval only after a real need appears.
 
-### Cancellation and disposal
+#### Cancellation and disposal
 
 `query/cancel` changes the state to `cancelling`.
 
@@ -1467,7 +1966,7 @@ Before a new run, send `query/dispose` for the old owner.
 
 Also dispose when the SQL Results View closes.
 
-## SQL Results View design
+### SQL Results View design
 
 Use one Project-owned compound View.
 
@@ -1479,7 +1978,7 @@ Navigation Back returns to the source Editor.
 
 A later command can open results to the side.
 
-### Internal surfaces
+#### Internal surfaces
 
 Use permanent internal tabs for:
 
@@ -1492,7 +1991,7 @@ A small result selector shows batch and result numbers.
 
 Do not build nested webview-style tabs.
 
-### Messages
+#### Messages
 
 Use one generated read-only Text View.
 
@@ -1509,9 +2008,11 @@ Make source locations Points of Interest when reliable line data exists.
 
 Selection execution must add its starting line offset.
 
-### Grid presentation
+#### Grid presentation
 
-Draw these fixed areas:
+Use the shared Tabular Data Preview table View.
+
+Configure these fixed areas:
 
 - column header
 - row number column
@@ -1527,9 +2028,9 @@ Show `NULL` differently from an empty string.
 
 Use existing style colors first.
 
-### Grid input
+#### Grid input
 
-Support these durable interactions:
+Reuse these durable interactions from the shared table View:
 
 - click selects one cell
 - drag selects a rectangle
@@ -1540,11 +2041,13 @@ Support these durable interactions:
 - column dividers resize columns
 - wheel input scrolls rows and columns
 
+Keep CSV-only sort and filter actions disabled for SQL result sources.
+
 Do not implement formula, fill, reorder, or spreadsheet behavior.
 
 Do not test exact key bindings.
 
-## SQL Explorer design
+### SQL Explorer design
 
 Use one SQL Explorer View per Project.
 
@@ -1554,7 +2057,7 @@ Cache expanded children by node path.
 
 Discard the cache when the connection generation changes.
 
-### Node actions
+#### Node actions
 
 Provide only these first actions:
 
@@ -1577,7 +2080,7 @@ Table commands include:
 
 Do not add create, drop, backup, restore, or designer actions initially.
 
-### SQL Object Search
+#### SQL Object Search
 
 Register a dedicated Fuzzy Searcher mode.
 
@@ -1600,7 +2103,7 @@ Activation opens the generated definition.
 
 A secondary action inserts the escaped identifier into the current SQL Editor.
 
-## Language integration design
+### Language integration design
 
 Start SQL Tools Service before attaching SQL Buffers.
 
@@ -1614,7 +2117,7 @@ Completion, hover, and signature help discover attached document clients automat
 
 Set `language_id = "sql"` unless service tests require `"SQL"`.
 
-### Connection timing
+#### Connection timing
 
 Attach the Buffer with `textDocument/didOpen` first.
 
@@ -1626,7 +2129,7 @@ Completion can return syntax-only items while connection metadata builds.
 
 Handle `textDocument/intelliSenseReady` as a quiet state transition.
 
-### Definitions
+#### Definitions
 
 Reuse Anvil's existing `editor:go_to_definition` command.
 
@@ -1636,7 +2139,7 @@ Intercept generated service files only to make them read-only.
 
 Copy their text into `TextView.from_text` if service file lifetime is uncertain.
 
-### Diagnostics
+#### Diagnostics
 
 Reuse existing diagnostic underlines and hints.
 
@@ -1646,7 +2149,7 @@ Query execution errors remain in the SQL Results View.
 
 Language diagnostics and execution errors have different lifecycles.
 
-### Tree-sitter
+#### Tree-sitter
 
 Do not block SQL Server support on a SQL Tree-sitter grammar.
 
@@ -1664,7 +2167,7 @@ A grammar must support T-SQL constructs and `GO` batches well.
 
 Do not use a generic SQL grammar without corpus tests.
 
-## SQL Table Data View design
+### SQL Table Data View design
 
 Open the View only for one known table.
 
@@ -1674,7 +2177,7 @@ Start with 200 rows to match the familiar “Edit Top 200 Rows” workflow.
 
 The limit is a preference, not a correctness contract.
 
-### View state
+#### View state
 
 Track this normalized state:
 
@@ -1697,7 +2200,7 @@ Keep service row IDs separate from visible row positions.
 
 Sorting and paging can change visible positions.
 
-### Editing one value
+#### Editing one value
 
 Select one editable cell.
 
@@ -1717,7 +2220,7 @@ Mark successful staged changes visibly.
 
 Mark failed changes with the returned error.
 
-### Row operations
+#### Row operations
 
 **Add Row** sends `edit/createRow`.
 
@@ -1733,7 +2236,7 @@ Deleting a new uncommitted row removes that pending row.
 
 Do not emulate backend edit rules only in Lua.
 
-### Commit
+#### Commit
 
 Before commit, show counts for inserts, updates, and deletes.
 
@@ -1755,7 +2258,7 @@ Do not report complete success after a partial backend failure.
 
 Reload table data after a successful commit.
 
-### Close
+#### Close
 
 A clean View closes immediately.
 
@@ -1769,7 +2272,7 @@ Cancel leaves the View open.
 
 Do not persist staged row changes into Workspace state.
 
-## Security and privacy rules
+### Security and privacy rules
 
 Never log passwords, tokens, or complete connection strings.
 
@@ -1799,7 +2302,7 @@ Do not add unreliable SQL text classification as a safety gate.
 
 Table delete commit still needs a clear change summary.
 
-## Performance rules
+### Performance rules
 
 Start SQL Tools Service lazily.
 
@@ -1831,7 +2334,7 @@ Measure service startup, first completion, and first row latency.
 
 Add complexity only after a measured problem.
 
-## Logging and diagnostics
+### Logging and diagnostics
 
 Use `core.log_quiet(...)` for these events:
 
@@ -1859,13 +2362,13 @@ SQL Tools Service logs belong under `USERDIR/logs`.
 
 Include the service version in startup diagnostics.
 
-## Implementation sequence
+### Implementation sequence
 
 Use red-green development for every durable behavior slice.
 
 Run only focused tests during each slice.
 
-### Slice 0: protocol compatibility spike
+#### Slice 0: protocol compatibility spike
 
 Add a fake framed server fixture.
 
@@ -1885,7 +2388,7 @@ Acceptance:
 - Existing LSP clients keep numeric IDs.
 - Clean SQL service shutdown does not show a crash.
 
-### Slice 1: service discovery and lifecycle
+#### Slice 1: service discovery and lifecycle
 
 Add `service.lua` with an injected executable path.
 
@@ -1904,7 +2407,7 @@ Acceptance:
 - Process failure reaches one visible state.
 - Shutdown releases pipes and pending requests.
 
-### Slice 2: profiles and connection
+#### Slice 2: profiles and connection
 
 Add non-secret profile storage.
 
@@ -1923,7 +2426,7 @@ Acceptance:
 - One SQL Buffer connects and disconnects.
 - Status Bar state is correct.
 
-### Slice 3: execute and messages
+#### Slice 3: execute and messages
 
 Add one query model test first.
 
@@ -1941,11 +2444,13 @@ Acceptance:
 - Cancel reaches a final state.
 - A new run disposes the old run.
 
-### Slice 4: paged result grid
+#### Slice 4: paged result grid
 
 Add a failing View test for visible page requests.
 
-Implement the private grid and page cache.
+Extract the shared table View from Tabular Data Preview.
+
+Connect a SQL page source and page cache to that View.
 
 Add multiple result-set selection.
 
@@ -1958,8 +2463,9 @@ Acceptance:
 - `NULL` differs from an empty value.
 - Rectangular copy is tab-separated.
 - Multiple batches and result sets stay ordered.
+- Existing Tabular Data Preview behavior remains unchanged.
 
-### Slice 5: connected language features
+#### Slice 5: connected language features
 
 Attach SQL Buffers to the service client.
 
@@ -1976,7 +2482,7 @@ Acceptance:
 - Go-to-definition opens a read-only generated definition.
 - SQL service state does not depend on global LSP enablement.
 
-### Slice 6: SQL Explorer and object search
+#### Slice 6: SQL Explorer and object search
 
 Add one lazy expansion test.
 
@@ -1994,7 +2500,7 @@ Acceptance:
 - Object Search opens a definition.
 - Table and column names can be copied or inserted.
 
-### Slice 7: table data editing
+#### Slice 7: table data editing
 
 Add a fake edit service and a dirty-close UI test.
 
@@ -2012,7 +2518,7 @@ Acceptance:
 - Dirty close offers Save, Discard, and Cancel.
 - Partial failure does not report complete success.
 
-### Slice 8: service installer
+#### Slice 8: service installer
 
 Pin one stable package and digest.
 
@@ -2029,7 +2535,7 @@ Acceptance:
 - Failed installs leave one actionable error.
 - Existing configured executables remain usable.
 
-### Slice 9: finish and document
+#### Slice 9: finish and document
 
 Add first-party defaults and plugin registration.
 
@@ -2043,9 +2549,9 @@ Run only the focused SQL test files.
 
 Run broader LSP tests only when core LSP code changes.
 
-## Test plan
+### Test plan
 
-### Fake service boundary
+#### Fake service boundary
 
 Use a fake SQL Tools Service at the process boundary.
 
@@ -2070,7 +2576,7 @@ Test these protocol cases:
 11. row subset responses
 12. edit session partial failure
 
-### Runtime tests
+#### Runtime tests
 
 `sql_server_service.lua` verifies process and protocol lifecycle.
 
@@ -2080,9 +2586,11 @@ Test these protocol cases:
 
 Do not test private helper call counts.
 
-### UI tests
+#### UI tests
 
 Drive commands and View input through stable seams.
+
+Keep the shared table-source behavior in focused Tabular Data Preview tests.
 
 `sql_server_results_view.lua` should test:
 
@@ -2118,7 +2626,7 @@ Do not test exact keyboard shortcuts.
 
 Do not test cosmetic pixel values.
 
-### Optional integration test
+#### Optional integration test
 
 Add one opt-in integration script after the fake tests pass.
 
@@ -2142,9 +2650,9 @@ Test these real service scenarios:
 - no-key table behavior
 - generated object definition
 
-## Manual validation scenarios
+### Manual validation scenarios
 
-### Query scenarios
+#### Query scenarios
 
 1. Run a complete file with one result set.
 2. Run a selection in the middle of a Buffer.
@@ -2158,7 +2666,7 @@ Test these real service scenarios:
 10. Disconnect during execution.
 11. Stop the service during execution.
 
-### Navigation scenarios
+#### Navigation scenarios
 
 1. Complete a table after `FROM`.
 2. Complete columns after an alias and dot.
@@ -2170,7 +2678,7 @@ Test these real service scenarios:
 8. Search objects with duplicate names in different schemas.
 9. Refresh after creating a table externally.
 
-### Edit scenarios
+#### Edit scenarios
 
 1. Update a nullable text cell.
 2. Set the cell to an empty string.
@@ -2187,7 +2695,7 @@ Test these real service scenarios:
 13. Try identity, computed, and rowversion columns.
 14. Close with dirty changes.
 
-## Suggested command identifiers
+### Suggested command identifiers
 
 Use command names that match Anvil conventions:
 
@@ -2231,7 +2739,7 @@ Do not define default shortcuts during the first implementation slice.
 
 Commands are the durable behavior seam.
 
-## First-party defaults
+### First-party defaults
 
 Register `sql_server` as a first-party core plugin.
 
@@ -2257,7 +2765,7 @@ They are service integrity data, not user preferences.
 
 Do not expose every grid constant as configuration.
 
-## Risks and controls
+### Risks and controls
 
 | Risk | Control |
 | --- | --- |
@@ -2273,10 +2781,11 @@ Do not expose every grid constant as configuration.
 | Edit partial commit | Warn before commit and preserve accurate remaining state. |
 | Concurrent table update | State key-only matching limit. Reload after commit. |
 | No stable table key | Keep the session read-only or show commit failure clearly. |
-| UI scope growth | Exclude plans, designers, Azure browsers, and notebooks. |
+| UI scope growth | Stop after the query pilot and select only one measured next feature. |
+| Duplicate table behavior | Reuse the Tabular Data Preview table View through a narrow source seam. |
 | PostgreSQL pressure | Keep View-facing operations normalized. Add no driver framework yet. |
 
-## Explicit non-goals
+### Explicit non-goals
 
 Do not include these features in the first implementation:
 
@@ -2310,7 +2819,7 @@ Do not include these features in the first implementation:
 
 Each item can follow a real workflow need.
 
-## Acceptance checklist
+### Acceptance checklist
 
 The first SQL Server release is complete when all items are true:
 
@@ -2343,7 +2852,11 @@ The first SQL Server release is complete when all items are true:
 - [ ] Focused runtime and UI tests pass.
 - [ ] Session logs contain useful redacted diagnostics.
 
-## Recommended first implementation milestone
+### Recommended first implementation milestone
+
+This earlier milestone is superseded by the **Realistic implementation plan**.
+
+Keep it only as a record of the prior scope.
 
 Do not implement every section at once.
 
@@ -2370,6 +2883,7 @@ Primary repositories and documentation:
 
 - <https://github.com/microsoft/vscode-mssql>
 - <https://github.com/microsoft/sqltoolsservice>
+- <https://github.com/microsoft/sqltoolsservice/releases/tag/6.0.20260827.1>
 - <https://microsoft.github.io/sqltoolssdk/>
 - <https://learn.microsoft.com/en-us/sql/tools/visual-studio-code-extensions/mssql/mssql-extension-visual-studio-code>
 
@@ -2386,11 +2900,18 @@ Key VS Code source files:
 - <https://github.com/microsoft/vscode-mssql/blob/main/extensions/mssql/src/services/tableExplorerService.ts>
 - <https://github.com/microsoft/vscode-mssql/blob/main/extensions/mssql/src/tableExplorer/tableExplorerWebViewController.ts>
 - <https://github.com/microsoft/vscode-mssql/blob/main/extensions/mssql/src/sharedInterfaces/tableExplorer.ts>
+- <https://github.com/microsoft/vscode-mssql/blob/main/extensions/mssql/src/services/sqlDataPlane/backendFactory.ts>
+- <https://github.com/microsoft/vscode-mssql/blob/main/extensions/mssql/src/services/sqlDataPlane/capabilityRegistry.ts>
+- <https://github.com/microsoft/vscode-mssql/blob/main/extensions/mssql/src/services/sqlDataPlane/sqlDataPlaneService.ts>
 - <https://github.com/microsoft/vscode-mssql/blob/main/extensions/mssql/src/services/sts2/sts2Backend.ts>
 
 Key SQL Tools Service source files:
 
 - <https://github.com/microsoft/sqltoolsservice/blob/main/docs/guide/jsonrpc_protocol.md>
+- <https://github.com/microsoft/sqltoolsservice/blob/main/src/Microsoft.SqlTools.ServiceLayer/QueryExecution/Contracts/ExecuteRequests/ExecuteStringRequest.cs>
+- <https://github.com/microsoft/sqltoolsservice/blob/main/src/Microsoft.SqlTools.ServiceLayer/QueryExecution/Contracts/SubsetRequest.cs>
+- <https://github.com/microsoft/sqltoolsservice/blob/main/src/Microsoft.SqlTools.ServiceLayer/QueryExecution/Contracts/QueryCancelRequest.cs>
+- <https://github.com/microsoft/sqltoolsservice/blob/main/src/Microsoft.SqlTools.ServiceLayer/QueryExecution/Contracts/QueryDisposeRequest.cs>
 - <https://github.com/microsoft/sqltoolsservice/blob/main/src/Microsoft.SqlTools.ServiceLayer/EditData/EditSession.cs>
 - <https://github.com/microsoft/sqltoolsservice/blob/main/src/Microsoft.SqlTools.ServiceLayer/EditData/UpdateManagement/RowEditBase.cs>
 - <https://github.com/microsoft/sqltoolsservice/blob/main/src/Microsoft.SqlTools.ServiceLayer/EditData/UpdateManagement/RowUpdate.cs>
