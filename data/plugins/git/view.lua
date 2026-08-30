@@ -114,6 +114,23 @@ local COMMIT_LINE_RENDER_PROVIDER = {
   end,
 }
 
+local function commit_line_hint(view, line)
+  local meta = view.git_commit_line_meta and view.git_commit_line_meta[line]
+  if not (meta and meta.role == "commit") then return nil end
+  local font = style.get_small_font(view:get_font())
+  local segments = { truncate = "left", gap_spaces = 2 }
+  if meta.author and meta.author ~= "" then
+    segments[#segments + 1] = { text = meta.author, font = font, color = style.dim }
+  end
+  if meta.date and meta.date ~= "" then
+    if #segments > 0 then
+      segments[#segments + 1] = { text = "   ", font = font, color = style.dim }
+    end
+    segments[#segments + 1] = { text = meta.date, font = font, color = style.dim }
+  end
+  return #segments > 0 and segments or nil
+end
+
 function GitView:new(project, opts)
   self.__hide_right_pane_on_focus = true
   GitView.super.new(self)
@@ -158,6 +175,7 @@ function GitView:pane_view(name)
     if ViewType == TextView then
       view.get_gutter_width = function() return 0 end
       view.draw_line_gutter = function(v) return v:get_line_height() end
+      view.get_line_hint = commit_line_hint
       view:add_line_render_provider("git-commit-line", COMMIT_LINE_RENDER_PROVIDER)
     end
     local draw_line_text = view.draw_line_text
@@ -448,7 +466,8 @@ function GitView:on_mouse_wheel(y, x)
     if y == 0 then return false end
     self:clamp_history_scroll(tab)
     local visible = self:history_visible_height()
-    local max_scroll = math.max(0, (#(tab.commits or {}) + ((tab.has_more or tab.loading) and 1 or 0)) * self:row_height() - visible)
+    local pending_row = tab.has_more or (tab.loading and not tab.refreshing)
+    local max_scroll = math.max(0, (#(tab.commits or {}) + (pending_row and 1 or 0)) * self:row_height() - visible)
     tab.scroll = common.clamp((tab.scroll or 0) + (-y * config.mouse_wheel_scroll), 0, max_scroll)
     return true
   end
@@ -602,16 +621,19 @@ end
 local function commit_label(commit)
   local hash = commit.short_hash or commit.hash or ""
   local subject = commit.subject or ""
-  local author = commit.author_name or ""
+  return string.format("%s  %s", hash, subject)
+end
+
+local function commit_line_metadata(commit)
   local timestamp = tonumber(commit.commit_time or commit.author_time)
   local date = timestamp and timestamp > 0 and os.date("%Y-%m-%d %H:%M", timestamp) or ""
-  local suffix = table.concat((function()
-    local values = {}
-    if author ~= "" then values[#values + 1] = author end
-    if date ~= "" then values[#values + 1] = date end
-    return values
-  end)(), " · ")
-  return string.format("%s  %s%s", hash, subject, suffix ~= "" and ("  " .. suffix) or "")
+  return {
+    role = "commit",
+    hash = commit.short_hash or commit.hash or "",
+    subject = commit.subject or "",
+    author = commit.author_name or "",
+    date = date,
+  }
 end
 
 local function tab_label(tab)
@@ -967,9 +989,9 @@ function GitView:update_pane_buffers()
     else
       for _, commit in ipairs(tab.commits or {}) do
         lines[#lines + 1] = commit_label(commit)
-        line_meta[#lines] = { role = "commit", hash = commit.short_hash or commit.hash or "", subject = commit.subject or "" }
+        line_meta[#lines] = commit_line_metadata(commit)
       end
-      if tab.loading then
+      if tab.loading and not tab.refreshing then
         lines[#lines + 1] = "Loading more commits..."
         line_meta[#lines] = { role = "message", text = lines[#lines] }
       elseif tab.has_more then
@@ -1030,7 +1052,7 @@ function GitView:update_pane_buffers()
     else
       for _, commit in ipairs(log_tab.commits) do
         lines[#lines + 1] = commit_label(commit)
-        line_meta[#lines] = { role = "commit", hash = commit.short_hash or commit.hash or "", subject = commit.subject or "" }
+        line_meta[#lines] = commit_line_metadata(commit)
       end
       if log_tab.loading_more then
         lines[#lines + 1] = "Loading more commits..."
@@ -1232,8 +1254,7 @@ function GitView:draw_log_tab(tab, x, y)
   local header_y = self.position.y + (header_height - style.prose_font:get_height()) / 2
   renderer.draw_rect(self.position.x, self.position.y, list_width, header_height, style.background2)
   renderer.draw_text(style.prose_font, "Commits", x, header_y, style.text)
-  local status = tab.loading and #tab.commits > 0
-    and "Refreshing…" or string.format("%d commits", #tab.commits)
+  local status = string.format("%d commits", #tab.commits)
   renderer.draw_text(
     style.prose_font, status,
     list.position.x + list.size.x - style.prose_font:get_width(status) - style.padding.x,
@@ -1535,7 +1556,7 @@ end
 
 function GitView:clamp_history_scroll(tab)
   if not tab then return end
-  local rows = #(tab.commits or {}) + ((tab.has_more or tab.loading) and 1 or 0)
+  local rows = #(tab.commits or {}) + ((tab.has_more or (tab.loading and not tab.refreshing)) and 1 or 0)
   local max_scroll = math.max(0, rows * self:row_height() - self:history_visible_height())
   tab.scroll = common.clamp(tab.scroll or 0, 0, max_scroll)
 end
@@ -1549,16 +1570,6 @@ function GitView:draw_history_tab(tab, x, y)
   list.position.x, list.position.y = x, top
   list.size.x, list.size.y = math.max(0, list_width - style.padding.x), self.position.y + self.size.y - top - style.padding.y
   list:draw()
-  if tab.loading and #tab.commits > 0 then
-    local text = "Refreshing…"
-    local width = style.prose_font:get_width(text)
-    renderer.draw_text(
-      style.prose_font, text,
-      list.position.x + list.size.x - width - style.padding.x,
-      self.position.y + style.padding.y,
-      style.dim
-    )
-  end
   renderer.draw_rect(list_right, self.position.y, 1 * SCALE, self.size.y, style.divider)
   if tab.error then
     renderer.draw_text(
@@ -1568,7 +1579,7 @@ function GitView:draw_history_tab(tab, x, y)
     )
     return
   end
-  if tab.preview_loading then
+  if tab.preview_loading and not tab.history_diff_view then
     renderer.draw_text(style.prose_font, "Loading file comparison...", diff_x + style.padding.x, top, style.dim)
     return
   end

@@ -147,6 +147,28 @@ test.describe("Git View command", function()
     test.ok(view:pane_view("log-list").buffer:get_utf8_line(1):find("Existing commit", 1, true))
   end)
 
+  test.it("keeps File History refreshes invisible when commits are already visible", function(context)
+    local session, view = open_fake_git_view(context.project)
+    local tab = {
+      id = "history-test",
+      kind = "file_history",
+      title = "History: src/app.lua",
+      relpath = "src/app.lua",
+      commits = { { hash = "abc", short_hash = "abc", subject = "Existing revision" } },
+      selected_commit = 1,
+      loading = true,
+      refreshing = true,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    view.tab_id = tab.id
+
+    view:update_pane_buffers()
+
+    local buffer = view:pane_view("history-list").buffer
+    test.ok(buffer:get_utf8_line(1):find("Existing revision", 1, true))
+    test.equal((buffer:get_utf8_line(2) or ""):find("Loading", 1, true), nil)
+  end)
+
   test.test("opened Git items become Pane history Views", function(context)
     local session, view = open_fake_git_view(context.project)
     local tab = {

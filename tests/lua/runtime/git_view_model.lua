@@ -109,6 +109,23 @@ test.describe("plugins.git.model", function()
     test.equal(model:selected_commit().changed_files[1].new_path, "src/app.lua")
   end)
 
+  test.it("retains loaded commit details through a seamless Log refresh", function()
+    local backend = fake_backend("", log_output())
+    local changed_file_calls = 0
+    backend.changed_files = function(repo, left, right, opts, callback)
+      changed_file_calls = changed_file_calls + 1
+      callback({ { status = "modified", path = "src/app.lua" } }, nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+
+    model:refresh_log()
+    model:refresh_log()
+
+    test.equal(changed_file_calls, 1)
+    test.equal(model:selected_commit().changed_files[1].path, "src/app.lua")
+  end)
+
   test.test("ignores stale refresh results and cancels older jobs", function()
     local callbacks = {}
     local cancelled = 0

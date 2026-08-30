@@ -669,6 +669,7 @@ function Model:load_file_history(tab, callback)
     self:_untrack_job(job)
     if generation ~= tab.history_generation then return end
     tab.loading = false
+    tab.refreshing = false
     tab.error = err
     local function notify(_, preview_err)
       local final_err = err or preview_err
@@ -1249,11 +1250,23 @@ end
 function Model:_finish_refresh(generation, status_records, log_page, err, callback)
   if generation ~= self.generation then return end
   local tab = self:log_tab()
+  local retained_commits = {}
+  for _, commit in ipairs(tab.commits or {}) do
+    if commit.hash then retained_commits[commit.hash] = commit end
+  end
   tab.loading = false
   tab.loading_more = false
   tab.error = err
   tab.commits = {}
   append_log_commits(tab, log_page)
+  for _, commit in ipairs(tab.commits) do
+    local retained = retained_commits[commit.hash]
+    if retained and retained.changed_files_loaded then
+      commit.changed_files = retained.changed_files
+      commit.changed_files_loaded = true
+      commit.details_tree_collapsed = retained.details_tree_collapsed
+    end
+  end
   if self.repo then
     self:sync_working_tree_diff_tabs()
     self:reload_file_history_tabs()
@@ -1310,6 +1323,7 @@ function Model:reload_file_history_tabs()
   for _, tab in ipairs(self.tabs) do
     if tab.kind == "file_history" then
       tab.replace_history_on_load = true
+      tab.refreshing = true
       tab.has_more = false
       tab.next_offset = nil
       tab.error = nil
@@ -1343,6 +1357,7 @@ function Model:invalidate_history_loads()
     if tab.kind == "file_history" then
       tab.history_generation = (tab.history_generation or 0) + 1
       tab.loading = false
+      tab.refreshing = false
     end
   end
 end
@@ -1371,8 +1386,6 @@ function Model:refresh_log(callback)
   tab.loading = true
   tab.loading_more = false
   tab.error = nil
-  tab.has_more = false
-  tab.next_offset = nil
 
   local function on_repo(repo, repo_err)
     if generation ~= self.generation then return end
