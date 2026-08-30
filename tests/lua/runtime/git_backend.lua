@@ -262,7 +262,7 @@ test.describe("plugins.git.backend", function()
         "Ada", "ada@example.test", "1710000001",
       }
       local output = backend.LOG_RECORD_SEPARATOR .. table.concat(fields, "\0")
-        .. "\0\nR100\0src/old.lua\0src/new.lua\0"
+        .. "\0\0\nR100\0src/old.lua\0src/new.lua\0"
 
       local page = backend.parse_file_history_page(output, { limit = 10 })
 

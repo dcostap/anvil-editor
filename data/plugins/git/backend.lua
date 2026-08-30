@@ -356,12 +356,19 @@ function backend.parse_file_history_page(output, opts)
     local commit = parse_log_record(raw)
     if commit then
       local fields = split_nul(raw)
-      local status = tostring(fields[12] or ""):gsub("^%s+", "")
-      if status:match("^[RC]") then
-        commit.history_parent_path = normalize_relpath(fields[13])
-        commit.history_path = normalize_relpath(fields[14])
-      else
-        commit.history_path = normalize_relpath(fields[13])
+      local status_index, status
+      for index = 12, #fields do
+        local candidate = tostring(fields[index] or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if candidate:match("^[A-Z][0-9]*$") then
+          status_index, status = index, candidate
+          break
+        end
+      end
+      if status and status:match("^[RC]") then
+        commit.history_parent_path = normalize_relpath(fields[status_index + 1])
+        commit.history_path = normalize_relpath(fields[status_index + 2])
+      elseif status then
+        commit.history_path = normalize_relpath(fields[status_index + 1])
         commit.history_parent_path = commit.history_path
       end
       commits[#commits + 1] = commit
