@@ -154,6 +154,7 @@ style.indent_guide = c("ebecf0")
 style.indent_guide_active = c("aeb3c2")
 style.whitespace = { common.color "rgba(0, 0, 0, 0.18)" }
 style.whitespace_trailing = { common.color "rgba(219, 59, 75, 0.55)" }
+style.soft_wrap_indicator = style.whitespace
 style.transparent = { common.color "#00000000" }
 
 -- First-party plugin colors
