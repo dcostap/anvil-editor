@@ -14,6 +14,10 @@ local DRAG_SCROLL_INTERVAL = 0.12
 local TAB_SIDE_INSET = math.floor(3 * SCALE)
 local TAB_TOP_INSET = math.floor(4 * SCALE)
 local TAB_RADIUS = math.floor(8 * SCALE)
+-- Text metrics and layout geometry can differ by a subpixel at fractional
+-- Zoom. Keep one pixel outside content-sized labels and ignore subpixel noise.
+local TEXT_FIT_RESERVE = 1
+local TEXT_OVERFLOW_TOLERANCE = 0.5
 local function tab_group_gap() return math.max(4, math.floor(8 * SCALE)) end
 local caption_font
 local caption_font_size
@@ -123,13 +127,15 @@ end
 
 local function fit_text(font, text, max_width)
   if max_width <= 0 then return "" end
-  if font:get_width(text) <= max_width then return text end
+  if font:get_width(text) <= max_width + TEXT_OVERFLOW_TOLERANCE then return text end
   local ellipsis = "…"
-  if font:get_width(ellipsis) > max_width then return "" end
+  if font:get_width(ellipsis) > max_width + TEXT_OVERFLOW_TOLERANCE then return "" end
   local low, high = 0, text:ulen()
   while low < high do
     local middle = math.ceil((low + high) / 2)
-    if font:get_width(text:usub(1, middle) .. ellipsis) <= max_width then
+    if font:get_width(text:usub(1, middle) .. ellipsis)
+      <= max_width + TEXT_OVERFLOW_TOLERANCE
+    then
       low = middle
     else
       high = middle - 1
@@ -279,7 +285,9 @@ function TitleBar:update_geometry()
     }
   end
 
-  local project_width = math.min(220 * SCALE, style.font:get_width(project_name()) + style.padding.x * 2)
+  local project_width = math.min(220 * SCALE, math.ceil(
+    style.font:get_width(project_name()) + style.padding.x * 2 + TEXT_FIT_RESERVE
+  ))
   self.project_rect = {
     x = self.position.x,
     y = self.position.y,

@@ -1,6 +1,7 @@
 local core = require "core"
 local layout = require "core.pane_layout"
 local panes = require "core.panes"
+local scale = require "plugins.scale"
 local style = require "core.style"
 local TitleBar = require "core.titlebar"
 local View = require "core.view"
@@ -20,7 +21,7 @@ end
 
 test.describe("Global title bar Pane entries", function()
   local set_active_view, projects, window, window_mode, set_window_mode,
-    set_window_hit_test, quit
+    set_window_hit_test, quit, zoom
 
   test.before_each(function()
     panes.reset_for_tests()
@@ -28,6 +29,7 @@ test.describe("Global title bar Pane entries", function()
     projects = core.projects
     window = core.window
     window_mode = core.window_mode
+    zoom = scale.get()
     set_window_mode = system.set_window_mode
     set_window_hit_test = system.set_window_hit_test
     quit = core.quit
@@ -40,6 +42,7 @@ test.describe("Global title bar Pane entries", function()
     core.projects = projects
     core.window = window
     core.window_mode = window_mode
+    scale.set(zoom)
     system.set_window_mode = set_window_mode
     system.set_window_hit_test = set_window_hit_test
     core.quit = quit
@@ -446,6 +449,32 @@ test.describe("Global title bar Pane entries", function()
     test.not_nil(project)
     test.ok(project.x + project.font:get_width(project.text)
       <= title.project_rect.x + title.project_rect.w)
+  end)
+
+  test.it("draws a complete short Project name at fractional Zoom", function()
+    core.projects = { { path = "C:\\projects\\glp4" } }
+    panes.create { factory = factory("tree") }
+    scale.set(1.436352296215)
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_rounded_rect = renderer.draw_rounded_rect
+    local old_draw_text = renderer.draw_text
+    local project_name
+    renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
+    renderer.draw_text = function(font, text, x)
+      project_name = project_name or text
+      return x + font:get_width(text)
+    end
+    local ok, err = pcall(title.draw, title)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_rounded_rect = old_draw_rounded_rect
+    renderer.draw_text = old_draw_text
+
+    test.ok(ok, err)
+    test.equal(project_name, "glp4")
   end)
 
   test.it("runs a caption action only after release over its pressed button", function()
