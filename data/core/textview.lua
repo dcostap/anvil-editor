@@ -879,6 +879,7 @@ function TextView:new(buffer)
   self.h_scrollbar:set_forced_status(config.force_scrollbar_status)
   self.cache_font = self:get_font()
   self.cache_font_size = self.cache_font:get_size()
+  self.__measurement_layout_scale = SCALE
   local _, indent_size = self.buffer:get_indent_info()
   self.cache_indent_size = indent_size
   self.fold_regions = {}
@@ -6201,6 +6202,24 @@ function TextView:active_window_has_focus()
   return not system.window_has_focus or system.window_has_focus(focused_window)
 end
 
+---Discard cached provider output that contains scale-dependent measurements.
+---@param reason string
+function TextView:invalidate_measurement_dependent_layout(reason)
+  if self:has_line_render_providers() then
+    self:invalidate_line_render(reason)
+  end
+  if self:has_visual_metric_providers() then
+    self:invalidate_visual_metrics(reason)
+  end
+  self.__measurement_layout_scale = SCALE
+end
+
+function TextView:on_scale_change(new_scale)
+  if self.__measurement_layout_scale ~= new_scale then
+    self:invalidate_measurement_dependent_layout("scale-change")
+  end
+end
+
 ---Update the view state each frame.
 ---Handles cache invalidation, auto-scrolling to caret, and blink timing.
 function TextView:update()
@@ -6211,10 +6230,12 @@ function TextView:update()
   local phase_start = perf_active and system.get_time()
   local font = self:get_font()
   local _, indent_size = self.buffer:get_indent_info()
+  local font_changed = self.cache_font ~= font
+    or self.cache_font_size ~= font:get_size()
   if
     self.cache_indent_size ~= indent_size
     or
-    self.cache_font ~= font or self.cache_font_size ~= font:get_size()
+    font_changed
   then
     self.buffer.cache.col_x = {}
     self.buffer.cache.line_width = {}
@@ -6222,6 +6243,9 @@ function TextView:update()
     self.cache_font = font
     self.cache_font_size = font:get_size()
     self.cache_indent_size = indent_size
+  end
+  if font_changed then
+    self:invalidate_measurement_dependent_layout("font-change")
   end
   perf_elapsed("textview_update_cache_ms", phase_start)
 
