@@ -1,34 +1,36 @@
 diff --git a/include/ghostty/vt/terminal.h b/include/ghostty/vt/terminal.h
-index 1474106..ffb0662 100644
+index 1474106..0d7b6d3 100644
 --- a/include/ghostty/vt/terminal.h
 +++ b/include/ghostty/vt/terminal.h
-@@ -1226,6 +1226,17 @@ typedef enum GHOSTTY_ENUM_TYPED {
+@@ -1226,6 +1226,19 @@ typedef enum GHOSTTY_ENUM_TYPED {
     * Input type: GhosttyString*
     */
    GHOSTTY_TERMINAL_OPT_TERMINFO_NAME = 37,
 +
 +  /**
-+   * Set whether OSC 133 A and N enforce their specified fresh-line action.
++   * Set whether OSC 133 A enforces its fresh-line action during synchronized
++   * output.
 +   *
-+   * Disable this when the running application uses OSC 133 only as semantic
-+   * markers and tracks all cursor movement itself. A NULL value pointer
-+   * restores the default of true.
++   * Disable this for TUI applications that use OSC 133 only as a semantic
++   * marker during synchronized repaints and track all cursor movement
++   * themselves. OSC 133 keeps its normal behavior outside synchronized
++   * output. A NULL value pointer restores the default of true.
 +   *
 +   * Input type: bool*
 +   */
-+  GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT_FRESH_LINE = 38,
++  GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT_FRESH_LINE_IN_SYNCHRONIZED_OUTPUT = 38,
    GHOSTTY_TERMINAL_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
  } GhosttyTerminalOption;
  
 diff --git a/src/terminal/c/terminal.zig b/src/terminal/c/terminal.zig
-index 99a45e1..d3bd34d 100644
+index 99a45e1..033563b 100644
 --- a/src/terminal/c/terminal.zig
 +++ b/src/terminal/c/terminal.zig
 @@ -968,6 +968,7 @@ pub const Option = enum(c_int) {
      unknown_sequence = 35,
      unknown_max_bytes = 36,
      terminfo_name = 37,
-+    semantic_prompt_fresh_line = 38,
++    semantic_prompt_fresh_line_in_synchronized_output = 38,
  
      /// Input type expected for setting the option.
      pub fn InType(comptime self: Option) type {
@@ -36,7 +38,7 @@ index 99a45e1..d3bd34d 100644
              .kitty_image_medium_shared_mem,
              .glyph_protocol,
              .title_report,
-+            .semantic_prompt_fresh_line,
++            .semantic_prompt_fresh_line_in_synchronized_output,
              => ?*const bool,
              .kitty_image_medium_temp_file => ?*const lib.String,
              .apc_max_bytes,
@@ -44,21 +46,21 @@ index 99a45e1..d3bd34d 100644
              ptr.*
          else
              false,
-+        .semantic_prompt_fresh_line => wrapper.stream.handler.semantic_prompt_fresh_line =
++        .semantic_prompt_fresh_line_in_synchronized_output => wrapper.stream.handler.semantic_prompt_fresh_line_in_synchronized_output =
 +            if (value) |ptr| ptr.* else true,
          .title => {
              const str = if (value) |v| v.ptr[0..v.len] else "";
              wrapper.terminal.setTitle(str) catch return .out_of_memory;
 diff --git a/src/terminal/stream_terminal.zig b/src/terminal/stream_terminal.zig
-index 2599097..ef4265c 100644
+index 2599097..3731d21 100644
 --- a/src/terminal/stream_terminal.zig
 +++ b/src/terminal/stream_terminal.zig
 @@ -37,6 +37,9 @@ pub const Handler = struct {
      /// The terminal state to modify.
      terminal: *Terminal,
  
-+    /// Whether OSC 133 A and N enforce their specified fresh-line action.
-+    semantic_prompt_fresh_line: bool = true,
++    /// Whether OSC 133 A enforces its fresh-line action during synchronized output.
++    semantic_prompt_fresh_line_in_synchronized_output: bool = true,
 +
      /// True after an error prevented a terminal-owned semantic update.
      ///
@@ -70,9 +72,9 @@ index 2599097..ef4265c 100644
 -            .semantic_prompt => try self.terminal.semanticPrompt(value),
 +            .semantic_prompt => {
 +                var prompt = value;
-+                if (!self.semantic_prompt_fresh_line and
-+                    (prompt.action == .fresh_line_new_prompt or
-+                        prompt.action == .new_command))
++                if (!self.semantic_prompt_fresh_line_in_synchronized_output and
++                    self.terminal.modes.get(.synchronized_output) and
++                    prompt.action == .fresh_line_new_prompt)
 +                {
 +                    prompt.action = .prompt_start;
 +                }

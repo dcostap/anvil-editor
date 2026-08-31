@@ -884,10 +884,11 @@ static bool initialize_terminal(
     session->terminal, GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
     (const void *)terminal_desktop_notification
   );
-  bool semantic_prompt_fresh_line = false;
+  bool semantic_prompt_fresh_line_in_synchronized_output = false;
   if (ghostty_terminal_set(
-      session->terminal, GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT_FRESH_LINE,
-      &semantic_prompt_fresh_line
+      session->terminal,
+      GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT_FRESH_LINE_IN_SYNCHRONIZED_OUTPUT,
+      &semantic_prompt_fresh_line_in_synchronized_output
     ) != GHOSTTY_SUCCESS) return false;
   if (!set_terminal_colors(session, colors)) return false;
   ghostty_terminal_resize(

@@ -91,11 +91,20 @@ test.describe("Native terminal session", function()
     })
     test.ok(session, start_error)
 
-    local text = wait_for_text(session, "ANVIL_SEMANTIC_MESSAGE", 5)
+    local text, snapshot = wait_for_text(session, "ANVIL_FRESH_LINE", 5)
     local capture, capture_error = session:text_capture()
     session:close()
 
     test.ok(text:find("ANVIL_SEMANTIC_MESSAGE", 1, true), text)
+    local fresh_line_row
+    for row_index, row in ipairs(snapshot.rows) do
+      for _, run in ipairs(row.text_runs or {}) do
+        if run.text:find("ANVIL_FRESH_LINE", 1, true) then
+          fresh_line_row = row_index
+        end
+      end
+    end
+    test.equal(fresh_line_row, 21)
     test.ok(capture, capture_error)
     test.ok(capture.text:find("ANVIL_SEMANTIC_MESSAGE", 1, true), capture.text)
   end)

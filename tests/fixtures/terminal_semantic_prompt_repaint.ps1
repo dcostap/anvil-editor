@@ -14,6 +14,9 @@ $bytes =
   $escape + ']133;B' + $bell +
   $escape + ']133;C' + $bell +
   $escape + '[?2026l' +
-  $escape + '[48;2;52;53;65m' + "`r" + $escape + '[K'
+  $escape + '[48;2;52;53;65m' + "`r" + $escape + '[K' +
+  $escape + '[20;10H' +
+  $escape + ']133;A' + $bell +
+  'ANVIL_FRESH_LINE'
 
 [Console]::Write($bytes)
