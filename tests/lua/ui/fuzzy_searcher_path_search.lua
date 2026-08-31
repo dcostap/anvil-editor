@@ -251,6 +251,23 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.ok(drawn, draw_error)
   end)
 
+  test.it("fuzzy matches direct folder contents when Everything is unavailable", function(context)
+    local folder = join_path(context.external_root, ".agents")
+    local file = join_path(context.external_root, ".agents.txt")
+    mkdirp(folder)
+    write_file(file)
+    helpers.set_everything_state("unavailable")
+
+    for _, separator in ipairs({ "", " " }) do
+      fuzzy_searcher.open("@" .. context.external_root .. PATHSEP .. separator .. "agents")
+      local picker = test.not_nil(core.fuzzy_searcher_active_view)
+
+      test.not_nil(result_for_path(picker.results, folder))
+      test.not_nil(result_for_path(picker.results, file))
+      picker:close()
+    end
+  end)
+
   test.it("asks how to open a Path Search folder", function(context)
     local folder = join_path(context.external_root, "alpha-folder")
     mkdirp(folder)

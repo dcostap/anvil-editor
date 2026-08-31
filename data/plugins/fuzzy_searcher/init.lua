@@ -4377,39 +4377,70 @@ function path_search.native_results(scope, query, limit, picker)
   query = trim_query(query)
   if query:find("[/\\]", 1) then return {}, {} end
   limit = math.max(1, limit or 30)
-  local folder_entries = system.list_dir_info(scope, limit, "dir", query)
-  local file_limit = picker and picker.extensions and 2147483647 or limit
-  local file_entries = picker and picker.select == "folder"
-    and {} or system.list_dir_info(scope, file_limit, "file", query)
+  local scan_limit = math.max(limit, fuzzy_searcher.fuzzy_scan_limit or 10000)
   local folders, files = {}, {}
-  local function append_entries(entries, is_folder, target)
-    for _, entry in ipairs(type(entries) == "table" and entries or {}) do
-      local path = common.normalize_path(scope .. PATHSEP .. entry.name)
-      local score, spans = fuzzy_match(query, path)
-      local info = not is_folder and system.get_file_info(path) or nil
+  local function matched_entries(entry_type)
+    local is_folder = entry_type == "dir"
+    local needs_scan = query ~= "" or (not is_folder and picker and picker.extensions)
+    local entries = system.list_dir_info(scope, needs_scan and scan_limit or limit, entry_type)
+    if type(entries) ~= "table" then return {} end
+
+    local candidates, names = {}, {}
+    for _, entry in ipairs(entries) do
       local extension = not is_folder and entry.name:match("%.([^./\\]+)$")
-      local allowed = is_folder or not (picker and picker.extensions)
-        or picker.extensions[tostring(extension or ""):lower()]
-      if allowed then
-        target[#target+1] = {
-          kind = "path",
-          label = path,
-          path = path,
-          file = is_folder and nil or path,
-          project = is_folder and path or nil,
-          is_folder = is_folder,
-          source = "filesystem",
-          query = query,
-          match_score = score,
-          match_spans = spans or {},
-          size_label = is_folder and "" or format_size(info and info.size),
-          modified_label = info and info.modified and compact_age(info.modified) or "",
-        }
+      if is_folder or not (picker and picker.extensions)
+          or picker.extensions[tostring(extension or ""):lower()] then
+        candidates[#candidates+1] = entry
+        names[#names+1] = entry.name
       end
     end
+
+    if query == "" then
+      local matches = {}
+      for index = 1, math.min(limit, #candidates) do
+        matches[#matches+1] = { entry = candidates[index], score = 0, spans = {} }
+      end
+      return matches
+    end
+
+    local matches = {}
+    for _, match in ipairs(fuzzy_native.filter(names, query, {
+      mode = "path", limit = limit, spans = true,
+    })) do
+      matches[#matches+1] = {
+        entry = candidates[match.index],
+        score = match.score or 0,
+        spans = match.spans or {},
+      }
+    end
+    return matches
   end
-  append_entries(folder_entries, true, folders)
-  append_entries(file_entries, false, files)
+
+  local function append_matches(matches, is_folder, target)
+    for _, match in ipairs(matches) do
+      local entry = match.entry
+      local path = common.normalize_path(scope .. PATHSEP .. entry.name)
+      local info = not is_folder and system.get_file_info(path) or nil
+      target[#target+1] = {
+        kind = "path",
+        label = path,
+        path = path,
+        file = is_folder and nil or path,
+        project = is_folder and path or nil,
+        is_folder = is_folder,
+        source = "filesystem",
+        query = query,
+        match_score = match.score,
+        match_spans = offset_spans(match.spans, #path - #entry.name),
+        size_label = is_folder and "" or format_size(info and info.size),
+        modified_label = info and info.modified and compact_age(info.modified) or "",
+      }
+    end
+  end
+  append_matches(matched_entries("dir"), true, folders)
+  if not (picker and picker.select == "folder") then
+    append_matches(matched_entries("file"), false, files)
+  end
   sort_path_results(folders)
   sort_path_results(files)
   return folders, files
