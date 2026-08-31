@@ -2046,8 +2046,14 @@ function core.on_event(type, ...)
     local modal, action = dispatch_modal_input("mouse_wheel", ...)
     if modal then
       did_keymap = action == "keymap" and keymap.on_mouse_wheel(...) or true
-    elseif not core.root_panel:on_mouse_wheel(...) then
-      did_keymap = keymap.on_mouse_wheel(...)
+    else
+      local control_wheel = keymap.modkeys.ctrl or keymap.modkeys.cmd
+      if control_wheel then
+        did_keymap = keymap.on_mouse_wheel(...)
+        if not did_keymap then core.root_panel:on_mouse_wheel(...) end
+      elseif not core.root_panel:on_mouse_wheel(...) then
+        did_keymap = keymap.on_mouse_wheel(...)
+      end
     end
   elseif type == "touchpressed" then
     local modal = dispatch_modal_input("touch_pressed", ...)
