@@ -975,6 +975,35 @@ test.describe("Git View command", function()
     buffer:on_close()
   end)
 
+  test.it("uses an Image Comparison View for binary image revisions", function(context)
+    local _, view = open_fake_git_view(context.project)
+    local image_path = DATADIR .. PATHSEP .. "plugins" .. PATHSEP
+      .. "editor_wallpaper" .. PATHSEP .. "wallpaper.jpg"
+    local tab = {
+      id = "image-comparison",
+      kind = "commit_diff",
+      title = "Image comparison",
+      changed_files = {
+        { status = "modified", old_path = "before.jpg", new_path = "after.jpg", binary = true },
+      },
+      selected_file = 1,
+      left_name = "before.jpg",
+      right_name = "after.jpg",
+      non_text = { kind = "binary", message = "Binary file changed" },
+      binary_paths = { left = image_path, right = image_path },
+      binary_generation_value = 1,
+    }
+
+    local comparison = select(7, view:layout_diff_tab(tab, 0))
+
+    test.equal(tostring(comparison), "ImageComparisonView")
+    test.not_nil(comparison.left_view.image)
+    test.not_nil(comparison.right_view.image)
+    test.equal(comparison.left_title, "Before — before.jpg")
+    test.equal(comparison.right_title, "After — after.jpg")
+    test.equal(tab.diff_view, nil)
+  end)
+
   test.it("continues change navigation into the next changed file on repeat", function(context)
     local session, view = open_fake_git_view(context.project)
     view.model.repo = { root = "C:/repo" }
@@ -1130,8 +1159,32 @@ test.describe("Git View command", function()
     test.equal(list.git_graph_rows.max_lanes, 2)
     test.equal(list.git_graph_rows[3].node_lane, 2)
     local line = list.buffer:get_utf8_line(1)
-    test.ok(line:find("main", 1, true))
-    test.ok(line:find("v1", 1, true))
+    local main_position = test.not_nil(line:find("main", 1, true))
+    local tag_position = test.not_nil(line:find("v1", 1, true))
+    local subject_position = test.not_nil(line:find("Merge work", 1, true))
+    test.ok(main_position < subject_position)
+    test.ok(tag_position < subject_position)
+  end)
+
+  test.it("presents Local Changes without a fake commit hash", function(context)
+    local _, view = open_fake_git_view(context.project)
+    view.model:log_tab().commits = {
+      {
+        kind = "working_tree", short_hash = "", subject = "Local Changes",
+        parents = { "head" }, changed_files = { { kind = "modified", path = "src/app.lua" } },
+        changed_files_loaded = true,
+      },
+      { hash = "head", short_hash = "head", subject = "HEAD commit", parents = {} },
+    }
+
+    view:update_pane_buffers()
+
+    local list = view:pane_view("log-list")
+    local details = view:pane_view("details")
+    local details_text = table.concat(details.buffer.lines)
+    test.equal(list.buffer:get_utf8_line(1), "Local Changes\n")
+    test.ok(details_text:find("app.lua", 1, true))
+    test.ok(not details_text:find("Hash:", 1, true))
   end)
 
   test.test("Local Focus Cycle enters and wraps through Git Log targets", function(context)

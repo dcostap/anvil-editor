@@ -283,6 +283,7 @@ end
 
 function Model:dispose_tab(tab)
   if not tab then return end
+  self:clear_binary_files(tab)
   tab.disposed = true
   tab.history_generation = (tab.history_generation or 0) + 1
   tab.preview_generation = (tab.preview_generation or 0) + 1
@@ -953,6 +954,7 @@ function Model:load_history_preview(tab, callback)
 end
 
 function Model:clear_diff_content(tab)
+  self:clear_binary_files(tab)
   tab.file_generation = (tab.file_generation or 0) + 1
   dispose_diff_view(tab)
   tab.loading_file = false
@@ -964,6 +966,98 @@ function Model:clear_diff_content(tab)
   tab.left_name, tab.right_name = nil, nil
   tab.diff_view = nil
   tab.diff_generation = (tab.diff_generation or 0) + 1
+end
+
+function Model:clear_binary_files(tab)
+  if not tab then return end
+  tab.binary_generation = (tab.binary_generation or 0) + 1
+  tab.binary_loading = false
+  tab.binary_error = nil
+  for _, path in ipairs(tab.binary_temp_paths or {}) do os.remove(path) end
+  tab.binary_temp_paths = nil
+  tab.binary_paths = nil
+  tab.image_comparison_view = nil
+end
+
+local function binary_temp_suffix(relpath)
+  return tostring(relpath or ""):match("(%.[%a%d]+)$") or ".bin"
+end
+
+local function write_binary_temp_file(relpath, content)
+  local path = core.temp_filename(binary_temp_suffix(relpath))
+  local fp, open_err = io.open(path, "wb")
+  if not fp then
+    return nil, { kind = "write_failed", message = open_err or "Could not create temporary file" }
+  end
+  local ok, write_err = fp:write(content or "")
+  fp:close()
+  if not ok then
+    os.remove(path)
+    return nil, { kind = "write_failed", message = write_err or "Could not write temporary file" }
+  end
+  return path
+end
+
+function Model:load_selected_binary_files(tab, callback)
+  if not (tab and tab.kind == "commit_diff" and tab.non_text and tab.non_text.kind == "binary") then
+    return false
+  end
+  if tab.binary_loading then return false end
+  local file = tab.changed_files and tab.changed_files[tab.selected_file]
+  if not file then return false end
+
+  self:clear_binary_files(tab)
+  local generation = tab.binary_generation
+  tab.binary_loading = true
+  local pending = 2
+  local paths = {}
+  local temp_paths = {}
+  local load_err
+  local function finish()
+    pending = pending - 1
+    if pending ~= 0 or generation ~= tab.binary_generation then return end
+    tab.binary_loading = false
+    tab.binary_error = load_err
+    if load_err then
+      for _, path in ipairs(temp_paths) do os.remove(path) end
+    else
+      tab.binary_paths = paths
+      tab.binary_temp_paths = temp_paths
+      tab.binary_generation_value = (tab.binary_generation_value or 0) + 1
+    end
+    if callback then callback(self, load_err) end
+    if self.on_update then self.on_update(self) end
+  end
+  local function load(side, rev, relpath)
+    if missing_side_for_status(file, side) or rev == self.backend.EMPTY_TREE or not relpath then
+      paths[side] = nil
+      finish()
+      return
+    end
+    if rev == self.backend.WORKING_TREE then
+      paths[side] = common.normalize_path(self.repo.root .. PATHSEP .. relpath)
+      finish()
+      return
+    end
+    local job, done
+    job = self.backend.file_at(self.repo, rev, relpath, {}, function(content, err)
+      done = true
+      self:_untrack_job(job)
+      if generation ~= tab.binary_generation then return end
+      local path
+      if not err then path, err = write_binary_temp_file(relpath, content) end
+      if err and not load_err then load_err = err end
+      if path then
+        paths[side] = path
+        temp_paths[#temp_paths + 1] = path
+      end
+      finish()
+    end)
+    if not done then self:_track_job(job) end
+  end
+  load("left", tab.left, path_for_file(file, "left"))
+  load("right", tab.right, path_for_file(file, "right"))
+  return true
 end
 
 function Model:load_changed_files(tab, callback)
@@ -1107,6 +1201,7 @@ function Model:load_selected_diff_file(tab, callback)
   if not tab or tab.kind ~= "commit_diff" then return false end
   local file = tab.changed_files and tab.changed_files[tab.selected_file]
   if not file then return false end
+  self:clear_binary_files(tab)
   if file.binary or (file.stat and file.stat.binary) then
     tab.file_generation = (tab.file_generation or 0) + 1
     dispose_diff_view(tab)
@@ -1115,7 +1210,12 @@ function Model:load_selected_diff_file(tab, callback)
     tab.file_error = nil
     tab.left_text, tab.right_text = nil, nil
     tab.left_current_path, tab.right_current_path = nil, nil
-    tab.non_text = { kind = "binary", message = "Binary files differ" }
+    tab.left_name = path_for_file(file, "left") or "File did not exist"
+    tab.right_name = path_for_file(file, "right") or "File did not exist"
+    tab.non_text = {
+      kind = "binary",
+      message = "Binary file changed. Text comparison is not available.",
+    }
     tab.diff_view = nil
     tab.diff_generation = (tab.diff_generation or 0) + 1
     if callback then callback(self, nil) end
@@ -1239,7 +1339,7 @@ function Model:sync_working_tree_diff_tabs()
   end
 end
 
-function Model:_finish_refresh(generation, total_commits, log_page, err, callback)
+function Model:_finish_refresh(generation, total_commits, log_page, local_changes, err, callback)
   if generation ~= self.generation then return end
   local tab = self:log_tab()
   local retained_commits = {}
@@ -1254,6 +1354,18 @@ function Model:_finish_refresh(generation, total_commits, log_page, err, callbac
   tab.total_commits = total_commits
   if tab.total_commits == nil and log_page and not log_page.has_more then
     tab.total_commits = #tab.commits
+  end
+  if local_changes and #local_changes > 0 then
+    local head = tab.commits[1]
+    table.insert(tab.commits, 1, {
+      kind = "working_tree",
+      short_hash = "",
+      subject = "Local Changes",
+      parents = head and head.hash and { head.hash } or {},
+      changed_files = local_changes,
+      changed_files_loaded = true,
+    })
+    tab.graph_revision = (tab.graph_revision or 0) + 1
   end
   for _, commit in ipairs(tab.commits) do
     local retained = retained_commits[commit.hash]
@@ -1283,12 +1395,12 @@ function Model:_finish_refresh(generation, total_commits, log_page, err, callbac
 end
 
 function Model:_start_refresh_jobs(repo, generation, callback)
-  local pending = self.backend.commit_count and 2 or 1
-  local total_commits, log_page, final_err
+  local pending = self.backend.commit_count and 3 or 2
+  local total_commits, log_page, local_changes, final_err
   local function done()
     pending = pending - 1
     if pending == 0 then
-      self:_finish_refresh(generation, total_commits, log_page, final_err, callback)
+      self:_finish_refresh(generation, total_commits, log_page, local_changes, final_err, callback)
     end
   end
 
@@ -1317,6 +1429,34 @@ function Model:_start_refresh_jobs(repo, generation, callback)
     done()
   end)
   if not log_done then self:_track_job(log_job) end
+
+  local status_job, status_done
+  status_job = self.backend.run_git(
+    repo,
+    { "status", "--porcelain=v1", "-z", "--untracked-files=all" },
+    {},
+    function(result, err)
+      status_done = true
+      self:_untrack_job(status_job)
+      if generation ~= self.generation then return end
+      local_changes = {}
+      local seen = {}
+      if result then
+        for _, record in ipairs(self.backend.parse_status_z(result.stdout)) do
+          if not untracked_directory_summary(record) then
+            local path = changed_file_path(record)
+            if path and path ~= "" then seen[path] = true end
+            local_changes[#local_changes + 1] = record
+          end
+        end
+      elseif err then
+        core.log_quiet("Git Log local changes unavailable: %s", err.message or err.kind)
+      end
+      add_dirty_buffer_records(repo, local_changes, seen)
+      done()
+    end
+  )
+  if not status_done then self:_track_job(status_job) end
 end
 
 function Model:reload_file_history_tabs()
@@ -1368,7 +1508,8 @@ end
 function Model:invalidate_diff_loads()
   for _, tab in ipairs(self.tabs) do
     if tab.kind == "commit_diff" then
-      local was_loading = tab.loading or tab.loading_file
+      local was_loading = tab.loading or tab.loading_file or tab.binary_loading
+      if tab.binary_loading then self:clear_binary_files(tab) end
       tab.file_generation = (tab.file_generation or 0) + 1
       tab.list_generation = (tab.list_generation or 0) + 1
       tab.loading = false
@@ -1397,7 +1538,7 @@ function Model:refresh_log(callback)
     if generation ~= self.generation then return end
     if not repo then
       self.repo = nil
-      self:_finish_refresh(generation, nil, nil, repo_err, callback)
+      self:_finish_refresh(generation, nil, nil, nil, repo_err, callback)
       return
     end
     self.repo = repo

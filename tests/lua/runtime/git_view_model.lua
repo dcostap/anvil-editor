@@ -74,7 +74,7 @@ test.describe("plugins.git.model", function()
     test.equal(tab.closable, false)
   end)
 
-  test.test("keeps local changes out of the commit log", function()
+  test.test("adds Local Changes above HEAD when the repository has changes", function()
     local status = table.concat({ " M src/app.lua", "" }, "\0")
     local model = Model.new({ path = "C:/repo" }, { backend = fake_backend(status, log_output()) })
     local done = false
@@ -82,17 +82,53 @@ test.describe("plugins.git.model", function()
 
     test.equal(done, true)
     local commits = model:log_tab().commits
-    test.equal(#commits, 1)
-    test.equal(commits[1].hash, "abc123")
-    test.equal(commits[1].subject, "Initial")
-    test.equal(model:selected_commit().hash, "abc123")
-    model:select_log_index(1)
-    test.equal(model:get_state().tabs[1].selected_commit_hash, "abc123")
-    test.equal(model:select_log_index(1).hash, "abc123")
-    test.equal(model:selected_commit().subject, "Initial")
+    test.equal(#commits, 2)
+    test.equal(commits[1].kind, "working_tree")
+    test.equal(commits[1].subject, "Local Changes")
+    test.equal(commits[1].hash, nil)
+    test.equal(commits[1].parents[1], "abc123")
+    test.equal(commits[1].changed_files[1].path, "src/app.lua")
+    test.equal(commits[2].hash, "abc123")
+    test.equal(model:selected_commit(), commits[1])
+    test.equal(model:get_state().tabs[1].selected_commit_hash, nil)
+
+    model:refresh_log()
+    test.equal(model:selected_commit().kind, "working_tree")
+
+    local diff = model:open_selected_commit_diff()
+    test.equal(diff.left, "HEAD")
+    test.equal(diff.right, real_backend.WORKING_TREE)
   end)
 
-  test.it("loads the repository commit total without scanning working-tree status", function()
+  test.it("omits Local Changes when the repository and open Buffers are clean", function()
+    local model = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()) })
+
+    model:refresh_log()
+
+    local commits = model:log_tab().commits
+    test.equal(#commits, 1)
+    test.equal(commits[1].hash, "abc123")
+  end)
+
+  test.it("falls back to HEAD when selected Local Changes become clean", function()
+    local status = table.concat({ " M src/app.lua", "" }, "\0")
+    local backend = fake_backend("", log_output())
+    backend.run_git = function(repo, args, opts, callback)
+      local stdout = args[1] == "status" and status or log_output()
+      callback({ code = 0, stdout = stdout }, nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+
+    model:refresh_log()
+    test.equal(model:selected_commit().kind, "working_tree")
+    status = ""
+    model:refresh_log()
+
+    test.equal(model:selected_commit().hash, "abc123")
+  end)
+
+  test.it("loads the repository commit total independently from Local Changes", function()
     local backend = fake_backend("", log_output())
     local status_calls = 0
     local run_git = backend.run_git
@@ -109,7 +145,7 @@ test.describe("plugins.git.model", function()
     model:refresh_log()
 
     test.equal(model:log_tab().total_commits, 1234)
-    test.equal(status_calls, 0)
+    test.equal(status_calls, 1)
   end)
 
   test.it("keeps a valid Git Log when commit counting fails", function()
@@ -170,9 +206,11 @@ test.describe("plugins.git.model", function()
     local model = Model.new({ path = "C:/repo" }, { backend = backend })
     model:refresh_log()
     model:refresh_log()
-    test.equal(cancelled, 1)
+    test.equal(cancelled, 2)
     callbacks[1].callback({ code = 0, stdout = "" }, nil)
-    callbacks[2].callback({ code = 0, stdout = log_output() }, nil)
+    callbacks[2].callback({ code = 0, stdout = "" }, nil)
+    callbacks[3].callback({ code = 0, stdout = log_output() }, nil)
+    callbacks[4].callback({ code = 0, stdout = "" }, nil)
 
     local commits = model:log_tab().commits
     test.equal(#commits, 1)
@@ -557,11 +595,11 @@ test.describe("plugins.git.model", function()
     local history_tab = model:open_file_history("src/app.lua")
     local diff_tab = model:open_working_tree_diff()
     test.equal(history_calls, 1)
-    test.equal(changed_calls, 2)
+    test.equal(changed_calls, 1)
     model:refresh_log()
     test.equal(model.repo, nil)
     test.equal(history_calls, 1)
-    test.equal(changed_calls, 2)
+    test.equal(changed_calls, 1)
     test.equal(history_tab.error.kind, "not_in_repository")
     test.equal(diff_tab.error.kind, "not_in_repository")
   end)
@@ -862,12 +900,54 @@ test.describe("plugins.git.model", function()
     local tab = model:open_selected_commit_diff()
 
     model:select_diff_file(tab, 2)
+    test.equal(#callbacks, 2)
     callbacks[1]("old left", nil)
     callbacks[2]("old right", nil)
 
     test.equal(tab.non_text.kind, "binary")
     test.equal(tab.left_text, nil)
     test.equal(tab.right_text, nil)
+  end)
+
+  test.it("materializes image revisions without sending them to the text Diff View", function()
+    local backend = fake_backend("", log_output())
+    backend.changed_files = function(repo, left, right, opts, callback)
+      callback({
+        { status = "modified", old_path = "image.png", new_path = "image.png", binary = true },
+      }, nil)
+      return { cancel = function() end }
+    end
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      callback(tostring(rev) .. " image bytes", nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = {
+      kind = "commit_diff",
+      left = "old",
+      right = "new",
+      changed_files = {
+        { status = "modified", old_path = "image.png", new_path = "image.png", binary = true },
+      },
+      selected_file = 1,
+      non_text = { kind = "binary" },
+    }
+    local done = false
+
+    test.ok(model:load_selected_binary_files(tab, function() done = true end))
+
+    test.equal(done, true)
+    test.equal(tab.non_text.kind, "binary")
+    test.not_nil(tab.binary_paths.left)
+    test.not_nil(tab.binary_paths.right)
+    test.ok(tab.binary_paths.left:match("%.png$"))
+    test.ok(tab.binary_paths.right:match("%.png$"))
+    test.equal(tab.diff_view, nil)
+    local left_path, right_path = tab.binary_paths.left, tab.binary_paths.right
+    model:dispose_tab(tab)
+    test.equal(system.get_file_info(left_path), nil)
+    test.equal(system.get_file_info(right_path), nil)
   end)
 
   test.it("keeps displayed diff content until its replacement finishes", function()
@@ -970,6 +1050,9 @@ test.describe("plugins.git.model", function()
     local model = Model.new({ path = "C:/repo" }, { backend = backend })
     model:refresh_log()
 
+    test.equal(model:selected_commit().kind, "working_tree")
+    test.equal(model:selected_commit().changed_files[1].path, "src/unsaved.lua")
+
     local tab = model:open_working_tree_diff()
 
     test.equal(#tab.changed_files, 1)
@@ -1001,7 +1084,7 @@ test.describe("plugins.git.model", function()
     local model = Model.new({ path = "C:/repo" }, { backend = backend })
     model:refresh_log()
     local tab = model:open_working_tree_diff()
-    test.equal(status_calls, 1)
+    test.equal(status_calls, 2)
     test.equal(#tab.changed_files, 1)
     test.ok(real_backend._contains_arg(status_args, "--untracked-files=all"), "diff-tab status should expand untracked directories")
     test.equal(tab.changed_files[1].kind, "untracked")
@@ -1158,7 +1241,7 @@ test.describe("plugins.git.model", function()
     test.equal(tab.right, real_backend.WORKING_TREE)
   end)
 
-  test.test("keeps an unborn repository commit log empty", function()
+  test.test("shows Local Changes in a repository without commits", function()
     local backend = fake_backend(table.concat({ "?? new.lua", "" }, "\0"), "")
     backend.run_git = function(repo, args, opts, callback)
       if args[1] == "status" then
@@ -1171,7 +1254,9 @@ test.describe("plugins.git.model", function()
     local model = Model.new({ path = "C:/repo" }, { backend = backend })
     model:refresh_log()
     test.equal(model:log_tab().error, nil)
-    test.equal(#model:log_tab().commits, 0)
+    test.equal(#model:log_tab().commits, 1)
+    test.equal(model:log_tab().commits[1].kind, "working_tree")
+    test.same(model:log_tab().commits[1].parents, {})
   end)
 
   test.test("loads more commits from the next log page", function()
