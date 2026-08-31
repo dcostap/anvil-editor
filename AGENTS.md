@@ -324,6 +324,18 @@ There is not a separate Lua framework for in-process UI tests: they are ordinary
 
 When adding or changing runtime/editor behavior, prefer adding or adjusting Lua tests in `tests/lua/runtime` or `tests/lua/ui` alongside the implementation. Use in-process UI tests for focus, layout, panel, widget, Document View, prompt bar, fuzzy picker, and command-routing behavior whenever possible.
 
+## Git commits
+
+Agents may commit their changes without separate approval. Create a commit after each complete milestone.
+
+Also create a commit when you fully implement a feature.
+
+Run the applicable checks before each commit. Commit only files that belong to the current task.
+
+Do not include unrelated working-tree changes.
+
+Use one clear commit message for each milestone. Report each new commit hash in the final response.
+
 ## Finalizing changes / updating the dev portable app
 
 When a change or feature is finished and non-Lua files were edited, run the relevant BAT file from the repo root so `C:\Projects\c_projects\anvil-portable` is updated. For non-Lua changes, usually run:
