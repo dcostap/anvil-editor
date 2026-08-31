@@ -492,6 +492,7 @@ function TerminalView:restart()
     return false
   end
   local previous = self.session
+  if self.vt_trace_path then self:stop_vt_trace() end
   self:adopt_session(replacement)
   if previous then previous:close() end
   core.log_quiet("Terminal session %d restarted", self.session_id)
@@ -715,6 +716,62 @@ function TerminalView:open_text_capture()
     core.error("Could not open terminal text: %s", tostring(place_error or "unknown error"))
     return false
   end
+  return true
+end
+
+local function trace_temp_directory()
+  return os.getenv("TEMP") or os.getenv("TMP") or USERDIR
+end
+
+local function write_trace_model(path, text)
+  local file, open_error = io.open(path, "wb")
+  if not file then return false, open_error end
+  local written, write_error = file:write(text)
+  local closed, close_error = file:close()
+  if not written then return false, write_error end
+  if not closed then return false, close_error end
+  return true
+end
+
+function TerminalView:start_vt_trace()
+  if not self.session or not self.session.trace then return false end
+  if self.vt_trace_path then
+    core.error("Terminal VT trace is already active: %s", self.vt_trace_path)
+    return false
+  end
+  local path = core.temp_filename(".terminal.vt", trace_temp_directory())
+  local started, trace_error = self.session:trace(path)
+  if not started then
+    core.error("Could not start terminal VT trace: %s", tostring(trace_error or "unknown error"))
+    return false
+  end
+  self.vt_trace_path = path
+  core.log("Terminal VT trace started. It can contain private text: %s", path)
+  return true
+end
+
+function TerminalView:stop_vt_trace()
+  if not self.session or not self.session.trace or not self.vt_trace_path then return false end
+  local path = self.vt_trace_path
+  self.vt_trace_path = nil
+  local stopped, bytes, trace_error = self.session:trace()
+  local capture, capture_error = self.session:text_capture()
+  local model_path = path .. ".model.txt"
+  local model_written, model_error = false, capture_error
+  if capture then
+    model_written, model_error = write_trace_model(model_path, capture.text or "")
+  end
+  if not stopped then
+    core.error("Terminal VT trace stopped with an error: %s", tostring(trace_error or "unknown error"))
+  end
+  if not model_written then
+    core.error("Could not save terminal trace model: %s", tostring(model_error or "unknown error"))
+  end
+  if not stopped or not model_written then return false end
+  core.log(
+    "Terminal VT trace stopped: %d bytes\nRaw: %s\nModel: %s",
+    bytes or 0, path, model_path
+  )
   return true
 end
 
@@ -1473,6 +1530,7 @@ function TerminalView:on_close()
   self.active_clipboard_request = nil
   self.queued_clipboard_request = nil
   if self.session then
+    if self.vt_trace_path then self:stop_vt_trace() end
     local stats = self.session.stats and self.session:stats() or {}
     self.session:close()
     self.session = nil
@@ -1619,6 +1677,16 @@ end, {
   end, {
     keywords = { "navigate", "buffer", "scrollback", "text" },
     opens_view = true,
+  }),
+  ["terminal:start_vt_trace"] = command.palette(function(view)
+    return view:start_vt_trace()
+  end, {
+    keywords = { "terminal", "diagnostic", "record", "raw", "output" },
+  }),
+  ["terminal:stop_vt_trace"] = command.palette(function(view)
+    return view:stop_vt_trace()
+  end, {
+    keywords = { "terminal", "diagnostic", "record", "raw", "output" },
   }),
   ["terminal:search"] = command.palette(function(view) return view:prompt_search() end),
   ["terminal:search_next"] = function(view) return view:search(view.search_query, false) end,

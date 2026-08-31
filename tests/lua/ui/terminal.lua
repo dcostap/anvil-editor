@@ -56,6 +56,7 @@ local function fake_native()
       scrolls = {},
       gesture_events = {},
       searches = {},
+      traces = {},
       closed = false,
       state = "running",
       revision = 1,
@@ -163,6 +164,15 @@ local function fake_native()
     end
     function session:hyperlink() return self.hyperlink_uri end
     function session:row_text() return self.row_text_data end
+    function session:trace(path)
+      self.traces[#self.traces + 1] = path or false
+      if path then
+        self.trace_path = path
+        return true
+      end
+      self.trace_path = nil
+      return true, 17
+    end
     function session:close() self.closed = true end
     sessions[#sessions + 1] = session
     return session
@@ -310,6 +320,32 @@ test.describe("Terminal View", function()
     test.ok(fragment.strikethrough)
     test.same(capture.terminal_background, { 1, 2, 3, 255 })
     test.equal(capture.terminal_source_view, nil)
+  end)
+
+  test.it("starts and stops an explicit VT trace with a terminal model capture", function(context)
+    local view = terminal.open()
+    local session = context.sessions[1]
+    session.capture = {
+      text = "ANVIL_TRACE_MODEL\n",
+      cursor_line = 1,
+      cursor_col = 1,
+      viewport_line = 1,
+    }
+
+    test.ok(command.perform("terminal:start_vt_trace"))
+    local trace_path = test.not_nil(view.vt_trace_path)
+    test.equal(session.traces[1], trace_path)
+    test.ok(command.perform("terminal:stop_vt_trace"))
+    test.equal(session.traces[2], false)
+    test.is_nil(view.vt_trace_path)
+
+    local model_path = trace_path .. ".model.txt"
+    local file = test.not_nil(io.open(model_path, "rb"))
+    local model = file:read("*a")
+    file:close()
+    os.remove(model_path)
+    os.remove(trace_path)
+    test.equal(model, "ANVIL_TRACE_MODEL\n")
   end)
 
   test.it("copies a frozen terminal text capture into an independent split", function(context)

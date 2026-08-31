@@ -115,6 +115,9 @@ typedef struct {
   size_t write_queue_count;
   uint8_t *snapshot_text;
   size_t snapshot_text_capacity;
+  HANDLE vt_trace_file;
+  uint64_t vt_trace_bytes;
+  DWORD vt_trace_error;
   bool write_lock_initialized;
   bool transport_released;
   volatile LONG write_failed;
@@ -733,6 +736,10 @@ static void close_session(TerminalSession *session) {
   if (!session || session->closed) return;
   session->closed = true;
   set_terminal_state(session, TERMINAL_STATE_CLOSED);
+  if (session->vt_trace_file) {
+    FlushFileBuffers(session->vt_trace_file);
+    close_handle(&session->vt_trace_file);
+  }
   terminate_terminal_process(session);
   release_terminal_transport(session);
   free_terminal_objects(session);
@@ -1317,6 +1324,18 @@ static int f_terminal_update(lua_State *L) {
     }
     LeaveCriticalSection(&session->read_lock);
     if (amount == 0) break;
+    if (session->vt_trace_file) {
+      DWORD written = 0;
+      BOOL write_ok = WriteFile(
+        session->vt_trace_file, buffer, (DWORD)amount, &written, NULL
+      );
+      if (!write_ok || written != (DWORD)amount) {
+        session->vt_trace_error = write_ok ? ERROR_WRITE_FAULT : GetLastError();
+        close_handle(&session->vt_trace_file);
+      } else {
+        session->vt_trace_bytes += written;
+      }
+    }
     ghostty_terminal_vt_write(session->terminal, buffer, amount);
     session->output_bytes_parsed += amount;
     total += amount;
@@ -1396,6 +1415,74 @@ static int f_terminal_write(lua_State *L) {
   }
   lua_pushstring(L, terminal_state_name(session->state));
   return 2;
+}
+
+static int f_terminal_trace(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  if (lua_isnoneornil(L, 2)) {
+    if (!session->vt_trace_file) {
+      lua_pushboolean(L, false);
+      lua_pushinteger(L, (lua_Integer)session->vt_trace_bytes);
+      if (session->vt_trace_error != ERROR_SUCCESS) {
+        push_windows_error(L, "Terminal VT trace failed", session->vt_trace_error);
+      } else {
+        lua_pushliteral(L, "Terminal VT trace is not active");
+      }
+      return 3;
+    }
+    if (!FlushFileBuffers(session->vt_trace_file) &&
+        session->vt_trace_error == ERROR_SUCCESS) {
+      session->vt_trace_error = GetLastError();
+    }
+    close_handle(&session->vt_trace_file);
+    lua_pushboolean(L, session->vt_trace_error == ERROR_SUCCESS);
+    lua_pushinteger(L, (lua_Integer)session->vt_trace_bytes);
+    if (session->vt_trace_error != ERROR_SUCCESS) {
+      push_windows_error(L, "Terminal VT trace failed", session->vt_trace_error);
+      return 3;
+    }
+    return 2;
+  }
+
+  const char *path = luaL_checkstring(L, 2);
+  if (session->closed || !terminal_model_available(session)) {
+    lua_pushboolean(L, false);
+    lua_pushliteral(L, "Terminal session is closed");
+    return 2;
+  }
+  if (session->vt_trace_file) {
+    lua_pushboolean(L, false);
+    lua_pushliteral(L, "Terminal VT trace is already active");
+    return 2;
+  }
+  if (!path[0]) {
+    lua_pushboolean(L, false);
+    lua_pushliteral(L, "Terminal VT trace path is empty");
+    return 2;
+  }
+
+  wchar_t *wide_path = utf8_to_wide(path);
+  if (!wide_path) {
+    lua_pushboolean(L, false);
+    lua_pushliteral(L, "Terminal VT trace path is not valid UTF-8");
+    return 2;
+  }
+  HANDLE file = CreateFileW(
+    wide_path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE,
+    NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL
+  );
+  HeapFree(GetProcessHeap(), 0, wide_path);
+  if (file == INVALID_HANDLE_VALUE) {
+    DWORD error = GetLastError();
+    lua_pushboolean(L, false);
+    push_windows_error(L, "Could not start terminal VT trace", error);
+    return 2;
+  }
+  session->vt_trace_file = file;
+  session->vt_trace_bytes = 0;
+  session->vt_trace_error = ERROR_SUCCESS;
+  lua_pushboolean(L, true);
+  return 1;
 }
 
 static int f_terminal_paste(lua_State *L) {
@@ -3207,6 +3294,7 @@ static int f_terminal_gc(lua_State *L) {
 static const luaL_Reg terminal_methods[] = {
   { "update", f_terminal_update },
   { "write", f_terminal_write },
+  { "trace", f_terminal_trace },
   { "paste", f_terminal_paste },
   { "resize", f_terminal_resize },
   { "clear", f_terminal_clear },

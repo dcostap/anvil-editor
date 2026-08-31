@@ -155,6 +155,35 @@ test.describe("Native terminal session", function()
     test.ok(text:find("ANVIL_DELAYED_OUTPUT", 1, true), text)
   end)
 
+  test.it("records raw ConPTY output only while a VT trace is active", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local trace_path = core.temp_filename(".vt")
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "Start-Sleep -Milliseconds 150; [Console]::Write('ANVIL_TRACE_FIRST'); Start-Sleep -Milliseconds 1000; [Console]::Write('ANVIL_TRACE_SECOND')"]],
+    })
+    test.ok(session, start_error)
+    local started, trace_error = session:trace(trace_path)
+    test.ok(started, trace_error)
+
+    local first = wait_for_text(session, "ANVIL_TRACE_FIRST", 5)
+    test.ok(first:find("ANVIL_TRACE_FIRST", 1, true), first)
+    local stopped, bytes, stop_error = session:trace()
+    test.ok(stopped, stop_error)
+    test.ok(bytes > 0)
+    wait_for_text(session, "ANVIL_TRACE_SECOND", 5)
+    session:close()
+
+    local file = test.not_nil(io.open(trace_path, "rb"))
+    local raw = file:read("*a")
+    file:close()
+    os.remove(trace_path)
+    test.ok(raw:find("ANVIL_TRACE_FIRST", 1, true), raw)
+    test.not_ok(raw:find("ANVIL_TRACE_SECOND", 1, true), raw)
+  end)
+
   test.it("reports the child exit code", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"
