@@ -59,6 +59,16 @@ local function open_fake_git_view(project)
   })
 end
 
+local function use_fake_command_git_views(context)
+  git_view.open_log = function(project, opts)
+    opts = opts or {}
+    opts.window = fake_window(2222)
+    opts.window_id = 2222
+    opts.git_view_opts = { backend = fake_backend }
+    return context.original_open_log(project, opts)
+  end
+end
+
 local function session_views(session)
   local result, seen = {}, {}
   for _, pane in ipairs(panes.ordered()) do
@@ -82,6 +92,7 @@ test.describe("Git View command", function()
     context.original_root_panel = core.root_panel
     context.original_nag_show = core.nag_view.show
     context.original_set_clipboard = system.set_clipboard
+    context.original_open_log = git_view.open_log
     context.original_linewrapping_default = config.plugins.linewrapping.enable_by_default
     panes.git_sessions = {}
     context.project = { path = "C:/repo" }
@@ -95,50 +106,37 @@ test.describe("Git View command", function()
     core.root_panel = context.original_root_panel
     core.nag_view.show = context.original_nag_show
     system.set_clipboard = context.original_set_clipboard
+    git_view.open_log = context.original_open_log
     config.plugins.linewrapping.enable_by_default = context.original_linewrapping_default
     panes.git_sessions = {}
   end)
 
-  test.test("opening the Git Log reuses one project Git session", function(context)
-    local first = open_fake_git_view(context.project)
-    local second = open_fake_git_view(context.project)
-    test.equal(first, second)
-    test.not_nil(panes.git_sessions[context.project.path])
-    test.not_nil(first.git_view)
+  test.test("each Git Log open creates an independent Git session", function(context)
+    local first_session, first_view = open_fake_git_view(context.project)
+    local second_session, second_view = open_fake_git_view(context.project)
+
+    test.ok(first_session ~= second_session)
+    test.ok(first_view ~= second_view)
+    test.ok(first_view.model ~= second_view.model)
   end)
 
-  test.test("git:open_log presents the Git Log instead of the last focused Git View", function(context)
-    local session, log_view = open_fake_git_view(context.project)
-    local history_tab = {
-      id = "history-open-log",
-      kind = "file_history",
-      title = "History: src/app.lua",
-      closable = true,
-      relpath = "src/app.lua",
-      commits = {},
-      selected_commit = 1,
-    }
-    log_view.model.tabs[#log_view.model.tabs + 1] = history_tab
-    local history_view = git_view.ensure_tab_view(session, history_tab, true)
+  test.test("git:open_log creates the Git Log in the invoking Pane", function(context)
+    local first_session, first_view = open_fake_git_view(context.project)
+    local first_pane = panes.pane_for_view(first_view)
+    local invoking_pane = panes.split(first_pane, "right", {
+      factory = function() return View() end,
+      focus = true,
+    })
     core.projects = { context.project }
-    test.equal(panes.active().current_view, history_view)
+    use_fake_command_git_views(context)
 
     test.equal(command.perform("git:open_log"), true)
 
-    test.equal(panes.active().current_view, log_view)
-  end)
-
-  test.it("reuses the retained Git Log Navigation History entry", function(context)
-    local _, log_view = open_fake_git_view(context.project)
-    local pane = panes.pane_for_view(log_view)
-    panes.present(View(), { pane = pane })
-    local before = panes.history_length(pane)
-    core.projects = { context.project }
-
-    command.perform("git:open_log")
-
-    test.equal(pane.current_view, log_view)
-    test.equal(panes.history_length(pane), before)
+    local opened = invoking_pane.current_view
+    test.equal(panes.active(), invoking_pane)
+    test.ok(opened ~= first_view)
+    test.ok(opened.git_session ~= first_session)
+    test.equal(first_pane.current_view, first_view)
   end)
 
   test.it("loads a Commit Diff View created without focus", function(context)
@@ -172,6 +170,7 @@ test.describe("Git View command", function()
     target.get_path_target = function() return { path = "C:/repo/vendor/src/app.lua" } end
     core.active_view = target
     core.projects = { context.project }
+    use_fake_command_git_views(context)
     local old_lookup = real_backend.repo_for_path_async
     real_backend.repo_for_path_async = function(path, callback)
       callback({ root = "C:/repo/vendor", relpath = "src/app.lua" }, nil)
@@ -180,7 +179,9 @@ test.describe("Git View command", function()
     command.perform("git:open_current_file_diff")
     real_backend.repo_for_path_async = old_lookup
 
-    test.not_nil(panes.git_sessions["C:/repo/vendor"])
+    local nested_session = panes.active().current_view.git_session
+    test.equal(nested_session.project_key, "C:/repo/vendor")
+    test.ok(nested_session ~= parent_session)
     test.equal(parent_session.git_model.repo.root, "C:/repo")
     test.equal(parent_log.model.repo.root, "C:/repo")
   end)
@@ -495,6 +496,7 @@ test.describe("Git View command", function()
       return { path = "C:/repo/src/from-tree.lua" }
     end
     core.active_view = target
+    use_fake_command_git_views(context)
     local old_lookup = real_backend.repo_for_path_async
     real_backend.repo_for_path_async = function(path, callback)
       callback({ root = "C:/repo", relpath = "src/from-tree.lua" }, nil)
@@ -503,11 +505,11 @@ test.describe("Git View command", function()
     command.perform("git:show_history")
     real_backend.repo_for_path_async = old_lookup
 
-    local found
-    for _, tab in ipairs(session.git_model.tabs) do
-      if tab.relpath == "src/from-tree.lua" then found = tab end
-    end
+    local opened = panes.active().current_view
+    local found = opened:model_tab()
+    test.ok(opened.git_session ~= session)
     test.not_nil(found)
+    test.equal(found.relpath, "src/from-tree.lua")
   end)
 
   test.it("opens Selection History from a file-backed Diff fragment", function(context)
@@ -524,6 +526,7 @@ test.describe("Git View command", function()
     diff.buffer_view_b:with_selection_state(function()
       diff.buffer_view_b.buffer:set_selection(1, 1, 1, 5)
     end)
+    use_fake_command_git_views(context)
     local old_lookup = real_backend.repo_for_path_async
     real_backend.repo_for_path_async = function(path, callback)
       callback({ root = "C:/repo", relpath = "src/source.lua" }, nil)
@@ -532,10 +535,11 @@ test.describe("Git View command", function()
     command.perform("git:show_selection_history")
     real_backend.repo_for_path_async = old_lookup
 
-    local found
-    for _, tab in ipairs(session.git_model.tabs) do
-      if tab.relpath == "src/source.lua" and tab.history_context then found = tab end
-    end
+    local opened = panes.active().current_view
+    local found = opened:model_tab()
+    test.ok(opened.git_session ~= session)
+    test.not_nil(found)
+    test.equal(found.relpath, "src/source.lua")
     test.equal(found.history_context.start_line, 2)
     test.equal(found.history_context.end_line, 2)
     diff:dispose_integrations()
@@ -1491,14 +1495,14 @@ test.describe("Git View command", function()
     test.equal(view:get_state().session.hidden, true)
     local state = git_view.save_state(session)
     panes.git_sessions = {}
-    git_view.restore_state(context.project, state, {
+    local restored = git_view.restore_state(context.project, state, {
         window = fake_window(2222),
         window_id = 2222,
         git_view_opts = { backend = fake_backend },
     })
 
-    local restored = panes.git_sessions[context.project.path]
     test.not_nil(restored)
+    test.equal(panes.git_sessions[state.session_key], restored)
     test.equal(restored.hidden, true)
     test.not_nil(restored.git_view.model:find_tab(history_tab.id))
   end)
@@ -1514,7 +1518,7 @@ test.describe("Git View command", function()
     test.equal(state.panes[1].view.state.tab_id, history_tab.id)
 
     panes.reset_for_tests()
-    test.equal(panes.git_sessions[context.project.path], session)
+    test.equal(panes.git_sessions[session.key], session)
     test.ok(panes.restore_workspace_state(state, function(saved)
       return require(saved.module).from_state(saved.state)
     end))
@@ -1522,7 +1526,7 @@ test.describe("Git View command", function()
     local restored = panes.active().current_view
     test.equal(restored.tab_id, history_tab.id)
     test.ok(restored ~= history_view)
-    test.equal(panes.git_sessions[context.project.path].git_tab_views[history_tab.id], restored)
+    test.equal(panes.git_sessions[session.key].git_tab_views[history_tab.id], restored)
   end)
 
   test.test("syncing real tabs follows model tab id changes", function(context)
@@ -1557,6 +1561,7 @@ test.describe("Git View command", function()
     git_view.restore_state(context.project,
       {
         kind = "git",
+        session_key = session.key,
         hidden = true,
         model = {
           repo = { root = "C:/repo" },
@@ -1600,7 +1605,7 @@ test.describe("Git View command", function()
         return { cancel = function() end }
       end,
     }
-    git_view.restore_state(context.project,
+    local restored = git_view.restore_state(context.project,
       {
         kind = "git",
         hidden = true,
@@ -1613,7 +1618,6 @@ test.describe("Git View command", function()
         window_id = 3333,
         git_view_opts = { backend = backend },
     })
-    local restored = panes.git_sessions[context.project.path]
     test.equal(restored.git_view.refresh_started, nil)
     test.equal(log_calls, 0)
 
@@ -1657,7 +1661,7 @@ test.describe("Git View command", function()
     test.equal(closed, true)
     test.equal(session.hidden, true)
     test.equal(session.git_view, view)
-    test.equal(panes.git_sessions[context.project.path], session)
+    test.equal(panes.git_sessions[session.key], session)
   end)
 
   test.test("closing the Git Log leaves sibling Git Views open", function(context)
@@ -1674,7 +1678,7 @@ test.describe("Git View command", function()
     core.active_view = sibling
     local pane = panes.pane_for_view(view)
     panes.close_view(pane, { view = view })
-    test.equal(panes.git_sessions[context.project.path], session)
+    test.equal(panes.git_sessions[session.key], session)
     test.ok(panes.pane_for_view(sibling) ~= nil)
     test.ok(core.active_view == sibling or core.active_view.git_owner_view == sibling)
     test.ok(panes.validate())

@@ -409,6 +409,7 @@ function GitView:get_state()
     tab_id = self.tab_id,
     session = session and session.git_model and {
       kind = "git",
+      session_key = session.key,
       hidden = self.git_session and self.git_session.hidden == true or false,
       model = session.git_model:get_state(),
     } or nil,

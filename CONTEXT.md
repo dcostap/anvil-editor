@@ -471,11 +471,12 @@ The family of top-level Git-related Views for a Project, including the Git Log, 
 _Avoid_: Git popup, Git panel, Git tab container
 
 **Git Log**:
-The singleton View for browsing commits from one selected Git repository in a Project and opening commit-focused Views.
+A View for browsing commits from one selected Git repository and opening commit-focused Views.
+A Project can have several independent Git Logs.
 _Avoid_: commit browser, main Git View
 
 **Selected Git Repository**:
-The repository whose commits the Project's singleton Git Log currently displays.
+The repository whose commits a Git Log currently displays.
 _Avoid_: active repository, current repo
 
 **Commit Diff View**:

@@ -13,13 +13,17 @@ local historical_buffer = require "plugins.git.historical_buffer"
 local model = require "plugins.git.model"
 local FragmentBuffer = require "plugins.diff.fragment_buffer"
 local panes = require "core.panes"
-panes.git_sessions = panes.git_sessions or {}
+panes.git_sessions = panes.git_sessions or setmetatable({}, { __mode = "v" })
+if not getmetatable(panes.git_sessions) then
+  setmetatable(panes.git_sessions, { __mode = "v" })
+end
 
 local git_view = {
   backend = backend,
   Model = model,
   View = GitView,
 }
+local next_session_number = 0
 
 local function current_project()
   return core.projects and core.projects[1] or core.root_project and core.root_project()
@@ -40,6 +44,14 @@ local function project_key(project)
   return tostring(project or "")
 end
 
+local function next_session_key(project)
+  local prefix = project_key(project) .. "\0git\0"
+  repeat
+    next_session_number = next_session_number + 1
+  until not panes.git_sessions[prefix .. next_session_number]
+  return prefix .. next_session_number
+end
+
 local function retained_session_is_stale(session)
   for _, view in pairs(session and session.git_tab_views or {}) do
     if view.__pane_owner and not panes.contains(view.__pane_owner) then return true end
@@ -58,21 +70,13 @@ end
 
 local function make_git_session(project, opts)
   opts = opts or {}
-  local key = project_key(project)
-  local session = panes.git_sessions[key]
-  if session and session.git_view then
-    if retained_session_is_stale(session) then
-      panes.git_sessions[key] = nil
-      session = nil
-      core.log_quiet("Git View discarded stale retained state for Project %s", key)
-    end
-  end
-  if session then return session, false end
-  session = {
+  local project_id = project_key(project)
+  local key = opts.session_key or next_session_key(project)
+  local session = {
     project = project,
-    project_key = key,
+    project_key = project_id,
     kind = "git",
-    key = key .. "\0git",
+    key = key,
     title = "Git - " .. tostring(type(project) == "table" and project.path or project),
     window = opts.window or core.window,
     window_id = opts.window_id or (core.window and system.get_window_id and system.get_window_id(core.window)),
@@ -100,7 +104,8 @@ local function make_git_session(project, opts)
     end
   end
   panes.git_sessions[key] = session
-  return session, true
+  core.log_quiet("Git View created session %s for Project %s", key, project_id)
+  return session
 end
 
 local function live_git_view(view)
@@ -119,12 +124,7 @@ local function focused_git_view()
 end
 
 local function active_git_view()
-  return focused_git_view() or (function()
-    local project = current_project()
-    local session = project and panes.git_sessions[project_key(project)]
-    if not session or session.hidden then return nil end
-    return session.git_view
-  end)()
+  return focused_git_view()
 end
 
 local function copy_options(options)
@@ -254,32 +254,25 @@ function git_view.open_log(project, opts)
   end
 
   local view
-  local session, created = make_git_session(project, opts)
+  local session = make_git_session(project, opts)
   session.hidden = opts.state and opts.state.hidden or false
-  if created or not session.git_view then
-    local git_view_opts = copy_options(opts.git_view_opts)
-    if opts.state and opts.state.model then git_view_opts.state = opts.state.model end
-    if opts.state and opts.state.hidden then git_view_opts.defer_refresh = true end
-    git_view_opts.tab_id = "log"
-    view = GitView(project, git_view_opts)
-    view.git_session = session
-    function view:on_model_tab_open(opened_tab)
-      git_view.ensure_tab_view(session, opened_tab, true)
-    end
-    session.git_view = view
-    session.git_model = view.model
-    session.git_tab_views = { log = view }
-    session.hidden = opts.state and opts.state.hidden or false
-    install_model_update_hook(session)
-    local focus = not session.hidden and opts.focus ~= false
-    git_view.ensure_tab_view(session, view.model:log_tab(), false)
-    git_view.sync_tab_views(session)
-    if focus then git_view.ensure_tab_view(session, view.model:log_tab(), true) end
-  elseif session.git_view then
-    view = session.git_view
-    view:set_refresh_pending()
-    git_view.ensure_tab_view(session, session.git_model:log_tab(), opts.focus ~= false)
+  local git_view_opts = copy_options(opts.git_view_opts)
+  if opts.state and opts.state.model then git_view_opts.state = opts.state.model end
+  if opts.state and opts.state.hidden then git_view_opts.defer_refresh = true end
+  git_view_opts.tab_id = "log"
+  view = GitView(project, git_view_opts)
+  view.git_session = session
+  function view:on_model_tab_open(opened_tab)
+    git_view.ensure_tab_view(session, opened_tab, true)
   end
+  session.git_view = view
+  session.git_model = view.model
+  session.git_tab_views = { log = view }
+  install_model_update_hook(session)
+  local focus = not session.hidden and opts.focus ~= false
+  git_view.ensure_tab_view(session, view.model:log_tab(), false)
+  git_view.sync_tab_views(session)
+  if focus then git_view.ensure_tab_view(session, view.model:log_tab(), true) end
   return session, view
 end
 
@@ -360,14 +353,15 @@ function git_view.save_state(session)
   if not session or not session.git_view or not session.git_view.model then return nil end
   return {
     kind = "git",
+    session_key = session.key,
     hidden = session.hidden and true or false,
     model = session.git_view.model:get_state(),
   }
 end
 
 function git_view.restore_state(project, state, opts)
-  local key = project_key(project)
-  local existing = panes.git_sessions[key]
+  local key = state and state.session_key
+  local existing = key and panes.git_sessions[key]
   if existing and existing.git_view then
     if retained_session_is_stale(existing) or not retained_session_has_live_view(existing) then
       panes.git_sessions[key] = nil
@@ -392,6 +386,7 @@ function git_view.restore_state(project, state, opts)
   end
   opts = copy_options(opts)
   opts.state = state
+  opts.session_key = key
   return git_view.open_log(project, opts)
 end
 
