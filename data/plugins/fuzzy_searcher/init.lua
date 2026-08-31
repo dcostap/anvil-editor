@@ -2438,6 +2438,22 @@ function fuzzy_searcher.draw_grep_symbol_context(font, symbol, x, y, width, row_
   return content_width
 end
 
+function fuzzy_searcher.file_result_filename_width(font, file, prefix, suffix, show_file_icon)
+  file = tostring(file or "")
+  prefix = tostring(prefix or "")
+  suffix = tostring(suffix or "")
+  local row_height = font:get_height()
+  local marker_width = math.max(1, style.gitdiff_width or (2 * (SCALE or 1)))
+  local marker_gap = math.max(2 * (SCALE or 1), style.padding.x / 4)
+  local icon_width = show_file_icon and fuzzy_searcher.file_icons.column_width(row_height) or 0
+  local file_font = style.prose_font:get_size() == font:get_size()
+    and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
+  local name = basename(file)
+  local directory_gap = #file > #name and (SCALE or 1) or 0
+  return marker_width + marker_gap + icon_width + font:get_width(prefix)
+    + file_font:get_width(name) + font:get_width(suffix) + directory_gap
+end
+
 local function draw_symbol_result_row(font, r, x, y, width, row_height)
   local symbol_icons = require "core.symbol_icons"
   local icon_size = symbol_icons.size_for_row(row_height)
@@ -2666,7 +2682,10 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
   local path_w, gap, text_w = grep_row_columns(width)
   local symbol = fuzzy_searcher.grep_enclosing_symbol(result)
   local context_width = 0
-  local context_gap = math.max(4 * (SCALE or 1), style.padding.x)
+  local context_gap = math.max(8 * (SCALE or 1), style.padding.x * 2)
+  local prefix = result.exact and "# " or "~# "
+  local line = tonumber(result.line) or 1
+  local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
   if symbol then
     local context_font = style.get_small_font(font)
     local symbol_icons = require "core.symbol_icons"
@@ -2675,19 +2694,21 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
     local icon_gap = icon_width > 0 and math.max(3 * (SCALE or 1), style.padding.x / 3) or 0
     local desired = icon_width + icon_gap
       + context_font:get_width(fuzzy_searcher.symbol_declaration_text(symbol))
-    local max_context = math.max(0, path_w - 140 * (SCALE or 1) - context_gap)
+    local file_width = fuzzy_searcher.file_result_filename_width(
+      font, result.file, prefix, line_suffix, true
+    )
+    local max_context = math.max(0, path_w - file_width - context_gap)
+    local min_context = icon_width + icon_gap
+      + context_font:get_width(tostring(symbol.name or ""))
     context_width = math.min(desired, max_context)
-    if context_width <= 0 then symbol = nil end
+    if context_width < min_context then symbol = nil; context_width = 0 end
   end
   local file_width = math.max(0, path_w - (symbol and context_width + context_gap or 0))
-  local line = tonumber(result.line) or 1
-  local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
   local line_x = collapsed_line_x
   if collapse_file then
     line_x = common.clamp(line_x or x, x, x + file_width)
     renderer.draw_text(font, truncate_text(font, line_suffix, math.max(0, x + file_width - line_x)), line_x, y, style.dim)
   else
-    local prefix = result.exact and "# " or "~# "
     local _end_x
     _end_x, line_x = draw_file_result_row(
       font, result.file or "", result.file_spans, prefix, x, y, file_width,
