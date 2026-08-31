@@ -81,6 +81,25 @@ test.describe("Native terminal session", function()
     test.ok(text:find("ANVIL_LIGHT_SCHEME", 1, true), text)
   end)
 
+  test.it("keeps app-positioned text around OSC 133 semantic markers", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 136, rows = 24, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -File tests/fixtures/terminal_semantic_prompt_repaint.ps1]],
+    })
+    test.ok(session, start_error)
+
+    local text = wait_for_text(session, "ANVIL_SEMANTIC_MESSAGE", 5)
+    local capture, capture_error = session:text_capture()
+    session:close()
+
+    test.ok(text:find("ANVIL_SEMANTIC_MESSAGE", 1, true), text)
+    test.ok(capture, capture_error)
+    test.ok(capture.text:find("ANVIL_SEMANTIC_MESSAGE", 1, true), capture.text)
+  end)
+
   test.it("runs a ConPTY command and parses its VT output", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"
