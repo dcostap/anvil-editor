@@ -217,6 +217,10 @@ elseif mode == "chunked_stdout" then
   write_stdout("lsp-chunk-one")
   sleep(2.0)
   write_stdout("lsp-chunk-two")
+elseif mode == "many_long_lines" then
+  local line = string.rep("s", 1023) .. "\n"
+  for _ = 1, 2048 do io.stdout:write(line) end
+  io.stdout:flush()
 elseif mode == "stdout_stderr" then
   write_stdout("stdout-one\n")
   write_stderr("stderr-one\n")

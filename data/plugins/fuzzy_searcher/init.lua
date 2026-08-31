@@ -51,6 +51,7 @@ local BUNDLED_PLUGIN_DIR = DATADIR .. PATHSEP .. "plugins" .. PATHSEP .. "fuzzy_
 local USER_PLUGIN_DIR = USERDIR .. PATHSEP .. "plugins" .. PATHSEP .. "fuzzy_searcher"
 local RECENT_COMMANDS_FILE = USER_PLUGIN_DIR .. PATHSEP .. "recent_commands.txt"
 local RECENT_PROJECT_TIMES_FILE = USER_PLUGIN_DIR .. PATHSEP .. "recent_project_times.lua"
+local EXACT_GREP_SLICE_SECONDS = 0.002
 
 local function bundled_tool(name)
   local bundled = BUNDLED_PLUGIN_DIR .. PATHSEP .. name
@@ -5274,6 +5275,14 @@ function FSView:start_grep(base, line, grep)
     local results_started = false
     local candidates = {}
     local matched_count = 0
+    local slice_started = system.get_time()
+    local slice_yields = 0
+    local function yield_if_due()
+      if system.get_time() - slice_started < EXACT_GREP_SLICE_SECONDS then return end
+      slice_yields = slice_yields + 1
+      coroutine.yield(0)
+      slice_started = system.get_time()
+    end
     local function begin_results()
       if results_started then return end
       results_started = true
@@ -5339,7 +5348,11 @@ function FSView:start_grep(base, line, grep)
         core.log_quiet(
           "Exact grep batch started files=%s", root_scope and tostring(#root_scope) or "all"
         )
-        local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F" }
+        local args = {
+          fuzzy_searcher.rg,
+          "--line-number", "--column", "--no-heading",
+          "--color", "never", "-i", "-F",
+        }
         project_files.add_filter_arguments(args, self.include_ignored == true)
         args[#args + 1], args[#args + 2] = "-e", grep
         if root_scope then
@@ -5359,6 +5372,7 @@ function FSView:start_grep(base, line, grep)
             if ok and line_or_error then
               local result = decorate_grep_result(parse_vimgrep(line_or_error), root.path)
               if result then add_result(result, seen, true) end
+              yield_if_due()
             elseif not ok and not tostring(line_or_error):find("timeout expired", 1, true) then
               core.log_quiet("Fuzzy grep read failed under %s: %s", tostring(root.path), tostring(line_or_error))
               break
@@ -5373,8 +5387,8 @@ function FSView:start_grep(base, line, grep)
           if grep_proc == proc then grep_proc = nil end
         end
         core.log_quiet(
-          "Exact grep batch finished files=%s matches=%d",
-          root_scope and tostring(#root_scope) or "all", matched_count
+          "Exact grep batch finished files=%s matches=%d yields=%d",
+          root_scope and tostring(#root_scope) or "all", matched_count, slice_yields
         )
       end
       return gen == grep_generation and active_view == self

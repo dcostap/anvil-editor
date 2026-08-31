@@ -28,6 +28,7 @@
 #include "../arena_allocator.h"
 
 #define READ_BUF_SIZE 2048
+#define PROCESS_DRAIN_BUDGET (64 * 1024)
 #define PROCESS_TERM_TRIES 3
 #define PROCESS_TERM_DELAY 50
 #define PROCESS_KILL_LIST_NAME "__process_kill_list__"
@@ -490,18 +491,20 @@ static int get_timeout(process_t *self, int timeout) {
 static bool drain_stream(process_t *self, int stream, int *error) {
   uint8_t buffer[READ_BUF_SIZE];
   SDL_IOStream *io = self->streams[stream];
+  size_t drained = 0;
 
   if (error) *error = 0;
   if (!io || self->pending_eof[stream])
     return true;
 
-  while (true) {
+  while (drained < PROCESS_DRAIN_BUDGET) {
     size_t amount = SDL_ReadIO(io, buffer, sizeof(buffer));
     if (amount > 0) {
       if (!append_pending(self, stream, buffer, amount)) {
         if (error) *error = ERROR_NOMEM;
         return false;
       }
+      drained += amount;
       continue;
     }
 
@@ -518,6 +521,7 @@ static bool drain_stream(process_t *self, int stream, int *error) {
         return false;
     }
   }
+  return true;
 }
 
 static bool poll_process(process_t *self, int timeout) {

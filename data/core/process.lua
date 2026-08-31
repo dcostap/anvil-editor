@@ -15,7 +15,41 @@ process.stream.__index = process.stream
 ---@param proc process The process to wrap.
 ---@param fd process.streamtype The standard stream of the process to wrap.
 function process.stream.new(proc, fd)
-  return setmetatable({ fd = fd, process = proc, buf = {}, len = 0 }, process.stream)
+  return setmetatable({
+    fd = fd,
+    process = proc,
+    buf = {},
+    head = 1,
+    head_offset = 1,
+    tail = 0,
+    len = 0,
+  }, process.stream)
+end
+
+local function take_buffer(stream, amount)
+  local chunks = {}
+  local remaining = math.min(amount, stream.len)
+  while remaining > 0 and stream.head <= stream.tail do
+    local chunk = stream.buf[stream.head]
+    local available = #chunk - stream.head_offset + 1
+    local take = math.min(remaining, available)
+    chunks[#chunks + 1] = chunk:sub(stream.head_offset, stream.head_offset + take - 1)
+    stream.head_offset = stream.head_offset + take
+    stream.len = stream.len - take
+    remaining = remaining - take
+    if stream.head_offset > #chunk then
+      stream.buf[stream.head] = nil
+      stream.head = stream.head + 1
+      stream.head_offset = 1
+    end
+  end
+  if stream.len == 0 then
+    stream.buf = {}
+    stream.head = 1
+    stream.head_offset = 1
+    stream.tail = 0
+  end
+  return table.concat(chunks)
 end
 
 ---@alias process.stream.readtype
@@ -45,14 +79,16 @@ function process.stream:read(bytes, options)
   local start = system.get_time()
   local target = 0
   if bytes == "line" or bytes == "l" or bytes == "L" then
-    if #self.buf > 0 then
-      for i,v in ipairs(self.buf) do
-        local s = v:find("\n")
+    if self.len > 0 then
+      for i = self.head, self.tail do
+        local v = self.buf[i]
+        local first = i == self.head and self.head_offset or 1
+        local s = v:find("\n", first, true)
         if s then
-          target = target + s
+          target = target + s - first + 1
           break
-        elseif i < #self.buf then
-          target = target + #v
+        elseif i < self.tail then
+          target = target + #v - first + 1
         else
           target = 1024*1024*1024*1024
         end
@@ -75,10 +111,11 @@ function process.stream:read(bytes, options)
       break
     end
     if #chunk > 0 then
-      table.insert(self.buf, chunk)
+      self.tail = self.tail + 1
+      self.buf[self.tail] = chunk
       self.len = self.len + #chunk
       if bytes == "line" or bytes == "l" or bytes == "L" then
-        local s = chunk:find("\n")
+        local s = chunk:find("\n", 1, true)
         if s then target = self.len - #chunk + s end
       end
     elseif coroutine.isyieldable() then
@@ -90,11 +127,12 @@ function process.stream:read(bytes, options)
       break
     end
   end
-  if #self.buf == 0 then return nil end
-  local str = table.concat(self.buf)
-  self.len = math.max(self.len - target, 0)
-  self.buf = self.len > 0 and { str:sub(target + 1) } or {}
-  return str:sub(1, target + ((bytes == "line" or bytes == "l") and str:byte(target) == 10 and -1 or 0))
+  if self.len == 0 then return nil end
+  local str = take_buffer(self, target)
+  if (bytes == "line" or bytes == "l") and str:byte(-1) == 10 then
+    return str:sub(1, -2)
+  end
+  return str
 end
 
 
