@@ -1630,6 +1630,7 @@ function FileTreeView:buffer_splice(at, remove, insert_lines, insert_meta)
     self.buffer.lines[1] = "\n"
     self.line_meta[1] = NO_META
   end
+  self.buffer.text_revision = (self.buffer.text_revision or 0) + 1
   -- Expand/collapse is navigation, not filesystem editing. It rewrites the
   -- backing text buffer outside Buffer's undo machinery, so stale undo entries can
   -- point at removed lines. Drop them to avoid corrupt undo history.
