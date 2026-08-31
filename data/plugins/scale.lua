@@ -119,6 +119,7 @@ function scale.set(scale)
   style.tab_width                   = style.tab_width                   * s
   style.padding.x                   = style.padding.x                   * s
   style.padding.y                   = style.padding.y                   * s
+  style.fuzzy_searcher_result_row_padding = style.fuzzy_searcher_result_row_padding * s
   style.margin.tab.top              = style.margin.tab.top              * s
   config.mouse_wheel_scroll         = config.mouse_wheel_scroll         * s
 
