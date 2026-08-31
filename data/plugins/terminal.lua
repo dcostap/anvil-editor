@@ -605,7 +605,7 @@ function TerminalView:service_session(include_rows)
   self:retry_pending_key_releases()
   local record_perf = include_rows and perf_is_recording()
   local update_started = record_perf and system.get_time()
-  local changed, status = self.session:update()
+  local changed, status, render_changed = self.session:update()
   if record_perf then
     perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
   end
@@ -614,8 +614,11 @@ function TerminalView:service_session(include_rows)
     self:clear_point_hover()
     if not include_rows then self.rows_dirty = true end
   end
-  local needs_snapshot = changed or state_changed or (include_rows and self.rows_dirty)
+  local rows_were_dirty = include_rows and self.rows_dirty
+  local needs_snapshot = changed or state_changed or rows_were_dirty
   if needs_snapshot then
+    local previous_title = self.snapshot and self.snapshot.title
+    local previous_pwd = self.snapshot and self.snapshot.pwd
     local snapshot_started = record_perf and system.get_time()
     self.snapshot = self.session:snapshot(self.snapshot, include_rows)
     self:handle_events()
@@ -624,7 +627,13 @@ function TerminalView:service_session(include_rows)
       perf_detail("terminal_snapshot_ms", (system.get_time() - snapshot_started) * 1000)
       perf_detail("terminal_snapshot_calls", 1)
     end
-    if include_rows then core.redraw = true end
+    local metadata_changed = previous_title ~= self.snapshot.title
+      or previous_pwd ~= self.snapshot.pwd
+    -- BEL and clipboard effects require event handling, but they do not require a frame.
+    if include_rows and (render_changed ~= false or state_changed or rows_were_dirty
+        or metadata_changed) then
+      core.redraw = true
+    end
   end
   return needs_snapshot
 end

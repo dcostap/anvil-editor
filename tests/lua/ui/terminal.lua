@@ -84,7 +84,10 @@ local function fake_native()
         }
       end
       self.status = self.status or { kind = self.state, revision = self.revision }
-      return changed, self.status
+      local render_changed = self.next_render_changed
+      self.next_render_changed = nil
+      if render_changed == nil then render_changed = changed end
+      return changed, self.status, render_changed
     end
     function session:snapshot(previous, include_rows)
       self.snapshot_calls = (self.snapshot_calls or 0) + 1
@@ -1260,6 +1263,9 @@ test.describe("Terminal View", function()
 
   test.it("handles terminal bells and clipboard requests", function(context)
     local view = terminal.open()
+    view.status_revision = view.session.revision
+    view.session.next_changed = true
+    view.session.next_render_changed = false
     local previous_active_view = core.active_view
     local previous_flash_window = system.flash_window
     local flash_count = 0
@@ -1271,12 +1277,15 @@ test.describe("Terminal View", function()
     }
     local previous_show = core.nag_view.show
     core.nag_view.show = function() end
-    view:handle_events()
+    view.rows_dirty = nil
+    core.redraw = false
+    view:service_session(true)
     core.nag_view.show = previous_show
     core.active_view = previous_active_view
     system.flash_window = previous_flash_window
     test.equal(view.bell_count, 1)
     test.equal(flash_count, 0)
+    test.not_ok(core.redraw)
     test.equal(view.active_clipboard_request.text, "terminal clipboard")
   end)
 

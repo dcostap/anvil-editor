@@ -523,6 +523,30 @@ test.describe("Native terminal session", function()
     test.equal(events[2].text, "test")
   end)
 
+  test.it("reports a bell-only update as visually clean", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "Start-Sleep -Milliseconds 300; $e=[char]27; $b=[char]7; [Console]::Write($b+$e+'[m'); Start-Sleep -Seconds 2"]],
+    })
+    test.ok(session, start_error)
+    session:snapshot()
+
+    local activity, visual_change
+    local deadline = system.get_time() + 5
+    while system.get_time() < deadline and not activity do
+      local _
+      activity, _, visual_change = session:update()
+      if not activity then coroutine.yield(0.01) end
+    end
+    session:close()
+
+    test.ok(activity)
+    test.equal(visual_change, false)
+  end)
+
   test.it("coalesces terminal desktop notifications without losing their count", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"

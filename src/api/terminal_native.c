@@ -1309,12 +1309,14 @@ static int f_terminal_update(lua_State *L) {
   if (session->closed) {
     lua_pushboolean(L, false);
     push_status(L, session);
-    return 2;
+    lua_pushboolean(L, false);
+    return 3;
   }
   if (session->transport_released) {
     lua_pushboolean(L, false);
     push_status(L, session);
-    return 2;
+    lua_pushboolean(L, false);
+    return 3;
   }
 
   uint8_t buffer[65536];
@@ -1355,12 +1357,19 @@ static int f_terminal_update(lua_State *L) {
     changed = true;
   }
 
+  bool render_changed = false;
   if (changed) {
     if (ghostty_render_state_update(session->render_state, session->terminal) != GHOSTTY_SUCCESS) {
       changed = false;
     } else {
-      session->render_generation++;
-      invalidate_search_scan(session);
+      GhosttyRenderStateDirty dirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
+      render_changed = ghostty_render_state_get(
+        session->render_state, GHOSTTY_RENDER_STATE_DATA_DIRTY, &dirty
+      ) == GHOSTTY_SUCCESS && dirty != GHOSTTY_RENDER_STATE_DIRTY_FALSE;
+      if (render_changed) {
+        session->render_generation++;
+        invalidate_search_scan(session);
+      }
     }
   }
   bool output_remains = false;
@@ -1411,7 +1420,9 @@ static int f_terminal_update(lua_State *L) {
   }
   lua_pushboolean(L, changed);
   push_status(L, session);
-  return 2;
+  /* Effect-only output, such as BEL, can produce activity without a new frame. */
+  lua_pushboolean(L, render_changed);
+  return 3;
 }
 
 static int f_terminal_write(lua_State *L) {
