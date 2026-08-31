@@ -2218,8 +2218,13 @@ local commands = {
     local edits = {}
     local selections = { table.unpack(dv.buffer.selections) }
     for _, block in ipairs(blocks) do
-      local delta = block.line2 < #dv.buffer.lines and 1 or 0
-      if delta ~= 0 then
+      local delta = 1
+      if block.line2 == #dv.buffer.lines then
+        edits[#edits + 1] = {
+          line1 = block.line1, col1 = 1, line2 = block.line1, col2 = 1,
+          text = "\n",
+        }
+      else
         local parts = {}
         for line = block.line1, block.line2 do parts[#parts + 1] = dv.buffer.lines[line] end
         local replacement = dv.buffer.lines[block.line2 + 1] .. table.concat(parts)

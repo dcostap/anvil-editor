@@ -1101,7 +1101,7 @@ test.describe("Text View Selection State edit characterization", function()
     })
   end)
 
-  test.it("move-lines-down handles a boundary selection while moving earlier lines", function(context)
+  test.it("move-lines-down extends the Buffer while moving earlier lines", function(context)
     local buffer, main = new_shared_views(context, "aa\nbb\ncc")
     core.set_active_view(main)
     set_view_selections(main, {
@@ -1115,11 +1115,11 @@ test.describe("Text View Selection State edit characterization", function()
 
     test.ok(command.perform("editor:move_lines_down"))
 
-    test.equal(text(buffer), "bb\naa\ncc\n")
+    test.equal(text(buffer), "bb\naa\n\ncc\n")
     test.equal(changes, 1)
     test.same(selection(main), {
       2, 1, 2, 1,
-      3, 1, 3, 1,
+      4, 1, 4, 1,
     })
   end)
 
@@ -1269,6 +1269,17 @@ test.describe("Text View Selection State edit characterization", function()
       2, 1, 2, 1,
       4, 1, 4, 1,
     })
+  end)
+
+  test.it("move-lines-down creates space below a final line and moves it there", function(context)
+    local buffer, main = new_shared_views(context, "aa\nbb")
+    core.set_active_view(main)
+    set_view_selection(main, 2, 2, 2, 2)
+
+    test.ok(command.perform("editor:move_lines_down"))
+
+    test.equal(text(buffer), "aa\n\nbb\n")
+    test.same(selection(main), { 3, 2, 3, 2 })
   end)
 
   test.it("move-lines-up batches independent non-final selected lines", function(context)
