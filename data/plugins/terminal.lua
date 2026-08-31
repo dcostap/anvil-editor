@@ -814,12 +814,10 @@ function TerminalView:handle_events()
   for _, event in ipairs((self.snapshot and self.snapshot.events) or {}) do
     if event.type == "bell" then
       self.bell_count = (self.bell_count or 0) + (event.count or 1)
-      self.bell_until = system.get_time() + 0.15
       if system.flash_window and (core.active_view ~= self or
           not system.window_has_focus(core.window)) then
         system.flash_window(core.window, "briefly")
       end
-      core.redraw = true
     elseif event.type == "clipboard" and event.text ~= nil then
       local request = { text = event.text, clear = event.clear == true }
       if self.active_clipboard_request then
@@ -854,10 +852,6 @@ function TerminalView:draw()
   local draw_scope = perf_scope_begin("terminal", true)
   local snapshot = self.snapshot
   local background = rgb(self, snapshot and snapshot.background, style.background)
-  if self.bell_until and system.get_time() < self.bell_until then
-    background = style.line_highlight or background
-    core.redraw = true
-  end
   self:draw_background(background)
   if not snapshot then
     if self.state == "failed" then
