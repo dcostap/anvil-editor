@@ -4821,6 +4821,20 @@ end
 
 function fuzzy_searcher.grep_order.regroup(sorted)
   local out, used = {}, {}
+  local buckets, bucket_positions = {}, {}
+  -- Index each file group once. The old full-tail scan made completion work
+  -- quadratic and caused a visible UI stall on broad searches.
+  for i, result in ipairs(sorted) do
+    local file = fuzzy_searcher.grep_order.file_key(result)
+    if file ~= "" then
+      local key = file .. "\0" .. tostring(result.path_match_class or 0)
+      local bucket = buckets[key] or {}
+      buckets[key] = bucket
+      bucket[#bucket+1] = i
+      bucket_positions[i] = #bucket
+    end
+  end
+
   for i, anchor in ipairs(sorted) do
     if not used[i] then
       out[#out+1] = anchor
@@ -4831,16 +4845,15 @@ function fuzzy_searcher.grep_order.regroup(sorted)
       local anchor_path_class = anchor.path_match_class or 0
       local pulled = 1
       if anchor_file ~= "" then
-        -- Search the complete ranked tail rather than an arbitrary eight-row
-        -- window. Keep the burst bounded so one large file cannot monopolize
-        -- the picker, and never pull a weaker path-match class across a
-        -- stronger one.
-        for j = i + 1, #sorted do
+        local key = anchor_file .. "\0" .. tostring(anchor_path_class)
+        local bucket = buckets[key] or {}
+        for bucket_index = (bucket_positions[i] or #bucket) + 1, #bucket do
+          local j = bucket[bucket_index]
           local candidate = sorted[j]
-          if not used[j]
-            and fuzzy_searcher.grep_order.file_key(candidate) == anchor_file
-            and (candidate.path_match_class or 0) == anchor_path_class
-            and anchor_score - (candidate.fuzzy_score or 0) <= fuzzy_searcher.grep_order.SAME_FILE_SCORE_SLACK then
+          if anchor_score - (candidate.fuzzy_score or 0) > fuzzy_searcher.grep_order.SAME_FILE_SCORE_SLACK then
+            break
+          end
+          if not used[j] then
             out[#out+1] = candidate
             used[j] = true
             pulled = pulled + 1
@@ -5102,12 +5115,6 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       if first_publish_done then commit_visible_prefix() end
 
       local selected_key = fuzzy_searcher.grep_order.result_key(self.results and self.results[self.selected])
-      if final then
-        -- Streaming publications favor stability, but completion is the
-        -- authoritative ranking. Do not let process timing permanently pin a
-        -- weaker visible prefix above better matches that arrived later.
-        committed_results, committed_keys = {}, {}
-      end
 
       local running, truncated, scanned = job_stats()
       local tail = {}
@@ -5192,6 +5199,12 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       self.status = status
       if final and matched_candidate_count > #candidates then
         core.log_quiet("Fuzzy grep: ranked best %d of %d matching lines", #candidates, matched_candidate_count)
+      end
+      if final then
+        core.log_quiet(
+          "Fuzzy grep: finalized stable prefix=%d shown=%d",
+          #committed_results, #out
+        )
       end
       self:schedule_update(true)
       last_publish = system.get_time()
@@ -5329,9 +5342,26 @@ function FSView:start_grep(base, line, grep)
     local matched_count = 0
     local slice_started = system.get_time()
     local slice_yields = 0
+    local last_progress_status = 0
+    local stable_prefix_count = 0
+    local function remember_visible_prefix()
+      if #self.results == 0 then return end
+      local visible_bottom = math.min(
+        #self.results,
+        (self.viewport_offset or 1) + self:list_metrics().result_rows - 1
+      )
+      stable_prefix_count = math.max(stable_prefix_count, visible_bottom)
+    end
     local function yield_if_due()
-      if system.get_time() - slice_started < EXACT_GREP_SLICE_SECONDS then return end
+      local now = system.get_time()
+      if now - slice_started < EXACT_GREP_SLICE_SECONDS then return end
       slice_yields = slice_yields + 1
+      if results_started and now - last_progress_status >= 0.05 then
+        self.status = string.format("%d exact matches — searching…", matched_count)
+        self.has_more = matched_count > #self.results
+        self:schedule_update(true)
+        last_progress_status = now
+      end
       coroutine.yield(0)
       slice_started = system.get_time()
     end
@@ -5344,6 +5374,7 @@ function FSView:start_grep(base, line, grep)
       self.viewport_offset = 1
       self.hovered_result = nil
       self.has_more = false
+      self.status = "Searching exact text matches…"
     end
 
     local function add_result(r, seen, exact)
@@ -5386,6 +5417,7 @@ function FSView:start_grep(base, line, grep)
           self.pending_select_index = nil
         end
         self:ensure_selection_visible()
+        remember_visible_prefix()
         self:schedule_update(true)
       else
         self.has_more = true
@@ -5491,15 +5523,33 @@ function FSView:start_grep(base, line, grep)
       return
     end
     if not results_started then begin_results() end
-    local selected_key = fuzzy_searcher.grep_order.result_key(self.results and self.results[self.selected])
-    self.results = fuzzy_searcher.grep_order.results(candidates)
-    if selected_key then
-      for i, result in ipairs(self.results) do
-        if fuzzy_searcher.grep_order.result_key(result) == selected_key then self.selected = i; break end
-      end
+    -- Preserve every row that the user could have seen. Rank only the unseen
+    -- tail so completion improves later results without moving visible rows.
+    remember_visible_prefix()
+    local out, committed = {}, {}
+    for i = 1, stable_prefix_count do
+      local result = self.results[i]
+      local key = fuzzy_searcher.grep_order.result_key(result)
+      out[#out+1] = result
+      if key then committed[key] = true end
     end
+    local ranked_tail = {}
+    for _, result in ipairs(candidates) do
+      local key = fuzzy_searcher.grep_order.result_key(result)
+      if not key or not committed[key] then ranked_tail[#ranked_tail+1] = result end
+    end
+    ranked_tail = fuzzy_searcher.grep_order.results(ranked_tail)
+    for _, result in ipairs(ranked_tail) do
+      if #out >= limit then break end
+      out[#out+1] = result
+    end
+    self.results = out
     self.has_more = matched_count > #self.results
     self.status = string.format("%d exact matches", matched_count)
+    core.log_quiet(
+      "Exact grep: finalized stable prefix=%d shown=%d matches=%d",
+      stable_prefix_count, #self.results, matched_count
+    )
     self:schedule_update(true)
   end)
 end
