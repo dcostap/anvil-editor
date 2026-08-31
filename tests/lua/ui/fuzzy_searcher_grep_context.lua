@@ -28,7 +28,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
     symbol_icons.draw = saved.draw_symbol_icon
   end)
 
-  test.it("draws the enclosing function at the right edge of the file column", function()
+  test.it("draws the enclosing function without parameters at the file column edge", function()
     local calls = {}
     symbol_index.enclosing_symbol = function(path, line, col, opts)
       test.equal(path, "C:/project/src/parser.lua")
@@ -71,10 +71,9 @@ test.describe("Fuzzy Searcher Text Search context", function()
     end
     test.not_nil(context_call, "expected the enclosing function name in the Text Search row")
     test.not_nil(prefix_call, "expected the enclosing function qualifier in the Text Search row")
-    test.not_nil(signature_call, "expected the enclosing function signature in the Text Search row")
+    test.is_nil(signature_call, "did not expect function parameters in the Text Search row")
     test.equal(context_call.color, style.text)
     test.equal(prefix_call.color, style.dim)
-    test.equal(signature_call.color, style.dim)
     test.ok(context_call.x > 200, "expected the function context on the right of the file column")
   end)
 

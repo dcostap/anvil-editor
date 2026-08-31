@@ -2367,15 +2367,21 @@ function fuzzy_searcher.grep_enclosing_symbol(result)
   if symbol and symbol.name and symbol.name ~= "" then return symbol end
 end
 
-function fuzzy_searcher.symbol_declaration_text(symbol)
+function fuzzy_searcher.symbol_declaration_text(symbol, include_suffix)
+  if include_suffix == nil then include_suffix = true end
   local declaration = tostring(symbol and symbol.declaration or "")
-  if declaration ~= "" and symbol.declaration_name_span then return declaration end
+  if declaration ~= "" and symbol.declaration_name_span then
+    if include_suffix then return declaration end
+    local name_end = math.min(#declaration, tonumber(symbol.declaration_name_span[2]) or 0)
+    if name_end > 0 then return declaration:sub(1, name_end) end
+  end
   local label = tostring(symbol and (symbol.label or symbol.name) or "")
   local signature = tostring(symbol and symbol.signature or "")
-  return signature ~= "" and (label .. " " .. signature) or label
+  return include_suffix and signature ~= "" and (label .. " " .. signature) or label
 end
 
-function fuzzy_searcher.draw_symbol_declaration(font, symbol, x, y, width, name_spans)
+function fuzzy_searcher.draw_symbol_declaration(font, symbol, x, y, width, name_spans, include_suffix)
+  if include_suffix == nil then include_suffix = true end
   local declaration = tostring(symbol and symbol.declaration or "")
   if declaration ~= "" and symbol.declaration_name_span then
     local name_start = math.max(1, tonumber(symbol.declaration_name_span[1]) or 1)
@@ -2383,7 +2389,7 @@ function fuzzy_searcher.draw_symbol_declaration(font, symbol, x, y, width, name_
     if name_start <= name_end then
       local before = declaration:sub(1, name_start - 1)
       local name = declaration:sub(name_start, name_end)
-      local after = declaration:sub(name_end + 1)
+      local after = include_suffix and declaration:sub(name_end + 1) or ""
       local right = x + width
       local cx = x
       local name_width = font:get_width(name)
@@ -2402,7 +2408,7 @@ function fuzzy_searcher.draw_symbol_declaration(font, symbol, x, y, width, name_
   end
 
   local label = tostring(symbol and (symbol.label or symbol.name) or "")
-  local signature = tostring(symbol and symbol.signature or "")
+  local signature = include_suffix and tostring(symbol and symbol.signature or "") or ""
   local signature_text = signature ~= "" and (" " .. signature) or ""
   local signature_width = math.min(width * 0.55, font:get_width(signature_text))
   local label_width = math.max(0, width - signature_width)
@@ -2420,7 +2426,7 @@ function fuzzy_searcher.draw_grep_symbol_context(font, symbol, x, y, width, row_
   local context_y = y + math.max(0, math.floor((row_height - context_font:get_height()) / 2))
   local icon_size = symbol_icons.size_for_row(row_height)
   local icon_gap = math.max(3 * (SCALE or 1), style.padding.x / 3)
-  local declaration = fuzzy_searcher.symbol_declaration_text(symbol)
+  local declaration = fuzzy_searcher.symbol_declaration_text(symbol, false)
   local icon_width = symbol_icons.resolve_kind(symbol.kind or "symbol") and icon_size or 0
   local content_gap = icon_width > 0 and icon_gap or 0
   local declaration_width = math.min(
@@ -2433,7 +2439,7 @@ function fuzzy_searcher.draw_grep_symbol_context(font, symbol, x, y, width, row_
     cx = cx + icon_width + content_gap
   end
   fuzzy_searcher.draw_symbol_declaration(
-    context_font, symbol, cx, context_y, declaration_width, {}
+    context_font, symbol, cx, context_y, declaration_width, {}, false
   )
   return content_width
 end
@@ -2693,7 +2699,7 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
       and symbol_icons.size_for_row(font:get_height()) or 0
     local icon_gap = icon_width > 0 and math.max(3 * (SCALE or 1), style.padding.x / 3) or 0
     local desired = icon_width + icon_gap
-      + context_font:get_width(fuzzy_searcher.symbol_declaration_text(symbol))
+      + context_font:get_width(fuzzy_searcher.symbol_declaration_text(symbol, false))
     local file_width = fuzzy_searcher.file_result_filename_width(
       font, result.file, prefix, line_suffix, true
     )
