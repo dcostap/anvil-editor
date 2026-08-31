@@ -2793,7 +2793,8 @@ local function probe_everything(view)
       if gen ~= everything.probe_generation then return end
       everything.state = ok and "available" or "unavailable"
       core.log_quiet("Fuzzy Everything: probe %s%s", ok and "available" or "unavailable", err and (" — " .. tostring(err)) or "")
-      if view and active_view == view and view:is_path_search() then
+      if view and active_view == view
+          and (view:is_path_search() or view.include_ignored) then
         view.dirty = true
         view:schedule_update(true)
       end
@@ -2976,8 +2977,18 @@ function path_search.external_path_parts(path)
 end
 
 function path_search.ignored_project_path_parts(query)
-  if not query:find("[/\\]") then return nil end
-  local root = common.normalize_path(project_dir())
+  local roots = project_paths.search_roots("files")
+  if #roots ~= 1 then return nil end
+  local root = common.normalize_path(roots[1].path)
+  if not query:find("[/\\]") then
+    if everything.state == "unavailable" then return nil end
+    return {
+      scope = root,
+      query = query,
+      external = false,
+      project_scope = true,
+    }
+  end
   local ok, path = pcall(common.normalize_path, root .. PATHSEP .. query)
   if not ok or not path or not common.path_belongs_to(path, root) then return nil end
   local parts = path_search.external_path_parts(path)
@@ -4729,6 +4740,9 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
           result.project = nil
           result.path_search = nil
         end
+        for _, result in ipairs(files) do
+          result.abs_path = result.path or result.file
+        end
       end
       if line then
         for _, result in ipairs(files) do result.line = line end
@@ -4758,6 +4772,9 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
       local scope_label = path_plan.scope and (" — " .. path_plan.scope) or ""
       self.status = (self.everything_status or "") .. scope_label
     end
+  elseif path_plan.project_scope then
+    local scope_label = path_plan.scope and (" — " .. path_plan.scope) or ""
+    self.status = (self.everything_status or "") .. scope_label
   elseif fuzzy_searcher.files_indexing then
     self.status = string.format("Indexing files… %d available — %s", file_index_count(), fuzzy_searcher.project_roots_label())
   else

@@ -33,6 +33,8 @@ test.describe("Fuzzy Searcher file refresh", function()
     context.original_projects = core.projects
     context.original_visited_files = core.visited_files
     context.original_cwd = system.getcwd()
+    context.everything_state = helpers.everything_state()
+    helpers.set_everything_state("unavailable")
     context.root = USERDIR
       .. PATHSEP .. "fuzzy-file-refresh-"
       .. system.get_process_id() .. "-"
@@ -52,6 +54,7 @@ test.describe("Fuzzy Searcher file refresh", function()
     project_paths.load_workspace_state(nil)
     core.projects = context.original_projects
     core.visited_files = context.original_visited_files
+    helpers.set_everything_state(context.everything_state)
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
     if context.root and system.get_file_info(context.root) then
       local ok, err = common.rm(context.root, true)

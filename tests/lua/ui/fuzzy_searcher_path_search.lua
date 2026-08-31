@@ -154,6 +154,46 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.equal(picker:search_modifier_text(), "Ignored files included")
   end)
 
+  test.it("searches ignored Project files by name through Everything", function(context)
+    local ignored = join_path(context.project_root, "build", "scratch_inventory.json")
+    mkdirp(join_path(context.project_root, "build"))
+    write_file(ignored)
+    write_file(join_path(context.project_root, ".gitignore"), "build/\n")
+    local requests = {}
+    http.get = function(_, params, options)
+      requests[#requests+1] = { params = params, options = options }
+    end
+    helpers.set_everything_state("available")
+
+    fuzzy_searcher.open("scratch_inventor")
+    local picker = core.fuzzy_searcher_active_view
+    test.ok(picker:toggle_ignored_files())
+
+    test.ok(wait_until(function() return #requests == 1 end),
+      "expected a scoped Everything folder request")
+    test.equal(requests[1].params.search,
+      'folder: ancestor:"' .. context.project_root .. '" scratch_inventor')
+    requests[1].options.on_done(true, nil, { totalResults = 0, results = {} })
+    test.equal(#requests, 2)
+    test.equal(requests[2].params.search,
+      'file: ancestor:"' .. context.project_root .. '" scratch_inventor')
+    requests[2].options.on_done(true, nil, {
+      totalResults = 1,
+      results = {
+        {
+          type = "file",
+          path = join_path(context.project_root, "build"),
+          name = "scratch_inventory.json",
+        },
+      },
+    })
+
+    test.ok(wait_until(function() return result_for_path(picker.results, ignored) end),
+      "expected the ignored Project file result")
+    test.equal(picker:is_path_search(), false)
+    test.equal(picker:search_modifier_text(), "Ignored files included")
+  end)
+
   test.it("starts scoped Path Search for an absolute path outside the Project", function(context)
     local requests = {}
     http.get = function(_, params, options)
