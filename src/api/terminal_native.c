@@ -28,6 +28,60 @@
 #define TERMINAL_DRAIN_MAX_MS 5000u
 #define TERMINAL_OUTPUT_EVENT "terminaloutput"
 
+static void *terminal_alloc(
+  void *ctx, size_t len, uint8_t alignment, uintptr_t ret_addr
+) {
+  (void)ctx;
+  (void)alignment;
+  (void)ret_addr;
+  return HeapAlloc(GetProcessHeap(), 0, len);
+}
+
+static bool terminal_resize(
+  void *ctx, void *memory, size_t memory_len, uint8_t alignment,
+  size_t new_len, uintptr_t ret_addr
+) {
+  (void)ctx;
+  (void)memory;
+  (void)alignment;
+  (void)ret_addr;
+  return new_len <= memory_len;
+}
+
+static void *terminal_remap(
+  void *ctx, void *memory, size_t memory_len, uint8_t alignment,
+  size_t new_len, uintptr_t ret_addr
+) {
+  (void)ctx;
+  (void)memory_len;
+  (void)alignment;
+  (void)ret_addr;
+  return HeapReAlloc(GetProcessHeap(), 0, memory, new_len);
+}
+
+static void terminal_free(
+  void *ctx, void *memory, size_t memory_len, uint8_t alignment,
+  uintptr_t ret_addr
+) {
+  (void)ctx;
+  (void)memory_len;
+  (void)alignment;
+  (void)ret_addr;
+  if (memory) HeapFree(GetProcessHeap(), 0, memory);
+}
+
+static const GhosttyAllocatorVtable terminal_allocator_vtable = {
+  .alloc = terminal_alloc,
+  .resize = terminal_resize,
+  .remap = terminal_remap,
+  .free = terminal_free,
+};
+
+static const GhosttyAllocator terminal_allocator = {
+  .ctx = NULL,
+  .vtable = &terminal_allocator_vtable,
+};
+
 typedef enum {
   TERMINAL_STATE_NEW,
   TERMINAL_STATE_RUNNING,
@@ -741,7 +795,9 @@ static bool initialize_terminal(
   TerminalSession *session, const TerminalColors *colors,
   const size_t *scrollback_max_lines
 ) {
-  if (ghostty_terminal_new(NULL, &session->terminal, session->cols, session->rows) != GHOSTTY_SUCCESS) {
+  if (ghostty_terminal_new(
+    &terminal_allocator, &session->terminal, session->cols, session->rows
+  ) != GHOSTTY_SUCCESS) {
     return false;
   }
   size_t scrollback_max_bytes = TERMINAL_SCROLLBACK_MAX_BYTES;
@@ -755,22 +811,41 @@ static bool initialize_terminal(
         scrollback_max_lines
       ) != GHOSTTY_SUCCESS
     )) return false;
-  if (ghostty_render_state_new(NULL, &session->render_state) != GHOSTTY_SUCCESS) return false;
-  if (ghostty_render_state_row_iterator_new(NULL, &session->row_iterator) != GHOSTTY_SUCCESS) return false;
-  if (ghostty_render_state_row_cells_new(NULL, &session->row_cells) != GHOSTTY_SUCCESS) return false;
-  if (ghostty_key_encoder_new(NULL, &session->key_encoder) != GHOSTTY_SUCCESS) return false;
-  if (ghostty_key_event_new(NULL, &session->key_event) != GHOSTTY_SUCCESS) return false;
-  if (ghostty_mouse_encoder_new(NULL, &session->mouse_encoder) != GHOSTTY_SUCCESS) return false;
-  if (ghostty_mouse_event_new(NULL, &session->mouse_event) != GHOSTTY_SUCCESS) return false;
-  if (ghostty_selection_gesture_new(NULL, &session->selection_gesture) != GHOSTTY_SUCCESS) return false;
-  if (ghostty_selection_gesture_event_new(
-    NULL, &session->selection_press, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_PRESS
+  if (ghostty_render_state_new(
+    &terminal_allocator, &session->render_state
+  ) != GHOSTTY_SUCCESS) return false;
+  if (ghostty_render_state_row_iterator_new(
+    &terminal_allocator, &session->row_iterator
+  ) != GHOSTTY_SUCCESS) return false;
+  if (ghostty_render_state_row_cells_new(
+    &terminal_allocator, &session->row_cells
+  ) != GHOSTTY_SUCCESS) return false;
+  if (ghostty_key_encoder_new(
+    &terminal_allocator, &session->key_encoder
+  ) != GHOSTTY_SUCCESS) return false;
+  if (ghostty_key_event_new(
+    &terminal_allocator, &session->key_event
+  ) != GHOSTTY_SUCCESS) return false;
+  if (ghostty_mouse_encoder_new(
+    &terminal_allocator, &session->mouse_encoder
+  ) != GHOSTTY_SUCCESS) return false;
+  if (ghostty_mouse_event_new(
+    &terminal_allocator, &session->mouse_event
+  ) != GHOSTTY_SUCCESS) return false;
+  if (ghostty_selection_gesture_new(
+    &terminal_allocator, &session->selection_gesture
   ) != GHOSTTY_SUCCESS) return false;
   if (ghostty_selection_gesture_event_new(
-    NULL, &session->selection_drag, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_DRAG
+    &terminal_allocator, &session->selection_press,
+    GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_PRESS
   ) != GHOSTTY_SUCCESS) return false;
   if (ghostty_selection_gesture_event_new(
-    NULL, &session->selection_release, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_RELEASE
+    &terminal_allocator, &session->selection_drag,
+    GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_DRAG
+  ) != GHOSTTY_SUCCESS) return false;
+  if (ghostty_selection_gesture_event_new(
+    &terminal_allocator, &session->selection_release,
+    GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_RELEASE
   ) != GHOSTTY_SUCCESS) return false;
 
   ghostty_terminal_set(session->terminal, GHOSTTY_TERMINAL_OPT_USERDATA, session);
