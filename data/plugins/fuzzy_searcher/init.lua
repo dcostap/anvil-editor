@@ -2367,6 +2367,52 @@ function fuzzy_searcher.grep_enclosing_symbol(result)
   if symbol and symbol.name and symbol.name ~= "" then return symbol end
 end
 
+function fuzzy_searcher.symbol_declaration_text(symbol)
+  local declaration = tostring(symbol and symbol.declaration or "")
+  if declaration ~= "" and symbol.declaration_name_span then return declaration end
+  local label = tostring(symbol and (symbol.label or symbol.name) or "")
+  local signature = tostring(symbol and symbol.signature or "")
+  return signature ~= "" and (label .. " " .. signature) or label
+end
+
+function fuzzy_searcher.draw_symbol_declaration(font, symbol, x, y, width, name_spans)
+  local declaration = tostring(symbol and symbol.declaration or "")
+  if declaration ~= "" and symbol.declaration_name_span then
+    local name_start = math.max(1, tonumber(symbol.declaration_name_span[1]) or 1)
+    local name_end = math.min(#declaration, tonumber(symbol.declaration_name_span[2]) or 0)
+    if name_start <= name_end then
+      local before = declaration:sub(1, name_start - 1)
+      local name = declaration:sub(name_start, name_end)
+      local after = declaration:sub(name_end + 1)
+      local right = x + width
+      local cx = x
+      local name_width = font:get_width(name)
+      local before_width = math.min(font:get_width(before), math.max(0, width - name_width))
+      if before_width > 0 then
+        cx = renderer.draw_text(font, truncate_text(font, before, before_width), cx, y, style.dim)
+      end
+      if cx < right then
+        cx = draw_highlighted_text(font, name, cx, y, math.max(0, right - cx), style.text, name_spans or {})
+      end
+      if after ~= "" and cx < right then
+        cx = renderer.draw_text(font, truncate_text(font, after, right - cx), cx, y, style.dim)
+      end
+      return cx
+    end
+  end
+
+  local label = tostring(symbol and (symbol.label or symbol.name) or "")
+  local signature = tostring(symbol and symbol.signature or "")
+  local signature_text = signature ~= "" and (" " .. signature) or ""
+  local signature_width = math.min(width * 0.55, font:get_width(signature_text))
+  local label_width = math.max(0, width - signature_width)
+  local cx = draw_highlighted_text(font, label, x, y, label_width, style.text, name_spans or {})
+  if signature_width > 0 and cx < x + width then
+    cx = renderer.draw_text(font, truncate_text(font, signature_text, x + width - cx), cx, y, style.dim)
+  end
+  return cx
+end
+
 function fuzzy_searcher.draw_grep_symbol_context(font, symbol, x, y, width, row_height)
   if not symbol or width <= 0 then return 0 end
   local symbol_icons = require "core.symbol_icons"
@@ -2374,19 +2420,21 @@ function fuzzy_searcher.draw_grep_symbol_context(font, symbol, x, y, width, row_
   local context_y = y + math.max(0, math.floor((row_height - context_font:get_height()) / 2))
   local icon_size = symbol_icons.size_for_row(row_height)
   local icon_gap = math.max(3 * (SCALE or 1), style.padding.x / 3)
-  local label = tostring(symbol.name or "")
+  local declaration = fuzzy_searcher.symbol_declaration_text(symbol)
   local icon_width = symbol_icons.resolve_kind(symbol.kind or "symbol") and icon_size or 0
   local content_gap = icon_width > 0 and icon_gap or 0
-  local label_width = math.max(0, width - icon_width - content_gap)
-  local displayed = truncate_text(context_font, label, label_width)
-  local displayed_width = context_font:get_width(displayed)
-  local content_width = icon_width + content_gap + displayed_width
+  local declaration_width = math.min(
+    context_font:get_width(declaration), math.max(0, width - icon_width - content_gap)
+  )
+  local content_width = icon_width + content_gap + declaration_width
   local cx = x + math.max(0, width - content_width)
   if icon_width > 0 then
     symbol_icons.draw(symbol.kind or "symbol", cx, y, row_height, icon_size)
     cx = cx + icon_width + content_gap
   end
-  if displayed ~= "" then renderer.draw_text(context_font, displayed, cx, context_y, style.text) end
+  fuzzy_searcher.draw_symbol_declaration(
+    context_font, symbol, cx, context_y, declaration_width, {}
+  )
   return content_width
 end
 
@@ -2411,40 +2459,9 @@ local function draw_symbol_result_row(font, r, x, y, width, row_height)
   local preview_font = style.get_small_font(font)
   local preview_y = y + math.max(0, math.floor((font:get_height() - preview_font:get_height()) / 2))
   local text_x = x + path_w + gap
-  local declaration = tostring(r.declaration or "")
-  if declaration ~= "" and r.declaration_name_span then
-    local name_start = math.max(1, tonumber(r.declaration_name_span[1]) or 1)
-    local name_end = math.min(#declaration, tonumber(r.declaration_name_span[2]) or 0)
-    if name_start <= name_end then
-      local before = declaration:sub(1, name_start - 1)
-      local name = declaration:sub(name_start, name_end)
-      local after = declaration:sub(name_end + 1)
-      local right = text_x + text_w
-      local cx = text_x
-      local name_w = preview_font:get_width(name)
-      local before_w = math.min(preview_font:get_width(before), math.max(0, text_w - name_w))
-      if before_w > 0 then
-        cx = renderer.draw_text(preview_font, truncate_text(preview_font, before, before_w), cx, preview_y, style.dim)
-      end
-      if cx < right then
-        cx = draw_highlighted_text(preview_font, name, cx, preview_y, math.max(0, right - cx), style.text, r.match_spans or {})
-      end
-      if after ~= "" and cx < right then
-        renderer.draw_text(preview_font, truncate_text(preview_font, after, right - cx), cx, preview_y, style.dim)
-      end
-      return
-    end
-  end
-
-  local label = tostring(r.label or r.name or "")
-  local signature = tostring(r.signature or "")
-  local signature_text = signature ~= "" and (" " .. signature) or ""
-  local signature_w = math.min(text_w * 0.55, preview_font:get_width(signature_text))
-  local label_w = math.max(0, text_w - signature_w)
-  local label_end = draw_highlighted_text(preview_font, label, text_x, preview_y, label_w, style.text, r.match_spans or {})
-  if signature_w > 0 and label_end < text_x + text_w then
-    renderer.draw_text(preview_font, truncate_text(preview_font, signature_text, text_x + text_w - label_end), label_end, preview_y, style.dim)
-  end
+  fuzzy_searcher.draw_symbol_declaration(
+    preview_font, r, text_x, preview_y, text_w, r.match_spans or {}
+  )
 end
 
 local function draw_path_result_row(font, r, x, y, width)
@@ -2656,9 +2673,10 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
     local icon_width = symbol_icons.resolve_kind(symbol.kind or "symbol")
       and symbol_icons.size_for_row(font:get_height()) or 0
     local icon_gap = icon_width > 0 and math.max(3 * (SCALE or 1), style.padding.x / 3) or 0
-    local desired = icon_width + icon_gap + context_font:get_width(tostring(symbol.name or ""))
+    local desired = icon_width + icon_gap
+      + context_font:get_width(fuzzy_searcher.symbol_declaration_text(symbol))
     local max_context = math.max(0, path_w - 140 * (SCALE or 1) - context_gap)
-    context_width = math.min(desired, max_context, math.floor(path_w * 0.46))
+    context_width = math.min(desired, max_context)
     if context_width <= 0 then symbol = nil end
   end
   local file_width = math.max(0, path_w - (symbol and context_width + context_gap or 0))

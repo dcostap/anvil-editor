@@ -35,10 +35,15 @@ test.describe("Fuzzy Searcher Text Search context", function()
       test.equal(line, 42)
       test.equal(col, 9)
       test.same(opts.kinds, { "function", "method" })
-      return { name = "parse_expression", kind = "function" }
+      return {
+        name = "parse_expression",
+        kind = "function",
+        declaration = "Parser::parse_expression(Token token)",
+        declaration_name_span = { 9, 24 },
+      }
     end
-    renderer.draw_text = function(font, text, x)
-      calls[#calls + 1] = { text = text, x = x }
+    renderer.draw_text = function(font, text, x, _, color)
+      calls[#calls + 1] = { text = text, x = x, color = color }
       return x + font:get_width(text)
     end
     renderer.draw_rect = function() end
@@ -54,13 +59,22 @@ test.describe("Fuzzy Searcher Text Search context", function()
       text = "return parse_expression(token)",
       exact = true,
       grep_query = "parse_expression",
-    }, 0, 0, 900, false)
+    }, 0, 0, 1400, false)
 
-    local context_call
+    local context_call, prefix_call, signature_call
     for _, call in ipairs(calls) do
       if call.text == "parse_expression" then context_call = call; break end
     end
+    for _, call in ipairs(calls) do
+      if call.text == "Parser::" then prefix_call = call end
+      if call.text == "(Token token)" then signature_call = call end
+    end
     test.not_nil(context_call, "expected the enclosing function name in the Text Search row")
+    test.not_nil(prefix_call, "expected the enclosing function qualifier in the Text Search row")
+    test.not_nil(signature_call, "expected the enclosing function signature in the Text Search row")
+    test.equal(context_call.color, style.text)
+    test.equal(prefix_call.color, style.dim)
+    test.equal(signature_call.color, style.dim)
     test.ok(context_call.x > 200, "expected the function context on the right of the file column")
   end)
 end)
