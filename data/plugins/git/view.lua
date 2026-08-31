@@ -9,6 +9,8 @@ local file_context = require "core.file_context"
 local MouseRouter = require "core.mouse_router"
 local style = require "core.style"
 local Buffer = require "core.buffer"
+local ImageComparisonView = require "core.imagecomparisonview"
+local ImageView = require "core.imageview"
 local TextView = require "core.textview"
 local View = require "core.view"
 local view_icons = require "core.view_icons"
@@ -107,34 +109,45 @@ local COMMIT_LINE_RENDER_PROVIDER = {
     if not (meta and meta.role == "commit") then return nil end
     local hash = meta.hash or ""
     local subject = meta.subject or ""
-    local subject_col = #hash + 3
-    local fragments = {
-      {
-        source_col1 = 1, source_col2 = #hash + 1,
+    local fragments = {}
+    local col = 1
+    local has_prefix = false
+    if hash ~= "" then
+      fragments[#fragments + 1] = {
+        source_col1 = col, source_col2 = col + #hash,
         text = hash, color = style.accent, font = style.code_font,
-      },
-      {
-        source_col1 = #hash + 1, source_col2 = subject_col,
-        text = "  ", color = style.dim,
-      },
-      {
-        source_col1 = subject_col, source_col2 = subject_col + #subject,
-        text = subject, color = style.text,
-      },
-    }
-    local col = subject_col + #subject
+      }
+      col = col + #hash
+      has_prefix = true
+    end
     for _, ref in ipairs(meta.ref_labels or {}) do
       local label = ref_text(ref)
-      fragments[#fragments + 1] = {
-        source_col1 = col, source_col2 = col + 2,
-        text = "  ", color = style.dim,
-      }
-      col = col + 2
+      if has_prefix then
+        fragments[#fragments + 1] = {
+          source_col1 = col, source_col2 = col + 2,
+          text = "  ", color = style.dim,
+        }
+        col = col + 2
+      end
       fragments[#fragments + 1] = {
         source_col1 = col, source_col2 = col + #label,
         text = label, color = ref_color(ref.kind), font = style.get_small_font(view:get_font()),
       }
       col = col + #label
+      has_prefix = true
+    end
+    if subject ~= "" then
+      if has_prefix then
+        fragments[#fragments + 1] = {
+          source_col1 = col, source_col2 = col + 2,
+          text = "  ", color = style.dim,
+        }
+        col = col + 2
+      end
+      fragments[#fragments + 1] = {
+        source_col1 = col, source_col2 = col + #subject,
+        text = subject, color = style.text,
+      }
     end
     return { fragments = fragments }
   end,
@@ -424,7 +437,7 @@ function GitView:dispose_tab_resources(tab)
       child:dispose_owned_buffers()
     end
   end
-  tab.diff_view, tab.history_diff_view = nil, nil
+  tab.diff_view, tab.history_diff_view, tab.image_comparison_view = nil, nil, nil
 end
 
 function GitView:on_close()
@@ -502,7 +515,7 @@ function GitView:mouse_surface_at(x, y)
   local list = self:pane_view(list_name)
   if point_in_view(list, x, y) then return list end
   if tab.kind == "commit_diff" then
-    local diff = tab.diff_view
+    local diff = tab.image_comparison_view or tab.diff_view
     if tab.loading_file then return nil end
     return point_in_view(diff, x, y) and diff or nil
   end
@@ -520,7 +533,8 @@ function GitView:on_mouse_wheel(y, x)
   local has_pointer = self.mouse_router:has_pointer()
   local surface = self.mouse_router:wheel_target()
   if surface then
-    if tab and (tab.kind == "commit_diff" and surface == tab.diff_view
+    if tab and (tab.kind == "commit_diff"
+          and (surface == tab.diff_view or surface == tab.image_comparison_view)
         or tab.kind == "file_history" and surface == tab.history_diff_view) then
       surface:on_mouse_wheel(y, x)
       return y ~= 0 or x ~= 0
@@ -553,8 +567,9 @@ function GitView:on_mouse_wheel(y, x)
     return true
   end
   if tab and tab.kind == "commit_diff" then
-    if tab.diff_view and tab.diff_view.on_mouse_wheel then
-      return tab.diff_view:on_mouse_wheel(y, x) ~= false
+    local comparison = tab.image_comparison_view or tab.diff_view
+    if comparison and comparison.on_mouse_wheel then
+      return comparison:on_mouse_wheel(y, x) ~= false
     end
     return false
   end
@@ -606,9 +621,10 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     self.mouse_router:capture(pane)
     if not content_click then pane:on_mouse_pressed(button, x, y, clicks) end
     self:sync_selection_from_pane()
-    local toggled_details_folder = clicks and clicks > 1 and pane.git_pane == "details"
+    local toggled_details_folder = button == "left" and clicks and clicks > 1
+      and pane.git_pane == "details"
       and self:toggle_details_tree_folder(pane, pane.buffer:get_selection())
-    if clicks and clicks > 1 and pane.git_pane ~= "history-list"
+    if button == "left" and clicks and clicks > 1 and pane.git_pane ~= "history-list"
         and not toggled_details_folder and self.activate_selected then
       local source_tab = self:model_tab()
       local diff_tab = self:activate_selected(function() core.redraw = true end)
@@ -649,6 +665,11 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
   if selected_tab and selected_tab.kind == "commit_diff" then
     list_width = math.floor(self.size.x * 0.28)
     if x > self.position.x + list_width then
+      local comparison = selected_tab.image_comparison_view
+      if comparison and point_in_view(comparison, x, y) then
+        self.mouse_router:capture(comparison)
+        return comparison:on_mouse_pressed(button, x, y, clicks) == true
+      end
       local diff = selected_tab.diff_view
       local side = diff and x >= diff.position.x + diff.size.x / 2 and "right" or "left"
       if not self:focus_diff_pane(side) then return true end
@@ -699,11 +720,13 @@ end
 local function commit_label(commit)
   local hash = commit.short_hash or commit.hash or ""
   local subject = commit.subject or ""
-  local parts = { string.format("%s  %s", hash, subject) }
+  local parts = {}
+  if hash ~= "" then parts[#parts + 1] = hash end
   for _, ref in ipairs(commit.ref_labels or {}) do
-    if ref.label and ref.label ~= "" then parts[#parts + 1] = "  " .. ref_text(ref) end
+    if ref.label and ref.label ~= "" then parts[#parts + 1] = ref_text(ref) end
   end
-  return table.concat(parts)
+  if subject ~= "" then parts[#parts + 1] = subject end
+  return table.concat(parts, "  ")
 end
 
 local function commit_line_metadata(commit)
@@ -827,13 +850,15 @@ local function commit_details_lines(commit, view)
     return lines, line_meta
   end
   add(commit.subject or "", { role = "subject", text = commit.subject or "" })
-  add("Hash: " .. tostring(commit.hash or ""), {
-    role = "field",
-    label = "Hash: ",
-    value = tostring(commit.hash or ""),
-    value_color = style.accent,
-    value_is_code = true,
-  })
+  if commit.kind ~= "working_tree" then
+    add("Hash: " .. tostring(commit.hash or ""), {
+      role = "field",
+      label = "Hash: ",
+      value = tostring(commit.hash or ""),
+      value_color = style.accent,
+      value_is_code = true,
+    })
+  end
   if commit.author_name and commit.author_name ~= "" then
     add("Author: " .. commit.author_name, { role = "field", label = "Author: ", value = commit.author_name })
   end
@@ -1298,6 +1323,40 @@ function GitView:draw_log_tab(tab, x, y)
   details:draw()
 end
 
+local function selected_file_is_image(tab)
+  if not (tab and tab.non_text and tab.non_text.kind == "binary") then return false end
+  local file = tab.changed_files and tab.changed_files[tab.selected_file]
+  if not file then return false end
+  local left = changed_file_side_path(file, "left")
+  local right = changed_file_side_path(file, "right")
+  if left and ImageView.is_supported(left) then return true end
+  return right ~= nil and ImageView.is_supported(right) or false
+end
+
+function GitView:ensure_image_comparison_view(tab)
+  if not selected_file_is_image(tab) then return nil end
+  if not tab.binary_paths then
+    if not tab.binary_loading and not tab.binary_error then
+      self.model:load_selected_binary_files(tab, function() core.redraw = true end)
+    end
+    return nil
+  end
+  if tab.image_comparison_view
+      and tab.image_comparison_seen_generation == tab.binary_generation_value then
+    return tab.image_comparison_view
+  end
+  local view = ImageComparisonView {
+    left_path = tab.binary_paths.left,
+    right_path = tab.binary_paths.right,
+    left_title = "Before — " .. (tab.left_name or "File did not exist"),
+    right_title = "After — " .. (tab.right_name or "File does not exist"),
+  }
+  view.git_owner_view = self
+  tab.image_comparison_view = view
+  tab.image_comparison_seen_generation = tab.binary_generation_value
+  return view
+end
+
 function GitView:ensure_diff_view(tab)
   if tab.diff_view and tab.diff_view_seen_generation == tab.diff_generation then
     if tab.diff_view.buffer_view_a then tab.diff_view.buffer_view_a.git_owner_view = self end
@@ -1652,10 +1711,14 @@ function GitView:layout_diff_tab(tab, x)
   local diff_w = self.position.x + self.size.x - diff_x - style.padding.x
   local diff_h = self.position.y + self.size.y - diff_y - style.padding.y
   local view
-  if tab.diff_view or (not tab.loading_file and not tab.file_error
+  if selected_file_is_image(tab) then
+    view = self:ensure_image_comparison_view(tab)
+  elseif tab.diff_view or (not tab.loading_file and not tab.file_error
     and (tab.left_text ~= nil or tab.right_text ~= nil))
   then
     view = self:ensure_diff_view(tab)
+  end
+  if view then
     view.position.x, view.position.y = diff_x, diff_y
     view.size.x, view.size.y = diff_w, diff_h
   end
@@ -1698,6 +1761,20 @@ function GitView:draw_diff_tab(tab, x, y)
     return
   end
   if tab.non_text then
+    if selected_file_is_image(tab) then
+      if tab.binary_loading then
+        draw_diff_status(
+          "Loading image comparison...", style.dim,
+          diff_x + style.padding.x, diff_y + style.padding.y
+        )
+      elseif tab.binary_error then
+        draw_diff_status(
+          "Image error: " .. tostring(tab.binary_error.message or tab.binary_error.kind or tab.binary_error),
+          style.error, diff_x + style.padding.x, diff_y + style.padding.y
+        )
+      end
+      return
+    end
     draw_diff_status(
       tab.non_text.message or "This file cannot use the text Diff View",
       style.dim, diff_x + style.padding.x, diff_y + style.padding.y

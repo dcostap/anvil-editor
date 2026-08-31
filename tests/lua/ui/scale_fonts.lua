@@ -1,3 +1,4 @@
+local core = require "core"
 local scale = require "plugins.scale"
 local style = require "core.style"
 local test = require "core.test"
@@ -56,5 +57,16 @@ test.describe("font scaling", function()
     test.near(style.code_font:get_size(), code_size * factor, 0.001)
     test.near(style.terminal_font:get_size(), terminal_size * factor, 0.001)
     test.near(fallback:get_size(), fallback_size * factor, 0.001)
+  end)
+
+  test.it("restores Fuzzy Search row spacing after a theme change while zoomed", function(context)
+    context.interface_scale = scale.get()
+    local row_padding = style.fuzzy_searcher_result_row_padding
+
+    scale.set(context.interface_scale * 1.1)
+    core.reload_module "colors.default"
+    scale.set(context.interface_scale)
+
+    test.near(style.fuzzy_searcher_result_row_padding, row_padding, 0.001)
   end)
 end)

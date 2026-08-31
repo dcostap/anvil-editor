@@ -1,6 +1,12 @@
 local test = require "core.test"
 
 test.describe("File-type icons", function()
+  test.after_each(function(context)
+    if context.interface_scale then
+      require("plugins.scale").set(context.interface_scale)
+    end
+  end)
+
   local function has_visible_glyph_pixels(font, glyph)
     local width, height = 64 * SCALE, 48 * SCALE
     local surface = canvas.new(width, height, { 0, 0, 0, 255 }, true)
@@ -104,6 +110,41 @@ test.describe("File-type icons", function()
       view:get_col_x_offset(line, caret_col),
       view:get_font():get_width(text:sub(1, name_col - 1))
         + file_icons.column_width(view:get_line_height())
+    )
+  end)
+
+  test.it("updates cached Path Tree row geometry after Zoom changes", function(context)
+    local Buffer = require "core.buffer"
+    local file_icons = require "core.file_icons"
+    local path_tree = require "plugins.path_tree"
+    local scale = require "plugins.scale"
+
+    context.interface_scale = scale.get()
+    local tree = path_tree.build({ { path = "src/example.py" } })
+    local view = path_tree.View(Buffer(nil, nil, true))
+    view:set_path_tree(tree)
+    view:update()
+
+    local line = tree:line_for_record(1)
+    local text = view.buffer.lines[line]:gsub("\n$", "")
+    local name_col = assert(text:find("example.py", 1, true))
+    local cached_render = test.not_nil(view:get_line_render(line))
+    view:get_col_x_offset(line, name_col)
+
+    local target_scale = context.interface_scale < 5
+      and context.interface_scale * 1.1
+      or context.interface_scale / 1.1
+    scale.set(target_scale)
+    view:update()
+
+    local updated_render = test.not_nil(view:get_line_render(line))
+    local expected_icon_width = file_icons.column_width(view:get_line_height())
+    test.ok(updated_render ~= cached_render, "Zoom must rebuild cached row geometry")
+    test.near(updated_render.fragments[1].width, expected_icon_width, 0.001)
+    test.near(
+      view:get_col_x_offset(line, name_col),
+      view:get_font():get_width(text:sub(1, name_col - 1)) + expected_icon_width,
+      0.001
     )
   end)
 

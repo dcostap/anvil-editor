@@ -210,6 +210,8 @@ end
 
 function M.register_focus_target(owner_view, child_view)
   assert(owner_view and child_view, "focus owner and target are required")
+  owner_view = M.owner_for_view(owner_view) or owner_view
+  assert(owner_view ~= child_view, "focus target cannot own itself")
   M.focus_owners[child_view] = owner_view
   return child_view
 end

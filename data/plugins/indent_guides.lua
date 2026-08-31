@@ -41,17 +41,17 @@ local function guide_color(active)
 end
 
 local function indent_cache(buffer, indent_size)
-  local change_id = buffer.get_change_id and buffer:get_change_id() or 0
+  local text_revision = buffer.text_revision or 0
   local limit = indent_guides.blank_line_search_limit or 25
   local cache = indent_cache_by_buffer[buffer]
   if
     not cache
-    or cache.change_id ~= change_id
+    or cache.text_revision ~= text_revision
     or cache.indent_size ~= indent_size
     or cache.blank_line_search_limit ~= limit
   then
     cache = {
-      change_id = change_id,
+      text_revision = text_revision,
       indent_size = indent_size,
       blank_line_search_limit = limit,
       leading = {},

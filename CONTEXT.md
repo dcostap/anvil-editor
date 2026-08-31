@@ -495,7 +495,7 @@ A closable View showing revisions that affected any path in a selected set of Pr
 _Avoid_: multi-file log, combined log
 
 **Local Changes Revision**:
-The newest revision in a File History View, representing the current Buffer including unsaved and uncommitted changes.
+The newest revision in a Git Log or File History View. It represents staged, unstaged, untracked, and unsaved Buffer changes.
 _Avoid_: dirty revision, working copy snapshot
 
 **Historical Buffer**:
@@ -505,6 +505,10 @@ _Avoid_: Historical Document, snapshot buffer
 **Diff View**:
 A visual comparison of two text sources, presented through two Diff Sides.
 _Avoid_: diffviewer
+
+**Image Comparison View**:
+A visual before-and-after comparison of two image revisions. It presents images directly instead of treating their bytes as text.
+_Avoid_: image diff, binary Diff View
 
 **Diff Side**:
 One text surface in a Diff View, representing one of the compared sources. A file-backed Diff Side presents the same Buffer as that file's Editors.

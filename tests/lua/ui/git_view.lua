@@ -79,6 +79,7 @@ test.describe("Git View command", function()
     context.original_projects = core.projects
     context.original_active_view = core.active_view
     context.original_active_window = core.active_window
+    context.original_root_panel = core.root_panel
     context.original_nag_show = core.nag_view.show
     context.original_set_clipboard = system.set_clipboard
     context.original_linewrapping_default = config.plugins.linewrapping.enable_by_default
@@ -91,6 +92,7 @@ test.describe("Git View command", function()
     core.projects = context.original_projects
     core.active_view = context.original_active_view
     core.active_window = context.original_active_window
+    core.root_panel = context.original_root_panel
     core.nag_view.show = context.original_nag_show
     system.set_clipboard = context.original_set_clipboard
     config.plugins.linewrapping.enable_by_default = context.original_linewrapping_default
@@ -212,6 +214,51 @@ test.describe("Git View command", function()
     view:on_mouse_pressed("left", 10, second_row_y, 1)
     test.equal(view.model:selected_commit().hash, "b")
     test.equal(session.hidden, false)
+  end)
+
+  test.it("routes auxiliary mouse navigation before Git pointer input", function(context)
+    local root = RootPanel()
+    root.position.x, root.position.y = 0, 0
+    root.size.x, root.size.y = 1000, 600
+    core.root_panel = root
+
+    local first = View()
+    local active_pane = panes.create { factory = function() return first end }
+    local second = View()
+    panes.present(second, { pane = active_pane })
+
+    local git_pane = panes.split(active_pane, "right", {
+      factory = function() return View() end,
+      focus = true,
+    })
+    local _, view = open_fake_git_view(context.project)
+    local tab = view.model:log_tab()
+    tab.commits = {
+      { hash = "a", short_hash = "a", subject = "First", parents = {} },
+    }
+    tab.selected_commit = 1
+
+    panes.focus(active_pane)
+    root:update()
+    local x = view.position.x + view.size.x / 2
+    local y = view.position.y + view.size.y / 2
+    local tab_count = #view.model.tabs
+
+    core.on_event("mousepressed", "x", x, y, 2)
+    core.on_event("mousereleased", "x", x, y)
+
+    test.equal(panes.active(), active_pane)
+    test.equal(active_pane.current_view, first)
+    test.equal(git_pane.current_view, view)
+    test.equal(#view.model.tabs, tab_count)
+
+    core.on_event("mousepressed", "y", x, y, 1)
+    core.on_event("mousereleased", "y", x, y)
+
+    test.equal(panes.active(), active_pane)
+    test.equal(active_pane.current_view, second)
+    test.equal(git_pane.current_view, view)
+    test.equal(#view.model.tabs, tab_count)
   end)
 
   test.it("keeps existing commits visible while the Git Log refreshes", function(context)
@@ -928,6 +975,35 @@ test.describe("Git View command", function()
     buffer:on_close()
   end)
 
+  test.it("uses an Image Comparison View for binary image revisions", function(context)
+    local _, view = open_fake_git_view(context.project)
+    local image_path = DATADIR .. PATHSEP .. "plugins" .. PATHSEP
+      .. "editor_wallpaper" .. PATHSEP .. "wallpaper.jpg"
+    local tab = {
+      id = "image-comparison",
+      kind = "commit_diff",
+      title = "Image comparison",
+      changed_files = {
+        { status = "modified", old_path = "before.jpg", new_path = "after.jpg", binary = true },
+      },
+      selected_file = 1,
+      left_name = "before.jpg",
+      right_name = "after.jpg",
+      non_text = { kind = "binary", message = "Binary file changed" },
+      binary_paths = { left = image_path, right = image_path },
+      binary_generation_value = 1,
+    }
+
+    local comparison = select(7, view:layout_diff_tab(tab, 0))
+
+    test.equal(tostring(comparison), "ImageComparisonView")
+    test.not_nil(comparison.left_view.image)
+    test.not_nil(comparison.right_view.image)
+    test.equal(comparison.left_title, "Before — before.jpg")
+    test.equal(comparison.right_title, "After — after.jpg")
+    test.equal(tab.diff_view, nil)
+  end)
+
   test.it("continues change navigation into the next changed file on repeat", function(context)
     local session, view = open_fake_git_view(context.project)
     view.model.repo = { root = "C:/repo" }
@@ -1083,8 +1159,32 @@ test.describe("Git View command", function()
     test.equal(list.git_graph_rows.max_lanes, 2)
     test.equal(list.git_graph_rows[3].node_lane, 2)
     local line = list.buffer:get_utf8_line(1)
-    test.ok(line:find("main", 1, true))
-    test.ok(line:find("v1", 1, true))
+    local main_position = test.not_nil(line:find("main", 1, true))
+    local tag_position = test.not_nil(line:find("v1", 1, true))
+    local subject_position = test.not_nil(line:find("Merge work", 1, true))
+    test.ok(main_position < subject_position)
+    test.ok(tag_position < subject_position)
+  end)
+
+  test.it("presents Local Changes without a fake commit hash", function(context)
+    local _, view = open_fake_git_view(context.project)
+    view.model:log_tab().commits = {
+      {
+        kind = "working_tree", short_hash = "", subject = "Local Changes",
+        parents = { "head" }, changed_files = { { kind = "modified", path = "src/app.lua" } },
+        changed_files_loaded = true,
+      },
+      { hash = "head", short_hash = "head", subject = "HEAD commit", parents = {} },
+    }
+
+    view:update_pane_buffers()
+
+    local list = view:pane_view("log-list")
+    local details = view:pane_view("details")
+    local details_text = table.concat(details.buffer.lines)
+    test.equal(list.buffer:get_utf8_line(1), "Local Changes\n")
+    test.ok(details_text:find("app.lua", 1, true))
+    test.ok(not details_text:find("Hash:", 1, true))
   end)
 
   test.test("Local Focus Cycle enters and wraps through Git Log targets", function(context)

@@ -519,6 +519,18 @@ test.describe("Pane manager", function()
     test.ok(panes.validate())
   end)
 
+  test.it("attaches a nested focus target to its Pane View", function()
+    local pane = panes.create { factory = factory("one") }
+    local child = FakeView("child")
+    local nested = FakeView("nested")
+    panes.register_focus_target(pane.current_view, child)
+
+    panes.register_focus_target(child, nested)
+
+    test.equal(panes.pane_for_view(nested), pane)
+    test.ok(panes.validate())
+  end)
+
   test.it("clears a closed final Pane View from global focus", function()
     local pane = panes.create { factory = factory("one") }
     core.active_view = pane.current_view

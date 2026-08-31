@@ -52,4 +52,18 @@ test.describe("plugins.git.graph", function()
     test.equal(after[1].node_color, before[1].node_color)
     test.equal(after[2].node_color, before[2].node_color)
   end)
+
+  test.it("connects Local Changes directly to HEAD", function()
+    local rows = graph.layout({
+      { kind = "working_tree", parents = { "head" } },
+      { hash = "head", parents = { "parent" } },
+      { hash = "parent", parents = {} },
+    })
+
+    test.equal(rows[1].node_lane, 1)
+    test.equal(rows[1].segments[1].to_lane, 1)
+    test.equal(rows[2].node_lane, 1)
+    test.equal(rows[2].incoming, true)
+    test.equal(rows.max_lanes, 1)
+  end)
 end)
