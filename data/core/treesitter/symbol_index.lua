@@ -116,6 +116,7 @@ local function new_index(root)
     project_paths_generation = nil,
     overlay_generation = 0,
     combined_symbols_cache = {},
+    enclosing_symbol_cache = {},
     diagnostics = { ui = {} },
     completed_runs = {},
     project_path_metadata_cache = {},
@@ -140,6 +141,7 @@ end
 local function bump_overlay_generation(index)
   if not index then return end
   index.overlay_generation = (index.overlay_generation or 0) + 1
+  index.enclosing_symbol_cache = {}
   invalidate_combined_symbols_cache(index)
 end
 
@@ -543,6 +545,7 @@ local function publish_native_snapshot(index, run, message)
   local summary = snapshot:summary()
   index.by_path = {}
   index.native_query_filter_cache = {}
+  index.enclosing_symbol_cache = {}
   index.symbols = {}
   index.usages_by_name = {}
   index.usage_count = summary.usages
@@ -848,6 +851,7 @@ end
 
 local refresh_open_buffer_overlays
 local overlay_entry_current
+local refresh_current_core_buffers_for_index
 
 local function buffer_should_suppress_disk(buffer)
   if not buffer then return false end
@@ -1001,6 +1005,90 @@ local function public_symbol(symbol)
   return item
 end
 
+local function point_before_or_equal(line1, col1, line2, col2)
+  return line1 < line2 or (line1 == line2 and col1 <= col2)
+end
+
+local function symbol_contains_point(symbol, line, col)
+  local start_line = tonumber(symbol and symbol.start_line)
+  local start_col = tonumber(symbol and symbol.start_col)
+  local end_line = tonumber(symbol and symbol.end_line)
+  local end_col = tonumber(symbol and symbol.end_col)
+  if not (start_line and start_col and end_line and end_col) then return false end
+  return point_before_or_equal(start_line, start_col, line, col)
+    and (line < end_line or (line == end_line and col < end_col))
+end
+
+local function enclosing_symbol_from_list(symbols, line, col, kinds)
+  local allowed
+  if kinds and #kinds > 0 then
+    allowed = {}
+    for _, kind in ipairs(kinds) do allowed[kind] = true end
+  end
+  local best
+  for _, symbol in ipairs(symbols or {}) do
+    if (not allowed or allowed[symbol.kind]) and symbol_contains_point(symbol, line, col) then
+      if not best or (tonumber(symbol.depth) or 0) >= (tonumber(best.depth) or 0) then
+        best = symbol
+      end
+    end
+  end
+  return best and public_symbol(best) or nil
+end
+
+function symbol_index.enclosing_symbol(path, line, col, opts)
+  opts = opts or {}
+  path = path and common.normalize_path(path) or nil
+  line = math.floor(tonumber(line) or 0)
+  col = math.floor(tonumber(col) or 1)
+  if not path or path == "" or line < 1 or col < 1 then return nil, "invalid-location" end
+
+  for _, root in ipairs(project_path_roots("symbols", opts)) do
+    if common.path_belongs_to(path, root) then
+      local index = indexes[root]
+      if not index then return nil, "index-unavailable" end
+      refresh_current_core_buffers_for_index(index)
+      if refresh_open_buffer_overlays then refresh_open_buffer_overlays(index) end
+
+      local overlay = index.open_buffers and index.open_buffers[path]
+      if overlay_entry_current(overlay) then
+        return enclosing_symbol_from_list(overlay.symbols, line, col, opts.kinds), nil
+      end
+
+      local suppressed = overlay_paths(index)
+      if suppressed[path] then return nil, "overlay-indexing" end
+      local snapshot = index.native_snapshot
+      if not snapshot or type(snapshot.enclosing_symbol) ~= "function" then
+        return nil, index.symbol_status == "indexing" and "indexing" or "index-unavailable"
+      end
+
+      local kinds = opts.kinds or opts.symbol_kinds
+      local cache = index.enclosing_symbol_cache or {}
+      index.enclosing_symbol_cache = cache
+      local key = table.concat({ path, tostring(line), tostring(col), table.concat(kinds or {}, "\0") }, "\1")
+      local cached = cache[key]
+      if cached and cached.snapshot == snapshot and cached.overlay_generation == (index.overlay_generation or 0) then
+        return cached.symbol, nil
+      end
+
+      local ok, symbol = pcall(snapshot.enclosing_symbol, snapshot, path, line, col, { kinds = kinds })
+      if not ok then
+        log_quiet("Tree-sitter Project enclosing symbol lookup failed for %s:%d:%d: %s",
+          tostring(path), line, col, tostring(symbol))
+        return nil, "lookup-failed"
+      end
+      symbol = symbol and public_symbol(symbol) or nil
+      cache[key] = {
+        snapshot = snapshot,
+        overlay_generation = index.overlay_generation or 0,
+        symbol = symbol,
+      }
+      return symbol, nil
+    end
+  end
+  return nil, "outside-project"
+end
+
 local function symbol_language_allowed(symbol, languages)
   if not languages or #languages == 0 then return true end
   local language_id = tostring(symbol and symbol.language_id or "")
@@ -1077,7 +1165,7 @@ local function filtered_symbols(symbols, query, limit, opts)
   return out, #items > #out
 end
 
-local function refresh_current_core_buffers_for_index(index)
+refresh_current_core_buffers_for_index = function(index)
   -- Query paths must not synchronously extract open-buffer overlays. Open
   -- Buffers are remembered here only so dirty Buffers can suppress stale disk
   -- entries; overlay records are updated by the Tree-sitter parse-ready hook.

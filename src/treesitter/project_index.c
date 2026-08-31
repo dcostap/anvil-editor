@@ -50,6 +50,8 @@ struct AnvilTSProjectSnapshot {
   char status[16];
   ProjectFileEntry *files;
   uint32_t file_count;
+  uint32_t *path_slots;
+  uint32_t path_slot_count;
   ProjectRecordRef *symbols;
   uint32_t symbol_count;
   FuzzyIndex symbol_fuzzy;
@@ -496,6 +498,40 @@ static int file_compare(const void *left, const void *right) {
   return strcmp(af ? af : "", bf ? bf : "");
 }
 
+static bool rebuild_snapshot_path_slots(AnvilTSProjectSnapshot *snapshot) {
+  if (!snapshot->file_count) return true;
+  uint32_t slot_count = 16;
+  while (slot_count / 2 < snapshot->file_count) {
+    if (slot_count > UINT32_MAX / 2) return false;
+    slot_count *= 2;
+  }
+  uint32_t *slots = (uint32_t *)calloc(slot_count, sizeof(*slots));
+  if (!slots) return false;
+  for (uint32_t i = 0; i < snapshot->file_count; i++) {
+    const char *path = anvil_ts_project_file_path(snapshot->files[i].file);
+    uint32_t slot = (uint32_t)path_hash(path) & (slot_count - 1);
+    while (slots[slot]) slot = (slot + 1) & (slot_count - 1);
+    slots[slot] = i + 1;
+  }
+  snapshot->path_slots = slots;
+  snapshot->path_slot_count = slot_count;
+  return true;
+}
+
+static AnvilTSProjectFileResult *snapshot_file_for_path(
+  const AnvilTSProjectSnapshot *snapshot,
+  const char *path
+) {
+  if (!snapshot || !path || !snapshot->path_slot_count) return NULL;
+  uint32_t slot = (uint32_t)path_hash(path) & (snapshot->path_slot_count - 1);
+  while (snapshot->path_slots[slot]) {
+    AnvilTSProjectFileResult *file = snapshot->files[snapshot->path_slots[slot] - 1].file;
+    if (project_path_equal(anvil_ts_project_file_path(file), path)) return file;
+    slot = (slot + 1) & (snapshot->path_slot_count - 1);
+  }
+  return NULL;
+}
+
 static int bytes_compare(const char *a, uint32_t a_len, const char *b, uint32_t b_len) {
   uint32_t common = a_len < b_len ? a_len : b_len;
   int compared = common ? memcmp(a, b, common) : 0;
@@ -555,6 +591,7 @@ static void snapshot_destroy(AnvilTSProjectSnapshot *snapshot) {
   free(snapshot->usage_names);
   free(snapshot->usage_name_slots);
   free(snapshot->files);
+  free(snapshot->path_slots);
   fuzzy_index_free(&snapshot->symbol_fuzzy);
   free(snapshot->symbols);
   free(snapshot->usages);
@@ -655,6 +692,11 @@ AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot(
     return NULL;
   }
   qsort(snapshot->files, snapshot->file_count, sizeof(*snapshot->files), file_compare);
+  if (!rebuild_snapshot_path_slots(snapshot)) {
+    snapshot_destroy(snapshot);
+    set_error(error, "out of memory building native Project path lookup");
+    return NULL;
+  }
   snapshot->symbol_count = (uint32_t)symbol_total;
   uint32_t raw_usage_count = (uint32_t)usage_total;
   snapshot->usage_count = raw_usage_count < usage_cap ? raw_usage_count : usage_cap;
@@ -903,6 +945,57 @@ static bool query_symbol_kind_allowed(
     if (length == symbol->kind_len && (!length || memcmp(symbol->kind, kind, length) == 0)) return true;
   }
   return false;
+}
+
+static bool project_point_in_range(
+  const AnvilTSProjectRange *range,
+  uint32_t row,
+  uint32_t column
+) {
+  bool after_start = row > range->start_point.row ||
+    (row == range->start_point.row && column >= range->start_point.column);
+  bool before_end = row < range->end_point.row ||
+    (row == range->end_point.row && column < range->end_point.column);
+  return after_start && before_end;
+}
+
+bool anvil_ts_project_snapshot_enclosing_symbol(
+  const AnvilTSProjectSnapshot *snapshot,
+  const char *path,
+  uint32_t line,
+  uint32_t column,
+  const char *const *kinds,
+  uint32_t kind_count,
+  AnvilTSProjectFileResult **file,
+  uint32_t *file_symbol_index
+) {
+  if (file) *file = NULL;
+  if (file_symbol_index) *file_symbol_index = 0;
+  if (!snapshot || !path || !line || !column || (kind_count && !kinds)) return false;
+  AnvilTSProjectFileResult *matched_file = snapshot_file_for_path(snapshot, path);
+  if (!matched_file) return false;
+
+  uint32_t row = line - 1;
+  uint32_t col = column - 1;
+  uint32_t best_index = 0;
+  uint32_t best_depth = 0;
+  bool found = false;
+  uint32_t count = anvil_ts_project_file_symbol_count(matched_file);
+  for (uint32_t i = 0; i < count; i++) {
+    AnvilTSProjectSymbolView symbol;
+    if (!anvil_ts_project_file_symbol_at(matched_file, i, &symbol) ||
+        !query_symbol_kind_allowed(&symbol, kinds, kind_count) ||
+        !project_point_in_range(&symbol.range, row, col)) continue;
+    if (!found || symbol.depth >= best_depth) {
+      found = true;
+      best_index = i;
+      best_depth = symbol.depth;
+    }
+  }
+  if (!found) return false;
+  if (file) *file = matched_file;
+  if (file_symbol_index) *file_symbol_index = best_index;
+  return true;
 }
 
 static bool query_symbol_language_allowed(

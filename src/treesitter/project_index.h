@@ -75,6 +75,16 @@ void anvil_ts_project_snapshot_summary(const AnvilTSProjectSnapshot *snapshot, A
 bool anvil_ts_project_snapshot_file_at(const AnvilTSProjectSnapshot *snapshot, uint32_t index, AnvilTSProjectSnapshotFileView *view);
 bool anvil_ts_project_snapshot_symbol_at(const AnvilTSProjectSnapshot *snapshot, uint32_t index, AnvilTSProjectFileResult **file, uint32_t *file_symbol_index);
 bool anvil_ts_project_snapshot_usage_at(const AnvilTSProjectSnapshot *snapshot, uint32_t index, AnvilTSProjectFileResult **file, uint32_t *file_usage_index);
+bool anvil_ts_project_snapshot_enclosing_symbol(
+  const AnvilTSProjectSnapshot *snapshot,
+  const char *path,
+  uint32_t line,
+  uint32_t column,
+  const char *const *kinds,
+  uint32_t kind_count,
+  AnvilTSProjectFileResult **file,
+  uint32_t *file_symbol_index
+);
 /* Language, kind, and parent-name filters are exact allowlists. Path filters are scope rules:
  * the longest matching included/excluded path wins, with exclusion winning
  * ties. Returned indices use snapshot order and are owned by the caller. */

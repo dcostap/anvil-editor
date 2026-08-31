@@ -2351,6 +2351,45 @@ end
 local draw_file_result_row
 local grep_row_columns
 
+function fuzzy_searcher.grep_enclosing_symbol(result)
+  if not result or not result.abs_path then return nil end
+  if result.enclosing_symbol_checked then return result.enclosing_symbol end
+  local line = tonumber(result.line) or 1
+  local col = tonumber(result.col or result.content_match_start) or 1
+  local symbol_index = require "core.treesitter.symbol_index"
+  local symbol, reason = symbol_index.enclosing_symbol(result.abs_path, line, col, {
+    kinds = { "function", "method" },
+  })
+  if reason ~= "indexing" and reason ~= "overlay-indexing" and reason ~= "index-unavailable" then
+    result.enclosing_symbol_checked = true
+    result.enclosing_symbol = symbol
+  end
+  if symbol and symbol.name and symbol.name ~= "" then return symbol end
+end
+
+function fuzzy_searcher.draw_grep_symbol_context(font, symbol, x, y, width, row_height)
+  if not symbol or width <= 0 then return 0 end
+  local symbol_icons = require "core.symbol_icons"
+  local context_font = style.get_small_font(font)
+  local context_y = y + math.max(0, math.floor((row_height - context_font:get_height()) / 2))
+  local icon_size = symbol_icons.size_for_row(row_height)
+  local icon_gap = math.max(3 * (SCALE or 1), style.padding.x / 3)
+  local label = tostring(symbol.name or "")
+  local icon_width = symbol_icons.resolve_kind(symbol.kind or "symbol") and icon_size or 0
+  local content_gap = icon_width > 0 and icon_gap or 0
+  local label_width = math.max(0, width - icon_width - content_gap)
+  local displayed = truncate_text(context_font, label, label_width)
+  local displayed_width = context_font:get_width(displayed)
+  local content_width = icon_width + content_gap + displayed_width
+  local cx = x + math.max(0, width - content_width)
+  if icon_width > 0 then
+    symbol_icons.draw(symbol.kind or "symbol", cx, y, row_height, icon_size)
+    cx = cx + icon_width + content_gap
+  end
+  if displayed ~= "" then renderer.draw_text(context_font, displayed, cx, context_y, style.text) end
+  return content_width
+end
+
 local function draw_symbol_result_row(font, r, x, y, width, row_height)
   local symbol_icons = require "core.symbol_icons"
   local icon_size = symbol_icons.size_for_row(row_height)
@@ -2608,18 +2647,38 @@ end
 
 local function draw_grep_result_row(font, result, x, y, width, collapse_file, collapsed_line_x)
   local path_w, gap, text_w = grep_row_columns(width)
+  local symbol = fuzzy_searcher.grep_enclosing_symbol(result)
+  local context_width = 0
+  local context_gap = math.max(4 * (SCALE or 1), style.padding.x / 2)
+  if symbol then
+    local context_font = style.get_small_font(font)
+    local symbol_icons = require "core.symbol_icons"
+    local icon_width = symbol_icons.resolve_kind(symbol.kind or "symbol")
+      and symbol_icons.size_for_row(font:get_height()) or 0
+    local icon_gap = icon_width > 0 and math.max(3 * (SCALE or 1), style.padding.x / 3) or 0
+    local desired = icon_width + icon_gap + context_font:get_width(tostring(symbol.name or ""))
+    local max_context = math.max(0, path_w - 140 * (SCALE or 1) - context_gap)
+    context_width = math.min(desired, max_context, math.floor(path_w * 0.46))
+    if context_width <= 0 then symbol = nil end
+  end
+  local file_width = math.max(0, path_w - (symbol and context_width + context_gap or 0))
   local line = tonumber(result.line) or 1
   local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
   local line_x = collapsed_line_x
   if collapse_file then
-    line_x = common.clamp(line_x or x, x, x + path_w)
-    renderer.draw_text(font, truncate_text(font, line_suffix, math.max(0, x + path_w - line_x)), line_x, y, style.dim)
+    line_x = common.clamp(line_x or x, x, x + file_width)
+    renderer.draw_text(font, truncate_text(font, line_suffix, math.max(0, x + file_width - line_x)), line_x, y, style.dim)
   else
     local prefix = result.exact and "# " or "~# "
     local _end_x
     _end_x, line_x = draw_file_result_row(
-      font, result.file or "", result.file_spans, prefix, x, y, path_w,
+      font, result.file or "", result.file_spans, prefix, x, y, file_width,
       line_suffix, result.prefix_span, result.root_role, true
+    )
+  end
+  if symbol then
+    fuzzy_searcher.draw_grep_symbol_context(
+      font, symbol, x + path_w - context_width, y, context_width, font:get_height()
     )
   end
   if text_w <= 0 then return line_x end
@@ -6913,6 +6972,7 @@ return {
     git_kind_for_file = fuzzy_searcher.git_kind_for_file,
     draw_recent_file_metadata = fuzzy_searcher.draw_recent_file_metadata,
     draw_file_result_row = draw_file_result_row,
+    draw_grep_result_row = draw_grep_result_row,
     split_mode_prefix = split_mode_prefix,
     prompt_uses_file_index = prompt_uses_file_index,
     normalize_prompt_history = fuzzy_searcher.normalize_prompt_history,

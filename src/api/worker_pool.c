@@ -1505,6 +1505,33 @@ static int project_snapshot_query_symbols(lua_State *L) {
   return 1;
 }
 
+static int project_snapshot_enclosing_symbol(lua_State *L) {
+  LuaProjectSnapshot *snapshot = check_project_snapshot(L, 1);
+  const char *path = luaL_checkstring(L, 2);
+  lua_Integer raw_line = luaL_checkinteger(L, 3);
+  lua_Integer raw_column = luaL_checkinteger(L, 4);
+  luaL_argcheck(L, raw_line > 0 && raw_line <= UINT32_MAX, 3, "invalid Project symbol line");
+  luaL_argcheck(L, raw_column > 0 && raw_column <= UINT32_MAX, 4, "invalid Project symbol column");
+  uint32_t kind_count = 0;
+  const char **kinds = project_query_string_array(L, 5, "kinds", &kind_count);
+  AnvilTSProjectFileResult *file = NULL;
+  uint32_t file_symbol_index = 0;
+  bool found = anvil_ts_project_snapshot_enclosing_symbol(
+    snapshot->snapshot,
+    path,
+    (uint32_t)raw_line,
+    (uint32_t)raw_column,
+    kinds,
+    kind_count,
+    &file,
+    &file_symbol_index
+  );
+  free(kinds);
+  if (!found) { lua_pushnil(L); return 1; }
+  push_snapshot_symbol(L, file, file_symbol_index);
+  return 1;
+}
+
 static int project_snapshot_query_usages(lua_State *L) {
   LuaProjectSnapshot *snapshot = check_project_snapshot(L, 1);
   size_t name_len = 0;
@@ -2388,6 +2415,7 @@ static const luaL_Reg project_snapshot_methods[] = {
   { "symbols", project_snapshot_symbols },
   { "usages", project_snapshot_usages },
   { "query_symbols", project_snapshot_query_symbols },
+  { "enclosing_symbol", project_snapshot_enclosing_symbol },
   { "query_usages", project_snapshot_query_usages },
   { "__gc", project_snapshot_gc },
   { NULL, NULL }
