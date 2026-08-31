@@ -814,10 +814,6 @@ function TerminalView:handle_events()
   for _, event in ipairs((self.snapshot and self.snapshot.events) or {}) do
     if event.type == "bell" then
       self.bell_count = (self.bell_count or 0) + (event.count or 1)
-      if system.flash_window and (core.active_view ~= self or
-          not system.window_has_focus(core.window)) then
-        system.flash_window(core.window, "briefly")
-      end
     elseif event.type == "clipboard" and event.text ~= nil then
       local request = { text = event.text, clear = event.clear == true }
       if self.active_clipboard_request then

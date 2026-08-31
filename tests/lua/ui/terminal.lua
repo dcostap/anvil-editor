@@ -1260,6 +1260,11 @@ test.describe("Terminal View", function()
 
   test.it("handles terminal bells and clipboard requests", function(context)
     local view = terminal.open()
+    local previous_active_view = core.active_view
+    local previous_flash_window = system.flash_window
+    local flash_count = 0
+    core.active_view = nil
+    system.flash_window = function() flash_count = flash_count + 1 end
     view.snapshot.events = {
       { type = "bell" },
       { type = "clipboard", text = "terminal clipboard" },
@@ -1268,7 +1273,10 @@ test.describe("Terminal View", function()
     core.nag_view.show = function() end
     view:handle_events()
     core.nag_view.show = previous_show
+    core.active_view = previous_active_view
+    system.flash_window = previous_flash_window
     test.equal(view.bell_count, 1)
+    test.equal(flash_count, 0)
     test.equal(view.active_clipboard_request.text, "terminal clipboard")
   end)
 
