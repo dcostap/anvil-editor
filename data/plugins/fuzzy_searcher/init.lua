@@ -1687,7 +1687,7 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored)
     }
     fuzzy_grep_jobs[key] = job
 
-    core.add_thread(function()
+    job.thread_key = core.add_thread(function()
       core.log_quiet(
         "Fuzzy grep batch started seed=%s files=%s",
         tostring(seed), scope and tostring(#scope) or "all"
@@ -5164,6 +5164,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
           end
           slice_start = yield_if_over_budget(slice_start)
         end
+        if not s.done and s.thread_key then core.wake_thread(s.thread_key) end
         if not s.done or (processed[s.key] or 0) < #s.lines then all_done = false end
       end
 
@@ -5350,7 +5351,7 @@ function FSView:start_grep(base, line, grep)
         )
         local args = {
           fuzzy_searcher.rg,
-          "--line-number", "--column", "--no-heading",
+          "--line-number", "--column", "--no-heading", "--with-filename",
           "--color", "never", "-i", "-F",
         }
         project_files.add_filter_arguments(args, self.include_ignored == true)

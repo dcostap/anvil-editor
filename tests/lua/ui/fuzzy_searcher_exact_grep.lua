@@ -54,6 +54,27 @@ test.describe("Fuzzy Searcher exact grep", function()
     test.equal(count, 2)
   end)
 
+  test.it("returns matches when the scope contains one file", function(context)
+    local path = context.root .. PATHSEP .. "single-file.txt"
+    local file = assert(io.open(path, "wb"))
+    file:write("a paragraph in one file\n")
+    file:close()
+
+    fuzzy_searcher.open("single-file.txt #paragraph")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function()
+      return picker.status and picker.status:find("exact matches", 1, true)
+    end), "expected exact grep to finish: " .. tostring(picker.status))
+
+    local count = 0
+    for _, result in ipairs(picker.results or {}) do
+      if result.abs_path and common.path_equals(result.abs_path, path) then
+        count = count + 1
+      end
+    end
+    test.equal(count, 1)
+  end)
+
   test.it("keeps the UI scheduler responsive during a broad search", function(context)
     local path = context.root .. PATHSEP .. "many-lines.txt"
     local file = assert(io.open(path, "wb"))
