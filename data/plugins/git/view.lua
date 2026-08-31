@@ -606,9 +606,10 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     self.mouse_router:capture(pane)
     if not content_click then pane:on_mouse_pressed(button, x, y, clicks) end
     self:sync_selection_from_pane()
-    local toggled_details_folder = clicks and clicks > 1 and pane.git_pane == "details"
+    local toggled_details_folder = button == "left" and clicks and clicks > 1
+      and pane.git_pane == "details"
       and self:toggle_details_tree_folder(pane, pane.buffer:get_selection())
-    if clicks and clicks > 1 and pane.git_pane ~= "history-list"
+    if button == "left" and clicks and clicks > 1 and pane.git_pane ~= "history-list"
         and not toggled_details_folder and self.activate_selected then
       local source_tab = self:model_tab()
       local diff_tab = self:activate_selected(function() core.redraw = true end)

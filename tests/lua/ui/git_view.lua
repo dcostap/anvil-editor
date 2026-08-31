@@ -79,6 +79,7 @@ test.describe("Git View command", function()
     context.original_projects = core.projects
     context.original_active_view = core.active_view
     context.original_active_window = core.active_window
+    context.original_root_panel = core.root_panel
     context.original_nag_show = core.nag_view.show
     context.original_set_clipboard = system.set_clipboard
     context.original_linewrapping_default = config.plugins.linewrapping.enable_by_default
@@ -91,6 +92,7 @@ test.describe("Git View command", function()
     core.projects = context.original_projects
     core.active_view = context.original_active_view
     core.active_window = context.original_active_window
+    core.root_panel = context.original_root_panel
     core.nag_view.show = context.original_nag_show
     system.set_clipboard = context.original_set_clipboard
     config.plugins.linewrapping.enable_by_default = context.original_linewrapping_default
@@ -212,6 +214,51 @@ test.describe("Git View command", function()
     view:on_mouse_pressed("left", 10, second_row_y, 1)
     test.equal(view.model:selected_commit().hash, "b")
     test.equal(session.hidden, false)
+  end)
+
+  test.it("routes auxiliary mouse navigation before Git pointer input", function(context)
+    local root = RootPanel()
+    root.position.x, root.position.y = 0, 0
+    root.size.x, root.size.y = 1000, 600
+    core.root_panel = root
+
+    local first = View()
+    local active_pane = panes.create { factory = function() return first end }
+    local second = View()
+    panes.present(second, { pane = active_pane })
+
+    local git_pane = panes.split(active_pane, "right", {
+      factory = function() return View() end,
+      focus = true,
+    })
+    local _, view = open_fake_git_view(context.project)
+    local tab = view.model:log_tab()
+    tab.commits = {
+      { hash = "a", short_hash = "a", subject = "First", parents = {} },
+    }
+    tab.selected_commit = 1
+
+    panes.focus(active_pane)
+    root:update()
+    local x = view.position.x + view.size.x / 2
+    local y = view.position.y + view.size.y / 2
+    local tab_count = #view.model.tabs
+
+    core.on_event("mousepressed", "x", x, y, 2)
+    core.on_event("mousereleased", "x", x, y)
+
+    test.equal(panes.active(), active_pane)
+    test.equal(active_pane.current_view, first)
+    test.equal(git_pane.current_view, view)
+    test.equal(#view.model.tabs, tab_count)
+
+    core.on_event("mousepressed", "y", x, y, 1)
+    core.on_event("mousereleased", "y", x, y)
+
+    test.equal(panes.active(), active_pane)
+    test.equal(active_pane.current_view, second)
+    test.equal(git_pane.current_view, view)
+    test.equal(#view.model.tabs, tab_count)
   end)
 
   test.it("keeps existing commits visible while the Git Log refreshes", function(context)

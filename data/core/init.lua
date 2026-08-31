@@ -2024,15 +2024,21 @@ function core.on_event(type, ...)
     local modal = dispatch_modal_input("mouse_moved", ...)
     if not modal then core.root_panel:on_mouse_moved(...) end
   elseif type == "mousepressed" then
+    local button = ...
     local modal = dispatch_modal_input("mouse_pressed", ...)
     if modal then
       did_keymap = true
+    elseif button == "x" or button == "y" then
+      did_keymap = keymap.on_mouse_pressed(...)
     elseif not core.root_panel:on_mouse_pressed(...) then
       did_keymap = keymap.on_mouse_pressed(...)
     end
   elseif type == "mousereleased" then
+    local button = ...
     local modal = dispatch_modal_input("mouse_released", ...)
-    if not modal then core.root_panel:on_mouse_released(...) end
+    if not modal and button ~= "x" and button ~= "y" then
+      core.root_panel:on_mouse_released(...)
+    end
   elseif type == "mouseleft" then
     local modal = dispatch_modal_input("mouse_left")
     if not modal then core.root_panel:on_mouse_left() end
