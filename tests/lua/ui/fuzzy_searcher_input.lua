@@ -1,5 +1,6 @@
 local config = require "core.config"
 local core = require "core"
+local command = require "core.command"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local keymap = require "core.keymap"
 local test = require "core.test"
@@ -64,5 +65,20 @@ test.describe("Fuzzy Searcher input", function()
     local buffer = picker.input.textview.buffer
     local line1, column1, line2, column2 = buffer:get_selection(true)
     test.equal(buffer:get_text(line1, column1, line2, column2), "camel")
+  end)
+
+  test.it("fills the query from the selected result and selects the new text", function()
+    fuzzy_searcher.open(">old query")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker.results = {
+      { kind = "command", label = "core:open_file", command = "core:open_file" },
+    }
+    picker.selected = 1
+
+    test.ok(command.perform("fuzzy:fill_prompt_from_selected"))
+
+    local buffer = picker.input.textview.buffer
+    test.equal(picker.input:get_text(), ">core:open_file")
+    test.same({ buffer:get_selection() }, { 1, 2, 1, #">core:open_file" + 1 })
   end)
 end)

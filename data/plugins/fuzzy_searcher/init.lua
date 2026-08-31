@@ -3534,6 +3534,26 @@ function FSView:selected_result()
   if r and not r.header then return r end
 end
 
+function FSView:fill_prompt_from_selected()
+  if self.static_mode or not self.input then return false end
+  local result = self:selected_result()
+  local text = fuzzy_searcher.result_main_text(result)
+  if not text then return false end
+
+  local before, marker = fuzzy_searcher.split_prompt_mode_marker(self.input:get_text())
+  local prefix = marker ~= "" and (before .. marker) or ""
+  local prompt = prefix .. text
+  self.input:set_text(prompt, false)
+  self.input.textview.buffer:set_selection(1, #prefix + 1, 1, #prompt + 1)
+  ensure_input_focus(self, "fill-prompt-from-selected")
+  core.log_quiet(
+    "Fuzzy Searcher: filled prompt from selected %s result (%d bytes)",
+    tostring(result.kind or "unknown"),
+    #text
+  )
+  return true
+end
+
 function FSView:copy_selected()
   local r = self:selected_result()
   local text = fuzzy_searcher.result_main_text(r)
@@ -6695,6 +6715,10 @@ command.add(picker_active, {
   ["fuzzy:confirm"] = picker_confirm,
   ["fuzzy:confirm_side"] = picker_confirm_side,
   ["fuzzy:reveal_selected_in_explorer"] = picker_reveal_selected_in_explorer,
+  ["fuzzy:fill_prompt_from_selected"] = function()
+    local view = current_picker()
+    if view then return view:fill_prompt_from_selected() end
+  end,
   ["fuzzy:copy_selected"] = function()
     local view = current_picker()
     if view then view:copy_selected() end
@@ -6747,6 +6771,7 @@ core.fuzzy_searcher_install_picker_keymaps = function()
     ["ctrl+shift+l"] = "fuzzy:reveal_selected_in_explorer",
     ["ctrl+c"] = "fuzzy:copy_selected",
     ["ctrl+i"] = "fuzzy:toggle_ignored_files",
+    ["tab"] = "fuzzy:fill_prompt_from_selected",
     ["up"] = "fuzzy:previous",
     ["down"] = "fuzzy:next",
     ["alt+left"] = "fuzzy:prompt_history_previous",
