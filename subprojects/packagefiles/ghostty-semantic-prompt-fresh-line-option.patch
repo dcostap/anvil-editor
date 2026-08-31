@@ -52,7 +52,7 @@ index 99a45e1..033563b 100644
              const str = if (value) |v| v.ptr[0..v.len] else "";
              wrapper.terminal.setTitle(str) catch return .out_of_memory;
 diff --git a/src/terminal/stream_terminal.zig b/src/terminal/stream_terminal.zig
-index 2599097..3731d21 100644
+index 2599097..e5c8993 100644
 --- a/src/terminal/stream_terminal.zig
 +++ b/src/terminal/stream_terminal.zig
 @@ -37,6 +37,9 @@ pub const Handler = struct {
@@ -65,13 +65,15 @@ index 2599097..3731d21 100644
      /// True after an error prevented a terminal-owned semantic update.
      ///
      /// When an error happens during terminal processing, streams continue
-@@ -347,7 +350,16 @@ pub const Handler = struct {
+@@ -347,7 +350,18 @@ pub const Handler = struct {
              .full_reset => self.terminal.fullReset(),
              .start_hyperlink => try self.terminal.screens.active.startHyperlink(value.uri, value.id),
              .end_hyperlink => self.terminal.screens.active.endHyperlink(),
 -            .semantic_prompt => try self.terminal.semanticPrompt(value),
 +            .semantic_prompt => {
 +                var prompt = value;
++                // Some TUIs use A as a marker while they control all cursor movement.
++                // Limit this compatibility mode to their synchronized repaint window.
 +                if (!self.semantic_prompt_fresh_line_in_synchronized_output and
 +                    self.terminal.modes.get(.synchronized_output) and
 +                    prompt.action == .fresh_line_new_prompt)

@@ -379,6 +379,20 @@ Current Anvil SDL3 patch:
 
 When updating SDL3 upstream, verify this patch still applies. If it fails, rebase/regenerate the patch against the new SDL3 revision and keep it tracked in the top-level Anvil repo.
 
+Current Anvil Ghostty patch:
+
+- `subprojects/packagefiles/ghostty-semantic-prompt-fresh-line-option.patch`
+- listed by `diff_files` in `subprojects/ghostty.wrap`
+- adds a libghostty-vt option for OSC 133 A during synchronized output
+- Anvil disables A's fresh-line action only inside synchronized output
+- this prevents Pi's differential renderer and Ghostty from tracking different cursor rows
+- normal OSC 133 shell behavior remains active outside synchronized output
+- `tests/fixtures/terminal_semantic_prompt_repaint.ps1` covers the original Pi sequence
+
+Pi emits OSC 133 A as a zero-width marker during synchronized TUI repaints. Ghostty treats A as a fresh-line command. If Pi emits A outside the first column, Ghostty moves down one row while Pi does not. Pi can then erase the displaced message during a later repaint. Pi issue `#2971` reported the same Ghostty-only problem.
+
+When updating Ghostty, verify this patch still applies. Remove it only after Pi and Ghostty agree on OSC 133 A behavior during TUI repaints.
+
 ## Why not Program Files for dev?
 
 Do not use `C:\Program Files` for this dev install. It causes admin/write-permission issues and makes junction/rebuild workflows annoying. Use the writable dev portable folder instead.

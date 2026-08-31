@@ -884,6 +884,13 @@ static bool initialize_terminal(
     session->terminal, GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
     (const void *)terminal_desktop_notification
   );
+  /*
+   * Pi emits OSC 133 A inside synchronized repaints as a zero-width zone marker.
+   * Ghostty gives A its specified fresh-line action. Pi does not track that move.
+   * A later Pi erase can therefore remove a user message from Ghostty's model.
+   * Suppress the move only during synchronized output. Keep normal shell behavior.
+   * See tests/fixtures/terminal_semantic_prompt_repaint.ps1 and Pi issue #2971.
+   */
   bool semantic_prompt_fresh_line_in_synchronized_output = false;
   if (ghostty_terminal_set(
       session->terminal,
