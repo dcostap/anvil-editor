@@ -77,4 +77,49 @@ test.describe("Fuzzy Searcher Text Search context", function()
     test.equal(signature_call.color, style.dim)
     test.ok(context_call.x > 200, "expected the function context on the right of the file column")
   end)
+
+  test.it("keeps standard horizontal padding between the file and declaration", function()
+    local calls = {}
+    local symbol_x
+    symbol_index.enclosing_symbol = function()
+      return {
+        name = "parse_expression",
+        kind = "function",
+        declaration = "Parser::parse_expression(Token token)",
+        declaration_name_span = { 9, 24 },
+      }
+    end
+    renderer.draw_text = function(font, text, x)
+      calls[#calls + 1] = { font = font, text = text, x = x }
+      return x + font:get_width(text)
+    end
+    renderer.draw_rect = function() end
+    file_icons.draw = function() end
+    symbol_icons.draw = function(_, x)
+      symbol_x = x
+    end
+
+    helpers.draw_grep_result_row(style.font, {
+      kind = "grep",
+      file = "src/a/very/long/path/that/fills/the/file/column/parser.lua",
+      abs_path = "C:/project/src/parser.lua",
+      line = 42,
+      col = 9,
+      text = "return parse_expression(token)",
+      exact = true,
+      grep_query = "parse_expression",
+    }, 0, 0, 900, false)
+
+    local line_call
+    for _, call in ipairs(calls) do
+      if call.text:find(":42", 1, true) == 1 then line_call = call; break end
+    end
+    test.not_nil(line_call, "expected the file line suffix")
+    test.not_nil(symbol_x, "expected the declaration symbol icon")
+    local line_end = line_call.x + line_call.font:get_width(line_call.text)
+    test.ok(
+      symbol_x - line_end >= style.padding.x,
+      "expected standard horizontal padding before the declaration"
+    )
+  end)
 end)

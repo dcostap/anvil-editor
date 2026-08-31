@@ -2666,7 +2666,7 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
   local path_w, gap, text_w = grep_row_columns(width)
   local symbol = fuzzy_searcher.grep_enclosing_symbol(result)
   local context_width = 0
-  local context_gap = math.max(4 * (SCALE or 1), style.padding.x / 2)
+  local context_gap = math.max(4 * (SCALE or 1), style.padding.x)
   if symbol then
     local context_font = style.get_small_font(font)
     local symbol_icons = require "core.symbol_icons"
