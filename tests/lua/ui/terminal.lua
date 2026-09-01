@@ -659,6 +659,20 @@ test.describe("Terminal View", function()
     test.not_ok(core.redraw)
   end)
 
+  test.it("does not reset the host blink clock for terminal output", function(context)
+    local view = terminal.open()
+    local session = context.sessions[1]
+    view.status_revision = session.revision
+    view.rows_dirty = nil
+    session.next_changed = true
+    session.next_render_changed = true
+    local blink_start = core.blink_start
+
+    view:service_session(true)
+
+    test.equal(core.blink_start, blink_start)
+  end)
+
   test.it("does not send shifted layout text twice after encoding its key", function(context)
     local view = terminal.open()
     local event = {

@@ -609,7 +609,6 @@ function TerminalView:service_session(include_rows)
   local rows_were_dirty = include_rows and self.rows_dirty
   local needs_snapshot = changed or state_changed or rows_were_dirty
   if needs_snapshot then
-    if include_rows and render_changed == true then core.blink_reset() end
     local previous_title = self.snapshot and self.snapshot.title
     local previous_pwd = self.snapshot and self.snapshot.pwd
     local snapshot_started = record_perf and system.get_time()
