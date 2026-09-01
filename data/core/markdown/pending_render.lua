@@ -24,7 +24,7 @@ local CALLOUT_ICONS = {
 function pending_render.current_source(
   view, line, previous, current_text, code,
   source_fallback, prose_render, scaled_font, heading_from_source, heading_font,
-  reveal_code_delimiter, code_render
+  thematic_break_fragment, reveal_code_delimiter, code_render
 )
   local function inline_fragments(text, base_col)
     local fragments = {}
@@ -231,12 +231,7 @@ function pending_render.current_source(
     if thematic then
       local render = prose_render(view, current_text, {
         fragments = {
-          {
-            source_col1 = 1,
-            source_col2 = #current_text + 1,
-            text = "────────────────",
-            color = style.markdown_live_rule,
-          },
+          thematic_break_fragment(view, 1, #current_text + 1),
         },
       })
       render.markdown_pending_provenance = "unavailable"

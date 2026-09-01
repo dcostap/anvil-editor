@@ -2100,6 +2100,25 @@ local function table_available_width(view)
   return math.max(math.floor(SCALE * 160), width)
 end
 
+function live.thematic_break_fragment(view, col1, col2, semantic_id)
+  local width = table_available_width(view)
+  return {
+    source_col1 = col1, source_col2 = col2,
+    text = "", width = width,
+    widget = {
+      width = width,
+      draw = function(_, _, x, y, visual_row_height)
+        local thickness = math.max(1, math.floor(SCALE))
+        renderer.draw_rect(
+          x, y + math.floor((visual_row_height - thickness) / 2),
+          width, thickness, style.markdown_live_rule
+        )
+      end,
+    },
+    semantic_id = semantic_id,
+  }
+end
+
 local function table_geometry_key(font, available_width)
   return table.concat({
     tostring(font), tostring(font:get_size()), tostring(available_width),
@@ -2697,7 +2716,7 @@ local function semantic_break_fragments(view, line_text, line, reveal_units)
     then
       fragments[#fragments + 1] = {
         source_col1 = node.source.col1, source_col2 = #line_text + 1,
-        text = " ↵", color = style.markdown_live_hidden_syntax,
+        text = "", hidden = true,
         semantic_id = node.id, hard_break = true,
       }
     end
@@ -3102,11 +3121,9 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         }
       end
     elseif node.type == "thematic_break" and node.source.line1 == line then
-      fragments[#fragments + 1] = {
-        source_col1 = node.source.col1, source_col2 = #line_text + 1,
-        text = "────────────────", color = style.markdown_live_rule,
-        semantic_id = node.id,
-      }
+      fragments[#fragments + 1] = live.thematic_break_fragment(
+        view, node.source.col1, #line_text + 1, node.id
+      )
     elseif node.type == "quote" and not seen.quote then
       local col1, col2 = line_text:find("^%s*>%s*")
       if col1 then
@@ -4031,7 +4048,8 @@ local function pending_source_render(view, line, render_line, current_text, code
   local render = pending_renderer.current_source(
     view, line, render_line, current_text, code,
     raw_pending_source_render, prose_render_line, markdown_live_scaled_font,
-    heading_for_line, heading_font, reveal_code_delimiter,
+    heading_for_line, heading_font, live.thematic_break_fragment,
+    reveal_code_delimiter,
     pending_fenced_code_render
   )
   local heading = not code and heading_for_line(current_text, line)

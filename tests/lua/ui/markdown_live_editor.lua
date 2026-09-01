@@ -525,12 +525,12 @@ test.describe("Markdown Live Preview", function()
 
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
     local pending = test.not_nil(view:get_line_render(3))
-    test.equal(visible_render_text(view, 3), "────────────────")
+    test.not_nil(test.not_nil(pending.fragments[1]).widget)
     test.equal(pending.source_text, "***")
     test.equal(pending.markdown_buffer_revision, buffer.text_revision)
     local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
-    test.equal(visible_render_text(view, 3), "────────────────")
+    test.not_nil(test.not_nil(view:get_line_render(3)).fragments[1].widget)
   end)
 
   test.it("reprojects a newly created Setext heading while semantics are pending", function()
@@ -3039,8 +3039,9 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("presents ordered markers, hard breaks, and indented code without replacing source content", function()
+  test.it("presents ordered markers and hides inactive hard break source", function()
     local view, buffer = make_view("    local code\nplain\n\n1. first\n   2. nested\n\nline  \nnext\nplain", "remaining-blocks.md")
+    view:set_wrapping_enabled(true)
     buffer:set_selection(9, 1)
     refresh(view)
     local ordered = test.not_nil(view:get_line_render(4))
@@ -3056,7 +3057,9 @@ test.describe("Markdown Live Preview", function()
     for _, fragment in ipairs(hard_break.fragments) do
       if fragment.hard_break then break_fragment = fragment break end
     end
-    test.equal(test.not_nil(break_fragment).text, " ↵")
+    test.equal(test.not_nil(break_fragment).text, "")
+    test.equal(break_fragment.hidden, true)
+    test.equal(visible_render_text(view, 7), "line")
     test.equal(view:get_line_render(1), nil)
     buffer:set_selection(7, 6)
     test.equal(visible_render_text(view, 7), "line  ")
@@ -3515,10 +3518,23 @@ test.describe("Markdown Live Preview", function()
 
   test.it("presents semantic thematic breaks and reveals their source when active", function()
     local view, buffer = make_view("before\n\n---\n\nafter", "rule.md")
+    view:set_wrapping_enabled(true)
     buffer:set_selection(5, 1)
     refresh(view)
     local rule = test.not_nil(view:get_line_render(3))
-    test.not_nil(rule.fragments[1].text)
+    local fragment = test.not_nil(rule.fragments[1])
+    test.equal(fragment.text, "")
+    test.not_nil(fragment.widget)
+    test.ok(fragment.width > view.size.x / 2)
+    local old_draw_rect = renderer.draw_rect
+    local drawn_width
+    renderer.draw_rect = function(x, y, width)
+      drawn_width = width
+    end
+    local ok, err = pcall(view.draw_line_text, view, 3, 0, 0)
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err) end
+    test.equal(drawn_width, fragment.width)
     buffer:set_selection(3, 2)
     test.equal(visible_render_text(view, 3), "---")
   end)
