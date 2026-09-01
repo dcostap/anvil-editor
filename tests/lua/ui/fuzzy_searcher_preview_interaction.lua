@@ -2,6 +2,9 @@ local command = require "core.command"
 local core = require "core"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local panes = require "core.panes"
+local poi = require "core.poi"
+local renderer = require "renderer"
+local style = require "core.style"
 local test = require "core.test"
 local View = require "core.view"
 
@@ -46,6 +49,19 @@ test.describe("Fuzzy Searcher preview interaction", function()
 
     test.equal(preview:get_current_line_highlight_mode(), false)
     test.equal(preview.buffer.read_only, true)
+
+    local divider
+    local original_draw_rect = renderer.draw_rect
+    renderer.draw_rect = function(x, y, width, height, color)
+      divider = { x = x, y = y, width = width, height = height, color = color }
+    end
+    preview:draw_gutter_divider()
+    renderer.draw_rect = original_draw_rect
+
+    test.equal(divider.x + divider.width, preview.position.x + preview:get_gutter_width())
+    test.equal(divider.y, preview.position.y)
+    test.equal(divider.height, preview.size.y)
+    test.equal(divider.color, style.divider)
   end)
 
   test.it("cycles local focus into the preview for cursor movement", function(context)
@@ -188,6 +204,9 @@ test.describe("Fuzzy Searcher preview interaction", function()
     preview.buffer:set_selection(82, 3, 82, 6)
     preview.scroll.x, preview.scroll.to.x = 14, 14
     preview.scroll.y, preview.scroll.to.y = 900, 900
+
+    local point = test.not_nil(poi.point_at_caret(preview, { activatable = true, silent = true }))
+    test.equal(point.kind, "fuzzy-preview-position")
 
     test.ok(command.perform("core:activate_point_of_interest"))
 

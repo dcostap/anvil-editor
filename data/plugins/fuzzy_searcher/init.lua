@@ -44,6 +44,23 @@ function PreviewTextView:restore_preview_search_ranges()
   end
 end
 
+function PreviewTextView:draw_gutter_divider()
+  local width = math.max(1, style.divider_size)
+  renderer.draw_rect(
+    self.position.x + self:get_gutter_width() - width,
+    self.position.y,
+    width,
+    self.size.y,
+    style.divider
+  )
+end
+
+function PreviewTextView:draw()
+  local drawn = PreviewTextView.super.draw(self)
+  if drawn then self:draw_gutter_divider() end
+  return drawn
+end
+
 function PreviewTextView:get_line_number_gutter_width()
   return self:get_font():get_width("00000")
 end
@@ -6344,7 +6361,7 @@ function FSView:reveal_selected_in_explorer()
   command.perform("editor:reveal_active_file_in_explorer", path)
 end
 
-function FSView:open_file_result(r, target_side)
+function FSView:open_file_result(r, target_side, restore)
   local path = fullpath(r)
   local line, col, line2, col2 = r.line or 1, r.col or 1, nil, nil
   if r.kind == "grep" then
@@ -6365,15 +6382,26 @@ function FSView:open_file_result(r, target_side)
   })
   if view and view.buffer then
     local function apply_selection()
-      view.buffer:set_selection(line, col, line2 or line, col2 or col)
+      if restore and restore.selections then
+        view.buffer:set_selection_list(
+          restore.selections, restore.last_selection, { sanitized = true }
+        )
+      else
+        view.buffer:set_selection(line, col, line2 or line, col2 or col)
+      end
     end
     if view.with_selection_state then
       view:with_selection_state(apply_selection)
     else
       apply_selection()
     end
-    if view.scroll_to_line then view:scroll_to_line(line, false, true) end
-    if view.scroll_to_make_visible then
+    if restore and restore.scroll then
+      view.scroll.x, view.scroll.y = restore.scroll.x, restore.scroll.y
+      view.scroll.to.x, view.scroll.to.y = restore.scroll.x, restore.scroll.y
+    elseif view.scroll_to_line then
+      view:scroll_to_line(line, false, true)
+    end
+    if not restore and view.scroll_to_make_visible then
       view:scroll_to_make_visible(line, col, true, {
         line2 = line2 or line,
         col2 = col2 or col,
@@ -6382,6 +6410,20 @@ function FSView:open_file_result(r, target_side)
     end
   end
   return view
+end
+
+function FSView:open_focused_preview(target_side)
+  local preview = self.preview_view
+  local result = self:selected_result()
+  if not (preview and preview:extends(TextView) and result and result.file) then return false end
+
+  local state = preview:get_selection_state()
+  local restore = {
+    selections = { table.unpack(state.selections or {}) },
+    last_selection = state.last_selection,
+    scroll = { x = preview.scroll.x, y = preview.scroll.y },
+  }
+  return self:open_file_result(result, target_side, restore)
 end
 
 function FSView:activate_create_path(r, target_side)
@@ -6861,9 +6903,24 @@ end
 
 poi.add_activation_provider("fuzzy-searcher-result", {
   priority = 300,
-  point_at_caret = function()
+  point_at_caret = function(_, focused_view)
     local view = current_picker()
-    if not view or view:is_preview_focused() then return nil end
+    if not view then return nil end
+    if view:is_preview_focused() and focused_view == view.preview_view then
+      local line, col, line2, col2 = focused_view.buffer:get_selection()
+      return {
+        kind = "fuzzy-preview-position",
+        line = line,
+        col = col,
+        line2 = line2,
+        col2 = col2,
+        text_bounds = true,
+        activate = function(_, _, opts)
+          return view:open_focused_preview(opts and opts.placement == "split") ~= false
+        end,
+      }
+    end
+    if view:is_preview_focused() then return nil end
     return {
       kind = "fuzzy-search-result",
       line = 1,
