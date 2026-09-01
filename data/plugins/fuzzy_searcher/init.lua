@@ -2085,7 +2085,7 @@ end
 
 local function draw_match_highlight_rect(x, y, w, h)
   if w <= 0 or h <= 0 then return end
-  renderer.draw_rect(x, y, w, h, style.selectionhighlight)
+  renderer.draw_rect(x, y, w, h, style.search_selection_secondary)
   local outline = style.search_selection_secondary_outline
   if not outline then return end
   local t = math.max(1, SCALE or 1)

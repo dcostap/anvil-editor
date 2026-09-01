@@ -79,7 +79,7 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     local draw_count = 0
     renderer.draw_rect = function(x, y, w, h, color)
       draw_count = draw_count + 1
-      if same_rgb(color, style.selectionhighlight) and not draw_order.match then
+      if color == style.search_selection_secondary and not draw_order.match then
         draw_order.match = draw_count
       end
       if same_rgb(color, probe_color) then draw_order.copy = draw_count end
