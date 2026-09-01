@@ -7774,7 +7774,7 @@ function TextView:search_match_style(primary)
   if primary then
     return style.search_selection, style.search_selection_outline
   end
-  return style.selectionhighlight, style.search_selection_secondary_outline
+  return style.search_selection_secondary, style.search_selection_secondary_outline
 end
 
 ---Iterate the screen rectangles occupied by a single-line Buffer range.

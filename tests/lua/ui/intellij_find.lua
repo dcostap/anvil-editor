@@ -101,6 +101,25 @@ test.describe("TextView Prompt Bar find", function()
     assert_selection(view, 1, 1, 1, 6)
   end)
 
+  test.it("returns Local Focus Cycle commands from find input to its Text View", function(context)
+    local view = open_editor(context, "alpha beta alpha\n")
+    local sibling_buffer = track(context, "buffers", core.open_buffer())
+    panes.split(panes.pane_for_view(view), "right", {
+      factory = function() return track(context, "views", Editor(sibling_buffer)) end,
+      focus = false,
+    })
+
+    test.ok(command.perform("editor:replace"))
+    active_find_input_for(view)
+    test.ok(command.perform("pane:focus_local_next"))
+    test.equal(core.active_view, view)
+
+    test.ok(command.perform("editor:replace"))
+    active_find_input_for(view)
+    test.ok(command.perform("pane:focus_local_previous"))
+    test.equal(core.active_view, view)
+  end)
+
   test.it("find navigation treats matches near the bottom edge as not already visible", function(context)
     local lines = {}
     for i = 1, 30 do lines[i] = "line " .. i end
@@ -172,7 +191,7 @@ test.describe("TextView Prompt Bar find", function()
     local rects = {}
     local old_draw_rect = renderer.draw_rect
     renderer.draw_rect = function(x, y, w, h, color)
-      if color == style.selectionhighlight then
+      if color == style.search_selection_secondary then
         rects[#rects + 1] = { x = x, y = y, w = w, h = h }
       end
     end

@@ -193,6 +193,7 @@ style.diff_overview_modify = { common.color "rgba(100, 145, 195, 0.54)" }
 style.search_selection = c("214283")
 style.search_selection_text = nil
 style.search_selection_outline = c("c8c8c8")
+style.search_selection_secondary = c("274324")
 style.search_selection_secondary_outline = c("777777")
 style.fuzzy_searcher_match = c("000000")
 style.fuzzy_searcher_match_background = { 186, 151, 82, 230 }

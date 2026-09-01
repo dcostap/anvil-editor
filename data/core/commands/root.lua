@@ -145,6 +145,20 @@ local function move_pane_to(source)
 end
 
 local function focus_local(pane, step)
+  local active = core.active_view
+  local active_owner = panes.owner_for_view(active)
+  if active_owner and active_owner ~= active and active_owner == pane.current_view then
+    local surfaces = active_owner:get_surface_focus_targets()
+    local is_surface = false
+    for _, target in ipairs(surfaces or {}) do
+      if target == active then is_surface = true break end
+    end
+    if not is_surface then
+      core.set_active_view(active_owner)
+      return true
+    end
+  end
+
   local targets = {}
   for _, member in ipairs(panes.ordered()) do
     if member.group == pane.group then

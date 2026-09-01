@@ -1160,6 +1160,7 @@ local function install_find_shortcut_override()
     ["shift+up"] = { "editor:find_field_add_previous", "core:select_to_previous_line" },
     ["shift+down"] = { "editor:find_field_add_next", "core:select_to_next_line" },
     ["tab"] = { "editor:find_toggle_replace_field", "core:complete_prompt", "core:indent" },
+    ["shift+tab"] = { "editor:find_toggle_replace_field", "core:unindent" },
     ["return"] = { "editor:find_submit_or_replace", "core:submit_prompt", "core:newline", "core:select_dialog_entry" },
     ["keypad enter"] = { "editor:find_submit_or_replace", "core:submit_prompt", "core:newline", "core:select_dialog_entry" },
     ["ctrl+return"] = { "editor:find_replace_all_confirm", "core:newline_below" },
@@ -1167,6 +1168,7 @@ local function install_find_shortcut_override()
 
   prioritize_key("escape", "editor:find_close")
   prioritize_key("tab", "editor:find_toggle_replace_field")
+  prioritize_key("shift+tab", "editor:find_toggle_replace_field")
   prioritize_key("return", "editor:find_submit_or_replace")
   prioritize_key("keypad enter", "editor:find_submit_or_replace")
   prioritize_key("ctrl+return", "editor:find_replace_all_confirm")
