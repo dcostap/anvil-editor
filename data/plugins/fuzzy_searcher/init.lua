@@ -6351,7 +6351,22 @@ function FSView:open_file_result(r, target_side)
     focus = true,
   })
   if view and view.buffer then
-    view.buffer:set_selection(line, col, line2 or line, col2 or col)
+    local function apply_selection()
+      view.buffer:set_selection(line, col, line2 or line, col2 or col)
+    end
+    if view.with_selection_state then
+      view:with_selection_state(apply_selection)
+    else
+      apply_selection()
+    end
+    if view.scroll_to_line then view:scroll_to_line(line, false, true) end
+    if view.scroll_to_make_visible then
+      view:scroll_to_make_visible(line, col, true, {
+        line2 = line2 or line,
+        col2 = col2 or col,
+        vertical = false,
+      })
+    end
   end
   return view
 end
