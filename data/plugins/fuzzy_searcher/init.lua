@@ -26,6 +26,17 @@ local fuzzy_native = require "fuzzy"
 
 local PreviewTextView = TextView:extend()
 
+function PreviewTextView:new(buffer)
+  PreviewTextView.super.new(self, buffer)
+  self.interactive = false
+  self.show_current_line_highlight = false
+end
+
+function PreviewTextView:set_interactive(interactive)
+  self.interactive = interactive == true
+  self.show_current_line_highlight = self.interactive
+end
+
 function PreviewTextView:get_line_number_gutter_width()
   return self:get_font():get_width("00000")
 end
@@ -34,10 +45,12 @@ function PreviewTextView:draw_line_gutter(line, x, y, width)
   local lh = self:get_line_height()
   if self:line_numbers_visible() then
     local color = style.line_number
-    for _, line1, _, line2 in self.buffer:get_selections(true) do
-      if line >= line1 and line <= line2 then
-        color = style.line_number2
-        break
+    if self.interactive then
+      for _, line1, _, line2 in self.buffer:get_selections(true) do
+        if line >= line1 and line <= line2 then
+          color = style.line_number2
+          break
+        end
       end
     end
     -- Preview gutters are fixed-width and left-aligned so the label itself
@@ -212,6 +225,8 @@ local function modal_picker_command_allowed(cmd)
       or cmd == "core:open_text_capture"
       or cmd == "core:activate_point_of_interest"
       or cmd == "core:activate_point_of_interest_split"
+      or cmd == "pane:focus_local_next"
+      or cmd == "pane:focus_local_previous"
 end
 
 local function modal_textbox_command_allowed(cmd)
@@ -3308,6 +3323,7 @@ function FSView:new(prefix, opts)
   self.preview_highlight_key = nil
   self.preview_blocked = nil
   self.preview_mouse_pressed = false
+  self.preview_interactive = false
   self.everything_folder_results = {}
   self.everything_file_results = {}
   self.everything_folder_total = 0
@@ -3804,6 +3820,9 @@ function FSView:preview_contains(x, y)
 end
 
 function FSView:clear_preview_view()
+  if self.preview_interactive and core.active_view == self.preview_view then
+    self:set_preview_interactive(false)
+  end
   if self.preview_view and self.preview_view.buffer then
     if self.preview_view.cancel_horizontal_extent_scan then
       self.preview_view:cancel_horizontal_extent_scan()
@@ -3816,6 +3835,7 @@ function FSView:clear_preview_view()
   self.preview_highlight_key = nil
   self.preview_blocked = nil
   self.preview_mouse_pressed = false
+  self.preview_interactive = false
 end
 
 local function draw_preview_debug(view, result, x, y, w, h)
@@ -3935,6 +3955,8 @@ function FSView:update_preview_view()
         self.preview_blocked = { reason = "Cannot open file", path = path }
         return nil
       end
+      buffer.read_only = true
+      buffer.read_only_reason = "Fuzzy Searcher previews are read-only"
       view = PreviewTextView(buffer)
       view:set_wrapping_enabled(false)
     end
@@ -4024,6 +4046,35 @@ function FSView:update_selected_preview()
   return self:update_preview_view()
 end
 
+function FSView:set_preview_interactive(interactive)
+  local preview = self.preview_view
+  if not (preview and preview:extends(TextView)) then return false end
+
+  interactive = interactive == true
+  self.preview_interactive = interactive
+  preview:set_interactive(interactive)
+  if interactive then
+    self:swap_active_child(nil)
+    core.set_active_view(preview)
+    core.blink_reset()
+    core.log_quiet("Fuzzy Searcher preview focused: file=%s",
+      tostring(preview.buffer and preview.buffer.abs_filename or "unknown"))
+  else
+    self.prev_view = self.source_view or self.prev_view
+    ensure_input_focus(self, "preview-focus-input")
+  end
+  self:schedule_update(true)
+  return true
+end
+
+function FSView:cycle_local_focus(step)
+  if not (self.preview_view and self.preview_view:extends(TextView)) then
+    self:update_selected_preview()
+  end
+  if not (self.preview_view and self.preview_view:extends(TextView)) then return false end
+  return self:set_preview_interactive(core.active_view ~= self.preview_view)
+end
+
 -- Treat the floating overlay as a modal surface for mouse routing: while it is
 -- open, editor hover/click/wheel events behind it should not leak through.
 function FSView:mouse_on_top(x, y)
@@ -4036,8 +4087,29 @@ function FSView:on_modal_key_pressed(key, ...)
   local stroke = modal_key_to_stroke(key)
   local picker_cmd = modal_picker_command(stroke, self)
   local textbox_cmd = not picker_cmd and modal_textbox_command(stroke)
-  if picker_cmd then
-    ensure_input_focus(self)
+  local preview_cmd = self.preview_interactive
+    and modal_command(stroke, function(cmd)
+      return type(cmd) == "string"
+        and cmd:match("^fuzzy:") == nil
+        and cmd ~= "pane:focus_local_next"
+        and cmd ~= "pane:focus_local_previous"
+    end) or nil
+  if picker_cmd == "pane:focus_local_next" then
+    self:cycle_local_focus(1)
+  elseif picker_cmd == "pane:focus_local_previous" then
+    self:cycle_local_focus(-1)
+  elseif self.preview_interactive and core.active_view == self.preview_view then
+    if picker_cmd == "fuzzy:close" then
+      command.perform(picker_cmd, ...)
+    elseif preview_cmd then
+      command.perform(preview_cmd, ...)
+    end
+  elseif picker_cmd then
+    if self.preview_interactive then
+      self:set_preview_interactive(false)
+    else
+      ensure_input_focus(self)
+    end
     fuzzy_focus_log("key-picker-command", self,
       "key=" .. tostring(key) .. " stroke=" .. tostring(stroke)
         .. " cmd=" .. tostring(picker_cmd))
@@ -4065,10 +4137,12 @@ function FSView:on_modal_key_pressed(key, ...)
 end
 
 function FSView:on_modal_text_input()
+  if self.preview_interactive and core.active_view == self.preview_view then return true end
   return "target"
 end
 
 function FSView:on_modal_ime_text_editing()
+  if self.preview_interactive and core.active_view == self.preview_view then return true end
   return "target"
 end
 
@@ -4113,6 +4187,7 @@ function FSView:on_mouse_pressed(button, x, y, clicks)
   end
 
   if self.input and self.input:mouse_on_top(x, y) then
+    if self.preview_interactive then self:set_preview_interactive(false) end
     self.forward_mouse_to_child = true
     return FSView.super.on_mouse_pressed(self, button, x, y, clicks)
   end
@@ -4120,12 +4195,21 @@ function FSView:on_mouse_pressed(button, x, y, clicks)
   if self:preview_contains(x, y) then
     if not self.preview_view then self:update_preview_view() end
     if not self.preview_view then return true end
-    local interactive = self.preview_view:extends(ImageView) or self.preview_view:scrollbar_overlaps_point(x, y)
-    if interactive then
+    if self.preview_view:extends(TextView) then
+      self:set_preview_interactive(true)
       self.preview_mouse_pressed = true
-      call_preview_view_method(self.preview_view, self.preview_view.on_mouse_pressed, button, x, y, clicks)
+      local handled = call_preview_view_method(
+        self.preview_view, self.preview_view.on_mouse_pressed, button, x, y, clicks
+      )
+      if not handled then keymap.on_mouse_pressed(button, x, y, clicks) end
+    elseif self.preview_view:extends(ImageView)
+        or self.preview_view:scrollbar_overlaps_point(x, y)
+    then
+      self.preview_mouse_pressed = true
+      call_preview_view_method(
+        self.preview_view, self.preview_view.on_mouse_pressed, button, x, y, clicks
+      )
     end
-    self:swap_active_child(self.input)
     self:schedule_update(true)
     return true
   end
@@ -4144,7 +4228,11 @@ function FSView:on_mouse_pressed(button, x, y, clicks)
     self:schedule_update(true)
   end
 
-  self:swap_active_child(self.input)
+  if self.preview_interactive then
+    self:set_preview_interactive(false)
+  else
+    self:swap_active_child(self.input)
+  end
   return true
 end
 
@@ -4163,7 +4251,7 @@ function FSView:on_mouse_released(button, x, y)
     if self.preview_view then
       call_preview_view_method(self.preview_view, self.preview_view.on_mouse_released, button, x, y)
     end
-    self:swap_active_child(self.input)
+    if not self.preview_interactive then self:swap_active_child(self.input) end
     self:schedule_update(true)
     return true
   end
@@ -4177,7 +4265,13 @@ function FSView:on_mouse_released(button, x, y)
 
   self.pressed_result = nil
   self.pressed_clicks = 0
-  if self:is_visible() then self:swap_active_child(self.input) end
+  if self:is_visible() then
+    if self.preview_interactive then
+      self:set_preview_interactive(false)
+    else
+      self:swap_active_child(self.input)
+    end
+  end
   return true
 end
 
@@ -6157,6 +6251,7 @@ end
 function FSView:close(reason)
   if self.closed then return end
   self.closed = true
+  if self.preview_interactive then self:set_preview_interactive(false) end
   local cancel
   if self.file_picker and not self.file_picker_finished then
     self.file_picker_finished = true
@@ -6468,7 +6563,9 @@ function FSView:update()
       " before_len=" .. tostring(a.text_len) ..
       " mods=" .. modal_modkeys_string())
   end
-  if self.input and core.active_view ~= self.input.textview then
+  local expected_preview_focus = self.preview_interactive
+    and self.preview_view and core.active_view == self.preview_view
+  if self.input and core.active_view ~= self.input.textview and not expected_preview_focus then
     local state = view_label(core.active_view) .. "|" .. view_label(self.child_active)
     if state ~= self._last_unexpected_focus_state then
       self._last_unexpected_focus_state = state
