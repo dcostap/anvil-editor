@@ -166,6 +166,14 @@ Typical files:
 - `anvil_perf_..._lua_samples.csv` — Lua sampling data.
 - `anvil_perf_..._api_calls.csv` — wrapped renderer/system API call counts.
 - `anvil_perf_..._details.csv` — detailed counters/timers.
+- `anvil_perf_..._file_opens.csv` — detailed file-open lifecycle events and stages.
+
+When F11 recording is active, file opens record the request, path checks,
+Buffer load, View placement, first View update, first View draw, and first
+present. The lifecycle total ends at the first present. Later background work,
+such as language parsing, remains in the normal frame and detail metrics.
+The automated capture opens its target before recording, so its file-open trace
+only contains files opened during the recorded interval.
 
 The PowerShell command also prints the JSON summary to stdout.
 

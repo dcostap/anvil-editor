@@ -19,6 +19,10 @@ local function fmt_num(v)
   return string.format("%.0f", tonumber(v) or 0)
 end
 
+local function short_file_name(path)
+  return tostring(path or ""):match("[^/\\]+$") or tostring(path or "")
+end
+
 local function draw_hud()
   if core.perf_capture_active then return end
   if not hud.visible and not perf.is_recording() then return end
@@ -50,6 +54,16 @@ local function draw_hud()
     )
   end
   lines[#lines + 1] = string.format("Selections %.0f  sel-iters %.0f", tonumber(s.selection_count) or 0, tonumber(s.buffer_get_selections_iters) or 0)
+  if recording then
+    local opening = perf.file_open_status and perf.file_open_status()
+    if opening then
+      lines[#lines + 1] = string.format(
+        "Opening %s  %.1fms  %s",
+        short_file_name(opening.path), tonumber(opening.elapsed_ms) or 0,
+        tostring(opening.phase or "in progress")
+      )
+    end
+  end
   if not recording then
     lines[#lines + 1] = "F11 record detailed metrics"
   end

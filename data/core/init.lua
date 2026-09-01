@@ -1665,10 +1665,44 @@ local function filename_has_control_chars(filename)
   return type(filename) == "string" and filename:find("[%z\1-\31]") ~= nil
 end
 
+local function file_open_begin(path, source)
+  local perf = package.loaded["core.perf"]
+  return perf and perf.file_open_begin and perf.file_open_begin(path, source)
+end
+
+local function file_open_stage_begin(name)
+  local perf = package.loaded["core.perf"]
+  return perf and perf.file_open_stage_begin and perf.file_open_stage_begin(name)
+end
+
+local function file_open_stage_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_stage_end then perf.file_open_stage_end(token) end
+end
+
+local function file_open_mark(name, detail)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_mark then perf.file_open_mark(name, detail) end
+end
+
+local function file_open_attach_view(view)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_attach_view then perf.file_open_attach_view(view) end
+end
+
+local function file_open_fail(reason)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_fail then perf.file_open_fail(reason) end
+end
+
 function core.open_buffer(filename)
+  local operation = filename and file_open_begin(filename, "core.open_buffer")
+  local total_stage = operation and file_open_stage_begin("core_open_buffer")
   local new_file = true
   local abs_filename
   local close_textview = false
+  local file_size = 0
   if filename then
     if filename_has_control_chars(filename) then
       core.log_quiet("Refusing to open filename with control characters: %q", filename)
@@ -1676,13 +1710,18 @@ function core.open_buffer(filename)
     end
     -- normalize filename and set absolute filename then
     -- try to find existing buffer for filename
+    local path_stage = file_open_stage_begin("buffer_path_resolution")
     filename = core.root_project():normalize_path(filename)
     abs_filename = core.root_project():absolute_path(filename)
+    file_open_stage_end(path_stage)
     if filename_has_control_chars(filename) or filename_has_control_chars(abs_filename) then
       core.log_quiet("Refusing to open normalized filename with control characters: %q", abs_filename or filename)
       error(string.format("invalid filename: %q", abs_filename or filename))
     end
+    local stat_stage = file_open_stage_begin("buffer_file_stat")
     local file_info = system.get_file_info(abs_filename)
+    file_open_stage_end(stat_stage)
+    file_size = file_info and file_info.size or 0
     new_file = not file_info
     if file_info and file_info.size > config.file_size_limit * 1e6 then
       local size = file_info.size / 1024 / 1024
@@ -1698,14 +1737,22 @@ function core.open_buffer(filename)
     local existing = core.buffer_registry:find(abs_filename)
     if existing then
       if close_textview then close_buffer_view(existing) end
+      file_open_mark("existing_buffer", abs_filename)
+      file_open_stage_end(total_stage)
       return existing
     end
   end
   -- no existing buffer for filename; create new
+  local construct_stage = file_open_stage_begin("buffer_construct")
   local buffer = Buffer(filename, abs_filename, new_file)
+  file_open_stage_end(construct_stage)
   core.buffer_registry:register(buffer, abs_filename)
   core.log_quiet(filename and "Opened buffer \"%s\"" or "Opened new buffer", filename)
   if close_textview then close_buffer_view(buffer) end
+  if operation then
+    file_open_mark("buffer_created", string.format("lines=%d bytes=%d", #buffer.lines, file_size))
+  end
+  file_open_stage_end(total_stage)
   return buffer
 end
 
@@ -1770,9 +1817,21 @@ end
 ---@param opts? table
 ---@return core.editor
 function core.open_file(filename, opts)
+  local operation = file_open_begin(filename, "core.open_file")
+  local total_stage = operation and file_open_stage_begin("core_open_file")
+  local path_stage = file_open_stage_begin("open_file_stat")
   local info = system.get_file_info(filename)
-  if info and info.type == "dir" then return nil, "cannot open a directory as a file" end
-  return core.root_panel:open_file(filename, opts)
+  file_open_stage_end(path_stage)
+  if info and info.type == "dir" then
+    file_open_stage_end(total_stage)
+    file_open_fail("directory")
+    return nil, "cannot open a directory as a file"
+  end
+  local result = table.pack(core.root_panel:open_file(filename, opts))
+  local view = result[1]
+  file_open_stage_end(total_stage)
+  if view then file_open_attach_view(view) else file_open_fail("no_view") end
+  return table.unpack(result, 1, result.n)
 end
 
 
@@ -2625,6 +2684,9 @@ function core.step(next_frame_time, options)
   local frame_time = system.get_time() - start_time
   step_stats.frame_time_ms = frame_time * 1000
   rendering_speed = math.max(0.001, frame_time)
+  if draw_perf and draw_perf.file_open_on_present then
+    draw_perf.file_open_on_present()
+  end
 
   if rad_frame_pacing_enabled() and renderer_present_paced() then
     -- D3D/SDL vsync present time is already the active frame clock. Do not

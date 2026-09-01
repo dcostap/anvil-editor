@@ -9,6 +9,7 @@ local system_originals = {}
 local sample_interval = 10000
 local draw_scope_frame = nil
 local pending_draw_scope_frame = nil
+local active_file_open = nil
 
 local function csv_escape(value)
   value = tostring(value or "")
@@ -50,6 +51,250 @@ end
 function perf.add_detail(key, amount)
   if not recording or not record or not key then return end
   add_count(record.detail_counts, key, amount or 1)
+end
+
+local function file_open_clean(value)
+  return tostring(value or ""):gsub("[\r\n]+", " ")
+end
+
+local function file_open_write(op, event, now, duration_ms, depth, detail)
+  if not op or not record or not record.file_open_file then return end
+  local offset_ms = math.max(0, (now - op.start_time) * 1000)
+  record.file_open_file:write(table.concat({
+    tostring(op.id),
+    csv_escape(event),
+    string.format("%.6f", now),
+    string.format("%.3f", offset_ms),
+    string.format("%.3f", duration_ms or 0),
+    tostring(depth or 0),
+    csv_escape(op.path),
+    csv_escape(op.source),
+    csv_escape(detail),
+  }, ",") .. "\n")
+end
+
+local function file_open_stage_finish(token, now, automatic)
+  if not token or token.finished then return end
+  token.finished = true
+  local op = token.operation
+  local elapsed_ms = math.max(0, (now - token.start_time) * 1000)
+  local row = {
+    name = token.name,
+    elapsed_ms = elapsed_ms,
+    depth = token.depth,
+    automatic = automatic == true,
+  }
+  op.stages[#op.stages + 1] = row
+  local aggregate = op.stage_aggregates[token.name]
+  if not aggregate then
+    aggregate = { calls = 0, total_ms = 0, max_ms = 0 }
+    op.stage_aggregates[token.name] = aggregate
+  end
+  aggregate.calls = aggregate.calls + 1
+  aggregate.total_ms = aggregate.total_ms + elapsed_ms
+  aggregate.max_ms = math.max(aggregate.max_ms, elapsed_ms)
+  add_count(record.detail_counts, "file_open_stage_calls:" .. token.name, 1)
+  add_count(record.detail_counts, "file_open_stage_ms:" .. token.name, elapsed_ms)
+  file_open_write(op, automatic and "stage_auto" or "stage", now, elapsed_ms, token.depth, token.name)
+end
+
+local function file_open_finish(op, status, completion, now)
+  if not op or op.finished then return end
+  now = now or system.get_time()
+  while #op.stage_stack > 0 do
+    file_open_stage_finish(table.remove(op.stage_stack), now, true)
+  end
+  op.finished = true
+  op.status = status or "completed"
+  op.completion = completion or "unknown"
+  op.end_time = now
+  op.total_ms = math.max(0, (now - op.start_time) * 1000)
+  op.phase = op.completion
+  add_count(record.detail_counts, "file_open_calls", 1)
+  add_count(record.detail_counts, "file_open_total_ms", op.total_ms)
+  file_open_write(op, "complete", now, op.total_ms, 0,
+    op.status .. ":" .. op.completion)
+  core.log_quiet(
+    "Performance file open: id=%d status=%s completion=%s total_ms=%.3f path=%s",
+    op.id, op.status, op.completion, op.total_ms, op.path
+  )
+  if active_file_open == op then active_file_open = nil end
+  record.last_file_open = op
+end
+
+---Start a detailed file-open lifecycle capture while F11 recording is active.
+---@param path string?
+---@param source string?
+---@return table?
+function perf.file_open_begin(path, source)
+  if not recording or not record then return nil end
+  if active_file_open and not active_file_open.finished then
+    if tostring(active_file_open.path) == tostring(path or "") then
+      return active_file_open
+    end
+    file_open_finish(active_file_open, "superseded", "another_file_open")
+  end
+  record.file_open_sequence = (record.file_open_sequence or 0) + 1
+  local op = {
+    id = record.file_open_sequence,
+    path = file_open_clean(path),
+    source = file_open_clean(source or "unknown"),
+    start_time = system.get_time(),
+    status = "in_progress",
+    phase = "requested",
+    stages = {},
+    stage_stack = {},
+    stage_aggregates = {},
+    first_update_started = false,
+    first_update_finished = false,
+    first_draw_started = false,
+    first_draw_finished = false,
+  }
+  record.file_opens[#record.file_opens + 1] = op
+  active_file_open = op
+  file_open_write(op, "begin", op.start_time, 0, 0, op.source)
+  return op
+end
+
+---Begin one named phase in the active file-open lifecycle.
+---@param name string
+---@return table?
+function perf.file_open_stage_begin(name)
+  local op = active_file_open
+  if not op or op.finished then return nil end
+  local token = {
+    operation = op,
+    name = file_open_clean(name or "unnamed"),
+    start_time = system.get_time(),
+    depth = #op.stage_stack + 1,
+  }
+  op.stage_stack[#op.stage_stack + 1] = token
+  op.phase = token.name
+  return token
+end
+
+---End one named phase in the active file-open lifecycle.
+---@param token table?
+function perf.file_open_stage_end(token)
+  if not token or token.finished then return end
+  local op = token.operation
+  if not op or op.finished then return end
+  local stack = op.stage_stack
+  if stack[#stack] ~= token then
+    op.stage_imbalance = (op.stage_imbalance or 0) + 1
+    local found
+    for i = #stack, 1, -1 do
+      if stack[i] == token then found = i break end
+    end
+    if not found then return end
+    for i = #stack, found, -1 do
+      file_open_stage_finish(table.remove(stack), system.get_time(), true)
+    end
+    return
+  end
+  table.remove(stack)
+  file_open_stage_finish(token, system.get_time(), false)
+end
+
+---Add a point-in-time detail to the active file-open lifecycle.
+---@param name string
+---@param detail string|number|boolean?
+function perf.file_open_mark(name, detail)
+  local op = active_file_open
+  if not op or op.finished then return end
+  op.phase = file_open_clean(name or "mark")
+  file_open_write(op, "mark", system.get_time(), 0, #op.stage_stack,
+    op.phase .. (detail ~= nil and (":" .. file_open_clean(detail)) or ""))
+end
+
+---Associate the active file-open lifecycle with its target View.
+---@param view table?
+function perf.file_open_attach_view(view)
+  local op = active_file_open
+  if not op or op.finished or not view then return end
+  if op.view == view then return end
+  op.view = view
+  op.buffer = view.buffer
+  perf.file_open_mark("view_placed", tostring(view))
+end
+
+---Begin timing the first update of the target Text View.
+---@param view table?
+---@return table?
+function perf.file_open_view_update_begin(view)
+  local op = active_file_open
+  if not op or op.finished or op.view ~= view or op.first_update_started then return nil end
+  op.first_update_started = true
+  return perf.file_open_stage_begin("first_view_update")
+end
+
+---Finish timing the first update of the target Text View.
+---@param token table?
+function perf.file_open_view_update_end(token)
+  if not token then return end
+  perf.file_open_stage_end(token)
+  local op = token.operation
+  if op and not op.finished then
+    op.first_update_finished = true
+    perf.file_open_mark("first_update_complete")
+  end
+end
+
+---Begin timing the first draw of the target Text View.
+---@param view table?
+---@return table?
+function perf.file_open_view_draw_begin(view)
+  local op = active_file_open
+  if not op or op.finished or op.view ~= view or op.first_draw_started then return nil end
+  op.first_draw_started = true
+  return perf.file_open_stage_begin("first_view_draw")
+end
+
+---Finish timing the first draw of the target Text View.
+---@param token table?
+function perf.file_open_view_draw_end(token)
+  if not token then return end
+  perf.file_open_stage_end(token)
+  local op = token.operation
+  if op and not op.finished then
+    op.first_draw_finished = true
+    perf.file_open_mark("first_draw_complete")
+  end
+end
+
+---Record the first present after the target View was drawn.
+function perf.file_open_on_present()
+  local op = active_file_open
+  if op and not op.finished and op.first_draw_finished then
+    file_open_finish(op, "completed", "first_present", system.get_time())
+  end
+end
+
+---Fallback for callers that only publish completed frame snapshots.
+---@param snapshot table?
+function perf.file_open_on_frame(snapshot)
+  if snapshot and snapshot.did_redraw then perf.file_open_on_present() end
+end
+
+---Mark the active file-open lifecycle as failed.
+---@param reason string?
+function perf.file_open_fail(reason)
+  if active_file_open and not active_file_open.finished then
+    file_open_finish(active_file_open, "failed", file_open_clean(reason or "unknown"))
+  end
+end
+
+---Return the active file-open lifecycle for the F11 HUD.
+---@return table?
+function perf.file_open_status()
+  local op = active_file_open
+  if not op or op.finished then return nil end
+  return {
+    id = op.id,
+    path = op.path,
+    phase = op.phase,
+    elapsed_ms = math.max(0, (system.get_time() - op.start_time) * 1000),
+  }
 end
 
 function perf.frame_add(key, amount)
@@ -694,6 +939,7 @@ end
 
 function perf.on_frame(snapshot)
   if not recording or not record or not snapshot then return end
+  perf.file_open_on_frame(snapshot)
   publish_draw_scope_frame(snapshot)
   local now = snapshot.time or system.get_time()
   local renderer_stats = snapshot.did_redraw and renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
@@ -1104,6 +1350,24 @@ local function write_summary(path)
     tostring(context.markdown_live_preview == true), context.visual_metric_providers or 0,
     context.line_render_providers or 0
   ))
+  file:write(string.format(
+    "File-open lifecycle captures: %d trace=%s\n",
+    #(record.file_opens or {}), record.file_open_path or ""
+  ))
+  for _, op in ipairs(record.file_opens or {}) do
+    file:write(string.format(
+      "  #%d status=%s completion=%s total_ms=%.3f path=%s source=%s\n",
+      op.id or 0, op.status or "unknown", op.completion or "unknown",
+      op.total_ms or 0, csv_escape(op.path), csv_escape(op.source)
+    ))
+    for _, stage in ipairs(op.stages or {}) do
+      file:write(string.format(
+        "    stage depth=%d elapsed_ms=%.3f%s %s\n",
+        stage.depth or 0, stage.elapsed_ms or 0,
+        stage.automatic and " auto_closed=true" or "", stage.name or ""
+      ))
+    end
+  end
   file:write(string.format("Run-loop iterations: %d\n", record.iteration_count))
   file:write(string.format("Idle/non-redraw iterations: %d\n", record.idle_iteration_count))
   file:write(string.format("UI update iterations: %d (%d with redraw, %d without redraw)\n",
@@ -1491,8 +1755,11 @@ function perf.start_recording()
   local file = assert(io.open(frames_path, "wb"))
   local scope_path = base .. "_draw_scopes.csv"
   local scope_file = assert(io.open(scope_path, "wb"))
+  local file_open_path = base .. "_file_opens.csv"
+  local file_open_file = assert(io.open(file_open_path, "wb"))
   write_frame_header(file)
   scope_file:write("frame,time,draw_emit_ms,path,calls,inclusive_ms,exclusive_ms,scope_heap_delta_kb,scope_heap_drop_calls,frame_heap_delta_kb,scope_imbalance\n")
+  file_open_file:write("open_id,event,time,offset_ms,duration_ms,depth,path,source,detail\n")
   record = {
     base = base,
     frames_path = frames_path,
@@ -1500,9 +1767,11 @@ function perf.start_recording()
     samples_path = base .. "_lua_samples.csv",
     api_path = base .. "_api_calls.csv",
     detail_path = base .. "_details.csv",
+    file_open_path = file_open_path,
     scope_path = scope_path,
     file = file,
     scope_file = scope_file,
+    file_open_file = file_open_file,
     start_time = system.get_time(),
     stop_time = nil,
     iteration_count = 0,
@@ -1531,10 +1800,14 @@ function perf.start_recording()
     scope_frame_count = 0,
     scope_aggregates = {},
     slow_scope_frames = {},
+    file_opens = {},
+    file_open_sequence = 0,
   }
   draw_scope_frame = nil
   pending_draw_scope_frame = nil
+  active_file_open = nil
   core.perf_draw_scope_active = false
+  core.perf_file_open_tracking_active = true
   recording = true
   wrap_renderer_api("draw_text")
   wrap_renderer_api("draw_text_known_bounds")
@@ -1555,8 +1828,12 @@ function perf.stop_recording()
   unwrap_renderer_api()
   unwrap_system_api()
   record.stop_time = system.get_time()
+  if active_file_open and not active_file_open.finished then
+    file_open_finish(active_file_open, "incomplete", "recording_stopped", record.stop_time)
+  end
   record.file:close()
   record.scope_file:close()
+  record.file_open_file:close()
   write_counts_csv(record.samples_path, "samples,source", sorted_counts(record.lua_samples))
   write_counts_csv(record.api_path, "calls,api_source", sorted_counts(record.api_calls))
   write_counts_csv(record.detail_path, "value,metric", sorted_counts(record.detail_counts))
@@ -1566,7 +1843,9 @@ function perf.stop_recording()
   record = nil
   draw_scope_frame = nil
   pending_draw_scope_frame = nil
+  active_file_open = nil
   core.perf_draw_scope_active = false
+  core.perf_file_open_tracking_active = false
   system.set_clipboard(summary_path)
   core.log("Performance recording saved: %s", summary_path)
   return summary_path

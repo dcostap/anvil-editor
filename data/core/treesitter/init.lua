@@ -58,6 +58,17 @@ local function buffer_name(buffer)
   return tostring(buffer)
 end
 
+local function file_open_stage_begin(name)
+  local perf = package.loaded["core.perf"]
+  return perf and perf.file_open_stage_begin and perf.file_open_stage_begin(name)
+end
+
+local function file_open_stage_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_stage_end then perf.file_open_stage_end(token) end
+end
+
 local function first_bytes(buffer, max_bytes)
   if not buffer or not buffer.lines then return "" end
   local out, total = {}, 0
@@ -198,12 +209,14 @@ function treesitter.schedule_parse(buffer, edit)
   end
   local snapshot_bytes = 0
   for _, line in ipairs(buffer.lines) do snapshot_bytes = snapshot_bytes + #line end
+  local native_stage = file_open_stage_begin("treesitter_schedule_parse")
   local snapshot_started = system.get_time()
   local ok, err = ts.native:schedule_parse(buffer.lines, ts.generation, edit)
   local snapshot_ms = (system.get_time() - snapshot_started) * 1000
   ts.snapshot_bytes = (ts.snapshot_bytes or 0) + snapshot_bytes
   ts.snapshot_ms = (ts.snapshot_ms or 0) + snapshot_ms
   ts.snapshot_max_ms = math.max(ts.snapshot_max_ms or 0, snapshot_ms)
+  file_open_stage_end(native_stage)
   if not ok then
     ts.status = "failed"
     ts.reason = err or "schedule failed"
@@ -273,14 +286,17 @@ function treesitter.attach_or_update_buffer(buffer, reason)
   end
 
   treesitter.close_buffer(buffer)
+  local state_stage = file_open_stage_begin("treesitter_create_buffer_state")
   local state, err = native.new_buffer_state(language.grammar, {
     parse_timeout_ms = language.parse_timeout_ms or DEFAULT_PARSE_TIMEOUT_MS,
   })
+  file_open_stage_end(state_stage)
   if not state then
     log_quiet("Tree-sitter: failed to attach %s: %s", buffer_name(buffer), tostring(err))
     return nil
   end
 
+  local query_stage = file_open_stage_begin("treesitter_compile_queries")
   ts = {
     language_id = language.id,
     grammar = language.grammar,
@@ -298,6 +314,7 @@ function treesitter.attach_or_update_buffer(buffer, reason)
     last_poll_changed = false,
     attached_reason = reason,
   }
+  file_open_stage_end(query_stage)
   buffer.treesitter = ts
   attached_buffers[buffer] = true
   if ts_symbol_index.remember_open_buffer then ts_symbol_index.remember_open_buffer(buffer) end

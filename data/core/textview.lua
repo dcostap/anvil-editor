@@ -266,6 +266,32 @@ local function perf_scope_end(token)
   if perf and perf.scope_end then perf.scope_end(token) end
 end
 
+local function file_open_view_update_begin(view)
+  if not core.perf_file_open_tracking_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.file_open_view_update_begin
+    and perf.file_open_view_update_begin(view)
+end
+
+local function file_open_view_update_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_view_update_end then perf.file_open_view_update_end(token) end
+end
+
+local function file_open_view_draw_begin(view)
+  if not core.perf_file_open_tracking_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.file_open_view_draw_begin
+    and perf.file_open_view_draw_begin(view)
+end
+
+local function file_open_view_draw_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_view_draw_end then perf.file_open_view_draw_end(token) end
+end
+
 local monospace_font_cache = setmetatable({}, { __mode = "k" })
 
 local function font_looks_monospace(font)
@@ -6232,6 +6258,7 @@ end
 function TextView:update()
   local perf_active = core.perf_frame_stats ~= nil
   local update_start = perf_active and system.get_time()
+  local file_open_update = file_open_view_update_begin(self)
 
   -- clear cache if font or indent size changed
   local phase_start = perf_active and system.get_time()
@@ -6307,6 +6334,7 @@ function TextView:update()
   line_packets.update_contributors(self)
   perf_elapsed("textview_update_super_ms", phase_start)
   perf_elapsed("textview_update_ms", update_start)
+  file_open_view_update_end(file_open_update)
 end
 
 
@@ -9116,13 +9144,19 @@ local function draw_textview(self)
 end
 
 function TextView:draw()
+  local file_open_draw = file_open_view_draw_begin(self)
   local stats = core.textview_frame_stats
-  if not stats then return draw_textview(self) end
+  if not stats then
+    local result = draw_textview(self)
+    file_open_view_draw_end(file_open_draw)
+    return result
+  end
   local draw_scope = perf_scope_begin("textview_core", true)
   local draw_start = system.get_time()
   local result = draw_textview(self)
   stats.draw_ms = stats.draw_ms + (system.get_time() - draw_start) * 1000
   perf_scope_end(draw_scope)
+  file_open_view_draw_end(file_open_draw)
   return result
 end
 

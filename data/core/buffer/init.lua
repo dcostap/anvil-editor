@@ -19,6 +19,17 @@ local tokenizer = require "core.tokenizer"
 ---@field read_only_reason? string Message shown when the user tries to edit this Buffer
 local Buffer = Object:extend()
 
+local function file_open_stage_begin(name)
+  local perf = package.loaded["core.perf"]
+  return perf and perf.file_open_stage_begin and perf.file_open_stage_begin(name)
+end
+
+local function file_open_stage_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_stage_end then perf.file_open_stage_end(token) end
+end
+
 function Buffer:__tostring() return "Buffer" end
 
 local function split_lines(text)
@@ -41,11 +52,17 @@ function Buffer:new(filename, abs_filename, new_file)
   self.bom = nil
   self.binary = false
   self.cache = {}
+  local reset_stage = file_open_stage_begin("buffer_initial_reset")
   self:reset()
+  file_open_stage_end(reset_stage)
   if filename then
+    local filename_stage = file_open_stage_begin("buffer_set_filename")
     self:set_filename(filename, abs_filename)
+    file_open_stage_end(filename_stage)
     if not new_file then
+      local load_stage = file_open_stage_begin("buffer_load")
       self:load(abs_filename)
+      file_open_stage_end(load_stage)
     end
   end
   if new_file then
@@ -152,6 +169,7 @@ end
 
 
 function Buffer:set_filename(filename, abs_filename)
+  local stage = file_open_stage_begin("buffer_set_filename_metadata")
   local old = metadata_snapshot(self)
   local old_path = language_mode.buffer_path(self)
   if core.buffer_registry and core.buffer_registry:identity(self)
@@ -176,6 +194,7 @@ function Buffer:set_filename(filename, abs_filename)
       new = metadata_snapshot(self),
     })
   end
+  file_open_stage_end(stage)
 end
 
 
@@ -190,13 +209,16 @@ end
 local copy_file, prompt_stale_backup
 
 function Buffer:load(filename)
+  local load_stage = file_open_stage_begin("buffer_load_contents")
   if prompt_stale_backup then prompt_stale_backup(filename) end
   local old_text = table.concat(self.lines or {})
   local old_line_count = #(self.lines or {})
   local selection_snapshots = snapshot_registered_selection_states(self)
   if not self.encoding then
     local errmsg
+    local encoding_stage = file_open_stage_begin("buffer_encoding_detection")
     self.encoding, self.bom, errmsg = encoding.detect(filename);
+    file_open_stage_end(encoding_stage)
     if not self.encoding then
       core.error("%s", errmsg)
       self.encoding = "UTF-8"
@@ -205,8 +227,13 @@ function Buffer:load(filename)
     self.bom = encoding.get_charset_bom(self.encoding)
   end
   local convert = self:needs_encoding_conversion()
+  local open_stage = file_open_stage_begin("buffer_file_open")
   local fp = assert( io.open(filename, "rb") )
+  file_open_stage_end(open_stage)
+  local reset_stage = file_open_stage_begin("buffer_reset_after_open")
   self:reset()
+  file_open_stage_end(reset_stage)
+  local read_stage = file_open_stage_begin("buffer_file_read")
   self.lines = {}
   self.clean_lines = {}
   local i = 1
@@ -246,7 +273,11 @@ function Buffer:load(filename)
     table.insert(self.lines, "\n")
   end
   fp:close()
+  file_open_stage_end(read_stage)
+  local syntax_stage = file_open_stage_begin("buffer_syntax_detection")
   self:reset_syntax()
+  file_open_stage_end(syntax_stage)
+  local transaction_stage = file_open_stage_begin("buffer_load_transaction")
   restore_registered_selection_states(self, selection_snapshots)
   local content_changed = old_text ~= table.concat(self.lines)
   self:on_text_transaction({
@@ -265,6 +296,8 @@ function Buffer:load(filename)
       },
     },
   })
+  file_open_stage_end(transaction_stage)
+  file_open_stage_end(load_stage)
 end
 
 

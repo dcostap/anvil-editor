@@ -223,6 +223,7 @@ core.add_background_thread(function()
     duration = string.format("%.3f", end_time - start_time),
     summary_file = summary_path or "",
     frames_file = frames_path or sibling_perf_path(summary_path, "_frames.csv"),
+    file_opens_file = sibling_perf_path(summary_path, "_file_opens.csv"),
     lua_samples_file = sibling_perf_path(summary_path, "_lua_samples.csv"),
     api_calls_file = sibling_perf_path(summary_path, "_api_calls.csv"),
     details_file = sibling_perf_path(summary_path, "_details.csv"),

@@ -119,6 +119,37 @@ function fuzzy_searcher._perf_scope_end(token)
   if perf and perf.scope_end then perf.scope_end(token) end
 end
 
+function fuzzy_searcher._perf_file_open_begin(path, source)
+  local perf = package.loaded["core.perf"]
+  return perf and perf.file_open_begin and perf.file_open_begin(path, source)
+end
+
+function fuzzy_searcher._perf_file_open_stage_begin(name)
+  local perf = package.loaded["core.perf"]
+  return perf and perf.file_open_stage_begin and perf.file_open_stage_begin(name)
+end
+
+function fuzzy_searcher._perf_file_open_stage_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_stage_end then perf.file_open_stage_end(token) end
+end
+
+function fuzzy_searcher._perf_file_open_attach_view(view)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_attach_view then perf.file_open_attach_view(view) end
+end
+
+function fuzzy_searcher._perf_file_open_mark(name, detail)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_mark then perf.file_open_mark(name, detail) end
+end
+
+function fuzzy_searcher._perf_file_open_fail(reason)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_fail then perf.file_open_fail(reason) end
+end
+
 local open
 local open_static_results
 
@@ -6346,15 +6377,20 @@ end
 
 function FSView:open_file_result(r, target_side, restore)
   local path = fullpath(r)
+  local file_open = fuzzy_searcher._perf_file_open_begin(path, "fuzzy_searcher")
   local line, col, line2, col2 = r.line or 1, r.col or 1, nil, nil
   if r.kind == "grep" then
     line, col, line2, col2 = grep_accept_range(r)
   end
   local source_view = self.source_view
   local source_pane = self.source_pane
+  local close_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_close_picker")
   self:close()
+  fuzzy_searcher._perf_file_open_stage_end(close_stage)
+  fuzzy_searcher._perf_file_open_mark("open_file_requested", string.format("line=%d col=%d", line, col))
   local opened, view = xpcall(function()
-    return core.open_file(path, {
+    local open_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_core_open_file")
+    local result = table.pack(core.open_file(path, {
       pane = source_pane,
       placement = target_side and "split" or "current",
       direction = target_side and "right" or nil,
@@ -6363,7 +6399,9 @@ function FSView:open_file_result(r, target_side, restore)
       line2 = line2,
       col2 = col2,
       focus = true,
-    })
+    }))
+    fuzzy_searcher._perf_file_open_stage_end(open_stage)
+    return table.unpack(result, 1, result.n)
   end, debug.traceback)
   if not opened then
     local open_error = view
@@ -6377,11 +6415,14 @@ function FSView:open_file_result(r, target_side, restore)
     elseif pane and pane.current_view and pane.current_view.buffer == buffer then
       view = pane.current_view
     else
+      fuzzy_searcher._perf_file_open_fail("core_open_file_error")
       error(open_error, 0)
     end
     core.log_quiet("Fuzzy Searcher recovered opened preview target after error: %s", open_error)
   end
   if view and view.buffer then
+    fuzzy_searcher._perf_file_open_attach_view(view)
+    local selection_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_restore_selection_and_scroll")
     local function apply_selection()
       if restore and restore.selections then
         view.buffer:set_selection_list(
@@ -6409,7 +6450,10 @@ function FSView:open_file_result(r, target_side, restore)
         vertical = false,
       })
     end
+    fuzzy_searcher._perf_file_open_stage_end(selection_stage)
+    fuzzy_searcher._perf_file_open_mark("open_file_state_restored")
   end
+  if file_open and not view then fuzzy_searcher._perf_file_open_fail("no_view") end
   return view
 end
 
@@ -6588,18 +6632,31 @@ function FSView:confirm(target_side)
     local buffer = r.buffer
     local source_view = self.source_view
     local source_pane = self.source_pane
+    local file_open = fuzzy_searcher._perf_file_open_begin(
+      buffer.abs_filename or buffer.filename, "fuzzy_searcher"
+    )
+    local close_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_close_picker")
     self:close()
+    fuzzy_searcher._perf_file_open_stage_end(close_stage)
+    fuzzy_searcher._perf_file_open_mark("open_buffer_requested", string.format("line=%d col=%d", r.line, r.col or 1))
     local view = source_view
     if not (view and view.buffer == buffer) then
       local Editor = require "core.editor"
+      local place_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_place_existing_buffer")
       view = panes.place(function() return Editor(buffer) end, {
         pane = source_pane,
         placement = target_side and "split" or "current",
         direction = target_side and "right" or nil,
         focus = true,
       })
+      fuzzy_searcher._perf_file_open_stage_end(place_stage)
     end
+    fuzzy_searcher._perf_file_open_attach_view(view)
+    local selection_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_restore_selection")
     if r.line2 and r.col2 then buffer:set_selection(r.line, r.col, r.line2, r.col2) else buffer:set_selection(r.line, r.col) end
+    fuzzy_searcher._perf_file_open_stage_end(selection_stage)
+    fuzzy_searcher._perf_file_open_mark("open_buffer_state_restored")
+    if file_open and not view then fuzzy_searcher._perf_file_open_fail("no_view") end
     return
   end
   if r.file then

@@ -16,6 +16,27 @@ local function panes()
   return core.panes or require "core.panes"
 end
 
+local function file_open_begin(path, source)
+  local perf = package.loaded["core.perf"]
+  return perf and perf.file_open_begin and perf.file_open_begin(path, source)
+end
+
+local function file_open_stage_begin(name)
+  local perf = package.loaded["core.perf"]
+  return perf and perf.file_open_stage_begin and perf.file_open_stage_begin(name)
+end
+
+local function file_open_stage_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_stage_end then perf.file_open_stage_end(token) end
+end
+
+local function file_open_attach_view(view)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.file_open_attach_view then perf.file_open_attach_view(view) end
+end
+
 local function call_view(view, name, ...)
   local method = view and view[name]
   if not method then return nil end
@@ -279,14 +300,28 @@ end
 
 function RootPanel:open_file(filename, opts)
   opts = opts or {}
+  local operation = file_open_begin(filename, "root_panel.open_file")
+  local total_stage = operation and file_open_stage_begin("root_panel_open_file")
   local project = core.root_project()
+  local path_stage = file_open_stage_begin("root_panel_path_resolution")
   local normalized = project:normalize_path(filename)
   local abs_filename = project:absolute_path(normalized)
+  file_open_stage_end(path_stage)
+  local lookup_stage = file_open_stage_begin("root_panel_buffer_lookup")
   local existing = core.buffer_registry:find(abs_filename)
-  if existing then return self:open_buffer(existing, opts) end
+  file_open_stage_end(lookup_stage)
+  if existing then
+    local present_stage = file_open_stage_begin("root_panel_present_existing_view")
+    local view = self:open_buffer(existing, opts)
+    file_open_stage_end(present_stage)
+    file_open_stage_end(total_stage)
+    file_open_attach_view(view)
+    return view
+  end
 
   local Editor = require "core.editor"
-  return panes().place(function()
+  local place_stage = file_open_stage_begin("root_panel_place_editor")
+  local view = panes().place(function()
     return Editor(core.open_buffer(filename))
   end, {
     pane = opts.pane,
@@ -296,6 +331,10 @@ function RootPanel:open_file(filename, opts)
     preserve_focus = opts.preserve_focus,
     reason = opts.reason,
   })
+  file_open_stage_end(place_stage)
+  file_open_stage_end(total_stage)
+  file_open_attach_view(view)
+  return view
 end
 
 function RootPanel:close_all_views(keep_view)
