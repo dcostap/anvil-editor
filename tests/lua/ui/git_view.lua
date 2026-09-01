@@ -1067,6 +1067,7 @@ test.describe("Git View command", function()
 
   test.it("uses an Image Comparison View for binary image revisions", function(context)
     local _, view = open_fake_git_view(context.project)
+    view.position.y = 40
     local image_path = DATADIR .. PATHSEP .. "plugins" .. PATHSEP
       .. "editor_wallpaper" .. PATHSEP .. "wallpaper.jpg"
     local tab = {
@@ -1084,9 +1085,11 @@ test.describe("Git View command", function()
       binary_generation_value = 1,
     }
 
-    local comparison = select(7, view:layout_diff_tab(tab, 0))
+    local list, _, _, _, _, _, comparison = view:layout_diff_tab(tab, 0)
 
     test.equal(tostring(comparison), "ImageComparisonView")
+    test.equal(list.position.y, view.position.y)
+    test.equal(comparison.position.y, view.position.y)
     test.not_nil(comparison.left_view.image)
     test.not_nil(comparison.right_view.image)
     test.equal(comparison.left_title, "Before — before.jpg")

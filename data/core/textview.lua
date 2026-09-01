@@ -50,17 +50,11 @@ local IME_STATE = {line1 = 0, col1 = 0, line2 = 0, col2 = 0, w = 0, h = 0}
 ---@field last_line2 integer
 ---@field last_col2 integer
 ---@field hovered_render_fragment table?
----@field content_padding_y number? Vertical content padding override
 local TextView = View:extend()
 
 function TextView:__tostring() return "TextView" end
 
 TextView.context = "workspace"
-
-local function vertical_content_padding(view)
-  if view.content_padding_y ~= nil then return view.content_padding_y end
-  return style.padding.y
-end
 
 function TextView:is_wrapping_enabled()
   return not not self.wrapping_enabled
@@ -90,14 +84,13 @@ local function capture_wrap_viewport_anchor(view, new_width)
   end
 
   local scroll_y = math.max(0, view.scroll.y or 0)
-  local padding_y = vertical_content_padding(view)
-  local row = view:get_visual_row_at_y(math.max(0, scroll_y - padding_y))
+  local row = view:get_visual_row_at_y(math.max(0, scroll_y - style.padding.y))
   local line, col = view:get_visual_row_line_col(row)
   if not line then return end
   return {
     line = line,
     col = col or 1,
-    row_offset = scroll_y - padding_y - view:get_visual_row_y_offset(row),
+    row_offset = scroll_y - style.padding.y - view:get_visual_row_y_offset(row),
     scroll_y = scroll_y,
   }
 end
@@ -110,8 +103,7 @@ local function restore_wrap_viewport_anchor(view, anchor, expected_width)
   end
 
   local row = view:get_visual_row(anchor.line, anchor.col)
-  local anchored_y = vertical_content_padding(view)
-    + view:get_visual_row_y_offset(row) + anchor.row_offset
+  local anchored_y = style.padding.y + view:get_visual_row_y_offset(row) + anchor.row_offset
   local max_scroll = math.max(0, view:get_scrollable_size() - view.size.y)
   anchored_y = common.clamp(anchored_y, 0, max_scroll)
   local delta = anchored_y - anchor.scroll_y
@@ -1160,9 +1152,7 @@ end
 function TextView:get_visible_scroll_context_lines()
   local lh = self:get_line_height()
   if lh <= 0 then return 0 end
-  local visible_span = math.max(0, math.floor(
-    (self:get_vertical_viewport_height() - vertical_content_padding(self)) / lh
-  ))
+  local visible_span = math.max(0, math.floor((self:get_vertical_viewport_height() - style.padding.y) / lh))
   return math.min(normalize_scroll_context_lines(), math.floor(visible_span / 2))
 end
 
@@ -1183,12 +1173,11 @@ function TextView:get_scrollable_size_for_line_count(line_count)
   line_count = math.max(1, math.floor(tonumber(line_count) or 1))
   local h_scroll = self:get_horizontal_scrollbar_height()
   local lh = self:get_line_height()
-  local padding_y = vertical_content_padding(self)
-  local text_height = lh * line_count + padding_y * 2
+  local text_height = lh * line_count + style.padding.y * 2
   local content_height = text_height + h_scroll
   if config.scroll_past_end then
     local pad = self:get_scroll_past_end_context_lines()
-    local last_line_y = padding_y + lh * math.max(0, line_count - 1)
+    local last_line_y = style.padding.y + lh * math.max(0, line_count - 1)
     local max_scroll = math.max(0, last_line_y - self:get_vertical_viewport_height() + lh * (pad + 1))
     return math.max(self.size.y, max_scroll + self.size.y)
   end
@@ -1205,12 +1194,11 @@ function TextView:get_scrollable_size()
   local cache = self:get_visual_row_metric_cache()
   if cache then
     local h_scroll = self:get_horizontal_scrollbar_height()
-    local padding_y = vertical_content_padding(self)
-    local text_height = cache.total_height + padding_y * 2
+    local text_height = cache.total_height + style.padding.y * 2
     local content_height = text_height + h_scroll
     if config.scroll_past_end then
       local pad = self:get_scroll_past_end_context_lines()
-      local last_line_y = padding_y + self:get_visual_row_y_offset(cache.row_count)
+      local last_line_y = style.padding.y + self:get_visual_row_y_offset(cache.row_count)
       local last_row_height = self:get_visual_row_height(cache.row_count)
       -- Only the final row contributes its specialized height here; the
       -- configurable context is still made of ordinary visual rows.
@@ -3859,15 +3847,14 @@ function TextView:iter_visible_visual_rows()
   local _, y1, _, y2 = self:get_content_bounds()
   local total = self:get_scrollable_line_count()
   local cache = self:get_visual_row_metric_cache()
-  local padding_y = vertical_content_padding(self)
   local row, last
   if cache then
-    row = self:get_visual_row_at_y(math.max(0, y1 - padding_y))
-    last = self:get_visual_row_at_y(math.max(0, y2 - padding_y))
+    row = self:get_visual_row_at_y(math.max(0, y1 - style.padding.y))
+    last = self:get_visual_row_at_y(math.max(0, y2 - style.padding.y))
   else
     local lh = self:get_line_height()
-    row = math.max(1, math.floor((y1 - padding_y) / lh) + 1)
-    last = math.min(total, math.floor((y2 - padding_y) / lh) + 1)
+    row = math.max(1, math.floor((y1 - style.padding.y) / lh) + 1)
+    last = math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
   end
   row = common.clamp(row, 1, total)
   last = common.clamp(last, 1, total)
@@ -3879,7 +3866,7 @@ function TextView:iter_visible_visual_rows()
     row = row + 1
     local entry = self:get_visual_row_entry(current)
     entry.visual_row = current
-    entry.y = base_y + self:get_visual_row_y_offset(current) + padding_y
+    entry.y = base_y + self:get_visual_row_y_offset(current) + style.padding.y
     entry.height = self:get_visual_row_height(current)
     return entry
   end
@@ -4156,12 +4143,12 @@ function TextView:get_line_screen_position(line, col, line_end)
     local x, y = self:get_content_offset()
     local gw = self:get_gutter_width()
     return x + gw + (col and self:get_col_x_offset(line, col, line_end) or 0),
-      y + self:get_visual_row_y_offset(idx) + vertical_content_padding(self) + render_y_offset()
+      y + self:get_visual_row_y_offset(idx) + style.padding.y + render_y_offset()
   end
   local x, y = self:get_content_offset()
   local gw = self:get_gutter_width()
   local row = self:has_composed_visual_rows() and self:get_composed_visual_row_for_position(line, col, line_end) or line
-  y = y + self:get_visual_row_y_offset(row) + vertical_content_padding(self) + render_y_offset()
+  y = y + self:get_visual_row_y_offset(row) + style.padding.y + render_y_offset()
   if col then
     return x + gw + self:get_col_x_offset(line, col), y
   else
@@ -4239,11 +4226,10 @@ function TextView:get_visible_line_range()
   local x, y, x2, y2 = self:get_content_bounds()
   local cache = self:get_visual_row_metric_cache()
   local lh = self:get_line_height()
-  local padding_y = vertical_content_padding(self)
   if self:has_composed_visual_rows() then
     local total = self:get_composed_visual_row_count()
-    local minidx = cache and self:get_visual_row_at_y(math.max(0, y - padding_y)) or math.max(1, math.floor((y - padding_y) / lh) + 1)
-    local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - padding_y)) or math.min(total, math.floor((y2 - padding_y) / lh) + 1)
+    local minidx = cache and self:get_visual_row_at_y(math.max(0, y - style.padding.y)) or math.max(1, math.floor((y - style.padding.y) / lh) + 1)
+    local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
     minidx = common.clamp(minidx, 1, total)
     maxidx = common.clamp(maxidx, 1, total)
     minidx, maxidx = overscan_metric_rows(cache, minidx, maxidx, total)
@@ -4253,8 +4239,8 @@ function TextView:get_visible_line_range()
   end
   if self.wrapped_settings then
     local total = linewrapping.get_total_wrapped_lines(self)
-    local minidx = cache and self:get_visual_row_at_y(math.max(0, y - padding_y)) or math.max(1, math.floor((y - padding_y) / lh) + 1)
-    local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - padding_y)) or math.min(total, math.floor((y2 - padding_y) / lh) + 1)
+    local minidx = cache and self:get_visual_row_at_y(math.max(0, y - style.padding.y)) or math.max(1, math.floor((y - style.padding.y) / lh) + 1)
+    local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
     minidx = common.clamp(minidx, 1, total)
     maxidx = common.clamp(maxidx, 1, total)
     minidx, maxidx = overscan_metric_rows(cache, minidx, maxidx, total)
@@ -4262,8 +4248,8 @@ function TextView:get_visible_line_range()
     local maxline = linewrapping.get_idx_line_col(self, maxidx)
     return minline, maxline
   end
-  local minline = cache and self:get_visual_row_at_y(math.max(0, y - padding_y)) or math.max(1, math.floor((y - padding_y) / lh) + 1)
-  local maxline = cache and self:get_visual_row_at_y(math.max(0, y2 - padding_y)) or math.min(#self.buffer.lines, math.floor((y2 - padding_y) / lh) + 1)
+  local minline = cache and self:get_visual_row_at_y(math.max(0, y - style.padding.y)) or math.max(1, math.floor((y - style.padding.y) / lh) + 1)
+  local maxline = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(#self.buffer.lines, math.floor((y2 - style.padding.y) / lh) + 1)
   minline = common.clamp(minline, 1, #self.buffer.lines)
   maxline = common.clamp(maxline, 1, #self.buffer.lines)
   minline, maxline = overscan_metric_rows(cache, minline, maxline, #self.buffer.lines)
@@ -5535,10 +5521,9 @@ end
 function TextView:resolve_screen_position(x, y)
   self.resolved_fold_widget = nil
   self.resolved_line_render_position_row = nil
-  local padding_y = vertical_content_padding(self)
   if self.wrapped_settings then
     local content_x, content_y = self:get_content_offset()
-    local ox, oy = content_x + self:get_gutter_width(), content_y + padding_y
+    local ox, oy = content_x + self:get_gutter_width(), content_y + style.padding.y
     local total = self:has_composed_visual_rows() and self:get_composed_visual_row_count() or linewrapping.get_total_wrapped_lines(self)
     local idx = common.clamp(self:get_visual_row_at_y(math.max(0, y - oy)), 1, total)
     if self:has_composed_visual_rows() then
@@ -5552,7 +5537,7 @@ function TextView:resolve_screen_position(x, y)
         self.wrapped_last_resolved_line_end = nil
         local row = entry.provider_row
         if row and row.hit_test then
-          local ok, line, col = pcall(row.hit_test, self, row, x - ox, y - (content_y + padding_y + self:get_visual_row_y_offset(idx)))
+          local ok, line, col = pcall(row.hit_test, self, row, x - ox, y - (content_y + style.padding.y + self:get_visual_row_y_offset(idx)))
           if ok and line then return line, col or 1 end
           if not ok then core.log_quiet("TextView provider row hit_test failed for %s: %s", self.buffer:get_name(), tostring(line)) end
         end
@@ -5609,7 +5594,7 @@ function TextView:resolve_screen_position(x, y)
     return line, col
   end
   local content_x, content_y = self:get_content_offset()
-  local ox, oy = content_x + self:get_gutter_width(), content_y + padding_y
+  local ox, oy = content_x + self:get_gutter_width(), content_y + style.padding.y
   local row = self:get_visual_row_at_y(math.max(0, y - oy))
   local line = common.clamp(row, 1, #self.buffer.lines)
   if self:has_composed_visual_rows() then
@@ -5621,7 +5606,7 @@ function TextView:resolve_screen_position(x, y)
       self.resolved_provider_row = entry
       local row_obj = entry.provider_row
       if row_obj and row_obj.hit_test then
-        local ok, hit_line, hit_col = pcall(row_obj.hit_test, self, row_obj, x - ox, y - (content_y + padding_y + self:get_visual_row_y_offset(entry.absolute_row)))
+        local ok, hit_line, hit_col = pcall(row_obj.hit_test, self, row_obj, x - ox, y - (content_y + style.padding.y + self:get_visual_row_y_offset(entry.absolute_row)))
         if ok and hit_line then return hit_line, hit_col or 1 end
         if not ok then core.log_quiet("TextView provider row hit_test failed for %s: %s", self.buffer:get_name(), tostring(hit_line)) end
       end
@@ -5725,10 +5710,9 @@ function TextView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
     -- expressed in normal visual rows, so do not use the target highlight
     -- height as the pixel size of every surrounding context row.
     local context_lh = self:get_line_height()
-    local padding_y = vertical_content_padding(self)
     local target_row = self:get_visual_row(line, col, false)
     local target_row_height = self:get_visual_row_height(target_row)
-    local target_row_y = oy + padding_y
+    local target_row_y = oy + style.padding.y
       + self:get_visual_row_y_offset(target_row)
     local target_bottom
     if position_row then
@@ -5761,7 +5745,7 @@ function TextView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
       local end_pad = self:get_scroll_past_end_context_lines()
       if end_pad > below_pad then
         local target_idx = self:get_visual_row_at_y(
-          math.max(0, ly - oy - padding_y)
+          math.max(0, ly - oy - style.padding.y)
         )
         local rows_below = math.max(0, self:get_scrollable_line_count() - target_idx)
         if rows_below < end_pad then
@@ -5770,7 +5754,7 @@ function TextView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
       end
     end
 
-    local above = math.max(0, ly - oy - padding_y - context_lh * pad)
+    local above = math.max(0, ly - oy - style.padding.y - context_lh * pad)
     local below = target_bottom - oy - self.size.y + scroll_h
       + context_lh * below_pad
 
@@ -8915,9 +8899,8 @@ function TextView:draw_wrapped()
   local _, y1, _, y2 = self:get_content_bounds()
   local total = linewrapping.get_total_wrapped_lines(self)
   local cache = self:get_visual_row_metric_cache()
-  local padding_y = vertical_content_padding(self)
-  local minidx = cache and self:get_visual_row_at_y(math.max(0, y1 - padding_y)) or math.max(1, math.floor((y1 - padding_y) / lh) + 1)
-  local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - padding_y)) or math.min(total, math.floor((y2 - padding_y) / lh) + 1)
+  local minidx = cache and self:get_visual_row_at_y(math.max(0, y1 - style.padding.y)) or math.max(1, math.floor((y1 - style.padding.y) / lh) + 1)
+  local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
   minidx = common.clamp(minidx, 1, total)
   maxidx = common.clamp(maxidx, 1, total)
   minidx, maxidx = overscan_metric_rows(cache, minidx, maxidx, total)
@@ -8969,7 +8952,7 @@ function TextView:draw_wrapped()
   for line = first_line, last_line do
     local first_idx = self.wrapped_line_to_idx[line]
     if first_idx then
-      local y = base_y + self:get_visual_row_y_offset(first_idx) + padding_y
+      local y = base_y + self:get_visual_row_y_offset(first_idx) + style.padding.y
       self:draw_line_gutter(line, self.position.x, y, gutter_w)
     end
   end
@@ -8980,7 +8963,7 @@ function TextView:draw_wrapped()
   for line = first_line, last_line do
     local first_idx = self.wrapped_line_to_idx[line]
     if first_idx then
-      local y = base_y + self:get_visual_row_y_offset(first_idx) + padding_y
+      local y = base_y + self:get_visual_row_y_offset(first_idx) + style.padding.y
       local drawn_height = self:draw_line_body(line, x + gw, y)
       local next_idx = self.wrapped_line_to_idx[line + 1]
       if not next_idx and line == #self.buffer.lines then next_idx = total + 1 end

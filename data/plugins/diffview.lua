@@ -503,8 +503,6 @@ function DiffView:new(a, b, compare_type, names)
   self.buffer_view_b.show_current_line_highlight = false
   self.buffer_view_a.gutter_padding = 0
   self.buffer_view_b.gutter_padding = 0
-  self.buffer_view_a.content_padding_y = 0
-  self.buffer_view_b.content_padding_y = 0
   self.buffer_view_a.suppress_gitdiff_gutter = true
   self.buffer_view_b.suppress_gitdiff_gutter = true
   self.side_editable = {

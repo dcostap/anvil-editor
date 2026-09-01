@@ -687,7 +687,7 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     self.focus_pane = "list"
     self.focused_diff_buffer_view = nil
     local list = self:pane_view("file-list")
-    local line = math.floor((y - self:commit_list_y() + (list.scroll.y or 0)) / self:row_height()) + 1
+    local line = math.floor((y - self.position.y + (list.scroll.y or 0)) / self:row_height()) + 1
     local index = selected_tab.file_line_to_index and selected_tab.file_line_to_index[line]
     if not selected_tab.file_line_to_index then index = line end
     if index and index >= 1 and index <= #(selected_tab.changed_files or {}) then
@@ -1667,7 +1667,7 @@ function GitView:focus_list_pane()
 end
 
 function GitView:history_commits_y()
-  return self:commit_list_y()
+  return self.position.y
 end
 
 function GitView:history_visible_height()
@@ -1728,7 +1728,7 @@ function GitView:layout_diff_tab(tab, x)
   local list_width = math.floor(self.size.x * 0.28)
   local diff_x = self.position.x + list_width + style.padding.x
   local list_right = diff_x - style.padding.x
-  local diff_y = self:commit_list_y()
+  local diff_y = self.position.y
   local list = self:pane_view("file-list")
   list.position.x, list.position.y = x, diff_y
   list.size.x, list.size.y = math.max(0, list_width - style.padding.x),
