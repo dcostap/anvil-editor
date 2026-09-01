@@ -609,6 +609,7 @@ function TerminalView:service_session(include_rows)
   local rows_were_dirty = include_rows and self.rows_dirty
   local needs_snapshot = changed or state_changed or rows_were_dirty
   if needs_snapshot then
+    if include_rows and render_changed == true then core.blink_reset() end
     local previous_title = self.snapshot and self.snapshot.title
     local previous_pwd = self.snapshot and self.snapshot.pwd
     local snapshot_started = record_perf and system.get_time()
@@ -1031,7 +1032,6 @@ end
 function TerminalView:on_text_input(text)
   if not self.session or self.running == false then return false end
   self.composition = nil
-  core.blink_reset()
   self.session:scroll("bottom")
   local encoded = self.encoded_text_queue and self.encoded_text_queue[1]
   if encoded and text == encoded.text then
@@ -1183,7 +1183,6 @@ function TerminalView:on_key_pressed(key, event)
   elseif key == "end" and event and event.ctrl and event.shift then
     return scroll("bottom")
   end
-  core.blink_reset()
   if not ({ lshift = true, rshift = true, lctrl = true, rctrl = true,
     lalt = true, ralt = true, lgui = true, rgui = true })[key] then
     self.session:scroll("bottom")

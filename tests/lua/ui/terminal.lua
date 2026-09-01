@@ -188,6 +188,8 @@ test.describe("Terminal View", function()
   test.before_each(function(context)
     panes.reset_for_tests()
     context.previous_active_view = core.active_view
+    context.blink_start = core.blink_start
+    context.blink_timer = core.blink_timer
     context.terminal_font_sizes = {}
     for _, font in ipairs({
       style.terminal_font, style.terminal_bold_font,
@@ -207,6 +209,8 @@ test.describe("Terminal View", function()
     panes.reset_for_tests()
     terminal._set_native_for_tests(nil)
     for font, size in pairs(context.terminal_font_sizes) do font:set_size(size) end
+    core.blink_start = context.blink_start
+    core.blink_timer = context.blink_timer
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
@@ -634,6 +638,25 @@ test.describe("Terminal View", function()
     test.equal(session.keys[1][3], "repeat")
     test.equal(session.keys[1][4], raw)
     test.equal(session.keys[2][3], "release")
+  end)
+
+  test.it("does not present a frame when Backspace only rings the terminal bell", function(context)
+    local view = terminal.open()
+    local session = context.sessions[1]
+    view.status_revision = session.revision
+    view.rows_dirty = nil
+    session.next_changed = true
+    session.next_render_changed = false
+    view.snapshot.events = { { type = "bell" } }
+    local blink_start = core.blink_start
+    core.redraw = false
+
+    test.ok(view:on_key_pressed("backspace", { modifiers = 0 }))
+    view:service_session(true)
+
+    test.equal(view.bell_count, 1)
+    test.equal(core.blink_start, blink_start)
+    test.not_ok(core.redraw)
   end)
 
   test.it("does not send shifted layout text twice after encoding its key", function(context)
