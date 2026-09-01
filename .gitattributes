@@ -1,6 +1,7 @@
 # Set the default behavior, in case people don't have core.autocrlf set.
 # See https://help.github.com/en/articles/dealing-with-line-endings
 * text=auto
+*.patch -text
 
 winlib/*  linguist-vendored
 src/lib/* linguist-vendored
