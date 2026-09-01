@@ -6353,16 +6353,34 @@ function FSView:open_file_result(r, target_side, restore)
   local source_view = self.source_view
   local source_pane = self.source_pane
   self:close()
-  local view = core.open_file(path, {
-    pane = source_pane,
-    placement = target_side and "split" or "current",
-    direction = target_side and "right" or nil,
-    line = line,
-    col = col,
-    line2 = line2,
-    col2 = col2,
-    focus = true,
-  })
+  local opened, view = xpcall(function()
+    return core.open_file(path, {
+      pane = source_pane,
+      placement = target_side and "split" or "current",
+      direction = target_side and "right" or nil,
+      line = line,
+      col = col,
+      line2 = line2,
+      col2 = col2,
+      focus = true,
+    })
+  end, debug.traceback)
+  if not opened then
+    local open_error = view
+    local project = core.root_project()
+    local abs_path = project:absolute_path(project:normalize_path(path))
+    local buffer = core.buffer_registry:find(abs_path)
+    local pane = panes.find(source_pane)
+    local active = core.active_view
+    if active and active.buffer == buffer then
+      view = active
+    elseif pane and pane.current_view and pane.current_view.buffer == buffer then
+      view = pane.current_view
+    else
+      error(open_error, 0)
+    end
+    core.log_quiet("Fuzzy Searcher recovered opened preview target after error: %s", open_error)
+  end
   if view and view.buffer then
     local function apply_selection()
       if restore and restore.selections then

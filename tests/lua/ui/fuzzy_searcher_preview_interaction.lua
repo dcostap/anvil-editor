@@ -202,6 +202,35 @@ test.describe("Fuzzy Searcher preview interaction", function()
     test.equal(view.scroll.y, 900)
   end)
 
+  test.it("restores a focused preview after a post-open error", function(context)
+    local path = temp_file_path("fuzzy-preview-focused-open-recovery-test.txt")
+    context.files = { path }
+    local lines = {}
+    for line = 1, 40 do lines[line] = "line " .. line end
+    write_file(path, table.concat(lines, "\n") .. "\n")
+
+    fuzzy_searcher.open("")
+    local picker = core.fuzzy_searcher_active_view
+    picker.results = { { kind = "file", file = path, text = path, line = 30 } }
+    picker.selected = 1
+    local preview = test.not_nil(picker:update_preview_view())
+    test.ok(picker:cycle_local_focus(1))
+    preview.buffer:set_selection(32, 2, 33, 4)
+
+    local original_open_file = core.open_file
+    core.open_file = function(...)
+      original_open_file(...)
+      error("simulated post-open failure")
+    end
+    local ok, performed = pcall(command.perform, "core:activate_point_of_interest")
+    core.open_file = original_open_file
+    if not ok then error(performed, 0) end
+
+    test.ok(performed)
+    test.equal(core.active_view.buffer.abs_filename, path)
+    test.same(selection_state(core.active_view), { 32, 2, 33, 4 })
+  end)
+
   test.it("keeps preview match highlights after caret movement", function(context)
     local path = temp_file_path("fuzzy-preview-persistent-match-test.txt")
     context.files = { path }
