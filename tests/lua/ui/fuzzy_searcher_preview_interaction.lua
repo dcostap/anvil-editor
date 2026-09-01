@@ -70,6 +70,30 @@ test.describe("Fuzzy Searcher preview interaction", function()
     test.equal(preview:get_current_line_highlight_mode(), false)
   end)
 
+  test.it("does not let picker-local commands steal focused preview input", function(context)
+    local path = temp_file_path("fuzzy-preview-command-routing-test.txt")
+    context.files = { path }
+    write_file(path, "first\nsecond\n")
+
+    fuzzy_searcher.open("")
+    local picker = core.fuzzy_searcher_active_view
+    picker.results = {
+      { kind = "file", file = path, text = path },
+      { kind = "file", file = path, text = path },
+    }
+    picker.selected = 1
+    local preview = test.not_nil(picker:update_preview_view())
+    test.ok(picker:cycle_local_focus(1))
+
+    test.not_ok(command.perform("fuzzy:next"))
+    test.equal(picker.selected, 1)
+    test.equal(core.active_view, preview)
+
+    test.ok(command.perform("fuzzy:open_files"))
+    test.equal(core.fuzzy_searcher_active_view, picker)
+    test.equal(core.active_view, picker.input.textview)
+  end)
+
   test.it("focuses the preview and places its caret on a text click", function(context)
     local path = temp_file_path("fuzzy-preview-click-focus-test.txt")
     context.files = { path }
