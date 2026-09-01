@@ -4301,9 +4301,18 @@ function FSView:start_file_search(query, line, reset_selection)
         table.sort(general_matches, function(a, b) return fuzzy_result_better(a, b) end)
         local out, hidden = build_sectioned_file_results(recent_matches, general_matches, self:result_limit(), query, line)
         local has_more = hidden or native_results.has_more or folder_has_more
-        local status = string.format("%d recent + %d matches shown%s — %d files + %d folders indexed — %s",
-          #recent_matches, #general_matches, has_more and "+" or "",
-          file_index_count(), folder_index_count(), roots_label)
+        local status
+        if #recent_matches + #general_matches == 0 then
+          status = fuzzy_searcher.files_indexing
+            and string.format("Searching files… refreshing with %d files available — %s",
+              file_index_count(), roots_label)
+            or string.format("No matching files — %d files + %d folders indexed — %s",
+              file_index_count(), folder_index_count(), roots_label)
+        else
+          status = string.format("%d recent + %d matches shown%s — %d files + %d folders indexed — %s",
+            #recent_matches, #general_matches, has_more and "+" or "",
+            file_index_count(), folder_index_count(), roots_label)
+        end
         if self.loading_feedback_pending and #out == 0 and not has_more and not direct then
           self.loading_feedback_status = status
           return
@@ -4333,10 +4342,20 @@ function FSView:start_file_search(query, line, reset_selection)
       local status
       if final then
         local total_matches = #recent_matches + matched_general + matched_folders
-        status = fuzzy_searcher.files_indexing
-          and string.format("%d matches — refreshing with %d files available — %s", total_matches, file_index_count(), roots_label)
-          or string.format("%d matches — %d files + %d folders indexed — %s",
-            total_matches, #items, folder_index_count(), roots_label)
+        if total_matches == 0 then
+          status = fuzzy_searcher.files_indexing
+            and string.format("Searching files… refreshing with %d files available — %s",
+              file_index_count(), roots_label)
+            or string.format("No matching files — %d files + %d folders indexed — %s",
+              #items, folder_index_count(), roots_label)
+        else
+          status = fuzzy_searcher.files_indexing
+            and string.format("%d matches — refreshing with %d files available — %s", total_matches, file_index_count(), roots_label)
+            or string.format("%d matches — %d files + %d folders indexed — %s",
+              total_matches, #items, folder_index_count(), roots_label)
+        end
+      elseif #recent_matches + matched_general == 0 then
+        status = string.format("Searching files… scanning %d/%d files…", scanned, #items)
       else
         status = string.format("%d matches — scanning %d/%d files…", #recent_matches + matched_general, scanned, #items)
       end
@@ -5305,16 +5324,20 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       local status
       if exact_results then
         if final then
-          status = truncated
+          status = fuzzy_count == 0 and "No exact matches" or truncated
             and string.format("%d exact matches — limited scan from '%s'", fuzzy_count, jobs_label())
             or string.format("%d exact matches", fuzzy_count)
+        elseif fuzzy_count == 0 then
+          status = string.format("Searching exact text matches… scanning '%s'… %d lines", jobs_label(), scanned)
         else
           status = string.format("%d exact matches — scanning '%s'… %d lines", fuzzy_count, jobs_label(), scanned)
         end
       elseif final then
-        status = truncated
+        status = fuzzy_count == 0 and "No fuzzy matches" or truncated
           and string.format("%d fuzzy matches — limited scan from '%s'", fuzzy_count, jobs_label())
           or string.format("%d fuzzy matches", fuzzy_count)
+      elseif fuzzy_count == 0 then
+        status = string.format("Searching fuzzy text matches… scanning '%s'… %d lines", jobs_label(), scanned)
       else
         status = string.format("%d fuzzy matches — scanning '%s'… %d lines", fuzzy_count, jobs_label(), scanned)
       end
@@ -5647,14 +5670,15 @@ function FSView:start_grep(base, line, grep)
         scope_plan.searched = scope_plan.searched + #batch
         local progress_status
         if scope_plan.complete then
-          progress_status = string.format(
-            "%d exact matches — searched %d of %d files",
-            matched_count, scope_plan.searched, #scope_plan.files
-          )
+          progress_status = matched_count == 0
+            and string.format("Searching exact text matches… searched %d of %d files",
+              scope_plan.searched, #scope_plan.files)
+            or string.format("%d exact matches — searched %d of %d files",
+              matched_count, scope_plan.searched, #scope_plan.files)
         else
-          progress_status = string.format(
-            "%d exact matches — searched %d+ files", matched_count, scope_plan.searched
-          )
+          progress_status = matched_count == 0
+            and string.format("Searching exact text matches… searched %d+ files", scope_plan.searched)
+            or string.format("%d exact matches — searched %d+ files", matched_count, scope_plan.searched)
         end
         if results_started then
           self.status = progress_status
@@ -5672,7 +5696,7 @@ function FSView:start_grep(base, line, grep)
 
     if gen ~= grep_generation or active_view ~= self then return end
     if not results_started and self.loading_feedback_pending then
-      self.loading_feedback_status = "0 exact matches"
+      self.loading_feedback_status = "No exact matches"
       return
     end
     if not results_started then begin_results() end
@@ -5698,7 +5722,8 @@ function FSView:start_grep(base, line, grep)
     end
     self.results = out
     self.has_more = matched_count > #self.results
-    self.status = string.format("%d exact matches", matched_count)
+    self.status = matched_count == 0 and "No exact matches"
+      or string.format("%d exact matches", matched_count)
     core.log_quiet(
       "Exact grep: finalized stable prefix=%d shown=%d matches=%d",
       stable_prefix_count, #self.results, matched_count

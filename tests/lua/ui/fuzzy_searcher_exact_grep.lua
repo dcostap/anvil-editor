@@ -108,6 +108,20 @@ test.describe("Fuzzy Searcher exact grep", function()
     test.equal(result_count_for_path(picker, path), 1)
   end)
 
+  test.it("describes a completed empty search without a numeric zero", function(context)
+    local path = context.root .. PATHSEP .. "no-match.txt"
+    local file = assert(io.open(path, "wb"))
+    file:write("unrelated text\n")
+    file:close()
+
+    fuzzy_searcher.open("#absent-search-term")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function()
+      return picker.status == "No exact matches"
+    end, 10), "expected clear empty-search feedback: " .. tostring(picker.status))
+    test.not_ok(picker.status:find("0 matches", 1, true))
+  end)
+
   test.it("keeps published rows stable when an exact search completes", function(context)
     local path = context.root .. PATHSEP .. "stable-results.txt"
     local file = assert(io.open(path, "wb"))

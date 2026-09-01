@@ -166,6 +166,13 @@ test.describe("Fuzzy Searcher file refresh", function()
     test.equal(helpers.file_index_status().indexing, true)
     test.ok(picker_has_path(picker, existing),
       "expected the previous completed snapshot to remain searchable during refresh")
+
+    picker.input:set_text("missing-during-refresh")
+    coroutine.yield(0.3)
+    test.ok(picker.status:find("Searching", 1, true),
+      "expected search feedback while the file index refresh is still running: " .. picker.status)
+    test.not_ok(picker.status:find("0 matches", 1, true),
+      "expected search feedback not to announce zero matches before refresh completes")
   end)
 
   test.it("applies ripgrep ignore files and hidden-path defaults before native ingestion", function(context)
