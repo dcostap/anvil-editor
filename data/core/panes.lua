@@ -280,14 +280,14 @@ function M.focus_index(index)
   return M.focus(pane)
 end
 
-function M.focus_direction(direction)
-  local active = M.active_pane
-  if not active then return nil end
-  local ax = active.position.x + active.size.x / 2
-  local ay = active.position.y + active.size.y / 2
+function M.neighbor(target, direction)
+  local source = M.find(target)
+  if not source then return nil end
+  local ax = source.position.x + source.size.x / 2
+  local ay = source.position.y + source.size.y / 2
   local best, best_score
-  for _, candidate in ipairs(layout.leaves(active.group.root)) do
-    if candidate ~= active then
+  for _, candidate in ipairs(layout.leaves(source.group.root)) do
+    if candidate ~= source then
       local cx = candidate.position.x + candidate.size.x / 2
       local cy = candidate.position.y + candidate.size.y / 2
       local primary, secondary
@@ -299,18 +299,23 @@ function M.focus_direction(direction)
       if primary > 0 then
         local overlap
         if direction == "left" or direction == "right" then
-          overlap = candidate.position.y < active.position.y + active.size.y
-            and active.position.y < candidate.position.y + candidate.size.y
+          overlap = candidate.position.y < source.position.y + source.size.y
+            and source.position.y < candidate.position.y + candidate.size.y
         else
-          overlap = candidate.position.x < active.position.x + active.size.x
-            and active.position.x < candidate.position.x + candidate.size.x
+          overlap = candidate.position.x < source.position.x + source.size.x
+            and source.position.x < candidate.position.x + candidate.size.x
         end
         local score = (overlap and 0 or 1e12) + primary * primary + secondary * secondary
         if not best_score or score < best_score then best, best_score = candidate, score end
       end
     end
   end
-  return best and M.focus(best) or nil
+  return best
+end
+
+function M.focus_direction(direction)
+  local neighbor = M.neighbor(M.active_pane, direction)
+  return neighbor and M.focus(neighbor) or nil
 end
 
 function M.rotate_group_clockwise(target)

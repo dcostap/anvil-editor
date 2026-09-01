@@ -2,6 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
 local file_context = require "core.file_context"
+local layout = require "core.pane_layout"
 local panes = require "core.panes"
 local View = require "core.view"
 local test = require "core.test"
@@ -146,6 +147,36 @@ test.describe("File Tree instances", function()
     test.equal(view.current_dir, common.normalize_path(root))
     test.equal(panes.forward(pane), view)
     test.equal(view.current_dir, common.normalize_path(folder))
+  end)
+
+  test.it("opens the selected file in a new right Pane without leaving the File Tree", function()
+    local tree = assert(filetree.new(file))
+    local source = panes.create { factory = function() return tree end }
+    layout.update_rects(source.group.root, { x = 0, y = 0, w = 300, h = 200 })
+
+    test.ok(command.perform("filetree:open_selected_right"))
+
+    test.equal(panes.count(), 2)
+    test.equal(panes.active(), source)
+    test.equal(core.active_view, tree)
+    layout.update_rects(source.group.root, { x = 0, y = 0, w = 300, h = 200 })
+    local destination = test.not_nil(panes.neighbor(source, "right"))
+    test.ok(common.path_equals(destination.current_view.buffer.abs_filename, file))
+  end)
+
+  test.it("reuses the right Pane when opening the selected File Tree file", function()
+    local tree = assert(filetree.new(file))
+    local source = panes.create { factory = function() return tree end }
+    local destination = panes.split(source, "right", { factory = function() return View() end })
+    layout.update_rects(source.group.root, { x = 0, y = 0, w = 300, h = 200 })
+    panes.focus(source)
+
+    test.ok(command.perform("filetree:open_selected_right"))
+
+    test.equal(panes.count(), 2)
+    test.equal(panes.active(), source)
+    test.equal(core.active_view, tree)
+    test.ok(common.path_equals(destination.current_view.buffer.abs_filename, file))
   end)
 
   test.it("keeps pending edits when parent navigation is requested", function()

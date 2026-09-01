@@ -3065,6 +3065,35 @@ function FileTreeView:open_item(opts)
   return false
 end
 
+function FileTreeView:open_selected_right()
+  self:sync_meta()
+  local line = self.buffer:get_selection(true)
+  local entry, err = self:entry_for_line(line)
+  if not entry then
+    if err then core.error("File Tree: %s", err) end
+    return false
+  end
+
+  local info = entry.type == "file" and system.get_file_info(entry.abs)
+  if not (info and info.type == "file") then return false end
+
+  local source = panes.pane_for_view(self)
+  if not source then return false end
+  local destination = panes.neighbor(source, "right")
+  local view = core.open_file(entry.abs, {
+    pane = destination or source,
+    placement = destination and "current" or "split",
+    direction = destination and nil or "right",
+    focus = false,
+    preserve_focus = true,
+    reason = "filetree-open-right",
+  })
+  if view then
+    core.log_quiet("File Tree opened selected file in right Pane: %s", entry.abs)
+  end
+  return view ~= nil
+end
+
 function FileTreeView:get_point_of_interest_at(line)
   local entry = self:entry_for_line(line)
   if not entry then return nil end
@@ -3771,6 +3800,7 @@ end, {
   end),
   ["filetree:apply_changes"] = command.palette(function(view) view:apply_edits() end),
   ["filetree:open_selected"] = function(view) view:open_item() end,
+  ["filetree:open_selected_right"] = function(view) return view:open_selected_right() end,
   ["filetree:up_dir"] = function(view) view:up_dir() end,
   ["filetree:project_root"] = function(view)
     view.current_dir = view.root_dir
@@ -3796,7 +3826,7 @@ keymap.add {
   ["ctrl+\\"] = "filetree:open_at_project_root",
   ["ctrl+s"] = "filetree:apply_changes",
   ["f5"] = "filetree:reload",
-  ["alt+shift+r"] = "filetree:enter_selected",
+  ["alt+shift+r"] = "filetree:open_selected_right",
   ["alt+home"] = "filetree:project_root",
 }
 
