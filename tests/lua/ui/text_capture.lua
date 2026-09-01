@@ -38,7 +38,7 @@ test.describe("Text Capture", function()
       },
     }, { status = "3 loaded results" })
     picker.selected = 2
-    picker.viewport_offset = 1
+    picker.viewport_offset = 2
     picker.has_more = true
     local preview_buffer = Buffer()
     context.preview_buffer = preview_buffer
