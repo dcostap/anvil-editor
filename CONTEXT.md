@@ -116,6 +116,10 @@ _Avoid_: File type, syntax mode
 A View that presents a Buffer through text navigation and selection behavior. It can allow edits with specialized effects.
 _Avoid_: Document View, DocView, buffer view
 
+**Text Capture**:
+A read-only Text View containing a stable textual representation of a supported View or Modal Input Owner. It includes all relevant content loaded at capture time, not only visible content.
+_Avoid_: text dump, snapshot buffer, turn into a text buffer
+
 **Line Hint**:
 Non-interactive text visually anchored to a Text View line that is not part of the Buffer.
 _Avoid_: Buffer hint, phantom text, inlay hint
@@ -243,6 +247,10 @@ _Avoid_: App shell, main panel
 **Modal Input Owner**:
 The top interaction that receives all user input until it closes. Owners form a stack when one interaction covers another.
 _Avoid_: priority interaction, modal popup, input-stealing View
+
+**Mouse-Complete Interaction**:
+An interaction rule where visible keyboard-selectable or activatable items also provide mouse hover, press, selection, and activation feedback.
+_Avoid_: mouse-friendly UI, basic mouse support
 
 **Pane**:
 A numbered work area that shows one Current View and owns one Navigation History. Each Pane belongs to one Pane Group.
@@ -423,7 +431,7 @@ An interactive View connected to a running shell or terminal application.
 _Avoid_: Terminal panel, terminal buffer, console
 
 **Terminal Text Capture**:
-A read-only Text View containing stable text captured from a Terminal View while that terminal continues to run.
+A Text Capture containing stable text from a Terminal View while that terminal continues to run.
 _Avoid_: terminal buffer, copy mode
 
 **Command Output History**:
