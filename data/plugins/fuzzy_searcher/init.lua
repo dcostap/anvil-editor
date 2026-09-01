@@ -6560,9 +6560,9 @@ function FSView:draw()
       end
     else
       if idx == self.selected then
-        renderer.draw_rect(x, yy, list_w, lh, style.line_highlight)
+        renderer.draw_rect(x, yy, list_w, lh, style.fuzzy_searcher_result_selection_background)
       elseif idx == self.hovered_result then
-        renderer.draw_rect(x, yy, list_w, lh, style.interactive_hover_background)
+        renderer.draw_rect(x, yy, list_w, lh, style.fuzzy_searcher_result_hover_background)
       end
       if r.kind == "file" or (r.kind == "path" and r.file) then
         local path = fullpath(r)

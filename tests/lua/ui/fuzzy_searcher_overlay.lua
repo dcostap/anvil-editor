@@ -135,8 +135,12 @@ test.describe("Fuzzy Searcher attention overlay", function()
     local original_draw_text_known_bounds = renderer.draw_text_known_bounds
     local original_set_clip_rect = renderer.set_clip_rect
     renderer.draw_rect = function(x, y, width, height, color)
-      if same_color(color, style.line_highlight) then selected_drawn = true end
-      if same_color(color, style.interactive_hover_background) then hover_drawn = true end
+      if same_color(color, style.fuzzy_searcher_result_selection_background) then
+        selected_drawn = true
+      end
+      if same_color(color, style.fuzzy_searcher_result_hover_background) then
+        hover_drawn = true
+      end
     end
     renderer.draw_rounded_rect = function() end
     renderer.draw_text = function(font, text, x)
@@ -154,7 +158,15 @@ test.describe("Fuzzy Searcher attention overlay", function()
 
     test.ok(selected_drawn, "expected selected-result feedback")
     test.ok(hover_drawn, "expected hovered-result feedback")
-    test.not_ok(same_color(style.line_highlight, style.interactive_hover_background),
+    test.not_ok(same_color(
+      style.fuzzy_searcher_result_selection_background,
+      style.fuzzy_searcher_result_hover_background
+    ),
       "expected hover and selection to use different feedback")
+    test.ok(
+      style.fuzzy_searcher_result_selection_background[4]
+        > style.fuzzy_searcher_result_hover_background[4],
+      "expected selection feedback to be stronger than hover feedback"
+    )
   end)
 end)
