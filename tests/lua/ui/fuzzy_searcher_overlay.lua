@@ -118,6 +118,26 @@ test.describe("Fuzzy Searcher attention overlay", function()
     test.equal(confirmations, 1)
   end)
 
+  test.it("keeps the hand cursor over a result after the next update", function()
+    local picker = fuzzy_searcher.open_static_results("Results", {
+      { kind = "file", label = "first.lua", file = "first.lua" },
+    })
+    picker:update()
+    local metrics = picker:list_metrics()
+    local x = metrics.x + 20
+    local y = metrics.results_top + metrics.lh / 2
+    local previous_cursor_request = core.cursor_change_req
+
+    picker:on_mouse_moved(x, y, 0, 0)
+    core.request_cursor("ibeam")
+    picker:update()
+    local cursor_request = core.cursor_change_req
+    core.cursor_change_req = previous_cursor_request
+
+    test.equal(picker.hovered_result, 1)
+    test.equal(cursor_request, "hand")
+  end)
+
   test.it("draws different feedback for hovered and selected results", function()
     local picker = fuzzy_searcher.open_static_results("Results", {
       { kind = "file", label = "first.lua", file = "first.lua" },

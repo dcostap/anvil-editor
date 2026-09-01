@@ -6479,6 +6479,14 @@ function FSView:update()
   end
   self:refresh(self.input:get_text())
   self:update_selected_preview()
+
+  local hit = self:result_at_point(self.mouse.x, self.mouse.y)
+  self.hovered_result = type(hit) == "number"
+    and self.results[hit] and not self.results[hit].header and hit or nil
+  if self.hovered_result then
+    self.cursor = "hand"
+    core.request_cursor(self.cursor)
+  end
 end
 
 function FSView:draw()
