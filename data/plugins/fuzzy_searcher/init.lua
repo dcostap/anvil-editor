@@ -2088,7 +2088,7 @@ local function draw_match_highlight_rect(x, y, w, h)
   renderer.draw_rect(x, y, w, h, style.search_selection_secondary)
   local outline = style.search_selection_secondary_outline
   if not outline then return end
-  local t = math.max(1, SCALE or 1)
+  local t = math.max(1, common.round(SCALE or 1))
   renderer.draw_rect(x, y, w, t, outline)
   renderer.draw_rect(x, y + h - t, w, t, outline)
   renderer.draw_rect(x, y, t, h, outline)
@@ -2472,7 +2472,7 @@ function fuzzy_searcher.file_result_filename_width(font, file, prefix, suffix, s
   prefix = tostring(prefix or "")
   suffix = tostring(suffix or "")
   local row_height = font:get_height()
-  local marker_width = math.max(1, style.gitdiff_width or (2 * (SCALE or 1)))
+  local marker_width = math.max(1, common.round(style.gitdiff_width or (2 * (SCALE or 1))))
   local marker_gap = math.max(2 * (SCALE or 1), style.padding.x / 4)
   local icon_width = show_file_icon and fuzzy_searcher.file_icons.column_width(row_height) or 0
   local file_font = style.prose_font:get_size() == font:get_size()
@@ -2529,7 +2529,7 @@ local function draw_path_result_row(font, r, x, y, width)
   )
   path_end = math.min(x + width, path_end or path_x)
 
-  local marker_width = math.max(1, style.gitdiff_width or (2 * (SCALE or 1)))
+  local marker_width = math.max(1, common.round(style.gitdiff_width or (2 * (SCALE or 1))))
     + math.max(2 * (SCALE or 1), style.padding.x / 4)
   r._path_copy_x = path_x + marker_width
   r._path_copy_width = math.max(0, path_end - r._path_copy_x)
@@ -2615,7 +2615,7 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, 
   suffix = suffix or ""
 
   local row_height = font:get_height()
-  local marker_width = math.max(1, style.gitdiff_width or (2 * (SCALE or 1)))
+  local marker_width = math.max(1, common.round(style.gitdiff_width or (2 * (SCALE or 1))))
   local marker_gap = math.max(2 * (SCALE or 1), style.padding.x / 4)
   local marker_column_width = marker_width + marker_gap
   local marker_color = path_tree.git_gutter_color(git_kind or fuzzy_searcher.git_kind_for_file(file))
@@ -3775,7 +3775,7 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
       width = r._path_copy_width
     else
       local icon_w = fuzzy_searcher.file_icons.column_width(font:get_height())
-      local marker_w = math.max(1, style.gitdiff_width or (2 * (SCALE or 1)))
+      local marker_w = math.max(1, common.round(style.gitdiff_width or (2 * (SCALE or 1))))
         + math.max(2 * (SCALE or 1), style.padding.x / 4)
       x = row_x + icon_w + marker_w
       width = math.max(0, row_text_w - icon_w - marker_w)

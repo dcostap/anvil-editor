@@ -905,17 +905,17 @@ function TerminalView:draw()
       end
       if run.underline and run.underline ~= 0 then
         local underline_color = rgb(self, run.underline_color, color)
-        local thickness = math.max(1, SCALE)
+        local thickness = math.max(1, common.round(SCALE))
         local underline_y = y + self.cell_height - thickness
         if run.underline == 3 then
-          local step = math.max(2, 2 * SCALE)
+          local step = math.max(2, common.round(2 * SCALE))
           for offset = 0, width - 1, step do
             renderer.draw_rect(x + offset, underline_y - ((offset / step) % 2) * thickness,
               math.min(step, width - offset), thickness, underline_color)
           end
         elseif run.underline == 4 or run.underline == 5 then
-          local mark = run.underline == 4 and thickness or math.max(3, 3 * SCALE)
-          local gap = run.underline == 4 and math.max(2, 2 * SCALE) or math.max(2, 2 * SCALE)
+          local mark = run.underline == 4 and thickness or math.max(3, common.round(3 * SCALE))
+          local gap = math.max(2, common.round(2 * SCALE))
           for offset = 0, width - 1, mark + gap do
             renderer.draw_rect(x + offset, underline_y, math.min(mark, width - offset),
               thickness, underline_color)
@@ -930,11 +930,11 @@ function TerminalView:draw()
       if run.strikethrough then
         renderer.draw_rect(
           x, y + math.floor(self.cell_height / 2),
-          width, math.max(1, SCALE), color
+          width, math.max(1, common.round(SCALE)), color
         )
       end
       if run.overline then
-        renderer.draw_rect(x, y, width, math.max(1, SCALE), color)
+        renderer.draw_rect(x, y, width, math.max(1, common.round(SCALE)), color)
       end
       ::continue_run::
     end
@@ -945,10 +945,10 @@ function TerminalView:draw()
   if hover and hover.row ~= nil and hover.col ~= nil then
     renderer.draw_rect(
       origin_x + hover.col * self.cell_width,
-      origin_y + hover.row * self.cell_height + self.cell_height - math.max(1, SCALE),
+      origin_y + hover.row * self.cell_height + self.cell_height - math.max(1, common.round(SCALE)),
       math.max(self.cell_width,
         ((hover.end_col or hover.col) - hover.col + 1) * self.cell_width),
-      math.max(1, SCALE), style.link or style.text
+      math.max(1, common.round(SCALE)), style.link or style.text
     )
   end
 
@@ -962,11 +962,12 @@ function TerminalView:draw()
     local color = rgb(self, value, style.caret)
     local cursor_style = self.focused and cursor.style or "hollow"
     if cursor_style == "bar" then
-      renderer.draw_rect(x, y, math.max(1, style.caret_width or SCALE), self.cell_height, color)
+      renderer.draw_rect(x, y, math.max(1, common.round(style.caret_width or SCALE)), self.cell_height, color)
     elseif cursor_style == "underline" then
-      renderer.draw_rect(x, y + self.cell_height - math.max(2, 2 * SCALE), self.cell_width, math.max(2, 2 * SCALE), color)
+      local thickness = math.max(2, common.round(2 * SCALE))
+      renderer.draw_rect(x, y + self.cell_height - thickness, self.cell_width, thickness, color)
     elseif cursor_style == "hollow" then
-      local thickness = math.max(1, SCALE)
+      local thickness = math.max(1, common.round(SCALE))
       renderer.draw_rect(x, y, self.cell_width, thickness, color)
       renderer.draw_rect(x, y + self.cell_height - thickness, self.cell_width, thickness, color)
       renderer.draw_rect(x, y, thickness, self.cell_height, color)
@@ -997,8 +998,8 @@ function TerminalView:draw()
     local selection_x = x + self.font:get_width(before)
     local selection_width = math.max(1, self.font:get_width(selected))
     renderer.draw_rect(
-      selection_x, y + self.cell_height - math.max(1, SCALE),
-      selection_width, math.max(1, SCALE), style.caret
+      selection_x, y + self.cell_height - math.max(1, common.round(SCALE)),
+      selection_width, math.max(1, common.round(SCALE)), style.caret
     )
     ime.set_location(x, y, width, self.cell_height)
   end

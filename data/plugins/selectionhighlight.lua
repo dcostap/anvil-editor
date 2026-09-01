@@ -36,7 +36,7 @@ end
 
 local function draw_box(x, y, w, h, color)
   local r = renderer.draw_rect
-  local s = math.ceil(SCALE)
+  local s = math.max(1, common.round(SCALE))
   r(x, y, w, s, color)
   r(x, y + h - s, w, s, color)
   r(x, y + s, s, h - s * 2, color)

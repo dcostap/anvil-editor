@@ -1,5 +1,6 @@
 --- mod-version:3.1
 local core = require "core"
+local common = require "core.common"
 local style = require "core.style"
 local command = require "core.command"
 local keymap = require "core.keymap"
@@ -201,7 +202,7 @@ local function draw_decoration(dv, x, y, line, col, width)
   local block_color = style.bracketmatch_block_color
   local frame_color = style.bracketmatch_frame_color
 
-  local thickness = math.max(1, SCALE)
+  local thickness = math.max(1, common.round(SCALE))
 
   -- color char or block style
   if conf.color_char or conf.style == "block" then

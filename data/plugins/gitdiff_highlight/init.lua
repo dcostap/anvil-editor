@@ -490,7 +490,7 @@ function TextView:draw_line_gutter(line, x, y, width)
 		return gutter_height
 	end
 
-	renderer.draw_rect(x - style.gitdiff_width * 3, y, style.gitdiff_width * 6, math.max(1, 2 * SCALE), color)
+	renderer.draw_rect(x - style.gitdiff_width * 3, y, style.gitdiff_width * 6, math.max(1, common.round(2 * SCALE)), color)
 	return gutter_height
 end
 

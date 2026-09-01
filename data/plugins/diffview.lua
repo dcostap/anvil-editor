@@ -1362,7 +1362,7 @@ local function draw_gap_marker(buffer_view, y, color)
   color = alpha_color(color, 190)
   if not color then return end
   local gw = buffer_view:get_gutter_width()
-  local h = math.max(1, SCALE)
+  local h = math.max(1, common.round(SCALE))
   renderer.draw_rect(
     buffer_view.position.x + gw,
     y - h / 2,
@@ -1729,7 +1729,7 @@ function DiffView:draw_divider_changes()
 
   self:draw_divider_line_numbers(x1, x2)
 
-  local divider_width = math.max(1, style.divider_size or SCALE)
+  local divider_width = math.max(1, common.round(style.divider_size or SCALE))
   local center = x1 + (x2 - x1) / 2
   renderer.draw_rect(center - divider_width / 2, self.position.y, divider_width, self.size.y, style.divider)
   core.pop_clip_rect()
@@ -1761,8 +1761,8 @@ function DiffView:draw_scrollbar()
         local ratio_start = common.clamp(scroll_y_start / overview_range, 0, 1)
         local ratio_end = common.clamp(scroll_y_end / overview_range, ratio_start, 1)
         local marker_y = y + ratio_start * h
-        local marker_h = math.max(2 * SCALE, (ratio_end - ratio_start) * h)
-        local marker_w = math.max(2 * SCALE, math.min(w, 5 * SCALE))
+        local marker_h = math.max(common.round(2 * SCALE), (ratio_end - ratio_start) * h)
+        local marker_w = math.max(common.round(2 * SCALE), math.min(w, common.round(5 * SCALE)))
         local marker_x = x + w - marker_w
 
         renderer.draw_rect(marker_x, marker_y, marker_w, marker_h, color)

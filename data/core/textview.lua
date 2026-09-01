@@ -369,7 +369,7 @@ local function draw_wrapped_search_match_segment(view, x1, y, x2, h, primary, ou
     renderer.draw_rect(x1, y, x2 - x1, h, bg)
     return
   end
-  local t = math.max(1, SCALE)
+  local t = math.max(1, common.round(SCALE))
   renderer.draw_rect(x1, y, x2 - x1, t, border)
   renderer.draw_rect(x1, y + h - t, x2 - x1, t, border)
   renderer.draw_rect(x1, y, t, h, border)
@@ -4116,7 +4116,7 @@ function TextView:draw_fold_widget_body(fold, x, y, height)
   local bg = selection_covers_fold(self.buffer, fold) and style.selection or style.fold_widget_background
   renderer.draw_rect(bx, y, bw, lh, bg)
   local border = style.fold_widget_border or style.fold_widget_effect or style.accent
-  local t = math.max(1, SCALE)
+  local t = math.max(1, common.round(SCALE))
   renderer.draw_rect(bx, y, bw, t, border)
   renderer.draw_rect(bx, y + lh - t, bw, t, border)
   renderer.draw_rect(bx, y, t, lh, border)
@@ -6809,17 +6809,17 @@ local function draw_render_fragment_text(
   local next_x = renderer.draw_text(font, text, text_x, y, color, opts)
   if fragment.overdraw then
     renderer.draw_text(
-      font, text, text_x + (fragment.overdraw_dx or math.max(1, SCALE)), y, color, opts
+      font, text, text_x + (fragment.overdraw_dx or math.max(1, common.round(SCALE))), y, color, opts
     )
   end
   if fragment.strikethrough then
     renderer.draw_rect(
-      text_x, y + math.floor(font:get_height() / 2), text_width, math.max(1, SCALE), color
+      text_x, y + math.floor(font:get_height() / 2), text_width, math.max(1, common.round(SCALE)), color
     )
   end
   if fragment.underline then
     renderer.draw_rect(
-      text_x, y + font:get_height() - math.max(1, SCALE), text_width, math.max(1, SCALE), color
+      text_x, y + font:get_height() - math.max(1, common.round(SCALE)), text_width, math.max(1, common.round(SCALE)), color
     )
   end
   return math.max(next_x, x + width)
@@ -7915,7 +7915,7 @@ end
 
 function TextView:draw_search_match_outline(line, col1, col2, primary)
   local _, outline = self:search_match_style(primary)
-  local t = math.max(1, SCALE)
+  local t = math.max(1, common.round(SCALE))
   for x1, y, x2, h in self:iter_text_range_screen_segments(
     line, col1, col2
   ) do
@@ -8665,7 +8665,7 @@ end
 ---@param line2 integer End line
 ---@param col2 integer End column
 function TextView:draw_ime_decoration(line1, col1, line2, col2)
-  local line_size = math.max(1, SCALE)
+  local line_size = math.max(1, common.round(SCALE))
   if line2 < line1 or line1 == line2 and col2 < col1 then
     line1, col1, line2, col2 = line2, col2, line1, col1
   end

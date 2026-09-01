@@ -7,7 +7,7 @@ local line_packets = require "core.textview_line_packets"
 
 local indent_guides = {
   enabled = true,
-  line_width = math.max(1, SCALE),
+  line_width = math.max(1, common.round(SCALE)),
   highlight_active = false,
   blank_line_search_limit = 25,
 }
@@ -180,7 +180,7 @@ local function emit_indent_guides(self, line, x, y, emit_grid, emit_rect)
     local indent_levels = math.floor(indent_cols / indent_size)
     local indent_px = self:get_font():get_width(string.rep(" ", indent_size))
     local lh = self:get_line_height()
-    local lw = conf.line_width or math.max(1, SCALE)
+    local lw = math.max(1, common.round(conf.line_width or SCALE))
     local active_depth = conf.highlight_active and active_indent_depth(self, indent_size) or nil
     local normal_color = guide_color(false)
     local active_color = conf.highlight_active and guide_color(true) or normal_color
