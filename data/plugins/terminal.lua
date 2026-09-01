@@ -1030,6 +1030,7 @@ end
 
 function TerminalView:on_text_input(text)
   if not self.session or self.running == false then return false end
+  core.event_frame_deferred = true
   self.composition = nil
   self.session:scroll("bottom")
   local encoded = self.encoded_text_queue and self.encoded_text_queue[1]
@@ -1158,6 +1159,7 @@ end
 
 function TerminalView:on_key_pressed(key, event)
   if not self.session or self.running == false then return false end
+  core.event_frame_deferred = true
   self:sync_focus()
   self:retry_pending_key_releases()
   self.key_owners = self.key_owners or {}
@@ -1209,6 +1211,7 @@ end
 
 function TerminalView:on_key_released(key, event)
   if not self.session or self.running == false then return false end
+  core.event_frame_deferred = true
   self.key_owners = self.key_owners or {}
   local key_id = physical_key_id(key, event)
   local owned = self.key_owners[key_id]

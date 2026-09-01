@@ -2496,13 +2496,16 @@ function core.step(next_frame_time, options)
   end
   for type, a,b,c,d in system.poll_event do
     local event_item_start = system.get_time()
+    local defer_frame = false
     step_stats.event_count = step_stats.event_count + 1
     local event_window_id = system.get_last_event_window_id and system.get_last_event_window_id()
     local main_window_id = core.window and system.get_window_id and system.get_window_id(core.window)
     if type == "textinput" and did_keymap then
       did_keymap = false
     elseif type == "mousemoved" then
+      core.event_frame_deferred = false
       core.try(core.on_event, type, a, b, c, d)
+      defer_frame = core.event_frame_deferred == true
     elseif type == "enteringforeground" then
       -- to break our frame refresh in two if we get entering/entered at the same time.
       -- required to avoid flashing and refresh issues on mobile
@@ -2518,13 +2521,15 @@ function core.step(next_frame_time, options)
       update_scale(a)
       core.refresh_display_timing("scalechanged")
     else
+      core.event_frame_deferred = false
       local _, res = core.try(core.on_event, type, a, b, c, d)
       did_keymap = res or did_keymap
+      defer_frame = core.event_frame_deferred == true
     end
     core.current_event_context = nil
     note_event(type, event_item_start)
     event_received = type
-    if type ~= "terminaloutput" then event_requires_frame = true end
+    if type ~= "terminaloutput" and not defer_frame then event_requires_frame = true end
   end
   step_stats.event_ms = (system.get_time() - event_start_time) * 1000
   if #event_type_order > 0 then

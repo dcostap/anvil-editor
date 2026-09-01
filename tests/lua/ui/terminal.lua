@@ -640,6 +640,55 @@ test.describe("Terminal View", function()
     test.equal(session.keys[2][3], "release")
   end)
 
+  test.it("does not force a frame for terminal key input", function(context)
+    local view = terminal.open({ focus = true })
+    local session = context.sessions[1]
+    local previous_poll_event = system.poll_event
+    local previous_update = core.root_panel.update
+    local previous_draw = core.root_panel.draw
+    local previous_title = core.get_window_title
+    local previous_begin_frame = renderer.begin_frame
+    local previous_set_clip_rect = renderer.set_clip_rect
+    local previous_end_frame = renderer.end_frame
+    local previous_frame_failed = renderer.frame_failed
+    local previous_redraw = core.redraw
+    local delivered = false
+    local updated, drawn = false, false
+    local ok, err
+
+    system.poll_event = function()
+      if delivered then return nil end
+      delivered = true
+      return "keypressed", "backspace", { modifiers = 0 }
+    end
+    core.root_panel.update = function() updated = true end
+    core.root_panel.draw = function() drawn = true end
+    core.get_window_title = function() return core.window_title end
+    renderer.begin_frame = function() end
+    renderer.set_clip_rect = function() end
+    renderer.end_frame = function() end
+    renderer.frame_failed = function() return false end
+    core.redraw = false
+    ok, err = pcall(function()
+      local result = core.step(system.get_time() - 1)
+      test.ok(updated)
+      test.not_ok(drawn)
+      test.not_ok(result)
+      test.equal(session.keys[1][1], "backspace")
+    end)
+
+    system.poll_event = previous_poll_event
+    core.root_panel.update = previous_update
+    core.root_panel.draw = previous_draw
+    core.get_window_title = previous_title
+    renderer.begin_frame = previous_begin_frame
+    renderer.set_clip_rect = previous_set_clip_rect
+    renderer.end_frame = previous_end_frame
+    renderer.frame_failed = previous_frame_failed
+    core.redraw = previous_redraw
+    if not ok then error(err, 0) end
+  end)
+
   test.it("does not present a frame when Backspace only rings the terminal bell", function(context)
     local view = terminal.open()
     local session = context.sessions[1]
