@@ -44,23 +44,6 @@ function PreviewTextView:restore_preview_search_ranges()
   end
 end
 
-function PreviewTextView:draw_gutter_divider()
-  local width = math.max(1, style.divider_size)
-  renderer.draw_rect(
-    self.position.x + self:get_gutter_width() - width,
-    self.position.y,
-    width,
-    self.size.y,
-    style.divider
-  )
-end
-
-function PreviewTextView:draw()
-  local drawn = PreviewTextView.super.draw(self)
-  if drawn then self:draw_gutter_divider() end
-  return drawn
-end
-
 function PreviewTextView:get_line_number_gutter_width()
   return self:get_font():get_width("00000")
 end

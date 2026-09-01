@@ -3,8 +3,6 @@ local core = require "core"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local panes = require "core.panes"
 local poi = require "core.poi"
-local renderer = require "renderer"
-local style = require "core.style"
 local test = require "core.test"
 local View = require "core.view"
 
@@ -49,19 +47,6 @@ test.describe("Fuzzy Searcher preview interaction", function()
 
     test.equal(preview:get_current_line_highlight_mode(), false)
     test.equal(preview.buffer.read_only, true)
-
-    local divider
-    local original_draw_rect = renderer.draw_rect
-    renderer.draw_rect = function(x, y, width, height, color)
-      divider = { x = x, y = y, width = width, height = height, color = color }
-    end
-    preview:draw_gutter_divider()
-    renderer.draw_rect = original_draw_rect
-
-    test.equal(divider.x + divider.width, preview.position.x + preview:get_gutter_width())
-    test.equal(divider.y, preview.position.y)
-    test.equal(divider.height, preview.size.y)
-    test.equal(divider.color, style.divider)
   end)
 
   test.it("cycles local focus into the preview for cursor movement", function(context)
