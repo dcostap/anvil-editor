@@ -1367,26 +1367,32 @@ function GitView:ensure_diff_view(tab)
     end
     return tab.diff_view
   end
+  local selected_file = tab.changed_files and tab.changed_files[tab.selected_file]
+  local selected_file_path = tab.selected_file_path
+    or selected_file and changed_file_path(selected_file)
   local presentation
   if tab.diff_view then
     local old = tab.diff_view
-    local function scroll_state(side)
-      return {
-        x = side.scroll.x,
-        y = side.scroll.y,
-        to_x = side.scroll.to.x,
-        to_y = side.scroll.to.y,
+    local old_data = old.request and old.request.user_data or {}
+    if (selected_file_path and old_data.selected_file_path == selected_file_path)
+        or (not selected_file_path and old_data.selected_file == selected_file) then
+      local function scroll_state(side)
+        return {
+          x = side.scroll.x,
+          y = side.scroll.y,
+          to_x = side.scroll.to.x,
+          to_y = side.scroll.to.y,
+        }
+      end
+      presentation = {
+        left = scroll_state(old.buffer_view_a),
+        right = scroll_state(old.buffer_view_b),
       }
     end
-    presentation = {
-      left = scroll_state(old.buffer_view_a),
-      right = scroll_state(old.buffer_view_b),
-    }
     tab.diff_view:dispose_integrations()
     tab.diff_view:dispose_owned_buffers()
   end
   local diffview = require "plugins.diffview"
-  local selected_file = tab.changed_files and tab.changed_files[tab.selected_file]
   local left_source_path = self:absolute_repo_path(changed_file_side_path(selected_file, "left"))
   local right_source_path = self:absolute_repo_path(changed_file_side_path(selected_file, "right"))
   local function source(text, current_path, name, source_path)
@@ -1420,7 +1426,7 @@ function GitView:ensure_diff_view(tab)
       tab = tab,
       selected_file = selected_file,
       selected_file_index = tab.selected_file,
-      selected_file_path = tab.selected_file_path or selected_file and changed_file_path(selected_file),
+      selected_file_path = selected_file_path,
       left_revision = tab.left,
       right_revision = tab.right,
       read_only_reason = "Historical Git content is read-only",

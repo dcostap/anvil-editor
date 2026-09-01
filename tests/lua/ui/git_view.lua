@@ -59,6 +59,16 @@ local function open_fake_git_view(project)
   })
 end
 
+local function wait_until(predicate, timeout, message)
+  local deadline = system.get_time() + (timeout or 1)
+  while not predicate() do
+    if system.get_time() >= deadline then
+      test.fail(message or "timed out waiting for condition", 2)
+    end
+    coroutine.yield(0.01)
+  end
+end
+
 local function use_fake_command_git_views(context)
   git_view.open_log = function(project, opts)
     opts = opts or {}
@@ -913,6 +923,48 @@ test.describe("Git View command", function()
     test.same(replacement.buffer_view_a.scroll, { x = 24, y = 320, to = { x = 28, y = 324 } })
     test.same(replacement.buffer_view_b.scroll, { x = 12, y = 320, to = { x = 16, y = 324 } })
     test.equal(replacement.pending_first_change_reveal, false)
+    replacement:dispose_integrations()
+    replacement:dispose_owned_buffers()
+  end)
+
+  test.it("reveals the first change when another Git file opens", function(context)
+    local _, view = open_fake_git_view(context.project)
+    local first_file = { status = "modified", old_path = "first.lua", new_path = "first.lua" }
+    local second_file = { status = "modified", old_path = "second.lua", new_path = "second.lua" }
+    local tab = {
+      id = "diff-file-reveal",
+      kind = "commit_diff",
+      title = "Diff file reveal",
+      closable = true,
+      changed_files = { first_file, second_file },
+      selected_file = 1,
+      left_text = "old\n",
+      right_text = "new\n",
+      left_name = "first.lua",
+      right_name = "first.lua",
+      diff_generation = 1,
+    }
+    local first = view:ensure_diff_view(tab)
+    first.buffer_view_a.scroll.y, first.buffer_view_a.scroll.to.y = 320, 320
+    first.buffer_view_b.scroll.y, first.buffer_view_b.scroll.to.y = 320, 320
+
+    local prefix = {}
+    for i = 1, 40 do prefix[i] = "unchanged " .. i end
+    tab.selected_file = 2
+    tab.selected_file_path = "second.lua"
+    tab.left_text = table.concat(prefix, "\n") .. "\nold value\n"
+    tab.right_text = table.concat(prefix, "\n") .. "\nnew value\n"
+    tab.left_name = "second.lua"
+    tab.right_name = "second.lua"
+    tab.diff_generation = 2
+    local replacement = view:ensure_diff_view(tab)
+    replacement.position.x, replacement.position.y = 0, 0
+    replacement.size.x, replacement.size.y = 800, 200
+    wait_until(function() return replacement.updater_idx == nil end, 1, "expected diff computation to finish")
+    replacement:update()
+
+    test.equal(replacement.buffer_view_b.buffer:get_selection(), 41)
+    test.ok(replacement.buffer_view_b.scroll.to.y > 0)
     replacement:dispose_integrations()
     replacement:dispose_owned_buffers()
   end)
