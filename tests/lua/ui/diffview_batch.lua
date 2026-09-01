@@ -109,12 +109,17 @@ test.describe("DiffView batch behavior", function()
     }, true))
 
     test.equal(view.buffer_view_a.buffer, canonical)
+    test.equal(core.buffer_registry:reference_count(canonical), 1)
+    test.equal(core.buffer_registry:remove(canonical), false)
+    test.equal(canonical.highlighter.buffer, canonical)
     view.buffer_view_a:on_text_input("diff ")
     test.equal(text(editor.buffer), "diff original\n")
     editor.buffer:apply_edits({ {
       line1 = 1, col1 = 1, line2 = 1, col2 = 6, text = "editor ",
     } }, { type = "test" })
     test.equal(text(view.buffer_view_a.buffer), "editor original\n")
+    view:dispose_owned_buffers()
+    test.equal(core.buffer_registry:reference_count(canonical), 0)
   end)
 
   test.it("keeps a selected fragment connected to its source Buffer", function(context)

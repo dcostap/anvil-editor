@@ -474,6 +474,18 @@ function DiffView:new(a, b, compare_type, names)
   self.side_buffers = { buffer_a, buffer_b }
   self.side_owns = { owns_a, owns_b }
   self.owned_buffers = { [buffer_a] = owns_a, [buffer_b] = owns_b }
+  self.retained_buffers = {}
+  local function retain_registered(buffer)
+    local registry = core.buffer_registry
+    if not (registry and registry:identity(buffer)) or self.retained_buffers[buffer] then return end
+    registry:retain(buffer, self)
+    self.retained_buffers[buffer] = true
+  end
+  if not owns_a then retain_registered(buffer_a) end
+  if not owns_b then retain_registered(buffer_b) end
+  for _, content in ipairs(self.request.contents) do
+    if content.kind == "fragment" then retain_registered(content.buffer) end
+  end
   self.comparison_message = comparison_rejection(self.side_buffers)
 
   self.buffer_view_a = TextView(buffer_a)
@@ -1581,6 +1593,12 @@ function DiffView:dispose_owned_buffers(opts)
   if self.owned_buffers_disposed then return end
   opts = opts or {}
   self.owned_buffers_disposed = true
+  if core.buffer_registry then
+    for buffer in pairs(self.retained_buffers or {}) do
+      core.buffer_registry:release(buffer, self)
+    end
+  end
+  self.retained_buffers = {}
   for buffer, owned in pairs(self.owned_buffers or {}) do
     if owned and not (opts.keep and opts.keep[buffer]) and buffer.on_close then buffer:on_close() end
   end
