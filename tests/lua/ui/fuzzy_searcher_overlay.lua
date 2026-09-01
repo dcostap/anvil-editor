@@ -1,7 +1,15 @@
 local config = require "core.config"
 local core = require "core"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
+local renderer = require "renderer"
+local style = require "core.style"
 local test = require "core.test"
+
+local function same_color(a, b)
+  return a and b
+    and a[1] == b[1] and a[2] == b[2]
+    and a[3] == b[3] and a[4] == b[4]
+end
 
 test.describe("Fuzzy Searcher attention overlay", function()
   test.before_each(function(context)
@@ -108,5 +116,45 @@ test.describe("Fuzzy Searcher attention overlay", function()
     picker:on_mouse_pressed("left", x, y, 2)
     picker:on_mouse_released("left", x, y)
     test.equal(confirmations, 1)
+  end)
+
+  test.it("draws different feedback for hovered and selected results", function()
+    local picker = fuzzy_searcher.open_static_results("Results", {
+      { kind = "file", label = "first.lua", file = "first.lua" },
+      { kind = "file", label = "second.lua", file = "second.lua" },
+    })
+    picker:update()
+    picker.selected = 1
+    picker.hovered_result = 2
+
+    local selected_drawn = false
+    local hover_drawn = false
+    local original_draw_rect = renderer.draw_rect
+    local original_draw_rounded_rect = renderer.draw_rounded_rect
+    local original_draw_text = renderer.draw_text
+    local original_draw_text_known_bounds = renderer.draw_text_known_bounds
+    local original_set_clip_rect = renderer.set_clip_rect
+    renderer.draw_rect = function(x, y, width, height, color)
+      if same_color(color, style.line_highlight) then selected_drawn = true end
+      if same_color(color, style.interactive_hover_background) then hover_drawn = true end
+    end
+    renderer.draw_rounded_rect = function() end
+    renderer.draw_text = function(font, text, x)
+      return x + (font and font:get_width(text) or 0)
+    end
+    renderer.draw_text_known_bounds = function() end
+    renderer.set_clip_rect = function() end
+    local ok, err = pcall(function() picker:draw() end)
+    renderer.draw_rect = original_draw_rect
+    renderer.draw_rounded_rect = original_draw_rounded_rect
+    renderer.draw_text = original_draw_text
+    renderer.draw_text_known_bounds = original_draw_text_known_bounds
+    renderer.set_clip_rect = original_set_clip_rect
+    if not ok then error(err, 0) end
+
+    test.ok(selected_drawn, "expected selected-result feedback")
+    test.ok(hover_drawn, "expected hovered-result feedback")
+    test.not_ok(same_color(style.line_highlight, style.interactive_hover_background),
+      "expected hover and selection to use different feedback")
   end)
 end)
