@@ -4309,7 +4309,7 @@ function FSView:start_file_search(query, line, reset_selection)
             or string.format("No matching files — %d files + %d folders indexed — %s",
               file_index_count(), folder_index_count(), roots_label)
         else
-          status = string.format("%d matches shown%s — %d files + %d folders indexed — %s",
+          status = string.format("%d%s matches found — %d files + %d folders indexed — %s",
             #recent_matches + #general_matches, has_more and "+" or "",
             file_index_count(), folder_index_count(), roots_label)
         end
@@ -6562,7 +6562,7 @@ function FSView:draw()
       if idx == self.selected then
         renderer.draw_rect(x, yy, list_w, lh, style.line_highlight)
       elseif idx == self.hovered_result then
-        renderer.draw_rect(x, yy, list_w, lh, style.background3 or color_with_alpha(style.text, 24))
+        renderer.draw_rect(x, yy, list_w, lh, style.interactive_hover_background)
       end
       if r.kind == "file" or (r.kind == "path" and r.file) then
         local path = fullpath(r)
