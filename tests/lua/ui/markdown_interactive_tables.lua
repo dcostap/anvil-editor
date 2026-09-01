@@ -91,6 +91,24 @@ test.describe("Markdown Interactive Table Editing", function()
     test.ok(test.not_nil(view:get_line_render(3)).table_row)
   end)
 
+  test.it("wraps inline code within the available table width", function()
+    local code = "alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda"
+    local view, buffer = make_view(table.concat({
+      "| Value |",
+      "| --- |",
+      "| `" .. code .. "` |",
+      "",
+      "plain",
+    }, "\n"))
+    view.size.x = 220
+    buffer:set_selection(5, 1)
+    refresh(view)
+
+    local cell = test.not_nil(table_cells(view, 3)[1])
+    test.equal(cell.text, code)
+    test.ok(#cell.text_lines > 1, "inline code did not wrap inside its table cell")
+  end)
+
   test.it("falls back to raw table Markdown when interactive editing is disabled", function()
     config.markdown_live_interactive_tables = false
     local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")

@@ -1942,7 +1942,6 @@ local function table_cell_presentation(view, text, source_col1, source_col2, hea
         font = inline_style_font(view, "code"),
         color = style.markdown_live_table_cell,
         background = style.markdown_live_inline_code_bg,
-        nowrap = true,
         literal_breaks = true,
       }
     end
