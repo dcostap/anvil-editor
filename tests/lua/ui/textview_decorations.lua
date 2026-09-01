@@ -23,6 +23,28 @@ local function make_view(text)
 end
 
 test.describe("TextView decoration providers", function()
+  test.it("draws the content left edge without a current line highlight", function()
+    local view = make_view("alpha")
+    view.show_current_line_highlight = false
+    local old_rect = renderer.draw_rect
+    local edge
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.textview_content_left_edge then
+        edge = { x = x, y = y, w = w, h = h }
+      end
+    end
+
+    local ok, err = pcall(function()
+      view:draw_current_line_underlay_highlights(1, 1)
+    end)
+    renderer.draw_rect = old_rect
+    if not ok then error(err, 0) end
+
+    test.not_nil(edge)
+    test.equal(edge.y, view.position.y)
+    test.equal(edge.h, view.size.y)
+  end)
+
   test.it("draws line backgrounds and inline ranges in provider order", function()
     local view = make_view("alpha\nbeta")
     local old_rect = renderer.draw_rect

@@ -6383,7 +6383,6 @@ function TextView:draw_current_line_highlights(minline, maxline, draw_highlight)
         draw_highlight(self.position.x, y, height)
       end
     end
-    self:draw_content_left_edge()
     return
   end
   if self.wrapped_settings then
@@ -6397,7 +6396,6 @@ function TextView:draw_current_line_highlights(minline, maxline, draw_highlight)
         draw_highlight(self.position.x, y, height)
       end
     end
-    self:draw_content_left_edge()
     return
   end
   for _, line1, col1, line2, col2 in self.buffer:get_selections(false) do
@@ -6409,13 +6407,13 @@ function TextView:draw_current_line_highlights(minline, maxline, draw_highlight)
       draw_highlight(self.position.x, y, height)
     end
   end
-  self:draw_content_left_edge()
 end
 
----Draw the full-width underlay before gutter and row contents. The content
----portion is drawn again later over semantic line decoration backgrounds.
+---Draw the full-width underlay and content edge before gutter and row contents.
+---The content portion is drawn again later over semantic line decoration backgrounds.
 function TextView:draw_current_line_underlay_highlights(minline, maxline)
   self:draw_current_line_highlights(minline, maxline)
+  self:draw_content_left_edge()
 end
 
 
