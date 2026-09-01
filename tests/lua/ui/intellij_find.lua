@@ -170,6 +170,35 @@ test.describe("TextView Prompt Bar find", function()
     test.equal(changes, 1)
   end)
 
+  test.it("does not draw the selection occurrence highlight over local find matches", function(context)
+    local view = open_editor(context, "pl pl\n")
+    test.ok(command.perform("editor:find"))
+    type_into_active_view("pl")
+
+    local selection_highlights = 0
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.selectionhighlight then
+        selection_highlights = selection_highlights + 1
+      end
+    end
+    renderer.draw_text = function(font, text, x)
+      return x + font:get_width(text)
+    end
+    renderer.draw_text_known_bounds = function(_, _, x, _, _, _, w)
+      return x + w
+    end
+    local ok, err = pcall(view.draw_line_body, view, 1, 0, 0)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    renderer.draw_text_known_bounds = old_draw_text_known_bounds
+    if not ok then error(err, 0) end
+
+    test.equal(selection_highlights, 0)
+  end)
+
   test.it("splits find highlights across Wrapped Visual Rows", function(context)
     local view = open_editor(context, "xxxxxxNEEDLE")
     local wrapping = config.plugins.linewrapping

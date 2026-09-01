@@ -936,7 +936,10 @@ local function make_local_find_draw_line_body(base)
       end
     end
 
+    local old_local_find_active = self.local_find_active
+    self.local_find_active = state ~= nil
     local lh = base(self, line, x, y)
+    self.local_find_active = old_local_find_active
 
     if line_matches and #line_matches > 0 then
       for _, idx in ipairs(line_matches) do
