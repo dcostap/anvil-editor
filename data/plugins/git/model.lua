@@ -4,6 +4,7 @@
 local config = require "core.config"
 local core = require "core"
 local common = require "core.common"
+local image_formats = require "core.image_formats"
 local range_marker = require "core.range_marker"
 local backend_default = require "plugins.git.backend"
 local diff_model = require "plugins.diff.model"
@@ -969,6 +970,12 @@ function Model:clear_diff_content(tab)
   tab.diff_generation = (tab.diff_generation or 0) + 1
 end
 
+local function file_is_supported_image(file)
+  local left = path_for_file(file, "left")
+  local right = path_for_file(file, "right")
+  return image_formats.is_supported(left) or image_formats.is_supported(right)
+end
+
 function Model:clear_binary_files(tab)
   if not tab then return end
   tab.binary_generation = (tab.binary_generation or 0) + 1
@@ -1203,7 +1210,8 @@ function Model:load_selected_diff_file(tab, callback)
   local file = tab.changed_files and tab.changed_files[tab.selected_file]
   if not file then return false end
   self:clear_binary_files(tab)
-  if file.binary or (file.stat and file.stat.binary) then
+  local image_file = file_is_supported_image(file)
+  if image_file or file.binary or (file.stat and file.stat.binary) then
     tab.file_generation = (tab.file_generation or 0) + 1
     dispose_diff_view(tab)
     tab.loading_file = false
@@ -1216,7 +1224,9 @@ function Model:load_selected_diff_file(tab, callback)
     tab.right_name = path_for_file(file, "right") or "File did not exist"
     tab.non_text = {
       kind = "binary",
-      message = "Binary file changed. Text comparison is not available.",
+      message = image_file
+        and "Image file changed. Text comparison is not available."
+        or "Binary file changed. Text comparison is not available.",
     }
     tab.diff_view = nil
     tab.diff_generation = (tab.diff_generation or 0) + 1

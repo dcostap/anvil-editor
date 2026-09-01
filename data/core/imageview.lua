@@ -4,49 +4,7 @@ local style = require "core.style"
 local keymap = require "core.keymap"
 local View = require "core.view"
 local view_icons = require "core.view_icons"
-
----List of supported image types by extension.
----@type table<string,boolean>
-local SUPPORTED_EXTENSIONS = {
-  -- AVIF (External library needed)
-  avif = true,
-  -- BMP (Built-in support)
-  bmp = true,
-  -- CUR (Cursor) (Built-in support)
-  cur = true,
-  -- GIF (Built-in support)
-  gif = true,
-  -- ICO (Icon) (Built-in support)
-  ico = true,
-  -- JPEG/JPG (Built-in via STB or External library needed)
-  jpg = true, jpeg = true, jfif = true, pjpeg = true, pjp = true,
-  -- JPEG-XL (External library needed)
-  jxl = true,
-  -- LBM (Interleaved Bitmap) (Built-in support)
-  lbm = true, iff = true,
-  -- PCX (Built-in support)
-  pcx = true,
-  -- PNG: (Built-in via STB or External library needed)
-  png = true,
-  -- PNM (Portable Anymap) (Built-in support)
-  pnm = true, pbm = true, pgm = true, ppm = true,
-  -- QOI (Quite OK Image) (Built-in support)
-  qoi = true,
-  -- SVG (Built-in support for simple files)
-  svg = true,
-  -- TGA (Targa) (Built-in support)
-  tga = true,
-  -- TIFF/TIF (Built-in support)
-  tif = true, tiff = true,
-  -- WebP (External library needed)
-  webp = true,
-  -- XCF (GIMP format) (Built-in support)
-  xcf = true,
-  -- XPM (X11 Pixmap) (Built-in support)
-  xpm = true,
-  -- XV (Thumbnail format) (Built-in support)
-  xv = true
-}
+local image_formats = require "core.image_formats"
 
 ---@alias core.imageview.zoommode "fit" | "fixed"
 
@@ -380,14 +338,7 @@ end
 ---@return boolean supported
 ---@return string file_extension
 function ImageView.is_supported(path)
-  local ext = path:match("%.(%a+)$")
-  if ext then
-    ext = ext:ulower()
-    if SUPPORTED_EXTENSIONS[ext] then
-      return true, ext
-    end
-  end
-  return false, ext
+  return image_formats.is_supported(path)
 end
 
 

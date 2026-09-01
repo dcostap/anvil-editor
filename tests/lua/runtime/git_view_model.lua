@@ -950,6 +950,29 @@ test.describe("plugins.git.model", function()
     test.equal(system.get_file_info(right_path), nil)
   end)
 
+  test.it("classifies an untracked image without Git binary statistics", function()
+    local model = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()) })
+    model.repo = { root = "C:/repo" }
+    local tab = {
+      kind = "commit_diff",
+      left = model.backend.EMPTY_TREE,
+      right = model.backend.WORKING_TREE,
+      changed_files = {
+        { status = "added", old_path = nil, new_path = "screenshots/new.png" },
+      },
+      selected_file = 1,
+    }
+
+    test.ok(model:load_selected_diff_file(tab))
+
+    test.equal(test.not_nil(tab.non_text).kind, "binary")
+    test.equal(tab.left_text, nil)
+    test.equal(tab.right_text, nil)
+    test.ok(model:load_selected_binary_files(tab))
+    test.equal(tab.binary_paths.left, nil)
+    test.ok(test.not_nil(tab.binary_paths.right):match("new%.png$"))
+  end)
+
   test.it("keeps displayed diff content until its replacement finishes", function()
     local callbacks = {}
     local backend = fake_backend("", log_output())
