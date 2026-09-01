@@ -2477,9 +2477,6 @@ function core.step(next_frame_time, options)
 
   local event_start_time = system.get_time()
   local event_received = false
-  -- Terminal output wakes update processing. The terminal view decides if it
-  -- also changed the frame, so effect-only output does not flash the window.
-  local event_requires_frame = false
   local event_type_counts = {}
   local event_type_order = {}
   local function note_event(event_type, event_item_start)
@@ -2496,21 +2493,17 @@ function core.step(next_frame_time, options)
   end
   for type, a,b,c,d in system.poll_event do
     local event_item_start = system.get_time()
-    local defer_frame = false
     step_stats.event_count = step_stats.event_count + 1
     local event_window_id = system.get_last_event_window_id and system.get_last_event_window_id()
     local main_window_id = core.window and system.get_window_id and system.get_window_id(core.window)
     if type == "textinput" and did_keymap then
       did_keymap = false
     elseif type == "mousemoved" then
-      core.event_frame_deferred = false
       core.try(core.on_event, type, a, b, c, d)
-      defer_frame = core.event_frame_deferred == true
     elseif type == "enteringforeground" then
       -- to break our frame refresh in two if we get entering/entered at the same time.
       -- required to avoid flashing and refresh issues on mobile
       event_received = type
-      event_requires_frame = true
       note_event(type, event_item_start)
       break
     elseif type == "displaychanged" then
@@ -2521,15 +2514,12 @@ function core.step(next_frame_time, options)
       update_scale(a)
       core.refresh_display_timing("scalechanged")
     else
-      core.event_frame_deferred = false
       local _, res = core.try(core.on_event, type, a, b, c, d)
       did_keymap = res or did_keymap
-      defer_frame = core.event_frame_deferred == true
     end
     core.current_event_context = nil
     note_event(type, event_item_start)
     event_received = type
-    if type ~= "terminaloutput" and not defer_frame then event_requires_frame = true end
   end
   step_stats.event_ms = (system.get_time() - event_start_time) * 1000
   if #event_type_order > 0 then
@@ -2546,7 +2536,7 @@ function core.step(next_frame_time, options)
   local update_start_time = system.get_time()
   local stats_config = config.draw_stats
   local uncapped = stats_config == "uncapped" or core.perf_cadence_uncapped
-  local priority_event = event_requires_frame and event_received ~= "mousemoved"
+  local priority_event = event_received and event_received ~= "mousemoved"
   local resizing = options.live_resize or (core.window_resizing_until and core.window_resizing_until > system.get_time())
   core.root_panel.size.x, core.root_panel.size.y = width, height
   if uncapped or resizing or priority_event or options.immediate or next_frame_time < system.get_time() then
@@ -2576,7 +2566,7 @@ function core.step(next_frame_time, options)
   ---interaction. Otherwise, rendering is prioritized on user events and
   ---config.fps not obeyed.
   if
-    not uncapped and not resizing and not options.immediate and ((not event_requires_frame and not core.redraw) or
+    not uncapped and not resizing and not options.immediate and ((not event_received and not core.redraw) or
       -- time left before next frame so we can skip
       next_frame_time > system.get_time()
     )

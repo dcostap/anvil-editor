@@ -597,7 +597,7 @@ function TerminalView:service_session(include_rows)
   self:retry_pending_key_releases()
   local record_perf = include_rows and perf_is_recording()
   local update_started = record_perf and system.get_time()
-  local changed, status, render_changed = self.session:update()
+  local changed, status = self.session:update()
   if record_perf then
     perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
   end
@@ -606,11 +606,8 @@ function TerminalView:service_session(include_rows)
     self:clear_point_hover()
     if not include_rows then self.rows_dirty = true end
   end
-  local rows_were_dirty = include_rows and self.rows_dirty
-  local needs_snapshot = changed or state_changed or rows_were_dirty
+  local needs_snapshot = changed or state_changed or (include_rows and self.rows_dirty)
   if needs_snapshot then
-    local previous_title = self.snapshot and self.snapshot.title
-    local previous_pwd = self.snapshot and self.snapshot.pwd
     local snapshot_started = record_perf and system.get_time()
     self.snapshot = self.session:snapshot(self.snapshot, include_rows)
     self:handle_events()
@@ -619,13 +616,7 @@ function TerminalView:service_session(include_rows)
       perf_detail("terminal_snapshot_ms", (system.get_time() - snapshot_started) * 1000)
       perf_detail("terminal_snapshot_calls", 1)
     end
-    local metadata_changed = previous_title ~= self.snapshot.title
-      or previous_pwd ~= self.snapshot.pwd
-    -- BEL and clipboard effects require event handling, but they do not require a frame.
-    if include_rows and (render_changed ~= false or state_changed or rows_were_dirty
-        or metadata_changed) then
-      core.redraw = true
-    end
+    if include_rows then core.redraw = true end
   end
   return needs_snapshot
 end
@@ -1030,8 +1021,8 @@ end
 
 function TerminalView:on_text_input(text)
   if not self.session or self.running == false then return false end
-  core.event_frame_deferred = true
   self.composition = nil
+  core.blink_reset()
   self.session:scroll("bottom")
   local encoded = self.encoded_text_queue and self.encoded_text_queue[1]
   if encoded and text == encoded.text then
@@ -1159,7 +1150,6 @@ end
 
 function TerminalView:on_key_pressed(key, event)
   if not self.session or self.running == false then return false end
-  core.event_frame_deferred = true
   self:sync_focus()
   self:retry_pending_key_releases()
   self.key_owners = self.key_owners or {}
@@ -1184,6 +1174,7 @@ function TerminalView:on_key_pressed(key, event)
   elseif key == "end" and event and event.ctrl and event.shift then
     return scroll("bottom")
   end
+  core.blink_reset()
   if not ({ lshift = true, rshift = true, lctrl = true, rctrl = true,
     lalt = true, ralt = true, lgui = true, rgui = true })[key] then
     self.session:scroll("bottom")
@@ -1211,7 +1202,6 @@ end
 
 function TerminalView:on_key_released(key, event)
   if not self.session or self.running == false then return false end
-  core.event_frame_deferred = true
   self.key_owners = self.key_owners or {}
   local key_id = physical_key_id(key, event)
   local owned = self.key_owners[key_id]

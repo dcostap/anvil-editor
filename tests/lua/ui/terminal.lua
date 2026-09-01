@@ -84,10 +84,7 @@ local function fake_native()
         }
       end
       self.status = self.status or { kind = self.state, revision = self.revision }
-      local render_changed = self.next_render_changed
-      self.next_render_changed = nil
-      if render_changed == nil then render_changed = changed end
-      return changed, self.status, render_changed
+      return changed, self.status
     end
     function session:snapshot(previous, include_rows)
       self.snapshot_calls = (self.snapshot_calls or 0) + 1
@@ -188,8 +185,6 @@ test.describe("Terminal View", function()
   test.before_each(function(context)
     panes.reset_for_tests()
     context.previous_active_view = core.active_view
-    context.blink_start = core.blink_start
-    context.blink_timer = core.blink_timer
     context.terminal_font_sizes = {}
     for _, font in ipairs({
       style.terminal_font, style.terminal_bold_font,
@@ -209,8 +204,6 @@ test.describe("Terminal View", function()
     panes.reset_for_tests()
     terminal._set_native_for_tests(nil)
     for font, size in pairs(context.terminal_font_sizes) do font:set_size(size) end
-    core.blink_start = context.blink_start
-    core.blink_timer = context.blink_timer
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
@@ -638,88 +631,6 @@ test.describe("Terminal View", function()
     test.equal(session.keys[1][3], "repeat")
     test.equal(session.keys[1][4], raw)
     test.equal(session.keys[2][3], "release")
-  end)
-
-  test.it("does not force a frame for terminal key input", function(context)
-    local view = terminal.open({ focus = true })
-    local session = context.sessions[1]
-    local previous_poll_event = system.poll_event
-    local previous_update = core.root_panel.update
-    local previous_draw = core.root_panel.draw
-    local previous_title = core.get_window_title
-    local previous_begin_frame = renderer.begin_frame
-    local previous_set_clip_rect = renderer.set_clip_rect
-    local previous_end_frame = renderer.end_frame
-    local previous_frame_failed = renderer.frame_failed
-    local previous_redraw = core.redraw
-    local delivered = false
-    local updated, drawn = false, false
-    local ok, err
-
-    system.poll_event = function()
-      if delivered then return nil end
-      delivered = true
-      return "keypressed", "backspace", { modifiers = 0 }
-    end
-    core.root_panel.update = function() updated = true end
-    core.root_panel.draw = function() drawn = true end
-    core.get_window_title = function() return core.window_title end
-    renderer.begin_frame = function() end
-    renderer.set_clip_rect = function() end
-    renderer.end_frame = function() end
-    renderer.frame_failed = function() return false end
-    core.redraw = false
-    ok, err = pcall(function()
-      local result = core.step(system.get_time() - 1)
-      test.ok(updated)
-      test.not_ok(drawn)
-      test.not_ok(result)
-      test.equal(session.keys[1][1], "backspace")
-    end)
-
-    system.poll_event = previous_poll_event
-    core.root_panel.update = previous_update
-    core.root_panel.draw = previous_draw
-    core.get_window_title = previous_title
-    renderer.begin_frame = previous_begin_frame
-    renderer.set_clip_rect = previous_set_clip_rect
-    renderer.end_frame = previous_end_frame
-    renderer.frame_failed = previous_frame_failed
-    core.redraw = previous_redraw
-    if not ok then error(err, 0) end
-  end)
-
-  test.it("does not present a frame when Backspace only rings the terminal bell", function(context)
-    local view = terminal.open()
-    local session = context.sessions[1]
-    view.status_revision = session.revision
-    view.rows_dirty = nil
-    session.next_changed = true
-    session.next_render_changed = false
-    view.snapshot.events = { { type = "bell" } }
-    local blink_start = core.blink_start
-    core.redraw = false
-
-    test.ok(view:on_key_pressed("backspace", { modifiers = 0 }))
-    view:service_session(true)
-
-    test.equal(view.bell_count, 1)
-    test.equal(core.blink_start, blink_start)
-    test.not_ok(core.redraw)
-  end)
-
-  test.it("does not reset the host blink clock for terminal output", function(context)
-    local view = terminal.open()
-    local session = context.sessions[1]
-    view.status_revision = session.revision
-    view.rows_dirty = nil
-    session.next_changed = true
-    session.next_render_changed = true
-    local blink_start = core.blink_start
-
-    view:service_session(true)
-
-    test.equal(core.blink_start, blink_start)
   end)
 
   test.it("does not send shifted layout text twice after encoding its key", function(context)
@@ -1349,9 +1260,6 @@ test.describe("Terminal View", function()
 
   test.it("handles terminal bells and clipboard requests", function(context)
     local view = terminal.open()
-    view.status_revision = view.session.revision
-    view.session.next_changed = true
-    view.session.next_render_changed = false
     local previous_active_view = core.active_view
     local previous_flash_window = system.flash_window
     local flash_count = 0
@@ -1363,15 +1271,12 @@ test.describe("Terminal View", function()
     }
     local previous_show = core.nag_view.show
     core.nag_view.show = function() end
-    view.rows_dirty = nil
-    core.redraw = false
-    view:service_session(true)
+    view:handle_events()
     core.nag_view.show = previous_show
     core.active_view = previous_active_view
     system.flash_window = previous_flash_window
     test.equal(view.bell_count, 1)
     test.equal(flash_count, 0)
-    test.not_ok(core.redraw)
     test.equal(view.active_clipboard_request.text, "terminal clipboard")
   end)
 
