@@ -213,6 +213,26 @@ test.describe("plugins.git.backend", function()
       test.equal(working.right, backend.WORKING_TREE)
     end)
 
+    test.it("loads working-tree changed-line statistics", function()
+      local old_run_git = backend.run_git
+      local captured_args
+      backend.run_git = function(repo, args, opts, callback)
+        captured_args = args
+        callback({ code = 0, stdout = "4\t2\tsrc/app.lua\0" }, nil)
+        return { cancel = function() end }
+      end
+      local stats
+
+      backend.changed_file_stats({ root = "repo" }, "HEAD", backend.WORKING_TREE, {}, function(result)
+        stats = result
+      end)
+      backend.run_git = old_run_git
+
+      test.ok(backend._contains_arg(captured_args, "--numstat"))
+      test.ok(not backend._contains_arg(captured_args, backend.WORKING_TREE))
+      test.same(stats["src/app.lua"], { additions = 4, deletions = 2 })
+    end)
+
     test.it("cancels every changed-file child job", function()
       local old_run_git = backend.run_git
       local callbacks, cancelled = {}, 0

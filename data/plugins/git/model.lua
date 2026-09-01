@@ -1369,6 +1369,14 @@ function Model:sync_working_tree_diff_tabs()
   end
 end
 
+local function apply_changed_file_stats(records, stats)
+  if not stats then return end
+  for _, record in ipairs(records or {}) do
+    local path = changed_file_path(record)
+    if path and stats[path] then record.stat = stats[path] end
+  end
+end
+
 function Model:_finish_refresh(generation, total_commits, log_page, local_changes, err, callback)
   if generation ~= self.generation then return end
   local tab = self:log_tab()
@@ -1425,11 +1433,13 @@ function Model:_finish_refresh(generation, total_commits, log_page, local_change
 end
 
 function Model:_start_refresh_jobs(repo, generation, callback)
-  local pending = self.backend.commit_count and 3 or 2
-  local total_commits, log_page, local_changes, final_err
+  local load_changed_stats = type(self.backend.changed_file_stats) == "function"
+  local pending = (self.backend.commit_count and 3 or 2) + (load_changed_stats and 1 or 0)
+  local total_commits, log_page, local_changes, working_tree_stats, final_err
   local function done()
     pending = pending - 1
     if pending == 0 then
+      apply_changed_file_stats(local_changes, working_tree_stats)
       self:_finish_refresh(generation, total_commits, log_page, local_changes, final_err, callback)
     end
   end
@@ -1456,6 +1466,22 @@ function Model:_start_refresh_jobs(repo, generation, callback)
     if generation ~= self.generation then return end
     if err and not empty_log_error(err) and not final_err then final_err = err end
     log_page = result and self.backend.parse_log_page(result.stdout, { limit = limit }) or { commits = {} }
+    if load_changed_stats then
+      local head = log_page.commits and log_page.commits[1]
+      local left = head and head.hash or self.backend.EMPTY_TREE
+      local stats_job, stats_done
+      stats_job = self.backend.changed_file_stats(repo, left, self.backend.WORKING_TREE, {}, function(stats, stats_err)
+        stats_done = true
+        self:_untrack_job(stats_job)
+        if generation ~= self.generation then return end
+        working_tree_stats = stats
+        if stats_err then
+          core.log_quiet("Git Log local-change statistics unavailable: %s", stats_err.message or stats_err.kind)
+        end
+        done()
+      end)
+      if not stats_done then self:_track_job(stats_job) end
+    end
     done()
   end)
   if not log_done then self:_track_job(log_job) end

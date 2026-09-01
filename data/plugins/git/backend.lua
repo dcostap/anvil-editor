@@ -592,6 +592,15 @@ function backend.build_changed_file_stats_args(left, right, opts)
   return build_diff_range_args({ "diff", "--numstat", "-z" }, left, right, opts)
 end
 
+function backend.changed_file_stats(repo, left, right, opts, callback)
+  opts = opts or {}
+  return backend.run_git(repo, backend.build_changed_file_stats_args(left, right, opts), opts, function(result, err)
+    if callback then
+      callback(result and backend.parse_numstat_z(result.stdout) or nil, err)
+    end
+  end)
+end
+
 function backend.changed_files(repo, left, right, opts, callback)
   opts = opts or {}
   local composite = { jobs = {}, cancelled = false, finished = false }
