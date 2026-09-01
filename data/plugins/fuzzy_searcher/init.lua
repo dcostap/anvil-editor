@@ -2525,7 +2525,7 @@ local function draw_symbol_result_row(font, r, x, y, width, row_height)
 
   x = x + icon_column_width
   width = math.max(0, width - icon_column_width)
-  local path_w, gap, text_w = grep_row_columns(width)
+  local path_w, gap, text_w = grep_row_columns(width, 0.33)
   local line = tonumber(r.line) or 1
   local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
   local prefix = r.symbol_scope == "buffer" and "$$ " or "$ "
@@ -2725,15 +2725,16 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, 
   return cx, suffix_x
 end
 
-grep_row_columns = function(width)
+grep_row_columns = function(width, ratio)
   local scale = SCALE or 1
   local gap = math.max(8 * scale, style.padding.x)
-  local ratio = fuzzy_searcher.grep_path_column_width or 0.45
+  local explicit_ratio = ratio ~= nil
+  ratio = ratio or fuzzy_searcher.grep_path_column_width or 0.45
   local path_w = math.floor(width * ratio)
   if width > 260 * scale then
     path_w = common.clamp(path_w, 130 * scale, width - 120 * scale)
   else
-    path_w = math.floor(width * 0.5)
+    path_w = math.floor(width * (explicit_ratio and ratio or 0.5))
   end
   return path_w, gap, math.max(0, width - path_w - gap)
 end
