@@ -17,6 +17,7 @@ typedef struct {
   int npairs;
   int ai, bi, pi;
   int lenA, lenB;
+  bool pairing_replacement;
 } DiffState;
 
 static int diff_state_gc(lua_State *L) {
@@ -402,6 +403,7 @@ static int f_diff(lua_State *L) {
   int result_idx = lua_gettop(L);
   int out_i = 1;
   int ai = 1, bi = 1, pi = 0;
+  bool pairing_replacement = false;
 
   while (ai <= lenA || bi <= lenB) {
     int mi = (pi < npairs) ? pairs[pi].i : lenA + 1;
@@ -421,6 +423,7 @@ static int f_diff(lua_State *L) {
 
       lua_pop(L, 2);
       ai++; bi++; pi++;
+      pairing_replacement = false;
     }
     else if (mi > ai && mj > bi) {
       // fallback similarity check for modifications
@@ -432,13 +435,14 @@ static int f_diff(lua_State *L) {
       double sim_val = similarity(a, a_len, b, b_len);
       lua_pop(L, 2);
 
-      if (sim_val >= 0.4) {
+      if (pairing_replacement || sim_val >= 0.4) {
         push_edit(L, "modify", "a", a, a_len);
         lua_pushlstring(L, b, b_len);
         lua_setfield(L, -2, "b");
         lua_rawseti(L, result_idx, out_i++);
 
         ai++; bi++;
+        pairing_replacement = true;
         continue;
       }
 
@@ -515,6 +519,7 @@ static int diff_iterator(lua_State *L) {
       lua_setfield(L, -2, "b");
 
       state->ai++; state->bi++; state->pi++;
+      state->pairing_replacement = false;
       return 1;
     }
 
@@ -529,12 +534,13 @@ static int diff_iterator(lua_State *L) {
       lua_pop(L, 1);
 
       double sim_val = similarity(a, a_len, b, b_len);
-      if (sim_val >= 0.4) {
+      if (state->pairing_replacement || sim_val >= 0.4) {
         push_edit(L, "modify", "a", a, a_len);
         lua_pushlstring(L, b, b_len);
         lua_setfield(L, -2, "b");
 
         state->ai++; state->bi++;
+        state->pairing_replacement = true;
         return 1;
       }
 

@@ -121,6 +121,35 @@ test.describe("diff", function()
     test.equal(modified, 1)
   end)
 
+  test.test("keeps replacement block continuation lines paired", function()
+    local before = {
+      "    fun test(): String {",
+      "        val start = System.currentTimeMillis()",
+      "        repeat(35) {",
+      '            logInfo("RUNNING TEST TASK $it")',
+      "            Thread.sleep(1000)",
+      "        }",
+    }
+    local after = {
+      "    fun sageBridgeHealthCheck() {",
+      "        SageBridgeClient.sageBridgeConnectionCheck().onFailure {",
+      "            logError(it)",
+      "            // TODO(2026-08-06): add more user-friendly name to this thing. Sage bridge is a vague / confusing term. Rename the SageBridge class etc",
+      '            notifyDevelopers(it, "SAGE BRIDGE HEALTH CHECK FAILURE", true)',
+      "        }",
+    }
+
+    local changes = diff.diff(before, after)
+    for line = 1, 5 do
+      test.same(changes[line], { tag = "modify", a = before[line], b = after[line] })
+    end
+    test.same(changes[6], { tag = "equal", a = before[6], b = after[6] })
+
+    local iterated = {}
+    for change in diff.diff_iter(before, after) do iterated[#iterated + 1] = change end
+    test.same(iterated, changes)
+  end)
+
   test.test("returns the same histogram script from table and iterator APIs", function()
     local seed = 73129
     local function random(limit)

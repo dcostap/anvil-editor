@@ -1679,25 +1679,34 @@ function DiffView:draw_divider_changes()
     )
   end
 
-  for _, block in ipairs(cached_change_blocks(self, "a", "connectors", { delete = true, modify = true }, true)) do
-    local a_start_y, a_end_y = line_range_y(left, block.start_line, block.end_line)
-    if block.tag == "delete" then
-      draw_connector(block.display_tag, a_start_y, a_end_y, a_start_y, a_start_y)
-      draw_gap_marker(right, a_start_y, gap_marker_color(block.display_tag))
+  local alignment = self.diff_model and self.diff_model.alignment or {}
+  local index = 1
+  while index <= #alignment do
+    if alignment[index].tag == "equal" then
+      index = index + 1
     else
-      local start_row = visual_rows_before_line(left, block.start_line)
-      local end_row = visual_rows_before_line(left, block.end_line)
-      local b_start_line = line_for_visual_row(right, start_row)
-      local b_end_line = line_for_visual_row(right, end_row)
-      local b_start_y, b_end_y = line_range_y(right, b_start_line, b_end_line)
-      draw_connector(block.display_tag, a_start_y, a_end_y, b_start_y, b_end_y)
-    end
-  end
+      local a_start, a_end, b_start, b_end
+      while index <= #alignment and alignment[index].tag ~= "equal" do
+        local pair = alignment[index]
+        if pair.a then a_start, a_end = a_start or pair.a, pair.a end
+        if pair.b then b_start, b_end = b_start or pair.b, pair.b end
+        index = index + 1
+      end
 
-  for _, block in ipairs(cached_change_blocks(self, "b", "inserts", { insert = true }, true)) do
-    local b_start_y, b_end_y = line_range_y(right, block.start_line, block.end_line)
-    draw_connector(block.display_tag, b_start_y, b_start_y, b_start_y, b_end_y)
-    draw_gap_marker(left, b_start_y, gap_marker_color(block.display_tag))
+      if a_start and b_start then
+        local a_start_y, a_end_y = line_range_y(left, a_start, a_end)
+        local b_start_y, b_end_y = line_range_y(right, b_start, b_end)
+        draw_connector("modify", a_start_y, a_end_y, b_start_y, b_end_y)
+      elseif a_start then
+        local a_start_y, a_end_y = line_range_y(left, a_start, a_end)
+        draw_connector("delete", a_start_y, a_end_y, a_start_y, a_start_y)
+        draw_gap_marker(right, a_start_y, gap_marker_color("delete"))
+      elseif b_start then
+        local b_start_y, b_end_y = line_range_y(right, b_start, b_end)
+        draw_connector("insert", b_start_y, b_start_y, b_start_y, b_end_y)
+        draw_gap_marker(left, b_start_y, gap_marker_color("insert"))
+      end
+    end
   end
 
   self:draw_divider_line_numbers(x1, x2)
