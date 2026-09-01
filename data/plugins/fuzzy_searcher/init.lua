@@ -4309,8 +4309,8 @@ function FSView:start_file_search(query, line, reset_selection)
             or string.format("No matching files — %d files + %d folders indexed — %s",
               file_index_count(), folder_index_count(), roots_label)
         else
-          status = string.format("%d recent + %d matches shown%s — %d files + %d folders indexed — %s",
-            #recent_matches, #general_matches, has_more and "+" or "",
+          status = string.format("%d matches shown%s — %d files + %d folders indexed — %s",
+            #recent_matches + #general_matches, has_more and "+" or "",
             file_index_count(), folder_index_count(), roots_label)
         end
         if self.loading_feedback_pending and #out == 0 and not has_more and not direct then
