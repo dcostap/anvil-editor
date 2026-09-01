@@ -18,6 +18,12 @@ local ImageView
 local Buffer
 local BufferRegistry
 local Project
+local startup = package.loaded["core.startup"]
+
+local function startup_measure(name, fn, detail)
+  if startup then return startup.measure(name, fn, detail) end
+  return fn()
+end
 
 ---Core functionality.
 ---@class core
@@ -334,13 +340,22 @@ end
 -- create a directory using mkdir but may need to create the parent
 -- directories as well.
 local function create_user_directory()
-  local success, err = common.mkdirp(USERDIR)
-  if not success then
-    error("cannot create directory \"" .. USERDIR .. "\": " .. err)
+  local user_info = system.get_file_info(USERDIR)
+  if user_info and user_info.type ~= "dir" then
+    error("user directory is not a directory: \"" .. USERDIR .. "\"")
+  end
+  if not user_info then
+    local success, err = common.mkdirp(USERDIR)
+    if not success and not system.get_file_info(USERDIR) then
+      error("cannot create directory \"" .. USERDIR .. "\": " .. err)
+    end
   end
   for _, modname in ipairs {'plugins', 'colors', 'fonts'} do
     local subdirname = USERDIR .. PATHSEP .. modname
-    if not system.mkdir(subdirname) then
+    local sub_info = system.get_file_info(subdirname)
+    if sub_info and sub_info.type ~= "dir" then
+      error("user subdirectory is not a directory: \"" .. subdirname .. "\"")
+    elseif not sub_info and not system.mkdir(subdirname) then
       error("cannot create directory: \"" .. subdirname .. "\"")
     end
   end
@@ -433,9 +448,7 @@ end
 
 function core.ensure_user_directory()
   return core.try(function()
-    if not system.get_file_info(USERDIR) then
-      create_user_directory()
-    end
+    create_user_directory()
     local init_filename = USERDIR .. PATHSEP .. "init.lua"
     if not system.get_file_info(init_filename) then
       write_user_init_file(init_filename)
@@ -473,26 +486,43 @@ end
 
 
 function core.init()
-  DEFAULT_SCALE, DEFAULT_FPS = system.get_display_info()
-  SCALE = tonumber(os.getenv("ANVIL_SCALE")) or DEFAULT_SCALE
+  local core_init_stage = startup and startup.stage_begin("core_init", "restarted=" .. tostring(RESTARTED)) or nil
+  if startup then
+    core.startup_trace_active = startup.active()
+    startup.mark("core_init_enter", string.format(
+      "restarted=%s cwd=%s", tostring(RESTARTED), tostring(system.getcwd())
+    ))
+  end
+  startup_measure("display_info_and_scale", function()
+    DEFAULT_SCALE, DEFAULT_FPS = system.get_display_info()
+    SCALE = tonumber(os.getenv("ANVIL_SCALE")) or DEFAULT_SCALE
+  end)
 
   -- load config after scale detection for flags that depend on it
-  config = require "core.config"
+  config = startup_measure("load_core_config", function() return require "core.config" end)
+  if startup then startup.mark("config_loaded", string.format(
+    "fps=%s draw_stats=%s borderless=%s", tostring(config.fps),
+    tostring(config.draw_stats), tostring(config.borderless)
+  )) end
 
   -- log functions depend on config so initialize after loading config
-  core.log_items = {}
   local session_log_error
-  local loaded_session_log, SessionLog = pcall(require, "core.session_log")
-  if loaded_session_log then
-    local started, logger, err = pcall(SessionLog.start, USERDIR .. PATHSEP .. "logs")
-    if started then
-      core.session_log, session_log_error = logger, err
+  startup_measure("initialize_session_log", function()
+    core.log_items = {}
+    local loaded_session_log, SessionLog = pcall(require, "core.session_log")
+    if loaded_session_log then
+      local started, logger, err = pcall(SessionLog.start, USERDIR .. PATHSEP .. "logs")
+      if started then
+        core.session_log, session_log_error = logger, err
+      else
+        session_log_error = logger
+      end
     else
-      session_log_error = logger
+      session_log_error = SessionLog
     end
-  else
-    session_log_error = SessionLog
-  end
+    core.startup_trace_path = startup and startup.path() or nil
+    core.log_quiet("Startup trace: %s", tostring(core.startup_trace_path or "unavailable"))
+  end)
   core.log_quiet("Anvil version %s - mod-version %s", VERSION, MOD_VERSION_STRING)
   if core.session_log then
     core.log_quiet("Session log started: %s", core.session_log.path)
@@ -504,34 +534,36 @@ function core.init()
     core.log_quiet("Native single-instance handoff disabled by config.plugins.ipc.single_instance=false")
   end
 
-  style = require "colors.default"
-  cli = require "core.cli"
-  command = require "core.command"
-  keymap = require "core.keymap"
-  dirwatch = require "core.dirwatch"
-  ime = require "core.ime"
-  RootPanel = require "core.rootpanel"
-  StatusBar = require "core.statusbar"
-  TitleBar = require "core.titlebar"
-  GlobalPromptBar = require "core.global_prompt_bar"
-  NagView = require "core.nagview"
-  Project = require "core.project"
-  TextView = require "core.textview"
-  ImageView = require "core.imageview"
-  Buffer = require "core.buffer"
-  BufferRegistry = require "core.buffer_registry"
-  core.treesitter = require "core.treesitter"
+  style = startup_measure("load_default_colors", function() return require "colors.default" end)
+  cli = startup_measure("load_core_cli", function() return require "core.cli" end)
+  command = startup_measure("load_core_command", function() return require "core.command" end)
+  keymap = startup_measure("load_core_keymap", function() return require "core.keymap" end)
+  dirwatch = startup_measure("load_core_dirwatch", function() return require "core.dirwatch" end)
+  ime = startup_measure("load_core_ime", function() return require "core.ime" end)
+  RootPanel = startup_measure("load_core_rootpanel", function() return require "core.rootpanel" end)
+  StatusBar = startup_measure("load_core_statusbar", function() return require "core.statusbar" end)
+  TitleBar = startup_measure("load_core_titlebar", function() return require "core.titlebar" end)
+  GlobalPromptBar = startup_measure("load_core_global_prompt_bar", function() return require "core.global_prompt_bar" end)
+  NagView = startup_measure("load_core_nagview", function() return require "core.nagview" end)
+  Project = startup_measure("load_core_project", function() return require "core.project" end)
+  TextView = startup_measure("load_core_textview", function() return require "core.textview" end)
+  ImageView = startup_measure("load_core_imageview", function() return require "core.imageview" end)
+  Buffer = startup_measure("load_core_buffer", function() return require "core.buffer" end)
+  BufferRegistry = startup_measure("load_core_buffer_registry", function() return require "core.buffer_registry" end)
+  core.treesitter = startup_measure("load_core_treesitter", function() return require "core.treesitter" end)
 
   -- apply to default color scheme
-  map_new_syntax_colors()
+  startup_measure("map_syntax_colors", map_new_syntax_colors)
 
-  if PATHSEP == '\\' then
-    USERDIR = common.normalize_volume(USERDIR)
-    DATADIR = common.normalize_volume(DATADIR)
-    EXEDIR  = common.normalize_volume(EXEDIR)
-  end
+  startup_measure("normalize_windows_paths", function()
+    if PATHSEP == '\\' then
+      USERDIR = common.normalize_volume(USERDIR)
+      DATADIR = common.normalize_volume(DATADIR)
+      EXEDIR  = common.normalize_volume(EXEDIR)
+    end
+  end)
 
-  local app_state = load_app_state()
+  local app_state = startup_measure("load_app_state", load_app_state)
   core.recent_projects = app_state.recents or {}
   core.previous_find = app_state.previous_find or {}
   core.previous_replace = app_state.previous_replace or {}
@@ -545,118 +577,134 @@ function core.init()
 
   -- remove projects that don't exist any longer and collapse path-identity
   -- duplicates such as Windows paths that differ only by case.
-  local recent_projects, seen_recent_projects = {}, {}
-  for _, project_dir in ipairs(core.recent_projects) do
-    local normalized_project_dir = normalize_project_path(project_dir)
-    local key = common.path_compare_key(normalized_project_dir)
-    if
-      normalized_project_dir
-      and not seen_recent_projects[key]
-      and system.get_file_info(normalized_project_dir)
-    then
-      recent_projects[#recent_projects + 1] = normalized_project_dir
-      seen_recent_projects[key] = true
+  local recent_projects = startup_measure("clean_recent_projects", function()
+    local projects, seen = {}, {}
+    for _, project_dir in ipairs(core.recent_projects) do
+      local normalized_project_dir = normalize_project_path(project_dir)
+      local key = common.path_compare_key(normalized_project_dir)
+      if
+        normalized_project_dir
+        and not seen[key]
+        and system.get_file_info(normalized_project_dir)
+      then
+        projects[#projects + 1] = normalized_project_dir
+        seen[key] = true
+      end
     end
-  end
+    return projects
+  end)
   core.recent_projects = recent_projects
 
   local project_dir = core.recent_projects[1] or "."
   local project_dir_explicit = false
   local files = {}
-  if not RESTARTED then
-    for i = 2, #ARGS do
-      if ARGS[i] == "--new-window" then
-        core.empty_window_request = true
-      else
-        local arg_filename = strip_trailing_slash(ARGS[i])
-        local info = system.get_file_info(arg_filename) or {}
-        if info.type == "dir" then
-          project_dir = arg_filename
-          project_dir_explicit = true
+  startup_measure("parse_startup_arguments", function()
+    if not RESTARTED then
+      for i = 2, #ARGS do
+        if ARGS[i] == "--new-window" then
+          core.empty_window_request = true
         else
-          -- on macOS we can get an argument like "-psn_0_52353" that we just ignore.
-          if not ARGS[i]:match("^-psn") then
-            local filename = common.normalize_path(arg_filename)
-            local abs_filename = system.absolute_path(filename or "")
-            local file_abs
-            if common.path_equals(filename, abs_filename) then
-              file_abs = abs_filename
-            else
-              file_abs = system.absolute_path(".") .. PATHSEP .. filename
-            end
-            if file_abs then
-              table.insert(files, file_abs)
-              project_dir = file_abs:match("^(.+)[/\\].+$")
+          local arg_filename = strip_trailing_slash(ARGS[i])
+          local info = system.get_file_info(arg_filename) or {}
+          if info.type == "dir" then
+            project_dir = arg_filename
+            project_dir_explicit = true
+          else
+            -- on macOS we can get an argument like "-psn_0_52353" that we just ignore.
+            if not ARGS[i]:match("^-psn") then
+              local filename = common.normalize_path(arg_filename)
+              local abs_filename = system.absolute_path(filename or "")
+              local file_abs
+              if common.path_equals(filename, abs_filename) then
+                file_abs = abs_filename
+              else
+                file_abs = system.absolute_path(".") .. PATHSEP .. filename
+              end
+              if file_abs then
+                table.insert(files, file_abs)
+                project_dir = file_abs:match("^(.+)[/\\].+$")
+              end
             end
           end
         end
       end
     end
-  end
+  end)
   -- Ensure that we have a user directory.
-  core.ensure_user_directory()
+  startup_measure("ensure_user_directory", core.ensure_user_directory)
 
-  --Set the maximum fps from display refresh rate.
-  config.fps = DEFAULT_FPS
+  startup_measure("initialize_core_state", function()
+    --Set the maximum fps from display refresh rate.
+    config.fps = DEFAULT_FPS
 
-  ---The process exit status used when the application quits.
-  ---@type integer
-  core.exit_status = 0
+    ---The process exit status used when the application quits.
+    ---@type integer
+    core.exit_status = 0
 
-  ---The actual maximum frames per second that can be rendered.
-  ---@type number
-  core.fps = config.fps
+    ---The actual maximum frames per second that can be rendered.
+    ---@type number
+    core.fps = config.fps
 
-  ---The maximum time coroutines have to run on a per frame iteration basis.
-  ---This value is automatically updated on each core.step().
-  ---@type number
-  core.co_max_time = 1 / config.fps - 0.004
+    ---The maximum time coroutines have to run on a per frame iteration basis.
+    ---This value is automatically updated on each core.step().
+    ---@type number
+    core.co_max_time = 1 / config.fps - 0.004
 
-  core.frame_start = 0
-  core.clip_rect_stack = {{ 0,0,0,0 }}
-  core.buffers = {}
-  core.buffer_registry = BufferRegistry(core.buffers)
-  core.projects = {}
-  core.cursor_clipboard = {}
-  core.cursor_clipboard_whole_line = {}
-  core.threads = setmetatable({}, { __mode = "k" })
-  core.background_threads = 0
-  core.blink_start = system.get_time()
-  core.blink_timer = core.blink_start
-  core.active_file_dialogs = {}
-  core.redraw = true
-  core.visited_files = {}
-  core.restart_request = false
-  core.quit_request = false
-  core.init_working_dir = system.getcwd()
-  core.collect_garbage = false
+    core.frame_start = 0
+    core.clip_rect_stack = {{ 0,0,0,0 }}
+    core.buffers = {}
+    core.buffer_registry = BufferRegistry(core.buffers)
+    core.projects = {}
+    core.cursor_clipboard = {}
+    core.cursor_clipboard_whole_line = {}
+    core.threads = setmetatable({}, { __mode = "k" })
+    core.background_threads = 0
+    core.blink_start = system.get_time()
+    core.blink_timer = core.blink_start
+    core.active_file_dialogs = {}
+    core.redraw = true
+    core.visited_files = {}
+    core.restart_request = false
+    core.quit_request = false
+    core.init_working_dir = system.getcwd()
+    core.collect_garbage = false
+  end)
 
   -- We load core views before plugins that may need them.
   ---@type core.rootpanel
-  core.root_panel = RootPanel()
+  core.root_panel = startup_measure("construct_root_panel", function() return RootPanel() end)
   ---@type core.global_prompt_bar
-  core.global_prompt_bar = GlobalPromptBar()
+  core.global_prompt_bar = startup_measure("construct_global_prompt_bar", function() return GlobalPromptBar() end)
   ---@type core.statusbar
-  core.status_bar = StatusBar()
+  core.status_bar = startup_measure("construct_status_bar", function() return StatusBar() end)
   ---@type core.nagview
-  core.nag_view = NagView()
+  core.nag_view = startup_measure("construct_nag_view", function() return NagView() end)
   ---@type core.titlebar
-  core.title_bar = TitleBar()
+  core.title_bar = startup_measure("construct_title_bar", function() return TitleBar() end)
 
   -- Load default commands first so plugins/core features can override them.
-  command.add_defaults()
+  startup_measure("load_default_commands", command.add_defaults)
 
   -- Pane 1 is created only by restored state or an explicit open request.
-  require "core.panes"
+  startup_measure("load_core_panes", function() return require "core.panes" end)
 
   -- Shared Point of Interest navigation commands/keymaps are loaded before
   -- plugins so providers can attach themselves during plugin initialization.
-  require "core.poi"
+  startup_measure("load_core_poi", function() return require "core.poi" end)
 
-  local project_dir_abs = system.absolute_path(project_dir)
+  local project_dir_abs = startup_measure("resolve_initial_project_path", function()
+    return system.absolute_path(project_dir)
+  end, "project_dir=" .. tostring(project_dir))
   -- We prevent set_project below to effectively add and scan the directory because the
   -- project module and its ignore files is not yet loaded.
-  if project_dir_abs and pcall(core.set_project, project_dir_abs) then
+  local project_set = startup_measure("set_initial_project", function()
+    return project_dir_abs and pcall(core.set_project, project_dir_abs)
+  end, "path=" .. tostring(project_dir_abs))
+  if startup then startup.mark("initial_project_result", string.format(
+    "path=%s explicit=%s success=%s", tostring(project_dir_abs),
+    tostring(project_dir_explicit), tostring(project_set)
+  )) end
+  if project_set then
     if project_dir_explicit then
       update_recents_project("add", project_dir_abs)
     end
@@ -665,46 +713,69 @@ function core.init()
       update_recents_project("remove", project_dir)
     end
     project_dir_abs = system.absolute_path(".")
-    local status, err = pcall(core.set_project, project_dir_abs)
+    startup_measure("set_fallback_project", function()
+      local status, err = pcall(core.set_project, project_dir_abs)
+      return status, err
+    end, "path=" .. tostring(project_dir_abs))
   end
 
   -- Load core and user plugins giving preference to user ones with same name.
-  local plugins_success, plugins_refuse_list = core.load_plugins()
+  local plugins_success, plugins_refuse_list = startup_measure("load_all_plugins", core.load_plugins)
+  if startup then startup.mark("plugins_complete", string.format(
+    "success=%s loaded=%d refused_user=%d refused_data=%d",
+    tostring(plugins_success), #core.plugin_list,
+    #plugins_refuse_list.userdir.plugins, #plugins_refuse_list.datadir.plugins
+  )) end
 
   -- Parse commandline arguments
-  cli.parse(ARGS)
+  startup_measure("parse_cli_arguments", function() cli.parse(ARGS) end)
 
   -- Update the files to open
   if cli.last_command ~= "default" then
-    files = {}
-    system.chdir(core.init_working_dir)
-    for _, argument in ipairs(cli.unhandled_arguments) do
-      local arg_filename = strip_trailing_slash(argument)
-      local info = system.get_file_info(arg_filename) or {}
-      if info.type ~= "dir" then
-        local filename = common.normalize_path(arg_filename)
-        local abs_filename = system.absolute_path(filename or "")
-        local file_abs
-        if common.path_equals(filename, abs_filename) then
-          file_abs = abs_filename
-        else
-          file_abs = system.absolute_path(".") .. PATHSEP .. filename
-        end
-        if file_abs then
-          table.insert(files, file_abs)
+    startup_measure("resolve_cli_files", function()
+      files = {}
+      system.chdir(core.init_working_dir)
+      for _, argument in ipairs(cli.unhandled_arguments) do
+        local arg_filename = strip_trailing_slash(argument)
+        local info = system.get_file_info(arg_filename) or {}
+        if info.type ~= "dir" then
+          local filename = common.normalize_path(arg_filename)
+          local abs_filename = system.absolute_path(filename or "")
+          local file_abs
+          if common.path_equals(filename, abs_filename) then
+            file_abs = abs_filename
+          else
+            file_abs = system.absolute_path(".") .. PATHSEP .. filename
+          end
+          if file_abs then
+            table.insert(files, file_abs)
+          end
         end
       end
-    end
+    end)
   end
 
-  local restored_window = core.window or renwindow._restore()
-  core.window = restored_window or renwindow.create("", table.unpack(app_state.window or {}))
-  core.active_window = core.window
+  local restored_window = core.window
+    or startup_measure("restore_window", renwindow._restore)
+  if restored_window then
+    startup_measure("adopt_restored_window", function() core.window = restored_window end)
+  else
+    core.window = startup_measure("create_window", function()
+      return renwindow.create("", table.unpack(app_state.window or {}))
+    end)
+  end
+  startup_measure("activate_window", function() core.active_window = core.window end)
+  if startup then startup.mark("window_ready", string.format(
+    "restored=%s window=%s size=%s", tostring(not not restored_window),
+    tostring(core.window), tostring(core.window_size)
+  )) end
 
   -- Refresh-rate detection before the window exists only sees the primary
   -- display. Re-query from the real window so high-refresh secondary displays
   -- do not stay capped at the primary display rate.
-  core.refresh_display_timing("window_create")
+  startup_measure("refresh_display_timing", function()
+    core.refresh_display_timing("window_create")
+  end)
 
   -- Maximizing the window makes it lose the hidden attribute on Windows
   -- so we delay this to keep window hidden until args parsed. Also, on
@@ -714,15 +785,17 @@ function core.init()
   -- the size is all we need on that platform.
   if app_state.window_mode == "maximized" and PLATFORM ~= "Mac OS X" and not restored_window then
     core.add_thread(function()
-      system.set_window_mode(core.window, "maximized")
+      startup_measure("apply_maximized_window_mode", function()
+        system.set_window_mode(core.window, "maximized")
+      end)
     end)
   end
 
 
-  do
+  startup_measure("log_project_start", function()
     local pdir, pname = project_dir_abs:match("(.*)[/\\\\](.*)")
     core.log_quiet("Opening project %q from directory %s", pname, pdir)
-  end
+  end)
 
   if #files > 0 then
     -- defer file loading to ensure all plugins are loaded first,
@@ -733,7 +806,9 @@ function core.init()
       -- allow workspace plugin to do its thing first to prevent duplicate files
       coroutine.yield()
       for _, filename in ipairs(files) do
-        core.open_file(filename)
+        startup_measure("open_startup_file", function()
+          return core.open_file(filename)
+        end, "path=" .. tostring(filename))
       end
     end)
   end
@@ -746,14 +821,16 @@ function core.init()
     end)
   end
 
-  core.configure_borderless_window()
+  startup_measure("configure_window_frame", core.configure_borderless_window)
 
   -- On Windows with Anvil's custom native frame, saved bounds must be applied
   -- after the frame is enabled. Applying them before borderless setup treats the
   -- saved outer HWND height as SDL client height, which can push the titlebar
   -- above the monitor when restoring a screen-height window.
   if app_state.window and not restored_window then
-    system.set_window_size(core.window, table.unpack(app_state.window))
+    startup_measure("apply_saved_window_bounds", function()
+      system.set_window_size(core.window, table.unpack(app_state.window))
+    end)
   end
 
   if #plugins_refuse_list.userdir.plugins > 0 or #plugins_refuse_list.datadir.plugins > 0 then
@@ -771,15 +848,21 @@ function core.init()
         msg[#msg + 1] = string.format("Plugins from directory \"%s\":\n%s", common.home_encode(entry.dir), table.concat(msg_list, "\n"))
       end
     end
-    core.nag_view:show(
-      "Refused Plugins",
-      string.format(
-        "Some plugins are not loaded due to version mismatch. Expected version %s.\n\n%s.\n\n" ..
-        "Please update or disable those plugins.",
-        MOD_VERSION_STRING, table.concat(msg, ".\n\n")),
-      opt, function(item)
-        if item.text == "Exit" then os.exit(1) end
-      end)
+    startup_measure("show_refused_plugins_notice", function()
+      core.nag_view:show(
+        "Refused Plugins",
+        string.format(
+          "Some plugins are not loaded due to version mismatch. Expected version %s.\n\n%s.\n\n" ..
+          "Please update or disable those plugins.",
+          MOD_VERSION_STRING, table.concat(msg, ".\n\n")),
+        opt, function(item)
+          if item.text == "Exit" then os.exit(1) end
+        end)
+    end)
+  end
+  if startup then
+    startup.mark("core_init_complete", "files=" .. tostring(#files))
+    startup.stage_end(core_init_stage, "ok", "files=" .. tostring(#files))
   end
 end
 
@@ -926,15 +1009,17 @@ local mod_version_regex =
   regex.compile([[--.*mod-version:\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:$|\s)]])
 local priority_regex = regex.compile([[\-\-.*priority\s*:\s*(\-?[\d\.]+)]])
 function core.get_plugin_details(path)
-  local info = system.get_file_info(path)
-  local file = path
-  if info ~= nil and info.type == "dir" then
-    file = path .. PATHSEP .. "init.lua"
-    info = system.get_file_info(file)
-  end
-  local details = info and core.parse_plugin_details(path:gsub("%.lua$", ""), file, mod_version_regex, priority_regex)
-  if details then details.load = require_lua_plugin end
-  return details
+  return startup_measure("inspect_plugin", function()
+    local info = system.get_file_info(path)
+    local file = path
+    if info ~= nil and info.type == "dir" then
+      file = path .. PATHSEP .. "init.lua"
+      info = system.get_file_info(file)
+    end
+    local details = info and core.parse_plugin_details(path:gsub("%.lua$", ""), file, mod_version_regex, priority_regex)
+    if details then details.load = require_lua_plugin end
+    return details
+  end, "path=" .. tostring(path))
 end
 
 
@@ -980,7 +1065,10 @@ function core.load_plugins()
   }
   for _, root_dir in ipairs {DATADIR, USERDIR} do
     local plugin_dir = root_dir .. PATHSEP .. "plugins"
-    for _, filename in ipairs(system.list_dir(plugin_dir) or {}) do
+    local plugin_names = startup_measure("scan_plugin_directory", function()
+      return system.list_dir(plugin_dir) or {}
+    end, "path=" .. plugin_dir)
+    for _, filename in ipairs(plugin_names) do
       if not files[filename] then
         local details = core.get_plugin_details(plugin_dir .. PATHSEP .. filename)
         if details and details.name ~= "anvil_defaults" then table.insert(ordered, details) end
@@ -989,7 +1077,8 @@ function core.load_plugins()
       files[filename] = plugin_dir
     end
   end
-  core.add_plugins(ordered)
+  startup_measure("order_plugins", function() core.add_plugins(ordered) end,
+    "count=" .. tostring(#ordered))
 
   local function reject_plugin_version(plugin)
     core.log_quiet(
@@ -1001,11 +1090,18 @@ function core.load_plugins()
     local rlist = plugin.file:find(USERDIR, 1, true) == 1
       and 'userdir' or 'datadir'
     table.insert(refused_list[rlist].plugins, plugin)
+    if startup then startup.mark("plugin_refused", "name=" .. tostring(plugin.name)) end
   end
 
   local function load_plugin(plugin, plugin_config)
     local start = system.get_time()
-    local ok, loaded_plugin = core.try(plugin.load, plugin)
+    local ok, loaded_plugin = startup_measure(
+      "load_plugin_" .. tostring(plugin.name),
+      function()
+        return core.try(plugin.load, plugin)
+      end,
+      string.format("file=%s priority=%s", tostring(plugin.file), tostring(plugin.priority))
+    )
     if ok then
       local plugin_version = ""
       if plugin.version_string and  plugin.version_string ~= MOD_VERSION_STRING then
@@ -1019,22 +1115,28 @@ function core.load_plugins()
         (system.get_time() - start) * 1000
       )
       if plugin_config and plugin_config.onload then
-        core.try(plugin_config.onload, loaded_plugin)
+        startup_measure(
+          "plugin_onload_" .. tostring(plugin.name),
+          function() return core.try(plugin_config.onload, loaded_plugin) end
+        )
       end
     else
       no_errors = false
+      if startup then startup.mark("plugin_load_failed", "name=" .. tostring(plugin.name)) end
     end
     return ok, loaded_plugin
   end
 
   local function load_defaults_plugin()
     if not defaults_plugin then
+      if startup then startup.mark("mandatory_plugin_missing", "name=anvil_defaults") end
       core.error("Mandatory first-party defaults plugin is missing: %s", DATADIR .. PATHSEP .. "plugins" .. PATHSEP .. "anvil_defaults.lua")
       no_errors = false
       return false
     end
     if not defaults_plugin.version_match then
       reject_plugin_version(defaults_plugin)
+      if startup then startup.mark("mandatory_plugin_incompatible", "name=anvil_defaults") end
       core.error("Mandatory first-party defaults plugin has an incompatible mod-version")
       no_errors = false
       return false
@@ -1063,10 +1165,13 @@ function core.load_plugins()
       reject_plugin_version(plugin)
     elseif env_disabled_plugins[plugin.name:lower()] then
       core.log_quiet("Skipped plugin %q from ANVIL_DISABLE_PLUGINS", plugin.name)
+      if startup then startup.mark("plugin_disabled", "name=" .. tostring(plugin.name) .. " reason=environment") end
     else
       local plugin_config = config.plugins[plugin.name]
       if plugin_config ~= false then
         load_plugin(plugin, plugin_config)
+      elseif startup then
+        startup.mark("plugin_disabled", "name=" .. tostring(plugin.name) .. " reason=config")
       end
     end
   end
@@ -1595,6 +1700,9 @@ local function add_thread(f, weak_ref, background, ...)
   if background then
     core.background_threads = core.background_threads + 1
   end
+  if core.startup_trace_active and startup then
+    startup.thread_scheduled(key, loc, background)
+  end
   return key
 end
 
@@ -1918,6 +2026,9 @@ function core.try(fn, ...)
     item.info = debug.traceback("", 2):gsub("\t", "")
     if core.session_log then
       pcall(core.session_log.write, core.session_log, "TRACE", item.info, item.at)
+    end
+    if core.startup_trace_active and startup then
+      startup.mark("core_try_error", "message=" .. tostring(msg) .. " at=" .. tostring(item.at))
     end
     err = msg
   end, ...)
@@ -2535,6 +2646,8 @@ function core.step(next_frame_time, options)
   local did_keymap = false
 
   local event_start_time = system.get_time()
+  local startup_event_stage = core.startup_trace_active and startup
+    and startup.stage_begin("first_frame_events") or nil
   local event_received = false
   local event_type_counts = {}
   local event_type_order = {}
@@ -2549,6 +2662,7 @@ function core.step(next_frame_time, options)
       step_stats.slowest_event_ms = elapsed
       step_stats.slowest_event_type = event_type
     end
+    if core.startup_trace_active and startup then startup.event(event_type) end
   end
   for type, a,b,c,d in system.poll_event do
     local event_item_start = system.get_time()
@@ -2588,11 +2702,15 @@ function core.step(next_frame_time, options)
     end
     step_stats.event_types = table.concat(event_types, " ")
   end
+  if core.startup_trace_active and startup then startup.stage_end(startup_event_stage, "ok",
+    "count=" .. tostring(step_stats.event_count)) end
 
   local width, height = core.window:get_size()
 
   -- update
   local update_start_time = system.get_time()
+  local startup_update_stage = core.startup_trace_active and startup
+    and startup.stage_begin("first_frame_update") or nil
   local stats_config = config.draw_stats
   local uncapped = stats_config == "uncapped" or core.perf_cadence_uncapped
   local priority_event = event_received and event_received ~= "mousemoved"
@@ -2615,6 +2733,7 @@ function core.step(next_frame_time, options)
   -- A hidden Project keeps its background threads and event loop active, but
   -- it does not emit or present editor frames until the manager selects it.
   if system.project_is_selected and not system.project_is_selected() then
+    if core.startup_trace_active and startup then startup.stage_end(startup_update_stage, "skipped", "project_not_selected") end
     core.ui_snapshot_active = false
     return false
   end
@@ -2630,10 +2749,12 @@ function core.step(next_frame_time, options)
       next_frame_time > system.get_time()
     )
   then
+    if core.startup_trace_active and startup then startup.stage_end(startup_update_stage, "ok", "redraw=false") end
     core.ui_snapshot_active = false
     return false
   end
   core.redraw = false
+  if core.startup_trace_active and startup then startup.stage_end(startup_update_stage, "ok", "redraw=true") end
 
   local pre_draw_start_time = system.get_time()
 
@@ -2653,6 +2774,8 @@ function core.step(next_frame_time, options)
   -- draw
   step_stats.pre_draw_ms = (system.get_time() - pre_draw_start_time) * 1000
   local start_time = system.get_time()
+  local startup_draw_stage = core.startup_trace_active and startup
+    and startup.stage_begin("first_frame_draw") or nil
   renderer.begin_frame(core.window)
   core.clip_rect_stack[1] = { 0, 0, width, height }
   renderer.set_clip_rect(table.unpack(core.clip_rect_stack[1]))
@@ -2680,6 +2803,8 @@ function core.step(next_frame_time, options)
   local renderer_end_start_time = system.get_time()
   renderer.end_frame()
   step_stats.renderer_end_ms = (system.get_time() - renderer_end_start_time) * 1000
+  if core.startup_trace_active and startup then startup.stage_end(startup_draw_stage, "ok",
+    "renderer_end_ms=" .. string.format("%.3f", step_stats.renderer_end_ms)) end
 
   local frame_time = system.get_time() - start_time
   step_stats.frame_time_ms = frame_time * 1000
@@ -2788,6 +2913,9 @@ local run_threads = coroutine.wrap(function()
       if run_threads_mode == "all" or thread.background then
         if thread.wake < system.get_time() then
           local start_time = system.get_time()
+          if core.startup_trace_active and startup then
+            startup.thread_started(k, thread.loc, thread.background)
+          end
           -- if the avg time of running the thread exceeds cycle_end_time
           -- execute the thread on next run
           if
@@ -2800,6 +2928,12 @@ local run_threads = coroutine.wrap(function()
           end
           local _, wait = assert(coroutine.resume(thread.cr))
           end_time = system.get_time() - start_time
+          if core.startup_trace_active and startup then
+            startup.thread_finished(
+              k, thread.loc, thread.background, end_time * 1000,
+              coroutine.status(thread.cr) == "dead"
+            )
+          end
           runs = runs + 1
           pass_runs = pass_runs + 1
           if end_time > slowest_time then
@@ -3119,12 +3253,17 @@ end
 ---via the init_code that also calls core.init().  SDL_AppIterate then drives the
 ---loop by calling core.run_step() on every frame.
 function core.run()
-  scale = require "plugins.scale"
-  run_next_step       = nil
-  run_skip_no_focus   = 0
-  run_burst_events    = 0
-  run_has_focus       = true
-  run_next_frame_time = system.get_time() + 1 / config.fps
+  startup_measure("load_scale_plugin", function()
+    scale = require "plugins.scale"
+  end)
+  startup_measure("initialize_run_loop", function()
+    run_next_step       = nil
+    run_skip_no_focus   = 0
+    run_burst_events    = 0
+    run_has_focus       = true
+    run_next_frame_time = system.get_time() + 1 / config.fps
+  end)
+  if startup then startup.mark("core_run_ready") end
 end
 
 ---Execute one frame of the main loop.
@@ -3139,6 +3278,7 @@ function core.run_step(options)
   local previous_live_resize_frame = core.in_live_resize_frame
   core.in_live_resize_frame = immediate and options.live_resize or false
   local run_step_start = system.get_time()
+  local startup_run_step = startup and startup.run_step_begin(options) or nil
   local sleep_requested_ms = 0
   local sleep_actual_ms = 0
   local worker_pool_frame_stats = {}
@@ -3308,7 +3448,15 @@ function core.run_step(options)
       now           = system.get_time()
       run_next_step = nil
     end
+    if startup_run_step then
+      startup.run_step_end(startup_run_step, did_redraw)
+      if did_redraw then startup.on_present() end
+      startup_run_step = nil
+    end
     if core.restart_request or core.quit_request then
+      if startup and startup.active() then
+        startup.finish("stopped", core.restart_request and "restart" or "quit")
+      end
       local worker_pool_module = package.loaded["core.worker_pool"]
       if worker_pool_module and worker_pool_module.shutdown_system then
         worker_pool_module.shutdown_system({ cancel_running = true, timeout_ms = 1000 })
@@ -3371,6 +3519,10 @@ function core.run_step(options)
         run_step_sleep(math.min(uncapped and 0 or 1, next_frame, time_to_wake))
       end
     end
+  end
+
+  if startup_run_step then
+    startup.run_step_end(startup_run_step, false)
   end
 
   -- run the garbage collector on request
@@ -3871,6 +4023,9 @@ end
 
 
 function core.on_error(err)
+  if startup and startup.active() then
+    startup.finish("error", tostring(err))
+  end
   -- write error to file
   local fp = io.open(USERDIR .. PATHSEP .. "error.txt", "wb")
   fp:write("Error: " .. tostring(err) .. "\n")

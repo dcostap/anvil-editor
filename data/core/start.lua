@@ -32,13 +32,23 @@ package.path = DATADIR .. '/?/init.lua;' .. package.path
 package.path = USERDIR .. '/?.lua;' .. package.path
 package.path = USERDIR .. '/?/init.lua;' .. package.path
 
+local startup = require "core.startup"
+startup.begin {
+  restarted = RESTARTED,
+  args = ARGS,
+  detail = "start.lua",
+}
+startup.mark("lua_paths_configured", string.format(
+  "datadir=%s userdir=%s exedir=%s", DATADIR, USERDIR, EXEDIR
+))
+
 -- Load compatibility changes when running in LuaJIT or PUC Lua < 5.3
 if LUA_VERSION < 5.3 then
-  require "core.jitsetup"
+  startup.measure("load_core_jitsetup", function() require "core.jitsetup" end)
   COMPAT_DISABLE_FIX_PATTERN = true
-  require "compat"
+  startup.measure("load_compatibility", function() require "compat" end)
 else
-  require "core.bit"
+  startup.measure("load_core_bit", function() require "core.bit" end)
 end
 
 local suffix = PLATFORM == "Windows" and 'dll' or 'so'
@@ -52,6 +62,7 @@ package.cpath =
   DATADIR .. '/?.' .. suffix .. ";" ..
   DATADIR .. '/?/init.' .. suffix .. ";"
 
+startup.mark("native_paths_configured", "cpath=" .. package.cpath)
 package.native_plugins = {}
 table.insert(package.searchers, 1, function(modname)
   local path, err = package.searchpath(modname, package.cpath)
@@ -114,13 +125,16 @@ function require(modname, ...)
     end
   end
 
+  local require_stage = startup.stage_begin("require", modname)
   table.insert(require_stack, modname)
   local ok, result, loaderdata = pcall(lua_require, modname, ...)
   table.remove(require_stack)
 
   if not ok then
+    startup.stage_end(require_stage, "error", "error=" .. tostring(result))
     return error(result)
   end
+  startup.stage_end(require_stage, "ok", "loader=" .. tostring(loaderdata))
   return result, loaderdata
 end
 
@@ -131,18 +145,22 @@ function get_current_require_path()
   return require_stack[#require_stack]
 end
 
-require "core.encoding"
-require "core.utf8string"
-require "core.process"
+startup.mark("require_wrapper_ready")
+startup.measure("load_core_encoding", function() require "core.encoding" end)
+startup.measure("load_core_utf8string", function() require "core.utf8string" end)
+startup.measure("load_core_process", function() require "core.process" end)
+startup.mark("runtime_modules_ready")
 
 -- Because AppImages change the working directory before running the executable,
 -- we need to change it back to the original one.
 -- https://github.com/AppImage/AppImageKit/issues/172
 -- https://github.com/AppImage/AppImageKit/pull/191
-local appimage_owd = os.getenv("OWD")
-if os.getenv("APPIMAGE") and appimage_owd then
-  system.chdir(appimage_owd)
-end
+startup.measure("adjust_runtime_working_directory", function()
+  local appimage_owd = os.getenv("OWD")
+  if os.getenv("APPIMAGE") and appimage_owd then
+    system.chdir(appimage_owd)
+  end
+end)
 
 -- Temporary SDL3 compatibility PLATFORM correction on macOS
 if PLATFORM == "macOS"  then PLATFORM = "Mac OS X" end
@@ -151,15 +169,17 @@ if PLATFORM == "macOS"  then PLATFORM = "Mac OS X" end
 -- On Mac OS X package managers like brew install binaries into /usr/local/bin
 -- but this location is not globally added to the PATH environment variable.
 if PLATFORM == "Mac OS X" then
-  local path_list = {"/usr/local/sbin", "/usr/local/bin"}
-  local system_path = os.getenv("PATH")
-  for _, local_bin_path in ipairs(path_list) do
-    if system_path and not system_path:match(local_bin_path) then
-      local path_info = system.get_file_info(local_bin_path)
-      if path_info and path_info.type == "dir" then
-        system_path = local_bin_path .. ":" .. system_path
-        system.setenv("PATH", system_path)
+  startup.measure("adjust_macos_path", function()
+    local path_list = {"/usr/local/sbin", "/usr/local/bin"}
+    local system_path = os.getenv("PATH")
+    for _, local_bin_path in ipairs(path_list) do
+      if system_path and not system_path:match(local_bin_path) then
+        local path_info = system.get_file_info(local_bin_path)
+        if path_info and path_info.type == "dir" then
+          system_path = local_bin_path .. ":" .. system_path
+          system.setenv("PATH", system_path)
+        end
       end
     end
-  end
+  end)
 end
