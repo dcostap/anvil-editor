@@ -197,4 +197,32 @@ test.describe("Fuzzy Searcher preview interaction", function()
     test.equal(view.scroll.x, 14)
     test.equal(view.scroll.y, 900)
   end)
+
+  test.it("keeps preview match highlights after caret movement", function(context)
+    local path = temp_file_path("fuzzy-preview-persistent-match-test.txt")
+    context.files = { path }
+    write_file(path, "alpha NEEDLE omega\n")
+
+    fuzzy_searcher.open("#NEEDLE")
+    local picker = core.fuzzy_searcher_active_view
+    picker.results = { {
+      kind = "grep", file = path, line = 1, col = 7,
+      grep_query = "NEEDLE", exact = true,
+      content_selection_span = { 7, 12 }, content_match_start = 7,
+      text = "alpha NEEDLE omega",
+    } }
+    picker.selected = 1
+    local preview = test.not_nil(picker:update_preview_view())
+    test.ok(#(preview.preview_search_ranges or {}) > 0)
+    test.ok(picker:cycle_local_focus(1))
+    picker:update_preview_view()
+    test.not_nil(next(preview.buffer.search_selections))
+
+    test.ok(command.perform("core:move_to_next_char"))
+    local moved = { preview.buffer:get_selection() }
+    picker:update_preview_view()
+
+    test.same({ preview.buffer:get_selection() }, moved)
+    test.not_nil(next(preview.buffer.search_selections))
+  end)
 end)

@@ -37,6 +37,13 @@ function PreviewTextView:set_interactive(interactive)
   self.show_current_line_highlight = self.interactive
 end
 
+function PreviewTextView:restore_preview_search_ranges()
+  if not self.preview_search_ranges or next(self.buffer.search_selections) ~= nil then return end
+  for _, range in ipairs(self.preview_search_ranges) do
+    self.buffer:add_search_selection(range[1], range[2], range[3], range[4])
+  end
+end
+
 function PreviewTextView:get_line_number_gutter_width()
   return self:get_font():get_width("00000")
 end
@@ -3979,10 +3986,12 @@ function FSView:update_preview_view()
       view:with_selection_state(function()
         view.buffer:clear_search_selections()
         local selections = {}
+        local search_ranges = {}
         if r.kind == "grep" then
           for _, span in ipairs(grep_content_spans(view.buffer.lines[target] or "", r, 0, target) or {}) do
             local col1, col2 = span[1], span[2] + 1
             view.buffer:add_search_selection(target, col1, target, col2)
+            search_ranges[#search_ranges + 1] = { target, col1, target, col2 }
             if not reveal_col1 then reveal_col1, reveal_col2 = col1, col2 end
             table.insert(selections, target)
             table.insert(selections, col1)
@@ -3995,6 +4004,7 @@ function FSView:update_preview_view()
           local col1 = math.max(1, tonumber(r.col) or 1)
           local col2 = math.max(col1 + 1, tonumber(r.col2) or (col1 + #(r.name or r.label or "")))
           view.buffer:add_search_selection(line1, col1, line2, col2)
+          search_ranges[#search_ranges + 1] = { line1, col1, line2, col2 }
           reveal_col1, reveal_col2 = col1, col2
           table.insert(selections, line1)
           table.insert(selections, col1)
@@ -4014,6 +4024,7 @@ function FSView:update_preview_view()
         else
           view.buffer:set_selection(target, 1, target, 1)
         end
+        view.preview_search_ranges = search_ranges
       end)
       view:scroll_to_line(target, false, true)
       if reveal_col1 then
@@ -4026,6 +4037,7 @@ function FSView:update_preview_view()
       self.preview_target_line = target
       self.preview_highlight_key = highlight_key
     end
+    view:restore_preview_search_ranges()
   end
 
   call_preview_view_method(view, view.update)
@@ -4053,6 +4065,7 @@ function FSView:set_preview_interactive(interactive)
   if interactive then
     self:swap_active_child(nil)
     core.set_active_view(preview)
+    preview:restore_preview_search_ranges()
     core.blink_reset()
     core.log_quiet("Fuzzy Searcher preview focused: file=%s",
       tostring(preview.buffer and preview.buffer.abs_filename or "unknown"))
