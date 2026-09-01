@@ -5384,10 +5384,6 @@ local function provider_generation_state(view)
   -- Wrapped-row topology is tracked by Editor's metric signature. It is not
   -- a Markdown presentation change: coupling it to this generation made a
   -- local wrap splice look like a buffer-wide metric invalidation.
-  local semantic_model = markdown_model.peek(view.buffer)
-  local semantic_status = semantic_model and semantic_model.status
-  local semantic_generation = semantic_model and semantic_model.generation
-  local semantic_revision = semantic_model and semantic_model.published_revision
   local owner = view.__markdown_live_owner
   local semantic_pending_line = owner and owner.semantic_pending_line
   local semantic_adoption_generation = owner and owner.semantic_adoption_generation
@@ -5419,9 +5415,6 @@ local function provider_generation_state(view)
     and cache.padding_x == padding_x
     and cache.interactive_tables == (config.markdown_live_interactive_tables == true)
     and cache.scale == SCALE
-    and cache.semantic_status == semantic_status
-    and cache.semantic_generation == semantic_generation
-    and cache.semantic_revision == semantic_revision
     and cache.semantic_pending_line == semantic_pending_line
     and cache.semantic_adoption_generation == semantic_adoption_generation
   then
@@ -5447,9 +5440,6 @@ local function provider_generation_state(view)
     padding_x = padding_x,
     interactive_tables = config.markdown_live_interactive_tables == true,
     scale = SCALE,
-    semantic_status = semantic_status,
-    semantic_generation = semantic_generation,
-    semantic_revision = semantic_revision,
     semantic_pending_line = semantic_pending_line,
     semantic_adoption_generation = semantic_adoption_generation,
   }
@@ -5493,9 +5483,9 @@ function provider:generation(view)
     .. ":width:" .. tostring(table_width)
     .. ":image-width:" .. tostring(image_width)
     .. ":interactive-tables:" .. tostring(state.interactive_tables)
-    .. ":semantic-status:" .. tostring(state.semantic_status)
-    .. ":semantic-generation:" .. tostring(state.semantic_generation)
-    .. ":semantic-revision:" .. tostring(state.semantic_revision)
+    -- Text transactions and semantic publications invalidate their changed
+    -- lines directly. Model status and revision are not global layout state.
+    -- Including them here rebuilt every row for a one-character task toggle.
     .. ":semantic-pending-line:" .. tostring(state.semantic_pending_line)
     .. ":semantic-adoption-generation:" .. tostring(state.semantic_adoption_generation)
   return state.generation

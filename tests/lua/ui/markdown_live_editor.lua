@@ -2587,6 +2587,51 @@ test.describe("Markdown Live Preview", function()
     test.equal(immediate_checkbox.widget.checked, true)
   end)
 
+  test.it("keeps checkbox toggle layout work local to the task row", function()
+    local view, buffer = make_view(table.concat({
+      "# Before",
+      "```lua",
+      "local value = true",
+      "```",
+      "",
+      "- [ ] todo",
+      "",
+      "# After",
+      "plain",
+    }, "\n"), "task-toggle-layout.md")
+    view:set_wrapping_enabled(true)
+    buffer:set_selection(9, 1)
+    refresh(view)
+    view:get_visual_row_metric_cache()
+
+    local service = fence_highlight.get(buffer)
+    local requests_before = service:get_diagnostics().requests
+    local rebuilds_before = view:get_render_cache_diagnostics().metric_full_rebuilds
+    local checkbox
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(6)).fragments or {}) do
+      if fragment.markdown_task_checkbox then checkbox = fragment break end
+    end
+    checkbox = test.not_nil(checkbox)
+    local line_x, line_y = view:get_line_screen_position(6)
+    local checkbox_x = line_x
+      + view:get_line_render_col_x_offset(view:get_line_render(6), checkbox.source_col1) + 2
+
+    test.equal(view:on_mouse_pressed("left", checkbox_x, line_y + 2, 1), true)
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
+    view:get_visual_row_metric_cache()
+
+    test.equal(
+      view:get_render_cache_diagnostics().metric_full_rebuilds,
+      rebuilds_before,
+      "the checkbox toggle rebuilt the complete Markdown layout"
+    )
+    test.equal(
+      service:get_diagnostics().requests,
+      requests_before,
+      "the checkbox toggle requested highlighting for an unrelated code block"
+    )
+  end)
+
   test.it("reveals the complete task-list prefix when the caret enters its checkbox", function()
     local view, buffer = make_view(" - [ ] todo\nplain", "task-reveal.md")
     buffer:set_selection(2, 1)
