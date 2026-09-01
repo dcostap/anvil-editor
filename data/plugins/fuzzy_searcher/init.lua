@@ -6558,6 +6558,9 @@ function FSView:update()
       self._last_unexpected_focus_state = state
       fuzzy_focus_log("update-unexpected-active", self)
     end
+    if core.root_panel:modal_input_owner() == self then
+      ensure_input_focus(self, "update-restore-input")
+    end
   else
     self._last_unexpected_focus_state = nil
   end

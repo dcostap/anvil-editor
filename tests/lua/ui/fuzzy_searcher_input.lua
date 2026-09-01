@@ -4,6 +4,7 @@ local command = require "core.command"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local keymap = require "core.keymap"
 local test = require "core.test"
+local View = require "core.view"
 
 test.describe("Fuzzy Searcher input", function()
   test.before_each(function(context)
@@ -29,6 +30,22 @@ test.describe("Fuzzy Searcher input", function()
     core.on_event("keypressed", "f24", {})
     keymap.unbind("f24", command_name)
   end
+
+  test.it("puts command-opened input focus back in the query field", function()
+    local source = View()
+    core.set_active_view(source)
+
+    test.ok(command.perform("fuzzy:open_files"))
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.equal(core.active_view, picker.input.textview)
+    test.equal(picker.input.active, true)
+
+    core.set_active_view(source)
+    picker:update()
+
+    test.equal(core.active_view, picker.input.textview)
+    test.equal(picker.input.active, true)
+  end)
 
   test.it("moves the query caret with Left", function()
     fuzzy_searcher.open(">")
