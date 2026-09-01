@@ -209,6 +209,7 @@ end
 local function modal_picker_command_allowed(cmd)
   if type(cmd) ~= "string" then return false end
   return cmd:match("^fuzzy:") ~= nil
+      or cmd == "core:open_text_capture"
       or cmd == "core:activate_point_of_interest"
       or cmd == "core:activate_point_of_interest_split"
 end
@@ -3688,6 +3689,35 @@ function FSView:copy_selected()
   return true
 end
 
+function FSView:text_capture()
+  return require("plugins.fuzzy_searcher.text_capture").build(self, {
+    result_main_text = fuzzy_searcher.result_main_text,
+    format_recent_file_age = fuzzy_searcher.format_recent_file_age,
+    prompt_mode = fuzzy_searcher.prompt_mode,
+  })
+end
+
+function FSView:open_text_capture()
+  local capture = self:text_capture()
+  local source_pane = self.source_pane or panes.active()
+  local result_count = #(self.results or {})
+  local query_bytes = #(self.input and self.input:get_text() or "")
+  self:close("text-capture")
+  local view, err = require("core.text_capture").open(capture, {
+    pane = source_pane,
+    reason = "fuzzy-searcher-text-capture",
+  })
+  if not view then
+    core.error("Could not open Fuzzy Searcher text: %s", tostring(err or "unknown error"))
+    return false
+  end
+  core.log_quiet(
+    "Fuzzy Searcher text capture opened: results=%d query_bytes=%d",
+    result_count, query_bytes
+  )
+  return true
+end
+
 function FSView:copy_flash_color(idx)
   local flash = self.copy_flash
   if not flash then return nil end
@@ -4174,6 +4204,8 @@ function FSView:on_mouse_moved(x, y, dx, dy)
     self.hovered_result = hovered
     self:schedule_update(true)
   end
+  self.cursor = hovered and "hand" or "arrow"
+  core.request_cursor(self.cursor)
   return true
 end
 

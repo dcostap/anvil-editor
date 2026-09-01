@@ -2064,9 +2064,104 @@ function FileTreeView:draw_line_body(line, x, y)
     y,
     math.max(0, self.size.x - gw)
   )
+  if line == self.hovered_entry_line or line == self.pressed_entry_line then
+    local text = self.buffer.lines[line] or ""
+    local width = math.max(0, self:get_col_x_offset(line, #text))
+    if width > 0 then
+      local color = line == self.pressed_entry_line
+        and (style.interactive_hover_overlay or style.interactive_hover_background)
+        or style.interactive_hover_background
+      renderer.draw_rect(x, y, width, self:get_line_height(), color)
+    end
+  end
   local result = FileTreeView.super.draw_line_body(self, line, x, y)
   perf_finish(stats, "filetree_draw_line_body_ms", start)
   return result
+end
+
+function FileTreeView:entry_row_at_point(x, y)
+  if self:scrollbar_hovering() or self:scrollbar_dragging() then return nil end
+  if x < self.position.x or y < self.position.y
+      or x >= self.position.x + self.size.x or y >= self.position.y + self.size.y
+  then
+    return nil
+  end
+
+  local line = self:resolve_screen_position(x, y)
+  local entry = self:entry_for_line(line)
+  if not entry then return nil end
+  local text = self.buffer.lines[line] or ""
+  if #text <= 1 then return nil end
+  local x1, y1 = self:get_line_screen_position(line, 1)
+  local x2 = self:get_line_screen_position(line, #text)
+  if y < y1 or y >= y1 + self:get_line_height() then return nil end
+  if x < math.min(x1, x2) or x >= math.max(x1, x2) then return nil end
+  return line, entry
+end
+
+function FileTreeView:on_mouse_moved(x, y, dx, dy)
+  local handled = FileTreeView.super.on_mouse_moved(self, x, y, dx, dy)
+  if self.mouse_selecting or self.hovering_gutter
+      or self:scrollbar_hovering() or self:scrollbar_dragging()
+  then
+    if self.hovered_entry_line then
+      self.hovered_entry_line = nil
+      core.redraw = true
+    end
+    return handled
+  end
+
+  local line = self:entry_row_at_point(x, y)
+  if line ~= self.hovered_entry_line then
+    self.hovered_entry_line = line
+    core.redraw = true
+  end
+  if line then self.cursor = "hand" end
+  return handled or line ~= nil
+end
+
+function FileTreeView:on_mouse_left()
+  FileTreeView.super.on_mouse_left(self)
+  if self.hovered_entry_line then
+    self.hovered_entry_line = nil
+    core.redraw = true
+  end
+end
+
+function FileTreeView:on_mouse_pressed(button, x, y, clicks)
+  self.pressed_entry_line = nil
+  self.pressed_entry_clicks = 0
+  local modified = keymap.modkeys.ctrl or keymap.modkeys.cmd or keymap.modkeys.shift
+  local line = button == "left" and not modified and self:entry_row_at_point(x, y) or nil
+  if not line then return FileTreeView.super.on_mouse_pressed(self, button, x, y, clicks) end
+
+  local text = self.buffer.lines[line] or ""
+  self.buffer:clear_search_selections()
+  self.buffer:set_selection(line, 1, line, #text)
+  self.mouse_selecting = nil
+  self.pressed_entry_line = line
+  self.pressed_entry_clicks = clicks or 1
+  core.blink_reset()
+  core.redraw = true
+  return true
+end
+
+function FileTreeView:on_mouse_released(button, x, y)
+  local pressed_line = self.pressed_entry_line
+  if not pressed_line then
+    return FileTreeView.super.on_mouse_released(self, button, x, y)
+  end
+
+  local released_line = self:entry_row_at_point(x, y)
+  local clicks = self.pressed_entry_clicks or 1
+  self.pressed_entry_line = nil
+  self.pressed_entry_clicks = 0
+  FileTreeView.super.on_mouse_released(self, button, x, y)
+  core.redraw = true
+  if button == "left" and released_line == pressed_line and clicks >= 2 then
+    return self:open_item()
+  end
+  return true
 end
 
 function FileTreeView:project_path_line_color(line)

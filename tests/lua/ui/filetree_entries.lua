@@ -128,4 +128,65 @@ test.describe("File Tree entry snapshots", function()
     test.ok(result)
     test.equal(opened.opts.placement, "split")
   end)
+
+  test.it("selects a hovered file row with one click and opens it with two", function(context)
+    local root = setup_tree(context)
+    local entry = test.not_nil(find_entry("root.txt"))
+    filetree.position.x, filetree.position.y = 0, 0
+    filetree.size.x, filetree.size.y = 800, 600
+    filetree.scroll.x, filetree.scroll.y = 0, 0
+    filetree.scroll.to.x, filetree.scroll.to.y = 0, 0
+    local x, y = filetree:get_line_screen_position(entry.line, 1)
+    x = x + math.max(1, filetree:get_font():get_width("r") / 2)
+    y = y + filetree:get_line_height() / 2
+    local original_line = entry.line == 1 and 2 or 1
+    filetree.buffer:set_selection(original_line, 1)
+
+    filetree:on_mouse_moved(x, y, 0, 0)
+
+    test.equal(filetree.buffer:get_selection(true), original_line)
+    test.equal(filetree.cursor, "hand")
+    test.equal(filetree.hovered_entry_line, entry.line)
+
+    local opened
+    local original_open_file = core.open_file
+    core.open_file = function(path, opts)
+      opened = { path = path, opts = opts }
+      return {}
+    end
+    local ok, err = pcall(function()
+      test.ok(filetree:on_mouse_pressed("left", x, y, 1))
+      filetree:on_mouse_released("left", x, y)
+      test.is_nil(opened)
+      local line1, col1, line2, col2 = filetree.buffer:get_selection(true)
+      test.same({ line1, col1, line2, col2 }, {
+        entry.line, 1, entry.line, #(filetree.buffer.lines[entry.line] or ""),
+      })
+
+      test.ok(filetree:on_mouse_pressed("left", x, y, 2))
+      filetree:on_mouse_released("left", x, y)
+    end)
+    core.open_file = original_open_file
+    if not ok then error(err, 0) end
+
+    test.ok(common.path_equals(opened.path, root .. PATHSEP .. "root.txt"))
+  end)
+
+  test.it("toggles a folder from a double click", function(context)
+    setup_tree(context)
+    local entry = test.not_nil(find_entry("folder"))
+    filetree.position.x, filetree.position.y = 0, 0
+    filetree.size.x, filetree.size.y = 800, 600
+    filetree.scroll.x, filetree.scroll.y = 0, 0
+    filetree.scroll.to.x, filetree.scroll.to.y = 0, 0
+    local x, y = filetree:get_line_screen_position(entry.line, 1)
+    x = x + math.max(1, filetree:get_font():get_width("f") / 2)
+    y = y + filetree:get_line_height() / 2
+
+    test.ok(filetree:on_mouse_pressed("left", x, y, 2))
+    filetree:on_mouse_released("left", x, y)
+
+    test.ok(filetree.line_meta[entry.line].expanded)
+    test.not_nil(find_entry("child.txt"))
+  end)
 end)

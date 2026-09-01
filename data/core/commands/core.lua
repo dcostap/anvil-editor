@@ -2,6 +2,7 @@ local core = require "core"
 local config = require "core.config"
 local common = require "core.common"
 local command = require "core.command"
+local keymap = require "core.keymap"
 local LogView = require "core.logview"
 local panes = require "core.panes"
 
@@ -396,3 +397,30 @@ command.add_toggle("core:toggle_line_numbers", {
     config.show_line_numbers = enabled
   end,
 })
+
+local function text_capture_target()
+  local root = core.root_panel
+  local modal = root and root.modal_input_owner and root:modal_input_owner()
+  if modal then
+    if type(modal.open_text_capture) == "function" then return true, modal end
+    return false
+  end
+  local view = core.active_view
+  if view and type(view.open_text_capture) == "function" then
+    return true, view
+  end
+  return false
+end
+
+command.add(text_capture_target, {
+  ["core:open_text_capture"] = command.palette(function(target)
+    return target:open_text_capture()
+  end, {
+    keywords = { "text", "capture", "snapshot", "buffer" },
+    opens_view = true,
+  }),
+})
+
+keymap.add {
+  ["f2"] = "core:open_text_capture",
+}

@@ -81,4 +81,32 @@ test.describe("Fuzzy Searcher attention overlay", function()
     if previous_view then core.set_active_view(previous_view) end
     if not ok then error(err, 0) end
   end)
+
+  test.it("keeps hover separate from selection and activates on two clicks", function()
+    local picker = fuzzy_searcher.open_static_results("Results", {
+      { kind = "file", label = "first.lua", file = "first.lua" },
+      { kind = "file", label = "second.lua", file = "second.lua" },
+    })
+    picker.selected = 1
+    local metrics = picker:list_metrics()
+    local x = metrics.x + 20
+    local y = metrics.results_top + metrics.lh * 1.5
+    local confirmations = 0
+    picker.confirm = function() confirmations = confirmations + 1 end
+
+    picker:on_mouse_moved(x, y, 0, 0)
+
+    test.equal(picker.hovered_result, 2)
+    test.equal(picker.selected, 1)
+    test.equal(picker.cursor, "hand")
+
+    picker:on_mouse_pressed("left", x, y, 1)
+    picker:on_mouse_released("left", x, y)
+    test.equal(picker.selected, 2)
+    test.equal(confirmations, 0)
+
+    picker:on_mouse_pressed("left", x, y, 2)
+    picker:on_mouse_released("left", x, y)
+    test.equal(confirmations, 1)
+  end)
 end)

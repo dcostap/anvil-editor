@@ -268,7 +268,7 @@ test.describe("Terminal View", function()
     terminal_view.position.x, terminal_view.position.y = 0, 0
     terminal_view.size.x, terminal_view.size.y = 800, 64
 
-    test.ok(command.perform("terminal:open_text_capture"))
+    test.ok(command.perform("core:open_text_capture"))
 
     local capture = pane.current_view
     test.ok(capture and capture:extends(require "core.textview"))
@@ -311,7 +311,7 @@ test.describe("Terminal View", function()
       },
     }
 
-    test.ok(command.perform("terminal:open_text_capture"))
+    test.ok(command.perform("core:open_text_capture"))
 
     local capture = panes.active().current_view
     local render_line = test.not_nil(capture:get_line_render(2))
@@ -364,7 +364,7 @@ test.describe("Terminal View", function()
         [2] = { { col1 = 1, col2 = 8, fg = 0xa1b2c3, bold = true } },
       },
     }
-    test.ok(command.perform("terminal:open_text_capture"))
+    test.ok(command.perform("core:open_text_capture"))
     local source_pane = panes.active()
     local capture = source_pane.current_view
 
@@ -411,7 +411,7 @@ test.describe("Terminal View", function()
       cursor_col = 1,
       viewport_line = 1,
     }
-    test.ok(command.perform("terminal:open_text_capture"))
+    test.ok(command.perform("core:open_text_capture"))
     local capture = panes.active().current_view
     local old_cell_width = terminal_view.cell_width
     local old_cell_height = terminal_view.cell_height

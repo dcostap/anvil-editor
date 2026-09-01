@@ -4,13 +4,12 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local core = require "core"
-local Buffer = require "core.buffer"
 local file_context = require "core.file_context"
 local ime = require "core.ime"
 local keymap = require "core.keymap"
 local panes = require "core.panes"
 local style = require "core.style"
-local TextView = require "core.textview"
+local text_capture = require "core.text_capture"
 local text_poi_locations = require "core.text_poi_locations"
 local View = require "core.view"
 local view_icons = require "core.view_icons"
@@ -271,7 +270,7 @@ function TerminalView:get_name()
 end
 
 ---@class plugins.terminal.text_capture_view : core.textview
-local TerminalTextCaptureView = TextView:extend()
+local TerminalTextCaptureView = text_capture.View:extend()
 
 function TerminalTextCaptureView:__tostring() return "TerminalTextCaptureView" end
 
@@ -331,47 +330,40 @@ function TerminalTextCaptureView:new(source, capture)
     styles = capture.styles or {},
     title = terminal_title,
   }
-  local buffer = Buffer()
-  buffer.display_name = "Terminal Text"
-  buffer:insert(1, 1, capture.text)
-  buffer:clear_undo_redo()
-  buffer:clean()
-  local line = common.clamp(
-    math.floor(tonumber(capture.cursor_line) or 1), 1, #buffer.lines
-  )
-  local col = common.clamp(
-    math.floor(tonumber(capture.cursor_col) or 1), 1, #buffer.lines[line]
-  )
-  buffer:set_selection(line, col)
-  buffer.read_only = true
-  buffer.read_only_reason = "Terminal text captures are read-only"
-
-  TerminalTextCaptureView.super.new(self, buffer)
-  self.context = "workspace"
+  TerminalTextCaptureView.super.new(self, {
+    text = capture.text,
+    title = terminal_title,
+    display_name = "Terminal Text",
+    cursor_line = capture.cursor_line,
+    cursor_col = capture.cursor_col,
+    viewport_line = capture.viewport_line,
+    font = "terminal_font",
+    show_line_numbers = false,
+    wrapping = false,
+    read_only_reason = "Terminal text captures are read-only",
+  })
   self.terminal_text_capture = true
   self.terminal_title = terminal_title
   self.terminal_capture = capture
-  self.font = "terminal_font"
   self.color_cache = {}
   self.terminal_foreground = rgb(self, capture.foreground, style.text)
   self.terminal_background = rgb(self, capture.background, style.background)
   self.terminal_capture_styles = capture.styles or {}
-  self.show_line_numbers = false
   self.gutter_padding = PADDING
-  self:set_wrapping_enabled(false)
   self:add_line_render_provider(
     "terminal-text-capture-styles", terminal_capture_style_provider
   )
+  local line, col = self.buffer:get_selection()
   self.last_line1, self.last_col1 = line, col
   self.last_line2, self.last_col2 = line, col
   local viewport_line = common.clamp(
-    math.floor(tonumber(capture.viewport_line) or 1), 1, #buffer.lines
+    math.floor(tonumber(capture.viewport_line) or 1), 1, #self.buffer.lines
   )
   self.scroll.y = (viewport_line - 1) * self:get_line_height()
   self.scroll.to.y = self.scroll.y
   core.log_quiet(
     "Terminal text capture opened: lines=%d cursor=%d:%d viewport=%d",
-    #buffer.lines, line, col, viewport_line
+    #self.buffer.lines, line, col, viewport_line
   )
 end
 
@@ -1671,12 +1663,6 @@ end, {
     view:refresh_snapshot()
     return true
   end),
-  ["terminal:open_text_capture"] = command.palette(function(view)
-    return view:open_text_capture()
-  end, {
-    keywords = { "navigate", "buffer", "scrollback", "text" },
-    opens_view = true,
-  }),
   ["terminal:start_vt_trace"] = command.palette(function(view)
     return view:start_vt_trace()
   end, {
@@ -1696,7 +1682,6 @@ keymap.add({
   ["ctrl+shift+c"] = "terminal:copy",
   ["ctrl+shift+v"] = "terminal:paste",
   ["ctrl+shift+f"] = { "terminal:search", "fuzzy:open_grep" },
-  ["f2"] = "terminal:open_text_capture",
   ["f3"] = "terminal:search_next",
   ["shift+f3"] = "terminal:search_previous",
   ["ctrl+shift+k"] = "terminal:clear",
