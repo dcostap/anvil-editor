@@ -862,6 +862,12 @@ local function buffer_should_suppress_disk(buffer)
   return false
 end
 
+local function buffer_can_overlay_project_index(buffer)
+  return buffer
+    and not buffer.disable_language_services
+    and not buffer.disable_treesitter
+end
+
 local function has_pending_open_buffer_overlay(index)
   return index and index.open_buffer_jobs and next(index.open_buffer_jobs) ~= nil
 end
@@ -892,7 +898,8 @@ overlay_entry_current = function(entry)
   local buffer = entry.buffer
   local ts = buffer.treesitter
   local change_id = buffer.get_change_id and buffer:get_change_id() or 0
-  return ts and ts.status == "ready" and entry.change_id == change_id
+  return buffer_can_overlay_project_index(buffer)
+    and ts and ts.status == "ready" and entry.change_id == change_id
 end
 
 local function partial_snapshot_symbols(index, max_items)
@@ -1887,6 +1894,7 @@ local function cancel_open_buffer_job(index, path)
 end
 
 local function submit_open_buffer_overlay(index, buffer, path, reason)
+  if not buffer_can_overlay_project_index(buffer) then return false, "disabled" end
   local ts = buffer and buffer.treesitter
   if not ts or ts.status ~= "ready" then return false, "not-ready" end
   local language = ts.language
@@ -2027,7 +2035,11 @@ refresh_open_buffer_overlays = function(index)
       seen[path] = true
       local current = index.open_buffers[path]
       local change_id = buffer.get_change_id and buffer:get_change_id() or 0
-      if not current or current.buffer ~= buffer or current.change_id ~= change_id then
+      if not buffer_can_overlay_project_index(buffer) then
+        local job = index.open_buffer_jobs and index.open_buffer_jobs[path]
+        if job then cancel_open_buffer_job(index, path); changed = true end
+        if current then index.open_buffers[path] = nil; changed = true end
+      elseif not current or current.buffer ~= buffer or current.change_id ~= change_id then
         local scheduled = submit_open_buffer_overlay(index, buffer, path, "refresh")
         changed = scheduled or changed
       end

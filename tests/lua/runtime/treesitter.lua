@@ -97,6 +97,7 @@ local function seed_open_buffer_overlay(index, path, entry)
     treesitter = { status = "ready" },
     get_change_id = function() return change_id end,
     is_dirty = function() return false end,
+    disable_language_services = entry.disable_language_services,
     on_close = function() end,
   }
   index.open_buffers[path] = common.merge({
@@ -865,6 +866,36 @@ class VendorThing
     test.is_nil(symbols)
     test.equal(reason, "query-too-large")
     test.equal(status, "pending")
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter Project Symbol Search ignores disabled language service Buffer overlays", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-clean-overlay-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_symbol_index(root, { "CleanThing" })
+    local path = common.normalize_path(root .. PATHSEP .. "CleanThing.kt")
+    local buffer = seed_open_buffer_overlay(index, path, {
+      disable_language_services = true,
+      symbols = {
+        { name = "WrongThing", text = "WrongThing", kind = "class", path = path,
+          file = "CleanThing.kt", relpath = "CleanThing.kt", start_line = 99, start_col = 1 },
+      },
+    })
+    symbol_index.remember_open_buffer(buffer)
+
+    local symbols, reason, status = symbol_index.workspace_symbols("CleanThing", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#symbols, 1)
+    test.equal(symbols[1].name, "CleanThing")
+    test.equal(symbols[1].start_line, 1)
+    symbol_index.clear_open_buffer(buffer, "test")
+    symbol_index.reset_for_tests()
     common.rm(root, true)
   end)
 
