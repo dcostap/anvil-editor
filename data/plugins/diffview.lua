@@ -1812,13 +1812,13 @@ function DiffView:update()
   self.buffer_view_b.size.x = math.max(0, (self.size.x / 2) - divider_half)
   self.buffer_view_b.size.y = math.max(0, self.size.y - header_height)
 
-  call_textview_method(self.buffer_view_a, self.buffer_view_a.update)
-  call_textview_method(self.buffer_view_b, self.buffer_view_b.update)
   self:refresh_core_gap_rows(false)
   if self.pending_first_change_reveal and self.diff_model then
     self.pending_first_change_reveal = false
     self:reveal_first_change()
   end
+  call_textview_method(self.buffer_view_a, self.buffer_view_a.update)
+  call_textview_method(self.buffer_view_b, self.buffer_view_b.update)
 end
 
 function DiffView:draw()
@@ -1833,6 +1833,15 @@ function DiffView:draw()
   if self.comparison_message then
     renderer.draw_text(
       style.prose_font, self.comparison_message,
+      self.position.x + style.padding.x,
+      self.position.y + (self.diff_header_height or 0) + style.padding.y,
+      style.dim
+    )
+    return
+  end
+  if not self.diff_model or self.pending_first_change_reveal then
+    renderer.draw_text(
+      style.prose_font, "Computing differences...",
       self.position.x + style.padding.x,
       self.position.y + (self.diff_header_height or 0) + style.padding.y,
       style.dim

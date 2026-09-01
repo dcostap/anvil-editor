@@ -322,6 +322,7 @@ test.describe("DiffView batch behavior", function()
     local line = view.buffer_view_b.buffer:get_selection()
     test.equal(line, 41)
     test.ok(view.buffer_view_b.scroll.to.y > 0)
+    test.ok(view.buffer_view_b.v_scrollbar.percent > 0)
   end)
 
   test.it("rejects invalid diff requests deterministically", function()
