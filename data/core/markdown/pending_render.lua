@@ -24,7 +24,8 @@ local CALLOUT_ICONS = {
 function pending_render.current_source(
   view, line, previous, current_text, code,
   source_fallback, prose_render, scaled_font, heading_from_source, heading_font,
-  thematic_break_fragment, reveal_code_delimiter, code_render
+  thematic_break_fragment, quote_prefix_fragment, reveal_code_delimiter,
+  code_render
 )
   local function inline_fragments(text, base_col)
     local fragments = {}
@@ -280,12 +281,7 @@ function pending_render.current_source(
       local fragments = inline_fragments(
         current_text:sub(content_col1), content_col1
       )
-      table.insert(fragments, 1, {
-        source_col1 = 1,
-        source_col2 = content_col1,
-        text = "│ ",
-        color = style.markdown_live_quote_bar,
-      })
+      table.insert(fragments, 1, quote_prefix_fragment(view, 1, content_col1))
       if #fragments == 1 and content_col1 <= #current_text then
         fragments[#fragments + 1] = {
           source_col1 = content_col1,

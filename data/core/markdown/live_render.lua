@@ -2119,6 +2119,30 @@ function live.thematic_break_fragment(view, col1, col2, semantic_id)
   }
 end
 
+function live.quote_prefix_fragment(view, col1, col2, semantic_id)
+  local width = math.max(
+    math.floor(8 * SCALE), markdown_live_body_font(view):get_width("  ")
+  )
+  return {
+    source_col1 = col1, source_col2 = col2,
+    text = "", width = width,
+    widget = {
+      wrapping = "inline", width = width,
+      draw = function(_, _, x, y, visual_row_height)
+        local thickness = math.max(2, math.floor(2 * SCALE))
+        local padding = math.max(1, math.floor(2 * SCALE))
+        local height = math.max(thickness, visual_row_height - padding * 2)
+        renderer.draw_rounded_rect(
+          x, y + padding, thickness, height, thickness / 2,
+          style.markdown_live_quote_bar
+        )
+      end,
+    },
+    semantic_id = semantic_id,
+    quote_prefix = true,
+  }
+end
+
 local function table_geometry_key(font, available_width)
   return table.concat({
     tostring(font), tostring(font:get_size()), tostring(available_width),
@@ -3128,11 +3152,9 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       local col1, col2 = line_text:find("^%s*>%s*")
       if col1 then
         seen.quote = true
-        fragments[#fragments + 1] = {
-          source_col1 = col1, source_col2 = col2 + 1,
-          text = "│ ", color = style.markdown_live_quote_bar,
-          semantic_id = node.id,
-        }
+        fragments[#fragments + 1] = live.quote_prefix_fragment(
+          view, col1, col2 + 1, node.id
+        )
       end
     elseif node.type == "list" or node.type == "list_item" then
       local task = attributes.task_checked or attributes.task_unchecked
@@ -4049,6 +4071,7 @@ local function pending_source_render(view, line, render_line, current_text, code
     view, line, render_line, current_text, code,
     raw_pending_source_render, prose_render_line, markdown_live_scaled_font,
     heading_for_line, heading_font, live.thematic_break_fragment,
+    live.quote_prefix_fragment,
     reveal_code_delimiter,
     pending_fenced_code_render
   )
