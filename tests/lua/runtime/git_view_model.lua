@@ -997,6 +997,26 @@ test.describe("plugins.git.model", function()
     test.equal(tab.diff_generation, 5)
   end)
 
+  test.it("keeps the same diff generation when refreshed content is unchanged", function()
+    local model = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()) })
+    local tab = {
+      kind = "commit_diff",
+      left = "old-revision",
+      right = "new-revision",
+      changed_files = {
+        { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" },
+      },
+      selected_file = 1,
+      diff_generation = 0,
+    }
+
+    test.ok(model:load_selected_diff_file(tab))
+    local generation = tab.diff_generation
+    test.ok(model:load_selected_diff_file(tab))
+
+    test.equal(tab.diff_generation, generation)
+  end)
+
   test.test("normalizes CRLF before storing diff text", function()
     local status = table.concat({ " M src/app.lua", "" }, "\0")
     local backend = fake_backend(status, log_output())

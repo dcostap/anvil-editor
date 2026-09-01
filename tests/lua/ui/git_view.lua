@@ -883,6 +883,40 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_pane, "file-list")
   end)
 
+  test.it("preserves Diff Side scroll when changed content replaces the viewer", function(context)
+    local _, view = open_fake_git_view(context.project)
+    local tab = {
+      id = "diff-scroll-reload",
+      kind = "commit_diff",
+      title = "Diff scroll reload",
+      closable = true,
+      changed_files = { { status = "modified", old_path = "a.lua", new_path = "a.lua" } },
+      selected_file = 1,
+      left_text = "old\n",
+      right_text = "new\n",
+      left_name = "a.lua",
+      right_name = "a.lua",
+      diff_generation = 1,
+    }
+    local first = view:ensure_diff_view(tab)
+    first.buffer_view_a.scroll.x, first.buffer_view_a.scroll.to.x = 24, 28
+    first.buffer_view_a.scroll.y, first.buffer_view_a.scroll.to.y = 320, 324
+    first.buffer_view_b.scroll.x, first.buffer_view_b.scroll.to.x = 12, 16
+    first.buffer_view_b.scroll.y, first.buffer_view_b.scroll.to.y = 320, 324
+
+    tab.left_text = "replaced old\n"
+    tab.right_text = "replaced new\n"
+    tab.diff_generation = 2
+    local replacement = view:ensure_diff_view(tab)
+
+    test.ok(replacement ~= first)
+    test.same(replacement.buffer_view_a.scroll, { x = 24, y = 320, to = { x = 28, y = 324 } })
+    test.same(replacement.buffer_view_b.scroll, { x = 12, y = 320, to = { x = 16, y = 324 } })
+    test.equal(replacement.pending_first_change_reveal, false)
+    replacement:dispose_integrations()
+    replacement:dispose_owned_buffers()
+  end)
+
   test.it("uses old and new paths for renamed Git Diff Sides", function(context)
     local session, view = open_fake_git_view(context.project)
     local tab = {

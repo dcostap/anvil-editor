@@ -1367,7 +1367,21 @@ function GitView:ensure_diff_view(tab)
     end
     return tab.diff_view
   end
+  local presentation
   if tab.diff_view then
+    local old = tab.diff_view
+    local function scroll_state(side)
+      return {
+        x = side.scroll.x,
+        y = side.scroll.y,
+        to_x = side.scroll.to.x,
+        to_y = side.scroll.to.y,
+      }
+    end
+    presentation = {
+      left = scroll_state(old.buffer_view_a),
+      right = scroll_state(old.buffer_view_b),
+    }
     tab.diff_view:dispose_integrations()
     tab.diff_view:dispose_owned_buffers()
   end
@@ -1400,6 +1414,7 @@ function GitView:ensure_diff_view(tab)
     },
     content_titles = { left = tab.left_name, right = tab.right_name },
     editable_policy = "content",
+    auto_reveal_first_change = presentation == nil,
     user_data = {
       source = "git",
       tab = tab,
@@ -1417,6 +1432,14 @@ function GitView:ensure_diff_view(tab)
       end,
     },
   }, true)
+  if presentation then
+    local function restore_scroll(side, state)
+      side.scroll.x, side.scroll.y = state.x, state.y
+      side.scroll.to.x, side.scroll.to.y = state.to_x, state.to_y
+    end
+    restore_scroll(view.buffer_view_a, presentation.left)
+    restore_scroll(view.buffer_view_b, presentation.right)
+  end
   tab.diff_view = view
   tab.diff_view_seen_generation = tab.diff_generation
   if view.buffer_view_a then view.buffer_view_a.git_owner_view = self end

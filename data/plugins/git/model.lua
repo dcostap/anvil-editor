@@ -962,6 +962,7 @@ function Model:clear_diff_content(tab)
   tab.file_error = nil
   tab.left_text, tab.right_text = nil, nil
   tab.left_current_path, tab.right_current_path = nil, nil
+  tab.loaded_left_revision, tab.loaded_right_revision = nil, nil
   tab.non_text = nil
   tab.left_name, tab.right_name = nil, nil
   tab.diff_view = nil
@@ -1210,6 +1211,7 @@ function Model:load_selected_diff_file(tab, callback)
     tab.file_error = nil
     tab.left_text, tab.right_text = nil, nil
     tab.left_current_path, tab.right_current_path = nil, nil
+    tab.loaded_left_revision, tab.loaded_right_revision = nil, nil
     tab.left_name = path_for_file(file, "left") or "File did not exist"
     tab.right_name = path_for_file(file, "right") or "File did not exist"
     tab.non_text = {
@@ -1237,14 +1239,32 @@ function Model:load_selected_diff_file(tab, callback)
     tab.file_loading_started_at = nil
     tab.file_error = file_err
     if not file_err then
-      tab.left_text = normalize_for_diff(left_text)
-      tab.right_text = normalize_for_diff(right_text)
+      local next_left_text = normalize_for_diff(left_text)
+      local next_right_text = normalize_for_diff(right_text)
+      local next_left_name = path_for_file(file, "left") or "<empty>"
+      local next_right_name = path_for_file(file, "right") or "<empty>"
+      local content_changed = tab.left_text ~= next_left_text
+        or tab.right_text ~= next_right_text
+        or tab.left_current_path ~= left_current_path
+        or tab.right_current_path ~= right_current_path
+        or tab.left_name ~= next_left_name
+        or tab.right_name ~= next_right_name
+        or tab.loaded_left_revision ~= tab.left
+        or tab.loaded_right_revision ~= tab.right
+      tab.left_text = next_left_text
+      tab.right_text = next_right_text
       tab.left_current_path = left_current_path
       tab.right_current_path = right_current_path
       tab.non_text = nil
-      tab.left_name = path_for_file(file, "left") or "<empty>"
-      tab.right_name = path_for_file(file, "right") or "<empty>"
-      tab.diff_generation = (tab.diff_generation or 0) + 1
+      tab.left_name = next_left_name
+      tab.right_name = next_right_name
+      tab.loaded_left_revision = tab.left
+      tab.loaded_right_revision = tab.right
+      if content_changed then
+        tab.diff_generation = (tab.diff_generation or 0) + 1
+      else
+        core.log_quiet("Git Diff retained unchanged content for %s", tostring(tab.selected_file_path or next_right_name))
+      end
     end
     if callback then callback(self, file_err) end
     if self.on_update then self.on_update(self) end
