@@ -138,14 +138,38 @@ function M.get_scaled_max_width(view)
   return max_width
 end
 
-function M.get_lane_rect(view)
+local function get_base_lane_rect(view)
   local cfg = settings()
   local max_width = M.get_scaled_max_width(view)
   if max_width <= 0 then max_width = view.size.x end
   local min_margin = tonumber(cfg.min_margin) or 0
   if cfg.scale_width ~= false then min_margin = min_margin * SCALE end
   local available = math.max(0, view.size.x - min_margin * 2)
-  local lane_width = math.min(view.size.x, math.max(0, math.min(max_width, available)))
+  local lane_width = math.min(
+    view.size.x,
+    math.max(0, math.min(max_width, available))
+  )
+  local lane_x = view.position.x + math.floor((view.size.x - lane_width) / 2)
+  return lane_x, lane_width, available, max_width
+end
+
+function M.get_lane_rect(view)
+  local base_x, base_width, available, max_width = get_base_lane_rect(view)
+  if M.wrapping_limits_to_lane(view)
+  or view.__centered_editor_measuring_content then
+    return base_x, base_width
+  end
+
+  local old_measuring = view.__centered_editor_measuring_content
+  view.__centered_editor_measuring_content = true
+  local ok, content_width = pcall(view.get_h_content_size, view)
+  view.__centered_editor_measuring_content = old_measuring
+  if not ok then error(content_width, 0) end
+
+  local lane_width = math.min(
+    view.size.x,
+    math.max(0, math.min(math.max(max_width, content_width), available))
+  )
   local lane_x = view.position.x + math.floor((view.size.x - lane_width) / 2)
   return lane_x, lane_width
 end
@@ -244,6 +268,10 @@ end
 save_textview_method("get_presentation_viewport_width")
 function TextView:get_presentation_viewport_width(...)
   if self.__centered_editor_in_geometry then return self.size.x end
+  if self.__centered_editor_measuring_content then
+    local base_x = get_base_lane_rect(self)
+    return self.position.x + self.size.x - base_x
+  end
   if M.should_center(self) then
     local _, width = M.get_editor_rect(self)
     return width

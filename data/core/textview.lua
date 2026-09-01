@@ -1717,9 +1717,9 @@ local function get_max_line_render_horizontal_extent(self)
   return width
 end
 
----Get the scrollable width for unwrapped text or overflowing rendered content.
----@return number width Total horizontal scrollable width in pixels
-function TextView:get_h_scrollable_size()
+---Get the natural width of unwrapped text or overflowing rendered content.
+---@return number width Horizontal content width in pixels
+function TextView:get_h_content_size()
   local presentation_width = get_max_line_render_horizontal_extent(self)
   if self.wrapping_enabled and presentation_width <= 0 then return 0 end
   local gutter_width = self:get_gutter_width()
@@ -1729,7 +1729,14 @@ function TextView:get_h_scrollable_size()
   if not self.wrapping_enabled then
     text_width = get_max_unwrapped_line_width(self) or 0
   end
-  local content_width = gutter_width + math.max(text_width, presentation_width) + right_padding
+  return gutter_width + math.max(text_width, presentation_width) + right_padding
+end
+
+---Get the scrollable width for unwrapped text or overflowing rendered content.
+---@return number width Total horizontal scrollable width in pixels
+function TextView:get_h_scrollable_size()
+  local content_width = self:get_h_content_size()
+  if self.wrapping_enabled and content_width <= 0 then return 0 end
   return math.max(self.size.x, content_width)
 end
 
