@@ -170,18 +170,22 @@ test.describe("TextView Prompt Bar find", function()
     test.equal(changes, 1)
   end)
 
-  test.it("does not draw the selection occurrence highlight over local find matches", function(context)
+  test.it("does not draw competing highlights over local find matches", function(context)
     local view = open_editor(context, "pl pl\n")
     test.ok(command.perform("editor:find"))
     type_into_active_view("pl")
+    view:prepare_line_body_draw_cache(1, 1)
 
     local selection_highlights = 0
+    local current_line_highlights = 0
     local old_draw_rect = renderer.draw_rect
     local old_draw_text = renderer.draw_text
     local old_draw_text_known_bounds = renderer.draw_text_known_bounds
     renderer.draw_rect = function(x, y, w, h, color)
       if color == style.selectionhighlight then
         selection_highlights = selection_highlights + 1
+      elseif color == style.line_highlight then
+        current_line_highlights = current_line_highlights + 1
       end
     end
     renderer.draw_text = function(font, text, x)
@@ -197,6 +201,7 @@ test.describe("TextView Prompt Bar find", function()
     if not ok then error(err, 0) end
 
     test.equal(selection_highlights, 0)
+    test.equal(current_line_highlights, 0)
   end)
 
   test.it("splits find highlights across Wrapped Visual Rows", function(context)

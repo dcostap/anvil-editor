@@ -937,9 +937,12 @@ local function make_local_find_draw_line_body(base)
     end
 
     local old_local_find_active = self.local_find_active
+    local old_show_current_line_highlight = self.show_current_line_highlight
     self.local_find_active = state ~= nil
+    if state then self.show_current_line_highlight = false end
     local lh = base(self, line, x, y)
     self.local_find_active = old_local_find_active
+    self.show_current_line_highlight = old_show_current_line_highlight
 
     if line_matches and #line_matches > 0 then
       for _, idx in ipairs(line_matches) do
@@ -961,7 +964,14 @@ local function make_local_find_draw(base)
 
     local old_depth = TextView.__local_find_draw_depth or 0
     TextView.__local_find_draw_depth = old_depth + 1
+    local state = visible_find_state(self)
+    local old_local_find_active = self.local_find_active
+    local old_show_current_line_highlight = self.show_current_line_highlight
+    self.local_find_active = state ~= nil
+    if state then self.show_current_line_highlight = false end
     local result = base(self, ...)
+    self.local_find_active = old_local_find_active
+    self.show_current_line_highlight = old_show_current_line_highlight
     if result ~= false then
       core.push_clip_rect(self.position.x, self.position.y, self.size.x, self.size.y)
       draw_local_find(self)
