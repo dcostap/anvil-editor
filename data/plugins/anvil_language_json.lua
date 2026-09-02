@@ -16,7 +16,7 @@ end
 
 syntax.add {
   name = "JSON",
-  files = { "%.json$", "%.geojson$", "%.topojson$" },
+  files = { "%.json$", "%.jsonc$", "%.geojson$", "%.topojson$" },
   detect_content = detect_json,
   patterns = {
     { regex = [["(?:[^"\\]|\\.)*"()\s*:]], type = { "keyword", "normal" } },

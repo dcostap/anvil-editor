@@ -1279,6 +1279,7 @@ local function push_batch_undo(undo_stack, time, transaction, before_selections,
     after_selections = after_selections,
     after_last_selection = after_last_selection,
     edits = transaction.inverse_edits,
+    merge_undo = transaction.merge_undo,
   }
   undo_stack[undo_stack.idx - config.max_undos] = nil
   undo_stack.idx = undo_stack.idx + 1
@@ -1359,7 +1360,8 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
   -- if next undo command is within the merge timeout then treat as a single
   -- command and continue to execute it
   local next = undo_stack[undo_stack.idx - 1]
-  if next and math.abs(cmd.time - next.time) < config.undo_merge_timeout then
+  if next and cmd.merge_undo ~= false and next.merge_undo ~= false
+      and math.abs(cmd.time - next.time) < config.undo_merge_timeout then
     return pop_undo(self, undo_stack, redo_stack, modified)
   end
 
@@ -1528,6 +1530,7 @@ function Buffer:apply_edits(edits, opts)
     old_last_selection = old_last_selection,
     new_last_selection = old_last_selection,
     selection_owner_id = owner_id,
+    merge_undo = opts.merge_undo,
   }
 
   if type(edits) ~= "table" then

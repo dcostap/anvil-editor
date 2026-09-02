@@ -41,7 +41,7 @@ fi
 
 cp "$anvil_exe" "$bindir/$exe_name"
 
-for module_name in core compat plugins colors fonts widget treesitter; do
+for module_name in core compat plugins colors fonts widget treesitter tools; do
   cp -R "$sourcedir/data/$module_name" "$datadir/"
 done
 mkdir -p "$datadir/icons"

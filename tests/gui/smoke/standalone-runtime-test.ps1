@@ -24,6 +24,7 @@ $userRoot = Join-Path $testRoot "user"
 $oldRuntimeRoot = $env:ANVIL_EMBEDDED_RUNTIME_ROOT
 $oldUserDir = $env:ANVIL_USERDIR
 $oldHeadless = $env:ANVIL_HEADLESS_TEST
+$oldDprintCache = $env:DPRINT_CACHE_DIR
 
 try {
   New-Item -ItemType Directory -Path $testRoot | Out-Null
@@ -32,6 +33,7 @@ try {
   $env:ANVIL_EMBEDDED_RUNTIME_ROOT = $runtimeRoot
   $env:ANVIL_USERDIR = $userRoot
   $env:ANVIL_HEADLESS_TEST = "1"
+  $env:DPRINT_CACHE_DIR = Join-Path $userRoot "dprint-cache"
 
   $helpOutput = (& $copyPath --help 2>&1 | Out-String)
   Assert-True ($LASTEXITCODE -eq 0) "The standalone executable crashed while printing command-line help."
@@ -56,6 +58,18 @@ try {
   Assert-True ($null -ne $ripgrep) "The embedded runtime did not extract its ripgrep helper."
   & $ripgrep.FullName --version | Out-Null
   Assert-True ($LASTEXITCODE -eq 0) "The extracted ripgrep helper did not run."
+
+  $dprint = Get-ChildItem -LiteralPath $runtimeRoot -Filter "dprint.exe" -File -Recurse |
+    Where-Object { $_.FullName -match "[\\/]data[\\/]tools[\\/]dprint[\\/]dprint\.exe$" } |
+    Select-Object -First 1
+  Assert-True ($null -ne $dprint) "The embedded runtime did not extract its dprint formatter."
+  $dprintConfig = Join-Path $dprint.Directory.FullName "anvil.json"
+  Assert-True (Test-Path $dprintConfig) "The embedded runtime omitted the dprint configuration."
+  $dprintPlugins = Get-ChildItem -LiteralPath (Join-Path $dprint.Directory.FullName "plugins") -Filter "*.wasm" -File
+  Assert-True ($dprintPlugins.Count -eq 4) "The embedded runtime did not extract all dprint plugins."
+  $formatOutput = ('{"one":1}' | & $dprint.FullName fmt --log-level silent --config $dprintConfig --stdin sample.json | Out-String)
+  Assert-True ($LASTEXITCODE -eq 0) "The extracted dprint formatter did not run."
+  Assert-True ($formatOutput.Contains('{ "one": 1 }')) "The extracted dprint formatter returned unexpected JSON."
 
   $marker = Get-ChildItem -LiteralPath $runtimeRoot -Filter ".complete" -File -Recurse |
     Select-Object -First 1
@@ -84,5 +98,6 @@ finally {
   $env:ANVIL_EMBEDDED_RUNTIME_ROOT = $oldRuntimeRoot
   $env:ANVIL_USERDIR = $oldUserDir
   $env:ANVIL_HEADLESS_TEST = $oldHeadless
+  $env:DPRINT_CACHE_DIR = $oldDprintCache
   Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

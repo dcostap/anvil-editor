@@ -416,7 +416,7 @@ install_subdir('resources/icons' , install_dir : anvil_datadir)
 
 fs = import('fs')
 
-data_dirs = ['fonts', 'plugins', 'colors', 'widget', 'treesitter']
+data_dirs = ['fonts', 'plugins', 'colors', 'widget', 'treesitter', 'tools']
 if lua_compat_needed
     data_dirs += ['compat']
 endif

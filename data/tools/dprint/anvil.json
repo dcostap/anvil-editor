@@ -1,0 +1,8 @@
+{
+  "plugins": [
+    "./plugins/json-0.23.0.wasm",
+    "./plugins/toml-0.8.0.wasm",
+    "./plugins/pretty_yaml-0.6.0.wasm",
+    "./plugins/markup_fmt-0.27.3.wasm"
+  ]
+}

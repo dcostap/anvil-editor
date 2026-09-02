@@ -112,6 +112,10 @@ _Avoid_: scratch buffer, unnamed file
 The language Anvil uses to interpret a Buffer for syntax highlighting and other language-aware behavior. It is normally detected from the file name or content, but a Buffer may have an explicit Language Mode override.
 _Avoid_: File type, syntax mode
 
+**Document Formatting**:
+The action that applies a Language Mode's standard layout to the complete Buffer while preserving its meaning.
+_Avoid_: Reformat Code, pretty printing
+
 **Text View**:
 A View that presents a Buffer through text navigation and selection behavior. It can allow edits with specialized effects.
 _Avoid_: Document View, DocView, buffer view

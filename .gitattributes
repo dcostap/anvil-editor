@@ -6,3 +6,6 @@
 winlib/*  linguist-vendored
 src/lib/* linguist-vendored
 resources/icons/icon.inl linguist-vendored
+data/tools/dprint/** linguist-vendored
+data/tools/dprint/*.exe -text
+data/tools/dprint/plugins/*.wasm -text

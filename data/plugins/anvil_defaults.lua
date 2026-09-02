@@ -23,6 +23,7 @@ local core_plugins = {
   centered_editor = true,
   custom_nagview = true,
   custom_welcome = true,
+  document_format = true,
   filetree = true,
   project_paths_view = true,
   global_prompt_bar_sanitize = true,
@@ -192,6 +193,7 @@ plugin_defaults("trimwhitespace", {
 require_core_plugin "intellij_actions"
 reload_core_plugin "global_prompt_bar_sanitize"
 require_core_plugin "intellij_find"
+require_core_plugin "document_format"
 require_core_plugin "untitled_recovery"
 require_core_plugin "untitled_tabs"
 reload_core_plugin "scale_debug_log"

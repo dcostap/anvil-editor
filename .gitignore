@@ -12,6 +12,7 @@ subprojects/.wraplock
 .run*
 *.diff
 *.exe
+!data/tools/dprint/dprint.exe
 *.tar.gz
 *.zip
 *.DS_Store
