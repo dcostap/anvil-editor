@@ -81,6 +81,37 @@ function transition.state(view, now)
   return eased, 1 + (START_SCALE - 1) * (1 - eased), eased > 0
 end
 
+function transition.begin_close(view, now)
+  now = now or system.get_time()
+  local opacity, scale, visible = transition.state(view, now)
+  if not enabled() or not visible or opacity <= 0 then return false end
+
+  view.close_transition_started_at = now
+  view.close_transition_start_opacity = opacity
+  view.close_transition_start_scale = scale
+  core.redraw = true
+  core.log_quiet("Fuzzy Searcher: closing transition started")
+  return true
+end
+
+function transition.close_state(view, now)
+  if not enabled() then return 0, START_SCALE, false, true end
+  now = now or system.get_time()
+  local progress = common.clamp(
+    (now - view.close_transition_started_at) / DURATION_SECONDS, 0, 1
+  )
+  local eased = cubic_ease_out(progress)
+  local opacity = view.close_transition_start_opacity * (1 - eased)
+  local scale = view.close_transition_start_scale
+    + (START_SCALE - view.close_transition_start_scale) * eased
+  if progress < 1 then
+    core.redraw = true
+  else
+    core.log_quiet("Fuzzy Searcher: closing transition complete")
+  end
+  return opacity, scale, opacity > 0, progress >= 1
+end
+
 function transition.draw(view, opacity, scale, draw)
   if opacity >= 1 and scale == 1 then return draw() end
 

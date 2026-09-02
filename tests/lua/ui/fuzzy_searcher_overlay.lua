@@ -92,6 +92,46 @@ test.describe("Fuzzy Searcher attention overlay", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("keeps the complete Fuzzy Searcher visible during its closing transition", function()
+    local now = 200
+    local original_get_time = system.get_time
+    local original_fps = core.fps
+    local original_live_resize = core.in_live_resize_frame
+    local picker
+
+    config.transitions = true
+    config.disabled_transitions.fuzzy_searcher = false
+    core.fps = 60
+    core.in_live_resize_frame = false
+    system.get_time = function() return now end
+
+    local ok, err = pcall(function()
+      picker = fuzzy_searcher.open_static_results("Results", {
+        { kind = "command", label = "core:open", command = "core:open" },
+      })
+      picker:update()
+      picker:opening_transition()
+      now = now + 1
+      picker:opening_transition()
+
+      picker:close()
+      test.ok(picker:is_visible(), "the Searcher must remain visible while its close transition runs")
+
+      now = now + 1
+      picker:update()
+      test.not_ok(picker:is_visible(), "the Searcher must hide after its close transition")
+    end)
+
+    if picker and picker:is_visible() then
+      now = now + 1
+      pcall(function() picker:update() end)
+    end
+    system.get_time = original_get_time
+    core.fps = original_fps
+    core.in_live_resize_frame = original_live_resize
+    if not ok then error(err, 0) end
+  end)
+
   test.it("dims the app while open and releases the overlay after closing", function()
     local root = core.root_panel
     local overlay_drawn = false

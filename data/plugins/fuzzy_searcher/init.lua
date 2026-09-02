@@ -3886,6 +3886,10 @@ function FSView:opening_transition(now)
   return fuzzy_searcher.open_transition.state(self, now)
 end
 
+function FSView:closing_transition(now)
+  return fuzzy_searcher.open_transition.close_state(self, now)
+end
+
 local function draw_preview_debug(view, result, x, y, w, h)
   if not fuzzy_searcher.preview_debug then return end
   local font = style.code_font
@@ -4218,6 +4222,7 @@ function FSView:result_at_point(x, y)
 end
 
 function FSView:on_mouse_pressed(button, x, y, clicks)
+  if self.closing then return false end
   self.mouse.x, self.mouse.y = x, y
   self.pressed_result = nil
   self.pressed_clicks = clicks or 1
@@ -4281,6 +4286,7 @@ function FSView:on_mouse_pressed(button, x, y, clicks)
 end
 
 function FSView:on_mouse_released(button, x, y)
+  if self.closing then return false end
   self.mouse.x, self.mouse.y = x, y
 
   if self.forward_mouse_to_child then
@@ -4320,6 +4326,7 @@ function FSView:on_mouse_released(button, x, y)
 end
 
 function FSView:on_mouse_moved(x, y, dx, dy)
+  if self.closing then return false end
   self.mouse.x, self.mouse.y = x, y
 
   if self.forward_mouse_to_child or (self.input and self.input.mouse_is_pressed) or (self.input and self.input:mouse_on_top(x, y)) then
@@ -4348,6 +4355,7 @@ function FSView:on_mouse_moved(x, y, dx, dy)
 end
 
 function FSView:on_mouse_wheel(y, x)
+  if self.closing then return false end
   if scale_mouse_wheel_modkeys_pressed() then return false end
 
   if self.preview_view and self:preview_contains(self.mouse.x, self.mouse.y) then
@@ -6233,6 +6241,7 @@ function FSView:supports_text_input()
 end
 
 function FSView:on_text_input(text)
+  if self.closing then return false end
   if self.static_mode then return true end
   -- Text input is the authoritative path for all printable characters,
   -- especially layout-dependent ones like AltGr, dead keys and IME output.
@@ -6293,8 +6302,10 @@ function FSView:navigate_prompt_history(delta)
 end
 
 function FSView:close(reason)
-  if self.closed then return end
-  self.closed = true
+  if self.closed or self.closing then return end
+  self.closing = true
+  local animate = reason ~= "replaced"
+    and fuzzy_searcher.open_transition.begin_close(self)
   if self:is_preview_focused() then self:set_preview_interactive(false) end
   local cancel
   if self.file_picker and not self.file_picker_finished then
@@ -6302,7 +6313,7 @@ function FSView:close(reason)
     cancel = self.file_picker.cancel
   end
   fuzzy_focus_log("close", self)
-  local input_view = self.input and self.input.textview
+  self.close_input_view = self.input and self.input.textview
   core.root_panel:pop_modal_input(self)
   core.root_panel:hide_app_overlay(self)
   self:record_prompt_history()
@@ -6311,19 +6322,31 @@ function FSView:close(reason)
   kill_file_search()
   kill_grep()
   kill_fuzzy_grep_jobs()
-  self:clear_preview_view()
   self:swap_active_child(nil)
+  if active_view == self then active_view = nil end
+  if core.fuzzy_searcher_active_view == self then core.fuzzy_searcher_active_view = nil end
+  if cancel then
+    core.log_quiet("File Picker: cancelled reason=%s", tostring(reason or "cancelled"))
+    cancel(reason or "cancelled")
+  end
+  if animate then
+    core.redraw = true
+  else
+    self:finish_close()
+  end
+end
+
+function FSView:finish_close()
+  if self.closed then return end
+  self.closed = true
+  self:clear_preview_view()
   self:hide()
   self:destroy()
   if active_view == self then active_view = nil end
   if core.fuzzy_searcher_active_view == self then core.fuzzy_searcher_active_view = nil end
   if not panes.contains(self.source_pane)
-      and (core.active_view == self or core.active_view == input_view) then
+      and (core.active_view == self or core.active_view == self.close_input_view) then
     core.clear_active_view(core.active_view)
-  end
-  if cancel then
-    core.log_quiet("File Picker: cancelled reason=%s", tostring(reason or "cancelled"))
-    cancel(reason or "cancelled")
   end
 end
 
@@ -6677,6 +6700,16 @@ function FSView:confirm(target_side)
 end
 
 function FSView:update()
+  if self.closing then
+    local _, _, _, complete = self:closing_transition()
+    if complete then
+      self:finish_close()
+      return
+    end
+    self:layout()
+    FSView.super.update(self)
+    return
+  end
   self:layout()
   FSView.super.update(self)
   if self.input then
@@ -6718,7 +6751,12 @@ end
 
 function FSView:draw()
   if not self:is_visible() then return false end
-  local opacity, scale, visible = self:opening_transition()
+  local opacity, scale, visible
+  if self.closing then
+    opacity, scale, visible = self:closing_transition()
+  else
+    opacity, scale, visible = self:opening_transition()
+  end
   if not visible then return false end
   return fuzzy_searcher.open_transition.draw(self, opacity, scale, function()
     return self:draw_open_content()
@@ -7197,7 +7235,7 @@ function open_static_results(title, results, opts)
   opts = opts or {}
   title = title or "Results"
   local view = current_picker()
-  if view then view:close() end
+  if view then view:close("replaced") end
   active_view = FSView(title, {
     static = true,
     results = results or {},
