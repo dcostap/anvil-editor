@@ -12,7 +12,7 @@ local core = require "core"
 ---Long name of the flag eg: my-flag for --my-flag
 ---@field name string
 ---Short name eg: m for -m
----@field short_name string
+---@field short_name? string
 ---Description used for the flag when running `app help mycommand`
 ---@field description string
 ---Data type of the flag if an argument/value can be given to it
@@ -252,10 +252,16 @@ local function print_command_help(command)
     print(cli.colorize("Options:", "yellow"))
     local flags_padding = 0
     for _, flag in ipairs(command.flags) do
-      flags_padding = math.max(flags_padding, 10 + #flag.name)
+      local label = flag.short_name
+        and ("  -" .. flag.short_name .. ", --" .. flag.name)
+        or ("      --" .. flag.name)
+      flags_padding = math.max(flags_padding, #label + 2)
     end
     for _, flag in ipairs(command.flags) do
-      local flag_len = 10 + #flag.name
+      local label = flag.short_name
+        and ("  -" .. flag.short_name .. ", --" .. flag.name)
+        or ("      --" .. flag.name)
+      local flag_len = #label + 2
       local init_padding = math.max(flags_padding, flag_len)
         - math.min(flags_padding, flag_len)
         + 2
@@ -278,9 +284,7 @@ local function print_command_help(command)
       else
         flag_info = "(type: flag)"
       end
-      local text = cli.colorize(
-          "  -" .. flag.short_name .. ", " .. "--" .. flag.name, "green"
-        ) .. pad_text(
+      local text = cli.colorize(label, "green") .. pad_text(
           flag.description or "",
           flags_padding,
           init_padding,
@@ -486,7 +490,9 @@ function cli.parse(args)
       local flag_found, flag_value
       if cmd.flags then
         for _, flag_data in ipairs(cmd.flags) do
-          if #flag_type == 1 and flag:match("^"..flag_data.short_name) then
+          if #flag_type == 1 and flag_data.short_name
+            and flag:match("^"..flag_data.short_name)
+          then
             flag_found = flag_data
             if #flag > 1 then
               flag_value = string.sub(flag, 2)
