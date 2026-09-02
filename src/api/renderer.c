@@ -1126,6 +1126,22 @@ static int f_get_last_frame_stats(lua_State *L) {
   lua_setfield(L, -2, "d3d11_dwm_flush_ms");
   lua_pushnumber(L, anvil_d3d11_last_clear_state_ms());
   lua_setfield(L, -2, "d3d11_clear_state_ms");
+  lua_pushnumber(L, anvil_d3d11_last_device_init_ms());
+  lua_setfield(L, -2, "d3d11_device_init_ms");
+  lua_pushnumber(L, anvil_d3d11_last_common_pipeline_ms());
+  lua_setfield(L, -2, "d3d11_common_pipeline_ms");
+  lua_pushnumber(L, anvil_d3d11_last_vertex_shader_compile_ms());
+  lua_setfield(L, -2, "d3d11_vertex_shader_compile_ms");
+  lua_pushnumber(L, anvil_d3d11_last_pixel_shader_compile_ms());
+  lua_setfield(L, -2, "d3d11_pixel_shader_compile_ms");
+  lua_pushnumber(L, anvil_d3d11_last_quad_pipeline_resources_ms());
+  lua_setfield(L, -2, "d3d11_quad_pipeline_resources_ms");
+  lua_pushnumber(L, anvil_d3d11_last_swapchain_create_ms());
+  lua_setfield(L, -2, "d3d11_swapchain_create_ms");
+  lua_pushnumber(L, anvil_d3d11_last_backbuffer_get_ms());
+  lua_setfield(L, -2, "d3d11_backbuffer_get_ms");
+  lua_pushnumber(L, anvil_d3d11_last_render_target_create_ms());
+  lua_setfield(L, -2, "d3d11_render_target_create_ms");
   lua_pushinteger(L, rc_stats ? rc_stats->commands : 0);
   lua_setfield(L, -2, "rencache_commands");
   lua_pushinteger(L, rc_stats ? rc_stats->text_commands : 0);
@@ -1144,6 +1160,8 @@ static int f_get_last_frame_stats(lua_State *L) {
   lua_setfield(L, -2, "rencache_draw_text_ms");
   lua_pushnumber(L, rc_stats ? rc_stats->draw_text_width_ms : 0.0);
   lua_setfield(L, -2, "rencache_draw_text_width_ms");
+  lua_pushnumber(L, rc_stats ? rc_stats->command_replay_ms : 0.0);
+  lua_setfield(L, -2, "rencache_command_replay_ms");
   lua_pushinteger(L, rc_stats ? rc_stats->display_packet_replays : 0);
   lua_setfield(L, -2, "display_packet_replays");
   lua_pushinteger(L, rc_stats ? rc_stats->display_packet_commands_replayed : 0);
@@ -1191,7 +1209,9 @@ static int f_get_last_frame_stats(lua_State *L) {
   PUSH_TEXT_STAT_INTEGER(render_whitespace_chars);
   PUSH_TEXT_STAT_INTEGER(render_chars_after_clip);
   PUSH_TEXT_STAT_INTEGER(render_top_clip_breaks);
+  PUSH_TEXT_STAT_INTEGER(render_glyph_bitmap_cache_misses);
   PUSH_TEXT_STAT_NUMBER(render_hb_shape_ms);
+  PUSH_TEXT_STAT_NUMBER(render_glyph_bitmap_cache_miss_ms);
 #undef PUSH_TEXT_STAT_INTEGER
 #undef PUSH_TEXT_STAT_NUMBER
   return 1;

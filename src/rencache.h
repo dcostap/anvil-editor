@@ -27,6 +27,7 @@ typedef struct {
   size_t max_text_bytes;
   double draw_text_ms;
   double draw_text_width_ms;
+  double command_replay_ms;
   int display_packet_replays;
   int display_packet_commands_replayed;
   int display_packet_text_commands_replayed;

@@ -28,6 +28,14 @@ double anvil_d3d11_last_glyph_push_ms(void);
 double anvil_d3d11_last_flush_quads_ms(void);
 double anvil_d3d11_last_dwm_flush_ms(void);
 double anvil_d3d11_last_clear_state_ms(void);
+double anvil_d3d11_last_device_init_ms(void);
+double anvil_d3d11_last_common_pipeline_ms(void);
+double anvil_d3d11_last_vertex_shader_compile_ms(void);
+double anvil_d3d11_last_pixel_shader_compile_ms(void);
+double anvil_d3d11_last_quad_pipeline_resources_ms(void);
+double anvil_d3d11_last_swapchain_create_ms(void);
+double anvil_d3d11_last_backbuffer_get_ms(void);
+double anvil_d3d11_last_render_target_create_ms(void);
 bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
                           float scale_x, float scale_y,
                           RenRect *rects, int rect_count);
@@ -71,6 +79,14 @@ static inline double anvil_d3d11_last_glyph_push_ms(void) { return 0.0; }
 static inline double anvil_d3d11_last_flush_quads_ms(void) { return 0.0; }
 static inline double anvil_d3d11_last_dwm_flush_ms(void) { return 0.0; }
 static inline double anvil_d3d11_last_clear_state_ms(void) { return 0.0; }
+static inline double anvil_d3d11_last_device_init_ms(void) { return 0.0; }
+static inline double anvil_d3d11_last_common_pipeline_ms(void) { return 0.0; }
+static inline double anvil_d3d11_last_vertex_shader_compile_ms(void) { return 0.0; }
+static inline double anvil_d3d11_last_pixel_shader_compile_ms(void) { return 0.0; }
+static inline double anvil_d3d11_last_quad_pipeline_resources_ms(void) { return 0.0; }
+static inline double anvil_d3d11_last_swapchain_create_ms(void) { return 0.0; }
+static inline double anvil_d3d11_last_backbuffer_get_ms(void) { return 0.0; }
+static inline double anvil_d3d11_last_render_target_create_ms(void) { return 0.0; }
 static inline bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
                                         float scale_x, float scale_y,
                                         RenRect *rects, int rect_count) {

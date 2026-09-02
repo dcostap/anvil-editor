@@ -1077,7 +1077,7 @@ static GlyphMetric *font_load_glyph_metric(RenFont *font, unsigned int glyph_id,
   return &font->glyphs.metrics[bitmap_idx][row][col];
 }
 
-static SDL_Surface *font_load_glyph_bitmap(RenFont *font, unsigned int glyph_id, unsigned int bitmap_idx, GlyphMetric *metric) {
+static SDL_Surface *font_load_glyph_bitmap_impl(RenFont *font, unsigned int glyph_id, unsigned int bitmap_idx, GlyphMetric *metric) {
   if (metric->flags & EGlyphBitmap) return font->glyphs.atlas[metric->format][metric->atlas_idx].surfaces[metric->surface_idx];
 
   // render the glyph for a bitmap_idx
@@ -1176,6 +1176,20 @@ static SDL_Surface *font_load_glyph_bitmap(RenFont *font, unsigned int glyph_id,
       memcpy(&pixels[target_offset], &slot->bitmap.buffer[source_offset], source_bytes);
     }
   }
+  return surface;
+}
+
+static SDL_Surface *font_load_glyph_bitmap(RenFont *font, unsigned int glyph_id,
+                                            unsigned int bitmap_idx, GlyphMetric *metric) {
+  if (metric->flags & EGlyphBitmap) {
+    return font_load_glyph_bitmap_impl(font, glyph_id, bitmap_idx, metric);
+  }
+  uint64_t started = SDL_GetPerformanceCounter();
+  SDL_Surface *surface = font_load_glyph_bitmap_impl(font, glyph_id, bitmap_idx, metric);
+  g_text_frame_stats.render_glyph_bitmap_cache_misses++;
+  g_text_frame_stats.render_glyph_bitmap_cache_miss_ms += renderer_perf_ms(
+    started, SDL_GetPerformanceCounter()
+  );
   return surface;
 }
 

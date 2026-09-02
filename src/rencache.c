@@ -671,6 +671,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
 
   RenColor clear = rencache_detect_frame_clear_color(ren_cache);
   if (!anvil_d3d11_begin_frame(ren_cache->window, width, height, clear)) return false;
+  uint64_t command_replay_start = SDL_GetPerformanceCounter();
 
   Command *cmd = NULL;
   RenRect clip = ren_cache->screen_rect;
@@ -754,6 +755,9 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
     }
   }
 
+  g_rencache_frame_stats.command_replay_ms = rencache_perf_ms(
+    command_replay_start, SDL_GetPerformanceCounter()
+  );
   if (!anvil_d3d11_end_frame(ren_cache->window)) return false;
   if (anvil_window_handoff_allow_show(ren_cache->window)) {
     SDL_ShowWindow(ren_cache->window);
@@ -773,6 +777,9 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
   return true;
 
 fail:
+  g_rencache_frame_stats.command_replay_ms = rencache_perf_ms(
+    command_replay_start, SDL_GetPerformanceCounter()
+  );
   anvil_d3d11_abort_frame_reason(ren_cache->window, fail_reason);
   return false;
 }

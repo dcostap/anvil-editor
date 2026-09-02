@@ -109,9 +109,28 @@ typedef struct D3D11FrameStats {
   HRESULT resize_hr;
   const char *fail_reason;
   LARGE_INTEGER start_counter;
+  double device_init_ms;
+  double common_pipeline_ms;
+  double vertex_shader_compile_ms;
+  double pixel_shader_compile_ms;
+  double quad_pipeline_resources_ms;
+  double swapchain_create_ms;
+  double backbuffer_get_ms;
+  double render_target_create_ms;
   double glyph_push_ms;
   double flush_quads_ms;
 } D3D11FrameStats;
+
+typedef struct D3D11SetupStats {
+  double device_init_ms;
+  double common_pipeline_ms;
+  double vertex_shader_compile_ms;
+  double pixel_shader_compile_ms;
+  double quad_pipeline_resources_ms;
+  double swapchain_create_ms;
+  double backbuffer_get_ms;
+  double render_target_create_ms;
+} D3D11SetupStats;
 
 typedef struct D3D11Stats {
   bool initialized;
@@ -623,6 +642,38 @@ double anvil_d3d11_last_clear_state_ms(void) {
   return g_d3d11.stats.frame.clear_state_ms;
 }
 
+double anvil_d3d11_last_device_init_ms(void) {
+  return g_d3d11.stats.frame.device_init_ms;
+}
+
+double anvil_d3d11_last_common_pipeline_ms(void) {
+  return g_d3d11.stats.frame.common_pipeline_ms;
+}
+
+double anvil_d3d11_last_vertex_shader_compile_ms(void) {
+  return g_d3d11.stats.frame.vertex_shader_compile_ms;
+}
+
+double anvil_d3d11_last_pixel_shader_compile_ms(void) {
+  return g_d3d11.stats.frame.pixel_shader_compile_ms;
+}
+
+double anvil_d3d11_last_quad_pipeline_resources_ms(void) {
+  return g_d3d11.stats.frame.quad_pipeline_resources_ms;
+}
+
+double anvil_d3d11_last_swapchain_create_ms(void) {
+  return g_d3d11.stats.frame.swapchain_create_ms;
+}
+
+double anvil_d3d11_last_backbuffer_get_ms(void) {
+  return g_d3d11.stats.frame.backbuffer_get_ms;
+}
+
+double anvil_d3d11_last_render_target_create_ms(void) {
+  return g_d3d11.stats.frame.render_target_create_ms;
+}
+
 static HWND hwnd_from_sdl_window(SDL_Window *window) {
   SDL_PropertiesID props = SDL_GetWindowProperties(window);
   return (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
@@ -726,7 +777,7 @@ fail:
   return false;
 }
 
-static bool d3d11_ensure_quad_pipeline(void) {
+static bool d3d11_ensure_quad_pipeline(D3D11SetupStats *setup_stats) {
   if (g_d3d11.quad_vs && g_d3d11.quad_ps && g_d3d11.quad_layout &&
       g_d3d11.quad_vbuf && g_d3d11.quad_cbuf && g_d3d11.quad_sampler) {
     return true;
@@ -736,19 +787,27 @@ static bool d3d11_ensure_quad_pipeline(void) {
   ID3DBlob *ps_blob = NULL;
   ID3DBlob *errors = NULL;
   UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
+  LARGE_INTEGER start, end;
 
+  QueryPerformanceCounter(&start);
   HRESULT hr = D3DCompile(quad_shader_source, strlen(quad_shader_source),
                           "anvil_quad_shader", NULL, NULL, "vs_main", "vs_4_0",
                           flags, 0, &vs_blob, &errors);
+  QueryPerformanceCounter(&end);
+  if (setup_stats) setup_stats->vertex_shader_compile_ms = d3d11_ms_between(start, end);
   SAFE_RELEASE(errors);
   if (FAILED(hr) || !vs_blob) goto fail;
 
+  QueryPerformanceCounter(&start);
   hr = D3DCompile(quad_shader_source, strlen(quad_shader_source),
                   "anvil_quad_shader", NULL, NULL, "ps_main", "ps_4_0",
                   flags, 0, &ps_blob, &errors);
+  QueryPerformanceCounter(&end);
+  if (setup_stats) setup_stats->pixel_shader_compile_ms = d3d11_ms_between(start, end);
   SAFE_RELEASE(errors);
   if (FAILED(hr) || !ps_blob) goto fail;
 
+  QueryPerformanceCounter(&start);
   hr = g_d3d11.device->lpVtbl->CreateVertexShader(g_d3d11.device,
                                                    vs_blob->lpVtbl->GetBufferPointer(vs_blob),
                                                    vs_blob->lpVtbl->GetBufferSize(vs_blob),
@@ -800,6 +859,8 @@ static bool d3d11_ensure_quad_pipeline(void) {
   sdesc.MaxLOD = D3D11_FLOAT32_MAX;
   hr = g_d3d11.device->lpVtbl->CreateSamplerState(g_d3d11.device, &sdesc, &g_d3d11.quad_sampler);
   if (FAILED(hr)) goto fail;
+  QueryPerformanceCounter(&end);
+  if (setup_stats) setup_stats->quad_pipeline_resources_ms = d3d11_ms_between(start, end);
 
   SAFE_RELEASE(ps_blob);
   SAFE_RELEASE(vs_blob);
@@ -928,10 +989,6 @@ static bool d3d11_get_backbuffer_timed(D3D11Window *w, double *get_buffer_ms, do
   return true;
 }
 
-static bool d3d11_get_backbuffer(D3D11Window *w) {
-  return d3d11_get_backbuffer_timed(w, NULL, NULL, NULL);
-}
-
 static void d3d11_set_swapchain_background(D3D11Window *w, RenColor color) {
   if (!w || !w->swapchain) return;
   DXGI_RGBA bg = {
@@ -943,7 +1000,8 @@ static void d3d11_set_swapchain_background(D3D11Window *w, RenColor color) {
   w->swapchain->lpVtbl->SetBackgroundColor(w->swapchain, &bg);
 }
 
-static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, int height) {
+static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, int height,
+                                                D3D11SetupStats *setup_stats) {
   D3D11Window *w = d3d11_find_window(window);
   if (w) return w;
 
@@ -975,6 +1033,8 @@ static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, in
     desc.BufferCount = 1;
   }
 
+  LARGE_INTEGER start, end;
+  QueryPerformanceCounter(&start);
   HRESULT hr = g_d3d11.factory->lpVtbl->CreateSwapChainForHwnd(
     g_d3d11.factory, (IUnknown *)g_d3d11.device, hwnd, &desc, NULL, NULL, &w->swapchain);
   if (FAILED(hr) && desc.SwapEffect != DXGI_SWAP_EFFECT_DISCARD) {
@@ -983,6 +1043,8 @@ static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, in
     hr = g_d3d11.factory->lpVtbl->CreateSwapChainForHwnd(
       g_d3d11.factory, (IUnknown *)g_d3d11.device, hwnd, &desc, NULL, NULL, &w->swapchain);
   }
+  QueryPerformanceCounter(&end);
+  if (setup_stats) setup_stats->swapchain_create_ms = d3d11_ms_between(start, end);
   if (FAILED(hr) || !w->swapchain) {
     d3d11_destroy_window(w);
     return NULL;
@@ -993,9 +1055,15 @@ static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, in
   w->height = height;
   w->buffer_count = (int)desc.BufferCount;
   w->swap_effect = desc.SwapEffect;
-  if (!d3d11_get_backbuffer(w)) {
+  double get_buffer_ms = 0.0;
+  double create_rtv_ms = 0.0;
+  if (!d3d11_get_backbuffer_timed(w, &get_buffer_ms, &create_rtv_ms, NULL)) {
     d3d11_destroy_window(w);
     return NULL;
+  }
+  if (setup_stats) {
+    setup_stats->backbuffer_get_ms = get_buffer_ms;
+    setup_stats->render_target_create_ms = create_rtv_ms;
   }
 
   w->next = g_d3d11.windows;
@@ -1120,11 +1188,32 @@ static bool d3d11_queue_quad(ID3D11ShaderResourceView *srv,
 
 bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor clear_color) {
   if (!anvil_d3d11_enabled() || !window || width <= 0 || height <= 0) return false;
-  if (!d3d11_init() || !d3d11_ensure_common_pipeline() || !d3d11_ensure_quad_pipeline()) return false;
+  D3D11SetupStats setup_stats = {0};
+  LARGE_INTEGER start, end;
 
-  D3D11Window *w = d3d11_get_or_create_window(window, width, height);
+  QueryPerformanceCounter(&start);
+  bool initialized = d3d11_init();
+  QueryPerformanceCounter(&end);
+  setup_stats.device_init_ms = d3d11_ms_between(start, end);
+  if (!initialized) return false;
+
+  QueryPerformanceCounter(&start);
+  bool common_pipeline_ready = d3d11_ensure_common_pipeline();
+  QueryPerformanceCounter(&end);
+  setup_stats.common_pipeline_ms = d3d11_ms_between(start, end);
+  if (!common_pipeline_ready || !d3d11_ensure_quad_pipeline(&setup_stats)) return false;
+
+  D3D11Window *w = d3d11_get_or_create_window(window, width, height, &setup_stats);
   if (!w) return false;
   d3d11_stats_begin("commands", window, w, width, height);
+  g_d3d11.stats.frame.device_init_ms = setup_stats.device_init_ms;
+  g_d3d11.stats.frame.common_pipeline_ms = setup_stats.common_pipeline_ms;
+  g_d3d11.stats.frame.vertex_shader_compile_ms = setup_stats.vertex_shader_compile_ms;
+  g_d3d11.stats.frame.pixel_shader_compile_ms = setup_stats.pixel_shader_compile_ms;
+  g_d3d11.stats.frame.quad_pipeline_resources_ms = setup_stats.quad_pipeline_resources_ms;
+  g_d3d11.stats.frame.swapchain_create_ms = setup_stats.swapchain_create_ms;
+  g_d3d11.stats.frame.backbuffer_get_ms = setup_stats.backbuffer_get_ms;
+  g_d3d11.stats.frame.render_target_create_ms = setup_stats.render_target_create_ms;
   d3d11_set_swapchain_background(w, clear_color);
   if (!d3d11_resize_window(w, width, height)) {
     g_d3d11.stats.frame.fail_reason = "resize";
@@ -1172,7 +1261,7 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
 bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenColor color) {
   if (window != g_d3d11.active_window) return false;
   if (color.a == 0) return true;
-  if (!d3d11_ensure_quad_pipeline() || !d3d11_ensure_white_texture()) return false;
+  if (!d3d11_ensure_quad_pipeline(NULL) || !d3d11_ensure_white_texture()) return false;
   g_d3d11.stats.frame.rect_pushes++;
   RenRect r = d3d11_intersect_renrect(rect, clip);
   if (r.width <= 0 || r.height <= 0) return true;
@@ -1194,7 +1283,7 @@ bool anvil_d3d11_push_rounded_rect(SDL_Window *window, RenRect rect, float radiu
   if (window != g_d3d11.active_window) return false;
   if (color.a == 0 || rect.width <= 0 || rect.height <= 0) return true;
   if (radius <= 0.0f) return anvil_d3d11_push_rect(window, rect, clip, color);
-  if (!d3d11_ensure_quad_pipeline() || !d3d11_ensure_white_texture()) return false;
+  if (!d3d11_ensure_quad_pipeline(NULL) || !d3d11_ensure_white_texture()) return false;
   g_d3d11.stats.frame.rect_pushes++;
 
   float width = (float)rect.width;
@@ -1235,7 +1324,7 @@ static inline RenRect d3d11_float_rect_to_grid(float x, float y, float w, float 
 bool anvil_d3d11_push_rect_grid(SDL_Window *window, float x, float y, float step_x, float w, float h, int count, RenRect clip, RenColor color) {
   if (window != g_d3d11.active_window) return false;
   if (color.a == 0 || count <= 0 || step_x <= 0.0f || w <= 0.0f || h <= 0.0f) return true;
-  if (!d3d11_ensure_quad_pipeline() || !d3d11_ensure_white_texture()) return false;
+  if (!d3d11_ensure_quad_pipeline(NULL) || !d3d11_ensure_white_texture()) return false;
 
   float clip_x0 = (float)clip.x;
   float clip_y0 = (float)clip.y;
@@ -1602,7 +1691,7 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
                                RenColor color, int mode) {
   if (window != g_d3d11.active_window || !surface) return false;
   if (color.a == 0) return true;
-  if (!d3d11_ensure_quad_pipeline()) return false;
+  if (!d3d11_ensure_quad_pipeline(NULL)) return false;
 
   LARGE_INTEGER t0, t1;
   QueryPerformanceCounter(&t0);
@@ -1653,7 +1742,7 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
   if (window != g_d3d11.active_window || !bytes || width <= 0 || height <= 0) return false;
   if (pitch < width * 4) return false;
   if (len < (size_t)pitch * (size_t)height) return false;
-  if (!d3d11_ensure_quad_pipeline()) return false;
+  if (!d3d11_ensure_quad_pipeline(NULL)) return false;
   if (!d3d11_ensure_upload_texture(width, height)) return false;
   if (!d3d11_flush_quads()) return false;
 
@@ -1865,7 +1954,7 @@ bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
   int height = surface->h;
   if (width <= 0 || height <= 0) return false;
 
-  D3D11Window *w = d3d11_get_or_create_window(window, width, height);
+  D3D11Window *w = d3d11_get_or_create_window(window, width, height, NULL);
   if (!w) return false;
   d3d11_stats_begin("surface_upload", window, w, width, height);
   if (!d3d11_resize_window(w, width, height)) {

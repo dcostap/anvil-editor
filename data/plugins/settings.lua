@@ -10,6 +10,12 @@ local View = require "core.view"
 local TextView = require "core.textview"
 local panes = require "core.panes"
 local view_icons = require "core.view_icons"
+local startup = package.loaded["core.startup"]
+
+local function startup_measure(name, fn)
+  if startup then return startup.measure(name, fn) end
+  return fn()
+end
 
 -- check if widget is installed before proceeding
 local widget_found, Widget = pcall(require, "widget")
@@ -2518,54 +2524,60 @@ end
 --------------------------------------------------------------------------------
 local core_run = core.run
 function core.run()
-  store_default_keybindings()
+  startup_measure("settings_store_default_keybindings", store_default_keybindings)
 
   -- load plugins disabled by default and enabled by user
-  if settings.config.enabled_plugins then
-    for name, _ in pairs(settings.config.enabled_plugins) do
-      if is_first_party_core_plugin(name) then
-        settings.config.enabled_plugins[name] = nil
-      elseif config.plugins[name] == nil then
-        require("plugins." .. name)
+  startup_measure("settings_load_enabled_plugins", function()
+    if settings.config.enabled_plugins then
+      for name, _ in pairs(settings.config.enabled_plugins) do
+        if is_first_party_core_plugin(name) then
+          settings.config.enabled_plugins[name] = nil
+        elseif config.plugins[name] == nil then
+          require("plugins." .. name)
+        end
       end
     end
-  end
+  end)
 
   -- append all settings defined in the plugins spec
-  scan_plugins_spec()
+  startup_measure("settings_scan_plugin_specs", scan_plugins_spec)
 
   -- merge custom settings into config
-  merge_settings()
+  startup_measure("settings_merge_saved_values", merge_settings)
 
   ---@type settings.ui
-  settings.ui = Settings()
+  settings.ui = startup_measure("settings_construct_ui", Settings)
 
   -- apply user chosen color theme
-  if settings.config.theme then
-    local normalized_theme = normalize_color_theme_name(settings.config.theme)
-    if settings.config.theme ~= normalized_theme then
-      settings.config.theme = normalized_theme
-      save_settings()
+  startup_measure("settings_apply_theme", function()
+    if settings.config.theme then
+      local normalized_theme = normalize_color_theme_name(settings.config.theme)
+      if settings.config.theme ~= normalized_theme then
+        settings.config.theme = normalized_theme
+        save_settings()
+      end
+      if normalized_theme ~= DEFAULT_COLOR_THEME_NAME then
+        core.try(function()
+          core.reload_module("colors." .. color_theme_module_name(normalized_theme))
+        end)
+      end
     end
-    if normalized_theme ~= DEFAULT_COLOR_THEME_NAME then
-      core.try(function()
-        core.reload_module("colors." .. color_theme_module_name(normalized_theme))
-      end)
-    end
-  end
+  end)
 
   -- re-apply user settings
   -- TODO: come up with a better solution for this that doesn't requires
   -- reloading these user modules, got an idea time ago and forgot it :(
-  if settings.config.reload_user_modules then
-    local modules = {
-      USERDIR .. PATHSEP .. "init.lua",
-      core.root_project().path .. PATHSEP .. ".anvil_project.lua"
-    }
-    for _, module in ipairs(modules) do
-      core.reload_absolute_module(module)
+  startup_measure("settings_reload_user_modules", function()
+    if settings.config.reload_user_modules then
+      local modules = {
+        USERDIR .. PATHSEP .. "init.lua",
+        core.root_project().path .. PATHSEP .. ".anvil_project.lua"
+      }
+      for _, module in ipairs(modules) do
+        core.reload_absolute_module(module)
+      end
     end
-  end
+  end)
 
   core_run()
 end

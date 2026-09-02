@@ -73,7 +73,9 @@ typedef struct {
   uint64_t render_whitespace_chars;
   uint64_t render_chars_after_clip;
   uint64_t render_top_clip_breaks;
+  uint64_t render_glyph_bitmap_cache_misses;
   double render_hb_shape_ms;
+  double render_glyph_bitmap_cache_miss_ms;
 } RenTextFrameStats;
 
 struct RenWindow;

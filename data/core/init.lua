@@ -2803,8 +2803,39 @@ function core.step(next_frame_time, options)
   local renderer_end_start_time = system.get_time()
   renderer.end_frame()
   step_stats.renderer_end_ms = (system.get_time() - renderer_end_start_time) * 1000
-  if core.startup_trace_active and startup then startup.stage_end(startup_draw_stage, "ok",
-    "renderer_end_ms=" .. string.format("%.3f", step_stats.renderer_end_ms)) end
+  if core.startup_trace_active and startup then
+    local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
+    startup.stage_end(startup_draw_stage, "ok", string.format(
+      "renderer_end_ms=%.3f path=%s present_ms=%.3f device_init_ms=%.3f "
+        .. "common_pipeline_ms=%.3f vertex_shader_compile_ms=%.3f "
+        .. "pixel_shader_compile_ms=%.3f quad_pipeline_resources_ms=%.3f "
+        .. "swapchain_create_ms=%.3f backbuffer_get_ms=%.3f "
+        .. "render_target_create_ms=%.3f command_replay_ms=%.3f "
+        .. "glyph_bitmap_cache_misses=%d glyph_bitmap_cache_miss_ms=%.3f "
+        .. "glyph_push_ms=%.3f flush_quads_ms=%.3f dwm_flush_ms=%.3f "
+        .. "clear_state_ms=%.3f texture_uploads=%d texture_upload_bytes=%d",
+      step_stats.renderer_end_ms,
+      tostring(renderer_stats.path or "unknown"),
+      renderer_stats.present_ms or 0,
+      renderer_stats.d3d11_device_init_ms or 0,
+      renderer_stats.d3d11_common_pipeline_ms or 0,
+      renderer_stats.d3d11_vertex_shader_compile_ms or 0,
+      renderer_stats.d3d11_pixel_shader_compile_ms or 0,
+      renderer_stats.d3d11_quad_pipeline_resources_ms or 0,
+      renderer_stats.d3d11_swapchain_create_ms or 0,
+      renderer_stats.d3d11_backbuffer_get_ms or 0,
+      renderer_stats.d3d11_render_target_create_ms or 0,
+      renderer_stats.rencache_command_replay_ms or 0,
+      renderer_stats.text_render_glyph_bitmap_cache_misses or 0,
+      renderer_stats.text_render_glyph_bitmap_cache_miss_ms or 0,
+      renderer_stats.d3d11_glyph_push_ms or 0,
+      renderer_stats.d3d11_flush_quads_ms or 0,
+      renderer_stats.d3d11_dwm_flush_ms or 0,
+      renderer_stats.d3d11_clear_state_ms or 0,
+      renderer_stats.texture_uploads or 0,
+      renderer_stats.texture_upload_bytes or 0
+    ))
+  end
 
   local frame_time = system.get_time() - start_time
   step_stats.frame_time_ms = frame_time * 1000
