@@ -138,6 +138,15 @@ local function quintic_ease_out(progress)
   return 1 - remaining * remaining * remaining * remaining * remaining
 end
 
+local function start_app_overlay_transition(overlay, target, now)
+  if overlay.target == target then return end
+  overlay.start_progress = overlay.progress
+  overlay.target = target
+  overlay.transition_started_at = now
+  overlay.transition_duration = APP_OVERLAY_FADE_DURATION
+    * math.abs(target - overlay.progress)
+end
+
 function RootPanel:update_app_overlay(now)
   local overlay = self.app_overlay
   if not overlay then return 0 end
@@ -151,11 +160,17 @@ function RootPanel:update_app_overlay(now)
   if transition_disabled then
     progress = overlay.target
   elseif overlay.target ~= progress then
-    local elapsed = math.max(0, now - overlay.last_time)
-    local direction = overlay.target > progress and 1 or -1
-    progress = common.clamp(progress + direction * elapsed / APP_OVERLAY_FADE_DURATION, 0, 1)
+    local duration = overlay.transition_duration or APP_OVERLAY_FADE_DURATION
+    if duration <= 0 then
+      progress = overlay.target
+    else
+      local elapsed = math.max(0, now - (overlay.transition_started_at or now))
+      local eased = quintic_ease_out(common.clamp(elapsed / duration, 0, 1))
+      progress = common.lerp(
+        overlay.start_progress or progress, overlay.target, eased
+      )
+    end
   end
-  overlay.last_time = now
   if progress ~= overlay.progress then overlay.progress, core.redraw = progress, true end
   if overlay.target == 0 and progress == 0 then self.app_overlay = nil end
   return progress
@@ -168,15 +183,20 @@ function RootPanel:show_app_overlay(owner, color, options)
   self:update_app_overlay(now)
   local overlay = self.app_overlay
   if not overlay then
-    overlay = { progress = 0, target = 0, last_time = now }
+    overlay = {
+      progress = 0,
+      target = 0,
+      start_progress = 0,
+      transition_started_at = now,
+      transition_duration = 0,
+    }
     self.app_overlay = overlay
   end
   overlay.owner = owner
   overlay.color = color
   overlay.unobscured_view = options.unobscured_view
   overlay.transition_name = options.transition_name
-  overlay.target = 1
-  overlay.last_time = now
+  start_app_overlay_transition(overlay, 1, now)
   core.redraw = true
 end
 
@@ -187,9 +207,8 @@ function RootPanel:hide_app_overlay(owner)
   self:update_app_overlay(now)
   overlay = self.app_overlay
   if not overlay or overlay.owner ~= owner then return false end
-  overlay.target = 0
+  start_app_overlay_transition(overlay, 0, now)
   overlay.unobscured_view = nil
-  overlay.last_time = now
   core.redraw = true
   return true
 end
@@ -227,7 +246,7 @@ function RootPanel:draw_active_app_overlay()
   local source = type(overlay.color) == "string" and style[overlay.color] or overlay.color
   if type(source) ~= "table" then return end
   local color = { table.unpack(source) }
-  color[4] = (color[4] or 255) * quintic_ease_out(overlay.progress)
+  color[4] = (color[4] or 255) * overlay.progress
   self:draw_app_overlay(color, overlay.unobscured_view)
 end
 

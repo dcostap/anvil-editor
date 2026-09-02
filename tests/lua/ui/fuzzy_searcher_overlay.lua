@@ -134,6 +134,52 @@ test.describe("Fuzzy Searcher attention overlay", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("uses equivalent inverted curves for background opening and closing", function()
+    local root = core.root_panel
+    local owner = {}
+    local now = 300
+    local original_get_time = system.get_time
+    local original_fps = core.fps
+    local original_live_resize = core.in_live_resize_frame
+    local original_draw_app_overlay = root.draw_app_overlay
+    local drawn_alpha
+
+    config.transitions = true
+    config.disabled_transitions.fuzzy_searcher = false
+    core.fps = 60
+    core.in_live_resize_frame = false
+    system.get_time = function() return now end
+    root.app_overlay = nil
+    root.draw_app_overlay = function(_, color) drawn_alpha = color[4] end
+
+    local ok, err = pcall(function()
+      root:show_app_overlay(owner, { 0, 0, 0, 200 }, {
+        transition_name = "fuzzy_searcher",
+      })
+      now = now + 0.02
+      root:update_app_overlay()
+      root:draw_active_app_overlay()
+      local opening_alpha = test.not_nil(drawn_alpha)
+
+      now = now + 1
+      root:update_app_overlay()
+      root:hide_app_overlay(owner)
+      now = now + 0.02
+      root:update_app_overlay()
+      drawn_alpha = nil
+      root:draw_active_app_overlay()
+      local closing_alpha = test.not_nil(drawn_alpha)
+
+      test.near(opening_alpha + closing_alpha, 200, 0.01)
+    end)
+
+    system.get_time = original_get_time
+    core.fps = original_fps
+    core.in_live_resize_frame = original_live_resize
+    root.draw_app_overlay = original_draw_app_overlay
+    if not ok then error(err, 0) end
+  end)
+
   test.it("dims the app while open and releases the overlay after closing", function()
     local root = core.root_panel
     local overlay_drawn = false
