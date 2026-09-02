@@ -153,6 +153,25 @@ test.describe("worker_pool", function()
     test.equal(pool:status(handle).status, "cancelled")
   end)
 
+  test.test("native validation errors return through the core worker_pool facade", function()
+    local pool = new_pool("test-native-facade-validation", 1)
+    local paths = {}
+    for i = 1, 65537 do paths[i] = USERDIR end
+    local ok, handle, err = pcall(pool.submit, pool, {
+      native = true,
+      kind = "treesitter_project_run",
+      payload = {
+        project_root = USERDIR,
+        project_scoped = true,
+        scan_paths = paths,
+        languages = {},
+      },
+    })
+    test.ok(ok, handle)
+    test.equal(handle, nil)
+    test.ok(tostring(err):find("string table exceeds limit", 1, true) ~= nil, err)
+  end)
+
   test.test("native Tree-sitter result handles pass through the core worker_pool facade", function()
     local pool = new_pool("test-native-facade-treesitter", 1)
     local result

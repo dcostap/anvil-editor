@@ -220,7 +220,8 @@ function worker_pool:submit(spec)
     local native_spec = common.merge({}, spec.native_payload or spec.payload or {})
     native_spec.kind = spec.native_kind or native_spec.kind or spec.kind
     native_spec.priority = spec.priority or "normal"
-    local native_handle, err = native:submit(native_spec)
+    local ok, native_handle, err = pcall(native.submit, native, native_spec)
+    if not ok then return nil, native_handle end
     if not native_handle then return nil, err or "native-submit-failed" end
     local native_status = native:status(native_handle) or {}
     local native_id = native_status.id
