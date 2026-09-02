@@ -28,7 +28,7 @@ test.describe("Fuzzy Searcher attention overlay", function()
     config.disabled_transitions.fuzzy_searcher = context.fuzzy_searcher_transition
   end)
 
-  test.it("keeps the complete Fuzzy Searcher hidden during its opening delay", function()
+  test.it("keeps the complete Fuzzy Searcher hidden until initial content is ready", function()
     local now = 100
     local original_get_time = system.get_time
     local original_draw_rect = renderer.draw_rect
@@ -60,13 +60,15 @@ test.describe("Fuzzy Searcher attention overlay", function()
         { kind = "command", label = "core:open", command = "core:open" },
       })
       picker:update()
+      picker.loading_feedback_pending = true
       draw_calls = 0
       local opacity, _, visible = picker:opening_transition()
       test.equal(opacity, 0)
       test.equal(visible, false)
       picker:draw()
-      test.equal(draw_calls, 0, "the opening delay must hide all Searcher chrome and content")
+      test.equal(draw_calls, 0, "initial loading must hide all Searcher chrome and content")
 
+      picker.loading_feedback_pending = false
       local deadline = now + 0.5
       repeat
         now = now + 0.01

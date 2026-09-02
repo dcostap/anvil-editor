@@ -6,9 +6,9 @@ local style = require "core.style"
 
 local transition = {}
 
-local DELAY_SECONDS = 0.03
-local DURATION_SECONDS = 0.11
-local START_SCALE = 0.965
+local DELAY_SECONDS = 0
+local DURATION_SECONDS = 0.11 / 1.5
+local START_SCALE = 1 - (1 - 0.965) * 1.25
 
 local function cubic_ease_out(progress)
   local remaining = 1 - progress
