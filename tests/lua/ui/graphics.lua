@@ -15,6 +15,14 @@ local function write_file(path, content)
   file:close()
 end
 
+local function read_file(path)
+  local file, err = io.open(path, "rb")
+  test.not_nil(file, err)
+  local content = file:read("*a")
+  file:close()
+  return content
+end
+
 test.describe("graphics apis", function()
   test.before_each(function(context)
     panes.reset_for_tests()
@@ -230,6 +238,15 @@ test.describe("graphics apis", function()
     local loaded_width, loaded_height = loaded:get_size()
     test.equal(loaded_width, 2)
     test.equal(loaded_height, 2)
+
+    local loaded_data, data_err = canvas.load_image_data(read_file(png_path))
+    test.not_nil(loaded_data, data_err)
+    local data_width, data_height = loaded_data:get_size()
+    test.equal(data_width, 2)
+    test.equal(data_height, 2)
+    local invalid_data, invalid_err = canvas.load_image_data("not an image")
+    test.equal(invalid_data, nil)
+    test.type(invalid_err, "string")
 
     local removed, remove_err = os.remove(png_path)
     test.ok(removed, remove_err)

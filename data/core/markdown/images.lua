@@ -3,6 +3,25 @@ local json = require "core.json"
 
 local images = {}
 
+local DATA_IMAGE_MIME_TYPES = {
+  ["image/avif"] = true,
+  ["image/bmp"] = true,
+  ["image/gif"] = true,
+  ["image/jpeg"] = true,
+  ["image/jpg"] = true,
+  ["image/png"] = true,
+  ["image/webp"] = true,
+}
+-- Embedded source expands in memory during Base64 decoding.
+local DEFAULT_MAX_DATA_IMAGE_BYTES = 32 * 1024 * 1024
+local BASE64_VALUES = {}
+do
+  local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  for index = 1, #alphabet do
+    BASE64_VALUES[alphabet:byte(index)] = index - 1
+  end
+end
+
 local function perf_frame_add(key, amount)
   if not core.perf_frame_stats then return end
   local perf = package.loaded["core.perf"]
@@ -19,8 +38,97 @@ local function hash_text(text)
   return string.format("%08x", hash)
 end
 
+local function data_asset_identity(url, max_bytes, separator)
+  local source = tostring(url or "")
+  return table.concat({
+    "data", hash_text(source), tostring(#source), source:sub(1, 32), source:sub(-32),
+    tostring(max_bytes or ""),
+  }, separator)
+end
+
 function images.is_remote(url)
   return type(url) == "string" and url:match("^https?://") ~= nil
+end
+
+local function data_image_payload(url)
+  if type(url) ~= "string" or url:sub(1, 5):lower() ~= "data:" then
+    return nil, "not an embedded image"
+  end
+  local comma = url:find(",", 6, true)
+  if not comma then return nil, "embedded image data has no payload" end
+  local header = url:sub(6, comma - 1):lower()
+  local mime = header:match("^%s*([^;%s]+)")
+  if not DATA_IMAGE_MIME_TYPES[mime or ""] then
+    return nil, "unsupported embedded image type"
+  end
+  local base64 = false
+  for parameter in header:gmatch(";([^;]*)") do
+    if parameter:gsub("^%s+", ""):gsub("%s+$", "") == "base64" then
+      base64 = true
+      break
+    end
+  end
+  if not base64 then return nil, "embedded image is not base64 encoded" end
+  return comma + 1, mime
+end
+
+function images.is_data_image(url)
+  return data_image_payload(url) ~= nil
+end
+
+function images.decode_data_image(url, max_bytes)
+  local payload_start, mime_or_error = data_image_payload(url)
+  if not payload_start then return nil, mime_or_error end
+  max_bytes = math.max(0, math.floor(tonumber(max_bytes) or DEFAULT_MAX_DATA_IMAGE_BYTES))
+  local encoded_length = #url - payload_start + 1
+  if encoded_length == 0 or encoded_length % 4 ~= 0 then
+    return nil, "embedded image has malformed base64 data"
+  end
+  if math.floor(encoded_length / 4) * 3 - 2 > max_bytes then
+    return nil, "embedded image exceeds the decoded size limit"
+  end
+
+  local chunks, output = {}, {}
+  local output_bytes, decoded_bytes = 0, 0
+  for index = payload_start, #url, 4 do
+    local byte1, byte2, byte3, byte4 = url:byte(index, index + 3)
+    local value1, value2 = BASE64_VALUES[byte1], BASE64_VALUES[byte2]
+    local value3 = byte3 ~= 61 and BASE64_VALUES[byte3] or nil
+    local value4 = byte4 ~= 61 and BASE64_VALUES[byte4] or nil
+    local final = index + 3 == #url
+    if not value1 or not value2
+      or (byte3 ~= 61 and not value3) or (byte4 ~= 61 and not value4)
+      or (byte3 == 61 and byte4 ~= 61) or ((byte3 == 61 or byte4 == 61) and not final)
+    then
+      return nil, "embedded image has malformed base64 data"
+    end
+
+    local count = byte3 == 61 and 1 or byte4 == 61 and 2 or 3
+    decoded_bytes = decoded_bytes + count
+    if decoded_bytes > max_bytes then
+      return nil, "embedded image exceeds the decoded size limit"
+    end
+    local decoded1 = value1 * 4 + math.floor(value2 / 16)
+    if count == 1 then
+      output[#output + 1] = string.char(decoded1)
+    elseif count == 2 then
+      output[#output + 1] = string.char(
+        decoded1, (value2 % 16) * 16 + math.floor(value3 / 4)
+      )
+    else
+      output[#output + 1] = string.char(
+        decoded1, (value2 % 16) * 16 + math.floor(value3 / 4),
+        (value3 % 4) * 64 + value4
+      )
+    end
+    output_bytes = output_bytes + count
+    if output_bytes >= 3072 then
+      chunks[#chunks + 1] = table.concat(output)
+      output, output_bytes = {}, 0
+    end
+  end
+  if #output > 0 then chunks[#chunks + 1] = table.concat(output) end
+  return table.concat(chunks), mime_or_error
 end
 
 function images.get_image_cache_path(url, cache_dir)
@@ -155,7 +263,9 @@ end
 function images.resolve_local_path(url, opts)
   perf_frame_add("markdown_image_resolve_local_path_calls", 1)
   opts = opts or {}
-  if type(url) ~= "string" or url == "" or images.is_remote(url) then
+  if type(url) ~= "string" or url == "" or images.is_remote(url)
+    or url:sub(1, 5):lower() == "data:"
+  then
     perf_frame_add("markdown_image_resolve_local_path_skips", 1)
     return nil
   end
@@ -217,6 +327,32 @@ function images.load_from_path(path, opts)
   return { status = "ready", path = path, image = image }
 end
 
+function images.load_from_data_image(url, opts)
+  opts = opts or {}
+  local data, mime_or_error = images.decode_data_image(url, opts.max_data_image_bytes)
+  if not data then return { status = "error", errmsg = mime_or_error } end
+  local loader = opts.data_loader or canvas.load_image_data
+  if not loader then
+    return { status = "error", errmsg = "in-memory image loading is unavailable" }
+  end
+  local started_at = system.get_time()
+  local image, errmsg = loader(data)
+  local elapsed = system.get_time() - started_at
+  if elapsed >= 0.1 then
+    local loaded_core = package.loaded.core
+    if loaded_core and loaded_core.log_quiet then
+      loaded_core.log_quiet(
+        "Embedded Markdown image load %s in %.1fms: bytes=%d type=%s",
+        image and "completed" or "failed", elapsed * 1000, #data, mime_or_error
+      )
+    end
+  end
+  if not image then
+    return { status = "error", errmsg = errmsg or "image data could not be loaded" }
+  end
+  return { status = "ready", image = image, mime = mime_or_error }
+end
+
 local assets = {}
 local asset_request_keys = {}
 local asset_clock = 0
@@ -250,8 +386,12 @@ local function normalize_context_path(path)
 end
 
 local function asset_request_key(url, opts)
+  local source = tostring(url or "")
+  if images.is_data_image(url) then
+    source = data_asset_identity(source, opts.max_data_image_bytes, ":")
+  end
   return table.concat({
-    tostring(url or ""),
+    source,
     normalize_context_path(opts.source_path),
     normalize_context_path(opts.project_root),
     normalize_context_path(opts.cache_dir or images.default_cache_dir),
@@ -263,6 +403,9 @@ end
 function images.asset_key(url, opts)
   perf_frame_add("markdown_image_asset_key_calls", 1)
   opts = opts or {}
+  if images.is_data_image(url) then
+    return data_asset_identity(url, opts.max_data_image_bytes, "\0")
+  end
   local local_path = images.resolve_local_path(url, opts)
   if local_path then return "local\0" .. normalize_context_path(local_path) end
   if images.is_remote(url) then
@@ -307,6 +450,13 @@ local function refresh_asset(entry, url, opts)
   entry.status = "idle"
   entry.image = nil
   entry.errmsg = nil
+
+  if images.is_data_image(url) then
+    entry.path = nil
+    apply_loaded(entry, images.load_from_data_image(url, opts))
+    notify(entry)
+    return entry
+  end
 
   local local_path = images.resolve_local_path(url, opts)
   if local_path then

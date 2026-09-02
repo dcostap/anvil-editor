@@ -856,6 +856,7 @@ end
 
 local function is_image_target(path)
   return IMAGE_EXTENSIONS[target_extension(path) or ""] == true
+    or images.is_data_image(path)
 end
 
 local function attachment_kind(path)
@@ -994,11 +995,15 @@ local function image_fragment(view, span, opts)
       )
     end
     local padding = image_vertical_padding()
+    local embedded = images.is_data_image(image_source)
+    local label = link.alias or link.alt
+    if not label or label == "" then label = embedded and "Embedded image" or image_source end
     return {
       source_col1 = span.col1,
       source_col2 = span.col2,
       width = opts.width or width,
       image_path = entry.path,
+      image_data = embedded or nil,
       widget = {
         type = "image",
         width = width,
@@ -1013,6 +1018,9 @@ local function image_fragment(view, span, opts)
         on_mouse_pressed = function(_, owner, hit, button)
           if button ~= "left" then return false end
           owner.buffer:set_selection(hit.line, 1)
+          if embedded then
+            return require("core.markdown.image_overlay").open_image(entry.image, label)
+          end
           return common.open_in_system(hit.fragment.image_path)
         end,
         draw = function(_, fragment, x, y, row_height)
@@ -1038,7 +1046,10 @@ local function image_fragment(view, span, opts)
   end
 
   local label = link.alias or link.alt
-  if not label or label == "" then label = link.path or link.raw_target or "" end
+  if not label or label == "" then
+    label = images.is_data_image(link.path) and "embedded image"
+      or link.path or link.raw_target or ""
+  end
   local status_text, color = "image unavailable", style.markdown_live_image_error
   -- Obsidian-style embeds depend on the vault index to find attachments by
   -- name. The local-path fallback may miss while that index is still being

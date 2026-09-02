@@ -31,6 +31,35 @@ test.describe("Markdown image helpers", function()
     test.equal(called, false)
   end)
 
+  test.it("decodes and loads embedded Base64 image data", function()
+    local loaded
+    local entry = images.get_asset("data:image/png;base64,/9j/4AAQ", {
+      data_loader = function(data)
+        loaded = data
+        return { get_size = function() return 307, 60 end }
+      end,
+    })
+    test.equal(entry.status, "ready")
+    test.equal(loaded, string.char(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10))
+    test.equal(entry.path, nil)
+  end)
+
+  test.it("rejects malformed and oversized embedded image data", function()
+    local malformed = images.get_asset("data:image/png;base64,not*base64", {
+      data_loader = function() error("malformed data reached the image loader") end,
+    })
+    test.equal(malformed.status, "error")
+    test.match(malformed.errmsg, "base64", nil, true)
+
+    images.clear_assets()
+    local oversized = images.get_asset("data:image/png;base64,QUJDRA==", {
+      max_data_image_bytes = 3,
+      data_loader = function() error("oversized data reached the image loader") end,
+    })
+    test.equal(oversized.status, "error")
+    test.match(oversized.errmsg, "size limit", nil, true)
+  end)
+
   test.it("resolves local image URLs after stripping fragments and queries", function(context)
     local root = USERDIR .. PATHSEP .. "markdown-image-tests-" .. system.get_process_id()
     local ok, err = common.mkdirp(root)

@@ -4091,6 +4091,44 @@ test.describe("Markdown Live Preview", function()
     test.equal(drawn, 2)
   end)
 
+  test.it("renders embedded Base64 image fragments", function()
+    local source = "![Logo](data:image/png;base64,/9j/4AAQ)"
+    local view, buffer = make_view(source .. "\nother", USERDIR .. PATHSEP .. "note.md")
+    buffer:set_selection(2, 1)
+    local old_load_image_data = canvas.load_image_data
+    local overlay = require "core.markdown.image_overlay"
+    local loaded
+    canvas.load_image_data = function(data)
+      loaded = data
+      return {
+        get_size = function() return 307, 60 end,
+        scaled = function(self) return self end,
+      }
+    end
+
+    local ok, err = pcall(function()
+      refresh(view)
+      local image_fragment
+      for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+        if fragment.widget and fragment.widget.type == "image" then
+          image_fragment = fragment
+          break
+        end
+      end
+      test.not_nil(image_fragment)
+      test.equal(loaded, string.char(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10))
+      test.equal(image_fragment.image_path, nil)
+      test.ok(image_fragment.widget:on_mouse_pressed(
+        view, { line = 1, fragment = image_fragment }, "left"
+      ))
+      test.equal(overlay.state.image:get_size(), 307)
+      test.equal(overlay.state.label, "Logo")
+    end)
+    overlay.close()
+    canvas.load_image_data = old_load_image_data
+    if not ok then error(err, 0) end
+  end)
+
   test.it("reveals raw source when the caret enters an unavailable image embed", function()
     local source = "![[missing-image-" .. system.get_process_id() .. ".png]]"
     local view, buffer = make_view(source .. "\nother", USERDIR .. PATHSEP .. "missing-image-note.md")

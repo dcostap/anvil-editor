@@ -87,6 +87,7 @@ function overlay.close()
   end
   state.visible = false
   state.path = nil
+  state.label = nil
   state.image = nil
   state.scaled = nil
   state.dragging = false
@@ -97,15 +98,11 @@ function overlay.max_scaled_size()
   return MAX_SCALED_IMAGE_WIDTH, MAX_SCALED_IMAGE_HEIGHT
 end
 
-function overlay.open(path)
-  if type(path) ~= "string" or path == "" then return false end
-  local image, err = canvas.load_image(path)
-  if not image then
-    core.log_quiet("Markdown image overlay failed to load %s: %s", tostring(path), tostring(err))
-    return false, err
-  end
+function overlay.open_image(image, label, path)
+  if not image then return false, "image is required" end
   state.visible = true
   state.path = path
+  state.label = label
   state.image = image
   state.scaled = nil
   state.scale = fit_scale()
@@ -118,6 +115,16 @@ function overlay.open(path)
   })
   core.redraw = true
   return true
+end
+
+function overlay.open(path)
+  if type(path) ~= "string" or path == "" then return false end
+  local image, err = canvas.load_image(path)
+  if not image then
+    core.log_quiet("Markdown image overlay failed to load %s: %s", tostring(path), tostring(err))
+    return false, err
+  end
+  return overlay.open_image(image, common.basename(path), path)
 end
 
 function overlay.zoom_at(delta, x, y)
@@ -245,7 +252,7 @@ function overlay.draw()
       renderer.draw_canvas(state.image, ix, iy)
     end
   end
-  local label = state.path and common.basename(state.path) or "Image"
+  local label = state.label or state.path and common.basename(state.path) or "Image"
   local text = string.format("%s  %.0f%%  (wheel zoom, drag pan, Esc close)", label, (state.scale or 1) * 100)
   local pad = math.max(12 * SCALE, 1)
   local font = style.font
