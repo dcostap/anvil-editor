@@ -6,9 +6,10 @@ local style = require "core.style"
 
 local transition = {}
 
-local DELAY_SECONDS = 0.02
+local DELAY_SECONDS = 0
 local DURATION_SECONDS = 0.11 / 1.5
-local START_SCALE = 1 - (1 - 0.965) * 1.25
+local ALPHA_DURATION_SECONDS = DURATION_SECONDS / 1.2
+local START_SCALE = 0.97
 
 local function cubic_ease_out(progress)
   local remaining = 1 - progress
@@ -70,15 +71,20 @@ function transition.state(view, now)
       (start_time - view.open_transition_requested_at) * 1000
     )
   end
-  local progress = common.clamp((now - start_time) / DURATION_SECONDS, 0, 1)
-  local eased = cubic_ease_out(progress)
-  if progress < 1 then
+  local elapsed = now - start_time
+  local scale_progress = common.clamp(elapsed / DURATION_SECONDS, 0, 1)
+  local alpha_progress = common.clamp(elapsed / ALPHA_DURATION_SECONDS, 0, 1)
+  local scale_eased = cubic_ease_out(scale_progress)
+  local alpha_eased = cubic_ease_out(alpha_progress)
+  if scale_progress < 1 then
     core.redraw = true
   else
     view.open_transition_complete = true
     core.log_quiet("Fuzzy Searcher: opening transition complete")
   end
-  return eased, 1 + (START_SCALE - 1) * (1 - eased), eased > 0
+  return alpha_eased,
+    1 + (START_SCALE - 1) * (1 - scale_eased),
+    alpha_eased > 0
 end
 
 function transition.begin_close(view, now)
@@ -97,19 +103,20 @@ end
 function transition.close_state(view, now)
   if not enabled() then return 0, START_SCALE, false, true end
   now = now or system.get_time()
-  local progress = common.clamp(
-    (now - view.close_transition_started_at) / DURATION_SECONDS, 0, 1
-  )
-  local eased = cubic_ease_out(progress)
-  local opacity = view.close_transition_start_opacity * (1 - eased)
+  local elapsed = now - view.close_transition_started_at
+  local scale_progress = common.clamp(elapsed / DURATION_SECONDS, 0, 1)
+  local alpha_progress = common.clamp(elapsed / ALPHA_DURATION_SECONDS, 0, 1)
+  local scale_eased = cubic_ease_out(scale_progress)
+  local alpha_eased = cubic_ease_out(alpha_progress)
+  local opacity = view.close_transition_start_opacity * (1 - alpha_eased)
   local scale = view.close_transition_start_scale
-    + (START_SCALE - view.close_transition_start_scale) * eased
-  if progress < 1 then
+    + (START_SCALE - view.close_transition_start_scale) * scale_eased
+  if scale_progress < 1 then
     core.redraw = true
   else
     core.log_quiet("Fuzzy Searcher: closing transition complete")
   end
-  return opacity, scale, opacity > 0, progress >= 1
+  return opacity, scale, opacity > 0, scale_progress >= 1
 end
 
 function transition.draw(view, opacity, scale, draw)
