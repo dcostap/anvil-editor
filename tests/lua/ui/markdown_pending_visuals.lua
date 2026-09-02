@@ -368,7 +368,7 @@ test.describe("Markdown pending visual continuity", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("keeps plus-delimited frontmatter ownership during a pending edit", function()
+  test.it("keeps plus-delimited frontmatter as ordinary source during a pending edit", function()
     local old_live = config.markdown_live_editor
     local old_active = core.active_view
     local filename = USERDIR .. PATHSEP
@@ -392,16 +392,11 @@ test.describe("Markdown pending visual continuity", function()
       buffer:insert(2, 5, "\n")
 
       test.equal(instance.status, "pending")
-      test.equal(
-        decoration:line_background(view, 2),
-        style.markdown_live_frontmatter_background,
-        "plus-delimited frontmatter lost its pending background"
-      )
+      test.equal(view:get_line_render(2), nil)
+      test.equal(decoration:line_background(view, 2), nil)
       test.ok(wait_ready(instance), instance.reason)
-      test.equal(
-        decoration:line_background(view, 2),
-        style.markdown_live_frontmatter_background
-      )
+      test.equal(view:get_line_render(2), nil)
+      test.equal(decoration:line_background(view, 2), nil)
     end)
     if view then markdown.live_render.detach(view) end
     config.markdown_live_editor = old_live
@@ -409,7 +404,7 @@ test.describe("Markdown pending visual continuity", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("keeps frontmatter ownership through an ordinary pending edit", function()
+  test.it("keeps frontmatter as ordinary source through a pending edit", function()
     local old_live = config.markdown_live_editor
     local old_active = core.active_view
     local filename = USERDIR .. PATHSEP
@@ -433,16 +428,11 @@ test.describe("Markdown pending visual continuity", function()
       buffer:insert(2, #buffer.lines[2] - 1, "!")
 
       test.equal(instance.status, "pending")
-      test.equal(
-        decoration:line_background(view, 2),
-        style.markdown_live_frontmatter_background,
-        "frontmatter lost its background during an ordinary pending edit"
-      )
+      test.equal(view:get_line_render(2), nil)
+      test.equal(decoration:line_background(view, 2), nil)
       test.ok(wait_ready(instance), instance.reason)
-      test.equal(
-        decoration:line_background(view, 2),
-        style.markdown_live_frontmatter_background
-      )
+      test.equal(view:get_line_render(2), nil)
+      test.equal(decoration:line_background(view, 2), nil)
     end)
     if view then markdown.live_render.detach(view) end
     config.markdown_live_editor = old_live

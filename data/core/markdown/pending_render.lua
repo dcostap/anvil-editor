@@ -73,15 +73,12 @@ function pending_render.current_source(
   local owner = view.__markdown_live_owner
   local topology = owner and owner.provisional_topology
   local function frontmatter_source_render()
-    local render = source_fallback(view, previous, current_text, false)
-    render.markdown_pending_provenance = "unavailable"
-    for _, fragment in ipairs(render.fragments or {}) do
-      fragment.color = (current_text:match("^%s*%-%-%-%s*$")
-          or current_text:match("^%s*%+%+%+%s*$")
-          or current_text:match("^%s*%.%.%.%s*$"))
-        and style.markdown_live_frontmatter_delimiter or style.text
-    end
-    return render
+    return {
+      source_text = current_text,
+      metric_height = view:get_line_height(),
+      markdown_pending_provenance = "unavailable",
+      raw_passthrough = true,
+    }
   end
   if topology and topology.revision == view.buffer.text_revision
     and topology.fence_delimiters and topology.fence_delimiters[line]

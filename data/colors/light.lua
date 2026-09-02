@@ -324,9 +324,6 @@ style.markdown_live_callout_palette = {
   example  = { accent = c("7650b5"), background = c("f1ebfa") },
   quote    = { accent = c("626872"), background = c("f0f1f3") },
 }
-style.markdown_live_frontmatter_background = style.background2
-style.markdown_live_frontmatter_delimiter = style.dim
-style.markdown_live_frontmatter_key = style.accent
 style.markdown_live_list_marker = style.dim
 style.markdown_live_task_checked = style.accent
 style.markdown_live_task_unchecked = style.dim

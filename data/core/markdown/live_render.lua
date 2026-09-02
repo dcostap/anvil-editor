@@ -69,7 +69,9 @@ local indented_code_for_line
 
 local function line_in_raw_block(view, line)
   for _, node in ipairs(semantic_line(view, line) or {}) do
-    if node.type == "code_fenced" or node.type == "code_indented" or node.type == "html" then
+    if node.type == "code_fenced" or node.type == "code_indented"
+      or node.type == "html" or node.type == "frontmatter"
+    then
       return true
     end
   end
@@ -2946,44 +2948,10 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
   local fragments, seen = {}, {}
   local callout = callout_runtime.for_line(view, line)
   if whole_line_reveal and not callout then return {} end
-  local frontmatter, frontmatter_line2 = frontmatter_for_line(view, line)
   local table_node = table_for_line(view, line)
   if table_node then
     if config.markdown_live_interactive_tables ~= true then return {} end
     return table_row_fragments(view, table_node, line) or {}
-  end
-  if frontmatter then
-    if line == frontmatter.source.line1 or line == frontmatter_line2 then
-      return {
-        {
-          source_col1 = 1, source_col2 = #line_text + 1, text = line_text,
-          color = style.markdown_live_frontmatter_delimiter,
-          semantic_id = frontmatter.id .. ":delimiter:" .. line,
-        },
-      }
-    end
-    local key, separator = line_text:match("^([%w_-]+)(:%s*)")
-    if key then
-      local separator_col2 = #key + #separator + 1
-      return {
-        {
-          source_col1 = 1, source_col2 = #key + 1, text = key,
-          color = style.markdown_live_frontmatter_key,
-          semantic_id = frontmatter.id .. ":key:" .. line,
-        },
-        {
-          source_col1 = #key + 1, source_col2 = separator_col2, text = separator,
-          color = style.markdown_live_frontmatter_delimiter,
-          semantic_id = frontmatter.id .. ":separator:" .. line,
-        },
-      }
-    end
-    return {
-      {
-        source_col1 = 1, source_col2 = #line_text + 1, text = line_text,
-        color = style.text, semantic_id = frontmatter.id .. ":value:" .. line,
-      },
-    }
   end
   local semantic_nodes = semantic_line(view, line) or {}
   if callout and callout.current_line_ranges then
@@ -5378,16 +5346,8 @@ function decoration_provider:line_background(view, line)
     if provisional and provisional.revision == view.buffer.text_revision then
       if provisional.comments[line] then return nil end
       if provisional.fenced[line] then return style.markdown_live_code_background end
-      if provisional.frontmatter[line] then
-        return style.markdown_live_frontmatter_background
-      end
     elseif owner.fence_service and owner.fence_service:contains_line(line) then
       return style.markdown_live_code_background
-    end
-    if owner.pending_frontmatter_lines
-      and owner.pending_frontmatter_lines[line]
-    then
-      return style.markdown_live_frontmatter_background
     end
   end
   local topology = current_provisional_topology(view, line)
@@ -5426,7 +5386,6 @@ function decoration_provider:line_background(view, line)
     if callout_runtime.for_line(view, line) then return nil end
     return style.markdown_live_code_background
   end
-  if frontmatter_for_line(view, line) then return style.markdown_live_frontmatter_background end
   return nil
 end
 

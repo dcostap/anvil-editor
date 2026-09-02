@@ -3187,27 +3187,32 @@ test.describe("Markdown Live Preview", function()
     end
   end)
 
-  test.it("styles semantic frontmatter as source-preserving structured content", function()
+  test.it("shows frontmatter as ordinary source", function()
     local view, buffer = make_view("---\naliases: [Example]\ntags:\n  - project/anvil\n---\n# Body", "properties.md")
     buffer:set_selection(6, 2)
     refresh(view)
-    local opening = test.not_nil(view:get_line_render(1))
-    test.equal(opening.fragments[1].text, "---")
-    local property = test.not_nil(view:get_line_render(2))
-    test.equal(property.fragments[1].text, "aliases")
-    test.equal(property.fragments[2].text, ": ")
-    local list_value = test.not_nil(view:get_line_render(4))
-    test.equal(list_value.fragments[1].text, "  - project/anvil")
+    for line = 1, 5 do
+      test.equal(
+        view:get_line_render(line), nil,
+        "frontmatter line " .. line .. " received a special render"
+      )
+    end
 
     local markdown_decoration
     for _, entry in ipairs(view:decoration_provider_entries()) do
       if entry.id == "markdown-live" then markdown_decoration = entry.provider break end
     end
     markdown_decoration = test.not_nil(markdown_decoration)
+    for line = 1, 5 do
+      test.equal(
+        markdown_decoration:line_background(view, line), nil,
+        "frontmatter line " .. line .. " received a special background"
+      )
+    end
     test.equal(markdown_decoration:line_background(view, 6), nil)
 
     buffer:set_selection(2, 3)
-    test.equal(visible_render_text(view, 2), "aliases: [Example]")
+    test.equal(view:get_line_render(2), nil)
   end)
 
   test.it("presents semantic callout headers, bodies, and unknown-type fallbacks", function()
