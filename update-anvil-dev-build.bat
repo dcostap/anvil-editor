@@ -28,6 +28,11 @@ call :KillAnvil
 if errorlevel 1 exit /b 1
 
 echo.
+echo === Building Anvil incrementally ===
+"%BASH%" -lc "%MSYS_ENV% cd %REPO_BASH% && zig_dir=$(./scripts/ensure-zig.sh) && export PATH=$zig_dir:$PATH && ./scripts/ensure-luajit-cli.sh && if [ -f build-windows-x86_64/build.ninja ]; then meson configure build-windows-x86_64 -Drenderer=true && meson compile -C build-windows-x86_64; else ./scripts/build.sh -f -P; fi"
+if errorlevel 1 exit /b 1
+
+echo.
 echo === Temporarily removing source-data junctions ===
 call :RemoveLink "%DEST%\data\core"
 if errorlevel 1 exit /b 1
@@ -38,11 +43,6 @@ if errorlevel 1 exit /b 1
 call :RemoveLink "%DEST%\data\widget"
 if errorlevel 1 exit /b 1
 call :RemoveLink "%DEST%\data\treesitter"
-if errorlevel 1 exit /b 1
-
-echo.
-echo === Building Anvil incrementally ===
-"%BASH%" -lc "%MSYS_ENV% cd %REPO_BASH% && zig_dir=$(./scripts/ensure-zig.sh) && export PATH=$zig_dir:$PATH && if [ -f build-windows-x86_64/build.ninja ]; then meson configure build-windows-x86_64 -Drenderer=true && meson compile -C build-windows-x86_64; else ./scripts/build.sh -f -P; fi && ./scripts/ensure-luajit-cli.sh"
 if errorlevel 1 exit /b 1
 
 echo.
