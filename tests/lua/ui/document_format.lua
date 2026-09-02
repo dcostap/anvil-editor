@@ -136,7 +136,8 @@ test.describe("document formatting", function()
   test.it("does not offer formatting for unsupported Language Modes", function(context)
     open_json(context, "plain")
     core.current_editor().buffer.syntax = syntax.plain_text_syntax
-    test.not_ok(command.is_valid("editor:format_document"))
+    test.ok(command.is_valid("editor:format_document"))
+    test.ok(command.perform("editor:format_document"))
   end)
 
   test.it("offers formatting for each bundled structured Language Mode", function(context)

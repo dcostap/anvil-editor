@@ -234,6 +234,10 @@ function document_format.format(view)
   if not view:can_edit("format", { warn = true }) then return false end
   local buffer = view.buffer
   local language = language_name(buffer)
+  if not extensions[language] then
+    core.error("No document formatter is available for %s", language)
+    return false
+  end
   local request = {
     buffer = buffer,
     revision = buffer.text_revision,
@@ -272,8 +276,7 @@ end
 
 local function format_target()
   local view = core.current_editor()
-  local language = view and language_name(view.buffer)
-  if view and view:extends(Editor) and extensions[language] then return true, view end
+  if view and view:extends(Editor) then return true, view end
   return false
 end
 
