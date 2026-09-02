@@ -133,10 +133,9 @@ function RootPanel:defer_draw(fn, ...)
   table.insert(self.deferred_draws, 1, { fn = fn, ... })
 end
 
-local function quadratic_ease_in_out(progress)
-  if progress < 0.5 then return 2 * progress * progress end
+local function quintic_ease_out(progress)
   local remaining = 1 - progress
-  return 1 - 2 * remaining * remaining
+  return 1 - remaining * remaining * remaining * remaining * remaining
 end
 
 function RootPanel:update_app_overlay(now)
@@ -228,7 +227,7 @@ function RootPanel:draw_active_app_overlay()
   local source = type(overlay.color) == "string" and style[overlay.color] or overlay.color
   if type(source) ~= "table" then return end
   local color = { table.unpack(source) }
-  color[4] = (color[4] or 255) * quadratic_ease_in_out(overlay.progress)
+  color[4] = (color[4] or 255) * quintic_ease_out(overlay.progress)
   self:draw_app_overlay(color, overlay.unobscured_view)
 end
 
