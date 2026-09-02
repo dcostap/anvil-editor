@@ -52,6 +52,7 @@ settings.sections = {}
 settings.plugin_sections = {}
 settings.config = {}
 settings.default_keybindings = {}
+settings.ready = false
 
 local DEFAULT_COLOR_THEME_NAME = "dark"
 local DEFAULT_COLOR_THEME_MODULE = "default"
@@ -1553,6 +1554,17 @@ function Settings:new()
   self:setup_about()
 end
 
+local function get_settings_ui()
+  if settings.ui then return settings.ui end
+  local started = system.get_time()
+  settings.ui = Settings()
+  core.log_quiet(
+    "Settings view constructed on demand in %.3f ms",
+    (system.get_time() - started) * 1000
+  )
+  return settings.ui
+end
+
 ---Helper function to add control for core, plugin, and standalone settings.
 ---@param pane widget
 ---@param option settings.option
@@ -2545,9 +2557,6 @@ function core.run()
   -- merge custom settings into config
   startup_measure("settings_merge_saved_values", merge_settings)
 
-  ---@type settings.ui
-  settings.ui = startup_measure("settings_construct_ui", Settings)
-
   -- apply user chosen color theme
   startup_measure("settings_apply_theme", function()
     if settings.config.theme then
@@ -2579,6 +2588,7 @@ function core.run()
     end
   end)
 
+  settings.ready = true
   core_run()
 end
 
@@ -2626,7 +2636,7 @@ command.add(nil, theme_commands)
 
 command.add(nil, {
   ["settings:open"] = command.palette(function()
-    open_settings_view(settings.ui)
+    open_settings_view(get_settings_ui())
   end, {
     keywords = { "preferences", "configuration", "options" },
     opens_view = true,

@@ -4,7 +4,6 @@ local settings = require "plugins.settings"
 local Button = require "widget.button"
 local TextBox = require "widget.textbox"
 local Toggle = require "widget.toggle"
-local SettingsView = getmetatable(settings.ui)
 
 local function find_child(view, class)
   local childs = view.childs
@@ -17,6 +16,17 @@ local function find_child(view, class)
 end
 
 test.describe("settings", function()
+  test.it("creates the settings view when the open command needs it", function()
+    local command = require "core.command"
+    settings.ui = nil
+
+    test.ok(command.perform("settings:open"))
+    test.ok(settings.ui)
+    test.equal(settings.ui.name, "Settings")
+
+    settings.ui:hide()
+  end)
+
   test.it("uses one theme picker instead of one command per theme", function()
     local command = require "core.command"
     test.ok(command.is_valid("core:select_theme"))
@@ -387,7 +397,7 @@ test.describe("settings", function()
       }
     }
 
-    SettingsView.enable_plugin(settings.ui, "test_settings")
+    settings.ui:enable_plugin("test_settings")
 
     test.equal(config.plugins.test_settings.project.name, "Website")
   end)

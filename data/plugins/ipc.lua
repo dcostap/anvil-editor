@@ -885,14 +885,13 @@ core.exit = function(quit_fn, force)
 end
 
 --------------------------------------------------------------------------------
--- Override system.get_time temporarily as first function called on core.run_step
--- to allow settings gui to properly load ipc config options as signal
--- core.open_file and core.change_directory.
+-- Delay IPC startup until the settings plugin loads its configuration.
+-- core.run_step calls system.get_time before core.open_file and core.change_directory.
 --------------------------------------------------------------------------------
 local system_get_time = system.get_time
 
 system.get_time = function()
-  if settings_found and settings and not settings.ui then
+  if settings_found and settings and not settings.ready then
     return system_get_time()
   end
 
