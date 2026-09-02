@@ -21,6 +21,7 @@ show_help() {
   echo "-p --prefix PREFIX            Install directory prefix. Default: '/'."
   echo "-B --bundle                   Create an App bundle (macOS only)"
   echo "-P --portable                 Create a portable binary package."
+  echo "-E --embedded-runtime         Embed Windows runtime data in the executable."
   echo "-O --pgo                      Use profile guided optimizations (pgo)."
   echo "-L --lto                      Enables Link-Time Optimization (LTO)."
   echo "-r --release                  Compile in release mode."
@@ -43,6 +44,7 @@ main() {
   local force_fallback
   local bundle
   local portable
+  local embedded_runtime
   local pgo
   local lto
   local cross
@@ -86,6 +88,10 @@ main() {
         ;;
       -P|--portable)
         portable="-Dportable=true"
+        shift
+        ;;
+      -E|--embedded-runtime)
+        embedded_runtime="-Dembedded_runtime=true"
         shift
         ;;
       -O|--pgo)
@@ -198,6 +204,7 @@ main() {
     $force_fallback \
     $bundle \
     $portable \
+    $embedded_runtime \
     $pgo \
     $lto \
     -Doptimization=3 \

@@ -110,10 +110,10 @@ foreach h: hdrgen
                                 output: 'lj_@0@.h'.format(h))
 endforeach
 
-custom_target('vmdef',
-              command: [buildvm, '-m', 'vmdef', '-o', '@OUTPUT@', ljlib_src],
-              output: 'vmdef.lua', build_by_default: true, install: true,
-              install_dir: join_paths(get_option('data_dir'), 'jit'))
+luajit_vmdef = custom_target('vmdef',
+                             command: [buildvm, '-m', 'vmdef', '-o', '@OUTPUT@', ljlib_src],
+                             output: 'vmdef.lua', build_by_default: true, install: true,
+                             install_dir: join_paths(get_option('data_dir'), 'jit'))
 
 genheaders += custom_target('folddef',
                             command: [buildvm, '-m', 'folddef', '-o', '@OUTPUT@', files('lj_opt_fold.c')],

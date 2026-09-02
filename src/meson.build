@@ -146,6 +146,18 @@ if host_machine.system() == 'windows'
         'zig_abi_compat.c',
         'api/terminal_native.c',
     ]
+    if embedded_runtime
+        anvil_sources += 'embedded_runtime.c'
+        anvil_cargs += '-DANVIL_EMBEDDED_RUNTIME'
+        anvil_deps += dependency(
+            'zlib',
+            fallback: ['zlib', 'zlib_dep'],
+            default_options: default_fallback_options + ['default_library=static']
+        )
+        anvil_rc += windows.compile_resources(
+            embedded_runtime_rc,
+        )
+    endif
     anvil_deps += cc.find_library('dwmapi', required: true)
     anvil_deps += cc.find_library('d3d11', required: true)
     anvil_deps += cc.find_library('dxgi', required: true)
@@ -378,7 +390,25 @@ anvil_exe = executable('anvil',
     win_subsystem: 'windows',
 )
 
-if host_machine.system() == 'windows'
+if embedded_runtime
+    standalone_runtime_powershell = find_program('powershell')
+    test(
+        'standalone-runtime',
+        standalone_runtime_powershell,
+        args: [
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-File', files('../tests/gui/smoke/standalone-runtime-test.ps1'),
+            '-AnvilExe', anvil_exe.full_path(),
+        ],
+        depends: anvil_exe,
+        suite: 'anvil',
+        timeout: 60,
+        is_parallel: false,
+    )
+endif
+
+if host_machine.system() == 'windows' and not embedded_runtime
     executable('anvil',
         anvil_sources + anvil_rc,
         include_directories: anvil_includes,

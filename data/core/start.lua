@@ -16,7 +16,9 @@ SCALE = 1.0
 PATHSEP = package.config:sub(1, 1)
 
 EXEDIR = EXEFILE:match("^(.+)[/\\][^/\\]+$")
-if MACOS_RESOURCES then
+if EMBEDDED_DATADIR then
+  DATADIR = EMBEDDED_DATADIR
+elseif MACOS_RESOURCES then
   DATADIR = MACOS_RESOURCES
 else
   local prefix = os.getenv('ANVIL_PREFIX') or EXEDIR:match("^(.+)[/\\]bin$")

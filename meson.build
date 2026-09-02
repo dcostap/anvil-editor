@@ -55,10 +55,12 @@ use_system_lua = get_option('use_system_lua')
 lua_jit_found = false
 if get_option('jit')
     if not use_system_lua
-        luajit_dep = subproject(
+        luajit_subproject = subproject(
             'luajit',
             default_options: ['default_library=static', 'data_dir='+anvil_datadir]
-        ).get_variable('luajit_dep')
+        )
+        luajit_dep = luajit_subproject.get_variable('luajit_dep')
+        luajit_vmdef = luajit_subproject.get_variable('luajit_vmdef')
     else
         luajit_dep = dependency('luajit', required : false,
             default_options: ['default_library=static']
@@ -441,12 +443,46 @@ if get_option('ppm')
     subproject('ppm', default_options: default_ppm_options)
 endif
 
-configure_file(
+configured_start = configure_file(
     input : 'data/core/start.lua',
     output : 'start.lua',
     configuration : conf_data,
     install_dir : join_paths(anvil_datadir, 'core'),
 )
+
+embedded_runtime = get_option('embedded_runtime')
+if embedded_runtime and host_machine.system() != 'windows'
+    error('embedded_runtime is only available on Windows')
+endif
+if embedded_runtime and (use_system_lua or not get_option('jit'))
+    error('embedded_runtime requires the bundled LuaJIT runtime')
+endif
+
+embedded_runtime_rc = []
+if embedded_runtime
+    embedded_runtime_python = find_program('python3', 'python')
+    embedded_runtime_command = [
+        embedded_runtime_python,
+        files('scripts/generate-embedded-runtime.py'),
+        '--source-root', anvil_source_root,
+        '--start-file', '@INPUT0@',
+        '--vmdef-file', '@INPUT1@',
+        '--output', '@OUTPUT0@',
+        '--resource-script', '@OUTPUT1@',
+    ]
+    if get_option('extra_languages')
+        embedded_runtime_command += '--extra-languages'
+    endif
+    embedded_runtime_archive = custom_target(
+        'anvil-embedded-runtime',
+        input : [configured_start, luajit_vmdef],
+        output : ['anvil-runtime.bin', 'embedded-runtime.rc'],
+        command : embedded_runtime_command,
+        build_by_default : true,
+        build_always_stale : true,
+    )
+    embedded_runtime_rc = embedded_runtime_archive[1]
+endif
 
 if not get_option('source-only')
     subdir('src')

@@ -10,3 +10,4 @@ option('ppm', type : 'boolean', value : true, description: 'Include the plugin m
 option('jit', type : 'boolean', value : true, description: 'Use luajit')
 option('repl_history', type : 'boolean', value : true, description: 'Enable history and completion support on REPL')
 option('net', type : 'boolean', value : true, description: 'Enable networking support using SDL3_net and mbedtls')
+option('embedded_runtime', type : 'boolean', value : false, description: 'Embed the Windows runtime data for standalone executable releases')

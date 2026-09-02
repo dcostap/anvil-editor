@@ -13,6 +13,9 @@
 #include "win32_single_instance.h"
 #include "win32_window_handoff.h"
 #include "treesitter/service.h"
+#ifdef ANVIL_EMBEDDED_RUNTIME
+  #include "embedded_runtime.h"
+#endif
 
 #ifdef _WIN32
   #include <windows.h>
@@ -141,6 +144,9 @@ typedef struct {
 static AppState *live_resize_app = NULL;
 static bool renderer_initialized = false;
 static bool custom_events_initialized = false;
+#ifdef ANVIL_EMBEDDED_RUNTIME
+static char embedded_datadir[4096] = "";
+#endif
 
 static void log_resize_request(AppState *app, const char *reason, const char *action,
                                Uint64 since_last_ns, double run_ms) {
@@ -228,7 +234,7 @@ static const char *init_code =
   "  LUAJIT = " ANVIL_LUAJIT "\n"
   "  local exedir = match(EXEFILE, '^(.*)" ANVIL_PATHSEP_PATTERN ANVIL_NONPATHSEP_PATTERN "$')\n"
   "  local prefix = os.getenv('ANVIL_PREFIX') or match(exedir, '^(.*)" ANVIL_PATHSEP_PATTERN "bin$')\n"
-  "  dofile((MACOS_RESOURCES or (prefix and prefix .. '/share/anvil' or exedir .. '/data')) .. '/core/start.lua')\n"
+  "  dofile((EMBEDDED_DATADIR or MACOS_RESOURCES or (prefix and prefix .. '/share/anvil' or exedir .. '/data')) .. '/core/start.lua')\n"
   "  core = require(os.getenv('ANVIL_RUNTIME') or 'core')\n"
   "  core.init()\n"
   "  core.run()\n"
@@ -280,6 +286,11 @@ static bool init_lua_state(AppState *app) {
   lua_pushboolean(app->L, app->running_lua_tests);
   lua_setglobal(app->L, "RUNNING_LUA_TESTS");
 
+#ifdef ANVIL_EMBEDDED_RUNTIME
+  lua_pushstring(app->L, embedded_datadir);
+  lua_setglobal(app->L, "EMBEDDED_DATADIR");
+#endif
+
   char exename[2048];
   get_exe_filename(exename, sizeof(exename));
   if (*exename) {
@@ -326,6 +337,19 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   if (!anvil_window_handoff_is_probe_child() &&
       anvil_single_instance_forward_or_own(argc, argv)) {
     return SDL_APP_SUCCESS;
+  }
+#endif
+#ifdef ANVIL_EMBEDDED_RUNTIME
+  char runtime_error[1024] = "";
+  if (!anvil_embedded_runtime_prepare(
+        embedded_datadir, sizeof(embedded_datadir), runtime_error, sizeof(runtime_error))) {
+    MessageBoxA(
+      NULL,
+      runtime_error[0] ? runtime_error : "The embedded Anvil runtime could not be prepared.",
+      "Anvil startup error",
+      MB_OK | MB_ICONERROR
+    );
+    return SDL_APP_FAILURE;
   }
 #endif
 #ifndef _WIN32

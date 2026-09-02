@@ -20,7 +20,20 @@ Compiling produces binaries in:
 These build-directory binaries retain native debug information. The dev
 portable install strips its executable so the daily launcher starts quickly.
 
-The Lua/data files are not embedded in the exe. A runnable portable app is produced by `meson install` into `C:\Projects\c_projects\anvil-portable`.
+Dev builds load Lua/data files beside the exe. A runnable dev app is produced by `meson install` into `C:\Projects\c_projects\anvil-portable`.
+
+## Standalone Windows release
+
+Run `build-anvil-standalone.bat` to create and test `dist\anvil.exe`.
+
+The release exe contains a compressed copy of the runtime data. On first run,
+it extracts that data to `%LOCALAPPDATA%\Anvil\runtime\<build-id>\data`.
+Later runs reuse the same complete runtime. Users only distribute `anvil.exe`.
+The standalone build runs `tests\gui\smoke\standalone-runtime-test.ps1`.
+
+Keep the dev build external-data workflow. Do not embed source data in the
+daily dev executable. The standalone build uses its own
+`build-windows-x86_64-standalone` directory.
 
 ## Dev portable workflow
 
