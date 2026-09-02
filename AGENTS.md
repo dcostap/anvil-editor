@@ -35,6 +35,38 @@ Keep the dev build external-data workflow. Do not embed source data in the
 daily dev executable. The standalone build uses its own
 `build-windows-x86_64-standalone` directory.
 
+The standalone build needs MSYS2, MinGW64 GCC, Ninja, CMake, Python, Meson,
+and Zig. `scripts\ensure-zig.sh` downloads the pinned Zig release into
+`%LOCALAPPDATA%\anvil-build-tools` when it is missing. The build needs network
+access for this download and for Meson subprojects on a clean machine.
+
+The standalone option is `-Dembedded_runtime=true`. It is off by default.
+`scripts\build-standalone-windows.sh` enables it, strips the executable, runs
+the standalone smoke test, and promotes the result only after the test passes.
+
+### GitHub releases
+
+The only active GitHub workflow is `.github\workflows\release.yml`. It builds
+one Windows x86_64 standalone executable and uploads `dist\anvil.exe` to a
+GitHub Release. A tag that starts with `v` starts the workflow:
+
+```sh
+git tag -a v3.10.1-anvil.3 -m "Anvil v3.10.1-anvil.3"
+git push origin master
+git push origin v3.10.1-anvil.3
+```
+
+The workflow also supports manual dispatch. Pass an existing release tag when
+you retry a build. Do not commit release executables; `*.exe` is ignored.
+
+The workflow uses the same standalone script as the local build. Keep these
+paths and the smoke test aligned when changing release packaging. The release
+asset is unsigned, so Windows SmartScreen can show a warning.
+
+The native Project symbol index accepts a bounded explicit path list. A very
+large Project can exceed that bound. The editor reports the submission error
+and stays open, but it does not index that complete Project.
+
 ## Dev portable workflow
 
 Use the BAT files in the repo root
