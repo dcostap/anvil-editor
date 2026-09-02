@@ -8117,6 +8117,11 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
       visible_caret_cache[#visible_caret_cache + 1] = { raw_line1, raw_col1, raw_line2, raw_col2 }
     end
   end
+  if #visible_caret_cache < #selections / 4 then
+    -- A later visible frame must start at its current position. Screen
+    -- coordinates from before an off-screen interval are not a valid origin.
+    self.animated_caret_positions = nil
+  end
   if stats then
     stats.visible_carets = stats.visible_carets + #visible_caret_cache
     stats.prepare_caret_ms = stats.prepare_caret_ms + (system.get_time() - phase_start) * 1000

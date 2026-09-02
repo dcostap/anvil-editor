@@ -104,4 +104,31 @@ test.describe("caret trail", function()
       test.equal(polygons[1].color[1], 12)
     end)
   end)
+
+  test.it("starts at the visible position after the caret leaves the viewport", function()
+    with_caret_settings(function()
+      local view = make_view()
+      local now = 30
+      local polygons = 0
+      system.get_time = function() return now end
+      renderer.draw_rect = function() end
+      renderer.draw_poly = function() polygons = polygons + 1 end
+      config.animated_caret = true
+      config.caret_trail = true
+      config.caret_trail_duration = 0.2
+      config.caret_trail_min_distance = 1
+      config.caret_trail_min_vertical_distance = 1
+      config.caret_trail_opacity = 0.5
+      config.caret_trail_width = 3
+      style.caret_trail = { 12, 34, 56, 200 }
+
+      view:draw_caret(10, 20, 1, 1, 1)
+      view.buffer:set_selection(2, 1)
+      view:prepare_line_body_draw_cache(1, 1)
+
+      now = 30.01
+      view:draw_caret(80, 60, 2, 1, 1)
+      test.equal(polygons, 0, "expected no animation from an off-screen position")
+    end)
+  end)
 end)
