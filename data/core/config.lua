@@ -306,6 +306,30 @@ config.animated_caret_distance_min = 15
 ---@type number
 config.animated_caret_distance_max = 450
 
+---Enables fading marks at recent caret positions.
+---@type boolean
+config.caret_trail = nil
+
+---Time in seconds before each caret trail mark disappears.
+---@type number
+config.caret_trail_duration = nil
+
+---Maximum number of stored marks for each caret.
+---@type integer
+config.caret_trail_max_points = nil
+
+---Minimum movement in pixels that adds a caret trail mark.
+---@type number
+config.caret_trail_min_distance = nil
+
+---Maximum caret trail opacity from 0 to 1.
+---@type number
+config.caret_trail_opacity = nil
+
+---Caret trail mark width in pixels.
+---@type number
+config.caret_trail_width = nil
+
 ---Draws whitespaces as dots.
 ---This option is deprecated.
 ---Please use the drawwhitespace plugin instead.

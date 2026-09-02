@@ -216,6 +216,10 @@ _Avoid_: global Pane cycle, internal split focus
 The caret and selection state owned by a Text View.
 _Avoid_: Buffer selection, shared selection
 
+**Caret Trail**:
+A short, fading visual trace that marks recent caret positions in a Text View.
+_Avoid_: Cursor trail, mouse trail
+
 **Selection Surrounding**:
 An editing action that keeps selected text selected while placing matching delimiters around it. A multiline line-content selection may become an indented delimiter block.
 _Avoid_: auto-pairing, wrapper conversion

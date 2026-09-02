@@ -7716,16 +7716,60 @@ end
 ---@param col integer Column number (for overwrite mode char width)
 function TextView:draw_caret(x, y, line, col, caret_idx, color)
   color = color or style.caret
-  if config.animated_caret then
+  local trail_enabled = config.caret_trail
+  local visual_state_enabled = config.animated_caret or trail_enabled
+  local pos
+  local now
+  if visual_state_enabled then
     self.animated_caret_positions = self.animated_caret_positions or {}
     caret_idx = caret_idx or 1
-    local pos = self.animated_caret_positions[caret_idx]
+    pos = self.animated_caret_positions[caret_idx]
     if not pos then
       pos = { x = x, y = y }
       self.animated_caret_positions[caret_idx] = pos
     end
 
-    local now = system.get_time()
+    now = system.get_time()
+    if trail_enabled then
+      pos.trail = pos.trail or {}
+      local moved = pos.target_line ~= nil
+        and (line ~= pos.target_line or col ~= pos.target_col)
+      if moved then
+        local old_x = pos.draw_x or pos.target_x or pos.x
+        local old_y = pos.draw_y or pos.target_y or pos.y
+        local dx = x - old_x
+        local dy = y - old_y
+        if math.sqrt(dx * dx + dy * dy) >= config.caret_trail_min_distance then
+          local trail = pos.trail
+          trail[#trail + 1] = {
+            x = old_x,
+            y = old_y,
+            height = pos.caret_height or self:get_line_height(),
+            time = now,
+          }
+          local max_points = math.max(0, math.floor(config.caret_trail_max_points))
+          while #trail > max_points do table.remove(trail, 1) end
+        end
+      end
+      pos.target_x, pos.target_y = x, y
+      pos.target_line, pos.target_col = line, col
+    else
+      pos.trail = nil
+      pos.target_x, pos.target_y = nil, nil
+      pos.target_line, pos.target_col = nil, nil
+    end
+
+  elseif self.animated_caret_positions then
+    caret_idx = caret_idx or 1
+    local old_pos = self.animated_caret_positions[caret_idx]
+    if old_pos then
+      old_pos.trail = nil
+      old_pos.target_x, old_pos.target_y = nil, nil
+      old_pos.target_line, old_pos.target_col = nil, nil
+    end
+  end
+
+  if config.animated_caret then
     local last = pos.last_time or now
     pos.last_time = now
     -- Keep the first frame after an idle period from consuming the whole
@@ -7787,6 +7831,40 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
     )
     y = y + content_y_offset
   end
+  if pos then
+    pos.caret_height = lh
+    pos.draw_x, pos.draw_y = x, y
+  end
+
+  if trail_enabled and pos and pos.trail then
+    local duration = config.caret_trail_duration
+    local base = style.caret_trail
+    local opacity = math.max(0, math.min(1, config.caret_trail_opacity))
+    if duration <= 0 or opacity <= 0 or config.caret_trail_width <= 0 then
+      pos.trail = {}
+    end
+    local write = 1
+    for read = 1, #pos.trail do
+      local point = pos.trail[read]
+      local remaining = 1 - (now - point.time) / duration
+      if remaining > 0 then
+        pos.trail[write] = point
+        write = write + 1
+        local fade = remaining * remaining
+        renderer.draw_rect(
+          point.x, point.y,
+          config.caret_trail_width, point.height,
+          {
+            base[1], base[2], base[3],
+            math.floor((base[4] or 255) * opacity * fade + 0.5),
+          }
+        )
+      end
+    end
+    for index = #pos.trail, write, -1 do pos.trail[index] = nil end
+    if #pos.trail > 0 then core.redraw = true end
+  end
+
   if self.buffer.overwrite then
     local w = self:get_font():get_width(self.buffer:get_char(line, col))
     renderer.draw_rect(x, y + lh, w, style.caret_width * 2, color)
