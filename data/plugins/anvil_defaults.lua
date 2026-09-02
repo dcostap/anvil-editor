@@ -6,6 +6,12 @@ local config = require "core.config"
 config.plugins.editor_wallpaper = false
 local keymap = require "core.keymap"
 local style = require "core.style"
+local startup = package.loaded["core.startup"]
+
+local function startup_measure(name, fn)
+  if startup then return startup.measure(name, fn) end
+  return fn()
+end
 
 local function plugin_defaults(name, defaults)
   if config.plugins[name] ~= false then
@@ -271,55 +277,67 @@ local function load_text_font(primary_path, options, fallbacks, size)
   end
   return renderer.font.group(fonts)
 end
-local interface_fallbacks = load_fallback_fonts("interface")
-local code_fallbacks = load_fallback_fonts("code")
+local interface_fallbacks = startup_measure(
+  "font_interface_fallback_loading",
+  function() return load_fallback_fonts("interface") end
+)
+local code_fallbacks = startup_measure(
+  "font_code_fallback_loading",
+  function() return load_fallback_fonts("code") end
+)
 local terminal_fallbacks = code_fallbacks
 
-style.font = load_text_font(
-  font_path, { ligatures = true, hinting = "full" }, interface_fallbacks
-)
-style.code_font = load_text_font(
-  code_font_path, { ligatures = true, hinting = "full" }, code_fallbacks
-)
-style.terminal_font = load_text_font(
-  code_font_path, { ligatures = false, hinting = "full" }, terminal_fallbacks
-)
-style.terminal_bold_font = load_text_font(
-  code_font_path, { ligatures = false, hinting = "full", bold = true }, terminal_fallbacks
-)
-style.terminal_italic_font = load_text_font(
-  code_font_path, { ligatures = false, hinting = "full", italic = true }, terminal_fallbacks
-)
-style.terminal_bold_italic_font = load_text_font(
-  code_font_path, {
-    ligatures = false, hinting = "full", bold = true, italic = true,
-  },
-  terminal_fallbacks
-)
+startup_measure("font_primary_loading", function()
+  style.font = load_text_font(
+    font_path, { ligatures = true, hinting = "full" }, interface_fallbacks
+  )
+  style.code_font = load_text_font(
+    code_font_path, { ligatures = true, hinting = "full" }, code_fallbacks
+  )
+end)
+startup_measure("font_terminal_variant_construction", function()
+  style.terminal_font = load_text_font(
+    code_font_path, { ligatures = false, hinting = "full" }, terminal_fallbacks
+  )
+  style.terminal_bold_font = load_text_font(
+    code_font_path, { ligatures = false, hinting = "full", bold = true }, terminal_fallbacks
+  )
+  style.terminal_italic_font = load_text_font(
+    code_font_path, { ligatures = false, hinting = "full", italic = true }, terminal_fallbacks
+  )
+  style.terminal_bold_italic_font = load_text_font(
+    code_font_path, {
+      ligatures = false, hinting = "full", bold = true, italic = true,
+    },
+    terminal_fallbacks
+  )
+end)
 -- Reusable proportional typography roles. Live Preview prose and compact
 -- navigation surfaces use these roles; source and diff text retain code_font.
-style.prose_font = load_text_font(prose_font_path, nil, interface_fallbacks)
-style.markdown_body_font = load_text_font(
-  prose_font_path, nil, interface_fallbacks, 16 * SCALE
-)
--- Keep the wrap arrow on Inter's monochrome text glyph instead of allowing
--- the code-font fallback group to select Segoe UI Emoji's boxed arrow.
-style.soft_wrap_indicator_font = style.prose_font
-style.prose_strong_font = load_text_font(
-  prose_strong_font_path, nil, interface_fallbacks
-)
-style.prose_emphasis_font = load_text_font(
-  prose_emphasis_font_path, nil, interface_fallbacks
-)
-style.prose_strong_emphasis_font = load_text_font(
-  prose_strong_emphasis_font_path, nil, interface_fallbacks
-)
-style.prose_heading_font = load_text_font(
-  prose_heading_font_path, nil, interface_fallbacks
-)
-style.prose_heading_emphasis_font = load_text_font(
-  prose_heading_emphasis_font_path, nil, interface_fallbacks
-)
+startup_measure("font_prose_and_heading_construction", function()
+  style.prose_font = load_text_font(prose_font_path, nil, interface_fallbacks)
+  style.markdown_body_font = load_text_font(
+    prose_font_path, nil, interface_fallbacks, 16 * SCALE
+  )
+  -- Keep the wrap arrow on Inter's monochrome text glyph instead of allowing
+  -- the code-font fallback group to select Segoe UI Emoji's boxed arrow.
+  style.soft_wrap_indicator_font = style.prose_font
+  style.prose_strong_font = load_text_font(
+    prose_strong_font_path, nil, interface_fallbacks
+  )
+  style.prose_emphasis_font = load_text_font(
+    prose_emphasis_font_path, nil, interface_fallbacks
+  )
+  style.prose_strong_emphasis_font = load_text_font(
+    prose_strong_emphasis_font_path, nil, interface_fallbacks
+  )
+  style.prose_heading_font = load_text_font(
+    prose_heading_font_path, nil, interface_fallbacks
+  )
+  style.prose_heading_emphasis_font = load_text_font(
+    prose_heading_emphasis_font_path, nil, interface_fallbacks
+  )
+end)
 -- Keep scrollbars visible in a small/contracted form instead of expanding/fading.
 -- Set this before constructing singleton views such as the File Tree.
 config.force_scrollbar_status = "contracted"
