@@ -8,7 +8,7 @@ local transition = {}
 
 local DELAY_SECONDS = 0.03
 local DURATION_SECONDS = 0.11
-local START_SCALE = 1.035
+local START_SCALE = 0.965
 
 local function cubic_ease_out(progress)
   local remaining = 1 - progress
