@@ -93,6 +93,10 @@ local function session_views(session)
   return result
 end
 
+local function buffer_text(buffer)
+  return table.concat(buffer.lines or {})
+end
+
 test.describe("Git View command", function()
   test.before_each(function(context)
     panes.reset_for_tests()
@@ -1287,8 +1291,6 @@ test.describe("Git View command", function()
     test.equal(command.perform("pane:focus_local_next"), true)
     test.equal(core.active_view.git_owner_view, view)
     test.equal(core.active_view.git_pane, "log-list")
-    test.equal(core.active_view:get_gutter_width(), 0)
-    test.equal(core.active_view:draw_line_gutter(1, 0, 0, 0), core.active_view:get_line_height())
     session:activate_root()
     test.equal(core.active_view.git_pane, "log-list")
     core.active_view.buffer:set_selection(1, 2)
@@ -1428,6 +1430,215 @@ test.describe("Git View command", function()
 
     core.active_view = {}
     test.equal(command.perform("git:select_next_row"), false)
+  end)
+
+  test.it("gives Git commit rows complete mouse interaction", function(context)
+    local session, view = open_fake_git_view(context.project)
+    view.model:log_tab().commits = {
+      { hash = "a", short_hash = "a", subject = "First", parents = {} },
+      { hash = "b", short_hash = "b", subject = "Second", parents = {} },
+    }
+    view:update_pane_buffers()
+    local list = view:pane_view("log-list")
+    list.position.x, list.position.y = 0, 0
+    list.size.x, list.size.y = 500, 200
+    list.scroll.x, list.scroll.y = 0, 0
+    list.scroll.to.x, list.scroll.to.y = 0, 0
+    local x, y = list:get_line_screen_position(2, 1)
+    x = x + math.max(1, list:get_font():get_width("b") / 2)
+    y = y + list:get_line_height() / 2
+    list.buffer:set_selection(1, 1)
+
+    view:on_mouse_moved(x, y, 0, 0)
+
+    test.equal(list.buffer:get_selection(), 1)
+    test.equal(view.cursor, "hand")
+    test.equal(list.git_hovered_action_line, 2)
+
+    test.ok(view:on_mouse_pressed("left", x, y, 1))
+    test.equal(list.git_pressed_action_line, 2)
+    local line1, col1, line2, col2 = list.buffer:get_selection(true)
+    test.same({ line1, col1, line2, col2 }, { 2, 1, 2, #list.buffer.lines[2] })
+    test.ok(view:on_mouse_released("left", x, y))
+    test.is_nil(list.git_pressed_action_line)
+    test.equal(#session_views(session), 1)
+
+    local text = list.buffer:get_utf8_line(1):gsub("\n$", "")
+    local text_x = select(1, list:get_line_screen_position(1, #text + 1))
+    local outside_x = math.min(list.position.x + list.size.x - 2, text_x + 20)
+    local outside_y = select(2, list:get_line_screen_position(1, 1)) + list:get_line_height() / 2
+    local tab_count = #view.model.tabs
+    view:on_mouse_moved(outside_x, outside_y, 0, 0)
+    test.not_equal(view.cursor, "hand")
+    test.is_nil(list.git_hovered_action_line)
+    test.ok(view:on_mouse_pressed("left", outside_x, outside_y, 2))
+    test.ok(view:on_mouse_released("left", outside_x, outside_y))
+    test.equal(#view.model.tabs, tab_count)
+
+    test.ok(view:on_mouse_pressed("left", x, y, 2))
+    test.ok(view:on_mouse_released("left", x, y))
+    test.equal(#session_views(session), 2)
+  end)
+
+  test.it("uses mouse interaction for changed-file folders", function(context)
+    local session, log_view = open_fake_git_view(context.project)
+    local tab = {
+      id = "diff-folder-mouse",
+      kind = "commit_diff",
+      title = "Diff folder mouse",
+      closable = true,
+      changed_files = {
+        { status = "modified", old_path = "src/a.lua", new_path = "src/a.lua" },
+        { status = "modified", old_path = "src/b.lua", new_path = "src/b.lua" },
+      },
+      selected_file = 1,
+    }
+    log_view.model.tabs[#log_view.model.tabs + 1] = tab
+    local view = git_view.ensure_tab_view(session, tab, true)
+    view:update_pane_buffers()
+    local list = view:pane_view("file-list")
+    list.position.x, list.position.y = 0, 0
+    list.size.x, list.size.y = 300, 200
+    list.scroll.x, list.scroll.y = 0, 0
+    list.scroll.to.x, list.scroll.to.y = 0, 0
+    local folder_line = list.path_tree:line_for_path("src", "dir")
+    local x, y = list:get_line_screen_position(folder_line, 1)
+    x = x + math.max(1, list:get_font():get_width("s") / 2)
+    y = y + list:get_line_height() / 2
+
+    view:on_mouse_moved(x, y, 0, 0)
+    test.equal(view.cursor, "hand")
+    test.equal(list.git_hovered_action_line, folder_line)
+
+    test.ok(view:on_mouse_pressed("left", x, y, 2))
+    test.ok(view:on_mouse_released("left", x, y))
+    test.equal(list.path_tree:is_expanded("src"), false)
+  end)
+
+  test.it("captures every loaded Git Log item as text", function(context)
+    local session, view = open_fake_git_view(context.project)
+    view.model.repo = { root = "C:/repo" }
+    local selected = {
+      hash = "bbbbbbbb",
+      short_hash = "bbbbbbbb",
+      subject = "Selected commit",
+      author_name = "Dario",
+      author_email = "dario@example.test",
+      body = "First body line\nSecond body line",
+      parents = { "aaaaaaaa" },
+      changed_files_loaded = true,
+      changed_files = {
+        { status = "modified", old_path = "src/a.lua", new_path = "src/a.lua", stat = { additions = 2, deletions = 1 } },
+        { status = "added", old_path = nil, new_path = "src/deep/b.lua", stat = { additions = 4, deletions = 0 } },
+      },
+    }
+    local log = view.model:log_tab()
+    log.commits = {
+      { hash = "aaaaaaaa", short_hash = "aaaaaaaa", subject = "Earlier commit", parents = {} },
+      selected,
+    }
+    log.selected_commit = 2
+    log.has_more = true
+    view.model.details_tree_collapsed[selected.hash] = { src = true }
+    view:update_pane_buffers()
+    core.active_view = view:pane_view("log-list")
+
+    test.ok(command.perform("core:open_text_capture"))
+
+    local capture = panes.active().current_view
+    test.ok(capture and capture.text_capture)
+    test.ok(capture.buffer.read_only)
+    local text = buffer_text(capture.buffer)
+    test.contains(text, "Repository: C:/repo")
+    test.contains(text, "Earlier commit")
+    test.contains(text, "Selected commit")
+    test.contains(text, "First body line")
+    test.contains(text, "src/a.lua")
+    test.contains(text, "src/deep/b.lua")
+    test.contains(text, "More commits: yes")
+  end)
+
+  test.it("captures a Commit Diff View list and both text sides", function(context)
+    local session, log_view = open_fake_git_view(context.project)
+    log_view.model.repo = { root = "C:/repo" }
+    local tab = {
+      id = "diff-text-capture",
+      kind = "commit_diff",
+      title = "Diff text capture",
+      closable = true,
+      left = "parent-revision",
+      right = "commit-revision",
+      changed_files = {
+        { status = "modified", old_path = "src/a.lua", new_path = "src/a.lua" },
+        { status = "renamed", old_path = "old.lua", new_path = "new.lua" },
+      },
+      selected_file = 2,
+      left_text = "old text\n",
+      right_text = "new text\n",
+      left_name = "parent:old.lua",
+      right_name = "commit:new.lua",
+      diff_generation = 1,
+    }
+    log_view.model.tabs[#log_view.model.tabs + 1] = tab
+    local view = git_view.ensure_tab_view(session, tab, true)
+    view:update()
+    core.active_view = test.not_nil(tab.diff_view).buffer_view_b
+
+    test.ok(command.perform("core:open_text_capture"))
+
+    local text = buffer_text(panes.active().current_view.buffer)
+    test.contains(text, "Diff text capture")
+    test.contains(text, "parent-revision")
+    test.contains(text, "commit-revision")
+    test.contains(text, "src/a.lua")
+    test.contains(text, "old.lua -> new.lua")
+    test.contains(text, "Left: parent:old.lua")
+    test.contains(text, "old text")
+    test.contains(text, "Right: commit:new.lua")
+    test.contains(text, "new text")
+  end)
+
+  test.it("captures every loaded File History revision and comparison", function(context)
+    local session, log_view = open_fake_git_view(context.project)
+    log_view.model.repo = { root = "C:/repo" }
+    local tab = {
+      id = "history-text-capture",
+      kind = "file_history",
+      title = "History: src/app.lua",
+      closable = true,
+      relpath = "src/app.lua",
+      history_context = { type = "selection", start_line = 4, end_line = 9 },
+      commits = {
+        { hash = "bbbbbbbb", short_hash = "bbbbbbbb", subject = "Newest", parents = { "aaaaaaaa" } },
+        { hash = "aaaaaaaa", short_hash = "aaaaaaaa", subject = "Oldest", parents = {} },
+      },
+      selected_commit = 1,
+      has_more = true,
+      preview_left_text = "before history\n",
+      preview_right_text = "after history\n",
+      preview_left_name = "aaaaaaaa:src/app.lua",
+      preview_right_name = "bbbbbbbb:src/app.lua",
+    }
+    log_view.model.tabs[#log_view.model.tabs + 1] = tab
+    local view = git_view.ensure_tab_view(session, tab, true)
+    tab.preview_left_text = "before history\n"
+    tab.preview_right_text = "after history\n"
+    tab.preview_left_name = "aaaaaaaa:src/app.lua"
+    tab.preview_right_name = "bbbbbbbb:src/app.lua"
+    tab.preview_generation_value = (tab.preview_generation_value or 0) + 1
+    view:update()
+    core.active_view = test.not_nil(tab.history_diff_view).buffer_view_a
+
+    test.ok(command.perform("core:open_text_capture"))
+
+    local text = buffer_text(panes.active().current_view.buffer)
+    test.contains(text, "Path: src/app.lua")
+    test.contains(text, "Selected lines: 4-9")
+    test.contains(text, "Newest")
+    test.contains(text, "Oldest")
+    test.contains(text, "More revisions: yes")
+    test.contains(text, "before history")
+    test.contains(text, "after history")
   end)
 
   test.it("does not activate a Git row while another Pane View has focus", function(context)

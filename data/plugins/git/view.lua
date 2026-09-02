@@ -6,6 +6,7 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local file_context = require "core.file_context"
+local keymap = require "core.keymap"
 local MouseRouter = require "core.mouse_router"
 local style = require "core.style"
 local Buffer = require "core.buffer"
@@ -271,6 +272,9 @@ function GitView:pane_view(name)
     view:set_wrapping_enabled(false)
     view.git_owner_view = self
     view.git_pane = name
+    view.open_text_capture = function()
+      return self:open_text_capture()
+    end
     view.get_path_target = function(v) return self:path_target_for_pane(v) end
     view.get_point_of_interest_at = function(v, line)
       return self:point_of_interest_for_pane(v, line)
@@ -313,6 +317,30 @@ function GitView:pane_view(name)
       end
       return draw_line_text(v, line, x, y)
     end
+    local draw_line_body = view.draw_line_body
+    view.draw_line_body = function(v, line, x, y)
+      local result = draw_line_body(v, line, x, y)
+      if line == v.git_hovered_action_line or line == v.git_pressed_action_line then
+        local text = v.buffer.lines[line] or ""
+        local width = math.max(0, v:get_col_x_offset(line, #text))
+        if width > 0 then
+          local color = line == v.git_pressed_action_line
+            and (style.interactive_hover_overlay or style.interactive_hover_background)
+            or style.interactive_hover_background
+          renderer.draw_rect(x, y, width, v:get_line_height(), color)
+        end
+      end
+      return result
+    end
+    local on_mouse_left = view.on_mouse_left
+    view.on_mouse_left = function(v, ...)
+      local result = on_mouse_left(v, ...)
+      if v.git_hovered_action_line then
+        v.git_hovered_action_line = nil
+        core.redraw = true
+      end
+      return result
+    end
     self.pane_views[name] = view
   end
   view.git_owner_view = self
@@ -331,6 +359,35 @@ function GitView:get_name()
   if tab and tab.id ~= "log" then return tab.title or tab.kind or "Git" end
   local path = type(self.project) == "table" and self.project.path or tostring(self.project or "")
   return "Git Log: " .. common.basename(path)
+end
+
+function GitView:text_capture()
+  self:update_pane_buffers()
+  return require("plugins.git.text_capture").build(self)
+end
+
+function GitView:open_text_capture()
+  local capture, err = self:text_capture()
+  if not capture then
+    core.error("Could not capture Git View text: %s", tostring(err or "unknown error"))
+    return false
+  end
+  local pane = panes.pane_for_view(self)
+  if not pane then return false end
+  local view, open_error = require("core.text_capture").open(capture, {
+    pane = pane,
+    reason = "git-view-text-capture",
+  })
+  if not view then
+    core.error("Could not open Git View text: %s", tostring(open_error or "unknown error"))
+    return false
+  end
+  local tab = self:model_tab()
+  core.log_quiet(
+    "Git View text capture opened: kind=%s title=%s",
+    tostring(tab and tab.kind or "unknown"), tostring(tab and tab.title or self:get_name())
+  )
+  return true
 end
 
 function GitView:set_refresh_pending(callback, force)
@@ -507,6 +564,57 @@ local function point_in_view(view, x, y)
     and y < view.position.y + view.size.y
 end
 
+function GitView:actionable_pane_line(view, line)
+  if not (view and view.git_owner_view == self and view.git_pane) then return false end
+  local tab = self:model_tab()
+  if not tab then return false end
+  if view.git_pane == "log-list" then
+    return self.model:log_tab().commits[line] ~= nil
+  end
+  if view.git_pane == "history-list" then
+    return tab.kind == "file_history" and tab.commits and tab.commits[line] ~= nil
+  end
+  if view.git_pane == "file-list" then
+    return tab.kind == "commit_diff" and view.path_tree_row and view:path_tree_row(line) ~= nil
+  end
+  if view.git_pane == "details" then
+    return self:details_tree_item(view, line) ~= nil
+  end
+  return false
+end
+
+function GitView:action_row_at_point(view, x, y)
+  if not view or view.mouse_selecting
+      or view:scrollbar_hovering() or view:scrollbar_dragging()
+      or not point_in_view(view, x, y)
+  then
+    return nil
+  end
+  local line = view:resolve_screen_position(x, y)
+  if not self:actionable_pane_line(view, line) then return nil end
+  local text = view.buffer.lines[line] or ""
+  if #text <= 1 then return nil end
+  local x1, y1 = view:get_line_screen_position(line, 1)
+  local x2 = view:get_line_screen_position(line, #text)
+  if y < y1 or y >= y1 + view:get_line_height() then return nil end
+  if x < math.min(x1, x2) or x >= math.max(x1, x2) then return nil end
+  return line
+end
+
+function GitView:update_pane_action_hover(view, x, y)
+  local line = self:action_row_at_point(view, x, y)
+  if line ~= view.git_hovered_action_line then
+    view.git_hovered_action_line = line
+    core.redraw = true
+  end
+  if line then
+    view.cursor = "hand"
+  elseif not view:scrollbar_hovering() and not view:scrollbar_dragging() then
+    view.cursor = view.hovering_gutter and "arrow" or "ibeam"
+  end
+  return line
+end
+
 function GitView:mouse_surface_at(x, y)
   local tab = self:model_tab()
   if not tab then return nil end
@@ -582,6 +690,8 @@ end
 function GitView:on_mouse_moved(x, y, dx, dy)
   local handled, surface = self.mouse_router:move(x, y, dx, dy)
   if surface then
+    if surface.git_pane then self:update_pane_action_hover(surface, x, y) end
+    self.cursor = self.mouse_router:cursor_for(surface, x, y)
     return handled ~= false
   end
   self.cursor = "arrow"
@@ -589,8 +699,23 @@ function GitView:on_mouse_moved(x, y, dx, dy)
 end
 
 function GitView:on_mouse_released(button, x, y)
-  if self.mouse_router:captured_target() then
+  local captured = self.mouse_router:captured_target()
+  if captured then
+    local pressed_line = captured.git_pressed_action_line
+    local pressed_clicks = captured.git_pressed_action_clicks or 1
+    local released_line = pressed_line and self:action_row_at_point(captured, x, y) or nil
+    captured.git_pressed_action_line = nil
+    captured.git_pressed_action_clicks = nil
     local result = self.mouse_router:release(button, x, y)
+    if captured.git_pane then self:update_pane_action_hover(captured, x, y) end
+    if button == "left" and pressed_line and released_line == pressed_line and pressed_clicks >= 2 then
+      local source_tab = self:model_tab()
+      local diff_tab = self:activate_selected(function() core.redraw = true end)
+      if source_tab and source_tab.kind ~= "commit_diff" and diff_tab and self.on_model_tab_open then
+        self:on_model_tab_open(diff_tab)
+      end
+    end
+    core.redraw = true
     return result ~= false
   end
   return GitView.super.on_mouse_released(self, button, x, y)
@@ -614,23 +739,27 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
       core.redraw = true
       return handled == true
     end
-    local content_click = false
-    if button == "left" and pane.buffer and pane.resolve_screen_position then
+    pane.git_pressed_action_line = nil
+    pane.git_pressed_action_clicks = nil
+    local modified = keymap.modkeys.ctrl or keymap.modkeys.cmd or keymap.modkeys.shift
+    local action_line = button == "left" and not modified
+      and self:action_row_at_point(pane, x, y) or nil
+    local content_click = action_line ~= nil
+    if action_line then
+      local text = pane.buffer.lines[action_line] or ""
+      pane.buffer:clear_search_selections()
+      pane.buffer:set_selection(action_line, 1, action_line, #text)
+      pane.mouse_selecting = nil
+      pane.git_pressed_action_line = action_line
+      pane.git_pressed_action_clicks = clicks or 1
+      core.blink_reset()
+    elseif button == "left" and pane.buffer and pane.resolve_screen_position then
       local cmd = clicks == 2 and "core:set_cursor_word" or clicks and clicks >= 3 and "core:set_cursor_line" or "core:set_cursor"
       content_click = command.perform(cmd, x, y, clicks)
     end
     self.mouse_router:capture(pane)
     if not content_click then pane:on_mouse_pressed(button, x, y, clicks) end
     self:sync_selection_from_pane()
-    local toggled_details_folder = button == "left" and clicks and clicks > 1
-      and pane.git_pane == "details"
-      and self:toggle_details_tree_folder(pane, pane.buffer:get_selection())
-    if button == "left" and clicks and clicks > 1 and pane.git_pane ~= "history-list"
-        and not toggled_details_folder and self.activate_selected then
-      local source_tab = self:model_tab()
-      local diff_tab = self:activate_selected(function() core.redraw = true end)
-      if source_tab.kind ~= "commit_diff" and diff_tab and self.on_model_tab_open then self:on_model_tab_open(diff_tab) end
-    end
     core.redraw = true
     return true
   end
@@ -1011,7 +1140,7 @@ function GitView:activate_selected(callback)
           active.git_file_index_to_line = tab.file_index_to_line or {}
           active.git_file_index_to_visible_line = tab.file_index_to_visible_line or {}
           active.git_file_line_meta = tab.file_line_meta or {}
-          core.log_quiet("Git View Path Tree folder %s", active.path_tree_row(line).expanded and "expanded" or "collapsed")
+          core.log_quiet("Git View Path Tree folder %s", active:path_tree_row(line).expanded and "expanded" or "collapsed")
           core.redraw = true
           return tab
         end
@@ -1334,6 +1463,14 @@ local function selected_file_is_image(tab)
   return right ~= nil and ImageView.is_supported(right) or false
 end
 
+local function attach_text_capture_owner(surface, owner)
+  if not surface then return end
+  surface.git_owner_view = owner
+  surface.open_text_capture = function()
+    return owner:open_text_capture()
+  end
+end
+
 function GitView:ensure_image_comparison_view(tab)
   if not selected_file_is_image(tab) then return nil end
   if not tab.binary_paths then
@@ -1352,7 +1489,9 @@ function GitView:ensure_image_comparison_view(tab)
     left_title = "Before — " .. (tab.left_name or "File did not exist"),
     right_title = "After — " .. (tab.right_name or "File does not exist"),
   }
-  view.git_owner_view = self
+  attach_text_capture_owner(view, self)
+  attach_text_capture_owner(view.left_view, self)
+  attach_text_capture_owner(view.right_view, self)
   tab.image_comparison_view = view
   tab.image_comparison_seen_generation = tab.binary_generation_value
   return view
@@ -1360,8 +1499,9 @@ end
 
 function GitView:ensure_diff_view(tab)
   if tab.diff_view and tab.diff_view_seen_generation == tab.diff_generation then
-    if tab.diff_view.buffer_view_a then tab.diff_view.buffer_view_a.git_owner_view = self end
-    if tab.diff_view.buffer_view_b then tab.diff_view.buffer_view_b.git_owner_view = self end
+    attach_text_capture_owner(tab.diff_view, self)
+    attach_text_capture_owner(tab.diff_view.buffer_view_a, self)
+    attach_text_capture_owner(tab.diff_view.buffer_view_b, self)
     if self.focused_diff_buffer_view ~= tab.diff_view.buffer_view_a and self.focused_diff_buffer_view ~= tab.diff_view.buffer_view_b then
       self.focused_diff_buffer_view = nil
     end
@@ -1448,8 +1588,9 @@ function GitView:ensure_diff_view(tab)
   end
   tab.diff_view = view
   tab.diff_view_seen_generation = tab.diff_generation
-  if view.buffer_view_a then view.buffer_view_a.git_owner_view = self end
-  if view.buffer_view_b then view.buffer_view_b.git_owner_view = self end
+  attach_text_capture_owner(view, self)
+  attach_text_capture_owner(view.buffer_view_a, self)
+  attach_text_capture_owner(view.buffer_view_b, self)
   if self.focused_diff_buffer_view ~= view.buffer_view_a and self.focused_diff_buffer_view ~= view.buffer_view_b then
     self.focused_diff_buffer_view = nil
   end
@@ -1546,8 +1687,9 @@ function GitView:ensure_history_diff_view(tab)
   }, true)
   tab.history_diff_view = view
   tab.history_diff_view_seen_generation = tab.preview_generation_value
-  view.buffer_view_a.git_owner_view = self
-  view.buffer_view_b.git_owner_view = self
+  attach_text_capture_owner(view, self)
+  attach_text_capture_owner(view.buffer_view_a, self)
+  attach_text_capture_owner(view.buffer_view_b, self)
   return view
 end
 
