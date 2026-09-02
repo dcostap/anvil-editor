@@ -6,7 +6,7 @@ local style = require "core.style"
 
 local transition = {}
 
-local DELAY_SECONDS = 0
+local DELAY_SECONDS = 0.02
 local DURATION_SECONDS = 0.11 / 1.5
 local START_SCALE = 1 - (1 - 0.965) * 1.25
 
