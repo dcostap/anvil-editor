@@ -7,7 +7,7 @@ local layout = require "core.pane_layout"
 
 local RootPanel = View:extend()
 
-local APP_OVERLAY_FADE_DURATION = 0.08
+local APP_OVERLAY_FADE_DURATION = 0.06
 local DIVIDER_TOLERANCE = 4
 
 function RootPanel:__tostring() return "RootPanel" end
@@ -138,6 +138,10 @@ local function quintic_ease_out(progress)
   return 1 - remaining * remaining * remaining * remaining * remaining
 end
 
+local function fuzzy_searcher_overlay_ease(progress)
+  return progress * progress * (3 - 2 * progress)
+end
+
 local function start_app_overlay_transition(overlay, target, now)
   if overlay.target == target then return end
   overlay.start_progress = overlay.progress
@@ -165,7 +169,10 @@ function RootPanel:update_app_overlay(now)
       progress = overlay.target
     else
       local elapsed = math.max(0, now - (overlay.transition_started_at or now))
-      local eased = quintic_ease_out(common.clamp(elapsed / duration, 0, 1))
+      local normalized = common.clamp(elapsed / duration, 0, 1)
+      local eased = overlay.transition_name == "fuzzy_searcher"
+        and fuzzy_searcher_overlay_ease(normalized)
+        or quintic_ease_out(normalized)
       progress = common.lerp(
         overlay.start_progress or progress, overlay.target, eased
       )

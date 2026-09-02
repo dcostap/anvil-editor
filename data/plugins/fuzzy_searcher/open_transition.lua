@@ -6,8 +6,8 @@ local renderer = require "renderer"
 local transition = {}
 
 local DELAY_SECONDS = 0
-local DURATION_SECONDS = 0.11 / 1.5
-local ALPHA_DURATION_SECONDS = DURATION_SECONDS / 1.2
+local DURATION_SECONDS = 0.11 / 1.5 - 0.02
+local ALPHA_DURATION_SECONDS = 0.11 / 1.5 / 1.2 - 0.02
 local START_SCALE = 0.97
 
 local function cubic_ease_out(progress)
