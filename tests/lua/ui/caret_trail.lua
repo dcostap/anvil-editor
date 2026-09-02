@@ -69,7 +69,7 @@ test.describe("caret trail", function()
       now = 10.01
       core.redraw = false
       view:draw_caret(110, 20, 1, 5, 1)
-      test.ok(#rects > 1, "expected trail marks before the live caret")
+      test.ok(#rects >= 4, "expected a visible trail path before the live caret")
       test.equal(rects[1].color[1], 12)
       test.equal(rects[1].color[2], 34)
       test.equal(rects[1].color[3], 56)

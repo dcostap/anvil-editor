@@ -7739,15 +7739,21 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
         local old_y = pos.draw_y or pos.target_y or pos.y
         local dx = x - old_x
         local dy = y - old_y
-        if math.sqrt(dx * dx + dy * dy) >= config.caret_trail_min_distance then
+        local distance = math.sqrt(dx * dx + dy * dy)
+        local min_distance = math.max(0.1, config.caret_trail_min_distance)
+        if distance >= min_distance then
           local trail = pos.trail
-          trail[#trail + 1] = {
-            x = old_x,
-            y = old_y,
-            height = pos.caret_height or self:get_line_height(),
-            time = now,
-          }
           local max_points = math.max(0, math.floor(config.caret_trail_max_points))
+          local point_count = math.min(max_points, math.ceil(distance / min_distance))
+          for index = 1, point_count do
+            local amount = (index - 1) / point_count
+            trail[#trail + 1] = {
+              x = old_x + dx * amount,
+              y = old_y + dy * amount,
+              height = pos.caret_height or self:get_line_height(),
+              time = now,
+            }
+          end
           while #trail > max_points do table.remove(trail, 1) end
         end
       end
