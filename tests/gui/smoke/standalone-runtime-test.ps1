@@ -33,6 +33,10 @@ try {
   $env:ANVIL_USERDIR = $userRoot
   $env:ANVIL_HEADLESS_TEST = "1"
 
+  $helpOutput = (& $copyPath --help 2>&1 | Out-String)
+  Assert-True ($LASTEXITCODE -eq 0) "The standalone executable crashed while printing command-line help."
+  Assert-True ($helpOutput.Contains("--new-window")) "Command-line help omitted the long-only new-window option."
+
   $first = Start-Process -FilePath $copyPath -ArgumentList "--version" -PassThru
   $parallel = Start-Process -FilePath $copyPath -ArgumentList "--version" -PassThru
   $first.WaitForExit()
