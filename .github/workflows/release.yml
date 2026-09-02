@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag
+        required: true
 
 permissions:
   contents: write
@@ -44,5 +49,6 @@ jobs:
       - name: Add executable to release
         uses: softprops/action-gh-release@v2.2.2
         with:
+          tag_name: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
           files: dist/anvil.exe
           generate_release_notes: true
