@@ -7823,7 +7823,11 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
       local dx = x - old_x
       local dy = y - old_y
       local distance = math.sqrt(dx * dx + dy * dy)
-      if distance >= math.max(0.1, config.caret_trail_min_distance) then
+      local enough_vertical_movement = math.abs(dy)
+        >= math.max(0.1, config.caret_trail_min_vertical_distance)
+      if enough_vertical_movement
+        and distance >= math.max(0.1, config.caret_trail_min_distance)
+      then
         pos.trail = {
           x = old_x,
           y = old_y,

@@ -20,9 +20,9 @@ local function with_caret_settings(fn)
     caret_trail = config.caret_trail,
     caret_trail_duration = config.caret_trail_duration,
     caret_trail_min_distance = config.caret_trail_min_distance,
+    caret_trail_min_vertical_distance = config.caret_trail_min_vertical_distance,
     caret_trail_opacity = config.caret_trail_opacity,
     caret_trail_width = config.caret_trail_width,
-    caret_trail_horizontal_height = config.caret_trail_horizontal_height,
     style_caret_trail = style.caret_trail,
     redraw = core.redraw,
   }
@@ -34,9 +34,9 @@ local function with_caret_settings(fn)
   config.caret_trail = saved.caret_trail
   config.caret_trail_duration = saved.caret_trail_duration
   config.caret_trail_min_distance = saved.caret_trail_min_distance
+  config.caret_trail_min_vertical_distance = saved.caret_trail_min_vertical_distance
   config.caret_trail_opacity = saved.caret_trail_opacity
   config.caret_trail_width = saved.caret_trail_width
-  config.caret_trail_horizontal_height = saved.caret_trail_horizontal_height
   style.caret_trail = saved.style_caret_trail
   core.redraw = saved.redraw
   system.get_time = old_time
@@ -46,7 +46,7 @@ local function with_caret_settings(fn)
 end
 
 test.describe("caret trail", function()
-  test.it("shows and expires a customizable trail after caret movement", function()
+  test.it("stays hidden during horizontal caret movement", function()
     with_caret_settings(function()
       local view = make_view()
       local now = 10
@@ -59,9 +59,9 @@ test.describe("caret trail", function()
       config.caret_trail = true
       config.caret_trail_duration = 0.2
       config.caret_trail_min_distance = 1
+      config.caret_trail_min_vertical_distance = 1
       config.caret_trail_opacity = 0.5
       config.caret_trail_width = 3
-      config.caret_trail_horizontal_height = 0.25
       style.caret_trail = { 12, 34, 56, 200 }
 
       view:draw_caret(10, 20, 1, 1, 1)
@@ -71,27 +71,8 @@ test.describe("caret trail", function()
       now = 10.01
       core.redraw = false
       view:draw_caret(110, 20, 1, 5, 1)
-      test.equal(#rects, 2, "expected one continuous trail and the live caret")
-      test.equal(rects[1].x, 10)
-      test.equal(rects[1].w, 103)
-      test.equal(rects[1].h, view:get_line_height() * 0.25)
-      test.equal(rects[1].color[1], 12)
-      test.equal(rects[1].color[2], 34)
-      test.equal(rects[1].color[3], 56)
-      test.ok(rects[1].color[4] <= 100)
-      test.ok(core.redraw, "expected the fading trail to request another frame")
-
-      rects = {}
-      now = 10.11
-      view:draw_caret(110, 20, 1, 5, 1)
-      test.equal(#rects, 2)
-      test.ok(rects[1].x > 10, "expected the trail tail to move smoothly")
-      test.ok(rects[1].w < 103, "expected the trail to contract smoothly")
-
-      rects = {}
-      now = 10.3
-      view:draw_caret(110, 20, 1, 5, 1)
       test.equal(#rects, 1)
+      test.equal(core.redraw, false)
     end)
   end)
 
@@ -108,9 +89,9 @@ test.describe("caret trail", function()
       config.caret_trail = true
       config.caret_trail_duration = 0.2
       config.caret_trail_min_distance = 1
+      config.caret_trail_min_vertical_distance = 1
       config.caret_trail_opacity = 0.5
       config.caret_trail_width = 3
-      config.caret_trail_horizontal_height = 0.25
       style.caret_trail = { 12, 34, 56, 200 }
 
       view:draw_caret(10, 20, 1, 1, 1)

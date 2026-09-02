@@ -318,6 +318,10 @@ config.caret_trail_duration = nil
 ---@type number
 config.caret_trail_min_distance = nil
 
+---Minimum vertical movement in pixels that enables the caret trail.
+---@type number
+config.caret_trail_min_vertical_distance = nil
+
 ---Maximum caret trail opacity from 0 to 1.
 ---@type number
 config.caret_trail_opacity = nil
