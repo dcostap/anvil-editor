@@ -25,8 +25,17 @@ void anvil_set_live_resize(bool live_resize);
 #ifndef DWMWA_WINDOW_CORNER_PREFERENCE
 #define DWMWA_WINDOW_CORNER_PREFERENCE 33
 #endif
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
+#endif
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
 #ifndef DWMWCP_DEFAULT
 #define DWMWCP_DEFAULT 0
+#endif
+#ifndef DWMWA_COLOR_DEFAULT
+#define DWMWA_COLOR_DEFAULT 0xFFFFFFFF
 #endif
 #ifndef WS_EX_NOREDIRECTIONBITMAP
 #define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
@@ -181,6 +190,13 @@ static void update_dwm(HWND hwnd, bool enabled) {
      non-client title area is collapsed into our client area. */
   MARGINS margins = enabled ? (MARGINS){ 1, 1, 1, 1 } : (MARGINS){ 0, 0, 0, 0 };
   DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+  Win32FrameData *frame = (Win32FrameData *) GetPropW(hwnd, ANVIL_WIN32_FRAME_PROP);
+  COLORREF frame_color = enabled && frame && frame->has_background_color
+    ? frame->background_color
+    : (COLORREF)DWMWA_COLOR_DEFAULT;
+  DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &frame_color, sizeof(frame_color));
+  DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &frame_color, sizeof(frame_color));
 }
 
 static void apply_monitor_work_area(HWND hwnd, MINMAXINFO *mmi) {
@@ -685,6 +701,8 @@ void win32_frame_set_background(SDL_Window *window, RenColor color) {
   frame->background_brush = background_brush;
   frame->background_color = background_color;
   frame->has_background_color = true;
+  DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &background_color, sizeof(background_color));
+  DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &background_color, sizeof(background_color));
 }
 
 void win32_frame_set_hit_test(RenWindow *ren, int title_height, int controls_width, int resize_border, int client_x, int client_width, int client2_x, int client2_width) {
