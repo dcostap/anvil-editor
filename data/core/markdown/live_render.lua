@@ -4589,6 +4589,7 @@ local function pending_entry(view, render_line, source_text, height, row_heights
   if not render_line or render_line.source_text ~= source_text then return nil end
   local rendered_height = render_line_metric_height(view, render_line)
   local metric_height = height or render_line.markdown_pending_metric_height
+    or render_line.metric_height
     or rendered_height
   local leading_spacing = tonumber(render_line.first_row_content_y_offset) or 0
   if leading_spacing > 0 then
@@ -4935,6 +4936,18 @@ local function capture_pending_renders(view, transaction)
     end
   end
   owner.pending_frontmatter_lines = pending_frontmatter
+  -- Frontmatter always uses the ordinary source presentation. Do not retain
+  -- Markdown body metrics while the semantic parser catches up. Those metrics
+  -- can be taller than source rows and make the block change height on each
+  -- edit.
+  for line in pairs(pending_frontmatter) do
+    local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
+    local render = current_source_render(view, line, nil, source, false)
+    local entry = pending_entry(
+      view, render, source, nil, nil, render.markdown_pending_provenance
+    )
+    pending_metric_invariant.store(owner, line, entry)
+  end
   local pending_callouts = {}
   local function shifted_callout(record)
     if not record then return nil end
@@ -5840,7 +5853,8 @@ function provider:on_text_transaction(view, transaction, line1, line2)
           view, pending_line, pending.render_line,
           pending.source_text, is_fenced
         )
-        pending.height = render_line_metric_height(view, pending.render_line)
+        pending.height = pending.render_line.metric_height
+          or render_line_metric_height(view, pending.render_line)
         pending.row_heights = nil
       end
     end

@@ -440,6 +440,47 @@ test.describe("Markdown pending visual continuity", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("keeps frontmatter row height stable through a pending edit", function()
+    local old_live = config.markdown_live_editor
+    local old_active = core.active_view
+    local filename = USERDIR .. PATHSEP
+      .. "markdown-pending-frontmatter-height.md"
+    local view
+    local ok, err = pcall(function()
+      config.markdown_live_editor = true
+      view = make_view(filename, "---\ndescription: Prompt for investigator agent.\nargument-hint: [extra notes]\n---\n\nBody")
+      local buffer = view.buffer
+      buffer:set_selection(2, 1)
+      core.active_view = view
+      markdown.live_render.refresh_view(view)
+      local instance = test.not_nil(markdown_model.peek(buffer))
+      test.ok(wait_ready(instance), instance.reason)
+      local source_height = view:get_line_height()
+      for line = 1, 4 do
+        test.equal(view:get_position_visual_row_height(line, 1), source_height)
+      end
+
+      buffer:insert(2, #buffer.lines[2] - 1, "!")
+
+      test.equal(instance.status, "pending")
+      for line = 1, 4 do
+        local pending_height = view:get_position_visual_row_height(line, 1)
+        test.equal(
+          pending_height, source_height,
+          string.format(
+            "frontmatter row %d changed height while semantics were pending: %s -> %s",
+            line, source_height, pending_height
+          )
+        )
+      end
+      test.ok(wait_ready(instance), instance.reason)
+    end)
+    if view then markdown.live_render.detach(view) end
+    config.markdown_live_editor = old_live
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps comment ownership through an ordinary pending edit", function()
     local old_live = config.markdown_live_editor
     local old_active = core.active_view
