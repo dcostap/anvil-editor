@@ -7728,43 +7728,12 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
       pos = { x = x, y = y }
       self.animated_caret_positions[caret_idx] = pos
     end
-
     now = system.get_time()
-    if trail_enabled then
-      pos.trail = pos.trail or {}
-      local moved = pos.target_line ~= nil
-        and (line ~= pos.target_line or col ~= pos.target_col)
-      if moved then
-        local old_x = pos.draw_x or pos.target_x or pos.x
-        local old_y = pos.draw_y or pos.target_y or pos.y
-        local dx = x - old_x
-        local dy = y - old_y
-        local distance = math.sqrt(dx * dx + dy * dy)
-        local min_distance = math.max(0.1, config.caret_trail_min_distance)
-        if distance >= min_distance then
-          local trail = pos.trail
-          local max_points = math.max(0, math.floor(config.caret_trail_max_points))
-          local point_count = math.min(max_points, math.ceil(distance / min_distance))
-          for index = 1, point_count do
-            local amount = (index - 1) / point_count
-            trail[#trail + 1] = {
-              x = old_x + dx * amount,
-              y = old_y + dy * amount,
-              height = pos.caret_height or self:get_line_height(),
-              time = now,
-            }
-          end
-          while #trail > max_points do table.remove(trail, 1) end
-        end
-      end
-      pos.target_x, pos.target_y = x, y
-      pos.target_line, pos.target_col = line, col
-    else
+    if not trail_enabled then
       pos.trail = nil
       pos.target_x, pos.target_y = nil, nil
       pos.target_line, pos.target_col = nil, nil
     end
-
   elseif self.animated_caret_positions then
     caret_idx = caret_idx or 1
     local old_pos = self.animated_caret_positions[caret_idx]
@@ -7775,7 +7744,7 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
     end
   end
 
-  if config.animated_caret then
+  if config.animated_caret and not trail_enabled then
     local last = pos.last_time or now
     pos.last_time = now
     -- Keep the first frame after an idle period from consuming the whole
@@ -7819,6 +7788,8 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
       end
     end
     x, y = pos.x, pos.y
+  elseif trail_enabled and pos then
+    pos.x, pos.y = x, y
   end
 
   local stats = core.textview_frame_stats
@@ -7837,38 +7808,91 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
     )
     y = y + content_y_offset
   end
-  if pos then
-    pos.caret_height = lh
-    pos.draw_x, pos.draw_y = x, y
-  end
 
-  if trail_enabled and pos and pos.trail then
+  if trail_enabled and pos then
     local duration = config.caret_trail_duration
     local base = style.caret_trail
     local opacity = math.max(0, math.min(1, config.caret_trail_opacity))
-    if duration <= 0 or opacity <= 0 or config.caret_trail_width <= 0 then
-      pos.trail = {}
-    end
-    local write = 1
-    for read = 1, #pos.trail do
-      local point = pos.trail[read]
-      local remaining = 1 - (now - point.time) / duration
-      if remaining > 0 then
-        pos.trail[write] = point
-        write = write + 1
-        local fade = remaining * remaining
-        renderer.draw_rect(
-          point.x, point.y,
-          config.caret_trail_width, point.height,
-          {
-            base[1], base[2], base[3],
-            math.floor((base[4] or 255) * opacity * fade + 0.5),
-          }
-        )
+    local width = config.caret_trail_width
+    local moved = pos.target_line ~= nil
+      and (line ~= pos.target_line or col ~= pos.target_col)
+
+    if moved then
+      local old_x = pos.draw_x or x
+      local old_y = pos.draw_y or y
+      local dx = x - old_x
+      local dy = y - old_y
+      local distance = math.sqrt(dx * dx + dy * dy)
+      if distance >= math.max(0.1, config.caret_trail_min_distance) then
+        pos.trail = {
+          x = old_x,
+          y = old_y,
+          height = pos.caret_height or lh,
+          target_x = x,
+          target_y = y,
+          target_height = lh,
+          started_at = now,
+        }
+      else
+        pos.trail = nil
       end
+    elseif pos.target_line ~= nil and pos.trail then
+      -- Keep the effect attached to Buffer positions while the View scrolls.
+      local shift_x = x - (pos.draw_x or x)
+      local shift_y = y - (pos.draw_y or y)
+      pos.trail.x = pos.trail.x + shift_x
+      pos.trail.y = pos.trail.y + shift_y
+      pos.trail.target_x = pos.trail.target_x + shift_x
+      pos.trail.target_y = pos.trail.target_y + shift_y
     end
-    for index = #pos.trail, write, -1 do pos.trail[index] = nil end
-    if #pos.trail > 0 then core.redraw = true end
+
+    pos.target_x, pos.target_y = x, y
+    pos.target_line, pos.target_col = line, col
+
+    local trail = pos.trail
+    if trail and duration > 0 and opacity > 0 and width > 0 then
+      local progress = math.max(0, math.min(1, (now - trail.started_at) / duration))
+      if progress < 1 then
+        local eased = 1 - math.pow(1 - progress, 3)
+        local tail_x = trail.x + (trail.target_x - trail.x) * eased
+        local tail_y = trail.y + (trail.target_y - trail.y) * eased
+        local tail_height = trail.height
+          + (trail.target_height - trail.height) * eased
+        local alpha = math.floor(
+          (base[4] or 255) * opacity * math.sqrt(1 - progress) + 0.5
+        )
+        local trail_color = { base[1], base[2], base[3], alpha }
+        if math.abs(tail_y - trail.target_y) < 0.5 then
+          local left = math.min(tail_x, trail.target_x)
+          local right = math.max(tail_x, trail.target_x) + width
+          renderer.draw_rect(
+            left, math.min(tail_y, trail.target_y),
+            right - left, math.max(tail_height, trail.target_height),
+            trail_color
+          )
+        else
+          renderer.draw_poly({
+            { tail_x, tail_y },
+            { tail_x + width, tail_y },
+            { trail.target_x + width, trail.target_y },
+            { trail.target_x + width, trail.target_y + trail.target_height },
+            { trail.target_x, trail.target_y + trail.target_height },
+            { tail_x, tail_y + tail_height },
+          }, trail_color)
+        end
+        core.redraw = true
+      else
+        pos.trail = nil
+      end
+    else
+      pos.trail = nil
+    end
+
+    pos.caret_height = lh
+    pos.draw_x, pos.draw_y = x, y
+  elseif pos then
+    pos.caret_height = lh
+    pos.draw_x, pos.draw_y = x, y
   end
 
   if self.buffer.overwrite then

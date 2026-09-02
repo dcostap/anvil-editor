@@ -314,10 +314,6 @@ config.caret_trail = nil
 ---@type number
 config.caret_trail_duration = nil
 
----Maximum number of stored marks for each caret.
----@type integer
-config.caret_trail_max_points = nil
-
 ---Minimum movement in pixels that adds a caret trail mark.
 ---@type number
 config.caret_trail_min_distance = nil
