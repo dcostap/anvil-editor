@@ -7744,7 +7744,9 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
     end
   end
 
-  if config.animated_caret and not trail_enabled then
+  local animate_caret = config.animated_caret
+    and (not trail_enabled or math.abs(y - pos.y) <= 0.1)
+  if animate_caret then
     local last = pos.last_time or now
     pos.last_time = now
     -- Keep the first frame after an idle period from consuming the whole

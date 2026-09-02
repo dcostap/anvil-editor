@@ -46,7 +46,7 @@ local function with_caret_settings(fn)
 end
 
 test.describe("caret trail", function()
-  test.it("stays hidden during horizontal caret movement", function()
+  test.it("stays hidden without replacing smooth horizontal caret movement", function()
     with_caret_settings(function()
       local view = make_view()
       local now = 10
@@ -55,7 +55,7 @@ test.describe("caret trail", function()
       renderer.draw_rect = function(x, y, w, h, color)
         rects[#rects + 1] = { x = x, y = y, w = w, h = h, color = color }
       end
-      config.animated_caret = false
+      config.animated_caret = true
       config.caret_trail = true
       config.caret_trail_duration = 0.2
       config.caret_trail_min_distance = 1
@@ -72,7 +72,9 @@ test.describe("caret trail", function()
       core.redraw = false
       view:draw_caret(110, 20, 1, 5, 1)
       test.equal(#rects, 1)
-      test.equal(core.redraw, false)
+      test.equal(core.redraw, true)
+      test.ok(rects[1].x > 10, "expected the animated caret to move toward its target")
+      test.ok(rects[1].x < 110, "expected the animated caret to keep a smooth transition")
     end)
   end)
 
