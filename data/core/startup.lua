@@ -18,6 +18,7 @@ local function safe_text(value)
 end
 
 local function enabled_by_environment()
+  if rawget(_G, "ANVIL_LUA_THREAD") then return false end
   local value = os.getenv("ANVIL_STARTUP_TRACE")
   if value and value ~= "" then
     value = value:lower():match("^%s*(.-)%s*$")

@@ -376,6 +376,11 @@ static int f_thread_create(lua_State *L)
   copy_global("HOME", L, thread->L);
   copy_global("LUAJIT", L, thread->L);
 
+  /* Worker Lua states use core/start.lua to configure module paths. They are
+   * not application startups and must not create application startup traces. */
+  lua_pushboolean(thread->L, 1);
+  lua_setglobal(thread->L, "ANVIL_LUA_THREAD");
+
 #ifdef MACOS_USE_BUNDLE
   copy_global("MACOS_RESOURCES", L, thread->L);
 #endif
