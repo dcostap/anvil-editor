@@ -2015,6 +2015,7 @@ typedef struct {
   uint8_t *destination_pixels;
   int clip_end_x, clip_end_y;
   float surface_scale_x, surface_scale_y;
+  float output_scale;
   RenColor color;
   bool d3d11;
   bool d3d11_failed;
@@ -2022,14 +2023,116 @@ typedef struct {
   RenRect d3d11_clip;
 } DrawGlyphContext;
 
+static void draw_glyph_bitmap_scaled_software(
+  DrawGlyphContext *ctx, RenFont **fonts, SDL_Surface *font_surface,
+  GlyphMetric *metric, int start_x, double y, double y_offset
+) {
+  float scale = ctx->output_scale;
+  int source_width = metric->x1;
+  int source_height = metric->y1 - metric->y0;
+  int target_width = lroundf(source_width * scale);
+  int target_height = lroundf(source_height * scale);
+  if (target_width <= 0 || target_height <= 0) return;
+  int target_y = lround(
+    y - y_offset * scale - metric->bitmap_top * scale
+      + fonts[0]->baseline * ctx->surface_scale_y * scale
+  );
+
+  const SDL_PixelFormatDetails *surface_format = SDL_GetPixelFormatDetails(
+    ctx->surface->format
+  );
+  const SDL_PixelFormatDetails *font_surface_format = SDL_GetPixelFormatDetails(
+    font_surface->format
+  );
+  uint8_t *source_pixels = font_surface->pixels;
+
+  for (int dy = 0; dy < target_height; dy++) {
+    int destination_y = target_y + dy;
+    if (destination_y < ctx->clip.y) continue;
+    if (destination_y >= ctx->clip_end_y) break;
+    int source_y = metric->y0 + (int)floorf((float)dy / scale);
+    if (source_y >= metric->y1) source_y = metric->y1 - 1;
+
+    int first_dx = start_x < ctx->clip.x ? ctx->clip.x - start_x : 0;
+    int last_dx = target_width;
+    if (start_x + last_dx > ctx->clip_end_x)
+      last_dx = ctx->clip_end_x - start_x;
+    if (last_dx <= first_dx) continue;
+
+    uint32_t *destination_pixel = (uint32_t *)(
+      ctx->destination_pixels + ctx->surface->pitch * destination_y
+      + (start_x + first_dx) * surface_format->bytes_per_pixel
+    );
+    for (int dx = first_dx; dx < last_dx; dx++) {
+      int source_x = (int)floorf((float)dx / scale);
+      if (source_x >= source_width) source_x = source_width - 1;
+      uint8_t *source_pixel = source_pixels
+        + source_y * font_surface->pitch
+        + source_x * font_surface_format->bytes_per_pixel;
+      uint32_t destination_color = *destination_pixel;
+      SDL_Color dst = {
+        (destination_color & surface_format->Rmask) >> surface_format->Rshift,
+        (destination_color & surface_format->Gmask) >> surface_format->Gshift,
+        (destination_color & surface_format->Bmask) >> surface_format->Bshift,
+        (destination_color & surface_format->Amask) >> surface_format->Ashift
+      };
+      unsigned int r, g, b;
+
+      if (metric->format == EGlyphFormatColor) {
+        unsigned int source_alpha = (source_pixel[3] * ctx->color.a + 127) / 255;
+        unsigned int inverse_alpha = 255 - source_alpha;
+        r = (source_pixel[2] * ctx->color.a + 127) / 255
+          + (dst.r * inverse_alpha + 127) / 255;
+        g = (source_pixel[1] * ctx->color.a + 127) / 255
+          + (dst.g * inverse_alpha + 127) / 255;
+        b = (source_pixel[0] * ctx->color.a + 127) / 255
+          + (dst.b * inverse_alpha + 127) / 255;
+        unsigned int alpha = source_alpha
+          + (dst.a * inverse_alpha + 127) / 255;
+        uint32_t packed = ((r << surface_format->Rshift) & surface_format->Rmask)
+          | ((g << surface_format->Gshift) & surface_format->Gmask)
+          | ((b << surface_format->Bshift) & surface_format->Bmask);
+        if (surface_format->Amask)
+          packed |= (alpha << surface_format->Ashift) & surface_format->Amask;
+        *destination_pixel++ = packed;
+        continue;
+      }
+
+      SDL_Color src;
+      if (metric->format == EGlyphFormatSubpixel) {
+        src.r = source_pixel[0];
+        src.g = source_pixel[1];
+        src.b = source_pixel[2];
+      } else {
+        src.r = src.g = src.b = source_pixel[0];
+      }
+      r = (ctx->color.r * src.r * ctx->color.a
+        + dst.r * (65025 - src.r * ctx->color.a) + 32767) / 65025;
+      g = (ctx->color.g * src.g * ctx->color.a
+        + dst.g * (65025 - src.g * ctx->color.a) + 32767) / 65025;
+      b = (ctx->color.b * src.b * ctx->color.a
+        + dst.b * (65025 - src.b * ctx->color.a) + 32767) / 65025;
+      *destination_pixel++ = (unsigned int)dst.a << surface_format->Ashift
+        | r << surface_format->Rshift
+        | g << surface_format->Gshift
+        | b << surface_format->Bshift;
+    }
+  }
+}
+
 static void draw_glyph_bitmap(DrawGlyphContext *ctx, RenFont **fonts, RenFont *font, SDL_Surface *font_surface, GlyphMetric *metric, int pixel_x, double y, double y_offset, bool draw_missing) {
   unsigned int r, g, b;
-  int start_x = pixel_x + metric->bitmap_left;
-  int end_x = metric->x1 + start_x; // x0 is assumed to be 0
+  float output_scale = ctx->output_scale > 0 ? ctx->output_scale : 1.0f;
+  int start_x = pixel_x + lroundf(metric->bitmap_left * output_scale);
+  int end_x = lroundf(metric->x1 * output_scale) + start_x; // x0 is assumed to be 0
   bool has_bitmap = font_surface && metric->x1 > 0 && metric->y1 > metric->y0;
 
   if (!has_bitmap && draw_missing) {
-    RenRect missing = { start_x + 1, y, font->space_advance - 1, ren_font_group_get_height(fonts) };
+    RenRect missing = {
+      start_x + 1, y,
+      lroundf((font->space_advance - 1) * output_scale),
+      lroundf(ren_font_group_get_height(fonts) * output_scale)
+    };
     if (ctx->d3d11) {
       if (!anvil_d3d11_push_rect(ctx->d3d11_window, missing, ctx->d3d11_clip, ctx->color)) {
         ctx->d3d11_failed = true;
@@ -2043,6 +2146,13 @@ static void draw_glyph_bitmap(DrawGlyphContext *ctx, RenFont **fonts, RenFont *f
     return;
   if (ctx->color.a == 0 || end_x < ctx->clip.x || start_x >= ctx->clip_end_x)
     return;
+
+  if (!ctx->d3d11 && output_scale != 1.0f) {
+    draw_glyph_bitmap_scaled_software(
+      ctx, fonts, font_surface, metric, start_x, y, y_offset
+    );
+    return;
+  }
 
   if (ctx->d3d11) {
     int target_y = (int)(y - y_offset - metric->bitmap_top + (fonts[0]->baseline * ctx->surface_scale_y));
@@ -2186,20 +2296,23 @@ static double draw_shaped_run(hb_buffer_t *buffer, DrawGlyphContext *ctx, RenFon
     positions = hb_buffer_get_glyph_positions(buffer, NULL);
   }
 
-  double clip_break_x = ctx->clip_end_x + font->size * ctx->surface_scale_x * 4.0;
+  double clip_break_x = ctx->clip_end_x
+    + font->size * ctx->surface_scale_x * ctx->output_scale * 4.0;
   for (unsigned int i = 0; i < glyph_count; i++) {
     if (pen_x >= clip_break_x) {
       g_text_frame_stats.render_chars_after_clip += glyph_count - i;
       break;
     }
-    double x_offset = hb_position_to_font_pixels(font, positions[i].x_offset);
+    double x_offset = hb_position_to_font_pixels(font, positions[i].x_offset)
+      * ctx->output_scale;
     double y_offset = hb_position_to_font_pixels(font, positions[i].y_offset);
     double glyph_x = pen_x + x_offset;
     draw_resolved_glyph(
       ctx, fonts, font, infos[i].codepoint, glyph_x, y, y_offset,
       infos[i].codepoint == 0
     );
-    pen_x += hb_position_to_font_pixels(font, positions[i].x_advance);
+    pen_x += hb_position_to_font_pixels(font, positions[i].x_advance)
+      * ctx->output_scale;
   }
 
   return pen_x;
@@ -2207,7 +2320,9 @@ static double draw_shaped_run(hb_buffer_t *buffer, DrawGlyphContext *ctx, RenFon
 
 static double draw_unshaped_run(DrawGlyphContext *ctx, RenFont **fonts, const char *text, const char *end, double pen_x, double original_pen_x, double y, RenTab tab) {
   g_text_frame_stats.render_unshaped_runs++;
-  double clip_break_x = ctx->clip_end_x + ren_font_group_get_size(fonts) * ctx->surface_scale_x * 4.0;
+  double clip_break_x = ctx->clip_end_x
+    + ren_font_group_get_size(fonts) * ctx->surface_scale_x
+      * ctx->output_scale * 4.0;
   while (text < end) {
     if (pen_x >= clip_break_x) {
       g_text_frame_stats.render_chars_after_clip++;
@@ -2229,16 +2344,19 @@ static double draw_unshaped_run(DrawGlyphContext *ctx, RenFont **fonts, const ch
     }
     if (!metric)
       break;
-    pen_x += font_get_xadvance(fonts[0], codepoint, metric, pen_x - original_pen_x, tab);
+    pen_x += font_get_xadvance(
+      fonts[0], codepoint, metric,
+      (pen_x - original_pen_x) / ctx->output_scale, tab
+    ) * ctx->output_scale;
   }
   return pen_x;
 }
 
-static void draw_font_decoration(RenSurface *rs, RenFont *font, double start_x, double end_x, double y, float surface_scale_x, float surface_scale_y, RenColor color, bool underline, bool strikethrough) {
+static void draw_font_decoration(RenSurface *rs, RenFont *font, double start_x, double end_x, double y, float surface_scale_x, float surface_scale_y, float output_scale, RenColor color, bool underline, bool strikethrough) {
   if (underline)
-    ren_draw_rect(rs, (RenRect){start_x / surface_scale_x, y / surface_scale_y + font->height - 1, (end_x - start_x) / surface_scale_x, font->underline_thickness * surface_scale_x}, color, false);
+    ren_draw_rect(rs, (RenRect){start_x / surface_scale_x, y / surface_scale_y + font->height * output_scale - 1, (end_x - start_x) / surface_scale_x, font->underline_thickness * surface_scale_x * output_scale}, color, false);
   if (strikethrough)
-    ren_draw_rect(rs, (RenRect){start_x / surface_scale_x, y / surface_scale_y + (float)font->height / 2, (end_x - start_x) / surface_scale_x, font->underline_thickness * surface_scale_x}, color, false);
+    ren_draw_rect(rs, (RenRect){start_x / surface_scale_x, y / surface_scale_y + (float)font->height * output_scale / 2, (end_x - start_x) / surface_scale_x, font->underline_thickness * surface_scale_x * output_scale}, color, false);
 }
 
 #ifdef RENDERER_DEBUG
@@ -2258,17 +2376,24 @@ void ren_font_dump(RenFont *font) {
 }
 #endif
 
-double ren_draw_text(RenSurface *rs, RenFont **fonts, const char *text, size_t len, float x, float y, RenColor color, RenTab tab) {
+double ren_draw_text_transformed(
+  RenSurface *rs, RenFont **fonts, const char *text, size_t len,
+  float x, float y, RenColor color, RenTab tab, RenTransform transform
+) {
   g_text_frame_stats.render_calls++;
   g_text_frame_stats.render_bytes += len;
+  int transformed_alpha = lroundf(color.a * transform.opacity);
+  color.a = (uint8_t)(transformed_alpha < 0 ? 0
+    : (transformed_alpha > 255 ? 255 : transformed_alpha));
   SDL_Surface *surface = rs->surface;
   SDL_Rect clip;
   SDL_GetSurfaceClipRect(surface, &clip);
 
   const float surface_scale_x = rs->scale_x, surface_scale_y = rs->scale_y;
-  double pen_x = x * surface_scale_x;
+  float output_scale = transform.scale > 0.0f ? transform.scale : 1.0f;
+  double pen_x = (transform.offset_x + x * output_scale) * surface_scale_x;
   double original_pen_x = pen_x;
-  y *= surface_scale_y;
+  y = (transform.offset_y + y * output_scale) * surface_scale_y;
   const char* end = text + len;
   hb_buffer_t *hb_buffer = NULL;
   DrawGlyphContext draw_context = {
@@ -2280,6 +2405,7 @@ double ren_draw_text(RenSurface *rs, RenFont **fonts, const char *text, size_t l
     .clip_end_y = clip.y + clip.h,
     .surface_scale_x = surface_scale_x,
     .surface_scale_y = surface_scale_y,
+    .output_scale = output_scale,
     .color = color
   };
 
@@ -2291,7 +2417,8 @@ double ren_draw_text(RenSurface *rs, RenFont **fonts, const char *text, size_t l
   while (text < end) {
     /* Early exit: pen_x is conservatively past the right clip edge;
        remaining glyphs would never be visible, including normal overhangs. */
-    if (pen_x >= draw_context.clip_end_x + ren_font_group_get_size(fonts) * surface_scale_x * 4.0) {
+    if (pen_x >= draw_context.clip_end_x
+        + ren_font_group_get_size(fonts) * surface_scale_x * output_scale * 4.0) {
       g_text_frame_stats.render_top_clip_breaks++;
       break;
     }
@@ -2307,7 +2434,7 @@ double ren_draw_text(RenSurface *rs, RenFont **fonts, const char *text, size_t l
       g_text_frame_stats.render_shape_probe_bytes += (uint64_t)(run_end - char_start);
       if(!last) last = font;
       else if(font != last) {
-        draw_font_decoration(rs, last, last_pen_x, pen_x, y, surface_scale_x, surface_scale_y, color, underline, strikethrough);
+        draw_font_decoration(rs, last, last_pen_x, pen_x, y, surface_scale_x, surface_scale_y, output_scale, color, underline, strikethrough);
         last = font;
         last_pen_x = pen_x;
       }
@@ -2333,11 +2460,14 @@ double ren_draw_text(RenSurface *rs, RenFont **fonts, const char *text, size_t l
       }
       if (!metric)
         break;
-      float adv = font_get_xadvance(fonts[0], codepoint, metric, pen_x - original_pen_x, tab);
+      float adv = font_get_xadvance(
+        fonts[0], codepoint, metric,
+        (pen_x - original_pen_x) / output_scale, tab
+      ) * output_scale;
 
       if(!last) last = font;
       else if(font != last) {
-        draw_font_decoration(rs, last, last_pen_x, pen_x, y, surface_scale_x, surface_scale_y, color, underline, strikethrough);
+        draw_font_decoration(rs, last, last_pen_x, pen_x, y, surface_scale_x, surface_scale_y, output_scale, color, underline, strikethrough);
         last = font;
         last_pen_x = pen_x;
       }
@@ -2348,8 +2478,18 @@ double ren_draw_text(RenSurface *rs, RenFont **fonts, const char *text, size_t l
   if (hb_buffer)
     hb_buffer_destroy(hb_buffer);
   if (last)
-    draw_font_decoration(rs, last, last_pen_x, pen_x, y, surface_scale_x, surface_scale_y, color, underline, strikethrough);
-  return pen_x / surface_scale_x;
+    draw_font_decoration(rs, last, last_pen_x, pen_x, y, surface_scale_x, surface_scale_y, output_scale, color, underline, strikethrough);
+  return x + (pen_x - original_pen_x) / (surface_scale_x * output_scale);
+}
+
+double ren_draw_text(
+  RenSurface *rs, RenFont **fonts, const char *text, size_t len,
+  float x, float y, RenColor color, RenTab tab
+) {
+  return ren_draw_text_transformed(
+    rs, fonts, text, len, x, y, color, tab,
+    (RenTransform){ 1.0f, 0.0f, 0.0f, 1.0f }
+  );
 }
 
 bool ren_draw_text_d3d11(SDL_Window *window, RenRect clip, RenFont **fonts, const char *text, size_t len, float x, float y, RenColor color, RenTab tab) {
@@ -2372,6 +2512,7 @@ bool ren_draw_text_d3d11(SDL_Window *window, RenRect clip, RenFont **fonts, cons
     .clip_end_y = (int)(clip.y + clip.height),
     .surface_scale_x = surface_scale_x,
     .surface_scale_y = surface_scale_y,
+    .output_scale = 1.0f,
     .color = color,
     .d3d11 = true,
     .d3d11_window = window,

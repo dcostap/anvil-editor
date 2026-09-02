@@ -1,6 +1,7 @@
 local config = require "core.config"
 local core = require "core"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
+local open_transition = require "plugins.fuzzy_searcher.open_transition"
 local renderer = require "renderer"
 local style = require "core.style"
 local test = require "core.test"
@@ -36,6 +37,8 @@ test.describe("Fuzzy Searcher attention overlay", function()
     local original_draw_text = renderer.draw_text
     local original_draw_text_known_bounds = renderer.draw_text_known_bounds
     local original_set_clip_rect = renderer.set_clip_rect
+    local original_push_transform = renderer.push_transform
+    local original_pop_transform = renderer.pop_transform
     local original_fps = core.fps
     local original_live_resize = core.in_live_resize_frame
     local draw_calls = 0
@@ -53,6 +56,8 @@ test.describe("Fuzzy Searcher attention overlay", function()
     end
     renderer.draw_text_known_bounds = function() draw_calls = draw_calls + 1 end
     renderer.set_clip_rect = function() end
+    renderer.push_transform = function() end
+    renderer.pop_transform = function() end
 
     local picker
     local ok, err = pcall(function()
@@ -88,6 +93,8 @@ test.describe("Fuzzy Searcher attention overlay", function()
     renderer.draw_text = original_draw_text
     renderer.draw_text_known_bounds = original_draw_text_known_bounds
     renderer.set_clip_rect = original_set_clip_rect
+    renderer.push_transform = original_push_transform
+    renderer.pop_transform = original_pop_transform
     core.fps = original_fps
     core.in_live_resize_frame = original_live_resize
     if picker then picker:close() end
@@ -131,6 +138,49 @@ test.describe("Fuzzy Searcher attention overlay", function()
     system.get_time = original_get_time
     core.fps = original_fps
     core.in_live_resize_frame = original_live_resize
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("scales the Fuzzy Searcher without replacing its fonts", function()
+    local original_push_transform = renderer.push_transform
+    local original_pop_transform = renderer.pop_transform
+    local original_draw_text = renderer.draw_text
+    local original_set_clip_rect = renderer.set_clip_rect
+    local original_get_scaled_font = style.get_scaled_font
+    local replacement_font = {}
+    local pushed
+    local popped = false
+    local drawn_font
+
+    renderer.push_transform = function(center_x, center_y, scale, opacity)
+      pushed = { center_x, center_y, scale, opacity }
+    end
+    renderer.pop_transform = function() popped = true end
+    renderer.draw_text = function(font, _, x)
+      drawn_font = font
+      return x
+    end
+    renderer.set_clip_rect = function() end
+    style.get_scaled_font = function() return replacement_font end
+
+    local ok, err = pcall(function()
+      open_transition.draw({
+        position = { x = 10, y = 20 },
+        size = { x = 200, y = 100 },
+      }, 0.5, 0.97, function()
+        renderer.draw_text(style.code_font, "result", 30, 40, style.text)
+      end)
+
+      test.same(pushed, { 110, 70, 0.97, 0.5 })
+      test.ok(popped)
+      test.equal(drawn_font, style.code_font)
+    end)
+
+    renderer.push_transform = original_push_transform
+    renderer.pop_transform = original_pop_transform
+    renderer.draw_text = original_draw_text
+    renderer.set_clip_rect = original_set_clip_rect
+    style.get_scaled_font = original_get_scaled_font
     if not ok then error(err, 0) end
   end)
 

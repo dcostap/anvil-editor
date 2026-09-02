@@ -30,6 +30,13 @@ typedef struct { int x, y; ERenBezierPointType tag; } RenPoint;
 typedef struct { RECT_TYPE x, y, width, height; } RenRect;
 typedef struct { double offset; } RenTab;
 typedef struct { SDL_Surface *surface; float scale_x, scale_y; } RenSurface;
+/* Maps a point to point * scale + offset and multiplies its alpha. */
+typedef struct {
+  float scale;
+  float offset_x;
+  float offset_y;
+  float opacity;
+} RenTransform;
 typedef struct { EFontMetaTag tag; char *value; size_t len; } FontMetaData;
 
 typedef struct {
@@ -112,6 +119,7 @@ void ren_font_group_wrap_text(
   const RenTextWrapOptions *options, RenTextWrapEmit emit, void *userdata
 );
 double ren_draw_text(RenSurface *rs, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab);
+double ren_draw_text_transformed(RenSurface *rs, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab, RenTransform transform);
 bool ren_draw_text_d3d11(SDL_Window *window, RenRect clip, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab);
 void ren_text_stats_begin_frame(void);
 void ren_text_stats_end_frame(void);

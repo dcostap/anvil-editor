@@ -70,6 +70,10 @@ void rencache_init(RenCache *rc);
 void rencache_uninit(RenCache *rc);
 void  rencache_show_debug(bool enable);
 void  rencache_set_clip_rect(RenCache *rc, RenRect rect);
+void  rencache_push_transform(
+  RenCache *rc, float center_x, float center_y, float scale, float opacity
+);
+void  rencache_pop_transform(RenCache *rc);
 void  rencache_draw_rect(RenCache *rc, RenRect rect, RenColor color, bool replace);
 void  rencache_draw_rounded_rect(RenCache *rc, RenRect rect, float radius, RenColor color);
 void  rencache_draw_rect_grid(RenCache *rc, float x, float y, float step_x, float w, float h, int count, RenColor color);

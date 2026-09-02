@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -76,7 +77,7 @@ static void rencache_activate_window(SDL_Window *window) {
 
 static size_t command_storage_size(size_t payload_size);
 
-enum CommandType { SET_CLIP, DRAW_TEXT, DRAW_RECT, DRAW_ROUNDED_RECT, DRAW_RECT_GRID, DRAW_POLY, DRAW_CANVAS, DRAW_PIXELS };
+enum CommandType { SET_CLIP, PUSH_TRANSFORM, POP_TRANSFORM, DRAW_TEXT, DRAW_RECT, DRAW_ROUNDED_RECT, DRAW_RECT_GRID, DRAW_POLY, DRAW_CANVAS, DRAW_PIXELS };
 
 typedef struct {
   enum CommandType type;
@@ -89,6 +90,18 @@ typedef struct {
 typedef struct {
   RenRect rect;
 } SetClipCommand;
+
+typedef struct {
+  RenRect rect;
+  float center_x;
+  float center_y;
+  float scale;
+  float opacity;
+} PushTransformCommand;
+
+typedef struct {
+  RenRect rect;
+} PopTransformCommand;
 
 typedef struct {
   RenRect rect;
@@ -172,6 +185,40 @@ static double rencache_perf_ms(uint64_t start, uint64_t end) {
 
 static inline int rencache_min(int a, int b) { return a < b ? a : b; }
 static inline int rencache_max(int a, int b) { return a > b ? a : b; }
+
+#define RENCACHE_TRANSFORM_STACK_MAX 32
+
+static RenTransform identity_transform(void) {
+  return (RenTransform) { 1.0f, 0.0f, 0.0f, 1.0f };
+}
+
+static RenTransform compose_transform(
+  RenTransform parent, const PushTransformCommand *command
+) {
+  float local_offset_x = command->center_x * (1.0f - command->scale);
+  float local_offset_y = command->center_y * (1.0f - command->scale);
+  return (RenTransform) {
+    .scale = parent.scale * command->scale,
+    .offset_x = parent.offset_x + parent.scale * local_offset_x,
+    .offset_y = parent.offset_y + parent.scale * local_offset_y,
+    .opacity = parent.opacity * command->opacity,
+  };
+}
+
+static RenRect transform_rect(RenRect rect, RenTransform transform) {
+  return rencache_rect_from_floats(
+    transform.offset_x + (double)rect.x * transform.scale,
+    transform.offset_y + (double)rect.y * transform.scale,
+    (double)rect.width * transform.scale,
+    (double)rect.height * transform.scale
+  );
+}
+
+static RenColor transform_color(RenColor color, RenTransform transform) {
+  int alpha = (int)lroundf((float)color.a * transform.opacity);
+  color.a = (uint8_t)(alpha < 0 ? 0 : (alpha > 255 ? 255 : alpha));
+  return color;
+}
 
 
 /* 32bit fnv-1a hash */
@@ -307,6 +354,8 @@ static void* push_command(RenCache *ren_cache, enum CommandType type, size_t pay
     g_rencache_frame_stats.command_bytes += (size_t)size;
     switch (type) {
       case SET_CLIP: g_rencache_frame_stats.set_clip_commands++; break;
+      case PUSH_TRANSFORM:
+      case POP_TRANSFORM: break;
       case DRAW_TEXT: g_rencache_frame_stats.text_commands++; break;
       case DRAW_RECT:
       case DRAW_ROUNDED_RECT:
@@ -374,6 +423,31 @@ void rencache_set_clip_rect(RenCache *ren_cache, RenRect rect) {
     cmd->rect = intersect_rects(rect, ren_cache->screen_rect);
     ren_cache->last_clip_rect = cmd->rect;
   }
+}
+
+void rencache_push_transform(
+  RenCache *ren_cache, float center_x, float center_y, float scale, float opacity
+) {
+  if (!ren_cache || !isfinite(center_x) || !isfinite(center_y)
+      || !isfinite(scale) || scale <= 0.0f || !isfinite(opacity)) return;
+  PushTransformCommand *cmd = push_command(
+    ren_cache, PUSH_TRANSFORM, sizeof(PushTransformCommand)
+  );
+  if (cmd) {
+    cmd->rect = ren_cache->screen_rect;
+    cmd->center_x = center_x;
+    cmd->center_y = center_y;
+    cmd->scale = scale;
+    cmd->opacity = opacity < 0.0f ? 0.0f : (opacity > 1.0f ? 1.0f : opacity);
+  }
+}
+
+void rencache_pop_transform(RenCache *ren_cache) {
+  if (!ren_cache) return;
+  PopTransformCommand *cmd = push_command(
+    ren_cache, POP_TRANSFORM, sizeof(PopTransformCommand)
+  );
+  if (cmd) cmd->rect = ren_cache->screen_rect;
 }
 
 
@@ -650,7 +724,17 @@ static RenColor rencache_detect_frame_clear_color(RenCache *ren_cache) {
      rect and use its color for both the D3D clear and swapchain background. */
   Command *cmd = NULL;
   RenRect screen = ren_cache->screen_rect;
+  int transform_depth = 0;
   while (next_command(ren_cache, &cmd)) {
+    if (cmd->type == PUSH_TRANSFORM) {
+      transform_depth++;
+      continue;
+    }
+    if (cmd->type == POP_TRANSFORM) {
+      if (transform_depth > 0) transform_depth--;
+      continue;
+    }
+    if (transform_depth > 0) continue;
     if (cmd->type != DRAW_RECT) continue;
     DrawRectCommand *rcmd = (DrawRectCommand*)&cmd->command;
     RenRect r = rcmd->rect;
@@ -679,12 +763,34 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
 
   Command *cmd = NULL;
   RenRect clip = ren_cache->screen_rect;
+  RenTransform transform = identity_transform();
+  RenTransform transform_stack[RENCACHE_TRANSFORM_STACK_MAX];
+  int transform_depth = 0;
+  anvil_d3d11_set_transform(transform);
   const char *fail_reason = "unknown";
   while (next_command(ren_cache, &cmd)) {
     switch (cmd->type) {
       case SET_CLIP: {
         SetClipCommand *ccmd = (SetClipCommand*)&cmd->command;
         clip = intersect_rects(ccmd->rect, ren_cache->screen_rect);
+      } break;
+      case PUSH_TRANSFORM: {
+        PushTransformCommand *tcmd = (PushTransformCommand*)&cmd->command;
+        if (transform_depth >= RENCACHE_TRANSFORM_STACK_MAX) {
+          fail_reason = "transform_stack_overflow";
+          goto fail;
+        }
+        transform_stack[transform_depth++] = transform;
+        transform = compose_transform(transform, tcmd);
+        anvil_d3d11_set_transform(transform);
+      } break;
+      case POP_TRANSFORM: {
+        if (transform_depth <= 0) {
+          fail_reason = "transform_stack_underflow";
+          goto fail;
+        }
+        transform = transform_stack[--transform_depth];
+        anvil_d3d11_set_transform(transform);
       } break;
       case DRAW_RECT: {
         DrawRectCommand *rcmd = (DrawRectCommand*)&cmd->command;
@@ -758,6 +864,10 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
       } break;
     }
   }
+  if (transform_depth != 0) {
+    fail_reason = "unbalanced_transform_stack";
+    goto fail;
+  }
 
   g_rencache_frame_stats.command_replay_ms = rencache_perf_ms(
     command_replay_start, SDL_GetPerformanceCounter()
@@ -805,16 +915,38 @@ void rencache_end_frame(RenCache *ren_cache) {
   /* update cells from commands */
   Command *cmd = NULL;
   RenRect cr = ren_cache->screen_rect;
+  RenTransform transform = identity_transform();
+  RenTransform transform_stack[RENCACHE_TRANSFORM_STACK_MAX];
+  int transform_depth = 0;
   while (next_command(ren_cache, &cmd)) {
     /* cmd->command[0] should always be the Command rect */
     if (cmd->type == SET_CLIP) {
       SetClipCommand *ccmd = (SetClipCommand*)&cmd->command;
       cr = ccmd->rect;
+      continue;
     }
-    RenRect r = intersect_rects(cmd->command[0], cr);
+    if (cmd->type == PUSH_TRANSFORM) {
+      if (transform_depth < RENCACHE_TRANSFORM_STACK_MAX) {
+        transform_stack[transform_depth++] = transform;
+        transform = compose_transform(
+          transform, (PushTransformCommand*)&cmd->command
+        );
+      }
+      continue;
+    }
+    if (cmd->type == POP_TRANSFORM) {
+      if (transform_depth > 0) transform = transform_stack[--transform_depth];
+      continue;
+    }
+    RenRect r = intersect_rects(
+      transform_rect(cmd->command[0], transform),
+      transform_rect(cr, transform)
+    );
+    r = intersect_rects(r, ren_cache->screen_rect);
     if (r.width == 0 || r.height == 0) { continue; }
     unsigned h = HASH_INITIAL;
     hash(&h, cmd, cmd->size);
+    hash(&h, &transform, sizeof(transform));
     update_overlapping_cells(ren_cache, r, h);
   }
 
@@ -849,6 +981,9 @@ void rencache_end_frame(RenCache *ren_cache) {
     /* draw */
     RenRect r = ren_cache->rect_buf[i];
     ren_set_clip_rect(&rs, r);
+    RenRect logical_clip = ren_cache->screen_rect;
+    transform = identity_transform();
+    transform_depth = 0;
 
     cmd = NULL;
     while (next_command(ren_cache, &cmd)) {
@@ -862,35 +997,112 @@ void rencache_end_frame(RenCache *ren_cache) {
       DrawPixelsCommand *pcmd = (DrawPixelsCommand*)&cmd->command;
       switch (cmd->type) {
         case SET_CLIP:
-          ren_set_clip_rect(&rs, intersect_rects(ccmd->rect, r));
+          logical_clip = ccmd->rect;
+          ren_set_clip_rect(
+            &rs, intersect_rects(transform_rect(logical_clip, transform), r)
+          );
+          break;
+        case PUSH_TRANSFORM:
+          if (transform_depth < RENCACHE_TRANSFORM_STACK_MAX) {
+            transform_stack[transform_depth++] = transform;
+            transform = compose_transform(
+              transform, (PushTransformCommand*)&cmd->command
+            );
+          }
+          ren_set_clip_rect(
+            &rs, intersect_rects(transform_rect(logical_clip, transform), r)
+          );
+          break;
+        case POP_TRANSFORM:
+          if (transform_depth > 0) transform = transform_stack[--transform_depth];
+          ren_set_clip_rect(
+            &rs, intersect_rects(transform_rect(logical_clip, transform), r)
+          );
           break;
         case DRAW_RECT:
-          ren_draw_rect(&rs, rcmd->rect, rcmd->color, rcmd->replace);
+          ren_draw_rect(
+            &rs, transform_rect(rcmd->rect, transform),
+            transform_color(rcmd->color, transform),
+            rcmd->replace && transform.opacity >= 1.0f
+          );
           break;
         case DRAW_ROUNDED_RECT:
-          ren_draw_rounded_rect(&rs, rrcmd->rect, rrcmd->radius, rrcmd->color);
+          ren_draw_rounded_rect(
+            &rs, transform_rect(rrcmd->rect, transform),
+            rrcmd->radius * transform.scale,
+            transform_color(rrcmd->color, transform)
+          );
           break;
         case DRAW_RECT_GRID:
           for (int i = 0; i < gcmd->count; i++) {
             RenRect item = rencache_rect_from_floats(gcmd->x + gcmd->step_x * (float)i, gcmd->y, gcmd->w, gcmd->h);
-            ren_draw_rect(&rs, item, gcmd->color, false);
+            ren_draw_rect(
+              &rs, transform_rect(item, transform),
+              transform_color(gcmd->color, transform), false
+            );
           }
           break;
         case DRAW_TEXT:
           ren_font_group_set_tab_size(tcmd->fonts, tcmd->tab_size);
-          ren_draw_text(&rs, tcmd->fonts, tcmd->text, tcmd->len, tcmd->text_x, tcmd->rect.y, tcmd->color, tcmd->tab);
+          ren_draw_text_transformed(
+            &rs, tcmd->fonts, tcmd->text, tcmd->len,
+            tcmd->text_x, tcmd->rect.y,
+            tcmd->color, tcmd->tab, transform
+          );
           break;
-        case DRAW_POLY:
-          ren_draw_poly(&rs, bcmd->points, bcmd->npoints, bcmd->color);
+        case DRAW_POLY: {
+          RenPoint *points = SDL_malloc(sizeof(RenPoint) * bcmd->npoints);
+          if (!points) break;
+          for (int point = 0; point < bcmd->npoints; point++) {
+            points[point] = bcmd->points[point];
+            points[point].x = (int)lroundf(
+              transform.offset_x + points[point].x * transform.scale
+            );
+            points[point].y = (int)lroundf(
+              transform.offset_y + points[point].y * transform.scale
+            );
+          }
+          ren_draw_poly(
+            &rs, points, bcmd->npoints,
+            transform_color(bcmd->color, transform)
+          );
+          SDL_free(points);
+        }
           break;
         case DRAW_CANVAS:
           rencache_end_frame(cvcmd->canvas);
           ren_draw_canvas_scaled(
-            &rs, cvcmd->canvas->rensurface.surface, cvcmd->rect, cvcmd->color
+            &rs, cvcmd->canvas->rensurface.surface,
+            transform_rect(cvcmd->rect, transform),
+            transform_color(cvcmd->color, transform)
           );
           break;
-        case DRAW_PIXELS:
-          ren_draw_pixels(&rs, pcmd->rect, pcmd->bytes, pcmd->len);
+        case DRAW_PIXELS: {
+          if (transform.scale == 1.0f && transform.offset_x == 0.0f
+              && transform.offset_y == 0.0f && transform.opacity >= 1.0f) {
+            ren_draw_pixels(&rs, pcmd->rect, pcmd->bytes, pcmd->len);
+            break;
+          }
+          const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(
+            SDL_PIXELFORMAT_RGBA32
+          );
+          int pitch = details->bytes_per_pixel * (int)pcmd->rect.width;
+          if (pcmd->len < (size_t)pitch * (size_t)pcmd->rect.height) break;
+          SDL_Surface *surface = SDL_CreateSurfaceFrom(
+            pcmd->rect.width, pcmd->rect.height, SDL_PIXELFORMAT_RGBA32,
+            pcmd->bytes, pitch
+          );
+          if (!surface) break;
+          SDL_SetSurfaceBlendMode(
+            surface, transform.opacity < 1.0f
+              ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE
+          );
+          ren_draw_canvas_scaled(
+            &rs, surface, transform_rect(pcmd->rect, transform),
+            transform_color((RenColor){255, 255, 255, 255}, transform)
+          );
+          SDL_DestroySurface(surface);
+        }
           break;
       }
     }

@@ -491,6 +491,30 @@ static int f_set_clip_rect(lua_State *L) {
   return 0;
 }
 
+static int f_push_transform(lua_State *L) {
+  lua_Number center_x = luaL_checknumber(L, 1);
+  lua_Number center_y = luaL_checknumber(L, 2);
+  lua_Number scale = luaL_checknumber(L, 3);
+  lua_Number opacity = luaL_optnumber(L, 4, 1);
+  luaL_argcheck(L, isfinite(center_x), 1, "must be finite");
+  luaL_argcheck(L, isfinite(center_y), 2, "must be finite");
+  luaL_argcheck(L, isfinite(scale) && scale > 0, 3, "must be finite and positive");
+  luaL_argcheck(L, isfinite(opacity), 4, "must be finite");
+  RenWindow *window = ren_get_target_window();
+  if (!window) return luaL_error(L, "no target window found");
+  rencache_push_transform(
+    &window->cache, center_x, center_y, scale, opacity
+  );
+  return 0;
+}
+
+static int f_pop_transform(lua_State *L) {
+  RenWindow *window = ren_get_target_window();
+  if (!window) return luaL_error(L, "no target window found");
+  rencache_pop_transform(&window->cache);
+  return 0;
+}
+
 
 static int f_draw_rect(lua_State *L) {
   lua_Number x = luaL_checknumber(L, 1);
@@ -1582,6 +1606,8 @@ static const luaL_Reg lib[] = {
   { "is_present_paced",   f_is_present_paced   },
   { "get_last_frame_stats", f_get_last_frame_stats },
   { "set_clip_rect",      f_set_clip_rect      },
+  { "push_transform",     f_push_transform     },
+  { "pop_transform",      f_pop_transform      },
   { "draw_rect",          f_draw_rect          },
   { "draw_rounded_rect",  f_draw_rounded_rect  },
   { "draw_text",          f_draw_text          },

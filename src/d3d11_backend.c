@@ -169,6 +169,7 @@ typedef struct D3D11State {
   int quad_srv_count;
   ID3D11ShaderResourceView *quad_last_texture_srv;
   int quad_texture_runs;
+  RenTransform transform;
   ID3D11Texture2D *white_texture;
   ID3D11ShaderResourceView *white_srv;
   ID3D11Texture2D *upload_texture;
@@ -187,6 +188,10 @@ typedef struct D3D11State {
 } D3D11State;
 
 static D3D11State g_d3d11;
+
+void anvil_d3d11_set_transform(RenTransform transform) {
+  g_d3d11.transform = transform;
+}
 
 static char d3d11_ascii_lower(char c) {
   return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
@@ -1150,6 +1155,7 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
   g_d3d11.quad_srv_count = 0;
   g_d3d11.quad_last_texture_srv = NULL;
   g_d3d11.quad_texture_runs = 0;
+  g_d3d11.transform = (RenTransform){ 1.0f, 0.0f, 0.0f, 1.0f };
   g_d3d11.active_window = window;
   return true;
 }
@@ -1552,6 +1558,24 @@ static bool d3d11_queue_quad(ID3D11ShaderResourceView *srv,
                              bool texture_dependent) {
   if (!srv || !inst) return false;
   D3D11QuadInstance queued = *inst;
+  queued.x0 = g_d3d11.transform.offset_x
+    + queued.x0 * g_d3d11.transform.scale;
+  queued.y0 = g_d3d11.transform.offset_y
+    + queued.y0 * g_d3d11.transform.scale;
+  queued.x1 = g_d3d11.transform.offset_x
+    + queued.x1 * g_d3d11.transform.scale;
+  queued.y1 = g_d3d11.transform.offset_y
+    + queued.y1 * g_d3d11.transform.scale;
+  queued.a *= g_d3d11.transform.opacity;
+  if (queued.mode == 4.0f) {
+    queued.u0 *= g_d3d11.transform.scale;
+    queued.v0 *= g_d3d11.transform.scale;
+    queued.u1 *= g_d3d11.transform.scale;
+    queued.v1 *= g_d3d11.transform.scale;
+    queued.pad0 *= g_d3d11.transform.scale;
+    queued.pad1 *= g_d3d11.transform.scale;
+    queued.pad2 *= g_d3d11.transform.scale;
+  }
   if (texture_dependent) {
     if (g_d3d11.quad_last_texture_srv
         && g_d3d11.quad_last_texture_srv != srv) {
