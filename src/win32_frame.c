@@ -42,6 +42,9 @@ struct Win32FrameData {
   bool live_resize;
   int last_pixel_w;
   int last_pixel_h;
+  HBRUSH background_brush;
+  COLORREF background_color;
+  bool has_background_color;
 };
 typedef struct Win32FrameData Win32FrameData;
 
@@ -449,6 +452,9 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
         if (own_wm_paint_enabled()) {
           PAINTSTRUCT ps;
           BeginPaint(hwnd, &ps);
+          if (frame->background_brush) {
+            FillRect(ps.hdc, &ps.rcPaint, frame->background_brush);
+          }
           live_resize_frame(frame, "wm_paint_owned");
           EndPaint(hwnd, &ps);
           return 0;
@@ -456,6 +462,16 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
         LRESULT result = CallWindowProcW(frame->old_proc, hwnd, msg, wparam, lparam);
         live_resize_frame(frame, "wm_paint");
         return result;
+      }
+      break;
+
+    case WM_ERASEBKGND:
+      if (frame->enabled && frame->background_brush) {
+        RECT client_rect;
+        if (GetClientRect(hwnd, &client_rect)) {
+          FillRect((HDC)wparam, &client_rect, frame->background_brush);
+        }
+        return 1;
       }
       break;
 
@@ -652,6 +668,25 @@ bool win32_frame_sync_client_size(RenWindow *ren) {
   return true;
 }
 
+void win32_frame_set_background(SDL_Window *window, RenColor color) {
+  if (!window) return;
+  HWND hwnd = get_hwnd(window);
+  if (!hwnd) return;
+
+  Win32FrameData *frame = (Win32FrameData *) GetPropW(hwnd, ANVIL_WIN32_FRAME_PROP);
+  if (!frame) return;
+
+  COLORREF background_color = RGB(color.r, color.g, color.b);
+  if (frame->has_background_color && frame->background_color == background_color) return;
+
+  HBRUSH background_brush = CreateSolidBrush(background_color);
+  if (!background_brush) return;
+  if (frame->background_brush) DeleteObject(frame->background_brush);
+  frame->background_brush = background_brush;
+  frame->background_color = background_color;
+  frame->has_background_color = true;
+}
+
 void win32_frame_set_hit_test(RenWindow *ren, int title_height, int controls_width, int resize_border, int client_x, int client_width, int client2_x, int client2_width) {
   if (!ren) return;
   ren->hit_test_info.title_height = title_height;
@@ -677,6 +712,7 @@ void win32_frame_destroy(RenWindow *ren) {
   }
 
   ren->win32_frame = NULL;
+  if (frame->background_brush) DeleteObject(frame->background_brush);
   SDL_free(frame);
 }
 

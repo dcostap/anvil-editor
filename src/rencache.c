@@ -26,6 +26,7 @@
 #include "rencache.h"
 #include "renwindow.h"
 #include "d3d11_backend.h"
+#include "win32_frame.h"
 #include "win32_window_handoff.h"
 
 /* a cache over the software renderer -- all drawing operations are stored as
@@ -670,6 +671,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
   if (width <= 0 || height <= 0) return false;
 
   RenColor clear = rencache_detect_frame_clear_color(ren_cache);
+  win32_frame_set_background(ren_cache->window, clear);
   if (!anvil_d3d11_begin_frame(ren_cache->window, width, height, clear)) return false;
   uint64_t command_replay_start = SDL_GetPerformanceCounter();
 
