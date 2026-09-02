@@ -77,7 +77,7 @@ double rencache_draw_text(RenCache *rc, RenFont **font, const char *text, size_t
 double rencache_draw_text_known_bounds(RenCache *rc, RenFont **font, const char *text, size_t len, double x, double y, RenRect rect, RenColor color, RenTab tab);
 double rencache_draw_text_known_bounds_captured(RenCache *rc, RenFont **font, const char *text, size_t len, double x, double y, RenRect rect, RenColor color, RenTab tab, int tab_size);
 RenRect rencache_draw_poly(RenCache *rc, RenPoint *points, int npoints, RenColor color);
-void  rencache_draw_canvas(RenCache *ren_cache, RenRect rect, RenCache *canvas);
+void  rencache_draw_canvas(RenCache *ren_cache, RenRect rect, RenCache *canvas, RenColor color);
 void  rencache_draw_pixels(RenCache *ren_cache, RenRect rect, const char* bytes, size_t len);
 void  rencache_invalidate(RenCache *rc);
 void  rencache_begin_frame(RenCache *rc);

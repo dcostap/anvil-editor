@@ -1049,6 +1049,7 @@ static int f_draw_canvas(lua_State *L) {
   RenCache* canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
   lua_Number x = luaL_checknumber(L, 2);
   lua_Number y = luaL_checknumber(L, 3);
+  lua_Number opacity = luaL_optnumber(L, 4, 1);
 
   ref_canvas(L);
 
@@ -1061,7 +1062,8 @@ static int f_draw_canvas(lua_State *L) {
   if (!window) {
     return luaL_error(L, "no target window found");
   } else {
-    rencache_draw_canvas(&window->cache, rect, canvas);
+    RenColor color = { 255, 255, 255, (uint8_t)(fmin(fmax(opacity, 0), 1) * 255) };
+    rencache_draw_canvas(&window->cache, rect, canvas, color);
   }
   return 0;
 }
@@ -1072,6 +1074,7 @@ static int f_draw_canvas_scaled(lua_State *L) {
   lua_Number y = luaL_checknumber(L, 3);
   lua_Number w = luaL_checknumber(L, 4);
   lua_Number h = luaL_checknumber(L, 5);
+  lua_Number opacity = luaL_optnumber(L, 6, 1);
 
   ref_canvas(L);
 
@@ -1080,7 +1083,8 @@ static int f_draw_canvas_scaled(lua_State *L) {
   if (!window) {
     return luaL_error(L, "no target window found");
   } else {
-    rencache_draw_canvas(&window->cache, rect, canvas);
+    RenColor color = { 255, 255, 255, (uint8_t)(fmin(fmax(opacity, 0), 1) * 255) };
+    rencache_draw_canvas(&window->cache, rect, canvas, color);
   }
   return 0;
 }

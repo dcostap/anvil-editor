@@ -14,6 +14,7 @@ end
 test.describe("Fuzzy Searcher attention overlay", function()
   test.before_each(function(context)
     context.transitions = config.transitions
+    context.fuzzy_searcher_transition = config.disabled_transitions.fuzzy_searcher
     context.app_overlay = core.root_panel.app_overlay
     config.transitions = false
   end)
@@ -24,6 +25,71 @@ test.describe("Fuzzy Searcher attention overlay", function()
     core.root_panel:update_app_overlay()
     core.root_panel.app_overlay = context.app_overlay
     config.transitions = context.transitions
+    config.disabled_transitions.fuzzy_searcher = context.fuzzy_searcher_transition
+  end)
+
+  test.it("keeps the complete Fuzzy Searcher hidden during its opening delay", function()
+    local now = 100
+    local original_get_time = system.get_time
+    local original_draw_rect = renderer.draw_rect
+    local original_draw_rounded_rect = renderer.draw_rounded_rect
+    local original_draw_text = renderer.draw_text
+    local original_draw_text_known_bounds = renderer.draw_text_known_bounds
+    local original_set_clip_rect = renderer.set_clip_rect
+    local original_fps = core.fps
+    local original_live_resize = core.in_live_resize_frame
+    local draw_calls = 0
+
+    config.transitions = true
+    config.disabled_transitions.fuzzy_searcher = false
+    core.fps = 60
+    core.in_live_resize_frame = false
+    system.get_time = function() return now end
+    renderer.draw_rect = function() draw_calls = draw_calls + 1 end
+    renderer.draw_rounded_rect = function() draw_calls = draw_calls + 1 end
+    renderer.draw_text = function(font, text, x)
+      draw_calls = draw_calls + 1
+      return x + (font and font:get_width(text) or 0)
+    end
+    renderer.draw_text_known_bounds = function() draw_calls = draw_calls + 1 end
+    renderer.set_clip_rect = function() end
+
+    local picker
+    local ok, err = pcall(function()
+      picker = fuzzy_searcher.open_static_results("Results", {
+        { kind = "command", label = "core:open", command = "core:open" },
+      })
+      picker:update()
+      draw_calls = 0
+      local opacity, _, visible = picker:opening_transition()
+      test.equal(opacity, 0)
+      test.equal(visible, false)
+      picker:draw()
+      test.equal(draw_calls, 0, "the opening delay must hide all Searcher chrome and content")
+
+      local deadline = now + 0.5
+      repeat
+        now = now + 0.01
+        picker:draw()
+      until draw_calls > 0 or now >= deadline
+      test.ok(draw_calls > 0, "the Searcher must draw through its opening transform")
+
+      draw_calls = 0
+      now = now + 1
+      picker:draw()
+      test.ok(draw_calls > 0, "the complete Searcher must draw after its opening transition")
+    end)
+
+    system.get_time = original_get_time
+    renderer.draw_rect = original_draw_rect
+    renderer.draw_rounded_rect = original_draw_rounded_rect
+    renderer.draw_text = original_draw_text
+    renderer.draw_text_known_bounds = original_draw_text_known_bounds
+    renderer.set_clip_rect = original_set_clip_rect
+    core.fps = original_fps
+    core.in_live_resize_frame = original_live_resize
+    if picker then picker:close() end
+    if not ok then error(err, 0) end
   end)
 
   test.it("dims the app while open and releases the overlay after closing", function()

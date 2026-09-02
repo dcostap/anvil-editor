@@ -80,6 +80,7 @@ local function bundled_tool(name)
 end
 
 local fuzzy_searcher = {
+  open_transition = require "plugins.fuzzy_searcher.open_transition",
   copy_feedback = require "core.copy_feedback",
   file_icons = require "core.file_icons",
   result_limit = 30,
@@ -3384,6 +3385,10 @@ function FSView:new(prefix, opts)
   self.everything_loading_pending = false
   self.everything_loading_status = nil
   self.include_ignored = false
+  self.open_transition_requested_at = system.get_time()
+  self.open_transition_ready_at = nil
+  self.open_transition_complete = false
+  self.open_transition_started_logged = false
 
   local source_view = opts.source_view or core.active_view
   local source_buffer = source_view and source_view.buffer
@@ -3463,7 +3468,9 @@ function FSView:new(prefix, opts)
   end
   self:show()
   core.root_panel:push_modal_input(self, { label = "fuzzy-searcher" })
-  core.root_panel:show_app_overlay(self, "fuzzy_searcher_overlay_background")
+  core.root_panel:show_app_overlay(self, "fuzzy_searcher_overlay_background", {
+    transition_name = "fuzzy_searcher",
+  })
   self:layout()
   ensure_input_focus(self)
   fuzzy_focus_log("open", self, "prefix_len=" .. tostring(#tostring(prefix or "")))
@@ -3873,6 +3880,10 @@ function FSView:clear_preview_view()
   self.preview_highlight_key = nil
   self.preview_blocked = nil
   self.preview_mouse_pressed = false
+end
+
+function FSView:opening_transition(now)
+  return fuzzy_searcher.open_transition.state(self, now)
 end
 
 local function draw_preview_debug(view, result, x, y, w, h)
@@ -6706,6 +6717,15 @@ function FSView:update()
 end
 
 function FSView:draw()
+  if not self:is_visible() then return false end
+  local opacity, scale, visible = self:opening_transition()
+  if not visible then return false end
+  return fuzzy_searcher.open_transition.draw(self, opacity, scale, function()
+    return self:draw_open_content()
+  end)
+end
+
+function FSView:draw_open_content()
   if not self:is_visible() then return false end
   local draw_scope = fuzzy_searcher._perf_scope_begin("fuzzy_searcher", true)
 

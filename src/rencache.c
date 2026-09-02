@@ -136,6 +136,7 @@ typedef struct {
 typedef struct {
   RenRect rect;
   RenCache *canvas;
+  RenColor color;
 } DrawCanvasCommand;
 
 typedef struct {
@@ -519,7 +520,7 @@ RenRect rencache_draw_poly(RenCache *ren_cache, RenPoint *points, int npoints, R
   return rect;
 }
 
-void rencache_draw_canvas(RenCache *ren_cache, RenRect rect, RenCache *canvas) {
+void rencache_draw_canvas(RenCache *ren_cache, RenRect rect, RenCache *canvas, RenColor color) {
   if (rect.width == 0 || rect.height == 0 || !rects_overlap(ren_cache->last_clip_rect, rect)) {
     return;
   }
@@ -527,6 +528,7 @@ void rencache_draw_canvas(RenCache *ren_cache, RenRect rect, RenCache *canvas) {
   if (cmd) {
     cmd->rect = rect;
     cmd->canvas = canvas;
+    cmd->color = color;
     rencache_begin_frame(canvas);
   }
 }
@@ -710,7 +712,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
           RenRect src = { 0, 0, surface->w, surface->h };
           RenRect dst = cvcmd->rect;
           if (!anvil_d3d11_push_texture(ren_cache->window, surface, src, dst, clip,
-                                        (RenColor){255, 255, 255, 255}, 2)) { fail_reason = "draw_canvas"; goto fail; }
+                                        cvcmd->color, 2)) { fail_reason = "draw_canvas"; goto fail; }
         }
       } break;
       case DRAW_PIXELS: {
@@ -883,7 +885,9 @@ void rencache_end_frame(RenCache *ren_cache) {
           break;
         case DRAW_CANVAS:
           rencache_end_frame(cvcmd->canvas);
-          ren_draw_canvas_scaled(&rs, cvcmd->canvas->rensurface.surface, cvcmd->rect);
+          ren_draw_canvas_scaled(
+            &rs, cvcmd->canvas->rensurface.surface, cvcmd->rect, cvcmd->color
+          );
           break;
         case DRAW_PIXELS:
           ren_draw_pixels(&rs, pcmd->rect, pcmd->bytes, pcmd->len);

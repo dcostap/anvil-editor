@@ -238,6 +238,8 @@ config.disabled_transitions = {
   tabs = false,
   ---Disables transitions when a notification is shown.
   statusbar = false,
+  ---Disables the Fuzzy Searcher opening transition.
+  fuzzy_searcher = false,
 }
 
 ---@alias config.animationtype
