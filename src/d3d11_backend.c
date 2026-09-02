@@ -5,7 +5,6 @@
 #include <windows.h>
 #include <dwmapi.h>
 #include <d3d11.h>
-#include <d3dcompiler.h>
 #include <dxgi1_2.h>
 #include <SDL3_image/SDL_image.h>
 #include <stdbool.h>
@@ -15,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "d3d11_backend.h"
+#include "d3d11_quad_shader.h"
 #include "resize_diagnostics.h"
 
 #ifndef SAFE_RELEASE
@@ -465,93 +465,6 @@ static void d3d11_reset_device(void) {
   g_d3d11.attempted_init = false;
 }
 
-static const char *quad_shader_source =
-  "Texture2D tex0 : register(t0);\n"
-  "Texture2D tex1 : register(t1);\n"
-  "Texture2D tex2 : register(t2);\n"
-  "Texture2D tex3 : register(t3);\n"
-  "Texture2D tex4 : register(t4);\n"
-  "Texture2D tex5 : register(t5);\n"
-  "Texture2D tex6 : register(t6);\n"
-  "Texture2D tex7 : register(t7);\n"
-  "SamplerState smp0 : register(s0);\n"
-  "cbuffer QuadConstants : register(b0) { float2 viewport; float2 _pad; };\n"
-  "struct VSIn { float4 dst : POSITION; float4 uvrect : TEXCOORD0; float4 color : COLOR0; float4 style : TEXCOORD1; uint vertex_id : SV_VertexID; };\n"
-  "struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float4 color : COLOR0; float4 style : TEXCOORD1; };\n"
-  "struct PSOut { float4 color : SV_Target0; float4 coverage : SV_Target1; };\n"
-  "VSOut vs_main(VSIn input) {\n"
-  "  VSOut output;\n"
-  "  float2 positions[4] = {\n"
-  "    float2(input.dst.x, input.dst.w),\n"
-  "    float2(input.dst.x, input.dst.y),\n"
-  "    float2(input.dst.z, input.dst.w),\n"
-  "    float2(input.dst.z, input.dst.y)\n"
-  "  };\n"
-  "  float2 uvs[4] = {\n"
-  "    float2(input.uvrect.x, input.uvrect.w),\n"
-  "    float2(input.uvrect.x, input.uvrect.y),\n"
-  "    float2(input.uvrect.z, input.uvrect.w),\n"
-  "    float2(input.uvrect.z, input.uvrect.y)\n"
-  "  };\n"
-  "  uint vid = input.vertex_id & 3;\n"
-  "  float2 p = float2((positions[vid].x / viewport.x) * 2.0f - 1.0f, 1.0f - (positions[vid].y / viewport.y) * 2.0f);\n"
-  "  output.pos = float4(p, 0.0f, 1.0f);\n"
-  "  output.uv = uvs[vid];\n"
-  "  output.color = input.color;\n"
-  "  output.style = input.style;\n"
-  "  return output;\n"
-  "}\n"
-  "float4 sample_quad_texture(float slot, float2 uv) {\n"
-  "  if (slot < 0.5f) return tex0.Sample(smp0, uv);\n"
-  "  if (slot < 1.5f) return tex1.Sample(smp0, uv);\n"
-  "  if (slot < 2.5f) return tex2.Sample(smp0, uv);\n"
-  "  if (slot < 3.5f) return tex3.Sample(smp0, uv);\n"
-  "  if (slot < 4.5f) return tex4.Sample(smp0, uv);\n"
-  "  if (slot < 5.5f) return tex5.Sample(smp0, uv);\n"
-  "  if (slot < 6.5f) return tex6.Sample(smp0, uv);\n"
-  "  return tex7.Sample(smp0, uv);\n"
-  "}\n"
-  "PSOut ps_main(VSOut input) {\n"
-  "  PSOut output;\n"
-  "  if (input.style.x > 3.5f) {\n"
-  "    float radius = input.style.y;\n"
-  "    float2 size = input.style.zw;\n"
-  "    float2 centered = input.uv - size * 0.5f;\n"
-  "    float2 q = abs(centered) - (size * 0.5f - radius);\n"
-  "    float distance = length(max(q, 0.0f)) + min(max(q.x, q.y), 0.0f) - radius;\n"
-  "    float coverage = 1.0f - smoothstep(-0.75f, 0.75f, distance);\n"
-  "    float a = input.color.a * coverage;\n"
-  "    output.color = float4(input.color.rgb * a, a);\n"
-  "    output.coverage = float4(a, a, a, a);\n"
-  "    return output;\n"
-  "  }\n"
-  "  if (input.style.x > 2.5f) {\n"
-  "    float a = input.color.a;\n"
-  "    output.color = float4(input.color.rgb * a, a);\n"
-  "    output.coverage = float4(a, a, a, a);\n"
-  "    return output;\n"
-  "  }\n"
-  "  float4 s = sample_quad_texture(input.style.y, input.uv);\n"
-  "  if (input.style.x < 0.5f) {\n"
-  "    float a = input.color.a * s.r;\n"
-  "    output.color = float4(input.color.rgb * a, a);\n"
-  "    output.coverage = float4(a, a, a, a);\n"
-  "    return output;\n"
-  "  }\n"
-  "  if (input.style.x < 1.5f) {\n"
-  "    float3 coverage = input.color.a * s.rgb;\n"
-  "    float a = max(coverage.r, max(coverage.g, coverage.b));\n"
-  "    output.color = float4(input.color.rgb * coverage, a);\n"
-  "    output.coverage = float4(coverage, a);\n"
-  "    return output;\n"
-  "  }\n"
-  "  float a = s.a * input.color.a;\n"
-  "  output.color = float4(s.rgb * a, a);\n"
-  "  output.coverage = float4(a, a, a, a);\n"
-  "  return output;\n"
-  "}\n";
-
-
 bool anvil_d3d11_enabled(void) {
   /* One runtime renderer switch:
      - unset / "d3d11" / "auto" / "1" => D3D11 command renderer
@@ -783,41 +696,25 @@ static bool d3d11_ensure_quad_pipeline(D3D11SetupStats *setup_stats) {
     return true;
   }
 
-  ID3DBlob *vs_blob = NULL;
-  ID3DBlob *ps_blob = NULL;
-  ID3DBlob *errors = NULL;
-  UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
   LARGE_INTEGER start, end;
 
   QueryPerformanceCounter(&start);
-  HRESULT hr = D3DCompile(quad_shader_source, strlen(quad_shader_source),
-                          "anvil_quad_shader", NULL, NULL, "vs_main", "vs_4_0",
-                          flags, 0, &vs_blob, &errors);
-  QueryPerformanceCounter(&end);
-  if (setup_stats) setup_stats->vertex_shader_compile_ms = d3d11_ms_between(start, end);
-  SAFE_RELEASE(errors);
-  if (FAILED(hr) || !vs_blob) goto fail;
-
-  QueryPerformanceCounter(&start);
-  hr = D3DCompile(quad_shader_source, strlen(quad_shader_source),
-                  "anvil_quad_shader", NULL, NULL, "ps_main", "ps_4_0",
-                  flags, 0, &ps_blob, &errors);
-  QueryPerformanceCounter(&end);
-  if (setup_stats) setup_stats->pixel_shader_compile_ms = d3d11_ms_between(start, end);
-  SAFE_RELEASE(errors);
-  if (FAILED(hr) || !ps_blob) goto fail;
-
-  QueryPerformanceCounter(&start);
-  hr = g_d3d11.device->lpVtbl->CreateVertexShader(g_d3d11.device,
-                                                   vs_blob->lpVtbl->GetBufferPointer(vs_blob),
-                                                   vs_blob->lpVtbl->GetBufferSize(vs_blob),
-                                                   NULL, &g_d3d11.quad_vs);
+  HRESULT hr = g_d3d11.device->lpVtbl->CreateVertexShader(
+    g_d3d11.device,
+    anvil_quad_vertex_shader,
+    sizeof(anvil_quad_vertex_shader),
+    NULL,
+    &g_d3d11.quad_vs
+  );
   if (FAILED(hr)) goto fail;
 
-  hr = g_d3d11.device->lpVtbl->CreatePixelShader(g_d3d11.device,
-                                                  ps_blob->lpVtbl->GetBufferPointer(ps_blob),
-                                                  ps_blob->lpVtbl->GetBufferSize(ps_blob),
-                                                  NULL, &g_d3d11.quad_ps);
+  hr = g_d3d11.device->lpVtbl->CreatePixelShader(
+    g_d3d11.device,
+    anvil_quad_pixel_shader,
+    sizeof(anvil_quad_pixel_shader),
+    NULL,
+    &g_d3d11.quad_ps
+  );
   if (FAILED(hr)) goto fail;
 
   D3D11_INPUT_ELEMENT_DESC layout[] = {
@@ -826,10 +723,14 @@ static bool d3d11_ensure_quad_pipeline(D3D11SetupStats *setup_stats) {
     { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D11_INPUT_PER_INSTANCE_DATA, 1 },
     { "TEXCOORD", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 48, D3D11_INPUT_PER_INSTANCE_DATA, 1 },
   };
-  hr = g_d3d11.device->lpVtbl->CreateInputLayout(g_d3d11.device, layout, 4,
-                                                  vs_blob->lpVtbl->GetBufferPointer(vs_blob),
-                                                  vs_blob->lpVtbl->GetBufferSize(vs_blob),
-                                                  &g_d3d11.quad_layout);
+  hr = g_d3d11.device->lpVtbl->CreateInputLayout(
+    g_d3d11.device,
+    layout,
+    4,
+    anvil_quad_vertex_shader,
+    sizeof(anvil_quad_vertex_shader),
+    &g_d3d11.quad_layout
+  );
   if (FAILED(hr)) goto fail;
 
   g_d3d11.quad_instance_buffer_capacity = 65536;
@@ -862,14 +763,9 @@ static bool d3d11_ensure_quad_pipeline(D3D11SetupStats *setup_stats) {
   QueryPerformanceCounter(&end);
   if (setup_stats) setup_stats->quad_pipeline_resources_ms = d3d11_ms_between(start, end);
 
-  SAFE_RELEASE(ps_blob);
-  SAFE_RELEASE(vs_blob);
   return true;
 
 fail:
-  SAFE_RELEASE(errors);
-  SAFE_RELEASE(ps_blob);
-  SAFE_RELEASE(vs_blob);
   SAFE_RELEASE(g_d3d11.quad_sampler);
   SAFE_RELEASE(g_d3d11.quad_cbuf);
   SAFE_RELEASE(g_d3d11.quad_vbuf);

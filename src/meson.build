@@ -140,9 +140,22 @@ message('lua-compat-5.3 needed: @0@'.format(lua_compat_needed))
 anvil_rc = []
 if host_machine.system() == 'windows'
     windows = import('windows')
+    d3dcompiler_dep = cc.find_library('d3dcompiler', required: true)
+    d3d11_shader_compiler = executable(
+        'd3d11_shader_compiler',
+        'd3d11_shader_compiler.c',
+        dependencies: d3dcompiler_dep,
+    )
+    d3d11_quad_shader = custom_target(
+        'd3d11_quad_shader',
+        input: 'd3d11_quad.hlsl',
+        output: 'd3d11_quad_shader.h',
+        command: [d3d11_shader_compiler, '@INPUT@', '@OUTPUT@'],
+    )
     anvil_sources += [
         'win32_frame.c',
         'd3d11_backend.c',
+        d3d11_quad_shader,
         'zig_abi_compat.c',
         'api/terminal_native.c',
     ]
@@ -162,7 +175,6 @@ if host_machine.system() == 'windows'
     anvil_deps += cc.find_library('d3d11', required: true)
     anvil_deps += cc.find_library('dxgi', required: true)
     anvil_deps += cc.find_library('dxguid', required: true)
-    anvil_deps += cc.find_library('d3dcompiler', required: true)
     anvil_deps += cc.find_library('shell32', required: true)
     anvil_rc += windows.compile_resources('../resources/icons/icon.rc')
     anvil_rc += windows.compile_resources('../resources/windows/manifest.rc')
