@@ -4108,16 +4108,22 @@ test.describe("Markdown Live Preview", function()
 
     local ok, err = pcall(function()
       refresh(view)
-      local image_fragment
-      for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
-        if fragment.widget and fragment.widget.type == "image" then
-          image_fragment = fragment
-          break
+      local function rendered_image()
+        for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+          if fragment.widget and fragment.widget.type == "image" then
+            return fragment
+          end
         end
       end
+      local image_fragment = rendered_image()
       test.not_nil(image_fragment)
       test.equal(loaded, string.char(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10))
       test.equal(image_fragment.image_path, nil)
+
+      buffer:set_selection(1, #source - 3)
+      image_fragment = test.not_nil(rendered_image())
+      test.ok(not visible_render_text(view, 1):find("base64", 1, true))
+
       test.ok(image_fragment.widget:on_mouse_pressed(
         view, { line = 1, fragment = image_fragment }, "left"
       ))

@@ -1512,10 +1512,11 @@ end
 local function semantic_link_fragments(view, line_text, line, reveal_units, opts)
   local fragments = {}
   for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
-    local revealed = reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2)
     local image_link = span.link
       and (span.link.kind == "image" or span.link.kind == "embed")
       and is_image_target(span.link.path)
+    local revealed = not (image_link and images.is_data_image(span.link.path))
+      and reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2)
     if image_link and revealed then
       for _, fragment in ipairs(revealed_link_fragments(view, line_text, line, span, opts)) do
         fragments[#fragments + 1] = fragment
@@ -6366,9 +6367,10 @@ local function build_render_line(view, line, _context)
 
   local image_span = image_only_span(view, text, line)
   if image_span then
-    local image_revealed = reveal_unit_matches(
-      reveal_units, image_span.semantic_id, image_span.col1, image_span.col2
-    )
+    local image_revealed = not images.is_data_image(image_span.link.path)
+      and reveal_unit_matches(
+        reveal_units, image_span.semantic_id, image_span.col1, image_span.col2
+      )
     local render_line = image_only_render_line(view, text, line, image_span, image_revealed)
     if render_line then
       for _, fragment in ipairs(render_line.fragments or {}) do
