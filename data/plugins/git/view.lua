@@ -750,6 +750,9 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
       pane.buffer:clear_search_selections()
       pane.buffer:set_selection(action_line, 1, action_line, #text)
       pane.mouse_selecting = nil
+      -- The clicked row is visible. Do not apply keyboard caret scroll context.
+      pane.last_line1, pane.last_col1, pane.last_line2, pane.last_col2 =
+        pane.buffer:get_selection()
       pane.git_pressed_action_line = action_line
       pane.git_pressed_action_clicks = clicks or 1
       core.blink_reset()
