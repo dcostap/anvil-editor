@@ -7865,9 +7865,14 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
         if math.abs(tail_y - trail.target_y) < 0.5 then
           local left = math.min(tail_x, trail.target_x)
           local right = math.max(tail_x, trail.target_x) + width
+          local full_height = math.max(tail_height, trail.target_height)
+          local trail_height = full_height * math.max(
+            0, math.min(1, config.caret_trail_horizontal_height)
+          )
+          local top = math.min(tail_y, trail.target_y)
+            + (full_height - trail_height) / 2
           renderer.draw_rect(
-            left, math.min(tail_y, trail.target_y),
-            right - left, math.max(tail_height, trail.target_height),
+            left, top, right - left, trail_height,
             trail_color
           )
         else

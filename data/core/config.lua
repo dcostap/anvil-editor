@@ -326,6 +326,10 @@ config.caret_trail_opacity = nil
 ---@type number
 config.caret_trail_width = nil
 
+---Horizontal trail height as a fraction of the caret height.
+---@type number
+config.caret_trail_horizontal_height = nil
+
 ---Draws whitespaces as dots.
 ---This option is deprecated.
 ---Please use the drawwhitespace plugin instead.

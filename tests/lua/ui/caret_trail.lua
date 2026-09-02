@@ -22,6 +22,7 @@ local function with_caret_settings(fn)
     caret_trail_min_distance = config.caret_trail_min_distance,
     caret_trail_opacity = config.caret_trail_opacity,
     caret_trail_width = config.caret_trail_width,
+    caret_trail_horizontal_height = config.caret_trail_horizontal_height,
     style_caret_trail = style.caret_trail,
     redraw = core.redraw,
   }
@@ -35,6 +36,7 @@ local function with_caret_settings(fn)
   config.caret_trail_min_distance = saved.caret_trail_min_distance
   config.caret_trail_opacity = saved.caret_trail_opacity
   config.caret_trail_width = saved.caret_trail_width
+  config.caret_trail_horizontal_height = saved.caret_trail_horizontal_height
   style.caret_trail = saved.style_caret_trail
   core.redraw = saved.redraw
   system.get_time = old_time
@@ -59,6 +61,7 @@ test.describe("caret trail", function()
       config.caret_trail_min_distance = 1
       config.caret_trail_opacity = 0.5
       config.caret_trail_width = 3
+      config.caret_trail_horizontal_height = 0.25
       style.caret_trail = { 12, 34, 56, 200 }
 
       view:draw_caret(10, 20, 1, 1, 1)
@@ -71,6 +74,7 @@ test.describe("caret trail", function()
       test.equal(#rects, 2, "expected one continuous trail and the live caret")
       test.equal(rects[1].x, 10)
       test.equal(rects[1].w, 103)
+      test.equal(rects[1].h, view:get_line_height() * 0.25)
       test.equal(rects[1].color[1], 12)
       test.equal(rects[1].color[2], 34)
       test.equal(rects[1].color[3], 56)
@@ -106,6 +110,7 @@ test.describe("caret trail", function()
       config.caret_trail_min_distance = 1
       config.caret_trail_opacity = 0.5
       config.caret_trail_width = 3
+      config.caret_trail_horizontal_height = 0.25
       style.caret_trail = { 12, 34, 56, 200 }
 
       view:draw_caret(10, 20, 1, 1, 1)
