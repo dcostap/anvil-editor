@@ -7760,6 +7760,7 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
       line = line,
       col = col,
       cell_width = self:get_font():get_width("n"),
+      cell_height = lh,
     }
     return
   end

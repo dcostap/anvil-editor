@@ -288,17 +288,31 @@ config.animated_caret = true
 ---@type number
 config.animated_caret_animation_length = 0.15
 
----Time in seconds for horizontal moves of two characters or less.
+---Shortest animation time, used at or below the minimum trail distance.
 ---
----Defaults to 0.04.
+---Defaults to 0.025.
 ---@type number
-config.animated_caret_short_animation_length = 0.04
+config.animated_caret_min_animation_length = 0.025
 
 ---Controls how far the back of the caret trails its front.
 ---
 ---Defaults to 1.
 ---@type number
 config.animated_caret_trail_size = 1
+
+---Movement distance where the caret uses its shortest animation time.
+---The distance is measured in text cells.
+---
+---Defaults to 1.
+---@type number
+config.animated_caret_trail_min_distance = 1
+
+---Movement distance where the caret reaches its full animation time.
+---The distance is measured in text cells.
+---
+---Defaults to 6.
+---@type number
+config.animated_caret_trail_full_distance = 6
 
 ---Draws whitespaces as dots.
 ---This option is deprecated.

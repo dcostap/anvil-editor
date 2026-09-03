@@ -25,8 +25,10 @@ local function with_caret_settings(fn)
     status_bar = core.status_bar,
     animated_caret = config.animated_caret,
     animated_caret_animation_length = config.animated_caret_animation_length,
-    animated_caret_short_animation_length = config.animated_caret_short_animation_length,
+    animated_caret_min_animation_length = config.animated_caret_min_animation_length,
     animated_caret_trail_size = config.animated_caret_trail_size,
+    animated_caret_trail_min_distance = config.animated_caret_trail_min_distance,
+    animated_caret_trail_full_distance = config.animated_caret_trail_full_distance,
     caret = style.caret,
     caret_trail = style.caret_trail,
     redraw = core.redraw,
@@ -43,8 +45,10 @@ local function with_caret_settings(fn)
   core.status_bar = saved.status_bar
   config.animated_caret = saved.animated_caret
   config.animated_caret_animation_length = saved.animated_caret_animation_length
-  config.animated_caret_short_animation_length = saved.animated_caret_short_animation_length
+  config.animated_caret_min_animation_length = saved.animated_caret_min_animation_length
   config.animated_caret_trail_size = saved.animated_caret_trail_size
+  config.animated_caret_trail_min_distance = saved.animated_caret_trail_min_distance
+  config.animated_caret_trail_full_distance = saved.animated_caret_trail_full_distance
   style.caret = saved.caret
   style.caret_trail = saved.caret_trail
   core.redraw = saved.redraw
@@ -69,6 +73,15 @@ local function x_bounds(points)
     max_x = math.max(max_x, point[1])
   end
   return min_x, max_x
+end
+
+local function y_bounds(points)
+  local min_y, max_y = math.huge, -math.huge
+  for _, point in ipairs(points) do
+    min_y = math.min(min_y, point[2])
+    max_y = math.max(max_y, point[2])
+  end
+  return min_y, max_y
 end
 
 test.describe("caret trail", function()
@@ -96,8 +109,10 @@ test.describe("caret trail", function()
       end
       config.animated_caret = true
       config.animated_caret_animation_length = 0.15
-      config.animated_caret_short_animation_length = 0.04
+      config.animated_caret_min_animation_length = 0.025
       config.animated_caret_trail_size = 1
+      config.animated_caret_trail_min_distance = 1
+      config.animated_caret_trail_full_distance = 6
       style.caret = { 12, 34, 56, 255 }
       style.caret_trail = { 90, 80, 70, 255 }
 
@@ -140,8 +155,10 @@ test.describe("caret trail", function()
       end
       config.animated_caret = true
       config.animated_caret_animation_length = 0.15
-      config.animated_caret_short_animation_length = 0.04
+      config.animated_caret_min_animation_length = 0.025
       config.animated_caret_trail_size = 1
+      config.animated_caret_trail_min_distance = 1
+      config.animated_caret_trail_full_distance = 6
 
       draw_frame(root, view, 10, 20)
       polygons = {}
@@ -153,6 +170,47 @@ test.describe("caret trail", function()
       local min_x, max_x = x_bounds(polygons[1])
       test.ok(min_x < 210, "expected a visible horizontal trail")
       test.ok(max_x >= 210, "expected the leading edge to follow the target")
+    end)
+  end)
+
+  test.it("settles a short vertical trail sooner than a medium trail", function()
+    with_caret_settings(function()
+      local function remaining_ratio(distance_cells)
+        local view = make_view()
+        local root = RootPanel()
+        core.root_panel = root
+        local now = 30
+        local polygon
+        system.get_time = function() return now end
+        renderer.draw_rect = function() end
+        renderer.draw_poly = function(points) polygon = points end
+        config.animated_caret = true
+        config.animated_caret_animation_length = 0.15
+        config.animated_caret_min_animation_length = 0.025
+        config.animated_caret_trail_size = 1
+        config.animated_caret_trail_min_distance = 1
+        config.animated_caret_trail_full_distance = 6
+
+        local cell_height = view:get_line_height()
+        local start_y = 20
+        draw_frame(root, view, 10, start_y, 1, 1)
+        now = 30.01
+        local target_y = start_y + distance_cells * cell_height
+        draw_frame(root, view, 10, target_y, 2, 1)
+        local min_y = y_bounds(polygon)
+        return (target_y - min_y) / (distance_cells * cell_height)
+      end
+
+      local short_remaining = remaining_ratio(1)
+      local medium_remaining = remaining_ratio(6)
+      test.ok(
+        short_remaining < 0.75,
+        "expected the minimum-distance trail to become brief"
+      )
+      test.ok(
+        short_remaining < medium_remaining,
+        "expected the short trail to catch up faster"
+      )
     end)
   end)
 end)

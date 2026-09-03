@@ -976,6 +976,7 @@ function TerminalView:draw()
           line = cursor.y or 0,
           col = cursor.x or 0,
           cell_width = self.cell_width,
+          cell_height = self.cell_height,
         }
       else
         renderer.draw_rect(cx, cy, cw, ch, cursor_color)

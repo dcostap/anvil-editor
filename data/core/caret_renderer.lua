@@ -95,7 +95,10 @@ function CaretRenderer:relocate(target)
   self.previous_target = target
 end
 
-function CaretRenderer:start_jump(target, animation_length, short_animation_length, trail_size)
+function CaretRenderer:start_jump(
+  target, animation_length, min_animation_length, trail_size,
+  min_distance, full_distance
+)
   local alignments = {}
   local minimum, maximum = math.huge, -math.huge
   for index, corner in ipairs(self.corners) do
@@ -117,16 +120,25 @@ function CaretRenderer:start_jump(target, animation_length, short_animation_leng
   local old_target = self.previous_target
   local jump_x = target.x - old_target.x
   local jump_y = target.y - old_target.y
-  local short_horizontal = math.abs(jump_x) <= 2.001 * math.max(1, target.cell_width or 1)
-    and math.abs(jump_y) <= 0.001
-  local leading = animation_length * (1 - clamp(trail_size, 0, 1))
+  local distance = math.sqrt(
+    math.pow(jump_x / math.max(1, target.cell_width or 1), 2)
+    + math.pow(jump_y / math.max(1, target.cell_height or target.height or 1), 2)
+  )
+  min_distance = math.max(0, min_distance or 0)
+  full_distance = math.max(min_distance, full_distance or min_distance)
+  local distance_range = math.max(0.001, full_distance - min_distance)
+  local distance_progress = clamp(
+    (distance - min_distance) / distance_range, 0, 1
+  )
+  local movement_length = min_animation_length
+    + (animation_length - min_animation_length) * distance_progress
+  local leading = movement_length * (1 - clamp(trail_size, 0, 1))
 
   for index, corner in ipairs(self.corners) do
     local x, y = destination(target, index)
     local alignment = range > 0 and (alignments[index] - minimum) / range or 1
-    corner.animation_length = short_horizontal
-      and math.min(animation_length, short_animation_length)
-      or animation_length + (leading - animation_length) * clamp(alignment, 0, 1)
+    corner.animation_length = movement_length
+      + (leading - movement_length) * clamp(alignment, 0, 1)
     corner.offset_x = x - corner.x
     corner.offset_y = y - corner.y
     corner.destination_x, corner.destination_y = x, y
@@ -139,12 +151,17 @@ local function snap_to_target_fraction(value, target_value)
   return math.floor(value - fraction + 0.5) + fraction
 end
 
-function CaretRenderer:draw(now, animation_length, short_animation_length, trail_size)
+function CaretRenderer:draw(
+  now, animation_length, min_animation_length, trail_size,
+  min_distance, full_distance
+)
   local target = self.target
   if not target then return false end
   now = now or system.get_time()
   animation_length = math.max(0, animation_length or 0)
-  short_animation_length = math.max(0, short_animation_length or animation_length)
+  min_animation_length = clamp(
+    min_animation_length or animation_length, 0, animation_length
+  )
   trail_size = clamp(trail_size or 0, 0, 1)
 
   local jumped = false
@@ -154,7 +171,10 @@ function CaretRenderer:draw(now, animation_length, short_animation_length, trail
     if same_location(self.previous_target, target) then
       self:relocate(target)
     else
-      self:start_jump(target, animation_length, short_animation_length, trail_size)
+      self:start_jump(
+        target, animation_length, min_animation_length, trail_size,
+        min_distance, full_distance
+      )
       jumped = true
     end
   end

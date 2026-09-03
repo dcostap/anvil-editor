@@ -94,8 +94,10 @@ function RootPanel:draw_keyboard_caret()
   local animating = self.caret_renderer:draw(
     system.get_time(),
     config.animated_caret_animation_length,
-    config.animated_caret_short_animation_length,
-    config.animated_caret_trail_size
+    config.animated_caret_min_animation_length,
+    config.animated_caret_trail_size,
+    config.animated_caret_trail_min_distance,
+    config.animated_caret_trail_full_distance
   )
   if animating then core.redraw = true end
 end
