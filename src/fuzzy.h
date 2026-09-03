@@ -103,6 +103,7 @@ const char *fuzzy_mode_name(FuzzyMode mode);
 bool fuzzy_match_buffer_build(FuzzyMatchBuffer *buffer, FuzzyMode mode, const char *text, uint32_t text_len);
 void fuzzy_match_buffer_free(FuzzyMatchBuffer *buffer);
 int fuzzy_match_buffer_score(FuzzyMode mode, const FuzzyMatchBuffer *buffer, const char *query);
+int fuzzy_match_buffer_score_parts(FuzzyMode mode, const FuzzyMatchBuffer *buffer, const char *query, int *out_boundary_score);
 uint32_t fuzzy_match_buffer_spans(FuzzyMode mode, const char *original, uint32_t original_len, const FuzzyMatchBuffer *buffer, const char *query, FuzzySpan *spans, uint32_t max_spans);
 
 bool fuzzy_index_build(FuzzyIndex *idx, const char **items, uint32_t count, FuzzyMode mode);
@@ -149,6 +150,7 @@ FuzzySearchResult *fuzzy_index_search(const FuzzyIndex *idx, const char *query, 
 const char *fuzzy_index_text(const FuzzyIndex *idx, uint32_t entry_index);
 
 int fuzzy_match_score(FuzzyMode mode, const char *text, const char *lower, uint32_t len, uint32_t basename_start, const char *query);
+int fuzzy_match_score_parts(FuzzyMode mode, const char *text, const char *lower, uint32_t len, uint32_t basename_start, const char *query, int *out_boundary_score);
 FuzzyMatchClass fuzzy_match_text_class(FuzzyMode mode, const char *lower, uint32_t len, const char *query);
 const char *fuzzy_match_class_name(FuzzyMatchClass match_class);
 uint32_t fuzzy_match_text_spans(FuzzyMode mode, const char *lower, uint32_t len, const char *query, FuzzySpan *spans, uint32_t max_spans);

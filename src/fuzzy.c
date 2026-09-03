@@ -358,9 +358,13 @@ const char *fuzzy_index_text(const FuzzyIndex *idx, uint32_t entry_index) {
 }
 
 int fuzzy_match_buffer_score(FuzzyMode mode, const FuzzyMatchBuffer *buffer, const char *query) {
+  return fuzzy_match_buffer_score_parts(mode, buffer, query, NULL);
+}
+
+int fuzzy_match_buffer_score_parts(FuzzyMode mode, const FuzzyMatchBuffer *buffer, const char *query, int *out_boundary_score) {
   if (!buffer) return FUZZY_SCORE_NO_MATCH;
-  return fuzzy_match_score(mode, buffer->match, buffer->lower, buffer->len,
-    basename_start_of(buffer->match, buffer->len), query);
+  return fuzzy_match_score_parts(mode, buffer->match, buffer->lower, buffer->len,
+    basename_start_of(buffer->match, buffer->len), query, out_boundary_score);
 }
 
 static uint32_t map_match_spans(
@@ -505,7 +509,7 @@ static bool fuzzy_subsequence_too_weak(uint32_t word_len, uint32_t span, uint32_
   return false;
 }
 
-static int score_word(FuzzyMode mode, const char *text, const char *lower, uint32_t len, uint32_t basename_start, const FuzzyWord *word) {
+static int score_word(FuzzyMode mode, const char *text, const char *lower, uint32_t len, uint32_t basename_start, const FuzzyWord *word, int *boundary_score) {
   if (word->len == 0) return 0;
   if (word->len > len) return FUZZY_SCORE_NO_MATCH;
 
@@ -518,7 +522,10 @@ static int score_word(FuzzyMode mode, const char *text, const char *lower, uint3
        split matches jump above exact basename matches. */
     int score = 10000 + (int)word->len * 220;
     score -= (int)pos;
-    if (is_boundary_at(text, pos)) score += 300;
+    if (is_boundary_at(text, pos)) {
+      score += 300;
+      if (boundary_score) *boundary_score += 300;
+    }
     if (mode == FUZZY_MODE_PATH && pos >= basename_start) score += 700;
     if (mode == FUZZY_MODE_PATH && pos == basename_start) score += 700;
     if (pos == 0) score += 300;
@@ -548,7 +555,10 @@ static int score_word(FuzzyMode mode, const char *text, const char *lower, uint3
     if (current_run > longest_run) longest_run = current_run;
 
     score += 100;
-    if (is_boundary_at(text, scan)) score += 70;
+    if (is_boundary_at(text, scan)) {
+      score += 70;
+      if (boundary_score) *boundary_score += 70;
+    }
     if (consecutive) score += 90;
     if (mode == FUZZY_MODE_PATH && scan >= basename_start) score += 24;
     prev = scan;
@@ -571,16 +581,23 @@ static int score_word(FuzzyMode mode, const char *text, const char *lower, uint3
 }
 
 int fuzzy_match_score(FuzzyMode mode, const char *text, const char *lower, uint32_t len, uint32_t basename_start, const char *query) {
+  return fuzzy_match_score_parts(mode, text, lower, len, basename_start, query, NULL);
+}
+
+int fuzzy_match_score_parts(FuzzyMode mode, const char *text, const char *lower, uint32_t len, uint32_t basename_start, const char *query, int *out_boundary_score) {
   FuzzyWord words[FUZZY_MAX_QUERY_WORDS];
   uint32_t word_count = parse_query_words(mode, query, words);
+  int boundary_score = 0;
+  if (out_boundary_score) *out_boundary_score = 0;
   if (word_count == 0) return 0 - (int)(len / 8);
 
   int total = 0;
   for (uint32_t i = 0; i < word_count; ++i) {
-    int score = score_word(mode, text, lower, len, basename_start, &words[i]);
+    int score = score_word(mode, text, lower, len, basename_start, &words[i], &boundary_score);
     if (score == FUZZY_SCORE_NO_MATCH) return FUZZY_SCORE_NO_MATCH;
     total += score;
   }
+  if (out_boundary_score) *out_boundary_score = boundary_score;
   total -= (int)(len / 8);
   return total;
 }

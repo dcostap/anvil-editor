@@ -1289,7 +1289,8 @@ local function fuzzy_match(query, text)
   if query == "" then return 0, {}, nil, nil end
   local match = fuzzy_native.match(text, query, { mode = "generic", spans = true })
   if not match then return nil end
-  return match.score, match.spans or {}, match.selection_span, match.match_start
+  return match.score, match.spans or {}, match.selection_span, match.match_start,
+    match.boundary_score or 0
 end
 
 local function fuzzy_match_file_fast(query, text)
@@ -5155,8 +5156,8 @@ function fuzzy_searcher.grep_order.regroup(sorted)
 
   for i, anchor in ipairs(sorted) do
     if not used[i] then
-      out[#out+1] = anchor
       used[i] = true
+      local group = { anchor }
 
       local anchor_file = fuzzy_searcher.grep_order.file_key(anchor)
       local anchor_score = anchor.fuzzy_score or 0
@@ -5172,13 +5173,25 @@ function fuzzy_searcher.grep_order.regroup(sorted)
             break
           end
           if not used[j] then
-            out[#out+1] = candidate
+            group[#group+1] = candidate
             used[j] = true
             pulled = pulled + 1
             if pulled >= fuzzy_searcher.grep_order.SAME_FILE_MAX_BURST then break end
           end
         end
       end
+      table.sort(group, function(a, b)
+        local ab, bb = a.boundary_score or 0, b.boundary_score or 0
+        if ab ~= bb then return ab > bb end
+        local al, bl = tonumber(a.line) or 0, tonumber(b.line) or 0
+        if al ~= bl then return al < bl end
+        local ac, bc = tonumber(a.col) or 0, tonumber(b.col) or 0
+        if ac ~= bc then return ac < bc end
+        local as, bs = a.fuzzy_score or 0, b.fuzzy_score or 0
+        if as ~= bs then return as > bs end
+        return tostring(a.text or "") < tostring(b.text or "")
+      end)
+      for _, result in ipairs(group) do out[#out+1] = result end
     end
   end
   return out
@@ -5356,9 +5369,9 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         if not term.exact and not low:find(term.text, 1, true) then return end
       end
 
-      local score, fuzzy_spans, fuzzy_selection_span, fuzzy_match_start = 0, {}, nil, nil
+      local score, fuzzy_spans, fuzzy_selection_span, fuzzy_match_start, boundary_score = 0, {}, nil, nil, 0
       if fuzzy_query ~= "" then
-        score, fuzzy_spans, fuzzy_selection_span, fuzzy_match_start = fuzzy_match(fuzzy_query, source.text)
+        score, fuzzy_spans, fuzzy_selection_span, fuzzy_match_start, boundary_score = fuzzy_match(fuzzy_query, source.text)
         if not score then return end
       end
       for _, span in ipairs(fuzzy_spans or {}) do spans[#spans+1] = span end
@@ -5385,6 +5398,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         grep_query = grep,
         fuzzy_query = fuzzy_query,
         fuzzy_score = score,
+        boundary_score = boundary_score,
         content_spans = spans or {},
         content_selection_span = content_selection_span,
         content_match_start = content_match_start,
@@ -5723,7 +5737,9 @@ function FSView:start_grep(base, line, grep)
           or fuzzy_searcher.grep_order.PATH_NONE
         r.path_score = 0
       end
-      r.fuzzy_score = fuzzy_match(grep, r.text) or 0
+      local fuzzy_score, _, _, _, boundary_score = fuzzy_match(grep, r.text)
+      r.fuzzy_score = fuzzy_score or 0
+      r.boundary_score = boundary_score or 0
       if r.base_query ~= "" and not r.file_spans then
         local _, file_spans = fuzzy_match(r.base_query, r.file)
         r.file_spans = file_spans or {}

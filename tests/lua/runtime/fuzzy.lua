@@ -31,6 +31,14 @@ test.describe("native fuzzy Lua API", function()
     test.equal(match.match_start, 5)
   end)
 
+  test.it("reports boundary strength separately from other score factors", function()
+    local boundary = fuzzy.match("working directory", "working director")
+    local embedded = fuzzy.match("reworking directory", "working director")
+
+    test.equal(boundary.boundary_score, 600)
+    test.equal(embedded.boundary_score, 300)
+  end)
+
   test.it("matches Latin letters without diacritics", function()
     local results = fuzzy.filter({ "éclair", "eclair", "resume", "naïve" }, "ecl", { limit = 10 })
     local found_accented = false

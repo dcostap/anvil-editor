@@ -521,7 +521,8 @@ static int match_text(lua_State *L, bool as_table) {
   if (text_len > UINT32_MAX) return 0;
   FuzzyMatchBuffer buffer;
   if (!fuzzy_match_buffer_build(&buffer, mode, text, (uint32_t)text_len)) luaL_error(L, "out of memory");
-  int score = fuzzy_match_buffer_score(mode, &buffer, query);
+  int boundary_score = 0;
+  int score = fuzzy_match_buffer_score_parts(mode, &buffer, query, &boundary_score);
   if (score == INT_MIN) {
     fuzzy_match_buffer_free(&buffer);
     return 0;
@@ -536,6 +537,8 @@ static int match_text(lua_State *L, bool as_table) {
   lua_createtable(L, 0, include_spans ? 5 : 2);
   lua_pushinteger(L, score);
   lua_setfield(L, -2, "score");
+  lua_pushinteger(L, boundary_score);
+  lua_setfield(L, -2, "boundary_score");
   lua_pushlstring(L, text, text_len);
   lua_setfield(L, -2, "text");
   lua_pushstring(L, fuzzy_match_class_name(

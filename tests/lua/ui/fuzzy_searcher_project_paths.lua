@@ -329,6 +329,22 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
       "expected a related result to stay with its file instead of depending on an eight-row window")
   end)
 
+  test.it("orders same-file grep results by boundary strength and then line", function(context)
+    local first_file = join_path(context.root, "first.ts")
+    local second_file = join_path(context.root, "second.ts")
+    local results = helpers.order_grep_results({
+      { abs_path = first_file, file = "first.ts", line = 30, fuzzy_score = 1200, boundary_score = 300 },
+      { abs_path = first_file, file = "first.ts", line = 10, fuzzy_score = 1000, boundary_score = 300 },
+      { abs_path = first_file, file = "first.ts", line = 1, fuzzy_score = 900, boundary_score = 0 },
+      { abs_path = second_file, file = "second.ts", line = 1, fuzzy_score = 1100, boundary_score = 300 },
+    })
+
+    test.same({ results[1].file, results[1].line }, { "first.ts", 10 })
+    test.same({ results[2].file, results[2].line }, { "first.ts", 30 })
+    test.same({ results[3].file, results[3].line }, { "first.ts", 1 })
+    test.same({ results[4].file, results[4].line }, { "second.ts", 1 })
+  end)
+
   test.it("retains the best grep candidates rather than the first streamed candidates", function()
     local retained = {}
     for score = 1, 10 do
