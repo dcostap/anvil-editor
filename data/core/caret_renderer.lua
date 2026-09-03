@@ -62,6 +62,8 @@ function CaretRenderer:reset()
   self.corners = {}
   self.target = nil
   self.previous_target = nil
+  self.mode = nil
+  self.horizontal_x = nil
   self.last_time = nil
 end
 
@@ -80,17 +82,24 @@ function CaretRenderer:reset_to_target(target)
     self.corners[index] = self.corners[index] or {}
     reset_spring(self.corners[index], x, y)
   end
+  self.mode = "trail"
+  self.horizontal_x = target.x
   self.previous_target = target
 end
 
 function CaretRenderer:relocate(target)
+  local old_target = self.previous_target
   for index, corner in ipairs(self.corners) do
-    local old_x, old_y = destination(self.previous_target, index)
+    local old_x, old_y = destination(old_target, index)
     local new_x, new_y = destination(target, index)
     local dx, dy = new_x - old_x, new_y - old_y
     corner.x, corner.y = corner.x + dx, corner.y + dy
     corner.destination_x = corner.destination_x + dx
     corner.destination_y = corner.destination_y + dy
+  end
+  if self.mode == "horizontal" then
+    self.horizontal_x = (self.horizontal_x or old_target.x)
+      + target.x - old_target.x
   end
   self.previous_target = target
 end
@@ -143,7 +152,29 @@ function CaretRenderer:start_jump(
     corner.offset_y = y - corner.y
     corner.destination_x, corner.destination_y = x, y
   end
+  self.mode = "trail"
+  self.horizontal_x = target.x
   self.previous_target = target
+end
+
+function CaretRenderer:start_horizontal(target)
+  if self.mode ~= "horizontal" then
+    self.horizontal_x = self.previous_target.x
+  end
+  self.mode = "horizontal"
+  self.previous_target = target
+end
+
+function CaretRenderer:sync_horizontal_corners(target)
+  local shift_x = (self.horizontal_x or target.x) - target.x
+  for index, corner in ipairs(self.corners) do
+    local x, y = destination(target, index)
+    corner.x, corner.y = x + shift_x, y
+    corner.destination_x, corner.destination_y = x, y
+    corner.offset_x, corner.offset_y = -shift_x, 0
+    corner.velocity_x, corner.velocity_y = 0, 0
+    corner.animation_length = 0
+  end
 end
 
 local function snap_to_target_fraction(value, target_value)
@@ -153,7 +184,8 @@ end
 
 function CaretRenderer:draw(
   now, animation_length, min_animation_length, trail_size,
-  min_distance, full_distance
+  min_distance, full_distance, min_speed, max_speed,
+  distance_min, distance_max
 )
   local target = self.target
   if not target then return false end
@@ -171,17 +203,55 @@ function CaretRenderer:draw(
     if same_location(self.previous_target, target) then
       self:relocate(target)
     else
-      self:start_jump(
-        target, animation_length, min_animation_length, trail_size,
-        min_distance, full_distance
-      )
-      jumped = true
+      local cell_height = math.max(1, target.cell_height or target.height or 1)
+      local horizontal_jump = math.abs(
+        target.y - self.previous_target.y
+      ) / cell_height < 0.05
+      if horizontal_jump then
+        self:start_horizontal(target)
+      else
+        self:start_jump(
+          target, animation_length, min_animation_length, trail_size,
+          min_distance, full_distance
+        )
+        jumped = true
+      end
     end
   end
 
   local dt = self.last_time and clamp(now - self.last_time, 0, 1 / 30) or 0
   if jumped then dt = math.min(dt, 1 / 60) end
+  if self.mode == "horizontal" then dt = math.min(dt, 1 / 120) end
   self.last_time = now
+
+  if self.mode == "horizontal" then
+    local dx = target.x - (self.horizontal_x or target.x)
+    local distance = math.abs(dx)
+    if distance <= math.max(1, target.cell_width or 1) then
+      self.horizontal_x = target.x
+    else
+      distance_min = distance_min or 15
+      distance_max = math.max(distance_min + 1, distance_max or 450)
+      local distance_progress = clamp(
+        (distance - distance_min) / (distance_max - distance_min), 0, 1
+      )
+      min_speed = min_speed or 45
+      max_speed = max_speed or 95
+      local speed = min_speed + (max_speed - min_speed) * distance_progress
+      local linear_progress = 1 - math.exp(-speed * dt)
+      local progress = 1 - math.pow(1 - linear_progress, 3)
+      self.horizontal_x = self.horizontal_x + dx * progress
+    end
+    local animating = math.abs(target.x - self.horizontal_x) > 0.1
+    if not animating then self.horizontal_x = target.x end
+    self:sync_horizontal_corners(target)
+    renderer.draw_rect(
+      self.horizontal_x, target.y,
+      target.width, target.height, target.color
+    )
+    return animating
+  end
+
   local animating = false
   local points = {}
   for index, corner in ipairs(self.corners) do

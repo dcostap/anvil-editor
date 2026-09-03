@@ -29,6 +29,10 @@ local function with_caret_settings(fn)
     animated_caret_trail_size = config.animated_caret_trail_size,
     animated_caret_trail_min_distance = config.animated_caret_trail_min_distance,
     animated_caret_trail_full_distance = config.animated_caret_trail_full_distance,
+    animated_caret_min_speed = config.animated_caret_min_speed,
+    animated_caret_max_speed = config.animated_caret_max_speed,
+    animated_caret_distance_min = config.animated_caret_distance_min,
+    animated_caret_distance_max = config.animated_caret_distance_max,
     caret = style.caret,
     caret_trail = style.caret_trail,
     redraw = core.redraw,
@@ -49,6 +53,10 @@ local function with_caret_settings(fn)
   config.animated_caret_trail_size = saved.animated_caret_trail_size
   config.animated_caret_trail_min_distance = saved.animated_caret_trail_min_distance
   config.animated_caret_trail_full_distance = saved.animated_caret_trail_full_distance
+  config.animated_caret_min_speed = saved.animated_caret_min_speed
+  config.animated_caret_max_speed = saved.animated_caret_max_speed
+  config.animated_caret_distance_min = saved.animated_caret_distance_min
+  config.animated_caret_distance_max = saved.animated_caret_distance_max
   style.caret = saved.caret
   style.caret_trail = saved.caret_trail
   core.redraw = saved.redraw
@@ -135,7 +143,7 @@ test.describe("caret trail", function()
     end)
   end)
 
-  test.it("stretches smoothly across a horizontal jump", function()
+  test.it("uses the old smooth caret without a horizontal trail", function()
     with_caret_settings(function()
       local view = make_view()
       local root = RootPanel()
@@ -148,8 +156,11 @@ test.describe("caret trail", function()
 
       local now = 20
       local polygons = {}
+      local rects = {}
       system.get_time = function() return now end
-      renderer.draw_rect = function() end
+      renderer.draw_rect = function(x, y, width, height, color)
+        rects[#rects + 1] = { x = x, y = y, width = width, height = height, color = color }
+      end
       renderer.draw_poly = function(points)
         polygons[#polygons + 1] = points
       end
@@ -159,17 +170,22 @@ test.describe("caret trail", function()
       config.animated_caret_trail_size = 1
       config.animated_caret_trail_min_distance = 1
       config.animated_caret_trail_full_distance = 6
+      config.animated_caret_min_speed = 45
+      config.animated_caret_max_speed = 95
+      config.animated_caret_distance_min = 15
+      config.animated_caret_distance_max = 450
 
       draw_frame(root, view, 10, 20)
       polygons = {}
+      rects = {}
 
       now = 20.01
       draw_frame(root, view, 210, 20, 1, 5)
 
-      test.equal(#polygons, 1)
-      local min_x, max_x = x_bounds(polygons[1])
-      test.ok(min_x < 210, "expected a visible horizontal trail")
-      test.ok(max_x >= 210, "expected the leading edge to follow the target")
+      test.equal(#polygons, 0)
+      test.equal(#rects, 1)
+      test.ok(rects[1].x > 10, "expected the caret to move toward its target")
+      test.ok(rects[1].x < 210, "expected the caret to keep a smooth transition")
     end)
   end)
 

@@ -303,16 +303,42 @@ config.animated_caret_trail_size = 1
 ---Movement distance where the caret uses its shortest animation time.
 ---The distance is measured in text cells.
 ---
----Defaults to 1.
+---Defaults to 3.
 ---@type number
-config.animated_caret_trail_min_distance = 1
+config.animated_caret_trail_min_distance = 3
 
 ---Movement distance where the caret reaches its full animation time.
 ---The distance is measured in text cells.
 ---
----Defaults to 6.
+---Defaults to 12.
 ---@type number
-config.animated_caret_trail_full_distance = 6
+config.animated_caret_trail_full_distance = 12
+
+---Minimum horizontal caret movement speed.
+---
+---Defaults to 45.
+---@type number
+config.animated_caret_min_speed = 45
+
+---Maximum horizontal caret movement speed.
+---
+---Defaults to 95.
+---@type number
+config.animated_caret_max_speed = 95
+
+---Horizontal distance where caret speed starts to increase.
+---The distance is measured in pixels.
+---
+---Defaults to 15.
+---@type number
+config.animated_caret_distance_min = 15
+
+---Horizontal distance where the caret reaches maximum speed.
+---The distance is measured in pixels.
+---
+---Defaults to 450.
+---@type number
+config.animated_caret_distance_max = 450
 
 ---Draws whitespaces as dots.
 ---This option is deprecated.
