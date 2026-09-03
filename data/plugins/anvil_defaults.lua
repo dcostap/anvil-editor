@@ -2,9 +2,11 @@
 -- Anvil first-party defaults, promoted from the old ~/.config/anvil/init.lua.
 local core = require "core"
 local common = require "core.common"
+local command = require "core.command"
 local config = require "core.config"
 config.plugins.editor_wallpaper = false
 local keymap = require "core.keymap"
+local panes = require "core.panes"
 local style = require "core.style"
 local startup = package.loaded["core.startup"]
 
@@ -207,6 +209,15 @@ require_core_plugin "theme_editor"
 if core.intellij_actions_disable_conflict_shortcuts then
   core.intellij_actions_disable_conflict_shortcuts()
 end
+-- With no Panes, Alt+Left reopens the last closed Pane instead of navigating
+-- through Navigation History. Fuzzy Searcher installs a higher-priority
+-- picker-local binding immediately below this one.
+keymap.add({
+  ["alt+left"] = function(...)
+    if panes.count() > 0 then return false end
+    return command.perform("core:reopen_last_closed_pane", ...)
+  end,
+})
 if core.fuzzy_searcher_install_picker_keymaps then
   core.fuzzy_searcher_install_picker_keymaps()
 end
