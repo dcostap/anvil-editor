@@ -282,57 +282,23 @@ config.disable_blink = false
 ---@type boolean
 config.animated_caret = true
 
----Minimum animated caret movement speed; higher values catch up faster.
+---Time in seconds for the rear of the caret to reach its target.
 ---
----Defaults to 45.
+---Defaults to 0.15.
 ---@type number
-config.animated_caret_min_speed = 45
+config.animated_caret_animation_length = 0.15
 
----Maximum animated caret movement speed; used for long jumps.
+---Time in seconds for horizontal moves of two characters or less.
 ---
----Defaults to 95.
+---Defaults to 0.04.
 ---@type number
-config.animated_caret_max_speed = 95
+config.animated_caret_short_animation_length = 0.04
 
----Distance in pixels where animated caret speed starts ramping up.
+---Controls how far the back of the caret trails its front.
 ---
----Defaults to 15.
+---Defaults to 1.
 ---@type number
-config.animated_caret_distance_min = 15
-
----Distance in pixels where animated caret speed reaches maximum.
----
----Defaults to 450.
----@type number
-config.animated_caret_distance_max = 450
-
----Enables fading marks at recent caret positions.
----@type boolean
-config.caret_trail = nil
-
----Time in seconds before each caret trail mark disappears.
----@type number
-config.caret_trail_duration = nil
-
----Minimum movement in pixels that adds a caret trail mark.
----@type number
-config.caret_trail_min_distance = nil
-
----Minimum vertical movement in pixels that enables the caret trail.
----@type number
-config.caret_trail_min_vertical_distance = nil
-
----Maximum caret trail opacity from 0 to 1.
----@type number
-config.caret_trail_opacity = nil
-
----Caret trail mark width in pixels.
----@type number
-config.caret_trail_width = nil
-
----Horizontal trail height as a fraction of the caret height.
----@type number
-config.caret_trail_horizontal_height = nil
+config.animated_caret_trail_size = 1
 
 ---Draws whitespaces as dots.
 ---This option is deprecated.

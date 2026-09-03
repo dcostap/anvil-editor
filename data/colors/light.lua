@@ -87,7 +87,6 @@ style.autocomplete_border = { common.color "rgba(0, 0, 0, 0.28)" }
 style.autocomplete_selection = c("e8f1ff")
 style.text = c(C.text_fg)
 style.caret = c("000000")
-style.caret_trail = c("3574f0")
 style.accent = c("3574f0")
 style.dim = c(C.ignored)
 style.divider = c(C.tearline)

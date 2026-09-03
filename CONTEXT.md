@@ -217,7 +217,7 @@ The caret and selection state owned by a Text View.
 _Avoid_: Buffer selection, shared selection
 
 **Caret Trail**:
-A short, fading visual trace that marks recent caret positions in a Text View.
+A global animated extension of the focused input caret. It follows that caret across Views and Panes.
 _Avoid_: Cursor trail, mouse trail
 
 **Selection Surrounding**:

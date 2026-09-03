@@ -7716,84 +7716,6 @@ end
 ---@param col integer Column number (for overwrite mode char width)
 function TextView:draw_caret(x, y, line, col, caret_idx, color)
   color = color or style.caret
-  local trail_enabled = config.caret_trail
-  local visual_state_enabled = config.animated_caret or trail_enabled
-  local pos
-  local now
-  if visual_state_enabled then
-    self.animated_caret_positions = self.animated_caret_positions or {}
-    caret_idx = caret_idx or 1
-    pos = self.animated_caret_positions[caret_idx]
-    if not pos then
-      pos = { x = x, y = y }
-      self.animated_caret_positions[caret_idx] = pos
-    end
-    now = system.get_time()
-    if not trail_enabled then
-      pos.trail = nil
-      pos.target_x, pos.target_y = nil, nil
-      pos.target_line, pos.target_col = nil, nil
-    end
-  elseif self.animated_caret_positions then
-    caret_idx = caret_idx or 1
-    local old_pos = self.animated_caret_positions[caret_idx]
-    if old_pos then
-      old_pos.trail = nil
-      old_pos.target_x, old_pos.target_y = nil, nil
-      old_pos.target_line, old_pos.target_col = nil, nil
-    end
-  end
-
-  local animate_caret = config.animated_caret
-    and (not trail_enabled or math.abs(y - pos.y) <= 0.1)
-  if animate_caret then
-    local last = pos.last_time or now
-    pos.last_time = now
-    -- Keep the first frame after an idle period from consuming the whole
-    -- animation. If this cap is too large, a caret move after a short pause can
-    -- almost snap to the target, making the animation feel like it vanished.
-    local dt = math.min(now - last, 1 / 120)
-    local dx = x - pos.x
-    local dy = y - pos.y
-
-    if math.abs(dy) > 0.1 then
-      -- Line changes must not animate at all. Snap both axes so clicks or
-      -- vertical navigation never glide diagonally from the old line.
-      pos.x = x
-      pos.y = y
-    else
-      local distance = math.abs(dx)
-      local char_width = self:get_font():get_width("n")
-      if distance <= char_width then
-        -- Per-character caret movement should feel immediate; animation here
-        -- reads as input lag rather than polish.
-        pos.x = x
-        pos.y = y
-      else
-        local distance_min = config.animated_caret_distance_min or 4
-        local distance_max = config.animated_caret_distance_max or 160
-        local distance_span = math.max(1, distance_max - distance_min)
-        local distance_t = math.max(0, math.min(1, (distance - distance_min) / distance_span))
-        local min_speed = config.animated_caret_min_speed or 35
-        local max_speed = config.animated_caret_max_speed or 100
-        local speed = min_speed + (max_speed - min_speed) * distance_t
-        local linear_t = 1 - math.exp(-speed * dt)
-        local t = 1 - math.pow(1 - linear_t, 3)
-        pos.x = pos.x + dx * t
-        pos.y = y
-      end
-
-      if math.abs(x - pos.x) > 0.1 then
-        core.redraw = true
-      else
-        pos.x = x
-      end
-    end
-    x, y = pos.x, pos.y
-  elseif trail_enabled and pos then
-    pos.x, pos.y = x, y
-  end
-
   local stats = core.textview_frame_stats
   if stats then stats.caret_draw_calls = stats.caret_draw_calls + 1 end
   local line_end = self.wrapped_settings
@@ -7811,107 +7733,37 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
     y = y + content_y_offset
   end
 
-  if trail_enabled and pos then
-    local duration = config.caret_trail_duration
-    local base = style.caret_trail
-    local opacity = math.max(0, math.min(1, config.caret_trail_opacity))
-    local width = config.caret_trail_width
-    local moved = pos.target_line ~= nil
-      and (line ~= pos.target_line or col ~= pos.target_col)
-
-    if moved then
-      local old_x = pos.draw_x or x
-      local old_y = pos.draw_y or y
-      local dx = x - old_x
-      local dy = y - old_y
-      local distance = math.sqrt(dx * dx + dy * dy)
-      local enough_vertical_movement = math.abs(dy)
-        >= math.max(0.1, config.caret_trail_min_vertical_distance)
-      if enough_vertical_movement
-        and distance >= math.max(0.1, config.caret_trail_min_distance)
-      then
-        pos.trail = {
-          x = old_x,
-          y = old_y,
-          height = pos.caret_height or lh,
-          target_x = x,
-          target_y = y,
-          target_height = lh,
-          started_at = now,
-        }
-      else
-        pos.trail = nil
-      end
-    elseif pos.target_line ~= nil and pos.trail then
-      -- Keep the effect attached to Buffer positions while the View scrolls.
-      local shift_x = x - (pos.draw_x or x)
-      local shift_y = y - (pos.draw_y or y)
-      pos.trail.x = pos.trail.x + shift_x
-      pos.trail.y = pos.trail.y + shift_y
-      pos.trail.target_x = pos.trail.target_x + shift_x
-      pos.trail.target_y = pos.trail.target_y + shift_y
-    end
-
-    pos.target_x, pos.target_y = x, y
-    pos.target_line, pos.target_col = line, col
-
-    local trail = pos.trail
-    if trail and duration > 0 and opacity > 0 and width > 0 then
-      local progress = math.max(0, math.min(1, (now - trail.started_at) / duration))
-      if progress < 1 then
-        local eased = 1 - math.pow(1 - progress, 3)
-        local tail_x = trail.x + (trail.target_x - trail.x) * eased
-        local tail_y = trail.y + (trail.target_y - trail.y) * eased
-        local tail_height = trail.height
-          + (trail.target_height - trail.height) * eased
-        local alpha = math.floor(
-          (base[4] or 255) * opacity * math.sqrt(1 - progress) + 0.5
-        )
-        local trail_color = { base[1], base[2], base[3], alpha }
-        if math.abs(tail_y - trail.target_y) < 0.5 then
-          local left = math.min(tail_x, trail.target_x)
-          local right = math.max(tail_x, trail.target_x) + width
-          local full_height = math.max(tail_height, trail.target_height)
-          local trail_height = full_height * math.max(
-            0, math.min(1, config.caret_trail_horizontal_height)
-          )
-          local top = math.min(tail_y, trail.target_y)
-            + (full_height - trail_height) / 2
-          renderer.draw_rect(
-            left, top, right - left, trail_height,
-            trail_color
-          )
-        else
-          renderer.draw_poly({
-            { tail_x, tail_y },
-            { tail_x + width, tail_y },
-            { trail.target_x + width, trail.target_y },
-            { trail.target_x + width, trail.target_y + trail.target_height },
-            { trail.target_x, trail.target_y + trail.target_height },
-            { tail_x, tail_y + tail_height },
-          }, trail_color)
-        end
-        core.redraw = true
-      else
-        pos.trail = nil
-      end
-    else
-      pos.trail = nil
-    end
-
-    pos.caret_height = lh
-    pos.draw_x, pos.draw_y = x, y
-  elseif pos then
-    pos.caret_height = lh
-    pos.draw_x, pos.draw_y = x, y
-  end
-
+  local caret_x, caret_y = x, y
+  local caret_width, caret_height
   if self.buffer.overwrite then
-    local w = self:get_font():get_width(self.buffer:get_char(line, col))
-    renderer.draw_rect(x, y + lh, w, style.caret_width * 2, color)
+    caret_y = y + lh
+    caret_width = self:get_font():get_width(self.buffer:get_char(line, col))
+    caret_height = style.caret_width * 2
   else
-    renderer.draw_rect(x, y, style.caret_width, lh, color)
+    caret_width, caret_height = style.caret_width, lh
   end
+
+  local active_line, active_col = self.buffer:get_selection(false)
+  local is_focused_caret = core.active_view == self
+    and line == active_line and col == active_col
+  local root = core.root_panel
+  if config.animated_caret and is_focused_caret
+    and root and root.submit_keyboard_caret
+  then
+    root:submit_keyboard_caret {
+      x = caret_x,
+      y = caret_y,
+      width = caret_width,
+      height = caret_height,
+      color = color,
+      owner = self,
+      line = line,
+      col = col,
+      cell_width = self:get_font():get_width("n"),
+    }
+    return
+  end
+  renderer.draw_rect(caret_x, caret_y, caret_width, caret_height, color)
 end
 
 
@@ -8116,11 +7968,6 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
     if raw_line1 >= minline and raw_line1 <= maxline then
       visible_caret_cache[#visible_caret_cache + 1] = { raw_line1, raw_col1, raw_line2, raw_col2 }
     end
-  end
-  if #visible_caret_cache < #selections / 4 then
-    -- A later visible frame must start at its current position. Screen
-    -- coordinates from before an off-screen interval are not a valid origin.
-    self.animated_caret_positions = nil
   end
   if stats then
     stats.visible_carets = stats.visible_carets + #visible_caret_cache

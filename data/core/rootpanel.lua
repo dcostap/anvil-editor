@@ -4,6 +4,7 @@ local config = require "core.config"
 local style = require "core.style"
 local View = require "core.view"
 local layout = require "core.pane_layout"
+local CaretRenderer = require "core.caret_renderer"
 
 local RootPanel = View:extend()
 
@@ -69,6 +70,33 @@ function RootPanel:new()
   self.dragged_divider = nil
   self.modal_inputs = {}
   self.content_rect = { x = 0, y = 0, w = 0, h = 0 }
+  self.caret_renderer = CaretRenderer.new()
+end
+
+---Submit the focused keyboard caret for global drawing.
+function RootPanel:submit_keyboard_caret(target)
+  local previous = self.caret_renderer.previous_target
+  if previous and previous.owner ~= target.owner then
+    core.log_quiet(
+      "Caret trail: following focus from=%s to=%s",
+      tostring(previous.owner), tostring(target.owner)
+    )
+  end
+  self.caret_renderer:submit(target)
+end
+
+function RootPanel:begin_keyboard_caret_frame()
+  self.caret_renderer:begin_frame(config.animated_caret)
+end
+
+function RootPanel:draw_keyboard_caret()
+  local animating = self.caret_renderer:draw(
+    system.get_time(),
+    config.animated_caret_animation_length,
+    config.animated_caret_short_animation_length,
+    config.animated_caret_trail_size
+  )
+  if animating then core.redraw = true end
 end
 
 local function modal_input_index(root, owner)
@@ -643,6 +671,7 @@ local function draw_split_dividers(node)
 end
 
 function RootPanel:draw()
+  self:begin_keyboard_caret_frame()
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.background)
   local group = panes().visible_group()
   for _, view in ipairs(self:pane_views()) do call_view(view, "draw") end
@@ -653,6 +682,7 @@ function RootPanel:draw()
     local item = table.remove(self.deferred_draws)
     item.fn(table.unpack(item, 1, #item))
   end
+  self:draw_keyboard_caret()
   if core.cursor_change_req then
     system.set_cursor(core.cursor_change_req)
     core.cursor_change_req = nil

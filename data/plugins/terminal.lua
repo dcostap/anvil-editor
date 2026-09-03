@@ -961,11 +961,37 @@ function TerminalView:draw()
     local value = cursor.color or snapshot.foreground
     local color = rgb(self, value, style.caret)
     local cursor_style = self.focused and cursor.style or "hollow"
+    local function draw_cursor_rect(cx, cy, cw, ch, cursor_color)
+      local root = core.root_panel
+      if config.animated_caret and self.focused
+        and root and root.submit_keyboard_caret
+      then
+        root:submit_keyboard_caret {
+          x = cx,
+          y = cy,
+          width = cw,
+          height = ch,
+          color = cursor_color,
+          owner = self,
+          line = cursor.y or 0,
+          col = cursor.x or 0,
+          cell_width = self.cell_width,
+        }
+      else
+        renderer.draw_rect(cx, cy, cw, ch, cursor_color)
+      end
+    end
     if cursor_style == "bar" then
-      renderer.draw_rect(x, y, math.max(1, common.round(style.caret_width or SCALE)), self.cell_height, color)
+      draw_cursor_rect(
+        x, y, math.max(1, common.round(style.caret_width or SCALE)),
+        self.cell_height, color
+      )
     elseif cursor_style == "underline" then
       local thickness = math.max(2, common.round(2 * SCALE))
-      renderer.draw_rect(x, y + self.cell_height - thickness, self.cell_width, thickness, color)
+      draw_cursor_rect(
+        x, y + self.cell_height - thickness,
+        self.cell_width, thickness, color
+      )
     elseif cursor_style == "hollow" then
       local thickness = math.max(1, common.round(SCALE))
       renderer.draw_rect(x, y, self.cell_width, thickness, color)
@@ -973,7 +999,7 @@ function TerminalView:draw()
       renderer.draw_rect(x, y, thickness, self.cell_height, color)
       renderer.draw_rect(x + self.cell_width - thickness, y, thickness, self.cell_height, color)
     else
-      renderer.draw_rect(
+      draw_cursor_rect(
         x, y, self.cell_width, self.cell_height,
         rgb(self, value, style.caret, 110)
       )

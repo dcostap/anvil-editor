@@ -1,5 +1,6 @@
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
+local RootPanel = require "core.rootpanel"
 local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
@@ -16,28 +17,34 @@ end
 
 local function with_caret_settings(fn)
   local saved = {
+    root_panel = core.root_panel,
+    active_view = core.active_view,
+    title_bar = core.title_bar,
+    nag_view = core.nag_view,
+    global_prompt_bar = core.global_prompt_bar,
+    status_bar = core.status_bar,
     animated_caret = config.animated_caret,
-    caret_trail = config.caret_trail,
-    caret_trail_duration = config.caret_trail_duration,
-    caret_trail_min_distance = config.caret_trail_min_distance,
-    caret_trail_min_vertical_distance = config.caret_trail_min_vertical_distance,
-    caret_trail_opacity = config.caret_trail_opacity,
-    caret_trail_width = config.caret_trail_width,
-    style_caret_trail = style.caret_trail,
+    animated_caret_animation_length = config.animated_caret_animation_length,
+    animated_caret_short_animation_length = config.animated_caret_short_animation_length,
+    animated_caret_trail_size = config.animated_caret_trail_size,
+    caret = style.caret,
     redraw = core.redraw,
   }
   local old_time = system.get_time
   local old_rect = renderer.draw_rect
   local old_poly = renderer.draw_poly
   local ok, err = pcall(fn)
+  core.root_panel = saved.root_panel
+  core.active_view = saved.active_view
+  core.title_bar = saved.title_bar
+  core.nag_view = saved.nag_view
+  core.global_prompt_bar = saved.global_prompt_bar
+  core.status_bar = saved.status_bar
   config.animated_caret = saved.animated_caret
-  config.caret_trail = saved.caret_trail
-  config.caret_trail_duration = saved.caret_trail_duration
-  config.caret_trail_min_distance = saved.caret_trail_min_distance
-  config.caret_trail_min_vertical_distance = saved.caret_trail_min_vertical_distance
-  config.caret_trail_opacity = saved.caret_trail_opacity
-  config.caret_trail_width = saved.caret_trail_width
-  style.caret_trail = saved.style_caret_trail
+  config.animated_caret_animation_length = saved.animated_caret_animation_length
+  config.animated_caret_short_animation_length = saved.animated_caret_short_animation_length
+  config.animated_caret_trail_size = saved.animated_caret_trail_size
+  style.caret = saved.caret
   core.redraw = saved.redraw
   system.get_time = old_time
   renderer.draw_rect = old_rect
@@ -45,90 +52,98 @@ local function with_caret_settings(fn)
   if not ok then error(err, 0) end
 end
 
+local function draw_frame(root, view, x, y, line, col)
+  core.active_view = view
+  root:begin_keyboard_caret_frame()
+  view.buffer:set_selection(line or 1, col or 1)
+  view:draw_caret(x, y, line or 1, col or 1, 1)
+  root:draw_keyboard_caret()
+end
+
+local function x_bounds(points)
+  local min_x, max_x = math.huge, -math.huge
+  for _, point in ipairs(points) do
+    min_x = math.min(min_x, point[1])
+    max_x = math.max(max_x, point[1])
+  end
+  return min_x, max_x
+end
+
 test.describe("caret trail", function()
-  test.it("stays hidden without replacing smooth horizontal caret movement", function()
+  test.it("follows the focused caret across Text Views", function()
     with_caret_settings(function()
-      local view = make_view()
+      local first = make_view()
+      local second = make_view()
+      local root = RootPanel()
+      root.size.x, root.size.y = 500, 300
+      core.root_panel = root
+      core.title_bar = nil
+      core.nag_view = nil
+      core.global_prompt_bar = nil
+      core.status_bar = nil
+
       local now = 10
-      local rects = {}
-      system.get_time = function() return now end
-      renderer.draw_rect = function(x, y, w, h, color)
-        rects[#rects + 1] = { x = x, y = y, w = w, h = h, color = color }
-      end
-      config.animated_caret = true
-      config.caret_trail = true
-      config.caret_trail_duration = 0.2
-      config.caret_trail_min_distance = 1
-      config.caret_trail_min_vertical_distance = 1
-      config.caret_trail_opacity = 0.5
-      config.caret_trail_width = 3
-      style.caret_trail = { 12, 34, 56, 200 }
-
-      view:draw_caret(10, 20, 1, 1, 1)
-      test.equal(#rects, 1)
-
-      rects = {}
-      now = 10.01
-      core.redraw = false
-      view:draw_caret(110, 20, 1, 5, 1)
-      test.equal(#rects, 1)
-      test.equal(core.redraw, true)
-      test.ok(rects[1].x > 10, "expected the animated caret to move toward its target")
-      test.ok(rects[1].x < 110, "expected the animated caret to keep a smooth transition")
-    end)
-  end)
-
-  test.it("connects line jumps with one smooth shape", function()
-    with_caret_settings(function()
-      local view = make_view()
       local polygons = {}
-      system.get_time = function() return 20 end
+      system.get_time = function() return now end
       renderer.draw_rect = function() end
       renderer.draw_poly = function(points, color)
         polygons[#polygons + 1] = { points = points, color = color }
       end
-      config.animated_caret = false
-      config.caret_trail = true
-      config.caret_trail_duration = 0.2
-      config.caret_trail_min_distance = 1
-      config.caret_trail_min_vertical_distance = 1
-      config.caret_trail_opacity = 0.5
-      config.caret_trail_width = 3
-      style.caret_trail = { 12, 34, 56, 200 }
+      config.animated_caret = true
+      config.animated_caret_animation_length = 0.15
+      config.animated_caret_short_animation_length = 0.04
+      config.animated_caret_trail_size = 1
+      style.caret = { 12, 34, 56, 255 }
 
-      view:draw_caret(10, 20, 1, 1, 1)
-      view:draw_caret(80, 60, 2, 1, 1)
+      draw_frame(root, first, 10, 20)
+      polygons = {}
+
+      now = 10.01
+      core.redraw = false
+      draw_frame(root, second, 210, 100)
 
       test.equal(#polygons, 1)
-      test.equal(#polygons[1].points, 6)
       test.equal(polygons[1].color[1], 12)
+      local min_x, max_x = x_bounds(polygons[1].points)
+      test.ok(min_x < 210, "expected the rear corners to follow from the first Text View")
+      test.ok(max_x >= 210, "expected the front corners to reach toward the focused caret")
+      test.ok(core.redraw, "expected the moving caret to request another frame")
     end)
   end)
 
-  test.it("starts at the visible position after the caret leaves the viewport", function()
+  test.it("stretches smoothly across a horizontal jump", function()
     with_caret_settings(function()
       local view = make_view()
-      local now = 30
-      local polygons = 0
+      local root = RootPanel()
+      root.size.x, root.size.y = 500, 300
+      core.root_panel = root
+      core.title_bar = nil
+      core.nag_view = nil
+      core.global_prompt_bar = nil
+      core.status_bar = nil
+
+      local now = 20
+      local polygons = {}
       system.get_time = function() return now end
       renderer.draw_rect = function() end
-      renderer.draw_poly = function() polygons = polygons + 1 end
+      renderer.draw_poly = function(points)
+        polygons[#polygons + 1] = points
+      end
       config.animated_caret = true
-      config.caret_trail = true
-      config.caret_trail_duration = 0.2
-      config.caret_trail_min_distance = 1
-      config.caret_trail_min_vertical_distance = 1
-      config.caret_trail_opacity = 0.5
-      config.caret_trail_width = 3
-      style.caret_trail = { 12, 34, 56, 200 }
+      config.animated_caret_animation_length = 0.15
+      config.animated_caret_short_animation_length = 0.04
+      config.animated_caret_trail_size = 1
 
-      view:draw_caret(10, 20, 1, 1, 1)
-      view.buffer:set_selection(2, 1)
-      view:prepare_line_body_draw_cache(1, 1)
+      draw_frame(root, view, 10, 20)
+      polygons = {}
 
-      now = 30.01
-      view:draw_caret(80, 60, 2, 1, 1)
-      test.equal(polygons, 0, "expected no animation from an off-screen position")
+      now = 20.01
+      draw_frame(root, view, 210, 20, 1, 5)
+
+      test.equal(#polygons, 1)
+      local min_x, max_x = x_bounds(polygons[1])
+      test.ok(min_x < 210, "expected a visible horizontal trail")
+      test.ok(max_x >= 210, "expected the leading edge to follow the target")
     end)
   end)
 end)

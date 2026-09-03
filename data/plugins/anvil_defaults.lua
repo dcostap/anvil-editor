@@ -425,13 +425,5 @@ config.transitions = true
 config.disabled_transitions.scroll = false
 config.scroll_animation_type = "constant"
 config.animation_rate = 4
--- Leave a short, subtle trace when the caret moves quickly.
-config.caret_trail = true
-config.caret_trail_duration = 0.14
-config.caret_trail_min_distance = 4 * SCALE
-config.caret_trail_min_vertical_distance = 3 * SCALE
-config.caret_trail_opacity = 0.30
-config.caret_trail_width = math.max(style.caret_width, 5 * SCALE)
-config.caret_trail_horizontal_height = 0.28
 -- Mouse wheel step; default is 70 * SCALE.
 config.mouse_wheel_scroll = 120 * SCALE
