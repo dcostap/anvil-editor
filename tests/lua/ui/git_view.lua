@@ -105,6 +105,7 @@ test.describe("Git View command", function()
     context.original_active_window = core.active_window
     context.original_root_panel = core.root_panel
     context.original_nag_show = core.nag_view.show
+    context.original_status_show_message = core.status_bar.show_message
     context.original_set_clipboard = system.set_clipboard
     context.original_open_log = git_view.open_log
     context.original_linewrapping_default = config.plugins.linewrapping.enable_by_default
@@ -120,6 +121,7 @@ test.describe("Git View command", function()
     core.active_window = context.original_active_window
     core.root_panel = context.original_root_panel
     core.nag_view.show = context.original_nag_show
+    core.status_bar.show_message = context.original_status_show_message
     system.set_clipboard = context.original_set_clipboard
     git_view.open_log = context.original_open_log
     config.plugins.linewrapping.enable_by_default = context.original_linewrapping_default
@@ -153,6 +155,27 @@ test.describe("Git View command", function()
     test.ok(opened ~= first_view)
     test.ok(opened.git_session ~= first_session)
     test.equal(first_pane.current_view, first_view)
+  end)
+
+  test.it("warns when file commands target an Untitled Buffer", function()
+    local messages = {}
+    core.status_bar.show_message = function(_, icon, color, text)
+      messages[#messages + 1] = { icon = icon, color = color, text = text }
+    end
+    core.active_view = Editor(Buffer(nil, nil, true))
+
+    command.perform("git:show_file_history")
+    command.perform("git:show_selection_history")
+    command.perform("git:open_current_file_in_project_diff")
+
+    test.equal(#messages, 3)
+    test.ok(messages[1].text:find("File History", 1, true))
+    test.ok(messages[2].text:find("Selection History", 1, true))
+    test.ok(messages[3].text:find("Project Diff", 1, true))
+    for _, message in ipairs(messages) do
+      test.equal(message.icon, style.log.WARN.icon)
+      test.equal(message.color, style.log.WARN.color)
+    end
   end)
 
   test.it("loads a Commit Diff View created without focus", function(context)

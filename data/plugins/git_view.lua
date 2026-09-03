@@ -414,7 +414,7 @@ command.add(nil, {
         end
         local tab, err = v.model:open_selected_commit_diff(source, function() core.redraw = true end)
         if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
-        if not tab and err then core.log_quiet("Git View: open selected commit diff skipped: %s", err.message or err.kind) end
+      if not tab and err then core.warn("Git View: Cannot open the selected Commit Diff: %s", err.message or err.kind) end
       end
       when_model_ready(view, open_diff)
     end,
@@ -426,20 +426,20 @@ command.add(nil, {
     when_model_ready(view, function(v)
       local tab, err = v.model:open_working_tree_diff(function() core.redraw = true end)
       if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
-      if not tab and err then core.log_quiet("Git View: open working tree diff skipped: %s", err.message or err.kind) end
+      if not tab and err then core.warn("Git View: Cannot open the Local Changes Diff: %s", err.message or err.kind) end
     end)
   end, { opens_view = true }),
 
   ["git:show_file_history"] = command.palette(function()
     local filename = active_file_path()
     if not filename then
-      core.log_quiet("Git View: file history skipped; active view has no file-backed buffer")
+      core.warn("Git View: File History requires a file-backed View")
       return
     end
     show_git_progress("Loading File History…")
     backend.repo_for_path_async(filename, function(repo, err)
       if not repo then
-        core.log_quiet("Git View: file history repo lookup failed: %s", err and (err.message or err.kind) or "unknown")
+        core.warn("Git View: Cannot show File History: %s", err and (err.message or err.kind) or "repository not found")
         return
       end
       local project = project_for_repo(repo)
@@ -458,22 +458,26 @@ command.add(nil, {
         end
         local tab, tab_err = v.model:open_file_history(repo.relpath, present_history)
         if tab and not tab.loading and not tab.preview_loading then present_history(nil, nil, tab) end
-        if not tab and tab_err then core.log_quiet("Git View: file history skipped: %s", tab_err.message or tab_err.kind) end
+        if not tab and tab_err then core.warn("Git View: Cannot show File History: %s", tab_err.message or tab_err.kind) end
         core.redraw = true
       end)
     end)
   end, { opens_view = true }),
 
   ["git:show_selection_history"] = command.palette(function()
+    if not active_file_path() then
+      core.warn("Git View: Selection History requires a file-backed View")
+      return
+    end
     local filename, start_line, end_line = active_selection_line_range()
     if not filename then
-      core.log_quiet("Git View: selection history skipped; active file has no selection")
+      core.warn("Git View: Selection History requires selected text")
       return
     end
     show_git_progress("Loading Selection History…")
     backend.repo_for_path_async(filename, function(repo, err)
       if not repo then
-        core.log_quiet("Git View: selection history repo lookup failed: %s", err and (err.message or err.kind) or "unknown")
+        core.warn("Git View: Cannot show Selection History: %s", err and (err.message or err.kind) or "repository not found")
         return
       end
       local project = project_for_repo(repo)
@@ -492,7 +496,7 @@ command.add(nil, {
           repo.relpath, start_line, end_line, present_history
         )
         if tab and not tab.loading and not tab.preview_loading then present_history(nil, nil, tab) end
-        if not tab and tab_err then core.log_quiet("Git View: selection history skipped: %s", tab_err.message or tab_err.kind) end
+        if not tab and tab_err then core.warn("Git View: Cannot show Selection History: %s", tab_err.message or tab_err.kind) end
         core.redraw = true
       end)
     end)
@@ -501,13 +505,13 @@ command.add(nil, {
   ["git:open_current_file_in_project_diff"] = command.palette(function()
     local filename = active_file_path()
     if not filename then
-      core.log_quiet("Git View: current file diff skipped; active View has no Path Target")
+      core.warn("Git View: Project Diff requires a file-backed View")
       return
     end
     show_git_progress("Loading Current File Diff…")
     backend.repo_for_path_async(filename, function(repo, err)
       if not repo then
-        core.log_quiet("Git View: current file diff repo lookup failed: %s", err and (err.message or err.kind) or "unknown")
+        core.warn("Git View: Cannot open the current file in a Project Diff: %s", err and (err.message or err.kind) or "repository not found")
         return
       end
       local project = project_for_repo(repo)
@@ -518,7 +522,7 @@ command.add(nil, {
           selected_file_path = repo.relpath,
         })
         if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
-        if not tab and tab_err then core.log_quiet("Git View: current file diff skipped: %s", tab_err.message or tab_err.kind) end
+        if not tab and tab_err then core.warn("Git View: Cannot open the current file in a Project Diff: %s", tab_err.message or tab_err.kind) end
       end)
     end)
   end, { opens_view = true }),
@@ -526,7 +530,10 @@ command.add(nil, {
   ["git:copy_selected_commit_hash"] = command.palette(function()
     local view = active_git_view()
     local commit = view and view.model:selected_commit(view:model_tab())
-    if not (commit and commit.hash) then return false end
+    if not (commit and commit.hash) then
+      core.warn("Git View: No commit hash is selected")
+      return false
+    end
     system.set_clipboard(commit.hash)
     return true
   end),
@@ -534,7 +541,10 @@ command.add(nil, {
   ["git:copy_selected_commit_message"] = command.palette(function()
     local view = active_git_view()
     local commit = view and view.model:selected_commit(view:model_tab())
-    if not commit then return false end
+    if not commit then
+      core.warn("Git View: No commit is selected")
+      return false
+    end
     local message = commit.subject or ""
     if commit.body and commit.body ~= "" then message = message .. "\n\n" .. commit.body end
     system.set_clipboard(message)
@@ -545,12 +555,12 @@ command.add(nil, {
     perform = function()
       local view = active_git_view()
       if not view then
-        core.log_quiet("Git View: historical buffer open skipped; Git View is not open")
+        core.warn("Git View: Open a Commit Diff View before opening a Historical Buffer")
         return
       end
       local request, request_err = view.model:selected_historical_buffer(view:model_tab())
       if not request then
-        core.log_quiet("Git View: historical buffer open skipped: %s", request_err.message or request_err.kind)
+        core.warn("Git View: Cannot open a Historical Buffer: %s", request_err.message or request_err.kind)
         return
       end
       if historical_buffer.activate_existing(request.repo, request.rev, request.relpath) then
@@ -559,7 +569,7 @@ command.add(nil, {
       end
       view.model.backend.file_at(request.repo, request.rev, request.relpath, {}, function(text, err)
         if err then
-          core.log_quiet("Git View: historical buffer load failed: %s", err.message or err.kind)
+          core.warn("Git View: Cannot open a Historical Buffer: %s", err.message or err.kind)
           return
         end
         historical_buffer.open(request.repo, request.rev, request.relpath, text or "")
@@ -634,7 +644,7 @@ end, {
   ["git:activate_selected_row"] = function(view)
     if not view then return end
     local diff_tab, err = view:activate_selected_point(function() core.redraw = true end)
-    if not diff_tab and err then core.log_quiet("Git View: activate selected row skipped: %s", err.message or err.kind) end
+    if not diff_tab and err then core.warn("Git View: Cannot activate the selected row: %s", err.message or err.kind) end
   end,
   ["git:close_selected_tab"] = close_git_view_tab,
 })
