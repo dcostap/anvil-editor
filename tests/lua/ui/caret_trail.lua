@@ -189,6 +189,45 @@ test.describe("caret trail", function()
     end)
   end)
 
+  test.it("uses horizontal caret motion across visual rows of one Buffer line", function()
+    with_caret_settings(function()
+      local view = make_view()
+      local root = RootPanel()
+      core.root_panel = root
+
+      local now = 25
+      local polygons = {}
+      local rects = {}
+      system.get_time = function() return now end
+      renderer.draw_rect = function(x, y, width, height, color)
+        rects[#rects + 1] = {
+          x = x, y = y, width = width, height = height, color = color,
+        }
+      end
+      renderer.draw_poly = function(points)
+        polygons[#polygons + 1] = points
+      end
+      config.animated_caret = true
+      config.animated_caret_min_speed = 45
+      config.animated_caret_max_speed = 95
+      config.animated_caret_distance_min = 15
+      config.animated_caret_distance_max = 450
+
+      draw_frame(root, view, 10, 20, 1, 1)
+      polygons = {}
+      rects = {}
+
+      now = 25.01
+      draw_frame(root, view, 210, 50, 1, 5)
+
+      test.equal(#polygons, 0)
+      test.equal(#rects, 1)
+      test.equal(rects[1].y, 50)
+      test.ok(rects[1].x > 10, "expected horizontal caret movement")
+      test.ok(rects[1].x < 210, "expected a smooth horizontal transition")
+    end)
+  end)
+
   test.it("settles a short vertical trail sooner than a medium trail", function()
     with_caret_settings(function()
       local function remaining_ratio(distance_cells)
