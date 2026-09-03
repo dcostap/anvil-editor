@@ -495,7 +495,7 @@ command.add(nil, {
     end)
   end, { opens_view = true }),
 
-  ["git:open_current_file_diff"] = command.palette(function()
+  ["git:open_current_file_in_project_diff"] = command.palette(function()
     local filename = active_file_path()
     if not filename then
       core.log_quiet("Git View: current file diff skipped; active View has no Path Target")

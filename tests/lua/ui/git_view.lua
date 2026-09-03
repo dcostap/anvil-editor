@@ -192,7 +192,7 @@ test.describe("Git View command", function()
       callback({ root = "C:/repo/vendor", relpath = "src/app.lua" }, nil)
     end
 
-    command.perform("git:open_current_file_diff")
+    command.perform("git:open_current_file_in_project_diff")
     real_backend.repo_for_path_async = old_lookup
 
     local nested_session = panes.active().current_view.git_session
@@ -2061,7 +2061,8 @@ test.describe("Git View command", function()
     test.not_nil(command.map["git:open_selected_commit_diff"])
     test.not_nil(command.map["git:open_working_tree_diff"])
     test.not_nil(command.map["git:show_history"])
-    test.not_nil(command.map["git:open_current_file_diff"])
+    test.not_nil(command.map["git:open_current_file_in_project_diff"])
+    test.is_nil(command.map["git:open_current_file_diff"])
     test.not_nil(command.map["git:copy_selected_commit_hash"])
     test.not_nil(command.map["git:copy_selected_commit_message"])
     test.not_nil(command.map["git:show_selection_history"])
@@ -2078,7 +2079,7 @@ test.describe("Git View command", function()
       "git:open_working_tree_diff",
       "git:show_history",
       "git:show_selection_history",
-      "git:open_current_file_diff",
+      "git:open_current_file_in_project_diff",
       "git:open_selected_historical_buffer",
     } do
       test.ok(command.get_metadata(name).opens_view, name)

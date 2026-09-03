@@ -1197,7 +1197,7 @@ Recommended final commands:
 - `git:show_selection_history`
 - `git:open_selected_commit_diff`
 - `git:open_working_tree_diff`
-- `git:open_current_file_diff`
+- `git:open_current_file_in_project_diff`
 - `git:open_selected_historical_buffer`
 - `git:copy_selected_commit_hash`
 - `git:copy_selected_commit_message`
@@ -1572,7 +1572,7 @@ Complete daily entry points without widening the product.
 Add:
 
 - generic `git:show_history` through Path Target;
-- `git:open_current_file_diff`;
+- `git:open_current_file_in_project_diff`;
 - copy commit hash and message;
 - compact Git text/hash filter;
 - repository selector for known project roots;
