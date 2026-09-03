@@ -403,20 +403,23 @@ command.add(nil, {
     if view then view.model:refresh_log(function() core.redraw = true end) end
   end),
 
-  ["git:open_selected_commit_diff"] = command.palette(function()
-    local session, view = active_or_open_view()
-    local function open_diff(v)
-      local source = v:model_tab()
-      if source and source.kind == "file_history" and source.loading then
-        v.model:load_file_history(source, function() open_diff(v) end)
-        return
+  ["git:open_selected_commit_diff"] = {
+    perform = function()
+      local session, view = active_or_open_view()
+      local function open_diff(v)
+        local source = v:model_tab()
+        if source and source.kind == "file_history" and source.loading then
+          v.model:load_file_history(source, function() open_diff(v) end)
+          return
+        end
+        local tab, err = v.model:open_selected_commit_diff(source, function() core.redraw = true end)
+        if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
+        if not tab and err then core.log_quiet("Git View: open selected commit diff skipped: %s", err.message or err.kind) end
       end
-      local tab, err = v.model:open_selected_commit_diff(source, function() core.redraw = true end)
-      if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
-      if not tab and err then core.log_quiet("Git View: open selected commit diff skipped: %s", err.message or err.kind) end
-    end
-    when_model_ready(view, open_diff)
-  end, { opens_view = true }),
+      when_model_ready(view, open_diff)
+    end,
+    metadata = { opens_view = true },
+  },
 
   ["git:open_working_tree_diff"] = command.palette(function()
     local session, view = active_or_open_view()
@@ -427,7 +430,7 @@ command.add(nil, {
     end)
   end, { opens_view = true }),
 
-  ["git:show_history"] = command.palette(function()
+  ["git:show_file_history"] = command.palette(function()
     local filename = active_file_path()
     if not filename then
       core.log_quiet("Git View: file history skipped; active view has no file-backed buffer")

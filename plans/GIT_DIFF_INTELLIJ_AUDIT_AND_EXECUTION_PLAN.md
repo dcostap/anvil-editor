@@ -1193,7 +1193,7 @@ Recommended final commands:
 
 - `git:open_log`
 - `git:refresh`
-- `git:show_history`
+- `git:show_file_history`
 - `git:show_selection_history`
 - `git:open_selected_commit_diff`
 - `git:open_working_tree_diff`
@@ -1571,7 +1571,7 @@ Complete daily entry points without widening the product.
 
 Add:
 
-- generic `git:show_history` through Path Target;
+- generic `git:show_file_history` through Path Target;
 - `git:open_current_file_in_project_diff`;
 - copy commit hash and message;
 - compact Git text/hash filter;

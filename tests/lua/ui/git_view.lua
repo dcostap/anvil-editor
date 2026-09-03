@@ -518,7 +518,7 @@ test.describe("Git View command", function()
       callback({ root = "C:/repo", relpath = "src/from-tree.lua" }, nil)
     end
 
-    command.perform("git:show_history")
+    command.perform("git:show_file_history")
     real_backend.repo_for_path_async = old_lookup
 
     local opened = panes.active().current_view
@@ -2060,7 +2060,8 @@ test.describe("Git View command", function()
     test.is_nil(command.map["git:open"])
     test.not_nil(command.map["git:open_selected_commit_diff"])
     test.not_nil(command.map["git:open_working_tree_diff"])
-    test.not_nil(command.map["git:show_history"])
+    test.not_nil(command.map["git:show_file_history"])
+    test.is_nil(command.map["git:show_history"])
     test.not_nil(command.map["git:open_current_file_in_project_diff"])
     test.is_nil(command.map["git:open_current_file_diff"])
     test.not_nil(command.map["git:copy_selected_commit_hash"])
@@ -2077,12 +2078,13 @@ test.describe("Git View command", function()
       "git:open_log",
       "git:open_selected_commit_diff",
       "git:open_working_tree_diff",
-      "git:show_history",
+      "git:show_file_history",
       "git:show_selection_history",
       "git:open_current_file_in_project_diff",
       "git:open_selected_historical_buffer",
     } do
       test.ok(command.get_metadata(name).opens_view, name)
     end
+    test.not_ok(command.get_metadata("git:open_selected_commit_diff").palette)
   end)
 end)
