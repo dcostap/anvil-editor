@@ -2086,5 +2086,6 @@ test.describe("Git View command", function()
       test.ok(command.get_metadata(name).opens_view, name)
     end
     test.not_ok(command.get_metadata("git:open_selected_commit_diff").palette)
+    test.not_ok(command.get_metadata("git:open_selected_historical_buffer").palette)
   end)
 end)

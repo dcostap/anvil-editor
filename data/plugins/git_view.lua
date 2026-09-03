@@ -541,30 +541,33 @@ command.add(nil, {
     return true
   end),
 
-  ["git:open_selected_historical_buffer"] = command.palette(function()
-    local view = active_git_view()
-    if not view then
-      core.log_quiet("Git View: historical buffer open skipped; Git View is not open")
-      return
-    end
-    local request, request_err = view.model:selected_historical_buffer(view:model_tab())
-    if not request then
-      core.log_quiet("Git View: historical buffer open skipped: %s", request_err.message or request_err.kind)
-      return
-    end
-    if historical_buffer.activate_existing(request.repo, request.rev, request.relpath) then
-      core.redraw = true
-      return
-    end
-    view.model.backend.file_at(request.repo, request.rev, request.relpath, {}, function(text, err)
-      if err then
-        core.log_quiet("Git View: historical buffer load failed: %s", err.message or err.kind)
+  ["git:open_selected_historical_buffer"] = {
+    perform = function()
+      local view = active_git_view()
+      if not view then
+        core.log_quiet("Git View: historical buffer open skipped; Git View is not open")
         return
       end
-      historical_buffer.open(request.repo, request.rev, request.relpath, text or "")
-      core.redraw = true
-    end)
-  end, { opens_view = true }),
+      local request, request_err = view.model:selected_historical_buffer(view:model_tab())
+      if not request then
+        core.log_quiet("Git View: historical buffer open skipped: %s", request_err.message or request_err.kind)
+        return
+      end
+      if historical_buffer.activate_existing(request.repo, request.rev, request.relpath) then
+        core.redraw = true
+        return
+      end
+      view.model.backend.file_at(request.repo, request.rev, request.relpath, {}, function(text, err)
+        if err then
+          core.log_quiet("Git View: historical buffer load failed: %s", err.message or err.kind)
+          return
+        end
+        historical_buffer.open(request.repo, request.rev, request.relpath, text or "")
+        core.redraw = true
+      end)
+    end,
+    metadata = { opens_view = true },
+  },
 
 })
 
