@@ -398,6 +398,18 @@ command.add_toggle("core:toggle_line_numbers", {
   end,
 })
 
+command.add_toggle("core:toggle_caret_trail", {
+  palette = true,
+  get = function()
+    return config.animated_caret
+  end,
+  set = function(enabled)
+    config.animated_caret = enabled
+    core.redraw = true
+    core.log_quiet("Caret Trail: enabled=%s", tostring(enabled))
+  end,
+})
+
 local function text_capture_target()
   local root = core.root_panel
   local modal = root and root.modal_input_owner and root:modal_input_owner()

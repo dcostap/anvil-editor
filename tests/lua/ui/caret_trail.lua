@@ -1,6 +1,7 @@
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local RootPanel = require "core.rootpanel"
+local command = require "core.command"
 local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
@@ -93,6 +94,27 @@ local function y_bounds(points)
 end
 
 test.describe("caret trail", function()
+  test.it("toggles from its Command Palette action", function()
+    with_caret_settings(function()
+      config.animated_caret = true
+
+      test.ok(command.perform("core:toggle_caret_trail"))
+      test.equal(config.animated_caret, false)
+      test.equal(
+        command.get_status_label("core:toggle_caret_trail"),
+        "[Currently: OFF]"
+      )
+
+      test.ok(command.perform("core:toggle_caret_trail"))
+      test.equal(config.animated_caret, true)
+      test.equal(
+        command.get_status_label("core:toggle_caret_trail"),
+        "[Currently: ON]"
+      )
+      test.equal(command.get_metadata("core:toggle_caret_trail").palette, true)
+    end)
+  end)
+
   test.it("follows the focused caret across Text Views", function()
     with_caret_settings(function()
       local first = make_view()
