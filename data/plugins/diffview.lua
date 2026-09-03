@@ -2157,6 +2157,15 @@ local function current_file_side(require_selection)
   return view
 end
 
+local function current_selected_text_side()
+  local view = core.active_view
+  if not (view and view.extends and view:extends(TextView) and view.buffer
+      and view.buffer:has_any_selection()) then
+    return nil
+  end
+  return view
+end
+
 local function selection_fragment_content(view)
   local line1, col1, line2, col2 = view:with_selection_state(function()
     return view.buffer:get_selection(true)
@@ -2165,7 +2174,7 @@ local function selection_fragment_content(view)
     line1, col1, line2, col2 = line2, col2, line1, col1
   end
   return content_fragment(view.buffer, line1, col1, line2, col2, {
-    name = common.basename(view.buffer.abs_filename) .. " selection",
+    name = common.basename(view.buffer.abs_filename or view.buffer:get_name()) .. " selection",
   })
 end
 
@@ -2194,7 +2203,7 @@ local function open_clipboard_comparison(view, selection_only)
 end
 
 command.add(function()
-  local view = current_file_side(true)
+  local view = current_selected_text_side()
   return view ~= nil, view
 end, {
   ["diff:compare_selection_with_clipboard"] = command.palette(function(view)

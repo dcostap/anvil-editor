@@ -1,6 +1,7 @@
 local command = require "core.command"
 local common = require "core.common"
 local core = require "core"
+local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local panes = require "core.panes"
 local Project = require "core.project"
@@ -142,6 +143,15 @@ test.describe("Command Palette View launchers", function()
     } do
       test.ok(valid[name], name)
     end
+  end)
+
+  test.it("offers clipboard comparison for a selected Untitled Buffer", function()
+    local editor = Editor(Buffer())
+    editor.buffer:insert(1, 1, "selected text")
+    editor.buffer:set_selection(1, 1, 1, 9)
+    core.active_view = editor
+
+    test.ok(command.is_valid("diff:compare_selection_with_clipboard"))
   end)
 
   test.it("uses the current File Tree command names and search keywords", function()
