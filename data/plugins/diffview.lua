@@ -1892,7 +1892,7 @@ command.add("core.textview", {
 
 command.add(
   function()
-    return element_a and core.active_view and core.active_view:is(TextView),
+    return element_a and core.active_view and core.active_view:extends(TextView),
     core.active_view
   end, {
   ["diff:compare_file_with_selected"] = command.palette(function(dv)
@@ -2116,7 +2116,7 @@ keymap.add({
 -- Register text compare commands
 local function text_select_compare_predicate()
   local is_textview = core.active_view
-    and core.active_view:is(TextView)
+    and core.active_view:extends(TextView)
     and core.active_view.buffer
   local has_selection = is_textview and core.active_view.buffer:has_any_selection()
   return has_selection, has_selection and core.active_view.buffer
@@ -2124,7 +2124,7 @@ end
 
 local function text_compare_with_predicate()
   local is_textview = (element_a_text and core.active_view)
-    and (core.active_view:is(TextView) and core.active_view.buffer)
+    and (core.active_view:extends(TextView) and core.active_view.buffer)
   local has_selection = is_textview and core.active_view.buffer:has_any_selection()
   return has_selection, has_selection and core.active_view.buffer
 end
@@ -2149,7 +2149,8 @@ command.add(text_compare_with_predicate, {
 
 local function current_file_side(require_selection)
   local view = core.active_view
-  if not (view and view.is and view:is(TextView) and view.buffer and view.buffer.abs_filename) then
+  if not (view and view.extends and view:extends(TextView)
+      and view.buffer and view.buffer.abs_filename) then
     return nil
   end
   if require_selection and not view.buffer:has_any_selection() then return nil end

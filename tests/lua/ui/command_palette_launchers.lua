@@ -128,6 +128,22 @@ test.describe("Command Palette View launchers", function()
     end
   end)
 
+  test.it("offers selection comparisons for a selected Editor", function(context)
+    local editor = Editor(core.open_buffer(context.file))
+    editor.buffer:set_selection(1, 1, 1, 5)
+    core.active_view = editor
+
+    local valid = {}
+    for _, name in ipairs(command.get_all_valid()) do valid[name] = true end
+    for _, name in ipairs {
+      "diff:select_text_for_compare",
+      "diff:compare_selection_with_clipboard",
+      "diff:compare_file_with_clipboard",
+    } do
+      test.ok(valid[name], name)
+    end
+  end)
+
   test.it("uses the current File Tree command names and search keywords", function()
     test.not_nil(command.map["filetree:apply_changes"])
     test.is_nil(command.map["filetree:apply"])
