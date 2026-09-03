@@ -1880,11 +1880,21 @@ end
 
 
 -- Register file compare commands
-command.add("core.textview", {
+local function current_file_text_view()
+  local view = core.active_view
+  if not (view and view.extends and view:extends(TextView)
+      and view.buffer and view.buffer.abs_filename) then
+    return nil
+  end
+  return view
+end
+
+command.add(function()
+  local view = current_file_text_view()
+  return view ~= nil, view
+end, {
   ["diff:select_file_for_compare"] = command.palette(function(dv)
-    if dv.buffer and dv.buffer.abs_filename then
-      element_a = dv.buffer.abs_filename
-    end
+    element_a = dv.buffer.abs_filename
   end, {
     keywords = { "compare", "files" },
   }),
@@ -1892,13 +1902,11 @@ command.add("core.textview", {
 
 command.add(
   function()
-    return element_a and core.active_view and core.active_view:extends(TextView),
-    core.active_view
+    local view = element_a and current_file_text_view()
+    return view ~= nil, view
   end, {
   ["diff:compare_file_with_selected"] = command.palette(function(dv)
-    if dv.buffer and dv.buffer.abs_filename then
-      element_b = dv.buffer.abs_filename
-    end
+    element_b = dv.buffer.abs_filename
     start_compare()
   end, {
     keywords = { "compare", "files" },
@@ -1977,12 +1985,12 @@ end
 command.add(function()
   return active_diff_controller() ~= nil
 end, {
-  ["diff:replace_left_with_file"] = function()
+  ["diff:replace_left_with_file"] = command.palette(function()
     replace_diff_side_with_file("left")
-  end,
-  ["diff:replace_right_with_file"] = function()
+  end, { keywords = { "compare", "side", "file" } }),
+  ["diff:replace_right_with_file"] = command.palette(function()
     replace_diff_side_with_file("right")
-  end,
+  end, { keywords = { "compare", "side", "file" } }),
 })
 
 
@@ -2044,13 +2052,13 @@ command.add(function()
   if view and view.is and view:is(DiffView) then return true, view end
   return false
 end, {
-  ["diff:toggle_folding"] = function(view)
+  ["diff:toggle_folding"] = command.palette(function(view)
     view:toggle_folding()
-  end,
+  end, { keywords = { "compare", "fold", "unchanged" } }),
   ["diff:swap_sides"] = command.palette(function(view)
     if view.request_controller then return view.request_controller:swap_sides() end
     return view:swap_sides()
-  end, { keywords = { "left", "right", "reverse" } }),
+  end, { keywords = { "compare", "left", "right", "reverse" } }),
 })
 
 local function active_diff_side()
@@ -2101,7 +2109,10 @@ end
 command.add(function()
   return active_diff_side() ~= nil
 end, {
-  ["diff:open_file_at_caret"] = open_diff_source_at_caret,
+  ["diff:open_file_at_caret"] = command.palette(open_diff_source_at_caret, {
+    keywords = { "compare", "source" },
+    opens_view = true,
+  }),
 })
 
 keymap.add({
@@ -2146,16 +2157,6 @@ command.add(text_compare_with_predicate, {
     opens_view = true,
   }),
 })
-
-local function current_file_side(require_selection)
-  local view = core.active_view
-  if not (view and view.extends and view:extends(TextView)
-      and view.buffer and view.buffer.abs_filename) then
-    return nil
-  end
-  if require_selection and not view.buffer:has_any_selection() then return nil end
-  return view
-end
 
 local function current_selected_text_side()
   local view = core.active_view
@@ -2215,7 +2216,7 @@ end, {
 })
 
 command.add(function()
-  local view = current_file_side(false)
+  local view = current_file_text_view()
   return view ~= nil, view
 end, {
   ["diff:compare_file_with_clipboard"] = command.palette(function(view)

@@ -129,6 +129,19 @@ test.describe("Command Palette View launchers", function()
     end
   end)
 
+  test.it("exposes contextual Diff actions in the Command Palette", function()
+    for _, name in ipairs {
+      "diff:swap_sides",
+      "diff:toggle_folding",
+      "diff:open_file_at_caret",
+      "diff:replace_left_with_file",
+      "diff:replace_right_with_file",
+    } do
+      local metadata = test.not_nil(command.get_metadata(name), name)
+      test.equal(metadata.palette, true, name)
+    end
+  end)
+
   test.it("offers selection comparisons for a selected Editor", function(context)
     local editor = Editor(core.open_buffer(context.file))
     editor.buffer:set_selection(1, 1, 1, 5)
@@ -152,6 +165,7 @@ test.describe("Command Palette View launchers", function()
     core.active_view = editor
 
     test.ok(command.is_valid("diff:compare_selection_with_clipboard"))
+    test.equal(command.is_valid("diff:select_file_for_compare"), false)
   end)
 
   test.it("uses the current File Tree command names and search keywords", function()
