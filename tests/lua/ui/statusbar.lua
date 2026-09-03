@@ -111,4 +111,18 @@ test.describe("status bar caret position item", function()
     local width = item.on_draw(0, 0, 20, false, true)
     test.ok(width > 0)
   end)
+
+  test.it("renders safely when the active view clears after layout", function()
+    core.active_view = TextView(Buffer(nil, nil, true))
+    local status_bar = StatusBar()
+    status_bar.size.x = 800
+    status_bar:update_active_items()
+
+    core.active_view = nil
+    for _, item in ipairs(status_bar.active_items) do
+      if item.on_draw then
+        item.on_draw(item.x, 0, 20, false, true)
+      end
+    end
+  end)
 end)

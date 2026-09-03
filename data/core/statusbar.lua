@@ -180,12 +180,19 @@ end
 StatusBar.Item = StatusBarItem
 
 
+---Get the active Text View, excluding the Global Prompt Bar.
+---@return core.textview|nil
+local function active_textview()
+  local view = core.active_view
+  if view and view:extends(TextView) and not view:is(GlobalPromptBar) then
+    return view
+  end
+end
+
 ---Check if active view is a Text View (but not the Global Prompt Bar).
 ---@return boolean
 local function predicate_textview()
-  return core.active_view ~= nil
-    and core.active_view:extends(TextView)
-    and not core.active_view:is(GlobalPromptBar)
+  return active_textview() ~= nil
 end
 
 local function plural_suffix(n)
@@ -370,7 +377,8 @@ function StatusBar:register_textview_items()
     alignment = StatusBar.Item.LEFT,
     get_item = {},
     on_draw = function(x, y, h, _, calc_only)
-      local dv = core.active_view
+      local dv = active_textview()
+      if not dv then return 0 end
       local line, col = dv.buffer:sanitize_position(dv.buffer:get_selection())
       local line_text = dv.buffer:get_utf8_line(line)
       local byte_col = col
@@ -432,7 +440,9 @@ function StatusBar:register_textview_items()
     position = 3,
     get_item = {},
     on_draw = function(x, y, h, _, calc_only)
-      local carets = get_buffer_selection_counts(core.active_view.buffer)
+      local dv = active_textview()
+      if not dv then return 0 end
+      local carets = get_buffer_selection_counts(dv.buffer)
       local label = string.format(" caret%s", plural_suffix(carets))
       return draw_reserved_count_label(carets, label, " carets", x, y, h, calc_only)
     end
@@ -445,7 +455,9 @@ function StatusBar:register_textview_items()
     position = 4,
     get_item = {},
     on_draw = function(x, y, h, _, calc_only)
-      local _, chars, _, chars_pending = get_buffer_selection_counts(core.active_view.buffer)
+      local dv = active_textview()
+      if not dv then return 0 end
+      local _, chars, _, chars_pending = get_buffer_selection_counts(dv.buffer)
       if chars_pending or chars <= 0 then
         return draw_reserved_status_text("", "9999 chars selected", x, y, h, calc_only)
       end
@@ -461,7 +473,9 @@ function StatusBar:register_textview_items()
     position = 5,
     get_item = {},
     on_draw = function(x, y, h, _, calc_only)
-      local _, _, selected_lines = get_buffer_selection_counts(core.active_view.buffer)
+      local dv = active_textview()
+      if not dv then return 0 end
+      local _, _, selected_lines = get_buffer_selection_counts(dv.buffer)
       if selected_lines <= 0 then
         return draw_reserved_status_text("", "9999 lines selected", x, y, h, calc_only)
       end
