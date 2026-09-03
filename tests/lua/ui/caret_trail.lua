@@ -28,6 +28,7 @@ local function with_caret_settings(fn)
     animated_caret_short_animation_length = config.animated_caret_short_animation_length,
     animated_caret_trail_size = config.animated_caret_trail_size,
     caret = style.caret,
+    caret_trail = style.caret_trail,
     redraw = core.redraw,
   }
   local old_time = system.get_time
@@ -45,6 +46,7 @@ local function with_caret_settings(fn)
   config.animated_caret_short_animation_length = saved.animated_caret_short_animation_length
   config.animated_caret_trail_size = saved.animated_caret_trail_size
   style.caret = saved.caret
+  style.caret_trail = saved.caret_trail
   core.redraw = saved.redraw
   system.get_time = old_time
   renderer.draw_rect = old_rect
@@ -84,8 +86,11 @@ test.describe("caret trail", function()
 
       local now = 10
       local polygons = {}
+      local rects = {}
       system.get_time = function() return now end
-      renderer.draw_rect = function() end
+      renderer.draw_rect = function(x, y, width, height, color)
+        rects[#rects + 1] = { x = x, y = y, width = width, height = height, color = color }
+      end
       renderer.draw_poly = function(points, color)
         polygons[#polygons + 1] = { points = points, color = color }
       end
@@ -94,16 +99,20 @@ test.describe("caret trail", function()
       config.animated_caret_short_animation_length = 0.04
       config.animated_caret_trail_size = 1
       style.caret = { 12, 34, 56, 255 }
+      style.caret_trail = { 90, 80, 70, 255 }
 
       draw_frame(root, first, 10, 20)
       polygons = {}
+      rects = {}
 
       now = 10.01
       core.redraw = false
       draw_frame(root, second, 210, 100)
 
       test.equal(#polygons, 1)
-      test.equal(polygons[1].color[1], 12)
+      test.equal(polygons[1].color[1], 90)
+      test.equal(#rects, 1)
+      test.equal(rects[1].color[1], 12)
       local min_x, max_x = x_bounds(polygons[1].points)
       test.ok(min_x < 210, "expected the rear corners to follow from the first Text View")
       test.ok(max_x >= 210, "expected the front corners to reach toward the focused caret")

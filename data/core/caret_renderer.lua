@@ -182,7 +182,10 @@ function CaretRenderer:draw(now, animation_length, short_animation_length, trail
     }
   end
 
-  renderer.draw_poly(points, target.color)
+  renderer.draw_poly(points, target.trail_color or target.color)
+  renderer.draw_rect(
+    target.x, target.y, target.width, target.height, target.color
+  )
   return animating
 end
 

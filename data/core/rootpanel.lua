@@ -75,6 +75,7 @@ end
 
 ---Submit the focused keyboard caret for global drawing.
 function RootPanel:submit_keyboard_caret(target)
+  target.trail_color = target.trail_color or style.caret_trail or target.color
   local previous = self.caret_renderer.previous_target
   if previous and previous.owner ~= target.owner then
     core.log_quiet(
