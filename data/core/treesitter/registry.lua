@@ -122,7 +122,7 @@ end
 
 function registry.reload()
   local languages = {}
-  local ids = { "c", "cpp", "odin", "kotlin" }
+  local ids = { "c", "cpp", "odin", "kotlin", "javascript", "typescript", "tsx" }
   for _, id in ipairs(ids) do
     local config = load_config(id)
     if config then

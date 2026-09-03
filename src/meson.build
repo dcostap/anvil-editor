@@ -271,7 +271,7 @@ markdown_vault_index_test = executable('markdown_vault_index_test',
         'treesitter/snapshot.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep],
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_javascript_dep, tree_sitter_typescript_dep, tree_sitter_tsx_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep],
     c_args: anvil_cargs,
 )
 test('markdown-vault-index', markdown_vault_index_test, env: anvil_test_env)
@@ -295,7 +295,7 @@ worker_pool_test = executable('worker_pool_test',
         'custom_events.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep, lua_dep, pcre2_dep],
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_javascript_dep, tree_sitter_typescript_dep, tree_sitter_tsx_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep, lua_dep, pcre2_dep],
     c_args: anvil_cargs,
 )
 test('worker_pool', worker_pool_test, env: anvil_test_env)
@@ -309,7 +309,7 @@ treesitter_test = executable('treesitter_test',
         'custom_events.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep, lua_dep, pcre2_dep],
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_javascript_dep, tree_sitter_typescript_dep, tree_sitter_tsx_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep, lua_dep, pcre2_dep],
     c_args: anvil_cargs,
 )
 test('treesitter', treesitter_test, env: anvil_test_env)
@@ -322,7 +322,7 @@ markdown_parser_test = executable('markdown_parser_test',
         'treesitter/snapshot.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep],
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_javascript_dep, tree_sitter_typescript_dep, tree_sitter_tsx_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep],
     c_args: anvil_cargs,
 )
 test('markdown_parser', markdown_parser_test, env: anvil_test_env)

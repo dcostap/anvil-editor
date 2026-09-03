@@ -1,0 +1,7 @@
+[wrap-git]
+url = https://github.com/tree-sitter/tree-sitter-typescript.git
+revision = f975a621f4e7f532fe322e13c4f79495e0a7b2e7
+patch_directory = tree-sitter-typescript
+
+[provide]
+tree-sitter-typescript = tree_sitter_typescript_dep
