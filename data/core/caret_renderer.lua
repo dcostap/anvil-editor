@@ -139,6 +139,9 @@ function CaretRenderer:start_jump(
   local distance_progress = clamp(
     (distance - min_distance) / distance_range, 0, 1
   )
+  -- Keep long jumps at full length, but make the trail catch up much faster
+  -- as the jump approaches one or two text cells.
+  distance_progress = distance_progress * distance_progress * distance_progress
   local movement_length = min_animation_length
     + (animation_length - min_animation_length) * distance_progress
   local leading = movement_length * (1 - clamp(trail_size, 0, 1))

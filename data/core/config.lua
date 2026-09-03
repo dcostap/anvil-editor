@@ -290,9 +290,9 @@ config.animated_caret_animation_length = 0.15
 
 ---Shortest animation time, used at or below the minimum trail distance.
 ---
----Defaults to 0.025.
+---Defaults to 0.02.
 ---@type number
-config.animated_caret_min_animation_length = 0.025
+config.animated_caret_min_animation_length = 0.02
 
 ---Controls how far the back of the caret trails its front.
 ---
