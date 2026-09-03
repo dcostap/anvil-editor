@@ -113,6 +113,21 @@ test.describe("Command Palette View launchers", function()
     end
   end)
 
+  test.it("exposes Diff comparison actions in the Command Palette", function()
+    local compare_commands = {
+      "diff:select_text_for_compare",
+      "diff:compare_text_with_selected",
+      "diff:select_file_for_compare",
+      "diff:compare_file_with_selected",
+      "diff:compare_selection_with_clipboard",
+      "diff:compare_file_with_clipboard",
+    }
+    for _, name in ipairs(compare_commands) do
+      local metadata = test.not_nil(command.get_metadata(name), name)
+      test.equal(metadata.palette, true, name)
+    end
+  end)
+
   test.it("uses the current File Tree command names and search keywords", function()
     test.not_nil(command.map["filetree:apply_changes"])
     test.is_nil(command.map["filetree:apply"])

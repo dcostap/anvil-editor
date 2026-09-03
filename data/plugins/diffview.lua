@@ -1881,11 +1881,13 @@ end
 
 -- Register file compare commands
 command.add("core.textview", {
-  ["diff:select_file_for_compare"] = function(dv)
+  ["diff:select_file_for_compare"] = command.palette(function(dv)
     if dv.buffer and dv.buffer.abs_filename then
       element_a = dv.buffer.abs_filename
     end
-  end
+  end, {
+    keywords = { "compare", "files" },
+  }),
 })
 
 command.add(
@@ -1893,12 +1895,15 @@ command.add(
     return element_a and core.active_view and core.active_view:is(TextView),
     core.active_view
   end, {
-  ["diff:compare_file_with_selected"] = function(dv)
+  ["diff:compare_file_with_selected"] = command.palette(function(dv)
     if dv.buffer and dv.buffer.abs_filename then
       element_b = dv.buffer.abs_filename
     end
     start_compare()
-  end
+  end, {
+    keywords = { "compare", "files" },
+    opens_view = true,
+  }),
 })
 
 command.add(nil, {
@@ -2125,16 +2130,21 @@ local function text_compare_with_predicate()
 end
 
 command.add(text_select_compare_predicate, {
-  ["diff:select_text_for_compare"] = function(buffer)
+  ["diff:select_text_for_compare"] = command.palette(function(buffer)
     element_a_text = buffer:get_selection_text()
-  end
+  end, {
+    keywords = { "compare", "text", "selection" },
+  }),
 })
 
 command.add(text_compare_with_predicate, {
-  ["diff:compare_text_with_selected"] = function(buffer)
+  ["diff:compare_text_with_selected"] = command.palette(function(buffer)
     element_b_text = buffer:get_selection_text()
     start_compare_string()
-  end
+  end, {
+    keywords = { "compare", "text", "selection" },
+    opens_view = true,
+  }),
 })
 
 local function current_file_side(require_selection)
@@ -2186,18 +2196,24 @@ command.add(function()
   local view = current_file_side(true)
   return view ~= nil, view
 end, {
-  ["diff:compare_selection_with_clipboard"] = function(view)
+  ["diff:compare_selection_with_clipboard"] = command.palette(function(view)
     return open_clipboard_comparison(view, true)
-  end,
+  end, {
+    keywords = { "compare", "selection", "clipboard" },
+    opens_view = true,
+  }),
 })
 
 command.add(function()
   local view = current_file_side(false)
   return view ~= nil, view
 end, {
-  ["diff:compare_file_with_clipboard"] = function(view)
+  ["diff:compare_file_with_clipboard"] = command.palette(function(view)
     return open_clipboard_comparison(view, false)
-  end,
+  end, {
+    keywords = { "compare", "file", "clipboard" },
+    opens_view = true,
+  }),
 })
 
 
