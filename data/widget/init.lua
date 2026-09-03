@@ -1674,8 +1674,9 @@ function Widget.override_rootview()
 
   function RootView:update()
     root_view_update(self)
-    local count = #floating_widgets
-    for i=1, count, 1 do
+    -- A floating widget can destroy itself while it updates. Walk backwards so
+    -- removing the current item does not shift an unread item out of range.
+    for i=#floating_widgets, 1, -1 do
       local widget = floating_widgets[i]
       if widget.visible and widget.defer_draw then
         widget:update()

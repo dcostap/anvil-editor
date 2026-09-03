@@ -1,4 +1,5 @@
 local test = require "core.test"
+local core = require "core"
 local config = require "core.config"
 local settings = require "plugins.settings"
 local Button = require "widget.button"
@@ -16,13 +17,34 @@ local function find_child(view, class)
 end
 
 test.describe("settings", function()
-  test.it("creates the settings view when the open command needs it", function()
+  test.it("opens from a closing Command Palette", function()
     local command = require "core.command"
     settings.ui = nil
 
-    test.ok(command.perform("settings:open"))
+    test.ok(command.perform("fuzzy:open_commands"))
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker.results = {{ kind = "command", command = "settings:open" }}
+    picker.selected = 1
+    picker.open_transition_complete = true
+    local old_transitions = config.transitions
+    local old_fuzzy_transition = config.disabled_transitions.fuzzy_searcher
+    local old_fps = core.fps
+    config.transitions = true
+    config.disabled_transitions.fuzzy_searcher = false
+    core.fps = 60
+    picker:confirm(false)
+
     test.ok(settings.ui)
     test.equal(settings.ui.name, "Settings")
+    test.ok(picker.closing)
+    test.not_ok(picker.closed)
+
+    picker.close_transition_started_at = system.get_time() - 1
+    local ok, err = pcall(function() core.root_panel:update() end)
+    config.transitions = old_transitions
+    config.disabled_transitions.fuzzy_searcher = old_fuzzy_transition
+    core.fps = old_fps
+    test.ok(ok, err)
 
     settings.ui:hide()
   end)
