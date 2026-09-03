@@ -1443,6 +1443,25 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("keeps ordered list geometry stable while typing", function()
+    local source = table.concat({
+      "1. Crea una carpeta",
+      "2. Crea una carpeta 01_originales_pdf para guardar los PDF originales.",
+    }, "\n")
+    local view, buffer = make_view(source, "pending-ordered-list-geometry.md")
+    view:set_wrapping_enabled(true)
+    buffer:set_selection(1, #buffer.lines[1] + 1)
+    refresh(view)
+
+    local body_col = 4
+    local body_x = view:get_col_x_offset(1, body_col)
+    test.equal(view:on_text_input("x"), true)
+    test.equal(
+      view:get_col_x_offset(1, body_col), body_x,
+      "typing changed the ordered list content x-position"
+    )
+  end)
+
   test.it("keeps nested task rows presented after pressing Enter", function()
     local source_lines = {
       "- [ ] Si se hace picking con el qr, seleccionará la línea y meterá las unidades a recibir",

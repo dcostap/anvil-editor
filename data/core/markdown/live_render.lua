@@ -3884,7 +3884,10 @@ local function pending_list_marker_render(view, previous, current_text)
     )
   )
   marker.width = kind == "ordered"
-    and indent_width + body_font:get_width(marker_text .. " ")
+    and indent_width + math.max(
+      marker_control_width + body_font:get_width(" "),
+      body_font:get_width(marker_text .. " ")
+    )
     or indent_width + marker_control_width + body_font:get_width(" ")
 
   if kind == "task" then
