@@ -2047,10 +2047,10 @@ end, {
   ["diff:toggle_folding"] = function(view)
     view:toggle_folding()
   end,
-  ["diff:swap_sides"] = function(view)
+  ["diff:swap_sides"] = command.palette(function(view)
     if view.request_controller then return view.request_controller:swap_sides() end
     return view:swap_sides()
-  end,
+  end, { keywords = { "left", "right", "reverse" } }),
 })
 
 local function active_diff_side()

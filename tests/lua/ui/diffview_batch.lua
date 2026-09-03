@@ -180,6 +180,7 @@ test.describe("DiffView batch behavior", function()
     }, true))
     core.active_view = view.buffer_view_b
 
+    test.equal(command.get_metadata("diff:swap_sides").palette, true)
     test.ok(command.perform("diff:swap_sides"))
     test.equal(view.buffer_view_a.buffer, right)
     test.equal(view.buffer_view_b.buffer, left)
