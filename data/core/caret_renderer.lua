@@ -8,6 +8,8 @@ local RELATIVE_CORNERS = {
   { -0.5,  0.5 },
 }
 
+local X_ANIMATION_LENGTH_SCALE = 0.5
+
 local function clamp(value, minimum, maximum)
   return math.max(minimum, math.min(maximum, value))
 end
@@ -24,7 +26,8 @@ local function reset_spring(corner, x, y)
   corner.destination_x, corner.destination_y = x, y
   corner.offset_x, corner.offset_y = 0, 0
   corner.velocity_x, corner.velocity_y = 0, 0
-  corner.animation_length = 0
+  corner.animation_length_x = 0
+  corner.animation_length_y = 0
 end
 
 local function update_spring(position, velocity, dt, animation_length)
@@ -149,8 +152,11 @@ function CaretRenderer:start_jump(
   for index, corner in ipairs(self.corners) do
     local x, y = destination(target, index)
     local alignment = range > 0 and (alignments[index] - minimum) / range or 1
-    corner.animation_length = movement_length
+    local corner_animation_length = movement_length
       + (leading - movement_length) * clamp(alignment, 0, 1)
+    corner.animation_length_x = corner_animation_length
+      * X_ANIMATION_LENGTH_SCALE
+    corner.animation_length_y = corner_animation_length
     corner.offset_x = x - corner.x
     corner.offset_y = y - corner.y
     corner.destination_x, corner.destination_y = x, y
@@ -176,7 +182,8 @@ function CaretRenderer:sync_horizontal_corners(target)
     corner.destination_x, corner.destination_y = x, y
     corner.offset_x, corner.offset_y = -shift_x, 0
     corner.velocity_x, corner.velocity_y = 0, 0
-    corner.animation_length = 0
+    corner.animation_length_x = 0
+    corner.animation_length_y = 0
   end
 end
 
@@ -263,10 +270,10 @@ function CaretRenderer:draw(
   for index, corner in ipairs(self.corners) do
     local x_animating, y_animating
     corner.offset_x, corner.velocity_x, x_animating = update_spring(
-      corner.offset_x, corner.velocity_x, dt, corner.animation_length
+      corner.offset_x, corner.velocity_x, dt, corner.animation_length_x
     )
     corner.offset_y, corner.velocity_y, y_animating = update_spring(
-      corner.offset_y, corner.velocity_y, dt, corner.animation_length
+      corner.offset_y, corner.velocity_y, dt, corner.animation_length_y
     )
     corner.x = corner.destination_x - corner.offset_x
     corner.y = corner.destination_y - corner.offset_y
