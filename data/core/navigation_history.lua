@@ -35,12 +35,12 @@ end
 
 local function is_far(a, b, opts)
   return math.abs(a.line - b.line) >= opts.far_lines
-    or math.abs(a.col - b.col) >= opts.far_columns
+    or a.line == b.line and math.abs(a.col - b.col) >= opts.far_columns
 end
 
 local function is_near(a, b, opts)
   return math.abs(a.line - b.line) <= opts.near_lines
-    and math.abs(a.col - b.col) <= opts.near_columns
+    and (a.line ~= b.line or math.abs(a.col - b.col) <= opts.near_columns)
 end
 
 local function current_recorded_position(pane)
@@ -51,28 +51,29 @@ end
 local function record(view, state, opts)
   local pane = panes.pane_for_view(view)
   if not pane or pane.current_view ~= view then return false end
-  return panes.record_location(pane, {
+  local inserted = panes.record_location(pane, {
     view = view,
     state = state,
     nearby_lines = opts.near_lines,
     nearby_columns = opts.near_columns,
   })
+  if inserted then M.navigation_place_inserted() end
+  return inserted
 end
 
-function M.selection_changed(view, new_selection, old_selection)
+function M.perform_jump(view, action, ...)
   local opts = options()
-  if not opts.enabled or view.__navigation_history_restoring then return false end
-  local pane = panes.pane_for_view(view)
-  if not pane or pane.current_view ~= view then return false end
-  local old_position = position(old_selection)
-  local new_position = position(new_selection)
+  local origin = navigation_state(view)
+  local result = table.pack(action(view, ...))
+  if not opts.enabled then return table.unpack(result, 1, result.n) end
+  local destination = navigation_state(view)
+  local old_position = position(origin.selection_state)
+  local new_position = position(destination.selection_state)
   if not old_position or not new_position or not is_far(old_position, new_position, opts) then
-    return false
+    return table.unpack(result, 1, result.n)
   end
 
   candidates[view] = nil
-  local origin = navigation_state(view, old_selection)
-  local destination = navigation_state(view, new_selection)
   record(view, origin, opts)
   local inserted = record(view, destination, opts)
   core.log_quiet(
@@ -80,16 +81,7 @@ function M.selection_changed(view, new_selection, old_selection)
     old_position.line, old_position.col, new_position.line, new_position.col,
     tostring(inserted)
   )
-  return inserted
-end
-
-function M.attach(view)
-  if view.__navigation_history_attached then return view end
-  view.__navigation_history_attached = true
-  view:add_selection_listener("core.navigation_history", function(owner, new_state, old_state)
-    M.selection_changed(owner, new_state, old_state)
-  end)
-  return view
+  return table.unpack(result, 1, result.n)
 end
 
 function M.sample(view, now)

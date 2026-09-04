@@ -99,11 +99,6 @@ local function navigation_position(state)
     tonumber(selections[offset + 1]) or tonumber(selections[2])
 end
 
-local function notify_history_inserted()
-  local tracker = package.loaded["core.navigation_history"]
-  if tracker and tracker.navigation_place_inserted then tracker.navigation_place_inserted() end
-end
-
 local function create_identity(view, opts)
   local pane = {
     id = next_id("pane"),
@@ -123,7 +118,6 @@ local function create_identity(view, opts)
   pane.history.index = 1
   pane.current_view = view
   M.panes_by_id[pane.id] = pane
-  notify_history_inserted()
   return pane
 end
 
@@ -858,7 +852,7 @@ function M.record_location(target, opts)
     local line, col = navigation_position(state)
     if old_line and line
         and math.abs(old_line - line) <= opts.nearby_lines
-        and math.abs(old_col - col) <= opts.nearby_columns then
+        and (old_line ~= line or math.abs(old_col - col) <= opts.nearby_columns) then
       return false
     end
   end
@@ -868,7 +862,6 @@ function M.record_location(target, opts)
   history.index = index
   M.prune_history(pane)
   log_navigation_history(pane, "record-place")
-  notify_history_inserted()
   after_mutation("recorded location in " .. pane.id)
   return true
 end
@@ -921,7 +914,6 @@ function M.present(view, opts)
   })
   history.index = index
   pane.current_view = view
-  notify_history_inserted()
   call_lifecycle(view, "on_resume")
   M.prune_history(pane)
   log_navigation_history(pane, "present")
@@ -949,7 +941,6 @@ local function commit_non_suspendable_replacement(pane, old, view, opts)
   table.insert(kept, insertion, { view = view, state = capture_navigation_state(view) })
   history.entries, history.index = kept, insertion
   pane.current_view = view
-  notify_history_inserted()
   release_view(pane, old)
   call_lifecycle(old, "on_close")
   call_lifecycle(view, "on_resume")

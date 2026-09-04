@@ -6,6 +6,7 @@ local keymap = require "core.keymap"
 local language_mode = require "core.language_mode"
 local linewrapping = require "core.linewrapping"
 local intelligence = require "core.language_intelligence"
+local navigation_history = require "core.navigation_history"
 local encodings = require "core.buffer.encodings"
 local translate = require "core.buffer.translate"
 local style = require "core.style"
@@ -3293,6 +3294,19 @@ commands["core:select_to_end_of_line"] = function(dv)
 end
 commands["core:delete_to_end_of_line"] = function(dv)
   return wrapped_delete_to(dv, "core:delete_to_end_of_line", move_to_wrapped_end_of_line, dv)
+end
+
+for _, name in ipairs {
+  "core:move_to_start_of_buffer",
+  "core:move_to_end_of_buffer",
+  "core:select_to_start_of_buffer",
+  "core:select_to_end_of_buffer",
+} do
+  local command_name = name
+  local action = commands[command_name]
+  commands[command_name] = function(dv, ...)
+    return navigation_history.perform_jump(dv, action, ...)
+  end
 end
 
 commands["editor:fold_at_caret"] = command.palette(function(dv)
