@@ -303,9 +303,9 @@ config.animated_caret_trail_size = 1
 ---Movement distance where the caret uses its shortest animation time.
 ---The distance is measured in text cells.
 ---
----Defaults to 6.
+---Defaults to 2.
 ---@type number
-config.animated_caret_trail_min_distance = 6
+config.animated_caret_trail_min_distance = 2
 
 ---Movement distance where the caret reaches its full animation time.
 ---The distance is measured in text cells.
