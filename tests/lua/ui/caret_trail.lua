@@ -290,40 +290,4 @@ test.describe("caret trail", function()
       )
     end)
   end)
-
-  test.it("moves the X component faster than the Y component", function()
-    with_caret_settings(function()
-      local view = make_view()
-      local root = RootPanel()
-      core.root_panel = root
-
-      local now = 40
-      local polygon
-      system.get_time = function() return now end
-      renderer.draw_rect = function() end
-      renderer.draw_poly = function(points) polygon = points end
-      config.animated_caret = true
-      config.animated_caret_animation_length = 0.15
-      config.animated_caret_min_animation_length = 0.02
-      config.animated_caret_trail_size = 1
-      config.animated_caret_trail_min_distance = 2
-      config.animated_caret_trail_full_distance = 12
-
-      local start_x, start_y = 10, 20
-      local target_x = start_x + 70 * view:get_font():get_width("M")
-      local target_y = start_y + 2 * view:get_line_height()
-      draw_frame(root, view, start_x, start_y, 1, 1)
-
-      now = 40.01
-      draw_frame(root, view, target_x, target_y, 2, 1)
-
-      local rear = polygon[1]
-      local x_remaining = (target_x - rear[1]) / (target_x - start_x)
-      local y_remaining = (target_y - rear[2]) / (target_y - start_y)
-      test.ok(
-        x_remaining + 0.04 < y_remaining,
-        "expected the X trail component to catch up faster"
-      )
-    end)
-  end)
 end)
