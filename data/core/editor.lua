@@ -9,6 +9,8 @@ local view_icons = require "core.view_icons"
 ---@field super core.textview
 local Editor = TextView:extend()
 
+Editor.records_edit_navigation = true
+
 view_icons.register("editor", view_icons.ui("K"))
 
 function Editor:__tostring()

@@ -108,6 +108,8 @@ plugin_defaults("navigation_history", {
   far_columns = 80,
   near_lines = 8,
   near_columns = 20,
+  edit_debounce = 1,
+  edit_near_lines = 1,
   feedback = true,
   feedback_duration = 0.25,
 })

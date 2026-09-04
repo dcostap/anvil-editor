@@ -583,6 +583,23 @@ local function call_lifecycle(view, method)
   if view and view[method] then view[method](view) end
 end
 
+local function navigation_history_module()
+  return package.loaded["core.navigation_history"]
+end
+
+local function flush_pending_edit(view)
+  local navigation_history = navigation_history_module()
+  if navigation_history and navigation_history.flush_edit then
+    navigation_history.flush_edit(view, nil, true)
+  end
+end
+
+local function has_pending_edit(view)
+  local navigation_history = navigation_history_module()
+  return navigation_history and navigation_history.has_pending_edit
+    and navigation_history.has_pending_edit(view) or false
+end
+
 local function log_navigation_history(pane, action)
   quiet(
     "Navigation History: pane=%s action=%s index=%d length=%d view=%s",
@@ -845,20 +862,41 @@ function M.record_location(target, opts)
   local current = history.entries[history.index]
   if current and navigation_state_key(current.view, current.state)
       == navigation_state_key(view, state) then
+    if opts.kind == "edit" then
+      clear_forward_history(pane, pane.current_view)
+      current.kind = "edit"
+      current.state = state
+    end
     return false
   end
   if current and current.view == view and opts.nearby_lines and opts.nearby_columns then
     local old_line, old_col = navigation_position(current.state)
     local line, col = navigation_position(state)
-    if old_line and line
-        and math.abs(old_line - line) <= opts.nearby_lines
-        and (old_line ~= line or math.abs(old_col - col) <= opts.nearby_columns) then
+    local nearby
+    if old_line and line then
+      if opts.kind == "edit" and current.kind == "edit" then
+        nearby = math.abs(old_line - line) <= math.max(
+          0, math.floor(tonumber(opts.edit_near_lines) or 1)
+        )
+      else
+        nearby = math.abs(old_line - line) <= opts.nearby_lines
+          and (old_line ~= line or math.abs(old_col - col) <= opts.nearby_columns)
+      end
+    end
+    if nearby then
+      if opts.kind == "edit" then
+        clear_forward_history(pane, pane.current_view)
+        current.state = state
+        current.kind = "edit"
+        log_navigation_history(pane, "merge-edit-place")
+        after_mutation("merged edit location in " .. pane.id)
+      end
       return false
     end
   end
   clear_forward_history(pane, pane.current_view)
   local index = history.index + 1
-  table.insert(history.entries, index, { view = view, state = state })
+  table.insert(history.entries, index, { view = view, state = state, kind = opts.kind })
   history.index = index
   M.prune_history(pane)
   log_navigation_history(pane, "record-place")
@@ -876,6 +914,7 @@ function M.present(view, opts)
       history_limit = opts.history_limit,
     }
   end
+  flush_pending_edit(pane.current_view)
   local existing = M.pane_for_view(view)
   if existing and existing ~= pane then
     return nil, "View is owned by another Pane"
@@ -1000,7 +1039,7 @@ local function detach_current_view_for_move(source)
     if index < first or index > last then
       if entry.view == view then
         if duplicate then
-          entry = { view = duplicate, state = entry.state }
+          entry = { view = duplicate, state = entry.state, kind = entry.kind }
         else
           entry = nil
         end
@@ -1071,6 +1110,7 @@ function M.move_current_view(source_target, destination_target, opts)
   local destination = M.find(destination_target)
   if not source or not destination then return nil, "invalid source or destination Pane" end
   if source == destination then return nil, "source and destination Pane are the same" end
+  flush_pending_edit(source.current_view)
 
   local old = destination.current_view
   local suspendable = not old.can_suspend or old:can_suspend() ~= false
@@ -1105,6 +1145,7 @@ function M.move_current_view_to_split(source_target, direction, opts)
       and direction ~= "up" and direction ~= "down" then
     return nil, "invalid split direction"
   end
+  flush_pending_edit(source.current_view)
 
   if #collect_owned_views(source) == 1 then
     local replacement, err = make_view { factory = opts.replacement_factory }
@@ -1133,6 +1174,7 @@ function M.move_current_view_to_new_group(source_target, opts)
   opts = opts or {}
   local source = M.find(source_target or M.active_pane)
   if not source then return nil, "invalid source Pane" end
+  flush_pending_edit(source.current_view)
   local transfer = detach_current_view_for_move(source)
   local moved = transfer.view
   local destination = create_identity_from_transfer(transfer, opts)
@@ -1208,20 +1250,42 @@ end
 function M.back(target)
   local pane = M.find(target or M.active_pane)
   if not pane then return nil end
+  flush_pending_edit(pane.current_view)
   M.prune_history(pane)
+  local current = pane.history.entries[pane.history.index]
+  if current and current.kind == "edit" and current.view == pane.current_view then
+    local live = capture_navigation_state(pane.current_view)
+    if navigation_state_key(current.view, current.state)
+        ~= navigation_state_key(pane.current_view, live) then
+      restore_navigation_state(pane.current_view, current.state)
+      log_navigation_history(pane, "return-to-edit-place")
+      M.focus(pane)
+      after_mutation("returned to edit location in " .. pane.id)
+      return pane.current_view
+    end
+  end
   return set_history_index(pane, pane.history.index - 1)
 end
 
 function M.forward(target)
   local pane = M.find(target or M.active_pane)
   if not pane then return nil end
+  flush_pending_edit(pane.current_view)
   M.prune_history(pane)
   return set_history_index(pane, pane.history.index + 1)
 end
 
 function M.is_back_available(target)
   local pane = M.find(target or M.active_pane)
-  return pane ~= nil and pane.history.index > 1
+  if not pane then return false end
+  if has_pending_edit(pane.current_view) then return true end
+  if pane.history.index > 1 then return true end
+  local current = pane.history.entries[pane.history.index]
+  if not (current and current.kind == "edit" and current.view == pane.current_view) then
+    return false
+  end
+  return navigation_state_key(current.view, current.state)
+    ~= navigation_state_key(pane.current_view, capture_navigation_state(pane.current_view))
 end
 
 function M.is_forward_available(target)

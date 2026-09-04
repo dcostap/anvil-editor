@@ -1,4 +1,5 @@
 local core = require "core"
+local Buffer = require "core.buffer"
 local config = require "core.config"
 local panes = require "core.panes"
 local style = require "core.style"
@@ -7,6 +8,7 @@ local M = {}
 
 local candidates = setmetatable({}, { __mode = "k" })
 local next_samples = setmetatable({}, { __mode = "k" })
+local pending_edits = setmetatable({}, { __mode = "k" })
 local feedback_started_at
 
 local function options()
@@ -48,21 +50,67 @@ local function current_recorded_position(pane)
   return entry and position(entry.state and entry.state.selection_state)
 end
 
-local function record(view, state, opts)
+local function record(view, state, opts, kind)
   local pane = panes.pane_for_view(view)
   if not pane or pane.current_view ~= view then return false end
   local inserted = panes.record_location(pane, {
     view = view,
     state = state,
+    kind = kind,
     nearby_lines = opts.near_lines,
     nearby_columns = opts.near_columns,
+    edit_near_lines = opts.edit_near_lines,
   })
   if inserted then M.navigation_place_inserted() end
   return inserted
 end
 
+function M.edited(view, now)
+  local opts = options()
+  if not opts.enabled or not view or not view.records_edit_navigation then return false end
+  local pane = panes.pane_for_view(view)
+  if not pane or pane.current_view ~= view or view.__navigation_history_restoring then return false end
+
+  now = now or system.get_time()
+  pending_edits[view] = {
+    due_at = now + math.max(0.01, tonumber(opts.edit_debounce) or 1),
+    state = navigation_state(view),
+  }
+  candidates[view] = nil
+  return true
+end
+
+function M.flush_edit(view, now, force)
+  local pending = pending_edits[view]
+  if not pending then return false end
+  local opts = options()
+  if not opts.enabled then pending_edits[view] = nil; return false end
+  now = now or system.get_time()
+  if not force and now < pending.due_at then return false end
+
+  local pane = panes.pane_for_view(view)
+  if not pane then pending_edits[view] = nil; return false end
+  if pane.current_view ~= view then return false end
+
+  pending_edits[view] = nil
+  local edit_position = position(pending.state.selection_state)
+  local inserted = record(view, pending.state, opts, "edit")
+  if edit_position then
+    core.log_quiet(
+      "Navigation History: Editor edit at %d:%d inserted=%s",
+      edit_position.line, edit_position.col, tostring(inserted)
+    )
+  end
+  return inserted
+end
+
+function M.has_pending_edit(view)
+  return pending_edits[view] ~= nil
+end
+
 function M.perform_jump(view, action, ...)
   local opts = options()
+  M.flush_edit(view, nil, true)
   local origin = navigation_state(view)
   local result = table.pack(action(view, ...))
   if not opts.enabled then return table.unpack(result, 1, result.n) end
@@ -118,18 +166,22 @@ end
 function M.update(view, now, force)
   local opts = options()
   now = now or system.get_time()
-  if not opts.enabled then candidates[view], next_samples[view] = nil, nil; return false end
+  if not opts.enabled then
+    candidates[view], next_samples[view], pending_edits[view] = nil, nil, nil
+    return false
+  end
+  local edit_inserted = M.flush_edit(view, now)
   if not force then
     local pane = panes.pane_for_view(view)
     local focused_pane = panes.pane_for_view(core.active_view)
     if pane ~= panes.active() or focused_pane ~= pane then
       candidates[view] = nil
-      return false
+      return edit_inserted
     end
   end
-  if now < (next_samples[view] or 0) then return false end
+  if now < (next_samples[view] or 0) then return edit_inserted end
   next_samples[view] = now + math.max(0.1, tonumber(opts.sample_interval))
-  return M.sample(view, now)
+  return M.sample(view, now) or edit_inserted
 end
 
 function M.navigation_place_inserted()
@@ -157,8 +209,15 @@ end
 function M.reset()
   candidates = setmetatable({}, { __mode = "k" })
   next_samples = setmetatable({}, { __mode = "k" })
+  pending_edits = setmetatable({}, { __mode = "k" })
   feedback_started_at = nil
 end
+
+Buffer.register_text_transaction_handler("navigation-history-edits", function(buffer, transaction)
+  if not (transaction and transaction.changed) then return end
+  local view = buffer.bound_selection_view
+  if view and view.records_edit_navigation then M.edited(view) end
+end)
 
 core.navigation_history = M
 return M
