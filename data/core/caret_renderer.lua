@@ -130,7 +130,7 @@ function CaretRenderer:start_jump(
   local jump_x = target.x - old_target.x
   local jump_y = target.y - old_target.y
   local distance = math.sqrt(
-    math.pow(jump_x / math.max(1, target.cell_width or 1) / 6, 2)
+    math.pow(jump_x / math.max(1, target.cell_width or 1) / 3, 2)
     + math.pow(jump_y / math.max(1, target.cell_height or target.height or 1), 2)
   )
   min_distance = math.max(0, min_distance or 0)
