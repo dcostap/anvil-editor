@@ -103,7 +103,7 @@ plugin_defaults("column_guides", {
 plugin_defaults("navigation_history", {
   enabled = true,
   sample_interval = 5,
-  dwell_time = 20,
+  dwell_time = 10,
   far_lines = 40,
   far_columns = 80,
   near_lines = 8,
