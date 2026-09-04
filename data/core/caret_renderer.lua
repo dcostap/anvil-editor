@@ -12,6 +12,18 @@ local function clamp(value, minimum, maximum)
   return math.max(minimum, math.min(maximum, value))
 end
 
+local function smoothstep(value)
+  value = clamp(value, 0, 1)
+  return value * value * (3 - 2 * value)
+end
+
+local function x_distance_duration_scale(distance)
+  if distance <= 20 then
+    return 1 + 0.4 * smoothstep(distance / 20)
+  end
+  return 1.4 - 0.9 * smoothstep((distance - 20) / 20)
+end
+
 local function destination(target, index)
   if index == 1 then return target.x, target.y end
   if index == 2 then return target.x + target.width, target.y end
@@ -144,6 +156,11 @@ function CaretRenderer:start_jump(
   distance_progress = distance_progress * distance_progress * distance_progress
   local movement_length = min_animation_length
     + (animation_length - min_animation_length) * distance_progress
+  local x_distance = math.abs(jump_x) / math.max(1, target.cell_width or 1)
+  movement_length = clamp(
+    movement_length * x_distance_duration_scale(x_distance),
+    min_animation_length, animation_length
+  )
   local leading = movement_length * (1 - clamp(trail_size, 0, 1))
 
   for index, corner in ipairs(self.corners) do

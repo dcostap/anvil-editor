@@ -290,4 +290,42 @@ test.describe("caret trail", function()
       )
     end)
   end)
+
+  test.it("catches up faster after long X-heavy jumps", function()
+    with_caret_settings(function()
+      local function remaining_ratio(x_cells)
+        local view = make_view()
+        local root = RootPanel()
+        core.root_panel = root
+        local now = 40
+        local polygon
+        system.get_time = function() return now end
+        renderer.draw_rect = function() end
+        renderer.draw_poly = function(points) polygon = points end
+        config.animated_caret = true
+        config.animated_caret_animation_length = 0.15
+        config.animated_caret_min_animation_length = 0.02
+        config.animated_caret_trail_size = 1
+        config.animated_caret_trail_min_distance = 2
+        config.animated_caret_trail_full_distance = 12
+
+        local start_x, start_y = 10, 20
+        local target_x = start_x + x_cells * view:get_font():get_width("M")
+        local target_y = start_y + view:get_line_height()
+        draw_frame(root, view, start_x, start_y, 1, 1)
+        now = 40.01
+        draw_frame(root, view, target_x, target_y, 2, 1)
+
+        local min_x = x_bounds(polygon)
+        return (target_x - min_x) / (target_x - start_x)
+      end
+
+      local medium_remaining = remaining_ratio(20)
+      local long_remaining = remaining_ratio(40)
+      test.ok(
+        long_remaining < medium_remaining,
+        "expected the long X-heavy trail to catch up faster"
+      )
+    end)
+  end)
 end)
