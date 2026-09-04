@@ -1,5 +1,6 @@
 local core = require "core"
 local language_mode = require "core.language_mode"
+local navigation_history = require "core.navigation_history"
 local TextView = require "core.textview"
 local view_icons = require "core.view_icons"
 
@@ -17,6 +18,12 @@ end
 function Editor:new(buffer)
   Editor.super.new(self, buffer)
   if core.buffer_registry then core.buffer_registry:retain(buffer, self) end
+  navigation_history.attach(self)
+end
+
+function Editor:update()
+  Editor.super.update(self)
+  navigation_history.update(self)
 end
 
 function Editor:release_buffer()

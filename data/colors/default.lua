@@ -89,6 +89,7 @@ style.autocomplete_selection = c("30343a")
 style.text = c(C.text_fg)
 style.caret = c("ffffff")
 style.caret_trail = { common.color "rgba(143, 199, 255, 0.35)" }
+style.navigation_history_feedback = { common.color "rgba(87, 196, 127, 0.10)" }
 style.accent = c(C.ctrl_clickable)
 style.dim = c(C.ignored)
 style.divider = c(C.tearline)

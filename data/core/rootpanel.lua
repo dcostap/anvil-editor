@@ -685,6 +685,8 @@ function RootPanel:draw()
   if group then draw_split_dividers(group.root) end
   for _, view in ipairs(self:shell_views()) do call_view(view, "draw") end
   self:draw_active_app_overlay()
+  local navigation_history = package.loaded["core.navigation_history"]
+  if navigation_history then navigation_history.draw_feedback(self) end
   while #self.deferred_draws > 0 do
     local item = table.remove(self.deferred_draws)
     item.fn(table.unpack(item, 1, #item))

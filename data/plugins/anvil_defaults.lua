@@ -100,6 +100,17 @@ plugin_defaults("column_guides", {
   enabled = true,
   columns = { 100, 150 },
 })
+plugin_defaults("navigation_history", {
+  enabled = true,
+  sample_interval = 5,
+  dwell_time = 20,
+  far_lines = 40,
+  far_columns = 80,
+  near_lines = 8,
+  near_columns = 20,
+  feedback = true,
+  feedback_duration = 0.25,
+})
 plugin_defaults("centered_editor", {
   enabled = true,
   max_width = 1200,
