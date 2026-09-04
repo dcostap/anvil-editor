@@ -142,25 +142,30 @@ function M.sample(view, now)
   local state = navigation_state(view)
   local caret = position(state.selection_state)
   local recorded = current_recorded_position(pane)
-  if not caret or not recorded or not is_far(caret, recorded, opts) then
+  if not caret or not recorded then
     candidates[view] = nil
     return false
   end
 
   local candidate = candidates[view]
-  if not candidate or not is_near(caret, candidate.anchor, opts) then
-    candidates[view] = { anchor = caret, started_at = now }
-    return false
-  end
-  if now - candidate.started_at < opts.dwell_time then return false end
+  if candidate and is_near(caret, candidate.anchor, opts) then
+    if now - candidate.started_at < opts.dwell_time then return false end
 
-  candidates[view] = nil
-  local inserted = record(view, state, opts)
-  core.log_quiet(
-    "Navigation History: Editor dwell at %d:%d seconds=%.1f inserted=%s",
-    caret.line, caret.col, now - candidate.started_at, tostring(inserted)
-  )
-  return inserted
+    candidates[view] = nil
+    local inserted = record(view, state, opts)
+    core.log_quiet(
+      "Navigation History: Editor dwell at %d:%d seconds=%.1f inserted=%s",
+      caret.line, caret.col, now - candidate.started_at, tostring(inserted)
+    )
+    return inserted
+  end
+
+  if is_far(caret, recorded, opts) then
+    candidates[view] = { anchor = caret, started_at = now }
+  else
+    candidates[view] = nil
+  end
+  return false
 end
 
 function M.update(view, now, force)

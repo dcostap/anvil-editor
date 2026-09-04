@@ -84,6 +84,22 @@ test.describe("automatic Editor Navigation History", function()
     test.equal(panes.history_length(pane), 2)
   end)
 
+  test.it("keeps dwell timing when nearby movement crosses the original distance boundary", function()
+    local pane = panes.create { factory = make_editor, focus = false }
+    local view = pane.current_view
+    move_one_line_at_a_time(view, 6)
+
+    navigation_history.update(view, 100, true)
+    move_one_line_at_a_time(view, 5)
+    navigation_history.update(view, 103, true)
+    test.equal(panes.history_length(pane), 1)
+
+    navigation_history.update(view, 104, true)
+    test.equal(panes.history_length(pane), 2)
+    test.equal(panes.back(pane), view)
+    test.equal(view:get_selection_state().selections[1], 1)
+  end)
+
   test.it("records both ends of a start or end Buffer command immediately", function()
     local pane = panes.create { factory = make_editor, focus = false }
     local view = pane.current_view
