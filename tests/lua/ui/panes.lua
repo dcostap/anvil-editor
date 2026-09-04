@@ -18,8 +18,19 @@ function FakeView:get_name()
   return self.name
 end
 
+function FakeView:get_navigation_state()
+  return { place = self.place }
+end
+
+function FakeView:set_navigation_state(state)
+  self.place = state and state.place
+end
+
 function FakeView:duplicate()
-  return self.copy_name and FakeView(self.copy_name) or nil
+  if not self.copy_name then return nil end
+  local copy = FakeView(self.copy_name)
+  copy.place = self.place
+  return copy
 end
 
 function FakeView:try_close(close)
@@ -516,6 +527,123 @@ test.describe("Pane manager", function()
     test.equal(panes.pane_for_view(child), pane)
     panes.close(pane, { force = true })
     test.is_nil(panes.pane_for_view(child))
+    test.ok(panes.validate())
+  end)
+
+  test.it("moves the current contiguous View history region", function()
+    local moved = FakeView("A")
+    moved.copy_name = "A copy"
+    moved.place = 111
+    local source = panes.create { factory = function() return moved end }
+    panes.present(FakeView("B"), { pane = source })
+    moved.place = 22
+    panes.present(moved, { pane = source })
+    moved.place = 100
+    panes.record_location(source)
+
+    local destination = panes.create { factory = factory("Z") }
+    panes.present(FakeView("O"), { pane = destination })
+
+    test.equal(panes.move_current_view(source, destination), moved)
+
+    test.equal(destination.current_view, moved)
+    test.equal(destination.current_view.place, 100)
+    test.equal(panes.back(destination), moved)
+    test.equal(destination.current_view.place, 22)
+    test.equal(panes.back(destination):get_name(), "O")
+    test.equal(panes.back(destination):get_name(), "Z")
+
+    test.equal(source.current_view:get_name(), "B")
+    local old_region = panes.back(source)
+    test.not_equal(old_region, moved)
+    test.equal(old_region:get_name(), "A copy")
+    test.equal(old_region.place, 111)
+    test.ok(panes.validate())
+  end)
+
+  test.it("preserves Forward places inside the moved contiguous region", function()
+    local moved = FakeView("A")
+    moved.copy_name = "A copy"
+    moved.place = 111
+    local source = panes.create { factory = function() return moved end }
+    panes.present(FakeView("B"), { pane = source })
+    moved.place = 22
+    panes.present(moved, { pane = source })
+    moved.place = 100
+    panes.record_location(source)
+    panes.back(source)
+
+    local destination = panes.create { factory = factory("Z") }
+    panes.present(FakeView("O"), { pane = destination })
+    panes.present(FakeView("discarded forward"), { pane = destination })
+    panes.back(destination)
+
+    test.equal(panes.move_current_view(source, destination), moved)
+
+    test.equal(destination.current_view.place, 22)
+    test.equal(panes.forward(destination), moved)
+    test.equal(destination.current_view.place, 100)
+    test.is_nil(panes.forward(destination))
+    test.equal(panes.back(destination), moved)
+    test.equal(destination.current_view.place, 22)
+    test.equal(panes.back(destination):get_name(), "O")
+    test.ok(panes.validate())
+  end)
+
+  test.it("moves the contiguous View history region into a new split", function()
+    local moved = FakeView("A")
+    moved.place = 10
+    local source = panes.create { factory = factory("source") }
+    panes.present(moved, { pane = source })
+    moved.place = 20
+    panes.record_location(source)
+
+    local destination = panes.move_current_view_to_split(source, "right")
+
+    test.equal(destination.current_view, moved)
+    test.equal(destination.current_view.place, 20)
+    test.equal(panes.history_length(destination), 2)
+    test.equal(panes.back(destination), moved)
+    test.equal(destination.current_view.place, 10)
+    test.equal(source.current_view:get_name(), "source")
+    test.ok(panes.validate())
+  end)
+
+  test.it("removes separate history regions for a moved non-duplicatable View", function()
+    local moved = FakeView("A")
+    moved.place = 10
+    local source = panes.create { factory = function() return moved end }
+    panes.present(FakeView("B"), { pane = source })
+    moved.place = 20
+    panes.present(moved, { pane = source })
+    local destination = panes.create { factory = factory("destination") }
+
+    test.equal(panes.move_current_view(source, destination), moved)
+
+    test.equal(source.current_view:get_name(), "B")
+    test.equal(panes.history_length(source), 1)
+    test.equal(destination.current_view, moved)
+    test.equal(destination.current_view.place, 20)
+    test.ok(panes.validate())
+  end)
+
+  test.it("moves the contiguous history region over a non-suspendable View", function()
+    local moved = FakeView("A")
+    moved.place = 10
+    local source = panes.create { factory = function() return moved end }
+    moved.place = 20
+    panes.record_location(source)
+    local destination = panes.create { factory = factory("destination") }
+    function destination.current_view:can_suspend() return false end
+    function destination.current_view:can_close(approve) approve() end
+
+    test.equal(panes.move_current_view(source, destination), moved)
+
+    test.equal(destination.current_view, moved)
+    test.equal(destination.current_view.place, 20)
+    test.equal(panes.history_length(destination), 2)
+    test.equal(panes.back(destination), moved)
+    test.equal(destination.current_view.place, 10)
     test.ok(panes.validate())
   end)
 

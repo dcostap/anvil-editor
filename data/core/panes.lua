@@ -929,18 +929,32 @@ local function construct_view(factory)
   return view
 end
 
-local function commit_non_suspendable_replacement(pane, old, view, opts)
+local function insert_history_transfer(history, insertion, transfer)
+  for offset, entry in ipairs(transfer.entries) do
+    table.insert(history.entries, insertion + offset - 1, entry)
+  end
+  history.index = insertion + transfer.index - 1
+end
+
+local function commit_non_suspendable_replacement(pane, old, view, opts, transfer)
   local history = pane.history
+  if transfer then clear_forward_history(pane, view) end
   local insertion = history.index
   local kept = {}
   for _, entry in ipairs(history.entries) do
     if entry.view ~= old then kept[#kept + 1] = entry end
   end
   insertion = math.max(1, math.min(insertion, #kept + 1))
+  history.entries = kept
   claim_view(pane, view)
-  table.insert(kept, insertion, { view = view, state = capture_navigation_state(view) })
-  history.entries, history.index = kept, insertion
+  if transfer then
+    insert_history_transfer(history, insertion, transfer)
+  else
+    table.insert(kept, insertion, { view = view, state = capture_navigation_state(view) })
+    history.index = insertion
+  end
   pane.current_view = view
+  restore_navigation_state(view, history.entries[history.index].state)
   release_view(pane, old)
   call_lifecycle(old, "on_close")
   call_lifecycle(view, "on_resume")
@@ -951,40 +965,102 @@ end
 
 local function detach_current_view_for_move(source)
   local view = source.current_view
-  call_lifecycle(view, "on_suspend")
+  local history = source.history
+  history.entries[history.index].state = capture_navigation_state(view)
+  local first, last = history.index, history.index
+  while first > 1 and history.entries[first - 1].view == view do first = first - 1 end
+  while last < #history.entries and history.entries[last + 1].view == view do last = last + 1 end
+  local transfer = { view = view, entries = {}, index = history.index - first + 1 }
+  for index = first, last do transfer.entries[#transfer.entries + 1] = history.entries[index] end
 
+  call_lifecycle(view, "on_suspend")
   unretain_view(source, view)
-  local kept = {}
-  local before = 0
-  for index, entry in ipairs(source.history.entries) do
-    if entry.view ~= view then
-      kept[#kept + 1] = entry
-      if index < source.history.index then before = before + 1 end
+
+  local has_separate_region = false
+  for index, entry in ipairs(history.entries) do
+    if (index < first or index > last) and entry.view == view then
+      has_separate_region = true
+      break
     end
   end
-  source.history.entries = kept
-  source.history.index = math.min(#kept, math.max(1, before))
+  local duplicate
+  if has_separate_region and view.duplicate then
+    local ok, candidate = pcall(view.duplicate, view)
+    if ok and candidate and candidate ~= view then
+      duplicate = candidate
+      claim_view(source, duplicate)
+    elseif not ok then
+      quiet("View duplication failed while moving history: %s", tostring(candidate))
+    end
+  end
+
+  local kept = {}
+  local before = 0
+  for index, entry in ipairs(history.entries) do
+    if index < first or index > last then
+      if entry.view == view then
+        if duplicate then
+          entry = { view = duplicate, state = entry.state }
+        else
+          entry = nil
+        end
+      end
+      if entry then
+        kept[#kept + 1] = entry
+        if index < first then before = before + 1 end
+      end
+    end
+  end
+  history.entries = kept
+  history.index = math.min(#kept, math.max(1, before))
 
   if #kept == 0 and #source.retained_views > 0 then
     local fallback = table.remove(source.retained_views)
     kept[1] = { view = fallback, state = capture_navigation_state(fallback) }
-    source.history.index = 1
+    history.index = 1
   end
 
   release_view(source, view)
   if #kept > 0 then
-    source.current_view = kept[source.history.index].view
+    source.current_view = kept[history.index].view
     restore_navigation_state(
-      source.current_view, kept[source.history.index].state
+      source.current_view, kept[history.index].state
     )
     call_lifecycle(source.current_view, "on_resume")
   else
     remove_from_group(source)
     M.panes_by_id[source.id] = nil
     source.current_view = nil
-    source.history.index = 0
+    history.index = 0
   end
-  return view
+  return transfer
+end
+
+local function present_history_transfer(pane, transfer, opts)
+  local history = pane.history
+  history.entries[history.index].state = capture_navigation_state(pane.current_view)
+  clear_forward_history(pane, transfer.view)
+  call_lifecycle(pane.current_view, "on_suspend")
+  claim_view(pane, transfer.view)
+  local insertion = history.index + 1
+  insert_history_transfer(history, insertion, transfer)
+  pane.current_view = transfer.view
+  restore_navigation_state(transfer.view, history.entries[history.index].state)
+  call_lifecycle(transfer.view, "on_resume")
+  M.prune_history(pane)
+  log_navigation_history(pane, "move-view")
+  if not opts or opts.focus ~= false then M.focus(pane) end
+  after_mutation("moved View history into " .. pane.id)
+  return pane
+end
+
+local function create_identity_from_transfer(transfer, opts)
+  local pane = create_identity(transfer.view, opts)
+  pane.history.entries = transfer.entries
+  pane.history.index = transfer.index
+  pane.current_view = transfer.view
+  restore_navigation_state(transfer.view, transfer.entries[transfer.index].state)
+  return pane
 end
 
 ---Move a Pane's Current View into an existing Pane.
@@ -1001,12 +1077,13 @@ function M.move_current_view(source_target, destination_target, opts)
   local result
   local function approved()
     if not M.contains(source) or not M.contains(destination) then return end
-    local moved = detach_current_view_for_move(source)
+    local transfer = detach_current_view_for_move(source)
+    local moved = transfer.view
     if suspendable then
-      local pane, err = M.present(moved, { pane = destination, focus = opts.focus })
-      if pane then result = moved else result = nil; quiet("View move failed: %s", tostring(err)) end
+      present_history_transfer(destination, transfer, opts)
+      result = moved
     else
-      commit_non_suspendable_replacement(destination, old, moved, opts)
+      commit_non_suspendable_replacement(destination, old, moved, opts, transfer)
       result = moved
     end
   end
@@ -1036,8 +1113,9 @@ function M.move_current_view_to_split(source_target, direction, opts)
     source.retained_views[#source.retained_views + 1] = replacement
   end
 
-  local moved = detach_current_view_for_move(source)
-  local destination = create_identity(moved, opts)
+  local transfer = detach_current_view_for_move(source)
+  local moved = transfer.view
+  local destination = create_identity_from_transfer(transfer, opts)
   destination.group = source.group
   source.group.root = layout.split(source.group.root, source, direction, destination)
   M.active_pane = destination
@@ -1055,8 +1133,9 @@ function M.move_current_view_to_new_group(source_target, opts)
   opts = opts or {}
   local source = M.find(source_target or M.active_pane)
   if not source then return nil, "invalid source Pane" end
-  local moved = detach_current_view_for_move(source)
-  local destination = create_identity(moved, opts)
+  local transfer = detach_current_view_for_move(source)
+  local moved = transfer.view
+  local destination = create_identity_from_transfer(transfer, opts)
   local group = create_group(destination)
   M.active_pane = destination
   M.visible_group_value = group

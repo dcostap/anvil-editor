@@ -305,8 +305,8 @@ An action that duplicates the Current View in another Pane without copying Navig
 _Avoid_: copy Pane, copy Navigation History
 
 **Move View**:
-An action that transfers the Current View to another Pane without moving Navigation History. The source Pane shows another retained View or closes when no View remains.
-_Avoid_: move Pane, merge histories
+An action that transfers the Current View and its contiguous Navigation History region to another Pane. Separate regions stay in the source through an independent duplicate when possible. Separate regions are removed when the View cannot be duplicated. The source Pane shows another retained View or closes when no View remains.
+_Avoid_: move Pane, move complete history
 
 **Pane Detach**:
 An action that moves one complete Pane from a multi-Pane Pane Group into its own Pane Group. The Pane keeps its Current View and Navigation History.
