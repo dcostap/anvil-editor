@@ -37,6 +37,9 @@ function translate.previous_word_start(buffer, line, col)
     end
     prev, line, col = char, l, c
   end
+  if prev and not prev:match("%s") then
+    return line, col
+  end
   return translate.start_of_word(buffer, line, col)
 end
 
