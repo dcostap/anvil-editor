@@ -17,8 +17,6 @@ local function keymap_macos(keymap)
     ["cmd+w"] = "core:close_pane_or_quit",
     ["ctrl+tab"] = "pane:focus_next",
     ["ctrl+shift+tab"] = "pane:focus_previous",
-    ["cmd+pageup"] = "pane:move_before",
-    ["cmd+pagedown"] = "pane:move_after",
     ["cmd+1"] = "pane:focus_1",
     ["cmd+2"] = "pane:focus_2",
     ["cmd+3"] = "pane:focus_3",
