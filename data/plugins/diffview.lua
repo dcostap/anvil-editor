@@ -2344,9 +2344,11 @@ function DiffRequestController:reload(opts)
     old_view:dispose_owned_buffers({ keep = request_owned_buffer_keep_set(request) })
   end
   view:assign_request()
-  if attached then
+  if attached and panes.pane_for_view(view) then
     local focus_side = request.preferred_focus_side == "right" and view.buffer_view_b or view.buffer_view_a
     core.set_active_view(focus_side or view)
+  elseif attached then
+    core.log_quiet("Diff comparison: kept source focus while View placement is pending or canceled")
   end
   return view
 end

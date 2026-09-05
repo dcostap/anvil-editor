@@ -258,6 +258,29 @@ test.describe("DiffView batch behavior", function()
     test.equal(text(source), "before changed after\n")
   end)
 
+  test.it("restores source focus after canceling a comparison replacement", function()
+    local source = Buffer(nil, nil, true)
+    source:insert(1, 1, "selected")
+    local editor = TextView(source)
+    function editor:can_suspend() return false end
+    function editor:can_close(approve)
+      core.nag_view:show("Close", "Discard changes?", {
+        { text = "Close", default_yes = true },
+        { text = "Cancel", default_no = true },
+      }, function(option)
+        if option.text == "Close" then approve() end
+      end)
+    end
+    local pane = panes.create { factory = function() return editor end }
+    editor:with_selection_state(function() source:set_selection(1, 1, 1, 9) end)
+    test.ok(command.perform("diff:compare_selection_with_clipboard"))
+    test.ok(core.nag_view.visible)
+    test.ok(command.perform("core:select_dialog_no"))
+    test.equal(pane.current_view, editor)
+    test.equal(core.active_view, editor)
+    test.is_nil(core.root_panel:modal_input_owner())
+  end)
+
   test.it("gives generated Diff Sides their source Path Targets", function(context)
     local left_path = system.absolute_path("old-name.lua")
     local right_path = system.absolute_path("new-name.lua")
