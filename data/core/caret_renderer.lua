@@ -221,6 +221,9 @@ local function narrow_trail(points, target)
   local center_y = target.y + target.height / 2
   local half_width = (math.abs(normal_x) * target.width
     + math.abs(normal_y) * target.height) / 2
+  -- A tall caret must not make sideways trails into full-height strips.
+  local ribbon_width = math.max(target.width, (target.cell_width or target.width) * 0.4)
+  half_width = math.min(half_width, ribbon_width / 2)
   local spread = half_width
   for _, point in ipairs(points) do
     local across = (point[1] - center_x) * normal_x
