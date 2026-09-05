@@ -51,40 +51,48 @@ test.describe("Untitled Editor replacement", function()
     return panes.create { factory = function() return Editor(buffer) end }, buffer
   end
 
-  test.it("closes a blank Untitled Editor without recording history", function()
+  test.it("keeps a blank Untitled Editor when opening another View", function()
     local pane = untitled_pane()
     local old = pane.current_view
     local counter = { count = 0 }
     local target = panes.replace_view(pane, target_factory(counter))
     test.ok(target)
     test.equal(counter.count, 1)
-    test.equal(pane.current_view, target)
-    test.same(panes.views(pane), { target })
-    test.is_nil(old.__pane_owner)
+    test.equal(pane.current_view, old)
+    test.same(panes.views(pane), { old })
+    test.equal(panes.active().current_view, target)
+    test.equal(panes.count(), 2)
     test.is_nil(prompt)
   end)
 
-  test.it("does not construct the target when dirty replacement is canceled", function()
+  test.it("opens after the source group without changing its Untitled Editor", function()
     local pane, buffer = untitled_pane()
     buffer:insert(1, 1, "text")
     local old = pane.current_view
+    old:with_selection_state(function() buffer:set_selection(1, 1, 1, 5) end)
+    local selection = old:get_selection_state()
+    local following = panes.create { factory = function() return TargetView() end }
+    panes.focus(pane)
     local counter = { count = 0 }
-    local target = panes.replace_view(pane, target_factory(counter))
-    test.is_nil(target)
-    test.ok(prompt)
-    test.equal(counter.count, 0)
+    local target, destination = panes.place(target_factory(counter), { pane = pane })
+    test.ok(target)
+    test.is_nil(prompt)
+    test.equal(counter.count, 1)
     test.equal(pane.current_view, old)
+    test.same(old:get_selection_state(), selection)
+    test.equal(table.concat(buffer.lines), "text\n")
+    test.same(panes.ordered(), { pane, destination, following })
+    test.equal(destination.current_view, target)
+    test.same(panes.views(pane), { old })
   end)
 
-  test.it("discards recovery state only after replacement is confirmed", function()
+  test.it("still prompts when explicitly closing a dirty Untitled Editor", function()
     local pane, buffer = untitled_pane()
     buffer:insert(1, 1, "text")
-    local counter = { count = 0 }
-    panes.replace_view(pane, target_factory(counter))
-    prompt.submit(nil, { text = "Close Without Saving" })
-    test.equal(counter.count, 1)
-    test.ok(pane.current_view:is(TargetView))
-    test.equal(#core.buffers, 0)
+    local old = pane.current_view
+    panes.close_view(pane)
+    test.ok(prompt)
+    test.equal(pane.current_view, old)
   end)
 
   test.it("suspends an Untitled Editor after Save As gives its Buffer file identity", function()
@@ -104,7 +112,7 @@ test.describe("Untitled Editor replacement", function()
     local target = panes.replace_view(first, function() return TargetView() end)
     test.ok(target)
     test.is_nil(prompt)
-    test.equal(core.buffer_registry:reference_count(buffer), 1)
+    test.equal(core.buffer_registry:reference_count(buffer), 2)
   end)
 
   test.it("does not replace or prompt when switching groups or splitting", function()

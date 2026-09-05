@@ -245,7 +245,8 @@ function M.create(opts)
     return nil, err
   end
   local pane = create_identity(view, opts)
-  local group = create_group(pane)
+  local after = opts.after_group and group_index(opts.after_group)
+  local group = create_group(pane, after and after + 1)
   M.active_pane = pane
   M.visible_group_value = group
   if opts.focus ~= false then focus_view(pane) end
@@ -932,6 +933,16 @@ function M.present(view, opts)
   end
   local current = pane.current_view
   if current ~= view and current.can_suspend and current:can_suspend() == false then
+    local Editor = require "core.editor"
+    if not existing and current:extends(Editor) then
+      quiet("Pane manager: opening a new group after %s to keep its Untitled Editor", pane.id)
+      return M.create {
+        factory = function() return view end,
+        after_group = pane.group,
+        focus = opts.focus,
+        history_limit = opts.history_limit,
+      }
+    end
     return nil, "Current View requires transactional replacement"
   end
   if existing == pane and current == view then
@@ -1194,7 +1205,8 @@ function M.replace_view(target, factory, opts)
   assert(type(factory) == "function", "View replacement requires a factory")
   local old = pane.current_view
   local suspendable = not old.can_suspend or old:can_suspend() ~= false
-  if suspendable then
+  local Editor = require "core.editor"
+  if suspendable or old:extends(Editor) then
     local view, err = construct_view(factory)
     if not view then return nil, err end
     local result, present_err = M.present(view, { pane = pane, focus = opts.focus })
@@ -1228,7 +1240,7 @@ function M.place(factory, opts)
   if placement == "current" then
     if target then
       view, err = M.replace_view(target, factory, opts)
-      pane = view and target or nil
+      pane = view and M.pane_for_view(view) or nil
     else
       pane, err = M.create { factory = factory, focus = opts.focus }
       view = pane and pane.current_view or nil
