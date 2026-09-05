@@ -2,12 +2,28 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SRC = Path(r"C:/Users/Darius/Downloads/logo.png")
 OUT = ROOT / "resources" / "icons"
+DEFAULT_SRC = OUT / "logo.svg"
+
+
+def render_svg(source: Path, inkscape: str) -> Image.Image:
+    """Render the vector source before making platform icon sizes."""
+    with tempfile.TemporaryDirectory(prefix="anvil-icon-") as directory:
+        output = Path(directory) / "logo.png"
+        subprocess.run([
+            inkscape, str(source.resolve()), "--export-type=png",
+            "--export-area-page", "--export-width=2048",
+            "--export-background-opacity=0", f"--export-filename={output}",
+        ], check=True)
+        with Image.open(output) as image:
+            return image.convert("RGBA")
 
 
 def trim_alpha(img: Image.Image, threshold: int = 4) -> Image.Image:
@@ -20,10 +36,11 @@ def trim_alpha(img: Image.Image, threshold: int = 4) -> Image.Image:
 
 
 def contain_square(img: Image.Image, size: int) -> Image.Image:
-    """Return a tight square icon with the trimmed source preserved and centered."""
+    """Center the artwork without distortion, with room for its edge pixels."""
     img = trim_alpha(img).convert("RGBA")
     work = img.copy()
-    work.thumbnail((size, size), Image.Resampling.LANCZOS)
+    inset_size = round(size * 0.94)
+    work.thumbnail((inset_size, inset_size), Image.Resampling.LANCZOS)
     out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     out.alpha_composite(work, ((size - work.width) // 2, (size - work.height) // 2))
     return out
@@ -49,7 +66,7 @@ def save_icon_inl(img: Image.Image) -> None:
 
 
 def save_packaging_images(img: Image.Image) -> None:
-    # Pre-rendered packaging images whose SVG sources reference logo.png.
+    # Pre-rendered packaging images whose SVG sources reference logo.svg.
     # Keeping these in sync avoids stale branding when packaging tools use the raster assets directly.
     bg = (33, 37, 43, 255)
     blue = (55, 113, 200, 255)
@@ -85,9 +102,12 @@ def save_packaging_images(img: Image.Image) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Regenerate Anvil product icon assets from source artwork.")
     parser.add_argument("source", nargs="?", type=Path, default=DEFAULT_SRC)
+    parser.add_argument("--inkscape", default=shutil.which("inkscape"), help="Path to the Inkscape executable")
     args = parser.parse_args()
 
-    img = Image.open(args.source).convert("RGBA")
+    if not args.inkscape:
+        parser.error("Inkscape is required. Add it to PATH or use --inkscape.")
+    img = render_svg(args.source, args.inkscape)
     logo = contain_square(img, 1024)
 
     OUT.mkdir(parents=True, exist_ok=True)

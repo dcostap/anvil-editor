@@ -176,7 +176,9 @@ if host_machine.system() == 'windows'
     anvil_deps += cc.find_library('dxgi', required: true)
     anvil_deps += cc.find_library('dxguid', required: true)
     anvil_deps += cc.find_library('shell32', required: true)
-    anvil_rc += windows.compile_resources('../resources/icons/icon.rc')
+    anvil_rc += windows.compile_resources('../resources/icons/icon.rc',
+        depend_files : files('../resources/icons/icon.ico')
+    )
     anvil_rc += windows.compile_resources('../resources/windows/manifest.rc')
 
     # solve missing symbols when building from sdl3 cmake subproject

@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="698.15" height="406.75" viewBox="153.55 311.95 698.15 406.75" fill="none">
+  <title>Silver anvil with folded corner</title>
+  <desc>A fully vector recreation with a silver face, dark inset slots, beveled edges, and soft light on a gray background. No embedded raster images.</desc>
+  <defs>
+    <radialGradient id="background" cx="49%" cy="48%" r="70%">
+      <stop stop-color="#a5a6a6"/>
+      <stop offset=".49" stop-color="#858686"/>
+      <stop offset="1" stop-color="#505151"/>
+    </radialGradient>
+    <radialGradient id="halo">
+      <stop stop-color="#fff" stop-opacity=".95"/>
+      <stop offset=".53" stop-color="#fff" stop-opacity=".64"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="face" x1="451" y1="312" x2="574" y2="714" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f9fafb"/>
+      <stop offset=".4" stop-color="#f4f5f7"/>
+      <stop offset=".76" stop-color="#e8e9ec"/>
+      <stop offset="1" stop-color="#d4d6da"/>
+    </linearGradient>
+    <linearGradient id="side" x1="485" y1="322" x2="515" y2="721" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c7cbcf"/>
+      <stop offset=".33" stop-color="#959a9f"/>
+      <stop offset=".67" stop-color="#8a8f94"/>
+      <stop offset="1" stop-color="#71767c"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="451" y1="310" x2="508" y2="707" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff"/>
+      <stop offset=".52" stop-color="#fff"/>
+      <stop offset="1" stop-color="#f3f4f6" stop-opacity=".65"/>
+    </linearGradient>
+    <linearGradient id="slot" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#a3a8ae"/>
+      <stop offset=".23" stop-color="#797f86"/>
+      <stop offset=".65" stop-color="#4e555b"/>
+      <stop offset="1" stop-color="#24292d"/>
+    </linearGradient>
+    <linearGradient id="foldSide" x1="731" y1="364" x2="782" y2="427" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#454c52"/>
+      <stop offset=".47" stop-color="#191f23"/>
+      <stop offset=".76" stop-color="#697076"/>
+      <stop offset="1" stop-color="#292e32"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="757" y1="376" x2="804" y2="330" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f5f6f8"/>
+      <stop offset=".48" stop-color="#fafbfd"/>
+      <stop offset=".7" stop-color="#e6e8eb"/>
+      <stop offset=".86" stop-color="#c8cdd2"/>
+      <stop offset="1" stop-color="#fefefe"/>
+    </linearGradient>
+    <filter id="blur" x="-40%" y="-60%" width="180%" height="220%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="29"/>
+    </filter>
+    <filter id="shadow" x="-25%" y="-35%" width="150%" height="185%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <filter id="contact" x="-20%" y="-30%" width="140%" height="170%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+    <filter id="grain" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency=".79" numOctaves="3" seed="18" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer><feFuncA type="linear" slope=".045"/></feComponentTransfer>
+    </filter>
+    <path id="body" d="M163 312.5 H726 Q731 312.5 731 323 V393 C731 414 742 425 765 425 H840 Q850 425 850 437 V506 Q850 512 843 514 C800 525 757 530 726 555 C711 567 703 583 708 598 C714 619 738 634 762 642 Q768 644 768 650 V691 Q768 701 758 701 H627 Q619 701 617 693 L612 671 C607 648 595 638 572 638 H514 C492 638 481 648 477 666 L470 692 Q468 701 460 701 H333 Q323 701 323 691 V650 Q323 643 330 641 C366 628 395 607 409 580 C424 549 419 518 399 494 C382 472 354 459 320 448 C264 431 207 408 178 369 C163 350 155 330 155 320 Q155 312.5 163 312.5 Z"/>
+    <path id="depth" d="M155 320 C149 354 180 402 217 427 C246 448 280 461 322 475 C360 488 387 498 402 520 C414 536 419 553 413 572 C402 605 372 628 331 643 Q322 646 322 654 V702 Q322 718 335 718 H461 C474 718 474 708 478 691 C482 670 493 659 515 659 H572 C596 659 605 671 609 692 C612 709 615 718 627 718 H756 Q769 718 769 703 V651 Q769 644 762 642 C736 631 713 616 708 597 C715 563 764 543 841 526 Q851 524 851 508 V438 Q851 426 840 425 H765 C742 425 731 414 731 393 V323 Q731 312 725 313 H163 Q155 313 155 320 Z"/>
+    <clipPath id="faceClip"><use href="#body"/></clipPath>
+  </defs>
+
+  <use href="#depth" fill="url(#side)" stroke="#30363b" stroke-width="1.4"/>
+  <path d="M326 708 Q329 716 338 715 H461 Q470 715 472 705 M488 672 C495 662 506 660 518 660 H572 C592 660 602 670 607 686 M620 713 Q624 716 633 715 H755 Q765 715 766 708" stroke="#c6c9cd" stroke-opacity=".52" stroke-width="1.1"/>
+  <use href="#body" fill="url(#face)" stroke="#70767c" stroke-width="1.1"/>
+  <path d="M163 320 C164 341 178 365 197 384 C225 412 274 433 322 448 C360 460 386 472 402 495 C423 523 424 553 411 581 C397 610 368 631 332 644 Q327 646 327 651 V691 Q327 697 334 697 H459 Q466 697 467 691 L474 665 C479 645 492 635 514 635 H572 C597 635 610 646 615 670 L620 692 Q621 697 628 697 H758 Q764 697 764 691 V651 Q764 647 759 646 C733 637 710 621 705 601 C699 583 708 565 723 552 C755 526 799 522 840 511 Q847 509 847 504 V438 Q847 430 840 430 H764 C737 430 726 416 726 394 V321" stroke="url(#rim)" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M164 314 H725" stroke="#fff" stroke-width="2" opacity=".95"/>
+
+  <!-- The folded corner is a separate closed vector shape. -->
+  <path d="M740 314 C735 313 733 318 733 326 V393 C733 413 742 424 762 424 H844 Q850 424 847 415 L748 315 Q744 311 740 314 Z" fill="url(#foldSide)" stroke="#252b30" stroke-width="1.2"/>
+  <path d="M742 314 Q740 314 740 320 V388 C740 405 747 412 763 412 H839 L747 318 Q744 315 742 314 Z" fill="url(#fold)" stroke="#6e747a" stroke-width="1.1"/>
+  <path d="M744 319 V388 C744 402 749 408 763 408 H831 Z" stroke="#fff" stroke-width="2.4" stroke-linejoin="round" opacity=".94"/>
+  <path d="M746 314 L845 413" stroke="#fff" stroke-width="1.7"/>
+  <path d="M763 414 H841" stroke="#bfc4c8" stroke-width="1.3"/>
+
+  <!-- Recessed slots with bright lower bevels and dark inner edges. -->
+  <g>
+    <rect x="574" y="442" width="174" height="22" rx="11" fill="#fff" opacity=".95"/>
+    <rect x="578" y="444.5" width="165" height="12.5" rx="6.25" fill="url(#slot)" stroke="#252b30" stroke-width="1.15"/>
+    <path d="M585 446 H736" stroke="#c6cacf" stroke-width=".8" opacity=".7"/>
+    <rect x="574" y="485.5" width="174" height="22" rx="11" fill="#fff" opacity=".96"/>
+    <rect x="578" y="488" width="165" height="12.5" rx="6.25" fill="url(#slot)" stroke="#252b30" stroke-width="1.15"/>
+    <path d="M585 489.5 H736" stroke="#c6cacf" stroke-width=".8" opacity=".7"/>
+    <rect x="574" y="527" width="120" height="23" rx="11" fill="#fff" opacity=".98"/>
+    <rect x="578" y="530" width="111.5" height="12.5" rx="6.25" fill="url(#slot)" stroke="#252b30" stroke-width="1.15"/>
+    <path d="M585 531.5 H682" stroke="#c6cacf" stroke-width=".8" opacity=".7"/>
+  </g>
+  <!-- Procedural SVG texture, not a bitmap. -->
+  <g clip-path="url(#faceClip)">
+    <path d="M0 0H1024V1024H0Z" filter="url(#grain)" opacity=".65"/>
+  </g>
+</svg>

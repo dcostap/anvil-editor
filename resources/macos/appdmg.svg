@@ -4,11 +4,11 @@
      xmlns:xlink="http://www.w3.org/1999/xlink">
   <rect width="640" height="480" fill="#21252b"/>
   <image x="210" y="38" width="220" height="223" preserveAspectRatio="xMidYMid meet"
-         href="../icons/logo.png" xlink:href="../icons/logo.png"/>
+         href="../icons/logo.svg" xlink:href="../icons/logo.svg"/>
 
   <rect x="132" y="318" width="106" height="96" rx="12" fill="#e6e6e6"/>
   <image x="156" y="337" width="58" height="58" preserveAspectRatio="xMidYMid meet"
-         href="../icons/logo.png" xlink:href="../icons/logo.png"/>
+         href="../icons/logo.svg" xlink:href="../icons/logo.svg"/>
 
   <path d="M280 366h78" fill="none" stroke="#3771c8" stroke-width="10" stroke-linecap="round"/>
   <path d="M374 366 344 342v48z" fill="#3771c8"/>

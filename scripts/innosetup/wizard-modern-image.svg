@@ -4,7 +4,7 @@
      xmlns:xlink="http://www.w3.org/1999/xlink">
   <rect width="164" height="314" fill="#21252b"/>
   <image x="18" y="28" width="128" height="130" preserveAspectRatio="xMidYMid meet"
-         href="../../resources/icons/logo.png" xlink:href="../../resources/icons/logo.png"/>
+         href="../../resources/icons/logo.svg" xlink:href="../../resources/icons/logo.svg"/>
   <g fill="#3771c8" stroke="#3771c8" stroke-linejoin="round" stroke-linecap="round">
     <rect x="54" y="260" width="56" height="22" rx="5" fill="none" stroke-width="4"/>
     <path d="M82 220v32" stroke-width="7"/>
