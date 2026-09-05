@@ -540,6 +540,10 @@ function DiffView:get_focus_view()
   return self.buffer_view_a
 end
 
+function DiffView:get_surface_focus_targets()
+  return { self.buffer_view_a, self.buffer_view_b }
+end
+
 function DiffView:get_path_target()
   local focus = core.active_view
   if focus ~= self.buffer_view_a and focus ~= self.buffer_view_b then
