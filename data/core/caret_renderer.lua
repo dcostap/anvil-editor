@@ -202,6 +202,43 @@ local function snap_to_target_fraction(value, target_value)
   return math.floor(value - fraction + 0.5) + fraction
 end
 
+local function narrow_trail(points, target)
+  -- Use the longest remaining corner movement as the trail's axis.
+  local axis_x, axis_y, length_squared = 0, 0, 0
+  for index, point in ipairs(points) do
+    local x, y = destination(target, index)
+    local dx, dy = point[1] - x, point[2] - y
+    local distance_squared = dx * dx + dy * dy
+    if distance_squared > length_squared then
+      axis_x, axis_y, length_squared = dx, dy, distance_squared
+    end
+  end
+  if length_squared == 0 then return end
+
+  local length = math.sqrt(length_squared)
+  local normal_x, normal_y = -axis_y / length, axis_x / length
+  local center_x = target.x + target.width / 2
+  local center_y = target.y + target.height / 2
+  local half_width = (math.abs(normal_x) * target.width
+    + math.abs(normal_y) * target.height) / 2
+  local spread = half_width
+  for _, point in ipairs(points) do
+    local across = (point[1] - center_x) * normal_x
+      + (point[2] - center_y) * normal_y
+    spread = math.max(spread, math.abs(across))
+  end
+  if spread <= half_width then return end
+
+  -- Compress only excess width. Keep length and spring state unchanged.
+  local compression = 1 - half_width / spread
+  for _, point in ipairs(points) do
+    local across = (point[1] - center_x) * normal_x
+      + (point[2] - center_y) * normal_y
+    point[1] = point[1] - normal_x * across * compression
+    point[2] = point[2] - normal_y * across * compression
+  end
+end
+
 function CaretRenderer:draw(
   now, animation_length, min_animation_length, trail_size,
   min_distance, full_distance, min_speed, max_speed,
@@ -295,6 +332,7 @@ function CaretRenderer:draw(
     }
   end
 
+  narrow_trail(points, target)
   renderer.draw_poly(points, target.trail_color or target.color)
   renderer.draw_rect(
     target.x, target.y, target.width, target.height, target.color
