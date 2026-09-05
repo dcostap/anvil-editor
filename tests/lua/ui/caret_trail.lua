@@ -94,6 +94,44 @@ local function y_bounds(points)
 end
 
 test.describe("caret trail", function()
+  test.it("snaps after a mouse press and animates later keyboard movement", function()
+    with_caret_settings(function()
+      local view = make_view()
+      local root = RootPanel()
+      core.root_panel = root
+      local now = 10
+      local polygon, rect
+      system.get_time = function() return now end
+      renderer.draw_poly = function(points) polygon = points end
+      renderer.draw_rect = function(x, y, width, height)
+        rect = { x = x, y = y, width = width, height = height }
+      end
+      config.animated_caret = true
+      config.animated_caret_animation_length = 0.15
+      config.animated_caret_min_animation_length = 0.025
+      config.animated_caret_trail_size = 1
+
+      draw_frame(root, view, 10, 20, 1, 1)
+      -- Click outside the panes, then submit the next focused caret.
+      core.on_event("mousepressed", "left", -100, -100, 1)
+      core.on_event("mousereleased", "left", -100, -100, 1)
+      now = now + 0.01
+      draw_frame(root, view, 210, 200, 2, 1)
+      local min_x, max_x = x_bounds(polygon)
+      local min_y, max_y = y_bounds(polygon)
+      test.equal(min_x, rect.x)
+      test.equal(max_x, rect.x + rect.width)
+      test.equal(min_y, rect.y)
+      test.equal(max_y, rect.y + rect.height)
+
+      now = now + 0.01
+      draw_frame(root, view, 10, 20, 1, 1)
+      local _, trail_end = y_bounds(polygon)
+      test.ok(trail_end > rect.y + rect.height,
+        "expected later caret movement to animate")
+    end)
+  end)
+
   test.it("toggles from its Command Palette action", function()
     with_caret_settings(function()
       config.animated_caret = true
