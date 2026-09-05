@@ -74,25 +74,29 @@
   <path d="M163 320 C164 341 178 365 197 384 C225 412 274 433 322 448 C360 460 386 472 402 495 C423 523 424 553 411 581 C397 610 368 631 332 644 Q327 646 327 651 V691 Q327 697 334 697 H459 Q466 697 467 691 L474 665 C479 645 492 635 514 635 H572 C597 635 610 646 615 670 L620 692 Q621 697 628 697 H758 Q764 697 764 691 V651 Q764 647 759 646 C733 637 710 621 705 601 C699 583 708 565 723 552 C755 526 799 522 840 511 Q847 509 847 504 V438 Q847 430 840 430 H764 C737 430 726 416 726 394 V321" stroke="url(#rim)" stroke-width="2.5" stroke-linecap="round"/>
   <path d="M164 314 H725" stroke="#fff" stroke-width="2" opacity=".95"/>
 
-  <!-- The folded corner is a separate closed vector shape. -->
+  <!-- Recessed slots with bright lower bevels and dark inner edges. -->
+  <g clip-path="url(#faceClip)">
+  <g transform="translate(0 380) scale(1 1.42) translate(0 -444)">
+    <rect x="544" y="441" width="206" height="23" rx="11.5" fill="#fff" opacity=".95"/>
+    <rect x="548" y="444" width="197" height="13" rx="6.5" fill="url(#slot)" stroke="#252b30" stroke-width="1.15"/>
+    <path d="M556 445.5 H737" stroke="#c6cacf" stroke-width=".8" opacity=".7"/>
+    <rect x="544" y="477" width="206" height="23" rx="11.5" fill="#fff" opacity=".96"/>
+    <rect x="548" y="480" width="197" height="13" rx="6.5" fill="url(#slot)" stroke="#252b30" stroke-width="1.15"/>
+    <path d="M556 481.5 H737" stroke="#c6cacf" stroke-width=".8" opacity=".7"/>
+    <rect x="544" y="513" width="206" height="23" rx="11.5" fill="#fff" opacity=".97"/>
+    <rect x="548" y="516" width="197" height="13" rx="6.5" fill="url(#slot)" stroke="#252b30" stroke-width="1.15"/>
+    <path d="M556 517.5 H737" stroke="#c6cacf" stroke-width=".8" opacity=".7"/>
+    <rect x="544" y="549" width="157" height="23" rx="11.5" fill="#fff" opacity=".98"/>
+    <rect x="548" y="552" width="148" height="13" rx="6.5" fill="url(#slot)" stroke="#252b30" stroke-width="1.15"/>
+    <path d="M556 553.5 H688" stroke="#c6cacf" stroke-width=".8" opacity=".7"/>
+  </g>
+  </g>
+  <!-- Draw the fold above the lines. -->
   <path d="M740 314 C735 313 733 318 733 326 V393 C733 413 742 424 762 424 H844 Q850 424 847 415 L748 315 Q744 311 740 314 Z" fill="url(#foldSide)" stroke="#252b30" stroke-width="1.2"/>
   <path d="M742 314 Q740 314 740 320 V388 C740 405 747 412 763 412 H839 L747 318 Q744 315 742 314 Z" fill="url(#fold)" stroke="#6e747a" stroke-width="1.1"/>
   <path d="M744 319 V388 C744 402 749 408 763 408 H831 Z" stroke="#fff" stroke-width="2.4" stroke-linejoin="round" opacity=".94"/>
   <path d="M746 314 L845 413" stroke="#fff" stroke-width="1.7"/>
   <path d="M763 414 H841" stroke="#bfc4c8" stroke-width="1.3"/>
-
-  <!-- Recessed slots with bright lower bevels and dark inner edges. -->
-  <g>
-    <rect x="574" y="442" width="174" height="22" rx="11" fill="#fff" opacity=".95"/>
-    <rect x="578" y="444.5" width="165" height="12.5" rx="6.25" fill="url(#slot)" stroke="#252b30" stroke-width="1.15"/>
-    <path d="M585 446 H736" stroke="#c6cacf" stroke-width=".8" opacity=".7"/>
-    <rect x="574" y="485.5" width="174" height="22" rx="11" fill="#fff" opacity=".96"/>
-    <rect x="578" y="488" width="165" height="12.5" rx="6.25" fill="url(#slot)" stroke="#252b30" stroke-width="1.15"/>
-    <path d="M585 489.5 H736" stroke="#c6cacf" stroke-width=".8" opacity=".7"/>
-    <rect x="574" y="527" width="120" height="23" rx="11" fill="#fff" opacity=".98"/>
-    <rect x="578" y="530" width="111.5" height="12.5" rx="6.25" fill="url(#slot)" stroke="#252b30" stroke-width="1.15"/>
-    <path d="M585 531.5 H682" stroke="#c6cacf" stroke-width=".8" opacity=".7"/>
-  </g>
   <!-- Procedural SVG texture, not a bitmap. -->
   <g clip-path="url(#faceClip)">
     <path d="M0 0H1024V1024H0Z" filter="url(#grain)" opacity=".65"/>
