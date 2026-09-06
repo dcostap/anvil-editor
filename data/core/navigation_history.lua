@@ -152,7 +152,7 @@ function M.sample(view, now)
     if now - candidate.started_at < opts.dwell_time then return false end
 
     candidates[view] = nil
-    local inserted = record(view, state, opts)
+    local inserted = record(view, state, opts, "dwell")
     core.log_quiet(
       "Navigation History: Editor dwell at %d:%d seconds=%.1f inserted=%s",
       caret.line, caret.col, now - candidate.started_at, tostring(inserted)

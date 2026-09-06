@@ -69,6 +69,22 @@ test.describe("automatic Editor Navigation History", function()
     test.equal(view:get_selection_state().selections[1], 1)
   end)
 
+  test.it("returns to the latest dwell checkpoint before an older place", function()
+    local pane = panes.create { factory = make_editor, focus = false }
+    local view = pane.current_view
+    move_one_line_at_a_time(view, 10)
+    navigation_history.update(view, 100, true)
+    navigation_history.update(view, 104, true)
+
+    move_one_line_at_a_time(view, 12)
+    test.equal(panes.back(pane), view)
+    test.equal(view:get_selection_state().selections[1], 10)
+    test.equal(panes.back(pane), view)
+    test.equal(view:get_selection_state().selections[1], 1)
+    test.equal(panes.forward(pane), view)
+    test.equal(view:get_selection_state().selections[1], 10)
+  end)
+
   test.it("restarts dwell timing when the caret leaves the near area", function()
     local pane = panes.create { factory = make_editor, focus = false }
     local view = pane.current_view

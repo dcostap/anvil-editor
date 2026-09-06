@@ -1267,7 +1267,7 @@ function M.back(target)
   flush_pending_edit(pane.current_view)
   M.prune_history(pane)
   local current = pane.history.entries[pane.history.index]
-  if current and (current.kind == "edit" or pane.history.index == 1)
+  if current and (current.kind == "edit" or current.kind == "dwell" or pane.history.index == 1)
       and current.view == pane.current_view then
     local live = capture_navigation_state(pane.current_view)
     if navigation_state_key(current.view, current.state)
@@ -1296,7 +1296,7 @@ function M.is_back_available(target)
   if has_pending_edit(pane.current_view) then return true end
   if pane.history.index > 1 then return true end
   local current = pane.history.entries[pane.history.index]
-  if not (current and (current.kind == "edit" or pane.history.index == 1)
+  if not (current and (current.kind == "edit" or current.kind == "dwell" or pane.history.index == 1)
       and current.view == pane.current_view) then
     return false
   end
