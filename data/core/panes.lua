@@ -698,16 +698,6 @@ local function can_trim_history_view(view)
   return not view.history_protected
 end
 
-local function clear_forward_history(pane, preserve_view)
-  local history = pane.history
-  local removed = #history.entries - history.index
-  for i = #history.entries, history.index + 1, -1 do
-    local view = history.entries[i].view
-    discard_entry(pane, i, view == preserve_view or not can_trim_history_view(view))
-  end
-  if removed > 0 then log_navigation_history(pane, "clear-forward") end
-end
-
 function M.prune_history(target)
   local pane = M.find(target)
   if not pane then return 0 end
@@ -726,25 +716,23 @@ function M.prune_history(target)
       removed = removed + 1
     end
   end
-  while #pane.history.entries > pane.history.limit do
-    local discard_index
-    for i, entry in ipairs(pane.history.entries) do
-      if i ~= pane.history.index and can_trim_history_view(entry.view) then
-        discard_index = i
-        break
-      end
+  local counts = {}
+  for _, entry in ipairs(pane.history.entries) do
+    counts[entry.view] = (counts[entry.view] or 0) + 1
+  end
+  local index = 1
+  while index <= #pane.history.entries do
+    local view = pane.history.entries[index].view
+    if index ~= pane.history.index and counts[view] > pane.history.limit then
+      discard_entry(pane, index)
+      counts[view] = counts[view] - 1
+      removed = removed + 1
+    else
+      index = index + 1
     end
-    local retain
-    if not discard_index then
-      for i in ipairs(pane.history.entries) do
-        if i ~= pane.history.index then discard_index, retain = i, true; break end
-      end
-    end
-    if not discard_index then break end
-    discard_entry(pane, discard_index, retain)
-    removed = removed + 1
   end
   pane.current_view = pane.history.entries[pane.history.index].view
+  if removed > 0 then log_navigation_history(pane, "prune") end
   return removed
 end
 
@@ -822,7 +810,7 @@ function M.move_and_merge(source_target, destination_target)
   destination.history.entries = destination_entries
   destination.history.index = destination_count + source.history.index
   destination.history.limit = math.max(
-    destination.history.limit, source.history.limit, #destination_entries
+    destination.history.limit, source.history.limit
   )
   destination.current_view = source.current_view
 
@@ -866,7 +854,6 @@ function M.record_location(target, opts)
   if current and navigation_state_key(current.view, current.state)
       == navigation_state_key(view, state) then
     if opts.kind == "edit" then
-      clear_forward_history(pane, pane.current_view)
       current.kind = "edit"
       current.state = state
     end
@@ -888,7 +875,6 @@ function M.record_location(target, opts)
     end
     if nearby then
       if opts.kind == "edit" then
-        clear_forward_history(pane, pane.current_view)
         current.state = state
         current.kind = "edit"
         log_navigation_history(pane, "merge-edit-place")
@@ -897,7 +883,6 @@ function M.record_location(target, opts)
       return false
     end
   end
-  clear_forward_history(pane, pane.current_view)
   local index = history.index + 1
   table.insert(history.entries, index, { view = view, state = state, kind = opts.kind })
   history.index = index
@@ -955,7 +940,6 @@ function M.present(view, opts)
 
   local history = pane.history
   history.entries[history.index].state = capture_navigation_state(pane.current_view)
-  clear_forward_history(pane, view)
   call_lifecycle(pane.current_view, "on_suspend")
   unretain_view(pane, view)
   claim_view(pane, view)
@@ -990,7 +974,6 @@ end
 
 local function commit_non_suspendable_replacement(pane, old, view, opts, transfer)
   local history = pane.history
-  if transfer then clear_forward_history(pane, view) end
   local insertion = history.index
   local kept = {}
   for _, entry in ipairs(history.entries) do
@@ -1091,7 +1074,6 @@ end
 local function present_history_transfer(pane, transfer, opts)
   local history = pane.history
   history.entries[history.index].state = capture_navigation_state(pane.current_view)
-  clear_forward_history(pane, transfer.view)
   call_lifecycle(pane.current_view, "on_suspend")
   claim_view(pane, transfer.view)
   local insertion = history.index + 1

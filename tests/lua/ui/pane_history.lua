@@ -87,7 +87,7 @@ test.describe("Pane View history", function()
     test.equal(panes.forward(pane), one)
   end)
 
-  test.it("clears a forward branch while retaining its protected live View", function()
+  test.it("keeps forward Views when presenting another View", function()
     local pane = panes.create { factory = factory("one") }
     local one = pane.current_view
     local protected = make("terminal")
@@ -101,16 +101,11 @@ test.describe("Pane View history", function()
     local four = make("four")
     panes.present(four, { pane = pane })
 
-    test.equal(panes.history_length(pane), 2)
+    test.equal(panes.history_length(pane), 4)
     test.equal(panes.back(pane), one)
     test.equal(panes.forward(pane), four)
-    test.is_nil(panes.forward(pane))
-    test.ok(protected.__pane_owner == pane)
-    test.ok(three.__pane_owner == nil)
-
-    panes.present(protected, { pane = pane })
-    test.equal(panes.history_length(pane), 3)
-    test.equal(panes.back(pane), four)
+    test.equal(panes.forward(pane), protected)
+    test.equal(panes.forward(pane), three)
   end)
 
   test.it("does not make one View Current in two Panes", function()
@@ -124,19 +119,18 @@ test.describe("Pane View history", function()
     test.not_equal(two.current_view, shared)
   end)
 
-  test.it("prunes the oldest suspended Views at the history bound", function()
+  test.it("keeps distinct Views when their combined history exceeds one View's limit", function()
     local pane = panes.create { factory = factory("one"), history_limit = 3 }
     local one = pane.current_view
     panes.present(make("two"), { pane = pane })
     panes.present(make("three"), { pane = pane })
     panes.present(make("four"), { pane = pane })
     local views = panes.views(pane)
-    test.equal(#views, 3)
-    test.equal(views[1]:get_name(), "two")
-    test.is_nil(one.__pane_owner)
+    test.equal(#views, 4)
+    test.equal(views[1], one)
   end)
 
-  test.it("keeps a protected suspended View during soft history trimming", function()
+  test.it("keeps protected and ordinary Views under separate history limits", function()
     local protected = make("terminal")
     protected.history_protected = true
     local pane = panes.create {
@@ -146,8 +140,10 @@ test.describe("Pane View history", function()
     panes.present(make("two"), { pane = pane })
     panes.present(make("three"), { pane = pane })
     local views = panes.views(pane)
+    test.equal(#views, 3)
     test.equal(views[1], protected)
-    test.equal(views[2]:get_name(), "three")
+    test.equal(views[2]:get_name(), "two")
+    test.equal(views[3]:get_name(), "three")
   end)
 
   test.it("closes Current and retained Views before removing a Pane", function()

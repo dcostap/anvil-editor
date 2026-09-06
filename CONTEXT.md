@@ -93,7 +93,7 @@ A place in a Pane that the user can return to through Navigation History, includ
 _Avoid_: editor-only location, browser page
 
 **Navigation History**:
-A Pane's back/forward sequence of Navigation Places. Navigation History never crosses into another Pane.
+A Pane's back/forward sequence of Navigation Places, with a separate retention limit for each View. Navigation History never crosses into another Pane.
 _Avoid_: file history, tab history, global history
 
 **Buffer**:

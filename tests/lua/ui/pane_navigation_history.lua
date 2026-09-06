@@ -62,6 +62,67 @@ test.describe("Pane navigation history", function()
     test.equal(one.place, 8)
   end)
 
+  test.it("inserts a place without removing forward places in the same View", function()
+    local pane = panes.create { factory = factory("A", 1) }
+    local view = pane.current_view
+    view.place = 2
+    panes.record_location(pane)
+    panes.back(pane)
+    view.place = 3
+    panes.record_location(pane)
+
+    test.equal(panes.back(pane), view)
+    test.equal(view.place, 1)
+    panes.forward(pane)
+    test.equal(view.place, 3)
+    panes.forward(pane)
+    test.equal(view.place, 2)
+  end)
+
+  test.it("preserves other Views and repeated visits when inserting a place", function()
+    local pane = panes.create { factory = factory("A", 1) }
+    local a = pane.current_view
+    local b = PlaceView("B", 10)
+    panes.present(b, { pane = pane })
+    a.place = 2
+    panes.present(a, { pane = pane })
+    panes.back(pane)
+    panes.back(pane)
+    a.place = 3
+    panes.record_location(pane)
+
+    test.equal(panes.back(pane), a)
+    test.equal(a.place, 1)
+    test.equal(panes.forward(pane), a)
+    test.equal(a.place, 3)
+    test.equal(panes.forward(pane), b)
+    test.equal(b.place, 10)
+    test.equal(panes.forward(pane), a)
+    test.equal(a.place, 2)
+  end)
+
+  test.it("limits each View across repeated visits without removing another View's places", function()
+    local pane = panes.create { factory = factory("A", 1), history_limit = 2 }
+    local a = pane.current_view
+    local b = PlaceView("B", 10)
+    panes.present(b, { pane = pane })
+    b.place = 20
+    panes.record_location(pane)
+    a.place = 2
+    panes.present(a, { pane = pane })
+    a.place = 3
+    panes.record_location(pane)
+
+    test.equal(panes.history_length(pane), 4)
+    test.equal(panes.back(pane), a)
+    test.equal(a.place, 2)
+    test.equal(panes.back(pane), b)
+    test.equal(b.place, 20)
+    test.equal(panes.back(pane), b)
+    test.equal(b.place, 10)
+    test.not_ok(panes.is_back_available(pane))
+  end)
+
   test.it("suppresses adjacent duplicate places", function()
     local pane = panes.create { factory = factory("one", 1) }
     test.not_ok(panes.record_location(pane))
