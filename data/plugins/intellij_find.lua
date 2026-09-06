@@ -558,8 +558,12 @@ function core.set_active_view(view, focus_context)
   local previous_state = previous and previous.local_find_input and previous.local_find_state
   local result = core_set_active_view_for_find(view, focus_context)
   local next = core.active_view
+  local next_state = next and next.local_find_input and next.local_find_state
+  if next_state and next_state.visible then
+    next_state.input_active = true
+    next_state.focus = next.local_find_field
+  end
   if previous_state and previous_state.visible and next ~= previous then
-    local next_state = next and next.local_find_input and next.local_find_state
     if next_state ~= previous_state then
       previous_state.input_active = false
       -- Focus can leave the input without closing search or clearing matches.
@@ -936,6 +940,19 @@ local function draw_find_overview(view)
   local selected = state.matches[state.current]
   if selected then draw_match(selected, true) end
   view.v_scrollbar:draw_thumb()
+end
+
+local textview_surface_focus_targets = TextView.get_surface_focus_targets
+function TextView:get_surface_focus_targets()
+  local targets = textview_surface_focus_targets(self)
+  local state = visible_find_state(self)
+  if not state then return targets end
+  local result = {}
+  for _, target in ipairs(targets or { self }) do result[#result + 1] = target end
+  if #result == 0 then result[1] = self end
+  result[#result + 1] = state.find
+  if state.mode == "replace" then result[#result + 1] = state.replace end
+  return result
 end
 
 local function make_local_find_draw_scrollbar(base)

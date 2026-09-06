@@ -111,6 +111,7 @@ end
 
 ---Return this View's ordered Surface Focus Targets.
 ---An empty result makes the View itself one Local Focus Cycle target.
+---Targets can provide their own targets. Include self to keep this View focusable.
 ---@return core.view[]? targets
 function View:get_surface_focus_targets()
   return nil

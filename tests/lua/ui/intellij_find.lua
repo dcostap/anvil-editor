@@ -101,26 +101,60 @@ test.describe("TextView Prompt Bar find", function()
     assert_selection(view, 1, 1, 1, 6)
   end)
 
-  test.it("returns Local Focus Cycle commands from find input to its Text View", function(context)
+  test.it("cycles through visible prompt inputs and Pane Views in both directions", function(context)
     local view = open_editor(context, "alpha beta alpha\n")
     local sibling_buffer = track(context, "buffers", core.open_buffer())
-    panes.split(panes.pane_for_view(view), "right", {
+    local sibling = panes.split(panes.pane_for_view(view), "right", {
       factory = function() return track(context, "views", Editor(sibling_buffer)) end,
       focus = false,
     })
 
     test.ok(command.perform("editor:replace"))
-    active_find_input_for(view)
+    local find = active_find_input_for(view)
     type_into_active_view("alpha")
-    test.ok(command.perform("pane:focus_local_next"))
-    test.equal(core.active_view, view)
-    test.ok(command.perform("editor:repeat_find"), "search must remain open after leaving its input")
+    test.ok(command.perform("editor:find_toggle_replace_field"))
+    local replace = active_find_input_for(view)
+    for _, cycle in ipairs { "pane:focus_local_next", "pane:focus_local_previous" } do
+      local visited = {}
+      for _ = 1, 4 do
+        test.ok(command.perform(cycle))
+        visited[core.active_view] = true
+      end
+      test.ok(visited[view] and visited[find] and visited[replace] and visited[sibling.current_view],
+        "cycle must include both inputs and both Pane Views")
+      test.equal(core.active_view, replace)
+      test.ok(command.perform("editor:find_toggle_replace_field"), "returning must activate input commands")
+      test.equal(core.active_view, find)
+      test.ok(command.perform("editor:find_toggle_replace_field"))
+    end
+    test.ok(command.perform("editor:find_close"))
+    for _ = 1, 4 do
+      test.ok(command.perform("pane:focus_local_next"))
+      test.ok(core.active_view == view or core.active_view == sibling.current_view,
+        "hidden prompts must not receive focus")
+    end
+  end)
 
-    test.ok(command.perform("editor:replace"))
-    active_find_input_for(view)
-    test.ok(command.perform("pane:focus_local_previous"))
-    test.equal(core.active_view, view)
-    test.ok(command.perform("editor:repeat_find"), "search must remain open after leaving its input")
+  test.it("includes a Diff Side's visible prompt in the compound View focus cycle", function(context)
+    local diffview = require "plugins.diffview"
+    local diff = diffview.string_to_string("alpha", "beta", "Left", "Right", true)
+    track(context, "buffers", diff.buffer_view_a.buffer)
+    track(context, "buffers", diff.buffer_view_b.buffer)
+    panes.place(function() return diff end, { placement = "new", focus = true })
+    test.ok(command.perform("editor:find"))
+    local input = active_find_input_for(diff.buffer_view_a)
+    type_into_active_view("alpha")
+    local visited = {}
+    for _ = 1, 3 do
+      test.ok(command.perform("pane:focus_local_next"))
+      visited[core.active_view] = true
+    end
+    test.ok(visited[input] and visited[diff.buffer_view_a] and visited[diff.buffer_view_b],
+      "cycle must include the prompt and both Diff Sides")
+    test.equal(core.active_view, input)
+    test.ok(command.perform("editor:find_submit_or_replace"))
+    test.equal(core.active_view, diff.buffer_view_a)
+    test.ok(command.perform("editor:find_close"))
   end)
 
   test.it("find navigation treats matches near the bottom edge as not already visible", function(context)

@@ -147,30 +147,25 @@ end
 local function focus_local(pane, step)
   local active = core.active_view
   local active_owner = panes.owner_for_view(active)
-  if active_owner and active_owner ~= active and active_owner == pane.current_view then
-    local surfaces = active_owner:get_surface_focus_targets()
-    local is_surface = false
-    for _, target in ipairs(surfaces or {}) do
-      if target == active then is_surface = true break end
+  local targets = {}
+  local function collect(member, owner, parent)
+    local surfaces = owner:get_surface_focus_targets()
+    if not surfaces or #surfaces == 0 then
+      targets[#targets + 1] = { pane = member, target = owner, path = parent }
+      return
     end
-    if not is_surface then
-      core.set_active_view(active_owner)
-      return true
+    for _, target in ipairs(surfaces) do
+      if target == owner then
+        targets[#targets + 1] = { pane = member, target = owner, path = parent }
+      else
+        collect(member, target, { owner = owner, target = target, parent = parent })
+      end
     end
   end
-
-  local targets = {}
   for _, member in ipairs(panes.ordered()) do
     if member.group == pane.group then
       local owner = member.current_view
-      local surfaces = owner and owner:get_surface_focus_targets()
-      if type(surfaces) == "table" and #surfaces > 0 then
-        for _, target in ipairs(surfaces) do
-          targets[#targets + 1] = { pane = member, owner = owner, target = target }
-        end
-      elseif owner then
-        targets[#targets + 1] = { pane = member, owner = owner, target = owner }
-      end
+      if owner then collect(member, owner) end
     end
   end
   if #targets == 0 then return false end
@@ -178,6 +173,10 @@ local function focus_local(pane, step)
   local current
   for index, entry in ipairs(targets) do
     if entry.target == core.active_view then current = index break end
+  end
+  if not current and active_owner and active_owner ~= active and active_owner == pane.current_view then
+    core.set_active_view(active_owner)
+    return true
   end
   local destination_index
   if current then
@@ -187,11 +186,13 @@ local function focus_local(pane, step)
   end
   local destination = targets[destination_index]
   panes.focus(destination.pane)
-  if destination.target ~= destination.owner then
-    panes.register_focus_target(destination.owner, destination.target)
-    return destination.owner:focus_surface_target(destination.target)
+  local function focus_path(path)
+    if not path then return true end
+    if not focus_path(path.parent) then return false end
+    panes.register_focus_target(path.owner, path.target)
+    return path.owner:focus_surface_target(path.target)
   end
-  return true
+  return focus_path(destination.path)
 end
 
 local commands = {
