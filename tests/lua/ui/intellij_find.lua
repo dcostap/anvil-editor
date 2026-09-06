@@ -220,8 +220,8 @@ test.describe("TextView Prompt Bar find", function()
       local draw_rounded_rect = renderer.draw_rounded_rect
       renderer.draw_rounded_rect = function() end
       renderer.draw_rect = function(x, y, w, h, color)
-        if color == style.search_selection or color == style.search_selection_secondary then
-          rects[#rects + 1] = { x = x, y = y, w = w, h = h, selected = color == style.search_selection }
+        if color == style.search_overview or color == style.search_overview_secondary then
+          rects[#rects + 1] = { x = x, y = y, w = w, h = h, selected = color == style.search_overview }
         end
       end
       local ok, err = pcall(view.draw_scrollbar, view)
