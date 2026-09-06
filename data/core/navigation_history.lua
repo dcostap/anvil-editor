@@ -108,6 +108,26 @@ function M.has_pending_edit(view)
   return pending_edits[view] ~= nil
 end
 
+function M.record_departure(view)
+  local opts = options()
+  if not opts.enabled or not view or not view.records_edit_navigation then return false end
+  local pane = panes.pane_for_view(view)
+  if not pane or pane.current_view ~= view then return false end
+
+  candidates[view] = nil
+  local state = navigation_state(view)
+  local caret = position(state.selection_state)
+  local recorded = current_recorded_position(pane)
+  if not caret or not recorded or not is_far(caret, recorded, opts) then return false end
+
+  local inserted = record(view, state, opts)
+  core.log_quiet(
+    "Navigation History: Editor departure at %d:%d inserted=%s",
+    caret.line, caret.col, tostring(inserted)
+  )
+  return inserted
+end
+
 function M.perform_jump(view, action, ...)
   local opts = options()
   M.flush_edit(view, nil, true)

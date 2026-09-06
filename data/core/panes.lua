@@ -1243,10 +1243,16 @@ function M.place(factory, opts)
   return view, pane or err
 end
 
+local function record_departure(view)
+  flush_pending_edit(view)
+  local navigation_history = navigation_history_module()
+  if navigation_history then navigation_history.record_departure(view) end
+end
+
 function M.back(target)
   local pane = M.find(target or M.active_pane)
   if not pane then return nil end
-  flush_pending_edit(pane.current_view)
+  record_departure(pane.current_view)
   M.prune_history(pane)
   local current = pane.history.entries[pane.history.index]
   if current and (current.kind == "edit" or current.kind == "dwell" or pane.history.index == 1)
@@ -1267,7 +1273,7 @@ end
 function M.forward(target)
   local pane = M.find(target or M.active_pane)
   if not pane then return nil end
-  flush_pending_edit(pane.current_view)
+  record_departure(pane.current_view)
   M.prune_history(pane)
   return set_history_index(pane, pane.history.index + 1)
 end

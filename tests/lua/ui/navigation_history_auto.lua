@@ -54,6 +54,54 @@ test.describe("automatic Editor Navigation History", function()
     core.active_view = old_active_view
   end)
 
+  test.it("Back saves a distant departure without waiting for dwell", function()
+    local pane = panes.create { factory = make_editor }
+    local view = pane.current_view
+    move_one_line_at_a_time(view, 10)
+
+    test.ok(command.perform("core:navigate_back"))
+    test.equal(view:get_selection_state().selections[1], 1)
+    test.ok(command.perform("core:navigate_forward"))
+    test.equal(view:get_selection_state().selections[1], 10)
+    test.equal(panes.history_length(pane), 2)
+  end)
+
+  test.it("Forward saves a distant departure and still reaches the next checkpoint", function()
+    local pane = panes.create { factory = make_editor }
+    local view = pane.current_view
+    move_one_line_at_a_time(view, 20)
+    panes.record_location(pane)
+    panes.back(pane)
+    move_one_line_at_a_time(view, 10)
+
+    test.ok(command.perform("core:navigate_forward"))
+    test.equal(view:get_selection_state().selections[1], 20)
+    test.ok(command.perform("core:navigate_back"))
+    test.equal(pane.current_view, view)
+    test.equal(view:get_selection_state().selections[1], 10)
+    test.ok(command.perform("core:navigate_back"))
+    test.equal(view:get_selection_state().selections[1], 1)
+    test.equal(panes.history_length(pane), 3)
+  end)
+
+  test.it("Back and Forward do not record nearby departures or duplicates", function()
+    local pane = panes.create { factory = make_editor }
+    local view = pane.current_view
+    move_one_line_at_a_time(view, 3)
+    test.ok(command.perform("core:navigate_back"))
+    test.equal(panes.history_length(pane), 1)
+
+    move_one_line_at_a_time(view, 10)
+    panes.record_location(pane)
+    panes.back(pane)
+    move_one_line_at_a_time(view, 3)
+    test.ok(command.perform("core:navigate_forward"))
+    test.equal(view:get_selection_state().selections[1], 10)
+    test.ok(command.perform("core:navigate_back"))
+    test.equal(view:get_selection_state().selections[1], 1)
+    test.equal(panes.history_length(pane), 2)
+  end)
+
   test.it("records a distant place after the caret dwells near it", function()
     local pane = panes.create { factory = make_editor, focus = false }
     local view = pane.current_view
@@ -193,8 +241,10 @@ test.describe("automatic Editor Navigation History", function()
     view:set_selection_state { selections = { 50, 1, 50, 1 }, last_selection = 1 }
 
     test.ok(command.perform("core:navigate_back"))
-    test.equal(panes.history_length(pane), 2)
+    test.equal(panes.history_length(pane), 3)
     test.equal(view:get_selection_state().selections[1], 10)
+    test.ok(command.perform("core:navigate_forward"))
+    test.equal(view:get_selection_state().selections[1], 50)
   end)
 
   test.it("replaces a pending edit place with the latest edit", function()
