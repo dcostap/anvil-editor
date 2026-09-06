@@ -359,8 +359,12 @@ end
 function path_tree.draw_row_text(view, text, x, y, kind, is_dir)
   local color = path_tree.row_text_color(kind, is_dir)
   if not color then return false end
+  local font = view:get_font()
+  local _, indent_size = view.buffer:get_indent_info()
+  -- Other rows can change the shared font while building their Display Packets.
+  font:set_tab_size(indent_size)
   renderer.draw_text(
-    view:get_font(), text, x, y + view:get_line_text_y_offset(), color,
+    font, text, x, y + view:get_line_text_y_offset(), color,
     { tab_offset = 0 }
   )
   return true

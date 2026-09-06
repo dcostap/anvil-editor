@@ -1,6 +1,8 @@
 local Buffer = require "core.buffer"
 local test = require "core.test"
 local path_tree = require "plugins.path_tree"
+local renderer = require "renderer"
+local renwindow = require "renwindow"
 
 local function record(path, kind, additions, deletions)
   return {
@@ -11,6 +13,43 @@ local function record(path, kind, additions, deletions)
 end
 
 test.describe("Path Tree", function()
+  test.it("keeps directory indentation stable after file row caches warm", function()
+    local view = path_tree.View(Buffer(nil, nil, true))
+    view.buffer.indent_info = { type = "hard", size = 4 }
+    view:set_path_tree(path_tree.build({
+      record("src/a/first.lua", "modified"),
+      record("src/b/second.lua", "modified"),
+    }))
+    local directory_line = view.path_tree:line_for_path("src/b", "dir")
+    local height = math.ceil(view:get_line_height())
+    local window = renwindow.create("Path Tree indentation", 400, height)
+    local function draw()
+      renderer.begin_frame(window)
+      renderer.set_clip_rect(0, 0, 400, height)
+      renderer.draw_rect(0, 0, 400, height, { 0, 0, 0, 255 })
+      -- Match the Text View's font setup, then draw preceding file rows offscreen.
+      local _, indent_size = view.buffer:get_indent_info()
+      view:get_font():set_tab_size(indent_size)
+      for line = 1, directory_line - 1 do
+        view:draw_line_text(line, 0, -height)
+      end
+      view:draw_line_text(directory_line, 0, 0)
+      renderer.end_frame()
+      local pixels = {}
+      for y = 0, height - 1 do
+        for x = 0, 399 do
+          pixels[#pixels + 1] = renwindow.get_color(window, x, y)
+        end
+      end
+      return pixels
+    end
+    local first = draw()
+    local second = draw()
+    for index = 1, #first do
+      test.same(second[index], first[index], "Directory text moved between redraws")
+    end
+  end)
+
   test.it("compacts consecutive single-child directories when requested", function()
     local tree = path_tree.build({
       record("src/main/java/App.java", "modified"),
