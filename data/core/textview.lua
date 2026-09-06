@@ -8491,6 +8491,8 @@ function TextView:draw_line_body(line, x, y)
     return line_packets.finish_line_body(self, line, x, y, line_height)
   end
 
+  local body_scope = perf_scope_begin("unwrapped_line_body", true)
+  local phase_scope = perf_scope_begin("backgrounds_and_selections", true)
   draw_decoration_line_backgrounds(self, line, x, y)
 
   if self:line_has_current_line_highlight(line) then
@@ -8583,7 +8585,11 @@ function TextView:draw_line_body(line, x, y)
   draw_decoration_inline_ranges(self, line, x, y)
 
   -- draw line's text
+  perf_scope_end(phase_scope)
+  phase_scope = perf_scope_begin("text", true)
   local line_height = self:draw_line_text(line, x, y)
+  perf_scope_end(phase_scope)
+  phase_scope = perf_scope_begin("post_text_overlays", true)
 
   if cached_search_matches then
     for _, match in ipairs(cached_search_matches) do
@@ -8599,9 +8605,15 @@ function TextView:draw_line_body(line, x, y)
     perf_scope_end(underline_scope)
   end
 
+  perf_scope_end(phase_scope)
+  phase_scope = perf_scope_begin("line_hint", true)
   self:draw_line_hint(line, x, y)
-
-  return line_packets.finish_line_body(self, line, x, y, line_height)
+  perf_scope_end(phase_scope)
+  phase_scope = perf_scope_begin("packet_finish", true)
+  local result = line_packets.finish_line_body(self, line, x, y, line_height)
+  perf_scope_end(phase_scope)
+  perf_scope_end(body_scope)
+  return result
 end
 
 
@@ -9074,6 +9086,7 @@ local function draw_textview(self)
     end
     return self:draw_wrapped()
   end
+  local phase_scope = perf_scope_begin("unwrapped_geometry", true)
   self:draw_background(style.background)
   local _, indent_size = self.buffer:get_indent_info()
   self:get_font():set_tab_size(indent_size)
@@ -9083,8 +9096,12 @@ local function draw_textview(self)
 
   local stats = core.textview_frame_stats
   if stats then stats.visible_lines = stats.visible_lines + math.max(0, maxline - minline + 1) end
+  perf_scope_end(phase_scope)
+  phase_scope = perf_scope_begin("unwrapped_prepare", true)
   self:prepare_line_body_draw_cache(minline, maxline)
   self:draw_current_line_underlay_highlights(minline, maxline)
+  perf_scope_end(phase_scope)
+  phase_scope = perf_scope_begin("unwrapped_gutters", true)
 
   local x, y = self:get_line_screen_position(minline)
   local gw, gpad = self:get_gutter_width()
@@ -9094,6 +9111,8 @@ local function draw_textview(self)
     self:draw_line_gutter(i, self.position.x, line_y, gpad and gw - gpad or gw)
   end
   if stats then stats.gutter_ms = stats.gutter_ms + (system.get_time() - gutter_start) * 1000 end
+  perf_scope_end(phase_scope)
+  phase_scope = perf_scope_begin("unwrapped_bodies", true)
 
   local pos = self.position
   x, y = self:get_line_screen_position(minline)
@@ -9106,13 +9125,18 @@ local function draw_textview(self)
     self:draw_line_body(i, line_x, line_y)
   end
   if stats then stats.body_ms = stats.body_ms + (system.get_time() - body_start) * 1000 end
+  perf_scope_end(phase_scope)
+  phase_scope = perf_scope_begin("unwrapped_overlay", true)
   self:draw_overlay()
   core.pop_clip_rect()
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
   self.__line_gutter_selection_cache = nil
 
+  perf_scope_end(phase_scope)
+  phase_scope = perf_scope_begin("unwrapped_scrollbar", true)
   self:draw_scrollbar()
+  perf_scope_end(phase_scope)
 end
 
 function TextView:draw()

@@ -937,12 +937,40 @@ local function publish_draw_scope_frame(snapshot)
   end
 end
 
+local frame_cost_keys = {
+  "target_fps", "total_ms", "event_ms", "update_ms", "pre_draw_ms",
+  "draw_emit_ms", "renderer_end_ms", "frame_ms", "gc_ms", "run_threads_ms",
+  "textview_draw_ms", "textview_body_ms", "textview_text_ms",
+}
+
+local function record_cost(name, value)
+  if type(value) ~= "number" then return end
+  local row = record.frame_costs[name]
+  if not row then
+    row = { count = 0, total = 0, max = value }
+    record.frame_costs[name] = row
+  end
+  row.count = row.count + 1
+  row.total = row.total + value
+  row.max = math.max(row.max, value)
+end
+
 function perf.on_frame(snapshot)
   if not recording or not record or not snapshot then return end
   perf.file_open_on_frame(snapshot)
   publish_draw_scope_frame(snapshot)
   local now = snapshot.time or system.get_time()
   local renderer_stats = snapshot.did_redraw and renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
+  if snapshot.did_redraw then
+    for _, key in ipairs(frame_cost_keys) do
+      record_cost("frame." .. key, snapshot[key])
+    end
+    for key, value in pairs(renderer_stats) do
+      record_cost("renderer." .. key, value)
+    end
+    if renderer_stats.path then record.renderer_paths[renderer_stats.path] = true end
+    record.target_fps = snapshot.target_fps
+  end
   record.iteration_count = record.iteration_count + 1
   local ui_update_ms = math.max(
     snapshot.core_root_panel_update_ms or 0,
@@ -1333,6 +1361,23 @@ local function write_summary(path)
   local elapsed = record.stop_time - record.start_time
   file:write("Anvil performance recording\n")
   file:write(string.format("Elapsed: %.3fs\n", elapsed))
+  file:write(string.format("Frame target: target_fps=%s budget_ms=%.3f\n",
+    tostring(record.target_fps), 1000 / math.max(1, record.target_fps or 1)))
+  file:write("Recording overhead: Lua sampling, API caller tracking, and draw scopes are enabled.\n")
+  file:write("These probes add CPU and allocation costs. Recorded FPS is not an uninstrumented benchmark.\n")
+  file:write("Redraw costs: totals, averages, and maxima use redraw samples only. Nested timings overlap.\n")
+  local renderer_paths = {}
+  for path in pairs(record.renderer_paths) do renderer_paths[#renderer_paths + 1] = path end
+  table.sort(renderer_paths)
+  file:write("Renderer paths: " .. table.concat(renderer_paths, ", ") .. "\n")
+  local cost_names = {}
+  for name in pairs(record.frame_costs) do cost_names[#cost_names + 1] = name end
+  table.sort(cost_names)
+  for _, name in ipairs(cost_names) do
+    local row = record.frame_costs[name]
+    file:write(string.format("  %s samples=%d total=%.3f avg=%.3f max=%.3f\n",
+      name, row.count, row.total, row.total / row.count, row.max))
+  end
   file:write(string.format(
     "Draw scope capture: frames=%d csv=%s\n",
     record.scope_frame_count or 0, record.scope_path or ""
@@ -1780,6 +1825,8 @@ function perf.start_recording()
     redraw_update_iteration_count = 0,
     idle_update_iteration_count = 0,
     frame_count = 0,
+    frame_costs = {},
+    renderer_paths = {},
     over_budget_count = 0,
     sleep_count = 0,
     sleep_actual_total_ms = 0,
@@ -1809,6 +1856,8 @@ function perf.start_recording()
   core.perf_draw_scope_active = false
   core.perf_file_open_tracking_active = true
   recording = true
+  core.log_quiet("Performance capture started: frames=%s scopes=%s; detailed probes add overhead",
+    frames_path, scope_path)
   wrap_renderer_api("draw_text")
   wrap_renderer_api("draw_text_known_bounds")
   wrap_renderer_api("draw_rect")
