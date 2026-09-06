@@ -111,13 +111,16 @@ test.describe("TextView Prompt Bar find", function()
 
     test.ok(command.perform("editor:replace"))
     active_find_input_for(view)
+    type_into_active_view("alpha")
     test.ok(command.perform("pane:focus_local_next"))
     test.equal(core.active_view, view)
+    test.ok(command.perform("editor:repeat_find"), "search must remain open after leaving its input")
 
     test.ok(command.perform("editor:replace"))
     active_find_input_for(view)
     test.ok(command.perform("pane:focus_local_previous"))
     test.equal(core.active_view, view)
+    test.ok(command.perform("editor:repeat_find"), "search must remain open after leaving its input")
   end)
 
   test.it("find navigation treats matches near the bottom edge as not already visible", function(context)
@@ -246,11 +249,24 @@ test.describe("TextView Prompt Bar find", function()
     test.ok(rects[#rects].selected, "selected marker must cover overlapping matches")
     test.equal(rects[#rects].y, first)
 
+    test.ok(command.perform("editor:find_submit_or_replace"))
+    test.equal(core.active_view, view)
+    test.same(markers(), rects, "leaving search input must retain the markers")
+
     test.ok(command.perform("editor:repeat_find"))
     test.ok(command.perform("editor:repeat_find"))
     rects = markers()
     test.ok(rects[#rects].selected)
     test.equal(rects[#rects].y, last)
+
+    type_into_active_view("removed")
+    view:update()
+    test.ok(view.buffer.lines[70]:find("removed", 1, true), "typing must edit the buffer")
+    rects = markers()
+    test.ok(#rects > 0, "remaining matches must stay visible after an edit")
+    for _, rect in ipairs(rects) do
+      test.equal(rect.y, first, "the removed match must leave no marker")
+    end
 
     test.ok(command.perform("editor:find_close"))
     test.equal(#markers(), 0)

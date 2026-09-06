@@ -562,18 +562,8 @@ function core.set_active_view(view, focus_context)
     local next_state = next and next.local_find_input and next.local_find_state
     if next_state ~= previous_state then
       previous_state.input_active = false
-      if next == previous_state.owner_view then
-        -- A TextView Prompt Bar closes when focus returns to its owning TextView.
-        -- It may stay visible when focus moves elsewhere, such as from a Side
-        -- Editor prompt to its owning Editor.
-        previous_state.visible = false
-        previous_state.matches = {}
-        previous_state.match_indexes_by_line = {}
-        previous_state.current = 0
-        core.log_quiet("Local find: closed overlay because focus returned to owner")
-      else
-        core.log_quiet("Local find: deactivated overlay because focus moved elsewhere")
-      end
+      -- Focus can leave the input without closing search or clearing matches.
+      core.log_quiet("Local find: input lost focus; search remains open")
       core.redraw = true
     end
   end
