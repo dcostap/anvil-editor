@@ -88,6 +88,33 @@ end
 local state = {}
 local select_adj = 0
 
+local function get_enclosing_bracket(buffer, caret_line, caret_col)
+  local depths = {}
+  for line = caret_line, 1, -1 do
+    local last_col = line == caret_line and caret_col - 1 or #buffer.lines[line]
+    for col = last_col, 1, -1 do
+      local byte = buffer.lines[line]:byte(col)
+      local close = bracket_maps[1][byte]
+      local open = bracket_maps[2][byte]
+      if (close or open) and get_token_at(buffer, line, col) ~= "comment" then
+        if open then
+          depths[open] = (depths[open] or 0) + 1
+        elseif (depths[byte] or 0) > 0 then
+          depths[byte] = depths[byte] - 1
+        else
+          local end_line, end_col = get_matching_bracket(
+            buffer, line, col, math.huge, byte, close, 1
+          )
+          if end_line and (end_line > caret_line
+            or end_line == caret_line and end_col >= caret_col) then
+            return line, col
+          end
+        end
+      end
+    end
+  end
+end
+
 --- @param line_limit integer?
 local function update_state(line_limit)
   line_limit = line_limit or math.huge
@@ -308,6 +335,16 @@ end
 
 
 command.add("core.textview", {
+  ["editor:move_to_enclosing_bracket"] = function(dv)
+    local line, col = get_enclosing_bracket(dv.buffer, dv.buffer:get_selection())
+    if not line then return end
+    local panes = require "core.panes"
+    local pane = panes.pane_for_view(dv)
+    if pane then panes.record_location(pane) end
+    dv.buffer:set_selection(line, col)
+    if pane then panes.record_location(pane) end
+    core.log_quiet("Bracket navigation: jumped to enclosing opener at %d:%d", line, col)
+  end,
   ["editor:move_to_matching"] = function(dv)
     update_state()
     if state.line2 then

@@ -1162,7 +1162,12 @@ local function duplicate_current_line(dv)
 end
 
 local function move_to_matching_bracket_with_history(dv)
+  local line, col = dv.buffer:get_selection()
   command.perform("editor:move_to_matching")
+  local next_line, next_col = dv.buffer:get_selection()
+  if next_line == line and next_col == col then
+    command.perform("editor:move_to_enclosing_bracket")
+  end
 end
 
 local function reopen_last_closed_tab()
