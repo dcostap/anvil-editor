@@ -110,7 +110,7 @@ plugin_defaults("navigation_history", {
   near_columns = 20,
   edit_debounce = 1,
   edit_near_lines = 1,
-  feedback = true,
+  feedback = false,
   feedback_duration = 0.25,
 })
 plugin_defaults("centered_editor", {
