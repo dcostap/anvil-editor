@@ -54,6 +54,47 @@ local function windows_extended_file(path, create)
 end
 
 test.describe("Project files", function()
+  for _, scope in ipairs { "root", "all" } do
+    test.it("keeps a shared scan through " .. scope .. " cache invalidation", function(context)
+      local project_files = require "core.project_files"
+      local process = require "core.process"
+      local root = join(USERDIR, "project-files-shared-" .. scope .. "-" .. system.get_process_id())
+      assert(common.mkdirp(join(root, "empty")))
+      write(join(root, "visible.lua"), "return true\n")
+      local start = process.start
+      local started, release = false, false
+      local first, second
+      context.cleanup = function()
+        release = true
+        process.start = start
+        project_files.invalidate(root)
+        common.rm(root, true)
+      end
+      process.start = function(args, opts)
+        if opts and common.path_equals(opts.cwd, root) then
+          started = true
+          while not release do coroutine.yield(0) end
+        end
+        return start(args, opts)
+      end
+      core.add_thread(function() first = { project_files.list(root) } end)
+      local deadline = system.get_time() + 5
+      while not started and system.get_time() < deadline do coroutine.yield(0) end
+      test.ok(started, "Project listing did not start")
+      project_files.invalidate(scope == "root" and root or nil)
+      core.add_thread(function() second = { project_files.list(root) } end)
+      release = true
+      while (not first or not second) and system.get_time() < deadline do coroutine.yield(0) end
+      test.not_nil(first)
+      test.not_nil(second)
+      test.same(names(assert(first[1], first[2])), { ["visible.lua"] = true })
+      test.same(directory_names(root, first[3]), { ["."] = true, empty = true })
+      test.equal(second[1], first[1], "Consumers must receive the same completed snapshot")
+      test.equal(second[3], first[3])
+      test.equal(project_files.cached(root), first[1])
+    end)
+  end
+
   test.it("skips Windows device-name files that normal filesystem APIs cannot open", function(context)
     test.skip_if(PLATFORM ~= "Windows", "Windows device names are platform-specific")
     local project_files = require "core.project_files"
@@ -149,6 +190,36 @@ test.describe("Project files", function()
     local listed = names(assert(project_files.list(root, { refresh = true })))
     test.ok(listed["build/visible-without-git.txt"])
     test.not_ok(listed["ignored/hidden-by-ignore.txt"])
+  end)
+
+  test.it("lists a directory junction without traversing its target", function(context)
+    test.skip_if(PLATFORM ~= "Windows", "This fixture uses a Windows junction")
+    local project_files = require "core.project_files"
+    local process = require "core.process"
+    local root = common.normalize_path(join(USERDIR, "project-files-junction-" .. system.get_process_id()))
+    local target = root .. "-target"
+    local link = join(root, "linked")
+    assert(common.mkdirp(root))
+    assert(common.mkdirp(join(target, "nested")))
+    write(join(target, "nested", "outside.lua"), "return true\n")
+    context.cleanup = function()
+      project_files.invalidate(root)
+      if system.get_file_info(link) then assert(system.rmdir(link)) end
+      common.rm(root, true)
+      common.rm(target, true)
+    end
+    local proc = assert(process.start({ "cmd.exe", "/d", "/c", "mklink", "/J", link, target }, {
+      stdout = process.REDIRECT_DISCARD, stderr = process.REDIRECT_DISCARD,
+    }))
+    while proc:running() do coroutine.yield(0.01) end
+    test.equal(proc:wait(process.WAIT_DEADLINE), 0)
+
+    local files, err, directories = project_files.list(root)
+
+    test.not_nil(files, err)
+    test.same(names(files), {})
+    test.same(directory_names(root, directories), { ["."] = true, linked = true })
+    test.not_ok(project_files.contains(root, link, "dir"))
   end)
 
   test.it("reconciles content changes without rebuilding Project membership", function(context)
@@ -253,6 +324,10 @@ test.describe("Project files", function()
     status = project_files.watch_status(root)
     test.ok(status.running)
     test.equal(status.subscribers, 1)
+    project_files.invalidate()
+    status = project_files.watch_status(root)
+    test.ok(status.running, "Cache invalidation must retain active subscriptions")
+    test.equal(status.subscribers, 1)
     project_files.unsubscribe(root, second)
     test.not_ok(project_files.watch_status(root).running)
   end)
@@ -267,11 +342,13 @@ test.describe("Project files", function()
       common.rm(root, true)
     end
     local indexing_beats = 0
+    local partial_snapshot = false
     local running = true
     core.add_thread(function()
       while running do
         if project_files.watch_status(root).phase == "indexing" then
           indexing_beats = indexing_beats + 1
+          partial_snapshot = partial_snapshot or project_files.cached(root) ~= nil
         end
         coroutine.yield(0)
       end
@@ -282,5 +359,6 @@ test.describe("Project files", function()
 
     test.equal(#listed, 2000)
     test.ok(indexing_beats > 0, "Project membership build blocked the scheduler")
+    test.not_ok(partial_snapshot, "Project listing must not publish incomplete membership")
   end)
 end)

@@ -121,14 +121,14 @@ local function scan_directories(root, ignored_paths, hidden_paths)
   while #pending > 0 do
     local directory = table.remove(pending)
     local entries = system.list_dir_info
-      and system.list_dir_info(directory, 2147483647, "dir") or nil
+      and system.list_dir_info(directory, 2147483647, "dir", nil, true) or nil
     for _, entry in ipairs(entries or {}) do
       local name = entry.name
       if name and name ~= "" and name:sub(1, 1) ~= "." then
         local path = common.normalize_path(directory .. PATHSEP .. name)
-        local info = path and system.get_file_info(path)
+        local info = entry
         local key = path and common.path_compare_key(path)
-        if info and info.type == "dir" and not hidden_paths[key] then
+        if path and info.type == "dir" and info.symlink ~= nil and not hidden_paths[key] then
           directories[#directories + 1] = path
           if not info.symlink and not ignored_paths[key] then
             searchable[key] = path
@@ -333,6 +333,7 @@ function project_files.list(root, opts)
   local entry = get_entry(root, opts.include_ignored == true)
   if entry.files and not opts.refresh then return entry.files, nil, entry.directory_list end
   if entry.scanning then
+    core.log_quiet("Project files: joining scan for %s", root)
     while entry.scanning do coroutine.yield(0.005) end
     return entry.files, entry.error, entry.directory_list
   end
@@ -341,10 +342,12 @@ function project_files.list(root, opts)
   entry.phase = "scanning"
   local files, err, directories, searchable_directories = scan(root, opts.include_ignored == true)
   if files then
-    entry.files = files
-    entry.error = nil
     entry.phase = "indexing"
-    index_paths(entry, directories, searchable_directories)
+    local snapshot = { root = root, files = files }
+    index_paths(snapshot, directories, searchable_directories)
+    entry.files, entry.paths, entry.directories = files, snapshot.paths, snapshot.directories
+    entry.searchable_directories, entry.directory_list = snapshot.searchable_directories, snapshot.directory_list
+    entry.error = nil
     entry.generation = (entry.generation or 0) + 1
     entry.phase = "watching"
     sync_watches(entry)
@@ -545,21 +548,19 @@ function project_files.unsubscribe(root, id)
 end
 
 function project_files.invalidate(root)
-  if not root then
-    for _, entry in pairs(cache) do stop_watcher(entry) end
-    cache = {}
-    return
-  end
-  root = common.normalize_path(root)
-  for _, include_ignored in ipairs { false, true } do
-    local key = cache_key(root, include_ignored)
-    local entry = cache[key]
-    if entry and (entry.watcher or next(entry.subscribers or {})) then
-      entry.files, entry.paths, entry.directories, entry.searchable_directories,
-        entry.directory_list = nil, nil, nil, nil, nil
-      entry.error = nil
-    else
-      cache[key] = nil
+  local root_key = root and common.path_compare_key(root)
+  for key, entry in pairs(cache) do
+    if not root_key or common.path_compare_key(entry.root) == root_key then
+      if entry.scanning then
+        -- The pending result replaces the invalidated snapshot. Keep its consumers together.
+        core.log_quiet("Project files: retained active scan for %s during invalidation", entry.root)
+      elseif entry.watcher or next(entry.subscribers) then
+        entry.files, entry.paths, entry.directories, entry.searchable_directories,
+          entry.directory_list = nil, nil, nil, nil, nil
+        entry.error = nil
+      else
+        cache[key] = nil
+      end
     end
   end
 end
