@@ -2314,6 +2314,8 @@ function FileTreeView:build_entries(include_hidden)
   local entries, errors = {}, {}
   local root = { abs = self.current_dir, type = "dir", level = -1 }
   local stack = {}
+  local project = core.root_project and core.root_project()
+  local root_tree = project and common.path_equals(self.root_dir, project.path)
 
   for _, row in ipairs(rows) do
     local meta = type(row.meta) == "table" and row.meta or nil
@@ -2356,8 +2358,6 @@ function FileTreeView:build_entries(include_hidden)
         goto continue
       end
     end
-    local project = core.root_project and core.root_project()
-    local root_tree = project and common.path_equals(self.root_dir, project.path)
     local resolved = root_tree and project_paths.resolve(abs) or nil
     local browsable = root_tree and resolved
       or (not root_tree and in_project(abs, self.root_dir))

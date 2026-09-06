@@ -7,6 +7,7 @@ local workspace_entries = {}
 local workspace_entries_root_key
 local generation = 0
 local merged_entries_cache
+local merged_entries_cache_keys
 local merged_entries_cache_root_key
 local merged_entries_cache_projects_key
 
@@ -53,8 +54,10 @@ local function normalize_abs(path, base)
   if not common.is_absolute_path(path) then
     base = base or root_path() or system.getcwd()
     path = common.normalize_path(base .. PATHSEP .. path)
+  elseif not ok then
+    path = common.normalize_path(path)
   end
-  return common.normalize_volume(common.normalize_path(path) or path)
+  return common.normalize_volume(path)
 end
 
 local function path_key(path)
@@ -63,11 +66,6 @@ end
 
 local function path_matches(filename, parent)
   return common.path_equals(filename, parent) or common.path_belongs_to(filename, parent)
-end
-
-local function relpath(parent, filename)
-  if common.path_equals(parent, filename) then return "" end
-  return common.relative_path(parent, filename)
 end
 
 local function copy_entry(entry)
@@ -279,13 +277,17 @@ local function core_projects_signature()
 end
 
 local function cached_merged_entries()
-  local root_key = path_key(root_path() or "") or ""
+  local root_key = root_path() or ""
   local projects_key = core_projects_signature()
   if not merged_entries_cache
   or merged_entries_cache_root_key ~= root_key
   or merged_entries_cache_projects_key ~= projects_key
   then
     merged_entries_cache = build_merged_entries()
+    merged_entries_cache_keys = {}
+    for i, entry in ipairs(merged_entries_cache) do
+      merged_entries_cache_keys[i] = path_key(entry.path)
+    end
     merged_entries_cache_root_key = root_key
     merged_entries_cache_projects_key = projects_key
   end
@@ -296,19 +298,31 @@ local function merged_entries()
   return copy_list(cached_merged_entries())
 end
 
-local function longest_match(path, entries)
+local function resolve_abs(path)
+  local entries = cached_merged_entries()
+  local key = path_key(path)
   local best
   local best_len = -1
-  for _, entry in ipairs(entries) do
-    if path_matches(path, entry.path) then
-      local len = #(path_key(entry.path) or entry.path)
+  local exact = false
+  for i, entry in ipairs(entries) do
+    local parent_key = merged_entries_cache_keys[i]
+    local prefix = parent_key:sub(-1) == PATHSEP and parent_key or parent_key .. PATHSEP
+    if key == parent_key or key:sub(1, #prefix) == prefix then
+      local len = #parent_key
       if len > best_len then
         best = entry
         best_len = len
+        exact = key == parent_key
       end
     end
   end
-  return best
+  if best then
+    if exact then return best, "" end
+    -- Both paths are absolute and normalized. The match already checked the boundary.
+    local offset = #best.path + 1
+    if path:sub(offset, offset) == PATHSEP then offset = offset + 1 end
+    return best, path:sub(offset)
+  end
 end
 
 function project_paths.entries(opts)
@@ -349,12 +363,11 @@ end
 function project_paths.resolve(path)
   local abs = normalize_abs(path)
   if not abs then return nil end
-  local entries = merged_entries()
-  local best = longest_match(abs, entries)
+  local best, relative = resolve_abs(abs)
   if not best then return nil end
   return {
-    entry = best,
-    relpath = relpath(best.path, abs),
+    entry = copy_entry(best),
+    relpath = relative,
   }
 end
 
@@ -362,8 +375,8 @@ function project_paths.display_path(path, opts)
   opts = opts or {}
   local abs = normalize_abs(path)
   if not abs then return nil end
-  local resolved = project_paths.resolve(abs)
-  if not resolved then
+  local entry, rel = resolve_abs(abs)
+  if not entry then
     local text = opts.home_encode == false and abs or common.home_encode(abs)
     return {
       text = text,
@@ -372,8 +385,6 @@ function project_paths.display_path(path, opts)
     }
   end
 
-  local entry = resolved.entry
-  local rel = resolved.relpath
   local text
   local prefix_span
   if entry.role == "root" then

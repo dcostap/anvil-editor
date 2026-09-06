@@ -144,6 +144,32 @@ test.describe("Project path roles", function()
     test.equal(resolved.relpath, join_path("foo", "Baz.java"))
   end)
 
+  test.test("resolution results cannot change later Project path results", function(context)
+    local path = join_path(context.root, "src", "main.lua")
+    local resolved = project_paths.resolve(path)
+    resolved.entry.path = context.external
+    resolved.entry.label = "changed"
+    resolved.entry.role = "external"
+    local display = project_paths.display_path(path)
+    display.text = "changed"
+
+    test.equal(project_paths.resolve(path).entry.role, "root")
+    test.equal(project_paths.display_path(path).text, join_path("src", "main.lua"))
+  end)
+
+  test.test("matches whole path components after normalization", function(context)
+    local path = context.root .. PATHSEP .. "src" .. PATHSEP .. ".." .. PATHSEP .. "main.lua"
+    test.equal(project_paths.resolve(path).relpath, "main.lua")
+    test.equal(project_paths.display_path(context.root).text, ".")
+    test.is_nil(project_paths.resolve(context.root .. "-other" .. PATHSEP .. "main.lua"))
+    if PLATFORM == "Windows" then
+      local mixed = context.root:lower():gsub("\\", "/") .. "/src/Main.lua"
+      local display = project_paths.display_path(mixed)
+      test.equal(display.root_role, "root")
+      test.equal(display.text, join_path("src", "Main.lua"))
+    end
+  end)
+
   test.test("display path metadata and reverse resolution use role labels", function(context)
     context.project_paths.configure_workspace {
       external = {
