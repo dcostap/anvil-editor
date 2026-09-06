@@ -209,6 +209,37 @@ test.describe("File Tree instances", function()
     test.equal(tree.root_dir, common.normalize_path(root))
   end)
 
+  test.it("restores a live File Tree without changing its Buffer", function()
+    local tree = assert(filetree.new(root))
+    local pane = panes.create { factory = function() return tree end }
+    tree:restore_expanded_paths({ [folder] = true })
+    test.ok(tree:sync_path(file, "test"))
+    tree.scroll.x, tree.scroll.y = 12, 34
+    local state = tree:get_navigation_state()
+    local revision = tree.buffer.text_revision
+    local text = table.concat(tree.buffer.lines)
+    panes.present(View(), { pane = pane })
+
+    test.equal(panes.back(pane), tree)
+
+    test.equal(table.concat(tree.buffer.lines), text)
+    test.same(tree:get_navigation_state(), state)
+    test.equal(tree.buffer.text_revision, revision,
+      "Navigation must not replace an unchanged File Tree Buffer")
+  end)
+
+  test.it("restores a different expansion state in the same directory", function()
+    local tree = assert(filetree.new(root))
+    local collapsed = tree:get_navigation_state()
+    tree:restore_expanded_paths({ [folder] = true })
+    test.ok(tree:capture_expanded_paths()[common.normalize_path(folder)])
+
+    test.ok(tree:set_navigation_state(collapsed))
+
+    test.same(tree:capture_expanded_paths(), {})
+    test.is_nil(table.concat(tree.buffer.lines):find("target.lua", 1, true))
+  end)
+
   test.it("opens a file path in an existing File Tree", function()
     local tree = assert(filetree.new(root))
     local pane = panes.create { factory = function() return tree end }

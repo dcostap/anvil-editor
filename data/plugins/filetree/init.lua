@@ -887,10 +887,30 @@ function FileTreeView:set_navigation_state(state)
     return false
   end
 
-  self.root_dir = common.normalize_path(state.root)
-  self.current_dir = common.normalize_path(state.current_dir)
-  self:refresh(false, false)
-  self:restore_expanded_paths(state.expanded_paths)
+  local root = common.normalize_path(state.root)
+  local current = common.normalize_path(state.current_dir)
+  local reuse = common.path_equals(self.root_dir, root)
+    and common.path_equals(self.rendered_dir, current)
+    and self.rendered_project_paths_generation == project_paths.generation()
+    and self.rendered_show_hidden == filetree_config.show_hidden
+    and self.rendered_sort_mode == self:get_sort_mode()
+    and not self.has_possible_edits
+  if reuse then
+    local expanded = self:capture_expanded_paths()
+    local wanted = state.expanded_paths or {}
+    for path in pairs(expanded) do
+      if not wanted[path] then reuse = false; break end
+    end
+    for path in pairs(wanted) do
+      if not expanded[path] then reuse = false; break end
+    end
+  end
+  self.root_dir, self.current_dir = root, current
+  if not reuse then
+    self:refresh(false, false)
+    self:restore_expanded_paths(state.expanded_paths)
+  end
+  core.log_quiet("File Tree Navigation restored: reused=%s directory=%s", tostring(reuse), current)
   if state.selection_paths then self:restore_selection_paths(state.selection_paths) end
   if state.scroll then
     self.scroll.x, self.scroll.to.x = state.scroll.x or 0, state.scroll.x or 0
@@ -1560,6 +1580,9 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
   self.project_path_separator_generation = (self.project_path_separator_generation or 0) + 1
   self:invalidate_visual_rows("filetree-project-path-separators")
   self.rendered_dir = self.current_dir
+  self.rendered_project_paths_generation = project_paths.generation()
+  self.rendered_show_hidden = filetree_config.show_hidden
+  self.rendered_sort_mode = self:get_sort_mode()
   self:snapshot_lines()
   self.status_cache = nil
   self.filesystem_watch_update_suppressed = (self.filesystem_watch_update_suppressed or 0) + 1
