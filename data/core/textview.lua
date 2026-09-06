@@ -2695,7 +2695,15 @@ function TextView:has_extra_visual_rows()
 end
 
 function TextView:has_composed_visual_rows()
-  return self:has_collapsed_folds() or self:has_extra_visual_rows()
+  local generation = self.fold_generation or 0
+  local cached = self.__has_composed_visual_rows_cache
+  if cached and cached.generation == generation then return cached.value end
+  local value = self:has_collapsed_folds() or self:has_extra_visual_rows()
+  self.__has_composed_visual_rows_cache = {
+    generation = generation,
+    value = value,
+  }
+  return value
 end
 
 local function visual_row_count_from_provider(view, entry, method, line)
@@ -6513,9 +6521,11 @@ function TextView:normalize_line_hint(hint)
 end
 
 function TextView:measure_line_hint_segments(segments)
+  if not segments then return 0 end
   if segments and segments.__measured_width then return segments.__measured_width end
   local width = 0
-  for _, segment in ipairs(segments or {}) do
+  for index = 1, #segments do
+    local segment = segments[index]
     width = width + segment.font:get_width(segment.text)
   end
   if segments and segments.__normalized_line_hint then
@@ -6639,6 +6649,64 @@ function TextView:get_line_hint_text_end_x(line, x)
   return x + self:get_col_x_offset(line, text_len + 1)
 end
 
+local function build_normalized_line_hint_packet(
+  segments, hint_height, default_y_offset, centered
+)
+  if not (renderer.display_packet and renderer.display_packet.new) then return nil end
+  local builder = renderer.display_packet.new()
+  local tx = 0
+  for index = 1, #segments do
+    local segment = segments[index]
+    local y_offset = centered
+      and math.max(0, (hint_height - segment.font:get_height()) / 2)
+      or default_y_offset
+    tx = builder:add_text(
+      0, 1, segment.font, segment.text, tx, y_offset,
+      segment.color, nil, 2
+    )
+  end
+  return builder:seal()
+end
+
+local function draw_normalized_line_hint_packet(
+  segments, draw_x, hint_y, hint_height, default_y_offset, centered, rebuilding
+)
+  if not segments.__normalized_line_hint then return false end
+  local cached = segments.__display_packet
+  if not cached or cached.hint_height ~= hint_height
+  or cached.default_y_offset ~= default_y_offset or cached.centered ~= centered then
+    if cached and cached.packet then cached.packet:release() end
+    segments.__display_packet = nil
+    local ok, packet = pcall(
+      build_normalized_line_hint_packet,
+      segments, hint_height, default_y_offset, centered
+    )
+    if not ok or not packet then return false end
+    cached = {
+      packet = packet,
+      hint_height = hint_height,
+      default_y_offset = default_y_offset,
+      centered = centered,
+    }
+    segments.__display_packet = cached
+  end
+  local ok, reason = cached.packet:draw(draw_x, hint_y, 0, 1, 1)
+  if ok then return true end
+  if reason == "stale_font" then
+    cached.packet:release()
+    segments.__display_packet = nil
+    if not rebuilding then
+      return draw_normalized_line_hint_packet(
+        segments, draw_x, hint_y, hint_height, default_y_offset, centered, true
+      )
+    end
+  elseif reason == "frame_failed" then
+    core.redraw = true
+    return true
+  end
+  return false
+end
+
 ---Draw a Line Hint for a line, clipped/truncated so it never covers Buffer text.
 ---@param line integer Line number
 ---@param x number Screen x coordinate of the line's text origin
@@ -6716,20 +6784,37 @@ function TextView:draw_line_hint(line, x, y)
   core.push_clip_rect(
     hint_left_limit, hint_y, math.max(0, content_right - hint_left_limit), hint_height
   )
-  for _, segment in ipairs(segments) do
-    local draw_text_start = stats and system.get_time()
-    local segment_y = content_y_offset
-      and hint_y + math.max(0, (hint_height - segment.font:get_height()) / 2)
-      or ty
-    tx = renderer.draw_text(
-      segment.font, segment.text, tx, segment_y, segment.color
-    )
+  local packet_start = stats and system.get_time()
+  local packet_drawn = draw_normalized_line_hint_packet(
+    segments, draw_x, hint_y, hint_height, ty - hint_y,
+    content_y_offset ~= nil
+  )
+  if packet_drawn then
+    tx = draw_x + width
     if stats then
-      local elapsed = (system.get_time() - draw_text_start) * 1000
-      stats.draw_text_calls = stats.draw_text_calls + 1
+      local elapsed = (system.get_time() - packet_start) * 1000
+      stats.draw_text_calls = stats.draw_text_calls + #segments
       stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + elapsed
-      stats.line_hint_draw_text_calls = stats.line_hint_draw_text_calls + 1
+      stats.line_hint_draw_text_calls = stats.line_hint_draw_text_calls + #segments
       stats.line_hint_draw_text_ms = stats.line_hint_draw_text_ms + elapsed
+    end
+  else
+    for index = 1, #segments do
+      local segment = segments[index]
+      local draw_text_start = stats and system.get_time()
+      local segment_y = content_y_offset
+        and hint_y + math.max(0, (hint_height - segment.font:get_height()) / 2)
+        or ty
+      tx = renderer.draw_text(
+        segment.font, segment.text, tx, segment_y, segment.color
+      )
+      if stats then
+        local elapsed = (system.get_time() - draw_text_start) * 1000
+        stats.draw_text_calls = stats.draw_text_calls + 1
+        stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + elapsed
+        stats.line_hint_draw_text_calls = stats.line_hint_draw_text_calls + 1
+        stats.line_hint_draw_text_ms = stats.line_hint_draw_text_ms + elapsed
+      end
     end
   end
   core.pop_clip_rect()
@@ -6769,6 +6854,16 @@ end
 local function draw_render_fragment_text(
   fragment, font, text, x, y, color, opts, background_y, background_height
 )
+  if not fragment.text_lines
+  and not fragment.width
+  and not fragment.background
+  and not fragment.hovered
+  and not fragment.overdraw
+  and not fragment.strikethrough
+  and not fragment.underline
+  and not fragment.text_x_offset then
+    return renderer.draw_text(font, text, x, y, color, opts)
+  end
   local text_width = font:get_width(text, opts)
   local width
   if fragment.text_lines then
@@ -7183,12 +7278,15 @@ function TextView:draw_line_text(line, x, y)
     )
     local content_y = y + content_y_offset
     local _, indent_size = self.buffer:get_indent_info()
-    for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+    local fragments = self:iter_line_render_fragments(render_line)
+    for index = 1, #fragments do
+      local fragment = fragments[index]
       if not fragment.hidden then
         local col1 = fragment.source_col1 or 1
-        local position_row = self:get_line_render_position_row(
-          render_line, col1, (fragment.source_col2 or col1) > col1
-        )
+        local position_row = render_line.position_rows
+          and self:get_line_render_position_row(
+            render_line, col1, (fragment.source_col2 or col1) > col1
+          ) or nil
         local draw_x = fragment.layout_x ~= nil and x + fragment.layout_x
         or position_row and x + self:get_line_render_col_x_offset(
           render_line, col1, position_row

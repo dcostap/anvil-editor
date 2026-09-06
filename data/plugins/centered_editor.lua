@@ -70,6 +70,10 @@ local function settings()
   return config.plugins.centered_editor or centered_editor
 end
 
+local function supports_centering(view)
+  return view and getmetatable(view) == Editor and view.buffer ~= nil
+end
+
 local function pane_for_view(view)
   local perf_start = core.perf_frame_stats and system.get_time()
   perf_frame_add("centered_editor_pane_lookup_calls", 1)
@@ -95,7 +99,7 @@ function M.should_center(view)
     perf_frame_add("centered_editor_should_center_disabled", 1)
     return false
   end
-  if not view or getmetatable(view) ~= Editor or not view.buffer then
+  if not supports_centering(view) then
     perf_frame_add("centered_editor_should_center_non_editor", 1)
     return false
   end
@@ -205,6 +209,7 @@ local function editor_contains_content_x(view, x)
 end
 
 local function with_geometry(view, rect_fn, fn, ...)
+  if not supports_centering(view) then return fn(...) end
   perf_frame_add("centered_editor_with_geometry_calls", 1)
   local should_center = M.should_center(view)
   if not should_center or view.__centered_editor_in_geometry then
@@ -267,6 +272,9 @@ end
 
 save_textview_method("get_presentation_viewport_width")
 function TextView:get_presentation_viewport_width(...)
+  if not supports_centering(self) then
+    return originals.textview.get_presentation_viewport_width(self, ...)
+  end
   if self.__centered_editor_in_geometry then return self.size.x end
   if self.__centered_editor_measuring_content then
     local base_x = get_base_lane_rect(self)
@@ -281,6 +289,9 @@ end
 
 save_textview_method("get_presentation_layout_generation")
 function TextView:get_presentation_layout_generation()
+  if not supports_centering(self) then
+    return originals.textview.get_presentation_layout_generation(self)
+  end
   local cfg = settings()
   if cfg.pane_views_only and self.__centered_editor_pane_membership == nil then
     local pane = pane_for_view(self)
@@ -332,7 +343,8 @@ end
 
 save_textview_method("get_content_offset")
 function TextView:get_content_offset(...)
-  if not M.should_center(self)
+  if not supports_centering(self)
+  or not M.should_center(self)
   or self.__centered_editor_in_geometry
   or self.__centered_editor_in_lane_geometry then
     return originals.textview.get_content_offset(self, ...)
@@ -351,7 +363,7 @@ end
 
 save_textview_method("draw")
 function TextView:draw(...)
-  if not M.should_center(self) then
+  if not supports_centering(self) or not M.should_center(self) then
     return originals.textview.draw(self, ...)
   end
 

@@ -79,14 +79,74 @@ end
 local function draw_segments(view, x, y, segments)
   local default_font = view:get_font()
   local tx = x
-  for _, segment in ipairs(segments or {}) do
+  for index = 1, #(segments or {}) do
+    local segment = segments[index]
     local font = segment.font or default_font
     local ty = y + (view:get_line_height() - font:get_height()) / 2
-    tx = renderer.draw_text(font, segment.text or "", tx, ty, segment.color or style.text, {
-      tab_offset = tx - x,
-    })
+    local text = segment.text or ""
+    if text ~= "" and not text:find("%S") then
+      tx = tx + font:get_width(text, { tab_offset = tx - x })
+    else
+      tx = renderer.draw_text(font, text, tx, ty, segment.color or style.text, {
+        tab_offset = tx - x,
+      })
+    end
   end
   return view:get_line_height()
+end
+
+local function build_commit_packet(view, render_line)
+  if not (renderer.display_packet and renderer.display_packet.new) then return nil end
+  local builder = renderer.display_packet.new()
+  local default_font = view:get_font()
+  local line_height = view:get_line_height()
+  local _, tab_size = view.buffer:get_indent_info()
+  local tx = 0
+  for index = 1, #(render_line.fragments or {}) do
+    local segment = render_line.fragments[index]
+    local font = segment.font or default_font
+    local text = segment.text or ""
+    if text ~= "" and not text:find("%S") then
+      tx = tx + font:get_width(text, { tab_offset = tx })
+    else
+      tx = builder:add_text(
+        0, 1, font, text, tx,
+        (line_height - font:get_height()) / 2,
+        segment.color or style.text, nil, tab_size or 2
+      )
+    end
+  end
+  return builder:seal(), line_height, default_font
+end
+
+local function draw_commit_segments(view, render_line, x, y, rebuilding)
+  local line_height = view:get_line_height()
+  local cached = render_line.__git_commit_packet
+  if not cached or cached.line_height ~= line_height
+  or cached.default_font ~= view:get_font() then
+    if cached and cached.packet then cached.packet:release() end
+    render_line.__git_commit_packet = nil
+    local ok, packet, height, font = pcall(build_commit_packet, view, render_line)
+    if not ok or not packet then
+      return draw_segments(view, x, y, render_line.fragments)
+    end
+    cached = { packet = packet, line_height = height, default_font = font }
+    render_line.__git_commit_packet = cached
+  end
+  local ok, reason = cached.packet:draw(x, y, 0, 1, 1)
+  if ok then return line_height end
+  if reason == "stale_font" then
+    cached.packet:release()
+    render_line.__git_commit_packet = nil
+    if not rebuilding then
+      return draw_commit_segments(view, render_line, x, y, true)
+    end
+  end
+  if reason == "frame_failed" then
+    core.redraw = true
+    return line_height
+  end
+  return draw_segments(view, x, y, render_line.fragments)
 end
 
 local function ref_color(kind)
@@ -232,7 +292,7 @@ local function commit_line_hint(view, line)
   end
   if meta.date and meta.date ~= "" then
     if #segments > 0 then
-      segments[#segments + 1] = { text = "   ", font = font, color = style.dim }
+      segments[#segments].text = segments[#segments].text .. "   "
     end
     segments[#segments + 1] = { text = meta.date, font = date_font, color = style.dim }
   end
@@ -301,6 +361,11 @@ function GitView:pane_view(name)
       local commit_meta = v.git_commit_line_meta and v.git_commit_line_meta[line]
       if commit_meta and commit_meta.role == "message" then
         return draw_segments(v, x, y, { { text = commit_meta.text or "", color = commit_meta.error and style.error or style.dim } })
+      elseif commit_meta and commit_meta.role == "commit" then
+        local render_line = v:get_line_render(line)
+        if render_line then
+          return draw_commit_segments(v, render_line, x, y)
+        end
       end
       local detail_meta = v.git_detail_line_meta and v.git_detail_line_meta[line]
       if detail_meta then
