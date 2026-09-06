@@ -126,11 +126,11 @@ local function open_location(result, opts)
     local view = opts.view or core.active_view
     local buffer = view and view.buffer
     if buffer then
-      if opts.pane and panes.pane_for_view(view) ~= opts.pane then
+      if opts.placement == "new" or (opts.pane and panes.pane_for_view(view) ~= opts.pane) then
         local Editor = require "core.editor"
         view = panes.place(function() return Editor(buffer) end, {
           pane = opts.pane,
-          placement = "current",
+          placement = opts.placement or "current",
           focus = true,
         }) or view
       end
@@ -147,7 +147,7 @@ local function open_location(result, opts)
   if not path then return false, "location has no path" end
   local view = core.open_file(path, {
     pane = opts.pane,
-    placement = "current",
+    placement = opts.placement or "current",
     focus = true,
   })
   if not view or not view.buffer then return false, "failed to open target" end
@@ -345,7 +345,7 @@ function language.goto_declaration(view, opts)
 
   local function open_declaration_results(results)
     if #results == 1 then
-      open_location(results[1], { view = view, pane = opts.pane })
+      open_location(results[1], { view = view, pane = opts.pane, placement = opts.placement })
     elseif #results > 1 then
       local items = {}
       for _, result in ipairs(results) do
@@ -378,7 +378,7 @@ function language.goto_declaration(view, opts)
   local function try_local_declaration(reason)
     local fallback, fallback_reason = intelligence.local_declaration(buffer, line, col)
     if fallback then
-      open_location(fallback, { view = view, pane = opts.pane })
+      open_location(fallback, { view = view, pane = opts.pane, placement = opts.placement })
     else
       try_workspace_declaration(fallback_reason or reason)
     end
@@ -589,6 +589,7 @@ poi.add_activation_provider("language-declaration", {
     local line, col = buffer_view.buffer:get_selection()
     return {
       kind = "declaration",
+      alternate_placement = "new",
       line = line,
       col = col,
       line2 = line,

@@ -122,7 +122,7 @@ test.describe("File Tree entry snapshots", function()
       opened = { path = path, opts = opts }
       return {}
     end
-    ok, result = pcall(command.perform, "core:activate_point_of_interest_split")
+    ok, result = pcall(command.perform, "core:activate_point_of_interest_alternate")
     core.open_file = original_open_file
     if not ok then error(result, 0) end
     test.ok(result)

@@ -324,7 +324,7 @@ test.describe("Command Palette View launchers", function()
     test.equal(pane.current_view, tree)
   end)
 
-  test.it("uses alternate Command Palette activation for split-capable Views", function(context)
+  test.it("opens placement-capable Views in a new Pane Group from the Command Palette", function(context)
     local source = View()
     panes.create { factory = function() return source end }
     fuzzy_searcher.open(">file tree project root")
@@ -343,6 +343,7 @@ test.describe("Command Palette View launchers", function()
       end
     end
     test.not_nil(found)
+    test.not_equal(panes.pane_for_view(found).group, panes.pane_for_view(source).group)
   end)
 
   test.it("opens a File Tree at a selected file path", function(context)
@@ -398,7 +399,7 @@ test.describe("Command Palette View launchers", function()
     test.equal(pane.current_view.root_dir, common.normalize_path(context.folder))
   end)
 
-  test.it("opens a Terminal at a selected folder with split placement", function(context)
+  test.it("opens a Terminal at a selected folder with new Pane Group placement", function(context)
     local source = View()
     local pane = panes.create { factory = function() return source end }
     local options
@@ -414,7 +415,7 @@ test.describe("Command Palette View launchers", function()
 
     test.equal(options.cwd, common.normalize_path(context.folder))
     test.equal(options.pane, pane)
-    test.equal(options.placement, "split")
+    test.equal(options.placement, "new")
   end)
 
   test.it("runs shell text only after explicit Shell mode activation", function(context)

@@ -1374,17 +1374,31 @@ function TerminalView:contains_terminal_cell(x, y)
     and y < top + self.rows * self.cell_height
 end
 
-function TerminalView:activate_point_of_interest(point)
+function TerminalView:activate_point_of_interest(point, opts)
   if not point then return false end
   if point.uri then return self:activate_uri(point.uri) end
   if point.path then
     return core.open_file(point.path, {
+      pane = panes.pane_for_view(self),
+      placement = opts and opts.placement or "current",
+      focus = true,
       line = point.target_line or 1,
       col = point.target_col or 1,
     }) ~= nil
   end
   return false
 end
+
+require("core.poi").add_activation_provider("terminal-cursor", {
+  point_at_caret = function(_, view)
+    if not view:is(TerminalView) or not view.session then return nil end
+    local cursor = view.snapshot and view.snapshot.cursor
+    if not cursor or not cursor.visible then return nil end
+    local point = view:point_of_interest_at(cursor.x, cursor.y)
+    if point then point.alternate_placement = "new" end
+    return point
+  end,
+})
 
 function TerminalView:refresh_snapshot()
   if not self.session then return end

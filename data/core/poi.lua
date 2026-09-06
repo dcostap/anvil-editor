@@ -11,6 +11,7 @@ M.activation_providers = M.activation_providers or {}
 ---Register a provider for context-sensitive Point of Interest Activation.
 ---Providers above priority 0 run before a view's own POIs; providers at or below 0
 ---are fallbacks used only when the Focused View has no activatable POI.
+---A returned POI can set alternate_placement to "new" to open a new Pane Group instead of a split.
 function M.add_activation_provider(id, provider, opts)
   assert(type(id) == "string" and id ~= "", "POI activation provider id must be a non-empty string")
   assert(type(provider) == "table" and type(provider.point_at_caret) == "function",
@@ -262,8 +263,13 @@ command.add(active_view_has_activatable_poi, {
   ["core:activate_point_of_interest"] = function(view, poi)
     M.activate(view, poi, { preserve_focus = false })
   end,
-  ["core:activate_point_of_interest_split"] = function(view, poi)
-    M.activate(view, poi, { placement = "split", preserve_focus = false })
+  ["core:activate_point_of_interest_alternate"] = function(view, poi)
+    local placement = poi.alternate_placement or "split"
+    core.log_quiet("Point of Interest alternate activation: kind=%s placement=%s", tostring(poi.kind), placement)
+    M.activate(view, poi, {
+      placement = placement,
+      preserve_focus = false,
+    })
   end,
 })
 
@@ -271,7 +277,7 @@ keymap.add({
   ["ctrl+alt+,"] = "core:previous_point_of_interest",
   ["ctrl+alt+."] = "core:next_point_of_interest",
   ["alt+r"] = "core:activate_point_of_interest",
-  ["alt+shift+r"] = "core:activate_point_of_interest_split",
+  ["alt+shift+r"] = "core:activate_point_of_interest_alternate",
 })
 
 return M

@@ -202,9 +202,28 @@ test.describe("Terminal View", function()
       if pane then panes.close(pane, { force = true }) else view:on_close() end
     end
     panes.reset_for_tests()
+    if context.activation_path then os.remove(context.activation_path) end
     terminal._set_native_for_tests(nil)
     for font, size in pairs(context.terminal_font_sizes) do font:set_size(size) end
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
+  end)
+
+  test.it("opens the file at the terminal cursor in a new Pane Group", function(context)
+    local path = USERDIR .. PATHSEP .. "terminal-activation.txt"
+    context.activation_path = path
+    local file = assert(io.open(path, "wb"))
+    file:write("first\nsecond\n")
+    file:close()
+    local view = terminal.open { focus = true }
+    local source = panes.active()
+    local group = source.group
+    view.session.hyperlink = function() return "file:///" .. path:gsub("\\", "/") end
+
+    test.ok(command.perform("core:activate_point_of_interest_alternate"))
+
+    test.not_equal(panes.active().group, group)
+    test.equal(source.current_view, view)
+    test.ok(common.path_equals(core.active_view.buffer.abs_filename, path))
   end)
 
   test.it("opens and focuses a Terminal View in Pane 1", function(context)

@@ -33,6 +33,34 @@ test.describe("Fuzzy Searcher preview interaction", function()
     for _, path in ipairs(context.files) do pcall(os.remove, path) end
   end)
 
+  for _, kind in ipairs({ "file", "buffer", "preview" }) do
+    test.it("opens a " .. kind .. " result in a new Pane Group", function(context)
+      local path = temp_file_path("fuzzy-new-group-test.txt")
+      context.files = { path }
+      write_file(path, "first\nsecond\n")
+      local source = core.open_file(path)
+      local source_pane = panes.active()
+      local source_group = source_pane.group
+      fuzzy_searcher.open("")
+      local picker = core.fuzzy_searcher_active_view
+      picker.results = { { kind = "file", file = path, text = path, line = 2, col = 1,
+        buffer = kind == "buffer" and source.buffer or nil } }
+      picker.selected = 1
+      if kind == "preview" then
+        test.not_nil(picker:update_preview_view())
+        test.ok(picker:cycle_local_focus(1))
+      end
+
+      test.ok(command.perform("core:activate_point_of_interest_alternate"))
+
+      test.not_equal(panes.active().group, source_group)
+      test.equal(source_pane.group, source_group)
+      test.equal(source_pane.current_view, source)
+      test.equal(core.active_view.buffer, source.buffer)
+      test.not_equal(core.active_view, source)
+    end)
+  end
+
   test.it("does not show a Current Line Highlight in a passive file preview", function(context)
     local path = temp_file_path("fuzzy-passive-preview-highlight-test.txt")
     context.files = { path }

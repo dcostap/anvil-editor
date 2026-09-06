@@ -263,7 +263,7 @@ local function modal_picker_command_allowed(cmd)
   return cmd:match("^fuzzy:") ~= nil
       or cmd == "core:open_text_capture"
       or cmd == "core:activate_point_of_interest"
-      or cmd == "core:activate_point_of_interest_split"
+      or cmd == "core:activate_point_of_interest_alternate"
       or cmd == "pane:focus_local_next"
       or cmd == "pane:focus_local_previous"
 end
@@ -303,7 +303,7 @@ local function modal_picker_command(stroke, picker)
   -- Ctrl+Enter is also claimed by local IntelliJ conflict disabling. Keep the
   -- picker modal command authoritative even when the global keymap was later
   -- overwritten.
-  if stroke == "ctrl+return" then return "fuzzy:confirm_side" end
+  if stroke == "ctrl+return" then return "fuzzy:confirm_new_group" end
   local cmd = modal_command(stroke, modal_picker_command_allowed)
   if cmd == "fuzzy:copy_selected" then
     local textview = picker and picker.input and picker.input.textview
@@ -6467,7 +6467,7 @@ function FSView:reveal_selected_in_explorer()
   command.perform("editor:reveal_active_file_in_explorer", path)
 end
 
-function FSView:open_file_result(r, target_side, restore)
+function FSView:open_file_result(r, new_group, restore)
   local path = fullpath(r)
   local file_open = fuzzy_searcher._perf_file_open_begin(path, "fuzzy_searcher")
   local line, col, line2, col2 = r.line or 1, r.col or 1, nil, nil
@@ -6489,8 +6489,7 @@ function FSView:open_file_result(r, target_side, restore)
     end
     local result = table.pack(open(path, {
       pane = source_pane,
-      placement = target_side and "split" or "current",
-      direction = target_side and "right" or nil,
+      placement = new_group and "new" or "current",
       line = line,
       col = col,
       line2 = line2,
@@ -6554,7 +6553,7 @@ function FSView:open_file_result(r, target_side, restore)
   return view
 end
 
-function FSView:open_focused_preview(target_side)
+function FSView:open_focused_preview(new_group)
   local preview = self.preview_view
   local result = self:selected_result()
   if not (preview and preview:extends(TextView) and result and result.file) then return false end
@@ -6565,20 +6564,20 @@ function FSView:open_focused_preview(target_side)
     last_selection = state.last_selection,
     scroll = { x = preview.scroll.x, y = preview.scroll.y },
   }
-  return self:open_file_result(result, target_side, restore)
+  return self:open_file_result(result, new_group, restore)
 end
 
-function FSView:activate_create_path(r, target_side)
+function FSView:activate_create_path(r, new_group)
   local path = common.normalize_path(r.abs_path or r.path)
   local info = path and system.get_file_info(path)
   if info then
     if info.type == "dir" then
       self:close()
-      if target_side then core.open_project_in_new_window(path)
+      if new_group then core.open_project_in_new_window(path)
       else core.open_project_in_same_window(path) end
       return
     end
-    return self:open_file_result({ kind = "path", file = path, abs_path = path, line = r.line }, target_side)
+    return self:open_file_result({ kind = "path", file = path, abs_path = path, line = r.line }, new_group)
   end
 
   if r.is_folder then
@@ -6615,19 +6614,18 @@ function FSView:activate_create_path(r, target_side)
   end
   fp:close()
   core.log_quiet("Fuzzy Path Search: created file path_len=%d", #path)
-  return self:open_file_result({ kind = "path", file = path, abs_path = path, line = r.line }, target_side)
+  return self:open_file_result({ kind = "path", file = path, abs_path = path, line = r.line }, new_group)
 end
 
-function FSView:confirm_folder_open(r, target_side)
+function FSView:confirm_folder_open(r, new_group)
   local path = common.normalize_path(r.abs_path or r.path or r.project)
   if not path then return false end
   local default_action = r.kind == "folder" and "filetree"
-    or ((target_side or r.kind == "new_project") and "project_new" or "project_here")
+    or ((new_group or r.kind == "new_project") and "project_new" or "project_here")
   local context = {
     source_view = self.source_view,
     source_pane = panes.find(self.source_pane) or panes.active(),
-    placement = target_side and "split" or "current",
-    direction = target_side and "right" or nil,
+    placement = new_group and "new" or "current",
   }
   local options = {
     { text = "Open File Tree", action = "filetree", default_yes = default_action == "filetree" },
@@ -6659,7 +6657,7 @@ function FSView:confirm_folder_open(r, target_side)
   return true
 end
 
-function FSView:confirm(target_side)
+function FSView:confirm(new_group)
   local r = self:selected_result()
   if not r then return end
   if r.kind == "shell_command" then
@@ -6673,12 +6671,11 @@ function FSView:confirm(target_side)
   if r.kind == "command" then
     local cmd = r.command
     local metadata = command.get_metadata(cmd) or {}
-    local placement = target_side and metadata.supports_placement and "split" or "current"
+    local placement = new_group and metadata.supports_placement and "new" or "current"
     local context = {
       source_view = self.source_view,
       source_pane = panes.find(self.source_pane) or panes.active(),
       placement = placement,
-      direction = placement == "split" and "right" or nil,
     }
     remember_command(cmd)
     self:close()
@@ -6709,8 +6706,7 @@ function FSView:confirm(target_side)
     local context = {
       source_view = self.source_view,
       source_pane = panes.find(self.source_pane) or panes.active(),
-      placement = target_side and "split" or "current",
-      direction = target_side and "right" or nil,
+      placement = new_group and "new" or "current",
     }
     self.file_picker_finished = true
     self:close()
@@ -6719,11 +6715,11 @@ function FSView:confirm(target_side)
     return
   end
   if r.kind == "create_path" then
-    return self:activate_create_path(r, target_side)
+    return self:activate_create_path(r, new_group)
   end
   if r.kind == "folder" or r.kind == "project" or r.kind == "new_project"
       or (r.kind == "path" and r.is_folder and r.project) then
-    return self:confirm_folder_open(r, target_side)
+    return self:confirm_folder_open(r, new_group)
   end
   if r.buffer and r.line then
     local buffer = r.buffer
@@ -6737,13 +6733,12 @@ function FSView:confirm(target_side)
     fuzzy_searcher._perf_file_open_stage_end(close_stage)
     fuzzy_searcher._perf_file_open_mark("open_buffer_requested", string.format("line=%d col=%d", r.line, r.col or 1))
     local view = source_view
-    if not (view and view.buffer == buffer) then
+    if new_group or not (view and view.buffer == buffer) then
       local Editor = require "core.editor"
       local place_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_place_existing_buffer")
       view = panes.place(function() return Editor(buffer) end, {
         pane = source_pane,
-        placement = target_side and "split" or "current",
-        direction = target_side and "right" or nil,
+        placement = new_group and "new" or "current",
         focus = true,
       })
       fuzzy_searcher._perf_file_open_stage_end(place_stage)
@@ -6757,7 +6752,7 @@ function FSView:confirm(target_side)
     return
   end
   if r.file then
-    return self:open_file_result(r, target_side)
+    return self:open_file_result(r, new_group)
   end
 end
 
@@ -7059,7 +7054,7 @@ function FSView:draw_open_content()
       draw_highlighted_text(font, display_root(r.path), px, py + lh, preview_w, style.text, {})
       renderer.draw_text(font, "Enter: create", px, py + lh * 3, style.dim)
       if not r.is_folder then
-        renderer.draw_text(font, "Ctrl+Enter: create and open in a split", px, py + lh * 4, style.dim)
+        renderer.draw_text(font, "Ctrl+Enter: create and open in a new Pane Group", px, py + lh * 4, style.dim)
       end
       core.pop_clip_rect()
     elseif r and (r.kind == "project" or (r.kind == "path" and r.is_folder)) then
@@ -7105,7 +7100,7 @@ local function picker_confirm()
   if view then view:confirm(false) end
 end
 
-local function picker_confirm_side()
+local function picker_confirm_new_group()
   local view = current_picker()
   if view then view:confirm(true) end
 end
@@ -7119,26 +7114,28 @@ poi.add_activation_provider("fuzzy-searcher-result", {
       local line, col, line2, col2 = focused_view.buffer:get_selection()
       return {
         kind = "fuzzy-preview-position",
+        alternate_placement = "new",
         line = line,
         col = col,
         line2 = line2,
         col2 = col2,
         text_bounds = true,
         activate = function(_, _, opts)
-          return view:open_focused_preview(opts and opts.placement == "split") ~= false
+          return view:open_focused_preview(opts and opts.placement == "new") ~= false
         end,
       }
     end
     if view:is_preview_focused() then return nil end
     return {
       kind = "fuzzy-search-result",
+      alternate_placement = "new",
       line = 1,
       col = 1,
       line2 = 1,
       col2 = 2,
       text_bounds = true,
       activate = function(_, _, opts)
-        view:confirm(opts and opts.placement == "split")
+        view:confirm(opts and opts.placement == "new")
         return true
       end,
     }
@@ -7367,7 +7364,7 @@ command.add(function()
   return view ~= nil and not view:is_preview_focused()
 end, {
   ["fuzzy:confirm"] = picker_confirm,
-  ["fuzzy:confirm_side"] = picker_confirm_side,
+  ["fuzzy:confirm_new_group"] = picker_confirm_new_group,
   ["fuzzy:reveal_selected_in_explorer"] = picker_reveal_selected_in_explorer,
   ["fuzzy:fill_prompt_from_selected"] = function()
     local view = current_picker()
@@ -7420,7 +7417,7 @@ core.fuzzy_searcher_install_picker_keymaps = function()
     ["escape"] = "fuzzy:close",
     ["return"] = "fuzzy:confirm",
     ["keypad enter"] = "fuzzy:confirm",
-    ["ctrl+return"] = "fuzzy:confirm_side",
+    ["ctrl+return"] = "fuzzy:confirm_new_group",
     ["ctrl+l"] = "fuzzy:open_current_file",
     ["ctrl+shift+l"] = "fuzzy:reveal_selected_in_explorer",
     ["ctrl+c"] = "fuzzy:copy_selected",

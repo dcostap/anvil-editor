@@ -163,7 +163,7 @@ test.describe("Fuzzy Searcher preview", function()
     test.ok(ph > 0)
   end)
 
-  test.it("focuses an Editor in a split Pane on alternate acceptance", function(context)
+  test.it("focuses an Editor in a new Pane Group on alternate acceptance", function(context)
     local path = temp_file_path("fuzzy-confirm-side-focus-test.txt")
     context.files = { path }
     write_file(path, "side target\n")
@@ -179,11 +179,12 @@ test.describe("Fuzzy Searcher preview", function()
     }
     picker.selected = 1
 
-    test.ok(command.perform("core:activate_point_of_interest_split"))
+    test.ok(command.perform("core:activate_point_of_interest_alternate"))
 
     local view = core.active_view
     test.ok(view and view.buffer and view.buffer.abs_filename == path, "expected side-accepted file to become active")
     test.not_equal(panes.pane_for_view(view), context.source_pane)
+    test.not_equal(panes.pane_for_view(view).group, context.source_pane.group)
     test.equal(panes.count(), 2)
     test.ok(file_context.is_editor_view(view), "expected accepted file to be focused as an Editor")
   end)
@@ -213,7 +214,7 @@ test.describe("Fuzzy Searcher preview", function()
       { kind = "project", label = project, project = project },
     })
 
-    test.ok(press_command_binding("core:activate_point_of_interest_split"), "expected alternate activation input to be handled")
+    test.ok(press_command_binding("core:activate_point_of_interest_alternate"), "expected alternate activation input to be handled")
     test.equal(opened, project)
     test.is_nil(core.fuzzy_searcher_active_view, "expected activation to close the picker")
   end)

@@ -95,47 +95,59 @@ test.describe("language navigation", function()
     symbol_index.reset_for_tests()
   end)
 
-  test.it("goes to exact Tree-sitter workspace symbol when LSP has no declaration", function(context)
-    local main_path = join_path(context.temp_root, "main.odin")
-    local defs_path = join_path(context.temp_root, "defs.odin")
-    write_file(main_path, [[package demo
+  for _, alternate in ipairs({ false, true }) do
+    test.it("goes to a workspace declaration in the " .. (alternate and "new Pane Group" or "current Pane"), function(context)
+      local main_path = join_path(context.temp_root, "main.odin")
+      local defs_path = join_path(context.temp_root, "defs.odin")
+      write_file(main_path, [[package demo
 
 main :: proc() {
   target()
 }
 ]])
-    write_file(defs_path, [[package demo
+      write_file(defs_path, [[package demo
 
 target :: proc() {}
 ]])
 
-    local view = core.open_file(main_path)
-    core.set_active_view(view)
-    test.ok(wait_ready(view.buffer))
-    view.buffer:insert(5, 1, "// local edit\n")
-    test.ok(view.buffer:is_dirty())
-    view:with_selection_state(function()
-      view.buffer:set_selection(4, 5)
-    end)
+      local view = core.open_file(main_path)
+      core.set_active_view(view)
+      test.ok(wait_ready(view.buffer))
+      view.buffer:insert(5, 1, "// local edit\n")
+      test.ok(view.buffer:is_dirty())
+      view:with_selection_state(function()
+        view.buffer:set_selection(4, 5)
+      end)
 
-    test.ok(command.perform("editor:go_to_declaration", view))
-    test.ok(wait_until(function()
-      local active = core.active_view
-      return active and active.buffer and common.path_equals(active.buffer.abs_filename, defs_path)
-    end))
+      local source_pane = panes.active()
+      local source_group = source_pane.group
+      core.set_active_view(view)
+      test.ok(command.perform(alternate and "core:activate_point_of_interest_alternate"
+        or "core:activate_point_of_interest"))
+      test.ok(wait_until(function()
+        local active = core.active_view
+        return active and active.buffer and common.path_equals(active.buffer.abs_filename, defs_path)
+      end))
 
-    local project_views = 0
-    for _, item in ipairs(panes.views(panes.active())) do
-      if item.buffer and item.buffer.abs_filename and common.path_belongs_to(item.buffer.abs_filename, context.temp_root) then
-        project_views = project_views + 1
+      local project_views = 0
+      for _, item in ipairs(panes.views(panes.active())) do
+        if item.buffer and item.buffer.abs_filename and common.path_belongs_to(item.buffer.abs_filename, context.temp_root) then
+          project_views = project_views + 1
+        end
       end
-    end
-    test.equal(project_views, 2, "dirty source Editor should remain in Pane history")
-    local buffer = core.active_view.buffer
-    local line1, col1, line2, col2 = buffer:get_selection(true)
-    test.equal(line1, 3)
-    test.equal(col1, 1)
-    test.equal(line2, 3)
-    test.equal(col2, 7)
-  end)
+      test.equal(project_views, alternate and 1 or 2)
+      if alternate then
+        test.not_equal(panes.active().group, source_group)
+        test.equal(source_pane.current_view, view)
+      else
+        test.equal(panes.active(), source_pane)
+      end
+      local buffer = core.active_view.buffer
+      local line1, col1, line2, col2 = buffer:get_selection(true)
+      test.equal(line1, 3)
+      test.equal(col1, 1)
+      test.equal(line2, 3)
+      test.equal(col2, 7)
+    end)
+  end
 end)

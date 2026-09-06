@@ -221,7 +221,7 @@ test.describe("Project File Search folders", function()
     end))
   end)
 
-  test.it("opens a folder result in a split with alternate activation", function(context)
+  test.it("opens a folder result in a new Pane Group with alternate activation", function(context)
     fuzzy_searcher.open("empty nested")
     local picker = assert(core.fuzzy_searcher_active_view)
     local index
@@ -236,6 +236,7 @@ test.describe("Project File Search folders", function()
     select_folder_action("filetree")
     test.ok(wait_until(function() return panes.count() == 2 end))
     test.equal(context.pane.current_view, context.source)
+    test.not_equal(panes.active().group, context.pane.group)
     test.equal(panes.active().current_view.root_dir, common.normalize_path(context.empty))
   end)
 

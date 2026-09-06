@@ -420,7 +420,7 @@ test.describe("autocomplete batch behavior", function()
 
     autocomplete.trigger()
     test.ok(autocomplete.is_open())
-    test.ok(command.perform("core:activate_point_of_interest_split"))
+    test.ok(command.perform("core:activate_point_of_interest_alternate"))
 
     local target_view = core.active_view
     test.equal(panes.count(), 2)
