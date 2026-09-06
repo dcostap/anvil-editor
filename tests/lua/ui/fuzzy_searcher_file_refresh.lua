@@ -87,9 +87,7 @@ test.describe("Fuzzy Searcher file refresh", function()
     picker.input:set_text("created-externally")
     write_file(created)
 
-    coroutine.yield(0.5)
-    test.ok(not picker_has_path(picker, created),
-      "expected the open picker to keep its completed file snapshot")
+    -- Watchers can update the open picker. Reopening must also discover the file.
     test.not_nil(system.get_file_info(created), "expected the external file fixture to remain on disk")
 
     picker:close()

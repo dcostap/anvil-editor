@@ -115,6 +115,48 @@ test.describe("Project File Search folders", function()
     test.ok(wait_until(function() return result_for_path(picker.results, context.empty) ~= nil end))
   end)
 
+  test.it("keeps folder results available while replacing a large index", function(context)
+    for i = 1, 1000 do
+      test.ok(common.mkdirp(context.root .. PATHSEP .. "folder-" .. i))
+    end
+    fuzzy_searcher.open("empty nested")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return result_for_path(picker.results, context.empty) ~= nil end))
+    picker:close()
+    fuzzy_searcher.open("empty nested")
+    picker = assert(core.fuzzy_searcher_active_view)
+    local deadline = system.get_time() + 10
+    local alternate = false
+    repeat
+      alternate = not alternate
+      picker.input:set_text(alternate and "empty/nested" or "empty nested")
+      coroutine.yield(0.01)
+      test.not_nil(result_for_path(picker.results, context.empty),
+        "Folder results disappeared while their replacement was still building")
+    until not fuzzy_searcher._test.file_index_status().indexing or system.get_time() >= deadline
+    test.not_ok(fuzzy_searcher._test.file_index_status().indexing)
+  end)
+
+  test.it("uses updated Project Path labels when they change during prewarm", function(context)
+    local target = context.empty .. PATHSEP .. "labelled.lua"
+    write_file(target)
+    project_paths.configure_workspace {
+      vendored = { { path = context.empty, label = "Old" } },
+    }
+    test.ok(fuzzy_searcher._test.prewarm_file_index_for_test())
+    local entry = project_paths.resolve(context.empty).entry
+    test.ok(project_paths.set_label(entry.id, "Renamed"))
+    test.ok(wait_until(function()
+      local status = fuzzy_searcher._test.file_index_status()
+      return status.native and not status.indexing
+    end))
+
+    fuzzy_searcher.open("labelled")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return result_for_path(picker.results, target) ~= nil end))
+    test.equal(result_for_path(picker.results, target).root_label, "Renamed")
+  end)
+
   test.it("ranks a matching folder before files inside it", function(context)
     fuzzy_searcher.open("src widgets")
     local picker = assert(core.fuzzy_searcher_active_view)

@@ -634,7 +634,7 @@ local function native_file_index_ready()
 end
 
 function fuzzy_searcher.file_roots_signature(roots, include_ignored)
-  local parts = {}
+  local parts = { tostring(project_paths.generation()) }
   for _, root in ipairs(roots or {}) do
     parts[#parts + 1] = root.id or root.path
     parts[#parts + 1] = root.path
@@ -751,6 +751,8 @@ local function sync_project_file_subscriptions(roots)
   end
 end
 
+local prewarm_file_index
+
 local function start_file_index(roots, signature, reason, include_ignored)
   if fuzzy_searcher.files_indexing then return false end
 
@@ -769,19 +771,40 @@ local function start_file_index(roots, signature, reason, include_ignored)
   fuzzy_searcher.files_refresh_requested = false
   fuzzy_searcher.files_scan_generation = fuzzy_searcher.files_scan_generation + 1
   local scan_generation = fuzzy_searcher.files_scan_generation
+  local paths_generation = project_paths.generation()
+  local function cancel_if_obsolete()
+    if scan_generation ~= fuzzy_searcher.files_scan_generation
+      or fuzzy_searcher.files_cache_root ~= signature then return true end
+    if paths_generation ~= project_paths.generation() then
+      core.log_quiet("Fuzzy file index: restarting after Project Paths changed")
+      cancel_file_index_scan()
+      if active_view then
+        fuzzy_searcher.refresh_file_index_for_picker_open()
+      else
+        prewarm_file_index()
+      end
+      return true
+    end
+    return false
+  end
   core.log_quiet("Fuzzy file index scan started (%s)", tostring(reason or "picker-open"))
-  core.add_thread(function()
+  core.add_background_thread(function()
     coroutine.yield(0.05)
     local scan_failed = false
     local scan_started = system.get_time()
     local native_feed_seconds = 0
     local scanned_directories = {}
     local scanned_directory_keys = {}
+    local slice_deadline = system.get_time() + 0.002
+    local function yield_slice(i)
+      if i % 64 == 0 and system.get_time() >= slice_deadline then
+        coroutine.yield(0)
+        slice_deadline = system.get_time() + 0.002
+      end
+    end
 
     for root_index, root in ipairs(roots) do
-      if scan_generation ~= fuzzy_searcher.files_scan_generation
-        or fuzzy_searcher.files_cache_root ~= signature
-      then
+      if cancel_if_obsolete() then
         pcall(native_builder.free, native_builder)
         return
       end
@@ -800,13 +823,18 @@ local function start_file_index(roots, signature, reason, include_ignored)
         )
         break
       end
-      for _, directory in ipairs(directories or project_files.directories(root.path, {
+      for i, directory in ipairs(directories or project_files.directories(root.path, {
         include_ignored = include_ignored,
       }) or {}) do
         local key = common.path_compare_key(directory)
         if key and not scanned_directory_keys[key] then
           scanned_directory_keys[key] = true
           scanned_directories[#scanned_directories + 1] = directory
+        end
+        yield_slice(i)
+        if cancel_if_obsolete() then
+          pcall(native_builder.free, native_builder)
+          return
         end
       end
       local chunk, chunk_bytes = {}, 0
@@ -815,9 +843,7 @@ local function start_file_index(roots, signature, reason, include_ignored)
         chunk[#chunk + 1] = value
         chunk_bytes = chunk_bytes + #value
         if chunk_bytes >= 256 * 1024 then
-          if scan_generation ~= fuzzy_searcher.files_scan_generation
-            or fuzzy_searcher.files_cache_root ~= signature
-          then
+          if cancel_if_obsolete() then
             pcall(native_builder.free, native_builder)
             return
           end
@@ -835,9 +861,7 @@ local function start_file_index(roots, signature, reason, include_ignored)
       end
     end
 
-    if scan_generation ~= fuzzy_searcher.files_scan_generation
-      or fuzzy_searcher.files_cache_root ~= signature
-    then
+    if cancel_if_obsolete() then
       pcall(native_builder.free, native_builder)
       return
     end
@@ -862,40 +886,53 @@ local function start_file_index(roots, signature, reason, include_ignored)
         core.log_quiet("Fuzzy native file index finalization failed: %s",
           tostring(task_started and native_index or finish_task))
       else
-        if scan_generation ~= fuzzy_searcher.files_scan_generation
-          or fuzzy_searcher.files_cache_root ~= signature
-        then
+        if cancel_if_obsolete() then
           pcall(native_index.free, native_index)
           return
         end
-        local previous_index = fuzzy_searcher.files_fuzzy_index
-        fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
-        fuzzy_searcher.files_cache = nil
-        fuzzy_searcher.files_metadata = {}
-        fuzzy_searcher.folders_cache = {}
+        local metadata, folders = {}, {}
         local folder_texts = {}
-        for _, directory in ipairs(scanned_directories) do
+        local folders_started = system.get_time()
+        local folder_work_seconds = 0
+        local folder_slice_started = folders_started
+        for i, directory in ipairs(scanned_directories) do
           local meta = project_paths.display_path(directory, { kind = "files" })
           if meta then
             if meta.relpath == "" then
               meta.text = meta.root_label or common.basename(directory)
             end
             meta.is_folder = true
-            local text = fuzzy_searcher.remember_file_metadata(meta)
+            local text = fuzzy_searcher.remember_file_metadata(meta, metadata)
             if text then
               meta.text = text
-              fuzzy_searcher.folders_cache[#fuzzy_searcher.folders_cache + 1] = meta
+              folders[#folders + 1] = meta
               folder_texts[#folder_texts + 1] = text
             end
           end
+          if i % 64 == 0 then
+            folder_work_seconds = folder_work_seconds + system.get_time() - folder_slice_started
+            yield_slice(i)
+            folder_slice_started = system.get_time()
+            if cancel_if_obsolete() then
+              pcall(native_index.free, native_index)
+              return
+            end
+          end
         end
-        if fuzzy_searcher.folders_fuzzy_index and fuzzy_searcher.folders_fuzzy_index.free then
-          pcall(function() fuzzy_searcher.folders_fuzzy_index:free() end)
-        end
+        folder_work_seconds = folder_work_seconds + system.get_time() - folder_slice_started
         local folder_index_ok, folder_index = pcall(
           fuzzy_native.index, folder_texts, { mode = "path" }
         )
+        local previous_index = fuzzy_searcher.files_fuzzy_index
+        local previous_folders = fuzzy_searcher.folders_fuzzy_index
+        fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
+        fuzzy_searcher.files_cache = nil
+        fuzzy_searcher.files_metadata = metadata
+        fuzzy_searcher.folders_cache = folders
         fuzzy_searcher.folders_fuzzy_index = folder_index_ok and folder_index or nil
+        if previous_folders and previous_folders.free then
+          pcall(previous_folders.free, previous_folders)
+        end
         fuzzy_searcher.files_materialized_cache = nil
         fuzzy_searcher.files_materialized_generation = -1
         fuzzy_searcher.files_fuzzy_index = native_index
@@ -911,6 +948,8 @@ local function start_file_index(roots, signature, reason, include_ignored)
           total_ms = (system.get_time() - scan_started) * 1000,
           native_feed_ms = native_feed_seconds * 1000,
           native_finish_ms = finish_seconds * 1000,
+          folder_work_ms = folder_work_seconds * 1000,
+          folder_elapsed_ms = (system.get_time() - folders_started) * 1000,
         }
         fuzzy_searcher.files_skip_next_picker_refresh = completed_reason == "project-prewarm"
           and active_view == nil
@@ -928,6 +967,8 @@ local function start_file_index(roots, signature, reason, include_ignored)
           native_feed_seconds * 1000,
           finish_seconds * 1000
         )
+        core.log_quiet("Fuzzy folder paths: folders=%d work_ms=%.3f elapsed_ms=%.3f",
+          #folders, folder_work_seconds * 1000, (system.get_time() - folders_started) * 1000)
       end
     end
     local refresh_requested = fuzzy_searcher.files_refresh_requested
@@ -963,7 +1004,7 @@ local function ensure_file_index()
   start_file_index(roots, signature, "initial-picker-open", include_ignored)
 end
 
-local function prewarm_file_index()
+prewarm_file_index = function()
   local roots = project_paths.search_roots("files")
   if #roots == 0 then return false end
   local signature = fuzzy_searcher.file_roots_signature(roots, false)
@@ -7367,7 +7408,7 @@ local cli = package.loaded["core.cli"]
 if not ((cli and cli.last_command == "test")
   or (type(ARGS) == "table" and ARGS[2] == "test"))
 then
-  core.add_thread(function()
+  core.add_background_thread(function()
     -- Workspace Project Paths are restored just after plugins load. Let that
     -- settle, then build the first immutable file snapshot before the picker
     -- is needed.
