@@ -84,6 +84,66 @@ test.describe("automatic Editor Navigation History", function()
     test.equal(panes.history_length(pane), 3)
   end)
 
+  test.it("Back merges repeated nearby departures with the forward checkpoint", function()
+    local pane = panes.create { factory = make_editor }
+    local view = pane.current_view
+    move_one_line_at_a_time(view, 10)
+    panes.record_location(pane)
+    move_one_line_at_a_time(view, 50)
+    panes.record_location(pane)
+    panes.back(pane)
+
+    for _, line in ipairs { 51, 52, 52 } do
+      move_one_line_at_a_time(view, line)
+      test.ok(command.perform("core:navigate_back"))
+      test.equal(view:get_selection_state().selections[1], 10)
+      test.equal(panes.history_length(pane), 3)
+    end
+    test.ok(command.perform("core:navigate_forward"))
+    test.equal(view:get_selection_state().selections[1], 52)
+  end)
+
+  test.it("Forward continues past a merged departure checkpoint", function()
+    local pane = panes.create { factory = make_editor }
+    local view = pane.current_view
+    for _, line in ipairs { 10, 50, 80 } do
+      move_one_line_at_a_time(view, line)
+      panes.record_location(pane)
+    end
+    panes.back(pane)
+    panes.back(pane)
+    move_one_line_at_a_time(view, 51)
+
+    test.ok(command.perform("core:navigate_forward"))
+    test.equal(view:get_selection_state().selections[1], 80)
+    test.equal(panes.history_length(pane), 4)
+    test.ok(command.perform("core:navigate_back"))
+    test.equal(view:get_selection_state().selections[1], 51)
+  end)
+
+  test.it("does not merge a departure with another View's forward checkpoint", function()
+    local pane = panes.create { factory = make_editor }
+    local view = pane.current_view
+    view.buffer.abs_filename = USERDIR .. PATHSEP .. "navigation-a.txt"
+    local other = make_editor()
+    other.buffer.abs_filename = USERDIR .. PATHSEP .. "navigation-b.txt"
+    move_one_line_at_a_time(other, 51)
+    panes.present(other, { pane = pane })
+    panes.back(pane)
+    move_one_line_at_a_time(view, 51)
+
+    test.ok(command.perform("core:navigate_back"))
+    test.equal(pane.current_view, view)
+    test.equal(view:get_selection_state().selections[1], 1)
+    test.ok(command.perform("core:navigate_forward"))
+    test.equal(pane.current_view, view)
+    test.equal(view:get_selection_state().selections[1], 51)
+    test.ok(command.perform("core:navigate_forward"))
+    test.equal(pane.current_view, other)
+    test.equal(other:get_selection_state().selections[1], 51)
+    test.equal(panes.history_length(pane), 3)
+  end)
+
   test.it("Back and Forward do not record nearby departures or duplicates", function()
     local pane = panes.create { factory = make_editor }
     local view = pane.current_view

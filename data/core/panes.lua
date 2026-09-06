@@ -842,6 +842,24 @@ function M.history_length(target)
   return pane and #pane.history.entries or 0
 end
 
+local function matches_navigation_place(entry, view, state, opts)
+  if not entry or entry.view ~= view then return false end
+  if navigation_state_key(view, entry.state) == navigation_state_key(view, state) then
+    return true
+  end
+  if not opts.nearby_lines or not opts.nearby_columns then return false end
+  local old_line, old_col = navigation_position(entry.state)
+  local line, col = navigation_position(state)
+  if not old_line or not line then return false end
+  if opts.kind == "edit" and entry.kind == "edit" then
+    return math.abs(old_line - line) <= math.max(
+      0, math.floor(tonumber(opts.edit_near_lines) or 1)
+    )
+  end
+  return math.abs(old_line - line) <= opts.nearby_lines
+    and (old_line ~= line or math.abs(old_col - col) <= opts.nearby_columns)
+end
+
 function M.record_location(target, opts)
   opts = opts or {}
   local pane = M.find(target or M.active_pane)
@@ -851,37 +869,25 @@ function M.record_location(target, opts)
   if view ~= pane.current_view then return false end
   local state = opts.state or capture_navigation_state(view)
   local current = history.entries[history.index]
-  if current and navigation_state_key(current.view, current.state)
-      == navigation_state_key(view, state) then
+  if matches_navigation_place(current, view, state, opts) then
     if opts.kind == "edit" then
       current.kind = "edit"
       current.state = state
+      log_navigation_history(pane, "merge-edit-place")
+      after_mutation("merged edit location in " .. pane.id)
     end
     return false
   end
-  if current and current.view == view and opts.nearby_lines and opts.nearby_columns then
-    local old_line, old_col = navigation_position(current.state)
-    local line, col = navigation_position(state)
-    local nearby
-    if old_line and line then
-      if opts.kind == "edit" and current.kind == "edit" then
-        nearby = math.abs(old_line - line) <= math.max(
-          0, math.floor(tonumber(opts.edit_near_lines) or 1)
-        )
-      else
-        nearby = math.abs(old_line - line) <= opts.nearby_lines
-          and (old_line ~= line or math.abs(old_col - col) <= opts.nearby_columns)
-      end
+  local next_entry = history.entries[history.index + 1]
+  if matches_navigation_place(next_entry, view, state, opts) then
+    if opts.kind == "edit" or next_entry.kind ~= "edit" then
+      next_entry.state = state
+      next_entry.kind = opts.kind or next_entry.kind
     end
-    if nearby then
-      if opts.kind == "edit" then
-        current.state = state
-        current.kind = "edit"
-        log_navigation_history(pane, "merge-edit-place")
-        after_mutation("merged edit location in " .. pane.id)
-      end
-      return false
-    end
+    history.index = history.index + 1
+    log_navigation_history(pane, "merge-forward-place")
+    after_mutation("merged forward location in " .. pane.id)
+    return false
   end
   local index = history.index + 1
   table.insert(history.entries, index, { view = view, state = state, kind = opts.kind })
