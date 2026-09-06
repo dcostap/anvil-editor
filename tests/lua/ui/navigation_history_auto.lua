@@ -54,6 +54,40 @@ test.describe("automatic Editor Navigation History", function()
     core.active_view = old_active_view
   end)
 
+  test.it("compresses repeated start and end Buffer jumps", function()
+    local pane = panes.create { factory = make_editor }
+    local view = pane.current_view
+    for _ = 1, 3 do
+      test.ok(command.perform("core:move_to_start_of_buffer"))
+      test.ok(command.perform("core:move_to_end_of_buffer"))
+    end
+    test.equal(panes.history_length(pane), 2)
+    test.equal(view:get_selection_state().selections[1], 100)
+    test.ok(command.perform("core:navigate_back"))
+    test.equal(view:get_selection_state().selections[1], 1)
+    test.ok(command.perform("core:navigate_forward"))
+    test.equal(view:get_selection_state().selections[1], 100)
+  end)
+
+  test.it("keeps the latest saved scroll when exact caret sequences repeat", function()
+    local pane = panes.create { factory = make_editor }
+    local view = pane.current_view
+    for _, place in ipairs { { 10, 20 }, { 1, 40 }, { 10, 60 } } do
+      view:set_navigation_state {
+        selection_state = { selections = { place[1], 1, place[1], 1 }, last_selection = 1 },
+        scroll = { x = 0, y = place[2] },
+      }
+      panes.record_location(pane)
+    end
+    test.equal(panes.history_length(pane), 2)
+    panes.back(pane)
+    test.equal(view:get_selection_state().selections[1], 1)
+    test.equal(view:get_navigation_state().scroll.y, 40)
+    panes.forward(pane)
+    test.equal(view:get_selection_state().selections[1], 10)
+    test.equal(view:get_navigation_state().scroll.y, 60)
+  end)
+
   test.it("Back saves a distant departure without waiting for dwell", function()
     local pane = panes.create { factory = make_editor }
     local view = pane.current_view

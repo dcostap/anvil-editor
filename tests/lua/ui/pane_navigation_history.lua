@@ -123,6 +123,80 @@ test.describe("Pane navigation history", function()
     test.not_ok(panes.is_back_available(pane))
   end)
 
+  test.it("compresses a repeated three-place sequence", function()
+    local pane = panes.create { factory = factory("A", 10) }
+    local view = pane.current_view
+    for _, place in ipairs { 20, 30, 10, 20, 30 } do
+      view.place = place
+      panes.record_location(pane)
+    end
+    test.equal(panes.history_length(pane), 3)
+    test.equal(view.place, 30)
+    panes.back(pane)
+    test.equal(view.place, 20)
+    panes.back(pane)
+    test.equal(view.place, 10)
+    test.not_ok(panes.is_back_available(pane))
+  end)
+
+  test.it("keeps the current place when insertion completes an earlier repeated copy", function()
+    local pane = panes.create { factory = factory("A", 10) }
+    local view = pane.current_view
+    for _, place in ipairs { 30, 10, 20, 30 } do
+      view.place = place
+      panes.record_location(pane)
+    end
+    for _ = 1, 4 do panes.back(pane) end
+    view.place = 20
+    panes.record_location(pane)
+
+    test.equal(panes.history_length(pane), 3)
+    test.equal(view.place, 20)
+    panes.forward(pane)
+    test.equal(view.place, 30)
+    panes.back(pane)
+    test.equal(view.place, 20)
+    panes.back(pane)
+    test.equal(view.place, 10)
+  end)
+
+  test.it("does not compress different positions into a repeated sequence", function()
+    local pane = panes.create { factory = factory("A", 10) }
+    local view = pane.current_view
+    for _, place in ipairs { 20, 11, 20 } do
+      view.place = place
+      panes.record_location(pane)
+    end
+    test.equal(panes.history_length(pane), 4)
+    for _, place in ipairs { 11, 20, 10 } do
+      panes.back(pane)
+      test.equal(view.place, place)
+    end
+  end)
+
+  test.it("does not compress repeated places across another View", function()
+    local pane = panes.create { factory = factory("A", 10) }
+    local view = pane.current_view
+    view.place = 20
+    panes.record_location(pane)
+    local other = PlaceView("B", 30)
+    panes.present(other, { pane = pane })
+    view.place = 10
+    panes.present(view, { pane = pane })
+    view.place = 20
+    panes.record_location(pane)
+
+    test.equal(panes.history_length(pane), 5)
+    panes.back(pane)
+    test.equal(view.place, 10)
+    test.equal(panes.back(pane), other)
+    test.equal(other.place, 30)
+    test.equal(panes.back(pane), view)
+    test.equal(view.place, 20)
+    panes.back(pane)
+    test.equal(view.place, 10)
+  end)
+
   test.it("suppresses adjacent duplicate places", function()
     local pane = panes.create { factory = factory("one", 1) }
     test.not_ok(panes.record_location(pane))

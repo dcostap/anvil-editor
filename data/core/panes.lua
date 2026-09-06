@@ -842,6 +842,56 @@ function M.history_length(target)
   return pane and #pane.history.entries or 0
 end
 
+local function find_repeated_places(keys)
+  for length = 1, math.floor(#keys / 2) do
+    for start = 1, #keys - 2 * length + 1 do
+      local matches = true
+      for offset = 0, length - 1 do
+        if keys[start + offset] ~= keys[start + length + offset] then
+          matches = false
+          break
+        end
+      end
+      if matches then return start, length end
+    end
+  end
+end
+
+local function compress_navigation_repetitions(pane)
+  local history = pane.history
+  local view = pane.current_view
+  local first, last = history.index, history.index
+  while first > 1 and history.entries[first - 1].view == view do first = first - 1 end
+  while last < #history.entries and history.entries[last + 1].view == view do last = last + 1 end
+  local keys = {}
+  for index = first, last do
+    local state = history.entries[index].state
+    local line, col = navigation_position(state)
+    -- Compare exact caret positions for now. We may use nearby-position matching later.
+    -- Views without carets compare their complete navigation state.
+    keys[#keys + 1] = line and col and (line .. ":" .. col)
+      or navigation_state_key(view, state)
+  end
+  local removed = 0
+  while true do
+    local start, length = find_repeated_places(keys)
+    if not start then break end
+    local index = first + start - 1
+    -- Keep the later copy and map the current place to it before removing entries.
+    if history.index >= index and history.index < index + length then
+      history.index = history.index + length
+    end
+    for _ = 1, length do
+      discard_entry(pane, index)
+      table.remove(keys, start)
+    end
+    removed = removed + length
+  end
+  if removed > 0 then
+    quiet("Navigation History: pane=%s compressed repeated places removed=%d", pane.id, removed)
+  end
+end
+
 local function matches_navigation_place(entry, view, state, opts)
   if not entry or entry.view ~= view then return false end
   if navigation_state_key(view, entry.state) == navigation_state_key(view, state) then
@@ -873,6 +923,7 @@ function M.record_location(target, opts)
     if opts.kind == "edit" then
       current.kind = "edit"
       current.state = state
+      compress_navigation_repetitions(pane)
       log_navigation_history(pane, "merge-edit-place")
       after_mutation("merged edit location in " .. pane.id)
     end
@@ -885,6 +936,7 @@ function M.record_location(target, opts)
       next_entry.kind = opts.kind or next_entry.kind
     end
     history.index = history.index + 1
+    compress_navigation_repetitions(pane)
     log_navigation_history(pane, "merge-forward-place")
     after_mutation("merged forward location in " .. pane.id)
     return false
@@ -892,6 +944,7 @@ function M.record_location(target, opts)
   local index = history.index + 1
   table.insert(history.entries, index, { view = view, state = state, kind = opts.kind })
   history.index = index
+  compress_navigation_repetitions(pane)
   M.prune_history(pane)
   log_navigation_history(pane, "record-place")
   after_mutation("recorded location in " .. pane.id)
