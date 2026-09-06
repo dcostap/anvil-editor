@@ -951,6 +951,8 @@ function M.record_location(target, opts)
   return true
 end
 
+local commit_non_suspendable_replacement
+
 function M.present(view, opts)
   opts = opts or {}
   local pane = M.find(opts.pane or M.active_pane)
@@ -981,6 +983,17 @@ function M.present(view, opts)
   if current ~= view and current.can_suspend and current:can_suspend() == false then
     local Editor = require "core.editor"
     if not existing and current:extends(Editor) then
+      if M.is_disposable(pane) then
+        local committed = false
+        local function approved()
+          if not M.contains(pane) or pane.current_view ~= current then return end
+          commit_non_suspendable_replacement(pane, current, view, opts)
+          committed = true
+        end
+        if opts.force or not current.can_close then approved() else current:can_close(approved) end
+        if committed then return pane end
+        return nil, "View replacement is pending or was canceled"
+      end
       quiet("Pane manager: opening a new group after %s to keep its Untitled Editor", pane.id)
       return M.create {
         factory = function() return view end,
@@ -1031,7 +1044,7 @@ local function insert_history_transfer(history, insertion, transfer)
   history.index = insertion + transfer.index - 1
 end
 
-local function commit_non_suspendable_replacement(pane, old, view, opts, transfer)
+commit_non_suspendable_replacement = function(pane, old, view, opts, transfer)
   local history = pane.history
   local insertion = history.index
   local kept = {}

@@ -51,17 +51,20 @@ test.describe("Untitled Editor replacement", function()
     return panes.create { factory = function() return Editor(buffer) end }, buffer
   end
 
-  test.it("keeps a blank Untitled Editor when opening another View", function()
-    local pane = untitled_pane()
+  test.it("replaces a blank Untitled Editor when opening another View", function()
+    local buffer = Buffer(nil, nil, true)
+    buffer.intellij_untitled = true
+    local pane = untitled_pane(buffer)
     local old = pane.current_view
     local counter = { count = 0 }
     local target = panes.replace_view(pane, target_factory(counter))
     test.ok(target)
     test.equal(counter.count, 1)
-    test.equal(pane.current_view, old)
-    test.same(panes.views(pane), { old })
+    test.equal(pane.current_view, target)
+    test.same(panes.views(pane), { target })
+    test.is_nil(old.__pane_owner)
     test.equal(panes.active().current_view, target)
-    test.equal(panes.count(), 2)
+    test.equal(panes.count(), 1)
     test.is_nil(prompt)
   end)
 
