@@ -153,55 +153,57 @@ test.describe("caret trail", function()
     end)
   end)
 
-  test.it("follows the focused caret across Text Views", function()
-    with_caret_settings(function()
-      local first = make_view()
-      local second = make_view()
-      local root = RootPanel()
-      root.size.x, root.size.y = 500, 300
-      core.root_panel = root
-      core.title_bar = nil
-      core.nag_view = nil
-      core.global_prompt_bar = nil
-      core.status_bar = nil
+  for _, destination_y in ipairs({ 100, 20 }) do
+    test.it("follows the focused caret across Text Views at Y=" .. destination_y, function()
+      with_caret_settings(function()
+        local first = make_view()
+        local second = make_view()
+        local root = RootPanel()
+        root.size.x, root.size.y = 500, 300
+        core.root_panel = root
+        core.title_bar = nil
+        core.nag_view = nil
+        core.global_prompt_bar = nil
+        core.status_bar = nil
 
-      local now = 10
-      local polygons = {}
-      local rects = {}
-      system.get_time = function() return now end
-      renderer.draw_rect = function(x, y, width, height, color)
-        rects[#rects + 1] = { x = x, y = y, width = width, height = height, color = color }
-      end
-      renderer.draw_poly = function(points, color)
-        polygons[#polygons + 1] = { points = points, color = color }
-      end
-      config.animated_caret = true
-      config.animated_caret_animation_length = 0.15
-      config.animated_caret_min_animation_length = 0.025
-      config.animated_caret_trail_size = 1
-      config.animated_caret_trail_min_distance = 1
-      config.animated_caret_trail_full_distance = 6
-      style.caret = { 12, 34, 56, 255 }
-      style.caret_trail = { 90, 80, 70, 255 }
+        local now = 10
+        local polygons = {}
+        local rects = {}
+        system.get_time = function() return now end
+        renderer.draw_rect = function(x, y, width, height, color)
+          rects[#rects + 1] = { x = x, y = y, width = width, height = height, color = color }
+        end
+        renderer.draw_poly = function(points, color)
+          polygons[#polygons + 1] = { points = points, color = color }
+        end
+        config.animated_caret = true
+        config.animated_caret_animation_length = 0.15
+        config.animated_caret_min_animation_length = 0.025
+        config.animated_caret_trail_size = 1
+        config.animated_caret_trail_min_distance = 1
+        config.animated_caret_trail_full_distance = 6
+        style.caret = { 12, 34, 56, 255 }
+        style.caret_trail = { 90, 80, 70, 255 }
 
-      draw_frame(root, first, 10, 20)
-      polygons = {}
-      rects = {}
+        draw_frame(root, first, 10, 20)
+        polygons = {}
+        rects = {}
 
-      now = 10.01
-      core.redraw = false
-      draw_frame(root, second, 210, 100)
+        now = 10.01
+        core.redraw = false
+        draw_frame(root, second, 210, destination_y)
 
-      test.equal(#polygons, 1)
-      test.equal(polygons[1].color[1], 90)
-      test.equal(#rects, 1)
-      test.equal(rects[1].color[1], 12)
-      local min_x, max_x = x_bounds(polygons[1].points)
-      test.ok(min_x < 210, "expected the rear corners to follow from the first Text View")
-      test.ok(max_x >= 210, "expected the front corners to reach toward the focused caret")
-      test.ok(core.redraw, "expected the moving caret to request another frame")
+        test.equal(#polygons, 1)
+        test.equal(polygons[1].color[1], 90)
+        test.equal(#rects, 1)
+        test.equal(rects[1].color[1], 12)
+        local min_x, max_x = x_bounds(polygons[1].points)
+        test.ok(min_x < 210, "expected the rear corners to follow from the first Text View")
+        test.ok(max_x >= 210, "expected the front corners to reach toward the focused caret")
+        test.ok(core.redraw, "expected the moving caret to request another frame")
+      end)
     end)
-  end)
+  end
 
   test.it("uses the old smooth caret without a horizontal trail", function()
     with_caret_settings(function()

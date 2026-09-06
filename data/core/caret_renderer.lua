@@ -255,12 +255,13 @@ function CaretRenderer:draw(
       self:relocate(target)
     else
       local cell_height = math.max(1, target.cell_height or target.height or 1)
-      local same_logical_line = target.owner == self.previous_target.owner
+      local same_owner = target.owner == self.previous_target.owner
+      local same_logical_line = same_owner
         and target.line ~= nil
         and target.line == self.previous_target.line
-      local horizontal_jump = same_logical_line or math.abs(
+      local horizontal_jump = same_owner and (same_logical_line or math.abs(
         target.y - self.previous_target.y
-      ) / cell_height < 0.05
+      ) / cell_height < 0.05)
       if horizontal_jump then
         self:start_horizontal(target)
       else
