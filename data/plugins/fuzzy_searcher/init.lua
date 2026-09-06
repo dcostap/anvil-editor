@@ -6441,7 +6441,12 @@ function FSView:open_file_result(r, target_side, restore)
   fuzzy_searcher._perf_file_open_mark("open_file_requested", string.format("line=%d col=%d", line, col))
   local opened, view = xpcall(function()
     local open_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_core_open_file")
-    local result = table.pack(core.open_file(path, {
+    local open = core.open_file
+    if ImageView.is_supported(path) then
+      open = core.open_image
+      core.log_quiet("Fuzzy Searcher opening image %q", path)
+    end
+    local result = table.pack(open(path, {
       pane = source_pane,
       placement = target_side and "split" or "current",
       direction = target_side and "right" or nil,
