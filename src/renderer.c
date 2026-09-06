@@ -89,6 +89,8 @@ typedef struct {
   SDL_Surface *surface;
   SDL_Rect clip;
   RenColor color;
+  SDL_Window *window;
+  bool failed;
 } RenPolyParams;
 
 /************************* Fonts *************************/
@@ -2595,6 +2597,16 @@ void raster_span(int y, int count, const FT_Span *spans, void *user) {
     SDL_Rect actual, span = { .x = spans[i].x, .y = y, .w = spans[i].len, .h = 1 };
     if (span.x > param->clip.x + param->clip.w) break;
     if (!SDL_GetRectIntersection(&param->clip, &span, &actual)) continue;
+    if (param->window) {
+      RenColor color = param->color;
+      color.a = (color.a * spans[i].coverage + 127) / 255;
+      RenRect rect = { actual.x, actual.y, actual.w, actual.h };
+      if (!anvil_d3d11_push_rect(param->window, rect, rect, color)) {
+        param->failed = true;
+        return;
+      }
+      continue;
+    }
     *((uint32_t *) draw_rect_surface->pixels) = SDL_MapRGBA(
       SDL_GetPixelFormatDetails(draw_rect_surface->format),
       SDL_GetSurfacePalette(draw_rect_surface),
@@ -2605,47 +2617,45 @@ void raster_span(int y, int count, const FT_Span *spans, void *user) {
   }
 }
 
-static void ren_draw_poly_mode(RenSurface *rs, RenPoint *points, unsigned short npoints,
-                               RenColor color, bool straight_alpha_mask) {
+static bool render_poly_spans(RenPoint *points, unsigned short npoints,
+                             float scale_x, float scale_y, RenPolyParams *params) {
   FT_Outline outline;
-  if (npoints == 0 || npoints > MAX_POLY_POINTS) return;
-  if (FT_Outline_New(library, npoints, 1, &outline) != 0) return;
+  if (npoints == 0) return true;
+  if (npoints > MAX_POLY_POINTS) return false;
+  if (FT_Outline_New(library, npoints, 1, &outline) != 0) return false;
   for (int i = 0; i < npoints; i++) {
     // this is undocumented, but freetype seems to expect 26.6 fixed point numbers
-    outline.points[i].x = points[i].x * rs->scale_x * 64;
-    outline.points[i].y = points[i].y * rs->scale_y * 64;
+    outline.points[i].x = points[i].x * scale_x * 64;
+    outline.points[i].y = points[i].y * scale_y * 64;
     outline.tags[i] = points[i].tag;
   }
   outline.contours[0] = npoints - 1;
-  RenPolyParams params = { .color = color, .surface = rs->surface };
-  SDL_GetSurfaceClipRect(rs->surface, &params.clip);
-
-  SDL_BlendMode previous_blend = SDL_BLENDMODE_INVALID;
-  bool restore_blend = straight_alpha_mask
-    && SDL_GetSurfaceBlendMode(draw_rect_surface, &previous_blend);
-  if (restore_blend) SDL_SetSurfaceBlendMode(draw_rect_surface, SDL_BLENDMODE_NONE);
-
-  FT_Outline_Render(library, &outline, &(FT_Raster_Params) {
+  FT_Error error = FT_Outline_Render(library, &outline, &(FT_Raster_Params) {
     .target = NULL,
-    .flags = FT_RASTER_FLAG_AA | FT_RASTER_FLAG_DIRECT,
+    .flags = FT_RASTER_FLAG_AA | FT_RASTER_FLAG_DIRECT | FT_RASTER_FLAG_CLIP,
+    .clip_box = { params->clip.x, params->clip.y,
+                  params->clip.x + params->clip.w, params->clip.y + params->clip.h },
     .gray_spans = &raster_span,
-    .user = &params,
+    .user = params,
   });
-
-  if (restore_blend) SDL_SetSurfaceBlendMode(draw_rect_surface, previous_blend);
   FT_Outline_Done(library, &outline);
+  return error == 0 && !params->failed;
+}
+
+bool ren_draw_poly_commands(SDL_Window *window, RenPoint *points,
+                            unsigned short npoints, RenRect clip, RenColor color) {
+  if (color.a == 0 || clip.width <= 0 || clip.height <= 0) return true;
+  RenPolyParams params = {
+    .window = window, .color = color,
+    .clip = { clip.x, clip.y, clip.width, clip.height },
+  };
+  return render_poly_spans(points, npoints, 1, 1, &params);
 }
 
 void ren_draw_poly(RenSurface *rs, RenPoint *points, unsigned short npoints, RenColor color) {
-  ren_draw_poly_mode(rs, points, npoints, color, false);
-}
-
-void ren_draw_poly_mask(RenSurface *rs, RenPoint *points, unsigned short npoints, RenColor color) {
-  // D3D uploads this transparent surface and applies coverage in its shader.
-  // Replace spans here to retain straight-alpha RGB; normal SDL blending would
-  // premultiply them once and the shader would multiply them a second time,
-  // producing dark antialiasing halos around curved polygon edges.
-  ren_draw_poly_mode(rs, points, npoints, color, true);
+  RenPolyParams params = { .color = color, .surface = rs->surface };
+  SDL_GetSurfaceClipRect(rs->surface, &params.clip);
+  render_poly_spans(points, npoints, rs->scale_x, rs->scale_y, &params);
 }
 
 size_t ren_font_group_get_advances(

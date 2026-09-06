@@ -180,12 +180,9 @@ end
 
 local function draw_graph_node(x, y, color)
   local radius = math.max(3, 3 * SCALE)
-  local points = {}
-  for index = 0, 7 do
-    local angle = index * math.pi / 4
-    points[#points + 1] = { x + math.cos(angle) * radius, y + math.sin(angle) * radius }
-  end
-  renderer.draw_poly(points, color)
+  renderer.draw_rounded_rect(
+    x - radius, y - radius, radius * 2, radius * 2, radius, color
+  )
 end
 
 local function graph_gutter_width(view)
@@ -222,7 +219,14 @@ local function commit_line_hint(view, line)
   if not (meta and meta.role == "commit") then return nil end
   local font = style.get_small_font(view:get_font())
   local date_font = style.get_small_font(style.code_font)
-  local segments = { truncate = "left", gap_spaces = 2 }
+  local cached = meta.hint_cache
+  if cached and cached.font == font and cached.date_font == date_font
+    and cached.color == style.dim then
+    return cached.segments
+  end
+  local segments = {
+    truncate = "left", gap_spaces = 2, __normalized_line_hint = true,
+  }
   if meta.author and meta.author ~= "" then
     segments[#segments + 1] = { text = meta.author, font = font, color = style.dim }
   end
@@ -232,7 +236,9 @@ local function commit_line_hint(view, line)
     end
     segments[#segments + 1] = { text = meta.date, font = date_font, color = style.dim }
   end
-  return #segments > 0 and segments or nil
+  local result = #segments > 0 and segments or nil
+  meta.hint_cache = { font = font, date_font = date_font, color = style.dim, segments = result }
+  return result
 end
 
 function GitView:new(project, opts)
@@ -862,17 +868,46 @@ local function commit_label(commit)
   return table.concat(parts, "  ")
 end
 
+-- Commit objects can change in place. Compare source values, including refs,
+-- before reusing their rendered row. Weak keys release unloaded log pages.
+local commit_rows = setmetatable({}, { __mode = "k" })
+
 local function commit_line_metadata(commit)
   local timestamp = tonumber(commit.commit_time or commit.author_time)
+  local cached = commit_rows[commit]
+  local hash = commit.short_hash or commit.hash or ""
+  local subject = commit.subject or ""
+  local author = commit.author_name or ""
+  local refs = commit.ref_labels
+  local unchanged = cached and cached.timestamp == timestamp
+    and cached.hash == hash and cached.subject == subject and cached.author == author
+    and #cached.ref_labels == (refs and #refs or 0)
+  if unchanged and refs then
+    for index, ref in ipairs(refs) do
+      local previous = cached.ref_labels[index]
+      if previous.label ~= ref.label or previous.kind ~= ref.kind then
+        unchanged = false
+        break
+      end
+    end
+  end
+  if unchanged then return cached end
   local date = timestamp and timestamp > 0 and os.date("%Y-%m-%d %H:%M", timestamp) or ""
-  return {
+  local meta = {
     role = "commit",
-    hash = commit.short_hash or commit.hash or "",
-    subject = commit.subject or "",
-    author = commit.author_name or "",
+    hash = hash,
+    subject = subject,
+    author = author,
+    timestamp = timestamp,
     date = date,
-    ref_labels = commit.ref_labels or {},
+    ref_labels = {},
   }
+  for index, ref in ipairs(refs or {}) do
+    meta.ref_labels[index] = { label = ref.label, kind = ref.kind }
+  end
+  meta.text = commit_label(meta)
+  commit_rows[commit] = meta
+  return meta
 end
 
 local function changed_file_path(file)
@@ -1227,8 +1262,9 @@ function GitView:update_pane_buffers()
       line_meta[1] = { role = "message", text = lines[1] }
     else
       for _, commit in ipairs(tab.commits or {}) do
-        lines[#lines + 1] = commit_label(commit)
-        line_meta[#lines] = commit_line_metadata(commit)
+        local meta = commit_line_metadata(commit)
+        lines[#lines + 1] = meta.text
+        line_meta[#lines] = meta
       end
       if tab.loading and not tab.refreshing then
         lines[#lines + 1] = "Loading more commits..."
@@ -1299,8 +1335,9 @@ function GitView:update_pane_buffers()
       line_meta[1] = { role = "message", text = lines[1] }
     else
       for _, commit in ipairs(log_tab.commits) do
-        lines[#lines + 1] = commit_label(commit)
-        line_meta[#lines] = commit_line_metadata(commit)
+        local meta = commit_line_metadata(commit)
+        lines[#lines + 1] = meta.text
+        line_meta[#lines] = meta
       end
       if log_tab.loading_more then
         lines[#lines + 1] = "Loading more commits..."

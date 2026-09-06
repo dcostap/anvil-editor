@@ -136,7 +136,7 @@ void ren_draw_pixels(RenSurface *rs, RenRect rect, const char* bytes, size_t len
 // function to draw polygons and curves
 int ren_poly_cbox(RenPoint *points, int npoints, RenRect *cbox);
 void ren_draw_poly(RenSurface *rs, RenPoint *points, unsigned short npoints, RenColor color);
-void ren_draw_poly_mask(RenSurface *rs, RenPoint *points, unsigned short npoints, RenColor color);
+bool ren_draw_poly_commands(SDL_Window *window, RenPoint *points, unsigned short npoints, RenRect clip, RenColor color);
 
 int video_init(void);
 int ren_init(void);

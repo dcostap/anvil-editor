@@ -6471,6 +6471,7 @@ end
 
 function TextView:normalize_line_hint(hint)
   if hint == nil or hint == false then return nil end
+  if type(hint) == "table" and hint.__normalized_line_hint then return hint end
 
   local default_font = self:get_font()
   local default_color = style.line_hint
@@ -6512,9 +6513,13 @@ function TextView:normalize_line_hint(hint)
 end
 
 function TextView:measure_line_hint_segments(segments)
+  if segments and segments.__measured_width then return segments.__measured_width end
   local width = 0
   for _, segment in ipairs(segments or {}) do
     width = width + segment.font:get_width(segment.text)
+  end
+  if segments and segments.__normalized_line_hint then
+    segments.__measured_width = width
   end
   return width
 end

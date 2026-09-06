@@ -6,7 +6,8 @@ local recording = false
 local record = nil
 local renderer_originals = {}
 local system_originals = {}
-local sample_interval = 10000
+local sample_interval = 100000
+local detail_frame_interval = 30
 local draw_scope_frame = nil
 local pending_draw_scope_frame = nil
 local active_file_open = nil
@@ -336,6 +337,15 @@ function perf.begin_draw_frame()
     core.perf_draw_scope_active = false
     return
   end
+  record.redraw_begin_count = (record.redraw_begin_count or 0) + 1
+  local capture_detail = record.redraw_begin_count == 1
+    or record.redraw_begin_count % detail_frame_interval == 0
+  record.capture_detail = capture_detail
+  if not capture_detail then
+    core.perf_draw_scope_active = false
+    draw_scope_frame = nil
+    return
+  end
   core.perf_draw_scope_active = true
   draw_scope_frame = {
     started = system.get_time(),
@@ -424,6 +434,7 @@ function perf.finish_draw_frame()
   local frame = draw_scope_frame
   if not frame then
     core.perf_draw_scope_active = false
+    if record then record.capture_detail = false end
     return
   end
   local now = system.get_time()
@@ -443,6 +454,7 @@ function perf.finish_draw_frame()
   pending_draw_scope_frame = frame
   draw_scope_frame = nil
   core.perf_draw_scope_active = false
+  record.capture_detail = false
 end
 
 function perf.record_linewrap_compute(row)
@@ -504,7 +516,7 @@ local function wrap_renderer_api(name)
   local original = renderer[name]
   renderer_originals[name] = original
   renderer[name] = function(...)
-    if record then
+    if record and record.capture_detail then
       local info = debug.getinfo(2, "Sl")
       local key = "renderer." .. name .. "," .. source_key(info)
       add_count(record.api_calls, key, 1)
@@ -526,6 +538,7 @@ local function wrap_system_api(name)
   system_originals[name] = original
   system[name] = function(...)
     if not record then return original(...) end
+    if not record.capture_detail then return original(...) end
     local info = debug.getinfo(2, "Sl")
     local source = source_key(info)
     local key = "system." .. name .. "," .. source
@@ -1363,8 +1376,11 @@ local function write_summary(path)
   file:write(string.format("Elapsed: %.3fs\n", elapsed))
   file:write(string.format("Frame target: target_fps=%s budget_ms=%.3f\n",
     tostring(record.target_fps), 1000 / math.max(1, record.target_fps or 1)))
-  file:write("Recording overhead: Lua sampling, API caller tracking, and draw scopes are enabled.\n")
-  file:write("These probes add CPU and allocation costs. Recorded FPS is not an uninstrumented benchmark.\n")
+  file:write(string.format(
+    "Recording overhead: draw scopes and API callers sample frame 1 and each %dth frame; Lua samples each %d instructions.\n",
+    detail_frame_interval, sample_interval
+  ))
+  file:write("Numeric frame and renderer costs cover each redraw. Detailed probes cover sampled redraws only.\n")
   file:write("Redraw costs: totals, averages, and maxima use redraw samples only. Nested timings overlap.\n")
   local renderer_paths = {}
   for path in pairs(record.renderer_paths) do renderer_paths[#renderer_paths + 1] = path end

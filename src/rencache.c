@@ -830,36 +830,10 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
       } break;
       case DRAW_POLY: {
         DrawBezierCommand *bcmd = (DrawBezierCommand*)&cmd->command;
-        int ox = (int)bcmd->rect.x - 2;
-        int oy = (int)bcmd->rect.y - 2;
-        int tw = (int)bcmd->rect.width + 4;
-        int th = (int)bcmd->rect.height + 4;
-        if (tw > 0 && th > 0 && bcmd->npoints > 0) {
-          SDL_Surface *surface = SDL_CreateSurface(tw, th, SDL_PIXELFORMAT_RGBA32);
-          if (surface) {
-            SDL_FillSurfaceRect(surface, NULL, SDL_MapSurfaceRGBA(surface, 0, 0, 0, 0));
-            RenPoint *points = SDL_malloc(sizeof(RenPoint) * bcmd->npoints);
-            if (points) {
-              for (int i = 0; i < bcmd->npoints; i++) {
-                points[i] = bcmd->points[i];
-                points[i].x -= ox;
-                points[i].y -= oy;
-              }
-              RenSurface trs = { .surface = surface, .scale_x = 1, .scale_y = 1 };
-              ren_set_clip_rect(&trs, (RenRect){0, 0, tw, th});
-              ren_draw_poly_mask(&trs, points, bcmd->npoints, bcmd->color);
-              SDL_free(points);
-              RenRect dst = { ox, oy, tw, th };
-              if (!anvil_d3d11_push_pixels(ren_cache->window, (const char *)surface->pixels,
-                                           (size_t)surface->pitch * (size_t)surface->h,
-                                           tw, th, surface->pitch, dst, clip)) {
-                SDL_DestroySurface(surface);
-                fail_reason = "draw_poly_pixels";
-                goto fail;
-              }
-            }
-            SDL_DestroySurface(surface);
-          }
+        if (!ren_draw_poly_commands(ren_cache->window, bcmd->points,
+                                   bcmd->npoints, clip, bcmd->color)) {
+          fail_reason = "draw_poly_spans";
+          goto fail;
         }
       } break;
     }
