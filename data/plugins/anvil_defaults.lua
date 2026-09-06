@@ -200,10 +200,6 @@ plugin_defaults("scale", {
   default_scale = DEFAULT_SCALE,
   use_mousewheel = true,
 })
-plugin_defaults("trimwhitespace", {
-  enabled = true,
-  trim_empty_end_lines = false,
-})
 -- IntelliJ-style navigation, custom actions/keybindings, and local workflow plugins.
 require_core_plugin "intellij_actions"
 reload_core_plugin "global_prompt_bar_sanitize"

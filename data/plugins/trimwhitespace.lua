@@ -1,46 +1,8 @@
 -- mod-version:3
-local config = require "core.config"
 local command = require "core.command"
-local Buffer = require "core.buffer"
-
----Configuration options for `trimwhitespace` plugin.
----@class config.plugins.trimwhitespace
----Disable or enable the trimming of white spaces by default.
----@field enabled boolean
----Remove any empty new lines at the end of documents.
----@field trim_empty_end_lines boolean
-config.plugins.trimwhitespace.config_spec = {
-    name = "Trim Whitespace",
-    {
-      label = "Enabled",
-      description = "Disable or enable the trimming of white spaces by default.",
-      path = "enabled",
-      type = "toggle",
-      default = false
-    },
-    {
-      label = "Trim Empty End Lines",
-      description = "Remove any empty new lines at the end of Buffers.",
-      path = "trim_empty_end_lines",
-      type = "toggle",
-      default = false
-    }
-  }
 
 ---@class plugins.trimwhitespace
 local trimwhitespace = {}
-
----Disable whitespace trimming for a specific buffer.
----@param buffer core.buffer
-function trimwhitespace.disable(buffer)
-  buffer.disable_trim_whitespace = true
-end
-
----Re-enable whitespace trimming if previously disabled.
----@param buffer core.buffer
-function trimwhitespace.enable(buffer)
-  buffer.disable_trim_whitespace = nil
-end
 
 ---Perform whitespace trimming in all lines of a buffer except the
 ---line where the caret is currently positioned.
@@ -160,22 +122,6 @@ command.add("core.textview", {
     trimwhitespace.trim_empty_end_lines(dv.buffer)
   end),
 })
-
-
-local buffer_save = Buffer.save
-Buffer.save = function(self, ...)
-  if
-    config.plugins.trimwhitespace.enabled
-    and
-    not self.disable_trim_whitespace
-  then
-    trimwhitespace.trim(self)
-    if config.plugins.trimwhitespace.trim_empty_end_lines then
-      trimwhitespace.trim_empty_end_lines(self)
-    end
-  end
-  buffer_save(self, ...)
-end
 
 
 return trimwhitespace

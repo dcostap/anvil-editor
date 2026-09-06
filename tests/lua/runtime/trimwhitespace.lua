@@ -1,5 +1,4 @@
 local Buffer = require "core.buffer"
-local config = require "core.config"
 local test = require "core.test"
 local trimwhitespace = require "plugins.trimwhitespace"
 
@@ -19,14 +18,21 @@ local function text(buffer)
 end
 
 test.describe("trimwhitespace", function()
-  test.before_each(function(context)
-    context.previous_enabled = config.plugins.trimwhitespace.enabled
-    context.previous_trim_empty = config.plugins.trimwhitespace.trim_empty_end_lines
-  end)
-
-  test.after_each(function(context)
-    config.plugins.trimwhitespace.enabled = context.previous_enabled
-    config.plugins.trimwhitespace.trim_empty_end_lines = context.previous_trim_empty
+  test.it("preserves whitespace when saving a Buffer", function()
+    local buffer = Buffer()
+    set_text(buffer, "aa   \n\t \n\n")
+    local expected = text(buffer)
+    local path = USERDIR .. PATHSEP .. "trimwhitespace-save-test.txt"
+    local ok, err = pcall(function()
+      buffer:save(path, path)
+      test.equal(text(buffer), expected)
+      local file = assert(io.open(path, "rb"))
+      local saved = file:read("*a")
+      file:close()
+      test.equal(saved:gsub("\r\n", "\n"), expected)
+    end)
+    os.remove(path)
+    if not ok then error(err, 0) end
   end)
 
   test.it("trims trailing whitespace in one buffer edit", function()
