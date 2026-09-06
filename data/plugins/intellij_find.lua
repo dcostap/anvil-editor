@@ -915,8 +915,52 @@ end
 -- captured an older shim and would recurse when we re-wrap them.
 local textview_draw_line_body_wrapper
 local textview_draw_wrapper
+local textview_draw_scrollbar_wrapper
 local textview_update_wrapper
 local textview_on_mouse_pressed_wrapper
+
+local function draw_find_overview(view)
+  local state = visible_find_state(view)
+  if not state or #state.matches == 0 then return end
+  local sx, sy, sw, sh = view.v_scrollbar:get_track_rect()
+  if sw <= 0 or sh <= 0 then return end
+  local source_h = math.max(1, view:get_scrollable_size())
+  local min_h = math.min(sh, math.max(2, common.round(3 * SCALE)))
+
+  local function draw_match(match, selected)
+    local first_row = view:get_visual_row(match.line, match.col1, false)
+    local last_row = view:get_visual_row(match.line, math.max(match.col1, match.col2 - 1), false)
+    local start_offset = view:get_visual_row_y_offset(first_row)
+    local end_offset = view:get_visual_row_y_offset(last_row + 1)
+    local y = sy + common.clamp(start_offset / source_h, 0, 1) * sh
+    local h = math.min(sh, math.max(min_h, (end_offset - start_offset) / source_h * sh))
+    y = math.min(y, sy + sh - h)
+    renderer.draw_rect(sx, y, sw, h,
+      selected and style.search_selection or style.search_selection_secondary)
+  end
+
+  for index, match in ipairs(state.matches) do
+    if index ~= state.current then draw_match(match, false) end
+  end
+  -- Keep the selected match visible when several matches share a marker row.
+  local selected = state.matches[state.current]
+  if selected then draw_match(selected, true) end
+  view.v_scrollbar:draw_thumb()
+end
+
+local function make_local_find_draw_scrollbar(base)
+  return function(self, ...)
+    if (TextView.__local_find_draw_scrollbar_depth or 0) > 0 then
+      return base(self, ...)
+    end
+    local old_depth = TextView.__local_find_draw_scrollbar_depth or 0
+    TextView.__local_find_draw_scrollbar_depth = old_depth + 1
+    local result = base(self, ...)
+    draw_find_overview(self)
+    TextView.__local_find_draw_scrollbar_depth = old_depth
+    return result
+  end
+end
 
 local function make_local_find_draw_line_body(base)
   return function(self, line, x, y)
@@ -1044,6 +1088,13 @@ local function patch_textview_method(name, wrapper_field, base_field, current_wr
 end
 
 local function install_textview_patches()
+  textview_draw_scrollbar_wrapper = patch_textview_method(
+    "draw_scrollbar",
+    "__local_find_draw_scrollbar_wrapper",
+    "__local_find_draw_scrollbar_base",
+    textview_draw_scrollbar_wrapper,
+    make_local_find_draw_scrollbar
+  )
   textview_draw_line_body_wrapper = patch_textview_method(
     "draw_line_body",
     "__local_find_draw_line_body_wrapper",

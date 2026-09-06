@@ -204,6 +204,58 @@ test.describe("TextView Prompt Bar find", function()
     test.equal(current_line_highlights, 0)
   end)
 
+  test.it("shows all search locations in the scrollbar and keeps the selected match on top", function(context)
+    local lines = { "NEEDLE NEEDLE" }
+    for i = 2, 80 do lines[i] = "plain" end
+    lines[70] = "NEEDLE"
+    local view = open_editor(context, table.concat(lines, "\n"))
+    view:with_selection_state(function() view.buffer:set_selection(1, 1) end)
+    test.ok(command.perform("editor:find"))
+    type_into_active_view("NEEDLE")
+    view:sync_scrollbar_geometry()
+
+    local function markers()
+      local rects = {}
+      local draw_rect = renderer.draw_rect
+      local draw_rounded_rect = renderer.draw_rounded_rect
+      renderer.draw_rounded_rect = function() end
+      renderer.draw_rect = function(x, y, w, h, color)
+        if color == style.search_selection or color == style.search_selection_secondary then
+          rects[#rects + 1] = { x = x, y = y, w = w, h = h, selected = color == style.search_selection }
+        end
+      end
+      local ok, err = pcall(view.draw_scrollbar, view)
+      renderer.draw_rect = draw_rect
+      renderer.draw_rounded_rect = draw_rounded_rect
+      if not ok then error(err, 0) end
+      return rects
+    end
+
+    local sx, sy, sw, sh = view.v_scrollbar:get_track_rect()
+    local rects = markers()
+    test.ok(#rects >= 2, "expected search markers, including an off-screen match")
+    local first, last
+    for _, rect in ipairs(rects) do
+      test.equal(rect.x, sx)
+      test.equal(rect.w, sw)
+      test.ok(rect.h > 0 and rect.y >= sy and rect.y + rect.h <= sy + sh)
+      first = math.min(first or rect.y, rect.y)
+      last = math.max(last or rect.y, rect.y)
+    end
+    test.ok(last > first, "expected separate whole-file locations")
+    test.ok(rects[#rects].selected, "selected marker must cover overlapping matches")
+    test.equal(rects[#rects].y, first)
+
+    test.ok(command.perform("editor:repeat_find"))
+    test.ok(command.perform("editor:repeat_find"))
+    rects = markers()
+    test.ok(rects[#rects].selected)
+    test.equal(rects[#rects].y, last)
+
+    test.ok(command.perform("editor:find_close"))
+    test.equal(#markers(), 0)
+  end)
+
   test.it("splits find highlights across Wrapped Visual Rows", function(context)
     local view = open_editor(context, "xxxxxxNEEDLE")
     local wrapping = config.plugins.linewrapping
