@@ -6844,7 +6844,7 @@ function FSView:draw_status(font, x, y)
   local width = font:get_width(label)
   local radius = font:get_width("MMMM")
   -- Start and finish outside the label so the repeated wave fades cleanly.
-  local center = (system.get_time() % 1.6) / 1.6 * (width + radius * 2) - radius
+  local center = (system.get_time() % 0.8) / 0.8 * (width + radius * 2) - radius
   for first, letter in label:gmatch("()([%z\1-\127\194-\244][\128-\191]*)") do
     local offset = font:get_width(label:sub(1, first - 1))
     local distance = math.abs(offset + font:get_width(letter) / 2 - center)
