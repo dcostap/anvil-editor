@@ -6761,6 +6761,11 @@ function FSView:confirm(target_side)
   end
 end
 
+function FSView:search_status_label()
+  local status = self.status or ""
+  return status:match("^(Searching.-…)") or status:match("^(Indexing.-…)")
+end
+
 function FSView:update()
   if self.closing then
     local _, _, _, complete = self:closing_transition()
@@ -6801,6 +6806,9 @@ function FSView:update()
   end
   self:refresh(self.input:get_text())
   self:update_selected_preview()
+  if self:is_visible() and self:search_status_label() then
+    core.redraw = true
+  end
 
   local hit = self:result_at_point(self.mouse.x, self.mouse.y)
   self.hovered_result = type(hit) == "number"
@@ -6825,6 +6833,28 @@ function FSView:draw()
   end)
 end
 
+function FSView:draw_status(font, x, y)
+  local status = self.status or ""
+  local label = self:search_status_label()
+  if not label then
+    renderer.draw_text(font, status, x, y, style.dim)
+    return
+  end
+
+  local width = font:get_width(label)
+  local radius = font:get_width("MMMM")
+  -- Start and finish outside the label so the repeated wave fades cleanly.
+  local center = (system.get_time() % 1.6) / 1.6 * (width + radius * 2) - radius
+  for first, letter in label:gmatch("()([%z\1-\127\194-\244][\128-\191]*)") do
+    local offset = font:get_width(label:sub(1, first - 1))
+    local distance = math.abs(offset + font:get_width(letter) / 2 - center)
+    local amount = math.max(0, 1 - distance / radius)
+    amount = amount * amount * (3 - 2 * amount)
+    renderer.draw_text(font, letter, x + offset, y, common.lerp(style.dim, style.accent, amount))
+  end
+  renderer.draw_text(font, status:sub(#label + 1), x + width, y, style.dim)
+end
+
 function FSView:draw_open_content()
   if not self:is_visible() then return false end
   local draw_scope = fuzzy_searcher._perf_scope_begin("fuzzy_searcher", true)
@@ -6846,7 +6876,7 @@ function FSView:draw_open_content()
   local row_padding = m.row_padding
   self:ensure_selection_visible()
 
-  renderer.draw_text(font, self.status or "", x + pad, y + self.input.size.y + pad * 1.5, style.dim)
+  self:draw_status(font, x + pad, y + self.input.size.y + pad * 1.5)
   local full_width_mode = self:is_full_width_mode()
   local vertical_preview = m.vertical_preview
   local command_mode = self:is_command_mode()
