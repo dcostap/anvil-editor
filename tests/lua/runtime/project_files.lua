@@ -54,13 +54,40 @@ local function windows_extended_file(path, create)
 end
 
 test.describe("Project files", function()
-  for _, scope in ipairs { "root", "all" } do
+  test.it("finishes a listing while its first caller is suspended", function(context)
+    local project_files = require "core.project_files"
+    local root = join(USERDIR, "project-files-suspended-" .. system.get_process_id())
+    assert(common.mkdirp(root))
+    write(join(root, "visible.lua"), "return true\n")
+    context.cleanup = function()
+      project_files.invalidate(root)
+      common.rm(root, true)
+    end
+    local result
+    local caller = coroutine.create(function() result = assert(project_files.list(root)) end)
+    test.ok(coroutine.resume(caller))
+    local deadline = system.get_time() + 3
+    while not project_files.cached(root) and system.get_time() < deadline do coroutine.yield(0.01) end
+
+    test.not_nil(project_files.cached(root), "The shared scan stopped with its first caller")
+    while coroutine.status(caller) ~= "dead" do
+      test.ok(coroutine.resume(caller))
+      coroutine.yield(0)
+    end
+    test.same(names(result), { ["visible.lua"] = true })
+  end)
+
+  for _, scope in ipairs { "root", "all", "refresh" } do
     test.it("keeps a shared scan through " .. scope .. " cache invalidation", function(context)
       local project_files = require "core.project_files"
       local process = require "core.process"
       local root = join(USERDIR, "project-files-shared-" .. scope .. "-" .. system.get_process_id())
       assert(common.mkdirp(join(root, "empty")))
       write(join(root, "visible.lua"), "return true\n")
+      if scope == "refresh" then
+        assert(project_files.list(root))
+        write(join(root, "added.lua"), "return false\n")
+      end
       local start = process.start
       local started, release = false, false
       local first, second
@@ -77,17 +104,19 @@ test.describe("Project files", function()
         end
         return start(args, opts)
       end
-      core.add_thread(function() first = { project_files.list(root) } end)
+      core.add_thread(function() first = { project_files.list(root, { refresh = true }) } end)
       local deadline = system.get_time() + 5
       while not started and system.get_time() < deadline do coroutine.yield(0) end
       test.ok(started, "Project listing did not start")
-      project_files.invalidate(scope == "root" and root or nil)
+      project_files.invalidate(scope ~= "all" and root or nil)
       core.add_thread(function() second = { project_files.list(root) } end)
       release = true
       while (not first or not second) and system.get_time() < deadline do coroutine.yield(0) end
       test.not_nil(first)
       test.not_nil(second)
-      test.same(names(assert(first[1], first[2])), { ["visible.lua"] = true })
+      local expected = { ["visible.lua"] = true }
+      if scope == "refresh" then expected["added.lua"] = true end
+      test.same(names(assert(first[1], first[2])), expected)
       test.same(directory_names(root, first[3]), { ["."] = true, empty = true })
       test.equal(second[1], first[1], "Consumers must receive the same completed snapshot")
       test.equal(second[3], first[3])
@@ -326,8 +355,10 @@ test.describe("Project files", function()
     test.equal(status.subscribers, 1)
     project_files.invalidate()
     status = project_files.watch_status(root)
-    test.ok(status.running, "Cache invalidation must retain active subscriptions")
+    test.not_ok(status.running, "Global invalidation must release watches for removed roots")
     test.equal(status.subscribers, 1)
+    test.not_nil(project_files.list(root))
+    test.ok(project_files.watch_status(root).running, "Listing must restore the retained subscription")
     project_files.unsubscribe(root, second)
     test.not_ok(project_files.watch_status(root).running)
   end)

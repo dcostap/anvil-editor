@@ -748,8 +748,10 @@ submit_worker_scan = function(index, generation, opts, phase)
     index.reason = opts.reason
     index.started_at = system.get_time()
     index.finished_at = nil
-    core.add_thread(function()
-      local listed, list_error = project_files.list(index.root, { refresh = true })
+    core.add_background_thread(function()
+      local listed, list_error = project_files.list(index.root, {
+        refresh = opts.force == true or generation > 1,
+      })
       if index.generation ~= generation then return end
       if not listed then
         index.status = "failed"

@@ -5,6 +5,7 @@ local process = require "core.process"
 
 local project_files = {}
 local cache = {}
+local start_watcher
 
 local WORK_SLICE_SECONDS = 0.002
 local WATCH_POLL_SECONDS = 0.02
@@ -118,17 +119,19 @@ local function scan_directories(root, ignored_paths, hidden_paths)
   local searchable = { [common.path_compare_key(root)] = root }
   local pruned_ignored = 0
   local state = cooperative_state()
+  -- Windows enumeration already has metadata. POSIX would stat every file before filtering directories.
+  local enumeration_metadata = PLATFORM == "Windows"
   while #pending > 0 do
     local directory = table.remove(pending)
     local entries = system.list_dir_info
-      and system.list_dir_info(directory, 2147483647, "dir", nil, true) or nil
+      and system.list_dir_info(directory, 2147483647, "dir", nil, enumeration_metadata) or nil
     for _, entry in ipairs(entries or {}) do
       local name = entry.name
       if name and name ~= "" and name:sub(1, 1) ~= "." then
         local path = common.normalize_path(directory .. PATHSEP .. name)
-        local info = entry
+        local info = enumeration_metadata and entry or path and system.get_file_info(path)
         local key = path and common.path_compare_key(path)
-        if path and info.type == "dir" and info.symlink ~= nil and not hidden_paths[key] then
+        if path and info and info.type == "dir" and info.symlink ~= nil and not hidden_paths[key] then
           directories[#directories + 1] = path
           if not info.symlink and not ignored_paths[key] then
             searchable[key] = path
@@ -156,7 +159,7 @@ local function scan(root, include_ignored)
 
   local ignore_debug = { pending = "", paths = {}, hidden_paths = {} }
   local debug_done = false
-  core.add_thread(function()
+  core.add_background_thread(function()
     while proc:running() do
       local ok, chunk = pcall(
         proc.stderr.read, proc.stderr, 64 * 1024,
@@ -327,20 +330,10 @@ local function sync_watches(entry)
   end
 end
 
-function project_files.list(root, opts)
-  opts = opts or {}
-  root = common.normalize_path(root)
-  local entry = get_entry(root, opts.include_ignored == true)
-  if entry.files and not opts.refresh then return entry.files, nil, entry.directory_list end
-  if entry.scanning then
-    core.log_quiet("Project files: joining scan for %s", root)
-    while entry.scanning do coroutine.yield(0.005) end
-    return entry.files, entry.error, entry.directory_list
-  end
-
-  entry.scanning = true
+local function scan_entry(entry)
+  local root = entry.root
   entry.phase = "scanning"
-  local files, err, directories, searchable_directories = scan(root, opts.include_ignored == true)
+  local files, err, directories, searchable_directories = scan(root, entry.include_ignored)
   if files then
     entry.phase = "indexing"
     local snapshot = { root = root, files = files }
@@ -354,9 +347,31 @@ function project_files.list(root, opts)
   else
     entry.error = err
   end
-  entry.phase = nil
-  entry.scanning = false
-  return files, err, entry.directory_list
+end
+
+function project_files.list(root, opts)
+  opts = opts or {}
+  root = common.normalize_path(root)
+  local entry = get_entry(root, opts.include_ignored == true)
+  if next(entry.subscribers) then start_watcher(entry) end
+  if entry.files and not opts.refresh then return entry.files, nil, entry.directory_list end
+  if entry.scanning then
+    core.log_quiet("Project files: joining scan for %s", root)
+  else
+    entry.scanning = true
+    core.add_background_thread(function()
+      local ok, err = pcall(scan_entry, entry)
+      if not ok then
+        entry.error = tostring(err)
+        core.log_quiet("Project files: scan failed for %s: %s", root, entry.error)
+      end
+      entry.phase = nil
+      entry.scanning = false
+    end, entry)
+  end
+  while entry.scanning do coroutine.yield(0.005) end
+  if entry.error then return nil, entry.error end
+  return entry.files, nil, entry.directory_list
 end
 
 function project_files.contains(root, path, kind)
@@ -474,7 +489,7 @@ local function start_watch_processor(entry)
   core.add_thread(function() process_watch_batches(entry, generation) end)
 end
 
-local function start_watcher(entry)
+start_watcher = function(entry)
   if entry.watcher or entry.include_ignored then return end
   local ok, watcher = pcall(DirWatch)
   if not ok then
@@ -551,13 +566,18 @@ function project_files.invalidate(root)
   local root_key = root and common.path_compare_key(root)
   for key, entry in pairs(cache) do
     if not root_key or common.path_compare_key(entry.root) == root_key then
-      if entry.scanning then
-        -- The pending result replaces the invalidated snapshot. Keep its consumers together.
-        core.log_quiet("Project files: retained active scan for %s during invalidation", entry.root)
-      elseif entry.watcher or next(entry.subscribers) then
-        entry.files, entry.paths, entry.directories, entry.searchable_directories,
-          entry.directory_list = nil, nil, nil, nil, nil
-        entry.error = nil
+      -- Project Path changes can remove roots. Resume watches only when a consumer requests them again.
+      if not root_key then stop_watcher(entry) end
+      if entry.scanning or entry.watcher or next(entry.subscribers) then
+        -- A scan installing watches has already published its complete replacement.
+        if entry.phase ~= "watching" then
+          entry.files, entry.paths, entry.directories, entry.searchable_directories,
+            entry.directory_list = nil, nil, nil, nil, nil
+          entry.error = nil
+        end
+        if entry.scanning then
+          core.log_quiet("Project files: retained active scan for %s during invalidation", entry.root)
+        end
       else
         cache[key] = nil
       end
