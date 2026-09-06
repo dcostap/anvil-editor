@@ -1310,9 +1310,60 @@ function GitView:point_of_interest_for_pane(view, line)
   }
 end
 
-function GitView:update_pane_buffers()
+local function pane_buffer_state(view, tab)
+  local log_tab = view.model:log_tab()
+  local detail = view:detail_commit_for_tab(tab)
+  return {
+    tab = tab,
+    tab_kind = tab and tab.kind,
+    tab_loading = tab and tab.loading,
+    tab_error = tab and tab.error,
+    tab_commits = tab and tab.commits,
+    tab_commit_count = tab and #(tab.commits or {}) or 0,
+    tab_selected_commit = tab and tab.selected_commit,
+    tab_changed_files = tab and tab.changed_files,
+    tab_changed_file_count = tab and #(tab.changed_files or {}) or 0,
+    tab_selected_file = tab and tab.selected_file,
+    tab_file_loading = tab and tab.loading_file,
+    tab_file_error = tab and tab.file_error,
+    log_commits = log_tab and log_tab.commits,
+    log_commit_count = log_tab and #(log_tab.commits or {}) or 0,
+    log_graph_revision = log_tab and log_tab.graph_revision,
+    log_loading = log_tab and log_tab.loading,
+    log_loading_more = log_tab and log_tab.loading_more,
+    log_error = log_tab and log_tab.error,
+    log_selected_commit = log_tab and log_tab.selected_commit,
+    detail = detail,
+    detail_files = detail and detail.changed_files,
+    detail_file_count = detail and #(detail.changed_files or {}) or 0,
+    detail_files_loading = detail and detail.changed_files_loading,
+    detail_files_loaded = detail and detail.changed_files_loaded,
+    detail_files_error = detail and detail.changed_files_error,
+  }
+end
+
+local function same_pane_buffer_state(a, b)
+  if not (a and b) then return false end
+  for key, value in pairs(a) do
+    if b[key] ~= value then return false end
+  end
+  for key, value in pairs(b) do
+    if a[key] ~= value then return false end
+  end
+  return true
+end
+
+function GitView:update_pane_buffers(force)
   local tab = self:model_tab()
   if not tab then return end
+  local state = pane_buffer_state(self, tab)
+  if force == false and same_pane_buffer_state(state, self.__pane_buffer_state) then
+    if tab.kind == "file_history" then
+      local list = self.pane_views and self.pane_views["history-list"]
+      if list then tab.scroll = list.scroll.to.y end
+    end
+    return false
+  end
   if tab.kind == "file_history" then
     local lines = {}
     local line_meta = {}
@@ -1423,6 +1474,8 @@ function GitView:update_pane_buffers()
       details:set_path_tree(detail_tree, detail_tree_offset or 0)
     end
   end
+  self.__pane_buffer_state = pane_buffer_state(self, tab)
+  return true
 end
 
 function GitView:maybe_load_more_commits()
@@ -1445,7 +1498,7 @@ function GitView:maybe_load_more_commits()
 end
 
 function GitView:update()
-  self:update_pane_buffers()
+  self:update_pane_buffers(false)
   self:maybe_load_more_commits()
   self:sync_selection_from_pane()
   local tab = self:model_tab()
