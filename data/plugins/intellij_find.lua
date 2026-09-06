@@ -925,7 +925,7 @@ local function draw_find_overview(view)
   local sx, sy, sw, sh = view.v_scrollbar:get_track_rect()
   if sw <= 0 or sh <= 0 then return end
   local source_h = math.max(1, view:get_scrollable_size())
-  local min_h = math.min(sh, math.max(2, common.round(4 * SCALE)))
+  local min_h = math.min(sh, math.max(2, common.round(3 * SCALE)))
 
   local function draw_match(match, selected)
     local first_row = view:get_visual_row(match.line, match.col1, false)
