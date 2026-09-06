@@ -43,6 +43,15 @@ local function patch_modified_times(context, overrides)
     end
     return info, err
   end
+  context.original_list_dir_info = system.list_dir_info
+  system.list_dir_info = function(path, ...)
+    local entries, err = context.original_list_dir_info(path, ...)
+    for _, entry in ipairs(entries or {}) do
+      local modified = overrides[common.normalize_path(path .. PATHSEP .. entry.name)]
+      if modified then entry.modified = modified end
+    end
+    return entries, err
+  end
 end
 
 local function setup_tree(context)
@@ -95,6 +104,9 @@ test.describe("File Tree Sorting", function()
     if context.original_get_file_info then
       system.get_file_info = context.original_get_file_info
     end
+    if context.original_list_dir_info then
+      system.list_dir_info = context.original_list_dir_info
+    end
     if context.filetree then
       context.filetree.current_dir = context.previous_dir or context.filetree.current_dir
       context.filetree:refresh(false, false)
@@ -113,6 +125,7 @@ test.describe("File Tree Sorting", function()
     local filetree = setup_tree(context)
 
     assert_filetree_lines(filetree, {
+      "../",
       "aaa-old-dir/",
       "zzz-new-dir/",
       "aaa-old.txt",
@@ -122,6 +135,7 @@ test.describe("File Tree Sorting", function()
     test.ok(command.perform("filetree:sort_by_date_modified"))
     test.equal(filetree:get_sort_mode(), "modified")
     assert_filetree_lines(filetree, {
+      "../",
       "zzz-new-dir/",
       "aaa-old-dir/",
       "zzz-new.txt",
@@ -131,6 +145,7 @@ test.describe("File Tree Sorting", function()
     test.ok(command.perform("filetree:sort_by_name"))
     test.equal(filetree:get_sort_mode(), "name")
     assert_filetree_lines(filetree, {
+      "../",
       "aaa-old-dir/",
       "zzz-new-dir/",
       "aaa-old.txt",
@@ -169,16 +184,17 @@ test.describe("File Tree Sorting", function()
 
   test.it("blocks sort changes while File Tree has unapplied text edits", function(context)
     local filetree = setup_tree(context)
+    local line = test.not_nil(find_filetree_line(filetree, "aaa-old-dir/"))
 
     filetree:with_selection_state(function()
-      filetree.buffer:insert(1, 1, "renamed-")
+      filetree.buffer:insert(line, 1, "renamed-")
     end)
-    test.equal(line_without_newline(filetree.buffer.lines[1]), "renamed-aaa-old-dir/")
+    test.equal(line_without_newline(filetree.buffer.lines[line]), "renamed-aaa-old-dir/")
     test.ok(filetree.has_possible_edits, "expected edited File Tree to track unapplied edits")
 
     test.ok(command.perform("filetree:sort_by_date_modified"))
 
     test.equal(filetree:get_sort_mode(), "name")
-    test.equal(line_without_newline(filetree.buffer.lines[1]), "renamed-aaa-old-dir/")
+    test.equal(line_without_newline(filetree.buffer.lines[line]), "renamed-aaa-old-dir/")
   end)
 end)

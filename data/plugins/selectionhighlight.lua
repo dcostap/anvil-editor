@@ -71,8 +71,8 @@ end
 function TextView:draw_line_body(line, x, y)
   local scope = perf_scope_begin("selection_highlight")
   if self.local_find_active then
-    local result = draw_line_body(self, line, x, y)
     perf_scope_end(scope)
+    local result = draw_line_body(self, line, x, y)
     return result
   end
 
@@ -105,7 +105,7 @@ function TextView:draw_line_body(line, x, y)
     end
   end
   ::return_value::
-  local result = draw_line_body(self, line, x, y)
   perf_scope_end(scope)
+  local result = draw_line_body(self, line, x, y)
   return result
 end

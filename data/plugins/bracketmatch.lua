@@ -276,8 +276,8 @@ end
 --- @param y number
 --- @return number
 function TextView:draw_line_text(line, x, y)
-  local scope = perf_scope_begin("bracket_match")
   local lh = draw_line_text(self, line, x, y)
+  local scope = perf_scope_begin("bracket_match")
   local width = 1
   if self.buffer == state.buffer and state.line2 then
     if line == state.line and bracketmatch.highlight_both then
