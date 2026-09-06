@@ -614,8 +614,10 @@ local function set_history_index(pane, index, opts)
   if index < 1 or index > #history.entries then return nil end
   if index == history.index then return pane.current_view end
   local old = pane.current_view
-  history.entries[history.index].state = capture_navigation_state(old)
   local next_view = history.entries[index].view
+  if old ~= next_view then
+    history.entries[history.index].state = capture_navigation_state(old)
+  end
   if old ~= next_view then call_lifecycle(old, "on_suspend") end
   history.index = index
   pane.current_view = next_view
@@ -1265,14 +1267,15 @@ function M.back(target)
   flush_pending_edit(pane.current_view)
   M.prune_history(pane)
   local current = pane.history.entries[pane.history.index]
-  if current and current.kind == "edit" and current.view == pane.current_view then
+  if current and (current.kind == "edit" or pane.history.index == 1)
+      and current.view == pane.current_view then
     local live = capture_navigation_state(pane.current_view)
     if navigation_state_key(current.view, current.state)
         ~= navigation_state_key(pane.current_view, live) then
       restore_navigation_state(pane.current_view, current.state)
-      log_navigation_history(pane, "return-to-edit-place")
+      log_navigation_history(pane, "return-to-place")
       M.focus(pane)
-      after_mutation("returned to edit location in " .. pane.id)
+      after_mutation("returned to recorded location in " .. pane.id)
       return pane.current_view
     end
   end
@@ -1293,7 +1296,8 @@ function M.is_back_available(target)
   if has_pending_edit(pane.current_view) then return true end
   if pane.history.index > 1 then return true end
   local current = pane.history.entries[pane.history.index]
-  if not (current and current.kind == "edit" and current.view == pane.current_view) then
+  if not (current and (current.kind == "edit" or pane.history.index == 1)
+      and current.view == pane.current_view) then
     return false
   end
   return navigation_state_key(current.view, current.state)
