@@ -408,10 +408,6 @@ else
             install_dir : 'share/icons/hicolor/1024x1024/apps',
             rename : 'anvil.png'
         )
-        install_data('resources/icons/logo.svg',
-            install_dir : 'share/icons/hicolor/scalable/apps',
-            rename : 'anvil.svg'
-        )
         install_data('resources/linux/io.github.dcostap.Anvil.desktop',
             install_dir : 'share/applications'
         )

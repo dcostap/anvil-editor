@@ -8,7 +8,7 @@ This folder contains resources that is used for building or packaging the projec
 
 ### Packaging
 
-- `icons/logo.svg`: source artwork for the Anvil app logo.
+- `icons/logo-source.png`: source artwork for the Anvil app logo.
 - `icons/logo.png`, `icons/icon.{icns,ico,inl,rc}`: Anvil icons for each platform.
 - `linux/io.github.dcostap.Anvil.appdata.xml`: AppStream metadata.
 - `linux/io.github.dcostap.Anvil.desktop`: Desktop file for Linux desktops.
@@ -19,17 +19,17 @@ This folder contains resources that is used for building or packaging the projec
 
 ### Development
 
-Regenerate all app icons and installer images from `icons/logo.svg`:
+Regenerate all app icons and installer images from `icons/logo-source.png`:
 
 ```sh
-python tools/update_anvil_icon.py --inkscape "C:/Program Files/Inkscape/bin/inkscape.exe"
+python tools/update_anvil_icon.py
 ```
 
-Run this command from the repository root. It needs Python, Pillow, and Inkscape.
-If Inkscape is on `PATH`, omit `--inkscape`.
-Normal builds use the generated files. They do not need Inkscape or Pillow.
+Run this command from the repository root. It needs Python and Pillow.
+Normal builds use the generated files. They do not need Pillow.
 
 The square icons keep the artwork's proportions and transparent background.
+The generator crops transparent outer padding and adds no inset.
 The Windows icon includes sizes from 16 to 256 pixels.
 The macOS icon includes sizes up to 1024 pixels.
 The native window icon uses 64-pixel RGBA data in `icons/icon.inl`.

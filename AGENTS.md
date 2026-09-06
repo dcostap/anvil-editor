@@ -69,23 +69,23 @@ and stays open, but it does not index that complete Project.
 
 ## App logo and icons
 
-The source artwork is `resources\icons\logo.svg`.
+The source artwork is `resources\icons\logo-source.png`.
 To replace the app logo:
 
-1. Replace `resources\icons\logo.svg` with the new SVG.
+1. Replace `resources\icons\logo-source.png` with the new PNG.
 2. Run this command from the repo root:
 
    ```sh
-   python tools/update_anvil_icon.py --inkscape "C:/Program Files/Inkscape/bin/inkscape.exe"
+   python tools/update_anvil_icon.py
    ```
 
 3. Check the generated icons at small sizes on light and dark backgrounds.
 4. Run `update-anvil-dev-build.bat` to rebuild, install, and restart the dev portable app.
 
-The generator needs Python, Pillow, and Inkscape. Omit `--inkscape` if Inkscape is on `PATH`.
+The generator needs Python and Pillow. It crops transparent outer padding and adds no inset.
 It updates the welcome logo, Windows ICO, macOS ICNS, native window icon, and installer images.
-Linux packages use the generated PNG and the source SVG.
-Do not edit generated icons separately. Commit the SVG and all generated files together.
+Linux packages use the generated PNG.
+Do not edit generated icons separately. Commit the source PNG and all generated files together.
 Normal builds use these files and do not need the generator's tools.
 Keep the Windows resource dependency on `resources\icons\icon.ico` in `src\meson.build`.
 This dependency makes ICO changes rebuild the executable's icon resource.
