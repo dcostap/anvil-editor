@@ -2,6 +2,7 @@
 -- Reusable hierarchy and TextView presentation for arbitrary file path sets.
 
 local common = require "core.common"
+local core = require "core"
 local config = require "core.config"
 local TextView = require "core.textview"
 local Object = require "core.object"
@@ -378,8 +379,15 @@ end
 function path_tree.inline_file_render(view, source_text, name_col, name, color)
   local line_height = view:get_line_height()
   local icon_width = file_icons.column_width(line_height)
+  local icon = file_icons.prepare(name, line_height)
   name_col = math.max(1, math.min(#source_text + 1, math.floor(name_col or 1)))
   return {
+    __path_tree_file = {
+      name = name,
+      prefix = source_text:sub(1, name_col - 1),
+      text = source_text:sub(name_col),
+      color = color,
+    },
     fragments = {
       {
         source_col1 = name_col,
@@ -389,7 +397,11 @@ function path_tree.inline_file_render(view, source_text, name_col, name, color)
           width = icon_width,
           height = line_height,
           draw = function(_, _, x, y, row_height)
-            file_icons.draw(name, x, y, row_height)
+            if row_height == line_height then
+              file_icons.draw_prepared(icon, x, y)
+            else
+              file_icons.draw(name, x, y, row_height)
+            end
           end,
         },
       },
@@ -401,6 +413,61 @@ function path_tree.inline_file_render(view, source_text, name_col, name, color)
       },
     },
   }
+end
+
+local function build_file_row_packet(view, spec)
+  if not (renderer.display_packet and renderer.display_packet.new) then return nil end
+  local line_height = view:get_line_height()
+  local icon = file_icons.prepare(spec.name, line_height)
+  local builder = renderer.display_packet.new()
+  local _, tab_size = view.buffer:get_indent_info()
+  tab_size = tab_size or config.indent_size or 2
+  local text_x = builder:add_text(
+    0, 1, view:get_font(), spec.prefix, 0,
+    view:get_line_text_y_offset(), style.text, 0, tab_size
+  )
+  if icon then
+    builder:add_text(
+      0, 1, icon.font, icon.glyph, text_x + icon.x_offset, icon.y_offset,
+      icon.color, nil, 2
+    )
+  end
+  text_x = text_x + file_icons.column_width(line_height)
+  builder:add_text(
+    0, 1, view:get_font(), spec.text, text_x,
+    view:get_line_text_y_offset(), spec.color or style.text, nil, 2
+  )
+  return builder:seal(), line_height, view:get_font()
+end
+
+local function draw_file_row_packet(view, render_line, x, y, rebuilding)
+  local spec = render_line.__path_tree_file
+  if not spec then return false end
+  local cached = render_line.__path_tree_packet
+  if not cached or cached.line_height ~= view:get_line_height()
+  or cached.font ~= view:get_font() then
+    if cached and cached.packet then cached.packet:release() end
+    render_line.__path_tree_packet = nil
+    local ok, packet, line_height, font = pcall(build_file_row_packet, view, spec)
+    if not ok or not packet then return false end
+    cached = { packet = packet, line_height = line_height, font = font }
+    render_line.__path_tree_packet = cached
+  end
+  local ok, reason = cached.packet:draw(
+    x, y + (render_line.content_y_offset or 0), 0, 1, 1
+  )
+  if ok then return true end
+  if reason == "stale_font" then
+    cached.packet:release()
+    render_line.__path_tree_packet = nil
+    if not rebuilding then
+      return draw_file_row_packet(view, render_line, x, y, true)
+    end
+  elseif reason == "frame_failed" then
+    core.redraw = true
+    return true
+  end
+  return false
 end
 
 local INLINE_FILE_ICON_PROVIDER = {
@@ -533,7 +600,11 @@ function PathTreeView:draw_line_body(line, x, y)
 end
 
 function PathTreeView:draw_line_text(line, x, y)
-  if self:get_line_render(line) then
+  local render_line = self:get_line_render(line)
+  if render_line and draw_file_row_packet(self, render_line, x, y) then
+    return self:get_line_height()
+  end
+  if render_line then
     return PathTreeView.super.draw_line_text(self, line, x, y)
   end
   local row = self:path_tree_row(line)

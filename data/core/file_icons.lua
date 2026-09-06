@@ -443,7 +443,7 @@ function file_icons.get(path, size, is_directory)
   return font, definition.glyph, COLORS[definition.color][variant], name
 end
 
-function file_icons.draw(path, x, y, row_height, size, is_directory)
+function file_icons.prepare(path, row_height, size, is_directory)
   size = size or file_icons.size_for_row(row_height)
   -- Seti's glyph artwork occupies only part of each font em. VS Code renders
   -- the font at 150%; do the same, capped close to the row height so adjacent
@@ -454,12 +454,30 @@ function file_icons.draw(path, x, y, row_height, size, is_directory)
     render_size = math.min(render_size, math.floor(row_height + 2 * scale))
   end
   local font, glyph, color = file_icons.get(path, render_size, is_directory)
-  if not font then return false end
+  if not font then return nil end
   local glyph_width = font:get_width(glyph)
-  local draw_x = x + math.floor((size - glyph_width) / 2)
-  local draw_y = y + math.floor(((row_height or size) - font:get_height()) / 2)
-  renderer.draw_text(font, glyph, math.floor(draw_x), math.floor(draw_y), color)
-  return true, file_icons.column_width(row_height, size)
+  return {
+    font = font,
+    glyph = glyph,
+    color = color,
+    x_offset = math.floor((size - glyph_width) / 2),
+    y_offset = math.floor(((row_height or size) - font:get_height()) / 2),
+    width = file_icons.column_width(row_height, size),
+  }
+end
+
+function file_icons.draw_prepared(icon, x, y)
+  if not icon then return false end
+  renderer.draw_text(
+    icon.font, icon.glyph, x + icon.x_offset, y + icon.y_offset, icon.color
+  )
+  return true, icon.width
+end
+
+function file_icons.draw(path, x, y, row_height, size, is_directory)
+  return file_icons.draw_prepared(
+    file_icons.prepare(path, row_height, size, is_directory), x, y
+  )
 end
 
 function file_icons.reset_cache()

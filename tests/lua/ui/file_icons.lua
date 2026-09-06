@@ -148,4 +148,48 @@ test.describe("File-type icons", function()
     )
   end)
 
+  test.it("keeps cached Path Tree file rows pixel-identical", function()
+    local Buffer = require "core.buffer"
+    local path_tree = require "plugins.path_tree"
+    local renderer = require "renderer"
+    local renwindow = require "renwindow"
+    local tree = path_tree.build({ { path = "src/example.py" } })
+    local view = path_tree.View(Buffer(nil, nil, true))
+    view:set_path_tree(tree)
+    local line = tree:line_for_record(1)
+    local render_line = test.not_nil(view:get_line_render(line))
+    local height = math.ceil(view:get_line_height())
+
+    local function draw(window, cached)
+      local display_packet = renderer.display_packet
+      if not cached then
+        if render_line.__path_tree_packet then
+          render_line.__path_tree_packet.packet:release()
+          render_line.__path_tree_packet = nil
+        end
+        renderer.display_packet = nil
+      end
+      renderer.begin_frame(window)
+      renderer.set_clip_rect(0, 0, 400, height)
+      renderer.draw_rect(0, 0, 400, height, { 0, 0, 0, 255 })
+      view:draw_line_text(line, 2, 0)
+      renderer.end_frame()
+      renderer.display_packet = display_packet
+    end
+
+    local cached_window = renwindow.create("cached Path Tree row", 400, height)
+    local legacy_window = renwindow.create("legacy Path Tree row", 400, height)
+    draw(cached_window, true)
+    draw(legacy_window, false)
+    for y = 0, height - 1 do
+      for x = 0, 399 do
+        test.same(
+          renwindow.get_color(cached_window, x, y),
+          renwindow.get_color(legacy_window, x, y),
+          string.format("pixel %d,%d", x, y)
+        )
+      end
+    end
+  end)
+
 end)

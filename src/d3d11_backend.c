@@ -118,6 +118,8 @@ typedef struct D3D11FrameStats {
   double backbuffer_get_ms;
   double render_target_create_ms;
   double glyph_push_ms;
+  uint64_t glyph_push_calls;
+  uint64_t glyph_push_samples;
   double flush_quads_ms;
 } D3D11FrameStats;
 
@@ -545,7 +547,10 @@ size_t anvil_d3d11_last_texture_upload_bytes(void) {
 }
 
 double anvil_d3d11_last_glyph_push_ms(void) {
-  return g_d3d11.stats.frame.glyph_push_ms;
+  D3D11FrameStats *frame = &g_d3d11.stats.frame;
+  if (!frame->glyph_push_samples) return 0.0;
+  return frame->glyph_push_ms
+    * (double)frame->glyph_push_calls / (double)frame->glyph_push_samples;
 }
 
 double anvil_d3d11_last_flush_quads_ms(void) {
@@ -1614,16 +1619,33 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
   if (!d3d11_ensure_quad_pipeline(NULL)) return false;
 
   LARGE_INTEGER t0, t1;
-  QueryPerformanceCounter(&t0);
+  D3D11FrameStats *frame = &g_d3d11.stats.frame;
+  bool measure = (frame->glyph_push_calls++ & 31) == 0;
+  if (measure) {
+    frame->glyph_push_samples++;
+    QueryPerformanceCounter(&t0);
+  }
 
   RenRect clipped = d3d11_intersect_renrect(dst_px, clip_px);
-  if (clipped.width <= 0 || clipped.height <= 0) { QueryPerformanceCounter(&t1); g_d3d11.stats.frame.glyph_push_ms += d3d11_ms_between(t0, t1); return true; }
+  if (clipped.width <= 0 || clipped.height <= 0) {
+    if (measure) {
+      QueryPerformanceCounter(&t1);
+      frame->glyph_push_ms += d3d11_ms_between(t0, t1);
+    }
+    return true;
+  }
 
   float dx0 = (float)dst_px.x;
   float dy0 = (float)dst_px.y;
   float dx1 = (float)(dst_px.x + dst_px.width);
   float dy1 = (float)(dst_px.y + dst_px.height);
-  if (dx1 == dx0 || dy1 == dy0) { QueryPerformanceCounter(&t1); g_d3d11.stats.frame.glyph_push_ms += d3d11_ms_between(t0, t1); return true; }
+  if (dx1 == dx0 || dy1 == dy0) {
+    if (measure) {
+      QueryPerformanceCounter(&t1);
+      frame->glyph_push_ms += d3d11_ms_between(t0, t1);
+    }
+    return true;
+  }
 
   float sx0 = (float)src_px.x;
   float sy0 = (float)src_px.y;
@@ -1641,7 +1663,13 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
   float v1 = (sy0 + (cy1 - dy0) * (sy1 - sy0) / (dy1 - dy0)) / (float)surface->h;
 
   D3D11CachedTexture *tex = d3d11_get_cached_texture(surface, mode);
-  if (!tex || !tex->srv) { QueryPerformanceCounter(&t1); g_d3d11.stats.frame.glyph_push_ms += d3d11_ms_between(t0, t1); return false; }
+  if (!tex || !tex->srv) {
+    if (measure) {
+      QueryPerformanceCounter(&t1);
+      frame->glyph_push_ms += d3d11_ms_between(t0, t1);
+    }
+    return false;
+  }
   g_d3d11.stats.frame.texture_quads++;
 
   float cr = color.r / 255.0f;
@@ -1651,8 +1679,10 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
   D3D11QuadInstance inst = { cx0, cy0, cx1, cy1, u0, v0, u1, v1, cr, cg, cb, ca, (float)mode, 0, 0, 0 };
 
   bool result = d3d11_queue_quad(tex->srv, &inst, true);
-  QueryPerformanceCounter(&t1);
-  g_d3d11.stats.frame.glyph_push_ms += d3d11_ms_between(t0, t1);
+  if (measure) {
+    QueryPerformanceCounter(&t1);
+    frame->glyph_push_ms += d3d11_ms_between(t0, t1);
+  }
   return result;
 }
 

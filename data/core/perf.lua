@@ -1377,7 +1377,7 @@ local function write_summary(path)
   file:write(string.format("Frame target: target_fps=%s budget_ms=%.3f\n",
     tostring(record.target_fps), 1000 / math.max(1, record.target_fps or 1)))
   file:write(string.format(
-    "Recording overhead: draw scopes and API callers sample frame 1 and each %dth frame; Lua samples each %d instructions.\n",
+    "Recording overhead: draw scopes and API callers sample frame 1 and each %dth frame; Lua samples each %d instructions; D3D glyph timing samples each 32nd texture push.\n",
     detail_frame_interval, sample_interval
   ))
   file:write("Numeric frame and renderer costs cover each redraw. Detailed probes cover sampled redraws only.\n")

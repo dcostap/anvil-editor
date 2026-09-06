@@ -178,6 +178,7 @@ local function emit_indent_guides(self, line, x, y, emit_grid, emit_rect)
     indent_size = indent_size or config.indent_size or 2
     local indent_cols = effective_indent_cols(self.buffer, line, indent_size)
     local indent_levels = math.floor(indent_cols / indent_size)
+    if indent_levels <= 1 then return end
     local indent_px = self:get_font():get_width(string.rep(" ", indent_size))
     local lh = self:get_line_height()
     local lw = math.max(1, common.round(conf.line_width or SCALE))
