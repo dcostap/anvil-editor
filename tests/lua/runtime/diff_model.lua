@@ -9,6 +9,47 @@ local function lines(text)
 end
 
 test.describe("DiffModel", function()
+  test.it("separates added wrappers from reindented code", function()
+    local before = lines(table.concat({
+      "LaunchedEffect(reloadNonce) {",
+      "    loading = true",
+      "    mainViewModel.apiClient.getPedidosPendientesAlmacen().fold(",
+      "        onSuccess = { data = it },",
+      '        onFailure = { mainViewModel.onSnackbarQuickError(it.message ?: "No se pudieron cargar los pedidos pendientes") },',
+      "    )",
+      "    loading = false",
+      "}",
+    }, "\n"))
+    local after = lines(table.concat({
+      "LaunchedEffect(reloadNonce) {",
+      "    loading = true",
+      "    try {",
+      "        mainViewModel.apiClient.getPedidosPendientesAlmacen().fold(",
+      "            onSuccess = { data = it },",
+      '            onFailure = { mainViewModel.onSnackbarQuickError(it.message ?: "No se pudieron cargar los pedidos pendientes") },',
+      "        )",
+      "    } finally {",
+      "        loading = false",
+      "        isPullToRefreshInProgress = false",
+      "    }",
+      "}",
+    }, "\n"))
+    for _, sides in ipairs { { before, after, "a", "b", "insert" }, { after, before, "b", "a", "delete" } } do
+      local m = model.compute(sides[1], sides[2])
+      for _, line in ipairs { 3, 8, 10, 11 } do
+        test.equal(m:line_state(sides[4], line), sides[5])
+      end
+      for _, pair in ipairs { { 3, 4 }, { 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 9 } } do
+        test.equal(m:map_line(sides[3], pair[1]), pair[2])
+        test.equal(m:map_line(sides[4], pair[2]), pair[1])
+        test.equal(m:line_state(sides[3], pair[1]), "modify")
+        test.equal(m:line_state(sides[4], pair[2]), "modify")
+        test.same(m:inline_ranges(sides[3], pair[1]), {})
+        test.same(m:inline_ranges(sides[4], pair[2]), {})
+      end
+    end
+  end)
+
   test.it("computes equal text", function()
     local m = model.compute(lines("a\nb"), lines("a\nb"))
     test.equal(m:line_state("a", 1), "equal")
@@ -71,7 +112,7 @@ test.describe("DiffModel", function()
     local after = lines('inserted: true\ndescription: "new managed assistant extensions"\nstable tail')
     local m = model.compute(before, after)
 
-    test.equal("modify", m:line_state("b", 1))
+    test.equal("insert", m:line_state("b", 1))
     test.equal("modify", m:line_state("a", 1))
     test.equal("modify", m:line_state("b", 2))
     test.equal(2, m:map_line("a", 1))
@@ -93,8 +134,8 @@ test.describe("DiffModel", function()
 
     test.equal(m:line_state("a", 1), "modify")
     test.equal(m:line_state("b", 1), "modify")
-    test.equal(m:line_state("b", 2), "modify")
-    test.equal(m:line_state("b", 3), "modify")
+    test.equal(m:line_state("b", 2), "insert")
+    test.equal(m:line_state("b", 3), "insert")
     test.equal(m:map_line("a", 1), 1)
   end)
 

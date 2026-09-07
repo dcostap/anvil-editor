@@ -304,39 +304,6 @@ function M.compute(a_lines, b_lines, opts)
     bi = bi + 1
   end
 
-  -- Once a changed block contains a confidently paired replacement, present
-  -- its unmatched continuation lines as part of that modification rather
-  -- than as a visually separate red/green delete/insert pair. Keep raw_tag so
-  -- the renderer can still use the correct one-sided connector geometry.
-  local changed_run = {}
-  local function mark_modify(change)
-    if change and change.tag ~= "equal" then
-      change.raw_tag = change.tag
-      change.tag = "modify"
-    end
-  end
-  local function flush_changed_run()
-    local has_modify = false
-    for _, pair in ipairs(changed_run) do
-      if pair.tag == "modify" then has_modify = true; break end
-    end
-    if has_modify then
-      for _, pair in ipairs(changed_run) do
-        mark_modify(pair.a and a_changes[pair.a] or nil)
-        mark_modify(pair.b and b_changes[pair.b] or nil)
-      end
-    end
-    changed_run = {}
-  end
-  for _, pair in ipairs(alignment) do
-    if pair.tag == "equal" then
-      flush_changed_run()
-    else
-      changed_run[#changed_run + 1] = pair
-    end
-  end
-  flush_changed_run()
-
   return setmetatable({
     a_len = a_len,
     b_len = b_len,

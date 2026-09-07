@@ -1376,25 +1376,22 @@ local function draw_gap_marker(buffer_view, y, color)
   )
 end
 
-local function change_blocks(changes, tags, use_raw_tag)
+local function change_blocks(changes)
   local blocks = {}
   local i = 1
   while i <= #changes do
     local change = changes[i]
-    local tag = change and (use_raw_tag and change.raw_tag or change.tag)
-    tag = tag or (change and change.tag)
-    if tag and tag ~= "equal" and (not tags or tags[tag]) then
+    local tag = change and change.tag
+    if tag and tag ~= "equal" then
       local start_line = i
       local end_line = i
       while changes[end_line + 1] do
-        local next_change = changes[end_line + 1]
-        local next_tag = (use_raw_tag and next_change.raw_tag or next_change.tag) or next_change.tag
+        local next_tag = changes[end_line + 1].tag
         if next_tag ~= tag then break end
         end_line = end_line + 1
       end
       blocks[#blocks + 1] = {
         tag = tag,
-        display_tag = change.tag,
         start_line = start_line,
         end_line = end_line,
       }
@@ -1406,7 +1403,7 @@ local function change_blocks(changes, tags, use_raw_tag)
   return blocks
 end
 
-local function cached_change_blocks(view, side, kind, tags, use_raw_tag)
+local function cached_change_blocks(view, side, kind)
   local changes = side == "a" and view.a_changes or view.b_changes
   local cache = view.__change_blocks_cache
   if not cache or cache.a_source ~= view.a_changes or cache.b_source ~= view.b_changes then
@@ -1414,7 +1411,7 @@ local function cached_change_blocks(view, side, kind, tags, use_raw_tag)
     view.__change_blocks_cache = cache
   end
   local key = side .. ":" .. kind
-  if not cache[key] then cache[key] = change_blocks(changes, tags, use_raw_tag) end
+  if not cache[key] then cache[key] = change_blocks(changes) end
   return cache[key]
 end
 

@@ -17,7 +17,6 @@ typedef struct {
   int npairs;
   int ai, bi, pi;
   int lenA, lenB;
-  bool pairing_replacement;
 } DiffState;
 
 static int diff_state_gc(lua_State *L) {
@@ -70,9 +69,11 @@ static double token_similarity(const char *a, const char *b, size_t len_a, size_
   if (countA == 0 || countB == 0) return 0.0;
 
   int matches = 0;
+  bool used_b[MAX_TOKENS] = { false };
   for (int i = 0; i < countA; i++) {
     for (int j = 0; j < countB; j++) {
-      if (strcmp(tokensA[i], tokensB[j]) == 0) {
+      if (!used_b[j] && strcmp(tokensA[i], tokensB[j]) == 0) {
+        used_b[j] = true;
         matches++;
         break;
       }
@@ -130,6 +131,9 @@ static bool has_matching_comment_marker(const char *a, size_t len_a, const char 
 
 
 static double similarity(const char *a, size_t la, const char *b, size_t lb) {
+  // Indentation is not evidence that two different statements correspond.
+  while (la && (*a == ' ' || *a == '\t')) { a++; la--; }
+  while (lb && (*b == ' ' || *b == '\t')) { b++; lb--; }
   if (la == lb && memcmp(a, b, la) == 0) return 1.0;
   if (la == 0 || lb == 0) return 0.0;
 
@@ -138,7 +142,7 @@ static double similarity(const char *a, size_t la, const char *b, size_t lb) {
   while (prefix < la && prefix < lb && a[prefix] == b[prefix]) prefix++;
 
   size_t suffix = 0;
-  while (suffix < la && suffix < lb && a[la - 1 - suffix] == b[lb - 1 - suffix]) suffix++;
+  while (suffix < la - prefix && suffix < lb - prefix && a[la - 1 - suffix] == b[lb - 1 - suffix]) suffix++;
 
   double fast_score = (double)(prefix + suffix) / (la > lb ? la : lb);
   if (has_matching_structural_prefix(a, la, b, lb) || has_matching_comment_marker(a, la, b, lb)) {
@@ -152,19 +156,77 @@ static double similarity(const char *a, size_t la, const char *b, size_t lb) {
   return token_similarity(a, b, la, lb);
 }
 
-static double table_line_similarity(lua_State *L, int Aidx, int ai, int Bidx, int bi) {
-  size_t len_a = 0, len_b = 0;
-  lua_rawgeti(L, Aidx, ai);
-  const char *a = lua_tolstring(L, -1, &len_a);
-  lua_rawgeti(L, Bidx, bi);
-  const char *b = lua_tolstring(L, -1, &len_b);
-  double score = similarity(a, len_a, b, len_b);
-  lua_pop(L, 2);
-  return score;
+// Refine only small gaps. Large unrelated blocks stay as deletions/additions.
+// Exact and reindented anchors do not need this quadratic comparison.
+static bool append_similar_pairs(const AnvilDiffLine *a, int alo, int ahi,
+                                 const AnvilDiffLine *b, int blo, int bhi,
+                                 Pair *out, int *count) {
+  int n = ahi - alo, m = bhi - blo;
+  if (!n || !m || (size_t)(n + 1) > 65536 / (size_t)(m + 1)) return true;
+  typedef struct { double score; char step; } Cell;
+  size_t width = (size_t)m + 1;
+  Cell *cells = SDL_calloc((size_t)(n + 1) * width, sizeof(*cells));
+  if (!cells) return false;
+  for (int i = n - 1; i >= 0; i--) {
+    for (int j = m - 1; j >= 0; j--) {
+      Cell *cell = &cells[(size_t)i * width + j];
+      cell->score = cells[(size_t)(i + 1) * width + j].score;
+      cell->step = 'a';
+      double skip_b = cells[(size_t)i * width + j + 1].score;
+      if (skip_b > cell->score) { cell->score = skip_b; cell->step = 'b'; }
+      double score = similarity(a[alo + i].data, a[alo + i].length,
+                                b[blo + j].data, b[blo + j].length);
+      double paired = score + cells[(size_t)(i + 1) * width + j + 1].score;
+      if (score >= 0.4 && paired >= cell->score) {
+        cell->score = paired;
+        cell->step = 'p';
+      }
+    }
+  }
+  int i = 0, j = 0;
+  while (i < n && j < m) {
+    char step = cells[(size_t)i * width + j].step;
+    if (step == 'p') out[(*count)++] = (Pair){ alo + i + 1, blo + j + 1 };
+    if (step != 'b') i++;
+    if (step != 'a') j++;
+  }
+  SDL_free(cells);
+  return true;
 }
 
+static AnvilDiffLine without_indent(AnvilDiffLine line) {
+  while (line.length && (*line.data == ' ' || *line.data == '\t')) {
+    line.data++;
+    line.length--;
+  }
+  return line;
+}
 
-static Pair *build_equal_pairs(lua_State *L, int Aidx, int Bidx, int *npairs) {
+static bool append_reindented_pairs(AnvilDiffLine *a, int alo, int ahi,
+                                    AnvilDiffLine *b, int blo, int bhi,
+                                    Pair *out, int *count) {
+  if (alo == ahi || blo == bhi) return true;
+  // These arrays contain references, not source text. Keep the Lua text intact.
+  for (int i = alo; i < ahi; i++) a[i] = without_indent(a[i]);
+  for (int j = blo; j < bhi; j++) b[j] = without_indent(b[j]);
+  int anchor_count = 0;
+  Pair *anchors = anvil_diff_equal_pairs(a + alo, ahi - alo, b + blo, bhi - blo, &anchor_count);
+  if (!anchors) return false;
+  int ai = alo, bi = blo;
+  bool ok = true;
+  for (int k = 0; k <= anchor_count; k++) {
+    int mi = k < anchor_count ? alo + anchors[k].i - 1 : ahi;
+    int mj = k < anchor_count ? blo + anchors[k].j - 1 : bhi;
+    if (!append_similar_pairs(a, ai, mi, b, bi, mj, out, count)) { ok = false; break; }
+    if (k < anchor_count) out[(*count)++] = (Pair){ mi + 1, mj + 1 };
+    ai = mi + 1;
+    bi = mj + 1;
+  }
+  anvil_diff_pairs_free(anchors);
+  return ok;
+}
+
+static Pair *build_line_pairs(lua_State *L, int Aidx, int Bidx, int *npairs) {
   int n = (int)lua_rawlen(L, Aidx);
   int m = (int)lua_rawlen(L, Bidx);
   AnvilDiffLine *a_lines = SDL_malloc((size_t)(n > 0 ? n : 1) * sizeof(*a_lines));
@@ -189,10 +251,28 @@ static Pair *build_equal_pairs(lua_State *L, int Aidx, int Bidx, int *npairs) {
     lua_pop(L, 1);
   }
 
-  Pair *pairs = anvil_diff_equal_pairs(a_lines, n, b_lines, m, npairs);
+  int exact_count = 0;
+  Pair *exact = anvil_diff_equal_pairs(a_lines, n, b_lines, m, &exact_count);
+  int capacity = n < m ? n : m;
+  Pair *pairs = malloc((size_t)(capacity > 0 ? capacity : 1) * sizeof(*pairs));
+  bool ok = exact && pairs;
+  *npairs = 0;
+  int ai = 0, bi = 0;
+  for (int k = 0; ok && k <= exact_count; k++) {
+    int mi = k < exact_count ? exact[k].i - 1 : n;
+    int mj = k < exact_count ? exact[k].j - 1 : m;
+    ok = append_reindented_pairs(a_lines, ai, mi, b_lines, bi, mj, pairs, npairs);
+    if (ok && k < exact_count) pairs[(*npairs)++] = exact[k];
+    ai = mi + 1;
+    bi = mj + 1;
+  }
+  anvil_diff_pairs_free(exact);
   SDL_free(a_lines);
   SDL_free(b_lines);
-  if (!pairs) luaL_error(L, "histogram diff engine failed");
+  if (!ok) {
+    free(pairs);
+    luaL_error(L, "line diff engine failed");
+  }
   return pairs;
 }
 
@@ -389,102 +469,19 @@ static int f_inline_diff(lua_State *L) {
  * Returns:
  *  A table with the differences per line for a and b.
  */
+static int f_diff_iter(lua_State *L);
+
 static int f_diff(lua_State *L) {
-  luaL_checktype(L, 1, LUA_TTABLE);
-  luaL_checktype(L, 2, LUA_TTABLE);
-  int Aidx = 1, Bidx = 2;
-  int lenA = (int)lua_rawlen(L, Aidx);
-  int lenB = (int)lua_rawlen(L, Bidx);
-
-  int npairs;
-  Pair *pairs = build_equal_pairs(L, Aidx, Bidx, &npairs);
-
+  f_diff_iter(L);
+  int iterator_idx = lua_gettop(L);
   lua_newtable(L);
   int result_idx = lua_gettop(L);
-  int out_i = 1;
-  int ai = 1, bi = 1, pi = 0;
-  bool pairing_replacement = false;
-
-  while (ai <= lenA || bi <= lenB) {
-    int mi = (pi < npairs) ? pairs[pi].i : lenA + 1;
-    int mj = (pi < npairs) ? pairs[pi].j : lenB + 1;
-
-    if (ai == mi && bi == mj) {
-      size_t a_len = 0, b_len = 0;
-      lua_rawgeti(L, Aidx, ai);
-      const char *a = lua_tolstring(L, -1, &a_len);
-      lua_rawgeti(L, Bidx, bi);
-      const char *b = lua_tolstring(L, -1, &b_len);
-
-      push_edit(L, "equal", "a", a, a_len);
-      lua_pushlstring(L, b, b_len);
-      lua_setfield(L, -2, "b");
-      lua_rawseti(L, result_idx, out_i++);
-
-      lua_pop(L, 2);
-      ai++; bi++; pi++;
-      pairing_replacement = false;
-    }
-    else if (mi > ai && mj > bi) {
-      // fallback similarity check for modifications
-      size_t a_len = 0, b_len = 0;
-      lua_rawgeti(L, Aidx, ai);
-      const char *a = lua_tolstring(L, -1, &a_len);
-      lua_rawgeti(L, Bidx, bi);
-      const char *b = lua_tolstring(L, -1, &b_len);
-      double sim_val = similarity(a, a_len, b, b_len);
-      lua_pop(L, 2);
-
-      if (pairing_replacement || sim_val >= 0.4) {
-        push_edit(L, "modify", "a", a, a_len);
-        lua_pushlstring(L, b, b_len);
-        lua_setfield(L, -2, "b");
-        lua_rawseti(L, result_idx, out_i++);
-
-        ai++; bi++;
-        pairing_replacement = true;
-        continue;
-      }
-
-      // Prefer an adjacent structural match over eagerly deleting the current
-      // source line. This keeps a modification paired when one side inserted
-      // a neighboring line before it.
-      double skip_b = bi + 1 < mj
-        ? table_line_similarity(L, Aidx, ai, Bidx, bi + 1) : 0.0;
-      double skip_a = ai + 1 < mi
-        ? table_line_similarity(L, Aidx, ai + 1, Bidx, bi) : 0.0;
-      if (skip_b >= 0.4 && skip_b > skip_a) {
-        size_t inserted_len = 0;
-        lua_rawgeti(L, Bidx, bi);
-        const char *inserted = lua_tolstring(L, -1, &inserted_len);
-        push_edit(L, "insert", "b", inserted, inserted_len);
-        lua_rawseti(L, result_idx, out_i++);
-        lua_pop(L, 1);
-        bi++;
-        continue;
-      }
-    }
-
-    if (mi > ai) {
-      size_t a_len = 0;
-      lua_rawgeti(L, Aidx, ai);
-      const char *a = lua_tolstring(L, -1, &a_len);
-      push_edit(L, "delete", "a", a, a_len);
-      lua_rawseti(L, result_idx, out_i++);
-      lua_pop(L, 1);
-      ai++;
-    } else if (mj > bi) {
-      size_t b_len = 0;
-      lua_rawgeti(L, Bidx, bi);
-      const char *b = lua_tolstring(L, -1, &b_len);
-      push_edit(L, "insert", "b", b, b_len);
-      lua_rawseti(L, result_idx, out_i++);
-      lua_pop(L, 1);
-      bi++;
-    }
+  for (int i = 1; ; i++) {
+    lua_pushvalue(L, iterator_idx);
+    lua_call(L, 0, 1);
+    if (lua_isnil(L, -1)) { lua_pop(L, 1); break; }
+    lua_rawseti(L, result_idx, i);
   }
-
-  anvil_diff_pairs_free(pairs);
   return 1;
 }
 
@@ -514,49 +511,13 @@ static int diff_iterator(lua_State *L) {
       const char *b = lua_tolstring(L, -1, &b_len);
       lua_pop(L, 1);
 
-      push_edit(L, "equal", "a", a, a_len);
+      bool equal = a_len == b_len && memcmp(a, b, a_len) == 0;
+      push_edit(L, equal ? "equal" : "modify", "a", a, a_len);
       lua_pushlstring(L, b, b_len);
       lua_setfield(L, -2, "b");
 
       state->ai++; state->bi++; state->pi++;
-      state->pairing_replacement = false;
       return 1;
-    }
-
-    if (state->ai < mi && state->bi < mj) {
-      size_t a_len = 0, b_len = 0;
-      lua_rawgeti(L, Aidx, state->ai);
-      const char *a = lua_tolstring(L, -1, &a_len);
-      lua_pop(L, 1);
-
-      lua_rawgeti(L, Bidx, state->bi);
-      const char *b = lua_tolstring(L, -1, &b_len);
-      lua_pop(L, 1);
-
-      double sim_val = similarity(a, a_len, b, b_len);
-      if (state->pairing_replacement || sim_val >= 0.4) {
-        push_edit(L, "modify", "a", a, a_len);
-        lua_pushlstring(L, b, b_len);
-        lua_setfield(L, -2, "b");
-
-        state->ai++; state->bi++;
-        state->pairing_replacement = true;
-        return 1;
-      }
-
-      double skip_b = state->bi + 1 < mj
-        ? table_line_similarity(L, Aidx, state->ai, Bidx, state->bi + 1) : 0.0;
-      double skip_a = state->ai + 1 < mi
-        ? table_line_similarity(L, Aidx, state->ai + 1, Bidx, state->bi) : 0.0;
-      if (skip_b >= 0.4 && skip_b > skip_a) {
-        size_t inserted_len = 0;
-        lua_rawgeti(L, Bidx, state->bi);
-        const char *inserted = lua_tolstring(L, -1, &inserted_len);
-        lua_pop(L, 1);
-        push_edit(L, "insert", "b", inserted, inserted_len);
-        state->bi++;
-        return 1;
-      }
     }
 
     if (state->ai < mi) {
@@ -613,7 +574,7 @@ static int f_diff_iter(lua_State *L) {
   state->ai = 1;
   state->bi = 1;
   state->pi = 0;
-  state->pairs = build_equal_pairs(L, 1, 2, &state->npairs);
+  state->pairs = build_line_pairs(L, 1, 2, &state->npairs);
 
   /* Push tables and the owning userdata to the closure. */
   lua_pushvalue(L, 1);

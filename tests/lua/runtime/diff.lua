@@ -121,36 +121,32 @@ test.describe("diff", function()
     test.equal(modified, 1)
   end)
 
-  test.test("keeps replacement block continuation lines paired", function()
+  test.test("does not pair unrelated lines after a modified statement", function()
     local before = {
-      "    fun test(): String {",
-      "        val start = System.currentTimeMillis()",
-      "        repeat(35) {",
-      '            logInfo("RUNNING TEST TASK $it")',
-      "            Thread.sleep(1000)",
-      "        }",
+      "    result = oldValue",
+      "    obsoleteCall()",
+      "}",
     }
     local after = {
-      "    fun sageBridgeHealthCheck() {",
-      "        SageBridgeClient.sageBridgeConnectionCheck().onFailure {",
-      "            logError(it)",
-      "            // TODO(2026-08-06): add more user-friendly name to this thing. Sage bridge is a vague / confusing term. Rename the SageBridge class etc",
-      '            notifyDevelopers(it, "SAGE BRIDGE HEALTH CHECK FAILURE", true)',
-      "        }",
+      "    result = newValue",
+      "    // New explanation",
+      "}",
     }
 
     local changes = diff.diff(before, after)
-    for line = 1, 5 do
-      test.same(changes[line], { tag = "modify", a = before[line], b = after[line] })
-    end
-    test.same(changes[6], { tag = "equal", a = before[6], b = after[6] })
+    test.same(changes, {
+      { tag = "modify", a = before[1], b = after[1] },
+      { tag = "delete", a = before[2] },
+      { tag = "insert", b = after[2] },
+      { tag = "equal", a = before[3], b = after[3] },
+    })
 
     local iterated = {}
     for change in diff.diff_iter(before, after) do iterated[#iterated + 1] = change end
     test.same(iterated, changes)
   end)
 
-  test.test("returns the same histogram script from table and iterator APIs", function()
+  test.test("preserves both inputs in the table and iterator edit scripts", function()
     local seed = 73129
     local function random(limit)
       seed = (seed * 48271) % 2147483647
@@ -161,8 +157,15 @@ test.describe("diff", function()
       local before, after = {}, {}
       for i = 1, random(15) + 5 do before[i] = vocabulary[random(#vocabulary)] end
       for i = 1, random(15) + 5 do after[i] = vocabulary[random(#vocabulary)] end
-      local iterated = {}
-      for change in diff.diff_iter(before, after) do iterated[#iterated + 1] = change end
+      local iterated, restored_before, restored_after = {}, {}, {}
+      for change in diff.diff_iter(before, after) do
+        iterated[#iterated + 1] = change
+        if change.a then restored_before[#restored_before + 1] = change.a end
+        if change.b then restored_after[#restored_after + 1] = change.b end
+        if change.tag == "equal" then test.equal(change.a, change.b) end
+      end
+      test.same(restored_before, before)
+      test.same(restored_after, after)
       test.same(iterated, diff.diff(before, after))
     end
   end)
