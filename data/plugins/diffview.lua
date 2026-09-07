@@ -19,6 +19,8 @@ local FragmentBuffer = require "plugins.diff.fragment_buffer"
 ---@class config.plugins.diffview
 ---Logs the amount of time taken to recompute differences.
 ---@field log_times boolean
+---Ignore whitespace within lines when comparing text.
+---@field ignore_whitespace boolean
 ---Disable syntax coloring on changed lines to improve visibility.
 ---@field plain_text boolean
 ---The color used on changed lines when plain text is enabled.
@@ -31,6 +33,13 @@ local FragmentBuffer = require "plugins.diff.fragment_buffer"
 ---@field fold_min_lines integer
 config.plugins.diffview.config_spec = {
     name = "Differences Viewer",
+    {
+      label = "Ignore Whitespace",
+      description = "Ignore whitespace within lines, including strings. Added or removed blank lines still count as changes.",
+      path = "ignore_whitespace",
+      type = "toggle",
+      default = config.plugins.diffview.ignore_whitespace
+    },
     {
       label = "Log Times",
       description = "Logs the amount of time taken to compute differences.",
@@ -607,6 +616,11 @@ end
 
 function DiffView:update_diff()
   if self.skip_update_diff then self.skip_update_diff = false return end
+  local ignore_whitespace = config.plugins.diffview.ignore_whitespace
+  if self.diff_ignore_whitespace ~= ignore_whitespace then
+    core.log_quiet("Diff View ignore whitespace: %s", tostring(ignore_whitespace))
+  end
+  self.diff_ignore_whitespace = ignore_whitespace
   self.comparison_message = comparison_rejection(self.side_buffers)
   if self.comparison_message then
     self.diff_generation = (self.diff_generation or 0) + 1
@@ -634,6 +648,7 @@ function DiffView:update_diff()
   local idx = core.add_thread(function()
     local computing_start = system.get_time()
     local model = diff_model.compute(self.buffer_view_a.buffer.lines, self.buffer_view_b.buffer.lines, {
+      ignore_whitespace = ignore_whitespace,
       should_yield = function()
         if system.get_time() - computing_start >= 0.5 then
           computing_start = system.get_time()
@@ -1489,7 +1504,7 @@ local function diff_decoration_provider(parent, is_a)
       local other_text = other.buffer.lines[mapping[line]]
       local added_width = 0
       -- A pending edit can remove a paired line before the next comparison.
-      if other_text then
+      if other_text and not parent.diff_ignore_whitespace then
         local indent = view.buffer.lines[line]:match("^[ \t]*")
         local other_indent = other_text:match("^[ \t]*")
         local font = view:get_font()
@@ -1820,6 +1835,9 @@ end
 
 function DiffView:update()
   DiffView.super.update(self)
+  if self.diff_ignore_whitespace ~= config.plugins.diffview.ignore_whitespace then
+    self:update_diff()
+  end
   local divider_half = self:get_divider_width() / 2
 
   self.buffer_view_a.position.x = self.position.x

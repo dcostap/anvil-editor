@@ -133,6 +133,7 @@ plugin_defaults("terminal", {
   scrollback_lines = 10000,
 })
 plugin_defaults("diffview", {
+  ignore_whitespace = true,
   log_times = false,
   plain_text = false,
   plain_text_color = style.diffview_plain_text,

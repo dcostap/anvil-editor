@@ -61,11 +61,14 @@ test.describe("Diff View indentation backgrounds", function()
     context.views = {}
     context.active_view = core.active_view
     context.plain_text = config.plugins.diffview.plain_text
+    context.ignore_whitespace = config.plugins.diffview.ignore_whitespace
     config.plugins.diffview.plain_text = false
+    config.plugins.diffview.ignore_whitespace = false
   end)
 
   test.after_each(function(context)
     config.plugins.diffview.plain_text = context.plain_text
+    config.plugins.diffview.ignore_whitespace = context.ignore_whitespace
     core.active_view = context.active_view
     for _, view in ipairs(context.views) do view:on_close() end
   end)

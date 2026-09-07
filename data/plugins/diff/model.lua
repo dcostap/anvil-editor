@@ -4,11 +4,16 @@ local function max_line(lines)
   return math.max(1, #(lines or {}))
 end
 
-local function comparable_lines(lines)
+local function comparable_lines(lines, ignore_whitespace)
   lines = lines or {}
   -- A Buffer always keeps one newline-only placeholder line. It is not file
   -- content and must not become an equality anchor against a real blank line.
   if #lines == 1 and lines[1] == "\n" then return {} end
+  if ignore_whitespace then
+    local normalized = {}
+    for i, line in ipairs(lines) do normalized[i] = line:gsub("%s", "") end
+    return normalized
+  end
   return lines
 end
 
@@ -122,9 +127,46 @@ local function token_inline_ranges(from, target)
   return ranges
 end
 
-local function inline_change(from, to)
+local function whitespace_inline_ranges(from, target)
+  local from_values = diff.split(from:gsub("%s", ""), "char")
+  local target_values, source_columns = {}, {}
+  for col = 1, #target do
+    local byte = target:sub(col, col)
+    if not byte:match("%s") then
+      target_values[#target_values + 1] = byte
+      source_columns[#source_columns + 1] = col
+    end
+  end
+
+  local changed_columns, target_index = {}, 1
+  for edit in diff.diff_iter(from_values, target_values) do
+    if edit.b then
+      if edit.tag ~= "equal" then
+        changed_columns[#changed_columns + 1] = source_columns[target_index]
+      end
+      target_index = target_index + 1
+    end
+  end
+
+  -- Match without whitespace, then expand changes to the original word boundaries.
+  -- Removing spaces must not join an unchanged keyword to a renamed identifier.
+  local segments = token_segments(target)
+  local ranges, changed_index = {}, 1
+  for _, segment in ipairs(segments) do
+    while changed_columns[changed_index] and changed_columns[changed_index] < segment.col1 do
+      changed_index = changed_index + 1
+    end
+    if changed_columns[changed_index] and changed_columns[changed_index] < segment.col2 then
+      append_token_range(ranges, target, segment.col1, segment.col2)
+    end
+  end
+  return ranges
+end
+
+local function inline_change(from, to, ignore_whitespace)
   from, to = from or "", to or ""
   if from == to then return nil, {} end
+  if ignore_whitespace then return nil, whitespace_inline_ranges(from, to) end
   return nil, token_inline_ranges(from, to)
 end
 
@@ -201,8 +243,8 @@ end
 
 function M.compute(a_lines, b_lines, opts)
   opts = opts or {}
-  local comparable_a = comparable_lines(a_lines)
-  local comparable_b = comparable_lines(b_lines)
+  local comparable_a = comparable_lines(a_lines, opts.ignore_whitespace)
+  local comparable_b = comparable_lines(b_lines, opts.ignore_whitespace)
   local ai, bi = 1, 1
   local a_offset, b_offset = 0, 0
   local a_offset_total, b_offset_total = 0, 0
@@ -223,6 +265,9 @@ function M.compute(a_lines, b_lines, opts)
   end
 
   for edit in diff.diff_iter(comparable_a, comparable_b) do
+    -- Compare normalized keys, but keep source columns and source text intact.
+    edit.a = edit.a and a_lines[ai] or nil
+    edit.b = edit.b and b_lines[bi] or nil
     alignment[#alignment + 1] = {
       tag = edit.tag,
       a = edit.a and ai or nil,
@@ -245,7 +290,10 @@ function M.compute(a_lines, b_lines, opts)
         b_to_a[bi] = ai
       end
       if edit.a then
-        local changes, inline_ranges = inline_change(edit.b, edit.a)
+        local changes, inline_ranges = nil, {}
+        if edit.tag ~= "equal" then
+          changes, inline_ranges = inline_change(edit.b, edit.a, opts.ignore_whitespace)
+        end
         a_changes[#a_changes + 1] = {
           tag = edit.tag,
           changes = changes,
@@ -255,7 +303,10 @@ function M.compute(a_lines, b_lines, opts)
         a_offset = 0
       end
       if edit.b then
-        local changes, inline_ranges = inline_change(edit.a, edit.b)
+        local changes, inline_ranges = nil, {}
+        if edit.tag ~= "equal" then
+          changes, inline_ranges = inline_change(edit.a, edit.b, opts.ignore_whitespace)
+        end
         b_changes[#b_changes + 1] = {
           tag = edit.tag,
           changes = changes,
