@@ -1339,8 +1339,9 @@ local function alpha_color(color, alpha)
 end
 
 local function normalize_marker_range(y1, y2)
-  if math.abs(y2 - y1) >= 2 * SCALE then return y1, y2 end
-  return y1 - SCALE, y1
+  local h = math.max(1, common.round(2 * SCALE))
+  if math.abs(y2 - y1) >= h then return y1, y2 end
+  return y1 - h, y1
 end
 
 local function curve_point(x1, x2, y1, y2, t)
@@ -1381,7 +1382,7 @@ local function draw_gap_marker(buffer_view, y, color)
   color = alpha_color(color, 190)
   if not color then return end
   local gw = buffer_view:get_gutter_width()
-  local h = math.max(1, common.round(SCALE))
+  local h = math.max(1, common.round(2 * SCALE))
   renderer.draw_rect(
     buffer_view.position.x + gw,
     y - h,
