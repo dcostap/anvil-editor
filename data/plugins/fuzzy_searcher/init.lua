@@ -6467,6 +6467,14 @@ function FSView:reveal_selected_in_explorer()
   command.perform("editor:reveal_active_file_in_explorer", path)
 end
 
+function FSView:restore_activation_focus(new_group)
+  if not new_group or self.closed or self.closing then return end
+  if self.preview_view and self.preview_view:extends(TextView) then
+    self.preview_view:set_interactive(false)
+  end
+  ensure_input_focus(self, "alternate-activation")
+end
+
 function FSView:open_file_result(r, new_group, restore)
   local path = fullpath(r)
   local file_open = fuzzy_searcher._perf_file_open_begin(path, "fuzzy_searcher")
@@ -6477,7 +6485,7 @@ function FSView:open_file_result(r, new_group, restore)
   local source_view = self.source_view
   local source_pane = self.source_pane
   local close_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_close_picker")
-  self:close()
+  if not new_group then self:close() end
   fuzzy_searcher._perf_file_open_stage_end(close_stage)
   fuzzy_searcher._perf_file_open_mark("open_file_requested", string.format("line=%d col=%d", line, col))
   local opened, view = xpcall(function()
@@ -6550,6 +6558,7 @@ function FSView:open_file_result(r, new_group, restore)
     fuzzy_searcher._perf_file_open_mark("open_file_state_restored")
   end
   if file_open and not view then fuzzy_searcher._perf_file_open_fail("no_view") end
+  self:restore_activation_focus(new_group)
   return view
 end
 
@@ -6572,7 +6581,7 @@ function FSView:activate_create_path(r, new_group)
   local info = path and system.get_file_info(path)
   if info then
     if info.type == "dir" then
-      self:close()
+      if not new_group then self:close() end
       if new_group then core.open_project_in_new_window(path)
       else core.open_project_in_same_window(path) end
       return
@@ -6641,7 +6650,7 @@ function FSView:confirm_folder_open(r, new_group)
     function(option)
       if option.action == "cancel" then return end
       if self.closed then return end
-      self:close()
+      if not new_group then self:close() end
       core.add_thread(function()
         core.log_quiet("Fuzzy Searcher: selected folder action=%s", tostring(option.action))
         if option.action == "filetree" then
@@ -6651,6 +6660,7 @@ function FSView:confirm_folder_open(r, new_group)
         elseif option.action == "project_new" then
           core.open_project_in_new_window(path)
         end
+        self:restore_activation_focus(new_group)
       end)
     end
   )
@@ -6658,13 +6668,19 @@ function FSView:confirm_folder_open(r, new_group)
 end
 
 function FSView:confirm(new_group)
+  local result = self:activate_selected_result(new_group)
+  self:restore_activation_focus(new_group)
+  return result
+end
+
+function FSView:activate_selected_result(new_group)
   local r = self:selected_result()
   if not r then return end
   if r.kind == "shell_command" then
     local text = trim_query(r.shell_command)
     if text == "" then return end
     local cwd = r.cwd or file_context.source_directory(self.source_view) or system.getcwd()
-    self:close()
+    if not new_group then self:close() end
     require("plugins.command_slots").run_once(text, { cwd = cwd, focus = true })
     return
   end
@@ -6678,7 +6694,7 @@ function FSView:confirm(new_group)
       placement = placement,
     }
     remember_command(cmd)
-    self:close()
+    if not new_group then self:close() end
     command.perform_with_context(cmd, context)
     return
   end
@@ -6709,7 +6725,7 @@ function FSView:confirm(new_group)
       placement = new_group and "new" or "current",
     }
     self.file_picker_finished = true
-    self:close()
+    if not new_group then self:close() end
     core.log_quiet("File Picker: selected type=%s", candidate.type)
     picker.submit(common.normalize_path(path), context)
     return
@@ -6729,7 +6745,7 @@ function FSView:confirm(new_group)
       buffer.abs_filename or buffer.filename, "fuzzy_searcher"
     )
     local close_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_close_picker")
-    self:close()
+    if not new_group then self:close() end
     fuzzy_searcher._perf_file_open_stage_end(close_stage)
     fuzzy_searcher._perf_file_open_mark("open_buffer_requested", string.format("line=%d col=%d", r.line, r.col or 1))
     local view = source_view

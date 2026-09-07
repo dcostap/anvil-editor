@@ -163,7 +163,7 @@ test.describe("Fuzzy Searcher preview", function()
     test.ok(ph > 0)
   end)
 
-  test.it("focuses an Editor in a new Pane Group on alternate acceptance", function(context)
+  test.it("keeps the picker focused after opening an Editor in a new Pane Group", function(context)
     local path = temp_file_path("fuzzy-confirm-side-focus-test.txt")
     context.files = { path }
     write_file(path, "side target\n")
@@ -181,12 +181,14 @@ test.describe("Fuzzy Searcher preview", function()
 
     test.ok(command.perform("core:activate_point_of_interest_alternate"))
 
-    local view = core.active_view
-    test.ok(view and view.buffer and view.buffer.abs_filename == path, "expected side-accepted file to become active")
+    local view = panes.active().current_view
+    test.ok(view and view.buffer and view.buffer.abs_filename == path, "expected file in the new Pane Group")
     test.not_equal(panes.pane_for_view(view), context.source_pane)
     test.not_equal(panes.pane_for_view(view).group, context.source_pane.group)
     test.equal(panes.count(), 2)
-    test.ok(file_context.is_editor_view(view), "expected accepted file to be focused as an Editor")
+    test.ok(file_context.is_editor_view(view), "expected accepted file to open as an Editor")
+    test.equal(core.fuzzy_searcher_active_view, picker)
+    test.equal(core.active_view, picker.input.textview)
   end)
 
   test.it("routes Point of Interest Activation through modal picker input", function(context)
@@ -200,6 +202,10 @@ test.describe("Fuzzy Searcher preview", function()
     })
 
     test.ok(press_command_binding("core:activate_point_of_interest"), "expected activation input to be handled")
+    core.nag_view:change_hovered(2)
+    test.ok(command.perform("core:select_dialog_entry"))
+    local deadline = system.get_time() + 5
+    while not opened and system.get_time() < deadline do coroutine.yield(0.02) end
     test.equal(opened, project)
     test.is_nil(core.fuzzy_searcher_active_view, "expected activation to close the picker")
   end)
@@ -215,8 +221,12 @@ test.describe("Fuzzy Searcher preview", function()
     })
 
     test.ok(press_command_binding("core:activate_point_of_interest_alternate"), "expected alternate activation input to be handled")
+    core.nag_view:change_hovered(3)
+    test.ok(command.perform("core:select_dialog_entry"))
+    local deadline = system.get_time() + 5
+    while not opened and system.get_time() < deadline do coroutine.yield(0.02) end
     test.equal(opened, project)
-    test.is_nil(core.fuzzy_searcher_active_view, "expected activation to close the picker")
+    test.not_nil(core.fuzzy_searcher_active_view, "expected alternate activation to keep the picker open")
   end)
 
   test.it("moves to the leftmost fuzzy chunk without selecting separated chunks", function(context)

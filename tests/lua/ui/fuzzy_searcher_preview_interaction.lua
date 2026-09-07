@@ -56,8 +56,19 @@ test.describe("Fuzzy Searcher preview interaction", function()
       test.not_equal(panes.active().group, source_group)
       test.equal(source_pane.group, source_group)
       test.equal(source_pane.current_view, source)
+      test.equal(panes.active().current_view.buffer, source.buffer)
+      test.not_equal(panes.active().current_view, source)
+      test.equal(core.fuzzy_searcher_active_view, picker)
+      test.equal(core.active_view, picker.input.textview)
+
+      test.ok(command.perform("core:activate_point_of_interest_alternate"))
+      test.equal(panes.count(), 3)
+      test.equal(core.fuzzy_searcher_active_view, picker)
+      test.equal(core.active_view, picker.input.textview)
+
+      test.ok(command.perform("core:activate_point_of_interest"))
+      test.is_nil(core.fuzzy_searcher_active_view)
       test.equal(core.active_view.buffer, source.buffer)
-      test.not_equal(core.active_view, source)
     end)
   end
 
