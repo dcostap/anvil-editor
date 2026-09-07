@@ -72,12 +72,10 @@ test.describe("Diff View one-sided change positions", function()
         test.ok(math.abs(expected_y - changed_y) > 1, "fixture must have different side offsets")
 
         local rects, polygons = render_changes(view)
-        local marker_color = reverse and style.diff_marker_delete or style.diff_marker_insert
         local background = reverse and style.diff_delete_background or style.diff_insert_background
         local marker_found, connector_found = false, false
         for _, rect in ipairs(rects) do
-          if rect.color and rect.color[1] == marker_color[1]
-            and rect.color[2] == marker_color[2] and rect.color[3] == marker_color[3]
+          if rect.color == background
             and rect.x == opposite.position.x + opposite:get_gutter_width()
             and expected_y >= rect.y and expected_y <= rect.y + rect.h then
             marker_found = true
