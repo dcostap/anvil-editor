@@ -1447,6 +1447,16 @@ local function line_range_y(buffer_view, start_line, end_line)
   return start_y, end_y
 end
 
+local function change_boundary_y(buffer_view, next_line)
+  if next_line then
+    local _, y = buffer_view:get_line_screen_position(next_line)
+    return y
+  end
+  local last_line = #buffer_view.buffer.lines
+  local _, y = line_range_y(buffer_view, last_line, last_line)
+  return y
+end
+
 local function diff_has_changes(changes)
   for _, change in ipairs(changes or {}) do
     if change.tag ~= "equal" then return true end
@@ -1755,12 +1765,16 @@ function DiffView:draw_divider_changes()
         draw_connector("modify", a_start_y, a_end_y, b_start_y, b_end_y)
       elseif a_start then
         local a_start_y, a_end_y = line_range_y(left, a_start, a_end)
-        draw_connector("delete", a_start_y, a_end_y, a_start_y, a_start_y)
-        draw_gap_marker(right, a_start_y, gap_marker_color("delete"))
+        local next_pair = alignment[index]
+        local b_y = change_boundary_y(right, next_pair and next_pair.b)
+        draw_connector("delete", a_start_y, a_end_y, b_y, b_y)
+        draw_gap_marker(right, b_y, gap_marker_color("delete"))
       elseif b_start then
         local b_start_y, b_end_y = line_range_y(right, b_start, b_end)
-        draw_connector("insert", b_start_y, b_start_y, b_start_y, b_end_y)
-        draw_gap_marker(left, b_start_y, gap_marker_color("insert"))
+        local next_pair = alignment[index]
+        local a_y = change_boundary_y(left, next_pair and next_pair.a)
+        draw_connector("insert", a_y, a_y, b_start_y, b_end_y)
+        draw_gap_marker(left, a_y, gap_marker_color("insert"))
       end
     end
   end
