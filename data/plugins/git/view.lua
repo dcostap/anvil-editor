@@ -1077,7 +1077,6 @@ local function commit_details_lines(commit, view)
     lines[#lines + 1] = text
     line_meta[#lines] = meta
   end
-  add("Details", { role = "heading", text = "Details" })
   if not commit then
     add("Select a commit", { role = "message", text = "Select a commit" })
     return lines, line_meta
@@ -1120,7 +1119,6 @@ local function commit_details_lines(commit, view)
     end
   end
   add("", nil)
-  add("Changed files", { role = "heading", text = "Changed files" })
   if commit.changed_files_loading then
     add("Loading changed files...", { role = "message", text = "Loading changed files..." })
   elseif commit.changed_files_error then

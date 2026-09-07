@@ -1309,6 +1309,26 @@ test.describe("Git View command", function()
     test.ok(not details_text:find("Hash:", 1, true))
   end)
 
+  test.it("omits redundant Git commit detail section headings", function(context)
+    local _, view = open_fake_git_view(context.project)
+    view.model:log_tab().commits = {
+      {
+        hash = "headings",
+        subject = "Heading-free commit",
+        changed_files = { { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" } },
+        changed_files_loaded = true,
+      },
+    }
+    view.model:log_tab().selected_commit = 1
+    view:update_pane_buffers()
+
+    local details = view:pane_view("details")
+    local details_text = table.concat(details.buffer.lines)
+    test.equal(details.buffer:get_utf8_line(1), "Heading-free commit\n")
+    test.ok(not details_text:find("Details", 1, true))
+    test.ok(not details_text:find("Changed files", 1, true))
+  end)
+
   test.test("Local Focus Cycle enters and wraps through Git Log targets", function(context)
     local session, view = open_fake_git_view(context.project)
     core.active_view = view
