@@ -1373,6 +1373,7 @@ local function draw_curved_trapezium(x1, x2, start1, end1, start2, end2, color)
 end
 
 local function draw_gap_marker(buffer_view, y, color)
+  color = alpha_color(color, 190)
   if not color then return end
   local gw = buffer_view:get_gutter_width()
   local h = math.max(1, common.round(2 * SCALE))
@@ -1762,13 +1763,13 @@ function DiffView:draw_divider_changes()
         local next_pair = alignment[index]
         local b_y = change_boundary_y(right, next_pair and next_pair.b)
         draw_connector("delete", a_start_y, a_end_y, b_y, b_y)
-        draw_gap_marker(right, b_y, diff_color("delete", true))
+        draw_gap_marker(right, b_y, style.diff_marker_delete)
       elseif b_start then
         local b_start_y, b_end_y = line_range_y(right, b_start, b_end)
         local next_pair = alignment[index]
         local a_y = change_boundary_y(left, next_pair and next_pair.a)
         draw_connector("insert", a_y, a_y, b_start_y, b_end_y)
-        draw_gap_marker(left, a_y, diff_color("insert", true))
+        draw_gap_marker(left, a_y, style.diff_marker_insert)
       end
     end
   end
