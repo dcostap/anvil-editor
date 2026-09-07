@@ -1463,25 +1463,47 @@ function DiffView:diff_points_of_interest(is_a)
 end
 
 local function diff_decoration_provider(parent, is_a)
+  local function background_color(tag)
+    local color = diff_color(tag, true)
+    if config.plugins.diffview.plain_text then color = alpha_color(color, 128) end
+    return color
+  end
+
   return {
     priority = 50,
     line_background = function(_, view, line)
       local changes = is_a and parent.a_changes or parent.b_changes
       local change = changes[line]
-      if not change or change.tag == "equal" then return nil end
-      if change.tag == "delete" then
-        local color = style.diff_delete_background
-        if config.plugins.diffview.plain_text then color = alpha_color(color, 128) end
-        return color
-      elseif change.tag == "insert" then
-        local color = style.diff_insert_background
-        if config.plugins.diffview.plain_text then color = alpha_color(color, 128) end
-        return color
-      elseif change.tag == "modify" then
-        local color = style.diff_modify_background
-        if config.plugins.diffview.plain_text then color = alpha_color(color, 128) end
-        return color
+      if change and (change.tag == "delete" or change.tag == "insert") then
+        return background_color(change.tag)
       end
+    end,
+    line_background_descriptor = function(_, view, line)
+      local changes = is_a and parent.a_changes or parent.b_changes
+      local change = changes[line]
+      if not change or change.tag ~= "modify" then return nil end
+
+      local model = parent.diff_model
+      local mapping = is_a and model.a_to_b or model.b_to_a
+      local other = is_a and parent.buffer_view_b or parent.buffer_view_a
+      local other_text = other.buffer.lines[mapping[line]]
+      local added_width = 0
+      -- A pending edit can remove a paired line before the next comparison.
+      if other_text then
+        local indent = view.buffer.lines[line]:match("^[ \t]*")
+        local other_indent = other_text:match("^[ \t]*")
+        local font = view:get_font()
+        local _, indent_size = view.buffer:get_indent_info()
+        font:set_tab_size(indent_size)
+        added_width = math.max(0, font:get_width(indent) - font:get_width(other_indent))
+      end
+      return {
+        color = background_color("modify"),
+        left_color = added_width > 0 and background_color(is_a and "delete" or "insert") or nil,
+        -- Keep the changed indentation band on continuation rows too.
+        -- The text origin includes the gutter; the background does not.
+        x_offset = added_width - view:get_gutter_width(),
+      }
     end,
     inline_ranges = function(_, view, line)
       local changes = is_a and parent.a_changes or parent.b_changes

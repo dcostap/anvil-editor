@@ -8175,6 +8175,13 @@ local function draw_decoration_line_backgrounds(view, line, x, y)
     local by = row_y + (tonumber(descriptor.y_offset) or 0)
     local bh = math.max(0, row_height - (tonumber(descriptor.y_offset) or 0)
       - (tonumber(descriptor.bottom_inset) or 0))
+    -- Split backgrounds meet at bx without blending two translucent fills.
+    if descriptor.left_color and bh > 0 then
+      local left_width = math.max(0, math.min(view.size.x, bx - view.position.x))
+      if left_width > 0 then
+        renderer.draw_rect(view.position.x, by, left_width, bh, descriptor.left_color)
+      end
+    end
     if bw <= 0 or bh <= 0 then return end
     local radius = math.max(0, math.min(
       tonumber(descriptor.radius) or 0, bw / 2, bh / 2
