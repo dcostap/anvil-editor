@@ -2096,6 +2096,9 @@ end, {
   ["diff:toggle_folding"] = command.palette(function(view)
     view:toggle_folding()
   end, { keywords = { "compare", "fold", "unchanged" } }),
+  ["diff:toggle_ignore_whitespace"] = command.palette(function()
+    config.plugins.diffview.ignore_whitespace = not config.plugins.diffview.ignore_whitespace
+  end, { keywords = { "compare", "spaces", "indentation" } }),
   ["diff:swap_sides"] = command.palette(function(view)
     if view.request_controller then return view.request_controller:swap_sides() end
     return view:swap_sides()

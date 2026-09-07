@@ -1,4 +1,6 @@
 local config = require "core.config"
+local core = require "core"
+local command = require "core.command"
 local test = require "core.test"
 local diffview = require "plugins.diffview"
 
@@ -11,13 +13,37 @@ local function wait_for_diff(view)
 end
 
 test.describe("Diff View whitespace preference", function()
+  test.before_each(function(context)
+    context.active_view = core.active_view
+    context.ignore_whitespace = config.plugins.diffview.ignore_whitespace
+  end)
+
   test.after_each(function(context)
+    core.active_view = context.active_view
     config.plugins.diffview.ignore_whitespace = context.ignore_whitespace
     if context.view then context.view:on_close() end
   end)
 
+  test.it("toggles whitespace comparison from a Diff Side and its parent View", function(context)
+    config.plugins.diffview.ignore_whitespace = true
+    local view = diffview.string_to_string("loading = false", "    loading=false", "Before", "After", true)
+    context.view = view
+    wait_for_diff(view)
+
+    core.active_view = view.buffer_view_b
+    test.equal(command.perform("diff:toggle_ignore_whitespace"), true)
+    view:update()
+    wait_for_diff(view)
+    test.equal(view.diff_model:line_state("b", 1), "modify")
+
+    core.active_view = view
+    test.equal(command.perform("diff:toggle_ignore_whitespace"), true)
+    view:update()
+    wait_for_diff(view)
+    test.equal(view.diff_model:line_state("b", 1), "equal")
+  end)
+
   test.it("ignores formatting by default and updates an open comparison when the preference changes", function(context)
-    context.ignore_whitespace = config.plugins.diffview.ignore_whitespace
     local before = "before\n    loading = false\n    value = oldValue\nend"
     local after = "before\n        loading=false  \n    value = newValue\nend"
     local view = diffview.string_to_string(before, after, "Before", "After", true)
