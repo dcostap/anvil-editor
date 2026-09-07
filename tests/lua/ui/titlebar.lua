@@ -1,4 +1,5 @@
 local core = require "core"
+local config = require "core.config"
 local layout = require "core.pane_layout"
 local panes = require "core.panes"
 local scale = require "plugins.scale"
@@ -21,7 +22,8 @@ end
 
 test.describe("Global title bar Pane entries", function()
   local set_active_view, projects, window, window_mode, set_window_mode,
-    set_window_hit_test, quit, zoom
+    set_window_hit_test, quit, zoom, set_clip_rect, transitions, scroll_transition, fps,
+    configured_fps, live_resize, animation_rate
 
   test.before_each(function()
     panes.reset_for_tests()
@@ -33,6 +35,12 @@ test.describe("Global title bar Pane entries", function()
     set_window_mode = system.set_window_mode
     set_window_hit_test = system.set_window_hit_test
     quit = core.quit
+    set_clip_rect = renderer.set_clip_rect
+    renderer.set_clip_rect = function() end
+    transitions, scroll_transition, fps = config.transitions, config.disabled_transitions.scroll, core.fps
+    config.transitions, config.disabled_transitions.scroll, core.fps = true, false, 60
+    configured_fps, live_resize, animation_rate = config.fps, core.in_live_resize_frame, config.animation_rate
+    config.fps, core.in_live_resize_frame, config.animation_rate = 60, false, 1
     core.set_active_view = function(view) core.active_view = view end
   end)
 
@@ -46,6 +54,9 @@ test.describe("Global title bar Pane entries", function()
     system.set_window_mode = set_window_mode
     system.set_window_hit_test = set_window_hit_test
     core.quit = quit
+    renderer.set_clip_rect = set_clip_rect
+    config.transitions, config.disabled_transitions.scroll, core.fps = transitions, scroll_transition, fps
+    config.fps, core.in_live_resize_frame, config.animation_rate = configured_fps, live_resize, animation_rate
   end)
 
   test.it("shows all Panes in current numeric order", function()
@@ -373,7 +384,7 @@ test.describe("Global title bar Pane entries", function()
     test.is_nil(title.dragged_pane)
   end)
 
-  test.it("pages hidden Tabs when a Pane drag reaches the lane edge", function()
+  test.it("scrolls hidden Tabs when a Pane drag reaches the lane edge", function()
     local first
     for i = 1, 7 do
       local pane = panes.create { factory = factory("long-view-name-" .. i) }
@@ -389,7 +400,8 @@ test.describe("Global title bar Pane entries", function()
     title:on_mouse_pressed("left", source.x + 2, source.y + 2, 1)
     title:on_mouse_moved(lane_right - 1, source.y + 2, lane_right - source.x, 0)
 
-    test.ok(title.tab_offset > 1)
+    for _ = 1, 120 do title:update() end
+    test.ok(title.entries[1] == nil or title.entries[1].x < source.x)
     test.equal(title.dragged_pane, first)
     title:on_mouse_released("left", -50, -50)
   end)
@@ -409,7 +421,7 @@ test.describe("Global title bar Pane entries", function()
     test.equal(panes.count(), 2)
   end)
 
-  test.it("pages the global Tab lane with the mouse wheel", function()
+  test.it("smoothly scrolls the Tab lane with fractional wheel input", function()
     local first
     for i = 1, 6 do
       local pane = panes.create { factory = factory("view-" .. i) }
@@ -419,9 +431,63 @@ test.describe("Global title bar Pane entries", function()
     local title = TitleBar()
     title.size.x = 420
     title:update()
-    local before = title.tab_offset
-    test.ok(title:on_mouse_wheel(-1, 0))
-    test.ok(title.tab_offset > before)
+    local before = title.entries[1].x
+    test.ok(title:on_mouse_wheel(-0.25, 0))
+    test.equal(title.entries[1].x, before)
+    title:update()
+    local moving = title.entries[1].x
+    test.ok(moving < before)
+    for _ = 1, 120 do title:update() end
+    test.ok(title.entries[1].x < moving)
+    test.ok(title.entries[1].x + title.entries[1].w > before)
+    test.is_nil(title:entry_at(before - 1, title.position.y + 2))
+  end)
+
+  test.it("keeps an overflowing edge Tab visible and clickable", function()
+    local first = panes.create { factory = factory("first") }
+    panes.create { factory = factory("second") }
+    panes.create { factory = factory("third") }
+    panes.focus(first)
+    local title = TitleBar()
+    title.size.x = 1200
+    title:update()
+    local second = title.entries[2]
+    title.size.x = title.size.x - (title.caption_rects[1].x - second.x - second.w / 2)
+    title:update()
+    local edge = title.caption_rects[1].x
+    test.not_nil(title.entries[2])
+    test.ok(title.entries[2].x < edge)
+    test.ok(title.entries[2].x + title.entries[2].w > edge)
+    test.equal(title:entry_at(edge - 1, title.position.y + 2), 2)
+    test.is_nil(title:entry_at(edge, title.position.y + 2))
+  end)
+
+  test.it("clamps horizontal scrolling and reveals the focused Tab", function()
+    local first, last
+    for i = 1, 6 do
+      last = panes.create { factory = factory("view-" .. i) }
+      first = first or last
+    end
+    panes.focus(first)
+    local title = TitleBar()
+    title.size.x = 600
+    title:update()
+    test.not_ok(title:on_mouse_wheel(0, 0))
+    test.ok(title:on_mouse_wheel(0, -1000))
+    for _ = 1, 120 do title:update() end
+    local right = title.caption_rects[1].x
+    test.equal(title.entries[6].x + title.entries[6].w, right)
+    panes.focus(last)
+    title:update()
+    panes.focus(first)
+    for _ = 1, 120 do title:update() end
+    test.equal(title.entries[1].x, title.project_rect.x + title.project_rect.w)
+    title:on_mouse_wheel(0, -1000)
+    for _ = 1, 120 do title:update() end
+    title.size.x = 3000
+    title:update()
+    test.equal(title.entries[1].x, title.project_rect.x + title.project_rect.w)
+    test.not_ok(title:on_mouse_wheel(-1, 0))
   end)
 
   test.it("keeps a long Project name out of the Tab lane", function()

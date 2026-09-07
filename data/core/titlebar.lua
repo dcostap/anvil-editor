@@ -245,7 +245,9 @@ function TitleBar:new()
   self.drag_target = nil
   self.entries = {}
   self.caption_rects = {}
-  self.tab_offset = 1
+  self.tab_scroll = 0
+  self.tab_scroll_target = 0
+  self.tab_scroll_max = 0
 end
 
 function TitleBar:get_pane_entries()
@@ -296,51 +298,41 @@ function TitleBar:update_geometry()
   }
   local start_x = self.project_rect.x + self.project_rect.w
   local available = math.max(0, caption_start - start_x)
+  self.tab_lane = { x = start_x, y = self.position.y, w = available, h = h }
   local ordered = panes().ordered()
   local count = #ordered
   self.entries = {}
   if count > 0 and available > 0 then
-    local widths = {}
-    for i, pane in ipairs(ordered) do widths[i] = preferred_tab_width(i, pane, h) end
-    self.tab_offset = common.clamp(self.tab_offset or 1, 1, count)
+    local widths, starts, total = {}, {}, 0
+    for i, pane in ipairs(ordered) do
+      if i > 1 and ordered[i - 1].group ~= pane.group then total = total + tab_group_gap() end
+      starts[i] = total
+      widths[i] = preferred_tab_width(i, pane, h)
+      total = total + widths[i]
+    end
+    self.tab_scroll_max = math.max(0, total - available)
     local active = panes().active()
-    if active ~= self.last_active_pane then
+    if active ~= self.last_active_pane or available ~= self.last_lane_width then
       self.last_active_pane = active
+      self.last_lane_width = available
       local active_index = panes().number(active)
-      if active_index and active_index < self.tab_offset then self.tab_offset = active_index end
       if active_index then
-        local used = 0
-        for i = self.tab_offset, active_index do
-          if i > self.tab_offset and ordered[i - 1].group ~= ordered[i].group then
-            used = used + tab_group_gap()
-          end
-          used = used + widths[i]
-        end
-        while used > available and self.tab_offset < active_index do
-          used = used - widths[self.tab_offset]
-          if ordered[self.tab_offset].group ~= ordered[self.tab_offset + 1].group then
-            used = used - tab_group_gap()
-          end
-          self.tab_offset = self.tab_offset + 1
-        end
+        local left = starts[active_index]
+        local right = left + widths[active_index]
+        self.tab_scroll_target = common.clamp(self.tab_scroll_target,
+          math.min(left, right - available), left)
       end
     end
-    local x = start_x
-    for i = self.tab_offset, count do
-      local gap = i > self.tab_offset and ordered[i - 1].group ~= ordered[i].group
-        and tab_group_gap() or 0
-      local width = math.min(widths[i], available)
-      if i > self.tab_offset and x + gap + width > start_x + available then break end
-      x = x + gap
-      self.entries[i] = {
-        x = x,
-        y = self.position.y,
-        w = width,
-        h = h,
-      }
-      x = x + width
-      if x >= start_x + available then break end
+    self.tab_scroll_target = common.clamp(self.tab_scroll_target, 0, self.tab_scroll_max)
+    self.tab_scroll = common.clamp(self.tab_scroll, 0, self.tab_scroll_max)
+    for i = 1, count do
+      local x = start_x + starts[i] - self.tab_scroll
+      if x < start_x + available and x + widths[i] > start_x then
+        self.entries[i] = { x = x, y = self.position.y, w = widths[i], h = h }
+      end
     end
+  else
+    self.tab_scroll, self.tab_scroll_target, self.tab_scroll_max = 0, 0, 0
   end
 end
 
@@ -356,8 +348,10 @@ function TitleBar:configure_hit_test(enabled)
   end
   local interactive_x, interactive_right
   for _, rect in pairs(self.entries) do
-    interactive_x = math.min(interactive_x or rect.x, rect.x)
-    interactive_right = math.max(interactive_right or (rect.x + rect.w), rect.x + rect.w)
+    local left = math.max(rect.x, self.tab_lane.x)
+    local right = math.min(rect.x + rect.w, self.tab_lane.x + self.tab_lane.w)
+    interactive_x = math.min(interactive_x or left, left)
+    interactive_right = math.max(interactive_right or right, right)
   end
   local interactive_width = interactive_x and interactive_right - interactive_x or 0
   interactive_x = interactive_x or 0
@@ -375,11 +369,18 @@ end
 function TitleBar:update()
   self.size.y = self.visible and bar_height() or 0
   self:update_geometry()
+  local previous_scroll = self.tab_scroll
+  self:move_towards("tab_scroll", self.tab_scroll_target, 0.25, "scroll")
+  if self.tab_scroll ~= previous_scroll then self:update_geometry() end
+  if self.mouse_x and self.mouse_y then
+    self.hovered_entry = self:entry_at(self.mouse_x, self.mouse_y)
+  end
   self:configure_hit_test()
   TitleBar.super.update(self)
 end
 
 function TitleBar:entry_at(x, y)
+  if not contains(self.tab_lane, x, y) then return end
   for i = 1, #panes().ordered() do
     local rect = self.entries[i]
     if contains(rect, x, y) then return i, rect end
@@ -393,6 +394,7 @@ function TitleBar:caption_at(x, y)
 end
 
 function TitleBar:on_mouse_moved(x, y, ...)
+  self.mouse_x, self.mouse_y = x, y
   self.hovered_entry = self:entry_at(x, y)
   self.hovered_caption = self:caption_at(x, y)
   if self.pressed_pane then
@@ -410,15 +412,12 @@ function TitleBar:on_mouse_moved(x, y, ...)
         or self.position.x + self.size.x
       if y >= self.position.y and y < self.position.y + self.size.y
       and now - (self.last_drag_scroll or 0) >= DRAG_SCROLL_INTERVAL then
-        local count = #panes().ordered()
-        local last_visible = 0
-        for index in pairs(self.entries) do last_visible = math.max(last_visible, index) end
-        if x < lane_left + DRAG_SCROLL_EDGE * SCALE and self.tab_offset > 1 then
-          self.tab_offset = self.tab_offset - 1
+        if x < lane_left + DRAG_SCROLL_EDGE * SCALE and self.tab_scroll_target > 0 then
+          self:scroll_tabs(-60 * SCALE)
           self.last_drag_scroll = now
           self:update_geometry()
-        elseif x > lane_right - DRAG_SCROLL_EDGE * SCALE and last_visible < count then
-          self.tab_offset = self.tab_offset + 1
+        elseif x > lane_right - DRAG_SCROLL_EDGE * SCALE and self.tab_scroll_target < self.tab_scroll_max then
+          self:scroll_tabs(60 * SCALE)
           self.last_drag_scroll = now
           self:update_geometry()
         end
@@ -434,6 +433,7 @@ function TitleBar:on_mouse_moved(x, y, ...)
 end
 
 function TitleBar:on_mouse_left()
+  self.mouse_x, self.mouse_y = nil, nil
   self.hovered_entry, self.hovered_caption = nil, nil
   if not self.pressed_pane then self.pressed_caption = nil end
   core.redraw = true
@@ -582,6 +582,7 @@ function TitleBar:on_mouse_pressed(button, x, y, clicks)
       self.pressed_pane = pane
       self.drag_start_x, self.drag_start_y = x, y
       self.drag_x, self.drag_y = x, y
+      core.redraw = true
     end
     return true
   end
@@ -624,17 +625,16 @@ function TitleBar:on_scale_change()
   self.hit_test_signature = nil
 end
 
-function TitleBar:on_mouse_wheel(y, x)
-  if self.size.y <= 0 then return false end
-  local count = #panes().ordered()
-  local visible = 0
-  for _ in pairs(self.entries) do visible = visible + 1 end
-  if count <= visible or visible == 0 then return false end
-  local direction = y > 0 and -1 or 1
-  self.tab_offset = common.clamp(self.tab_offset + direction * visible, 1,
-    math.max(1, count - visible + 1))
-  self:update_geometry()
+function TitleBar:scroll_tabs(distance)
+  self.tab_scroll_target = common.clamp(self.tab_scroll_target + distance, 0, self.tab_scroll_max)
   core.redraw = true
+end
+
+function TitleBar:on_mouse_wheel(y, x)
+  if self.size.y <= 0 or self.tab_scroll_max <= 0 then return false end
+  local delta = x and x ~= 0 and x or y
+  if not delta or delta == 0 then return false end
+  self:scroll_tabs(-delta * 60 * SCALE)
   return true
 end
 
@@ -684,6 +684,7 @@ function TitleBar:draw()
   draw_centered_text(font,
     fit_text(font, project_name(), math.max(0, self.project_rect.w - style.padding.x * 2)),
     self.project_rect, style.text)
+  core.push_clip_rect(self.tab_lane.x, self.tab_lane.y, self.tab_lane.w, self.tab_lane.h)
   for i, entry in ipairs(pane_entries) do
     local rect = self.entries[i]
     if rect then
@@ -694,7 +695,8 @@ function TitleBar:draw()
       end
       if hovered then
         draw_tab_tile(rect.x, rect.y, rect.w, rect.h,
-          style.titlebar_tab_hover or style.background2)
+          self.pressed_pane == entry.pane and style.titlebar_control_pressed
+            or style.titlebar_tab_hover)
       end
       local label_rect = { x = rect.x + style.padding.x, y = rect.y,
         w = math.max(0, rect.w - style.padding.x * 2), h = rect.h }
@@ -720,6 +722,21 @@ function TitleBar:draw()
       style.titlebar_group_indicator
     )
   end
+  -- Soft edge shadows show that more Tabs continue outside the lane.
+  local fade_width = math.min(16 * SCALE, self.tab_lane.w / 2)
+  for edge = 1, 2 do
+    if (edge == 1 and self.tab_scroll > 0)
+      or (edge == 2 and self.tab_scroll < self.tab_scroll_max) then
+      for step = 0, math.ceil(fade_width) - 1 do
+        local alpha = 220 * (1 - step / fade_width) ^ 2
+        local x = edge == 1 and self.tab_lane.x + step
+          or self.tab_lane.x + self.tab_lane.w - step - 1
+        renderer.draw_rect(x, self.position.y, 1, self.size.y,
+          { style.titlebar[1], style.titlebar[2], style.titlebar[3], alpha })
+      end
+    end
+  end
+  core.pop_clip_rect()
   local window_focused = not core.window or not system.window_has_focus
     or system.window_has_focus(core.window)
   for i, rect in ipairs(self.caption_rects) do
