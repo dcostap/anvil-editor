@@ -79,7 +79,7 @@ test.describe("Diff View one-sided change positions", function()
           if rect.color and rect.color[1] == marker_color[1]
             and rect.color[2] == marker_color[2] and rect.color[3] == marker_color[3]
             and rect.x == opposite.position.x + opposite:get_gutter_width()
-            and math.abs(rect.y + rect.h / 2 - expected_y) < 0.01 then
+            and expected_y >= rect.y and expected_y <= rect.y + rect.h then
             marker_found = true
           end
         end

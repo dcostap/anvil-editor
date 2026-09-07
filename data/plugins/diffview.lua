@@ -1384,7 +1384,7 @@ local function draw_gap_marker(buffer_view, y, color)
   local h = math.max(1, common.round(SCALE))
   renderer.draw_rect(
     buffer_view.position.x + gw,
-    y - h / 2,
+    y - h,
     math.max(0, buffer_view.size.x - gw),
     h,
     color
