@@ -31,13 +31,16 @@ test.describe("Diff View whitespace preference", function()
     wait_for_diff(view)
 
     core.active_view = view.buffer_view_b
+    test.equal(command.get_status("diff:toggle_ignore_whitespace", view.buffer_view_b), true)
     test.equal(command.perform("diff:toggle_ignore_whitespace"), true)
+    test.equal(command.get_status("diff:toggle_ignore_whitespace", view.buffer_view_b), false)
     view:update()
     wait_for_diff(view)
     test.equal(view.diff_model:line_state("b", 1), "modify")
 
     core.active_view = view
     test.equal(command.perform("diff:toggle_ignore_whitespace"), true)
+    test.equal(command.get_status("diff:toggle_ignore_whitespace", view), true)
     view:update()
     wait_for_diff(view)
     test.equal(view.diff_model:line_state("b", 1), "equal")

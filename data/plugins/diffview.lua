@@ -2096,13 +2096,27 @@ end, {
   ["diff:toggle_folding"] = command.palette(function(view)
     view:toggle_folding()
   end, { keywords = { "compare", "fold", "unchanged" } }),
-  ["diff:toggle_ignore_whitespace"] = command.palette(function()
-    config.plugins.diffview.ignore_whitespace = not config.plugins.diffview.ignore_whitespace
-  end, { keywords = { "compare", "spaces", "indentation" } }),
   ["diff:swap_sides"] = command.palette(function(view)
     if view.request_controller then return view.request_controller:swap_sides() end
     return view:swap_sides()
   end, { keywords = { "compare", "left", "right", "reverse" } }),
+})
+
+command.add_toggle("diff:toggle_ignore_whitespace", {
+  predicate = function()
+    local view = core.active_view
+    if view and view.diff_view_parent then return true, view.diff_view_parent end
+    if view and view.is and view:is(DiffView) then return true, view end
+    return false
+  end,
+  palette = true,
+  metadata = { keywords = { "compare", "spaces", "indentation" } },
+  get = function()
+    return config.plugins.diffview.ignore_whitespace
+  end,
+  set = function(enabled)
+    config.plugins.diffview.ignore_whitespace = enabled
+  end,
 })
 
 local function active_diff_side()
