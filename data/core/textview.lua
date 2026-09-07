@@ -1945,7 +1945,7 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
       cache.row_count = current_row_count
       cache.total_height = cache.total_height - removed_height + inserted_height
       cache.height_tree = metric_tree_build(cache.heights, cache.row_count)
-      if old_row2 < old_anchor and self.scroll then
+      if old_row2 < old_anchor and self.scroll and not self.__pending_viewport_anchor then
         local delta = inserted_height - removed_height
         self.scroll.y = self.scroll.y + delta
         self.scroll.to.y = self.scroll.to.y + delta
@@ -3580,6 +3580,40 @@ local function metric_tree_sum(tree, row)
   return total
 end
 
+---Capture the source row displayed at the top of the measured viewport.
+---Do not resolve new provider state while capturing the previous layout.
+function TextView:capture_viewport_anchor()
+  if self.__pending_viewport_anchor then self:get_visual_row_metric_cache() end
+  local cache = self.__visual_metric_cache
+  if not cache or self.scroll.y <= 0
+    or cache.wrap_layout_generation ~= (self.__wrap_layout_generation or 0)
+    or cache.text_revision ~= (self.buffer.text_revision or 0)
+  then return nil end
+  local row = metric_tree_row_at_y(cache.height_tree, cache.row_count,
+    math.max(0, self.scroll.y - style.padding.y))
+  local line, col = self:get_visual_row_line_col(row)
+  if not line then return nil end
+  return { line = line, col = col or 1, content_y = metric_tree_sum(cache.height_tree, row - 1) }
+end
+
+---Restore an anchor when the replacement row measurements become available.
+function TextView:restore_viewport_anchor(anchor)
+  self.__pending_viewport_anchor = anchor
+  self.__visual_metric_snapshot_kind = nil
+  self.__visual_metric_snapshot_id = nil
+end
+
+local function apply_viewport_anchor(view, cache)
+  local anchor = view.__pending_viewport_anchor
+  if not anchor then return end
+  view.__pending_viewport_anchor = nil
+  local row = view:get_visual_row(anchor.line, anchor.col)
+  row = common.clamp(row, 1, cache.row_count)
+  local delta = metric_tree_sum(cache.height_tree, row - 1) - anchor.content_y
+  view.scroll.y = math.max(0, view.scroll.y + delta)
+  view.scroll.to.y = math.max(0, view.scroll.to.y + delta)
+end
+
 metric_tree_row_at_y = function(tree, row_count, y)
   local index, accumulated = 0, 0
   local step = 1
@@ -3747,11 +3781,12 @@ function TextView:get_visual_row_metric_cache()
         end
       end
       cache.dirty_rows = nil
-      if anchor_delta ~= 0 and self.scroll then
+      if anchor_delta ~= 0 and self.scroll and not self.__pending_viewport_anchor then
         self.scroll.y = self.scroll.y + anchor_delta
         self.scroll.to.y = self.scroll.to.y + anchor_delta
       end
     end
+    apply_viewport_anchor(self, cache)
     perf_elapsed("textview_visual_metric_cache_lookup_ms", lookup_start)
     if snapshot_id then
       self.__visual_metric_snapshot_kind = snapshot_kind
@@ -3809,6 +3844,7 @@ function TextView:get_visual_row_metric_cache()
     sparse_metrics = sparse_metrics,
   }
   self.__visual_metric_cache = cache
+  apply_viewport_anchor(self, cache)
   if snapshot_id then
     self.__visual_metric_snapshot_kind = snapshot_kind
     self.__visual_metric_snapshot_id = snapshot_id
@@ -3885,9 +3921,9 @@ local function overscan_metric_rows(cache, first, last, total)
 end
 
 function TextView:iter_visible_visual_rows()
+  local cache = self:get_visual_row_metric_cache()
   local _, y1, _, y2 = self:get_content_bounds()
   local total = self:get_scrollable_line_count()
-  local cache = self:get_visual_row_metric_cache()
   local row, last
   if cache then
     row = self:get_visual_row_at_y(math.max(0, y1 - style.padding.y))
@@ -4181,20 +4217,18 @@ function TextView:get_line_screen_position(line, col, line_end)
     else
       idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
     end
-    local x, y = self:get_content_offset()
     local gw = self:get_gutter_width()
-    return x + gw + (col and self:get_col_x_offset(line, col, line_end) or 0),
-      y + self:get_visual_row_y_offset(idx) + style.padding.y + render_y_offset()
+    local dx = col and self:get_col_x_offset(line, col, line_end) or 0
+    local content_y = render_y_offset() + self:get_visual_row_y_offset(idx) + style.padding.y
+    local x, y = self:get_content_offset()
+    return x + gw + dx, y + content_y
   end
-  local x, y = self:get_content_offset()
   local gw = self:get_gutter_width()
   local row = self:has_composed_visual_rows() and self:get_composed_visual_row_for_position(line, col, line_end) or line
-  y = y + self:get_visual_row_y_offset(row) + style.padding.y + render_y_offset()
-  if col then
-    return x + gw + self:get_col_x_offset(line, col), y
-  else
-    return x + gw, y
-  end
+  local dx = col and self:get_col_x_offset(line, col) or 0
+  local content_y = render_y_offset() + self:get_visual_row_y_offset(row) + style.padding.y
+  local x, y = self:get_content_offset()
+  return x + gw + dx, y + content_y
 end
 
 
@@ -4264,8 +4298,8 @@ end
 ---@return integer minline First visible line
 ---@return integer maxline Last visible line
 function TextView:get_visible_line_range()
-  local x, y, x2, y2 = self:get_content_bounds()
   local cache = self:get_visual_row_metric_cache()
+  local x, y, x2, y2 = self:get_content_bounds()
   local lh = self:get_line_height()
   if self:has_composed_visual_rows() then
     local total = self:get_composed_visual_row_count()
@@ -5560,6 +5594,7 @@ end
 ---@return integer line Line number
 ---@return integer col Column number
 function TextView:resolve_screen_position(x, y)
+  self:get_visual_row_metric_cache()
   self.resolved_fold_widget = nil
   self.resolved_line_render_position_row = nil
   if self.wrapped_settings then
@@ -5739,6 +5774,7 @@ function TextView:scroll_to_make_visible(line, col, instant, opts)
 end
 
 function TextView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
+  self:get_visual_row_metric_cache()
   opts = opts or {}
   if opts.vertical ~= false then
     self.scroll.y = math.max(0, self.scroll.y or 0)
@@ -9023,9 +9059,9 @@ function TextView:draw_wrapped()
 
   phase_scope = perf_scope_begin("visible_geometry")
   local lh = self:get_line_height()
+  local cache = self:get_visual_row_metric_cache()
   local _, y1, _, y2 = self:get_content_bounds()
   local total = linewrapping.get_total_wrapped_lines(self)
-  local cache = self:get_visual_row_metric_cache()
   local minidx = cache and self:get_visual_row_at_y(math.max(0, y1 - style.padding.y)) or math.max(1, math.floor((y1 - style.padding.y) / lh) + 1)
   local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
   minidx = common.clamp(minidx, 1, total)

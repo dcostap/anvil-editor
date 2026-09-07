@@ -1060,6 +1060,7 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
 
   local function finish()
     if not current() then return false end
+    local viewport_anchor = textview:capture_viewport_anchor()
     textview.wrapped_lines = token.wrapped_lines
     textview.wrapped_line_to_idx = token.wrapped_line_to_idx
     textview.wrapped_line_offsets = token.wrapped_line_offsets
@@ -1070,6 +1071,7 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     textview:clear_composed_visual_row_cache()
     textview.__line_render_wrap_change = nil
     textview.__async_wrap_reconstruction = nil
+    textview:restore_viewport_anchor(viewport_anchor)
     perf_frame_add("linewrapping_async_reconstruct_commits", 1)
     core.log_quiet(
       "Committed sliced wrapped layout for %s: lines=%d rows=%d work_ms=%.3f yields=%d",

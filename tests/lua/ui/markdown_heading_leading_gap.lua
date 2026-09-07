@@ -422,33 +422,15 @@ test.describe("Markdown heading leading spacing", function()
       return heading_line
     end
 
-    local function assert_pending_metrics_have_one_owner(label)
-      local owner = test.not_nil(view.__markdown_live_owner)
-      local fallback_heights = owner.pending_metric_state
-        and owner.pending_metric_state.heights or {}
-      for line in pairs(owner.pending_lines or {}) do
-        test.equal(
-          fallback_heights[line], nil,
-          string.format(
-            "%s gave line %d both a pending render metric and a fallback metric",
-            label, line
-          )
-        )
-      end
-    end
-
     test.equal(command.perform("core:newline"), true)
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
-    assert_pending_metrics_have_one_owner("exiting the empty task")
     assert_heading_matches_fresh("exiting the empty task")
     test.equal(command.perform("core:newline"), true)
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
-    assert_pending_metrics_have_one_owner("inserting the following blank row")
     assert_heading_matches_fresh("inserting the following blank row")
     buffer:set_selection(4, 1)
     test.equal(command.perform("core:backspace"), true)
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
-    assert_pending_metrics_have_one_owner("deleting the inserted blank row")
     assert_heading_matches_fresh("deleting the inserted blank row")
     local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_ready(instance), instance.reason)
@@ -458,7 +440,7 @@ test.describe("Markdown heading leading spacing", function()
     test.ok(heading_line >= 4)
   end)
 
-  test.it("keeps retained fallback metrics disjoint through consecutive edits", function()
+  test.it("keeps unchanged heading measurements stable through consecutive edits", function()
     local lines = {}
     for line = 1, 60 do
       lines[line] = line % 5 == 0
@@ -471,22 +453,27 @@ test.describe("Markdown heading leading spacing", function()
     refresh(view)
     linewrapping.complete_async_reconstruction(view)
 
+    local before = {}
+    for _, line in ipairs({ 20, 25, 30 }) do
+      local _, y = view:get_line_screen_position(line)
+      before[line] = { y = y, height = view:get_position_visual_row_height(line, 1) }
+    end
+    local function assert_headings_unchanged()
+      for line, expected in pairs(before) do
+        local _, y = view:get_line_screen_position(line)
+        test.equal(y, expected.y)
+        test.equal(view:get_position_visual_row_height(line, 1), expected.height)
+      end
+    end
+
     buffer:insert(10, #buffer.lines[10], "a")
     buffer:insert(10, #buffer.lines[10], "b")
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
 
-    local owner = test.not_nil(view.__markdown_live_owner)
-    test.equal(
-      owner.pending_metric_invariant_violations or 0, 0,
-      "ordinary typing required metric ownership repair"
-    )
-    local fallback_heights = owner.pending_metric_state
-      and owner.pending_metric_state.heights or {}
-    for line in pairs(owner.pending_lines or {}) do
-      test.equal(
-        fallback_heights[line], nil,
-        string.format("line %d has duplicate pending metric ownership", line)
-      )
-    end
+    assert_headings_unchanged()
+    local instance = markdown_model.peek(buffer)
+    test.ok(wait_ready(instance), instance.reason)
+    linewrapping.complete_async_reconstruction(view)
+    assert_headings_unchanged()
   end)
 end)
