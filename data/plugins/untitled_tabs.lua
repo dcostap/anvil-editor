@@ -21,7 +21,8 @@ local function is_untitled_buffer(buffer)
 end
 
 local function untitled_buffer_has_promptable_content(buffer)
-  return buffer and buffer:get_text(1, 1, math.huge, math.huge) ~= ""
+  -- An empty Buffer contains one line with only its final newline.
+  return buffer and (#buffer.lines > 1 or #buffer.lines[1] > 1)
 end
 
 local function untitled_index(name)
