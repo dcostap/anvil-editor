@@ -2457,7 +2457,11 @@ function fuzzy_searcher.draw_file_metadata(font, r, x, y, width, parts, columns)
   local icon_gap = math.max(2 * (SCALE or 1), style.padding.x / 4)
   local separator = "  "
   local separator_w = metadata_font:get_width(separator)
-  local metadata_w = (#parts - 1) * separator_w
+  local diff_separator = " "
+  local metadata_w = math.max(0, #parts - 1) * separator_w
+  if #parts >= 2 then
+    metadata_w = metadata_w - separator_w + metadata_font:get_width(diff_separator)
+  end
   for index, part in ipairs(parts) do
     part.cell_width = columns and columns[index]
       or math.max(metadata_font:get_width(part.sample), metadata_font:get_width(part.text))
@@ -2468,7 +2472,9 @@ function fuzzy_searcher.draw_file_metadata(font, r, x, y, width, parts, columns)
   if metadata_w + outer_gap >= width then return width end
   local cx = x + width - metadata_w
   for index, part in ipairs(parts) do
-    if index > 1 then cx = renderer.draw_text(metadata_font, separator, cx, metadata_y, style.dim) end
+    if index > 1 then
+      cx = renderer.draw_text(metadata_font, index == 2 and diff_separator or separator, cx, metadata_y, style.dim)
+    end
     if part.icon then
       recent_file_icons.draw(part.icon, cx, metadata_y, row_height, icon_size)
       cx = cx + icon_size + icon_gap
