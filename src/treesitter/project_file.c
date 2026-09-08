@@ -484,6 +484,15 @@ static bool build_symbols(AnvilTSProjectFileResult *result, const AnvilTSSnapsho
     if (!capture_text(snapshot, name_capture, &raw_name, &raw_name_len)) continue;
     Buffer name = {0};
     if (!collapse_whitespace(raw_name, raw_name_len, &name)) { buffer_free(&name); goto oom; }
+    if (item->name_len == 15 && memcmp(item->name, "outline.heading", 15) == 0 &&
+        item->start_byte < snapshot->byte_len && snapshot->bytes[item->start_byte] == '#') {
+      uint32_t end = name.length;
+      while (end && name.data[end - 1] == '#') end--;
+      if (end < name.length && end && name.data[end - 1] == ' ') {
+        name.length = end - 1;
+        name.data[name.length] = '\0';
+      }
+    }
     if (!name.length) { buffer_free(&name); continue; }
     if (!checked_grow((void **)&result->symbols, &result->symbol_capacity, result->symbol_count + 1, sizeof(*result->symbols))) { buffer_free(&name); goto oom; }
     Symbol *symbol = &result->symbols[result->symbol_count++];

@@ -198,6 +198,9 @@ end
 local function symbol_from_group(buffer, group)
   if not group or not group.item or not group.name then return nil end
   local name = trim_name(text_for_capture(buffer, group.name))
+  if group.kind == "heading" and text_for_capture(buffer, group.item):match("^#") then
+    name = name:gsub("[ \t]+#+$", "")
+  end
   if name == "" then return nil end
   local item = group.item
   local declaration, declaration_name_span = declaration_preview(buffer, item, group.name)

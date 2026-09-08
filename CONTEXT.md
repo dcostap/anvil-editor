@@ -61,7 +61,7 @@ The per-project editor state that restores open views, tabs, splits, scroll posi
 _Avoid_: Session, app state
 
 **Project Symbol Search**:
-A search over named code symbols across a loaded Project.
+A search over named code symbols and Markdown headings across a loaded Project.
 _Avoid_: global symbol search
 
 **Project Usage Search**:
@@ -81,7 +81,7 @@ A named code symbol that belongs to a containing type or similar named container
 _Avoid_: self-scoped symbol
 
 **Current Buffer Symbol Search**:
-A search over named code symbols in the active Buffer only.
+A search over named code symbols and Markdown headings in the active Buffer only.
 _Avoid_: local symbol search, file symbol search
 
 **Recent File**:
