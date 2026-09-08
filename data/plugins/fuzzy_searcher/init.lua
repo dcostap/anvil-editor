@@ -1900,12 +1900,19 @@ local function utf8_safe_sub(text, first, last)
   return text:sub(first, last)
 end
 
-local function fit_forward_end(font, text, first, max_width)
+local function fit_forward_end(font, text, first, max_width, last)
   first = utf8_ceil_start(text, first or 1)
+  last = last or #text
   if max_width <= 0 or first > #text then return first - 1 end
-  if font:get_width(utf8_safe_sub(text, first, #text)) <= max_width then return #text end
-
-  local lo, hi = first - 1, #text
+  -- Find a nearby overflow before binary search. Never start with the full line.
+  local step = 32
+  local lo, hi = first - 1, math.min(last, first + step - 1)
+  while font:get_width(utf8_safe_sub(text, first, hi)) <= max_width do
+    if hi == last then return utf8_floor_end(text, last) end
+    lo = hi
+    step = step * 2
+    hi = math.min(last, first + step - 1)
+  end
   while lo < hi do
     local mid = math.ceil((lo + hi) / 2)
     if font:get_width(utf8_safe_sub(text, first, mid)) <= max_width then
@@ -1920,9 +1927,14 @@ end
 local function fit_suffix_start(font, text, last, max_width)
   last = utf8_floor_end(text, last or #text)
   if max_width <= 0 or last < 1 then return last + 1 end
-  if font:get_width(utf8_safe_sub(text, 1, last)) <= max_width then return 1 end
-
-  local lo, hi = 1, last
+  local step = 32
+  local lo, hi = math.max(1, last - step + 1), last + 1
+  while font:get_width(utf8_safe_sub(text, lo, last)) <= max_width do
+    if lo == 1 then return 1 end
+    hi = lo
+    step = step * 2
+    lo = math.max(1, last - step + 1)
+  end
   while lo < hi do
     local mid = math.floor((lo + hi) / 2)
     if font:get_width(utf8_safe_sub(text, mid, last)) <= max_width then
@@ -2072,7 +2084,9 @@ local function clip_highlighted_text(font, text, width, spans, anchor_to_match)
   text = tostring(text or "")
   spans = spans or {}
   if width <= 0 then return "", {} end
-  if font:get_width(text) <= width then return text, merge_spans(spans, #text) end
+  if fit_forward_end(font, text, 1, width) == #text then
+    return text, merge_spans(spans, #text)
+  end
 
   local ellipsis = "..."
   local ellipsis_width = font:get_width(ellipsis)
@@ -2111,7 +2125,9 @@ local function clip_highlighted_text(font, text, width, spans, anchor_to_match)
   end
 
   local text_width = width - fixed_width
-  local match_width = font:get_width(utf8_safe_sub(text, match_start, match_end))
+  local fit_match_end = fit_forward_end(font, text, match_start, text_width, match_end)
+  local match_width = fit_match_end < match_end and text_width
+    or font:get_width(utf8_safe_sub(text, match_start, match_end))
   local extra_width = math.max(0, text_width - math.min(match_width, text_width))
   local before_budget = math.min(extra_width * 0.45, text_width * 0.30)
   local first = match_start
