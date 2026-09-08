@@ -138,6 +138,7 @@ local FRIENDLY_NAMES = {
   ["style.filetree_git_status_added"] = { "Git / File Tree", "File tree added-file status" },
   ["style.filetree_git_status_modified"] = { "Git / File Tree", "File tree modified-file status" },
   ["style.filetree_git_status_deleted"] = { "Git / File Tree", "File tree deleted-file status" },
+  ["style.filetree_git_status_unmerged"] = { "Git / File Tree", "File tree conflict status" },
   ["style.filetree_git_line_additions"] = { "Git / File Tree", "File tree added-line count" },
   ["style.filetree_git_line_deletions"] = { "Git / File Tree", "File tree deleted-line count" },
 }

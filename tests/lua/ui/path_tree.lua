@@ -13,6 +13,21 @@ local function record(path, kind, additions, deletions)
 end
 
 test.describe("Path Tree", function()
+  test.it("keeps conflicts visible above other directory changes", function()
+    for _, conflict_first in ipairs { false, true } do
+      local records = {
+        record("src/modified.lua", "modified"),
+        record("src/added.lua", "added"),
+        record("src/deleted.lua", "deleted"),
+      }
+      table.insert(records, conflict_first and 1 or #records + 1,
+        record("src/nested/conflict.lua", "unmerged"))
+      local tree = path_tree.build(records)
+      test.equal(tree:row(tree:line_for_path("src", "dir")).kind, "unmerged")
+      test.equal(tree:row(tree:line_for_path("src/nested", "dir")).kind, "unmerged")
+    end
+  end)
+
   test.it("keeps directory indentation stable after file row caches warm", function()
     local view = path_tree.View(Buffer(nil, nil, true))
     view.buffer.indent_info = { type = "hard", size = 4 }

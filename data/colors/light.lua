@@ -225,6 +225,7 @@ style.filetree_git_status_untracked = c("f04460")
 style.filetree_git_status_added = c("08a91f")
 style.filetree_git_status_modified = c("739bc0")
 style.filetree_git_status_deleted = c("f04460")
+style.filetree_git_status_unmerged = style.error
 style.filetree_git_line_additions = style.git_change_addition
 style.filetree_git_line_deletions = style.git_change_deletion
 style.filetree_folder = c("5c5f6b")

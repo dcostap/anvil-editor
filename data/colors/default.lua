@@ -288,6 +288,7 @@ style.filetree_git_status_untracked = c("c98282")
 style.filetree_git_status_added = style.git_change_addition
 style.filetree_git_status_modified = c("739bc0")
 style.filetree_git_status_deleted = c("c98282")
+style.filetree_git_status_unmerged = style.error
 style.filetree_git_line_additions = style.git_change_addition
 style.filetree_git_line_deletions = style.git_change_deletion
 style.filetree_folder = style.dim

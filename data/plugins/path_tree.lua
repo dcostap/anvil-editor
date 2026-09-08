@@ -39,7 +39,7 @@ local KIND_RANK = {
   renamed = 5,
   copied = 5,
   typechange = 5,
-  unmerged = 5,
+  unmerged = 8,
   untracked = 2,
   ignored = 1,
 }
@@ -339,7 +339,8 @@ function path_tree.git_text_color(kind)
   if kind == "ignored" then return style.filetree_git_status_ignored end
   if kind == "untracked" then return style.filetree_git_status_untracked end
   if kind == "added" then return style.filetree_git_status_added end
-  if kind == "modified" or kind == "renamed" or kind == "copied" or kind == "typechange" or kind == "unmerged" then
+  if kind == "unmerged" then return style.filetree_git_status_unmerged end
+  if kind == "modified" or kind == "renamed" or kind == "copied" or kind == "typechange" then
     return style.filetree_git_status_modified
   end
   if kind == "deleted" then return style.filetree_git_status_deleted end
@@ -347,8 +348,9 @@ end
 
 function path_tree.git_gutter_color(kind)
   kind = normalize_kind(kind)
+  if kind == "unmerged" then return style.filetree_git_status_unmerged end
   if kind == "addition" or kind == "added" or kind == "untracked" then return style.git_change_addition end
-  if kind == "modification" or kind == "modified" or kind == "renamed" or kind == "copied" or kind == "typechange" or kind == "unmerged" then
+  if kind == "modification" or kind == "modified" or kind == "renamed" or kind == "copied" or kind == "typechange" then
     return style.git_change_modification
   end
   if kind == "deletion" or kind == "deleted" then return style.git_change_deletion end
