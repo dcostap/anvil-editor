@@ -5149,6 +5149,13 @@ function poi_provider:points_of_interest(view)
           label = link.display,
           semantic_id = node.id,
           link = link,
+          preview = function(owner, point)
+            local resolution = resolve_live_link(owner, point.link)
+            if resolution.status ~= "resolved" or not resolution.path then return false end
+            return require("core.poi_preview").location(owner, {
+              line = point.line, path = resolution.path, target_line = resolution.line or 1,
+            })
+          end,
           activate = function(owner, point)
             return live.open_link(owner, {
               link = point.link,

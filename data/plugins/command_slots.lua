@@ -452,7 +452,7 @@ function CommandOutputView:on_close()
 end
 
 function CommandOutputView:can_discard_from_history()
-  if require("core.poi").get_remote_source() == self then return false end
+  if require("core.poi").is_selected_remote_source(self) then return false end
   return not (self.slot and self.slot.running)
 end
 
@@ -466,6 +466,8 @@ end
 
 function CommandOutputView:show_entry(entry, opts)
   opts = opts or {}
+  local preview = package.loaded["core.poi_preview"]
+  if preview then preview.dismiss(self) end
   if self.displayed_entry and self.displayed_entry ~= entry then
     self:save_displayed_entry_state()
   end
@@ -594,6 +596,10 @@ function CommandOutputView:activate_point_of_interest(poi, opts)
     preserve_focus = preserve_focus,
   })
   return view
+end
+
+function CommandOutputView:preview_point_of_interest(point)
+  return require("core.poi_preview").location(self, point)
 end
 
 function CommandOutputView:get_navigation_state()

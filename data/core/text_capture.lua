@@ -54,6 +54,10 @@ function TextCaptureView:get_points_of_interest()
   return self.text_capture_data.points or {}
 end
 
+function TextCaptureView:preview_point_of_interest(point)
+  return require("core.poi_preview").location(self, point)
+end
+
 function TextCaptureView:activate_point_of_interest(point, opts)
   opts = opts or {}
   local placement = opts.placement or "current"
@@ -70,7 +74,7 @@ function TextCaptureView:activate_point_of_interest(point, opts)
 end
 
 function TextCaptureView:can_discard_from_history()
-  return poi.get_remote_source() ~= self
+  return not poi.is_selected_remote_source(self)
 end
 
 function TextCaptureView:on_close()

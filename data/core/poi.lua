@@ -13,7 +13,9 @@ function M.set_remote_source(view, opts)
   opts = opts or {}
   local project = opts.project or core.root_project()
   if not project or not view or view.remote_poi_source ~= true then return false end
-  M.remote_sources[project] = { view = view, initial = true }
+  M.remote_sources[project] = { view = view, initial = opts.from_start ~= false }
+  local preview = package.loaded["core.poi_preview"]
+  if preview then preview.dismiss(view) end
   core.log_quiet("Remote POI source selected: %s", view:get_name())
   return true
 end
@@ -21,6 +23,13 @@ end
 function M.get_remote_source(project)
   local source = M.remote_sources[project or core.root_project()]
   return source and source.view
+end
+
+function M.is_selected_remote_source(view)
+  for _, source in pairs(M.remote_sources) do
+    if source.view == view then return true end
+  end
+  return false
 end
 
 function M.clear_remote_source(view, project)
@@ -237,6 +246,7 @@ end
 
 function M.select(view, poi, opts)
   opts = opts or {}
+  require("core.poi_preview").dismiss(view)
   return with_selection_state(view, function()
     local _, current_col = view.buffer:get_selection()
     local col = poi.preserve_col and current_col or poi.col
@@ -321,6 +331,13 @@ local function active_view_has_activatable_poi(...)
 end
 
 command.add(nil, {
+  ["core:show_remote_point_of_interest_source"] = function()
+    local view = M.get_remote_source()
+    local owner = panes.owner_for_view(view)
+    if not owner then return navigation_feedback.none("Remote POI Source") end
+    panes.present(owner, { pane = panes.pane_for_view(owner) })
+    if owner.focus_surface_target then owner:focus_surface_target(view) end
+  end,
   ["core:previous_remote_point_of_interest"] = function()
     M.navigate_remote(-1)
   end,
@@ -332,6 +349,15 @@ command.add(nil, {
   end,
   ["core:next_point_of_interest"] = function()
     M.navigate(core.active_view, 1)
+  end,
+})
+
+command.add(function()
+  local view = provider_view(core.active_view)
+  return view and view.remote_poi_source == true, view
+end, {
+  ["core:use_remote_point_of_interest_source"] = function(view)
+    M.set_remote_source(view, { from_start = false })
   end,
 })
 

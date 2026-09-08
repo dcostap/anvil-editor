@@ -4,6 +4,7 @@ local shell = require "core.shell"
 local test = require "core.test"
 local View = require "core.view"
 local poi = require "core.poi"
+local command = require "core.command"
 local command_output = require "plugins.command_slots"
 
 local function fake_capture(context)
@@ -106,6 +107,9 @@ test.describe("Command Output Views", function()
     test.ok(poi.navigate_remote(1))
     test.equal(panes.active(), destination)
     test.ok(common.path_equals(destination.current_view.buffer.abs_filename, context.file))
+    test.equal(output.buffer:get_selection(), 3)
+    test.ok(command.perform("core:show_remote_point_of_interest_source"))
+    test.equal(panes.active().current_view, output)
     test.equal(output.buffer:get_selection(), 3)
     output:on_close()
     test.equal(poi.get_remote_source(), nil)

@@ -602,6 +602,21 @@ local function gitdiff_unavailable_message(state)
 	if not state.is_in_repo then return "Git changes unavailable" end
 end
 
+local function preview_git_change(view, point)
+  local state = get_state(view.buffer)
+  local range = point.range
+  local lines = {}
+  for line = range.base_start or 1, (range.base_end or 1) - 1 do
+    if #lines >= 24 then lines[#lines + 1] = "..."; break end
+    lines[#lines + 1] = "- " .. ((state.base_lines or {})[line] or "")
+  end
+  for line = range.current_start, range.current_end - 1 do
+    if #lines >= 24 then lines[#lines + 1] = "..."; break end
+    lines[#lines + 1] = "+ " .. (view.buffer.lines[line] or "")
+  end
+  return require("core.poi_preview").show(view, point, "Git change", lines)
+end
+
 local function gitdiff_points_for_view(view)
 	if not file_context.is_editor_view(view) or not view.buffer then return nil, "no-provider" end
 	local buffer = view.buffer
@@ -611,14 +626,20 @@ local function gitdiff_points_for_view(view)
 	local points = {}
 	for _, range in ipairs(state.ranges or {}) do
 		local line = math.min(#buffer.lines, math.max(1, range.current_start or 1))
+		local last = math.min(#buffer.lines, math.max(line, (range.current_end or line + 1) - 1))
 		points[#points + 1] = {
 			line = line,
 			col = 1,
+			line2 = last,
+			col2 = #(buffer.lines[last] or "") + 1,
+			text_bounds = true,
 			preserve_col = true,
 			line_only_navigation = true,
 			kind = "git-change",
 			label = range.type,
 			range = range,
+			preview = preview_git_change,
+			activate = preview_git_change,
 		}
 	end
 	return points
@@ -639,21 +660,6 @@ function TextView:get_points_of_interest(opts)
 	end
 	return git_points or provider_points, unavailable or provider_unavailable
 end
-
-local function active_editor_view()
-	local view = core.active_view
-	return file_context.is_editor_view(view), view
-end
-
-local function jump_to_gitdiff_change(view, direction)
-	local poi = require("core.poi")
-	return poi.navigate(view, direction)
-end
-
-command.add(active_editor_view, {
-	["editor:previous_git_change"] = function(view) jump_to_gitdiff_change(view, -1) end,
-	["editor:next_git_change"] = function(view) jump_to_gitdiff_change(view, 1) end,
-})
 
 command.add("core.textview", {
 	["editor:refresh_git_changes"] = function()
