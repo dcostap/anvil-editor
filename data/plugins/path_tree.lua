@@ -11,6 +11,32 @@ local file_icons = require "core.file_icons"
 
 local path_tree = {}
 
+function path_tree.git_info_for_file(path)
+  local filetree = package.loaded["plugins.filetree"]
+  if not path or not (filetree and filetree.instances) then return nil end
+  for _, view in ipairs(filetree.instances()) do
+    local info = view:get_git_info_for_entry({ abs = path, type = "file" })
+    if info then return info end
+  end
+end
+
+function path_tree.format_file_size(size)
+  local units = { "B", "K", "M", "G", "T", "P" }
+  local value = math.max(0, tonumber(size) or 0)
+  local unit = 1
+  while value >= 1024 and unit < #units do
+    value = value / 1024
+    unit = unit + 1
+  end
+  local rounded = math.floor(value + 0.5)
+  if rounded >= 1000 and unit < #units then
+    value = value / 1024
+    unit = unit + 1
+    rounded = math.floor(value + 0.5)
+  end
+  return string.format("%3d %s", rounded, units[unit])
+end
+
 local KIND_RANK = {
   deleted = 7,
   added = 6,

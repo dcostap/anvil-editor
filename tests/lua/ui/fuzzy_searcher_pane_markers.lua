@@ -52,6 +52,7 @@ test.describe("Fuzzy Searcher Pane markers", function()
     local draw_rect = renderer.draw_rect
     local draw_rounded_rect = renderer.draw_rounded_rect
     local set_clip_rect = renderer.set_clip_rect
+    local draw_canvas = renderer.draw_canvas
     renderer.draw_text = function(font, text, x, y, color)
       if text:match("^%d") and same_rgb(color, style.titlebar_pane_number) then
         markers[text] = { font = font, text = text, x = x, color = color }
@@ -62,12 +63,14 @@ test.describe("Fuzzy Searcher Pane markers", function()
     renderer.draw_rect = function() end
     renderer.draw_rounded_rect = function() end
     renderer.set_clip_rect = function() end
+    renderer.draw_canvas = function() end
     local drawn, draw_error = pcall(function() picker:draw() end)
     renderer.draw_text = draw_text
     renderer.draw_text_known_bounds = draw_text_known_bounds
     renderer.draw_rect = draw_rect
     renderer.draw_rounded_rect = draw_rounded_rect
     renderer.set_clip_rect = set_clip_rect
+    renderer.draw_canvas = draw_canvas
 
     test.ok(drawn, draw_error)
     local marker_names = {}

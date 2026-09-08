@@ -208,6 +208,10 @@ local function draw_pane_label(number, pane, rect, name_color)
   end
   local name = fit_text(metrics.name_font, metrics.name,
     math.max(0, rect.x + rect.w - x))
+  local path_tree = require "plugins.path_tree"
+  local path = require("core.file_context").view_file_path(pane.current_view)
+  local git = path_tree.git_info_for_file(path)
+  name_color = path_tree.git_text_color(git and git.kind) or name_color
   renderer.draw_text(
     metrics.name_font, name, x,
     rect.y + math.floor((rect.h - metrics.name_font:get_height()) / 2), name_color

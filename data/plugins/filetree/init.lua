@@ -257,23 +257,7 @@ local function sorted_dir(path, show_hidden)
   return items
 end
 
-local function format_file_size(size)
-  local units = { "B", "K", "M", "G", "T", "P" }
-  local value = math.max(0, tonumber(size) or 0)
-  local unit = 1
-  while value >= 1024 and unit < #units do
-    value = value / 1024
-    unit = unit + 1
-  end
-
-  local rounded = math.floor(value + 0.5)
-  if rounded >= 1000 and unit < #units then
-    value = value / 1024
-    unit = unit + 1
-    rounded = math.floor(value + 0.5)
-  end
-  return string.format("%3d %s", rounded, units[unit])
-end
+local format_file_size = path_tree.format_file_size
 
 local RELATIVE_TIME_COLUMN_WIDTH = 12
 

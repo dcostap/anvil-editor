@@ -441,14 +441,8 @@ end
 ---@param file string
 ---@return string?
 function fuzzy_searcher.git_kind_for_file(file)
-  local filetree = package.loaded["plugins.filetree"]
-  if not (filetree and filetree.instances) then return nil end
-  local abs = fullpath(file)
-  if not abs then return nil end
-  for _, view in ipairs(filetree.instances()) do
-    local info = view:get_git_info_for_entry({ abs = abs, type = "file" })
-    if info then return info.kind end
-  end
+  local info = path_tree.git_info_for_file(fullpath(file))
+  return info and info.kind
 end
 
 function fuzzy_searcher.current_file_pane_markers(max_width)
@@ -501,7 +495,7 @@ function fuzzy_searcher.format_recent_file_age(ts, now)
   local hour = 60 * minute
   local day = 24 * hour
   local year = 365 * day
-  if elapsed < hour then return tostring(math.floor(elapsed / minute)) .. " min" end
+  if elapsed < hour then return tostring(math.floor(elapsed / minute)) .. " m" end
   if elapsed < day then return tostring(math.floor(elapsed / hour)) .. " h" end
   if elapsed < year then return tostring(math.floor(elapsed / day)) .. " d" end
   return tostring(math.floor(elapsed / year)) .. " yr"
@@ -2402,26 +2396,43 @@ local function draw_project_result_row(font, r, x, y, width)
   draw_highlighted_text(project_font, label, cx, project_y, math.max(0, x + label_w - cx), style.text, spans)
 end
 
-function fuzzy_searcher.draw_recent_file_metadata(font, r, x, y, width)
-  local recent_file_icons = require "core.recent_file_icons"
-  local metadata_font = style.get_small_font(font)
-  local metadata_y = y + math.max(0, math.floor((font:get_height() - metadata_font:get_height()) / 2))
+function fuzzy_searcher.file_metadata_parts(r)
   local parts = {}
   local edited = fuzzy_searcher.format_recent_file_age(r.last_edited)
   local viewed = fuzzy_searcher.format_recent_file_age(r.last_viewed)
-  if edited then parts[#parts+1] = { icon = "pencil", text = edited } end
-  if viewed then parts[#parts+1] = { icon = "eye", text = viewed } end
-  if #parts == 0 then return width end
+  local git = path_tree.git_info_for_file(fullpath(r.file or r.abs_path or r.path))
+  local stat = git and git.stat
+  if stat and (stat.additions or 0) == 0 and (stat.deletions or 0) == 0 then stat = nil end
+  if r.file_size == nil then
+    local info = system.get_file_info(fullpath(r.file or r.abs_path or r.path))
+    r.file_size = info and info.size or false
+  end
+  parts[#parts+1] = { text = stat and ("+" .. tostring(stat.additions or 0)) or "",
+    color = style.filetree_git_line_additions, sample = "+999" }
+  parts[#parts+1] = { text = stat and ("−" .. tostring(stat.deletions or 0)) or "",
+    color = style.filetree_git_line_deletions, sample = "−999" }
+  parts[#parts+1] = { text = r.file_size and path_tree.format_file_size(r.file_size) or "", sample = "999 M" }
+  parts[#parts+1] = { icon = "pencil", text = edited or "", sample = "99 yr" }
+  parts[#parts+1] = { icon = "eye", text = viewed or "", sample = "99 yr" }
+  return parts
+end
+
+function fuzzy_searcher.draw_file_metadata(font, r, x, y, width, parts, columns)
+  local recent_file_icons = require "core.recent_file_icons"
+  local metadata_font = style.get_small_font(style.get_small_font(font))
+  local metadata_y = y + math.max(0, math.floor((font:get_height() - metadata_font:get_height()) / 2))
+  parts = parts or fuzzy_searcher.file_metadata_parts(r)
 
   local row_height = metadata_font:get_height()
   local icon_size = recent_file_icons.size_for_row(row_height)
   local icon_gap = math.max(2 * (SCALE or 1), style.padding.x / 4)
-  local separator = "  ·  "
+  local separator = "  "
   local separator_w = metadata_font:get_width(separator)
   local metadata_w = (#parts - 1) * separator_w
-  for _, part in ipairs(parts) do
-    part.cell_width = metadata_font:get_width(part.text)
-    metadata_w = metadata_w + icon_size + icon_gap + part.cell_width
+  for index, part in ipairs(parts) do
+    part.cell_width = columns and columns[index]
+      or math.max(metadata_font:get_width(part.sample), metadata_font:get_width(part.text))
+    metadata_w = metadata_w + (part.icon and icon_size + icon_gap or 0) + part.cell_width
   end
 
   local outer_gap = style.padding.x
@@ -2429,9 +2440,13 @@ function fuzzy_searcher.draw_recent_file_metadata(font, r, x, y, width)
   local cx = x + width - metadata_w
   for index, part in ipairs(parts) do
     if index > 1 then cx = renderer.draw_text(metadata_font, separator, cx, metadata_y, style.dim) end
-    recent_file_icons.draw(part.icon, cx, metadata_y, row_height, icon_size)
-    cx = cx + icon_size + icon_gap
-    renderer.draw_text(metadata_font, part.text, cx, metadata_y, style.dim)
+    if part.icon then
+      recent_file_icons.draw(part.icon, cx, metadata_y, row_height, icon_size)
+      cx = cx + icon_size + icon_gap
+    end
+    local text = truncate_text(metadata_font, part.text, part.cell_width)
+    renderer.draw_text(metadata_font, text,
+      cx + part.cell_width - metadata_font:get_width(text), metadata_y, part.color or style.dim)
     cx = cx + part.cell_width
   end
   return math.max(0, width - metadata_w - outer_gap)
@@ -2546,14 +2561,12 @@ function fuzzy_searcher.file_result_filename_width(font, file, prefix, suffix, s
   prefix = tostring(prefix or "")
   suffix = tostring(suffix or "")
   local row_height = font:get_height()
-  local marker_width = math.max(1, common.round(style.gitdiff_width or (2 * (SCALE or 1))))
-  local marker_gap = math.max(2 * (SCALE or 1), style.padding.x / 4)
   local icon_width = show_file_icon and fuzzy_searcher.file_icons.column_width(row_height) or 0
   local file_font = style.prose_font:get_size() == font:get_size()
     and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
   local name = basename(file)
   local directory_gap = #file > #name and (SCALE or 1) or 0
-  return marker_width + marker_gap + icon_width + font:get_width(prefix)
+  return icon_width + font:get_width(prefix)
     + file_font:get_width(name) + font:get_width(suffix) + directory_gap
 end
 
@@ -2603,9 +2616,7 @@ local function draw_path_result_row(font, r, x, y, width)
   )
   path_end = math.min(x + width, path_end or path_x)
 
-  local marker_width = math.max(1, common.round(style.gitdiff_width or (2 * (SCALE or 1))))
-    + math.max(2 * (SCALE or 1), style.padding.x / 4)
-  r._path_copy_x = path_x + marker_width
+  r._path_copy_x = path_x
   r._path_copy_width = math.max(0, path_end - r._path_copy_x)
 
   local available = math.max(0, x + width - path_end - gap)
@@ -2689,13 +2700,6 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, 
   suffix = suffix or ""
 
   local row_height = font:get_height()
-  local marker_width = math.max(1, common.round(style.gitdiff_width or (2 * (SCALE or 1))))
-  local marker_gap = math.max(2 * (SCALE or 1), style.padding.x / 4)
-  local marker_column_width = marker_width + marker_gap
-  local marker_color = path_tree.git_gutter_color(git_kind or fuzzy_searcher.git_kind_for_file(file))
-  if marker_color then renderer.draw_rect(x, y, marker_width, row_height, marker_color) end
-  x = x + marker_column_width
-  width = math.max(0, width - marker_column_width)
 
   if show_file_icon then
     local icon_column_width = fuzzy_searcher.file_icons.column_width(row_height)
@@ -2710,7 +2714,7 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, 
   local prefix_color = style.dim
   local dir_color = style.dim
   local suffix_color = style.dim
-  local name_color = style.text
+  local name_color = path_tree.git_text_color(git_kind or fuzzy_searcher.git_kind_for_file(file)) or style.text
   local line_h = font:get_height()
   local name_y = y + math.max(0, math.floor((line_h - file_font:get_height()) / 2))
   local path_y = y + math.max(0, math.floor((line_h - path_font:get_height()) / 2))
@@ -3856,10 +3860,8 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
       width = r._path_copy_width
     else
       local icon_w = fuzzy_searcher.file_icons.column_width(font:get_height())
-      local marker_w = math.max(1, common.round(style.gitdiff_width or (2 * (SCALE or 1))))
-        + math.max(2 * (SCALE or 1), style.padding.x / 4)
-      x = row_x + icon_w + marker_w
-      width = math.max(0, row_text_w - icon_w - marker_w)
+      x = row_x + icon_w
+      width = math.max(0, row_text_w - icon_w)
     end
     text = r.label or r.path or r.project or r.file or ""
     text_font = fuzzy_searcher.project_result_font(font)
@@ -6921,6 +6923,19 @@ function FSView:draw_open_content()
   fuzzy_searcher._perf_scope_end(phase_scope)
 
   local results_scope = fuzzy_searcher._perf_scope_begin("result_rows")
+  local metadata_rows, metadata_columns = {}, {}
+  local metadata_font = style.get_small_font(style.get_small_font(font))
+  for idx = self.viewport_offset, last do
+    local r = self.results[idx]
+    if r.kind == "file" and not r.header then
+      local parts = fuzzy_searcher.file_metadata_parts(r)
+      metadata_rows[idx] = parts
+      for column, part in ipairs(parts) do
+        metadata_columns[column] = math.max(metadata_columns[column] or 0,
+          metadata_font:get_width(part.sample), metadata_font:get_width(part.text))
+      end
+    end
+  end
   local previous_rendered_grep_file = nil
   local previous_rendered_grep_line_x = nil
   local previous_rendered_was_grep = false
@@ -6972,7 +6987,8 @@ function FSView:draw_open_content()
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        local file_text_w = r.recent and fuzzy_searcher.draw_recent_file_metadata(font, r, x + pad, row_y, row_text_w) or row_text_w
+        local file_text_w = fuzzy_searcher.draw_file_metadata(
+          font, r, x + pad, row_y, row_text_w, metadata_rows[idx], metadata_columns)
         draw_file_result_row(
           font, r.file or r.label, r.match_spans, "", x + pad, row_y,
           file_text_w, nil, r.prefix_span, r.root_role, true
@@ -7480,7 +7496,7 @@ return {
     end,
     format_recent_file_age = fuzzy_searcher.format_recent_file_age,
     git_kind_for_file = fuzzy_searcher.git_kind_for_file,
-    draw_recent_file_metadata = fuzzy_searcher.draw_recent_file_metadata,
+    draw_file_metadata = fuzzy_searcher.draw_file_metadata,
     draw_file_result_row = draw_file_result_row,
     draw_grep_result_row = draw_grep_result_row,
     split_mode_prefix = split_mode_prefix,
