@@ -23,7 +23,7 @@ local function make_controller()
       function snapshot:close() end
       callback(snapshot)
     end,
-    publish = function(snapshot) publications[#publications+1] = snapshot end,
+    publish = function(snapshot, event) publications[#publications+1] = { snapshot = snapshot, event = event } end,
   }
   return controller, commands, publications, function(seconds) now = now + seconds end
 end
@@ -34,7 +34,7 @@ local function complete(commands, offset)
 end
 
 test.describe("Repository Git status controller", function()
-  test.it("keeps the published snapshot when Git reports no changes", function()
+  test.it("notifies after a successful refresh even when Git output is unchanged", function()
     local controller, commands, publications, advance = make_controller()
     controller:request("initial")
     controller:update()
@@ -44,8 +44,10 @@ test.describe("Repository Git status controller", function()
     controller:request("focus")
     controller:update()
     complete(commands, 2)
-    test.equal(#publications, 1, "unchanged Git output must not publish another snapshot")
-    test.equal(controller:status().published_generation, generation)
+    test.equal(#publications, 2, "completed refreshes must notify subscribers")
+    test.ok(controller:status().published_generation > generation)
+    test.equal(publications[2].snapshot, publications[1].snapshot,
+      "unchanged output must retain the last snapshot")
     test.not_ok(controller:status().active)
     controller:close()
   end)
@@ -63,6 +65,24 @@ test.describe("Repository Git status controller", function()
     test.equal(info.kind, "modified")
     test.equal(info.additions, 2)
     test.equal(info.deletions, 1)
+    controller:close()
+  end)
+
+  test.it("uses the empty tree for staged new-file numstat in an unborn HEAD", function()
+    local controller, commands, publications = make_controller()
+    controller:request("initial")
+    controller:update()
+    commands[1].callback({ stdout = "A  new.lua\0" })
+    commands[2].callback(nil, {
+      kind = "exit", stderr = "fatal: bad revision 'HEAD'",
+    })
+    test.equal(#commands, 3)
+    test.equal(commands[3].args[5], "4b825dc642cb6eb9a060e54bf8d69288fbee4904")
+    commands[3].callback({ stdout = "1\t0\tnew.lua\0" })
+    test.equal(#publications, 1)
+    test.is_nil(publications[1].event.err)
+    test.not_ok(controller:status().active)
+    test.is_nil(controller:status().error)
     controller:close()
   end)
 
@@ -86,8 +106,10 @@ test.describe("Repository Git status controller", function()
     controller:request("failure")
     controller:update()
     commands[3].callback(nil, { kind = "exit", message = "failed" })
-    test.equal(#publications, 1)
+    test.equal(#publications, 2, "refresh errors must notify subscribers")
     test.equal(controller:lookup("C:/repo/src/app.lua", false).kind, "modified")
+    test.equal(controller:status().error.message, "failed")
+    test.ok(controller:status().stale)
     test.not_ok(controller:status().active)
     advance(3)
     controller:request("retry")

@@ -67,4 +67,27 @@ test.describe("File Git status", function()
     until system.get_time() >= deadline
     test.is_nil(info, "restoring the saved file must clear its Git status")
   end)
+
+  test.it("reports line counts for staged files before the first commit", function()
+    local root = system.absolute_path("file-git-status-unborn-fixture")
+    common.mkdirp(root)
+    run(root, "init")
+    core.projects = { Project(root) }
+    local path = root .. PATHSEP .. "staged.txt"
+    write(path, "first\nsecond\n")
+    run(root, "add", ".")
+
+    local info
+    local deadline = system.get_time() + 10
+    repeat
+      info = path_tree.git_info_for_file(path)
+      if info then break end
+      coroutine.yield(0.01)
+    until system.get_time() >= deadline
+    test.not_nil(info, "Git status must load an unborn repository")
+    test.equal(info.kind, "added")
+    test.not_nil(info.stat)
+    test.equal(info.stat.additions, 2)
+    test.equal(info.stat.deletions, 0)
+  end)
 end)

@@ -30,6 +30,10 @@ struct AnvilGitStatusSnapshot {
   bool case_insensitive_paths;
   GitEntry *entries;
   char *path_arena;
+  AnvilGitStatusKind root_kind;
+  uint64_t root_additions;
+  uint64_t root_deletions;
+  bool has_root_numstat;
   uint32_t capacity;
   uint32_t count;
   AnvilGitStatusSummary summary;
@@ -60,13 +64,13 @@ static uint64_t hash_bytes(const char *text, size_t len) {
 
 static int kind_rank(AnvilGitStatusKind kind) {
   switch (kind) {
+    case ANVIL_GIT_STATUS_UNMERGED: return 8;
     case ANVIL_GIT_STATUS_DELETED: return 7;
     case ANVIL_GIT_STATUS_ADDED: return 6;
     case ANVIL_GIT_STATUS_MODIFIED:
     case ANVIL_GIT_STATUS_RENAMED:
     case ANVIL_GIT_STATUS_COPIED:
-    case ANVIL_GIT_STATUS_TYPECHANGE:
-    case ANVIL_GIT_STATUS_UNMERGED: return 5;
+    case ANVIL_GIT_STATUS_TYPECHANGE: return 5;
     case ANVIL_GIT_STATUS_UNTRACKED: return 2;
     case ANVIL_GIT_STATUS_IGNORED: return 1;
     default: return 0;
@@ -212,7 +216,7 @@ static bool update_parents(AnvilGitStatusSnapshot *snapshot, char *path, size_t 
       entry->has_directory_numstat = true;
       entry->directory_additions += additions;
       entry->directory_deletions += deletions;
-    } else {
+    } else if (kind != ANVIL_GIT_STATUS_IGNORED) {
       entry->directory_kind = stronger(entry->directory_kind, kind);
     }
     snapshot->summary.parent_edges++;
@@ -255,6 +259,9 @@ static bool parse_status(AnvilGitStatusSnapshot *snapshot, const AnvilGitStatusB
     GitEntry *entry = entry_for(snapshot, path, path_len, true);
     if (!entry) { SDL_free(path); set_error(error, "out of memory"); return false; }
     entry->exact_kind = stronger(entry->exact_kind, kind);
+    if (kind != ANVIL_GIT_STATUS_IGNORED) {
+      snapshot->root_kind = stronger(snapshot->root_kind, kind);
+    }
     if (directory && (kind == ANVIL_GIT_STATUS_IGNORED || kind == ANVIL_GIT_STATUS_UNTRACKED)) {
       entry->subtree_kind = stronger(entry->subtree_kind, kind);
       snapshot->summary.subtree_summaries++;
@@ -302,6 +309,9 @@ static bool parse_numstat(AnvilGitStatusSnapshot *snapshot, const AnvilGitStatus
     entry->has_numstat = true;
     entry->additions = additions;
     entry->deletions = deletions;
+    snapshot->has_root_numstat = true;
+    snapshot->root_additions += additions;
+    snapshot->root_deletions += deletions;
     if (!update_parents(snapshot, path, path_len, ANVIL_GIT_STATUS_NONE, true, additions, deletions)) {
       SDL_free(path); set_error(error, "out of memory"); return false;
     }
@@ -387,6 +397,15 @@ bool anvil_git_status_snapshot_lookup(const AnvilGitStatusSnapshot *snapshot, co
   bool is_directory, AnvilGitStatusLookup *lookup) {
   if (lookup) SDL_memset(lookup, 0, sizeof(*lookup));
   if (!snapshot || !path || !lookup) return false;
+  if (is_directory && path_len == 0) {
+    lookup->kind = snapshot->root_kind;
+    if (snapshot->has_root_numstat) {
+      lookup->has_numstat = true;
+      lookup->additions = snapshot->root_additions;
+      lookup->deletions = snapshot->root_deletions;
+    }
+    return lookup->kind != ANVIL_GIT_STATUS_NONE || lookup->has_numstat;
+  }
   size_t canonical_len = 0;
   char *canonical = canonical_path(path, path_len, snapshot->case_insensitive_paths, &canonical_len, NULL);
   if (!canonical) return false;

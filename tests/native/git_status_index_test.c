@@ -22,7 +22,10 @@ int main(void) {
     "!! build/\0"
     "?? scratch/\0"
     "R  src/renamed.lua\0src/old.lua\0"
-    "UU conflict.lua\0";
+    "UU conflict.lua\0"
+    " M src/conflict/modified.lua\0"
+    "UU src/conflict/unmerged.lua\0"
+    "!! ignored/cache/\0";
   static const char numstat[] =
     "5\t2\tsrc/app.lua\0"
     "1\t0\tsrc/new.lua\0"
@@ -45,7 +48,7 @@ int main(void) {
   CHECK(lookup.kind == ANVIL_GIT_STATUS_MODIFIED);
   CHECK(lookup.has_numstat && lookup.additions == 5 && lookup.deletions == 2);
   CHECK(anvil_git_status_snapshot_lookup(snapshot, "src", strlen("src"), true, &lookup));
-  CHECK(lookup.kind == ANVIL_GIT_STATUS_ADDED);
+  CHECK(lookup.kind == ANVIL_GIT_STATUS_UNMERGED);
   CHECK(lookup.has_numstat && lookup.additions == 9 && lookup.deletions == 6);
   CHECK(anvil_git_status_snapshot_lookup(snapshot, "build/cache/object.o", strlen("build/cache/object.o"), false, &lookup));
   CHECK(lookup.kind == ANVIL_GIT_STATUS_IGNORED);
@@ -56,12 +59,20 @@ int main(void) {
   CHECK(lookup.has_numstat && lookup.additions == 3 && lookup.deletions == 4);
   CHECK(anvil_git_status_snapshot_lookup(snapshot, "conflict.lua", strlen("conflict.lua"), false, &lookup));
   CHECK(lookup.kind == ANVIL_GIT_STATUS_UNMERGED);
+  CHECK(anvil_git_status_snapshot_lookup(snapshot, "src/conflict", strlen("src/conflict"), true, &lookup));
+  CHECK(lookup.kind == ANVIL_GIT_STATUS_UNMERGED);
+  CHECK(!anvil_git_status_snapshot_lookup(snapshot, "ignored", strlen("ignored"), true, &lookup));
+  CHECK(anvil_git_status_snapshot_lookup(snapshot, "ignored/cache/file.txt", strlen("ignored/cache/file.txt"), false, &lookup));
+  CHECK(lookup.kind == ANVIL_GIT_STATUS_IGNORED);
+  CHECK(anvil_git_status_snapshot_lookup(snapshot, "", 0, true, &lookup));
+  CHECK(lookup.kind == ANVIL_GIT_STATUS_UNMERGED);
+  CHECK(lookup.has_numstat && lookup.additions == 9 && lookup.deletions == 6);
 
   AnvilGitStatusSummary summary;
   anvil_git_status_snapshot_summary(snapshot, &summary);
-  CHECK(summary.status_records == 6);
+  CHECK(summary.status_records == 9);
   CHECK(summary.numstat_records == 3);
-  CHECK(summary.subtree_summaries == 2);
+  CHECK(summary.subtree_summaries == 3);
   CHECK(summary.parent_edges > 0);
   CHECK(summary.entry_count >= 7);
 

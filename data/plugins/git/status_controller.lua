@@ -79,6 +79,18 @@ local function cancel_job(job)
   if job and job.cancel then pcall(job.cancel, job) end
 end
 
+local function empty_head_diff_error(err)
+  local text = type(err) == "table"
+    and (err.stderr or err.message or err.kind)
+    or err
+  text = tostring(text or ""):lower()
+  return text:find("bad revision", 1, true)
+    or text:find("unknown revision", 1, true)
+    or text:find("ambiguous argument 'head'", 1, true)
+    or text:find("invalid object name 'head'", 1, true)
+    or text:find("does not have any commits", 1, true)
+end
+
 function git_status.new(options)
   options = options or {}
   assert(options.repository and options.repository.root, "Git status controller requires a repository")
@@ -99,6 +111,9 @@ function git_status.new(options)
     pending_reason = nil,
     last_start = -math.huge,
     coalesced_requests = 0,
+    last_error = nil,
+    last_error_generation = nil,
+    active_reason = nil,
   }, Controller)
 end
 
@@ -137,8 +152,20 @@ end
 function Controller:finish_failure(generation, root, phase, err)
   if not self:is_current(generation, root) then return end
   self:cancel_active(phase .. "-failed")
+  self.last_error = err or { kind = phase .. "_failed", message = "Git status refresh failed" }
+  self.last_error_generation = generation
   log_quiet("Shared Git %s failed generation=%d root=%s: %s",
     phase, generation, tostring(root), tostring(err and (err.message or err.kind) or err))
+  if self.publish then
+    self.publish(nil, {
+      generation = generation,
+      root = root,
+      reason = self.active_reason or "refresh",
+      phase = phase,
+      err = self.last_error,
+      changed = false,
+    })
+  end
 end
 
 function Controller:adopt(snapshot, generation, root, repository_root, reason)
@@ -150,6 +177,8 @@ function Controller:adopt(snapshot, generation, root, repository_root, reason)
   self.snapshot = snapshot
   self.snapshot_repository_root = repository_root
   self.published_generation = generation
+  self.last_error = nil
+  self.last_error_generation = nil
   self.active = false
   self.stage = nil
   self.status_job, self.numstat_job, self.native_job = nil, nil, nil
@@ -158,15 +187,23 @@ function Controller:adopt(snapshot, generation, root, repository_root, reason)
   log_quiet("Shared Git published generation=%d root=%s status_records=%s numstat_records=%s parent_edges=%s build_ms=%s",
     generation, tostring(root), tostring(summary.status_records), tostring(summary.numstat_records),
     tostring(summary.parent_edges), tostring(summary.build_ms))
-  if self.publish then self.publish(snapshot, { generation = generation, root = root, reason = reason }) end
+  if self.publish then
+    self.publish(snapshot, { generation = generation, root = root, reason = reason, changed = true })
+  end
 end
 
 function Controller:build(generation, root, repo, status_text, numstat_text, reason)
   if not self:is_current(generation, root) then return end
   if self.snapshot and self.snapshot_repository_root == repo.root
       and self.status_text == status_text and self.numstat_text == numstat_text then
+    self.published_generation = generation
+    self.last_error = nil
+    self.last_error_generation = nil
     self.active, self.stage = false, nil
     self.status_job, self.numstat_job, self.native_job = nil, nil, nil
+    if self.publish then
+      self.publish(self.snapshot, { generation = generation, root = root, reason = reason, changed = false })
+    end
     return
   end
   self.stage = "native-build"
@@ -207,21 +244,29 @@ function Controller:start_git(generation, root, repo, reason)
     end)
   if self.active and self.stage == "git" then self.status_job = status_job end
 
-  local numstat_job = self.backend.run_git(repo,
-    { "diff", "--numstat", "--no-renames", "-z", "HEAD", "--" },
-    { generation = generation, max_output = self.max_output, optional_locks = false },
-    function(result, err)
-      if not self:is_current(generation, root) then return end
-      if result then
-        numstat_text = result.stdout or ""
-      else
-        log_quiet("Shared Git numstat failed generation=%d root=%s: %s",
-          generation, tostring(root), tostring(err and (err.message or err.kind) or err))
-      end
-      numstat_done = true
-      complete_if_ready()
-    end)
-  if self.active and self.stage == "git" then self.numstat_job = numstat_job end
+  local function start_numstat(revision, unborn_fallback)
+    local done = false
+    local job = self.backend.run_git(repo,
+      { "diff", "--numstat", "--no-renames", "-z", revision, "--" },
+      { generation = generation, max_output = self.max_output, optional_locks = false },
+      function(result, err)
+        done = true
+        if not self:is_current(generation, root) then return end
+        if result then
+          numstat_text = result.stdout or ""
+        elseif not unborn_fallback and empty_head_diff_error(err) then
+          -- An unborn HEAD has no diff base. Reuse the normal empty-tree
+          -- diff so staged new files still receive line counts.
+          return start_numstat(self.backend.EMPTY_TREE or git_backend.EMPTY_TREE, true)
+        else
+          return self:finish_failure(generation, root, "numstat", err)
+        end
+        numstat_done = true
+        complete_if_ready()
+      end)
+    if not done and self.active and self.stage == "git" then self.numstat_job = job end
+  end
+  start_numstat("HEAD", false)
 end
 
 function Controller:publish_empty(generation, root, reason)
@@ -233,6 +278,7 @@ function Controller:start()
   local generation, reason = self.generation, self.pending_reason or "refresh"
   self.pending_reason, self.dirty = nil, false
   self.active, self.active_generation = true, generation
+  self.active_reason = reason
   self.last_start = self.clock()
 
   if self.backend.is_enabled and not self.backend.is_enabled() then
@@ -252,7 +298,9 @@ end
 function Controller:lookup(path, is_directory)
   if not self.snapshot then return nil end
   local relative = path
-  if self.snapshot_repository_root and common.path_belongs_to(path, self.snapshot_repository_root) then
+  if self.snapshot_repository_root and common.path_equals(path, self.snapshot_repository_root) then
+    relative = ""
+  elseif self.snapshot_repository_root and common.path_belongs_to(path, self.snapshot_repository_root) then
     relative = common.relative_path(common.normalize_path(self.snapshot_repository_root), common.normalize_path(path))
   end
   return self.snapshot:lookup(relative:gsub("\\", "/"), is_directory)
@@ -266,6 +314,9 @@ function Controller:status()
     active = self.active,
     stage = self.stage,
     coalesced_requests = self.coalesced_requests,
+    error = self.last_error,
+    stale = self.snapshot ~= nil and self.last_error ~= nil,
+    has_snapshot = self.snapshot ~= nil,
   }
 end
 
