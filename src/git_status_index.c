@@ -413,10 +413,16 @@ bool anvil_git_status_snapshot_lookup(const AnvilGitStatusSnapshot *snapshot, co
   AnvilGitStatusKind kind = entry ? entry->exact_kind : ANVIL_GIT_STATUS_NONE;
   if (is_directory && entry) kind = stronger(kind, entry->directory_kind);
   if (entry) kind = stronger(kind, entry->subtree_kind);
-  for (size_t i = canonical_len; i > 0; i--) {
-    if (canonical[i - 1] != '/') continue;
-    GitEntry *parent = entry_for((AnvilGitStatusSnapshot *)snapshot, canonical, i - 1, false);
-    if (parent) kind = stronger(kind, parent->subtree_kind);
+  /* Exact status and the nearest directory summary override broader summaries. */
+  if (!entry || entry->exact_kind == ANVIL_GIT_STATUS_NONE) {
+    for (size_t i = canonical_len; i > 0; i--) {
+      if (canonical[i - 1] != '/') continue;
+      GitEntry *parent = entry_for((AnvilGitStatusSnapshot *)snapshot, canonical, i - 1, false);
+      if (parent && parent->subtree_kind != ANVIL_GIT_STATUS_NONE) {
+        kind = stronger(kind, parent->subtree_kind);
+        break;
+      }
+    }
   }
   lookup->kind = kind;
   if (entry && (is_directory ? entry->has_directory_numstat : entry->has_numstat)) {

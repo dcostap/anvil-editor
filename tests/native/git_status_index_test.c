@@ -81,6 +81,27 @@ int main(void) {
   CHECK(anvil_git_status_snapshot_lookup(snapshot, "src/app.lua", strlen("src/app.lua"), false, &lookup));
   anvil_git_status_snapshot_release(snapshot);
 
+  /* Git can collapse untracked files while listing ignored paths inside them. */
+  static const char nested_ignored[] =
+    "?? scratch/\0"
+    "!! scratch/cache.tmp\0"
+    "!! scratch/cache/\0";
+  spec.status_text = nested_ignored;
+  spec.status_text_len = sizeof(nested_ignored) - 1;
+  spec.numstat_text = NULL;
+  spec.numstat_text_len = 0;
+  snapshot = anvil_git_status_snapshot_build(&spec, &error);
+  CHECK(snapshot != NULL);
+  CHECK(anvil_git_status_snapshot_lookup(snapshot, "scratch/cache.tmp", strlen("scratch/cache.tmp"), false, &lookup));
+  CHECK(lookup.kind == ANVIL_GIT_STATUS_IGNORED);
+  CHECK(anvil_git_status_snapshot_lookup(snapshot, "scratch/cache", strlen("scratch/cache"), true, &lookup));
+  CHECK(lookup.kind == ANVIL_GIT_STATUS_IGNORED);
+  CHECK(anvil_git_status_snapshot_lookup(snapshot, "scratch/cache/deep/file.tmp", strlen("scratch/cache/deep/file.tmp"), false, &lookup));
+  CHECK(lookup.kind == ANVIL_GIT_STATUS_IGNORED);
+  CHECK(anvil_git_status_snapshot_lookup(snapshot, "scratch/new.txt", strlen("scratch/new.txt"), false, &lookup));
+  CHECK(lookup.kind == ANVIL_GIT_STATUS_UNTRACKED);
+  anvil_git_status_snapshot_release(snapshot);
+
   static const char malformed[] =
     " M ../escape.lua\0"
     " M /absolute.lua\0"
