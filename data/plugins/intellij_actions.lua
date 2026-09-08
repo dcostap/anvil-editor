@@ -1427,7 +1427,7 @@ core.intellij_actions_disable_conflict_shortcuts = function()
   keymap.add_direct({
     ["ctrl+g"] = "core:disabled_intellij_conflict",
     ["ctrl+shift+k"] = "core:disabled_intellij_conflict",
-    ["ctrl+return"] = "core:disabled_intellij_conflict",
+    ["ctrl+return"] = { "markdown:alternate_list_item_checkbox", "core:newline_below" },
     ["ctrl+alt+p"] = "editor:select_all_occurrences",
     ["alt+return"] = "core:disabled_intellij_conflict",
     ["ctrl+alt+r"] = "core:disabled_intellij_conflict",
