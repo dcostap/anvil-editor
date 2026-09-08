@@ -106,6 +106,21 @@ local function call_textview_method(view, method, ...)
   return with_textview_selection(view, method, view, ...)
 end
 
+local function perf_begin(name)
+  if not core.perf_frame_stats then return end
+  local perf = package.loaded["core.perf"]
+  local scope = core.perf_draw_scope_active and perf and perf.scope_begin(name, true)
+  return system.get_time(), scope
+end
+
+local function perf_end(name, started, scope)
+  if not started then return end
+  local perf = package.loaded["core.perf"]
+  if not perf then return end
+  if scope then perf.scope_end(scope) end
+  perf.frame_add(name .. "_ms", (system.get_time() - started) * 1000)
+end
+
 local is_fold_widget_line
 
 ---@class plugins.diffview.view : core.view
@@ -1453,6 +1468,110 @@ local function change_boundary_y(buffer_view, next_line)
   return y
 end
 
+-- Keep document ranges separate from layout so resizing does not scan alignment.
+local function connector_ranges(view)
+  local model = view.diff_model
+  local cache = view.__connector_ranges
+  if cache and cache.model == model then return cache.ranges end
+  local alignment = model and model.alignment or {}
+  local ranges, index = {}, 1
+  while index <= #alignment do
+    if alignment[index].tag == "equal" then
+      index = index + 1
+    else
+      local range = {}
+      while index <= #alignment and alignment[index].tag ~= "equal" do
+        local pair = alignment[index]
+        if pair.a then range.a_start, range.a_end = range.a_start or pair.a, pair.a end
+        if pair.b then range.b_start, range.b_end = range.b_start or pair.b, pair.b end
+        index = index + 1
+      end
+      local next_pair = alignment[index]
+      range.a_next = next_pair and next_pair.a
+      range.b_next = next_pair and next_pair.b
+      range.tag = range.a_start and (range.b_start and "modify" or "delete") or "insert"
+      ranges[#ranges + 1] = range
+    end
+  end
+  view.__connector_ranges = { model = model, ranges = ranges }
+  core.log_quiet("Diff View cached %d connector ranges", #ranges)
+  return ranges
+end
+
+local function connector_geometry(view)
+  local left, right = view.buffer_view_a, view.buffer_view_b
+  local ranges = connector_ranges(view)
+  local a_signature = left:get_visual_metric_signature()
+  local b_signature = right:get_visual_metric_signature()
+  local cache = view.__connector_geometry
+  if cache and cache.ranges == ranges and cache.left == left and cache.right == right
+    and cache.a_signature == a_signature
+    and cache.b_signature == b_signature and cache.padding == style.padding.y then
+    return cache.entries
+  end
+  local started, scope = perf_begin("diffview_connector_geometry_build")
+  local _, a_offset = left:get_content_offset()
+  local _, b_offset = right:get_content_offset()
+  local entries = {}
+  for _, range in ipairs(ranges) do
+    local a_start, a_end, b_start, b_end
+    if range.a_start then
+      a_start, a_end = line_range_y(left, range.a_start, range.a_end)
+    else
+      a_start = change_boundary_y(left, range.a_next)
+      a_end = a_start
+    end
+    if range.b_start then
+      b_start, b_end = line_range_y(right, range.b_start, range.b_end)
+    else
+      b_start = change_boundary_y(right, range.b_next)
+      b_end = b_start
+    end
+    entries[#entries + 1] = {
+      tag = range.tag,
+      a_start = a_start - a_offset, a_end = a_end - a_offset,
+      b_start = b_start - b_offset, b_end = b_end - b_offset,
+    }
+  end
+  view.__connector_geometry = {
+    ranges = ranges, left = left, right = right,
+    a_signature = a_signature, b_signature = b_signature,
+    padding = style.padding.y, entries = entries,
+  }
+  perf_end("diffview_connector_geometry_build", started, scope)
+  return entries
+end
+
+local function overview_geometry(view, side)
+  local buffer_view = side == "a" and view.buffer_view_a or view.buffer_view_b
+  local blocks = cached_change_blocks(view, side, "overview")
+  local signature = buffer_view:get_visual_metric_signature()
+  local full_h = math.max(1, buffer_view:get_scrollable_size())
+  local key = "__overview_geometry_" .. side
+  local cache = view[key]
+  if cache and cache.view == buffer_view and cache.blocks == blocks
+    and cache.signature == signature and cache.full_h == full_h then
+    return cache.entries
+  end
+  local started, scope = perf_begin("diffview_overview_geometry_build")
+  local entries, lh = {}, buffer_view:get_line_height()
+  for _, block in ipairs(blocks) do
+    local start_row = visual_rows_before_line(buffer_view, block.start_line)
+    local end_row = visual_rows_before_line(buffer_view, block.end_line)
+      + visual_line_count(buffer_view, block.end_line)
+    local first = common.clamp(start_row * lh / full_h, 0, 1)
+    entries[#entries + 1] = {
+      tag = block.tag, first = first,
+      last = common.clamp(end_row * lh / full_h, first, 1),
+    }
+  end
+  view[key] = {
+    view = buffer_view, blocks = blocks, signature = signature, full_h = full_h, entries = entries,
+  }
+  perf_end("diffview_overview_geometry_build", started, scope)
+  return entries
+end
+
 local function diff_has_changes(changes)
   for _, change in ipairs(changes or {}) do
     if change.tag ~= "equal" then return true end
@@ -1727,6 +1846,7 @@ function DiffView:draw_divider_changes()
   local x1 = left.position.x + left.size.x
   local x2 = right.position.x
   if x2 <= x1 then return end
+  local started, scope = perf_begin("diffview_divider_draw")
 
   core.push_clip_rect(self.position.x, self.position.y, self.size.x, self.size.y)
 
@@ -1741,37 +1861,24 @@ function DiffView:draw_divider_changes()
     )
   end
 
-  local alignment = self.diff_model and self.diff_model.alignment or {}
-  local index = 1
-  while index <= #alignment do
-    if alignment[index].tag == "equal" then
-      index = index + 1
-    else
-      local a_start, a_end, b_start, b_end
-      while index <= #alignment and alignment[index].tag ~= "equal" do
-        local pair = alignment[index]
-        if pair.a then a_start, a_end = a_start or pair.a, pair.a end
-        if pair.b then b_start, b_end = b_start or pair.b, pair.b end
-        index = index + 1
-      end
-
-      if a_start and b_start then
-        local a_start_y, a_end_y = line_range_y(left, a_start, a_end)
-        local b_start_y, b_end_y = line_range_y(right, b_start, b_end)
-        draw_connector("modify", a_start_y, a_end_y, b_start_y, b_end_y)
-      elseif a_start then
-        local a_start_y, a_end_y = line_range_y(left, a_start, a_end)
-        local next_pair = alignment[index]
-        local b_y = change_boundary_y(right, next_pair and next_pair.b)
-        draw_connector("delete", a_start_y, a_end_y, b_y, b_y)
-        draw_gap_marker(right, b_y, style.diff_marker_delete)
-      elseif b_start then
-        local b_start_y, b_end_y = line_range_y(right, b_start, b_end)
-        local next_pair = alignment[index]
-        local a_y = change_boundary_y(left, next_pair and next_pair.a)
-        draw_connector("insert", a_y, a_y, b_start_y, b_end_y)
-        draw_gap_marker(left, a_y, style.diff_marker_insert)
-      end
+  local _, a_offset = left:get_content_offset()
+  local _, b_offset = right:get_content_offset()
+  local top, bottom = self.position.y, self.position.y + self.size.y
+  local marker_height = math.max(1, common.round(2 * SCALE))
+  for _, entry in ipairs(connector_geometry(self)) do
+    local a_start, a_end = entry.a_start + a_offset, entry.a_end + a_offset
+    local b_start, b_end = entry.b_start + b_offset, entry.b_end + b_offset
+    local a_top, a_bottom = normalize_marker_range(a_start, a_end)
+    local b_top, b_bottom = normalize_marker_range(b_start, b_end)
+    -- Curves stay between their endpoints. Keep connectors spanning the viewport,
+    -- including connectors whose two sides are both outside it.
+    if math.max(a_bottom, b_bottom) >= top - 1 and math.min(a_top, b_top) <= bottom + 1 then
+      draw_connector(entry.tag, a_start, a_end, b_start, b_end)
+    end
+    if entry.tag == "delete" and b_start >= top - 1 and b_start - marker_height <= bottom + 1 then
+      draw_gap_marker(right, b_start, style.diff_marker_delete)
+    elseif entry.tag == "insert" and a_start >= top - 1 and a_start - marker_height <= bottom + 1 then
+      draw_gap_marker(left, a_start, style.diff_marker_insert)
     end
   end
 
@@ -1781,35 +1888,21 @@ function DiffView:draw_divider_changes()
   local center = x1 + (x2 - x1) / 2
   renderer.draw_rect(center - divider_width / 2, self.position.y, divider_width, self.size.y, style.divider)
   core.pop_clip_rect()
+  perf_end("diffview_divider_draw", started, scope)
 end
 
 function DiffView:draw_scrollbar()
-  for _, side in ipairs {
-    {view = self.buffer_view_a, blocks = cached_change_blocks(self, "a", "overview")},
-    {view = self.buffer_view_b, blocks = cached_change_blocks(self, "b", "overview")},
-  } do
-    local view = side.view
+  local started, scope = perf_begin("diffview_overview_draw")
+  for _, side in ipairs { "a", "b" } do
+    local view = side == "a" and self.buffer_view_a or self.buffer_view_b
     local scrollbar = view.v_scrollbar
-
-    local lh = view:get_line_height()
-    local full_h = view:get_scrollable_size()
     local x, y, w, h = scrollbar:get_track_rect()
-
-    local overview_range = math.max(1, full_h)
-
-    for _, block in ipairs(side.blocks) do
-      local color = overview_marker_color(block.tag)
+    for _, marker in ipairs(overview_geometry(self, side)) do
+      local color = overview_marker_color(marker.tag)
 
       if color then
-        local start_row = visual_rows_before_line(view, block.start_line)
-        local end_row = visual_rows_before_line(view, block.end_line)
-          + visual_line_count(view, block.end_line)
-        local scroll_y_start = start_row * lh
-        local scroll_y_end = end_row * lh
-        local ratio_start = common.clamp(scroll_y_start / overview_range, 0, 1)
-        local ratio_end = common.clamp(scroll_y_end / overview_range, ratio_start, 1)
-        local marker_y = y + ratio_start * h
-        local marker_h = math.max(common.round(2 * SCALE), (ratio_end - ratio_start) * h)
+        local marker_y = y + marker.first * h
+        local marker_h = math.max(common.round(2 * SCALE), (marker.last - marker.first) * h)
         local marker_w = math.max(common.round(2 * SCALE), math.min(w, common.round(5 * SCALE)))
         local marker_x = x + w - marker_w
 
@@ -1821,6 +1914,7 @@ function DiffView:draw_scrollbar()
 
   redraw_thumb(self.buffer_view_a.v_scrollbar)
   redraw_thumb(self.buffer_view_b.v_scrollbar)
+  perf_end("diffview_overview_draw", started, scope)
 end
 
 function DiffView:reveal_first_change()
@@ -1844,6 +1938,7 @@ function DiffView:reveal_first_change()
 end
 
 function DiffView:update()
+  local started, scope = perf_begin("diffview_update")
   DiffView.super.update(self)
   if self.diff_ignore_whitespace ~= config.plugins.diffview.ignore_whitespace then
     self:update_diff()
@@ -1863,13 +1958,20 @@ function DiffView:update()
   self.buffer_view_b.size.x = math.max(0, (self.size.x / 2) - divider_half)
   self.buffer_view_b.size.y = math.max(0, self.size.y - header_height)
 
+  local gap_started, gap_scope = perf_begin("diffview_gap_update")
   self:refresh_core_gap_rows(false)
+  perf_end("diffview_gap_update", gap_started, gap_scope)
   if self.pending_first_change_reveal and self.diff_model then
     self.pending_first_change_reveal = false
     self:reveal_first_change()
   end
+  local left_started, left_scope = perf_begin("diffview_left_update")
   call_textview_method(self.buffer_view_a, self.buffer_view_a.update)
+  perf_end("diffview_left_update", left_started, left_scope)
+  local right_started, right_scope = perf_begin("diffview_right_update")
   call_textview_method(self.buffer_view_b, self.buffer_view_b.update)
+  perf_end("diffview_right_update", right_started, right_scope)
+  perf_end("diffview_update", started, scope)
 end
 
 function DiffView:draw()
