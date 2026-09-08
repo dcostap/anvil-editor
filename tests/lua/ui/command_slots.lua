@@ -75,6 +75,21 @@ test.describe("Command Slots", function()
     test.equal(#command_slots.slots[1].output_history, 2)
   end)
 
+  test.it("runs the alternate command in a reusable split without taking focus", function(context)
+    local source = panes.create { factory = function() return View() end }
+    local focused = core.active_view
+    command_slots.set_command(1, "build")
+    test.ok(command.perform("quick_command_output:run_a_alternate"))
+    local output = command_slots.slots[1].view
+    test.not_equal(panes.pane_for_view(output), source)
+    test.equal(panes.active(), source)
+    test.equal(core.active_view, focused)
+    test.ok(command.perform("quick_command_output:run_a_alternate"))
+    test.equal(command_slots.slots[1].view, output)
+    test.equal(panes.count(), 2)
+    test.equal(core.active_view, focused)
+  end)
+
   test.it("runs Slots A and S independently and reruns only A", function(context)
     command_slots.run_command(1, "a-one")
     local a_first = context.runs[1]

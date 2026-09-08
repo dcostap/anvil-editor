@@ -900,7 +900,8 @@ end
 
 M.QuickCommandOutputView = QuickCommandOutputView
 
-local function ensure_quick_output_view(slot, focus)
+local function ensure_quick_output_view(slot, focus, placement)
+  local starting_pane = panes.active()
   local quick_output = M.quick_output_views[slot.project_path]
   local pane = quick_output and panes.pane_for_view(quick_output) or nil
   if quick_output and not pane then
@@ -911,7 +912,7 @@ local function ensure_quick_output_view(slot, focus)
     quick_output = QuickCommandOutputView(slot.project_path)
     quick_output:select_slot(slot.index, { focus = false })
     local placed = panes.place(function() return quick_output end, {
-      placement = "current",
+      placement = placement or "current",
       focus = focus ~= false,
       reason = "quick-command-output",
     })
@@ -919,6 +920,17 @@ local function ensure_quick_output_view(slot, focus)
     M.quick_output_views[slot.project_path] = quick_output
     pane = panes.pane_for_view(quick_output)
   else
+    if placement == "split" and pane == starting_pane then
+      panes.present(quick_output, { pane = pane, focus = false })
+      local split = panes.move_current_view_to_split(pane, "right", { focus = false })
+      if not split then return nil end
+      pane = split
+      if starting_pane then panes.focus(starting_pane) end
+    elseif placement == "current" and starting_pane and pane ~= starting_pane then
+      panes.present(quick_output, { pane = pane, focus = false })
+      if not panes.move_current_view(pane, starting_pane, { focus = focus ~= false }) then return nil end
+      pane = starting_pane
+    end
     if pane.current_view ~= quick_output then
       panes.present(quick_output, { pane = pane, focus = focus ~= false })
     elseif focus ~= false then
@@ -950,8 +962,8 @@ local function ensure_one_time_output_view(slot, focus)
   return placed
 end
 
-local function ensure_output_view(slot, focus)
-  if slot.index then return ensure_quick_output_view(slot, focus) end
+local function ensure_output_view(slot, focus, placement)
+  if slot.index then return ensure_quick_output_view(slot, focus, placement) end
   return ensure_one_time_output_view(slot, focus)
 end
 
@@ -1211,7 +1223,7 @@ local function default_run_command(slot, command_text, opts)
   local marker = powershell and "PS" or "$"
   local header = string.format("%s %s> %s\n\n", marker, tostring(cwd or ""), tostring(command_text or ""))
   local entry = push_output_entry(slot, command_text, cwd, header)
-  local view = ensure_output_view(slot, opts.focus)
+  local view = ensure_output_view(slot, opts.focus, opts.placement or "current")
   if not view then return nil end
   view:show_entry(entry, { follow_end = true })
   view.remote_poi_source = true
@@ -1276,15 +1288,15 @@ function M.run_once(command_text, opts)
   return default_run_command(slot, command_text, opts)
 end
 
-function M.run_slot(index)
+function M.run_slot(index, opts)
   local text = M.get_command(index)
   if is_blank(text) then
-    return M.prompt_slot(index, false)
+    return M.prompt_slot(index, false, opts)
   end
-  return M.run_command(index, text)
+  return M.run_command(index, text, opts)
 end
 
-function M.prompt_slot(index, select_existing)
+function M.prompt_slot(index, select_existing, opts)
   local slot = slot_for_index(index)
   if not slot then return end
   local text = M.get_command(index)
@@ -1302,7 +1314,7 @@ function M.prompt_slot(index, select_existing)
         return
       end
       M.set_command(index, input)
-      M.run_command(index, input)
+      M.run_command(index, input, opts)
     end,
   })
 end
@@ -1331,6 +1343,9 @@ local function install_commands()
     local index = def.index
     map["quick_command_output:run_" .. def.key] = command.palette(function()
       return M.run_slot(index)
+    end, { opens_view = true })
+    map["quick_command_output:run_" .. def.key .. "_alternate"] = command.palette(function()
+      return M.run_slot(index, { placement = "split", focus = false })
     end, { opens_view = true })
     map["quick_command_output:edit_" .. def.key] = command.palette(function()
       return M.prompt_slot(index, true)
@@ -1365,7 +1380,7 @@ local function install_keymaps()
   local map = {}
   for _, def in ipairs(SLOT_DEFS) do
     map["alt+" .. def.key] = "quick_command_output:run_" .. def.key
-    map["alt+shift+" .. def.key] = "quick_command_output:edit_" .. def.key
+    map["alt+shift+" .. def.key] = "quick_command_output:run_" .. def.key .. "_alternate"
   end
   keymap.add_direct(map)
 end
