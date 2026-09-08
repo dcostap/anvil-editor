@@ -12,12 +12,7 @@ local file_icons = require "core.file_icons"
 local path_tree = {}
 
 function path_tree.git_info_for_file(path)
-  local filetree = package.loaded["plugins.filetree"]
-  if not path or not (filetree and filetree.instances) then return nil end
-  for _, view in ipairs(filetree.instances()) do
-    local info = view:get_git_info_for_entry({ abs = path, type = "file" })
-    if info then return info end
-  end
+  return require("plugins.file_git_status").lookup(path)
 end
 
 function path_tree.format_file_size(size)
