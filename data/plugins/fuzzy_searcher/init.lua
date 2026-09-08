@@ -2815,7 +2815,7 @@ grep_row_columns = function(width, ratio)
   return path_w, gap, math.max(0, width - path_w - gap)
 end
 
-local function draw_grep_result_row(font, result, x, y, width, collapse_file, collapsed_line_x)
+local function draw_grep_result_row(font, result, x, y, width, collapse_file, collapsed_line_x, collapsed_context_x)
   local path_w, gap, text_w = grep_row_columns(width)
   local symbol = fuzzy_searcher.grep_enclosing_symbol(result)
   local context_width = 0
@@ -2847,7 +2847,7 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
     )
     local metadata_width = math.max(0, file_width - filename_width)
     local remaining = fuzzy_searcher.draw_file_metadata(
-      font, result, x + filename_width, y, metadata_width
+      font, result, x + path_w - metadata_width, y, metadata_width
     )
     file_width = file_width - metadata_width + remaining
   end
@@ -2862,12 +2862,16 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
       line_suffix, result.prefix_span, result.root_role, true
     )
   end
+  local context_x = x + file_width + context_gap
+  if collapse_file and collapsed_context_x then
+    context_x = math.min(context_x, collapsed_context_x)
+  end
   if symbol then
     fuzzy_searcher.draw_grep_symbol_context(
-      font, symbol, x + path_w - context_width, y, context_width, font:get_height()
+      font, symbol, context_x, y, context_width, font:get_height()
     )
   end
-  if text_w <= 0 then return line_x end
+  if text_w <= 0 then return line_x, context_x end
   local preview_font = style.get_small_font(font)
   local preview_y = y + math.max(0, math.floor((font:get_height() - preview_font:get_height()) / 2))
   local text_x = x + path_w + gap
@@ -2881,7 +2885,7 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
     if type(anchor) == "number" then anchor = math.max(1, anchor - leading) end
   end
   draw_highlighted_text(preview_font, text, text_x, preview_y, text_w, style.text, spans, nil, anchor)
-  return line_x
+  return line_x, context_x
 end
 
 fuzzy_searcher.grep_order = {
@@ -6958,6 +6962,7 @@ function FSView:draw_open_content()
   end
   local previous_rendered_grep_file = nil
   local previous_rendered_grep_line_x = nil
+  local previous_rendered_grep_context_x = nil
   local previous_rendered_was_grep = false
   for idx = self.viewport_offset, last do
     local r = self.results[idx]
@@ -7000,7 +7005,9 @@ function FSView:draw_open_content()
       if r.kind == "grep" then
         local file = tostring(r.file or "")
         local collapse_file = file ~= "" and previous_rendered_was_grep and file == previous_rendered_grep_file
-        previous_rendered_grep_line_x = draw_grep_result_row(font, r, x + pad, row_y, row_text_w, collapse_file, previous_rendered_grep_line_x)
+        previous_rendered_grep_line_x, previous_rendered_grep_context_x = draw_grep_result_row(
+          font, r, x + pad, row_y, row_text_w, collapse_file,
+          previous_rendered_grep_line_x, previous_rendered_grep_context_x)
         previous_rendered_grep_file = file
         previous_rendered_was_grep = true
       elseif r.kind == "file" then
