@@ -8,6 +8,29 @@ local markdown_tables = require "core.markdown.tables"
 local markdown_rename_links = require "core.markdown.rename_links"
 local markdown_vault_index = require "core.markdown.vault_index"
 
+local function alternate_list_item_checkbox(view)
+  local buffer = view.buffer
+  local line = buffer:get_selection()
+  local text = buffer.lines[line]:sub(1, -2)
+  local indent, body = text:match("^([ \t]*)(.*)$")
+  local bullet, task, content = body:match("^([%-%*%+])%s+%[([ xX])%]%s*(.*)$")
+  local replacement
+  if bullet then
+    replacement = indent .. bullet .. (task == " " and " [x] " or " [ ] ") .. content
+  else
+    bullet, content = body:match("^([%-%*%+])%s+(.*)$")
+    if bullet then
+      replacement = indent .. bullet .. " [ ] " .. content
+    else
+      content = body:match("^%d+[.)]%s+(.*)$") or body
+      replacement = indent .. "- " .. content
+    end
+  end
+  buffer:replace_cursor(nil, line, 1, line, #buffer.lines[line], function()
+    return replacement
+  end)
+end
+
 command.add(function()
   local view = core.active_view
   if view and view:extends(Editor) and markdown_live.is_markdown_buffer(view.buffer) then
@@ -44,6 +67,9 @@ end, {
   end),
   ["markdown:review_rename_link_updates"] = command.palette(function(view)
     markdown_rename_links.present(markdown_vault_index.pending_rename(view.buffer.abs_filename))
+  end),
+  ["markdown:alternate_list_item_checkbox"] = command.palette(function(view)
+    alternate_list_item_checkbox(view)
   end),
 })
 
