@@ -11,6 +11,7 @@ local style = require "core.style"
 local file_context = require "core.file_context"
 local ranges = require "plugins.gitdiff_highlight.ranges"
 local git_backend = require "plugins.git.backend"
+local git_status = require "plugins.file_git_status"
 
 local unpack = table.unpack or unpack
 local function pack_results(...)
@@ -46,8 +47,10 @@ local function new_state()
 	return {
 		is_in_repo = false,
 		operational = false,
+		closed = false,
 		loading = false,
 		too_large = false,
+		base_from_head_path = false,
 		generation = 0,
 		base_generation = 0,
 		local_generation = 0,
@@ -82,8 +85,16 @@ local function clear_state(buffer, error_message)
 	state.error = error_message
 	state.base_text = nil
 	state.base_lines = nil
+	state.base_from_head_path = false
+	state.repo_root = nil
+	state.rel_path = nil
+	state.head_identity = nil
+	state.background_reload = false
 	state.ranges = {}
 	state.line_index = {}
+	if plugin_config.debug_log and error_message then
+		core.log_quiet("[gitdiff_highlight] baseline unavailable %s: %s", buffer.abs_filename or "?", tostring(error_message))
+	end
 	return state
 end
 
@@ -111,6 +122,38 @@ end
 
 local function normalize_git_path(path)
 	return (path or ""):gsub("\\", "/")
+end
+
+local function split_nul(text)
+	local fields = {}
+	local start = 1
+	while true do
+		local finish = text:find("\0", start, true)
+		if not finish then
+			if start <= #text then fields[#fields + 1] = text:sub(start) end
+			break
+		end
+		fields[#fields + 1] = text:sub(start, finish - 1)
+		start = finish + 1
+	end
+	return fields
+end
+
+local function error_text(err)
+	return tostring(err or ""):lower()
+end
+
+local function is_unborn_head_error(err)
+	local text = error_text(err)
+	return text:find("does not have any commits", 1, true) ~= nil
+		or text:find("needed a single revision", 1, true) ~= nil
+end
+
+local function is_missing_head_path_error(err)
+	local text = error_text(err)
+	return text:find("exists on disk, but not in 'head'", 1, true) ~= nil
+		or text:find("does not exist in 'head'", 1, true) ~= nil
+		or (text:find("path '", 1, true) and text:find("not in 'head'", 1, true)) ~= nil
 end
 
 local function path_starts_with_ci(path, prefix)
@@ -213,7 +256,7 @@ local function read_available(proc, stream, chunks, cap)
 		elseif errcode == process.ERROR_WOULDBLOCK or chunk == "" then
 			return true
 		elseif not chunk then
-			if errcode == process.ERROR_PIPE then return true end
+			if errcode == process.ERROR_PIPE or (errmsg == nil and errcode == nil) then return true end
 			return false, errmsg or "process read failed"
 		else
 			return true
@@ -243,8 +286,10 @@ local function run_process_capture(args, max_stdout)
 		coroutine.yield(0.02)
 	end
 
-	read_available(proc, process.STREAM_STDOUT, stdout_chunks, stdout_cap)
-	read_available(proc, process.STREAM_STDERR, stderr_chunks, stderr_cap)
+	local ok, err = read_available(proc, process.STREAM_STDOUT, stdout_chunks, stdout_cap)
+	if not ok then return nil, table.concat(stdout_chunks), err end
+	ok, err = read_available(proc, process.STREAM_STDERR, stderr_chunks, stderr_cap)
+	if not ok then return nil, table.concat(stdout_chunks), err end
 
 	return proc:returncode() or 0, table.concat(stdout_chunks), table.concat(stderr_chunks)
 end
@@ -257,8 +302,32 @@ local function git(args, max_stdout)
 	return run_process_capture(full, max_stdout)
 end
 
+local function head_path_for_staged_rename(root, rel)
+	local rc, output, err = git({
+		"--no-optional-locks", "--literal-pathspecs", "-C", root,
+		"diff", "--cached", "--name-status", "-z", "-M", "HEAD", "--",
+	}, 64 * 1024 * 1024)
+	if rc ~= 0 then return nil, err, false end
+
+	local fields = split_nul(output)
+	local index = 1
+	while index <= #fields do
+		local status = fields[index] or ""
+		index = index + 1
+		if status:match("^[RC]%d*$") then
+			local old_path, new_path = fields[index], fields[index + 1]
+			index = index + 2
+			if normalize_git_path(new_path) == rel then
+				return normalize_git_path(old_path), nil, true
+			end
+		elseif status ~= "" then
+			index = index + 1
+		end
+	end
+	return nil, nil, true
+end
+
 local function decode_base_text(buffer, text)
-	if text:find("%z", 1, true) then return nil, "binary file" end
 	if buffer.needs_encoding_conversion and buffer:needs_encoding_conversion() then
 		if not encoding or not encoding.convert then return nil, "encoding conversion unavailable" end
 		local ok, converted = pcall(encoding.convert, "UTF-8", buffer.encoding, text, {
@@ -270,6 +339,10 @@ local function decode_base_text(buffer, text)
 	elseif not text:uisvalid() then
 		return nil, "base is not valid UTF-8"
 	end
+	if text:find("\0", 1, true) then return nil, "binary file" end
+	-- Buffer:load() removes a UTF-8 BOM from the first stored line. Keep the
+	-- Git baseline in the same representation before splitting it into lines.
+	if text:sub(1, 3) == "\239\187\191" then text = text:sub(4) end
 	return text
 end
 
@@ -298,6 +371,10 @@ local function finish_base_worker(buffer, state)
 	state = state or ensure_state(buffer)
 	state.base_worker_running = false
 	state.loading = false
+	if state.closed then
+		state.base_reload_requested = false
+		return
+	end
 	if state.base_reload_requested then
 		state.base_reload_requested = false
 		schedule_base_reload(buffer, "queued-base-reload")
@@ -307,6 +384,7 @@ end
 schedule_local_diff = function(buffer, reason)
 	if not buffer or not buffer.abs_filename or buffer_gitdiff_disabled(buffer) then return end
 	local state = ensure_state(buffer)
+	if state.closed then return end
 	if not state.base_lines then return end
 
 	state.local_generation = state.local_generation + 1
@@ -317,6 +395,10 @@ schedule_local_diff = function(buffer, reason)
 	core.add_thread(function()
 		while true do
 			local current_state = ensure_state(buffer)
+			if current_state.closed then
+				current_state.local_worker_running = false
+				return
+			end
 			local deadline = current_state.local_deadline or 0
 			local now = system.get_time()
 			if now >= deadline then break end
@@ -324,6 +406,10 @@ schedule_local_diff = function(buffer, reason)
 		end
 
 		local current_state = ensure_state(buffer)
+		if current_state.closed then
+			current_state.local_worker_running = false
+			return
+		end
 		local generation = current_state.local_generation
 		local built, meta = ranges.build(current_state.base_lines or {}, buffer.lines or {}, {
 			max_diff_cells = plugin_config.max_diff_cells,
@@ -358,16 +444,26 @@ end
 schedule_base_reload = function(buffer, reason)
 	if not buffer or not buffer.abs_filename or buffer_gitdiff_disabled(buffer) then return end
 	local state = ensure_state(buffer)
+	if state.closed then return end
+	-- Keep the shared status service aware of open Editors. This discovery does
+	-- not request a refresh and therefore cannot create a watcher loop.
+	git_status:lookup(buffer.abs_filename, false)
 	if state.base_worker_running then
 		state.base_reload_requested = true
+		state.background_reload = state.background_reload
+			or tostring(reason or ""):match("^shared%-git%-") ~= nil
 		return
 	end
 	state.base_worker_running = true
 	state.loading = true
+	state.background_reload = state.background_reload
+		or tostring(reason or ""):match("^shared%-git%-") ~= nil
+	state.local_generation = state.local_generation + 1
 	state.base_generation = state.base_generation + 1
 	local base_generation = state.base_generation
 
 	core.add_thread(function()
+		if state.closed then finish_base_worker(buffer, state); return end
 		local full_path = buffer.abs_filename
 		local git_full_path = normalize_git_path(full_path)
 		local file_dir = dirname(full_path)
@@ -388,33 +484,106 @@ schedule_base_reload = function(buffer, reason)
 		root = trim_eol(root)
 
 		local rel
-		rc, rel, err = git({ "-C", root, "ls-files", "--full-name", "--error-unmatch", "--", git_full_path }, 64 * 1024)
+		rc, rel, err = git({
+			"--literal-pathspecs", "-C", root,
+			"ls-files", "--full-name", "--error-unmatch", "-z", "--", git_full_path,
+		}, 64 * 1024)
 		if base_generation ~= ensure_state(buffer).base_generation then finish_base_worker(buffer, state); return end
 		if rc ~= 0 then
 			local fallback_rel = repo_relative_path(root, full_path)
 			if fallback_rel then
-				rc, rel, err = git({ "-C", root, "ls-files", "--full-name", "--error-unmatch", "--", fallback_rel }, 64 * 1024)
+				rc, rel, err = git({
+					"--literal-pathspecs", "-C", root,
+					"ls-files", "--full-name", "--error-unmatch", "-z", "--", fallback_rel,
+				}, 64 * 1024)
 			end
 		end
+		if base_generation ~= ensure_state(buffer).base_generation then finish_base_worker(buffer, state); return end
 		if rc ~= 0 then
 			clear_state(buffer, "file is not tracked: " .. tostring(err))
 			finish_base_worker(buffer, state)
 			return
 		end
-		rel = normalize_git_path(trim_eol(rel))
+		local rel_end = rel and rel:find("\0", 1, true)
+		if rel_end then rel = rel:sub(1, rel_end - 1) end
+		rel = normalize_git_path(rel or "")
+		if rel == "" then
+			clear_state(buffer, "tracked path lookup returned no path")
+			finish_base_worker(buffer, state)
+			return
+		end
 
 		local max_stdout = plugin_config.max_file_size + 1
 		local base_text
-		rc, base_text, err = git({ "-C", root, "show", "--textconv", "HEAD:" .. rel }, max_stdout)
+		local base_from_head_path = false
+		local head_rc, head_output, head_err = git({ "-C", root, "rev-parse", "--verify", "HEAD" }, 64 * 1024)
 		if base_generation ~= ensure_state(buffer).base_generation then finish_base_worker(buffer, state); return end
-		if rc == nil then
+		local unborn_head = head_rc ~= 0 and is_unborn_head_error(head_err)
+		if head_rc ~= 0 and not unborn_head then
+			clear_state(buffer, head_err or "HEAD lookup failed")
+			finish_base_worker(buffer, state)
+			return
+		end
+
+		if unborn_head then
+			base_text = ""
+			if state.background_reload and state.base_from_head_path
+				and common.path_equals(state.repo_root, root) and state.rel_path == rel
+				and state.head_identity == "UNBORN" then
+				state.loading = false
+				if not state.base_reload_requested then state.background_reload = false end
+				state.error = nil
+				finish_base_worker(buffer, state)
+				schedule_local_diff(buffer, reason or "base-reload")
+				return
+			end
+		else
+			local head_identity = trim_eol(head_output)
+			if state.background_reload and state.base_from_head_path
+				and common.path_equals(state.repo_root, root) and state.rel_path == rel
+				and state.head_identity == head_identity then
+				state.loading = false
+				if not state.base_reload_requested then state.background_reload = false end
+				state.error = nil
+				finish_base_worker(buffer, state)
+				schedule_local_diff(buffer, reason or "base-reload")
+				return
+			end
+			rc, base_text, err = git({ "-C", root, "show", "--textconv", "HEAD:" .. rel }, max_stdout)
+			if rc == 0 then base_from_head_path = true end
+		end
+		if base_generation ~= ensure_state(buffer).base_generation then finish_base_worker(buffer, state); return end
+		if unborn_head then
+			-- An unborn HEAD has no file content to compare.
+		elseif rc == nil then
 			clear_state(buffer, err or "git show failed")
 			finish_base_worker(buffer, state)
 			return
 		elseif rc ~= 0 then
-			-- Unborn HEAD or a path tracked in the index but absent from HEAD: treat
-			-- the base as empty for v1. Rename-aware base lookup can be added later.
-			base_text = ""
+			if not is_missing_head_path_error(err) then
+				clear_state(buffer, err or "git show failed")
+				finish_base_worker(buffer, state)
+				return
+			end
+			local old_path, rename_err, rename_query_ok = head_path_for_staged_rename(root, rel)
+			if base_generation ~= ensure_state(buffer).base_generation then finish_base_worker(buffer, state); return end
+			if not rename_query_ok then
+				clear_state(buffer, rename_err or "staged rename lookup failed")
+				finish_base_worker(buffer, state)
+				return
+			end
+			if old_path then
+				rc, base_text, err = git({ "-C", root, "show", "--textconv", "HEAD:" .. old_path }, max_stdout)
+				if base_generation ~= ensure_state(buffer).base_generation then finish_base_worker(buffer, state); return end
+				if rc == nil or rc ~= 0 then
+					clear_state(buffer, err or rename_err or "renamed Git baseline lookup failed")
+					finish_base_worker(buffer, state)
+					return
+				end
+			else
+				-- A tracked index path absent from HEAD is a staged addition.
+				base_text = ""
+			end
 		end
 		if #base_text > plugin_config.max_file_size then
 			clear_state(buffer, "base file too large")
@@ -434,8 +603,11 @@ schedule_base_reload = function(buffer, reason)
 		current_state.operational = true
 		current_state.loading = false
 		current_state.error = nil
+		if not current_state.base_reload_requested then current_state.background_reload = false end
 		current_state.repo_root = root
 		current_state.rel_path = rel
+		current_state.head_identity = unborn_head and "UNBORN" or trim_eol(head_output)
+		current_state.base_from_head_path = base_from_head_path
 		current_state.base_text = decoded
 		current_state.base_lines = ranges.split_buffer_lines(decoded)
 		if plugin_config.debug_log then
@@ -467,7 +639,8 @@ end
 local old_textview_gutter = TextView.draw_line_gutter
 local old_gutter_width = TextView.get_gutter_width
 function TextView:draw_line_gutter(line, x, y, width)
-	if self.suppress_gitdiff_gutter or not plugin_config.gutter or not get_state(self.buffer).is_in_repo then
+	local state = get_state(self.buffer)
+	if self.suppress_gitdiff_gutter or not plugin_config.gutter or not state.is_in_repo then
 		return old_textview_gutter(self, line, x, y, width)
 	end
 
@@ -496,7 +669,7 @@ end
 
 function TextView:get_gutter_width()
 	local gw, gpad = old_gutter_width(self)
-	if self.suppress_gitdiff_gutter then return gw, gpad end
+	if self.suppress_gitdiff_gutter or not plugin_config.gutter then return gw, gpad end
 	-- Reserve the gitdiff marker lane immediately so newly opened files do not
 	-- shift right after async git state flips from unknown to tracked.
 	return gw + style.padding.x * style.gitdiff_width / 12, gpad
@@ -597,7 +770,7 @@ core.add_thread(function()
 end)
 
 local function gitdiff_unavailable_message(state)
-	if state.loading then return "Git changes are still loading" end
+	if state.loading and not state.background_reload then return "Git changes are still loading" end
 	if state.too_large then return "Git changes unavailable: diff too large" end
 	if not state.is_in_repo then return "Git changes unavailable" end
 end
@@ -615,6 +788,20 @@ local function preview_git_change(view, point)
     lines[#lines + 1] = "+ " .. (view.buffer.lines[line] or "")
   end
   return require("core.poi_preview").show(view, point, "Git change", lines)
+end
+
+local old_buffer_close = Buffer.on_close
+function Buffer:on_close(...)
+	local state = states[self]
+	if state then
+		state.closed = true
+		state.base_generation = (state.base_generation or 0) + 1
+		state.local_generation = (state.local_generation or 0) + 1
+		state.base_reload_requested = false
+		state.ranges = {}
+		state.line_index = {}
+	end
+	return old_buffer_close(self, ...)
 end
 
 local function gitdiff_points_for_view(view)
@@ -673,6 +860,24 @@ command.add("core.textview", {
 		write_debug_dump(buffer)
 	end,
 })
+
+local function refresh_published_repository(root, reason, err)
+	if err or not root then return end
+	if plugin_config.debug_log then
+		core.log_quiet("[gitdiff_highlight] shared Git refresh root=%s reason=%s", tostring(root), tostring(reason))
+	end
+	for buffer, state in pairs(states) do
+		if not state.closed and buffer.abs_filename
+			and (common.path_equals(buffer.abs_filename, root)
+				or common.path_belongs_to(buffer.abs_filename, root)) then
+			schedule_base_reload(buffer, "shared-git-" .. tostring(reason or "refresh"))
+		end
+	end
+end
+
+-- Unsubscribe first so a reloaded module cannot retain an old callback.
+git_status:unsubscribe(gitdiff_highlight)
+git_status:subscribe(gitdiff_highlight, refresh_published_repository)
 
 function gitdiff_highlight._set_state_for_tests(buffer, state)
 	states[buffer] = state

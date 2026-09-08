@@ -107,6 +107,13 @@ local function exact_equal(base_lines, current_lines)
   return true
 end
 
+local function comparable_lines(lines)
+  -- Buffer uses one newline-only line for an empty file. It is a placeholder,
+  -- not a real line, so do not turn an empty-file edit into a replacement.
+  if #lines == 1 and lines[1] == "\n" then return {} end
+  return lines
+end
+
 local function find_trim(base_lines, current_lines)
   local base_count = #base_lines
   local current_count = #current_lines
@@ -198,6 +205,9 @@ function ranges.build(base_lines, current_lines, options)
   options = options or default_options
   base_lines = base_lines or {}
   current_lines = current_lines or {}
+
+  base_lines = comparable_lines(base_lines)
+  current_lines = comparable_lines(current_lines)
 
   if exact_equal(base_lines, current_lines) then
     return {}, { clean = true, trimmed = true, cells = 0 }
