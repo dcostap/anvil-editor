@@ -1361,13 +1361,14 @@ local function draw_curved_trapezium(x1, x2, start1, end1, start2, end2, color)
 
   local points = {}
   local steps = 12
+  -- Use the rectangle pixel grid; the polygon API otherwise truncates coordinates.
   for i = 0, steps do
     local x, y = curve_point(x1, x2, start1, start2, i / steps)
-    points[#points + 1] = { x, y }
+    points[#points + 1] = { math.modf(x + 0.5), (math.modf(y + 0.5)) }
   end
   for i = steps, 0, -1 do
     local x, y = curve_point(x1, x2, end1, end2, i / steps)
-    points[#points + 1] = { x, y }
+    points[#points + 1] = { math.modf(x + 0.5), (math.modf(y + 0.5)) }
   end
   renderer.draw_poly(points, color)
 end
