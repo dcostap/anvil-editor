@@ -4,10 +4,32 @@ local core = require "core"
 local common = require "core.common"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
+local process = require "core.process"
 
 local Model = require "plugins.git.model"
 
 local real_backend = require "plugins.git.backend"
+
+local function run_command(args, cwd)
+  local proc = process.start(args, {
+    cwd = cwd,
+    stdin = process.REDIRECT_DISCARD,
+    stdout = process.REDIRECT_PIPE,
+    stderr = process.REDIRECT_PIPE,
+  })
+  if not proc then return nil end
+  local code = proc:wait(process.WAIT_INFINITE, 0.01)
+  return code, proc:read_stdout(16 * 1024 * 1024) or "", proc:read_stderr(1024 * 1024) or ""
+end
+
+local function wait_until(predicate, timeout, message)
+  local deadline = system.get_time() + (timeout or 5)
+  while system.get_time() < deadline do
+    if predicate() then return end
+    coroutine.yield(0.01)
+  end
+  test.fail(message or "timed out waiting", 2)
+end
 
 local function fake_backend(status_output, log_output)
   return {
@@ -931,6 +953,67 @@ test.describe("plugins.git.model", function()
     os.remove(path)
   end)
 
+  test.test("uses a real Git rename source in File History", function()
+    local code = run_command({ real_backend.git_path(), "--version" })
+    test.skip_if(code ~= 0, "git executable is not available")
+
+    local root = USERDIR .. PATHSEP .. "git-history-real-rename-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    local ok, mkdir_err = common.mkdirp(root)
+    test.ok(ok, mkdir_err)
+    local git_root = root:gsub("\\", "/")
+    test.equal(run_command({ real_backend.git_path(), "-C", git_root, "init" }), 0)
+    test.equal(run_command({ real_backend.git_path(), "-C", git_root, "config", "user.email", "anvil@example.test" }), 0)
+    test.equal(run_command({ real_backend.git_path(), "-C", git_root, "config", "user.name", "Anvil Test" }), 0)
+    local plain = root .. PATHSEP .. "plain.txt"
+    local file = assert(io.open(plain, "wb"))
+    file:write("same content\n")
+    file:close()
+    test.equal(run_command({ real_backend.git_path(), "-C", git_root, "add", "plain.txt" }), 0)
+    test.equal(run_command({ real_backend.git_path(), "-C", git_root, "commit", "-m", "first" }), 0)
+    test.equal(run_command({ real_backend.git_path(), "-C", git_root, "mv", "plain.txt", "renamed.txt" }), 0)
+    local renamed = root .. PATHSEP .. "renamed.txt"
+    local renamed_file = assert(io.open(renamed, "wb"))
+    renamed_file:write("working content\n")
+    renamed_file:close()
+
+    local head_code, head = run_command({ real_backend.git_path(), "-C", git_root, "rev-parse", "HEAD" })
+    test.equal(head_code, 0)
+    head = head:gsub("%s+$", "")
+    local model = Model.new({ path = root }, { backend = real_backend, status_service = {} })
+    model.repo = { root = root }
+    local tab = {
+      id = "real-rename-history",
+      kind = "file_history",
+      relpath = "renamed.txt",
+      commits = { { kind = "commit", hash = head, parents = {} } },
+      selected_commit = 1,
+    }
+    model.tabs[#model.tabs + 1] = tab
+    local changes_done = false
+    model:refresh_local_changes_revision(tab, function(err)
+      test.equal(err, nil)
+      changes_done = true
+    end)
+    wait_until(function() return changes_done end, 10, "real Git Local Changes refresh did not finish")
+
+    test.equal(tab.commits[1].kind, "local_changes")
+    test.equal(tab.local_changes_head_path, "plain.txt")
+    test.equal(tab.history_head_text, "same content\n")
+    local preview_done = false
+    model:load_history_preview(tab, function(_, err)
+      test.equal(err, nil)
+      preview_done = true
+    end)
+    wait_until(function() return preview_done end, 10, "real Git history preview did not finish")
+    test.equal(tab.preview_left_text, "same content\n")
+    if PLATFORM == "Windows" then
+      os.execute('attrib -R /S /D "' .. root .. '\\*" >NUL 2>NUL')
+    end
+    local removed, remove_err = common.rm(root, true)
+    test.ok(removed, remove_err)
+  end)
+
   test.test("bounds staged rename fallback when the old HEAD path is missing", function()
     local root = USERDIR .. PATHSEP .. "git-history-rename-missing-" .. system.get_process_id()
     local path = root .. PATHSEP .. "src" .. PATHSEP .. "new.lua"
@@ -966,8 +1049,8 @@ test.describe("plugins.git.model", function()
     local tab = model:open_file_history("src/new.lua")
 
     test.equal(status_calls, 1)
-    test.equal(tab.commits[1].kind, "local_changes")
-    test.equal(tab.preview_left_text, "")
+    test.equal(tab.commits[1].kind, "commit")
+    test.equal(tab.local_changes_error.kind, "exit")
     os.remove(path)
   end)
 

@@ -539,16 +539,21 @@ end
 
 function backend.path_status(repo, relpath, opts, callback)
   opts = opts or {}
-  local args = { "status", "--porcelain=v1", "-z" }
+  local args = { "status", "--porcelain=v1", "-z", "--renames" }
   if opts.ignored then args[#args + 1] = "--ignored" end
-  args[#args + 1] = "--"
-  args[#args + 1] = normalize_relpath(relpath)
   return backend.run_git(repo, args, opts, function(result, err)
     if not result then
       if callback then callback(nil, err) end
       return
     end
-    if callback then callback(backend.parse_status_z(result.stdout), nil) end
+    local target = normalize_relpath(relpath)
+    local records = {}
+    for _, record in ipairs(backend.parse_status_z(result.stdout)) do
+      if record.path == target or record.old_path == target or record.new_path == target then
+        records[#records + 1] = record
+      end
+    end
+    if callback then callback(records, nil) end
   end)
 end
 

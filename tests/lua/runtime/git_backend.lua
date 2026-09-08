@@ -401,6 +401,35 @@ test.describe("plugins.git.backend", function()
       test.ok(result.stdout:match("git version") ~= nil, "expected git version output")
     end)
 
+    test.test("keeps rename sources when path_status targets the new path", function(context)
+      local code = run({ backend.git_path(), "--version" })
+      test.skip_if(code ~= 0, "git executable is not available")
+
+      local root = join_path(USERDIR, "git-backend-path-status-" .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000))
+      context.root = root
+      local ok, err = common.mkdirp(root)
+      test.ok(ok, err)
+      local git_root = root:gsub("\\", "/")
+      test.equal(run({ backend.git_path(), "-C", git_root, "init" }), 0)
+      test.equal(run({ backend.git_path(), "-C", git_root, "config", "user.email", "anvil@example.test" }), 0)
+      test.equal(run({ backend.git_path(), "-C", git_root, "config", "user.name", "Anvil Test" }), 0)
+      write_file(join_path(root, "plain.txt"), "same content\n")
+      test.equal(run({ backend.git_path(), "-C", git_root, "add", "plain.txt" }), 0)
+      test.equal(run({ backend.git_path(), "-C", git_root, "commit", "-m", "first" }), 0)
+      test.equal(run({ backend.git_path(), "-C", git_root, "mv", "plain.txt", "renamed.txt" }), 0)
+
+      local records, callback_err
+      backend.path_status({ root = root }, "renamed.txt", { optional_locks = false }, function(result, err)
+        records, callback_err = result, err
+      end)
+      wait_until(function() return records ~= nil or callback_err ~= nil end, 5, "path status callback did not run")
+      test.equal(callback_err, nil)
+      test.equal(#records, 1)
+      test.equal(records[1].kind, "renamed")
+      test.equal(records[1].old_path, "plain.txt")
+      test.equal(records[1].new_path, "renamed.txt")
+    end)
+
     test.test("reports cancellation exactly once", function()
       local executable, args
       if PLATFORM == "Windows" then

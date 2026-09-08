@@ -817,7 +817,9 @@ function Model:refresh_local_changes_revision(tab, callback)
         end
         return
       end
-      text, err = "", nil
+      tab.local_changes_error = err
+      if callback then callback(err) end
+      return
     end
     if err then
       tab.local_changes_error = err
