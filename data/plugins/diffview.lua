@@ -2102,6 +2102,19 @@ command.add(function()
   if view and view.is and view:is(DiffView) then return true, view end
   return false
 end, {
+  ["diff:copy_patch"] = command.palette(function(view)
+    local a, b = view.buffer_view_a.buffer, view.buffer_view_b.buffer
+    local titles = view.request.content_titles or {}
+    local patch = require("plugins.diff.patch").build(a.lines, b.lines,
+      titles[1] or a:get_name(), titles[2] or b:get_name())
+    if not patch then
+      diff_status("No changes to copy")
+      return
+    end
+    system.set_clipboard(patch)
+    core.log_quiet("Copied Diff View patch: %d bytes", #patch)
+    diff_status("Patch copied to clipboard")
+  end, { keywords = { "clipboard", "share", "unified", "diff" } }),
   ["diff:toggle_folding"] = command.palette(function(view)
     view:toggle_folding()
   end, { keywords = { "compare", "fold", "unchanged" } }),
