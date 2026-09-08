@@ -2898,21 +2898,15 @@ local function task_checkbox_widget(
       local box_y = y + math.floor((visual_row_height - box_size) / 2)
       local radius = math.max(border, math.floor(box_size * 0.22))
       if fragment.hovered then
-        local hover_padding = math.max(3, math.floor(3 * SCALE))
-        local hover_border = math.max(1, math.floor(SCALE))
+        local hover_padding = math.max(2, math.floor(2 * SCALE))
         renderer.draw_rounded_rect(
           box_x - hover_padding, box_y - hover_padding,
           box_size + hover_padding * 2, box_size + hover_padding * 2,
-          radius + hover_padding, style.interactive_hover_border
+          radius + hover_padding, style.interactive_hover_overlay
         )
-        renderer.draw_rounded_rect(
-          box_x - hover_padding + hover_border,
-          box_y - hover_padding + hover_border,
-          box_size + (hover_padding - hover_border) * 2,
-          box_size + (hover_padding - hover_border) * 2,
-          radius + hover_padding - hover_border,
-          style.interactive_hover_overlay
-        )
+        if not is_checked then
+          checkbox_color = style.markdown_live_task_checked
+        end
       end
       renderer.draw_rounded_rect(
         box_x, box_y, box_size, box_size, radius, checkbox_color

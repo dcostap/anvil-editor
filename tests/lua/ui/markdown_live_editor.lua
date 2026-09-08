@@ -2986,7 +2986,7 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("draws clear rounded hover feedback around task checkboxes", function()
+  test.it("draws compact hover feedback around task checkboxes", function()
     local view, buffer = make_view("- [ ] task\nplain", "task-hover.md")
     buffer:set_selection(2, 1)
     refresh(view)
@@ -3004,7 +3004,7 @@ test.describe("Markdown Live Preview", function()
     local old_draw_rounded_rect = renderer.draw_rounded_rect
     local old_draw_text = renderer.draw_text
     local old_draw_text_known_bounds = renderer.draw_text_known_bounds
-    local generic_hover_rects, checkbox_hover_fills, checkbox_hover_borders = 0, 0, 0
+    local generic_hover_rects, checkbox_hover_fills = 0, 0
     renderer.draw_rect = function(_, _, _, _, color)
       if color == style.interactive_hover_overlay
         or color == style.interactive_hover_border
@@ -3015,8 +3015,6 @@ test.describe("Markdown Live Preview", function()
     renderer.draw_rounded_rect = function(_, _, _, _, _, color)
       if color == style.interactive_hover_overlay then
         checkbox_hover_fills = checkbox_hover_fills + 1
-      elseif color == style.interactive_hover_border then
-        checkbox_hover_borders = checkbox_hover_borders + 1
       end
     end
     renderer.draw_text = function(font, text, x, _, _, opts)
@@ -3036,7 +3034,6 @@ test.describe("Markdown Live Preview", function()
     if not draw_ok then error(draw_err, 0) end
     test.equal(generic_hover_rects, 0)
     test.equal(checkbox_hover_fills, 1)
-    test.equal(checkbox_hover_borders, 1)
   end)
 
   test.it("alternates the current Markdown line through list and task states", function()
