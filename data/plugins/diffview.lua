@@ -121,6 +121,20 @@ local function perf_end(name, started, scope)
   perf.frame_add(name .. "_ms", (system.get_time() - started) * 1000)
 end
 
+-- Keep selection binding outside the method scope so its cost stays visible.
+local function profile_textview_method(view, method, name)
+  if not core.perf_frame_stats then
+    return call_textview_method(view, method)
+  end
+  local started, scope = perf_begin(name)
+  with_textview_selection(view, function()
+    local body_started, body_scope = perf_begin(name .. "_body")
+    method(view)
+    perf_end(name .. "_body", body_started, body_scope)
+  end)
+  perf_end(name, started, scope)
+end
+
 local is_fold_widget_line
 
 ---@class plugins.diffview.view : core.view
@@ -1939,7 +1953,9 @@ end
 
 function DiffView:update()
   local started, scope = perf_begin("diffview_update")
+  local super_started, super_scope = perf_begin("diffview_super_update")
   DiffView.super.update(self)
+  perf_end("diffview_super_update", super_started, super_scope)
   if self.diff_ignore_whitespace ~= config.plugins.diffview.ignore_whitespace then
     self:update_diff()
   end
@@ -1965,16 +1981,14 @@ function DiffView:update()
     self.pending_first_change_reveal = false
     self:reveal_first_change()
   end
-  local left_started, left_scope = perf_begin("diffview_left_update")
-  call_textview_method(self.buffer_view_a, self.buffer_view_a.update)
-  perf_end("diffview_left_update", left_started, left_scope)
-  local right_started, right_scope = perf_begin("diffview_right_update")
-  call_textview_method(self.buffer_view_b, self.buffer_view_b.update)
-  perf_end("diffview_right_update", right_started, right_scope)
+  profile_textview_method(self.buffer_view_a, self.buffer_view_a.update, "diffview_left_update")
+  profile_textview_method(self.buffer_view_b, self.buffer_view_b.update, "diffview_right_update")
   perf_end("diffview_update", started, scope)
 end
 
 function DiffView:draw()
+  local started, scope = perf_begin("diffview_draw")
+  local chrome_started, chrome_scope = perf_begin("diffview_draw_chrome")
   DiffView.super.draw(self)
   self:draw_background(style.background)
   local titles = self.request and self.request.content_titles
@@ -1990,6 +2004,8 @@ function DiffView:draw()
       self.position.y + (self.diff_header_height or 0) + style.padding.y,
       style.dim
     )
+    perf_end("diffview_draw_chrome", chrome_started, chrome_scope)
+    perf_end("diffview_draw", started, scope)
     return
   end
   if not self.diff_model or self.pending_first_change_reveal then
@@ -1999,12 +2015,16 @@ function DiffView:draw()
       self.position.y + (self.diff_header_height or 0) + style.padding.y,
       style.dim
     )
+    perf_end("diffview_draw_chrome", chrome_started, chrome_scope)
+    perf_end("diffview_draw", started, scope)
     return
   end
-  call_textview_method(self.buffer_view_a, self.buffer_view_a.draw)
-  call_textview_method(self.buffer_view_b, self.buffer_view_b.draw)
+  perf_end("diffview_draw_chrome", chrome_started, chrome_scope)
+  profile_textview_method(self.buffer_view_a, self.buffer_view_a.draw, "diffview_left_draw")
+  profile_textview_method(self.buffer_view_b, self.buffer_view_b.draw, "diffview_right_draw")
   self:draw_divider_changes()
   self:draw_scrollbar()
+  perf_end("diffview_draw", started, scope)
 end
 
 

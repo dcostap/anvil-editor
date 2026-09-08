@@ -39,6 +39,19 @@ test.describe("performance frame cost report", function()
     test.match(text, "Renderer paths: test")
   end)
 
+  test.it("reports small timers even when large counters fill the detail list", function()
+    frames = perf.start_recording()
+    for i = 1, 80 do perf.add_detail("large_counter_" .. i, 10000) end
+    perf.add_detail("diffview_left_draw_ms", 3)
+    perf.add_detail("diffview_right_draw_ms", 2)
+    local path = perf.stop_recording()
+    local file = assert(io.open(path, "rb"))
+    local text = file:read("*a")
+    file:close()
+    test.match(text, "3.000 diffview_left_draw_ms")
+    test.match(text, "2.000 diffview_right_draw_ms")
+  end)
+
   test.it("keeps draw scope reports balanced while drawing unwrapped text", function()
     local buffer = Buffer(nil, nil, true)
     buffer:insert(1, 1, "first line\nsecond line\nthird line")
@@ -57,5 +70,35 @@ test.describe("performance frame cost report", function()
     end
     file:close()
     test.ok(rows > 0, "Expected draw scope rows")
+  end)
+
+  test.it("records both Diff View sides with balanced draw scopes", function()
+    local diffview = require "plugins.diffview"
+    local view = diffview.string_to_string("before\nretained", "after\nretained", "Left", "Right")
+    local deadline = system.get_time() + 10
+    while view.updater_idx do
+      test.ok(system.get_time() < deadline, "Diff computation did not finish")
+      coroutine.yield(0.01)
+    end
+    frames = perf.start_recording()
+    core.redraw = true
+    coroutine.yield(0.03)
+    local path = perf.stop_recording()
+    local file = assert(io.open(path, "rb"))
+    local text = file:read("*a")
+    file:close()
+    for _, side in ipairs { "left", "right" } do
+      test.match(text, "diffview_" .. side .. "_draw_body_ms")
+      test.match(text, "diffview_" .. side .. "_update_body_ms")
+    end
+    file = assert(io.open(frames:gsub("_frames%.csv$", "_draw_scopes.csv"), "rb"))
+    file:read("*l")
+    local rows = 0
+    for line in file:lines() do
+      rows = rows + 1
+      test.match(line, ",0\r?$")
+    end
+    file:close()
+    test.ok(rows > 0, "Expected Diff View draw scope rows")
   end)
 end)

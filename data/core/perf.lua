@@ -1788,6 +1788,13 @@ local function write_summary(path)
   end
   if mode_count == 0 then file:write("  (none recorded)\n") end
 
+  file:write("\nPerf detail timers (total ms; nested timers overlap):\n")
+  for _, row in ipairs(sorted_counts(record.detail_counts)) do
+    if row.key:match("_ms$") or row.key:find("_ms:", 1, true) then
+      file:write(string.format("%12.3f %s\n", row.count, row.key))
+    end
+  end
+
   file:write("\nTop perf detail counters/timers:\n")
   for i, row in ipairs(sorted_counts(record.detail_counts)) do
     if i > 60 then break end
