@@ -1,6 +1,7 @@
 local common = require "core.common"
 local core = require "core"
 local command = require "core.command"
+local config = require "core.config"
 local panes = require "core.panes"
 local test = require "core.test"
 local filetree = assert(require("plugins.filetree").new())
@@ -40,6 +41,10 @@ test.describe("File Tree entry snapshots", function()
   end)
 
   test.after_each(function(context)
+    if context.original_open_file then core.open_file = context.original_open_file end
+    if context.scroll_context_lines then
+      config.scroll_context_lines = context.scroll_context_lines
+    end
     if context.original_resolve then
       project_paths.resolve = context.original_resolve
     end
@@ -189,4 +194,49 @@ test.describe("File Tree entry snapshots", function()
     test.ok(filetree.line_meta[entry.line].expanded)
     test.not_nil(find_entry("child.txt"))
   end)
+
+  for _, clicks in ipairs { 1, 2 } do
+    test.it("keeps the File Tree still after " .. clicks .. " file-row clicks near the viewport edge", function(context)
+      local root = setup_tree(context)
+      for i = 1, 60 do
+        write_file(root .. PATHSEP .. string.format("file-%02d.txt", i), "file")
+      end
+      filetree:refresh(false, false)
+      context.scroll_context_lines = config.scroll_context_lines
+      config.scroll_context_lines = 3
+      core.set_active_view(filetree)
+      filetree.position.x, filetree.position.y = 0, 0
+      filetree.size.x, filetree.size.y = 800, 12 * filetree:get_line_height()
+      filetree.buffer:set_selection(1, 1)
+      filetree:update()
+      filetree.scroll.x, filetree.scroll.to.x = 0, 0
+      filetree.scroll.y, filetree.scroll.to.y = 0, 0
+      local entry = test.not_nil(find_entry("file-08.txt"))
+      local x, y = filetree:get_line_screen_position(entry.line, 1)
+      x = x + filetree:get_font():get_width("f") / 2
+      y = y + filetree:get_line_height() / 2
+      local opened
+      context.original_open_file = core.open_file
+      core.open_file = function(path)
+        opened = path
+        return {}
+      end
+      test.ok(filetree:on_mouse_pressed("left", x, y, clicks))
+      filetree:update()
+      test.equal(filetree.scroll.to.y, 0, "mouse press must not add scroll context")
+      filetree:on_mouse_released("left", x, y)
+      filetree:update()
+      test.equal(filetree.scroll.to.y, 0, "mouse release must not add scroll context")
+      test.equal(filetree.buffer:get_selection(true), entry.line)
+      if clicks == 2 then
+        test.ok(common.path_equals(opened, entry.abs))
+      else
+        test.is_nil(opened)
+      end
+
+      filetree.buffer:set_selection(find_entry("file-50.txt").line, 1)
+      filetree:update()
+      test.ok(filetree.scroll.to.y > 0, "non-mouse selection must still reveal the file")
+    end)
+  end
 end)

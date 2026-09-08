@@ -1916,6 +1916,9 @@ function FileTreeView:on_mouse_pressed(button, x, y, clicks)
   local text = self.buffer.lines[line] or ""
   self.buffer:clear_search_selections()
   self.buffer:set_selection(line, 1, line, #text)
+  -- The clicked row is already visible. Do not add caret scroll context.
+  self.last_line1, self.last_col1, self.last_line2, self.last_col2 =
+    self.buffer:get_selection()
   self.mouse_selecting = nil
   self.pressed_entry_line = line
   self.pressed_entry_clicks = clicks or 1
