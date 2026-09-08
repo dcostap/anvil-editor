@@ -6494,6 +6494,8 @@ end
 ---string, a single segment table `{ text, color?, font? }`, or a list of
 ---segment tables. Hints are drawn right-aligned by default and are never part
 ---of the Buffer text.
+---A custom hint can return `{ draw = function(x, y, width) }` instead.
+---The callback receives the available area after the Buffer text, with clipping applied.
 ---@param line integer Line number
 ---@return string|table|nil hint
 function TextView:get_line_hint(line)
@@ -6515,6 +6517,7 @@ end
 
 function TextView:normalize_line_hint(hint)
   if hint == nil or hint == false then return nil end
+  if type(hint) == "table" and type(hint.draw) == "function" then return hint end
   if type(hint) == "table" and hint.__normalized_line_hint then return hint end
 
   local default_font = self:get_font()
@@ -6789,6 +6792,21 @@ function TextView:draw_line_hint(line, x, y)
   local available = content_right - hint_left_limit
   if stats then stats.line_hint_layout_ms = stats.line_hint_layout_ms + (system.get_time() - phase_start) * 1000 end
   if available <= 0 then finish("line_hint_skip_no_space"); return end
+
+  if segments.draw then
+    local offset, height = self:get_line_render_content_geometry(
+      line, self.wrapped_settings and #(self.buffer.lines[line] or "") + 1 or 1,
+      self.wrapped_settings and true or false)
+    local hint_y = offset and y + offset or y
+    height = height or self:get_line_height()
+    local text_y = offset and hint_y + math.max(0, (height - self:get_font():get_height()) / 2)
+      or y + self:get_line_text_y_offset()
+    core.push_clip_rect(hint_left_limit, hint_y, available, height)
+    segments.draw(hint_left_limit, text_y, available)
+    core.pop_clip_rect()
+    finish()
+    return
+  end
 
   phase_start = stats and system.get_time()
   local width = self:measure_line_hint_segments(segments)

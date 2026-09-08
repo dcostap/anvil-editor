@@ -487,20 +487,6 @@ local function compact_age(ts)
   return tostring(math.floor(elapsed / week)) .. "w"
 end
 
-function fuzzy_searcher.format_recent_file_age(ts, now)
-  ts = tonumber(ts)
-  if not ts then return nil end
-  local elapsed = math.max(0, (tonumber(now) or os.time()) - ts)
-  local minute = 60
-  local hour = 60 * minute
-  local day = 24 * hour
-  local year = 365 * day
-  if elapsed < hour then return tostring(math.floor(elapsed / minute)) .. "m" end
-  if elapsed < day then return tostring(math.floor(elapsed / hour)) .. "h" end
-  if elapsed < year then return tostring(math.floor(elapsed / day)) .. "d" end
-  return tostring(math.floor(elapsed / year)) .. "yr"
-end
-
 local function filetime_to_time(filetime)
   if filetime == nil then return nil end
   local n = tonumber(filetime)
@@ -2413,78 +2399,29 @@ local function draw_project_result_row(font, r, x, y, width)
 end
 
 function fuzzy_searcher.file_metadata_parts(r)
-  local parts = {}
+  local file_metadata = require "plugins.file_metadata"
   local path = fullpath(r.abs_path or r.file or r.path)
-  local last_edited, last_viewed = r.last_edited, r.last_viewed
-  if not last_edited or not last_viewed then
-    local key = common.path_compare_key(path)
-    for _, recent in ipairs(core.visited_files or {}) do
-      if type(recent) == "table" and common.path_compare_key(core.recent_file_path(recent)) == key then
-        last_edited = last_edited or recent.last_edited
-        last_viewed = last_viewed or recent.last_viewed
-        break
-      end
-    end
-  end
-  local git = path_tree.git_info_for_file(path)
-  local stat = git and git.stat
-  if stat and (stat.additions or 0) == 0 and (stat.deletions or 0) == 0 then stat = nil end
-  if r.file_size == nil then
+  local last_edited, last_viewed = file_metadata.recent_times(path)
+  local git = require("plugins.file_git_status"):lookup(path, r.is_folder)
+  if r.file_size == nil or r.is_folder then
     local info = system.get_file_info(path)
     r.file_size = info and info.size or false
     r.file_modified = info and info.modified
   end
-  local edited = fuzzy_searcher.format_recent_file_age(last_edited or r.file_modified)
-  local viewed = fuzzy_searcher.format_recent_file_age(last_viewed)
-  parts[#parts+1] = { text = stat and ("+" .. tostring(stat.additions or 0)) or "",
-    color = style.filetree_git_line_additions, sample = "+999" }
-  parts[#parts+1] = { text = stat and ("−" .. tostring(stat.deletions or 0)) or "",
-    color = style.filetree_git_line_deletions, sample = "−999" }
-  parts[#parts+1] = { text = r.file_size and path_tree.format_file_size(r.file_size) or "", sample = "999M" }
-  parts[#parts+1] = { icon = "pencil", text = edited or "", sample = "99yr" }
-  parts[#parts+1] = { icon = "eye", text = viewed or "", sample = "99yr" }
-  return parts
+  local counts, count_pending
+  if r.is_folder then
+    counts, count_pending = require("plugins.folder_counts").get(path, r.file_modified, false)
+  end
+  return file_metadata.parts {
+    type = r.is_folder and "dir" or "file", size = r.file_size,
+    count = counts and counts.count, count_pending = count_pending,
+    modified = r.file_modified, git = git,
+    last_edited = r.last_edited or last_edited, last_viewed = r.last_viewed or last_viewed,
+  }
 end
 
 function fuzzy_searcher.draw_file_metadata(font, r, x, y, width, parts, columns)
-  local recent_file_icons = require "core.recent_file_icons"
-  local metadata_font = style.get_small_font(style.get_small_font(font))
-  local metadata_y = y + math.max(0, math.floor((font:get_height() - metadata_font:get_height()) / 2))
-  parts = parts or fuzzy_searcher.file_metadata_parts(r)
-
-  local row_height = metadata_font:get_height()
-  local icon_size = recent_file_icons.size_for_row(row_height)
-  local icon_gap = math.max(2 * (SCALE or 1), style.padding.x / 4)
-  local separator = "  "
-  local separator_w = metadata_font:get_width(separator)
-  local diff_separator = " "
-  local metadata_w = math.max(0, #parts - 1) * separator_w
-  if #parts >= 2 then
-    metadata_w = metadata_w - separator_w + metadata_font:get_width(diff_separator)
-  end
-  for index, part in ipairs(parts) do
-    part.cell_width = columns and columns[index]
-      or math.max(metadata_font:get_width(part.sample), metadata_font:get_width(part.text))
-    metadata_w = metadata_w + (part.icon and icon_size + icon_gap or 0) + part.cell_width
-  end
-
-  local outer_gap = style.padding.x
-  if metadata_w + outer_gap >= width then return width end
-  local cx = x + width - metadata_w
-  for index, part in ipairs(parts) do
-    if index > 1 then
-      cx = renderer.draw_text(metadata_font, index == 2 and diff_separator or separator, cx, metadata_y, style.dim)
-    end
-    if part.icon then
-      recent_file_icons.draw(part.icon, cx, metadata_y, row_height, icon_size)
-      cx = cx + icon_size + icon_gap
-    end
-    local text = truncate_text(metadata_font, part.text, part.cell_width)
-    renderer.draw_text(metadata_font, text,
-      cx + part.cell_width - metadata_font:get_width(text), metadata_y, part.color or style.dim)
-    cx = cx + part.cell_width
-  end
-  return math.max(0, width - metadata_w - outer_gap)
+  return require("plugins.file_metadata").draw(font, parts or fuzzy_searcher.file_metadata_parts(r), x, y, width, columns)
 end
 
 local function draw_new_project_result_row(font, r, x, y, width)
@@ -3848,7 +3785,6 @@ end
 function FSView:text_capture()
   return require("plugins.fuzzy_searcher.text_capture").build(self, {
     result_main_text = fuzzy_searcher.result_main_text,
-    format_recent_file_age = fuzzy_searcher.format_recent_file_age,
     prompt_mode = fuzzy_searcher.prompt_mode,
   })
 end
@@ -6954,16 +6890,12 @@ function FSView:draw_open_content()
 
   local results_scope = fuzzy_searcher._perf_scope_begin("result_rows")
   local metadata_rows, metadata_columns = {}, {}
-  local metadata_font = style.get_small_font(style.get_small_font(font))
   for idx = self.viewport_offset, last do
     local r = self.results[idx]
-    if r.kind == "file" and not r.header then
+    if (r.kind == "file" or r.kind == "folder") and not r.header then
       local parts = fuzzy_searcher.file_metadata_parts(r)
       metadata_rows[idx] = parts
-      for column, part in ipairs(parts) do
-        metadata_columns[column] = math.max(metadata_columns[column] or 0,
-          metadata_font:get_width(part.sample), metadata_font:get_width(part.text))
-      end
+      require("plugins.file_metadata").include_columns(metadata_columns, font, parts)
     end
   end
   local previous_rendered_grep_file = nil
@@ -7030,7 +6962,9 @@ function FSView:draw_open_content()
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        draw_path_result_row(font, r, x + pad, row_y, row_text_w)
+        local file_text_w = fuzzy_searcher.draw_file_metadata(
+          font, r, x + pad, row_y, row_text_w, metadata_rows[idx], metadata_columns)
+        draw_path_result_row(font, r, x + pad, row_y, file_text_w)
       elseif r.kind == "symbol" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
@@ -7527,7 +7461,6 @@ return {
       everything.state = state
       everything.search_generation = everything.search_generation + 1
     end,
-    format_recent_file_age = fuzzy_searcher.format_recent_file_age,
     git_kind_for_file = fuzzy_searcher.git_kind_for_file,
     draw_file_metadata = fuzzy_searcher.draw_file_metadata,
     draw_file_result_row = draw_file_result_row,

@@ -51,8 +51,6 @@ filetree_config.sort_mode = normalize_sort_mode(filetree_config.sort_mode)
 local INDENT = 1
 local INDENT_TEXT = "\t"
 local NO_META = false
-local LINE_HINT_COUNT_WORKER_BUDGET = 0.008
-local LINE_HINT_COUNT_CHILD_BUDGET = 0.004
 
 local function perf_stats()
   return core.textview_frame_stats
@@ -257,67 +255,8 @@ local function sorted_dir(path, show_hidden)
   return items
 end
 
-local format_file_size = path_tree.format_file_size
-
-local RELATIVE_TIME_COLUMN_WIDTH = 12
-
-local function format_relative_time(modified, reference_time)
-  local value = tonumber(modified)
-  local now = tonumber(reference_time)
-  if not value or not now then return nil end
-
-  local age = math.max(0, now - value)
-  local minutes = math.floor(age / 60)
-  if minutes < 1 then return "just now" end
-  if minutes < 60 then
-    return string.format("%d min%s ago", minutes, minutes == 1 and "" or "s")
-  end
-
-  local hours = math.floor(minutes / 60)
-  if hours < 24 then
-    local remaining_minutes = minutes % 60
-    if hours > 9 or remaining_minutes == 0 then
-      return string.format("%d hr%s ago", hours, hours == 1 and "" or "s")
-    end
-    return string.format("%d:%02d hrs ago", hours, remaining_minutes)
-  end
-
-  local days = math.floor(hours / 24)
-  if days < 30 then
-    return string.format("%d day%s ago", days, days == 1 and "" or "s")
-  end
-  if days < 365 then
-    local months = math.floor(days / 30)
-    return string.format("%d mo%s ago", months, months == 1 and "" or "s")
-  end
-
-  local years = math.floor(days / 365)
-  if years > 99 then return "99+ yrs ago" end
-  return string.format("%d yr%s ago", years, years == 1 and "" or "s")
-end
-
-local function count_direct_children(path, show_hidden, yield_budget)
-  local entries, err = list_dir_metadata(path)
-  if not entries then return nil, nil, err or "unable to list directory" end
-
-  local folders, files = 0, 0
-  local start_time = system.get_time()
-  for _, info in ipairs(entries) do
-    local name = info.name
-    if info.modified ~= nil and (show_hidden or name:sub(1, 1) ~= ".") then
-      if info.type == "dir" then
-        folders = folders + 1
-      elseif info.type == "file" then
-        files = files + 1
-      end
-    end
-    if yield_budget and system.get_time() - start_time > yield_budget then
-      coroutine.yield(0)
-      start_time = system.get_time()
-    end
-  end
-  return folders, files
-end
+local file_metadata = require "plugins.file_metadata"
+local folder_counts = require "plugins.folder_counts"
 
 local function path_key(path)
   return common.path_compare_key(path) or tostring(path)
@@ -803,11 +742,6 @@ function FileTreeView:new(opts)
   self.line_meta = {}
   self.entry_snapshot_generation = 0
   self.entry_snapshots = {}
-  self.line_hint_cache = {}
-  self.line_hint_count_cache = {}
-  self.line_hint_count_pending = {}
-  self.line_hint_count_queue = {}
-  self.line_hint_count_worker_running = false
   self.last_lines = nil
   self.status_cache = nil
   self.git_status = { generation = 0 }
@@ -1506,11 +1440,6 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
   self.original_by_name = {}
   self.known_originals = {}
   self.line_meta = {}
-  self.line_hint_cache = {}
-  self.line_hint_count_cache = {}
-  self.line_hint_count_pending = {}
-  self.line_hint_count_queue = {}
-  self.line_hint_reference_time = os.time()
 
   local out = {}
   local parent = parent_navigation_target(self.current_dir)
@@ -1843,148 +1772,8 @@ function FileTreeView:get_line_hint_entry(line)
   return entry
 end
 
-function FileTreeView:line_hint_count_key(abs, show_hidden)
-  if show_hidden == nil then show_hidden = filetree_config.show_hidden end
-  return (show_hidden and "1" or "0") .. "\0" .. abs
-end
-
-function FileTreeView:pop_line_hint_count_task()
-  for i, task in ipairs(self.line_hint_count_queue or {}) do
-    if task.priority then
-      return table.remove(self.line_hint_count_queue, i)
-    end
-  end
-  return table.remove(self.line_hint_count_queue, 1)
-end
-
-function FileTreeView:start_line_hint_count_worker()
-  if self.line_hint_count_worker_running then return end
-  self.line_hint_count_worker_running = true
-
-  core.add_thread(function()
-    local batch_updated = false
-    local batch_start = system.get_time()
-
-    while true do
-      local task = self:pop_line_hint_count_task()
-      if not task then break end
-
-      local info = system.get_file_info(task.abs)
-      if info and info.type == "dir" and info.modified == task.modified then
-        local folders, files, err = count_direct_children(
-          task.abs, task.show_hidden, LINE_HINT_COUNT_CHILD_BUDGET
-        )
-        local latest = system.get_file_info(task.abs)
-        if latest and latest.type == "dir" and latest.modified == task.modified then
-          self.line_hint_count_cache[task.key] = {
-            modified = task.modified,
-            folders = folders,
-            files = files,
-            error = err,
-          }
-          if err then
-            core.log_quiet("File Tree Line Hint count failed for %s: %s", task.abs, err)
-          end
-          batch_updated = true
-        end
-      end
-      if self.line_hint_count_pending[task.key] == task then
-        self.line_hint_count_pending[task.key] = nil
-      end
-
-      if system.get_time() - batch_start >= LINE_HINT_COUNT_WORKER_BUDGET then
-        if batch_updated then
-          core.redraw = true
-          batch_updated = false
-        end
-        coroutine.yield(0)
-        batch_start = system.get_time()
-      end
-    end
-
-    if batch_updated then core.redraw = true end
-    self.line_hint_count_worker_running = false
-  end)
-end
-
-function FileTreeView:get_folder_hint_counts(abs, modified, priority)
-  self.line_hint_count_cache = self.line_hint_count_cache or {}
-  self.line_hint_count_pending = self.line_hint_count_pending or {}
-  self.line_hint_count_queue = self.line_hint_count_queue or {}
-
-  local key = self:line_hint_count_key(abs)
-  local cached = self.line_hint_count_cache[key]
-  if cached and cached.modified == modified then return cached end
-
-  local pending = self.line_hint_count_pending[key]
-  if pending then
-    pending.modified = modified
-    pending.show_hidden = filetree_config.show_hidden
-    pending.priority = pending.priority or priority
-    return nil, true
-  end
-
-  pending = {
-    key = key,
-    abs = abs,
-    modified = modified,
-    show_hidden = filetree_config.show_hidden,
-    priority = priority,
-  }
-  self.line_hint_count_pending[key] = pending
-  table.insert(self.line_hint_count_queue, pending)
-  self:start_line_hint_count_worker()
-  return nil, true
-end
-
-function FileTreeView:format_line_hint_for_path(abs, info)
-  local stats = perf_stats()
-  local start = perf_start(stats)
-  if not info or not info.type then perf_finish(stats, "filetree_line_hint_format_ms", start); return nil end
-
-  if not self.line_hint_reference_time then self.line_hint_reference_time = os.time() end
-  local relative = format_relative_time(info.modified, self.line_hint_reference_time)
-  if not relative then perf_finish(stats, "filetree_line_hint_format_ms", start); return nil end
-  local relative_hint = string.format("%-" .. RELATIVE_TIME_COLUMN_WIDTH .. "s", relative)
-
-  if info.type == "file" then
-    self.line_hint_cache = self.line_hint_cache or {}
-    local key = self:line_hint_count_key(abs)
-    local cached = self.line_hint_cache[key]
-    if cached and cached.type == info.type
-        and cached.size == info.size
-        and cached.modified == info.modified then
-      perf_add(stats, "filetree_line_hint_cache_hits", 1)
-      perf_finish(stats, "filetree_line_hint_format_ms", start)
-      return cached.text
-    end
-
-    perf_add(stats, "filetree_line_hint_cache_misses", 1)
-    local text = string.format("%s · %s", format_file_size(info.size), relative_hint)
-    self.line_hint_cache[key] = {
-      type = info.type,
-      size = info.size,
-      modified = info.modified,
-      text = text,
-    }
-    perf_finish(stats, "filetree_line_hint_format_ms", start)
-    return text
-  elseif info.type == "dir" then
-    local counts = self:get_folder_hint_counts(abs, info.modified, true)
-    if counts and counts.error then perf_finish(stats, "filetree_line_hint_format_ms", start); return relative_hint end
-    if counts and counts.folders and counts.files then
-      perf_add(stats, "filetree_line_hint_folder_count_hits", 1)
-      perf_finish(stats, "filetree_line_hint_format_ms", start)
-      return string.format("%4d   · %s", counts.folders + counts.files, relative_hint)
-    end
-    perf_add(stats, "filetree_line_hint_folder_count_pending", 1)
-    perf_finish(stats, "filetree_line_hint_format_ms", start)
-    return string.format("%s   · %s", "   …", relative_hint)
-  end
-  perf_finish(stats, "filetree_line_hint_format_ms", start)
-end
-
 function FileTreeView:get_line_hint(line)
+  if self.metadata_hints then return self.metadata_hints[line] end
   local stats = perf_stats()
   local start = perf_call(stats, "filetree_line_hint_calls")
   local function finish(result)
@@ -2001,26 +1790,34 @@ function FileTreeView:get_line_hint(line)
   local info = entry.cached_info
   if not info or info.type ~= entry.type then return finish(nil) end
 
-  local text = self:format_line_hint_for_path(entry.abs, info)
-  if not text then return finish(nil) end
-
-  local font = style.get_small_font(self:get_font())
-  local dim = style.dim
   local git_start = perf_start(stats)
   local git = self:get_git_info_for_entry(entry)
   perf_finish(stats, "filetree_line_hint_git_ms", git_start)
-  local segments = path_tree.changed_stat_segments(git and git.stat) or {}
-  if #segments > 0 then segments[#segments + 1] = { text = "   ", font = font, color = dim } end
-  if #segments == 0 and git and git.kind == "ignored" then
-    segments[#segments + 1] = { text = "ignored   ", font = font, color = style.filetree_git_status_ignored }
+  local counts, pending
+  if info.type == "dir" then
+    counts, pending = folder_counts.get(entry.abs, info.modified, filetree_config.show_hidden)
   end
-  if #segments == 0 then
-    perf_add(stats, "filetree_line_hint_segments", 1)
-    return finish({ text = text, font = font, color = dim })
+  local edited, viewed = file_metadata.recent_times(entry.abs)
+  local parts = file_metadata.parts {
+    type = info.type, size = info.size, modified = info.modified, git = git,
+    count = counts and counts.count, count_pending = pending,
+    last_edited = edited, last_viewed = viewed,
+  }
+  if self.metadata_columns then
+    file_metadata.include_columns(self.metadata_columns, self:get_font(), parts)
   end
-  segments[#segments + 1] = { text = text, font = font, color = dim }
-  perf_add(stats, "filetree_line_hint_segments", #segments)
-  return finish(segments)
+  return finish(file_metadata.line_hint(self:get_font(), parts, self.metadata_columns))
+end
+
+function FileTreeView:draw()
+  local hints = {}
+  self.metadata_columns = {}
+  local first, last = self:get_visible_line_range()
+  for line = first, last do hints[line] = self:get_line_hint(line) end
+  self.metadata_hints = hints
+  local result = FileTreeView.super.draw(self)
+  self.metadata_hints, self.metadata_columns = nil, nil
+  return result
 end
 
 function FileTreeView:draw_folder_row_background(line, x, y, width)
