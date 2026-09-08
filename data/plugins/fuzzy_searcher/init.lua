@@ -495,10 +495,10 @@ function fuzzy_searcher.format_recent_file_age(ts, now)
   local hour = 60 * minute
   local day = 24 * hour
   local year = 365 * day
-  if elapsed < hour then return tostring(math.floor(elapsed / minute)) .. " m" end
-  if elapsed < day then return tostring(math.floor(elapsed / hour)) .. " h" end
-  if elapsed < year then return tostring(math.floor(elapsed / day)) .. " d" end
-  return tostring(math.floor(elapsed / year)) .. " yr"
+  if elapsed < hour then return tostring(math.floor(elapsed / minute)) .. "m" end
+  if elapsed < day then return tostring(math.floor(elapsed / hour)) .. "h" end
+  if elapsed < year then return tostring(math.floor(elapsed / day)) .. "d" end
+  return tostring(math.floor(elapsed / year)) .. "yr"
 end
 
 local function filetime_to_time(filetime)
@@ -2440,9 +2440,9 @@ function fuzzy_searcher.file_metadata_parts(r)
     color = style.filetree_git_line_additions, sample = "+999" }
   parts[#parts+1] = { text = stat and ("−" .. tostring(stat.deletions or 0)) or "",
     color = style.filetree_git_line_deletions, sample = "−999" }
-  parts[#parts+1] = { text = r.file_size and path_tree.format_file_size(r.file_size) or "", sample = "999 M" }
-  parts[#parts+1] = { icon = "pencil", text = edited or "", sample = "99 yr" }
-  parts[#parts+1] = { icon = "eye", text = viewed or "", sample = "99 yr" }
+  parts[#parts+1] = { text = r.file_size and path_tree.format_file_size(r.file_size) or "", sample = "999M" }
+  parts[#parts+1] = { icon = "pencil", text = edited or "", sample = "99yr" }
+  parts[#parts+1] = { icon = "eye", text = viewed or "", sample = "99yr" }
   return parts
 end
 

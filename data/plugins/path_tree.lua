@@ -29,7 +29,7 @@ function path_tree.format_file_size(size)
     unit = unit + 1
     rounded = math.floor(value + 0.5)
   end
-  return string.format("%3d %s", rounded, units[unit])
+  return string.format("%3d%s", rounded, units[unit])
 end
 
 local KIND_RANK = {
