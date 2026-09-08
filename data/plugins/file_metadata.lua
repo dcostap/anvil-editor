@@ -6,6 +6,37 @@ local style = require "core.style"
 local icons = require "core.recent_file_icons"
 local path_tree = require "plugins.path_tree"
 local metadata = {}
+local recent_source, recent_by_path
+local font_widths = setmetatable({}, { __mode = "k" })
+
+local function widths_for(font)
+  local frame = core.render_frame_active and core.render_frame_id
+  local cache = font_widths[font]
+  if frame and cache and cache.frame == frame then return cache end
+  local size = font:get_size()
+  local generation = font:get_generation()
+  local scale = font:get_surface_scale()
+  if type(generation) == "table" then generation = table.concat(generation, ":") end
+  if type(scale) == "table" then scale = table.concat(scale, ":") end
+  if not cache or cache.size ~= size or cache.generation ~= generation or cache.scale ~= scale then
+    cache = { size = size, generation = generation, scale = scale, values = {}, count = 0 }
+    font_widths[font] = cache
+  end
+  cache.frame = frame
+  return cache
+end
+
+local function text_width(font, cache, text)
+  local width = cache.values[text]
+  if width == nil then
+    -- Bound storage when file sizes, counts, or ages keep changing.
+    if cache.count >= 512 then cache.values, cache.count = {}, 0 end
+    width = font:get_width(text)
+    cache.values[text] = width
+    cache.count = cache.count + 1
+  end
+  return width
+end
 
 function metadata.format_age(ts, now)
   ts = tonumber(ts)
@@ -18,12 +49,20 @@ function metadata.format_age(ts, now)
 end
 
 function metadata.recent_times(path)
-  local key = common.path_compare_key(path)
-  for _, recent in ipairs(core.visited_files or {}) do
-    if type(recent) == "table" and common.path_compare_key(core.recent_file_path(recent)) == key then
-      return recent.last_edited, recent.last_viewed
+  local source = core.visited_files
+  if recent_source ~= source or not recent_by_path then
+    recent_source, recent_by_path = source, {}
+    for _, recent in ipairs(source or {}) do
+      if type(recent) == "table" then
+        local key = common.path_compare_key(core.recent_file_path(recent))
+        if key and not recent_by_path[key] then recent_by_path[key] = recent end
+      end
     end
   end
+  local key = common.path_compare_key(path)
+  -- Core replaces the list after visits and pruning. Edits update these entries in place.
+  local recent = recent_by_path[key]
+  if recent then return recent.last_edited, recent.last_viewed end
 end
 
 function metadata.parts(info)
@@ -60,14 +99,16 @@ end
 
 function metadata.include_columns(columns, font, parts)
   font = metadata.font(font)
+  local cache = widths_for(font)
   for _, part in ipairs(parts) do
     columns[part.id] = math.max(columns[part.id] or 0,
-      font:get_width(part.sample), font:get_width(part.text))
+      text_width(font, cache, part.sample), text_width(font, cache, part.text))
   end
 end
 
 function metadata.draw(font, parts, x, y, width, columns)
   local small_font = metadata.font(font)
+  local cache = widths_for(small_font)
   local text_y = y + math.max(0, math.floor((font:get_height() - small_font:get_height()) / 2))
   local row_height = small_font:get_height()
   local icon_size = icons.size_for_row(row_height)
@@ -76,23 +117,29 @@ function metadata.draw(font, parts, x, y, width, columns)
   local widths = {}
   for index, part in ipairs(parts) do
     widths[index] = columns and columns[part.id]
-      or math.max(small_font:get_width(part.sample), small_font:get_width(part.text))
+      or math.max(text_width(small_font, cache, part.sample), text_width(small_font, cache, part.text))
     total = total + widths[index] + (part.icon and icon_size + icon_gap or 0)
-    if index > 1 then total = total + small_font:get_width(part.separator or "  ") end
+    if index > 1 then total = total + text_width(small_font, cache, part.separator or "  ") end
   end
   local outer_gap = style.padding.x
   if total + outer_gap >= width then return width end
   local cx = x + width - total
   for index, part in ipairs(parts) do
     if index > 1 then
-      cx = renderer.draw_text(small_font, part.separator or "  ", cx, text_y, style.dim)
+      local separator = part.separator or "  "
+      if separator:find("%S") then
+        renderer.draw_text(small_font, separator, cx, text_y, style.dim)
+      end
+      cx = cx + text_width(small_font, cache, separator)
     end
     if part.icon then
       icons.draw(part.icon, cx, text_y, row_height, icon_size)
       cx = cx + icon_size + icon_gap
     end
-    renderer.draw_text(small_font, part.text,
-      cx + widths[index] - small_font:get_width(part.text), text_y, part.color or style.dim)
+    if part.text ~= "" then
+      renderer.draw_text(small_font, part.text,
+        cx + widths[index] - text_width(small_font, cache, part.text), text_y, part.color or style.dim)
+    end
     cx = cx + widths[index]
   end
   return math.max(0, width - total - outer_gap)
