@@ -11,6 +11,7 @@ local markdown_vault_index = require "core.markdown.vault_index"
 local function alternate_list_item_checkbox(view)
   local buffer = view.buffer
   local line = buffer:get_selection()
+  local selection_state = view:get_selection_state()
   local text = buffer.lines[line]:sub(1, -2)
   local indent, body = text:match("^([ \t]*)(.*)$")
   local bullet, task, content = body:match("^([%-%*%+])%s+%[([ xX])%]%s*(.*)$")
@@ -29,6 +30,15 @@ local function alternate_list_item_checkbox(view)
   buffer:replace_cursor(nil, line, 1, line, #buffer.lines[line], function()
     return replacement
   end)
+  local column_delta = #replacement - #text
+  for index = 1, #selection_state.selections, 2 do
+    if selection_state.selections[index] == line then
+      selection_state.selections[index + 1] = math.max(
+        1, selection_state.selections[index + 1] + column_delta
+      )
+    end
+  end
+  view:set_selection_state(selection_state)
 end
 
 command.add(function()

@@ -3055,8 +3055,12 @@ test.describe("Markdown Live Preview", function()
       local old_active = core.active_view
       core.active_view = view
       local ok, err = pcall(function()
+        local old_col = select(2, buffer:get_selection())
         test.equal(command.perform("markdown:alternate_list_item_checkbox"), true)
         test.equal(buffer.lines[1], case[2] .. "\n")
+        local new_line, new_col = buffer:get_selection()
+        test.equal(new_line, 1)
+        test.equal(new_col, old_col + #case[2] - #case[1])
       end)
       core.active_view = old_active
       if not ok then error(err, 0) end
