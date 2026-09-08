@@ -347,6 +347,21 @@ test.describe("plugins.git.backend", function()
   end)
 
   test.describe("repo_for_path", function()
+    test.it("keeps repository access errors distinct from a missing repository", function()
+      local previous = backend.run_git
+      local reported
+      backend.run_git = function(_, _, _, callback)
+        callback(nil, { kind = "exit", message = "fatal: detected dubious ownership in repository" })
+      end
+      local ok, err = pcall(backend.repo_for_path_async, USERDIR, function(_, result_err)
+        reported = result_err
+      end)
+      backend.run_git = previous
+      test.ok(ok, err)
+      test.not_nil(reported)
+      test.equal(reported.kind, "exit")
+    end)
+
     test.test("discovers the canonical repository root from a file path", function(context)
       local code = run({ backend.git_path(), "--version" })
       test.skip_if(code ~= 0, "git executable is not available")

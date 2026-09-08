@@ -905,6 +905,14 @@ local function repo_from_rev_parse(input, out)
   return { root = root, relpath = relpath, input_path = input.abs }
 end
 
+local function discovery_error(err)
+  if err and err.kind == "exit"
+      and tostring(err.stderr or err.message or ""):lower():find("not a git repository", 1, true) then
+    err.kind = "not_in_repository"
+  end
+  return err
+end
+
 function backend.repo_for_path(path)
   if not backend.is_enabled() then return nil, disabled_error() end
   local input, input_err = repo_input_for_path(path)
@@ -912,10 +920,7 @@ function backend.repo_for_path(path)
 
   local out, err = run_git_sync(input.cwd, { "rev-parse", "--show-toplevel" }, 1024 * 1024)
   if not out then
-    if err and err.kind == "exit" then
-      err.kind = "not_in_repository"
-    end
-    return nil, err
+    return nil, discovery_error(err)
   end
 
   return repo_from_rev_parse(input, out)
@@ -933,8 +938,7 @@ function backend.repo_for_path_async(path, callback)
   end
   return backend.run_git(input.cwd, { "rev-parse", "--show-toplevel" }, { max_output = 1024 * 1024 }, function(result, err)
     if not result then
-      if err and err.kind == "exit" then err.kind = "not_in_repository" end
-      if callback then callback(nil, err) end
+      if callback then callback(nil, discovery_error(err)) end
       return
     end
     if callback then callback(repo_from_rev_parse(input, result.stdout), nil) end
