@@ -467,7 +467,7 @@ The bottom information bar that shows state, messages, tooltips, and context for
 _Avoid_: StatusView, bottom bar
 
 **Navigation Boundary Feedback**:
-A brief user-facing message shown when directional navigation reaches the boundary of its current scope. In a multi-file Diff View, it can announce that repeating the command will continue into the adjacent file.
+A brief user-facing message shown when directional navigation reaches the boundary of its current scope.
 _Avoid_: wraparound feedback, no-op warning
 
 **Point of Interest / POI**:
@@ -516,7 +516,8 @@ The repository whose commits a Git Log currently displays.
 _Avoid_: active repository, current repo
 
 **Commit Diff View**:
-A closable View for browsing all files changed by a commit or working-tree state and comparing them against another Git state.
+A closable View listing files changed by a commit or working-tree state against another Git state.
+Its files form a Remote POI Source whose entries open separate comparisons.
 _Avoid_: commit diff tab
 
 **File History View**:

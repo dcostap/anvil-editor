@@ -208,6 +208,8 @@ function M.next(view, direction, opts)
   direction = normalize_direction(direction)
   if not view or not view.buffer then return nil, "no-provider" end
   return with_selection_state(view, function()
+    -- Structured sources can include entries inside collapsed folders.
+    if view.next_point_of_interest then return view:next_point_of_interest(direction, opts) end
     local points, unavailable = M.points_for_view(view, opts)
     if not points then return nil, unavailable or "no-provider" end
     if #points == 0 then return nil, "empty" end
@@ -248,6 +250,8 @@ function M.select(view, poi, opts)
   opts = opts or {}
   require("core.poi_preview").dismiss(view)
   return with_selection_state(view, function()
+    -- The source can reveal an entry and update its text position before selection.
+    if view.select_point_of_interest then view:select_point_of_interest(poi, opts) end
     local _, current_col = view.buffer:get_selection()
     local col = poi.preserve_col and current_col or poi.col
     view.buffer:set_selection(poi.line, col, poi.line, col)

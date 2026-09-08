@@ -892,7 +892,7 @@ test.describe("Git View command", function()
     test.ok(details.buffer.text_revision > before_revision)
   end)
 
-  test.test("commit diff tabs can focus diff content and return to the Git list", function(context)
+  test.test("opens a standalone comparison and restores its source", function(context)
     local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-focus",
@@ -912,7 +912,8 @@ test.describe("Git View command", function()
     core.active_view = tab_view
 
     test.equal(command.perform("git:focus_diff_pane"), true)
-    test.equal(core.active_view.git_owner_view, tab_view)
+    test.equal(core.active_view.git_owner_view, nil)
+    test.not_nil(panes.active().current_view.buffer_view_a)
     git_view.ensure_tab_view(session, tab, true)
     test.equal(core.active_view.git_owner_view, tab_view)
     git_view.sync_tab_views(session)
@@ -1036,7 +1037,7 @@ test.describe("Git View command", function()
     test.equal(copied, right.path .. ":2")
   end)
 
-  test.it("focused Git diff TextView becomes the active Git pane", function(context)
+  test.it("focuses the standalone comparison rather than a source sub-area", function(context)
     local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-caret",
@@ -1057,10 +1058,10 @@ test.describe("Git View command", function()
     tab_view.size.x, tab_view.size.y = 800, 600
 
     test.equal(command.perform("git:focus_diff_pane"), true)
-    local diff = tab.diff_view
+    local diff = panes.active().current_view
     local buffer_view = diff.buffer_view_a
     test.equal(core.active_view, buffer_view)
-    test.equal(core.active_view.git_owner_view, tab_view)
+    test.equal(core.active_view.git_owner_view, nil)
   end)
 
   test.it("uses the canonical editable Buffer for a working-tree Diff Side", function(context)
@@ -1114,11 +1115,11 @@ test.describe("Git View command", function()
       binary_generation_value = 1,
     }
 
-    local list, _, _, _, _, _, comparison = view:layout_diff_tab(tab, 0)
+    local list = view:layout_diff_tab(tab, 0)
+    local comparison = view:ensure_image_comparison_view(tab)
 
     test.equal(tostring(comparison), "ImageComparisonView")
     test.equal(list.position.y, view.position.y)
-    test.equal(comparison.position.y, view.position.y)
     test.not_nil(comparison.left_view.image)
     test.not_nil(comparison.right_view.image)
     test.equal(comparison.left_title, "Before — before.jpg")
@@ -1126,7 +1127,7 @@ test.describe("Git View command", function()
     test.equal(tab.diff_view, nil)
   end)
 
-  test.it("continues change navigation into the next changed file on repeat", function(context)
+  test.it("uses remote POIs to continue into the next changed file", function(context)
     local session, view = open_fake_git_view(context.project)
     view.model.repo = { root = "C:/repo" }
     local tab = {
@@ -1147,13 +1148,11 @@ test.describe("Git View command", function()
       diff_generation = 1,
     }
     view.model.tabs[#view.model.tabs + 1] = tab
-    local diff = view:ensure_diff_view(tab)
-    local boundary = diff.request.user_data.on_change_boundary
-    test.equal(type(boundary), "function")
-
-    boundary(1, diff.buffer_view_b)
+    local source = git_view.ensure_tab_view(session, tab, true)
+    require("core.poi").set_remote_source(source:pane_view("file-list"))
+    test.ok(command.perform("core:next_remote_point_of_interest"))
     test.equal(tab.selected_file, 1)
-    boundary(1, diff.buffer_view_b)
+    test.ok(command.perform("core:next_remote_point_of_interest"))
     test.equal(tab.selected_file, 2)
   end)
 
@@ -1173,7 +1172,7 @@ test.describe("Git View command", function()
     test.equal(prompts, 1)
   end)
 
-  test.it("updates an embedded commit diff before drawing", function(context)
+  test.it("keeps only the changed-file tree in the commit source", function(context)
     local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-update",
@@ -1194,13 +1193,9 @@ test.describe("Git View command", function()
     local tab_view = git_view.ensure_tab_view(session, tab, true)
     tab_view.position.x, tab_view.position.y = 0, 0
     tab_view.size.x, tab_view.size.y = 800, 600
-    local diff = tab_view:ensure_diff_view(tab)
-    local updates = 0
-    diff.update = function() updates = updates + 1 end
-
     tab_view:update()
-
-    test.equal(updates, 1)
+    test.same(tab_view:get_surface_focus_targets(), { tab_view:pane_view("file-list") })
+    test.equal(tab.diff_view, nil)
   end)
 
   test.it("keeps the previous Diff View visible while the next file loads", function(context)
@@ -1226,14 +1221,13 @@ test.describe("Git View command", function()
     tab_view.position.x, tab_view.position.y = 0, 0
     tab_view.size.x, tab_view.size.y = 800, 300
     tab_view:update()
-    local previous = test.not_nil(tab.diff_view)
+    test.ok(command.perform("git:focus_diff_pane"))
+    local previous = panes.active().current_view
 
     tab.selected_file = 2
     tab.loading_file = true
     tab.file_loading_started_at = system.get_time()
-    local presented = select(7, tab_view:layout_diff_tab(tab, tab_view.position.x + style.padding.x))
-
-    test.equal(presented, previous)
+    test.equal(panes.active().current_view, previous)
     test.equal(tab_view:file_loading_indicator_visible(tab, tab.file_loading_started_at + 0.999), false)
     test.equal(tab_view:file_loading_indicator_visible(tab, tab.file_loading_started_at + 1.001), true)
   end)
@@ -1388,7 +1382,7 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_owner_view, view)
   end)
 
-  test.it("Local Focus Cycle wraps through Git diff targets in both directions", function(context)
+  test.it("Local Focus Cycle keeps the commit tree separate from comparison sides", function(context)
     local session, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-panes",
@@ -1411,8 +1405,8 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_pane, "file-list")
     git_view.ensure_tab_view(session, tab, true)
     test.equal(core.active_view.git_pane, "file-list")
-    test.equal(command.perform("pane:focus_local_next"), true)
-    local diff = tab.diff_view
+    test.equal(command.perform("git:focus_diff_pane"), true)
+    local diff = panes.active().current_view
     test.equal(diff.request.kind, "git")
     test.equal(nil, diff.request.metadata)
     test.equal(diff.request.user_data.selected_file_path, "a.lua")
@@ -1420,33 +1414,19 @@ test.describe("Git View command", function()
     test.equal(diff.request.user_data.read_only_reason, "Historical Git content is read-only")
     test.equal(diff.request.editable_policy, "content")
     test.equal(core.active_view, diff.buffer_view_a)
-    diff.buffer_view_a.get_points_of_interest = function()
-      return { { line = 2, col = 1, line_only_navigation = true, scroll_to_line = true } }
-    end
-    diff.buffer_view_a.buffer:set_selection(1, 1)
-    test.equal(command.perform("core:next_point_of_interest"), true)
-    local line = diff.buffer_view_a.buffer:get_selection()
-    test.equal(line, 2)
-
     test.equal(command.perform("pane:focus_local_next"), true)
     test.equal(core.active_view, diff.buffer_view_b)
     test.equal(command.perform("pane:focus_local_next"), true)
-    test.equal(core.active_view.git_pane, "file-list")
+    test.equal(core.active_view, diff.buffer_view_a)
 
     test.equal(command.perform("pane:focus_local_previous"), true)
     test.equal(core.active_view, diff.buffer_view_b)
     test.equal(command.perform("pane:focus_local_previous"), true)
     test.equal(core.active_view, diff.buffer_view_a)
     test.equal(command.perform("pane:focus_local_previous"), true)
+    test.equal(core.active_view, diff.buffer_view_b)
+    test.ok(command.perform("core:show_remote_point_of_interest_source"))
     test.equal(core.active_view.git_pane, "file-list")
-
-    test.equal(command.perform("pane:focus_local_next"), true)
-    test.equal(core.active_view, diff.buffer_view_a)
-    test.equal(command.perform("git:close_selected_tab"), true)
-    test.ok(core.active_view ~= tab_view)
-    test.ok(core.active_view.git_owner_view ~= tab_view)
-    test.equal(command.perform("pane:focus_local_next"), true)
-    test.ok(core.active_view ~= tab_view)
 
   end)
 
@@ -1659,7 +1639,7 @@ test.describe("Git View command", function()
     log_view.model.tabs[#log_view.model.tabs + 1] = tab
     local view = git_view.ensure_tab_view(session, tab, true)
     view:update()
-    core.active_view = test.not_nil(tab.diff_view).buffer_view_b
+    core.active_view = view:pane_view("file-list")
 
     test.ok(command.perform("core:open_text_capture"))
 
@@ -1814,7 +1794,7 @@ test.describe("Git View command", function()
     local x, y, width, height = list.v_scrollbar:get_thumb_rect()
     test.ok(width > 0 and height > 0)
     local selected_line = list.buffer:get_selection()
-    core.active_view = test.not_nil(tab.diff_view).buffer_view_b
+    core.active_view = tab_view
 
     test.equal(tab_view:on_mouse_pressed("left", x + width / 2, y + height / 2, 1), true)
     test.equal(list.v_scrollbar.dragging, true)
@@ -1828,7 +1808,7 @@ test.describe("Git View command", function()
     test.equal(list.v_scrollbar.dragging, false)
   end)
 
-  test.it("routes wheel input to the hovered Diff View instead of the focused Path Tree", function(context)
+  test.it("scrolls a standalone comparison without moving the source tree", function(context)
     local session, view = open_fake_git_view(context.project)
     local lines = {}
     for index = 1, 40 do lines[index] = "line " .. index end
@@ -1854,11 +1834,14 @@ test.describe("Git View command", function()
     tab_view:update()
 
     local list = tab_view:pane_view("file-list")
-    local diff = test.not_nil(tab.diff_view)
-    core.active_view = list
-    tab_view:on_mouse_moved(diff.position.x + 10, diff.position.y + 10, 0, 0)
+    local diff = tab_view:ensure_diff_view(tab)
+    diff.position.x, diff.position.y = 0, 0
+    diff.size.x, diff.size.y = 800, 120
+    diff:update()
+    core.active_view = diff.buffer_view_a
+    diff:on_mouse_moved(diff.position.x + 10, diff.position.y + 10, 0, 0)
 
-    test.equal(tab_view:on_mouse_wheel(-1, 0), true)
+    diff:on_mouse_wheel(-1, 0)
     test.equal(list.scroll.to.y, 0)
     test.ok(diff.buffer_view_a.scroll.to.y > 0)
     test.ok(diff.buffer_view_b.scroll.to.y > 0)

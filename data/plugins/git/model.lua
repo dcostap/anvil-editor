@@ -1169,7 +1169,6 @@ end
 function Model:select_diff_file(tab, index, callback)
   if not tab or tab.kind ~= "commit_diff" then return nil end
   if #tab.changed_files == 0 then return nil end
-  tab.change_boundary_arm = nil
   tab.selected_file = math.max(1, math.min(#tab.changed_files, tonumber(index) or 1))
   tab.selected_file_path = changed_file_path(tab.changed_files[tab.selected_file])
   self:load_selected_diff_file(tab, callback)

@@ -345,6 +345,24 @@ function GitView:pane_view(name)
     view.get_point_of_interest_at = function(v, line)
       return self:point_of_interest_for_pane(v, line)
     end
+    if name == "file-list" then
+      view.remote_poi_source = true
+      view.get_points_of_interest = function() return self:changed_file_points() end
+      view.next_point_of_interest = function(v, direction)
+        local points = self:changed_file_points()
+        if #points == 0 then return nil, "empty" end
+        local tab = self:model_tab()
+        local record = v:path_tree_record_for_line(v.buffer:get_selection())
+        local selected = record or tab.changed_files[tab.selected_file]
+        for index, point in ipairs(points) do
+          if point.record == selected then
+            return points[index + direction], "boundary"
+          end
+        end
+        return direction > 0 and points[1] or points[#points], "empty"
+      end
+      view.select_point_of_interest = function(_, point) self:select_changed_file_point(point) end
+    end
     if ViewType == TextView then
       if name == "log-list" then
         view.get_gutter_width = graph_gutter_width
@@ -481,27 +499,14 @@ end
 
 function GitView:get_focus_view()
   self:update_pane_buffers()
+  local current = self:model_tab()
+  if current and current.kind == "commit_diff" then return self:pane_view("file-list") end
   local active = core.active_view
   if active and active.git_owner_view == self then return active end
   if self.focused_pane_name and self.pane_views and self.pane_views[self.focused_pane_name] then
     return self.pane_views[self.focused_pane_name]
   end
   local tab = self.model and self:model_tab()
-  if self.focus_pane == "diff" and tab and tab.kind == "commit_diff" then
-    if tab.loading_file or tab.file_error or (tab.left_text == nil and tab.right_text == nil) then
-      self.focused_diff_buffer_view = nil
-      return self:pane_view("file-list")
-    end
-    local diff = self:ensure_diff_view(tab)
-    if core.active_view and (core.active_view == diff.buffer_view_a or core.active_view == diff.buffer_view_b) then
-      return core.active_view
-    end
-    if self.focused_diff_buffer_view == diff.buffer_view_a or self.focused_diff_buffer_view == diff.buffer_view_b then
-      return self.focused_diff_buffer_view
-    end
-    self.focused_diff_buffer_view = nil
-    return diff and diff.get_focus_view and diff:get_focus_view() or self:pane_view("file-list")
-  end
   if tab and tab.kind == "file_history" then
     if self.focus_pane == "diff" and not tab.preview_loading and not tab.preview_error
         and (tab.preview_left_text ~= nil or tab.preview_right_text ~= nil) then
@@ -510,7 +515,6 @@ function GitView:get_focus_view()
     end
     return self:pane_view("history-list")
   end
-  if tab and tab.kind == "commit_diff" then return self:pane_view("file-list") end
   return self:pane_view("log-list")
 end
 
@@ -519,6 +523,12 @@ function GitView:on_suspend()
 end
 
 function GitView:on_resume()
+  local tab = self:model_tab()
+  if tab and tab.kind == "commit_diff" and not self.remote_source_registered then
+    self:update_pane_buffers()
+    require("core.poi").set_remote_source(self:pane_view("file-list"))
+    self.remote_source_registered = true
+  end
   if self.git_session and self.git_session.syncing_tabs then return end
   if not self.refresh_after_resume then return end
   self.refresh_after_resume = false
@@ -570,6 +580,10 @@ function GitView:dispose_tab_resources(tab)
 end
 
 function GitView:on_close()
+  if self.pane_views and self.pane_views["file-list"] then
+    require("core.poi").clear_remote_source(self.pane_views["file-list"])
+  end
+  self.comparison_request = nil
   if self.tab_id == "log" then
     if self.git_session then
       local session = self.git_session
@@ -592,6 +606,11 @@ function GitView:on_close()
     end
   end
   return true
+end
+
+function GitView:can_discard_from_history()
+  local view = self.pane_views and self.pane_views["file-list"]
+  return not (view and require("core.poi").is_selected_remote_source(view))
 end
 
 function GitView:commit_list_y()
@@ -695,9 +714,7 @@ function GitView:mouse_surface_at(x, y)
   local list = self:pane_view(list_name)
   if point_in_view(list, x, y) then return list end
   if tab.kind == "commit_diff" then
-    local diff = tab.image_comparison_view or tab.diff_view
-    if tab.loading_file then return nil end
-    return point_in_view(diff, x, y) and diff or nil
+    return nil
   end
   if tab.kind == "file_history" then
     local diff = tab.history_diff_view
@@ -713,9 +730,7 @@ function GitView:on_mouse_wheel(y, x)
   local has_pointer = self.mouse_router:has_pointer()
   local surface = self.mouse_router:wheel_target()
   if surface then
-    if tab and (tab.kind == "commit_diff"
-          and (surface == tab.diff_view or surface == tab.image_comparison_view)
-        or tab.kind == "file_history" and surface == tab.history_diff_view) then
+    if tab and tab.kind == "file_history" and surface == tab.history_diff_view then
       surface:on_mouse_wheel(y, x)
       return y ~= 0 or x ~= 0
     end
@@ -747,11 +762,7 @@ function GitView:on_mouse_wheel(y, x)
     return true
   end
   if tab and tab.kind == "commit_diff" then
-    local comparison = tab.image_comparison_view or tab.diff_view
-    if comparison and comparison.on_mouse_wheel then
-      return comparison:on_mouse_wheel(y, x) ~= false
-    end
-    return false
+    return scroll_pane_view(self:pane_view("file-list"), y, x)
   end
   if y == 0 then return false end
   self.scroll.to.y = self.scroll.to.y + (-y * config.mouse_wheel_scroll)
@@ -867,37 +878,7 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
   end
 
   if selected_tab and selected_tab.kind == "commit_diff" then
-    list_width = math.floor(self.size.x * 0.28)
-    if x > self.position.x + list_width then
-      local comparison = selected_tab.image_comparison_view
-      if comparison and point_in_view(comparison, x, y) then
-        self.mouse_router:capture(comparison)
-        return comparison:on_mouse_pressed(button, x, y, clicks) == true
-      end
-      local diff = selected_tab.diff_view
-      local side = diff and x >= diff.position.x + diff.size.x / 2 and "right" or "left"
-      if not self:focus_diff_pane(side) then return true end
-      if selected_tab.diff_view and selected_tab.diff_view.on_mouse_pressed then
-        self.mouse_router:capture(selected_tab.diff_view)
-        local result = selected_tab.diff_view:on_mouse_pressed(button, x, y, clicks)
-        if core.active_view and core.active_view.git_owner_view == self then self.focused_diff_buffer_view = core.active_view end
-        return result == true
-      end
-      return true
-    end
-    if button ~= "left" then return true end
-    if x < self.position.x then return true end
-    self.focus_pane = "list"
-    self.focused_diff_buffer_view = nil
-    local list = self:pane_view("file-list")
-    local line = math.floor((y - self.position.y + (list.scroll.y or 0)) / self:row_height()) + 1
-    local index = selected_tab.file_line_to_index and selected_tab.file_line_to_index[line]
-    if not selected_tab.file_line_to_index then index = line end
-    if index and index >= 1 and index <= #(selected_tab.changed_files or {}) then
-      self.model:select_diff_file(selected_tab, index, function() core.redraw = true end)
-      core.redraw = true
-    end
-    return true
+    return false
   end
 
   if button ~= "left" then return true end
@@ -1248,7 +1229,9 @@ function GitView:activate_selected(callback)
         return nil
       end
     end
-    self.model:load_selected_diff_file(tab, callback or function() core.redraw = true end)
+    for _, point in ipairs(self:changed_file_points()) do
+      if point.index == tab.selected_file then self:open_changed_file(point); break end
+    end
     return tab
   end
   if details_commit then
@@ -1268,6 +1251,115 @@ function GitView:activate_selected_point(callback)
   return diff_tab, err
 end
 
+function GitView:changed_file_points()
+  local tab = self:model_tab()
+  if not tab or tab.kind ~= "commit_diff" then return {} end
+  local tree = changed_file_tree(tab.changed_files, {})
+  local points = {}
+  for line, row in ipairs(tree.rows) do
+    local index = tree.line_to_record[line]
+    if index then
+      points[#points + 1] = {
+        line = line, col = 1, kind = "git-changed-file", label = row.text,
+        record = tab.changed_files[index], index = index,
+        activate = function(_, point, opts) return self:open_changed_file(point, opts) end,
+      }
+    end
+  end
+  return points
+end
+
+function GitView:select_changed_file_point(point)
+  local tab = self:model_tab()
+  local list = self:pane_view("file-list")
+  tab.selected_file = point.index
+  tab.selected_file_path = changed_file_path(point.record)
+  local path = tab.selected_file_path:gsub("\\", "/")
+  for prefix in path:gmatch("()/") do
+    if list.path_tree then list.path_tree:set_expanded(path:sub(1, prefix - 1), true) end
+  end
+  tab.file_tree_collapsed = list.path_tree and list.path_tree.collapsed or {}
+  list.git_changed_file_tree_cache = nil
+  self:update_pane_buffers(true)
+  point.line = list.git_file_index_to_line[point.index] or point.line
+end
+
+local function selected_file_is_image(tab)
+  if not (tab and tab.non_text and tab.non_text.kind == "binary") then return false end
+  local file = tab.changed_files and tab.changed_files[tab.selected_file]
+  if not file then return false end
+  local left = changed_file_side_path(file, "left")
+  local right = changed_file_side_path(file, "right")
+  if left and ImageView.is_supported(left) then return true end
+  return right ~= nil and ImageView.is_supported(right) or false
+end
+
+function GitView:open_changed_file(point, opts)
+  opts = opts or {}
+  self:select_changed_file_point(point)
+  local tab = self:model_tab()
+  local destination = opts.pane or panes.pane_for_view(self) or panes.active()
+  local destination_view = destination and destination.current_view
+  local request = {}
+  self.comparison_request = request
+  local placement = opts.placement or "current"
+  local project = core.root_project()
+  local poi = require "core.poi"
+  if not opts.remote then
+    poi.set_remote_source(self:pane_view("file-list"), { from_start = false })
+  end
+  local function request_is_current()
+    return self.comparison_request == request and panes.contains(destination)
+      and destination.current_view == destination_view
+      and poi.get_remote_source(project) == self:pane_view("file-list")
+      and tab.selected_file == point.index and tab.changed_files[point.index] == point.record
+  end
+  local function present(comparison)
+    if not comparison then return end
+    local placed, reason = panes.place(function() return comparison end, {
+      pane = destination, placement = placement, focus = opts.preserve_focus ~= true,
+      reason = "git-file-comparison",
+    })
+    if not placed then
+      comparison:on_close()
+      core.log_quiet("Git comparison placement failed: %s", tostring(reason))
+    else
+      core.log_quiet("Git comparison opened: path=%s placement=%s", tab.selected_file_path, placement)
+    end
+  end
+  return self.model:load_selected_diff_file(tab, function(_, err)
+    if not request_is_current() then return end
+    if err or tab.file_error then
+      core.error("Could not open Git comparison: %s", tostring((err or tab.file_error).message))
+      return
+    end
+    if tab.non_text then
+      if selected_file_is_image(tab) then
+        self.model:load_selected_binary_files(tab, function(_, image_err)
+          if not request_is_current() then return end
+          if image_err then core.error("Could not open Git image comparison: %s", tostring(image_err.message)); return end
+          local comparison = self:ensure_image_comparison_view(tab)
+          if not comparison then return end
+          local paths = tab.binary_temp_paths or {}
+          tab.binary_temp_paths, tab.binary_paths, tab.image_comparison_view = nil, nil, nil
+          local on_close = comparison.on_close
+          comparison.on_close = function(view)
+            on_close(view)
+            for _, path in ipairs(paths) do os.remove(path) end
+          end
+          present(comparison)
+        end)
+        return
+      end
+      core.warn("%s", tab.non_text.message)
+      return
+    end
+    local comparison = self:ensure_diff_view(tab)
+    tab.diff_view = nil
+    present(comparison)
+  end)
+end
+
 function GitView:point_of_interest_for_pane(view, line)
   local tab = self:model_tab()
   if not tab then return nil end
@@ -1282,7 +1374,10 @@ function GitView:point_of_interest_for_pane(view, line)
     if tab.kind ~= "commit_diff" then return nil end
     local index = view.git_file_line_to_index and view.git_file_line_to_index[line]
     if not index or not (tab.changed_files and tab.changed_files[index]) then return nil end
-    kind = "git-changed-file"
+    for _, point in ipairs(self:changed_file_points()) do
+      if point.index == index then point.line = line; return point end
+    end
+    return nil
   elseif view.git_pane == "details" then
     local _, row, record = self:details_tree_item(view, line)
     if not (row and row.type == "file" and record) then return nil end
@@ -1502,7 +1597,7 @@ function GitView:update()
   local tab = self:model_tab()
   local diff_view
   if tab and tab.kind == "commit_diff" then
-    diff_view = select(7, self:layout_diff_tab(tab, self.position.x + style.padding.x))
+    self:layout_diff_tab(tab, self.position.x + style.padding.x)
     if tab.loading_file and not self:file_loading_indicator_visible(tab) then
       core.redraw = true
     end
@@ -1609,16 +1704,6 @@ function GitView:draw_log_tab(tab, x, y)
   details:draw()
 end
 
-local function selected_file_is_image(tab)
-  if not (tab and tab.non_text and tab.non_text.kind == "binary") then return false end
-  local file = tab.changed_files and tab.changed_files[tab.selected_file]
-  if not file then return false end
-  local left = changed_file_side_path(file, "left")
-  local right = changed_file_side_path(file, "right")
-  if left and ImageView.is_supported(left) then return true end
-  return right ~= nil and ImageView.is_supported(right) or false
-end
-
 local function attach_text_capture_owner(surface, owner)
   if not surface then return end
   surface.git_owner_view = owner
@@ -1645,9 +1730,6 @@ function GitView:ensure_image_comparison_view(tab)
     left_title = "Before — " .. (tab.left_name or "File did not exist"),
     right_title = "After — " .. (tab.right_name or "File does not exist"),
   }
-  attach_text_capture_owner(view, self)
-  attach_text_capture_owner(view.left_view, self)
-  attach_text_capture_owner(view.right_view, self)
   tab.image_comparison_view = view
   tab.image_comparison_seen_generation = tab.binary_generation_value
   return view
@@ -1655,12 +1737,6 @@ end
 
 function GitView:ensure_diff_view(tab)
   if tab.diff_view and tab.diff_view_seen_generation == tab.diff_generation then
-    attach_text_capture_owner(tab.diff_view, self)
-    attach_text_capture_owner(tab.diff_view.buffer_view_a, self)
-    attach_text_capture_owner(tab.diff_view.buffer_view_b, self)
-    if self.focused_diff_buffer_view ~= tab.diff_view.buffer_view_a and self.focused_diff_buffer_view ~= tab.diff_view.buffer_view_b then
-      self.focused_diff_buffer_view = nil
-    end
     return tab.diff_view
   end
   local selected_file = tab.changed_files and tab.changed_files[tab.selected_file]
@@ -1726,12 +1802,6 @@ function GitView:ensure_diff_view(tab)
       left_revision = tab.left,
       right_revision = tab.right,
       read_only_reason = "Historical Git content is read-only",
-      on_change_boundary = function(direction, side_view)
-        return self:handle_change_boundary(tab, direction, side_view)
-      end,
-      on_navigation_state_change = function()
-        tab.change_boundary_arm = nil
-      end,
     },
   }, true)
   if presentation then
@@ -1744,56 +1814,7 @@ function GitView:ensure_diff_view(tab)
   end
   tab.diff_view = view
   tab.diff_view_seen_generation = tab.diff_generation
-  attach_text_capture_owner(view, self)
-  attach_text_capture_owner(view.buffer_view_a, self)
-  attach_text_capture_owner(view.buffer_view_b, self)
-  if self.focused_diff_buffer_view ~= view.buffer_view_a and self.focused_diff_buffer_view ~= view.buffer_view_b then
-    self.focused_diff_buffer_view = nil
-  end
   return view
-end
-
-function GitView:show_navigation_feedback(message)
-  if core.status_bar and core.status_bar.show_message then
-    core.status_bar:show_message("i", style.dim, message)
-  else
-    core.log_quiet("Git navigation: %s", message)
-  end
-end
-
-function GitView:handle_change_boundary(tab, direction, side_view)
-  direction = direction < 0 and -1 or 1
-  local index = tab.selected_file or 1
-  local arm = tab.change_boundary_arm
-  if not (arm and arm.direction == direction and arm.file_index == index) then
-    tab.change_boundary_arm = { direction = direction, file_index = index }
-    self:show_navigation_feedback(direction > 0
-      and "Repeat Next Change to continue to the next file"
-      or "Repeat Previous Change to continue to the previous file")
-    return true
-  end
-  local target_index = index + direction
-  if target_index < 1 or target_index > #(tab.changed_files or {}) then
-    self:show_navigation_feedback(direction > 0 and "No next changed file" or "No previous changed file")
-    return true
-  end
-  local side = side_view == tab.diff_view.buffer_view_b and "right" or "left"
-  tab.change_boundary_arm = nil
-  self.model:select_diff_file(tab, target_index, function()
-    local diff = self:ensure_diff_view(tab)
-    local target = side == "right" and diff.buffer_view_b or diff.buffer_view_a
-    local points = diff:diff_points_of_interest(target == diff.buffer_view_a)
-    local point = direction > 0 and points[1] or points[#points]
-    if point then
-      target:with_selection_state(function()
-        target.buffer:set_selection(point.line, point.col or 1)
-      end)
-    end
-    self.focused_diff_buffer_view = target
-    core.set_active_view(target)
-    core.redraw = true
-  end)
-  return true
 end
 
 function GitView:ensure_history_diff_view(tab)
@@ -1871,8 +1892,10 @@ function GitView:focus_diff_pane(side)
   if not tab then return false end
   local view
   if tab.kind == "commit_diff" then
-    if tab.loading_file or tab.file_error or (tab.left_text == nil and tab.right_text == nil) then return false end
-    view = self:ensure_diff_view(tab)
+    for _, point in ipairs(self:changed_file_points()) do
+      if point.index == tab.selected_file then return self:open_changed_file(point) end
+    end
+    return false
   elseif tab.kind == "file_history" then
     if tab.preview_loading or tab.preview_error
         or (tab.preview_left_text == nil and tab.preview_right_text == nil) then return false end
@@ -1919,14 +1942,7 @@ function GitView:get_surface_focus_targets()
   local tab = self:model_tab()
   if not tab then return {} end
   if tab.kind == "commit_diff" then
-    local targets = { self:pane_view("file-list") }
-    if not tab.loading_file and not tab.file_error
-        and (tab.left_text ~= nil or tab.right_text ~= nil) then
-      local diff = self:ensure_diff_view(tab)
-      targets[#targets + 1] = diff.buffer_view_a
-      targets[#targets + 1] = diff.buffer_view_b
-    end
-    return targets
+    return { self:pane_view("file-list") }
   elseif tab.kind == "file_history" then
     local targets = { self:pane_view("history-list") }
     if not tab.preview_loading and not tab.preview_error
@@ -1945,10 +1961,6 @@ function GitView:focus_surface_target(target)
     return self:focus_pane_view(target.git_pane)
   end
   local tab = self:model_tab()
-  if tab and tab.kind == "commit_diff" and tab.diff_view then
-    if target == tab.diff_view.buffer_view_a then return self:focus_diff_pane("left") end
-    if target == tab.diff_view.buffer_view_b then return self:focus_diff_pane("right") end
-  end
   if tab and tab.kind == "file_history" and tab.history_diff_view then
     if target == tab.history_diff_view.buffer_view_a then return self:focus_diff_pane("left") end
     if target == tab.history_diff_view.buffer_view_b then return self:focus_diff_pane("right") end
@@ -2023,34 +2035,16 @@ function GitView:draw_history_tab(tab, x, y)
 end
 
 function GitView:layout_diff_tab(tab, x)
-  local list_width = math.floor(self.size.x * 0.28)
-  local diff_x = self.position.x + list_width + style.padding.x
-  local list_right = diff_x - style.padding.x
-  local diff_y = self.position.y
   local list = self:pane_view("file-list")
-  list.position.x, list.position.y = x, diff_y
-  list.size.x, list.size.y = math.max(0, list_width - style.padding.x),
-    self.position.y + self.size.y - diff_y - style.padding.y
+  list.position.x, list.position.y = x, self.position.y
+  list.size.x, list.size.y = math.max(0, self.position.x + self.size.x - x - style.padding.x),
+    math.max(0, self.size.y - style.padding.y)
   if not tab.file_scroll_applied then
     list.scroll.y = tab.file_scroll or 0
     list.scroll.to.y = list.scroll.y
     tab.file_scroll_applied = true
   end
-  local diff_w = self.position.x + self.size.x - diff_x - style.padding.x
-  local diff_h = self.position.y + self.size.y - diff_y - style.padding.y
-  local view
-  if selected_file_is_image(tab) then
-    view = self:ensure_image_comparison_view(tab)
-  elseif tab.diff_view or (not tab.loading_file and not tab.file_error
-    and (tab.left_text ~= nil or tab.right_text ~= nil))
-  then
-    view = self:ensure_diff_view(tab)
-  end
-  if view then
-    view.position.x, view.position.y = diff_x, diff_y
-    view.size.x, view.size.y = diff_w, diff_h
-  end
-  return list, diff_x, list_right, diff_y, diff_w, diff_h, view
+  return list
 end
 
 local function draw_diff_status(text, color, x, y)
@@ -2065,12 +2059,9 @@ local function draw_diff_status(text, color, x, y)
 end
 
 function GitView:draw_diff_tab(tab, x, y)
-  local list, diff_x, list_right, diff_y, _, _, view =
-    self:layout_diff_tab(tab, x)
+  local list = self:layout_diff_tab(tab, x)
   list:draw()
-  renderer.draw_rect(list_right, self.position.y, 1 * SCALE, self.size.y, style.divider)
-
-  if view then view:draw() end
+  local diff_x, diff_y = x, y
 
   if tab.loading_file then
     if self:file_loading_indicator_visible(tab) then
@@ -2107,10 +2098,6 @@ function GitView:draw_diff_tab(tab, x, y)
       tab.non_text.message or "This file cannot use the text Diff View",
       style.dim, diff_x + style.padding.x, diff_y + style.padding.y
     )
-    return
-  end
-  if tab.left_text == nil and tab.right_text == nil then
-    renderer.draw_text(style.prose_font, "Select a changed file", diff_x + style.padding.x, diff_y, style.dim)
     return
   end
 end
