@@ -2658,39 +2658,128 @@ void ren_draw_poly(RenSurface *rs, RenPoint *points, unsigned short npoints, Ren
   render_poly_spans(points, npoints, rs->scale_x, rs->scale_y, &params);
 }
 
+static size_t shaped_run_get_advances(
+  hb_buffer_t *buffer, RenFont *font, const char *text, size_t len,
+  uint32_t source_offset, double *width, uint32_t *byte_offsets, double *advances
+) {
+  bool have_offset = true;
+  double run_width = shaped_run_get_width(buffer, font, text, len, NULL, &have_offset);
+  ShapedWidthCacheEntry *cached = len <= SHAPED_WIDTH_CACHE_MAX_TEXT
+    ? font_lookup_shaped_width_cache(font, text, len, hash_bytes(text, len)) : NULL;
+  unsigned int glyph_count = 0;
+  const hb_glyph_info_t *infos;
+  const hb_glyph_position_t *positions;
+  if (cached && cached->glyph_infos && cached->glyph_positions) {
+    glyph_count = cached->glyph_count;
+    infos = cached->glyph_infos;
+    positions = cached->glyph_positions;
+  } else {
+    // A width-only cache entry does not populate the HarfBuzz buffer on a hit.
+    if (cached) {
+      hb_buffer_clear_contents(buffer);
+      hb_buffer_add_utf8(buffer, text, len, 0, len);
+      hb_buffer_guess_segment_properties(buffer);
+      hb_shape(font->hb_font, buffer, NULL, 0);
+    }
+    infos = hb_buffer_get_glyph_infos(buffer, &glyph_count);
+    positions = hb_buffer_get_glyph_positions(buffer, NULL);
+  }
+
+  size_t count = 0;
+  const char *cursor = text;
+  while (cursor < text + len) {
+    byte_offsets[count] = source_offset + (uint32_t)(cursor - text);
+    advances[count++] = NAN;
+    unsigned int codepoint;
+    cursor = utf8_to_codepoint(cursor, text + len, &codepoint);
+  }
+  byte_offsets[count] = source_offset + (uint32_t)len;
+  advances[count] = 0;
+  for (unsigned int i = 0; i < glyph_count; i++) {
+    uint32_t cluster = source_offset + infos[i].cluster;
+    size_t low = 0, high = count;
+    while (low + 1 < high) {
+      size_t mid = low + (high - low) / 2;
+      if (byte_offsets[mid] <= cluster) low = mid;
+      else high = mid;
+    }
+    if (isnan(advances[low])) advances[low] = 0;
+    advances[low] += hb_position_to_font_pixels(font, positions[i].x_advance);
+  }
+
+  // Keep every UTF-8 boundary addressable, including characters inside ligatures.
+  double pen = *width;
+  for (size_t first = 0; first < count;) {
+    size_t next = first + 1;
+    while (next < count && isnan(advances[next])) next++;
+    double cluster_width = isnan(advances[first]) ? 0 : advances[first];
+    for (size_t i = first; i < next; i++)
+      advances[i] = pen + cluster_width * (double)(i - first) / (next - first);
+    pen += cluster_width;
+    first = next;
+  }
+  *width += run_width;
+  advances[count] = *width;
+  return count;
+}
+
 size_t ren_font_group_get_advances(
   RenFont **fonts, const char *text, size_t len, RenTab tab,
   uint32_t *byte_offsets, double *advances
 ) {
   if (!byte_offsets || !advances) return 0;
+  font_group_prepare_text_resolve_cache(fonts);
   g_text_frame_stats.width_calls++;
   g_text_frame_stats.width_bytes += len;
   size_t count = 1;
   double width = 0;
   const char *start = text;
   const char *end = text + len;
+  const char *unshaped_end = text;
+  hb_buffer_t *hb_buffer = NULL;
   byte_offsets[0] = 0;
   advances[0] = 0;
 
-  /* Caret and wrapping advances intentionally use character advances. This
-   * matches the editor's established hit-testing behavior while moving UTF-8
-   * decoding, fallback lookup, tab expansion, and glyph measurement into one
-   * native pass. Text drawing remains free to shape ligature runs. */
+  // Use the same shaped runs as text drawing, not standalone character widths.
   while (text < end) {
     unsigned int codepoint;
+    const char *char_start = text;
     text = utf8_to_codepoint(text, end, &codepoint);
+    unsigned int glyph_id = font_get_glyph_id(fonts[0], codepoint);
+    RenFont *font = fonts[0];
+    if (!glyph_id && !is_whitespace(codepoint))
+      font = font_group_resolve_text_font(fonts, codepoint, &glyph_id);
+    if (char_start >= unshaped_end && !is_whitespace(codepoint)
+      && font && font->ligatures && font->hb_font && glyph_id) {
+      const char *run_end = next_shaped_run(fonts, text, end, font, TEXT_STATS_WIDTH);
+      unshaped_end = run_end;
+      g_text_frame_stats.width_shape_probe_bytes += (uint64_t)(run_end - char_start);
+      if (text_needs_shaping(char_start, run_end)) {
+        g_text_frame_stats.width_shaped_runs++;
+        if (!hb_buffer) hb_buffer = hb_buffer_create();
+        size_t added = shaped_run_get_advances(
+          hb_buffer, font, char_start, run_end - char_start,
+          (uint32_t)(char_start - start), &width,
+          byte_offsets + count - 1, advances + count - 1
+        );
+        count += added;
+        g_text_frame_stats.width_chars += added;
+        text = run_end;
+        continue;
+      }
+    }
     GlyphMetric *metric = NULL;
     font_group_get_glyph(fonts, codepoint, 0, NULL, &metric);
     width += font_get_xadvance(fonts[0], codepoint, metric, width, tab);
     byte_offsets[count] = (uint32_t)(text - start);
-#ifdef ANVIL_USE_SDL_RENDERER
-    advances[count] = width / fonts[0]->scale;
-#else
     advances[count] = width;
-#endif
     count++;
     g_text_frame_stats.width_chars++;
   }
+  if (hb_buffer) hb_buffer_destroy(hb_buffer);
+#ifdef ANVIL_USE_SDL_RENDERER
+  for (size_t i = 0; i < count; i++) advances[i] /= fonts[0]->scale;
+#endif
   return count;
 }
 
