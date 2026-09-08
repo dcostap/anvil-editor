@@ -327,7 +327,9 @@ function CaretRenderer:draw(
     }
   end
 
-  renderer.draw_poly(points, trail_color(points, target))
+  -- The fractional polygon can extend beyond the pixel-aligned caret rectangle.
+  -- Stop drawing it when the trail has reached the target.
+  if animating then renderer.draw_poly(points, trail_color(points, target)) end
   renderer.draw_rect(
     target.x, target.y, target.width, target.height, target.color
   )
