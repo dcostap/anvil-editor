@@ -75,6 +75,10 @@ function metadata.parts(info)
     { id = "deletions", text = stat and ("−" .. tostring(stat.deletions or 0)) or "",
       color = style.filetree_git_line_deletions, sample = "−999", separator = " " },
   }
+  if git and git.error then
+    local text = git.stale and "Git status stale" or "Git unavailable"
+    parts[#parts + 1] = { id = "git_status", text = text, sample = text, color = style.warn }
+  end
   if git and git.kind == "ignored" then
     parts[#parts + 1] = { id = "ignored", text = "ignored", sample = "ignored",
       color = style.filetree_git_status_ignored }

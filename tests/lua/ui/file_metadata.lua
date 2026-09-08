@@ -18,6 +18,23 @@ local function capture(font, parts, columns)
 end
 
 test.describe("Shared file metadata", function()
+  test.it("identifies unavailable Git status while preserving the last known line counts", function()
+    local values = {}
+    local parts = metadata.parts {
+      type = "file",
+      git = { kind = "modified", error = { kind = "exit" }, stale = true,
+        stat = { additions = 3, deletions = 1 } },
+    }
+    for _, part in ipairs(parts) do values[part.id] = part.text end
+    test.not_nil(values.git_status)
+    test.ok(values.git_status ~= "")
+    test.equal(values.additions, "+3")
+    test.equal(values.deletions, "−1")
+    for _, part in ipairs(metadata.parts { type = "file", git = { kind = "modified" } }) do
+      test.ok(part.id ~= "git_status", "successful status must not show an error")
+    end
+  end)
+
   test.it("shows folder contents instead of a file size", function()
     local parts = metadata.parts({ type = "dir", size = 9999, count = 7 })
     local values = {}
