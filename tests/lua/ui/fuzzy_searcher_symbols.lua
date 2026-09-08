@@ -32,6 +32,34 @@ test.describe("Fuzzy Searcher Project symbols", function()
     test.ok(helpers.prompt_uses_file_index("vehicle.cpp"))
   end)
 
+  test.it("shows file metadata to the right of symbol declarations", function()
+    local picker = fuzzy_searcher.open_static_results("Symbols", {
+      { kind = "symbol", file = "example.cpp", abs_path = EXEDIR .. "/example.cpp",
+        line = 12, label = "update", name = "update", signature = "()",
+        file_size = 1024, match_spans = {} },
+    })
+    picker:update()
+    local original = renderer.draw_text
+    local saved = {}
+    for _, name in ipairs { "draw_rect", "draw_rounded_rect", "draw_text_known_bounds", "set_clip_rect", "draw_canvas" } do
+      saved[name] = renderer[name]
+      renderer[name] = function() end
+    end
+    local declaration, size
+    renderer.draw_text = function(font, text, x, ...)
+      if text == "update" then declaration = { x = x, right = x + font:get_width(text) } end
+      if text:match("^%s*1K$") then size = { x = x } end
+      return x + font:get_width(text)
+    end
+    local ok, err = pcall(function() picker:draw() end)
+    renderer.draw_text = original
+    for name, method in pairs(saved) do renderer[name] = method end
+    if not ok then error(err, 0) end
+    test.not_nil(declaration, "expected the symbol declaration")
+    test.not_nil(size, "expected the file size")
+    test.ok(size.x > declaration.right, "metadata must not overlap the declaration")
+  end)
+
   test.it("does not keep Project symbol search pending while only usage indexing is running", function(context)
     context.original_lsp_enabled = lsp_manager.is_enabled
     context.original_ts_workspace_symbols_async = symbol_index.workspace_symbols_async

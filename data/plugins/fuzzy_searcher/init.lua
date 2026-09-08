@@ -6892,7 +6892,7 @@ function FSView:draw_open_content()
   local metadata_rows, metadata_columns = {}, {}
   for idx = self.viewport_offset, last do
     local r = self.results[idx]
-    if (r.kind == "file" or r.kind == "folder") and not r.header then
+    if (r.kind == "file" or r.kind == "folder" or r.kind == "symbol") and not r.header then
       local parts = fuzzy_searcher.file_metadata_parts(r)
       metadata_rows[idx] = parts
       require("plugins.file_metadata").include_columns(metadata_columns, font, parts)
@@ -6969,7 +6969,9 @@ function FSView:draw_open_content()
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        draw_symbol_result_row(font, r, x + pad, row_y, row_text_w, lh)
+        local symbol_text_w = fuzzy_searcher.draw_file_metadata(
+          font, r, x + pad, row_y, row_text_w, metadata_rows[idx], metadata_columns)
+        draw_symbol_result_row(font, r, x + pad, row_y, symbol_text_w, lh)
       elseif r.kind == "command" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
