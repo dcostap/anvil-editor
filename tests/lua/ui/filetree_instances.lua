@@ -7,7 +7,6 @@ local panes = require "core.panes"
 local View = require "core.view"
 local test = require "core.test"
 local filetree = require "plugins.filetree"
-local fuzzy_searcher = require "plugins.fuzzy_searcher"
 
 local function write_file(path, text)
   local handle = assert(io.open(path, "wb"))
@@ -307,7 +306,6 @@ test.describe("File Tree instances", function()
     test.equal(copy.scroll.y, 34)
     test.not_equal(copy.buffer, tree.buffer)
     test.not_equal(copy.filesystem_watch, tree.filesystem_watch)
-    test.not_equal(copy.git_status_controller, tree.git_status_controller)
     test.equal(source.current_view, tree)
   end)
 
@@ -339,12 +337,4 @@ test.describe("File Tree instances", function()
     test.ok(blocker.close_requested)
   end)
 
-  test.it("provides File Tree Git state to fuzzy file results", function()
-    local tree = assert(filetree.new(root))
-    panes.create { factory = function() return tree end }
-    function tree:get_git_info_for_entry(entry)
-      if common.path_equals(entry.abs, file) then return { kind = "modified" } end
-    end
-    test.equal(fuzzy_searcher._test.git_kind_for_file(file), "modified")
-  end)
 end)

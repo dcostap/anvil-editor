@@ -52,5 +52,19 @@ test.describe("File Git status", function()
     test.not_nil(info.stat)
     test.equal(info.stat.additions, 2)
     test.equal(info.stat.deletions, 1)
+    local tree = assert(require("plugins.filetree").new(root))
+    local tree_info = tree:get_git_info_for_entry({ abs = path, type = "file" })
+    test.same(tree_info, info)
+    tree:on_close()
+
+    write(path, "original\n")
+    require("plugins.file_git_status"):request(path, "save")
+    deadline = system.get_time() + 10
+    repeat
+      info = path_tree.git_info_for_file(path)
+      if not info then break end
+      coroutine.yield(0.01)
+    until system.get_time() >= deadline
+    test.is_nil(info, "restoring the saved file must clear its Git status")
   end)
 end)

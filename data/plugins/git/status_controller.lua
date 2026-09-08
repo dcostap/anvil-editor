@@ -1,5 +1,5 @@
 -- mod-version:3
--- File Tree Git status control plane. Repository-scale parsing and aggregation
+-- Shared Git status controller. Repository-scale parsing and aggregation
 -- are owned by the native worker-pool job and immutable snapshot handle.
 
 local common = require "core.common"
@@ -33,7 +33,7 @@ local function release_snapshot(snapshot)
     native_payload = { release_git_status_snapshot = snapshot },
   }
   snapshot:close()
-  if not handle then log_quiet("File Tree Git snapshot release fell back to the current thread") end
+  if not handle then log_quiet("Shared Git snapshot release fell back to the current thread") end
 end
 
 local function native_builder(payload, generation, callback)
@@ -81,12 +81,10 @@ end
 
 function git_status.new(options)
   options = options or {}
-  assert(type(options.root) == "function", "File Tree Git status controller requires root()")
-  assert(type(options.presented) == "function", "File Tree Git status controller requires presented()")
+  assert(options.repository and options.repository.root, "Git status controller requires a repository")
   return setmetatable({
     backend = options.backend or git_backend,
-    root = options.root,
-    presented = options.presented,
+    repository = options.repository,
     clock = options.clock or now,
     publish = options.publish,
     build_snapshot = options.build_snapshot or native_builder,
@@ -97,21 +95,17 @@ function git_status.new(options)
     generation = 0,
     published_generation = 0,
     dirty = false,
-    forced = false,
     active = false,
     pending_reason = nil,
     last_start = -math.huge,
-    repository_cache = {},
     coalesced_requests = 0,
-    was_presented = false,
   }, Controller)
 end
 
-function Controller:request(reason, force)
+function Controller:request(reason)
   local was_dirty = self.dirty
   self.generation = self.generation + 1
   self.dirty = true
-  self.forced = self.forced or not not force
   self.pending_reason = reason or self.pending_reason or "refresh"
   if self.active then
     self.coalesced_requests = self.coalesced_requests + 1
@@ -119,38 +113,31 @@ function Controller:request(reason, force)
   elseif was_dirty then
     self.coalesced_requests = self.coalesced_requests + 1
   end
-  log_quiet("File Tree Git request generation=%d root=%s reason=%s forced=%s",
-    self.generation, tostring(self.root()), tostring(reason), tostring(force == true))
+  log_quiet("Shared Git request generation=%d root=%s reason=%s",
+    self.generation, self.repository.root, tostring(reason))
 end
 
 function Controller:cancel_active(reason)
   if not self.active then return false end
-  cancel_job(self.discovery_job)
   cancel_job(self.status_job)
   cancel_job(self.numstat_job)
   cancel_job(self.native_job)
-  self.discovery_job, self.status_job, self.numstat_job, self.native_job = nil, nil, nil, nil
+  self.status_job, self.numstat_job, self.native_job = nil, nil, nil
   self.active = false
   self.stage = nil
-  log_quiet("File Tree Git cancelled generation=%d reason=%s", self.active_generation or 0, tostring(reason))
+  log_quiet("Shared Git cancelled generation=%d reason=%s", self.active_generation or 0, tostring(reason))
   return true
 end
 
 function Controller:is_current(generation, root)
   return self.active and self.active_generation == generation
-    and common.path_equals(self.active_root, root)
-    and common.path_equals(self.root(), root)
-    and self.presented()
+    and common.path_equals(self.repository.root, root)
 end
 
 function Controller:finish_failure(generation, root, phase, err)
   if not self:is_current(generation, root) then return end
-  if phase == "status" then
-    self.repository_cache[common.path_compare_key(root)] = nil
-    log_quiet("File Tree Git invalidated cached repository after status failure: root=%s", tostring(root))
-  end
   self:cancel_active(phase .. "-failed")
-  log_quiet("File Tree Git %s failed generation=%d root=%s: %s",
+  log_quiet("Shared Git %s failed generation=%d root=%s: %s",
     phase, generation, tostring(root), tostring(err and (err.message or err.kind) or err))
 end
 
@@ -165,10 +152,10 @@ function Controller:adopt(snapshot, generation, root, repository_root, reason)
   self.published_generation = generation
   self.active = false
   self.stage = nil
-  self.discovery_job, self.status_job, self.numstat_job, self.native_job = nil, nil, nil, nil
+  self.status_job, self.numstat_job, self.native_job = nil, nil, nil
   if previous and previous ~= snapshot then release_snapshot(previous) end
   local summary = snapshot and snapshot.summary and snapshot:summary() or {}
-  log_quiet("File Tree Git published generation=%d root=%s status_records=%s numstat_records=%s parent_edges=%s build_ms=%s",
+  log_quiet("Shared Git published generation=%d root=%s status_records=%s numstat_records=%s parent_edges=%s build_ms=%s",
     generation, tostring(root), tostring(summary.status_records), tostring(summary.numstat_records),
     tostring(summary.parent_edges), tostring(summary.build_ms))
   if self.publish then self.publish(snapshot, { generation = generation, root = root, reason = reason }) end
@@ -176,6 +163,12 @@ end
 
 function Controller:build(generation, root, repo, status_text, numstat_text, reason)
   if not self:is_current(generation, root) then return end
+  if self.snapshot and self.snapshot_repository_root == repo.root
+      and self.status_text == status_text and self.numstat_text == numstat_text then
+    self.active, self.stage = false, nil
+    self.status_job, self.numstat_job, self.native_job = nil, nil, nil
+    return
+  end
   self.stage = "native-build"
   local payload = {
     repository_root = repo.root,
@@ -185,6 +178,9 @@ function Controller:build(generation, root, repo, status_text, numstat_text, rea
   }
   local returned = self.build_snapshot(payload, generation, function(snapshot, err)
     if not snapshot then return self:finish_failure(generation, root, "snapshot-build", err) end
+    if self:is_current(generation, root) then
+      self.status_text, self.numstat_text = status_text, numstat_text
+    end
     self:adopt(snapshot, generation, root, repo.root, reason)
   end)
   if self.active and self.stage == "native-build" then self.native_job = returned end
@@ -192,7 +188,6 @@ end
 
 function Controller:start_git(generation, root, repo, reason)
   if not self:is_current(generation, root) then return end
-  self.repository_cache[common.path_compare_key(root)] = repo
   self.stage = "git"
   local status_done, numstat_done = false, false
   local status_text, numstat_text = nil, ""
@@ -203,7 +198,7 @@ function Controller:start_git(generation, root, repo, reason)
   end
   local status_job = self.backend.run_git(repo,
     { "status", "--porcelain=v1", "--ignored", "--untracked-files=normal", "-z" },
-    { generation = generation, max_output = self.max_output },
+    { generation = generation, max_output = self.max_output, optional_locks = false },
     function(result, err)
       if not self:is_current(generation, root) then return end
       if not result then return self:finish_failure(generation, root, "status", err) end
@@ -214,13 +209,13 @@ function Controller:start_git(generation, root, repo, reason)
 
   local numstat_job = self.backend.run_git(repo,
     { "diff", "--numstat", "--no-renames", "-z", "HEAD", "--" },
-    { generation = generation, max_output = self.max_output },
+    { generation = generation, max_output = self.max_output, optional_locks = false },
     function(result, err)
       if not self:is_current(generation, root) then return end
       if result then
         numstat_text = result.stdout or ""
       else
-        log_quiet("File Tree Git numstat failed generation=%d root=%s: %s",
+        log_quiet("Shared Git numstat failed generation=%d root=%s: %s",
           generation, tostring(root), tostring(err and (err.message or err.kind) or err))
       end
       numstat_done = true
@@ -234,55 +229,22 @@ function Controller:publish_empty(generation, root, reason)
 end
 
 function Controller:start()
-  local root = self.root()
-  if not root then return end
-  root = common.normalize_path(root)
-  local generation, reason, forced = self.generation, self.pending_reason or "refresh", self.forced
-  self.pending_reason, self.dirty, self.forced = nil, false, false
-  self.active, self.active_generation, self.active_root = true, generation, root
+  local root = self.repository.root
+  local generation, reason = self.generation, self.pending_reason or "refresh"
+  self.pending_reason, self.dirty = nil, false
+  self.active, self.active_generation = true, generation
   self.last_start = self.clock()
 
   if self.backend.is_enabled and not self.backend.is_enabled() then
     return self:publish_empty(generation, root, "git-disabled")
   end
 
-  local cache_key = common.path_compare_key(root)
-  if forced then self.repository_cache[cache_key] = nil end
-  local cached = self.repository_cache[cache_key]
-  if cached then return self:start_git(generation, root, cached, reason) end
-
-  self.stage = "repository-discovery"
-  log_quiet("File Tree Git repository discovery generation=%d root=%s", generation, root)
-  local returned = self.backend.repo_for_path_async(root, function(repo, err)
-    if not self:is_current(generation, root) then return end
-    if not repo then
-      if err and (err.kind == "not_in_repository" or err.kind == "disabled") then
-        return self:publish_empty(generation, root, err.kind)
-      end
-      return self:finish_failure(generation, root, "repository-discovery", err)
-    end
-    self:start_git(generation, root, repo, reason)
-  end)
-  if self.active and self.stage == "repository-discovery" then self.discovery_job = returned end
+  self:start_git(generation, root, self.repository, reason)
 end
 
 function Controller:update()
-  local presented = not not self.presented()
-  if not presented then
-    if self.active then
-      self.dirty = true
-      self.generation = self.generation + 1
-      self:cancel_active("hidden")
-    end
-    if self.dirty and self.was_presented then
-      log_quiet("File Tree Git deferred while hidden root=%s", tostring(self.root()))
-    end
-    self.was_presented = false
-    return false
-  end
-  self.was_presented = true
   if self.active or not self.dirty then return false end
-  if not self.forced and self.clock() - self.last_start < self.refresh_interval then return false end
+  if self.clock() - self.last_start < self.refresh_interval then return false end
   self:start()
   return true
 end
@@ -291,7 +253,7 @@ function Controller:lookup(path, is_directory)
   if not self.snapshot then return nil end
   local relative = path
   if self.snapshot_repository_root and common.path_belongs_to(path, self.snapshot_repository_root) then
-    relative = common.relative_path(self.snapshot_repository_root, path)
+    relative = common.relative_path(common.normalize_path(self.snapshot_repository_root), common.normalize_path(path))
   end
   return self.snapshot:lookup(relative:gsub("\\", "/"), is_directory)
 end

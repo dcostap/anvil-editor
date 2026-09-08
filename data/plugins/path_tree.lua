@@ -12,7 +12,7 @@ local file_icons = require "core.file_icons"
 local path_tree = {}
 
 function path_tree.git_info_for_file(path)
-  return require("plugins.file_git_status").lookup(path)
+  return require("plugins.file_git_status"):lookup(path)
 end
 
 function path_tree.format_file_size(size)

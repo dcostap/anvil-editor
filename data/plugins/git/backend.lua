@@ -741,6 +741,7 @@ function backend.run_git(repo, args, opts, callback)
       return
     end
     local command = { executable }
+    if opts.optional_locks == false then command[#command + 1] = "--no-optional-locks" end
     if root and root ~= "" then
       command[#command + 1] = "-C"
       command[#command + 1] = git_arg_path(root)

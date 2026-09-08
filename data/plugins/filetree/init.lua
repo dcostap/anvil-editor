@@ -14,7 +14,7 @@ local project_paths = require "core.project_paths"
 local panes = require "core.panes"
 local storage = require "core.storage"
 local DirWatch = require "core.dirwatch"
-local filetree_git_status = require "plugins.filetree.git_status"
+local file_git_status = require "plugins.file_git_status"
 local path_tree = require "plugins.path_tree"
 
 local FILETREE_SETTINGS_MODULE = "filetree"
@@ -811,20 +811,6 @@ function FileTreeView:new(opts)
   self.last_lines = nil
   self.status_cache = nil
   self.git_status = { generation = 0 }
-  self.git_status_controller = filetree_git_status.new {
-    root = function() return self:git_root() end,
-    presented = function()
-      local pane = panes.pane_for_view(self)
-      return pane and panes.is_visible(pane)
-        and pane.current_view == self
-        and self.visible
-    end,
-    publish = function(_, detail)
-      self.git_status = { generation = detail.generation }
-      self.status_cache = nil
-      core.redraw = true
-    end,
-  }
   self.has_possible_edits = false
   self.filesystem_watch = DirWatch()
   self.filesystem_watched_dirs = {}
@@ -928,7 +914,6 @@ end
 
 function FileTreeView:on_close()
   self.filesystem_watch_running = false
-  if self.git_status_controller then self.git_status_controller:close() end
   local filesystem_watch = self.filesystem_watch
   self.filesystem_watch = nil
   if filesystem_watch and filesystem_watch.__gc then filesystem_watch:__gc() end
@@ -969,30 +954,13 @@ function FileTreeView:git_root()
   return self.root_dir or self.current_dir
 end
 
-function FileTreeView:schedule_git_status_refresh(reason, force)
-  self.git_status_controller:request(reason, force)
+function FileTreeView:schedule_git_status_refresh(reason)
+  file_git_status:request(self:git_root(), reason)
 end
 
 function FileTreeView:get_git_info_for_entry(entry)
   if not entry then return nil end
-  local generation = self.git_status and self.git_status.generation or 0
-  if entry.git_status_lookup_generation == generation then
-    return entry.git_status_lookup or nil
-  end
-  local info = self.git_status_controller:lookup(entry.abs, entry.type == "dir")
-  if not info then
-    entry.git_status_lookup_generation = generation
-    entry.git_status_lookup = false
-    return nil
-  end
-  local stat
-  if info.additions ~= nil then
-    stat = { additions = info.additions, deletions = info.deletions }
-  end
-  local result = { kind = info.kind, stat = stat }
-  entry.git_status_lookup_generation = generation
-  entry.git_status_lookup = result
-  return result
+  return file_git_status:lookup(entry.abs, entry.type == "dir")
 end
 
 function FileTreeView:get_git_info_for_line(line)
@@ -1006,7 +974,13 @@ end
 
 function FileTreeView:update()
   FileTreeView.super.update(self)
-  self.git_status_controller:update()
+  file_git_status:lookup(self:git_root(), true)
+  local generation = file_git_status.generation
+  if generation ~= self.git_status.generation then
+    self.git_status = { generation = generation }
+    self.status_cache = nil
+    core.redraw = true
+  end
 end
 
 function FileTreeView:filesystem_reveal_paths(path)
@@ -1015,6 +989,7 @@ function FileTreeView:filesystem_reveal_paths(path)
 end
 
 function FileTreeView:queue_filesystem_sync(path, reason)
+  file_git_status:request(path, reason or "filesystem")
   if self.has_possible_edits then
     if not self.filesystem_sync_deferred then
       core.log_quiet("File Tree filesystem sync deferred because the editable tree has unapplied edits")
@@ -1578,7 +1553,6 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
     self.buffer:set_selection(math.min(l, #self.buffer.lines), c)
   end
   self:update_filesystem_watches()
-  self:schedule_git_status_refresh("filetree-refresh", false)
 end
 
 function FileTreeView:get_sort_mode()
@@ -3803,7 +3777,7 @@ command.add(function()
 end, {
   ["filetree:reload"] = command.palette(function(view)
     view:refresh_preserving_selection_paths(true)
-    view:schedule_git_status_refresh("manual-refresh", true)
+    view:schedule_git_status_refresh("manual-refresh")
   end),
   ["filetree:apply_changes"] = command.palette(function(view) view:apply_edits() end),
   ["filetree:open_selected"] = function(view) view:open_item() end,
