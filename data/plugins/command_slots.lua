@@ -442,6 +442,7 @@ function CommandOutputView:can_close(approve)
 end
 
 function CommandOutputView:on_close()
+  require("core.poi").clear_remote_source(self)
   local slot = self.slot
   if slot and slot.running then slot.running:cancel() end
   if slot and slot.view == self then
@@ -451,6 +452,7 @@ function CommandOutputView:on_close()
 end
 
 function CommandOutputView:can_discard_from_history()
+  if require("core.poi").get_remote_source() == self then return false end
   return not (self.slot and self.slot.running)
 end
 
@@ -580,7 +582,7 @@ function CommandOutputView:activate_point_of_interest(poi, opts)
   opts = opts or {}
   local preserve_focus = opts.preserve_focus
   if preserve_focus == nil then preserve_focus = true end
-  local pane = panes.pane_for_view(self)
+  local pane = type(opts.pane) == "table" and opts.pane or panes.pane_for_view(self)
   local placement = opts.placement or (opts.pane == "right" and "split" or "current")
   local view = core.open_file(poi.path, {
     pane = pane,
@@ -880,6 +882,7 @@ end
 function QuickCommandOutputView:can_discard_from_history()
   for _, slot in ipairs(self:slots()) do
     if slot.running then return false end
+    if slot.view and not slot.view:can_discard_from_history() then return false end
   end
   return true
 end
@@ -1211,6 +1214,8 @@ local function default_run_command(slot, command_text, opts)
   local view = ensure_output_view(slot, opts.focus)
   if not view then return nil end
   view:show_entry(entry, { follow_end = true })
+  view.remote_poi_source = true
+  require("core.poi").set_remote_source(view)
 
   slot.start_time = system.get_time()
   slot.output_bytes = 0

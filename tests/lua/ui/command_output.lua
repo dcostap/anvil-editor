@@ -3,6 +3,7 @@ local panes = require "core.panes"
 local shell = require "core.shell"
 local test = require "core.test"
 local View = require "core.view"
+local poi = require "core.poi"
 local command_output = require "plugins.command_slots"
 
 local function fake_capture(context)
@@ -92,6 +93,22 @@ test.describe("Command Output Views", function()
 
     test.not_equal(pane.current_view, view)
     test.contains(view.buffer.output_text, "background output")
+  end)
+
+  test.it("opens a hidden run's first error in the Pane requesting remote navigation", function(context)
+    context.file = USERDIR .. PATHSEP .. "remote-command-target.lua"
+    write_file(context.file)
+    local output = command_output.run_once("build", { cwd = USERDIR })
+    context.runs[1].opts.on_output("remote-command-target.lua:1:1: error\n")
+    local destination = panes.create { factory = function() return View() end }
+    panes.focus(destination)
+    test.equal(poi.get_remote_source(), output)
+    test.ok(poi.navigate_remote(1))
+    test.equal(panes.active(), destination)
+    test.ok(common.path_equals(destination.current_view.buffer.abs_filename, context.file))
+    test.equal(output.buffer:get_selection(), 3)
+    output:on_close()
+    test.equal(poi.get_remote_source(), nil)
   end)
 
   test.it("cancels an active run when its Pane closes", function(context)

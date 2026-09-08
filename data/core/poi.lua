@@ -7,6 +7,32 @@ local panes = require "core.panes"
 local M = core.poi or {}
 core.poi = M
 M.activation_providers = M.activation_providers or {}
+M.remote_sources = M.remote_sources or setmetatable({}, { __mode = "k" })
+
+function M.set_remote_source(view, opts)
+  opts = opts or {}
+  local project = opts.project or core.root_project()
+  if not project or not view or view.remote_poi_source ~= true then return false end
+  M.remote_sources[project] = { view = view, initial = true }
+  core.log_quiet("Remote POI source selected: %s", view:get_name())
+  return true
+end
+
+function M.get_remote_source(project)
+  local source = M.remote_sources[project or core.root_project()]
+  return source and source.view
+end
+
+function M.clear_remote_source(view, project)
+  if project then
+    local source = M.remote_sources[project]
+    if source and source.view == view then M.remote_sources[project] = nil end
+  else
+    for owner, source in pairs(M.remote_sources) do
+      if source.view == view then M.remote_sources[owner] = nil end
+    end
+  end
+end
 
 ---Register a provider for context-sensitive Point of Interest Activation.
 ---Providers above priority 0 run before a view's own POIs; providers at or below 0
@@ -209,11 +235,8 @@ local function show_navigation_feedback(status, direction)
   return navigation_feedback.warning(status)
 end
 
-function M.navigate(view, direction, opts)
-  view = provider_view(view)
-  direction = normalize_direction(direction)
-  local poi, status = M.next(view, direction, opts)
-  if not poi then return show_navigation_feedback(status, direction) end
+function M.select(view, poi, opts)
+  opts = opts or {}
   return with_selection_state(view, function()
     local _, current_col = view.buffer:get_selection()
     local col = poi.preserve_col and current_col or poi.col
@@ -225,8 +248,52 @@ function M.navigate(view, direction, opts)
     elseif type(view.scroll_to_line) == "function" then
       view:scroll_to_line(poi.line, false, true)
     end
+    if opts.preview ~= false then
+      if type(poi.preview) == "function" then
+        poi.preview(view, poi)
+      elseif type(view.preview_point_of_interest) == "function" then
+        view:preview_point_of_interest(poi)
+      end
+    end
     return poi
   end)
+end
+
+function M.navigate(view, direction, opts)
+  view = provider_view(view)
+  direction = normalize_direction(direction)
+  local point, status = M.next(view, direction, opts)
+  if not point then return show_navigation_feedback(status, direction) end
+  for _, source in pairs(M.remote_sources) do
+    if source.view == view then source.initial = false end
+  end
+  return M.select(view, point, opts)
+end
+
+function M.navigate_remote(direction, opts)
+  opts = opts or {}
+  direction = normalize_direction(direction)
+  local source = M.remote_sources[opts.project or core.root_project()]
+  if not source then return navigation_feedback.none("Remote POIs") end
+  local view = source.view
+  local point, status
+  if source.initial then
+    local points
+    points, status = M.points_for_view(view, { remote = true })
+    point = points and (direction > 0 and points[1] or points[#points])
+    status = status or "empty"
+  else
+    point, status = M.next(view, direction, { remote = true })
+  end
+  if not point then return show_navigation_feedback(status, direction) end
+  source.initial = false
+  M.select(view, point, { preview = false })
+  local result = M.activate(view, point, {
+    pane = opts.pane or panes.active(), placement = "current", preserve_focus = false,
+    remote = true,
+  })
+  if not result then navigation_feedback.warning("Could not activate remote POI") end
+  return result
 end
 
 function M.activate(view, poi, opts)
@@ -234,6 +301,9 @@ function M.activate(view, poi, opts)
   if not view then return false end
   poi = poi or M.point_at_caret(view, { activatable = true, silent = true })
   if not poi then return false end
+  for _, source in pairs(M.remote_sources) do
+    if source.view == view then source.initial = false end
+  end
   if type(poi.activate) == "function" then
     local result = poi.activate(view, poi, opts)
     if result then return result end
@@ -251,6 +321,12 @@ local function active_view_has_activatable_poi(...)
 end
 
 command.add(nil, {
+  ["core:previous_remote_point_of_interest"] = function()
+    M.navigate_remote(-1)
+  end,
+  ["core:next_remote_point_of_interest"] = function()
+    M.navigate_remote(1)
+  end,
   ["core:previous_point_of_interest"] = function()
     M.navigate(core.active_view, -1)
   end,

@@ -482,6 +482,18 @@ _Avoid_: link, text link
 The action taken for an activatable Point of Interest, such as opening the referenced file location.
 _Avoid_: trigger, click action
 
+**Point of Interest Preview**:
+Supporting content shown for a selected Point of Interest without moving focus or opening its destination.
+
+**Local POI Navigation**:
+Navigation between Points of Interest in the focused View, with an optional preview but without explicit activation.
+
+**Remote POI Source**:
+A collection explicitly available for POI navigation from other Views. Each Project has at most one current Remote POI Source.
+
+**Remote POI Navigation**:
+Navigation through the Project's current Remote POI Source, with activation in the current Pane and no source preview.
+
 **Project Tool Window**:
 A separate project-owned window for a large singleton tool that should stay available without taking over the main editing layout.
 _Avoid_: popup, modal, detached panel
