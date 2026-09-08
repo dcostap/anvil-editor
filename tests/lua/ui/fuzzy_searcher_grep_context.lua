@@ -15,6 +15,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
       enclosing_symbol = symbol_index.enclosing_symbol,
       draw_text = renderer.draw_text,
       draw_rect = renderer.draw_rect,
+      draw_canvas = renderer.draw_canvas,
       draw_file_icon = file_icons.draw,
       draw_symbol_icon = symbol_icons.draw,
     }
@@ -24,6 +25,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
     symbol_index.enclosing_symbol = saved.enclosing_symbol
     renderer.draw_text = saved.draw_text
     renderer.draw_rect = saved.draw_rect
+    renderer.draw_canvas = saved.draw_canvas
     file_icons.draw = saved.draw_file_icon
     symbol_icons.draw = saved.draw_symbol_icon
   end)
@@ -75,6 +77,38 @@ test.describe("Fuzzy Searcher Text Search context", function()
     test.equal(context_call.color, style.text)
     test.equal(prefix_call.color, style.dim)
     test.ok(context_call.x > 200, "expected the function context on the right of the file column")
+  end)
+
+  test.it("shows file metadata only on the first row of a text match group", function()
+    local calls = {}
+    renderer.draw_canvas = function() end
+    symbol_index.enclosing_symbol = function() end
+    renderer.draw_text = function(font, text, x)
+      calls[#calls + 1] = { text = text, x = x, right = x + font:get_width(text) }
+      return x + font:get_width(text)
+    end
+    renderer.draw_rect = function() end
+    file_icons.draw = function() end
+    local row = {
+      kind = "grep", file = "example.lua", line = 12, col = 1,
+      text = "matched content", file_size = 123456, exact = true,
+    }
+    local width = 2400
+    local line_x = helpers.draw_grep_result_row(style.font, row, 0, 0, width, false)
+    local size_text = require("plugins.path_tree").format_file_size(row.file_size)
+    local size_call, content_call
+    for _, call in ipairs(calls) do
+      if call.text == size_text then size_call = call end
+      if call.text == row.text then content_call = call end
+    end
+    test.not_nil(size_call, "expected file size beside the file path")
+    test.not_nil(content_call)
+    test.ok(size_call.right < content_call.x, "metadata must stay in the file column")
+    calls = {}
+    helpers.draw_grep_result_row(style.font, row, 0, 0, width, true, line_x)
+    for _, call in ipairs(calls) do
+      test.ok(call.text ~= size_text, "continuation rows must not repeat file metadata")
+    end
   end)
 
   test.it("keeps the full filename and a clear gap before the declaration", function()

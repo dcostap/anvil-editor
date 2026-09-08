@@ -2414,15 +2414,28 @@ end
 
 function fuzzy_searcher.file_metadata_parts(r)
   local parts = {}
-  local edited = fuzzy_searcher.format_recent_file_age(r.last_edited)
-  local viewed = fuzzy_searcher.format_recent_file_age(r.last_viewed)
-  local git = path_tree.git_info_for_file(fullpath(r.file or r.abs_path or r.path))
+  local path = fullpath(r.abs_path or r.file or r.path)
+  local last_edited, last_viewed = r.last_edited, r.last_viewed
+  if not last_edited or not last_viewed then
+    local key = common.path_compare_key(path)
+    for _, recent in ipairs(core.visited_files or {}) do
+      if type(recent) == "table" and common.path_compare_key(core.recent_file_path(recent)) == key then
+        last_edited = last_edited or recent.last_edited
+        last_viewed = last_viewed or recent.last_viewed
+        break
+      end
+    end
+  end
+  local git = path_tree.git_info_for_file(path)
   local stat = git and git.stat
   if stat and (stat.additions or 0) == 0 and (stat.deletions or 0) == 0 then stat = nil end
   if r.file_size == nil then
-    local info = system.get_file_info(fullpath(r.file or r.abs_path or r.path))
+    local info = system.get_file_info(path)
     r.file_size = info and info.size or false
+    r.file_modified = info and info.modified
   end
+  local edited = fuzzy_searcher.format_recent_file_age(last_edited or r.file_modified)
+  local viewed = fuzzy_searcher.format_recent_file_age(last_viewed)
   parts[#parts+1] = { text = stat and ("+" .. tostring(stat.additions or 0)) or "",
     color = style.filetree_git_line_additions, sample = "+999" }
   parts[#parts+1] = { text = stat and ("−" .. tostring(stat.deletions or 0)) or "",
@@ -2828,6 +2841,16 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
     if context_width < min_context then symbol = nil; context_width = 0 end
   end
   local file_width = math.max(0, path_w - (symbol and context_width + context_gap or 0))
+  if not collapse_file then
+    local filename_width = fuzzy_searcher.file_result_filename_width(
+      font, result.file, prefix, line_suffix, true
+    )
+    local metadata_width = math.max(0, file_width - filename_width)
+    local remaining = fuzzy_searcher.draw_file_metadata(
+      font, result, x + filename_width, y, metadata_width
+    )
+    file_width = file_width - metadata_width + remaining
+  end
   local line_x = collapsed_line_x
   if collapse_file then
     line_x = common.clamp(line_x or x, x, x + file_width)
