@@ -572,7 +572,11 @@ command.add(nil, {
           core.warn("Git View: Cannot open a Historical Buffer: %s", err.message or err.kind)
           return
         end
-        historical_buffer.open(request.repo, request.rev, request.relpath, text or "")
+        local _, open_err = historical_buffer.open(request.repo, request.rev, request.relpath, text or "")
+        if open_err then
+          core.warn("Git View: Cannot open a Historical Buffer: %s", open_err.message or open_err.kind or open_err)
+          return
+        end
         core.redraw = true
       end)
     end,

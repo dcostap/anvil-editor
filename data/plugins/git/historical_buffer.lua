@@ -47,6 +47,41 @@ local function set_buffer_text(buffer, text)
   buffer:set_selection(1, 1, 1, 1)
 end
 
+local function normalize_historical_text(text)
+  text = tostring(text or "")
+  local charset, _, detect_err = encoding.detect_string(text)
+  if not charset then
+    return nil, {
+      kind = "encoding",
+      message = detect_err or "Git revision has no detected text encoding",
+    }
+  end
+  if charset ~= "UTF-8" and charset ~= "ASCII" then
+    local converted, convert_err = encoding.convert("UTF-8", charset, text, {
+      strict = true,
+      handle_from_bom = true,
+    })
+    if not converted then
+      return nil, {
+        kind = "encoding",
+        message = convert_err or ("Git revision cannot convert from " .. charset),
+      }
+    end
+    text = converted
+  end
+  if text:find("\0", 1, true) then
+    return nil, { kind = "binary", message = "Git revision is a binary file" }
+  end
+  if not text:uisvalid() then
+    return nil, {
+      kind = "encoding",
+      message = "Git revision is not valid UTF-8 and has no usable encoding",
+    }
+  end
+  if text:sub(1, 3) == "\239\187\191" then text = text:sub(4) end
+  return text:gsub("\r\n", "\n"):gsub("\r", "\n")
+end
+
 local function make_read_only(buffer)
   buffer.git_historical_read_only = true
   buffer.apply_edits = reject_edit
@@ -77,10 +112,13 @@ function historical.create_buffer(repo, rev, relpath, text)
   local existing = historical.find(key)
   if existing then return existing, false end
 
+  local normalized, text_err = normalize_historical_text(text)
+  if not normalized then return nil, text_err end
+
   local title = string.format("%s @ %s", relpath, short_rev(rev))
   local buffer = Buffer(nil, nil, true)
   buffer.filename = relpath
-  set_buffer_text(buffer, text)
+  set_buffer_text(buffer, normalized)
   buffer:reset_syntax()
   buffer:clear_undo_redo()
   buffer:clean()
@@ -139,7 +177,8 @@ function historical.activate_existing(repo, rev, relpath)
 end
 
 function historical.open(repo, rev, relpath, text)
-  local buffer = historical.create_buffer(repo, rev, relpath, text)
+  local buffer, err = historical.create_buffer(repo, rev, relpath, text)
+  if not buffer then return nil, err end
   return open_buffer_view(buffer)
 end
 

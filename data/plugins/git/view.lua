@@ -1411,6 +1411,7 @@ local function pane_buffer_state(view, tab)
     tab_kind = tab and tab.kind,
     tab_loading = tab and tab.loading,
     tab_error = tab and tab.error,
+    tab_local_changes_error = tab and tab.local_changes_error,
     tab_commits = tab and tab.commits,
     tab_commit_count = tab and #(tab.commits or {}) or 0,
     tab_selected_commit = tab and tab.selected_commit,
@@ -1474,6 +1475,11 @@ function GitView:update_pane_buffers(force)
         local meta = commit_line_metadata(commit)
         lines[#lines + 1] = meta.text
         line_meta[#lines] = meta
+      end
+      if tab.local_changes_error then
+        lines[#lines + 1] = "Local Changes unavailable: "
+          .. tostring(tab.local_changes_error.message or tab.local_changes_error.kind or tab.local_changes_error)
+        line_meta[#lines] = { role = "message", text = lines[#lines], error = true }
       end
       if tab.loading and not tab.refreshing then
         lines[#lines + 1] = "Loading more commits..."

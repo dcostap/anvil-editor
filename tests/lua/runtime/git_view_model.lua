@@ -1,6 +1,7 @@
 local test = require "core.test"
 local config = require "core.config"
 local core = require "core"
+local common = require "core.common"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 
@@ -166,6 +167,87 @@ test.describe("plugins.git.model", function()
 
     test.equal(model:log_tab().error, nil)
     test.equal(model:log_tab().commits[1].hash, "abc123")
+  end)
+
+  test.test("shows a Git Log error when status loading fails", function()
+    local backend = fake_backend("", log_output())
+    backend.run_git = function(repo, args, opts, callback)
+      if args[1] == "status" then
+        callback(nil, { kind = "exit", message = "status failed" })
+      else
+        callback({ code = 0, stdout = log_output() }, nil)
+      end
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+
+    model:refresh_log()
+
+    test.equal(model:log_tab().error.message, "status failed")
+  end)
+
+  test.test("refreshes after a completed shared Git status update", function()
+    local status_callback
+    local subscriptions, lookups, log_calls = 0, 0, 0
+    local model
+    local service = {
+      subscribe = function(_, owner, callback)
+        subscriptions = subscriptions + 1
+        status_callback = callback
+        test.equal(owner, model)
+      end,
+      unsubscribe = function() end,
+      lookup = function() lookups = lookups + 1 end,
+    }
+    local backend = fake_backend("", log_output())
+    local run_git = backend.run_git
+    backend.run_git = function(repo, args, opts, callback)
+      if args[1] == "log" then log_calls = log_calls + 1 end
+      return run_git(repo, args, opts, callback)
+    end
+    model = Model.new({ path = "C:/repo" }, {
+      backend = backend,
+      status_service = service,
+    })
+
+    model:refresh_log()
+    test.equal(subscriptions, 1)
+    test.equal(lookups, 1)
+    test.equal(log_calls, 1)
+
+    status_callback("C:/repo", "filesystem", nil)
+
+    test.equal(log_calls, 2)
+  end)
+
+  test.test("surfaces shared Git status errors without refreshing", function()
+    local status_callback
+    local log_calls = 0
+    local service = {
+      subscribe = function(_, _, callback) status_callback = callback end,
+      unsubscribe = function() end,
+      lookup = function() end,
+    }
+    local backend = fake_backend("", log_output())
+    local run_git = backend.run_git
+    backend.run_git = function(repo, args, opts, callback)
+      if args[1] == "log" then log_calls = log_calls + 1 end
+      return run_git(repo, args, opts, callback)
+    end
+    local model = Model.new({ path = "C:/repo" }, {
+      backend = backend,
+      status_service = service,
+    })
+
+    model:refresh_log()
+    local status_err = { kind = "exit", message = "shared status failed" }
+    status_callback("C:/repo", "refresh", status_err)
+
+    test.equal(log_calls, 1)
+    test.equal(model:log_tab().error, status_err)
+    status_callback("C:/repo", "refresh", nil)
+    test.equal(log_calls, 2)
+    test.equal(model:log_tab().error, nil)
   end)
 
   test.test("refresh loads changed files for initially selected log commit details", function()
@@ -687,6 +769,41 @@ test.describe("plugins.git.model", function()
     test.equal(tab.preview_right_name, "renamed:src/new.lua")
   end)
 
+  test.test("uses a merge commit first parent for renamed File History previews", function()
+    local requested = {}
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      requested[#requested + 1] = tostring(rev) .. ":" .. tostring(relpath)
+      callback(tostring(rev), nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model.repo = { root = "C:/repo" }
+    local tab = {
+      kind = "file_history",
+      relpath = "src/new.lua",
+      selected_commit = 1,
+      commits = {
+        {
+          hash = "merge",
+          parents = { "first-parent", "side-parent" },
+          history_parent_path = "src/old.lua",
+          history_path = "src/new.lua",
+        },
+        {
+          hash = "side-parent",
+          parents = { "older" },
+          history_parent_path = "src/old.lua",
+          history_path = "src/old.lua",
+        },
+      },
+    }
+
+    model:load_history_preview(tab)
+
+    test.same(requested, { "first-parent:src/old.lua", "merge:src/new.lua" })
+  end)
+
   test.test("adds a live Local Changes Revision for an open changed Buffer", function()
     local backend = fake_backend("", log_output())
     backend.file_at = function(repo, rev, relpath, opts, callback)
@@ -712,6 +829,181 @@ test.describe("plugins.git.model", function()
     end
     test.equal(local_rows, 1)
     model:dispose_tab(tab)
+    buffer:on_close()
+  end)
+
+  test.test("shows a disk Local Changes Revision without an open Buffer", function()
+    local root = USERDIR .. PATHSEP .. "git-history-disk-" .. system.get_process_id()
+    local path = root .. PATHSEP .. "src" .. PATHSEP .. "app.lua"
+    local ok, mkdir_err = common.mkdirp(root .. PATHSEP .. "src")
+    test.ok(ok, mkdir_err)
+    local file = assert(io.open(path, "wb"))
+    file:write("edited\n")
+    file:close()
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      if rev == "HEAD" then
+        callback("committed\n", nil)
+      elseif rev == real_backend.WORKING_TREE then
+        callback("edited\n", nil)
+      else
+        callback("historical\n", nil)
+      end
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = root }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/app.lua")
+
+    test.equal(tab.commits[1].kind, "local_changes")
+    test.equal(tab.preview_left_text, "committed\n")
+    os.remove(path)
+  end)
+
+  test.test("shows Local Changes when a tracked disk file is deleted", function()
+    local root = USERDIR .. PATHSEP .. "git-history-deleted-" .. system.get_process_id()
+    local ok, mkdir_err = common.mkdirp(root .. PATHSEP .. "src")
+    test.ok(ok, mkdir_err)
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      if rev == "HEAD" then
+        callback("committed\n", nil)
+      elseif rev == real_backend.WORKING_TREE then
+        error("deleted file must compare against empty working-tree text")
+      else
+        callback("historical\n", nil)
+      end
+      return { cancel = function() end }
+    end
+    backend.path_status = function(repo, relpath, opts, callback)
+      test.equal(opts.optional_locks, false)
+      callback({ { kind = "deleted", path = relpath } }, nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = root }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/app.lua")
+
+    test.equal(tab.commits[1].kind, "local_changes")
+    test.equal(tab.preview_left_text, "committed\n")
+  end)
+
+  test.test("uses the staged rename source as the File History HEAD path", function()
+    local root = USERDIR .. PATHSEP .. "git-history-rename-" .. system.get_process_id()
+    local path = root .. PATHSEP .. "src" .. PATHSEP .. "new.lua"
+    local ok, mkdir_err = common.mkdirp(root .. PATHSEP .. "src")
+    test.ok(ok, mkdir_err)
+    local file = assert(io.open(path, "wb"))
+    file:write("working\n")
+    file:close()
+    local backend = fake_backend("", log_output())
+    backend.is_missing_path_error = real_backend.is_missing_path_error
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      if rev == "HEAD" and relpath == "src/new.lua" then
+        callback(nil, {
+          kind = "exit",
+          stderr = "fatal: path 'src/new.lua' exists on disk, but not in 'HEAD'",
+        })
+      elseif rev == "HEAD" and relpath == "src/old.lua" then
+        callback("committed\n", nil)
+      elseif rev == real_backend.WORKING_TREE then
+        callback("working\n", nil)
+      else
+        callback("historical\n", nil)
+      end
+      return { cancel = function() end }
+    end
+    backend.path_status = function(repo, relpath, opts, callback)
+      test.equal(opts.optional_locks, false)
+      callback({ {
+        kind = "renamed", path = "src/new.lua",
+        old_path = "src/old.lua", new_path = "src/new.lua",
+      } }, nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = root }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/new.lua")
+
+    test.equal(tab.commits[1].kind, "local_changes")
+    test.equal(tab.local_changes_head_path, "src/old.lua")
+    test.equal(tab.preview_left_text, "committed\n")
+    os.remove(path)
+  end)
+
+  test.test("bounds staged rename fallback when the old HEAD path is missing", function()
+    local root = USERDIR .. PATHSEP .. "git-history-rename-missing-" .. system.get_process_id()
+    local path = root .. PATHSEP .. "src" .. PATHSEP .. "new.lua"
+    local ok, mkdir_err = common.mkdirp(root .. PATHSEP .. "src")
+    test.ok(ok, mkdir_err)
+    local file = assert(io.open(path, "wb"))
+    file:write("working\n")
+    file:close()
+    local backend = fake_backend("", log_output())
+    backend.is_missing_path_error = real_backend.is_missing_path_error
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      if rev == "HEAD" then
+        callback(nil, {
+          kind = "exit",
+          stderr = "fatal: path '" .. relpath .. "' exists on disk, but not in 'HEAD'",
+        })
+      elseif rev == real_backend.WORKING_TREE then
+        callback("working\n", nil)
+      end
+      return { cancel = function() end }
+    end
+    local status_calls = 0
+    backend.path_status = function(repo, relpath, opts, callback)
+      test.equal(opts.optional_locks, false)
+      status_calls = status_calls + 1
+      callback(status_calls == 1 and { {
+        kind = "renamed", old_path = "src/old.lua", new_path = "src/new.lua",
+      } } or {}, nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = root }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/new.lua")
+
+    test.equal(status_calls, 1)
+    test.equal(tab.commits[1].kind, "local_changes")
+    test.equal(tab.preview_left_text, "")
+    os.remove(path)
+  end)
+
+  test.test("keeps a Local Changes Revision and exposes a HEAD read error", function()
+    local head_reads = 0
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      if rev == "HEAD" then
+        head_reads = head_reads + 1
+        if head_reads == 1 then
+          callback("committed\n", nil)
+        else
+          callback(nil, { kind = "exit", message = "HEAD read failed" })
+        end
+      else
+        callback("historical\n", nil)
+      end
+      return { cancel = function() end }
+    end
+    local path = "C:/repo/src/history-error.lua"
+    local buffer = Buffer("src/history-error.lua", path, true)
+    buffer:insert(1, 1, "edited")
+    core.buffer_registry:register(buffer, path)
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/history-error.lua")
+    test.equal(tab.commits[1].kind, "local_changes")
+
+    model:load_file_history(tab)
+
+    local has_local_changes = false
+    for _, commit in ipairs(tab.commits) do
+      has_local_changes = has_local_changes or commit.kind == "local_changes"
+    end
+    test.ok(has_local_changes)
+    test.equal(tab.local_changes_error.message, "HEAD read failed")
     buffer:on_close()
   end)
 
@@ -979,6 +1271,35 @@ test.describe("plugins.git.model", function()
     test.ok(test.not_nil(tab.binary_paths.right):match("new%.png$"))
   end)
 
+  test.test("detects an untracked arbitrary binary before opening its Diff Side", function()
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      if rev == backend.WORKING_TREE then
+        callback("text\0binary", nil)
+      else
+        callback("", nil)
+      end
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model.repo = { root = "C:/repo" }
+    local tab = {
+      kind = "commit_diff",
+      left = model.backend.EMPTY_TREE,
+      right = model.backend.WORKING_TREE,
+      changed_files = {
+        { status = "untracked", old_path = nil, new_path = "data/blob.dat" },
+      },
+      selected_file = 1,
+    }
+
+    test.ok(model:load_selected_diff_file(tab))
+
+    test.equal(test.not_nil(tab.non_text).kind, "binary")
+    test.equal(tab.left_text, nil)
+    test.equal(tab.right_text, nil)
+  end)
+
   test.it("keeps displayed diff content until its replacement finishes", function()
     local callbacks = {}
     local backend = fake_backend("", log_output())
@@ -1122,6 +1443,7 @@ test.describe("plugins.git.model", function()
     backend.run_git = function(repo, args, opts, callback)
       if args[1] == "status" then
         status_args = args
+        test.equal(opts.optional_locks, false)
         status_calls = status_calls + 1
         local stdout = table.concat({ "?? new.lua", "" }, "\0")
         callback({ code = 0, stdout = stdout }, nil)

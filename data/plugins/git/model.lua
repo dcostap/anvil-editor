@@ -9,6 +9,8 @@ local range_marker = require "core.range_marker"
 local backend_default = require "plugins.git.backend"
 local diff_model = require "plugins.diff.model"
 
+local default_status_service = require "plugins.file_git_status"
+
 local Model = {}
 Model.__index = Model
 
@@ -33,15 +35,22 @@ end
 
 function Model.new(project, opts)
   opts = opts or {}
+  local status_service = opts.status_service
+  if status_service == nil and (not opts.backend or opts.backend == backend_default) then
+    status_service = default_status_service
+  end
   local self = setmetatable({
     project = project,
     backend = opts.backend or backend_default,
+    status_service = status_service,
     generation = 0,
     tabs = { new_log_tab() },
     repo = nil,
     error = nil,
     active_jobs = {},
     details_tree_collapsed = {},
+    shared_refresh_pending = false,
+    shared_refresh_active = false,
   }, Model)
   if opts.state then self:apply_state(opts.state) end
   return self
@@ -172,6 +181,9 @@ end
 
 function Model:apply_state(state)
   if type(state) ~= "table" then return end
+  self:unsubscribe_status_service()
+  self.shared_refresh_pending = false
+  self.shared_refresh_active = false
   self.generation = (self.generation or 0) + 1
   self:invalidate_history_loads()
   self:invalidate_diff_loads()
@@ -370,6 +382,13 @@ end
 
 local function normalize_for_diff(text)
   return tostring(text or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+end
+
+local function is_binary_text(text)
+  if type(text) ~= "string" then return false end
+  if text:find("\0", 1, true) then return true end
+  local ok, valid = pcall(function() return text:uisvalid() end)
+  return not ok or not valid
 end
 
 local function dispose_diff_view(tab)
@@ -660,6 +679,7 @@ function Model:load_file_history(tab, callback)
     tab.loading = false
     tab.refreshing = false
     tab.error = err
+    tab.local_changes_error = nil
     local function notify(_, preview_err)
       local final_err = err or preview_err
       local callbacks = tab.pending_history_callbacks or {}
@@ -668,9 +688,13 @@ function Model:load_file_history(tab, callback)
       for _, cb in ipairs(callbacks) do cb(self, final_err) end
       if self.on_update then self.on_update(self) end
     end
-    local function publish()
-      if self:load_history_preview(tab, notify) then return end
-      notify()
+    local function publish(local_err)
+      tab.local_changes_error = local_err
+      local function preview_done(model, preview_err)
+        notify(model, local_err or preview_err)
+      end
+      if self:load_history_preview(tab, preview_done) then return end
+      notify(nil, local_err)
     end
     if page and page.commits then
       if replace_existing then tab.commits = {} end
@@ -707,31 +731,38 @@ function Model:refresh_local_changes_revision(tab, callback)
   local generation = tab.local_changes_generation
   local path = common.normalize_path(self.repo.root .. PATHSEP .. tab.relpath)
   local buffer = core.buffer_registry and core.buffer_registry:find(path)
-  if not buffer then return false end
-  self:attach_history_buffer(tab)
-  local current_text = normalize_for_diff(table.concat(buffer.lines or {}))
-  local job, done
-  job = self.backend.file_at(self.repo, "HEAD", tab.relpath, {}, function(text, err)
-    done = true
-    self:_untrack_job(job)
-    tab.local_changes_job = nil
-    if tab.disposed or generation ~= tab.local_changes_generation then return end
-    if err and self.backend.is_missing_path_error and self.backend.is_missing_path_error(err) then
-      text, err = "", nil
+  if buffer then self:attach_history_buffer(tab) end
+  local current_text = buffer and normalize_for_diff(table.concat(buffer.lines or {}))
+
+  local function start_file_at(rev, relpath, on_result)
+    local request, finished
+    request = self.backend.file_at(self.repo, rev, relpath or tab.relpath, {}, function(text, err)
+      finished = true
+      self:_untrack_job(request)
+      if tab.local_changes_job == request then tab.local_changes_job = nil end
+      if tab.disposed or generation ~= tab.local_changes_generation then return end
+      on_result(text, err)
+    end)
+    if not finished then
+      tab.local_changes_job = request
+      self:_track_job(request)
     end
-    local head_text = normalize_for_diff(text)
-    tab.history_head_text = not err and head_text or tab.history_head_text
+  end
+
+  local function compare(current, head)
+    tab.local_changes_error = nil
+    tab.history_head_text = head
     for index = #tab.commits, 1, -1 do
       if tab.commits[index].kind == "local_changes" then table.remove(tab.commits, index) end
     end
     local context = tab.history_context
     local changed
     if context and context.type == "selection" then
-      changed = update_local_selection_diff(tab, current_text, head_text)
+      changed = update_local_selection_diff(tab, current, head)
     else
-      changed = current_text ~= head_text
+      changed = current ~= head
     end
-    if not err and changed then
+    if changed then
       table.insert(tab.commits, 1, {
         kind = "local_changes",
         subject = "Local Changes",
@@ -747,18 +778,109 @@ function Model:refresh_local_changes_revision(tab, callback)
       end
       core.log_quiet("Git File History added Local Changes Revision for %s", tab.relpath)
     end
-    callback()
-  end)
-  if not done then
-    tab.local_changes_job = job
-    self:_track_job(job)
+    if callback then callback() end
   end
+
+  local function finish_head(text, err, source_path)
+    if err and self.backend.is_missing_path_error and self.backend.is_missing_path_error(err) then
+      if source_path == tab.relpath and self.backend.path_status then
+        local status_job, status_done
+        status_job = self.backend.path_status(self.repo, tab.relpath, { optional_locks = false }, function(records, status_err)
+          status_done = true
+          self:_untrack_job(status_job)
+          if tab.local_changes_job == status_job then tab.local_changes_job = nil end
+          if tab.disposed or generation ~= tab.local_changes_generation then return end
+          if status_err then
+            tab.local_changes_error = status_err
+            if callback then callback(status_err) end
+            return
+          end
+          local rename
+          for _, record in ipairs(records or {}) do
+            if record.kind == "renamed" and record.old_path and record.new_path == tab.relpath then
+              rename = record
+              break
+            end
+          end
+          if rename then
+            tab.local_changes_head_path = rename.old_path
+            start_file_at("HEAD", rename.old_path, function(old_text, old_err)
+              finish_head(old_text, old_err, rename.old_path)
+            end)
+          else
+            finish_head("", nil, tab.relpath)
+          end
+        end)
+        if not status_done then
+          tab.local_changes_job = status_job
+          self:_track_job(status_job)
+        end
+        return
+      end
+      text, err = "", nil
+    end
+    if err then
+      tab.local_changes_error = err
+      if callback then callback(err) end
+      return
+    end
+    tab.local_changes_head_path = source_path ~= tab.relpath and source_path or nil
+    local head_text = normalize_for_diff(text)
+    if buffer then
+      compare(current_text, head_text)
+      return
+    end
+    if not system.get_file_info(path) then
+      if not self.backend.path_status then
+        if callback then callback() end
+        return
+      end
+      local status_job, status_done
+      status_job = self.backend.path_status(self.repo, tab.relpath, { optional_locks = false }, function(records, status_err)
+        status_done = true
+        self:_untrack_job(status_job)
+        if tab.local_changes_job == status_job then tab.local_changes_job = nil end
+        if tab.disposed or generation ~= tab.local_changes_generation then return end
+        if status_err then
+          tab.local_changes_error = status_err
+          if callback then callback(status_err) end
+          return
+        end
+        for _, record in ipairs(records or {}) do
+          if (record.kind == "deleted" or record.status == "deleted")
+              and (record.path == tab.relpath or record.old_path == tab.relpath) then
+            compare("", head_text)
+            return
+          end
+        end
+        if callback then callback() end
+      end)
+      if not status_done then
+        tab.local_changes_job = status_job
+        self:_track_job(status_job)
+      end
+      return
+    end
+    start_file_at(self.backend.WORKING_TREE, tab.relpath, function(current, current_err)
+      if current_err then
+        tab.local_changes_error = current_err
+        if callback then callback(current_err) end
+        return
+      end
+      compare(normalize_for_diff(current), head_text)
+    end)
+  end
+
+  start_file_at("HEAD", tab.relpath, function(text, err)
+    finish_head(text, err, tab.relpath)
+  end)
   return true
 end
 
 function Model:update_local_changes_from_buffer(tab)
   local buffer = tab and tab.history_buffer
   if not (buffer and tab.history_head_text ~= nil) then return false end
+  tab.local_changes_error = nil
   local current_text = normalize_for_diff(table.concat(buffer.lines or {}))
   local context = tab.history_context
   local changed
@@ -848,12 +970,12 @@ function Model:load_history_preview(tab, callback)
     left_rev, right_rev = "HEAD", self.backend.WORKING_TREE
   else
     right_rev = commit.hash
-    local older = tab.commits[tab.selected_commit + 1]
-    left_rev = older and older.hash or commit.parents and commit.parents[1] or self.backend.EMPTY_TREE
+    left_rev = commit.parents and commit.parents[1] or self.backend.EMPTY_TREE
   end
   local right_path = commit.kind == "local_changes" and tab.relpath
     or commit.history_path or tab.relpath
-  local left_path = commit.kind == "local_changes" and tab.relpath
+  local left_path = commit.kind == "local_changes"
+    and (tab.local_changes_head_path or tab.relpath)
     or commit.history_parent_path or right_path
   local context = tab.history_context
   local tracked = context and context.type == "selection" and commit.selection_diff
@@ -1139,20 +1261,25 @@ function Model:load_changed_files(tab, callback)
     end)
     if not diff_done then self:_track_job(diff_job) end
     local status_job, status_done
-    status_job = self.backend.run_git(self.repo, { "status", "--porcelain=v1", "-z", "--untracked-files=all" }, {}, function(result, err)
-      status_done = true
-      self:_untrack_job(status_job)
-      if err and not final_err then final_err = err end
-      untracked_records = {}
-      if result then
-        for _, record in ipairs(self.backend.parse_status_z(result.stdout)) do
-          if record.kind == "untracked" and not untracked_directory_summary(record) then
-            untracked_records[#untracked_records + 1] = record
+    status_job = self.backend.run_git(
+      self.repo,
+      { "status", "--porcelain=v1", "-z", "--untracked-files=all" },
+      { optional_locks = false },
+      function(result, err)
+        status_done = true
+        self:_untrack_job(status_job)
+        if err and not final_err then final_err = err end
+        untracked_records = {}
+        if result then
+          for _, record in ipairs(self.backend.parse_status_z(result.stdout)) do
+            if record.kind == "untracked" and not untracked_directory_summary(record) then
+              untracked_records[#untracked_records + 1] = record
+            end
           end
         end
+        done_one()
       end
-      done_one()
-    end)
+    )
     if not status_done then self:_track_job(status_job) end
     return true
   else
@@ -1238,8 +1365,11 @@ function Model:load_selected_diff_file(tab, callback)
   tab.loading_file = true
   tab.file_loading_started_at = system.get_time()
   tab.file_error = nil
-  local pending = 2
+  local probe_working_tree = tab.right == self.backend.WORKING_TREE
+    and not missing_side_for_status(file, "right")
+  local pending = 2 + (probe_working_tree and 1 or 0)
   local left_text, right_text, left_current_path, right_current_path, file_err
+  local binary_detected = false
   local function finish()
     pending = pending - 1
     if pending ~= 0 then return end
@@ -1248,31 +1378,45 @@ function Model:load_selected_diff_file(tab, callback)
     tab.file_loading_started_at = nil
     tab.file_error = file_err
     if not file_err then
+      local binary = binary_detected or is_binary_text(left_text) or is_binary_text(right_text)
       local next_left_text = normalize_for_diff(left_text)
       local next_right_text = normalize_for_diff(right_text)
       local next_left_name = path_for_file(file, "left") or "<empty>"
       local next_right_name = path_for_file(file, "right") or "<empty>"
-      local content_changed = tab.left_text ~= next_left_text
-        or tab.right_text ~= next_right_text
-        or tab.left_current_path ~= left_current_path
-        or tab.right_current_path ~= right_current_path
-        or tab.left_name ~= next_left_name
-        or tab.right_name ~= next_right_name
-        or tab.loaded_left_revision ~= tab.left
-        or tab.loaded_right_revision ~= tab.right
-      tab.left_text = next_left_text
-      tab.right_text = next_right_text
-      tab.left_current_path = left_current_path
-      tab.right_current_path = right_current_path
-      tab.non_text = nil
-      tab.left_name = next_left_name
-      tab.right_name = next_right_name
-      tab.loaded_left_revision = tab.left
-      tab.loaded_right_revision = tab.right
-      if content_changed then
+      if binary then
+        dispose_diff_view(tab)
+        tab.left_text, tab.right_text = nil, nil
+        tab.left_current_path, tab.right_current_path = left_current_path, right_current_path
+        tab.left_name, tab.right_name = next_left_name, next_right_name
+        tab.loaded_left_revision, tab.loaded_right_revision = nil, nil
+        tab.non_text = {
+          kind = "binary",
+          message = "Binary file changed. Text comparison is not available.",
+        }
         tab.diff_generation = (tab.diff_generation or 0) + 1
       else
-        core.log_quiet("Git Diff retained unchanged content for %s", tostring(tab.selected_file_path or next_right_name))
+        local content_changed = tab.left_text ~= next_left_text
+          or tab.right_text ~= next_right_text
+          or tab.left_current_path ~= left_current_path
+          or tab.right_current_path ~= right_current_path
+          or tab.left_name ~= next_left_name
+          or tab.right_name ~= next_right_name
+          or tab.loaded_left_revision ~= tab.left
+          or tab.loaded_right_revision ~= tab.right
+        tab.left_text = next_left_text
+        tab.right_text = next_right_text
+        tab.left_current_path = left_current_path
+        tab.right_current_path = right_current_path
+        tab.non_text = nil
+        tab.left_name = next_left_name
+        tab.right_name = next_right_name
+        tab.loaded_left_revision = tab.left
+        tab.loaded_right_revision = tab.right
+        if content_changed then
+          tab.diff_generation = (tab.diff_generation or 0) + 1
+        else
+          core.log_quiet("Git Diff retained unchanged content for %s", tostring(tab.selected_file_path or next_right_name))
+        end
       end
     end
     if callback then callback(self, file_err) end
@@ -1303,6 +1447,19 @@ function Model:load_selected_diff_file(tab, callback)
   end
   load("left", tab.left, path_for_file(file, "left"))
   load("right", tab.right, path_for_file(file, "right"))
+  if probe_working_tree then
+    local relpath = path_for_file(file, "right")
+    local job, done
+    job = self.backend.file_at(self.repo, self.backend.WORKING_TREE, relpath, {}, function(text, err)
+      done = true
+      self:_untrack_job(job)
+      if generation ~= tab.file_generation then return end
+      if not err and is_binary_text(text) then binary_detected = true end
+      finish()
+      end
+    )
+    if not done then self:_track_job(job) end
+  end
   return true
 end
 
@@ -1333,6 +1490,58 @@ end
 
 local function project_path(project)
   return type(project) == "table" and project.path or project
+end
+
+function Model:unsubscribe_status_service()
+  local service = self.status_service
+  if service then service:unsubscribe(self) end
+  self.status_subscribed = false
+  self.status_subscription_root = nil
+end
+
+function Model:subscribe_status_service()
+  local service = self.status_service
+  if not (service and self.repo and self.repo.root) then return false end
+
+  if self.status_subscribed and self.status_subscription_root
+      and common.path_equals(self.status_subscription_root, self.repo.root) then
+    return true
+  end
+  self:unsubscribe_status_service()
+  local root = self.repo.root
+  local weak_model = setmetatable({ model = self }, { __mode = "v" })
+  service:subscribe(self, function(event_root, reason, err)
+    local model = weak_model.model
+    if not model then return end
+    if model.repo and event_root and not common.path_equals(model.repo.root, event_root) then return end
+    if err then
+      model.shared_refresh_pending = false
+      model.shared_refresh_active = false
+      model:log_tab().error = err
+      if model.on_update then model.on_update(model) end
+      return
+    end
+    model.shared_refresh_pending = true
+    model:flush_shared_refresh()
+  end)
+  self.status_subscribed = true
+  self.status_subscription_root = root
+  -- Discovery through the shared service starts its repository watcher. The
+  -- Git model still owns its own data load and does not read the snapshot.
+  service:lookup(root, true)
+  return true
+end
+
+function Model:flush_shared_refresh()
+  local tab = self:log_tab()
+  if not self.shared_refresh_pending or self.shared_refresh_active
+      or tab.loading or tab.loading_more then
+    return false
+  end
+  self.shared_refresh_pending = false
+  self.shared_refresh_active = true
+  self:refresh_log()
+  return true
 end
 
 local function empty_log_error(err)
@@ -1428,7 +1637,9 @@ function Model:_finish_refresh(generation, total_commits, log_page, local_change
   apply_commit_anchor(tab)
   if tab.selected_commit > #tab.commits then tab.selected_commit = math.max(1, #tab.commits) end
   self:load_commit_changed_files(tab.commits[tab.selected_commit])
+  self.shared_refresh_active = false
   if callback then callback(self, err) end
+  self:flush_shared_refresh()
 end
 
 function Model:_start_refresh_jobs(repo, generation, callback)
@@ -1489,7 +1700,7 @@ function Model:_start_refresh_jobs(repo, generation, callback)
   status_job = self.backend.run_git(
     repo,
     { "status", "--porcelain=v1", "-z", "--untracked-files=all" },
-    {},
+    { optional_locks = false },
     function(result, err)
       status_done = true
       self:_untrack_job(status_job)
@@ -1505,6 +1716,7 @@ function Model:_start_refresh_jobs(repo, generation, callback)
           end
         end
       elseif err then
+        if not final_err then final_err = err end
         core.log_quiet("Git Log local changes unavailable: %s", err.message or err.kind)
       end
       add_dirty_buffer_records(repo, local_changes, seen)
@@ -1592,11 +1804,16 @@ function Model:refresh_log(callback)
   local function on_repo(repo, repo_err)
     if generation ~= self.generation then return end
     if not repo then
+      self:unsubscribe_status_service()
       self.repo = nil
       self:_finish_refresh(generation, nil, nil, nil, repo_err, callback)
       return
     end
+    if not self.repo or not common.path_equals(self.repo.root, repo.root) then
+      self:unsubscribe_status_service()
+    end
     self.repo = repo
+    self:subscribe_status_service()
     self:_start_refresh_jobs(repo, generation, callback)
   end
 
@@ -1639,6 +1856,8 @@ function Model:load_more_log(callback)
       self:load_commit_changed_files(tab.commits[tab.selected_commit])
     end
     if callback then callback(self, err) end
+    self.shared_refresh_active = false
+    self:flush_shared_refresh()
   end)
   if not log_done then self:_track_job(log_job) end
   return true

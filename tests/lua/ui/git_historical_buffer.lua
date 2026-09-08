@@ -45,4 +45,28 @@ test.describe("Git Historical Buffer", function()
     test.equal(buffer_text(buffer), "abc\n")
     test.equal(buffer:get_text(1, 1, math.huge, math.huge), "abc")
   end)
+
+  test.test("strips a UTF-8 BOM from historical text", function()
+    local buffer = historical.create_buffer(
+      { root = "C:/repo" }, "bom123", "src/bom.lua", "\239\187\191return true\n"
+    )
+    test.equal(buffer_text(buffer), "return true\n")
+  end)
+
+  test.test("decodes a BOM-marked UTF-16 historical blob", function()
+    local buffer = historical.create_buffer(
+      { root = "C:/repo" }, "utf16-123", "src/utf16.lua",
+      "\255\254r\0e\0t\0u\0r\0n\0 \0t\0r\0u\0e\0\n\0"
+    )
+    test.equal(buffer_text(buffer), "return true\n")
+  end)
+
+  test.test("rejects binary historical text", function()
+    local buffer, err = historical.create_buffer(
+      { root = "C:/repo" }, "binary123", "data/blob.bin", "text\0binary"
+    )
+    test.equal(buffer, nil)
+    test.equal(err.kind, "binary")
+
+  end)
 end)
