@@ -1,4 +1,5 @@
 local keymap = require "core.keymap"
+local core = require "core"
 
 local M = {}
 
@@ -126,12 +127,26 @@ function M.build(view, support)
   }
 
   local selected_capture_line
+  local points = {}
   for index, result in ipairs(view.results or {}) do
     local marker = not result.header and index == view.selected and "> " or "  "
     lines[#lines + 1] = string.format(
       "%s%d. %s", marker, index, result_text(result, support)
     )
     if index == view.selected then selected_capture_line = #lines end
+    if not result.header and (result.kind == "file" or result.kind == "grep"
+        or result.kind == "symbol" or (result.kind == "path" and not result.is_folder)) then
+      local path = result.abs_path or result.file or result.path
+      if path or result.buffer then
+        points[#points + 1] = {
+          line = #lines, col = 1, col2 = #lines[#lines] + 1, text_bounds = true,
+          kind = "file-location", label = lines[#lines],
+          path = path and core.project_absolute_path(path),
+          target_buffer = result.buffer,
+          target_line = result.line or 1, target_col = result.col or 1,
+        }
+      end
+    end
   end
   if #(view.results or {}) == 0 then lines[#lines + 1] = "  (no loaded results)" end
   append_preview(lines, view)
@@ -144,6 +159,8 @@ function M.build(view, support)
     cursor_col = 1,
     wrapping = false,
     read_only_reason = "Fuzzy Searcher text captures are read-only",
+    points = points,
+    remote_poi_source = #points > 0,
   }
 end
 

@@ -4,6 +4,7 @@ local View = require "core.view"
 local command = require "core.command"
 local core = require "core"
 local panes = require "core.panes"
+local poi = require "core.poi"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
@@ -62,5 +63,26 @@ test.describe("Text Capture", function()
     test.contains(text, "Selected result: 2")
     test.contains(text, "preview first line")
     test.contains(text, "preview second line")
+  end)
+
+  test.it("keeps file locations as remote POIs after the picker closes", function(context)
+    local buffer = Buffer()
+    context.preview_buffer = buffer
+    buffer:insert(1, 1, "one\ntwo\nthree\n")
+    fuzzy_searcher.open_static_results("needle", {
+      { kind = "symbol", buffer = buffer, line = 2, col = 1, label = "second" },
+      { kind = "symbol", buffer = buffer, line = 3, col = 1, label = "third" },
+    })
+    test.ok(command.perform("core:open_text_capture"))
+    local capture = panes.active().current_view
+    test.equal(poi.get_remote_source(), capture)
+    local points = poi.points_for_view(capture)
+    test.equal(#points, 2)
+    test.ok(poi.navigate_remote(1))
+    test.equal(panes.active().current_view.buffer, buffer)
+    test.equal(buffer:get_selection(), 2)
+    test.ok(poi.navigate_remote(1))
+    test.equal(buffer:get_selection(), 3)
+    test.equal(capture.buffer:get_selection(), points[2].line)
   end)
 end)

@@ -2,6 +2,8 @@ local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local common = require "core.common"
 local panes = require "core.panes"
+local core = require "core"
+local poi = require "core.poi"
 
 local TextCaptureView = TextView:extend()
 
@@ -20,6 +22,7 @@ function TextCaptureView:new(capture)
   self.text_capture = true
   self.text_capture_title = capture.title or buffer.display_name
   self.text_capture_data = capture
+  self.remote_poi_source = capture.remote_poi_source == true
   if capture.font then self.font = capture.font end
   if capture.show_line_numbers ~= nil then
     self.show_line_numbers = capture.show_line_numbers == true
@@ -47,6 +50,34 @@ function TextCaptureView:get_name()
   return self.text_capture_title or "Text Capture"
 end
 
+function TextCaptureView:get_points_of_interest()
+  return self.text_capture_data.points or {}
+end
+
+function TextCaptureView:activate_point_of_interest(point, opts)
+  opts = opts or {}
+  local placement = opts.placement or "current"
+  local open_opts = {
+    pane = opts.pane or panes.pane_for_view(self), placement = placement,
+    line = point.target_line, col = point.target_col,
+    focus = opts.preserve_focus ~= true,
+  }
+  if point.target_buffer then
+    return core.root_panel:open_buffer(point.target_buffer, open_opts)
+  end
+  if point.path then return core.open_file(point.path, open_opts) end
+  return false
+end
+
+function TextCaptureView:can_discard_from_history()
+  return poi.get_remote_source() ~= self
+end
+
+function TextCaptureView:on_close()
+  poi.clear_remote_source(self)
+  TextCaptureView.super.on_close(self)
+end
+
 function TextCaptureView:duplicate()
   local line, col = self.buffer:get_selection()
   local capture = {}
@@ -67,13 +98,15 @@ local M = {
 
 function M.open(capture, opts)
   opts = opts or {}
-  return panes.place(function() return TextCaptureView(capture) end, {
+  local view, err = panes.place(function() return TextCaptureView(capture) end, {
     pane = opts.pane,
     placement = opts.placement or "current",
     direction = opts.direction,
     focus = opts.focus ~= false,
     reason = opts.reason or "text-capture",
   })
+  if view and view.remote_poi_source then poi.set_remote_source(view) end
+  return view, err
 end
 
 return M
