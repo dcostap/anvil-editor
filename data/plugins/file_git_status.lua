@@ -40,7 +40,30 @@ function Service.new(options)
     publish = options.publish or function() core.redraw = true end,
     build_snapshot = options.build_snapshot,
     aliases = {}, repositories = {}, generation = 0,
+    file_lookups = {}, directory_lookups = {}, lookup_count = 0,
   }, Service)
+end
+
+function Service:invalidate_lookups()
+  self.file_lookups, self.directory_lookups, self.lookup_count = {}, {}, 0
+end
+
+local function check_lookup_routing(self)
+  local generation = project_paths.generation()
+  local projects = core.projects or {}
+  local previous = self.lookup_project_paths
+  local changed = self.lookup_project_generation ~= generation or not previous or #previous ~= #projects
+  if not changed then
+    for i, project in ipairs(projects) do
+      if previous[i] ~= project.path then changed = true; break end
+    end
+  end
+  if changed then
+    self:invalidate_lookups()
+    self.lookup_project_generation = generation
+    self.lookup_project_paths = {}
+    for i, project in ipairs(projects) do self.lookup_project_paths[i] = project.path end
+  end
 end
 
 local function read_line(path)
@@ -72,6 +95,7 @@ function Service:watch_repository(state)
 end
 
 function Service:mark_dirty(state, reason)
+  self:invalidate_lookups()
   if not state.dirty then state.due = self.clock() + 0.2 end
   state.dirty, state.reason = true, reason
 end
@@ -105,6 +129,7 @@ function Service:state_for(path, is_directory)
           clock = self.clock, refresh_interval = 0.5,
           build_snapshot = self.build_snapshot,
           publish = function()
+            self:invalidate_lookups()
             self.generation = self.generation + 1
             self.publish(repo.root)
           end,
@@ -123,9 +148,23 @@ function Service:state_for(path, is_directory)
 end
 
 function Service:lookup(path, is_directory)
-  local state = self:state_for(path, is_directory)
-  if not state then return nil end
-  local info = state.controller:lookup(path, is_directory)
+  if self.closed or not path then return nil end
+  check_lookup_routing(self)
+  local cache = is_directory and self.directory_lookups or self.file_lookups
+  local entry = cache[path]
+  if not entry then
+    local state = self:state_for(path, is_directory)
+    -- Do not retain discovery failures or pending discovery. Their retries stay active.
+    if not state then return nil end
+    entry = { state = state, info = state.controller:lookup(path, is_directory) or false }
+    if self.lookup_count >= 4096 then self:invalidate_lookups() end
+    -- Synchronous discovery can publish status and replace the cache tables.
+    cache = is_directory and self.directory_lookups or self.file_lookups
+    cache[path] = entry
+    self.lookup_count = self.lookup_count + 1
+  end
+  entry.state.last_used = self.clock()
+  local info = entry.info
   if not info then return nil end
   return {
     kind = info.kind,
@@ -135,6 +174,7 @@ end
 
 function Service:request(path, reason)
   if self.closed then return end
+  self:invalidate_lookups()
   for _, state in pairs(self.repositories) do
     if not path or common.path_equals(path, state.repo.root) or common.path_belongs_to(path, state.repo.root)
         or common.path_belongs_to(state.repo.root, path) then
@@ -170,6 +210,7 @@ function Service:filesystem_changed(state, path)
 end
 
 function Service:release(key, state)
+  self:invalidate_lookups()
   state.controller:close()
   for _, path in ipairs(state.watch_paths) do state.watcher:unwatch(path) end
   self.repositories[key] = nil
