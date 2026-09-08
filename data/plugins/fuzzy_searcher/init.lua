@@ -6490,6 +6490,24 @@ function FSView:open_file_result(r, new_group, restore)
   if not new_group then self:close() end
   fuzzy_searcher._perf_file_open_stage_end(close_stage)
   fuzzy_searcher._perf_file_open_mark("open_file_requested", string.format("line=%d col=%d", line, col))
+  local function navigate(view)
+    if restore and restore.selections then
+      view.buffer:set_selection_list(restore.selections, restore.last_selection, { sanitized = true })
+    else
+      view.buffer:set_selection(line, col, line2 or line, col2 or col)
+    end
+    if restore and restore.scroll then
+      view.scroll.x, view.scroll.y = restore.scroll.x, restore.scroll.y
+      view.scroll.to.x, view.scroll.to.y = restore.scroll.x, restore.scroll.y
+    elseif view.scroll_to_line then
+      view:scroll_to_line(line, false, true)
+    end
+    if not restore and view.scroll_to_make_visible then
+      view:scroll_to_make_visible(line, col, true, {
+        line2 = line2 or line, col2 = col2 or col, vertical = false,
+      })
+    end
+  end
   local opened, view = xpcall(function()
     local open_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_core_open_file")
     local open = core.open_file
@@ -6504,6 +6522,7 @@ function FSView:open_file_result(r, new_group, restore)
       col = col,
       line2 = line2,
       col2 = col2,
+      navigate = navigate,
       focus = true,
     }))
     fuzzy_searcher._perf_file_open_stage_end(open_stage)
@@ -6528,35 +6547,6 @@ function FSView:open_file_result(r, new_group, restore)
   end
   if view and view.buffer then
     fuzzy_searcher._perf_file_open_attach_view(view)
-    local selection_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_restore_selection_and_scroll")
-    local function apply_selection()
-      if restore and restore.selections then
-        view.buffer:set_selection_list(
-          restore.selections, restore.last_selection, { sanitized = true }
-        )
-      else
-        view.buffer:set_selection(line, col, line2 or line, col2 or col)
-      end
-    end
-    if view.with_selection_state then
-      view:with_selection_state(apply_selection)
-    else
-      apply_selection()
-    end
-    if restore and restore.scroll then
-      view.scroll.x, view.scroll.y = restore.scroll.x, restore.scroll.y
-      view.scroll.to.x, view.scroll.to.y = restore.scroll.x, restore.scroll.y
-    elseif view.scroll_to_line then
-      view:scroll_to_line(line, false, true)
-    end
-    if not restore and view.scroll_to_make_visible then
-      view:scroll_to_make_visible(line, col, true, {
-        line2 = line2 or line,
-        col2 = col2 or col,
-        vertical = false,
-      })
-    end
-    fuzzy_searcher._perf_file_open_stage_end(selection_stage)
     fuzzy_searcher._perf_file_open_mark("open_file_state_restored")
   end
   if file_open and not view then fuzzy_searcher._perf_file_open_fail("no_view") end
@@ -6741,7 +6731,6 @@ function FSView:activate_selected_result(new_group)
   end
   if r.buffer and r.line then
     local buffer = r.buffer
-    local source_view = self.source_view
     local source_pane = self.source_pane
     local file_open = fuzzy_searcher._perf_file_open_begin(
       buffer.abs_filename or buffer.filename, "fuzzy_searcher"
@@ -6750,21 +6739,13 @@ function FSView:activate_selected_result(new_group)
     if not new_group then self:close() end
     fuzzy_searcher._perf_file_open_stage_end(close_stage)
     fuzzy_searcher._perf_file_open_mark("open_buffer_requested", string.format("line=%d col=%d", r.line, r.col or 1))
-    local view = source_view
-    if new_group or not (view and view.buffer == buffer) then
-      local Editor = require "core.editor"
-      local place_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_place_existing_buffer")
-      view = panes.place(function() return Editor(buffer) end, {
-        pane = source_pane,
-        placement = new_group and "new" or "current",
-        focus = true,
-      })
-      fuzzy_searcher._perf_file_open_stage_end(place_stage)
-    end
+    local view = core.root_panel:open_buffer(buffer, {
+      pane = source_pane,
+      placement = new_group and "new" or "current",
+      focus = true,
+      line = r.line, col = r.col, line2 = r.line2, col2 = r.col2,
+    })
     fuzzy_searcher._perf_file_open_attach_view(view)
-    local selection_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_restore_selection")
-    if r.line2 and r.col2 then buffer:set_selection(r.line, r.col, r.line2, r.col2) else buffer:set_selection(r.line, r.col) end
-    fuzzy_searcher._perf_file_open_stage_end(selection_stage)
     fuzzy_searcher._perf_file_open_mark("open_buffer_state_restored")
     if file_open and not view then fuzzy_searcher._perf_file_open_fail("no_view") end
     return

@@ -591,12 +591,6 @@ function CommandOutputView:activate_point_of_interest(poi, opts)
     focus = not preserve_focus,
     preserve_focus = preserve_focus,
   })
-  if view and view.buffer then
-    view.buffer:set_selection(
-      poi.target_line or poi.line,
-      poi.target_col or 1
-    )
-  end
   return view
 end
 

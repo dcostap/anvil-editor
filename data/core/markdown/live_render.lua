@@ -7318,14 +7318,7 @@ local function open_link_resolution(resolution)
   if resolution.kind == "attachment" then
     return common.open_in_system(resolution.path)
   end
-  local target_view = core.open_file(resolution.path)
-  if target_view and resolution.line and target_view.set_selection_state then
-    target_view:set_selection_state({
-      selections = { resolution.line, 1, resolution.line, 1 },
-      last_selection = 1,
-    })
-    target_view:scroll_to_line(resolution.line, true, true)
-  end
+  local target_view = core.open_file(resolution.path, { line = resolution.line, col = 1 })
   return target_view ~= nil
 end
 

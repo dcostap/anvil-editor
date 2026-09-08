@@ -336,6 +336,28 @@ function RootPanel:get_active_pane()
   return panes().active()
 end
 
+-- Apply the destination before the Pane records the arrival place.
+local function prepare_file_destination(view, opts)
+  if not opts.line and not opts.navigate then return view end
+  local pane = panes().pane_for_view(view)
+  if pane and pane.current_view == view then
+    require("core.navigation_history").flush_edit(view, nil, true)
+    panes().record_location(pane)
+  end
+  view:with_selection_state(function()
+    if opts.navigate then
+      opts.navigate(view)
+    else
+      local line, col = opts.line, opts.col or 1
+      view.buffer:set_selection(line, col, opts.line2 or line, opts.col2 or col)
+      view:scroll_to_line(line, false, true)
+    end
+  end)
+  local selection = view:get_selection_state().selections
+  core.log_quiet("Navigation History: file destination prepared at %d:%d", selection[1], selection[2])
+  return view
+end
+
 function RootPanel:open_buffer(buffer, opts)
   opts = opts or {}
   local Editor = require "core.editor"
@@ -343,12 +365,13 @@ function RootPanel:open_buffer(buffer, opts)
   if target and (opts.placement == nil or opts.placement == "current") then
     for _, view in ipairs(panes().views(target)) do
       if view.extends and view:extends(Editor) and view.buffer == buffer then
+        prepare_file_destination(view, opts)
         panes().present(view, { pane = target, focus = opts.focus })
         return view
       end
     end
   end
-  return panes().place(function() return Editor(buffer) end, {
+  return panes().place(function() return prepare_file_destination(Editor(buffer), opts) end, {
     pane = opts.pane,
     placement = opts.placement or "current",
     direction = opts.direction,
@@ -382,7 +405,7 @@ function RootPanel:open_file(filename, opts)
   local Editor = require "core.editor"
   local place_stage = file_open_stage_begin("root_panel_place_editor")
   local view = panes().place(function()
-    return Editor(core.open_buffer(filename))
+    return prepare_file_destination(Editor(core.open_buffer(filename)), opts)
   end, {
     pane = opts.pane,
     placement = opts.placement or "current",

@@ -127,11 +127,12 @@ local function open_location(result, opts)
     local buffer = view and view.buffer
     if buffer then
       if opts.placement == "new" or (opts.pane and panes.pane_for_view(view) ~= opts.pane) then
-        local Editor = require "core.editor"
-        view = panes.place(function() return Editor(buffer) end, {
+        view = core.root_panel:open_buffer(buffer, {
           pane = opts.pane,
           placement = opts.placement or "current",
           focus = true,
+          line = result.start_line, col = result.start_col,
+          line2 = result.end_line, col2 = result.end_col,
         }) or view
       end
       if view.expand_folds_covering_range then
@@ -145,26 +146,28 @@ local function open_location(result, opts)
 
   local path = result_path(result)
   if not path then return false, "location has no path" end
+  local function navigate(view)
+    local range = result_buffer_range(view, result)
+    if range then
+      if view.expand_folds_covering_range then view:expand_folds_covering_range(range.line1, range.col1, range.line2, range.col2, "language-location") end
+      view.buffer:set_selection(range.line1, range.col1, range.line2, range.col2)
+    elseif result.line and result.col then
+      local line2, col2 = result.line2 or result.line, result.col2 or result.col
+      if view.expand_folds_covering_range then
+        view:expand_folds_covering_range(result.line, result.col, line2, col2, "language-location")
+      elseif view.expand_folds_at_line then
+        view:expand_folds_at_line(result.line, "language-location")
+      end
+      view.buffer:set_selection(result.line, result.col, line2, col2)
+    end
+  end
   local view = core.open_file(path, {
     pane = opts.pane,
     placement = opts.placement or "current",
     focus = true,
+    navigate = navigate,
   })
   if not view or not view.buffer then return false, "failed to open target" end
-  local range = result_buffer_range(view, result)
-  if range then
-    if view.expand_folds_covering_range then view:expand_folds_covering_range(range.line1, range.col1, range.line2, range.col2, "language-location") end
-    view.buffer:set_selection(range.line1, range.col1, range.line2, range.col2)
-  elseif result.line and result.col then
-    local line2, col2 = result.line2 or result.line, result.col2 or result.col
-    if view.expand_folds_covering_range then
-      view:expand_folds_covering_range(result.line, result.col, line2, col2, "language-location")
-    elseif view.expand_folds_at_line then
-      view:expand_folds_at_line(result.line, "language-location")
-    end
-    view.buffer:set_selection(result.line, result.col, line2, col2)
-  end
-  panes.record_location(panes.pane_for_view(view))
   return true
 end
 

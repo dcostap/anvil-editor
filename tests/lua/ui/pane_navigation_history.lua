@@ -62,6 +62,53 @@ test.describe("Pane navigation history", function()
     test.equal(one.place, 8)
   end)
 
+  test.it("opens a Buffer at its destination without a file-start stop", function()
+    local Buffer = require "core.buffer"
+    local RootPanel = require "core.rootpanel"
+    local pane = panes.create { factory = factory("source", 4) }
+    local source = pane.current_view
+    local buffer = Buffer(nil, nil, true)
+    buffer:insert(1, 1, string.rep("line\n", 100))
+    buffer.abs_filename = USERDIR .. PATHSEP .. "navigation-target.txt"
+    local root = RootPanel()
+    local view = root:open_buffer(buffer, { pane = pane, line = 80, col = 3 })
+    test.equal(view:get_selection_state().selections[1], 80)
+    test.equal(panes.back(pane), source)
+    test.equal(panes.forward(pane), view)
+    test.equal(view:get_selection_state().selections[1], 80)
+    test.equal(view:get_selection_state().selections[2], 3)
+    root:open_buffer(buffer, { pane = pane, line = 30, col = 2 })
+    test.equal(panes.back(pane), view)
+    test.equal(view:get_selection_state().selections[1], 80)
+    test.equal(panes.back(pane), source)
+    root:open_buffer(buffer, { pane = pane, navigate = function(target)
+      target.buffer:set_selection(60, 4)
+    end })
+    test.equal(view:get_selection_state().selections[1], 60)
+    test.equal(panes.back(pane), source)
+    test.equal(panes.forward(pane), view)
+    test.equal(view:get_selection_state().selections[1], 60)
+  end)
+
+  test.it("opens a new file with only its requested arrival place", function()
+    local RootPanel = require "core.rootpanel"
+    local pane = panes.create { factory = factory("source", 4) }
+    local source = pane.current_view
+    local path = USERDIR .. PATHSEP .. "navigation-arrival.txt"
+    local file = assert(io.open(path, "wb"))
+    file:write(string.rep("line\n", 100))
+    file:close()
+    local ok, err = pcall(function()
+      local view = RootPanel():open_file(path, { pane = pane, line = 80, col = 2 })
+      test.equal(view:get_selection_state().selections[1], 80)
+      test.equal(panes.back(pane), source)
+      test.equal(panes.forward(pane), view)
+      test.equal(view:get_selection_state().selections[1], 80)
+    end)
+    os.remove(path)
+    if not ok then error(err) end
+  end)
+
   test.it("inserts a place without removing forward places in the same View", function()
     local pane = panes.create { factory = factory("A", 1) }
     local view = pane.current_view
