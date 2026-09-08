@@ -1619,8 +1619,23 @@ local function write_summary(path)
   drill_metric("filetree line_is_dir ms", "filetree_line_is_dir_ms", redraw_denom, "redraw")
   drill_metric("filetree draw_line_body ms", "filetree_draw_line_body_ms", redraw_denom, "redraw")
   drill_metric("filetree draw_line_text ms", "filetree_draw_line_text_ms", redraw_denom, "redraw")
+  drill_metric("filetree metadata prepare ms", "filetree_metadata_prepare_ms", redraw_denom, "redraw")
+  drill_metric("filetree super draw ms", "filetree_super_draw_ms", redraw_denom, "redraw")
+  file:write("  Root Panel drawing phases (nested timings overlap):\n")
+  for _, row in ipairs(sorted_counts(record.detail_counts)) do
+    if row.key:match("^rootpanel_.*_draw_ms$") then
+      drill_metric(row.key, row.key, redraw_denom, "redraw")
+    end
+  end
 
   file:write("  UI update metrics:\n")
+  drill_metric("filetree super update ms", "filetree_super_update_ms", update_denom, "update")
+  drill_metric("filetree Git update ms", "filetree_git_update_ms", update_denom, "update")
+  for _, row in ipairs(sorted_counts(record.detail_counts)) do
+    if row.key:match("^rootpanel_.*_update_ms$") then
+      drill_metric(row.key, row.key, update_denom, "update")
+    end
+  end
   drill_metric("textview update total ms", "textview_update_ms", update_denom, "update")
   drill_metric("textview update cache ms", "textview_update_cache_ms", update_denom, "update")
   drill_metric("textview update selection ms", "textview_update_selection_ms", update_denom, "update")

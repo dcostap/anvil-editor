@@ -73,6 +73,12 @@ local function perf_call(stats, key)
   return perf_start(stats)
 end
 
+local function perf_phase_finish(key, started)
+  if not started then return end
+  local perf = package.loaded["core.perf"]
+  if perf then perf.frame_add(key, (system.get_time() - started) * 1000) end
+end
+
 local function indent_prefix(level)
   return string.rep(INDENT_TEXT, level)
 end
@@ -907,7 +913,11 @@ function FileTreeView:git_text_color(kind)
 end
 
 function FileTreeView:update()
+  local stats = core.perf_frame_stats
+  local started = perf_start(stats)
   FileTreeView.super.update(self)
+  perf_phase_finish("filetree_super_update_ms", started)
+  started = perf_start(stats)
   file_git_status:lookup(self:git_root(), true)
   local generation = file_git_status.generation
   if generation ~= self.git_status.generation then
@@ -915,6 +925,7 @@ function FileTreeView:update()
     self.status_cache = nil
     core.redraw = true
   end
+  perf_phase_finish("filetree_git_update_ms", started)
 end
 
 function FileTreeView:filesystem_reveal_paths(path)
@@ -1810,12 +1821,22 @@ function FileTreeView:get_line_hint(line)
 end
 
 function FileTreeView:draw()
+  local stats = perf_stats()
+  local started = perf_start(stats)
+  local perf = package.loaded["core.perf"]
+  local scope = core.perf_draw_scope_active and perf and perf.scope_begin("filetree_metadata_prepare", true)
   local hints = {}
   self.metadata_columns = {}
   local first, last = self:get_visible_line_range()
   for line = first, last do hints[line] = self:get_line_hint(line) end
   self.metadata_hints = hints
+  if scope then perf.scope_end(scope) end
+  perf_phase_finish("filetree_metadata_prepare_ms", started)
+  started = perf_start(stats)
+  scope = core.perf_draw_scope_active and perf and perf.scope_begin("filetree_super_draw", true)
   local result = FileTreeView.super.draw(self)
+  if scope then perf.scope_end(scope) end
+  perf_phase_finish("filetree_super_draw_ms", started)
   self.metadata_hints, self.metadata_columns = nil, nil
   return result
 end

@@ -38,13 +38,39 @@ local function file_open_attach_view(view)
   if perf and perf.file_open_attach_view then perf.file_open_attach_view(view) end
 end
 
-local function call_view(view, name, ...)
+local function perf_begin(name)
+  if not core.perf_frame_stats then return end
+  local perf = package.loaded["core.perf"]
+  local scope = core.perf_draw_scope_active and perf and perf.scope_begin(name, true)
+  return system.get_time(), scope
+end
+
+local function perf_end(name, started, scope)
+  if not started then return end
+  local perf = package.loaded["core.perf"]
+  if not perf then return end
+  if scope then perf.scope_end(scope) end
+  perf.frame_add(name .. "_ms", (system.get_time() - started) * 1000)
+end
+
+local function invoke_view(view, name, ...)
   local method = view and view[name]
   if not method then return nil end
   if view.with_selection_state then
     return view:with_selection_state(method, view, ...)
   end
   return method(view, ...)
+end
+
+local function call_view(view, name, ...)
+  if not core.perf_frame_stats or not view or (name ~= "update" and name ~= "draw") then
+    return invoke_view(view, name, ...)
+  end
+  local key = "rootpanel_" .. tostring(view) .. "_" .. name
+  local started, scope = perf_begin(key)
+  local result = table.pack(invoke_view(view, name, ...))
+  perf_end(key, started, scope)
+  return table.unpack(result, 1, result.n)
 end
 
 local function point_in_view(view, x, y)
@@ -489,8 +515,11 @@ local function request_view_cursor(view, x, y)
 end
 
 function RootPanel:update()
+  local started, scope = perf_begin("rootpanel_update")
   self:update_app_overlay()
+  local layout_started, layout_scope = perf_begin("rootpanel_initial_layout")
   self:update_layout()
+  perf_end("rootpanel_initial_layout", layout_started, layout_scope)
   local current = {}
   for _, view in ipairs(self:pane_views()) do
     current[view] = true
@@ -512,6 +541,7 @@ function RootPanel:update()
       end
     end
   end
+  perf_end("rootpanel_update", started, scope)
 end
 
 function RootPanel:grab_mouse(button, view)
@@ -701,24 +731,30 @@ local function draw_split_dividers(node)
 end
 
 function RootPanel:draw()
+  local started, scope = perf_begin("rootpanel_core_draw")
   self:begin_keyboard_caret_frame()
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.background)
   local group = panes().visible_group()
   for _, view in ipairs(self:pane_views()) do call_view(view, "draw") end
   if group then draw_split_dividers(group.root) end
   for _, view in ipairs(self:shell_views()) do call_view(view, "draw") end
+  local overlay_started, overlay_scope = perf_begin("rootpanel_overlays_draw")
   self:draw_active_app_overlay()
   local navigation_history = package.loaded["core.navigation_history"]
   if navigation_history then navigation_history.draw_feedback(self) end
+  perf_end("rootpanel_overlays_draw", overlay_started, overlay_scope)
+  local deferred_started, deferred_scope = perf_begin("rootpanel_deferred_draw")
   while #self.deferred_draws > 0 do
     local item = table.remove(self.deferred_draws)
     item.fn(table.unpack(item, 1, #item))
   end
+  perf_end("rootpanel_deferred_draw", deferred_started, deferred_scope)
   self:draw_keyboard_caret()
   if core.cursor_change_req then
     system.set_cursor(core.cursor_change_req)
     core.cursor_change_req = nil
   end
+  perf_end("rootpanel_core_draw", started, scope)
 end
 
 return RootPanel
