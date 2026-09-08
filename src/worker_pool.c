@@ -1816,6 +1816,8 @@ static bool copy_reused_inline_captures(
     if (markdown_extension_capture_name(capture->name)) continue;
     uint32_t start = markdown_map_old_start_byte(capture->start_byte, edit);
     uint32_t end = markdown_map_old_end_byte(capture->end_byte, edit);
+    // Deleted captures can collapse onto the start of an unchanged inline tree.
+    if (end <= start) continue;
     if (!capture_in_reused_inline_tree(tree, start, end)) continue;
     if (max_captures > 0 && query_result->count >= max_captures) return true;
     AnvilTSQueryCapture mapped = {

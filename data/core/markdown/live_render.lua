@@ -516,14 +516,18 @@ local function semantic_formatting_spans(view, line_text, line)
       while advanced do
         advanced = false
         for _, marker in ipairs(markers) do
-          if marker.col1 == content_col1 then content_col1, advanced = marker.col2, true end
+          if marker.col1 == content_col1 and marker.col2 > content_col1 then
+            content_col1, advanced = marker.col2, true
+          end
         end
       end
       advanced = true
       while advanced do
         advanced = false
         for _, marker in ipairs(markers) do
-          if marker.col2 == content_col2 then content_col2, advanced = marker.col1, true end
+          if marker.col2 == content_col2 and marker.col1 < content_col2 then
+            content_col2, advanced = marker.col1, true
+          end
         end
       end
       spans[#spans + 1] = {
