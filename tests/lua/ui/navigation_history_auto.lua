@@ -69,6 +69,32 @@ test.describe("automatic Editor Navigation History", function()
     test.equal(view:get_selection_state().selections[1], 100)
   end)
 
+  test.it("moves Back past an edit checkpoint after scrolling", function()
+    local pane = panes.create { factory = make_editor }
+    local view = pane.current_view
+    view:set_selection_state { selections = { 50, 1, 50, 1 }, last_selection = 1 }
+    panes.record_location(pane, { kind = "edit" })
+    view.scroll.y, view.scroll.to.y = 500, 500
+    panes.back(pane)
+    test.equal(view:get_selection_state().selections[1], 1)
+  end)
+
+  test.it("reveals the restored cursor when saved scrolling is outside the document", function()
+    local pane = panes.create { factory = make_editor }
+    local view = pane.current_view
+    view.size.x, view.size.y = 800, 400
+    view:set_selection_state { selections = { 50, 1, 50, 1 }, last_selection = 1 }
+    view:update()
+    local state = view:get_navigation_state()
+    state.scroll.y = 1000000
+    view:set_navigation_state(state)
+    view:update()
+    local y = view:get_position_highlight_geometry(50, 1, false)
+    test.ok(y >= view.position.y)
+    test.ok(y + view:get_line_height() <= view.position.y + view.size.y)
+    test.equal(view:get_selection_state().selections[1], 50)
+  end)
+
   test.it("keeps the latest saved scroll when exact caret sequences repeat", function()
     local pane = panes.create { factory = make_editor }
     local view = pane.current_view

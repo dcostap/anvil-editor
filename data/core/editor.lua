@@ -63,6 +63,8 @@ function Editor:set_navigation_state(state)
     self.scroll.x, self.scroll.to.x = state.scroll.x or 0, state.scroll.x or 0
     self.scroll.y, self.scroll.to.y = state.scroll.y or 0, state.scroll.y or 0
   end
+  -- Validate after layout, even when the restored selection did not change.
+  self.needs_initial_scroll_validation = true
 end
 
 function Editor:duplicate()

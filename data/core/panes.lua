@@ -86,6 +86,8 @@ end
 
 local function navigation_state_key(view, state)
   if state == nil then return tostring(view) .. ":nil" end
+  -- Text locations use selections as identity; scrolling is only a restore hint.
+  if state.selection_state then state = state.selection_state end
   return tostring(view) .. ":" .. common.serialize(state, { sort = true })
 end
 
