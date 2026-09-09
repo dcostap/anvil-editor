@@ -5889,9 +5889,12 @@ function TextView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
   end
 
   local right_padding = math.max(style.padding.x, scroll_w or 0)
+  -- Reserve viewport space only when horizontal scrolling needs it.
+  -- Empty space at scroll zero is not document content.
   require_unwrapped_horizontal_width(self, math.max(
     xsup,
-    next_scroll_x + self.size.x - fixed_gutter_right - right_padding
+    next_scroll_x > 0
+      and next_scroll_x + self.size.x - fixed_gutter_right - right_padding or 0
   ))
   self.scroll.to.x = next_scroll_x
 

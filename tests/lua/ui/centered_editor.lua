@@ -124,6 +124,28 @@ test.describe("centered editor", function()
     test.ok(col2 > lane_col2, "expected visible-column estimation to include the right-side drawing area")
   end)
 
+  test.it("keeps the editing lane stable when typing on a short line", function(context)
+    local view, buffer = open_editor(context, string.rep("W", 50) .. "\nshort\n")
+    view.wrapping_enabled = false
+    view.wrapped_settings = nil
+    view:get_h_scrollable_size()
+    test.ok(wait_until(function()
+      view:get_h_scrollable_size()
+      return not view:is_horizontal_extent_scan_pending()
+    end, 2))
+    local before = centered_editor.get_lane_rect(view)
+    buffer:set_selection(2, 6)
+    buffer:text_input("x")
+    view:scroll_to_make_visible(2, 7)
+    test.equal(centered_editor.get_lane_rect(view), before,
+      "typing must not expand the lane while width measurement is pending")
+    test.ok(wait_until(function()
+      view:get_h_scrollable_size()
+      return not view:is_horizontal_extent_scan_pending()
+    end, 2))
+    test.equal(centered_editor.get_lane_rect(view), before)
+  end)
+
   test.it("reduces unwrapped centering to fit the widest Buffer line", function(context)
     local text = string.rep("W", 50)
     local view = open_editor(context, text .. "\nshort\n")
