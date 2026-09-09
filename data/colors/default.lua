@@ -155,6 +155,7 @@ style.markdown_live_task_unchecked = style.dim
 style.markdown_live_task_completed_text = style.dim
 style.markdown_live_task_background = style.background
 style.markdown_live_task_checkmark = style.background
+style.markdown_live_task_hover = { style.accent[1], style.accent[2], style.accent[3], 64 }
 style.markdown_live_rule = style.dim
 style.markdown_live_tag = style.accent
 style.markdown_live_reference_definition = style.dim

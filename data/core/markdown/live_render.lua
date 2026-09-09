@@ -2906,7 +2906,7 @@ local function task_checkbox_widget(
         renderer.draw_rounded_rect(
           box_x - hover_padding, box_y - hover_padding,
           box_size + hover_padding * 2, box_size + hover_padding * 2,
-          radius + hover_padding, style.interactive_hover_overlay
+          radius + hover_padding, style.markdown_live_task_hover
         )
         if not is_checked then
           checkbox_color = style.markdown_live_task_checked
@@ -2927,6 +2927,13 @@ local function task_checkbox_widget(
           inner_size, inner_size, math.max(0, radius - border),
           style.markdown_live_task_background
         )
+        if fragment.hovered then
+          renderer.draw_rounded_rect(
+            box_x + border, box_y + border,
+            inner_size, inner_size, math.max(0, radius - border),
+            style.markdown_live_task_hover
+          )
+        end
       end
     end,
   }
@@ -3160,7 +3167,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       local body_font = markdown_live_body_font(view)
       local checkmark_font = markdown_live_scaled_font(
         view, style.prose_strong_font,
-        math.max(1, math.floor(body_font:get_size() * 0.78))
+        math.max(1, math.floor(body_font:get_size() * 0.88))
       )
       local row_height = markdown_live_body_line_height(view)
       local checked = task and attributes.task_checked ~= nil
@@ -3172,7 +3179,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       local task_raw = task and line_text:sub(task.col1, task.col2 - 1)
       local task_content_col = task and list_item_content_col(line_text, marker, task)
       local list_control_size = math.max(
-        math.floor(SCALE * 10), math.floor(body_font:get_height() * 0.72)
+        math.floor(SCALE * 12), math.floor(body_font:get_height() * 0.84)
       )
       local box_size = task and list_control_size
       local task_source_width = task and math.max(
@@ -3887,7 +3894,7 @@ local function pending_list_marker_render(view, previous, current_text)
   )
   local marker_control_width = math.max(
     body_font:get_width("-"), math.max(
-      math.floor(SCALE * 10), math.floor(body_font:get_height() * 0.72)
+      math.floor(SCALE * 12), math.floor(body_font:get_height() * 0.84)
     )
   )
   marker.width = kind == "ordered"
@@ -3913,7 +3920,7 @@ local function pending_list_marker_render(view, previous, current_text)
     marker_control_width = math.max(body_font:get_width("-"), box_size)
     local checkmark_font = markdown_live_scaled_font(
       view, style.prose_strong_font,
-      math.max(1, math.floor(body_font:get_size() * 0.78))
+      math.max(1, math.floor(body_font:get_size() * 0.88))
     )
     local widget = task_checkbox_widget(
       marker.width, markdown_live_body_line_height(view), box_size,
