@@ -1485,8 +1485,13 @@ local function append_span(out, lines, line1, col1, line2, col2)
     return
   end
   append_text_linewise(out, lines[line1]:sub(col1))
-  for line = line1 + 1, line2 - 1 do
-    append_text_linewise(out, lines[line])
+  if line2 > line1 + 1 then
+    local at = #out
+    for line = line1 + 1, line2 - 1 do
+      out[at] = lines[line]
+      at = at + 1
+    end
+    out[at] = ""
   end
   append_text_linewise(out, lines[line2]:sub(1, col2 - 1))
 end
@@ -1494,8 +1499,13 @@ end
 local function append_span_to_end(out, lines, line, col)
   if line > #lines then return end
   append_text_linewise(out, lines[line]:sub(col))
-  for i = line + 1, #lines do
-    append_text_linewise(out, lines[i])
+  if line < #lines then
+    -- Unchanged lines already have the correct boundaries. Copy references only.
+    local at = #out
+    for i = line + 1, #lines do
+      out[at] = lines[i]
+      at = at + 1
+    end
   end
 end
 
@@ -1506,8 +1516,8 @@ local function finalize_lines(out)
 end
 
 -- Locate positions in the edited text without constructing that text.
-local function edit_position_map(old_lines, edits)
-  local starts, total = line_starts_for(old_lines)
+local function edit_position_map(old_lines, edits, starts, total)
+  if not starts then starts, total = line_starts_for(old_lines) end
   local spans, delta = {}, 0
   local old_line, old_col, new_line, new_col = 1, 1, 1, 1
   local function translate_position(line, col, from_line, from_col, to_line, to_col)
@@ -1574,7 +1584,7 @@ function Buffer:apply_edits(edits, opts)
   local time = opts.time or system.get_time()
   local owner_id = opts.owner_id or current_selection_owner_id(self)
   local old_lines = self.lines
-  local old_starts = line_starts_for(old_lines)
+  local old_starts, old_total = line_starts_for(old_lines)
   local old_selections = copy_array(self.selections)
   local old_last_selection = self.last_selection or 1
   local normalized = {}
@@ -1661,14 +1671,14 @@ function Buffer:apply_edits(edits, opts)
   end
   append_span_to_end(out, old_lines, cursor_line, cursor_col)
   local new_lines = finalize_lines(out)
-  local new_starts, new_total = line_starts_for(new_lines)
+  local position, map_position = edit_position_map(old_lines, normalized, old_starts, old_total)
 
   local delta = 0
   for _, edit in ipairs(normalized) do
     local new_start = edit.start_offset + delta
     local new_end = new_start + #edit.text
-    local il1, ic1 = offset_to_position(new_lines, new_starts, new_total, new_start)
-    local il2, ic2 = offset_to_position(new_lines, new_starts, new_total, new_end)
+    local il1, ic1 = position(new_start)
+    local il2, ic2 = position(new_end)
     transaction.inverse_edits[#transaction.inverse_edits + 1] = {
       line1 = il1, col1 = ic1, line2 = il2, col2 = ic2, text = edit.old_text,
     }
@@ -1685,25 +1695,6 @@ function Buffer:apply_edits(edits, opts)
   end
 
   self.lines = new_lines
-
-  local function map_position(line, col, affinity)
-    line, col = sanitize_position_in_lines(old_lines, line, col)
-    local pos = position_to_offset(old_starts, line, col)
-    local map_delta = 0
-    for _, edit in ipairs(normalized) do
-      if pos < edit.start_offset then
-        break
-      elseif edit.start_offset == edit.end_offset and pos == edit.start_offset then
-        if affinity == "after" then map_delta = map_delta + #edit.text end
-        break
-      elseif pos <= edit.end_offset then
-        return offset_to_position(new_lines, new_starts, new_total, edit.start_offset + map_delta)
-      else
-        map_delta = map_delta + #edit.text - (edit.end_offset - edit.start_offset)
-      end
-    end
-    return offset_to_position(new_lines, new_starts, new_total, pos + map_delta)
-  end
 
   local new_selections
   if opts.selections then
@@ -1773,7 +1764,13 @@ function Buffer:apply_edits(edits, opts)
     else
       self.highlighter:soft_reset()
     end
-    self:clear_cache(first_line, #self.lines - first_line)
+    if clean_suffix then
+      self:clear_cache(first_line, #self.lines - first_line)
+    else
+      for _, range in ipairs(transaction.changed_ranges) do
+        self:clear_cache(range.new_line1, range.new_line2 - range.new_line1)
+      end
+    end
     adjust_registered_selection_states_for_batch(self, map_position, transaction)
 
     if opts.record_undo ~= false then

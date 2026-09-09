@@ -190,4 +190,28 @@ test.describe("core.buffer batch edit primitive", function()
       2, 1, 2, 1, 2, 3, 2, 3, 2, 1, 2, 1,
     })
   end)
+
+  test.it("joins and splits adjacent ranges in one reversible transaction", function()
+    local buffer = Buffer()
+    set_text(buffer, "ab\ncd\nef\ngh\nij")
+    buffer:set_selection(5, 2, 1, 2)
+    local tx = buffer:apply_edits({
+      { line1 = 1, col1 = 2, line2 = 2, col2 = 2, text = "X\nY" },
+      { line1 = 2, col1 = 2, line2 = 3, col2 = 1, text = "" },
+      { line1 = 4, col1 = 2, line2 = 4, col2 = 3, text = "é\nZ\n" },
+    }, { merge_undo = false })
+    test.equal(text(buffer), "aX\nYef\ngé\nZ\n\nij\n")
+    test.same(buffer.selections, { 6, 2, 1, 2 })
+    test.same(tx.inverse_edits, {
+      { line1 = 1, col1 = 2, line2 = 2, col2 = 2, text = "b\nc" },
+      { line1 = 2, col1 = 2, line2 = 2, col2 = 2, text = "d\n" },
+      { line1 = 3, col1 = 2, line2 = 5, col2 = 1, text = "h" },
+    })
+    buffer:undo()
+    test.equal(text(buffer), "ab\ncd\nef\ngh\nij\n")
+    test.same(buffer.selections, { 5, 2, 1, 2 })
+    buffer:redo()
+    test.equal(text(buffer), "aX\nYef\ngé\nZ\n\nij\n")
+    test.same(buffer.selections, { 6, 2, 1, 2 })
+  end)
 end)
