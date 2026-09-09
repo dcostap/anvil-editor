@@ -311,7 +311,7 @@ style.markdown_live_code_background = style.background2
 style.markdown_live_code_header = style.dim
 style.markdown_live_highlight_bg = c("fff1b8")
 style.markdown_live_quote_bar = style.accent
-style.markdown_live_quote_background = { 0, 0, 0, 26 }
+style.markdown_live_quote_background = { 0, 0, 0, 13 }
 style.markdown_live_callout_palette = {
   note     = { accent = c("2878c8"), background = c("eaf3fc") },
   abstract = { accent = c("16869a"), background = c("e7f6f8") },
