@@ -531,15 +531,14 @@ function DiffView:new(a, b, compare_type, names)
   self.mouse_router = MouseRouter(self, function(owner, x, y)
     return owner:mouse_side_at(x, y)
   end)
-  -- IntelliJ-style Diff Views put both line-number lanes in the center so the
-  -- compared text starts at the outer edges instead of wasting two gutters.
+  -- Both line-number lanes sit in the center instead of the outer gutters.
   self.buffer_view_a.show_line_numbers = false
   self.buffer_view_b.show_line_numbers = false
   -- Current Line Highlights cover the Diff View's change colors. The caret
   -- already identifies its row on each synchronized Diff Side.
   self.buffer_view_a.show_current_line_highlight = false
   self.buffer_view_b.show_current_line_highlight = false
-  self.buffer_view_a.gutter_padding = 0
+  self.buffer_view_a.gutter_padding = 4 * SCALE
   self.buffer_view_b.gutter_padding = 0
   self.buffer_view_a.suppress_gitdiff_gutter = true
   self.buffer_view_b.suppress_gitdiff_gutter = true
