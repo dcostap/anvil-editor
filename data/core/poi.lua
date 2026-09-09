@@ -335,34 +335,34 @@ local function active_view_has_activatable_poi(...)
 end
 
 command.add(nil, {
-  ["core:show_remote_point_of_interest_source"] = function()
+  ["core:show_remote_point_of_interest_source"] = command.palette(function()
     local view = M.get_remote_source()
     local owner = panes.owner_for_view(view)
     if not owner then return navigation_feedback.none("Remote POI Source") end
     panes.present(owner, { pane = panes.pane_for_view(owner) })
     if owner.focus_surface_target then owner:focus_surface_target(view) end
-  end,
-  ["core:previous_remote_point_of_interest"] = function()
+  end),
+  ["core:previous_remote_point_of_interest"] = command.palette(function()
     M.navigate_remote(-1)
-  end,
-  ["core:next_remote_point_of_interest"] = function()
+  end),
+  ["core:next_remote_point_of_interest"] = command.palette(function()
     M.navigate_remote(1)
-  end,
-  ["core:previous_point_of_interest"] = function()
+  end),
+  ["core:previous_point_of_interest"] = command.palette(function()
     M.navigate(core.active_view, -1)
-  end,
-  ["core:next_point_of_interest"] = function()
+  end),
+  ["core:next_point_of_interest"] = command.palette(function()
     M.navigate(core.active_view, 1)
-  end,
+  end),
 })
 
 command.add(function()
   local view = provider_view(core.active_view)
   return view and view.remote_poi_source == true, view
 end, {
-  ["core:use_remote_point_of_interest_source"] = function(view)
+  ["core:use_remote_point_of_interest_source"] = command.palette(function(view)
     M.set_remote_source(view, { from_start = false })
-  end,
+  end),
 })
 
 command.add(active_view_has_activatable_poi, {

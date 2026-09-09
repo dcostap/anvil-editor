@@ -27,6 +27,19 @@ local function make_editor(text)
 end
 
 test.describe("Point of Interest navigation", function()
+  test.it("exposes POI navigation commands in the Command Palette", function()
+    for _, name in ipairs({
+      "core:previous_point_of_interest",
+      "core:next_point_of_interest",
+      "core:previous_remote_point_of_interest",
+      "core:next_remote_point_of_interest",
+      "core:show_remote_point_of_interest_source",
+      "core:use_remote_point_of_interest_source",
+    }) do
+      test.equal(command.get_metadata(name).palette, true)
+    end
+  end)
+
   test.before_each(function(context)
     context.previous_active_view = core.active_view
   end)
