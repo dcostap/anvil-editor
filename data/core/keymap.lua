@@ -221,6 +221,13 @@ function keymap.on_key_pressed(k, ...)
   else
     local stroke = key_to_stroke(k)
     local commands, performed = keymap.map[stroke], false
+    local trace_shortcut = keymap.modkeys.ctrl or keymap.modkeys.alt
+      or keymap.modkeys.altgr or k == "," or k == "."
+    if trace_shortcut then
+      local names = {}
+      for _, cmd in ipairs(commands or {}) do names[#names + 1] = tostring(cmd) end
+      core.log_quiet("Shortcut lookup: stroke=%q commands=[%s]", stroke, table.concat(names, ", "))
+    end
     if commands then
       for _, cmd in ipairs(commands) do
         if type(cmd) == "function" then
@@ -232,6 +239,9 @@ function keymap.on_key_pressed(k, ...)
           end
         else
           performed = command.perform(cmd, ...)
+        end
+        if trace_shortcut then
+          core.log_quiet("Shortcut result: stroke=%q command=%s performed=%s", stroke, tostring(cmd), tostring(performed))
         end
         if performed then break end
       end

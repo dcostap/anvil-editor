@@ -2145,6 +2145,25 @@ function core.on_event(type, ...)
   local active = core.active_view
   local active_type = active and active.type_name
   local fuzzy_input_debug = active_type == "plugins.fuzzy_searcher"
+  local trace_shortcut = false
+  if type == "keypressed" or type == "keyreleased" then
+    local key, event = ...
+    event = event or {}
+    trace_shortcut = key == "," or key == "."
+      or key:find("ctrl", 1, true) ~= nil or key:find("alt", 1, true) ~= nil
+      or event.ctrl or event.alt or event.altgr
+      or keymap.modkeys.ctrl or keymap.modkeys.alt or keymap.modkeys.altgr
+    if trace_shortcut then
+      core.log_quiet(
+        "Shortcut input: event=%s key=%q keycode=%s scancode=%s native_modifiers=%s ctrl=%s alt=%s altgr=%s shift=%s repeat=%s lua_ctrl=%s lua_alt=%s lua_altgr=%s lua_shift=%s active=%s ime=%s",
+        type, key, tostring(event.keycode), tostring(event.scancode),
+        tostring(event.modifiers), tostring(event.ctrl), tostring(event.alt),
+        tostring(event.altgr), tostring(event.shift), tostring(event["repeat"]),
+        tostring(keymap.modkeys.ctrl), tostring(keymap.modkeys.alt),
+        tostring(keymap.modkeys.altgr), tostring(keymap.modkeys.shift),
+        tostring(active_type), tostring(ime.editing))
+    end
+  end
   if type == "textinput" then
     if fuzzy_input_debug then
       local text = (...)
@@ -2163,11 +2182,15 @@ function core.on_event(type, ...)
     -- In some cases during IME composition input is still sent to us
     -- so we just ignore it.
     if ime.editing then
+      if trace_shortcut then core.log_quiet("Shortcut route: blocked by IME") end
       core.current_event_context = nil
       return false
     end
     local key, event = ...
     local modal, action = dispatch_modal_input("key_pressed", key, event)
+    if trace_shortcut then
+      core.log_quiet("Shortcut route: modal=%s action=%s", tostring(not not modal), tostring(action))
+    end
     if modal and action ~= "keymap" then
       if action == "target" then core.root_panel:on_key_pressed(key, event) end
       -- SDL emits printable text separately through textinput only when the
@@ -2181,11 +2204,17 @@ function core.on_event(type, ...)
         or key == "left windows" or key == "right windows"
       if not (event and event.altgr) or modifier_key then
         did_keymap = keymap.on_key_pressed(...)
+      elseif trace_shortcut then
+        core.log_quiet("Shortcut route: keymap skipped for AltGr")
       end
       if not did_keymap then
         did_keymap = core.root_panel:on_key_pressed(...) == true
+        if trace_shortcut then
+          core.log_quiet("Shortcut route: root_panel handled=%s", tostring(did_keymap))
+        end
       end
     end
+    if trace_shortcut then core.log_quiet("Shortcut route: handled=%s", tostring(did_keymap)) end
   elseif type == "keyreleased" then
     keymap.on_key_released(...)
     local modal = dispatch_modal_input("key_released", ...)
