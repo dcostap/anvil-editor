@@ -2319,8 +2319,6 @@ end, {
 })
 
 keymap.add({
-  ["ctrl+pageup"] = "core:previous_point_of_interest",
-  ["ctrl+pagedown"] = "core:next_point_of_interest",
   ["ctrl+r"] = "diff:toggle_folding",
   ["ctrl+return"] = "diff:open_file_at_caret",
   ["ctrl+keypad enter"] = "diff:open_file_at_caret",

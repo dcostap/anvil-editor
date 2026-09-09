@@ -380,8 +380,6 @@ command.add(active_view_has_activatable_poi, {
 })
 
 keymap.add({
-  ["ctrl+pageup"] = "core:previous_point_of_interest",
-  ["ctrl+pagedown"] = "core:next_point_of_interest",
   ["alt+r"] = "core:activate_point_of_interest",
   ["alt+shift+r"] = "core:activate_point_of_interest_alternate",
 })
