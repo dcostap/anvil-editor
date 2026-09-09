@@ -1128,7 +1128,7 @@ function GitView:detail_commit_for_tab(tab)
     commit = log_tab.commits and log_tab.commits[log_tab.selected_commit]
     if log_tab.selected_commit_hash and (not commit or commit.hash ~= log_tab.selected_commit_hash) then return nil end
   end
-  local key = commit and (commit.kind == "working_tree" and "WORKING_TREE" or commit.hash)
+  local key = commit and (commit.local_scope or (commit.kind == "working_tree" and "WORKING_TREE" or commit.hash))
   local collapsed = key and self.model.details_tree_collapsed and self.model.details_tree_collapsed[key]
   if collapsed then commit.details_tree_collapsed = collapsed end
   return commit
@@ -1157,7 +1157,7 @@ function GitView:toggle_details_tree_folder(view, line)
   if not (commit and row and row.type == "dir" and view:toggle_path_tree_folder(line)) then return false end
   refresh_view_changed_file_tree_cache(view)
   commit.details_tree_collapsed = view.path_tree.collapsed
-  local key = commit.kind == "working_tree" and "WORKING_TREE" or commit.hash
+  local key = commit.local_scope or (commit.kind == "working_tree" and "WORKING_TREE" or commit.hash)
   if key then
     self.model.details_tree_collapsed = self.model.details_tree_collapsed or {}
     self.model.details_tree_collapsed[key] = commit.details_tree_collapsed

@@ -29,7 +29,7 @@ function graph.layout(commits)
   end
 
   for row_index, commit in ipairs(commits or {}) do
-    local hash = commit.hash
+    local hash = commit.graph_id or commit.hash
     local node_lane = find_lane(lanes, hash)
     local incoming = node_lane ~= nil
     if not node_lane then

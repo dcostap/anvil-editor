@@ -533,8 +533,14 @@ A closable View showing revisions that affected any path in a selected set of Pr
 _Avoid_: multi-file log, combined log
 
 **Local Changes Revision**:
-The newest revision in a Git Log or File History View. It represents staged, unstaged, untracked, and unsaved Buffer changes.
+The newest revision in a File History View. It represents staged, unstaged, untracked, and unsaved Buffer changes.
 _Avoid_: dirty revision, working copy snapshot
+
+**Local Staged Changes**:
+A Git Log row showing changes prepared for the next commit, compared with HEAD.
+
+**Local Unstaged Changes**:
+A Git Log row showing current files and Buffers compared with staged content, including untracked files.
 
 **Historical Buffer**:
 A read-only Buffer containing file text from a past Git revision.

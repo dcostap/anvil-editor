@@ -11,6 +11,7 @@ local backend = {}
 
 backend.EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 backend.WORKING_TREE = "WORKING_TREE"
+backend.INDEX = "INDEX"
 backend.LOG_RECORD_SEPARATOR = "\30"
 backend.LOG_FIELD_SEPARATOR = "\0"
 backend.DEFAULT_LOG_LIMIT = 500
@@ -234,6 +235,20 @@ function backend.parse_status_z(output)
     end
   end
   return records
+end
+
+---Return the change on one side of a tracked, merged status record.
+function backend.status_column_change(record, column)
+  local code = record.xy:sub(column, column)
+  if code == " " then return nil end
+  local status = status_from_name_token(code)
+  local renamed = status == "renamed" or status == "copied"
+  return {
+    status = status,
+    path = record.path,
+    old_path = status ~= "added" and (renamed and record.old_path or record.path) or nil,
+    new_path = status ~= "deleted" and record.path or nil,
+  }
 end
 
 local function parse_parents(text)
@@ -576,8 +591,11 @@ local function build_diff_range_args(base, left, right, opts)
   opts = opts or {}
   local args = base
   if opts.ignore_whitespace then args[#args + 1] = "--ignore-all-space" end
-  if right == backend.WORKING_TREE then
+  if right == backend.INDEX then
+    args[#args + 1] = "--cached"
     if left and left ~= "" then args[#args + 1] = left end
+  elseif right == backend.WORKING_TREE then
+    if left and left ~= "" and left ~= backend.INDEX then args[#args + 1] = left end
   else
     if left and left ~= "" then args[#args + 1] = left end
     if right and right ~= "" then args[#args + 1] = right end
@@ -672,7 +690,8 @@ function backend.file_at(repo, rev, relpath, opts, callback)
     if callback then callback(text, err) end
     return nil
   end
-  return backend.run_git(repo, { "show", tostring(rev) .. ":" .. git_arg_path(relpath) }, opts, function(result, err)
+  local prefix = rev == backend.INDEX and "" or tostring(rev)
+  return backend.run_git(repo, { "show", prefix .. ":" .. git_arg_path(relpath) }, opts, function(result, err)
     if not result then
       if callback then callback(nil, err) end
       return

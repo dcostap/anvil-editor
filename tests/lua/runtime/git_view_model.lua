@@ -38,6 +38,7 @@ local function fake_backend(status_output, log_output)
     parse_status_z = real_backend.parse_status_z,
     parse_log_page = real_backend.parse_log_page,
     WORKING_TREE = real_backend.WORKING_TREE,
+    INDEX = real_backend.INDEX,
     EMPTY_TREE = real_backend.EMPTY_TREE,
     diff_endpoint_for_commit = real_backend.diff_endpoint_for_commit,
     changed_files = function(repo, left, right, opts, callback)
@@ -97,7 +98,7 @@ test.describe("plugins.git.model", function()
     test.equal(tab.closable, false)
   end)
 
-  test.test("adds Local Changes above HEAD when the repository has changes", function()
+  test.test("adds Local Unstaged Changes above HEAD when the repository has changes", function()
     local status = table.concat({ " M src/app.lua", "" }, "\0")
     local backend = fake_backend(status, log_output())
     backend.changed_file_stats = function(repo, left, right, opts, callback)
@@ -112,7 +113,7 @@ test.describe("plugins.git.model", function()
     local commits = model:log_tab().commits
     test.equal(#commits, 2)
     test.equal(commits[1].kind, "working_tree")
-    test.equal(commits[1].subject, "Local Changes")
+    test.equal(commits[1].subject, "Local Unstaged Changes")
     test.equal(commits[1].hash, nil)
     test.equal(commits[1].parents[1], "abc123")
     test.equal(commits[1].changed_files[1].path, "src/app.lua")
@@ -125,7 +126,7 @@ test.describe("plugins.git.model", function()
     test.equal(model:selected_commit().kind, "working_tree")
 
     local diff = model:open_selected_commit_diff()
-    test.equal(diff.left, "HEAD")
+    test.equal(diff.left, real_backend.INDEX)
     test.equal(diff.right, real_backend.WORKING_TREE)
   end)
 

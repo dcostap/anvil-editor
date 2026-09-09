@@ -83,6 +83,7 @@ local function lightweight_commit(commit)
   if type(commit) ~= "table" then return nil end
   return {
     kind = commit.kind,
+    local_scope = commit.local_scope,
     hash = commit.hash,
     short_hash = commit.short_hash,
     subject = commit.subject,
@@ -114,6 +115,16 @@ local function commit_index_by_hash(commits, hash)
 end
 
 local function apply_commit_anchor(tab)
+  if tab and tab.selected_local_scope then
+    for index, commit in ipairs(tab.commits or {}) do
+      if commit.local_scope == tab.selected_local_scope then
+        tab.selected_commit = index
+        return
+      end
+    end
+    tab.selected_local_scope = nil
+    tab.selected_commit = 1
+  end
   if not tab or not tab.selected_commit_hash then return end
   local index = commit_index_by_hash(tab.commits, tab.selected_commit_hash)
   if index then
@@ -147,6 +158,8 @@ function Model:get_state()
         kind = "log",
         selected_commit = tab.selected_commit,
         selected_commit_hash = selected_commit_hash(tab),
+        selected_local_scope = tab.selected_local_scope
+          or (tab.commits[tab.selected_commit] or {}).local_scope,
       }
     elseif tab.kind == "commit_diff" then
       local selected_file = tab.changed_files and tab.changed_files[tab.selected_file]
@@ -200,6 +213,7 @@ function Model:apply_state(state)
     if type(saved) == "table" and saved.kind == "log" then
       self.tabs[1].selected_commit = tonumber(saved.selected_commit) or 1
       self.tabs[1].selected_commit_hash = saved.selected_commit_hash
+      self.tabs[1].selected_local_scope = saved.selected_local_scope
     elseif type(saved) == "table" and saved.kind == "commit_diff" and saved.left and saved.right then
       self.tabs[#self.tabs + 1] = {
         id = saved.id or diff_tab_id(self.repo, saved.left, saved.right),
@@ -289,6 +303,7 @@ function Model:select_log_index(index, callback)
   index = math.max(1, math.min(#tab.commits, tonumber(index) or 1))
   tab.selected_commit = index
   local commit = tab.commits[index]
+  tab.selected_local_scope = commit and commit.local_scope
   tab.selected_commit_hash = commit and commit.kind ~= "working_tree" and commit.hash or nil
   self:load_commit_changed_files(commit, callback)
   return tab.commits[index]
@@ -344,6 +359,7 @@ local function log_limit()
 end
 
 local function short_rev(rev)
+  if rev == backend_default.INDEX then return "staged" end
   if rev == backend_default.WORKING_TREE then return "working" end
   if rev == backend_default.EMPTY_TREE then return "empty" end
   return tostring(rev or ""):sub(1, 8)
@@ -351,7 +367,11 @@ end
 
 function diff_tab_id(repo, left, right, scope)
   if right == backend_default.WORKING_TREE then
-    return table.concat({ "diff", repo and repo.root or "", "working_tree", scope or "" }, "\0")
+    local state = left == backend_default.INDEX and "unstaged" or "working_tree"
+    return table.concat({ "diff", repo and repo.root or "", state, scope or "" }, "\0")
+  end
+  if right == backend_default.INDEX then
+    return table.concat({ "diff", repo and repo.root or "", "staged", scope or "" }, "\0")
   end
   return table.concat({
     "diff", repo and repo.root or "", tostring(left or ""), tostring(right or ""), scope or "",
@@ -376,6 +396,7 @@ function history_tab_title(relpath, context)
 end
 
 function diff_tab_title(commit, left, right)
+  if commit and commit.local_scope then return "Diff " .. commit.subject end
   if commit and commit.kind == "working_tree" then return "Diff Working Tree" end
   return "Diff " .. short_rev(right) .. " ← " .. short_rev(left)
 end
@@ -520,7 +541,10 @@ function Model:open_commit_diff(commit, callback, opts)
 
   local endpoint
   if commit.kind == "working_tree" then
-    endpoint = { left = self:working_tree_left_revision(), right = self.backend.WORKING_TREE }
+    endpoint = {
+      left = commit.local_scope == "unstaged" and self.backend.INDEX or self:working_tree_left_revision(),
+      right = commit.local_scope == "staged" and self.backend.INDEX or self.backend.WORKING_TREE,
+    }
   else
     endpoint = self.backend.diff_endpoint_for_commit(commit)
   end
@@ -1570,9 +1594,10 @@ end
 
 function Model:sync_working_tree_diff_tabs()
   for _, tab in ipairs(self.tabs) do
-    if tab.kind == "commit_diff" and tab.right == self.backend.WORKING_TREE then
+    if tab.kind == "commit_diff"
+        and (tab.right == self.backend.WORKING_TREE or tab.right == self.backend.INDEX) then
       tab.reload_after_refresh = nil
-      local new_left = self:working_tree_left_revision()
+      local new_left = tab.left == self.backend.INDEX and self.backend.INDEX or self:working_tree_left_revision()
       tab.left = new_left
       tab.id = diff_tab_id(self.repo, tab.left, tab.right)
       tab.title = diff_tab_title(tab.commit, tab.left, tab.right)
@@ -1605,17 +1630,21 @@ function Model:_finish_refresh(generation, total_commits, log_page, local_change
   if tab.total_commits == nil and log_page and not log_page.has_more then
     tab.total_commits = #tab.commits
   end
-  if local_changes and #local_changes > 0 then
-    local head = tab.commits[1]
-    table.insert(tab.commits, 1, {
-      kind = "working_tree",
-      short_hash = "",
-      subject = "Local Changes",
-      parents = head and head.hash and { head.hash } or {},
-      changed_files = local_changes,
-      changed_files_loaded = true,
-    })
-    tab.graph_revision = (tab.graph_revision or 0) + 1
+  for _, scope in ipairs { "staged", "unstaged" } do
+    local files = local_changes and local_changes[scope]
+    if files and #files > 0 then
+      local head = tab.commits[1]
+      local parent = head and (head.graph_id or head.hash)
+      table.insert(tab.commits, 1, {
+        kind = "working_tree", local_scope = scope, graph_id = scope,
+        short_hash = "",
+        subject = scope == "staged" and "Local Staged Changes" or "Local Unstaged Changes",
+        parents = parent and { parent } or {},
+        changed_files = files,
+        changed_files_loaded = true,
+      })
+      tab.graph_revision = (tab.graph_revision or 0) + 1
+    end
   end
   for _, commit in ipairs(tab.commits) do
     local retained = retained_commits[commit.hash]
@@ -1648,12 +1677,15 @@ end
 
 function Model:_start_refresh_jobs(repo, generation, callback)
   local load_changed_stats = type(self.backend.changed_file_stats) == "function"
-  local pending = (self.backend.commit_count and 3 or 2) + (load_changed_stats and 1 or 0)
-  local total_commits, log_page, local_changes, working_tree_stats, final_err
+  local pending = (self.backend.commit_count and 3 or 2) + (load_changed_stats and 2 or 0)
+  local total_commits, log_page, local_changes, final_err
+  local local_stats = {}
   local function done()
     pending = pending - 1
     if pending == 0 then
-      apply_changed_file_stats(local_changes, working_tree_stats)
+      for scope, records in pairs(local_changes or {}) do
+        apply_changed_file_stats(records, local_stats[scope])
+      end
       self:_finish_refresh(generation, total_commits, log_page, local_changes, final_err, callback)
     end
   end
@@ -1683,18 +1715,22 @@ function Model:_start_refresh_jobs(repo, generation, callback)
     if load_changed_stats then
       local head = log_page.commits and log_page.commits[1]
       local left = head and head.hash or self.backend.EMPTY_TREE
-      local stats_job, stats_done
-      stats_job = self.backend.changed_file_stats(repo, left, self.backend.WORKING_TREE, {}, function(stats, stats_err)
-        stats_done = true
-        self:_untrack_job(stats_job)
-        if generation ~= self.generation then return end
-        working_tree_stats = stats
-        if stats_err then
-          core.log_quiet("Git Log local-change statistics unavailable: %s", stats_err.message or stats_err.kind)
-        end
-        done()
-      end)
-      if not stats_done then self:_track_job(stats_job) end
+      for _, scope in ipairs { "staged", "unstaged" } do
+        local stats_job, stats_done
+        local from = scope == "staged" and left or self.backend.INDEX
+        local to = scope == "staged" and self.backend.INDEX or self.backend.WORKING_TREE
+        stats_job = self.backend.changed_file_stats(repo, from, to, {}, function(stats, stats_err)
+          stats_done = true
+          self:_untrack_job(stats_job)
+          if generation ~= self.generation then return end
+          local_stats[scope] = stats
+          if stats_err then
+            core.log_quiet("Git Log %s statistics unavailable: %s", scope, stats_err.message or stats_err.kind)
+          end
+          done()
+        end)
+        if not stats_done then self:_track_job(stats_job) end
+      end
     end
     done()
   end)
@@ -1709,21 +1745,33 @@ function Model:_start_refresh_jobs(repo, generation, callback)
       status_done = true
       self:_untrack_job(status_job)
       if generation ~= self.generation then return end
-      local_changes = {}
+      local_changes = { staged = {}, unstaged = {} }
       local seen = {}
       if result then
         for _, record in ipairs(self.backend.parse_status_z(result.stdout)) do
           if not untracked_directory_summary(record) then
             local path = changed_file_path(record)
-            if path and path ~= "" then seen[path] = true end
-            local_changes[#local_changes + 1] = record
+            if record.kind == "untracked" or record.kind == "unmerged" then
+              local_changes.unstaged[#local_changes.unstaged + 1] = record
+              if path then seen[path] = true end
+            elseif record.kind ~= "ignored" then
+              for column, scope in ipairs { "staged", "unstaged" } do
+                local change = backend_default.status_column_change(record, column)
+                if change then
+                  local_changes[scope][#local_changes[scope] + 1] = change
+                  if scope == "unstaged" then seen[path] = true end
+                end
+              end
+            end
           end
         end
       elseif err then
         if not final_err then final_err = err end
         core.log_quiet("Git Log local changes unavailable: %s", err.message or err.kind)
       end
-      add_dirty_buffer_records(repo, local_changes, seen)
+      add_dirty_buffer_records(repo, local_changes.unstaged, seen)
+      core.log_quiet("Git Log local changes: %d staged files, %d unstaged files",
+        #local_changes.staged, #local_changes.unstaged)
       done()
     end
   )
@@ -1795,6 +1843,8 @@ function Model:invalidate_diff_loads()
 end
 
 function Model:refresh_log(callback)
+  local selected = self:selected_commit()
+  if selected then self:log_tab().selected_local_scope = selected.local_scope end
   self:invalidate_history_loads()
   self:invalidate_diff_loads()
   self:cancel_jobs()
