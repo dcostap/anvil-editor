@@ -2867,6 +2867,29 @@ function FileTreeView:open_item(opts)
   return false
 end
 
+function FileTreeView:open_simple_created_file(opts)
+  opts = opts or {}
+  self:sync_meta()
+  local plan = self:plan_changes()
+  if not plan or #plan.creates ~= 1 or plan.creates[1].type ~= "file"
+      or #plan.copies > 0 or #plan.moves > 0 or #plan.trashes > 0
+      or #(plan.project_path_label_updates or {}) > 0
+      or #(plan.project_path_removals or {}) > 0 then
+    return nil
+  end
+
+  local operation = plan.creates[1]
+  if not self:apply_plan(plan) then return false end
+  local pane = panes.pane_for_view(self)
+  return core.open_file(operation.path, {
+    pane = pane,
+    placement = opts.placement or "current",
+    direction = opts.placement == "split" and "right" or nil,
+    focus = true,
+    reason = "filetree-create-open",
+  }) ~= nil
+end
+
 function FileTreeView:open_selected_right()
   self:sync_meta()
   local line = self.buffer:get_selection(true)
@@ -2908,6 +2931,10 @@ function FileTreeView:get_point_of_interest_at(line)
     col2 = math.max(2, #text + 1),
     text_bounds = true,
     activate = function(_, _, opts)
+      if entry.type == "file" then
+        local created = self:open_simple_created_file(opts)
+        if created ~= nil then return created end
+      end
       return self:open_item(opts)
     end,
   }
@@ -3110,6 +3137,7 @@ function FileTreeView:apply_plan(plan)
   for _, op in ipairs(plan.creates) do reveal_paths[#reveal_paths + 1] = op.path end
   self:refresh_preserving_selection_paths(true, reveal_paths, selection_path_map, selection_paths)
   if changed then core.log("File Tree: applied edits") else core.log("File Tree: nothing to apply") end
+  return changed
 end
 
 function FileTreeView:operation_lines(plan)

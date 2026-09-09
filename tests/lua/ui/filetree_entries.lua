@@ -134,6 +134,47 @@ test.describe("File Tree entry snapshots", function()
     test.equal(opened.opts.placement, "split")
   end)
 
+  test.it("creates and opens a single new file through Point of Interest Activation", function(context)
+    local root = setup_tree(context)
+    filetree.buffer:insert(1, 1, "created.txt\n")
+    filetree.buffer:set_selection(1, 1)
+    core.set_active_view(filetree)
+    context.original_open_file = core.open_file
+    local opened
+    core.open_file = function(path, opts)
+      opened = { path = path, opts = opts }
+      return {}
+    end
+
+    test.ok(command.perform("core:activate_point_of_interest"))
+
+    local created = root .. PATHSEP .. "created.txt"
+    local info = system.get_file_info(created)
+    test.not_nil(info, "expected the File Tree edit to create the file")
+    test.equal(info.type, "file")
+    test.ok(opened, "expected the created file to open")
+    test.ok(common.path_equals(opened.path, created))
+    test.equal(opened.opts.placement, "current")
+  end)
+
+  test.it("does not apply multiple File Tree edits through Point of Interest Activation", function(context)
+    local root = setup_tree(context)
+    filetree.buffer:insert(1, 1, "first.txt\nsecond.txt\n")
+    filetree.buffer:set_selection(1, 1)
+    core.set_active_view(filetree)
+    context.original_open_file = core.open_file
+    local opened
+    core.open_file = function(path, opts)
+      opened = { path = path, opts = opts }
+      return {}
+    end
+
+    command.perform("core:activate_point_of_interest")
+    test.ok(not system.get_file_info(root .. PATHSEP .. "first.txt"))
+    test.ok(not system.get_file_info(root .. PATHSEP .. "second.txt"))
+    test.equal(opened, nil)
+  end)
+
   test.it("selects a hovered file row with one click and opens it with two", function(context)
     local root = setup_tree(context)
     local entry = test.not_nil(find_entry("root.txt"))
