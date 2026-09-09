@@ -1738,56 +1738,11 @@ function LineWrapping.get_line_col_from_index_and_x(textview, idx, x)
     perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
     return line, target_col, soft_end and target_col == row_end_col
   end
-  local default_font = textview:get_font()
-  local last_i, last_w = col, 0
-  local token_start_col = 1
-  for _, type, text in buffer.highlighter:each_token(line) do
-    local token_end_col = token_start_col + #text
-    if token_end_col > col and token_start_col < row_end_col then
-      local scan_start_col = math.max(token_start_col, col)
-      local scan_end_col = math.min(token_end_col, row_end_col)
-      local scan_text = text
-      if scan_start_col > token_start_col or scan_end_col < token_end_col then
-        scan_text = text:sub(scan_start_col - token_start_col + 1, scan_end_col - token_start_col)
-      end
-      local i = scan_start_col
-      local font, w = style.syntax_fonts[type] or default_font, last_w
-      for char in common.utf8_chars(scan_text) do
-        if i >= row_end_col then
-          if xoffset >= x then
-            local target_col = xoffset - x > (w / 2) and last_i or row_end_col
-            perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
-            perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
-            return line, target_col, soft_end and target_col == row_end_col
-          end
-          perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
-          perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
-          return line, row_end_col, soft_end
-        end
-        if xoffset >= x then
-          perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
-          perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
-          return line, (xoffset - x > (w / 2) and last_i or i), false
-        end
-        w = font:get_width(char)
-        last_w = w
-        xoffset = xoffset + w
-        last_i = i
-        i = i + #char
-      end
-    end
-    if token_end_col >= row_end_col then break end
-    token_start_col = token_end_col
-  end
-  if xoffset >= x and last_w > 0 then
-    local target_col = xoffset - x > (last_w / 2) and last_i or row_end_col
-    perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
-    perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
-    return line, target_col, soft_end and target_col == row_end_col
-  end
+  local target_col = textview:get_plain_text_layout(line, col):col_at(x)
+  target_col = common.clamp(target_col, col, row_end_col)
   perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
   perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
-  return line, row_end_col, soft_end
+  return line, target_col, soft_end and target_col == row_end_col
 end
 
 function LineWrapping.get_idx_line_length(textview, idx)

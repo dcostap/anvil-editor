@@ -1,7 +1,6 @@
 local core = require "core"
 local linewrapping = require "core.linewrapping"
 local style = require "core.style"
-local tokenizer = require "core.tokenizer"
 
 local line_packets = {}
 
@@ -441,68 +440,16 @@ local function key_matches(
 end
 
 local function compile_syntax(
-  builder, view, line, tokens, first_idx, built_first, built_last
+  builder, view, line, first_idx, built_first, built_last
 )
-  local default_font = view:get_font()
   local text_y_offset = view:get_line_text_y_offset()
-  local begin_width = view.wrapped_line_offsets
-    and view.wrapped_line_offsets[line] or 0
   local line_height = view:get_line_height()
-  local _, indent_size = view.buffer:get_indent_info()
-  indent_size = indent_size or 2
-  local row_idx = built_first
-  local _, row_start_col = linewrapping.get_idx_line_col(view, row_idx)
-  local row_next_line, row_end_col = linewrapping.get_idx_line_col(view, row_idx + 1)
-  if row_next_line ~= line then row_end_col = #view.buffer.lines[line] end
-  local tx = row_start_col ~= 1 and begin_width or 0
-  local token_start_col = 1
-
-  local function advance_row()
-    row_idx = row_idx + 1
-    if row_idx > built_last then return false end
-    _, row_start_col = linewrapping.get_idx_line_col(view, row_idx)
-    row_next_line, row_end_col = linewrapping.get_idx_line_col(view, row_idx + 1)
-    if row_next_line ~= line then row_end_col = #view.buffer.lines[line] end
-    tx = row_start_col ~= 1 and begin_width or 0
-    return true
-  end
-
-  for _, token_type, text in tokenizer.each_token(tokens) do
-    if row_idx > built_last then break end
-    local token_end_col = token_start_col + #text
-    local color = style.syntax[token_type] or style.syntax.normal
-    local font = style.syntax_fonts[token_type] or default_font
-    while row_idx <= built_last and token_end_col > row_start_col do
-      if token_start_col >= row_end_col then
-        if not advance_row() then break end
-      else
-        local draw_start_col = math.max(token_start_col, row_start_col)
-        local draw_end_col = math.min(token_end_col, row_end_col)
-        local rendered = text:sub(
-          draw_start_col - token_start_col + 1,
-          draw_end_col - token_start_col
-        )
-        if rendered ~= "" then
-          tx = builder:add_text(
-            CONTENT,
-            row_idx - first_idx + 1,
-            font,
-            rendered,
-            tx,
-            text_y_offset + (row_idx - first_idx) * line_height,
-            color,
-            nil,
-            indent_size
-          )
-        end
-        if token_end_col >= row_end_col then
-          if not advance_row() then break end
-        else
-          break
-        end
-      end
-    end
-    token_start_col = token_end_col
+  for row_idx = built_first, built_last do
+    local _, col = linewrapping.get_idx_line_col(view, row_idx)
+    view:get_plain_text_layout(line, col):add_to_packet(
+      builder, CONTENT, row_idx - first_idx + 1,
+      text_y_offset + (row_idx - first_idx) * line_height
+    )
   end
 end
 
@@ -568,9 +515,6 @@ local function build_entry(view, line, screen_x, screen_y)
   perf_add("textview_line_packet_misses", 1)
   if existing then discard_entry(cache, line) end
 
-  local highlighter_line = view.buffer.highlighter:get_line(line)
-  local tokens = highlighter_line.tokens
-
   local started = system.get_time()
   local builder = renderer.display_packet.new()
   local context = {
@@ -594,7 +538,7 @@ local function build_entry(view, line, screen_x, screen_y)
       contributor.append_packet(builder, view, line, context)
     end
   end
-  compile_syntax(builder, view, line, tokens, first_idx, built_first, built_last)
+  compile_syntax(builder, view, line, first_idx, built_first, built_last)
   local packet = builder:seal()
   local entry = {
     key = key,

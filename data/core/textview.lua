@@ -14,7 +14,6 @@ local copy_feedback = require "core.copy_feedback"
 local Buffer = require "core.buffer"
 local View = require "core.view"
 
-local CACHE_LINE_LEN = 500
 local LINE_HINT_ELLIPSIS = "…"
 
 local IME_VIEW = nil
@@ -324,30 +323,6 @@ local ASCII_LIGATURE_SENSITIVE_PATTERN = "[=><!/*:.|&f%-]"
 local function ascii_ligature_sensitive_byte(byte)
   return byte ~= nil
     and string.char(byte):find(ASCII_LIGATURE_SENSITIVE_PATTERN) ~= nil
-end
-
-local function has_ligature_sensitive_ascii(text)
-  -- Keep this in sync with the renderer's text_needs_shaping() probes.
-  -- Known monospace cell bounds are not exact for these shaped runs.
-  return text:find(ASCII_LIGATURE_SENSITIVE_PATTERN) ~= nil
-end
-
-local function draw_text_known_advance(font, text, x, y, width, height, color, opts)
-  local bounds_x = math.floor(x)
-  local bounds_y = math.floor(y)
-  renderer.draw_text_known_bounds(
-    font, text, x, y,
-    bounds_x,
-    bounds_y,
-    math.max(1, math.ceil(x + width - bounds_x)),
-    math.max(1, math.ceil(y + height - bounds_y)),
-    color,
-    opts
-  )
-  -- The integer bounds conservatively describe the cached draw command; they
-  -- are not the text advance. Returning their rounded width accumulates drift
-  -- at every syntax-color boundary on fractional-width monospace fonts.
-  return x + width
 end
 
 local function get_fast_ascii_monospace_x_offset(self, line, col, line_text, font)
@@ -5398,6 +5373,20 @@ end
 ---@param line_end boolean? Whether this is the visual line end
 ---@param skip_render boolean? Measure source text without requesting a rendered line
 ---@return number offset Horizontal pixel offset
+function TextView:get_plain_text_layout(line, col, line_end)
+  local first, last, leading = 1, line_source_end(self.buffer.lines[line] or "") + 1, 0
+  if self.wrapped_settings then
+    local idx, _, count
+    idx, _, count, first = linewrapping.get_line_idx_col_count(self, line, col, line_end)
+    local next_line, next_col = linewrapping.get_idx_line_col(self, idx + 1)
+    if next_line == line then last = math.min(last, next_col) end
+    if first ~= 1 then leading = self.wrapped_line_offsets[line] or 0 end
+  end
+  return require("core.textview_text_layout").get(
+    self, line, first, last, leading, self.wrapped_settings ~= nil
+  )
+end
+
 function TextView:get_col_x_offset(line, col, line_end, skip_render)
   local render_line = not skip_render and self:get_line_render(line) or nil
   if render_line then
@@ -5417,103 +5406,10 @@ function TextView:get_col_x_offset(line, col, line_end, skip_render)
     end
     return rendered_offset
   end
-  if self.wrapped_settings then
-    local perf_active = core.perf_frame_stats ~= nil
-    local perf_start = perf_active and system.get_time()
-    if line_end == nil and self.__use_wrapped_caret_affinity then
-      line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
-    end
-    local _, _, _, scol = linewrapping.get_line_idx_col_count(self, line, col, line_end)
-    local xoffset, i = (scol ~= 1 and self.wrapped_line_offsets[line] or 0), 1
-    local default_font = self:get_font()
-    for _, type, text in self.buffer.highlighter:each_token(line) do
-      if i + #text >= scol then
-        if i < scol then
-          text = text:sub(scol - i + 1)
-          i = scol
-        end
-        if #text > col - i then
-          text = text:sub(1, math.max(0, col - i))
-        end
-        local font = style.syntax_fonts[type] or default_font
-        for char in common.utf8_chars(text) do
-          if i >= col then
-            perf_frame_add("textview_get_col_x_offset_wrapped_calls", 1)
-            perf_elapsed("textview_get_col_x_offset_wrapped_ms", perf_start)
-            return xoffset
-          end
-          xoffset = xoffset + font:get_width(char)
-          i = i + #char
-        end
-      else
-        i = i + #text
-      end
-    end
-    perf_frame_add("textview_get_col_x_offset_wrapped_calls", 1)
-    perf_elapsed("textview_get_col_x_offset_wrapped_ms", perf_start)
-    return xoffset
+  if line_end == nil and self.__use_wrapped_caret_affinity then
+    line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
   end
-  local column = 1
-  local xoffset = 0
-  local cache = self.buffer.cache.col_x
-  local line_text = self.buffer.lines[line]
-  local line_len = #line_text
-  if line_len > CACHE_LINE_LEN then
-    if cache[line] and cache[line][col] then
-      return cache[line][col]
-    elseif not cache[line] then
-      cache[line] = {}
-    elseif col > 1 then
-      for i=col-1, 1, -1 do
-        if cache[line][i] then
-          column = i
-          xoffset = cache[line][i]
-          break
-        end
-      end
-    end
-  end
-  local default_font = self:get_font()
-  local _, indent_size = self.buffer:get_indent_info()
-  default_font:set_tab_size(indent_size)
-  if line_len > CACHE_LINE_LEN and column == 1 then
-    local fast_x = get_fast_ascii_monospace_x_offset(self, line, col, line_text, default_font)
-    if fast_x then
-      if cache[line] then cache[line][col] = fast_x end
-      return fast_x
-    end
-  end
-  local scol = column > 1 and column or nil
-  for _, type, text in self.buffer.highlighter:each_render_token(line, scol) do
-    local font = style.syntax_fonts[type] or default_font
-    if font ~= default_font then font:set_tab_size(indent_size) end
-    local length = #text
-    if column + length <= col then
-      xoffset = xoffset + font:get_width(text, {tab_offset = xoffset})
-      column = column + length
-      if line_len > CACHE_LINE_LEN and cache[line] then
-        cache[line][column] = xoffset
-      end
-      if column >= col then
-        return xoffset
-      end
-    else
-      for char in common.utf8_chars(text) do
-        if column >= col then
-          return xoffset
-        end
-        xoffset = xoffset + font:get_width(char, {tab_offset = xoffset})
-        column = column + #char
-        if line_len > CACHE_LINE_LEN and cache[line] then
-          cache[line][column] = xoffset
-        end
-      end
-    end
-  end
-  if line_len > CACHE_LINE_LEN and cache[line] then
-    cache[line][column] = xoffset
-  end
-  return xoffset
+  return self:get_plain_text_layout(line, col, line_end):x_at(col)
 end
 
 
@@ -5530,61 +5426,7 @@ function TextView:get_x_offset_col(line, x)
     local _, target_col = linewrapping.get_line_col_from_index_and_x(self, idx, x)
     return target_col
   end
-  local line_text = self.buffer.lines[line]
-  local line_len = #line_text
-  local default_font = self:get_font()
-  local cell_width = get_fast_ascii_monospace_x_offset(
-    self, line, 2, line_text, default_font
-  )
-  if cell_width and cell_width > 0 then
-    local cell = math.max(0, x) / cell_width
-    local cell_index = math.floor(cell)
-    if cell - cell_index > 0.5 then cell_index = cell_index + 1 end
-    perf_frame_add("textview_get_x_offset_col_fast_ascii_calls", 1)
-    return common.clamp(cell_index + 1, 1, line_len)
-  end
-
-  -- we leverage the caching already present on col_x, this works on all lines,
-  -- but for the moment lets do it only on the cached lines and keep original
-  -- code logic intact
-  if line_len > CACHE_LINE_LEN then
-    local xo, pxo, last_col = 0, 0, 0
-    for col, _ in utf8extra.next, line_text do
-      pxo = xo
-      xo = self:get_col_x_offset(line, col)
-      if xo >= x or col >= line_len then
-        local w = xo - pxo
-        return (xo - x > w / 2) and last_col or col
-      end
-      last_col = col
-    end
-  end
-
-  local xoffset, i = 0, 1
-  local _, indent_size = self.buffer:get_indent_info()
-  default_font:set_tab_size(indent_size)
-  for _, type, text in self.buffer.highlighter:each_render_token(line) do
-    local font = style.syntax_fonts[type] or default_font
-    if font ~= default_font then font:set_tab_size(indent_size) end
-    local width = font:get_width(text, {tab_offset = xoffset})
-    -- Don't take the shortcut if the width matches x,
-    -- because we need last_i which should be calculated using utf-8.
-    if xoffset + width < x then
-      xoffset = xoffset + width
-      i = i + #text
-    else
-      for char in common.utf8_chars(text) do
-        local w = font:get_width(char, {tab_offset = xoffset})
-        if xoffset + w >= x then
-          return (x <= xoffset + (w / 2)) and i or i + #char
-        end
-        xoffset = xoffset + w
-        i = i + #char
-      end
-    end
-  end
-
-  return line_len
+  return self:get_plain_text_layout(line):col_at(x)
 end
 
 
@@ -6883,19 +6725,6 @@ function TextView:draw_line_hint(line, x, y)
   return tx, draw_x, width
 end
 
-local function fast_ascii_monospace_width(text, space_width, tab_width, tab_offset)
-  local x = tab_offset or 0
-  local start_x = x
-  for i = 1, #text do
-    if text:byte(i) == 9 then
-      x = (math.floor(x / tab_width) + 1) * tab_width
-    else
-      x = x + space_width
-    end
-  end
-  return x - start_x
-end
-
 local function draw_render_fragment_background(fragment, x, y, width, height, force)
   if fragment.background and (force or not fragment.background_under_selection) then
     renderer.draw_rect(x, y, width, height, fragment.background)
@@ -7376,492 +7205,29 @@ function TextView:draw_line_text(line, x, y)
     end
     return row_height
   end
-  local provider_text_color = self:decoration_text_color(line)
-  if provider_text_color then
-    local text_y_offset = self:get_line_text_y_offset()
-    local lh = self:get_line_height()
-    if self.wrapped_settings then
-      local first_idx, _, count = linewrapping.get_line_idx_col_count(self, line)
-      local visible_idx1 = math.max(first_idx, self.__wrapped_draw_first_idx or first_idx)
-      local visible_idx2 = math.min(first_idx + count - 1, self.__wrapped_draw_last_idx or (first_idx + count - 1))
-      for idx = visible_idx1, visible_idx2 do
-        local row_line, row_start_col = linewrapping.get_idx_line_col(self, idx)
-        if row_line == line then
-          local next_line, row_end_col = linewrapping.get_idx_line_col(self, idx + 1)
-          if next_line ~= line then row_end_col = #self.buffer.lines[line] end
-          local tx = x + (row_start_col ~= 1 and (self.wrapped_line_offsets[line] or 0) or 0)
-          renderer.draw_text(self:get_font(), self.buffer.lines[line]:sub(row_start_col, math.max(row_start_col, row_end_col - 1)), tx, y + text_y_offset + (idx - first_idx) * lh, provider_text_color)
-        end
-      end
-      return lh * count
-    end
-    renderer.draw_text(self:get_font(), self.buffer.lines[line], x, y + text_y_offset, provider_text_color)
-    return lh
+  if not self:decoration_text_color(line) then
+    local packet_height = line_packets.draw_content(self, line, x, y)
+    if packet_height then return packet_height end
   end
-  local packet_height = line_packets.draw_content(self, line, x, y)
-  if packet_height then return packet_height end
+  local text_y_offset = self:get_line_text_y_offset()
+  local lh = self:get_line_height()
   if self.wrapped_settings then
-    local wrapped_text_scope = perf_scope_begin("wrapped_text", true)
-    local perf_active = core.perf_frame_stats ~= nil
-    local perf_start = perf_active and system.get_time()
-    local perf_segments, perf_bytes, perf_known_bounds_segments = 0, 0, 0
-    local substring_ms, enqueue_known_ms, enqueue_measured_ms = 0, 0, 0
-    local substring_calls, enqueue_known_calls, enqueue_measured_calls = 0, 0, 0
-    local default_font = self:get_font()
-    local default_font_height = default_font:get_height()
-    local default_ascii_cell_width = default_font:get_width(" ")
-    local text_y_offset = self:get_line_text_y_offset()
-    local begin_width = self.wrapped_line_offsets[line]
-    local lh = self:get_line_height()
     local first_idx, _, count = linewrapping.get_line_idx_col_count(self, line)
-    local last_idx = first_idx + count - 1
     local visible_idx1 = math.max(first_idx, self.__wrapped_draw_first_idx or first_idx)
-    local visible_idx2 = math.min(last_idx, self.__wrapped_draw_last_idx or last_idx)
-    local drawn_rows = math.max(0, visible_idx2 - visible_idx1 + 1)
-    local can_use_known_bounds = renderer.draw_text_known_bounds ~= nil
-
-    local function draw_segment(font, text, sx, sy, color, uses_default_font)
-      if text == "" then return sx end
-      perf_segments = perf_segments + 1
-      perf_bytes = perf_bytes + #text
-      if can_use_known_bounds
-      and uses_default_font
-      and not text:find("[\t\128-\255]")
-      and not has_ligature_sensitive_ascii(text) then
-        perf_known_bounds_segments = perf_known_bounds_segments + 1
-        local width = #text * default_ascii_cell_width
-        local enqueue_start = perf_active and system.get_time()
-        local result = draw_text_known_advance(
-          font, text, sx, sy,
-          width,
-          default_font_height,
-          color
-        )
-        if enqueue_start then
-          enqueue_known_ms = enqueue_known_ms + (system.get_time() - enqueue_start) * 1000
-          enqueue_known_calls = enqueue_known_calls + 1
-        end
-        return result
-      end
-      local enqueue_start = perf_active and system.get_time()
-      local result = renderer.draw_text(font, text, sx, sy, color)
-      if enqueue_start then
-        enqueue_measured_ms = enqueue_measured_ms + (system.get_time() - enqueue_start) * 1000
-        enqueue_measured_calls = enqueue_measured_calls + 1
-      end
-      return result
+    local visible_idx2 = math.min(first_idx + count - 1, self.__wrapped_draw_last_idx or (first_idx + count - 1))
+    for idx = visible_idx1, visible_idx2 do
+      local _, col = linewrapping.get_idx_line_col(self, idx)
+      self:get_plain_text_layout(line, col):draw(
+        self, x, y + text_y_offset + (idx - first_idx) * lh
+      )
     end
-
-    local row_idx = visible_idx1
-    local _, row_start_col = linewrapping.get_idx_line_col(self, row_idx)
-    local row_next_line, row_end_col = linewrapping.get_idx_line_col(self, row_idx + 1)
-    if row_next_line ~= line then row_end_col = #self.buffer.lines[line] end
-    local tx = x + (row_start_col ~= 1 and begin_width or 0)
-    local ty = y + text_y_offset + (row_idx - first_idx) * lh
-    local token_start_col = 1
-
-    local function advance_row()
-      row_idx = row_idx + 1
-      if row_idx > visible_idx2 then return false end
-      _, row_start_col = linewrapping.get_idx_line_col(self, row_idx)
-      row_next_line, row_end_col = linewrapping.get_idx_line_col(self, row_idx + 1)
-      if row_next_line ~= line then row_end_col = #self.buffer.lines[line] end
-      tx = x + (row_start_col ~= 1 and begin_width or 0)
-      ty = y + text_y_offset + (row_idx - first_idx) * lh
-      return true
-    end
-
-    local token_loop_scope = perf_scope_begin("token_and_wrap_loop")
-    for _, type, text in self.buffer.highlighter:each_token(line) do
-      if row_idx > visible_idx2 then break end
-      local token_end_col = token_start_col + #text
-      local color = style.syntax[type] or style.syntax["normal"]
-      local syntax_font = style.syntax_fonts[type]
-      local font = syntax_font or default_font
-      while row_idx <= visible_idx2 and token_end_col > row_start_col do
-        if token_start_col >= row_end_col then
-          if not advance_row() then break end
-        else
-          local draw_start_col = math.max(token_start_col, row_start_col)
-          local draw_end_col = math.min(token_end_col, row_end_col)
-          local substring_start = perf_active and system.get_time()
-          local rendered_text = text:sub(draw_start_col - token_start_col + 1, draw_end_col - token_start_col)
-          if substring_start then
-            substring_ms = substring_ms + (system.get_time() - substring_start) * 1000
-            substring_calls = substring_calls + 1
-          end
-          tx = draw_segment(font, rendered_text, tx, ty, color, syntax_font == nil)
-          if token_end_col >= row_end_col then
-            if not advance_row() then break end
-          else
-            break
-          end
-        end
-      end
-      token_start_col = token_end_col
-    end
-    local scope_perf = token_loop_scope and package.loaded["core.perf"]
-    if scope_perf and scope_perf.scope_add_child then
-      scope_perf.scope_add_child(token_loop_scope, "substring", substring_ms, substring_calls)
-      scope_perf.scope_add_child(token_loop_scope, "enqueue_known_bounds", enqueue_known_ms, enqueue_known_calls)
-      scope_perf.scope_add_child(token_loop_scope, "enqueue_measured", enqueue_measured_ms, enqueue_measured_calls)
-    end
-    perf_scope_end(token_loop_scope)
-    perf_frame_add("linewrapping_draw_line_text_calls", 1)
-    perf_frame_add("linewrapping_draw_line_text_rows", drawn_rows)
-    perf_frame_add("linewrapping_draw_line_text_segments", perf_segments)
-    perf_frame_add("linewrapping_draw_line_text_bytes", perf_bytes)
-    perf_frame_add("linewrapping_draw_line_text_known_bounds_segments", perf_known_bounds_segments)
-    perf_elapsed("linewrapping_draw_line_text_ms", perf_start)
-    perf_scope_end(wrapped_text_scope)
     return lh * count
   end
 
   local stats = core.textview_frame_stats
   local text_start = stats and system.get_time()
-  local default_font = self:get_font()
-  local tx, ty = x, y + self:get_line_text_y_offset()
-  local last_token = nil
-  local get_line_start = stats and system.get_time()
-  local render_line = self.buffer.highlighter:get_render_line(line)
-  local tokens = render_line.tokens
-  if stats then stats.highlighter_get_line_ms = stats.highlighter_get_line_ms + (system.get_time() - get_line_start) * 1000 end
-  local syntax = style.syntax
-  local syntax_fonts = style.syntax_fonts
-  local normal_color = syntax.normal
-  local tokens_count = #tokens
-  if tokens_count > 0 and string.sub(tokens[tokens_count], -1) == "\n" then
-    last_token = tokens_count - 1
-  end
-  local _, indent_size = self.buffer:get_indent_info()
-  local token_loop_start = stats and system.get_time()
-  local line_start_tx = tx
-  local unwrapped_default_ascii_width = default_font:get_width(" ")
-  local unwrapped_tab_width = unwrapped_default_ascii_width * indent_size
-  local unwrapped_default_font_height = default_font:get_height()
-  local line_text = self.buffer.lines[line]
-  local line_len = #line_text
-  local draw_start_col = 1
-  local draw_end_col = line_len
-  if line_len > CACHE_LINE_LEN and self.scroll.x > 0 then
-    local col1, col2 = self:get_visible_cols_range(line, 512)
-    if col1 and col1 > 1 then
-      local visible_left = x + self.scroll.x
-      local target_x = visible_left - default_font:get_width("W") * 64
-      local has_syntax_font = false
-      for i = 1, tokens_count, 2 do
-        if syntax_fonts[tokens[i]] then
-          has_syntax_font = true
-          break
-        end
-      end
-      local can_fast_monospace_anchor = not has_syntax_font and not render_line.text:find("[\t\128-\255]")
-      local function col_tx(col)
-        if can_fast_monospace_anchor then
-          return x + (col - 1) * unwrapped_default_ascii_width
-        end
-        return x + self:get_col_x_offset(line, col)
-      end
-      local candidate_tx = col_tx(col1)
-      if candidate_tx > target_x then
-        local lo, hi = 1, col1 - 1
-        col1 = 1
-        candidate_tx = x
-        while lo <= hi do
-          local mid = math.floor((lo + hi) / 2)
-          local mid_tx = col_tx(mid)
-          if mid_tx <= target_x then
-            col1 = mid
-            candidate_tx = mid_tx
-            lo = mid + 1
-          else
-            hi = mid - 1
-          end
-        end
-      elseif candidate_tx < target_x - default_font:get_width("W") * 128 then
-        local lo, hi = col1 + 1, #self.buffer.lines[line]
-        while lo <= hi do
-          local mid = math.floor((lo + hi) / 2)
-          local mid_tx = col_tx(mid)
-          if mid_tx <= target_x then
-            col1 = mid
-            candidate_tx = mid_tx
-            lo = mid + 1
-          else
-            hi = mid - 1
-          end
-        end
-      end
-      if col1 > 1 then
-        draw_start_col = col1
-        tx = candidate_tx
-        local estimated_visible_cols = math.ceil((self.size.x + default_font:get_width("W") * 256) / math.max(1, unwrapped_default_ascii_width))
-        draw_end_col = math.min(line_len, math.max(col2 or 0, draw_start_col + estimated_visible_cols))
-      end
-    end
-  end
-
-  if
-    renderer.draw_text_known_bounds
-    and core.window
-    and (not package.loaded["core.test"] or self.__test_force_known_bounds)
-    and tokens_count == 2
-    and tokens[1] == "normal"
-    and not style.syntax_fonts.normal
-    and render_line.text:find("[\128-\255]") == nil
-    and not has_ligature_sensitive_ascii(render_line.text)
-  then
-    local text = tokens[2]
-    if text:sub(-1) == "\n" then text = text:sub(1, -2) end
-    if draw_start_col > 1 or draw_end_col < #text then
-      text = text:sub(draw_start_col, draw_end_col)
-    end
-    if text ~= "" then
-      local draw_text_start = stats and system.get_time()
-      local char_width = unwrapped_default_ascii_width
-      local tab_width = unwrapped_tab_width
-      local width = #text * char_width
-      local text_has_tabs = false
-
-      -- Cull text that extends past the right edge of the view.
-      -- Without this, very long unwrapped lines feed their entire text
-      -- (potentially 100KB+) through the GPU command buffer and per-glyph
-      -- iteration, making every redraw frame take hundreds of milliseconds.
-      local right_edge = self.position.x + self.size.x
-      if tx + width > right_edge then
-        local available = right_edge - tx
-        if available <= 0 then
-          if stats then
-            stats.tokens = stats.tokens + 1
-            stats.token_loop_ms = stats.token_loop_ms + (system.get_time() - token_loop_start) * 1000
-            stats.text_ms = stats.text_ms + (system.get_time() - text_start) * 1000
-            stats.text_lines = stats.text_lines + 1
-          end
-          return self:get_line_height()
-        end
-        -- Include a small right-edge margin so the renderer can clip the
-        -- partially-visible final cell and any normal glyph overhang instead
-        -- of leaving a blank strip at the viewport edge.
-        local max_chars = math.ceil((available + char_width * 4) / char_width)
-        local tab_scan_chars = math.min(#text, max_chars + indent_size * 2)
-        text_has_tabs = text:sub(1, tab_scan_chars):find("\t", 1, true) ~= nil
-        if text_has_tabs then
-          -- Tab expansion can push past the naive char-width estimate.
-          max_chars = max_chars + indent_size * 2
-        end
-        if max_chars < #text then
-          text = text:sub(1, max_chars)
-        end
-      else
-        text_has_tabs = text:find("\t", 1, true) ~= nil
-      end
-      width = text_has_tabs
-        and fast_ascii_monospace_width(text, char_width, tab_width, tx - line_start_tx)
-        or (#text * char_width)
-
-      tx = draw_text_known_advance(
-        default_font,
-        text,
-        tx,
-        ty,
-        width,
-        unwrapped_default_font_height,
-        normal_color,
-        text_has_tabs and { tab_offset = tx - line_start_tx } or nil
-      )
-      if stats then
-        stats.tokens = stats.tokens + 1
-        stats.draw_text_calls = stats.draw_text_calls + 1
-        stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + (system.get_time() - draw_text_start) * 1000
-        stats.token_loop_ms = stats.token_loop_ms + (system.get_time() - token_loop_start) * 1000
-        stats.text_ms = stats.text_ms + (system.get_time() - text_start) * 1000
-        stats.text_lines = stats.text_lines + 1
-      end
-      return self:get_line_height()
-    end
-  end
-
-  local start_tx = line_start_tx
-  local pending_font, pending_color, pending_chunks, pending_len, pending_has_tabs
-  local max_pending_bytes = self.buffer.binary and 256 or 512
-  local function flush_pending_text()
-    if not pending_font then return false end
-    local draw_text_start = stats and system.get_time()
-    local text = #pending_chunks == 1 and pending_chunks[1] or table.concat(pending_chunks)
-    if renderer.draw_text_known_bounds
-    and (not package.loaded["core.test"] or self.__test_force_known_bounds)
-    and (core.window or self.__test_force_known_bounds)
-    and pending_font == default_font
-    and not text:find("[\128-\255]")
-    and not has_ligature_sensitive_ascii(text) then
-      local tab_offset = tx - start_tx
-      local width = pending_has_tabs
-        and fast_ascii_monospace_width(text, unwrapped_default_ascii_width, unwrapped_tab_width, tab_offset)
-        or (#text * unwrapped_default_ascii_width)
-      tx = draw_text_known_advance(
-        pending_font,
-        text,
-        tx,
-        ty,
-        width,
-        unwrapped_default_font_height,
-        pending_color,
-        pending_has_tabs and { tab_offset = tab_offset } or nil
-      )
-    elseif pending_has_tabs then
-      tx = renderer.draw_text(pending_font, text, tx, ty, pending_color, {tab_offset = tx - start_tx})
-    else
-      tx = renderer.draw_text(pending_font, text, tx, ty, pending_color)
-    end
-    if stats then
-      stats.draw_text_calls = stats.draw_text_calls + 1
-      stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + (system.get_time() - draw_text_start) * 1000
-    end
-    pending_font, pending_color, pending_chunks, pending_len, pending_has_tabs = nil, nil, nil, nil, nil
-    return tx > self.position.x + self.size.x
-  end
-  local function ascii_strong_boundary(text, j)
-    local byte = text:byte(j)
-    local next_byte = text:byte(j + 1)
-    return byte == 32 or byte == 9 or byte == 34 or byte == 39
-        or byte == 44 or byte == 59 or byte == 93 or byte == 125
-        or next_byte == 32 or next_byte == 9 or next_byte == 34 or next_byte == 39
-        or next_byte == 40 or next_byte == 91 or next_byte == 123
-  end
-  local function ascii_safe_boundary(text, j)
-    local byte = text:byte(j)
-    local next_byte = text:byte(j + 1)
-    return not ascii_ligature_sensitive_byte(byte) and not ascii_ligature_sensitive_byte(next_byte)
-  end
-  local function utf8_safe_chunk_end(text, first, last)
-    last = math.min(#text, last)
-    while last >= first do
-      local next_byte = text:byte(last + 1)
-      if not (next_byte and next_byte >= 128 and next_byte < 192) then return last end
-      last = last - 1
-    end
-    last = first
-    while last < #text do
-      local next_byte = text:byte(last + 1)
-      if not (next_byte and next_byte >= 128 and next_byte < 192) then break end
-      last = last + 1
-    end
-    return last
-  end
-
-  local function ascii_preferred_chunk_end(text, first, last)
-    if last >= #text then return #text end
-    for j = last, first, -1 do
-      if ascii_strong_boundary(text, j) then return j end
-    end
-    for j = last, first, -1 do
-      if ascii_safe_boundary(text, j) then return j end
-    end
-    local forward_limit = math.min(#text - 1, first + max_pending_bytes * 4)
-    for j = last + 1, forward_limit do
-      if ascii_strong_boundary(text, j) then return j end
-    end
-    for j = last + 1, forward_limit do
-      if ascii_safe_boundary(text, j) then return j end
-    end
-    return nil
-  end
-  local stop_drawing = false
-  local token_start_col = 1
-  for tidx = 1, tokens_count, 2 do
-    local type = tokens[tidx]
-    local raw_text = tokens[tidx + 1] or ""
-    local raw_len = #raw_text
-    local token_end_col = token_start_col + raw_len
-    local token_draw_end_col = tidx == last_token and token_end_col - 1 or token_end_col
-    if token_draw_end_col > draw_start_col and token_start_col <= draw_end_col then
-      if stats then stats.tokens = stats.tokens + 1 end
-      local slice_start_col = math.max(token_start_col, draw_start_col)
-      local slice_end_col = math.min(token_draw_end_col - 1, draw_end_col)
-      local text = slice_start_col <= slice_end_col
-        and raw_text:sub(slice_start_col - token_start_col + 1, slice_end_col - token_start_col + 1)
-        or ""
-      local color = syntax[type] or normal_color
-      local font = syntax_fonts[type] or default_font
-      if font ~= default_font then font:set_tab_size(indent_size) end
-      if text ~= "" then
-        local text_chunkable = self.buffer.binary
-          or (#text > max_pending_bytes * 4)
-          or text:find("[\128-\255]") == nil
-        if not text_chunkable then
-        -- Avoid splitting complex/shaped scripts across draw calls; HarfBuzz
-        -- needs the full run to preserve joining and ligatures. Pathological
-        -- ASCII tokens and binary data can use bounded chunks.
-        if pending_font ~= font or pending_color ~= color or (pending_len or 0) + #text > max_pending_bytes then
-          if flush_pending_text() then break end
-        end
-        if not pending_font then
-          pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
-        end
-        pending_len = pending_len + #text
-        if text:find("\t", 1, true) then pending_has_tabs = true end
-        pending_chunks[#pending_chunks + 1] = text
-      else
-        if pending_font ~= font or pending_color ~= color then
-          if flush_pending_text() then break end
-        end
-        local i = 1
-        while i <= #text do
-          if not pending_font then
-            pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
-          end
-          local available = max_pending_bytes - (pending_len or 0)
-          if available <= 0 then
-            if flush_pending_text() then stop_drawing = true; break end
-            pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
-            available = max_pending_bytes
-          end
-          local j = ascii_preferred_chunk_end(text, i, math.min(#text, i + available - 1))
-          if not j then
-            -- A token made entirely of ligature-sensitive ASCII (for example
-            -- a long run of 'f' or '=') has no shaping-safe split nearby.
-            -- Do not draw the whole remainder as one batch: on very long
-            -- unwrapped lines that can feed hundreds of KB through the
-            -- renderer before right-edge culling gets a chance to stop.  Split
-            -- at the pending chunk limit; preserving pathological ligatures is
-            -- less important than keeping input responsive.
-            j = math.min(#text, i + available - 1)
-          end
-          local next_byte = text:byte(j + 1)
-          if next_byte and next_byte >= 128 then
-            j = j - 1
-          end
-          local chunk = j >= i and text:sub(i, j) or ""
-          if chunk == "" or chunk:find("[\128-\255]") then
-            if flush_pending_text() then stop_drawing = true; break end
-            local utf8_end = utf8_safe_chunk_end(text, i, i + available - 1)
-            chunk = text:sub(i, utf8_end)
-            pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
-            pending_len = #chunk
-            if chunk:find("\t", 1, true) then pending_has_tabs = true end
-            pending_chunks[#pending_chunks + 1] = chunk
-            i = utf8_end + 1
-            if flush_pending_text() then stop_drawing = true; break end
-          else
-            pending_len = pending_len + #chunk
-            if chunk:find("\t", 1, true) then pending_has_tabs = true end
-            pending_chunks[#pending_chunks + 1] = chunk
-            i = j + 1
-            if pending_len >= max_pending_bytes then
-              if flush_pending_text() then stop_drawing = true; break end
-            end
-          end
-        end
-        end
-      end
-      if stop_drawing then break end
-    end
-    token_start_col = token_end_col
-    if token_start_col > draw_end_col then break end
-  end
-  if not stop_drawing then flush_pending_text() end
+  self:get_plain_text_layout(line):draw(self, x, y + text_y_offset)
   if stats then
-    stats.token_loop_ms = stats.token_loop_ms + (system.get_time() - token_loop_start) * 1000
     stats.text_ms = stats.text_ms + (system.get_time() - text_start) * 1000
     stats.text_lines = stats.text_lines + 1
   end
