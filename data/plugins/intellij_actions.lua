@@ -1412,8 +1412,8 @@ keymap.add({
   ["ctrl+alt+t"] = "terminal:open",
   ["ctrl+up"] = "editor:move_caret_previous_paragraph",
   ["ctrl+down"] = "editor:move_caret_next_paragraph",
-  ["ctrl+alt+,"] = "core:previous_point_of_interest",
-  ["ctrl+alt+."] = "core:next_point_of_interest",
+  ["ctrl+pageup"] = "core:previous_point_of_interest",
+  ["ctrl+pagedown"] = "core:next_point_of_interest",
 }, true)
 
 -- Keep Escape cooperative: plugin panels (GlobalPromptBar, project search,
