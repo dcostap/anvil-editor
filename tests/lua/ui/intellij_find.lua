@@ -101,6 +101,101 @@ test.describe("TextView Prompt Bar find", function()
     assert_selection(view, 1, 1, 1, 6)
   end)
 
+  test.it("finds new matches after edits that do not record undo", function(context)
+    local view, buffer = open_editor(context, "hit\nmiss\nhit")
+    test.ok(command.perform("editor:find"))
+    active_find_input_for(view):set_text("hit")
+    buffer:apply_edits({
+      { line1 = 2, col1 = 1, line2 = 2, col2 = 5, text = "hit" },
+    }, { record_undo = false })
+    view:update()
+    view:with_selection_state(function() buffer:set_selection(1, 4, 1, 1) end)
+    test.ok(command.perform("editor:repeat_find"))
+    assert_selection(view, 2, 1, 2, 4)
+  end)
+
+  test.it("keeps Find results current through batched line changes and undo", function(context)
+    local view, buffer = open_editor(context, "hit\nmiss\nhit\nmiss\nhit")
+    buffer:clear_undo_redo()
+    test.ok(command.perform("editor:find"))
+    local input = active_find_input_for(view)
+    input:set_text("hit")
+    local state = input.local_find_state
+    buffer:apply_edits({
+      { line1 = 2, col1 = 1, line2 = 2, col2 = 5, text = "hit\nhit" },
+      { line1 = 4, col1 = 1, line2 = 5, col2 = 1, text = "" },
+    }, { merge_undo = false })
+    view:update()
+    test.same(state.matches, {
+      { line = 1, col1 = 1, col2 = 4 }, { line = 2, col1 = 1, col2 = 4 },
+      { line = 3, col1 = 1, col2 = 4 }, { line = 4, col1 = 1, col2 = 4 },
+      { line = 5, col1 = 1, col2 = 4 },
+    })
+    buffer:undo()
+    view:update()
+    test.same(state.matches, {
+      { line = 1, col1 = 1, col2 = 4 }, { line = 3, col1 = 1, col2 = 4 },
+      { line = 5, col1 = 1, col2 = 4 },
+    })
+    buffer:redo()
+    view:update()
+    test.equal(#state.matches, 5)
+    buffer:apply_edits({
+      { line1 = 2, col1 = 1, line2 = 2, col2 = 2, text = "H" },
+      { line1 = 2, col1 = 3, line2 = 2, col2 = 4, text = "T" },
+    })
+    view:update()
+    test.equal(#state.matches, 5, "several edits on one line must not duplicate matches")
+  end)
+
+  test.it("keeps each Pane's query independent after shared Buffer edits", function(context)
+    local view, buffer = open_editor(context, "cat\ndog\ncat")
+    test.ok(command.perform("editor:find"))
+    local first = active_find_input_for(view)
+    first:set_text("cat")
+    local sibling = track(context, "views", panes.place(function() return Editor(buffer) end,
+      { placement = "new", focus = true }))
+    test.ok(command.perform("editor:find"))
+    local second = active_find_input_for(sibling)
+    second:set_text("dog")
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 4, text = "dog\ncat" } })
+    view:update()
+    sibling:update()
+    test.same(first.local_find_state.matches, {
+      { line = 2, col1 = 1, col2 = 4 }, { line = 4, col1 = 1, col2 = 4 },
+    })
+    test.same(second.local_find_state.matches, {
+      { line = 1, col1 = 1, col2 = 4 }, { line = 3, col1 = 1, col2 = 4 },
+    })
+  end)
+
+  test.it("updates regex matches and honors changed search options", function(context)
+    local view, buffer = open_editor(context, "Cat1\ncat2\nnone")
+    test.ok(command.perform("editor:find"))
+    local input = active_find_input_for(view)
+    local state = input.local_find_state
+    input:set_text("cat[0-9]")
+    test.ok(command.perform("editor:toggle_regex"))
+    test.equal(#state.matches, 2)
+    test.ok(command.perform("editor:toggle_sensitivity"))
+    test.same(state.matches, { { line = 2, col1 = 1, col2 = 5 } })
+    buffer:apply_edits({ { line1 = 3, col1 = 1, line2 = 3, col2 = 5, text = "cat3\nCat4" } })
+    view:update()
+    test.same(state.matches, {
+      { line = 2, col1 = 1, col2 = 5 }, { line = 3, col1 = 1, col2 = 5 },
+    })
+    input:set_text("[")
+    test.equal(state.info, "Invalid regex")
+    view:with_selection_state(function() buffer:set_selection(1, 1) end)
+    test.ok(command.perform("editor:find"))
+    test.equal(state.info, "Invalid regex")
+    input:set_text("missing")
+    test.equal(#state.matches, 0)
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 5, text = "missing" } })
+    view:update()
+    test.same(state.matches, { { line = 1, col1 = 1, col2 = 8 } })
+  end)
+
   test.it("cycles through visible prompt inputs and Pane Views in both directions", function(context)
     local view = open_editor(context, "alpha beta alpha\n")
     local sibling_buffer = track(context, "buffers", core.open_buffer())

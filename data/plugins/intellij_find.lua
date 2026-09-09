@@ -268,7 +268,7 @@ local function build_match_indexes_by_line(matches)
   return by_line
 end
 
-local function find_all_matches(buffer, state)
+local function find_all_matches(buffer, state, ranges)
   local query = field_text(state.find)
   if not buffer or query == "" then return {}, nil end
 
@@ -282,7 +282,8 @@ local function find_all_matches(buffer, state)
     query = query:lower()
   end
 
-  for line_nr, line_text in ipairs(buffer.lines) do
+  local function scan_line(line_nr)
+    local line_text = buffer.lines[line_nr]
     local source = (not state.regex and not state.case_sensitive) and line_text:lower() or line_text
     local pos = 1
     while pos <= #source do
@@ -300,8 +301,92 @@ local function find_all_matches(buffer, state)
     end
   end
 
+  if ranges then
+    for _, range in ipairs(ranges) do
+      for line = range.new_line1, math.min(#buffer.lines, range.new_line2) do scan_line(line) end
+    end
+  else
+    for line = 1, #buffer.lines do scan_line(line) end
+  end
+
   return matches, nil
 end
+
+local function same_query(state)
+  return state.match_query == field_text(state.find)
+    and state.match_regex == state.regex
+    and state.match_case_sensitive == state.case_sensitive
+end
+
+local function matches_are_current(buffer, state)
+  return state.match_buffer == buffer and state.match_revision == buffer.text_revision and same_query(state)
+end
+
+local function remember_matches(buffer, state)
+  state.match_buffer = buffer
+  state.match_revision = buffer.text_revision
+  state.match_query = field_text(state.find)
+  state.match_regex = state.regex
+  state.match_case_sensitive = state.case_sensitive
+  state.match_indexes_by_line = build_match_indexes_by_line(state.matches)
+end
+
+Buffer.register_text_transaction_handler("local-find", function(buffer, transaction)
+  if not transaction or not transaction.changed then return end
+  for view, state in pairs(find_state_by_view) do
+    if state.visible and view.buffer == buffer then
+      -- A transaction uses old and new line coordinates. Merge touching ranges
+      -- so several edits on one line cause only one search of that line.
+      local ranges = {}
+      for _, change in ipairs(transaction.changed_ranges or {}) do
+        local last = ranges[#ranges]
+        if last and change.old_line1 <= last.old_line2 + 1 then
+          last.old_line2 = math.max(last.old_line2, change.old_line2)
+          last.new_line2 = math.max(last.new_line2, change.new_line2)
+        else
+          ranges[#ranges + 1] = {
+            old_line1 = change.old_line1, old_line2 = change.old_line2,
+            new_line1 = change.new_line1, new_line2 = change.new_line2,
+          }
+        end
+      end
+      if #ranges > 0 and state.match_buffer == buffer and same_query(state)
+          and state.match_revision == buffer.text_revision - 1 then
+        local added, err = find_all_matches(buffer, state, ranges)
+        local matches, old, index, added_index, shift = {}, state.matches, 1, 1, 0
+        local function retain(match)
+          matches[#matches + 1] = shift == 0 and match or {
+            line = match.line + shift, col1 = match.col1, col2 = match.col2,
+          }
+        end
+        for _, range in ipairs(ranges) do
+          while old[index] and old[index].line < range.old_line1 do
+            retain(old[index])
+            index = index + 1
+          end
+          while old[index] and old[index].line <= range.old_line2 do index = index + 1 end
+          while added[added_index] and added[added_index].line <= range.new_line2 do
+            matches[#matches + 1] = added[added_index]
+            added_index = added_index + 1
+          end
+          shift = range.new_line2 - range.old_line2
+        end
+        while old[index] do
+          retain(old[index])
+          index = index + 1
+        end
+        state.matches, state.match_error = matches, err
+        remember_matches(buffer, state)
+      else
+        state.match_revision = nil
+        core.log_quiet("Local find: invalidated matches for %s after %s",
+          buffer:get_name(), transaction.type or "change")
+      end
+      -- Refresh the current match and status even when undo history did not change.
+      state.change_id = -1
+    end
+  end
+end)
 
 local function selection_match_index(view, matches)
   local l1, c1, l2, c2 = table.unpack(view:with_selection_state(function()
@@ -419,9 +504,12 @@ end
 
 local function refresh_matches(view, state, opts)
   opts = opts or {}
-  state.error = false
-  state.matches, state.error = find_all_matches(view.buffer, state)
-  state.match_indexes_by_line = build_match_indexes_by_line(state.matches)
+  if not matches_are_current(view.buffer, state) then
+    state.matches, state.match_error = find_all_matches(view.buffer, state)
+    remember_matches(view.buffer, state)
+    core.log_quiet("Local find: searched %d lines in %s", #view.buffer.lines, view.buffer:get_name())
+  end
+  state.error = state.match_error
   state.change_id = view.buffer:get_change_id()
 
   if state.error then
@@ -542,6 +630,7 @@ local function close_find(view, state, hide)
     state.matches = {}
     state.match_indexes_by_line = {}
     state.current = 0
+    state.match_revision = nil
   end
   if core.active_view and core.active_view.local_find_input and view then
     core.set_active_view(view)
@@ -576,7 +665,7 @@ end
 
 local function navigate(view, state, reverse)
   if not state or field_text(state.find) == "" then return end
-  if state.change_id ~= view.buffer:get_change_id() then
+  if state.change_id ~= view.buffer:get_change_id() or not matches_are_current(view.buffer, state) then
     refresh_matches(view, state, { scroll = false })
   end
   if #(state.matches or {}) == 0 then
@@ -592,7 +681,7 @@ end
 
 local function add_match_to_selection(view, state, reverse)
   if not state or field_text(state.find) == "" then return end
-  if state.change_id ~= view.buffer:get_change_id() then
+  if state.change_id ~= view.buffer:get_change_id() or not matches_are_current(view.buffer, state) then
     refresh_matches(view, state, { scroll = false })
   end
   local index = choose_match(view, state, reverse, false)
@@ -620,7 +709,7 @@ end
 
 local function replace_current_match(view, state)
   if not state or field_text(state.find) == "" then return end
-  if state.change_id ~= view.buffer:get_change_id() then
+  if state.change_id ~= view.buffer:get_change_id() or not matches_are_current(view.buffer, state) then
     refresh_matches(view, state, { scroll = false })
   end
 
@@ -1044,7 +1133,7 @@ local function make_local_find_update(base)
     local state = visible_find_state(self)
     if state then
       update_find_input_fields(self, state)
-      if state.change_id ~= self.buffer:get_change_id() then
+      if state.change_id ~= self.buffer:get_change_id() or not matches_are_current(self.buffer, state) then
         refresh_matches(self, state, {
           scroll = false,
           restore_origin = false,
