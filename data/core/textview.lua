@@ -8489,6 +8489,23 @@ local function draw_line_render_empty_cell_selections(
   return drawn
 end
 
+local function line_search_matches(view, line)
+  local cache = view.__line_body_search_match_cache
+  if cache then return cache[line] end
+  local matches = {}
+  for _, line1, col1, line2, col2 in view.buffer:get_selections(true) do
+    if line1 > line then break end
+    if line >= line1 and line <= line2 then
+      if line1 ~= line then col1 = 1 end
+      if line2 ~= line then col2 = #view.buffer.lines[line] + 1 end
+      if view.buffer:is_search_selection(line1, col1, line, col2) then
+        matches[#matches + 1] = { col1, col2, true }
+      end
+    end
+  end
+  return matches
+end
+
 function TextView:draw_line_body(line, x, y)
   if not self.buffer.lines[line] then
     core.log_quiet(
@@ -8583,7 +8600,15 @@ function TextView:draw_line_body(line, x, y)
       self, self:get_line_render(line), x, y, line
     )
 
-    local search_matches
+    local search_matches = line_search_matches(self, line)
+    for _, match in ipairs(search_matches or {}) do
+      draw_wrapped_search_match(
+        self, line, match[1], match[2], x, y, idx0,
+        match[3], false, visible_idx1, visible_idx2
+      )
+    end
+    -- Background decorations stay below selection; text stays above it.
+    draw_decoration_inline_ranges(self, line, x, y)
     local render_line = self:get_line_render(line)
     draw_line_render_empty_cell_selections(
       self, line, render_line, x, y, style.selection
@@ -8594,8 +8619,7 @@ function TextView:draw_line_body(line, x, y)
         if line2 ~= line then col2 = #self.buffer.lines[line] + 1 end
         if col1 ~= col2 then
           if self.buffer:is_search_selection(line1, col1, line, col2) then
-            search_matches = search_matches or {}
-            search_matches[#search_matches + 1] = { col1, col2, true }
+            -- Search backgrounds were drawn before ordinary selections.
           elseif render_line and render_line.position_rows then
             draw_line_render_position_row_range(
               self, render_line, col1, col2, x, y, style.selection
@@ -8620,13 +8644,6 @@ function TextView:draw_line_body(line, x, y)
         end
       end
     end
-    for _, match in ipairs(search_matches or {}) do
-      draw_wrapped_search_match(
-        self, line, match[1], match[2], x, y, idx0,
-        match[3], false, visible_idx1, visible_idx2
-      )
-    end
-    draw_decoration_inline_ranges(self, line, x, y)
     perf_scope_end(body_phase_scope)
 
     body_phase_scope = perf_scope_begin("text")
@@ -8683,6 +8700,13 @@ function TextView:draw_line_body(line, x, y)
     self, self:get_line_render(line), x, y, line
   )
 
+  local cached_search_matches = line_search_matches(self, line)
+  for _, match in ipairs(cached_search_matches or {}) do
+    self:draw_search_match_background(line, match[1], match[2], match[3])
+  end
+  -- Background decorations stay below selection; text stays above it.
+  draw_decoration_inline_ranges(self, line, x, y)
+
   -- draw selection if it overlaps this line
   local lh = self:get_position_visual_row_height(line, 1)
   local selection_cache = self.__line_body_selection_cache
@@ -8690,7 +8714,6 @@ function TextView:draw_line_body(line, x, y)
   draw_line_render_empty_cell_selections(
     self, line, render_line, x, y, style.selection
   )
-  local fallback_search_matches
   local cached_selections = selection_cache and selection_cache[line]
   if cached_selections then
     for _, sel in ipairs(cached_selections) do
@@ -8720,8 +8743,7 @@ function TextView:draw_line_body(line, x, y)
         if line1 ~= line then col1 = 1 end
         if line2 ~= line then col2 = #text + 1 end
         if self.buffer:is_search_selection(line1, col1, line, col2) then
-          fallback_search_matches = fallback_search_matches or {}
-          fallback_search_matches[#fallback_search_matches + 1] = { col1, col2, true }
+          -- Search backgrounds were drawn before ordinary selections.
         elseif render_line and render_line.position_rows then
           draw_line_render_position_row_range(
             self, render_line, col1, col2, x, y, style.selection
@@ -8742,16 +8764,6 @@ function TextView:draw_line_body(line, x, y)
       end
     end
   end
-
-  local search_match_cache = self.__line_body_search_match_cache
-  local cached_search_matches = (search_match_cache and search_match_cache[line]) or fallback_search_matches
-  if cached_search_matches then
-    for _, match in ipairs(cached_search_matches) do
-      self:draw_search_match_background(line, match[1], match[2], match[3])
-    end
-  end
-
-  draw_decoration_inline_ranges(self, line, x, y)
 
   -- draw line's text
   perf_scope_end(phase_scope)

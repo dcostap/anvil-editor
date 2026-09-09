@@ -23,6 +23,46 @@ local function make_view(text)
 end
 
 test.describe("TextView decoration providers", function()
+  for _, wrapped in ipairs { false, true } do
+    test.it("keeps selection above backgrounds and below text" .. (wrapped and " when wrapped" or ""), function()
+      local view, buffer = make_view("alpha beta gamma")
+      view:set_wrapping_enabled(wrapped)
+      view:set_selection_state { selections = { 1, 2, 1, 5, 1, 1, 1, 6 } }
+      buffer:add_search_selection(1, 1, 1, 6)
+      local background = { 9, 8, 7, 255 }
+      view:add_decoration_provider("selection-background", {
+        inline_ranges = function()
+          return { { col1 = 1, col2 = 6, color = background } }
+        end,
+      })
+      local old_rect, old_text = renderer.draw_rect, renderer.draw_text
+      local top_background, selected_text
+      local saw_inline, saw_search, saw_selection = false, false, false
+      renderer.draw_rect = function(_, _, _, _, color)
+        if color == background or color == style.search_selection or color == style.selection then
+          top_background = color
+          saw_inline = saw_inline or color == background
+          saw_search = saw_search or color == style.search_selection
+          saw_selection = saw_selection or color == style.selection
+        end
+      end
+      renderer.draw_text = function(font, text, x, y, color, opts)
+        if text:find("alpha", 1, true) then selected_text = top_background end
+        return x + font:get_width(text, opts)
+      end
+      local ok, err = pcall(function()
+        view:with_selection_state(function()
+          view:prepare_line_body_draw_cache(1, 1)
+          view:draw_line_body(1, 0, 0)
+        end)
+      end)
+      renderer.draw_rect, renderer.draw_text = old_rect, old_text
+      if not ok then error(err, 0) end
+      test.ok(saw_inline and saw_search and saw_selection, "expected all overlapping backgrounds")
+      test.equal(selected_text, style.selection, "selection must cover decoration backgrounds before text draws")
+    end)
+  end
+
   test.it("draws the content left edge without a current line highlight", function()
     local view = make_view("alpha")
     view.show_current_line_highlight = false
