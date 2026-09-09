@@ -776,6 +776,44 @@ test.describe("Git View command", function()
     test.equal(list.buffer:get_selection(), 1)
   end)
 
+  test.it("opens the first changed file directly from a Git Log commit row", function(context)
+    local session, view = open_fake_git_view(context.project)
+    local commit = {
+      hash = "log-row-file",
+      subject = "Log row file",
+      parents = { "log-row-parent" },
+    }
+    local files = {
+      { status = "modified", old_path = "src/App.kt", new_path = "src/App.kt" },
+      { status = "modified", old_path = "README.md", new_path = "README.md" },
+    }
+    local backend = {}
+    for key, value in pairs(fake_backend) do backend[key] = value end
+    backend.changed_files = function(repo, left, right, opts, callback)
+      callback(files, nil)
+      return { cancel = function() end }
+    end
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      callback(rev .. ":" .. relpath .. "\n", nil)
+      return { cancel = function() end }
+    end
+    view.model.backend = backend
+    view.model:log_tab().commits = { commit }
+    view.model:log_tab().selected_commit = 1
+    view:update_pane_buffers()
+
+    local log_list = view:pane_view("log-list")
+    core.active_view = log_list
+    log_list.buffer:set_selection(1, 1)
+    test.not_nil(log_list:get_point_of_interest_at(1))
+
+    test.equal(command.perform("core:activate_point_of_interest"), true)
+    test.not_equal(panes.active().current_view, view)
+    test.not_nil(panes.active().current_view.buffer_view_a)
+    test.not_nil(panes.active().current_view.buffer_view_b)
+    test.equal(panes.active().current_view.buffer_view_b.buffer:get_utf8_line(1), "log-row-parent:src/App.kt\n")
+  end)
+
   test.it("keeps folder collapse state with its commit when changed-file data is shared", function(context)
     local session, view = open_fake_git_view(context.project)
     local files = {

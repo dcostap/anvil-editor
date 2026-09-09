@@ -1260,6 +1260,34 @@ function GitView:activate_selected_point(callback)
         and commit.selected_changed_file_path == path
     end)
   end
+  if source and source.git_pane == "log-list" then
+    local log_commit = self.model:selected_commit()
+    if not log_commit then return nil end
+    local function open_first_changed_file()
+      local record = log_commit.changed_files and log_commit.changed_files[1]
+      local path = record and changed_file_path(record)
+      if not path then return nil end
+      return self:open_file_comparison(source, function(done)
+        return self.model:open_commit_diff(log_commit, function(_, err, tab)
+          done(tab, err)
+          if callback then callback(self.model, err) end
+        end, { selected_file_path = path })
+      end, function()
+        return self.model:selected_commit() == log_commit
+      end)
+    end
+    if log_commit.changed_files or log_commit.changed_files_loaded then
+      return open_first_changed_file()
+    end
+    self.model:load_commit_changed_files(log_commit, function(_, err)
+      if err then
+        if callback then callback(self.model, err) end
+        return
+      end
+      if self.model:selected_commit() == log_commit then open_first_changed_file() end
+    end)
+    return true
+  end
   local source_tab = self:model_tab()
   local diff_tab, err = self:activate_selected(callback)
   if source_tab.kind == "log" and diff_tab and self.on_model_tab_open then
