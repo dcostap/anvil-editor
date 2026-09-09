@@ -2542,22 +2542,22 @@ function fuzzy_searcher.file_result_filename_width(font, file, prefix, suffix, s
     + file_font:get_width(name) + font:get_width(suffix) + directory_gap
 end
 
-local function draw_symbol_result_row(font, r, x, y, width, row_height)
+local function draw_symbol_result_row(font, r, x, y, width, row_height, file_width)
   local symbol_icons = require "core.symbol_icons"
   local icon_size = symbol_icons.size_for_row(row_height)
-  local icon_column_width = 0
+  local icon_column_width = icon_size + math.max(4 * (SCALE or 1), style.padding.x / 2)
   if symbol_icons.resolve_kind(r.symbol_kind or "symbol") then
-    icon_column_width = icon_size + math.max(4 * (SCALE or 1), style.padding.x / 2)
     symbol_icons.draw(r.symbol_kind or "symbol", x, y, row_height, icon_size)
   end
 
   x = x + icon_column_width
   width = math.max(0, width - icon_column_width)
   local path_w, gap, text_w = grep_row_columns(width, 0.33)
+  file_width = file_width or path_w
   local line = tonumber(r.line) or 1
   local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
-  local prefix = r.symbol_scope == "buffer" and "$$ " or "$ "
-  draw_file_result_row(font, r.file or "", r.file_spans, prefix, x, y, path_w, line_suffix, r.prefix_span, r.root_role)
+  local prefix = r.symbol_scope == "buffer" and "$$" or "$"
+  draw_file_result_row(font, r.file or "", r.file_spans, prefix, x, y, file_width, line_suffix, r.prefix_span, r.root_role)
   if text_w <= 0 then return end
 
   local preview_font = style.get_small_font(font)
@@ -6881,10 +6881,10 @@ function FSView:draw_open_content()
 
   phase_scope = fuzzy_searcher._perf_scope_begin("result_scan")
   local last = math.min(#self.results, self.viewport_offset + m.result_rows - 1)
-  local has_visible_grep = false
+  local has_visible_split = false
   for idx = self.viewport_offset, last do
     local r = self.results[idx]
-    if r and r.kind == "grep" then has_visible_grep = true; break end
+    if r and r.kind == "grep" then has_visible_split = true; break end
   end
   fuzzy_searcher._perf_scope_end(phase_scope)
 
@@ -6969,9 +6969,18 @@ function FSView:draw_open_content()
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        local symbol_text_w = fuzzy_searcher.draw_file_metadata(
-          font, r, x + pad, row_y, row_text_w, metadata_rows[idx], metadata_columns)
-        draw_symbol_result_row(font, r, x + pad, row_y, symbol_text_w, lh)
+        local symbol_x = x + pad
+        local symbol_icon_size = require("core.symbol_icons").size_for_row(lh)
+        local symbol_icon_width = symbol_icon_size + math.max(4 * (SCALE or 1), style.padding.x / 2)
+        local symbol_path_w, symbol_gap = grep_row_columns(row_text_w - symbol_icon_width, 0.33)
+        local metadata_remaining = fuzzy_searcher.draw_file_metadata(
+          font, r, symbol_x + symbol_icon_width, row_y, symbol_path_w,
+          metadata_rows[idx], metadata_columns)
+        local symbol_file_w = metadata_remaining
+        draw_symbol_result_row(font, r, symbol_x, row_y, row_text_w, lh, symbol_file_w)
+        renderer.draw_rect(
+          symbol_x + symbol_icon_width + symbol_path_w + math.floor(symbol_gap / 2),
+          yy, style.divider_size, lh, style.divider)
       elseif r.kind == "command" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
@@ -7021,7 +7030,7 @@ function FSView:draw_open_content()
     end
     fuzzy_searcher._perf_scope_end(row_scope)
   end
-  if has_visible_grep then
+  if has_visible_split then
     local path_w, gap = grep_row_columns(row_text_w)
     local sx = x + pad + path_w + gap / 2
     renderer.draw_rect(sx, m.results_top, style.divider_size, math.max(0, last - self.viewport_offset + 1) * lh, style.divider)

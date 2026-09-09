@@ -116,7 +116,7 @@ function metadata.draw(font, parts, x, y, width, columns)
   local text_y = y + math.max(0, math.floor((font:get_height() - small_font:get_height()) / 2))
   local row_height = small_font:get_height()
   local icon_size = icons.size_for_row(row_height)
-  local icon_gap = math.max(2 * (SCALE or 1), style.padding.x / 4)
+  local icon_gap = -math.max(3, 2 * (SCALE or 1))
   local total = 0
   local widths = {}
   for index, part in ipairs(parts) do
@@ -125,7 +125,7 @@ function metadata.draw(font, parts, x, y, width, columns)
     total = total + widths[index] + (part.icon and icon_size + icon_gap or 0)
     if index > 1 then total = total + text_width(small_font, cache, part.separator or "  ") end
   end
-  local outer_gap = style.padding.x
+  local outer_gap = math.max(1, math.floor(style.padding.x / 2))
   if total + outer_gap >= width then return width end
   local cx = x + width - total
   for index, part in ipairs(parts) do
