@@ -2483,6 +2483,47 @@ local commands = {
     set_primary_selection(dv.buffer)
   end,
 
+  ["editor:align_cursors"] = command.palette(function(dv)
+    if not can_edit(dv, "align cursors") then return end
+    local target_buffer = dv.buffer
+    if #target_buffer.selections < 8 then return end
+    local _, tab_size = target_buffer:get_indent_info()
+    local cursors, lines, target = {}, {}, 0
+    for _, line, col in target_buffer:get_selections() do
+      if lines[line] then
+        core.warn("Align Cursors needs one cursor per line")
+        return
+      end
+      lines[line] = true
+      local width = 0
+      for character in common.utf8_chars(target_buffer.lines[line]:sub(1, col - 1)) do
+        width = width + (character == "\t" and tab_size - width % tab_size or 1)
+      end
+      cursors[#cursors + 1] = { line = line, col = col, width = width }
+      target = math.max(target, width)
+    end
+    local edits, selections = {}, { table.unpack(target_buffer.selections) }
+    for _, cursor in ipairs(cursors) do
+      local padding = target - cursor.width
+      if padding > 0 then
+        edits[#edits + 1] = {
+          line1 = cursor.line, col1 = cursor.col, text = string.rep(" ", padding),
+        }
+        for i = 1, #selections, 2 do
+          if selections[i] == cursor.line and selections[i + 1] >= cursor.col then
+            selections[i + 1] = selections[i + 1] + padding
+          end
+        end
+      end
+    end
+    if #edits == 0 then return end
+    target_buffer:apply_edits(edits, {
+      selections = selections, last_selection = target_buffer.last_selection,
+      merge_undo = false,
+    })
+    core.log_quiet("Aligned %d cursors", #cursors)
+  end),
+
   ["editor:create_cursor_previous_line"] = command.palette(function(dv)
     split_cursor(dv, -1)
     dv.buffer:merge_cursors()
