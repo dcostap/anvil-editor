@@ -158,4 +158,36 @@ test.describe("core.buffer batch edit primitive", function()
     test.equal(text(buffer), "Xabc\nYdef\n")
     test.same(buffer.selections, { 1, 2, 1, 2, 2, 2, 2, 2 })
   end)
+
+  test.it("previews byte targets across inserted newlines and unchanged text", function()
+    local buffer = Buffer()
+    set_text(buffer, "ab\ncd\nef")
+    buffer.selections = { 1, 2, 1, 2, 3, 2, 2, 2 }
+    local edits = {
+      { idx = 1, line1 = 1, col1 = 2, line2 = 2, col2 = 2, text = "X\nYZ" },
+    }
+    test.same(buffer:selections_after_edits(edits, { { "start", 2, "end", 6, -1, 100 } }), {
+      1, 2, 1, 2, 2, 1, 2, 1, 2, 3, 2, 3,
+      3, 1, 3, 1, 1, 1, 1, 1, 3, 3, 3, 3,
+      3, 2, 1, 2,
+    })
+    test.same(buffer:selection_ranges_after_edits(edits, { { "end", "start" } }), {
+      2, 3, 1, 2, 3, 2, 1, 2,
+    })
+    test.equal(text(buffer), "ab\ncd\nef\n")
+    test.same(buffer.selections, { 1, 2, 1, 2, 3, 2, 2, 2 })
+  end)
+
+  test.it("previews adjacent edits and keeps the final newline position valid", function()
+    local buffer = Buffer()
+    set_text(buffer, "abc")
+    buffer.selections = { 1, 1, 1, 1, 1, 2, 1, 2, 1, 4, 1, 4 }
+    local edits = {
+      { idx = 1, line1 = 1, col1 = 1, line2 = 1, col2 = 2, text = "\n" },
+      { idx = 2, line1 = 1, col1 = 2, line2 = 1, col2 = 4, text = "é\n" },
+    }
+    test.same(buffer:selections_after_edits(edits, { "end", 2 }), {
+      2, 1, 2, 1, 2, 3, 2, 3, 2, 1, 2, 1,
+    })
+  end)
 end)

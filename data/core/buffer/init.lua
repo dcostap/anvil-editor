@@ -1505,6 +1505,68 @@ local function finalize_lines(out)
   return out
 end
 
+-- Locate positions in the edited text without constructing that text.
+local function edit_position_map(old_lines, edits)
+  local starts, total = line_starts_for(old_lines)
+  local spans, delta = {}, 0
+  local old_line, old_col, new_line, new_col = 1, 1, 1, 1
+  local function translate_position(line, col, from_line, from_col, to_line, to_col)
+    if line == from_line then return to_line, to_col + col - from_col end
+    return to_line + line - from_line, col
+  end
+  local function advance(line, col, text, bytes)
+    local pos = 1
+    while true do
+      local nl = text:find("\n", pos, true)
+      if not nl or nl > bytes then return line, col + bytes - pos + 1 end
+      line, col, pos = line + 1, 1, nl + 1
+    end
+  end
+  for i, edit in ipairs(edits) do
+    local line, col = translate_position(edit.line1, edit.col1, old_line, old_col, new_line, new_col)
+    local end_line, end_col = advance(line, col, edit.text, #edit.text)
+    spans[i] = { start = edit.start_offset + delta, line = line, col = col,
+      end_line = end_line, end_col = end_col }
+    delta = delta + #edit.text - (edit.end_offset - edit.start_offset)
+    old_line, old_col = edit.line2, edit.col2
+    new_line, new_col = end_line, end_col
+  end
+  local new_total = total + delta
+  local function position(offset)
+    -- The last byte is the final caret position, not a phantom trailing line.
+    offset = common.clamp(offset, 0, math.max(0, new_total - 1))
+    local shift, ol, oc, nl, nc = 0, 1, 1, 1, 1
+    for i, edit in ipairs(edits) do
+      local span = spans[i]
+      if offset < span.start then break end
+      if offset < span.start + #edit.text then
+        return advance(span.line, span.col, edit.text, offset - span.start)
+      end
+      shift = shift + #edit.text - (edit.end_offset - edit.start_offset)
+      ol, oc, nl, nc = edit.line2, edit.col2, span.end_line, span.end_col
+    end
+    local line, col = offset_to_position(old_lines, starts, total, offset - shift)
+    return translate_position(line, col, ol, oc, nl, nc)
+  end
+  local function map_position(line, col, affinity)
+    line, col = sanitize_position_in_lines(old_lines, line, col)
+    local offset = position_to_offset(starts, line, col)
+    local shift = 0
+    for _, edit in ipairs(edits) do
+      if offset < edit.start_offset then break end
+      if edit.start_offset == edit.end_offset and offset == edit.start_offset then
+        if affinity == "after" then shift = shift + #edit.text end
+        break
+      elseif offset <= edit.end_offset then
+        return position(edit.start_offset + shift)
+      end
+      shift = shift + #edit.text - (edit.end_offset - edit.start_offset)
+    end
+    return position(offset + shift)
+  end
+  return position, map_position
+end
+
 function Buffer:apply_edits(edits, opts)
   local perf_t = perf_start()
   perf_add("buffer_apply_edits_calls", 1)
@@ -1901,18 +1963,6 @@ function Buffer:redo()
   pop_undo(self, self.redo_stack, self.undo_stack, false)
 end
 
-local function build_lines_for_normalized_edits(old_lines, normalized)
-  local out = { "" }
-  local cursor_line, cursor_col = 1, 1
-  for _, edit in ipairs(normalized) do
-    append_span(out, old_lines, cursor_line, cursor_col, edit.line1, edit.col1)
-    append_text_linewise(out, edit.text)
-    cursor_line, cursor_col = edit.line2, edit.col2
-  end
-  append_span_to_end(out, old_lines, cursor_line, cursor_col)
-  return finalize_lines(out)
-end
-
 local function plan_normalized_edits(self, edits, opts)
   opts = opts or {}
   local old_lines = self.lines
@@ -1939,10 +1989,7 @@ local function plan_normalized_edits(self, edits, opts)
 end
 
 local function final_selections_after_edits(self, normalized, final_by_idx, last_selection)
-  local old_lines = self.lines
-  local old_starts = line_starts_for(old_lines)
-  local new_lines = build_lines_for_normalized_edits(old_lines, normalized)
-  local new_starts, new_total = line_starts_for(new_lines)
+  local position, map_position = edit_position_map(self.lines, normalized)
   local final_offsets = {}
   local delta = 0
   local function final_offset_for(target, new_start, edit)
@@ -1964,25 +2011,6 @@ local function final_selections_after_edits(self, normalized, final_by_idx, last
     delta = delta + #edit.text - (edit.end_offset - edit.start_offset)
   end
 
-  local function map_position(line, col, affinity)
-    line, col = sanitize_position_in_lines(old_lines, line, col)
-    local pos = position_to_offset(old_starts, line, col)
-    local map_delta = 0
-    for _, edit in ipairs(normalized) do
-      if pos < edit.start_offset then
-        break
-      elseif edit.start_offset == edit.end_offset and pos == edit.start_offset then
-        if affinity == "after" then map_delta = map_delta + #edit.text end
-        break
-      elseif pos <= edit.end_offset then
-        return offset_to_position(new_lines, new_starts, new_total, edit.start_offset + map_delta)
-      else
-        map_delta = map_delta + #edit.text - (edit.end_offset - edit.start_offset)
-      end
-    end
-    return offset_to_position(new_lines, new_starts, new_total, pos + map_delta)
-  end
-
   local new_selections = {}
   for i = 1, #self.selections, 4 do
     local selection_idx = (i - 1) / 4 + 1
@@ -1990,7 +2018,7 @@ local function final_selections_after_edits(self, normalized, final_by_idx, last
     if final_offset then
       local offsets = type(final_offset) == "table" and final_offset or { final_offset }
       for _, offset in ipairs(offsets) do
-        local line, col = offset_to_position(new_lines, new_starts, new_total, offset)
+        local line, col = position(offset)
         new_selections[#new_selections + 1] = line
         new_selections[#new_selections + 1] = col
         new_selections[#new_selections + 1] = line
@@ -2052,10 +2080,7 @@ local function clip_overlapping_edits_to_later_starts(self, normalized)
 end
 
 local function selection_ranges_after_edits(self, normalized, ranges_by_idx, last_selection)
-  local old_lines = self.lines
-  local old_starts = line_starts_for(old_lines)
-  local new_lines = build_lines_for_normalized_edits(old_lines, normalized)
-  local new_starts, new_total = line_starts_for(new_lines)
+  local position, map_position = edit_position_map(self.lines, normalized)
   local range_offsets = {}
   local delta = 0
   for _, edit in ipairs(normalized) do
@@ -2074,32 +2099,13 @@ local function selection_ranges_after_edits(self, normalized, ranges_by_idx, las
     delta = delta + #edit.text - (edit.end_offset - edit.start_offset)
   end
 
-  local function map_position(line, col, affinity)
-    line, col = sanitize_position_in_lines(old_lines, line, col)
-    local pos = position_to_offset(old_starts, line, col)
-    local map_delta = 0
-    for _, edit in ipairs(normalized) do
-      if pos < edit.start_offset then
-        break
-      elseif edit.start_offset == edit.end_offset and pos == edit.start_offset then
-        if affinity == "after" then map_delta = map_delta + #edit.text end
-        break
-      elseif pos <= edit.end_offset then
-        return offset_to_position(new_lines, new_starts, new_total, edit.start_offset + map_delta)
-      else
-        map_delta = map_delta + #edit.text - (edit.end_offset - edit.start_offset)
-      end
-    end
-    return offset_to_position(new_lines, new_starts, new_total, pos + map_delta)
-  end
-
   local new_selections = {}
   for i = 1, #self.selections, 4 do
     local selection_idx = (i - 1) / 4 + 1
     local range = range_offsets[selection_idx]
     if range then
-      local l1, c1 = offset_to_position(new_lines, new_starts, new_total, range[1])
-      local l2, c2 = offset_to_position(new_lines, new_starts, new_total, range[2])
+      local l1, c1 = position(range[1])
+      local l2, c2 = position(range[2])
       new_selections[#new_selections + 1] = l1
       new_selections[#new_selections + 1] = c1
       new_selections[#new_selections + 1] = l2
