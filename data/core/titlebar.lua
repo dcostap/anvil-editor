@@ -1,6 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
+local keymap = require "core.keymap"
 local style = require "core.style"
 local view_icons = require "core.view_icons"
 local View = require "core.view"
@@ -569,7 +570,10 @@ function TitleBar:on_mouse_pressed(button, x, y, clicks)
   if button == "middle" then
     local index = self:entry_at(x, y)
     local pane = index and panes().ordered()[index]
-    if pane then panes().close(pane); return true end
+    if pane then
+      panes().close(pane, { discard = keymap.modkeys["shift"] == true })
+      return true
+    end
     return false
   end
   if button ~= "left" then return false end

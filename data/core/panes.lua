@@ -1479,9 +1479,15 @@ function M.close(target, opts)
   local function close()
     if committed or not M.contains(pane) then return end
     committed = true
+    if opts.discard then
+      for _, view in ipairs(collect_owned_views(pane)) do
+        view.discard_buffer_on_close = true
+      end
+      core.log_quiet("Pane close: discard requested for %s", pane.id)
+    end
     commit_close(pane)
   end
-  authorize_close(pane, opts.force, close)
+  authorize_close(pane, opts.force or opts.discard, close)
   return committed
 end
 

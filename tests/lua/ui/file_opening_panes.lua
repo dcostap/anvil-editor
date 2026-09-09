@@ -23,6 +23,7 @@ test.describe("File opening through Panes", function()
       buffers = core.buffers,
       buffer_registry = core.buffer_registry,
       set_active_view = core.set_active_view,
+      global_prompt_bar = core.global_prompt_bar,
     }
     core.buffers = {}
     core.buffer_registry = BufferRegistry(core.buffers)
@@ -39,8 +40,23 @@ test.describe("File opening through Panes", function()
     core.buffers = saved.buffers
     core.buffer_registry = saved.buffer_registry
     core.set_active_view = saved.set_active_view
+    core.global_prompt_bar = saved.global_prompt_bar
     os.remove(first_path)
     os.remove(second_path)
+  end)
+
+  test.it("discards unsaved file changes when closing a Pane without approval", function()
+    local view = core.open_file(first_path)
+    local original = table.concat(view.buffer.lines)
+    view.buffer:insert(1, 1, "unsaved ")
+    core.global_prompt_bar = { enter = function() error("unexpected close prompt") end }
+
+    test.ok(panes.close(panes.active(), { discard = true }))
+    test.equal(panes.count(), 0)
+    test.is_nil(core.buffer_registry:find(first_path))
+    local reopened = core.open_file(first_path)
+    test.equal(table.concat(reopened.buffer.lines), original)
+    test.ok(not reopened.buffer:is_dirty())
   end)
 
   test.it("creates Pane 1 when opening with zero Panes", function()
