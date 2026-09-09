@@ -1192,7 +1192,7 @@ Recommended final commands:
 ### Git
 
 - `git:open_log`
-- `git:refresh`
+- `git:reload`
 - `git:show_file_history`
 - `git:show_selection_history`
 - `git:open_selected_commit_diff`

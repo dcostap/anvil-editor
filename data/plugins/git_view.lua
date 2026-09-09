@@ -398,7 +398,7 @@ command.add(nil, {
     opens_view = true,
   }),
 
-  ["git:refresh"] = command.palette(function()
+  ["git:reload"] = command.palette(function()
     local session, view = active_or_open_view()
     if view then view.model:refresh_log(function() core.redraw = true end) end
   end),
