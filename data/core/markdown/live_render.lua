@@ -5595,7 +5595,7 @@ function provider:horizontal_extent(view)
   end
 
   local width = 0
-  local nodes, reason = instance:nodes_for_lines(1, #view.buffer.lines, {
+  local nodes, reason = instance:table_nodes_for_lines(1, #view.buffer.lines, {
     limit = 100000,
   })
   local seen = {}

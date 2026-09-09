@@ -1869,6 +1869,7 @@ static int treesitter_index_result_semantic_nodes_for_lines(lua_State *L) {
   LuaTreeSitterIndexResult *lua_result = check_treesitter_index_result(L, 1);
   AnvilWorkerTreeSitterIndexResult *result = lua_result->result;
   const char *requested = luaL_optstring(L, 2, "both");
+  bool tables_only = strcmp(requested, "table") == 0;
   lua_Integer raw_line1 = luaL_checkinteger(L, 3);
   lua_Integer raw_line2 = luaL_checkinteger(L, 4);
   luaL_argcheck(L, raw_line1 > 0 && raw_line1 <= UINT32_MAX, 3, "invalid start line");
@@ -1876,7 +1877,7 @@ static int treesitter_index_result_semantic_nodes_for_lines(lua_State *L) {
   uint32_t limit = lua_istable(L, 5) ? opt_uint32_field(L, 5, "limit", 4096) : 4096;
   const char *kinds[2];
   uint32_t kind_count = 0;
-  if (strcmp(requested, "block") == 0 || strcmp(requested, "outline") == 0) {
+  if (tables_only || strcmp(requested, "block") == 0 || strcmp(requested, "outline") == 0) {
     kinds[kind_count++] = "outline";
   } else if (strcmp(requested, "inline") == 0 || strcmp(requested, "usage") == 0) {
     kinds[kind_count++] = "usage";
@@ -1951,6 +1952,7 @@ static int treesitter_index_result_semantic_nodes_for_lines(lua_State *L) {
   for (uint32_t index = 0; index < capture_count; index++) {
     SemanticCaptureView *capture = &captures[index];
     if (!capture->name || !semantic_parent(capture)) continue;
+    if (tables_only && !capture_name_equal(capture, "block.table")) continue;
     nodes[node_count++].capture = *capture;
   }
   qsort(nodes, node_count, sizeof(*nodes), semantic_node_compare);
@@ -1985,7 +1987,8 @@ static int treesitter_index_result_semantic_nodes_for_lines(lua_State *L) {
     lua_rawseti(L, result_table, (int)index + 1);
   }
 
-  for (uint32_t capture_index = 0; capture_index < capture_count; capture_index++) {
+  /* Table discovery needs identities and source ranges, not inline metadata. */
+  for (uint32_t capture_index = 0; !tables_only && capture_index < capture_count; capture_index++) {
     SemanticCaptureView *decoration = &captures[capture_index];
     if (!decoration->name || !semantic_decoration(decoration)) continue;
     int best = -1;

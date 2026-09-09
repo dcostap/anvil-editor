@@ -568,6 +568,18 @@ function Model:nodes_for_lines(line1, line2, opts)
   return self:stabilize_node_ids(nodes), nodes.truncated and "limit" or nil
 end
 
+---Return table identities and source ranges without inline metadata.
+function Model:table_nodes_for_lines(line1, line2, opts)
+  opts = opts or {}
+  if not self.result or (self.status ~= "ready"
+    and not (self.status == "pending" and opts.allow_pending_result))
+  then
+    return nil, self.status
+  end
+  local nodes = self.result:semantic_nodes_for_lines("table", line1, line2, opts)
+  return self:stabilize_node_ids(nodes), nodes.truncated and "limit" or nil
+end
+
 ---Returns the fenced-code block containing a line, completing opening-line
 ---metadata through a second bounded semantic query when necessary.
 ---@param line integer
