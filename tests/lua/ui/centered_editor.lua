@@ -146,6 +146,51 @@ test.describe("centered editor", function()
     test.equal(centered_editor.get_lane_rect(view), before)
   end)
 
+  test.it("keeps an unwrapped Markdown lane stable during caret movement and typing", function(context)
+    local view, buffer = open_editor(context, string.rep("W", 50) .. "\nshort\n")
+    buffer.filename = "centered-stable.md"
+    buffer.abs_filename = buffer.filename
+    test.equal(markdown.live_render.refresh_view(view), true)
+    view.wrapping_enabled = false
+    view.wrapped_settings = nil
+    local function settle()
+      test.ok(wait_until(function()
+        view:update()
+        view:get_h_content_size()
+        return not view:is_horizontal_extent_scan_pending()
+          and require("core.markdown.model").get(buffer).status == "ready"
+      end, 2))
+    end
+    settle()
+    buffer:set_selection(2, 1)
+    for _ = 1, 8 do
+      view:update()
+      coroutine.yield(0.01)
+    end
+    settle()
+    local before = centered_editor.get_lane_rect(view)
+    local function check_frames()
+      for _ = 1, 8 do
+        view:update()
+        test.equal(centered_editor.get_lane_rect(view), before)
+        coroutine.yield(0.01)
+      end
+    end
+    buffer:set_selection(2, 2)
+    view:scroll_to_make_visible(2, 2)
+    test.equal(centered_editor.get_lane_rect(view), before,
+      "caret movement must not shift the lane during width measurement")
+    check_frames()
+    settle()
+    buffer:text_input("x")
+    view:scroll_to_make_visible(2, 3)
+    test.equal(centered_editor.get_lane_rect(view), before,
+      "typing must not shift the lane during width measurement")
+    check_frames()
+    settle()
+    test.equal(centered_editor.get_lane_rect(view), before)
+  end)
+
   test.it("reduces unwrapped centering to fit the widest Buffer line", function(context)
     local text = string.rep("W", 50)
     local view = open_editor(context, text .. "\nshort\n")

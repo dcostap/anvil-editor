@@ -1315,11 +1315,20 @@ local function horizontal_extent_state(self)
       local scroll_target = math.max(
         0, self.scroll.to.x or self.scroll.x or 0
       )
-      required_width = math.max(
-        0,
-        scroll_target + self.size.x - self:get_gutter_width() - right_padding
-      )
+      if scroll_target > 0 then
+        required_width = math.max(
+          0,
+          scroll_target + self.size.x - self:get_gutter_width() - right_padding
+        )
+      end
     end
+    -- Keep the last measured extent until the new presentation scan finishes.
+    -- A pending measurement must not move an unwrapped centered editing lane.
+    local previous_width = state and state.buffer == self.buffer and math.max(
+      state.exact_width or 0,
+      state.previous_exact_width or 0,
+      state.measured_width or 0
+    ) or nil
     if state and state.scan then cancel_horizontal_extent_token(self, state.scan) end
     state = {
       buffer = self.buffer,
@@ -1327,6 +1336,7 @@ local function horizontal_extent_state(self)
       revision = revision,
       measured_width = 0,
       required_width = required_width,
+      previous_exact_width = previous_width,
     }
     self.__horizontal_extent_state = state
   elseif state.revision ~= revision then
@@ -1365,6 +1375,9 @@ end
 local function skip_pending_line_render(self, line)
   local owner = self.__markdown_live_owner
   local model = owner and owner.semantic_model
+  if owner and owner.source_mode then return false end
+  if model and (model.status == "error" or model.status == "closed"
+    or model.status == "detached") then return false end
   local pending = owner and (
     owner.semantic_pending_line ~= nil
     or model and (
@@ -1605,6 +1618,9 @@ local function start_unwrapped_width_scan(self, state)
       while token.next_line <= token.line_count do
         if not unwrapped_width_scan_is_current(self, token) then return end
         local line = token.next_line
+        -- Raw source widths do not describe pending Markdown presentation.
+        -- Wait for that presentation instead of publishing a temporary width.
+        if skip_pending_line_render(self, line) then break end
         local width, done, bytes, blocked = measure_line_width_chunk(
           self, line, token
         )
