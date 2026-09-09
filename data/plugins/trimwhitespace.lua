@@ -1,4 +1,5 @@
 -- mod-version:3
+local core = require "core"
 local command = require "core.command"
 
 ---@class plugins.trimwhitespace
@@ -112,6 +113,22 @@ end
 
 
 command.add("core.textview", {
+  ["editor:trim_leading_whitespace"] = command.palette(function(dv)
+    if dv.can_edit and not dv:can_edit("trim whitespace", { warn = true }) then return end
+    local edits = {}
+    for line, text in ipairs(dv.buffer.lines) do
+      local whitespace = text:match("^[ \t]+")
+      if whitespace then
+        edits[#edits + 1] = {
+          line1 = line, col1 = 1, line2 = line, col2 = #whitespace + 1, text = "",
+        }
+      end
+    end
+    if #edits == 0 then return end
+    dv.buffer:apply_edits(edits, { type = "remove", merge_undo = false })
+    core.log_quiet("Trimmed leading whitespace on %d lines", #edits)
+  end),
+
   ["editor:trim_trailing_whitespace"] = command.palette(function(dv)
     if dv.can_edit and not dv:can_edit("trim whitespace", { warn = true }) then return end
     trimwhitespace.trim(dv.buffer)
