@@ -2344,8 +2344,8 @@ local function ignore_rules_scope(root, path)
   end
 end
 
----Turn changed filesystem leaf paths into the smallest relevant directory
----refresh scopes. Files that cannot contribute to the Project symbol index are
+---Refresh changed files individually and changed directories by scope.
+---Files that cannot contribute to the Project symbol index are
 ---discarded before a native worker job is submitted.
 ---@param root string
 ---@param paths table<string, boolean>|string[]
@@ -2386,7 +2386,7 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
     end
   end
 
-  local scope_candidates = {}
+  local scope_candidates, file_candidates = {}, {}
   local ignored, irrelevant = 0, 0
   processed = 0
   for key, value in pairs(paths) do
@@ -2420,9 +2420,9 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
         elseif has_project_index_provider(path) then
           -- Do not size-filter source paths here. A file that grew beyond the
           -- native scan cap may already have records in the current snapshot;
-          -- refreshing its scope is what removes those now-stale records.
+          -- reindexing the file removes those now-stale records.
           if watch_path_allowed(index, path, info, "file") then
-            scope_candidates[common.dirname(path)] = true
+            file_candidates[path] = true
           else
             ignored = ignored + 1
           end
@@ -2439,11 +2439,28 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
 
   index.watch_ignored_events = (index.watch_ignored_events or 0) + ignored
   index.watch_irrelevant_events = (index.watch_irrelevant_events or 0) + irrelevant
-  if not next(scopes) then
+  if not next(scopes) and not next(file_candidates) then
     return false, ignored > 0 and irrelevant == 0 and "ignored" or "irrelevant"
   end
-  return symbol_index.mark_directories_dirty(scopes, reason or "project-watch",
-    common.merge(opts or {}, { project_files_refreshed = files_current }))
+  local matched, refresh_reason = false, nil
+  if next(scopes) then
+    matched, refresh_reason = symbol_index.mark_directories_dirty(scopes, reason or "project-watch",
+      common.merge(opts or {}, { project_files_refreshed = files_current }))
+  end
+  for path in pairs(file_candidates) do
+    local covered = false
+    for scope in pairs(scopes) do
+      if common.path_belongs_to(path, scope) then covered = true; break end
+    end
+    if not covered then
+      local file_matched, file_reason = symbol_index.reindex_file(path,
+        common.merge(opts or {}, { reason = reason or "project-watch" }))
+      matched = matched or file_matched
+      refresh_reason = refresh_reason or file_reason
+    end
+  end
+  if matched then return true end
+  return false, refresh_reason
 end
 
 function symbol_index.mark_file_dirty(path, reason)
