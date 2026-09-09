@@ -537,6 +537,8 @@ function Model:open_commit_diff(commit, callback, opts)
     local selected = changed_file_index_by_path(tab.changed_files, tab.selected_file_path)
     if selected then tab.selected_file = selected end
   end
+  local on_loaded = callback
+  callback = on_loaded and function(model, err) on_loaded(model, err, tab) end
   if commit.kind == "working_tree" then
     self:load_changed_files(tab, callback)
   elseif tab.changed_files and #tab.changed_files > 0 then

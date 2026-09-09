@@ -810,12 +810,12 @@ test.describe("Git View command", function()
     test.equal(details.path_tree:is_expanded("src"), true)
   end)
 
-  test.it("activates a changed file from Git Log details with that file preselected", function(context)
+  test.it("opens a file comparison directly from Git Log details", function(context)
     local session, view = open_fake_git_view(context.project)
     local commit = {
       hash = "details-tree",
       subject = "Details tree",
-      parents = {},
+      parents = { "details-parent" },
       changed_files_loaded = true,
       changed_files = {
         { status = "modified", old_path = "src/App.kt", new_path = "src/App.kt" },
@@ -825,8 +825,13 @@ test.describe("Git View command", function()
     }
     local backend = {}
     for key, value in pairs(fake_backend) do backend[key] = value end
+    local finish_files
     backend.changed_files = function(repo, left, right, opts, callback)
-      callback(commit.changed_files, nil)
+      finish_files = callback
+      return { cancel = function() end }
+    end
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      callback(rev .. ":" .. relpath .. "\n", nil)
       return { cancel = function() end }
     end
     view.model.backend = backend
@@ -851,6 +856,8 @@ test.describe("Git View command", function()
     test.not_nil(details:get_point_of_interest_at(line))
 
     test.equal(command.perform("core:activate_point_of_interest"), true)
+    test.equal(panes.active().current_view, view)
+    finish_files(commit.changed_files, nil)
     local opened
     for _, candidate in ipairs(view.model.tabs) do
       if candidate.kind == "commit_diff" then opened = candidate end
@@ -859,6 +866,9 @@ test.describe("Git View command", function()
     test.equal(opened.kind, "commit_diff")
     test.equal(opened.selected_file_path, "src/Util.kt")
     test.equal(opened.selected_file, 3)
+    test.not_nil(panes.active().current_view.buffer_view_a)
+    test.not_nil(panes.active().current_view.buffer_view_b)
+    test.equal(panes.active().current_view.buffer_view_b.buffer:get_utf8_line(1), "details-tree:src/Util.kt\n")
   end)
 
   test.it("invalidates embedded Path Tree layout when Git details rows are replaced", function(context)

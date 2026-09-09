@@ -1243,6 +1243,23 @@ function GitView:activate_selected(callback)
 end
 
 function GitView:activate_selected_point(callback)
+  self:sync_selection_from_pane()
+  local source = core.active_view
+  local commit, _, record = self:details_tree_item(
+    source, source and source.buffer and source.buffer:get_selection() or 1
+  )
+  if commit and record then
+    local path = changed_file_path(record)
+    return self:open_file_comparison(source, function(done)
+      return self.model:open_commit_diff(commit, function(_, err, tab)
+        done(tab, err)
+        if callback then callback(self.model, err) end
+      end, { selected_file_path = path })
+    end, function()
+      return self:detail_commit_for_tab(self:model_tab()) == commit
+        and commit.selected_changed_file_path == path
+    end)
+  end
   local source_tab = self:model_tab()
   local diff_tab, err = self:activate_selected(callback)
   if source_tab.kind == "log" and diff_tab and self.on_model_tab_open then
@@ -1298,6 +1315,15 @@ function GitView:open_changed_file(point, opts)
   opts = opts or {}
   self:select_changed_file_point(point)
   local tab = self:model_tab()
+  return self:open_file_comparison(self:pane_view("file-list"), function(done)
+    return self.model:load_selected_diff_file(tab, function(_, err) done(tab, err) end)
+  end, function()
+    return tab.selected_file == point.index and tab.changed_files[point.index] == point.record
+  end, opts)
+end
+
+function GitView:open_file_comparison(source, load, selection_is_current, opts)
+  opts = opts or {}
   local destination = opts.pane or panes.pane_for_view(self) or panes.active()
   local destination_view = destination and destination.current_view
   local request = {}
@@ -1306,15 +1332,15 @@ function GitView:open_changed_file(point, opts)
   local project = core.root_project()
   local poi = require "core.poi"
   if not opts.remote then
-    poi.set_remote_source(self:pane_view("file-list"), { from_start = false })
+    poi.set_remote_source(source, { from_start = false })
   end
   local function request_is_current()
     return self.comparison_request == request and panes.contains(destination)
       and destination.current_view == destination_view
-      and poi.get_remote_source(project) == self:pane_view("file-list")
-      and tab.selected_file == point.index and tab.changed_files[point.index] == point.record
+      and (not source.remote_poi_source or poi.get_remote_source(project) == source)
+      and selection_is_current()
   end
-  local function present(comparison)
+  local function present(comparison, tab)
     if not comparison then return end
     local placed, reason = panes.place(function() return comparison end, {
       pane = destination, placement = placement, focus = opts.preserve_focus ~= true,
@@ -1327,7 +1353,7 @@ function GitView:open_changed_file(point, opts)
       core.log_quiet("Git comparison opened: path=%s placement=%s", tab.selected_file_path, placement)
     end
   end
-  return self.model:load_selected_diff_file(tab, function(_, err)
+  return load(function(tab, err)
     if not request_is_current() then return end
     if err or tab.file_error then
       core.error("Could not open Git comparison: %s", tostring((err or tab.file_error).message))
@@ -1347,7 +1373,7 @@ function GitView:open_changed_file(point, opts)
             on_close(view)
             for _, path in ipairs(paths) do os.remove(path) end
           end
-          present(comparison)
+          present(comparison, tab)
         end)
         return
       end
@@ -1356,7 +1382,7 @@ function GitView:open_changed_file(point, opts)
     end
     local comparison = self:ensure_diff_view(tab)
     tab.diff_view = nil
-    present(comparison)
+    present(comparison, tab)
   end)
 end
 
