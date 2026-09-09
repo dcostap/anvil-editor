@@ -1271,6 +1271,28 @@ test.describe("DiffView batch behavior", function()
     test.equal(view.diff_folds_a[1].hidden_count, view.diff_folds_b[1].hidden_count)
   end)
 
+  test.it("navigates changes with no text on the active side", function(context)
+    for _, missing_side in ipairs({ "left", "right" }) do
+      local short = "aa\nbb\ncc\ndd\nee"
+      local long = "aa\nadded-one\nbb\ncc\nadded-two\ndd\nee"
+      local view = track(context, "diffviews", diffview.string_to_string(
+        missing_side == "left" and short or long,
+        missing_side == "right" and short or long,
+        "left", "right", true
+      ))
+      wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+      local side = missing_side == "left" and view.buffer_view_a or view.buffer_view_b
+      core.set_active_view(side)
+      side.buffer:set_selection(1, 1)
+      test.ok(command.perform("diff:next_change"))
+      test.equal(side.buffer:get_selection(), 2)
+      test.ok(command.perform("diff:next_change"))
+      test.equal(side.buffer:get_selection(), 4)
+      test.ok(command.perform("diff:prev_change"))
+      test.equal(side.buffer:get_selection(), 2)
+    end
+  end)
+
   test.it("does not wrap change navigation within one file", function(context)
     local view = track(context, "diffviews", diffview.string_to_string(
       "aa\nleft-one\nbb\nleft-two\ncc",

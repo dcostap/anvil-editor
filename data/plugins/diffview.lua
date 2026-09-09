@@ -1586,16 +1586,8 @@ local function overview_geometry(view, side)
   return entries
 end
 
-local function diff_has_changes(changes)
-  for _, change in ipairs(changes or {}) do
-    if change.tag ~= "equal" then return true end
-  end
-  return false
-end
-
 function DiffView:diff_points_of_interest(is_a)
   local changes = is_a and self.a_changes or self.b_changes
-  if not diff_has_changes(changes) then return {} end
   local points = {}
   local last_tag
   for line, change in ipairs(changes) do
@@ -1613,6 +1605,22 @@ function DiffView:diff_points_of_interest(is_a)
     end
     last_tag = tag
   end
+  -- Empty-side changes have a boundary marker, but no changed Buffer lines.
+  local side = is_a and "a" or "b"
+  local buffer_view = is_a and self.buffer_view_a or self.buffer_view_b
+  for _, range in ipairs(connector_ranges(self)) do
+    if not range[side .. "_start"] then
+      points[#points + 1] = {
+        line = range[side .. "_next"] or #buffer_view.buffer.lines,
+        col = 1,
+        line_only_navigation = true,
+        scroll_to_line = true,
+        kind = "diff-change",
+        label = range.tag,
+      }
+    end
+  end
+  table.sort(points, function(a, b) return a.line < b.line end)
   return points
 end
 
