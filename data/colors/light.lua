@@ -221,10 +221,10 @@ style.git_ref_tag = c("9a5700")
 
 -- File tree Git status and line-count colors
 style.filetree_git_status_ignored = c("bd6b00")
-style.filetree_git_status_untracked = c("f04460")
+style.filetree_git_status_untracked = c("db3b4b")
 style.filetree_git_status_added = c("08a91f")
 style.filetree_git_status_modified = c("2f6fbd")
-style.filetree_git_status_deleted = c("f04460")
+style.filetree_git_status_deleted = c("db3b4b")
 style.filetree_git_status_unmerged = style.error
 style.filetree_git_line_additions = style.git_change_addition
 style.filetree_git_line_deletions = style.git_change_deletion
