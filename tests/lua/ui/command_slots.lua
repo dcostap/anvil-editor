@@ -2,6 +2,7 @@ local command = require "core.command"
 local common = require "core.common"
 local core = require "core"
 local panes = require "core.panes"
+local layout = require "core.pane_layout"
 local shell = require "core.shell"
 local storage = require "core.storage"
 local test = require "core.test"
@@ -84,9 +85,68 @@ test.describe("Command Slots", function()
     test.not_equal(panes.pane_for_view(output), source)
     test.equal(panes.active(), source)
     test.equal(core.active_view, focused)
+    layout.update_rects(source.group.root, { w = 1000, h = 800 })
     test.ok(command.perform("quick_command_output:run_a_alternate"))
     test.equal(command_slots.slots[1].view, output)
     test.equal(panes.count(), 2)
+    test.equal(core.active_view, focused)
+  end)
+
+  test.it("focuses existing output in another Pane for a normal run", function(context)
+    local output = command_slots.run_command(1, "first")
+    finish(context.runs[1], "done\n")
+    local output_pane = panes.pane_for_view(output)
+    local quick_output = output_pane.current_view
+    panes.present(View(), { pane = output_pane })
+    local source = panes.create { factory = function() return View() end }
+    local source_view = source.current_view
+
+    test.equal(command_slots.run_command(1, "second"), output)
+    test.equal(panes.pane_for_view(output), output_pane)
+    test.equal(output_pane.current_view, quick_output)
+    test.equal(source.current_view, source_view)
+    test.equal(panes.active(), output_pane)
+    test.equal(core.active_view, output)
+  end)
+
+  test.it("moves output out of the current Pane for an alternate run", function(context)
+    local source = panes.create { factory = function() return View() end }
+    local editor = source.current_view
+    local output = command_slots.run_command(1, "first")
+    finish(context.runs[1], "done\n")
+
+    test.equal(command_slots.run_command(1, "second", { placement = "split", focus = false }), output)
+    test.not_equal(panes.pane_for_view(output), source)
+    test.equal(panes.pane_for_view(output).group, source.group)
+    test.equal(source.current_view, editor)
+    test.equal(panes.active(), source)
+    test.equal(core.active_view, editor)
+  end)
+
+  test.it("moves distant output beside the requesting Pane without taking focus", function(context)
+    command_slots.set_command(1, "first")
+    local output = command_slots.run_command(1, "first")
+    finish(context.runs[1], "done\n")
+    local old_pane = panes.pane_for_view(output)
+    panes.present(View(), { pane = old_pane })
+    local old_view = old_pane.current_view
+    local source = panes.create { factory = function() return View() end }
+    local focused = core.active_view
+
+    test.ok(command.perform("quick_command_output:run_a_alternate"))
+    local destination = panes.pane_for_view(output)
+    test.not_equal(destination, old_pane)
+    test.not_equal(destination, source)
+    test.equal(destination.group, source.group)
+    test.equal(old_pane.current_view, old_view)
+    test.equal(source.current_view, focused)
+    test.equal(panes.active(), source)
+    test.equal(core.active_view, focused)
+    layout.update_rects(source.group.root, { w = 1000, h = 800 })
+    test.equal(panes.neighbor(source, "right"), destination)
+    test.ok(command.perform("quick_command_output:run_a_alternate"))
+    test.equal(panes.pane_for_view(output), destination)
+    test.equal(panes.active(), source)
     test.equal(core.active_view, focused)
   end)
 

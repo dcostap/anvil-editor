@@ -941,16 +941,22 @@ local function ensure_quick_output_view(slot, focus, placement)
     M.quick_output_views[slot.project_path] = quick_output
     pane = panes.pane_for_view(quick_output)
   else
-    if placement == "split" and pane == starting_pane then
+    local beside_start = starting_pane and pane ~= starting_pane
+      and (panes.neighbor(starting_pane, "left") == pane
+        or panes.neighbor(starting_pane, "right") == pane)
+    if placement == "split" and starting_pane and not beside_start then
       panes.present(quick_output, { pane = pane, focus = false })
+      if pane ~= starting_pane then
+        if not panes.move_current_view(pane, starting_pane, { focus = false }) then return nil end
+        pane = starting_pane
+      end
       local split = panes.move_current_view_to_split(pane, "right", { focus = false })
       if not split then return nil end
       pane = split
-      if starting_pane then panes.focus(starting_pane) end
-    elseif placement == "current" and starting_pane and pane ~= starting_pane then
-      panes.present(quick_output, { pane = pane, focus = false })
-      if not panes.move_current_view(pane, starting_pane, { focus = focus ~= false }) then return nil end
-      pane = starting_pane
+      panes.focus(starting_pane)
+      core.log_quiet("Quick Command Output: moved beside Pane %s", starting_pane.id)
+    elseif pane ~= starting_pane then
+      core.log_quiet("Quick Command Output: reused Pane %s", pane.id)
     end
     if pane.current_view ~= quick_output then
       panes.present(quick_output, { pane = pane, focus = focus ~= false })
