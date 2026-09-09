@@ -1630,7 +1630,8 @@ function Model:_finish_refresh(generation, total_commits, log_page, local_change
   if tab.total_commits == nil and log_page and not log_page.has_more then
     tab.total_commits = #tab.commits
   end
-  for _, scope in ipairs { "staged", "unstaged" } do
+  -- Local rows are prepended, so add unstaged first to keep staged first.
+  for _, scope in ipairs { "unstaged", "staged" } do
     local files = local_changes and local_changes[scope]
     if files and #files > 0 then
       local head = tab.commits[1]
