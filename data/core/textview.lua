@@ -2324,7 +2324,7 @@ function TextView:decoration_provider_entries()
 end
 
 local copy_feedback_decoration_provider = {
-  inline_ranges = function(_, view, line)
+  inline_ranges_above_selection = function(_, view, line)
     return view:get_copy_feedback_ranges(line)
   end,
 }
@@ -7691,10 +7691,11 @@ local function draw_decoration_line_backgrounds(view, line, x, y)
   end
 end
 
-local function draw_decoration_inline_ranges(view, line, x, y)
+local function draw_decoration_inline_ranges(view, line, x, y, method)
+  method = method or "inline_ranges"
   local render_line = view:get_line_render(line)
   for _, entry in ipairs(view:decoration_provider_entries()) do
-    local ranges = provider_call(view, entry, "inline_ranges", view, line)
+    local ranges = provider_call(view, entry, method, view, line)
     for _, range in ipairs(ranges or {}) do
       local col1 = math.max(1, math.floor(tonumber(range.col1 or range[1]) or 1))
       local col2 = math.max(col1, math.floor(tonumber(range.col2 or range[2]) or col1))
@@ -8026,6 +8027,9 @@ function TextView:draw_line_body(line, x, y)
         end
       end
     end
+    draw_decoration_inline_ranges(
+      self, line, x, y, "inline_ranges_above_selection"
+    )
     perf_scope_end(body_phase_scope)
 
     body_phase_scope = perf_scope_begin("text")
@@ -8146,6 +8150,10 @@ function TextView:draw_line_body(line, x, y)
       end
     end
   end
+
+  draw_decoration_inline_ranges(
+    self, line, x, y, "inline_ranges_above_selection"
+  )
 
   -- draw line's text
   perf_scope_end(phase_scope)

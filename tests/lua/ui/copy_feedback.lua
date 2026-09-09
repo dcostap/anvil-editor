@@ -32,9 +32,12 @@ test.describe("Copy Feedback Highlight", function()
     end
   end)
 
-  test.it("briefly marks the exact Text View text copied by buffer:copy", function(context)
+  for _, wrapped in ipairs { false, true } do
+    test.it("briefly marks the exact Text View text copied by buffer:copy"
+      .. (wrapped and " when wrapped" or ""), function(context)
     local view, buffer = make_view("alpha")
     context.view, context.buffer = view, buffer
+    view:set_wrapping_enabled(wrapped)
     panes.present(view, { placement = "new", focus = true })
     view:with_selection_state(function()
       buffer:set_selection(1, 2, 1, 5)
@@ -52,12 +55,16 @@ test.describe("Copy Feedback Highlight", function()
     renderer.draw_text = function(font, text, x)
       return x + (font and font:get_width(text) or 0)
     end
-    local ok, err = pcall(function() view:draw_line_body(1, 0, 0) end)
+    local ok, err = pcall(function()
+      view:prepare_line_body_draw_cache(1, 1)
+      view:draw_line_body(1, 0, 0)
+    end)
     renderer.draw_rect = old_rect
     renderer.draw_text = old_text
     if not ok then error(err, 0) end
 
     local feedback_rect
+    local selected_text_background
     for _, rect in ipairs(rects) do
       local color = rect.color
       if color and color[1] == style.copy_feedback[1]
@@ -67,8 +74,20 @@ test.describe("Copy Feedback Highlight", function()
         break
       end
     end
+    -- The copied text stays selected after the copy command. The feedback
+    -- must be the last background before text, or the selection hides it.
+    for _, rect in ipairs(rects) do
+      if rect.x <= view:get_col_x_offset(1, 2)
+      and rect.x + rect.w >= view:get_col_x_offset(1, 5)
+      then
+        selected_text_background = rect.color
+      end
+    end
     test.not_nil(feedback_rect, "expected copied text to receive themed fading feedback")
     test.equal(feedback_rect.x, view:get_col_x_offset(1, 2))
     test.equal(feedback_rect.w, view:get_col_x_offset(1, 5) - view:get_col_x_offset(1, 2))
-  end)
+    test.equal(selected_text_background, feedback_rect.color,
+      "copy feedback must cover the selection")
+    end)
+  end
 end)
