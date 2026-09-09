@@ -301,7 +301,7 @@ function M.navigate_remote(direction, opts)
   end
   if not point then return show_navigation_feedback(status, direction) end
   source.initial = false
-  M.select(view, point, { preview = false })
+  M.select(view, point, { preview = false, remote = true })
   local result = M.activate(view, point, {
     pane = opts.pane or panes.active(), placement = "current", preserve_focus = false,
     remote = true,

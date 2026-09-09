@@ -130,6 +130,28 @@ test.describe("Command Slots", function()
     test.equal(panes.count(), 1)
   end)
 
+  test.it("keeps the remote POI cursor when returning to command output", function(context)
+    local poi = require "core.poi"
+    local path = DATADIR .. PATHSEP .. "core" .. PATHSEP .. "poi.lua"
+    local output = command_slots.run_command(1, "check")
+    finish(context.runs[1], path .. ":1\n" .. path .. ":2\n" .. path .. ":3\n")
+    local pane = panes.pane_for_view(output)
+    local quick_output = pane.current_view
+    panes.present(View(), { pane = pane })
+
+    test.ok(poi.navigate_remote(1))
+    test.ok(poi.navigate_remote(1))
+    test.equal(output:get_selection_state().selections[1], 4)
+    for _ = 1, panes.history_length(pane) do
+      if pane.current_view == quick_output then break end
+      test.ok(panes.back(pane))
+    end
+    test.equal(core.active_view, output)
+    test.equal(output:get_selection_state().selections[1], 4)
+    test.ok(poi.navigate_remote(1))
+    test.equal(output:get_selection_state().selections[1], 5)
+  end)
+
   test.it("keeps output run history distinct from Pane Navigation History", function(context)
     local output = command_slots.run_command(1, "first")
     finish(context.runs[1], "first-output\n")

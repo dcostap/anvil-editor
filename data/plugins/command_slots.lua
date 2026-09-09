@@ -602,8 +602,15 @@ function CommandOutputView:preview_point_of_interest(point)
   return require("core.poi_preview").location(self, point)
 end
 
+function CommandOutputView:select_point_of_interest(point, opts)
+  if opts.remote then
+    self.remote_navigation_revision = (self.remote_navigation_revision or 0) + 1
+  end
+end
+
 function CommandOutputView:get_navigation_state()
   return {
+    remote_navigation_revision = self.remote_navigation_revision,
     output_history_index = self.slot and self.slot.output_history_index or nil,
     selection_state = self:get_selection_state(),
     scroll = { x = self.scroll.x, y = self.scroll.y },
@@ -611,6 +618,14 @@ function CommandOutputView:get_navigation_state()
 end
 
 function CommandOutputView:set_navigation_state(state)
+  -- Remote navigation can move the cursor after Pane history saves this run.
+  -- Keep that newer position, but still allow history to restore other runs.
+  if state and self.slot
+    and self.displayed_entry == self.slot.output_history[state.output_history_index]
+    and self.remote_navigation_revision ~= state.remote_navigation_revision then
+    core.log_quiet("Command Output: kept newer remote POI position during history restore")
+    return
+  end
   if state and state.output_history_index and self.slot then
     local index = common.clamp(state.output_history_index, 1, #(self.slot.output_history or {}))
     self.slot.output_history_index = index
