@@ -5421,6 +5421,13 @@ function decoration_provider:line_background(view, line)
     if callout_runtime.for_line(view, line) then return nil end
     return style.markdown_live_code_background
   end
+  if not callout_runtime.for_line(view, line) then
+    for _, node in ipairs(semantic_line(view, line) or {}) do
+      if node.type == "quote" then
+        return style.markdown_live_quote_background
+      end
+    end
+  end
   return nil
 end
 
