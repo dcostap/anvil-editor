@@ -1271,6 +1271,46 @@ test.describe("DiffView batch behavior", function()
     test.equal(view.diff_folds_a[1].hidden_count, view.diff_folds_b[1].hidden_count)
   end)
 
+  test.it("treats adjacent deleted and modified lines as one navigation block", function(context)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      "start\nremoved one\nold value\nremoved two\nshared\nlast old\nend",
+      "start\nnew value\nshared\nlast new\nend",
+      "left", "right", true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    local left = view.buffer_view_a
+    core.set_active_view(left)
+    left.buffer:set_selection(1, 1)
+    test.ok(command.perform("diff:next_change"))
+    test.equal(left.buffer:get_selection(), 2)
+    test.ok(command.perform("diff:next_change"))
+    test.equal(left.buffer:get_selection(), 6)
+    test.ok(command.perform("diff:prev_change"))
+    test.equal(left.buffer:get_selection(), 2)
+  end)
+
+  test.it("provides intermediate navigation stops inside a long change block", function(context)
+    local lines = { "start" }
+    for i = 1, 75 do lines[#lines + 1] = "removed " .. i end
+    lines[#lines + 1] = "end"
+    local view = track(context, "diffviews", diffview.string_to_string(
+      table.concat(lines, "\n"), "start\nend", "left", "right", true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    local left = view.buffer_view_a
+    core.set_active_view(left)
+    left.buffer:set_selection(1, 1)
+    test.ok(command.perform("diff:next_change"))
+    test.equal(left.buffer:get_selection(), 2)
+    test.ok(command.perform("diff:next_change"))
+    local middle = left.buffer:get_selection()
+    test.ok(middle > 2 and middle < 76, "expected a stop inside the block")
+    test.ok(command.perform("diff:next_change"))
+    test.ok(left.buffer:get_selection() > middle, "expected progress through the block")
+    test.ok(command.perform("diff:prev_change"))
+    test.equal(left.buffer:get_selection(), middle)
+  end)
+
   test.it("navigates changes with no text on the active side", function(context)
     for _, missing_side in ipairs({ "left", "right" }) do
       local short = "aa\nbb\ncc\ndd\nee"

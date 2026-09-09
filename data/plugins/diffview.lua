@@ -1589,38 +1589,26 @@ end
 function DiffView:diff_points_of_interest(is_a)
   local changes = is_a and self.a_changes or self.b_changes
   local points = {}
-  local last_tag
-  for line, change in ipairs(changes) do
-    local tag = change and change.tag or "equal"
-    if tag ~= "equal" and tag ~= last_tag then
+  local side = is_a and "a" or "b"
+  local buffer_view = is_a and self.buffer_view_a or self.buffer_view_b
+  for _, range in ipairs(connector_ranges(self)) do
+    -- Unchanged lines separate blocks, not changes in marker color.
+    -- Empty sides use the boundary marker as their single stop.
+    local first = range[side .. "_start"]
+      or range[side .. "_next"] or #buffer_view.buffer.lines
+    local last = range[side .. "_end"] or first
+    for line = first, last, 30 do
       points[#points + 1] = {
         line = line,
         col = 1,
         line_only_navigation = true,
         scroll_to_line = true,
         kind = "diff-change",
-        label = tag,
-        change = change,
-      }
-    end
-    last_tag = tag
-  end
-  -- Empty-side changes have a boundary marker, but no changed Buffer lines.
-  local side = is_a and "a" or "b"
-  local buffer_view = is_a and self.buffer_view_a or self.buffer_view_b
-  for _, range in ipairs(connector_ranges(self)) do
-    if not range[side .. "_start"] then
-      points[#points + 1] = {
-        line = range[side .. "_next"] or #buffer_view.buffer.lines,
-        col = 1,
-        line_only_navigation = true,
-        scroll_to_line = true,
-        kind = "diff-change",
         label = range.tag,
+        change = changes[line],
       }
     end
   end
-  table.sort(points, function(a, b) return a.line < b.line end)
   return points
 end
 
