@@ -7895,12 +7895,14 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
 
   local caret_x, caret_y = x, y
   local caret_width, caret_height
+  -- Scaling can leave a fractional thickness. Round it before placing the edges.
+  local thickness = math.max(1, common.round(style.caret_width))
   if self.buffer.overwrite then
     caret_y = y + lh
     caret_width = self:get_font():get_width(self.buffer:get_char(line, col))
-    caret_height = style.caret_width * 2
+    caret_height = thickness * 2
   else
-    caret_width, caret_height = style.caret_width, lh
+    caret_width, caret_height = thickness, lh
   end
 
   local active_line, active_col = self.buffer:get_selection(false)

@@ -2,6 +2,42 @@ local CaretRenderer = require "core.caret_renderer"
 local test = require "core.test"
 
 test.describe("Resting caret", function()
+  test.it("keeps scaled caret thickness constant across positions", function()
+    local core = require "core"
+    local style = require "core.style"
+    local config = require "core.config"
+    local view = require("core.editor")(require("core.buffer")())
+    local old_width, old_active = style.caret_width, core.active_view
+    local old_rect, old_submit = renderer.draw_rect, core.root_panel.submit_keyboard_caret
+    local old_animated = config.animated_caret
+    local widths = {}
+    local function capture(x, y, w)
+      widths[#widths + 1] = math.floor(x + w + 0.5) - math.floor(x + 0.5)
+    end
+    local ok, err = pcall(function()
+      style.caret_width = 1.5
+      config.animated_caret = true
+      renderer.draw_rect = capture
+      core.root_panel.submit_keyboard_caret = function(_, target)
+        capture(target.x, target.y, target.width)
+      end
+      for _, focused in ipairs { false, true } do
+        core.active_view = focused and view or nil
+        for _, x in ipairs { 10, 10.25, 10.5, 10.75 } do
+          view:draw_caret(x, 0, 1, 1)
+        end
+      end
+      test.equal(#widths, 8)
+      for _, width in ipairs(widths) do
+        test.equal(width, widths[1], "caret thickness changes with position")
+      end
+    end)
+    style.caret_width, core.active_view = old_width, old_active
+    renderer.draw_rect, core.root_panel.submit_keyboard_caret = old_rect, old_submit
+    config.animated_caret = old_animated
+    if not ok then error(err, 0) end
+  end)
+
   test.it("stops painting the trail when movement has ended", function()
     local caret = CaretRenderer.new()
     local owner = {}
