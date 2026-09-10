@@ -1,5 +1,6 @@
 local core = require "core"
 local vault_index = require "core.markdown.vault_index"
+local file_completion = require "core.markdown.file_completion"
 
 local completion = {}
 
@@ -36,7 +37,7 @@ function completion.context(view)
   if not line then return nil end
   local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
   local col1 = open_wikilink_start(text, col)
-  if not col1 then return nil end
+  if not col1 then return file_completion.context(text, line, col) end
   local partial = text:sub(col1 + 2, col - 1)
   if partial:find("|", 1, true) then return nil end
 
@@ -74,20 +75,30 @@ function completion.context(view)
   }
 end
 
-function completion.apply(view, target)
+function completion.apply(view, target, is_directory)
   local context = completion.context(view)
   if not context then return false end
   if context.alias then target = target:match("^[^|]*") .. context.alias end
+  local text, target_end
+  if context.mode == "file" then
+    text, target_end = file_completion.replacement(context, target)
+  else
+    text = "[[" .. target .. "]]"
+  end
   local result = view:with_selection_state(function()
     local buffer = view.buffer
     local edits = {{
       line1 = context.line, col1 = context.col1,
       line2 = context.line, col2 = context.col2,
-      text = "[[" .. target .. "]]", idx = 1,
+      text = text, idx = 1,
     }}
+    local selections = buffer:selections_after_edits(edits, { "end" })
+    if is_directory then
+      selections = { context.line, context.col1 + target_end, context.line, context.col1 + target_end }
+    end
     return buffer:apply_edits(edits, {
       type = "replace", merge_undo = false, allow_selection_only = true,
-      selections = buffer:selections_after_edits(edits, { "end" }),
+      selections = selections,
       last_selection = 1,
     })
   end)
@@ -101,19 +112,24 @@ function completion.get_completions(view)
   if not context then return nil end
   context.items = {}
   local path = view.buffer.abs_filename or view.buffer.filename
-  local index = path and vault_index.index_for_path(path)
-  if not index then return context end
-  if not index:can_resolve() then
-    index:ensure("link-completion")
-    return context
+  if not path then return context end
+  local candidates
+  if context.mode == "file" then
+    candidates = file_completion.candidates(context, path)
+  else
+    local index = vault_index.index_for_path(path)
+    if not index:can_resolve() then
+      index:ensure("link-completion")
+      return context
+    end
+    local target_path = path
+    if context.note_target then
+      local resolution = index:resolve(context.note_target, path)
+      if resolution.status ~= "resolved" or resolution.kind ~= "note" then return context end
+      target_path = resolution.path
+    end
+    candidates = index:completion_candidates(context.mode, context.query, target_path, 200)
   end
-  local target_path = path
-  if context.note_target then
-    local resolution = index:resolve(context.note_target, path)
-    if resolution.status ~= "resolved" or resolution.kind ~= "note" then return context end
-    target_path = resolution.path
-  end
-  local candidates = index:completion_candidates(context.mode, context.query, target_path, 200)
 
   for _, candidate in ipairs(candidates) do
     if context.note_target then
@@ -122,14 +138,14 @@ function completion.get_completions(view)
     end
     context.items[#context.items + 1] = {
       text = candidate.text,
-      info = candidate.rel_path .. ":" .. tostring(candidate.line or 1),
+      info = candidate.line and candidate.rel_path .. ":" .. candidate.line or candidate.kind,
       icon = candidate.kind,
       data = candidate,
       source_path = candidate.path,
       source_line = candidate.line or 1,
       source_col = 1,
       onselect = function(_, item)
-        return completion.apply(view, item.data.target)
+        return completion.apply(view, item.data.target, item.data.directory)
       end,
     }
   end
@@ -148,7 +164,7 @@ function completion.ensure_provider()
 end
 
 function completion.open(view)
-  if not completion.context(view) then return false, "caret is not in an incomplete Wikilink" end
+  if not completion.context(view) then return false, "caret is not in a link target" end
   if not completion.ensure_provider() then return false, "autocomplete unavailable" end
   require("plugins.autocomplete").trigger()
   return true
