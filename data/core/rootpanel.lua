@@ -127,7 +127,8 @@ function RootPanel:draw_keyboard_caret()
     config.animated_caret_min_speed,
     config.animated_caret_max_speed,
     config.animated_caret_distance_min,
-    config.animated_caret_distance_max
+    config.animated_caret_distance_max,
+    config.animated_caret_far_jump_speed_bonus
   )
   if animating then core.redraw = true end
 end
