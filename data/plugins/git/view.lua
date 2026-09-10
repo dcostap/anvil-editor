@@ -345,7 +345,14 @@ function GitView:pane_view(name)
     view.get_point_of_interest_at = function(v, line)
       return self:point_of_interest_for_pane(v, line)
     end
-    if name == "file-list" then
+    if name == "details" then
+      view.remote_poi_source = true
+      view.get_points_of_interest = function() return self:detail_file_points() end
+      view.next_point_of_interest = function(v, direction)
+        return self:next_detail_file_point(v, direction)
+      end
+      view.select_point_of_interest = function(_, point) self:select_detail_file_point(point) end
+    elseif name == "file-list" then
       view.remote_poi_source = true
       view.get_points_of_interest = function() return self:changed_file_points() end
       view.next_point_of_interest = function(v, direction)
@@ -502,7 +509,7 @@ function GitView:get_focus_view()
   local current = self:model_tab()
   if current and current.kind == "commit_diff" then return self:pane_view("file-list") end
   local active = core.active_view
-  if active and active.git_owner_view == self then return active end
+  if active and active.git_owner_view == self and active.git_pane then return active end
   if self.focused_pane_name and self.pane_views and self.pane_views[self.focused_pane_name] then
     return self.pane_views[self.focused_pane_name]
   end
@@ -572,6 +579,8 @@ function GitView:dispose_tab_resources(tab)
   if not tab then return end
   for _, child in ipairs { tab.diff_view, tab.history_diff_view } do
     if child then
+      local pane = panes.pane_for_view(child)
+      if pane then panes.close_view(pane, { view = child, force = true, focus = false }) end
       child:dispose_integrations()
       child:dispose_owned_buffers()
     end
@@ -582,6 +591,9 @@ end
 function GitView:on_close()
   if self.pane_views and self.pane_views["file-list"] then
     require("core.poi").clear_remote_source(self.pane_views["file-list"])
+  end
+  if self.pane_views and self.pane_views.details then
+    require("core.poi").clear_remote_source(self.pane_views.details)
   end
   self.comparison_request = nil
   if self.tab_id == "log" then
@@ -609,8 +621,10 @@ function GitView:on_close()
 end
 
 function GitView:can_discard_from_history()
-  local view = self.pane_views and self.pane_views["file-list"]
-  return not (view and require("core.poi").is_selected_remote_source(view))
+  for _, view in pairs(self.pane_views or {}) do
+    if require("core.poi").is_selected_remote_source(view) then return false end
+  end
+  return true
 end
 
 function GitView:commit_list_y()
@@ -716,11 +730,7 @@ function GitView:mouse_surface_at(x, y)
   if tab.kind == "commit_diff" then
     return nil
   end
-  if tab.kind == "file_history" then
-    local diff = tab.history_diff_view
-    if tab.preview_loading then return nil end
-    return point_in_view(diff, x, y) and diff or nil
-  end
+  if tab.kind == "file_history" then return nil end
   local details = self:pane_view("details")
   return point_in_view(details, x, y) and details or nil
 end
@@ -730,10 +740,6 @@ function GitView:on_mouse_wheel(y, x)
   local has_pointer = self.mouse_router:has_pointer()
   local surface = self.mouse_router:wheel_target()
   if surface then
-    if tab and tab.kind == "file_history" and surface == tab.history_diff_view then
-      surface:on_mouse_wheel(y, x)
-      return y ~= 0 or x ~= 0
-    end
     local handled = scroll_pane_view(surface, y, x)
     if tab and tab.kind == "commit_diff" and surface.git_pane == "file-list" then
       tab.file_scroll = surface.scroll.to.y
@@ -851,20 +857,8 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
   local selected_tab = self:model_tab()
   local list_width = math.floor(self.size.x * 0.45)
   if selected_tab and selected_tab.kind == "file_history" then
-    local diff = selected_tab.history_diff_view
-    if diff and point_in_view(diff, x, y) then
-      local side = x >= diff.position.x + diff.size.x / 2 and "right" or "left"
-      if not self:focus_diff_pane(side) then return true end
-      self.mouse_router:capture(diff)
-      local result = diff:on_mouse_pressed(button, x, y, clicks)
-      if core.active_view and core.active_view.git_owner_view == self then
-        self.focused_diff_buffer_view = core.active_view
-      end
-      return result == true
-    end
-    local list_width = math.floor(self.size.x * 0.34)
     if button ~= "left" then return true end
-    if x < self.position.x or x > self.position.x + list_width then return true end
+    if x < self.position.x or x > self.position.x + self.size.x then return true end
     if y < self:history_commits_y() then return true end
     self:clamp_history_scroll(selected_tab)
     local index = math.floor((y - self:history_commits_y() + (selected_tab.scroll or 0)) / self:row_height()) + 1
@@ -1296,6 +1290,63 @@ function GitView:activate_selected_point(callback)
   return diff_tab, err
 end
 
+function GitView:next_detail_file_point(view, direction)
+  local points = self:detail_file_points()
+  local commit = self:detail_commit_for_tab(self:model_tab())
+  local record = view:path_tree_record_for_line(view.buffer:get_selection())
+  local path = record and changed_file_path(record) or (commit and commit.selected_changed_file_path)
+  for index, point in ipairs(points) do
+    if changed_file_path(point.record) == path then return points[index + direction], "boundary" end
+  end
+  return direction > 0 and points[1] or points[#points], "empty"
+end
+
+function GitView:detail_file_points()
+  local commit = self:detail_commit_for_tab(self:model_tab())
+  if not commit then return {} end
+  local tree = changed_file_tree(commit.changed_files or {}, {})
+  local points = {}
+  for line, row in ipairs(tree.rows) do
+    local index = tree.line_to_record[line]
+    if index then
+      points[#points + 1] = {
+        line = line, col = 1, kind = "git-changed-file", label = row.text,
+        record = commit.changed_files[index], commit = commit,
+        activate = function(_, point, opts)
+          self:select_detail_file_point(point)
+          local path = changed_file_path(point.record)
+          return self:open_file_comparison(self:pane_view("details"), function(done)
+            return self.model:open_commit_diff(commit, function(_, err, tab) done(tab, err) end,
+              { selected_file_path = path })
+          end, function()
+            return self:detail_commit_for_tab(self:model_tab()) == commit
+              and commit.selected_changed_file_path == path
+          end, opts)
+        end,
+      }
+    end
+  end
+  return points
+end
+
+function GitView:select_detail_file_point(point)
+  local view = self:pane_view("details")
+  local path = changed_file_path(point.record)
+  point.commit.selected_changed_file_path = path
+  for prefix in path:gmatch("()/") do
+    if view.path_tree then view.path_tree:set_expanded(path:sub(1, prefix - 1), true) end
+  end
+  refresh_view_changed_file_tree_cache(view)
+  self:update_pane_buffers(true)
+  for line = 1, #view.buffer.lines do
+    if view:path_tree_record_for_line(line) == point.record then
+      point.line = line
+      view.buffer:set_selection(line, 1)
+      break
+    end
+  end
+end
+
 function GitView:changed_file_points()
   local tab = self:model_tab()
   if not tab or tab.kind ~= "commit_diff" then return {} end
@@ -1435,7 +1486,10 @@ function GitView:point_of_interest_for_pane(view, line)
   elseif view.git_pane == "details" then
     local _, row, record = self:details_tree_item(view, line)
     if not (row and row.type == "file" and record) then return nil end
-    kind = "git-changed-file"
+    for _, point in ipairs(self:detail_file_points()) do
+      if point.record == record then point.line = line; return point end
+    end
+    return nil
   else
     return nil
   end

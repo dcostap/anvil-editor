@@ -34,6 +34,41 @@ test.describe("Commit remote POIs", function()
 
   test.after_each(function() panes.reset_for_tests() end)
 
+  test.it("continues through Git Log files after activating a file comparison", function(context)
+    local source = context.source
+    source.tab_id = "log"
+    local log = source.model:log_tab()
+    log.commits = {{ hash = "after", parents = { "before" }, subject = "Change",
+      changed_files = context.tab.changed_files, changed_files_loaded = true }}
+    log.selected_commit = 1
+    source.model.backend.diff_endpoint_for_commit = function()
+      return { left = "before", right = "after" }
+    end
+    source.model.backend.changed_files = function(_, _, _, _, callback)
+      callback(context.tab.changed_files)
+    end
+    source:update_pane_buffers(true)
+    local tree = source:pane_view("details")
+    for line = 1, #tree.buffer.lines do
+      local row = tree:path_tree_row(line)
+      if row and row.type == "dir" then tree:toggle_path_tree_folder(line); break end
+    end
+    test.ok(poi.navigate(tree, 1))
+    test.equal(panes.active().current_view, source)
+    test.ok(poi.activate(tree))
+    test.equal(poi.get_remote_source(), tree)
+    local destination = panes.active()
+    test.contains(table.concat(destination.current_view.buffer_view_b.buffer.lines), "after src/a.lua")
+    test.ok(poi.navigate_remote(1))
+    test.contains(table.concat(destination.current_view.buffer_view_b.buffer.lines), "after src/b.lua")
+    test.equal(tree:path_tree_record_for_line(tree.buffer:get_selection()).new_path, "src/b.lua")
+    test.ok(poi.navigate_remote(-1))
+    test.contains(table.concat(destination.current_view.buffer_view_b.buffer.lines), "after src/a.lua")
+    test.equal(source:can_discard_from_history(), false)
+    source:on_close()
+    test.equal(poi.get_remote_source(), nil)
+  end)
+
   test.it("keeps the tree local and opens remote comparisons in the requesting Pane", function(context)
     local source = context.source
     local tree = source:pane_view("file-list")
