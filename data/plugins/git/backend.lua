@@ -678,6 +678,21 @@ local function read_file_contents(filename, max_output)
   return text, nil
 end
 
+local revision_content, revision_content_order, revision_content_bytes = {}, {}, 0
+local REVISION_CONTENT_LIMIT = 16 * 1024 * 1024
+
+local function remember_revision_content(key, text)
+  if not key or revision_content[key] or #text > REVISION_CONTENT_LIMIT then return end
+  while #revision_content_order >= 128 or revision_content_bytes + #text > REVISION_CONTENT_LIMIT do
+    local oldest = table.remove(revision_content_order, 1)
+    revision_content_bytes = revision_content_bytes - #revision_content[oldest]
+    revision_content[oldest] = nil
+  end
+  revision_content[key] = text
+  revision_content_order[#revision_content_order + 1] = key
+  revision_content_bytes = revision_content_bytes + #text
+end
+
 function backend.file_at(repo, rev, relpath, opts, callback)
   opts = opts or {}
   if rev == nil or rev == "" then
@@ -690,13 +705,33 @@ function backend.file_at(repo, rev, relpath, opts, callback)
     if callback then callback(text, err) end
     return nil
   end
+  -- Only complete object IDs are immutable. HEAD, index, and branch names are not.
+  local key
+  if type(rev) == "string" and (#rev == 40 or #rev == 64) and rev:match("^%x+$") then
+    local root = type(repo) == "table" and repo.root or repo
+    key = tostring(root) .. "\0" .. rev .. "\0" .. git_arg_path(relpath)
+  end
+  local cached = key and revision_content[key]
+  if cached and backend.is_enabled() then
+    local cfg = git_config()
+    local limit = opts.max_output or (cfg and cfg.max_output) or backend.DEFAULT_MAX_OUTPUT
+    if #cached > limit then
+      if callback then callback(nil, { kind = "output_too_large", message = "output too large" }) end
+    else
+      core.log_quiet("Git backend: reused immutable revision content for %s", relpath)
+      if callback then callback(cached, nil) end
+    end
+    return nil
+  end
   local prefix = rev == backend.INDEX and "" or tostring(rev)
   return backend.run_git(repo, { "show", prefix .. ":" .. git_arg_path(relpath) }, opts, function(result, err)
     if not result then
       if callback then callback(nil, err) end
       return
     end
-    if callback then callback(result.stdout or "", nil) end
+    local text = result.stdout or ""
+    remember_revision_content(key, text)
+    if callback then callback(text, nil) end
   end)
 end
 
