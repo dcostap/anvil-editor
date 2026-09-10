@@ -31,6 +31,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
   end)
 
   test.it("draws the enclosing function without parameters at the file column edge", function()
+    renderer.draw_canvas = function() end
     local calls = {}
     symbol_index.enclosing_symbol = function(path, line, col, opts)
       test.equal(path, "C:/project/src/parser.lua")
