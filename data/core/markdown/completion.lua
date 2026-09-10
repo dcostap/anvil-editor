@@ -138,6 +138,7 @@ function completion.get_completions(view)
     end
     context.items[#context.items + 1] = {
       text = candidate.text,
+      name_span = candidate.name and { #candidate.text - #candidate.name + 1, #candidate.text },
       info = candidate.line and candidate.rel_path .. ":" .. candidate.line or candidate.kind,
       icon = candidate.kind,
       data = candidate,

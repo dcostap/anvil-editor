@@ -969,7 +969,7 @@ function Index:completion_candidates(mode, query, source_path, limit)
     end
     return result
   end
-  local function add(text, target, kind, entry, line, info)
+  local function add(text, target, kind, entry, line, info, name)
     local key = kind .. "\0" .. target .. "\0" .. tostring(entry and entry.abs_path or "")
     if seen[key] then return end
     local match_score = score(text, target, kind, info)
@@ -977,6 +977,7 @@ function Index:completion_candidates(mode, query, source_path, limit)
     seen[key] = true
     candidates[#candidates + 1] = {
       text = text,
+      name = name,
       target = target,
       kind = kind,
       path = entry and entry.abs_path,
@@ -1019,7 +1020,7 @@ function Index:completion_candidates(mode, query, source_path, limit)
   elseif mode == "current_heading" and source_entry then
     for _, heading in ipairs(source_entry.headings or {}) do
       local heading_target = heading.path_text or heading.text
-      add(heading_target, "#" .. heading_target, "heading", source_entry, heading.line, source_entry.rel_path)
+      add(heading_target, "#" .. heading_target, "heading", source_entry, heading.line, source_entry.rel_path, heading.text)
     end
   elseif mode == "global_heading" then
     for _, entry in pairs(self.notes_by_abs) do
@@ -1027,7 +1028,7 @@ function Index:completion_candidates(mode, query, source_path, limit)
       for _, heading in ipairs(entry.headings or {}) do
         local heading_target = heading.path_text or heading.text
         add(heading_target, note_target .. "#" .. heading_target,
-          "heading", entry, heading.line, entry.rel_path)
+          "heading", entry, heading.line, entry.rel_path, heading.text)
       end
     end
   elseif mode == "current_block" and source_entry then

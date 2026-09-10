@@ -17,6 +17,8 @@ local tree_sitter_registry = require "core.treesitter.registry"
 ---@class plugins.autocomplete.symbolinfo
 ---Text value of the symbol displayed on the autocomplete box.
 ---@field text string
+---Inclusive byte span of the target name within a contextual label.
+---@field name_span? integer[]
 ---Additional information displayed on autocomplete box, eg: item type.
 ---@field info? string
 ---Rich row preview containing the displayed declaration or contextual symbol.
@@ -341,7 +343,9 @@ local function display_text(text, max_len)
   max_len = max_len or max_symbol_length()
   if #text <= max_len then return text end
   if max_len <= 1 then return "…" end
-  return text:sub(1, max_len - 1) .. "…"
+  local last = max_len - 1
+  while last > 0 and common.is_utf8_cont(text, last + 1) do last = last - 1 end
+  return text:sub(1, last) .. "…"
 end
 
 local function translate_start_of_word(buffer, line, col)
@@ -1649,7 +1653,9 @@ local function draw_matched_text(font, base_color, match_color, item, x, y, w, h
     run_text = ""
   end
   for i = 1, #text do
-    local color = matches and matches[i] and match_color or base_color
+    local name = item and item.name_span
+    local color = matches and matches[i] and match_color
+      or name and (i < name[1] or i > name[2]) and style.dim or base_color
     if run_color ~= color then
       flush()
       run_color = color
@@ -1689,8 +1695,11 @@ local function fit_prefix(font, text, width)
   local lo, hi = 0, #text
   while lo < hi do
     local mid = math.ceil((lo + hi) / 2)
-    if font:get_width(text:sub(1, mid)) <= width then lo = mid else hi = mid - 1 end
+    local last = mid
+    while last > 0 and last < #text and common.is_utf8_cont(text, last + 1) do last = last - 1 end
+    if font:get_width(text:sub(1, last)) <= width then lo = mid else hi = mid - 1 end
   end
+  while lo > 0 and lo < #text and common.is_utf8_cont(text, lo + 1) do lo = lo - 1 end
   return text:sub(1, lo)
 end
 
@@ -1700,15 +1709,18 @@ local function fit_suffix(font, text, width)
   local lo, hi = 1, #text + 1
   while lo < hi do
     local mid = math.floor((lo + hi) / 2)
-    if font:get_width(text:sub(mid)) <= width then hi = mid else lo = mid + 1 end
+    local first = mid
+    while first <= #text and common.is_utf8_cont(text, first) do first = first + 1 end
+    if font:get_width(text:sub(first)) <= width then hi = mid else lo = mid + 1 end
   end
+  while lo <= #text and common.is_utf8_cont(text, lo) do lo = lo + 1 end
   return text:sub(lo)
 end
 
 local function clipped_preview_around_name(font, text, span, width)
   text = tostring(text or "")
-  if text == "" or width <= 0 then return "", nil end
-  if font:get_width(text) <= width + TEXT_OVERFLOW_TOLERANCE then return text, span end
+  if text == "" or width <= 0 then return "", nil, 1, 0, 0 end
+  if font:get_width(text) <= width + TEXT_OVERFLOW_TOLERANCE then return text, span, 1, #text, 0 end
   span = span or { 1, math.min(#text, #(tostring(text):match("%S+") or text)) }
   local name_start = common.clamp(tonumber(span[1]) or 1, 1, #text)
   local name_end = common.clamp(tonumber(span[2]) or name_start, name_start, #text)
@@ -1718,9 +1730,14 @@ local function clipped_preview_around_name(font, text, span, width)
   local ellipsis = "..."
   local ellipsis_w = font:get_width(ellipsis)
   local name_w = font:get_width(name)
-  if name_w >= width then
-    local clipped_name = fit_prefix(font, name, math.max(0, width - ellipsis_w)) .. ellipsis
-    return clipped_name, { 1, math.max(1, #clipped_name - #ellipsis) }
+  if name_w > width then
+    local prefix = fit_prefix(font, name, math.max(0, width - ellipsis_w))
+    local clipped_name = prefix .. fit_prefix(font, ellipsis, width - font:get_width(prefix))
+    return clipped_name, { 1, #prefix }, name_start, name_start + #prefix - 1, 0
+  end
+  local marker_width = (before ~= "" and ellipsis_w or 0) + (after ~= "" and ellipsis_w or 0)
+  if name_w + marker_width > width then
+    return name, { 1, #name }, name_start, name_end, 0
   end
 
   local remaining = width - name_w
@@ -1751,7 +1768,7 @@ local function clipped_preview_around_name(font, text, span, width)
     and font:get_width(clipped) > width + TEXT_OVERFLOW_TOLERANCE
     and clipped_after ~= ""
   do
-    clipped_after = clipped_after:sub(1, -2)
+    clipped_after = clipped_after:usub(1, -2)
     trailing = clipped_after ~= after and ellipsis or ""
     clipped = leading .. clipped_before .. name .. clipped_after .. trailing
   end
@@ -1759,12 +1776,50 @@ local function clipped_preview_around_name(font, text, span, width)
     and font:get_width(clipped) > width + TEXT_OVERFLOW_TOLERANCE
     and clipped_before ~= ""
   do
-    clipped_before = clipped_before:sub(2)
+    clipped_before = clipped_before:usub(2)
     leading = clipped_before ~= before and ellipsis or ""
     clipped = leading .. clipped_before .. name .. clipped_after .. trailing
   end
   local clipped_name_start = #leading + #clipped_before + 1
-  return clipped, { clipped_name_start, clipped_name_start + #name - 1 }
+  return clipped, { clipped_name_start, clipped_name_start + #name - 1 },
+    name_start - #clipped_before, name_end + #clipped_after, #leading
+end
+
+local function draw_label(font, item, x, y, width, height)
+  local text = tostring(item.text or "")
+  if text == "" then return x end
+  local name = item.name_span or { 1, #text }
+  local focus, offset = name, 0
+  if font:get_width(text:sub(name[1], name[2])) > width then
+    -- Remove parent context before shortening the name itself.
+    offset = name[1] - 1
+    text = text:sub(name[1], name[2])
+    local first, last
+    for i in pairs(item.autocomplete_matches or {}) do
+      if i >= name[1] and i <= name[2] then
+        first, last = math.min(first or i, i), math.max(last or i, i)
+      end
+    end
+    focus = first and { first - offset, last - offset } or { 1, #text }
+  end
+  local clipped, _, first, last, leading = clipped_preview_around_name(font, text, focus, width)
+  local draw_item = { autocomplete_matches = {} }
+  for i in pairs(item.autocomplete_matches or {}) do
+    if i - offset >= first and i - offset <= last then
+      draw_item.autocomplete_matches[i - offset - first + leading + 1] = true
+    end
+  end
+  if item.name_span then
+    draw_item.name_span = { name[1] - offset - first + leading + 1, name[2] - offset - first + leading + 1 }
+  end
+  return draw_matched_text(font, style.text, style.accent, draw_item, x, y, width, height, clipped)
+end
+
+local function fit_info(info, width)
+  if not info or info == "" or width <= 0 then return "" end
+  if style.font:get_width(info) <= width then return info end
+  local dots = fit_prefix(style.font, "...", width)
+  return dots .. fit_suffix(style.font, info, width - style.font:get_width(dots))
 end
 
 local function draw_preview_text(font, item, x, y, w, h)
@@ -1830,7 +1885,7 @@ local function draw_description_box(text, sx, sy, sw, sh)
   desc_rect = { x = x, y = y, w = width, h = height }
 end
 
-local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_width, selected, max_chars)
+local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_width, selected)
   local row_bg = selected and style.autocomplete_selection or style.background3
   if selected then renderer.draw_rect(rx, y, rw, lh, row_bg) end
 
@@ -1847,11 +1902,9 @@ local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_
   end
 
   local hide_info = config.plugins.autocomplete.hide_info
-  local label, info = row_text_parts(suggestion, hide_info, max_chars)
+  local info = not hide_info and display_info(suggestion) or nil
   local text_width = rw - icon_l_padding - icon_r_padding - style.padding.x * 2
   local text_padding = rx + icon_l_padding + style.padding.x
-  local dots_width = font:get_width("...")
-  local content_width = row_text_width(font, style.font, suggestion, hide_info, max_chars)
 
   if text_width <= 0 then return end
   core.push_clip_rect(text_padding, y, text_width, lh)
@@ -1862,31 +1915,27 @@ local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_
     local info_width = preview_info and preview_info ~= "" and style.font:get_width(preview_info) or 0
     local info_gap = info_width > 0 and style.padding.x or 0
     local preview_width = math.max(0, text_width - info_width - info_gap)
-    local preview_end = draw_preview_text(preview_font, suggestion, text_padding, preview_y, preview_width, lh)
+    draw_preview_text(preview_font, suggestion, text_padding, preview_y, preview_width, lh)
     if info_width > 0 then
       common.draw_text(
-        style.font, style.dim, preview_info, "left",
-        preview_end + info_gap, y,
-        math.max(0, text_width - (preview_end - text_padding) - info_gap), lh
+        style.font, style.dim, preview_info, "right",
+        text_padding, y, text_width, lh
       )
     end
   else
-    local label_end = draw_matched_text(font, style.text, style.accent, suggestion, text_padding, y, text_width, lh, label)
+    local basename = info and info:match("[^/\\]+$") or ""
+    local info_budget = math.max(
+      math.min(style.font:get_width(basename), text_width * 0.4),
+      text_width - font:get_width(suggestion.text) - style.padding.x
+    )
+    info = fit_info(info, info_budget)
+    local info_width = style.font:get_width(info)
+    local gap = info_width > 0 and style.padding.x or 0
+    local label_width = math.max(0, text_width - info_width - gap)
+    draw_label(font, suggestion, text_padding, y, label_width, lh)
     if info and info ~= "" then
       common.draw_text(
-        style.font, style.dim, info, "left",
-        label_end + style.padding.x, y,
-        math.max(0, text_width - (label_end - text_padding) - style.padding.x), lh
-      )
-    end
-    if content_width > text_width + TEXT_OVERFLOW_TOLERANCE then
-      renderer.draw_rect(
-        text_padding + math.max(0, text_width - dots_width), y,
-        math.min(dots_width, text_width), lh,
-        row_bg
-      )
-      common.draw_text(
-        font, style.text, "...", "right",
+        style.font, style.dim, info, "right",
         text_padding, y, text_width, lh
       )
     end
@@ -1894,7 +1943,8 @@ local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_
   core.pop_clip_rect()
 end
 
-local function draw_suggestions_box(av)
+---Draw the current completion rows for an Editor.
+function autocomplete.draw(av)
   if #suggestions <= 0 then
     return
   end
@@ -1914,7 +1964,7 @@ local function draw_suggestions_box(av)
     local s = suggestions[i]
     if not s then break end
     local selected = suggestions_idx == i
-    draw_suggestion_row(font, s, rx, y, rw, lh, icon_column_width, selected, ROW_PREVIEW_MAX_CHARS)
+    draw_suggestion_row(font, s, rx, y, rw, lh, icon_column_width, selected)
     if selected then
       selected_item = s
       selected_y = y
@@ -1928,16 +1978,16 @@ local function draw_suggestions_box(av)
   end
 
   if selected_item then
-    local hide_info = config.plugins.autocomplete.hide_info
-    local full_width = row_text_width(font, style.font, selected_item, hide_info)
-    full_width = full_width + icon_column_width
-    local ww = system.get_window_size(core.window)
-    local desired_overlay_width = math.ceil(
-      full_width + style.padding.x * 2 + TEXT_FIT_RESERVE
-    )
-    local overlay_width = math.max(rw, desired_overlay_width)
-    overlay_width = math.min(overlay_width, math.max(rw, ww - rx - style.padding.x))
-    draw_suggestion_row(font, selected_item, rx, selected_y, overlay_width, lh, icon_column_width, true)
+    -- Contextual rows keep one detail-column edge, including the selected row.
+    if not provider_completion then
+      local full_width = row_text_width(font, style.font, selected_item, config.plugins.autocomplete.hide_info)
+      local ww = system.get_window_size(core.window)
+      local desired_overlay_width = math.ceil(
+        full_width + icon_column_width + style.padding.x * 2 + TEXT_FIT_RESERVE
+      )
+      local overlay_width = math.min(math.max(rw, desired_overlay_width), math.max(rw, ww - rx - style.padding.x))
+      draw_suggestion_row(font, selected_item, rx, selected_y, overlay_width, lh, icon_column_width, true)
+    end
     if selected_desc and #selected_desc > 0 then
       draw_description_box(selected_desc, rx, ry, rw, rh)
     end
@@ -2122,7 +2172,7 @@ RootPanel.draw = function(...)
   local av = get_active_view()
   if av then
     -- draw suggestions box after everything else
-    core.root_panel:defer_draw(draw_suggestions_box, av)
+    core.root_panel:defer_draw(autocomplete.draw, av)
   end
 end
 

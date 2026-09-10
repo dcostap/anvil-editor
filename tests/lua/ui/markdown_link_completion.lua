@@ -7,6 +7,46 @@ local panes = require "core.panes"
 local test = require "core.test"
 local markdown = require "core.markdown"
 local autocomplete = require "plugins.autocomplete"
+local style = require "core.style"
+
+local function render_completions(view, width)
+  local runs = {}
+  local old_text, old_rect, old_clip = renderer.draw_text, renderer.draw_rect, renderer.set_clip_rect
+  local old_size, old_stack = system.get_window_size, core.clip_rect_stack
+  local clip = { 0, 0, width, 800 }
+  core.clip_rect_stack = { clip }
+  system.get_window_size = function() return width, 800 end
+  renderer.set_clip_rect = function(x, y, w, h) clip = { x, y, w, h } end
+  renderer.draw_rect = function(x, y, w, h, color)
+    if color == style.background3 or color == style.autocomplete_selection then
+      for i = #runs, 1, -1 do
+        local run = runs[i]
+        if run.x >= x and run.x + run.width <= x + w and run.y >= y and run.y < y + h then
+          table.remove(runs, i)
+        end
+      end
+    end
+  end
+  renderer.draw_text = function(font, text, x, y, color)
+    test.is_nil(text:uinvalidoffset(), "completion text contains incomplete UTF-8")
+    local visible, prefix = "", ""
+    for char in common.utf8_chars(text) do
+      local left = x + font:get_width(prefix)
+      prefix = prefix .. char
+      local right = x + font:get_width(prefix)
+      if left >= clip[1] and right <= clip[1] + clip[3]
+        and y >= clip[2] and y + font:get_height() <= clip[2] + clip[4]
+      then visible = visible .. char end
+    end
+    runs[#runs + 1] = { text = visible, x = x, y = y, width = font:get_width(text), color = color }
+    return x + font:get_width(text)
+  end
+  local ok, err = pcall(function() autocomplete.draw(view) end)
+  renderer.draw_text, renderer.draw_rect, renderer.set_clip_rect = old_text, old_rect, old_clip
+  system.get_window_size, core.clip_rect_stack = old_size, old_stack
+  if not ok then error(err, 0) end
+  return runs
+end
 
 local function write_file(path, text)
   local dir = common.dirname(path)
@@ -246,5 +286,49 @@ test.describe("Markdown link completion", function()
     test.ok(command.perform("markdown:complete_link"))
     test.ok(command.perform("autocomplete:complete"))
     test.equal(context.buffer.lines[2], '![Plot](<Plot%20Image.png> "Figure (one)") after\n')
+  end)
+
+  test.it("keeps a subheading visible when its parent headings do not fit", function(context)
+    write_file(context.root .. PATHSEP .. "Guide.md",
+      "# " .. string.rep("Long parent heading ", 12) .. "\n## C# LeafTarget\n")
+    context.index:rebuild("completion-row-layout")
+    core.root_panel:on_text_input("[[Guide#")
+    context.view.position.x, context.view.size.x = 0, 500
+    local visible = {}
+    for _, run in ipairs(render_completions(context.view, 600)) do visible[#visible + 1] = run.text end
+    test.contains(table.concat(visible), "C# LeafTarget")
+  end)
+
+  test.it("aligns file details to one right edge across completion rows", function(context)
+    write_file(context.root .. PATHSEP .. "A.md", "# First\n")
+    write_file(context.root .. PATHSEP .. "Bigger Name.md", "# Second\n")
+    context.index:rebuild("completion-row-alignment")
+    core.root_panel:on_text_input("[[")
+    context.view.position.x, context.view.size.x = 0, 500
+    local ends = {}
+    for _, run in ipairs(render_completions(context.view, 600)) do
+      if run.text == "A.md:1" or run.text == "Bigger Name.md:1" then
+        ends[run.text] = run.x + run.width
+      end
+    end
+    test.not_nil(ends["A.md:1"])
+    test.not_nil(ends["Bigger Name.md:1"])
+    test.near(ends["A.md:1"], ends["Bigger Name.md:1"], 0.01)
+  end)
+
+  test.it("keeps the matched text highlighted when the subheading itself is too long", function(context)
+    local heading = string.rep("Información ", 20) .. "MatchedNeedle" .. string.rep(" salida", 20)
+    context.buffer:insert(2, 1, "## " .. heading .. "\n")
+    context.view:set_selection_state({ selections = { 3, 1, 3, 1 }, last_selection = 1 })
+    test.ok(wait_until(function() return #context.index:note(context.source).headings == 2 end))
+    core.root_panel:on_text_input("[[#matchedneedle")
+    context.view.position.x, context.view.size.x = 0, 500
+    local matched = false
+    for _, run in ipairs(render_completions(context.view, 600)) do
+      if run.text == "MatchedNeedle" and run.color == style.accent then matched = true end
+    end
+    test.ok(matched, "the clipped row hid the match or removed its highlight")
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(context.buffer.lines[3], "[[#Alta de usuarios#" .. heading .. "]]\n")
   end)
 end)

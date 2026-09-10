@@ -1245,7 +1245,9 @@ static int markdown_vault_completion(lua_State *L) {
         if (!target) continue;
         if (strcmp(mode, "current_heading") == 0) SDL_snprintf(target, bytes, "#%s", heading_text);
         else SDL_snprintf(target, bytes, "%s#%s", note_target, heading_text);
-        push_completion_candidate(L, heading_text, target, "heading", note.absolute_path, note.relative_path, heading->line, note.relative_path); lua_rawseti(L, -2, ++out); SDL_free(target);
+        push_completion_candidate(L, heading_text, target, "heading", note.absolute_path, note.relative_path, heading->line, note.relative_path);
+        lua_pushstring(L, heading->text); lua_setfield(L, -2, "name");
+        lua_rawseti(L, -2, ++out); SDL_free(target);
       }
       SDL_free(note_target);
     } else if ((strcmp(mode, "current_block") == 0 && current) || strcmp(mode, "global_block") == 0) {
