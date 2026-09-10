@@ -1162,6 +1162,32 @@ test.describe("plugins.git.model", function()
     buffer:on_close()
   end)
 
+  test.it("queries committed selection lines after local insertions before the block", function()
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      callback("before\nselected\nafter\n", nil)
+      return { cancel = function() end }
+    end
+    local requested
+    backend.selection_history = function(repo, relpath, first, last, opts, callback)
+      requested = { first, last }
+      callback({ commits = {}, has_more = false }, nil)
+      return { cancel = function() end }
+    end
+    local path = "C:/repo/src/shifted.lua"
+    local buffer = Buffer("src/shifted.lua", path, true)
+    buffer:insert(1, 1, "new line\nbefore\nselected\nafter")
+    core.buffer_registry:register(buffer, path)
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_selection_history("src/shifted.lua", 3, 3)
+
+    test.same(requested, { 2, 2 })
+    test.equal(#tab.commits, 0)
+    model:dispose_tab(tab)
+    buffer:on_close()
+  end)
+
   test.it("tracks a Selection History block when lines are inserted before it", function()
     local backend = fake_backend("", log_output())
     backend.file_at = function(repo, rev, relpath, opts, callback)

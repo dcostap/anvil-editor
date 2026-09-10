@@ -750,9 +750,25 @@ function Model:load_file_history(tab, callback)
     publish()
   end
   if tab.history_context and tab.history_context.type == "selection" then
-    job = self.backend.selection_history(
-      self.repo, tab.relpath, tab.history_context.start_line, tab.history_context.end_line, opts, on_page
-    )
+    -- Git -L starts at HEAD, not at the current Buffer or staged file.
+    self:refresh_local_changes_revision(tab, function(err)
+      if tab.disposed or generation ~= tab.history_generation then return end
+      if err then on_page(nil, err); return end
+      local context = tab.history_context
+      local tracked = tab.local_selection_diff
+      local first = tracked and tracked.left_start_line or context.start_line
+      local last = tracked and tracked.left_end_line or context.end_line
+      core.log_quiet("Git Selection History: %s current=%d,%d HEAD=%d,%d",
+        tab.relpath, context.start_line, context.end_line, first, last)
+      job = self.backend.selection_history(
+        self.repo, tab.local_changes_head_path or tab.relpath, first, last, opts, on_page
+      )
+      if not done then
+        tab.history_job = job
+        self:_track_job(job)
+      end
+    end)
+    return true
   else
     job = self.backend.file_history(self.repo, tab.relpath, opts, on_page)
   end
