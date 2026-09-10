@@ -412,7 +412,6 @@ schedule_local_diff = function(buffer, reason)
 		end
 		local generation = current_state.local_generation
 		local built, meta = ranges.build(current_state.base_lines or {}, buffer.lines or {}, {
-			max_diff_cells = plugin_config.max_diff_cells,
 			max_diff_lines = plugin_config.max_diff_lines,
 		})
 		if generation ~= current_state.local_generation then
@@ -427,7 +426,7 @@ schedule_local_diff = function(buffer, reason)
 		current_state.ranges = built or {}
 		build_line_index(buffer, current_state)
 		current_state.local_worker_running = false
-		if plugin_config.debug_log then
+		if plugin_config.debug_log or current_state.too_large or current_state.error then
 			core.log_quiet(
 				"[gitdiff_highlight] local diff %s: ranges=%d too_large=%s error=%s cells=%s",
 				buffer.abs_filename or "?",

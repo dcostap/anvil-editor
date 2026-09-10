@@ -156,7 +156,6 @@ plugin_defaults("git", {
 plugin_defaults("gitdiff_highlight", {
   local_diff_debounce_ms = 200,
   max_file_size = 2 * 1024 * 1024,
-  max_diff_cells = 2 * 1000 * 1000,
   max_diff_lines = 50000,
   overview = true,
   gutter = true,

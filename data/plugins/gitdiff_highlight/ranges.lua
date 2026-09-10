@@ -9,7 +9,6 @@
 local ranges = {}
 
 local default_options = {
-  max_diff_cells = 2 * 1000 * 1000,
   max_diff_lines = 50000,
 }
 
@@ -151,11 +150,8 @@ local function over_budget(base_mid_count, current_mid_count, options)
     return true, "too_many_lines"
   end
 
-  local max_diff_cells = options.max_diff_cells or default_options.max_diff_cells
-  if count_cells(base_mid_count, current_mid_count) > max_diff_cells then
-    return true, "too_many_cells"
-  end
-
+  -- The native histogram matcher does not allocate a full line-pair matrix.
+  -- Distant edits can have a large product while most lines remain unchanged.
   return false
 end
 
