@@ -515,11 +515,6 @@ function GitView:get_focus_view()
   end
   local tab = self.model and self:model_tab()
   if tab and tab.kind == "file_history" then
-    if self.focus_pane == "diff" and not tab.preview_loading and not tab.preview_error
-        and (tab.preview_left_text ~= nil or tab.preview_right_text ~= nil) then
-      local diff = self:ensure_history_diff_view(tab)
-      return self.focused_diff_buffer_view == diff.buffer_view_b and diff.buffer_view_b or diff.buffer_view_a
-    end
     return self:pane_view("history-list")
   end
   return self:pane_view("log-list")
@@ -579,8 +574,10 @@ function GitView:dispose_tab_resources(tab)
   if not tab then return end
   for _, child in ipairs { tab.diff_view, tab.history_diff_view } do
     if child then
-      local pane = panes.pane_for_view(child)
-      if pane then panes.close_view(pane, { view = child, force = true, focus = false }) end
+      if child == tab.history_diff_view then
+        local pane = panes.pane_for_view(child)
+        if pane then panes.close_view(pane, { view = child, force = true, focus = false }) end
+      end
       child:dispose_integrations()
       child:dispose_owned_buffers()
     end
@@ -1721,6 +1718,8 @@ function GitView:update()
       core.redraw = true
     end
   elseif tab and tab.kind == "file_history" and not tab.preview_loading and not tab.preview_error
+      and tab.history_diff_view
+      and not tab.history_diff_view.owned_buffers_disposed
       and (tab.preview_left_text ~= nil or tab.preview_right_text ~= nil) then
     diff_view = self:ensure_history_diff_view(tab)
   end
@@ -1938,13 +1937,17 @@ end
 
 function GitView:ensure_history_diff_view(tab)
   if tab.history_diff_view
+      and not tab.history_diff_view.owned_buffers_disposed
       and tab.history_diff_view_seen_generation == tab.preview_generation_value then
     return tab.history_diff_view
   end
-  if tab.history_diff_view then
-    tab.history_diff_view:dispose_integrations()
-    tab.history_diff_view:dispose_owned_buffers()
-  end
+  local old_view = tab.history_diff_view
+  local old_pane = old_view and panes.pane_for_view(old_view)
+  local old_focused = old_view and (
+    core.active_view == old_view
+      or core.active_view == old_view.buffer_view_a
+      or core.active_view == old_view.buffer_view_b
+  )
   local diffview = require "plugins.diffview"
   local function source(text, current_path, fragment, name)
     if fragment then
@@ -1986,6 +1989,64 @@ function GitView:ensure_history_diff_view(tab)
   attach_text_capture_owner(view, self)
   attach_text_capture_owner(view.buffer_view_a, self)
   attach_text_capture_owner(view.buffer_view_b, self)
+  if old_pane then
+    local placed, reason = panes.place(function() return view end, {
+      pane = old_pane,
+      placement = "current",
+      focus = old_focused == true,
+      reason = "git-history-diff-refresh",
+    })
+    if not placed then
+      tab.history_diff_view = old_view
+      tab.history_diff_view_seen_generation = nil
+      view:dispose_integrations()
+      view:dispose_owned_buffers()
+      core.log_quiet("Git history Diff View refresh failed: %s", tostring(reason))
+      return old_view
+    end
+  end
+  if old_view then
+    old_view:dispose_integrations()
+    old_view:dispose_owned_buffers()
+  end
+  return view
+end
+
+function GitView:open_history_diff_view(tab, opts)
+  opts = opts or {}
+  if not (tab and tab.kind == "file_history") then
+    return nil, "Git history Diff View requires a file history tab"
+  end
+  if tab.preview_loading then return nil, "Git history preview is still loading" end
+  if tab.preview_error then return nil, tab.preview_error end
+  if tab.preview_left_text == nil and tab.preview_right_text == nil then
+    return nil, "Git history preview is not available"
+  end
+
+  local view = self:ensure_history_diff_view(tab)
+  local pane = panes.pane_for_view(view)
+  if pane then
+    if opts.focus ~= false then panes.present(view, { pane = pane, focus = true, reuse = true }) end
+    return view
+  end
+
+  local source_pane = panes.pane_for_view(self) or panes.active()
+  if not source_pane then return nil, "Git history View has no source Pane" end
+  local placed, reason = panes.place(function() return view end, {
+    pane = source_pane,
+    placement = "split",
+    direction = opts.direction or "right",
+    focus = opts.focus ~= false,
+    reason = "git-history-diff",
+  })
+  if not placed then
+    tab.history_diff_view = nil
+    tab.history_diff_view_seen_generation = nil
+    view:dispose_integrations()
+    view:dispose_owned_buffers()
+    return nil, reason
+  end
+  core.log_quiet("Git history Diff View opened separately: %s", tostring(tab.title or tab.relpath))
   return view
 end
 
@@ -2019,6 +2080,9 @@ function GitView:focus_diff_pane(side)
     if tab.preview_loading or tab.preview_error
         or (tab.preview_left_text == nil and tab.preview_right_text == nil) then return false end
     view = self:ensure_history_diff_view(tab)
+    if not panes.pane_for_view(view) then
+      view = self:open_history_diff_view(tab, { focus = false })
+    end
   else
     return false
   end
@@ -2035,7 +2099,6 @@ function GitView:focus_diff_pane(side)
   self.focus_pane = "diff"
   self.focused_diff_buffer_view = focus
   focus.git_owner_view = self
-  if panes.pane_for_view(self) then panes.register_focus_target(self, focus) end
   return with_git_session_event_window(self.git_session, function()
     core.set_active_view(focus)
     if core.active_view then core.active_view.git_owner_view = self end
@@ -2063,14 +2126,7 @@ function GitView:get_surface_focus_targets()
   if tab.kind == "commit_diff" then
     return { self:pane_view("file-list") }
   elseif tab.kind == "file_history" then
-    local targets = { self:pane_view("history-list") }
-    if not tab.preview_loading and not tab.preview_error
-        and (tab.preview_left_text ~= nil or tab.preview_right_text ~= nil) then
-      local diff = self:ensure_history_diff_view(tab)
-      targets[#targets + 1] = diff.buffer_view_a
-      targets[#targets + 1] = diff.buffer_view_b
-    end
-    return targets
+    return { self:pane_view("history-list") }
   end
   return { self:pane_view("log-list"), self:pane_view("details") }
 end
@@ -2078,11 +2134,6 @@ end
 function GitView:focus_surface_target(target)
   if target and target.git_owner_view == self and target.git_pane then
     return self:focus_pane_view(target.git_pane)
-  end
-  local tab = self:model_tab()
-  if tab and tab.kind == "file_history" and tab.history_diff_view then
-    if target == tab.history_diff_view.buffer_view_a then return self:focus_diff_pane("left") end
-    if target == tab.history_diff_view.buffer_view_b then return self:focus_diff_pane("right") end
   end
   return false
 end
@@ -2114,43 +2165,12 @@ function GitView:clamp_history_scroll(tab)
 end
 
 function GitView:draw_history_tab(tab, x, y)
-  local list_width = math.floor(self.size.x * 0.34)
-  local diff_x = self.position.x + list_width + style.padding.x
-  local list_right = diff_x - style.padding.x
   local top = self:history_commits_y()
   local list = self:pane_view("history-list")
   list.position.x, list.position.y = x, top
-  list.size.x, list.size.y = math.max(0, list_width - style.padding.x), self.position.y + self.size.y - top - style.padding.y
+  list.size.x, list.size.y = math.max(0, self.position.x + self.size.x - x - style.padding.x),
+    self.position.y + self.size.y - top - style.padding.y
   list:draw()
-  renderer.draw_rect(list_right, self.position.y, 1 * SCALE, self.size.y, style.divider)
-  if tab.error then
-    renderer.draw_text(
-      style.prose_font,
-      "Git error: " .. tostring(tab.error.message or tab.error.kind or tab.error),
-      diff_x + style.padding.x, top, style.error
-    )
-    return
-  end
-  if tab.preview_loading and not tab.history_diff_view then
-    renderer.draw_text(style.prose_font, "Loading file comparison...", diff_x + style.padding.x, top, style.dim)
-    return
-  end
-  if tab.preview_error then
-    renderer.draw_text(style.prose_font,
-      "Git error: " .. tostring(tab.preview_error.message or tab.preview_error.kind or tab.preview_error),
-      diff_x + style.padding.x, top, style.error)
-    return
-  end
-  if tab.preview_left_text == nil and tab.preview_right_text == nil then
-    renderer.draw_text(style.prose_font, "Select a revision", diff_x + style.padding.x, top, style.dim)
-    return
-  end
-  local view = self:ensure_history_diff_view(tab)
-  view.position.x, view.position.y = diff_x, top
-  view.size.x = self.position.x + self.size.x - diff_x - style.padding.x
-  view.size.y = self.position.y + self.size.y - top - style.padding.y
-  view:update()
-  view:draw()
 end
 
 function GitView:layout_diff_tab(tab, x)

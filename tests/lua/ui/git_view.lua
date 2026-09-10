@@ -551,6 +551,53 @@ test.describe("Git View command", function()
     test.equal(found.relpath, "src/from-tree.lua")
   end)
 
+  test.it("opens File History with its Diff View in a separate Pane", function(context)
+    local source = View()
+    source.get_path_target = function()
+      return { path = "C:/repo/src/from-tree.lua" }
+    end
+    core.active_view = source
+    core.projects = { context.project }
+    use_fake_command_git_views(context)
+    local old_lookup = real_backend.repo_for_path_async
+    local old_history = fake_backend.file_history
+    local old_file_at = fake_backend.file_at
+    real_backend.repo_for_path_async = function(path, callback)
+      callback({ root = "C:/repo", relpath = "src/from-tree.lua" }, nil)
+    end
+    fake_backend.file_history = function(repo, relpath, opts, callback)
+      callback({ commits = {
+        { hash = "history-commit", short_hash = "history", subject = "History" },
+      }, has_more = false }, nil)
+      return { cancel = function() end }
+    end
+    fake_backend.file_at = function(repo, rev, relpath, opts, callback)
+      callback(rev .. ":" .. relpath, nil)
+      return { cancel = function() end }
+    end
+
+    command.perform("git:show_file_history")
+
+    real_backend.repo_for_path_async = old_lookup
+    fake_backend.file_history = old_history
+    fake_backend.file_at = old_file_at
+
+    local history_view
+    for _, pane in ipairs(panes.ordered()) do
+      local candidate = pane.current_view
+      if candidate and candidate.tab_id and candidate.tab_id ~= "log" then
+        history_view = candidate
+        break
+      end
+    end
+    test.not_nil(history_view)
+    local tab = history_view:model_tab()
+    test.equal(tab.kind, "file_history")
+    test.not_nil(tab.history_diff_view)
+    test.ok(panes.pane_for_view(tab.history_diff_view))
+    test.not_equal(panes.pane_for_view(history_view), panes.pane_for_view(tab.history_diff_view))
+  end)
+
   test.it("opens Selection History from a file-backed Diff fragment", function(context)
     local session = open_fake_git_view(context.project)
     local source = Buffer("src/source.lua", "C:/repo/src/source.lua", true)
@@ -586,7 +633,7 @@ test.describe("Git View command", function()
     source:on_close()
   end)
 
-  test.test("selecting a history commit loads its embedded Diff preview", function(context)
+  test.test("selecting a history commit updates its separate Diff View", function(context)
     local session, view = open_fake_git_view(context.project)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 600
@@ -619,13 +666,24 @@ test.describe("Git View command", function()
     local history_view = git_view.ensure_tab_view(session, tab, true)
     history_view.position.x, history_view.position.y = 0, 0
     history_view.size.x, history_view.size.y = 800, 600
+    tab.preview_left_text = "a:src/app.lua"
+    tab.preview_right_text = "a:src/app.lua"
+    tab.preview_left_name = "a:src/app.lua"
+    tab.preview_right_name = "a:src/app.lua"
+    tab.preview_generation_value = 1
+    local initial_diff = history_view:open_history_diff_view(tab)
+    test.not_nil(initial_diff)
+    test.ok(panes.pane_for_view(history_view) ~= panes.pane_for_view(initial_diff))
     file_at_calls = 0
 
     history_view:on_mouse_pressed("left", 10, history_view:history_commits_y() + history_view:row_height() + 1, 1)
+    history_view:update()
 
     test.equal(tab.selected_commit, 2)
     test.equal(file_at_calls, 1)
     test.equal(tab.preview_right_text, "b:src/app.lua")
+    test.not_equal(initial_diff, tab.history_diff_view)
+    test.not_nil(panes.pane_for_view(tab.history_diff_view))
 
     local tab_count = #view.model.tabs
     history_view:on_mouse_pressed(
@@ -635,18 +693,6 @@ test.describe("Git View command", function()
     )
     test.equal(#view.model.tabs, tab_count)
 
-    local preview = history_view:ensure_history_diff_view(tab)
-    preview.position.x = math.floor(history_view.size.x * 0.34) + style.padding.x
-    preview.position.y = history_view:history_commits_y()
-    preview.size.x = history_view.size.x - preview.position.x
-    preview.size.y = history_view.size.y - preview.position.y
-    preview:update()
-    local calls_before_diff_click = file_at_calls
-    history_view:on_mouse_pressed("left", 700, history_view:history_commits_y() + 1, 1)
-    test.equal(tab.selected_commit, 2)
-    test.equal(file_at_calls, calls_before_diff_click)
-    test.ok(core.active_view == tab.history_diff_view.buffer_view_a
-      or core.active_view == tab.history_diff_view.buffer_view_b)
   end)
 
   test.it("commit diff file list renders changed files as a project-relative tree", function(context)
@@ -811,7 +857,7 @@ test.describe("Git View command", function()
     test.not_equal(panes.active().current_view, view)
     test.not_nil(panes.active().current_view.buffer_view_a)
     test.not_nil(panes.active().current_view.buffer_view_b)
-    test.equal(panes.active().current_view.buffer_view_b.buffer:get_utf8_line(1), "log-row-parent:src/App.kt\n")
+    test.equal(panes.active().current_view.buffer_view_a.buffer:get_utf8_line(1), "log-row-parent:src/App.kt\n")
   end)
 
   test.it("keeps folder collapse state with its commit when changed-file data is shared", function(context)
@@ -1107,7 +1153,7 @@ test.describe("Git View command", function()
 
     test.equal(command.perform("git:focus_diff_pane"), true)
     local diff = panes.active().current_view
-    local buffer_view = diff.buffer_view_a
+    local buffer_view = diff.buffer_view_b
     test.equal(core.active_view, buffer_view)
     test.equal(core.active_view.git_owner_view, nil)
   end)
@@ -1463,18 +1509,18 @@ test.describe("Git View command", function()
     test.equal(diff.request.user_data.source, "git")
     test.equal(diff.request.user_data.read_only_reason, "Historical Git content is read-only")
     test.equal(diff.request.editable_policy, "content")
-    test.equal(core.active_view, diff.buffer_view_a)
-    test.equal(command.perform("pane:focus_local_next"), true)
     test.equal(core.active_view, diff.buffer_view_b)
     test.equal(command.perform("pane:focus_local_next"), true)
     test.equal(core.active_view, diff.buffer_view_a)
+    test.equal(command.perform("pane:focus_local_next"), true)
+    test.equal(core.active_view, diff.buffer_view_b)
 
     test.equal(command.perform("pane:focus_local_previous"), true)
-    test.equal(core.active_view, diff.buffer_view_b)
-    test.equal(command.perform("pane:focus_local_previous"), true)
     test.equal(core.active_view, diff.buffer_view_a)
     test.equal(command.perform("pane:focus_local_previous"), true)
     test.equal(core.active_view, diff.buffer_view_b)
+    test.equal(command.perform("pane:focus_local_previous"), true)
+    test.equal(core.active_view, diff.buffer_view_a)
     test.ok(command.perform("core:show_remote_point_of_interest_source"))
     test.equal(core.active_view.git_pane, "file-list")
 
@@ -1733,6 +1779,7 @@ test.describe("Git View command", function()
     tab.preview_left_name = "aaaaaaaa:src/app.lua"
     tab.preview_right_name = "bbbbbbbb:src/app.lua"
     tab.preview_generation_value = (tab.preview_generation_value or 0) + 1
+    test.not_nil(view:open_history_diff_view(tab))
     view:update()
     core.active_view = test.not_nil(tab.history_diff_view).buffer_view_a
 

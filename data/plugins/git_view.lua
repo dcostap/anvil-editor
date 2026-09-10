@@ -453,7 +453,12 @@ command.add(nil, {
           if presented then return end
           if not (ready and ready.kind == "file_history") then return end
           presented = true
-          git_view.ensure_tab_view(v.git_session, ready, true)
+          local history_view = git_view.ensure_tab_view(v.git_session, ready, true)
+          local _, diff_err = history_view:open_history_diff_view(ready)
+          if diff_err and diff_err ~= "Git history preview is not available" then
+            local message = type(diff_err) == "table" and (diff_err.message or diff_err.kind) or diff_err
+            core.warn("Git View: Cannot open File History Diff: %s", message)
+          end
           core.redraw = true
         end
         local tab, tab_err = v.model:open_file_history(repo.relpath, present_history)
@@ -489,7 +494,12 @@ command.add(nil, {
           if presented then return end
           if not (ready and ready.kind == "file_history") then return end
           presented = true
-          git_view.ensure_tab_view(v.git_session, ready, true)
+          local history_view = git_view.ensure_tab_view(v.git_session, ready, true)
+          local _, diff_err = history_view:open_history_diff_view(ready)
+          if diff_err and diff_err ~= "Git history preview is not available" then
+            local message = type(diff_err) == "table" and (diff_err.message or diff_err.kind) or diff_err
+            core.warn("Git View: Cannot open Selection History Diff: %s", message)
+          end
           core.redraw = true
         end
         local tab, tab_err = v.model:open_selection_history(
