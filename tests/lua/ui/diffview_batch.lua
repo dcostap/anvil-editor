@@ -93,6 +93,18 @@ test.describe("DiffView batch behavior", function()
     test.equal("New", view.request.content_titles[2])
   end)
 
+  test.it("opens a Diff View with the right side focused", function(context)
+    local view, err = diffview.open({
+      contents = {
+        diffview.content.text("left"),
+        diffview.content.text("right"),
+      },
+    })
+    test.ok(view, err)
+    track(context, "diffviews", view)
+    test.equal(view.buffer_view_b, core.active_view)
+  end)
+
   test.it("reuses the canonical Buffer for a file-backed Diff Side", function(context)
     local path = core.project_absolute_path("tmp-diff-shared-buffer.txt")
     pcall(os.remove, path)
@@ -478,7 +490,7 @@ test.describe("DiffView batch behavior", function()
     local pane = panes.pane_for_view(view)
     track(context, "diffviews", view)
     test.equal(panes.active(), panes.pane_for_view(view))
-    test.equal(view.buffer_view_a, core.active_view)
+    test.equal(view.buffer_view_b, core.active_view)
 
     view.buffer_view_b:on_text_input("right")
     wait_until(function() return view.updater_idx == nil end, 1, "expected edited diff computation to finish")

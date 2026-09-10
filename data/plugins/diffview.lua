@@ -574,7 +574,7 @@ function DiffView:new(a, b, compare_type, names)
 end
 
 function DiffView:get_focus_view()
-  return self.buffer_view_a
+  return self.buffer_view_b
 end
 
 function DiffView:get_surface_focus_targets()
@@ -584,7 +584,7 @@ end
 function DiffView:get_path_target()
   local focus = core.active_view
   if focus ~= self.buffer_view_a and focus ~= self.buffer_view_b then
-    focus = self:get_focus_view()
+    focus = self.buffer_view_a
   end
   return focus and focus.get_path_target and focus:get_path_target() or nil
 end
@@ -2118,7 +2118,7 @@ local function open_blank_diff()
     },
     content_titles = { "Left", "Right" },
     editable_policy = "editable",
-    preferred_focus_side = "left",
+    preferred_focus_side = "right",
     user_data = {
       blank_diff = true,
       suppress_equal_contents_notification = true,
@@ -2541,7 +2541,7 @@ function DiffRequestController:reload(opts)
   end
   view:assign_request()
   if attached and panes.pane_for_view(view) then
-    local focus_side = request.preferred_focus_side == "right" and view.buffer_view_b or view.buffer_view_a
+    local focus_side = request.preferred_focus_side == "left" and view.buffer_view_a or view.buffer_view_b
     core.set_active_view(focus_side or view)
   elseif attached then
     core.log_quiet("Diff comparison: kept source focus while View placement is pending or canceled")
