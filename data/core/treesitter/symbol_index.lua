@@ -1886,7 +1886,8 @@ end
 
 local function buffer_text_from_lines(lines)
   if type(lines) ~= "table" then return nil, "missing-lines" end
-  return table.concat(lines, "\n")
+  -- Buffer lines already include their newline.
+  return table.concat(lines)
 end
 
 local function cancel_open_buffer_job(index, path)

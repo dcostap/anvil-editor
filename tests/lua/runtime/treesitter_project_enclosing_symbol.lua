@@ -143,4 +143,76 @@ test.describe("Tree-sitter Project enclosing symbols", function()
     test.equal(symbol.name, "inner")
     test.equal(symbol.kind, "method")
   end)
+
+  test.it("keeps real Buffer line positions in open Buffer symbols", function()
+    local Buffer = require "core.buffer"
+    local registry = require "core.treesitter.registry"
+    local workers = require "core.worker_pool"
+    local root = common.normalize_path(USERDIR .. PATHSEP .. "scope-lines")
+    local path = common.normalize_path(root .. PATHSEP .. "current.kt")
+    local buffer = Buffer()
+    buffer.abs_filename, buffer.filename = path, path
+    buffer:text_input("fun first() {\n  println(1)\n}\nfun second() {\n  println(2)\n}\n")
+    buffer.treesitter = { status = "ready", language = registry.get_by_id("kotlin") }
+    local index = symbol_index.status(root)
+    index.status, index.symbol_status = "ready", "ready"
+    test.ok(symbol_index.update_open_buffer(buffer, "test"))
+    for _ = 1, 1000 do
+      workers.system():drain({ max_ms = 5, max_messages = 64 })
+      if not next(index.open_buffer_jobs) then break end
+      coroutine.yield(0.001)
+    end
+    local symbol = symbol_index.enclosing_symbol(path, 5, 1, {
+      root = root, kinds = { "function", "method" },
+    })
+    test.not_nil(symbol)
+    test.equal(symbol.name, "second")
+    symbol_index.clear_open_buffer(buffer, "test")
+  end)
+
+  test.it("refreshes a text result after the Project snapshot changes", function()
+    local fuzzy_searcher = require "plugins.fuzzy_searcher"
+    local core = require "core"
+    local root = common.normalize_path(core.root_project().path)
+    local path = common.normalize_path(root .. PATHSEP .. "scope-refresh.c")
+    local index = symbol_index.status(root)
+    index.status, index.symbol_status = "ready", "ready"
+    pool = native_pool.new({ name = "scope-refresh", worker_count = 1 })
+    local row = { kind = "grep", abs_path = path, file = "scope-refresh.c", line = 1, col = 20, text = "return 1;" }
+    for _, name in ipairs({ "before", "after" }) do
+      test.not_nil(pool:submit({
+        kind = "treesitter_index_text", language = "c", path = path,
+        relpath = "scope-refresh.c", text = "int " .. name .. "(void) { return 1; }",
+        outline_query = [[(function_definition declarator: (function_declarator
+          declarator: (identifier) @name)) @outline.function]],
+        compact_project_records = true, capture_paging = false, line_range_lookup = false,
+      }))
+      local result
+      test.ok(drain_until(pool, function(message)
+        if message.type == "result" then result = message.result end
+        return message.type == "final"
+      end))
+      local builder = native_pool.new_project_builder({ usage_cap = 10 })
+      test.ok(result:adopt_project(builder:id(), { fingerprint = name, usage_complete = true }))
+      index.native_snapshot = builder:freeze()
+      local drawn = {}
+      local draw_text = renderer.draw_text
+      local draw_canvas, draw_rect = renderer.draw_canvas, renderer.draw_rect
+      renderer.draw_canvas, renderer.draw_rect = function() end, function() end
+      local icons = require "core.file_icons"
+      local draw_icon = icons.draw
+      icons.draw = function() end
+      renderer.draw_text = function(font, text, x)
+        drawn[text] = true
+        return x + font:get_width(text)
+      end
+      local ok, err = pcall(fuzzy_searcher._test.draw_grep_result_row,
+        require("core.style").font, row, 0, 0, 1400, false)
+      renderer.draw_text = draw_text
+      renderer.draw_canvas, renderer.draw_rect = draw_canvas, draw_rect
+      icons.draw = draw_icon
+      test.ok(ok, err)
+      test.ok(drawn[name], "expected current scope " .. name)
+    end
+  end)
 end)

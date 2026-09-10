@@ -2437,17 +2437,13 @@ local grep_row_columns
 
 function fuzzy_searcher.grep_enclosing_symbol(result)
   if not result or not result.abs_path then return nil end
-  if result.enclosing_symbol_checked then return result.enclosing_symbol end
   local line = tonumber(result.line) or 1
   local col = tonumber(result.col or result.content_match_start) or 1
   local symbol_index = require "core.treesitter.symbol_index"
-  local symbol, reason = symbol_index.enclosing_symbol(result.abs_path, line, col, {
+  -- The index owns the cache and invalidates it when symbols change.
+  local symbol = symbol_index.enclosing_symbol(result.abs_path, line, col, {
     kinds = { "function", "method" },
   })
-  if reason ~= "indexing" and reason ~= "overlay-indexing" and reason ~= "index-unavailable" then
-    result.enclosing_symbol_checked = true
-    result.enclosing_symbol = symbol
-  end
   if symbol and symbol.name and symbol.name ~= "" then return symbol end
 end
 
