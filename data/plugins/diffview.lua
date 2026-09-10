@@ -2223,19 +2223,6 @@ command.add(function()
   if view and view.is and view:is(DiffView) then return true, view end
   return false
 end, {
-  ["diff:copy_patch"] = command.palette(function(view)
-    local a, b = view.buffer_view_a.buffer, view.buffer_view_b.buffer
-    local titles = view.request.content_titles or {}
-    local patch = require("plugins.diff.patch").build(a.lines, b.lines,
-      titles[1] or a:get_name(), titles[2] or b:get_name())
-    if not patch then
-      diff_status("No changes to copy")
-      return
-    end
-    system.set_clipboard(patch)
-    core.log_quiet("Copied Diff View patch: %d bytes", #patch)
-    diff_status("Patch copied to clipboard")
-  end, { keywords = { "clipboard", "share", "unified", "diff" } }),
   ["diff:toggle_folding"] = command.palette(function(view)
     view:toggle_folding()
   end, { keywords = { "compare", "fold", "unchanged" } }),
@@ -2243,6 +2230,62 @@ end, {
     if view.request_controller then return view.request_controller:swap_sides() end
     return view:swap_sides()
   end, { keywords = { "compare", "left", "right", "reverse" } }),
+})
+
+local function copy_diff_patch(scope_kind)
+  local active = core.active_view
+  local parent = active.diff_view_parent or (active:is(DiffView) and active)
+  local view, source, unavailable, side = active, nil, nil, "right"
+  if parent then
+    view = active == parent and parent.buffer_view_b or active
+    side = view == parent.buffer_view_a and "left" or "right"
+    local a, b = parent.buffer_view_a.buffer, parent.buffer_view_b.buffer
+    local titles = parent.request.content_titles or {}
+    source = { before = a.lines, after = b.lines,
+      before_name = titles[1] or a:get_name(), after_name = titles[2] or b:get_name() }
+  else
+    source, unavailable = require("plugins.gitdiff_highlight").get_patch_source(view.buffer)
+  end
+  if not source then diff_status(unavailable); return end
+  local scope
+  if scope_kind ~= "file" then
+    scope = { side = side, intervals = {} }
+    with_textview_selection(view, function()
+      if scope_kind == "cursor" then
+        local line = view.buffer:get_selection()
+        scope.intervals[1] = { line, line }
+      else
+        for _, line1, col1, line2, col2 in view.buffer:get_selections(true) do
+          if line1 ~= line2 or col1 ~= col2 then
+            scope.intervals[#scope.intervals + 1] = { line1, line2 - (col2 == 1 and line2 > line1 and 1 or 0) }
+          end
+        end
+      end
+    end)
+    if #scope.intervals == 0 then diff_status("Select text to copy its change blocks"); return end
+  end
+  local patch = require("plugins.diff.patch").build(source.before, source.after,
+    source.before_name, source.after_name, scope)
+  if not patch then diff_status("No changes to copy"); return end
+  system.set_clipboard(patch)
+  core.log_quiet("Copied %s diff patch: %d bytes", scope_kind, #patch)
+  diff_status("Patch copied to clipboard")
+end
+
+command.add(function()
+  local view = core.active_view
+  return view and (view.diff_view_parent or view:is(DiffView)
+    or require("core.file_context").is_editor_view(view)) and true or false
+end, {
+  ["diff:copy_diff_patch_under_cursor"] = command.palette(function()
+    copy_diff_patch("cursor")
+  end, { keywords = { "clipboard", "git", "hunk", "block", "caret" } }),
+  ["diff:copy_diff_patch_for_selection"] = command.palette(function()
+    copy_diff_patch("selection")
+  end, { keywords = { "clipboard", "git", "hunk", "block", "selected" } }),
+  ["diff:copy_diff_patch_for_file"] = command.palette(function()
+    copy_diff_patch("file")
+  end, { keywords = { "clipboard", "git", "unified", "share" } }),
 })
 
 command.add_toggle("diff:toggle_ignore_whitespace", {

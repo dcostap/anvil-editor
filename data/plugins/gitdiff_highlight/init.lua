@@ -802,6 +802,19 @@ local function preview_git_change(view, point)
   })
 end
 
+function gitdiff_highlight.get_patch_source(buffer)
+	local state = get_state(buffer)
+	local unavailable = gitdiff_unavailable_message(state)
+	if unavailable or state.closed or buffer_gitdiff_disabled(buffer) or not state.base_lines then
+		return nil, unavailable or "Git changes unavailable"
+	end
+	return {
+		before = state.base_lines, after = buffer.lines,
+		before_name = state.rel_path or buffer:get_name(),
+		after_name = state.rel_path or buffer:get_name(),
+	}
+end
+
 local old_buffer_close = Buffer.on_close
 function Buffer:on_close(...)
 	local state = states[self]
