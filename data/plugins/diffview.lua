@@ -666,6 +666,8 @@ function DiffView:update_diff()
   self:cancel_diff_update()
 
   local start_time = system.get_time()
+  self.diff_started_at = start_time
+  self.diff_loading_visible = false
 
   if config.plugins.diffview.log_times then
     core.log(
@@ -1979,6 +1981,14 @@ function DiffView:update()
     self.pending_first_change_reveal = false
     self:reveal_first_change()
   end
+  -- Fast comparisons must not flash a loading message between frames.
+  local loading_visible = not self.comparison_message
+    and (not self.diff_model or self.pending_first_change_reveal)
+    and self.diff_started_at ~= nil and system.get_time() - self.diff_started_at >= 1
+  if self.diff_loading_visible ~= loading_visible then
+    self.diff_loading_visible = loading_visible
+    core.redraw = true
+  end
   profile_textview_method(self.buffer_view_a, self.buffer_view_a.update, "diffview_left_update")
   profile_textview_method(self.buffer_view_b, self.buffer_view_b.update, "diffview_right_update")
   perf_end("diffview_update", started, scope)
@@ -2007,12 +2017,14 @@ function DiffView:draw()
     return
   end
   if not self.diff_model or self.pending_first_change_reveal then
-    renderer.draw_text(
-      style.prose_font, "Computing differences...",
-      self.position.x + style.padding.x,
-      self.position.y + (self.diff_header_height or 0) + style.padding.y,
-      style.dim
-    )
+    if self.diff_loading_visible then
+      renderer.draw_text(
+        style.prose_font, "Computing differences...",
+        self.position.x + style.padding.x,
+        self.position.y + (self.diff_header_height or 0) + style.padding.y,
+        style.dim
+      )
+    end
     perf_end("diffview_draw_chrome", chrome_started, chrome_scope)
     perf_end("diffview_draw", started, scope)
     return
