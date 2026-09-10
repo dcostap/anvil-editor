@@ -435,8 +435,11 @@ local function buffer_for_content(content, title)
   end
   local buffer = Buffer(nil, nil, true)
   buffer.display_name = buffer_name
+  -- Language detection must not give generated content a disk identity.
+  buffer.syntax_path = content.source_path
   local text = content.kind == "empty" and "" or (content.text or "")
   if text ~= "" then buffer:insert(1, 1, text) end
+  buffer:reset_syntax()
   buffer:clear_undo_redo()
   buffer:clean()
   if content.kind == "blank" then

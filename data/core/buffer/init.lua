@@ -135,7 +135,7 @@ end
 function Buffer:reset_syntax(opts)
   opts = opts or {}
   local header = self:get_text(1, 1, self:position_offset(1, 1, 128))
-  local path = self.abs_filename
+  local path = self.syntax_path or self.abs_filename
   if not path and self.filename then
     path = core.root_project().path .. PATHSEP .. self.filename
   end

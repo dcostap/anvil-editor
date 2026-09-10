@@ -86,7 +86,7 @@ local function first_bytes(buffer, max_bytes)
 end
 
 local function buffer_path(buffer)
-  local path = buffer and buffer.abs_filename or buffer and buffer.filename
+  local path = buffer and (buffer.syntax_path or buffer.abs_filename or buffer.filename)
   if path and common and common.normalize_path then return common.normalize_path(path) end
   return path
 end
@@ -102,7 +102,7 @@ end
 local common = require "core.common"
 
 buffer_path = function(buffer)
-  local path = buffer and (buffer.abs_filename or buffer.filename)
+  local path = buffer and (buffer.syntax_path or buffer.abs_filename or buffer.filename)
   return path and common.normalize_path(path) or path
 end
 
