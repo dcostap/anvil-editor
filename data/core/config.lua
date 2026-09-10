@@ -290,9 +290,9 @@ config.animated_caret_animation_length = 0.16
 
 ---Additional speed bonus for the far part of long vertical caret jumps.
 ---The bonus fades in from 30 to 80 text lines.
----Defaults to 0.25.
+---Defaults to 0.75.
 ---@type number
-config.animated_caret_far_jump_speed_bonus = 0.25
+config.animated_caret_far_jump_speed_bonus = 0.75
 
 ---Shortest animation time, used at or below the minimum trail distance.
 ---
