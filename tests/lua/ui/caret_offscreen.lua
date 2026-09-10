@@ -58,14 +58,14 @@ test.describe("Off-screen caret movement", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("speeds up only the far part of a vertical trail", function()
+  test.it("limits a far vertical trail to the effective app height", function()
     local old_time = system.get_time
     local old_rect, old_poly = renderer.draw_rect, renderer.draw_poly
     local now = 0
     system.get_time = function() return now end
     renderer.draw_rect = function() end
 
-    local function first_frame_remaining(line_distance, speed_bonus)
+    local function first_frame_remaining(line_distance, app_height)
       local caret = require "core.caret_renderer".new()
       local owner = {}
       local points
@@ -80,7 +80,7 @@ test.describe("Off-screen caret movement", function()
           color = { 12, 34, 56, 255 },
           cell_width = 10, cell_height = 20,
         }
-        caret:draw(now, 0.16, 0.02, 1, 1, 12, 45, 95, 15, 450, speed_bonus)
+        caret:draw(now, 0.16, 0.02, 1, 1, 12, 45, 95, 15, 450, app_height)
       end
 
       draw_target(1, 0)
@@ -90,12 +90,9 @@ test.describe("Off-screen caret movement", function()
     end
 
     local ok, err = pcall(function()
-      local near_normal = first_frame_remaining(20, 0)
-      local near_bonus = first_frame_remaining(20, 0.25)
-      local far_normal = first_frame_remaining(80, 0)
-      local far_bonus = first_frame_remaining(80, 0.25)
-      test.equal(near_bonus, near_normal)
-      test.ok(far_bonus < far_normal, "the far trail should catch up faster")
+      local capped = first_frame_remaining(40, 500)
+      local far = first_frame_remaining(100, 500)
+      test.equal(far, capped, "the far trail should start within the app height")
     end)
 
     system.get_time = old_time

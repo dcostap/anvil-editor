@@ -8,10 +8,6 @@ local RELATIVE_CORNERS = {
   { -0.5,  0.5 },
 }
 
-local FAR_JUMP_SPEED_START_DISTANCE = 30
-local FAR_JUMP_SPEED_FULL_DISTANCE = 80
-local DEFAULT_FAR_JUMP_SPEED_BONUS = 0.25
-
 local function clamp(value, minimum, maximum)
   return math.max(minimum, math.min(maximum, value))
 end
@@ -43,11 +39,9 @@ local function reset_spring(corner, x, y)
   corner.animation_length = 0
 end
 
-local function update_spring(position, velocity, dt, animation_length, speed_scale)
-  if position == 0 then return 0, 0, false end
-  local effective_length = animation_length / math.max(1, speed_scale or 1)
-  if effective_length <= dt then return 0, 0, false end
-  local omega = 4 / effective_length
+local function update_spring(position, velocity, dt, animation_length)
+  if animation_length <= dt or position == 0 then return 0, 0, false end
+  local omega = 4 / animation_length
   local a = position
   local b = position * omega + velocity
   local decay = math.exp(-omega * dt)
@@ -55,17 +49,6 @@ local function update_spring(position, velocity, dt, animation_length, speed_sca
   velocity = decay * (-a * omega - b * dt * omega + b)
   if math.abs(position) < 0.01 then return 0, 0, false end
   return position, velocity, true
-end
-
-local function vertical_speed_scale(offset_y, cell_height, speed_bonus)
-  local distance = math.abs(offset_y) / math.max(1, cell_height or 1)
-  local progress = clamp(
-    (distance - FAR_JUMP_SPEED_START_DISTANCE)
-      / (FAR_JUMP_SPEED_FULL_DISTANCE - FAR_JUMP_SPEED_START_DISTANCE),
-    0, 1
-  )
-  return 1 + math.max(0, speed_bonus or DEFAULT_FAR_JUMP_SPEED_BONUS)
-    * smoothstep(progress)
 end
 
 local function same_location(a, b)
@@ -163,10 +146,38 @@ function CaretRenderer:relocate(target)
   self.previous_target = target
 end
 
+local function limit_far_vertical_trail(corners, old_target, target, window_height)
+  window_height = tonumber(window_height)
+  if not window_height or window_height <= 0 then return old_target end
+
+  local cell_height = math.max(1, target.cell_height or target.height or 1)
+  local trail_height = math.max(
+    window_height + cell_height * 10,
+    cell_height * 40
+  )
+  local jump_y = target.y - old_target.y
+  if math.abs(jump_y) <= trail_height then return old_target end
+
+  local direction = jump_y < 0 and -1 or 1
+  local limited_y = target.y - direction * trail_height
+  local shift_y = limited_y - old_target.y
+  for _, corner in ipairs(corners) do
+    corner.y = corner.y + shift_y
+    corner.destination_y = corner.destination_y + shift_y
+  end
+
+  local limited = copy_target(old_target)
+  limited.y = limited_y
+  return limited
+end
+
 function CaretRenderer:start_jump(
   target, animation_length, min_animation_length, trail_size,
-  min_distance, full_distance
+  min_distance, full_distance, window_height
 )
+  local old_target = limit_far_vertical_trail(
+    self.corners, self.previous_target, target, window_height
+  )
   local alignments = {}
   local minimum, maximum = math.huge, -math.huge
   for index, corner in ipairs(self.corners) do
@@ -185,7 +196,6 @@ function CaretRenderer:start_jump(
   end
 
   local range = maximum - minimum
-  local old_target = self.previous_target
   local jump_x = target.x - old_target.x
   local jump_y = target.y - old_target.y
   local distance = math.sqrt(
@@ -283,7 +293,7 @@ end
 function CaretRenderer:draw(
   now, animation_length, min_animation_length, trail_size,
   min_distance, full_distance, min_speed, max_speed,
-  distance_min, distance_max, far_jump_speed_bonus
+  distance_min, distance_max, window_height
 )
   local target = self.target
   if not target then return false end
@@ -293,9 +303,6 @@ function CaretRenderer:draw(
     min_animation_length or animation_length, 0, animation_length
   )
   trail_size = clamp(trail_size or 0, 0, 1)
-  far_jump_speed_bonus = math.max(
-    0, tonumber(far_jump_speed_bonus) or DEFAULT_FAR_JUMP_SPEED_BONUS
-  )
 
   local jumped = false
   if #self.corners == 0 or not self.previous_target then
@@ -319,7 +326,7 @@ function CaretRenderer:draw(
       else
         self:start_jump(
           target, animation_length, min_animation_length, trail_size,
-          min_distance, full_distance
+          min_distance, full_distance, window_height
         )
         jumped = true
       end
@@ -363,14 +370,11 @@ function CaretRenderer:draw(
   local points = {}
   for index, corner in ipairs(self.corners) do
     local x_animating, y_animating
-    local speed_scale = vertical_speed_scale(
-      corner.offset_y, target.cell_height or target.height, far_jump_speed_bonus
-    )
     corner.offset_x, corner.velocity_x, x_animating = update_spring(
-      corner.offset_x, corner.velocity_x, dt, corner.animation_length, speed_scale
+      corner.offset_x, corner.velocity_x, dt, corner.animation_length
     )
     corner.offset_y, corner.velocity_y, y_animating = update_spring(
-      corner.offset_y, corner.velocity_y, dt, corner.animation_length, speed_scale
+      corner.offset_y, corner.velocity_y, dt, corner.animation_length
     )
     corner.x = corner.destination_x - corner.offset_x
     corner.y = corner.destination_y - corner.offset_y
