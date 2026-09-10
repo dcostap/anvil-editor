@@ -17,6 +17,7 @@ function M.dismiss(view)
   if not previews[view] then return false end
   previews[view] = nil
   view:remove_visual_row_provider(provider_id)
+  view:remove_decoration_provider(provider_id)
   view:remove_selection_listener(provider_id)
   core.redraw = true
   return true
@@ -28,6 +29,11 @@ local function draw_row(view, row, x, y, width, height)
     local font = view:get_font()
     local _, indent_size = view.buffer:get_indent_info()
     font:set_tab_size(indent_size)
+    for _, range in ipairs(row.inline_ranges or {}) do
+      local left = font:get_width(row.text:sub(1, range.col1 - 1))
+      local right = font:get_width(row.text:sub(1, range.col2 - 1))
+      renderer.draw_rect(x + left, y, right - left, height, style.diff_modify_inline)
+    end
     -- Provider rows already receive the scrolled text origin. Keep code
     -- previews aligned with the source line instead of adding another offset.
     local tx = x
@@ -69,6 +75,8 @@ function M.show(view, point, title, lines, options)
       -- Keep newline tokens out of the renderer without changing lexer state.
       for i = 2, #row.tokens, 2 do row.tokens[i] = row.tokens[i]:gsub("[\r\n]+$", "") end
       row.background = style.diff_delete_background
+      local change = options.changes and options.changes[index]
+      row.inline_ranges = change and change.inline_ranges
     else
       row.text = row.text:gsub("\t", "    ")
     end
@@ -86,6 +94,25 @@ function M.show(view, point, title, lines, options)
       if line == preview.line and placement == "after" then return rows end
     end,
   })
+  if options and options.current_changes then
+    view:add_decoration_provider(provider_id, {
+      line_background = function(_, _, line)
+        local change = options.current_changes[line - options.current_start + 1]
+        if change and change.tag ~= "equal" then return style.diff_insert_background end
+      end,
+      inline_ranges = function(_, _, line)
+        local change = options.current_changes[line - options.current_start + 1]
+        if not change or not change.inline_ranges then return nil end
+        local ranges = {}
+        for _, range in ipairs(change.inline_ranges) do
+          ranges[#ranges + 1] = {
+            col1 = range.col1, col2 = range.col2, color = style.diff_modify_inline,
+          }
+        end
+        return ranges
+      end,
+    })
+  end
   view:add_selection_listener(provider_id, function(_, state)
     if state.selections[1] ~= preview.line then M.dismiss(view) end
   end)

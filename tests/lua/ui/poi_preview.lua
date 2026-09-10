@@ -30,6 +30,40 @@ test.describe("POI previews", function()
 end)
 
 test.describe("Git change POIs", function()
+  test.it("highlights changed words on both sides until the preview closes", function()
+    local Editor = require "core.editor"
+    local gitdiff = require "plugins.gitdiff_highlight"
+    local poi = require "core.poi"
+    local preview = require "core.poi_preview"
+    local editor = Editor(Buffer())
+    editor.size.x, editor.size.y = 800, 600
+    editor.buffer:insert(1, 1, "unchanged\n\tvalue = new_name + same\n")
+    editor.buffer:set_selection(1, 1)
+    gitdiff._set_state_for_tests(editor.buffer, {
+      is_in_repo = true, base_lines = { "unchanged\n", "\tvalue = old_name + same\n" },
+      ranges = {{ type = "modification", current_start = 2, current_end = 3, base_start = 2, base_end = 3 }},
+      line_index = {},
+    })
+    test.ok(poi.navigate(editor, 1))
+    local row = editor:get_visual_row_entry(3).provider_row
+    test.same(row.inline_ranges, {{ col1 = 10, col2 = 18 }})
+    local function current_ranges()
+      local result = {}
+      for _, entry in ipairs(editor:decoration_provider_entries()) do
+        if entry.provider.inline_ranges then
+          for _, range in ipairs(entry.provider:inline_ranges(editor, 2) or {}) do
+            result[#result + 1] = { col1 = range.col1, col2 = range.col2 }
+          end
+        end
+      end
+      return result
+    end
+    test.same(current_ranges(), {{ col1 = 10, col2 = 18 }})
+    preview.dismiss(editor)
+    test.same(current_ranges(), {})
+    editor.buffer:on_close()
+  end)
+
   test.it("previews a local Git change without replacing the remote source", function()
     local Editor = require "core.editor"
     local gitdiff = require "plugins.gitdiff_highlight"

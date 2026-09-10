@@ -788,7 +788,19 @@ local function preview_git_change(view, point)
     if #lines >= 24 then lines[#lines + 1] = "..."; break end
     lines[#lines + 1] = ((state.base_lines or {})[line] or "")
   end
-  return preview.show(view, point, "Previous code", lines, { code = true })
+  -- Keep large previews bounded. Do not compare incomplete blocks.
+  if #lines > 24 or range.current_end - range.current_start > 24 then
+    return preview.show(view, point, "Previous code", lines, { code = true })
+  end
+  local current = {}
+  for line = range.current_start, range.current_end - 1 do
+    current[#current + 1] = view.buffer.lines[line] or ""
+  end
+  local model = require("plugins.diff.model").compute(lines, current)
+  return preview.show(view, point, "Previous code", lines, {
+    code = true, changes = model.a_changes,
+    current_changes = model.b_changes, current_start = range.current_start,
+  })
 end
 
 local old_buffer_close = Buffer.on_close
