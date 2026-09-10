@@ -504,6 +504,7 @@ local suggestions_idx = 1
 local suggestions = {}
 local last_line, last_col
 local last_buffer
+local pending_tree_sitter_completion
 local pending_deletion_buffer
 
 local function display_info(suggestion)
@@ -1095,6 +1096,7 @@ local function reset_suggestions(skip_close)
   triggered_manually = false
   force_basic_suggestions = true
   pending_deletion_buffer = nil
+  pending_tree_sitter_completion = nil
   provider_completion = nil
   reset_lsp_completion_items()
 
@@ -1111,6 +1113,7 @@ end
 function update_suggestions()
   local buffer = core.active_view.buffer
   local filename = buffer and buffer.filename or ""
+  pending_tree_sitter_completion = nil
 
   suggestions = {}
   desc_rect = nil
@@ -1248,6 +1251,15 @@ function update_suggestions()
       local reason
       symbols, reason = locals.get_visible_buffer_symbols(buffer, line1, col1, line2, col2)
       visible_symbols = symbols ~= nil and reason == nil
+      if reason == "not-ready" then
+        pending_tree_sitter_completion = {
+          view = core.active_view,
+          buffer = buffer,
+          change_id = buffer:get_change_id(),
+          line = line2,
+          col = col2,
+        }
+      end
     end
     if not visible_symbols and locals and locals.get_buffer_symbols then
       symbols = locals.get_buffer_symbols(buffer)
@@ -2025,7 +2037,11 @@ local function show_autocomplete(opts)
       end
       local contextual_member_count = update_suggestions()
       if member_receiver and not should_open_normally and contextual_member_count == 0 then
-        reset_suggestions()
+        if pending_tree_sitter_completion then
+          suggestions = {}
+        else
+          reset_suggestions()
+        end
       end
 
       if not triggered_manually then
@@ -2163,6 +2179,31 @@ RootPanel.update = function(...)
         reset_suggestions()
       end
     end
+  end
+
+  local pending = pending_tree_sitter_completion
+  if not pending then return end
+  local buffer = pending.buffer
+  local line, col = buffer:get_selection()
+  if av ~= pending.view or av.buffer ~= buffer or buffer:get_change_id() ~= pending.change_id
+    or line ~= pending.line or col ~= pending.col then
+    reset_suggestions()
+  elseif buffer.treesitter and buffer.treesitter.status == "ready" then
+    local selected = suggestions[suggestions_idx]
+    local offset = suggestions_offset
+    show_autocomplete({ keep_open = #suggestions > 0 })
+    -- Keep the user's selected name when a symbol replaces its Buffer word.
+    if selected then
+      for i, item in ipairs(suggestions) do
+        if suggestion_text(item) == suggestion_text(selected) then
+          suggestions_idx = i
+          suggestions_offset = common.clamp(offset, math.max(1, i - get_visible_suggestion_count(av) + 1), i)
+          break
+        end
+      end
+    end
+    core.redraw = true
+    core.log_quiet("Autocomplete: refreshed %d suggestion(s) after parsing %s", #suggestions, buffer:get_name())
   end
 end
 
@@ -2457,7 +2498,11 @@ command.add(predicate, {
   ["autocomplete:go_to_declaration_opposite"] = function()
     return reveal_completion_source(true)
   end,
+})
 
+command.add(function()
+  return predicate() or (pending_tree_sitter_completion and pending_tree_sitter_completion.view == get_active_view())
+end, {
   ["autocomplete:cancel"] = function()
     reset_suggestions()
   end,

@@ -850,8 +850,8 @@ local function gitdiff_points_for_view(view)
 			kind = "git-change",
 			label = range.type,
 			range = range,
+			-- Git regions provide navigation previews, not caret activation.
 			preview = preview_git_change,
-			activate = preview_git_change,
 		}
 	end
 	return points

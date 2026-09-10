@@ -4,10 +4,12 @@ local command = require "core.command"
 local EmptyView = require "core.emptyview"
 local Project = require "core.project"
 local panes = require "core.panes"
+local process = require "core.process"
 local test = require "core.test"
 local treesitter = require "core.treesitter"
 local symbol_index = require "core.treesitter.symbol_index"
 require "core.commands.language"
+require "plugins.gitdiff_highlight"
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
@@ -18,6 +20,18 @@ local function write_file(path, content)
   test.not_nil(file, err)
   file:write(content or "")
   file:close()
+end
+
+local function git(root, ...)
+  local args = { "git", "-C", root }
+  for _, arg in ipairs({...}) do args[#args + 1] = arg end
+  local proc = assert(process.start(args, {
+    stdin = process.REDIRECT_DISCARD,
+    stdout = process.REDIRECT_DISCARD,
+    stderr = process.REDIRECT_PIPE,
+  }))
+  local code = proc:wait(process.WAIT_INFINITE, 0.01)
+  test.equal(code, 0, proc:read_stderr() or "Git fixture failed")
 end
 
 local function remove_buffer(buffer)
@@ -80,6 +94,9 @@ test.describe("language navigation", function()
       symbol_index.reset_for_tests()
       coroutine.yield(0.05)
       if system.get_file_info(context.temp_root) then
+        if PLATFORM == "Windows" and system.get_file_info(join_path(context.temp_root, ".git")) then
+          os.execute('attrib -R /S /D "' .. context.temp_root:gsub("/", "\\") .. '\\*" >NUL 2>NUL')
+        end
         local ok, err
         local deadline = system.get_time() + 1
         repeat
@@ -148,6 +165,54 @@ target :: proc() {}
       test.equal(col1, 1)
       test.equal(line2, 3)
       test.equal(col2, 7)
+    end)
+  end
+
+  for _, change in ipairs({ "addition", "modification" }) do
+    test.it("opens a method declaration from a Git " .. change, function(context)
+      local caller_path = join_path(context.temp_root, "Caller.kt")
+      local declaration_path = join_path(context.temp_root, "MainWindow.kt")
+      local baseline = change == "addition" and "" or "  println(\"before\")\n"
+      write_file(caller_path, "fun main() {\n" .. baseline .. "}\n")
+      write_file(declaration_path, [[object MainWindow {
+  fun setVisibleAndLoadInitialSize() {}
+}
+]])
+      git(context.temp_root, "init", "-q")
+      git(context.temp_root, "add", ".")
+      git(context.temp_root, "-c", "user.name=Anvil Test", "-c", "user.email=anvil@example.test",
+        "commit", "-qm", "Add navigation fixture")
+      write_file(caller_path, "fun main() {\n  MainWindow.setVisibleAndLoadInitialSize()\n}\n")
+
+      local view = core.open_file(caller_path)
+      core.set_active_view(view)
+      test.ok(wait_ready(view.buffer))
+      test.ok(wait_until(function()
+        for _, point in ipairs(view:get_points_of_interest() or {}) do
+          if point.kind == "git-change" and point.label == change and point.line == 2 then return true end
+        end
+      end), "expected the method call to belong to a Git change")
+      test.ok(wait_until(function()
+        local symbols, _, status = symbol_index.workspace_symbols("setVisibleAndLoadInitialSize")
+        return status == "fresh" and symbols and #symbols == 1
+      end), "expected the Project index to contain the method declaration")
+      view:with_selection_state(function() view.buffer:set_selection(2, 14) end)
+      local source_pane = panes.active()
+      local alternate = change == "modification"
+      test.ok(command.perform(alternate and "core:activate_point_of_interest_alternate"
+        or "core:activate_point_of_interest"))
+      test.ok(wait_until(function()
+        local active = core.active_view
+        return active and active.buffer and common.path_equals(active.buffer.abs_filename, declaration_path)
+      end), "expected activation to open the method declaration, not the Git preview")
+      local buffer = core.active_view.buffer
+      test.equal(buffer:get_text(buffer:get_selection(true)), "setVisibleAndLoadInitialSize")
+      if alternate then
+        test.not_equal(panes.active().group, source_pane.group)
+        test.equal(source_pane.current_view, view)
+      else
+        test.equal(panes.active(), source_pane)
+      end
     end)
   end
 end)
