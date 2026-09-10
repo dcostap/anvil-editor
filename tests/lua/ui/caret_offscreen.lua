@@ -58,45 +58,61 @@ test.describe("Off-screen caret movement", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("limits a far vertical trail to the effective app height", function()
+  test.it("keeps far scroll-jump trails independent of Buffer length", function()
     local old_time = system.get_time
     local old_rect, old_poly = renderer.draw_rect, renderer.draw_poly
+    local old_animated, old_redraw = config.animated_caret, core.redraw
     local now = 0
     system.get_time = function() return now end
     renderer.draw_rect = function() end
+    config.animated_caret = true
 
-    local function first_frame_remaining(line_distance, app_height)
-      local caret = require "core.caret_renderer".new()
-      local owner = {}
+    local function first_jump_frame(scroll_distance, app_height)
+      local root = RootPanel()
+      root.size.x, root.size.y = 800, app_height
+      local owner = { scroll = { x = 0, y = 0 } }
       local points
+      -- Capture polygons so a failure cannot enter the native rasterizer.
       renderer.draw_poly = function(value) points = value end
       now = 0
 
-      local function draw_target(line, y)
-        caret:begin_frame(true)
-        caret:submit {
-          x = 10, y = y, width = 2, height = 20,
-          owner = owner, line = line, col = 1,
-          color = { 12, 34, 56, 255 },
-          cell_width = 10, cell_height = 20,
-        }
-        caret:draw(now, 0.16, 0.02, 1, 1, 12, 45, 95, 15, 450, app_height)
+      local function draw_target(line)
+        root:begin_keyboard_caret_frame()
+        if line then
+          root:submit_keyboard_caret {
+            x = 10, y = 100, width = 2, height = 20,
+            owner = owner, line = line, col = 1,
+            color = { 12, 34, 56, 255 },
+            cell_width = 10, cell_height = 20,
+            scroll_x = owner.scroll.x, scroll_y = owner.scroll.y,
+          }
+        end
+        root:draw_keyboard_caret()
       end
 
-      draw_target(1, 0)
+      draw_target(1)
+      owner.scroll.y = scroll_distance
       now = 0.01
-      draw_target(2, line_distance * 20)
-      return line_distance * 20 - points[1][2]
+      draw_target()
+      now = 0.02
+      draw_target(2)
+      test.ok(points, "the returning caret should still draw a trail")
+      return points
     end
 
     local ok, err = pcall(function()
-      local capped = first_frame_remaining(40, 500)
-      local far = first_frame_remaining(100, 500)
-      test.equal(far, capped, "the far trail should start within the app height")
+      for _, direction in ipairs { -1, 1 } do
+        for _, height in ipairs { 600, 1200 } do
+          local far = first_jump_frame(direction * 40000, height)
+          local farther = first_jump_frame(direction * 80000, height)
+          test.same(farther, far, "longer Buffers must not produce longer off-screen trails")
+        end
+      end
     end)
 
     system.get_time = old_time
     renderer.draw_rect, renderer.draw_poly = old_rect, old_poly
+    config.animated_caret, core.redraw = old_animated, old_redraw
     if not ok then error(err, 0) end
   end)
 end)
