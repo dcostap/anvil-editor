@@ -34,7 +34,9 @@ test.describe("Commit remote POIs", function()
 
   test.after_each(function() panes.reset_for_tests() end)
 
-  for _, activation in ipairs { "POI activation", "double-click" } do
+  for _, activation in ipairs {
+    "POI activation", "double-click", "commit activation", "commit activation after loading files",
+  } do
   test.it("continues through Git Log files after " .. activation, function(context)
     local source = context.source
     source.tab_id = "log"
@@ -56,7 +58,23 @@ test.describe("Commit remote POIs", function()
     end
     test.ok(poi.navigate(tree, 1))
     test.equal(panes.active().current_view, source)
-    if activation == "double-click" then
+    if activation:find("commit activation", 1, true) then
+      test.ok(poi.navigate(tree, 1))
+      local complete_listing
+      if activation == "commit activation after loading files" then
+        log.commits[1].changed_files, log.commits[1].changed_files_loaded = nil, nil
+        source.model.backend.changed_files = function(_, _, _, _, callback)
+          complete_listing = callback
+        end
+      end
+      core.active_view = source:pane_view("log-list")
+      core.active_view.buffer:set_selection(1, 1)
+      test.ok(require("core.command").perform("core:activate_point_of_interest"))
+      if activation == "commit activation after loading files" then
+        test.not_nil(complete_listing)
+        complete_listing(context.tab.changed_files)
+      end
+    elseif activation == "double-click" then
       tree.position.x, tree.position.y = 0, 0
       tree.size.x, tree.size.y = 600, 400
       tree.scroll.x, tree.scroll.y = 0, 0

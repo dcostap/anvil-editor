@@ -1263,13 +1263,15 @@ function GitView:activate_selected_point(callback)
       local record = log_commit.changed_files and log_commit.changed_files[1]
       local path = record and changed_file_path(record)
       if not path then return nil end
-      return self:open_file_comparison(source, function(done)
+      self:select_detail_file_point { commit = log_commit, record = record }
+      return self:open_file_comparison(self:pane_view("details"), function(done)
         return self.model:open_commit_diff(log_commit, function(_, err, tab)
           done(tab, err)
           if callback then callback(self.model, err) end
         end, { selected_file_path = path })
       end, function()
         return self.model:selected_commit() == log_commit
+          and log_commit.selected_changed_file_path == path
       end)
     end
     if log_commit.changed_files or log_commit.changed_files_loaded then
