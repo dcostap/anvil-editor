@@ -66,6 +66,12 @@ local function same_shape(a, b)
     and a.height == b.height
 end
 
+local function copy_target(target)
+  local copy = {}
+  for key, value in pairs(target) do copy[key] = value end
+  return copy
+end
+
 function CaretRenderer.new()
   return setmetatable({ corners = {}, target = nil, previous_target = nil }, CaretRenderer)
 end
@@ -81,11 +87,35 @@ end
 
 function CaretRenderer:begin_frame(enabled)
   self.target = nil
-  if not enabled then self:reset() end
+  if not enabled then
+    self:reset()
+  else
+    self:track_previous_target()
+  end
 end
 
 function CaretRenderer:submit(target)
   self.target = target
+end
+
+-- Keep an old caret attached to its document position while its view scrolls
+-- before the new caret becomes visible. Without this, a returning caret can
+-- have the same screen rectangle as the old target and skip its trail.
+function CaretRenderer:track_previous_target()
+  local previous = self.previous_target
+  local owner = previous and previous.owner
+  local scroll = owner and owner.scroll
+  if not scroll or previous.scroll_x == nil or previous.scroll_y == nil then return end
+
+  local dx = previous.scroll_x - (scroll.x or 0)
+  local dy = previous.scroll_y - (scroll.y or 0)
+  if dx == 0 and dy == 0 then return end
+
+  local target = copy_target(previous)
+  target.x = target.x + dx
+  target.y = target.y + dy
+  target.scroll_x, target.scroll_y = scroll.x or 0, scroll.y or 0
+  self:relocate(target)
 end
 
 function CaretRenderer:reset_to_target(target)
@@ -250,7 +280,9 @@ function CaretRenderer:draw(
   local jumped = false
   if #self.corners == 0 or not self.previous_target then
     self:reset_to_target(target)
-  elseif not same_shape(self.previous_target, target) then
+  elseif not same_location(self.previous_target, target)
+    or not same_shape(self.previous_target, target)
+  then
     if same_location(self.previous_target, target) then
       self:relocate(target)
     else
