@@ -33,7 +33,7 @@ local fixtures = {
   { name = "heading", source = "## body", visible = "## body" },
   { name = "bullet", source = "- body", visible = "body" },
   { name = "task", source = "- [ ] body", visible = "body", checkbox = true },
-  { name = "checked task", source = "- [x] body", visible = "body", checkbox = true },
+  { name = "checked task", source = "- [x] body", visible = "body", checkbox = true, checked = true },
   { name = "nested bullet", prefix = "- parent\n", source = "  - body", visible = "body" },
   { name = "formatted bullet", source = "- **bold** body", visible = "bold body" },
   { name = "formatted task", source = "- [ ] **bold** body", visible = "bold body", checkbox = true },
@@ -143,7 +143,15 @@ test.describe("Markdown edit matrix", function()
             if fixture.raw then test.equal(render, nil, "frontmatter acquired Markdown rendering") end
             test.equal(visible_text(render, source), visible)
             if render then test.equal(render.source_text, source) end
-            if original_box then test.same(checkbox_size(view, render), original_box) end
+            if original_box then
+              test.same(checkbox_size(view, render), original_box)
+              for _, fragment in ipairs(render.fragments) do
+                if not fragment.hidden and not fragment.widget and fragment.text ~= "" then
+                  test.equal(fragment.strikethrough == true, fixture.checked == true,
+                    "task text changed its completion style")
+                end
+              end
+            end
             local x, y = view:get_line_screen_position(line, #source + 1)
             test.ok(x == x and y == y and math.abs(x) < math.huge and math.abs(y) < math.huge,
               "caret position is not finite")

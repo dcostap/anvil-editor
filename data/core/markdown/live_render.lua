@@ -4011,6 +4011,9 @@ local function pending_list_marker_render(view, previous, current_text)
       color = style.text,
     }
   end
+  if kind == "task" then
+    set_render_line_task_completion(render, checked, content_col)
+  end
   return render
 end
 
@@ -4769,8 +4772,14 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
             visual_capture, "retained"
           )
         else
-          -- The edit already preserved these fragments. Re-parsing the line
-          -- as a list loses inline formatting and ignores its block context.
+          if index > 1 and pending_projection.list_signature(source) ~= "" then
+            -- A new list item cannot inherit the preceding item's body style.
+            render = current_source_render(
+              view, line, nil, source,
+              owner.fence_service and owner.fence_service:contains_line(line)
+            )
+          end
+          -- Keep the existing item's fragments and inline formatting.
           publish(line, render, captured, "active-source-reveal")
         end
       end
