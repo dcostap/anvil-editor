@@ -4,10 +4,42 @@ local command = require "core.command"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local tokenizer = require "core.tokenizer"
+local TextView = require "core.textview"
 
 local M = {}
 local previews = setmetatable({}, { __mode = "k" })
 local provider_id = "core.poi-preview"
+
+local draw_overlay = TextView.draw_overlay
+function TextView:draw_overlay(...)
+  local result = draw_overlay(self, ...)
+  local preview = previews[self]
+  if not (preview and preview.code) then return result end
+  -- Draw after all text rows so adjacent line backgrounds cannot erase the shadow.
+  for entry in self:iter_visible_visual_rows() do
+    local row = entry.provider_row
+    if row and row.preview == preview then
+      local height = entry.height or self:get_line_height()
+      local x = self:get_content_offset() + self:get_gutter_width()
+      local y = entry.y - (row.index - 1) * height
+      local width = math.max(0, self.size.x - self:get_gutter_width())
+      local bottom = y + preview.row_count * height
+      local size = math.max(1, math.ceil(style.poi_preview_shadow_size))
+      local source = style.poi_preview_shadow
+      local color = { source[1], source[2], source[3], 0 }
+      for offset = 1, size do
+        local fade = 1 - (offset - 1) / size
+        color[4] = math.floor(source[4] * fade * fade + 0.5)
+        renderer.draw_rect(x - offset, y - offset, width + offset * 2, 1, color)
+        renderer.draw_rect(x - offset, bottom + offset - 1, width + offset * 2, 1, color)
+        renderer.draw_rect(x - offset, y - offset + 1, 1, bottom - y + offset * 2 - 2, color)
+        renderer.draw_rect(x + width + offset - 1, y - offset + 1, 1, bottom - y + offset * 2 - 2, color)
+      end
+      break
+    end
+  end
+  return result
+end
 
 function M.for_view(view)
   return previews[view]
@@ -58,7 +90,7 @@ end
 
 function M.show(view, point, title, lines, options)
   M.dismiss(view)
-  local preview = { line = point.line, title = title, lines = lines }
+  local preview = { line = point.line, title = title, lines = lines, code = options and options.code }
   previews[view] = preview
   local rows = options and options.code and {} or {
     { id = "title", text = title .. "  [Escape to close]", draw = draw_row },
@@ -83,7 +115,10 @@ function M.show(view, point, title, lines, options)
     rows[#rows + 1] = row
   end
   if options and options.code then
+    preview.row_count = #rows
     for index, row in ipairs(rows) do
+      row.preview = preview
+      row.index = index
       row.framed = true
       row.first = index == 1
       row.last = index == #rows
