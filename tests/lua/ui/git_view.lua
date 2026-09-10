@@ -687,7 +687,12 @@ test.describe("Git View command", function()
     test.equal(tab.selected_commit, 2)
     test.equal(file_at_calls, 1)
     test.equal(tab.preview_right_text, "b:src/app.lua")
-    test.not_equal(initial_diff, tab.history_diff_view)
+    test.equal(initial_diff, tab.history_diff_view)
+    test.not_nil(tab.history_diff_view_pending)
+    wait_until(function()
+      history_view:update()
+      return tab.history_diff_view ~= initial_diff
+    end, 1, "history Diff View did not finish refreshing")
     test.not_nil(panes.pane_for_view(tab.history_diff_view))
 
     local tab_count = #view.model.tabs

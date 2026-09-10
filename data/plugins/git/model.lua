@@ -339,13 +339,15 @@ function Model:dispose_tab(tab)
     range_marker.remove(tab.history_range_marker)
     tab.history_range_marker = nil
   end
-  for _, child in ipairs { tab.diff_view, tab.history_diff_view } do
+  for _, child in ipairs { tab.diff_view, tab.history_diff_view, tab.history_diff_view_pending } do
     if child then
       child:dispose_integrations()
       child:dispose_owned_buffers()
     end
   end
-  tab.diff_view, tab.history_diff_view = nil, nil
+  tab.diff_view, tab.history_diff_view, tab.history_diff_view_pending = nil, nil, nil
+  tab.history_diff_view_pending_generation = nil
+  tab.history_diff_view_pending_started_at = nil
 end
 
 function Model:find_tab(id)

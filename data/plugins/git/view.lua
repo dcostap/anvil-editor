@@ -573,7 +573,7 @@ end
 
 function GitView:dispose_tab_resources(tab)
   if not tab then return end
-  for _, child in ipairs { tab.diff_view, tab.history_diff_view } do
+  for _, child in ipairs { tab.diff_view, tab.history_diff_view, tab.history_diff_view_pending } do
     if child then
       if child == tab.history_diff_view then
         local pane = panes.pane_for_view(child)
@@ -583,7 +583,10 @@ function GitView:dispose_tab_resources(tab)
       child:dispose_owned_buffers()
     end
   end
-  tab.diff_view, tab.history_diff_view, tab.image_comparison_view = nil, nil, nil
+  tab.diff_view, tab.history_diff_view, tab.history_diff_view_pending = nil, nil, nil
+  tab.image_comparison_view = nil
+  tab.history_diff_view_pending_generation = nil
+  tab.history_diff_view_pending_started_at = nil
 end
 
 function GitView:on_close()
@@ -1715,6 +1718,10 @@ function GitView:update()
   self:sync_selection_from_pane()
   local tab = self:model_tab()
   local diff_view
+  local pending_diff_view = tab and tab.history_diff_view_pending
+  if pending_diff_view and not pending_diff_view.owned_buffers_disposed then
+    pending_diff_view:update()
+  end
   if tab and tab.kind == "commit_diff" then
     self:layout_diff_tab(tab, self.position.x + style.padding.x)
     if tab.loading_file and not self:file_loading_indicator_visible(tab) then
@@ -1725,6 +1732,9 @@ function GitView:update()
       and not tab.history_diff_view.owned_buffers_disposed
       and (tab.preview_left_text ~= nil or tab.preview_right_text ~= nil) then
     diff_view = self:ensure_history_diff_view(tab)
+    if tab.history_diff_view_pending and not tab.history_diff_view_pending.owned_buffers_disposed then
+      core.redraw = true
+    end
   end
   for _, view in pairs(self.pane_views or {}) do view:update() end
   if diff_view then diff_view:update() end
@@ -1938,19 +1948,88 @@ function GitView:ensure_diff_view(tab)
   return view
 end
 
+local function history_diff_view_ready(view)
+  return view and not view.owned_buffers_disposed
+    and not view.updater_idx
+    and (view.diff_model or view.comparison_message)
+end
+
+local function dispose_history_diff_view(view)
+  if not view then return end
+  view:dispose_integrations()
+  view:dispose_owned_buffers()
+end
+
 function GitView:ensure_history_diff_view(tab)
-  if tab.history_diff_view
-      and not tab.history_diff_view.owned_buffers_disposed
-      and tab.history_diff_view_seen_generation == tab.preview_generation_value then
-    return tab.history_diff_view
-  end
+  local target_generation = tab.preview_generation_value
   local old_view = tab.history_diff_view
-  local old_pane = old_view and panes.pane_for_view(old_view)
-  local old_focused = old_view and (
-    core.active_view == old_view
+  local pending_view = tab.history_diff_view_pending
+  if pending_view and (
+      pending_view.owned_buffers_disposed
+      or tab.history_diff_view_pending_generation ~= target_generation
+    ) then
+    dispose_history_diff_view(pending_view)
+    tab.history_diff_view_pending = nil
+    tab.history_diff_view_pending_generation = nil
+    tab.history_diff_view_pending_started_at = nil
+    pending_view = nil
+  end
+
+  if old_view
+      and not old_view.owned_buffers_disposed
+      and tab.history_diff_view_seen_generation == target_generation
+      and not pending_view then
+    return old_view
+  end
+
+  local function promote(view)
+    local old_pane = old_view and panes.pane_for_view(old_view)
+    if not old_view or not old_pane then
+      tab.history_diff_view = view
+      tab.history_diff_view_seen_generation = target_generation
+      tab.history_diff_view_pending = nil
+      tab.history_diff_view_pending_generation = nil
+      tab.history_diff_view_pending_started_at = nil
+      dispose_history_diff_view(old_view)
+      return view
+    end
+    local old_focused = core.active_view == old_view
       or core.active_view == old_view.buffer_view_a
       or core.active_view == old_view.buffer_view_b
-  )
+    -- Pane layout runs before this update. Copy the old View geometry so the
+    -- replacement can render in the same frame instead of waiting for the
+    -- next layout pass with a zero-sized View.
+    view.position.x, view.position.y = old_view.position.x, old_view.position.y
+    view.size.x, view.size.y = old_view.size.x, old_view.size.y
+    view:update()
+    local placed, reason = panes.place(function() return view end, {
+      pane = old_pane,
+      placement = "current",
+      focus = old_focused,
+      reason = "git-history-diff-refresh",
+    })
+    if not placed then
+      core.log_quiet("Git history Diff View refresh failed: %s", tostring(reason))
+      return old_view
+    end
+    tab.history_diff_view = view
+    tab.history_diff_view_seen_generation = target_generation
+    tab.history_diff_view_pending = nil
+    tab.history_diff_view_pending_generation = nil
+    tab.history_diff_view_pending_started_at = nil
+    dispose_history_diff_view(old_view)
+    return view
+  end
+
+  if pending_view then
+    local pending_started_at = tab.history_diff_view_pending_started_at or system.get_time()
+    local pending_timed_out = system.get_time() - pending_started_at >= FILE_DIFF_LOADING_DELAY
+    if not history_diff_view_ready(pending_view) and not pending_timed_out then
+      return old_view
+    end
+    return promote(pending_view)
+  end
+
   local diffview = require "plugins.diffview"
   local function source(text, current_path, fragment, name)
     if fragment then
@@ -1987,32 +2066,16 @@ function GitView:ensure_history_diff_view(tab)
     editable_policy = "content",
     user_data = { source = "git-history", tab = tab },
   }, true)
-  tab.history_diff_view = view
-  tab.history_diff_view_seen_generation = tab.preview_generation_value
   attach_text_capture_owner(view, self)
   attach_text_capture_owner(view.buffer_view_a, self)
   attach_text_capture_owner(view.buffer_view_b, self)
-  if old_pane then
-    local placed, reason = panes.place(function() return view end, {
-      pane = old_pane,
-      placement = "current",
-      focus = old_focused == true,
-      reason = "git-history-diff-refresh",
-    })
-    if not placed then
-      tab.history_diff_view = old_view
-      tab.history_diff_view_seen_generation = nil
-      view:dispose_integrations()
-      view:dispose_owned_buffers()
-      core.log_quiet("Git history Diff View refresh failed: %s", tostring(reason))
-      return old_view
-    end
+  if old_view and panes.pane_for_view(old_view) then
+    tab.history_diff_view_pending = view
+    tab.history_diff_view_pending_generation = target_generation
+    tab.history_diff_view_pending_started_at = system.get_time()
+    return old_view
   end
-  if old_view then
-    old_view:dispose_integrations()
-    old_view:dispose_owned_buffers()
-  end
-  return view
+  return promote(view)
 end
 
 function GitView:open_history_diff_view(tab, opts)
