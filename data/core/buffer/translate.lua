@@ -55,6 +55,9 @@ function translate.next_word_end(buffer, line, col)
     line, col = buffer:position_offset(line, col, 1)
     prev = char
   end
+  if prev and not prev:match("%s") then
+    return line, col
+  end
   return translate.end_of_word(buffer, line, col)
 end
 
