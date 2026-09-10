@@ -25,7 +25,7 @@ function pending_render.current_source(
   view, line, previous, current_text, code,
   source_fallback, prose_render, scaled_font, heading_from_source, heading_font,
   thematic_break_fragment, quote_prefix_fragment, reveal_code_delimiter,
-  code_render
+  code_render, list_render
 )
   local function inline_fragments(text, base_col)
     local fragments = {}
@@ -176,6 +176,9 @@ function pending_render.current_source(
   end
 
   if not code then
+    -- Block context takes priority over list-like source text.
+    local render = list_render(view, previous, current_text)
+    if render then return render end
     local next_text = line and (view.buffer.lines[line + 1] or ""):gsub("\n$", "") or ""
     local next_compact = next_text:gsub("%s", "")
     local setext_level = next_compact:match("^=+$") and 1

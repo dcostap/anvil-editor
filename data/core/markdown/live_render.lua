@@ -3915,7 +3915,7 @@ local function pending_list_marker_render(view, previous, current_text)
     marker.color = checked and style.markdown_live_task_checked
       or style.markdown_live_task_unchecked
     local box_size = math.max(
-      math.floor(SCALE * 10), math.floor(body_font:get_height() * 0.72)
+      math.floor(SCALE * 12), math.floor(body_font:get_height() * 0.84)
     )
     marker_control_width = math.max(body_font:get_width("-"), box_size)
     local checkmark_font = markdown_live_scaled_font(
@@ -4053,10 +4053,6 @@ end
 local pending_fenced_code_render
 
 local function pending_source_render(view, line, render_line, current_text, code)
-  if not code then
-    local list_render = pending_list_marker_render(view, render_line, current_text)
-    if list_render then return list_render end
-  end
   local reveal_code_delimiter = false
   if code then
     local state = current_selection_state(view)
@@ -4077,7 +4073,7 @@ local function pending_source_render(view, line, render_line, current_text, code
     heading_for_line, heading_font, live.thematic_break_fragment,
     live.quote_prefix_fragment,
     reveal_code_delimiter,
-    pending_fenced_code_render
+    pending_fenced_code_render, pending_list_marker_render
   )
   local heading = not code and heading_for_line(current_text, line)
   if render and heading then

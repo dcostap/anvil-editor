@@ -69,6 +69,73 @@ local function exit_empty_list(buffer)
 end
 
 test.describe("Markdown pending visual continuity", function()
+  test.it("keeps checkbox drawing size while editing item text", function()
+    local old_live, old_active = config.markdown_live_editor, core.active_view
+    local view
+    local ok, err = pcall(function()
+      config.markdown_live_editor = true
+      view = make_view(USERDIR .. PATHSEP .. "markdown-checkbox-edit.md", "- [ ] item\nplain")
+      local buffer = view.buffer
+      buffer:set_selection(1, 11)
+      core.active_view = view
+      markdown.live_render.refresh_view(view)
+      local instance = test.not_nil(markdown_model.peek(buffer))
+      test.ok(wait_ready(instance), instance.reason)
+      local function checkbox_size()
+        local renderer = require "renderer"
+        for _, fragment in ipairs(view:get_line_render(1).fragments) do
+          if fragment.markdown_task_checkbox then
+            local saved = renderer.draw_rounded_rect
+            local size
+            renderer.draw_rounded_rect = function(x, y, width, height)
+              size = size or { width, height }
+            end
+            local drawn, draw_error = pcall(fragment.widget.draw,
+              fragment.widget, fragment, 0, 0, view:get_line_height())
+            renderer.draw_rounded_rect = saved
+            if not drawn then error(draw_error, 0) end
+            return test.not_nil(size)
+          end
+        end
+        error("checkbox is missing")
+      end
+      local before = checkbox_size()
+      buffer:insert(1, 11, "!")
+      test.equal(instance.status, "pending")
+      test.same(checkbox_size(), before)
+      test.ok(wait_ready(instance), instance.reason)
+      test.same(checkbox_size(), before)
+    end)
+    if view then markdown.live_render.detach(view) end
+    config.markdown_live_editor, core.active_view = old_live, old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps frontmatter list text raw while editing an item", function()
+    local old_live, old_active = config.markdown_live_editor, core.active_view
+    local view
+    local ok, err = pcall(function()
+      config.markdown_live_editor = true
+      view = make_view(USERDIR .. PATHSEP .. "markdown-frontmatter-list-edit.md",
+        "---\ntags:\n  - item\n---\nplain")
+      local buffer = view.buffer
+      buffer:set_selection(3, 9)
+      core.active_view = view
+      markdown.live_render.refresh_view(view)
+      local instance = test.not_nil(markdown_model.peek(buffer))
+      test.ok(wait_ready(instance), instance.reason)
+      test.equal(view:get_line_render(3), nil)
+      buffer:insert(3, 9, "!")
+      test.equal(instance.status, "pending")
+      test.equal(view:get_line_render(3), nil)
+      test.ok(wait_ready(instance), instance.reason)
+      test.equal(view:get_line_render(3), nil)
+    end)
+    if view then markdown.live_render.detach(view) end
+    config.markdown_live_editor, core.active_view = old_live, old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps attachment chips through an empty-list exit", function()
     local old_live = config.markdown_live_editor
     local old_active = core.active_view
