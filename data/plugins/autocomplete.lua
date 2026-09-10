@@ -12,6 +12,7 @@ local RootPanel = require "core.rootpanel"
 local project_paths = require "core.project_paths"
 local poi = require "core.poi"
 local symbol_icons = require "core.symbol_icons"
+local file_icons = require "core.file_icons"
 local tree_sitter_registry = require "core.treesitter.registry"
 
 ---@class plugins.autocomplete.symbolinfo
@@ -35,6 +36,8 @@ local tree_sitter_registry = require "core.treesitter.registry"
 ---@field completion_prefix? string
 ---Name of a registered icon.
 ---@field icon? string
+---File path used to select a shared file-type icon instead of a symbol icon.
+---@field file_icon_path? string
 ---Description shown when the symbol is hovered on the autocomplete box.
 ---@field desc? string
 ---Internal source classification used to keep Buffer Word Completion behavior distinct.
@@ -258,6 +261,7 @@ function autocomplete.add(t, manually_triggered)
             text = text,
             info = info.info,
             icon = info.icon,
+            file_icon_path = info.file_icon_path,
             desc = info.desc,
             onhover = info.onhover,
             onselect = info.onselect,
@@ -515,12 +519,13 @@ end
 
 local function display_icon(suggestion)
   if suggestion and suggestion.no_icon then return nil end
-  return suggestion and suggestion.icon
+  return suggestion and (suggestion.file_icon_path or suggestion.icon)
 end
 
 local function display_icon_width(suggestion, row_height)
   local icon = display_icon(suggestion)
   if not icon then return 0 end
+  if suggestion.file_icon_path then return file_icons.size_for_row(row_height) end
   if symbol_icons.resolve_kind(icon) then
     return symbol_icons.size_for_row(row_height)
   end
@@ -534,6 +539,9 @@ local function draw_display_icon(suggestion, x, y, width, row_height)
   local icon_width = display_icon_width(suggestion, row_height)
   if icon_width <= 0 then return false end
   local draw_x = x + math.max(0, math.floor((width - icon_width) / 2))
+  if suggestion.file_icon_path then
+    return file_icons.draw(suggestion.file_icon_path, draw_x, y, row_height, icon_width)
+  end
   if symbol_icons.resolve_kind(icon) then
     return symbol_icons.draw(icon, draw_x, y, row_height, icon_width)
   end

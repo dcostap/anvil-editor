@@ -3,6 +3,7 @@ local vault_index = require "core.markdown.vault_index"
 local file_completion = require "core.markdown.file_completion"
 
 local completion = {}
+local file_result_kinds = { note = true, alias = true, attachment = true, file = true }
 
 local function primary_caret(view)
   local state = view and view.get_selection_state and view:get_selection_state()
@@ -141,6 +142,7 @@ function completion.get_completions(view)
       name_span = candidate.name and { #candidate.text - #candidate.name + 1, #candidate.text },
       info = candidate.line and candidate.rel_path .. ":" .. candidate.line or candidate.kind,
       icon = candidate.kind,
+      file_icon_path = file_result_kinds[candidate.kind] and candidate.path or nil,
       data = candidate,
       source_path = candidate.path,
       source_line = candidate.line or 1,
