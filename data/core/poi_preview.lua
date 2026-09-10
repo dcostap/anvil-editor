@@ -25,21 +25,27 @@ end
 local function draw_row(view, row, x, y, width, height)
   if row.tokens then
     renderer.draw_rect(x, y, width, height, row.background)
-    renderer.draw_rect(x, y, math.max(1, SCALE), height, style.git_change_deletion)
     local font = view:get_font()
     local _, indent_size = view.buffer:get_indent_info()
     font:set_tab_size(indent_size)
-    local tx = x - view.scroll.x
+    local tx = x + style.padding.x - view.scroll.x
     local origin = tx
     local ty = y + (height - font:get_height()) / 2
     for _, kind, text in tokenizer.each_token(row.tokens) do
       tx = renderer.draw_text(font, text, tx, ty, style.syntax[kind] or style.text,
         { tab_offset = tx - origin })
     end
-    return
+  else
+    renderer.draw_rect(x, y, width, height, style.background2)
+    renderer.draw_text(view:get_font(), row.text, x + style.padding.x, y, style.text)
   end
-  renderer.draw_rect(x, y, width, height, style.background2)
-  renderer.draw_text(view:get_font(), row.text, x + style.padding.x, y, style.text)
+  if row.framed then
+    local border = math.max(1, SCALE)
+    renderer.draw_rect(x, y, border, height, style.divider)
+    renderer.draw_rect(x + width - border, y, border, height, style.divider)
+    if row.first then renderer.draw_rect(x, y, width, border, style.divider) end
+    if row.last then renderer.draw_rect(x, y + height - border, width, border, style.divider) end
+  end
 end
 
 function M.show(view, point, title, lines, options)
@@ -65,6 +71,13 @@ function M.show(view, point, title, lines, options)
       row.text = row.text:gsub("\t", "    ")
     end
     rows[#rows + 1] = row
+  end
+  if options and options.code then
+    for index, row in ipairs(rows) do
+      row.framed = true
+      row.first = index == 1
+      row.last = index == #rows
+    end
   end
   view:add_visual_row_provider(provider_id, {
     visual_rows = function(_, _, line, placement)
