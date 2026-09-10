@@ -4051,8 +4051,15 @@ local function raw_pending_source_render(view, render_line, current_text, code)
 end
 
 local pending_fenced_code_render
+local current_provisional_topology
 
 local function pending_source_render(view, line, render_line, current_text, code)
+  local topology = current_provisional_topology(view, line)
+  if topology then
+    local owner = view.__markdown_live_owner
+    code = topology.fenced[line] == true
+      or owner.pending_indented_lines and owner.pending_indented_lines[line] == true
+  end
   local reveal_code_delimiter = false
   if code then
     local state = current_selection_state(view)
@@ -4762,8 +4769,9 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
             visual_capture, "retained"
           )
         else
-          local list = pending_list_marker_render(view, transformed, source)
-          publish(line, list or render, captured, "active-source-reveal")
+          -- The edit already preserved these fragments. Re-parsing the line
+          -- as a list loses inline formatting and ignores its block context.
+          publish(line, render, captured, "active-source-reveal")
         end
       end
     end
@@ -4811,8 +4819,7 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
               visual_capture, "retained"
             )
           else
-            local list = pending_list_marker_render(view, previous, source)
-            local render = list or current_source_render(
+            local render = current_source_render(
               view, new_line, previous, source,
               owner.fence_service and owner.fence_service:contains_line(new_line)
             )
@@ -5061,8 +5068,6 @@ local function capture_pending_renders(view, transaction)
   )
   owner.pre_edit_capture = nil
 end
-
-local current_provisional_topology
 
 local function pending_render(view, line)
   local owner = view.__markdown_live_owner
@@ -5894,7 +5899,9 @@ function provider:on_text_transaction(view, transaction, line1, line2)
       local is_frontmatter = topology.frontmatter[pending_line] == true
       local was_html = line_in_raw_block(view, pending_line)
       local is_html = topology.html[pending_line] == true
-      if was_fenced ~= is_fenced or was_comment ~= is_comment
+      -- The fence service can already reflect this edit. Its current state
+      -- cannot prove that a retained row still has the same block context.
+      if raw_context_changed or was_fenced ~= is_fenced or was_comment ~= is_comment
         or was_math ~= is_math or was_frontmatter ~= is_frontmatter
         or was_html ~= is_html
       then
@@ -6302,8 +6309,6 @@ local function build_render_line(view, line, _context)
       and (not owner.semantic_pending_line or line >= owner.semantic_pending_line)
     then
       local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
-      local pending_list = pending_list_marker_render(view, nil, text)
-      if pending_list then return pending_list end
       local provisional = current_provisional_topology(view, line)
       local code
       if provisional and provisional.revision == view.buffer.text_revision then
