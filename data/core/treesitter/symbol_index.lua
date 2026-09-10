@@ -1510,6 +1510,10 @@ local function native_workspace_symbols_async(query, opts, roots)
       return nil, "overlay-indexing", "pending", { roots = per_root, index = #roots == 1 and index or nil }
     end
     local excluded, included, suppressed = native_query_path_rules(index, snapshot, opts.kind or "symbols")
+    -- Path rules can start an overlay refresh. Do not query without those symbols.
+    if has_pending_open_buffer_overlay(index) then
+      return nil, "overlay-indexing", "pending", { roots = per_root, index = #roots == 1 and index or nil }
+    end
     local overlays, overlay_more = bounded_overlay_symbols(index, suppressed, query, opts, candidate_limit)
     local child = {
       root = root,
@@ -2100,8 +2104,9 @@ end
 function symbol_index.clear_open_buffer(buffer, reason)
   local path = buffer_path(buffer)
   local cleared = false
+  -- A preview can share this path. Clear only records owned by this Buffer.
   for open_path, open_buffer in pairs(open_buffers) do
-    if (path and open_path == path) or open_buffer == buffer then
+    if open_buffer == buffer then
       open_buffers[open_path] = nil
       cleared = true
     end
@@ -2109,7 +2114,7 @@ function symbol_index.clear_open_buffer(buffer, reason)
   for _, index in pairs(indexes) do
     local index_cleared = false
     for overlay_path, entry in pairs(index.open_buffers or {}) do
-      if (path and overlay_path == path) or entry.buffer == buffer then
+      if entry.buffer == buffer then
         cancel_open_buffer_job(index, overlay_path)
         index.open_buffers[overlay_path] = nil
         cleared = true
@@ -2117,7 +2122,7 @@ function symbol_index.clear_open_buffer(buffer, reason)
       end
     end
     for overlay_path, job in pairs(index.open_buffer_jobs or {}) do
-      if (path and overlay_path == path) or job.buffer == buffer then
+      if job.buffer == buffer then
         cancel_open_buffer_job(index, overlay_path)
         cleared = true
       end
