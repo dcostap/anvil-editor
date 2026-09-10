@@ -1977,7 +1977,10 @@ function DiffView:update()
   local gap_started, gap_scope = perf_begin("diffview_gap_update")
   self:refresh_core_gap_rows(false)
   perf_end("diffview_gap_update", gap_started, gap_scope)
-  if self.pending_first_change_reveal and self.diff_model then
+  -- File History updates pending comparisons before placing them in a Pane.
+  -- Wait for a usable layout so wrapping cannot move only one revealed side.
+  if self.pending_first_change_reveal and self.diff_model
+      and self.buffer_view_a.size.x > 0 and self.buffer_view_a.size.y > 0 then
     self.pending_first_change_reveal = false
     self:reveal_first_change()
   end
