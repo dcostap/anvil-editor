@@ -3,6 +3,7 @@ local common = require "core.common"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local style = require "core.style"
+local tokenizer = require "core.tokenizer"
 
 local M = {}
 local previews = setmetatable({}, { __mode = "k" })
@@ -22,23 +23,48 @@ function M.dismiss(view)
 end
 
 local function draw_row(view, row, x, y, width, height)
+  if row.tokens then
+    renderer.draw_rect(x, y, width, height, row.background)
+    renderer.draw_rect(x, y, math.max(1, SCALE), height, style.git_change_deletion)
+    local font = view:get_font()
+    local _, indent_size = view.buffer:get_indent_info()
+    font:set_tab_size(indent_size)
+    local tx = x - view.scroll.x
+    local origin = tx
+    local ty = y + (height - font:get_height()) / 2
+    for _, kind, text in tokenizer.each_token(row.tokens) do
+      tx = renderer.draw_text(font, text, tx, ty, style.syntax[kind] or style.text,
+        { tab_offset = tx - origin })
+    end
+    return
+  end
   renderer.draw_rect(x, y, width, height, style.background2)
   renderer.draw_text(view:get_font(), row.text, x + style.padding.x, y, style.text)
 end
 
-function M.show(view, point, title, lines)
+function M.show(view, point, title, lines, options)
   M.dismiss(view)
   local preview = { line = point.line, title = title, lines = lines }
   previews[view] = preview
-  local rows = {{ id = "title", text = title .. "  [Escape to close]", draw = draw_row }}
+  local rows = options and options.code and {} or {
+    { id = "title", text = title .. "  [Escape to close]", draw = draw_row },
+  }
+  local token_state
   for index, text in ipairs(lines) do
     if index > 24 then
       rows[#rows + 1] = { id = "more", text = "...", draw = draw_row }
       break
     end
-    rows[#rows + 1] = {
-      id = tostring(index), text = text:gsub("[\r\n]+$", ""):gsub("\t", "    "), draw = draw_row,
-    }
+    local row = { id = tostring(index), text = text:gsub("[\r\n]+$", ""), draw = draw_row }
+    if options and options.code then
+      row.tokens, token_state = tokenizer.tokenize(view.buffer.syntax, row.text .. "\n", token_state)
+      -- Keep newline tokens out of the renderer without changing lexer state.
+      for i = 2, #row.tokens, 2 do row.tokens[i] = row.tokens[i]:gsub("[\r\n]+$", "") end
+      row.background = style.diff_delete_background
+    else
+      row.text = row.text:gsub("\t", "    ")
+    end
+    rows[#rows + 1] = row
   end
   view:add_visual_row_provider(provider_id, {
     visual_rows = function(_, _, line, placement)

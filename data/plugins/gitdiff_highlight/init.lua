@@ -778,16 +778,17 @@ end
 local function preview_git_change(view, point)
   local state = get_state(view.buffer)
   local range = point.range
+  local preview = require "core.poi_preview"
+  if range.base_start == range.base_end then
+    preview.dismiss(view)
+    return true
+  end
   local lines = {}
   for line = range.base_start or 1, (range.base_end or 1) - 1 do
     if #lines >= 24 then lines[#lines + 1] = "..."; break end
-    lines[#lines + 1] = "- " .. ((state.base_lines or {})[line] or "")
+    lines[#lines + 1] = ((state.base_lines or {})[line] or "")
   end
-  for line = range.current_start, range.current_end - 1 do
-    if #lines >= 24 then lines[#lines + 1] = "..."; break end
-    lines[#lines + 1] = "+ " .. (view.buffer.lines[line] or "")
-  end
-  return require("core.poi_preview").show(view, point, "Git change", lines)
+  return preview.show(view, point, "Previous code", lines, { code = true })
 end
 
 local old_buffer_close = Buffer.on_close

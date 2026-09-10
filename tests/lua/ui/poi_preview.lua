@@ -36,6 +36,7 @@ test.describe("Git change POIs", function()
     local poi = require "core.poi"
     local preview = require "core.poi_preview"
     local editor = Editor(Buffer())
+    editor.size.x, editor.size.y = 800, 600
     editor.buffer:insert(1, 1, "unchanged\nnew\n")
     editor.buffer:set_selection(1, 1)
     gitdiff._set_state_for_tests(editor.buffer, {
@@ -46,10 +47,31 @@ test.describe("Git change POIs", function()
     local remote = poi.get_remote_source()
     test.ok(poi.navigate(editor, 1))
     local content = test.not_nil(preview.for_view(editor))
-    test.contains(table.concat(content.lines, "\n"), "- old")
-    test.contains(table.concat(content.lines, "\n"), "+ new")
+    test.same(content.lines, { "old\n" })
+    local entry = editor:get_visual_row_entry(3)
+    test.equal(entry.type, "provider")
     test.equal(poi.get_remote_source(), remote)
     test.ok(poi.activate(editor))
+    preview.dismiss(editor)
+    editor.buffer:on_close()
+  end)
+
+  test.it("navigates pure additions without showing a preview", function()
+    local Editor = require "core.editor"
+    local gitdiff = require "plugins.gitdiff_highlight"
+    local poi = require "core.poi"
+    local preview = require "core.poi_preview"
+    local editor = Editor(Buffer())
+    editor.buffer:insert(1, 1, "unchanged\nadded\n")
+    gitdiff._set_state_for_tests(editor.buffer, {
+      is_in_repo = true, base_lines = { "unchanged\n" },
+      ranges = {{ type = "addition", current_start = 2, current_end = 3, base_start = 2, base_end = 2 }},
+      line_index = {},
+    })
+    editor.buffer:set_selection(1, 1)
+    test.ok(poi.navigate(editor, 1))
+    test.equal(editor.buffer:get_selection(), 2)
+    test.equal(preview.for_view(editor), nil)
     preview.dismiss(editor)
     editor.buffer:on_close()
   end)
