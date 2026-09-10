@@ -1,5 +1,6 @@
 #include "markdown_vault_index.h"
 #include "markdown_parser.h"
+#include "fuzzy.h"
 #include "treesitter/snapshot.h"
 
 #include <SDL3/SDL.h>
@@ -1023,15 +1024,18 @@ static bool pair_builder_add(PairBuilder *builder, const char *key, uint32_t ind
   builder->pairs[builder->count].index = index; builder->count++; return true;
 }
 
-static bool add_completion_grams(PairBuilder *builder, const char *text, uint32_t index) {
-  char *normalized = target_key(text, true); if (!normalized) return false;
-  size_t length = strlen(normalized); bool ok = true;
-  for (size_t width = 1; ok && width <= 3; width++) for (size_t start = 0; start + width <= length; start++) {
-    char key[6] = { (char)('0' + width), ':' };
-    memcpy(key + 2, normalized + start, width); key[2 + width] = '\0';
+static bool add_completion_characters(PairBuilder *builder, const char *text, uint32_t index) {
+  FuzzyMatchBuffer normalized;
+  if (!fuzzy_match_buffer_build(&normalized, FUZZY_MODE_GENERIC, text, (uint32_t)strlen(text))) return false;
+  bool seen[256] = { false }, ok = true;
+  for (uint32_t i = 0; i < normalized.len; i++) {
+    unsigned char byte = (unsigned char)normalized.lower[i];
+    if (seen[byte] || isspace(byte)) continue;
+    seen[byte] = true;
+    char key[2] = { (char)byte, '\0' };
     if (!pair_builder_add(builder, key, index)) { ok = false; break; }
   }
-  SDL_free(normalized); return ok;
+  fuzzy_match_buffer_free(&normalized); return ok;
 }
 
 static void free_pair_builder(PairBuilder *builder) {
@@ -1045,18 +1049,18 @@ static bool build_completion_indexes(AnvilMarkdownVaultSnapshot *snapshot,
   for (uint32_t i = 0; ok && i < snapshot->note_count; i++) {
     if ((i & 255u) == 0 && cancelled_fn && cancelled_fn(cancel_userdata)) { ok = false; break; }
     const AnvilMarkdownVaultNoteView *note = &snapshot->notes[i].view;
-    ok = add_completion_grams(&notes, note->display_name, i) && add_completion_grams(&notes, note->relative_path, i);
-    for (uint32_t a = 0; ok && a < note->alias_count; a++) ok = add_completion_grams(&notes, note->aliases[a], i);
+    ok = add_completion_characters(&notes, note->display_name, i) && add_completion_characters(&notes, note->relative_path, i);
+    for (uint32_t a = 0; ok && a < note->alias_count; a++) ok = add_completion_characters(&notes, note->aliases[a], i);
     for (uint32_t h = 0; ok && h < note->heading_count; h++) {
-      ok = add_completion_grams(&headings, note->headings[h].text, i)
-        && add_completion_grams(&headings, note->headings[h].path_text, i);
+      ok = add_completion_characters(&headings, note->headings[h].text, i)
+        && add_completion_characters(&headings, note->headings[h].path_text, i);
     }
-    for (uint32_t b = 0; ok && b < note->block_count; b++) ok = add_completion_grams(&blocks, note->blocks[b].id, i);
+    for (uint32_t b = 0; ok && b < note->block_count; b++) ok = add_completion_characters(&blocks, note->blocks[b].id, i);
   }
   for (uint32_t i = 0; ok && i < snapshot->attachment_count; i++) {
     const AnvilMarkdownVaultAttachmentView *entry = &snapshot->attachments[i].view;
-    ok = add_completion_grams(&attachments, entry->display_name, i)
-      && add_completion_grams(&attachments, entry->relative_path, i);
+    ok = add_completion_characters(&attachments, entry->display_name, i)
+      && add_completion_characters(&attachments, entry->relative_path, i);
   }
   if (ok) ok = collapse_target_pairs(notes.pairs, notes.count, &snapshot->completion_notes, &snapshot->completion_note_count)
     && collapse_target_pairs(headings.pairs, headings.count, &snapshot->completion_headings, &snapshot->completion_heading_count)
@@ -1081,15 +1085,22 @@ uint32_t anvil_markdown_vault_completion_candidates(const AnvilMarkdownVaultSnap
     for (uint32_t i = 0; indices && i < copied; i++) indices[i] = offset + i;
     return total_records;
   }
-  char *normalized = target_key(query, true); if (!normalized) return 0; length = strlen(normalized);
-  size_t width = length < 3 ? length : 3; const TargetGroup *best = NULL;
-  for (size_t start = 0; start + width <= length; start++) {
-    char key[6] = { (char)('0' + width), ':' }; memcpy(key + 2, normalized + start, width); key[2 + width] = '\0';
+  FuzzyMatchBuffer normalized;
+  if (!fuzzy_match_buffer_build(&normalized, FUZZY_MODE_GENERIC, query, (uint32_t)length)) return 0;
+  const TargetGroup *best = NULL;
+  bool has_characters = false;
+  for (uint32_t i = 0; i < normalized.len; i++) {
+    unsigned char byte = (unsigned char)normalized.lower[i];
+    if (isspace(byte)) continue;
+    has_characters = true;
+    char key[2] = { (char)byte, '\0' };
     const TargetGroup *group = find_target_group(groups, group_count, key, false);
     if (!group) { best = NULL; break; }
     if (!best || group->count < best->count) best = group;
   }
-  SDL_free(normalized); if (!best) return 0;
+  fuzzy_match_buffer_free(&normalized);
+  if (!has_characters) return anvil_markdown_vault_completion_candidates(snapshot, kind, "", offset, indices, capacity);
+  if (!best) return 0;
   uint32_t available = offset < best->count ? best->count - offset : 0, copied = available < capacity ? available : capacity;
   if (indices && copied) memcpy(indices, best->indices + offset, copied * sizeof(uint32_t));
   return best->count;

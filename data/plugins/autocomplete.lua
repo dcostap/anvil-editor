@@ -52,6 +52,12 @@ local tree_sitter_registry = require "core.treesitter.registry"
 ---List of symbols that belong to this symbols table.
 ---@field items table<string,plugins.autocomplete.symbolinfo|string|false|nil>
 
+---@class plugins.autocomplete.context
+---@field query string Complete query, including spaces.
+---@field line integer Query line in the Buffer.
+---@field query_col integer First query column in the Buffer.
+---@field items plugins.autocomplete.symbolinfo[] Ordered, filtered results.
+
 ---@class plugins.autocomplete.map
 ---Lua patterns which match the files where the symbols are valid.
 ---@field files string | table<integer,string>
@@ -197,9 +203,24 @@ autocomplete.map_manually = {}
 autocomplete.on_close = nil
 ---@type table<string,plugins.autocomplete.icon>
 autocomplete.icons = {}
----@type table<string,fun(view:core.textview,opts:table):plugins.autocomplete.symbols?,table? >
+---A provider returns a query, its line/column, and ordered completion items.
+---A non-nil result owns completion at the caret, including an empty result.
+---@type table<string,fun(view:core.textview,opts:table):plugins.autocomplete.context?>
 autocomplete.providers = {}
-local provider_maps = {}
+local provider_completion
+
+local function refresh_providers(view, opts)
+  provider_completion = nil
+  for id, provider in pairs(autocomplete.providers) do
+    local ok, result = pcall(provider, view, opts or {})
+    if not ok then
+      core.log_quiet("Autocomplete provider %s failed: %s", id, tostring(result))
+    elseif result then
+      provider_completion = result
+      break
+    end
+  end
+end
 
 -- Flag that indicates if the autocomplete box was manually triggered
 -- with the autocomplete.complete() function to prevent the suggestions
@@ -345,6 +366,9 @@ end
 function autocomplete.get_partial_symbol()
   local buffer = core.active_view.buffer
   local line2, col2 = buffer:get_selection()
+  if provider_completion then
+    return provider_completion.query, provider_completion.line, provider_completion.query_col, line2, col2
+  end
   local line1, col1 = buffer:position_offset(line2, col2, translate_start_of_word)
   return buffer:get_text(line1, col1, line2, col2), line1, col1, line2, col2
 end
@@ -1067,6 +1091,7 @@ local function reset_suggestions(skip_close)
   triggered_manually = false
   force_basic_suggestions = true
   pending_deletion_buffer = nil
+  provider_completion = nil
   reset_lsp_completion_items()
 
   if not skip_close then
@@ -1085,6 +1110,15 @@ function update_suggestions()
 
   suggestions = {}
   desc_rect = nil
+
+  if provider_completion then
+    for i, item in ipairs(provider_completion.items) do
+      if i > config.plugins.autocomplete.max_suggestions then break end
+      suggestions[i] = annotate_match(item, provider_completion.query)
+    end
+    suggestions_idx, suggestions_offset = 1, 1
+    return 0
+  end
 
   local assigned_sym = {}
   local contextual_member_count = 0
@@ -1912,28 +1946,11 @@ local function draw_suggestions_box(av)
   draw_box_border(rx, ry, rw, rh)
 end
 
-local function refresh_providers(view, opts)
-  for name in pairs(provider_maps) do autocomplete.map[name] = nil end
-  provider_maps = {}
-  local force_open = false
-  for id, provider in pairs(autocomplete.providers) do
-    local ok, symbols, provider_opts = pcall(provider, view, opts)
-    if not ok then
-      quiet_log("Autocomplete provider %s failed: %s", id, tostring(symbols))
-    elseif symbols then
-      autocomplete.add(symbols, false)
-      provider_maps[symbols.name] = true
-      force_open = force_open or (provider_opts and provider_opts.force_open) or false
-    end
-  end
-  return force_open
-end
-
 local function show_autocomplete(opts)
   opts = opts or {}
   local av = get_active_view()
   if av then
-    local provider_force_open = refresh_providers(av, opts)
+    refresh_providers(av, opts)
     -- update partial symbol and suggestions
     partial = autocomplete.get_partial_symbol()
 
@@ -1946,14 +1963,14 @@ local function show_autocomplete(opts)
     end
     local member_receiver = member_completion_receiver(buffer)
     local should_open_normally = triggered_manually
-      or provider_force_open
+      or provider_completion ~= nil
       or #partial >= config.plugins.autocomplete.min_len
       or (opts.keep_open and #partial > 0)
       or trigger_character ~= nil
     local should_open = should_open_normally or member_receiver ~= nil
 
     if should_open then
-      if lsp_available then
+      if lsp_available and not provider_completion then
         request_lsp_completion(av, { manual = triggered_manually, trigger_character = trigger_character })
       end
       local contextual_member_count = update_suggestions()
@@ -1968,7 +1985,7 @@ local function show_autocomplete(opts)
         local line, col = av.buffer:get_selection()
         local char = av.buffer:get_char(line, col-1, line, col-1)
 
-        if char:match("%s") or (char:match("%p") and col ~= last_col and not lsp_available) then
+        if not provider_completion and (char:match("%s") or (char:match("%p") and col ~= last_col and not lsp_available)) then
           reset_suggestions()
         end
       end
@@ -2134,6 +2151,7 @@ function autocomplete.open(on_close, opts)
 
   local av = get_active_view()
   if av then
+    if opts.force_basic ~= false then refresh_providers(av) end
     partial = autocomplete.get_partial_symbol()
     if opts.force_basic ~= nil then
       force_basic_suggestions = opts.force_basic == true
@@ -2142,7 +2160,7 @@ function autocomplete.open(on_close, opts)
     end
     last_line, last_col = av.buffer:get_selection()
     last_buffer = av.buffer
-    request_lsp_completion(av, { manual = true })
+    if not provider_completion then request_lsp_completion(av, { manual = true }) end
     update_suggestions()
   end
 end

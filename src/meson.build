@@ -266,6 +266,7 @@ test('project-file-manifest', project_file_manifest_test, env: anvil_test_env)
 markdown_vault_index_test = executable('markdown_vault_index_test',
     [
         '../tests/native/markdown_vault_index_test.c',
+        'fuzzy.c',
         'project_file_manifest.c',
         'markdown_vault_index.c',
         'markdown_parser.c',

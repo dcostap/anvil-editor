@@ -956,14 +956,24 @@ end
 
 function Index:completion_candidates(mode, query, source_path, limit)
   source_path = source_path and absolute_path(source_path) or nil
-  query = tostring(query or ""):lower()
+  query = tostring(query or "")
   limit = math.max(1, tonumber(limit) or 200)
   local candidates, seen = {}, {}
+  local function score(text, target, kind, info)
+    if query == "" then return 0 end
+    local result = common.fuzzy_match(text, query)
+    if kind == "note" or kind == "attachment" then
+      result = math.max(result or -math.huge,
+        common.fuzzy_match(target, query) or -math.huge,
+        common.fuzzy_match(info or "", query) or -math.huge)
+    end
+    return result
+  end
   local function add(text, target, kind, entry, line, info)
     local key = kind .. "\0" .. target .. "\0" .. tostring(entry and entry.abs_path or "")
     if seen[key] then return end
-    local haystack = (text .. " " .. target .. " " .. tostring(info or "")):lower()
-    if query ~= "" and not haystack:find(query, 1, true) then return end
+    local match_score = score(text, target, kind, info)
+    if not match_score or match_score == -math.huge then return end
     seen[key] = true
     candidates[#candidates + 1] = {
       text = text,
@@ -973,6 +983,7 @@ function Index:completion_candidates(mode, query, source_path, limit)
       rel_path = entry and entry.rel_path,
       line = line,
       info = info,
+      score = match_score,
     }
   end
 
@@ -987,6 +998,7 @@ function Index:completion_candidates(mode, query, source_path, limit)
       )) then
         local key = candidate.kind .. "\0" .. candidate.target .. "\0" .. tostring(candidate.path or "")
         seen[key] = true
+        candidate.score = score(candidate.text, candidate.target, candidate.kind, candidate.info)
         candidates[#candidates + 1] = candidate
       end
     end
@@ -1014,7 +1026,7 @@ function Index:completion_candidates(mode, query, source_path, limit)
       local note_target = canonical_note_target(self, entry, source_path)
       for _, heading in ipairs(entry.headings or {}) do
         local heading_target = heading.path_text or heading.text
-        add(heading_target .. " — " .. entry.display_name, note_target .. "#" .. heading_target,
+        add(heading_target, note_target .. "#" .. heading_target,
           "heading", entry, heading.line, entry.rel_path)
       end
     end
@@ -1026,13 +1038,14 @@ function Index:completion_candidates(mode, query, source_path, limit)
     for _, entry in pairs(self.notes_by_abs) do
       local note_target = canonical_note_target(self, entry, source_path)
       for _, block in ipairs(entry.blocks or {}) do
-        add(block.id .. " — " .. entry.display_name, note_target .. "#^" .. block.id,
+        add(block.id, note_target .. "#^" .. block.id,
           "block", entry, block.line, entry.rel_path)
       end
     end
   end
 
   table.sort(candidates, function(a, b)
+    if a.score ~= b.score then return a.score > b.score end
     local at, bt = a.text:lower(), b.text:lower()
     if at ~= bt then return at < bt end
     return (a.rel_path or "") < (b.rel_path or "")

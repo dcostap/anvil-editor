@@ -1,5 +1,6 @@
 #include "api.h"
 #include "../worker_pool.h"
+#include "../fuzzy.h"
 #include "../treesitter/project_index.h"
 
 #include <SDL3/SDL.h>
@@ -1127,15 +1128,14 @@ static int markdown_vault_linked_notes_lua(lua_State *L) {
   lua_pushinteger(L, total); lua_setfield(L, -2, "total"); SDL_free(indices); return 1;
 }
 
-static bool lua_contains_ci(const char *text, const char *query) {
+static bool markdown_completion_matches(const char *text, const char *query) {
   if (!query || !query[0]) return true;
-  size_t qlen = strlen(query);
-  for (const char *start = text ? text : ""; *start; start++) {
-    size_t i = 0;
-    while (i < qlen && start[i] && SDL_tolower((unsigned char)start[i]) == SDL_tolower((unsigned char)query[i])) i++;
-    if (i == qlen) return true;
-  }
-  return false;
+  if (!text) return false;
+  FuzzyMatchBuffer buffer;
+  if (!fuzzy_match_buffer_build(&buffer, FUZZY_MODE_GENERIC, text, (uint32_t)strlen(text))) return false;
+  int score = fuzzy_match_buffer_score(FUZZY_MODE_GENERIC, &buffer, query);
+  fuzzy_match_buffer_free(&buffer);
+  return score != INT_MIN;
 }
 
 static char *lua_strip_markdown_extension(const char *path) {
@@ -1211,25 +1211,27 @@ static int markdown_vault_completion(lua_State *L) {
   lua_createtable(L, (int)limit, 0); uint32_t out = 0;
   uint32_t source_index = 0; bool has_source = source[0] && anvil_markdown_vault_note_lookup(snapshot, source, &source_index);
   uint32_t candidate_indices[4096], candidate_count = 0;
-  if ((strcmp(mode, "current_heading") == 0 || strcmp(mode, "current_block") == 0) && has_source) {
+  bool current_only = strcmp(mode, "current_heading") == 0 || strcmp(mode, "current_block") == 0;
+  AnvilMarkdownVaultCompletionKind kind = strcmp(mode, "note") == 0 ? ANVIL_MARKDOWN_VAULT_COMPLETION_NOTES
+    : (strcmp(mode, "global_heading") == 0 ? ANVIL_MARKDOWN_VAULT_COMPLETION_HEADINGS : ANVIL_MARKDOWN_VAULT_COMPLETION_BLOCKS);
+  if (current_only && has_source) {
     candidate_indices[0] = source_index; candidate_count = 1;
-  } else {
-    AnvilMarkdownVaultCompletionKind kind = strcmp(mode, "note") == 0 ? ANVIL_MARKDOWN_VAULT_COMPLETION_NOTES
-      : (strcmp(mode, "global_heading") == 0 ? ANVIL_MARKDOWN_VAULT_COMPLETION_HEADINGS : ANVIL_MARKDOWN_VAULT_COMPLETION_BLOCKS);
-    uint32_t total = anvil_markdown_vault_completion_candidates(snapshot, kind, query, 0, NULL, 0);
-    candidate_count = total < 4096 ? total : 4096;
-    anvil_markdown_vault_completion_candidates(snapshot, kind, query, 0, candidate_indices, candidate_count);
+  } else if (!current_only) {
+    candidate_count = anvil_markdown_vault_completion_candidates(snapshot, kind, query, 0, NULL, 0);
   }
   for (uint32_t candidate = 0; out < limit && candidate < candidate_count; candidate++) {
-    uint32_t i = candidate_indices[candidate];
+    if (!current_only && candidate % 4096 == 0) {
+      anvil_markdown_vault_completion_candidates(snapshot, kind, query, candidate, candidate_indices, 4096);
+    }
+    uint32_t i = candidate_indices[candidate % 4096];
     AnvilMarkdownVaultNoteView note; if (!anvil_markdown_vault_note_at(snapshot, i, &note)) continue;
     bool current = has_source && i == source_index;
     if (strcmp(mode, "note") == 0) {
       char *target = markdown_completion_note_target(snapshot, &note, policy, source);
-      if (target && (lua_contains_ci(note.display_name, query) || lua_contains_ci(target, query) || lua_contains_ci(note.relative_path, query))) {
+      if (target && (markdown_completion_matches(note.display_name, query) || markdown_completion_matches(target, query) || markdown_completion_matches(note.relative_path, query))) {
         push_completion_candidate(L, note.display_name, target, "note", note.absolute_path, note.relative_path, 1, note.relative_path); lua_rawseti(L, -2, ++out);
       }
-      for (uint32_t a = 0; target && out < limit && a < note.alias_count; a++) if (lua_contains_ci(note.aliases[a], query)) {
+      for (uint32_t a = 0; target && out < limit && a < note.alias_count; a++) if (markdown_completion_matches(note.aliases[a], query)) {
         size_t bytes = strlen(target) + strlen(note.aliases[a]) + 2; char *alias_target = (char *)SDL_malloc(bytes);
         if (alias_target) { SDL_snprintf(alias_target, bytes, "%s|%s", target, note.aliases[a]); push_completion_candidate(L, note.aliases[a], alias_target, "alias", note.absolute_path, note.relative_path, 1, note.relative_path); lua_rawseti(L, -2, ++out); SDL_free(alias_target); }
       }
@@ -1238,7 +1240,7 @@ static int markdown_vault_completion(lua_State *L) {
       char *note_target = markdown_completion_note_target(snapshot, &note, policy, source);
       for (uint32_t h = 0; note_target && out < limit && h < note.heading_count; h++) {
         const AnvilMarkdownVaultHeadingView *heading = &note.headings[h]; const char *heading_text = heading->path_text[0] ? heading->path_text : heading->text;
-        if (!lua_contains_ci(heading_text, query)) continue;
+        if (!markdown_completion_matches(heading_text, query)) continue;
         size_t bytes = strlen(note_target) + strlen(heading_text) + 2; char *target = (char *)SDL_malloc(bytes);
         if (!target) continue;
         if (strcmp(mode, "current_heading") == 0) SDL_snprintf(target, bytes, "#%s", heading_text);
@@ -1249,7 +1251,7 @@ static int markdown_vault_completion(lua_State *L) {
     } else if ((strcmp(mode, "current_block") == 0 && current) || strcmp(mode, "global_block") == 0) {
       char *note_target = markdown_completion_note_target(snapshot, &note, policy, source);
       for (uint32_t b = 0; note_target && out < limit && b < note.block_count; b++) {
-        const AnvilMarkdownVaultBlockView *block = &note.blocks[b]; if (!lua_contains_ci(block->id, query)) continue;
+        const AnvilMarkdownVaultBlockView *block = &note.blocks[b]; if (!markdown_completion_matches(block->id, query)) continue;
         size_t bytes = strlen(note_target) + strlen(block->id) + 3; char *target = (char *)SDL_malloc(bytes); if (!target) continue;
         if (strcmp(mode, "current_block") == 0) SDL_snprintf(target, bytes, "^%s", block->id);
         else SDL_snprintf(target, bytes, "%s#^%s", note_target, block->id);
@@ -1259,18 +1261,18 @@ static int markdown_vault_completion(lua_State *L) {
     }
   }
   if (strcmp(mode, "note") == 0) {
-    uint32_t total = anvil_markdown_vault_completion_candidates(
+    candidate_count = anvil_markdown_vault_completion_candidates(
       snapshot, ANVIL_MARKDOWN_VAULT_COMPLETION_ATTACHMENTS, query, 0, NULL, 0
-    );
-    candidate_count = total < 4096 ? total : 4096;
-    anvil_markdown_vault_completion_candidates(
-      snapshot, ANVIL_MARKDOWN_VAULT_COMPLETION_ATTACHMENTS, query, 0, candidate_indices, candidate_count
     );
   }
   if (strcmp(mode, "note") == 0) for (uint32_t candidate = 0; out < limit && candidate < candidate_count; candidate++) {
-    uint32_t i = candidate_indices[candidate];
+    if (candidate % 4096 == 0) {
+      anvil_markdown_vault_completion_candidates(snapshot, ANVIL_MARKDOWN_VAULT_COMPLETION_ATTACHMENTS,
+        query, candidate, candidate_indices, 4096);
+    }
+    uint32_t i = candidate_indices[candidate % 4096];
     AnvilMarkdownVaultAttachmentView entry; if (!anvil_markdown_vault_attachment_at(snapshot, i, &entry)) continue;
-    if (lua_contains_ci(entry.display_name, query) || lua_contains_ci(entry.relative_path, query)) {
+    if (markdown_completion_matches(entry.display_name, query) || markdown_completion_matches(entry.relative_path, query)) {
       push_completion_candidate(L, entry.display_name, entry.relative_path, "attachment", entry.absolute_path, entry.relative_path, 1, entry.relative_path); lua_rawseti(L, -2, ++out);
     }
   }

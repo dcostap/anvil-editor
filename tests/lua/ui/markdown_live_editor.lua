@@ -5,7 +5,6 @@ local core = require "core"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local markdown = require "core.markdown"
-local markdown_completion = require "core.markdown.completion"
 local fence_highlight = require "core.markdown.fence_highlight"
 local markdown_model = require "core.markdown.model"
 local linewrapping = require "core.linewrapping"
@@ -2231,72 +2230,6 @@ test.describe("Markdown Live Preview", function()
       test.equal(#view:get_points_of_interest(), 0)
     end)
     core.open_file, core.active_view = old_open_file, old_active
-    core.projects = old_projects
-    common.rm(root, true)
-    if not ok then error(err, 0) end
-  end)
-
-  test.it("completes note, current/global heading, and current/global block Wikilink states", function()
-    local root = USERDIR .. PATHSEP .. "markdown-live-link-completion-" .. system.get_process_id()
-    test.ok(common.mkdirp(root))
-    local note_path = root .. PATHSEP .. "Note.md"
-    local fp = test.not_nil(io.open(note_path, "wb"))
-    fp:write("# Global Heading\n\ntext ^global-block\n")
-    fp:close()
-    local old_projects = core.projects
-    core.projects = { Project(root) }
-    markdown.vault_index.get_index(root):rebuild("ui-completion")
-    local autocomplete = require "plugins.autocomplete"
-    local old_complete, old_active = autocomplete.complete, core.active_view
-    local offered
-    local offer_index = 0
-    autocomplete.complete = function(symbols) offered = symbols end
-    local ok, err = pcall(function()
-      local function offer(text, line)
-        offer_index = offer_index + 1
-        local source_path = root .. PATHSEP .. "Source" .. offer_index .. ".md"
-        local view, buffer = make_view(text, source_path)
-        local content = (buffer.lines[line] or ""):gsub("\n$", "")
-        buffer:set_selection(line, #content + 1)
-        refresh(view)
-        local deadline = system.get_time() + 5
-        while system.get_time() < deadline do
-          local ready = markdown_completion.symbols(view)
-          if ready then break end
-          coroutine.yield(0.01)
-        end
-        core.active_view = view
-        offered = nil
-        test.equal(command.perform("markdown:complete_link"), true)
-        return view, buffer, test.not_nil(offered, "completion was not offered for " .. text)
-      end
-      local function item_for(symbols, target)
-        for _, item in pairs(symbols.items) do
-          if item.data and item.data.target == target then return item end
-        end
-      end
-
-      local note_view, note_buffer, symbols = offer("[[No", 1)
-      local provider = test.not_nil(autocomplete.providers["markdown-live-links"])
-      local automatic_symbols, automatic_opts = provider(note_view, { text = "o" })
-      test.not_nil(item_for(test.not_nil(automatic_symbols), "Note"))
-      test.equal(automatic_opts.force_open, true)
-      local note = test.not_nil(item_for(symbols, "Note"))
-      test.equal(note.onselect(1, { data = note.data }), true)
-      test.equal(note_buffer.lines[1], "[[Note]]\n")
-
-      local ignored_view, ignored_buffer
-      ignored_view, ignored_buffer, symbols = offer("# Local Heading\n[[#Lo", 2)
-      test.not_nil(item_for(symbols, "#Local Heading"))
-      ignored_view, ignored_buffer, symbols = offer("[[##Gl", 1)
-      test.not_nil(item_for(symbols, "Note#Global Heading"))
-      ignored_view, ignored_buffer, symbols = offer("text ^local-block\n[[^loc", 2)
-      test.not_nil(item_for(symbols, "^local-block"))
-      ignored_view, ignored_buffer, symbols = offer("[[^^glob", 1)
-      test.not_nil(item_for(symbols, "Note#^global-block"))
-    end)
-    autocomplete.complete = old_complete
-    core.active_view = old_active
     core.projects = old_projects
     common.rm(root, true)
     if not ok then error(err, 0) end

@@ -40,7 +40,7 @@ function completion.context(view)
   local partial = text:sub(col1 + 2, col - 1)
   if partial:find("|", 1, true) then return nil end
 
-  local mode, query
+  local mode, query, note_target
   if partial:sub(1, 2) == "##" then
     mode, query = "global_heading", partial:sub(3)
   elseif partial:sub(1, 1) == "#" then
@@ -49,63 +49,91 @@ function completion.context(view)
     mode, query = "global_block", partial:sub(3)
   elseif partial:sub(1, 1) == "^" then
     mode, query = "current_block", partial:sub(2)
+  elseif partial:find("#", 1, true) then
+    note_target, query = partial:match("^(.-)#(.*)$")
+    mode = "current_heading"
+    if query:sub(1, 1) == "^" then
+      mode, query = "current_block", query:sub(2)
+    end
   else
     mode, query = "note", partial
   end
-  local col2 = text:sub(col, col + 1) == "]]" and col + 2 or col
+  local close = text:find("]]", col, true)
+  local target_end = close or #text + 1
+  local alias_start = text:find("|", col, true)
+  local alias = alias_start and alias_start < target_end and text:sub(alias_start, target_end - 1) or nil
   return {
     line = line,
     col1 = col1,
-    col2 = col2,
+    col2 = close and close + 2 or #text + 1,
     mode = mode,
     query = query,
+    query_col = col - #query,
+    note_target = note_target,
+    alias = alias,
   }
 end
 
 function completion.apply(view, target)
   local context = completion.context(view)
   if not context then return false end
-  view:set_selection_state({
-    selections = { context.line, context.col1, context.line, context.col2 },
-    last_selection = 1,
-  })
-  view:with_selection_state(function()
-    view.buffer:text_input("[[" .. target .. "]]", false)
+  if context.alias then target = target:match("^[^|]*") .. context.alias end
+  local result = view:with_selection_state(function()
+    local buffer = view.buffer
+    local edits = {{
+      line1 = context.line, col1 = context.col1,
+      line2 = context.line, col2 = context.col2,
+      text = "[[" .. target .. "]]", idx = 1,
+    }}
+    return buffer:apply_edits(edits, {
+      type = "replace", merge_undo = false, allow_selection_only = true,
+      selections = buffer:selections_after_edits(edits, { "end" }),
+      last_selection = 1,
+    })
   end)
-  core.log_quiet("Markdown link completion inserted %s", target)
-  return true
+  if result.applied then core.log_quiet("Markdown link completion inserted %s", target) end
+  return result.applied
 end
 
-function completion.symbols(view)
+function completion.get_completions(view)
+  if not require("core.markdown.live_render").is_markdown_buffer(view.buffer) then return nil end
   local context = completion.context(view)
-  if not context then return nil, "caret is not in an incomplete Wikilink" end
+  if not context then return nil end
+  context.items = {}
   local path = view.buffer.abs_filename or view.buffer.filename
   local index = path and vault_index.index_for_path(path)
-  if not index then return nil, "index unavailable" end
-  if index.status ~= "ready" then
+  if not index then return context end
+  if not index:can_resolve() then
     index:ensure("link-completion")
-    return nil, "index pending"
+    return context
   end
-  local candidates = index:completion_candidates(context.mode, context.query, path, 200)
-  if #candidates == 0 then return nil, "no candidates" end
+  local target_path = path
+  if context.note_target then
+    local resolution = index:resolve(context.note_target, path)
+    if resolution.status ~= "resolved" or resolution.kind ~= "note" then return context end
+    target_path = resolution.path
+  end
+  local candidates = index:completion_candidates(context.mode, context.query, target_path, 200)
 
-  local items = {}
-  for i, candidate in ipairs(candidates) do
-    local label = candidate.text
-    if items[label] then label = label .. " — " .. tostring(candidate.rel_path or i) end
-    items[label] = {
-      info = candidate.kind,
+  for _, candidate in ipairs(candidates) do
+    if context.note_target then
+      candidate.target = context.note_target
+        .. (context.mode == "current_block" and "#" or "") .. candidate.target
+    end
+    context.items[#context.items + 1] = {
+      text = candidate.text,
+      info = candidate.rel_path .. ":" .. tostring(candidate.line or 1),
+      icon = candidate.kind,
       data = candidate,
+      source_path = candidate.path,
+      source_line = candidate.line or 1,
+      source_col = 1,
       onselect = function(_, item)
         return completion.apply(view, item.data.target)
       end,
     }
   end
-  return {
-    name = "markdown-live-link-completion",
-    files = ".*",
-    items = items,
-  }
+  return context
 end
 
 local provider_registered = false
@@ -114,21 +142,15 @@ function completion.ensure_provider()
   if provider_registered then return true end
   local ok, autocomplete = pcall(require, "plugins.autocomplete")
   if not ok or not autocomplete.add_provider then return false end
-  autocomplete.add_provider("markdown-live-links", function(view)
-    if not (view and view.__markdown_live_attached) then return nil end
-    local symbols = completion.symbols(view)
-    if symbols then return symbols, { force_open = true } end
-  end)
+  autocomplete.add_provider("markdown-live-links", completion.get_completions)
   provider_registered = true
   return true
 end
 
 function completion.open(view)
-  local symbols, err = completion.symbols(view)
-  if not symbols then return false, err end
-  local ok, autocomplete = pcall(require, "plugins.autocomplete")
-  if not ok then return false, "autocomplete unavailable" end
-  autocomplete.complete(symbols)
+  if not completion.context(view) then return false, "caret is not in an incomplete Wikilink" end
+  if not completion.ensure_provider() then return false, "autocomplete unavailable" end
+  require("plugins.autocomplete").trigger()
   return true
 end
 
