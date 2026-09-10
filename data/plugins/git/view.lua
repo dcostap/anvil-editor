@@ -797,10 +797,15 @@ function GitView:on_mouse_released(button, x, y)
     local result = self.mouse_router:release(button, x, y)
     if captured.git_pane then self:update_pane_action_hover(captured, x, y) end
     if button == "left" and pressed_line and released_line == pressed_line and pressed_clicks >= 2 then
-      local source_tab = self:model_tab()
-      local diff_tab = self:activate_selected(function() core.redraw = true end)
-      if source_tab and source_tab.kind ~= "commit_diff" and diff_tab and self.on_model_tab_open then
-        self:on_model_tab_open(diff_tab)
+      local point = self:point_of_interest_for_pane(captured, released_line)
+      if point and point.kind == "git-changed-file" then
+        require("core.poi").activate(captured, point, { preserve_focus = false })
+      else
+        local source_tab = self:model_tab()
+        local diff_tab = self:activate_selected(function() core.redraw = true end)
+        if source_tab and source_tab.kind ~= "commit_diff" and diff_tab and self.on_model_tab_open then
+          self:on_model_tab_open(diff_tab)
+        end
       end
     end
     core.redraw = true

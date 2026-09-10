@@ -34,7 +34,8 @@ test.describe("Commit remote POIs", function()
 
   test.after_each(function() panes.reset_for_tests() end)
 
-  test.it("continues through Git Log files after activating a file comparison", function(context)
+  for _, activation in ipairs { "POI activation", "double-click" } do
+  test.it("continues through Git Log files after " .. activation, function(context)
     local source = context.source
     source.tab_id = "log"
     local log = source.model:log_tab()
@@ -55,7 +56,18 @@ test.describe("Commit remote POIs", function()
     end
     test.ok(poi.navigate(tree, 1))
     test.equal(panes.active().current_view, source)
-    test.ok(poi.activate(tree))
+    if activation == "double-click" then
+      tree.position.x, tree.position.y = 0, 0
+      tree.size.x, tree.size.y = 600, 400
+      tree.scroll.x, tree.scroll.y = 0, 0
+      tree.scroll.to.x, tree.scroll.to.y = 0, 0
+      local x, y = tree:get_line_screen_position(tree.buffer:get_selection())
+      x, y = x + 8, y + tree:get_line_height() / 2
+      test.ok(source:on_mouse_pressed("left", x, y, 2))
+      test.ok(source:on_mouse_released("left", x, y))
+    else
+      test.ok(poi.activate(tree))
+    end
     test.equal(poi.get_remote_source(), tree)
     local destination = panes.active()
     test.contains(table.concat(destination.current_view.buffer_view_b.buffer.lines), "after src/a.lua")
@@ -68,6 +80,7 @@ test.describe("Commit remote POIs", function()
     source:on_close()
     test.equal(poi.get_remote_source(), nil)
   end)
+  end
 
   test.it("keeps the tree local and opens remote comparisons in the requesting Pane", function(context)
     local source = context.source
