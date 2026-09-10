@@ -556,14 +556,26 @@ function Model:open_commit_diff(commit, callback, opts)
   elseif commit.kind == "working_tree" then
     tab.commit = commit
   end
-  if opts.selected_file_path then
-    tab.selected_file_path = changed_file_path({ path = opts.selected_file_path })
+  local selected_path = opts.selected_file_path
+    and changed_file_path({ path = opts.selected_file_path })
+  local listed_file = selected_path and changed_file_index_by_path(commit.changed_files, selected_path)
+  if listed_file and not tab.loading then
+    -- Opening a listed file needs current content, not another repository listing.
+    tab.changed_files = commit.changed_files
+  else
+    listed_file = nil
+  end
+  if selected_path then
+    tab.selected_file_path = selected_path
     local selected = changed_file_index_by_path(tab.changed_files, tab.selected_file_path)
     if selected then tab.selected_file = selected end
   end
   local on_loaded = callback
   callback = on_loaded and function(model, err) on_loaded(model, err, tab) end
-  if commit.kind == "working_tree" then
+  if listed_file then
+    core.log_quiet("Git Diff: opening listed file without refreshing the file list: %s", tab.selected_file_path)
+    self:load_selected_diff_file(tab, callback)
+  elseif commit.kind == "working_tree" then
     self:load_changed_files(tab, callback)
   elseif tab.changed_files and #tab.changed_files > 0 then
     self:load_selected_diff_file(tab, callback)
