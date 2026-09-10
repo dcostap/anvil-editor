@@ -28,7 +28,9 @@ local function draw_row(view, row, x, y, width, height)
     local font = view:get_font()
     local _, indent_size = view.buffer:get_indent_info()
     font:set_tab_size(indent_size)
-    local tx = x + style.padding.x - view.scroll.x
+    -- Provider rows already receive the scrolled text origin. Keep code
+    -- previews aligned with the source line instead of adding another offset.
+    local tx = x
     local origin = tx
     local ty = y + (height - font:get_height()) / 2
     for _, kind, text in tokenizer.each_token(row.tokens) do
