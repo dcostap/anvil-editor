@@ -860,6 +860,54 @@ function TextView:get_points_of_interest(opts)
 	return git_points or provider_points, unavailable or provider_unavailable
 end
 
+command.add(function()
+	local view = core.active_view
+	return file_context.is_editor_view(view) and view:supports_text_input()
+		and not buffer_gitdiff_disabled(view.buffer), view
+end, {
+	["editor:revert_git_change"] = function(view)
+		local buffer = view.buffer
+		local state = get_state(buffer)
+		if gitdiff_unavailable_message(state) or not state.base_lines or state.closed then return end
+		-- Rebuild now: the displayed markers can lag behind unsaved edits.
+		local current_ranges, meta = ranges.build(state.base_lines, buffer.lines, {
+			max_diff_lines = plugin_config.max_diff_lines,
+		})
+		if meta.too_large or meta.error then return end
+		local caret = buffer:get_selection()
+		local count = #buffer.lines
+		for _, range in ipairs(current_ranges) do
+			local first = math.min(count, range.current_start)
+			local last = math.min(count, math.max(first, range.current_end - 1))
+			if caret >= first and caret <= last then
+				local replacement = table.concat(state.base_lines, "", range.base_start, range.base_end - 1)
+				local line1, col1 = range.current_start, 1
+				local line2, col2 = range.current_end, 1
+				-- Buffer keeps a final newline that is not editable text.
+				if line2 > count or (count == 1 and buffer.lines[1] == "\n") then
+					line2, col2 = count, #buffer.lines[count]
+					replacement = replacement:gsub("\n$", "")
+					if line1 > count then
+						line1, col1 = count, #buffer.lines[count]
+						replacement = "\n" .. replacement
+					elseif range.base_start == range.base_end and line1 > 1 then
+						line1 = line1 - 1
+						col1 = #buffer.lines[line1]
+					end
+				end
+				local result = buffer:apply_edits({ {
+					line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = replacement,
+				} }, { merge_undo = false })
+				if result.changed then
+					require("core.poi_preview").dismiss(view)
+					core.log_quiet("Reverted Git %s in %s at line %d", range.type, buffer:get_name(), first)
+				end
+				return
+			end
+		end
+	end,
+})
+
 command.add("core.textview", {
 	["editor:refresh_git_changes"] = function()
 		local view = core.active_view
