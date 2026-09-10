@@ -284,9 +284,9 @@ config.animated_caret = true
 
 ---Time in seconds for the rear of the caret to reach its target.
 ---
----Defaults to 0.14.
+---Defaults to 0.16.
 ---@type number
-config.animated_caret_animation_length = 0.14
+config.animated_caret_animation_length = 0.16
 
 ---Shortest animation time, used at or below the minimum trail distance.
 ---
