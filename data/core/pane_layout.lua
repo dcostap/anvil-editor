@@ -103,7 +103,7 @@ local function replace_node(root, target, replacement)
   return root, changed
 end
 
-function layout.split(root, pane, direction, new_pane)
+function layout.split(root, pane, direction, new_pane, opts)
   local target = layout.find(root, pane)
   assert(target, "Pane is not in this layout")
   local before = direction == "left" or direction == "up"
@@ -119,7 +119,11 @@ function layout.split(root, pane, direction, new_pane)
     b = before and target or new_leaf,
   }
   root = replace_node(root, target, replacement)
-  return layout.rebalance(root, axis)
+  root = layout.rebalance(root, axis)
+  if opts and opts.ratio ~= nil then
+    replacement.ratio = common.clamp(tonumber(opts.ratio) or 0.5, MIN_RATIO, MAX_RATIO)
+  end
+  return root
 end
 
 local function remove_node(node, pane)

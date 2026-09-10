@@ -22,6 +22,7 @@ local panes = require "core.panes"
 
 local GitView = View:extend()
 local FILE_DIFF_LOADING_DELAY = 1
+local HISTORY_DIFF_LIST_RATIO = 0.30
 GitView.view_icon = view_icons.register("git", view_icons.file(".gitignore"))
 
 local function reject_read_only_edit()
@@ -2034,10 +2035,16 @@ function GitView:open_history_diff_view(tab, opts)
 
   local source_pane = panes.pane_for_view(self) or panes.active()
   if not source_pane then return nil, "Git history View has no source Pane" end
+  local direction = opts.direction or "right"
+  local ratio = opts.ratio
+  if ratio == nil and (direction == "left" or direction == "right") then
+    ratio = direction == "left" and 1 - HISTORY_DIFF_LIST_RATIO or HISTORY_DIFF_LIST_RATIO
+  end
   local placed, reason = panes.place(function() return view end, {
     pane = source_pane,
     placement = "split",
-    direction = opts.direction or "right",
+    direction = direction,
+    ratio = ratio,
     focus = opts.focus ~= false,
     reason = "git-history-diff",
   })

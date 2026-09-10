@@ -10,6 +10,7 @@ local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local View = require "core.view"
 local RootPanel = require "core.rootpanel"
+local layout = require "core.pane_layout"
 local git_view = require "plugins.git_view"
 local diffview = require "plugins.diffview"
 local path_tree = require "plugins.path_tree"
@@ -673,7 +674,11 @@ test.describe("Git View command", function()
     tab.preview_generation_value = 1
     local initial_diff = history_view:open_history_diff_view(tab)
     test.not_nil(initial_diff)
-    test.ok(panes.pane_for_view(history_view) ~= panes.pane_for_view(initial_diff))
+    local history_pane = panes.pane_for_view(history_view)
+    local diff_pane = panes.pane_for_view(initial_diff)
+    test.ok(history_pane ~= diff_pane)
+    local _, split = layout.find(history_pane.group.root, history_pane)
+    test.equal(split.ratio, 0.3)
     file_at_calls = 0
 
     history_view:on_mouse_pressed("left", 10, history_view:history_commits_y() + history_view:row_height() + 1, 1)

@@ -271,7 +271,7 @@ function M.split(target, direction, opts)
   end
   local new_pane = create_identity(view, opts)
   new_pane.group = pane.group
-  pane.group.root = layout.split(pane.group.root, pane, direction, new_pane)
+  pane.group.root = layout.split(pane.group.root, pane, direction, new_pane, opts)
   M.visible_group_value = pane.group
   if opts.focus ~= false then
     M.active_pane = new_pane
@@ -1308,7 +1308,11 @@ function M.place(factory, opts)
     view = pane and pane.current_view or nil
   elseif placement == "split" then
     if not target then return nil, "split placement requires a target Pane" end
-    pane, err = M.split(target, opts.direction or "right", { factory = factory, focus = opts.focus })
+    pane, err = M.split(target, opts.direction or "right", {
+      factory = factory,
+      focus = opts.focus,
+      ratio = opts.ratio,
+    })
     view = pane and pane.current_view or nil
   else
     return nil, "invalid View placement"
