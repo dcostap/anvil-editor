@@ -725,7 +725,8 @@ function QuickCommandOutputView:slot_view(slot)
   end
   view.quick_command_output_owner = self
   self.views[slot.index] = view
-  panes.register_focus_target(self, view)
+  -- Focus queries also occur before placement and after the Pane releases this View.
+  if panes.pane_for_view(self) then panes.register_focus_target(self, view) end
   return view
 end
 

@@ -59,6 +59,19 @@ test.describe("Command Slots", function()
     test.equal(#suggestions, 2)
   end)
 
+  test.it("keeps Pane ownership valid when closed output is queried for focus", function(context)
+    local output = command_slots.run_command(1, "first")
+    finish(context.runs[1], "done\n")
+    local pane = panes.pane_for_view(output)
+    local quick_output = pane.current_view
+    panes.create { factory = function() return View() end }
+    panes.close(pane, { force = true })
+
+    local target = quick_output:get_focus_view()
+    test.equal(panes.pane_for_view(target), nil)
+    test.ok(panes.validate())
+  end)
+
   test.it("creates one Quick Command Output View and reuses Slot A", function(context)
     local first = command_slots.run_command(1, "first")
     local pane = panes.pane_for_view(first)
