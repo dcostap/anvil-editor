@@ -1387,7 +1387,27 @@ local function curve_point(x1, x2, y1, y2, t)
   return x, y
 end
 
-local function draw_curved_trapezium(x1, x2, start1, end1, start2, end2, color)
+-- Clip polygon edges, not curve endpoints, to keep the visible shape unchanged.
+-- A positive sign keeps points below the boundary; a negative sign keeps points above it.
+local function clip_polygon_y(points, boundary, sign)
+  local clipped = {}
+  local previous = points[#points]
+  if not previous then return clipped end
+  local previous_inside = sign * (previous[2] - boundary) >= 0
+  for _, point in ipairs(points) do
+    local inside = sign * (point[2] - boundary) >= 0
+    if inside ~= previous_inside then
+      local t = (boundary - previous[2]) / (point[2] - previous[2])
+      local x = previous[1] + t * (point[1] - previous[1])
+      clipped[#clipped + 1] = { math.modf(x + 0.5), boundary }
+    end
+    if inside then clipped[#clipped + 1] = point end
+    previous, previous_inside = point, inside
+  end
+  return clipped
+end
+
+local function draw_curved_trapezium(x1, x2, start1, end1, start2, end2, color, top, bottom)
   if not color or x2 <= x1 then return end
   start1, end1 = normalize_marker_range(start1, end1)
   start2, end2 = normalize_marker_range(start2, end2)
@@ -1403,7 +1423,11 @@ local function draw_curved_trapezium(x1, x2, start1, end1, start2, end2, color)
     local x, y = curve_point(x1, x2, end1, end2, i / steps)
     points[#points + 1] = { math.modf(x + 0.5), (math.modf(y + 0.5)) }
   end
-  renderer.draw_poly(points, color)
+  -- Rasterizer clipping does not protect its edge arithmetic from huge coordinates.
+  top, bottom = math.modf(top + 0.5), math.modf(bottom + 0.5)
+  if math.min(start1, start2) < top then points = clip_polygon_y(points, top, 1) end
+  if math.max(end1, end2) > bottom then points = clip_polygon_y(points, bottom, -1) end
+  if #points >= 3 then renderer.draw_poly(points, color) end
 end
 
 local function draw_gap_marker(buffer_view, y, color)
@@ -1871,7 +1895,7 @@ function DiffView:draw_divider_changes()
       x1, x2,
       left_start_y, left_end_y,
       right_start_y, right_end_y,
-      diff_color(tag, true)
+      diff_color(tag, true), self.position.y, self.position.y + self.size.y
     )
   end
 

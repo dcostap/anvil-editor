@@ -105,9 +105,47 @@ test.describe("Diff View visible decorations", function()
       for _, point in ipairs(polygon.points) do
         low, high = math.min(low, point[2]), math.max(high, point[2])
       end
-      if low < view.position.y and high > view.position.y + view.size.y then crossing = true end
+      if low <= view.position.y and high >= view.position.y + view.size.y then crossing = true end
     end
     test.ok(crossing, "connectors must survive when their endpoints straddle the viewport")
+  end)
+
+  test.it("bounds connector drawing after large pastes into a Blank Diff View", function(context)
+    local view = diffview.open({
+      contents = { diffview.content.blank(), diffview.content.blank() },
+    }, true)
+    context.views[#context.views + 1] = view
+    view.position.x, view.position.y = 40, 25
+    view.size.x, view.size.y = 800, 300
+    local left, right = view.buffer_view_a, view.buffer_view_b
+    left:set_wrapping_enabled(false)
+    right:set_wrapping_enabled(false)
+    local pasted = string.rep("pasted line\n", 28128)
+    right:on_text_input(pasted)
+    wait_for_diff(view)
+    view:update()
+
+    for _, fraction in ipairs { 0, 0.5, 1 } do
+      local scroll = fraction * (right:get_scrollable_size() - right.size.y)
+      for _, side in ipairs { left, right } do
+        side.scroll.y, side.scroll.to.y = scroll, scroll
+      end
+      local polygons = capture(view, "draw_divider_changes")
+      test.ok(#polygons > 0, "the large insertion must keep its visible connector")
+      for _, polygon in ipairs(polygons) do
+        for _, point in ipairs(polygon.points) do
+          test.ok(point[2] >= view.position.y and point[2] <= view.position.y + view.size.y,
+            "large paste sent an unbounded connector to the native rasterizer")
+        end
+      end
+    end
+
+    left:on_text_input(pasted)
+    wait_for_diff(view)
+    view:update()
+    test.equal(table.concat(left.buffer.lines), pasted .. "\n")
+    test.equal(table.concat(right.buffer.lines), pasted .. "\n")
+    test.equal(#capture(view, "draw_divider_changes"), 0, "equal pasted text must have no connectors")
   end)
 
   local mutations = {
