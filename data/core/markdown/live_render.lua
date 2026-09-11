@@ -7232,6 +7232,7 @@ end
 function live.attach(view)
   if not (view and view.extends and view:extends(Editor)) then return false end
   if view.__markdown_live_attached then return false end
+  ensure_owner(view)
   view:add_visual_metric_provider(PROVIDER_ID, provider)
   view:add_decoration_provider(PROVIDER_ID, decoration_provider)
   -- Install gutter policy before the render provider reconstructs soft-wrap

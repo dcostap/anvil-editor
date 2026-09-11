@@ -4,6 +4,70 @@ local TextView = require "core.textview"
 local test = require "core.test"
 
 test.describe("POI previews", function()
+  test.it("renders a linked Markdown heading and body without opening the note", function()
+    local preview = require "core.poi_preview"
+    local worker_pool = require "core.worker_pool"
+    local source = require("core.editor")(Buffer("preview-source.md", nil, true))
+    source.size.x, source.size.y = 800, 600
+    source.buffer:insert(1, 1, "reference\n")
+    require("core.markdown.live_render").attach(source)
+    local target = Buffer("linked-preview.md", nil, true)
+    target:insert(1, 1, "Before the destination\n\n### Sales series\n\n**Unsaved description**\n- First item\n")
+    target:set_selection(1, 2)
+    local focused, buffer_count = core.active_view, #core.buffers
+    local ok, err = pcall(function()
+      test.ok(preview.location(source, { line = 1, target_buffer = target, target_line = 3 }))
+      local drawn = {}
+      local function draw_preview()
+        drawn = {}
+        local old_draw_text = renderer.draw_text
+        local old_draw_rect, old_set_clip_rect = renderer.draw_rect, renderer.set_clip_rect
+        renderer.draw_rect = function() end
+        renderer.set_clip_rect = function() end
+        renderer.draw_text = function(font, text, x, y, color, opts)
+          drawn[#drawn + 1] = text
+          return x + font:get_width(text, opts)
+        end
+        local success, failure = pcall(function()
+          for entry in source:iter_visible_visual_rows() do
+            if entry.type == "provider" then
+              entry.provider_row.draw(source, entry.provider_row, 0, entry.y, 800, entry.height)
+            end
+          end
+        end)
+        renderer.draw_text = old_draw_text
+        renderer.draw_rect, renderer.set_clip_rect = old_draw_rect, old_set_clip_rect
+        if not success then error(failure, 0) end
+      end
+      local deadline = system.get_time() + 5
+      repeat
+        local pool = worker_pool.current_system()
+        if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+        draw_preview()
+        if table.concat(drawn, "\n"):find("\nSales series\n", 1, true) then break end
+        system.sleep(0.001)
+      until system.get_time() >= deadline
+      local text = table.concat(drawn, "\n")
+      test.contains(text, "\nSales series\n")
+      test.contains(text, "Unsaved description")
+      test.equal(text:find("###", 1, true), nil)
+      test.equal(text:find("**", 1, true), nil)
+      test.equal(text:find("Before the destination", 1, true), nil)
+      test.equal(target:get_selection(), 1)
+      test.equal(select(2, target:get_selection()), 2)
+      test.equal(source.buffer:get_selection(), 1)
+      test.equal(core.active_view, focused)
+      test.equal(#core.buffers, buffer_count)
+      test.ok(preview.dismiss(source))
+      test.not_equal(source:get_visual_row_entry(2).type, "provider")
+    end)
+    preview.dismiss(source)
+    source:on_close()
+    core.buffer_registry:remove(source.buffer, true)
+    target:on_close()
+    if not ok then error(err, 0) end
+  end)
+
   test.it("shows an unsaved file excerpt without changing either caret or focus", function()
     local preview = require "core.poi_preview"
     local source = TextView(Buffer())

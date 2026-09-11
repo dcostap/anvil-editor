@@ -14,16 +14,17 @@ local draw_overlay = TextView.draw_overlay
 function TextView:draw_overlay(...)
   local result = draw_overlay(self, ...)
   local preview = previews[self]
-  if not (preview and preview.code) then return result end
+  if not preview then return result end
   -- Draw after all text rows so adjacent line backgrounds cannot erase the shadow.
   for entry in self:iter_visible_visual_rows() do
     local row = entry.provider_row
     if row and row.preview == preview then
-      local height = entry.height or self:get_line_height()
       local x = self:get_content_offset() + self:get_gutter_width()
-      local y = entry.y - (row.index - 1) * height
+      local first = entry.visual_row - row.index + 1
+      local top = self:get_visual_row_y_offset(first)
+      local y = entry.y - (self:get_visual_row_y_offset(entry.visual_row) - top)
       local width = math.max(0, self.size.x - self:get_gutter_width())
-      local bottom = y + preview.row_count * height
+      local bottom = y + self:get_visual_row_y_offset(first + preview.row_count) - top
       local size = math.max(1, math.ceil(style.poi_preview_shadow_size))
       local source = style.poi_preview_shadow
       local color = { source[1], source[2], source[3], 0 }
@@ -35,6 +36,11 @@ function TextView:draw_overlay(...)
         renderer.draw_rect(x - offset, y - offset + 1, 1, bottom - y + offset * 2 - 2, color)
         renderer.draw_rect(x + width + offset - 1, y - offset + 1, 1, bottom - y + offset * 2 - 2, color)
       end
+      local border = math.max(1, SCALE)
+      renderer.draw_rect(x, y, width, border, style.divider)
+      renderer.draw_rect(x, bottom - border, width, border, style.divider)
+      renderer.draw_rect(x, y, border, bottom - y, style.divider)
+      renderer.draw_rect(x + width - border, y, border, bottom - y, style.divider)
       break
     end
   end
@@ -46,17 +52,25 @@ function M.for_view(view)
 end
 
 function M.dismiss(view)
-  if not previews[view] then return false end
+  local preview = previews[view]
+  if not preview then return false end
   previews[view] = nil
   view:remove_visual_row_provider(provider_id)
+  view:remove_visual_metric_provider(provider_id)
   view:remove_decoration_provider(provider_id)
   view:remove_selection_listener(provider_id)
+  view:remove_owned_feature(provider_id)
+  if preview.content then preview.content:on_close() end
   core.redraw = true
   return true
 end
 
 local function draw_row(view, row, x, y, width, height)
-  if row.tokens then
+  if row.content then
+    renderer.draw_rect(x, y, width, height, style.background2)
+    row.content:draw(x + style.padding.x, y + style.padding.y,
+      math.max(1, width - style.padding.x * 2), math.max(1, height - style.padding.y * 2))
+  elseif row.tokens then
     renderer.draw_rect(x, y, width, height, row.background)
     local font = view:get_font()
     local _, indent_size = view.buffer:get_indent_info()
@@ -77,23 +91,23 @@ local function draw_row(view, row, x, y, width, height)
     end
   else
     renderer.draw_rect(x, y, width, height, style.background2)
-    renderer.draw_text(view:get_font(), row.text, x + style.padding.x, y, style.text)
-  end
-  if row.framed then
-    local border = math.max(1, SCALE)
-    renderer.draw_rect(x, y, border, height, style.divider)
-    renderer.draw_rect(x + width - border, y, border, height, style.divider)
-    if row.first then renderer.draw_rect(x, y, width, border, style.divider) end
-    if row.last then renderer.draw_rect(x, y + height - border, width, border, style.divider) end
+    local font = row.title and style.font or view:get_font()
+    core.push_clip_rect(x, y, width, height)
+    renderer.draw_text(font, row.text, x + style.padding.x,
+      y + (height - font:get_height()) / 2, row.title and style.dim or style.text)
+    core.pop_clip_rect()
   end
 end
 
+-- All content shares the card frame and lifetime. Custom content supplies
+-- layout(width, max_height), draw(x, y, width, height), and on_close().
 function M.show(view, point, title, lines, options)
   M.dismiss(view)
-  local preview = { line = point.line, title = title, lines = lines, code = options and options.code }
+  local preview = { line = point.line, title = title, lines = lines,
+    content = options and options.content }
   previews[view] = preview
   local rows = options and options.code and {} or {
-    { id = "title", text = title .. "  [Escape to close]", draw = draw_row },
+    { id = "title", title = true, text = title, draw = draw_row },
   }
   local token_state
   for index, text in ipairs(lines) do
@@ -114,21 +128,41 @@ function M.show(view, point, title, lines, options)
     end
     rows[#rows + 1] = row
   end
-  if options and options.code then
-    preview.row_count = #rows
-    for index, row in ipairs(rows) do
-      row.preview = preview
-      row.index = index
-      row.framed = true
-      row.first = index == 1
-      row.last = index == #rows
-    end
+  if preview.content then
+    rows[#rows + 1] = { id = "content", content = preview.content, draw = draw_row }
+  end
+  preview.row_count = #rows
+  for index, row in ipairs(rows) do
+    row.preview, row.index = preview, index
+  end
+  local function layout()
+    if not preview.content then return 0 end
+    local width = math.max(1, view.size.x - view:get_gutter_width() - style.padding.x * 2)
+    local limit = math.max(view:get_line_height(), math.min(view.size.y / 2, view:get_line_height() * 12))
+    local height = preview.content:layout(width, limit) + style.padding.y * 2
+    rows[#rows].height = height
+    return table.concat({ width, height, style.font:get_height() }, ":")
   end
   view:add_visual_row_provider(provider_id, {
+    generation = layout,
     visual_rows = function(_, _, line, placement)
       if line == preview.line and placement == "after" then return rows end
     end,
   })
+  if preview.content then
+    view:add_visual_metric_provider(provider_id, {
+      -- Card rows own their height, regardless of the source line's presentation.
+      priority = 100,
+      generation = layout,
+      line_height = function(_, _, _, entry)
+        local row = entry.provider_row
+        if row and row.preview == preview then
+          return row.height or (style.font:get_height() + style.padding.y)
+        end
+      end,
+    })
+  end
+  view:add_owned_feature(provider_id, { on_release = function() M.dismiss(view) end })
   if options and options.current_changes then
     view:add_decoration_provider(provider_id, {
       line_background = function(_, _, line)
@@ -167,6 +201,29 @@ function M.location(view, point)
     end
   end
   local line = math.max(1, point.target_line or 1)
+  local path = point.path or (target and (target.abs_filename or target.filename))
+  local markdown = require "core.markdown.live_render"
+  if markdown.is_markdown_buffer(target or { filename = path }) then
+    local text
+    if target then
+      text = table.concat(target.lines)
+    elseif path then
+      local info = system.get_file_info(path)
+      if info and info.type == "file" and info.size <= 1024 * 1024 then
+        local file = io.open(path, "rb")
+        if file then
+          text = file:read("*a")
+          file:close()
+        end
+      end
+    end
+    local title = common.basename(path or target:get_name())
+    if not text or #text > 1024 * 1024 then
+      return M.show(view, point, title, { "Preview unavailable" })
+    end
+    local content = require("core.markdown.preview")(path or title, text:gsub("\r\n", "\n"), line)
+    return M.show(view, point, title, {}, { content = content })
+  end
   local first, last = math.max(1, line - 3), line + 3
   local lines = {}
   if target then
