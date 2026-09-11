@@ -89,6 +89,22 @@ test.describe("Markdown missing link activation", function()
     file:close()
   end)
 
+  test.it("opens an existing heading immediately after a code fence", function(c)
+    local path = c.root .. PATHSEP .. "Functions.md"
+    local file = assert(io.open(path, "wb"))
+    file:write("```\n# Not a heading\n```\n#### CreaMovimientoStock(datos de ConsumosIncidencia)\nBody\n")
+    file:close()
+    c.index:rebuild("heading-after-fence-test")
+    test.ok(live.open_link(c.view, {
+      link = links.from_target("wiki", "Functions#CreaMovimientoStock(datos de ConsumosIncidencia)"),
+    }))
+    test.equal(c.opened, common.normalize_path(path))
+    test.equal(c.open_options.line, 4)
+    test.is_nil(c.warning)
+    test.is_nil(c.confirm)
+    test.ok(c.index:resolve(links.from_target("wiki", "Functions#Not a heading"), c.source).subtarget_missing)
+  end)
+
   test.it("does not create notes outside the Project", function(c)
     test.ok(not live.open_link(c.view, { link = links.from_target("wiki", "../../Outside") }))
     test.is_nil(c.confirm)

@@ -473,9 +473,11 @@ static StructuralLines parse_structural_lines(const char *text, size_t len,
       TSNode node = ts_tree_cursor_current_node(&cursor); const char *type = ts_node_type(node);
       if (strcmp(type, "fenced_code_block") == 0 || strcmp(type, "indented_code_block") == 0
           || strcmp(type, "html_block") == 0) {
-        uint32_t first = ts_node_start_point(node).row, last = ts_node_end_point(node).row;
-        if (last >= lines.count) last = lines.count ? lines.count - 1 : 0;
-        for (uint32_t row = first; row < lines.count && row <= last; row++) lines.excluded[row] = true;
+        /* Tree-sitter end points are exclusive. Column zero starts the next line. */
+        TSPoint end = ts_node_end_point(node);
+        uint32_t first = ts_node_start_point(node).row;
+        uint32_t stop = end.row + (end.column > 0);
+        for (uint32_t row = first; row < lines.count && row < stop; row++) lines.excluded[row] = true;
       }
       if (ts_tree_cursor_goto_first_child(&cursor)) continue;
       while (!ts_tree_cursor_goto_next_sibling(&cursor)) {
