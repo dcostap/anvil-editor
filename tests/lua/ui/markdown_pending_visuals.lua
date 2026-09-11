@@ -69,6 +69,48 @@ local function exit_empty_list(buffer)
 end
 
 test.describe("Markdown pending visual continuity", function()
+  test.it("keeps the heading below indented code outside its background while typing", function()
+    local old_live, old_active = config.markdown_live_editor, core.active_view
+    local view
+    local ok, err = pcall(function()
+      config.markdown_live_editor = true
+      view = make_view(USERDIR .. PATHSEP .. "markdown-indented-code-end.md",
+        "## Code\n\t\t\tfirst statement\n\t\t\tsecond statement\n\n## Next section\n\nText below")
+      local buffer = view.buffer
+      buffer:set_selection(7, 11)
+      core.active_view = view
+      markdown.live_render.refresh_view(view)
+      local instance = test.not_nil(markdown_model.peek(buffer))
+      test.ok(wait_ready(instance), instance.reason)
+      local decoration
+      for _, entry in ipairs(view:decoration_provider_entries()) do
+        if entry.id == "markdown-live" then decoration = entry.provider break end
+      end
+      decoration = test.not_nil(decoration)
+      local function check_backgrounds()
+        test.equal(decoration:line_background(view, 2), style.markdown_live_code_background)
+        test.equal(decoration:line_background(view, 3), style.markdown_live_code_background)
+        test.equal(decoration:line_background(view, 5), nil,
+          "the following heading acquired the code background")
+      end
+      view:update()
+      for line = 1, #buffer.lines do view:get_line_render(line) end
+      check_backgrounds()
+      for _ = 1, 3 do
+        view:on_text_input("x")
+        test.equal(instance.status, "pending")
+        check_backgrounds()
+        view:update()
+        check_backgrounds()
+        test.ok(wait_ready(instance), instance.reason)
+        check_backgrounds()
+      end
+    end)
+    if view then view:release_owned_features("test") end
+    config.markdown_live_editor, core.active_view = old_live, old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps checkbox drawing size while editing item text", function()
     local old_live, old_active = config.markdown_live_editor, core.active_view
     local view

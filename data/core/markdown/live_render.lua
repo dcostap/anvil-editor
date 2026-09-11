@@ -4478,9 +4478,9 @@ local function capture_pre_edit_renders(view, change)
   for line in pairs(lines) do
     local render = cached_render_line(view, line)
     local source_text = (view.buffer.lines[line] or ""):gsub("\n$", "")
-    local indented_node
+    local indented_node, indented_end_line
     if not (owner.pending_indented_lines and owner.pending_indented_lines[line]) then
-      indented_node = indented_code_for_line(view, line)
+      indented_node, indented_end_line = indented_code_for_line(view, line)
     end
     local frontmatter_node, frontmatter_end_line =
       frontmatter_for_line(view, line)
@@ -4514,7 +4514,7 @@ local function capture_pre_edit_renders(view, change)
         and owner.pending_indented_lines[line]
         or indented_node ~= nil,
       indented_line1 = indented_node and indented_node.source.line1 or nil,
-      indented_line2 = indented_node and indented_node.source.line2 or nil,
+      indented_line2 = indented_end_line,
       frontmatter = frontmatter_node ~= nil or old_frontmatter[line] == true,
       frontmatter_line1 = frontmatter_node
         and frontmatter_node.source.line1 or nil,
@@ -5208,7 +5208,7 @@ indented_code_for_line = function(view, line)
     if node.type == "code_indented" then
       local line2 = node.source.line2
       if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
-      if line >= node.source.line1 and line <= line2 then return node end
+      if line >= node.source.line1 and line <= line2 then return node, line2 end
     end
   end
 end
