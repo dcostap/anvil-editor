@@ -40,9 +40,11 @@ end
 
 function live.is_markdown_buffer(buffer)
   if not buffer then return false end
-  if MARKDOWN_EXTENSIONS[extension(buffer.abs_filename or buffer.filename or "") or ""] then return true end
   local syntax_name = buffer.syntax and buffer.syntax.name
-  return type(syntax_name) == "string" and syntax_name:lower():find("markdown", 1, true) ~= nil
+  if type(syntax_name) == "string" then
+    return syntax_name:lower():find("markdown", 1, true) ~= nil
+  end
+  return MARKDOWN_EXTENSIONS[extension(buffer.abs_filename or buffer.filename or "") or ""] == true
 end
 
 local function line_is_wrapped(view, line)

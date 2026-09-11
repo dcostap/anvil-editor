@@ -70,6 +70,24 @@ test.describe("Language Mode", function()
     test.equal(buffer.syntax.name, "Markdown")
   end)
 
+  test.it("turns off Markdown rendering in Plain Text mode and restores it in Automatic mode", function(context)
+    local live = require "core.markdown.live_render"
+    local buffer = Buffer("mode-render.md", "mode-render.md", true)
+    context.buffers = { buffer }
+    buffer:insert(1, 1, "# Heading\n")
+    local editor = Editor(buffer)
+    core.set_active_view(editor)
+    live.refresh_view(editor)
+    test.ok(live.is_live_mode(editor))
+
+    test.ok(buffer:set_language_mode("Plain Text"))
+    test.ok(not live.is_live_mode(editor), "Plain Text must detach Markdown rendering")
+    test.ok(not live.is_markdown_buffer(buffer), "Plain Text must not receive Markdown behavior")
+
+    test.ok(buffer:set_language_mode(nil))
+    test.ok(live.is_live_mode(editor), "Automatic mode must restore Markdown rendering")
+  end)
+
   test.it("round-trips named-file overrides through Project Workspace state", function()
     local first_path = common.normalize_path(core.root_project().path .. PATHSEP .. "language-mode.txt")
     local first = Buffer("language-mode.txt", first_path, true)
