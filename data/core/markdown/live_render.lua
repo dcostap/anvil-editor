@@ -7349,12 +7349,16 @@ local function record_navigation_origin()
   require("core.panes").record_location()
 end
 
-local function open_link_resolution(resolution)
+local function open_link_resolution(resolution, target)
   if resolution.status == "external" then
     record_navigation_origin()
     return common.open_in_system(resolution.path)
   end
   if resolution.status ~= "resolved" then return false end
+  if resolution.subtarget_missing then
+    core.warn("Markdown link target not found: %s (%s)", target, resolution.reason)
+    return false
+  end
   local info = resolution.path and system.get_file_info(resolution.path)
   if (not info or info.type ~= "file") and not (resolution.entry and resolution.entry.buffer) then
     core.log_quiet("Markdown link target disappeared before activation: %s", tostring(resolution.path))
@@ -7365,9 +7369,6 @@ local function open_link_resolution(resolution)
     return common.open_in_system(resolution.path)
   end
   local target_view = core.open_file(resolution.path, { line = resolution.line, col = 1 })
-  if target_view and resolution.subtarget_missing then
-    core.warn("Markdown link target not found in note: %s", tostring(resolution.target))
-  end
   return target_view ~= nil
 end
 
@@ -7402,7 +7403,7 @@ local function open_ambiguous_picker(view, link, resolution)
       suggestion = suggestion and suggestion.entry and suggestion or exact_suggestion(text)
       if not suggestion then return end
       local selected = index:resolve_entry_result(suggestion.entry, link, link.raw_target or link.path)
-      open_link_resolution(selected)
+      open_link_resolution(selected, link.raw_target)
     end,
   })
   return true
@@ -7427,7 +7428,8 @@ function live.open_link(view, opts)
     core.log_quiet("Markdown link not opened: status=%s target=%s", resolution.status, tostring(resolution.target))
     return false, resolution.status
   end
-  return open_link_resolution(resolution), resolution.status
+  return open_link_resolution(resolution, link.raw_target),
+    resolution.subtarget_missing and "missing" or resolution.status
 end
 
 function live.allow_remote_image_once(view)

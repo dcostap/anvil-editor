@@ -25,13 +25,14 @@ test.describe("Markdown missing link activation", function()
     while not c.index:can_resolve() and system.get_time() < deadline do coroutine.yield(0.01) end
     test.ok(c.index:can_resolve())
     live.refresh_view(c.view)
-    c.show, c.open = core.nag_view.show, core.open_file
+    c.show, c.open, c.warn = core.nag_view.show, core.open_file, core.warn
     core.nag_view.show = function(_, title, text, choices, submit) c.confirm = submit end
-    core.open_file = function(path) c.opened = path; return {} end
+    core.open_file = function(path, options) c.opened, c.open_options = path, options; return {} end
+    core.warn = function(...) c.warning = string.format(...) end
   end)
 
   test.after_each(function(c)
-    core.nag_view.show, core.open_file = c.show, c.open
+    core.nag_view.show, core.open_file, core.warn = c.show, c.open, c.warn
     panes.reset_for_tests()
     c.buffer:clean()
     for i = #core.buffers, 1, -1 do
@@ -74,10 +75,15 @@ test.describe("Markdown missing link activation", function()
     test.equal(c.opened, path)
   end)
 
-  test.it("opens the existing note without creating a missing heading", function(c)
-    test.ok(live.open_link(c.view, { link = links.from_target("wiki", "Source#Missing") }))
+  test.it("warns about a missing heading without opening the note or moving the caret", function(c)
+    c.view:set_selection_state({ selections = { 1, 3, 1, 3 }, last_selection = 1 })
+    local selection, focus = c.view:get_selection_state(), core.active_view
+    test.equal(live.open_link(c.view, { link = links.from_target("wiki", "Source#Missing") }), false)
     test.is_nil(c.confirm)
-    test.equal(c.opened, common.normalize_path(c.source))
+    test.is_nil(c.opened)
+    test.same(c.view:get_selection_state(), selection)
+    test.equal(core.active_view, focus)
+    test.contains(c.warning, "Source#Missing")
     local file = assert(io.open(c.source, "rb"))
     test.equal(file:read("*a"), "# Source\n")
     file:close()
