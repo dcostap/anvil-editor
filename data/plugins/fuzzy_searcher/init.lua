@@ -80,6 +80,8 @@ local function bundled_tool(name)
 end
 
 local fuzzy_searcher = {
+  modifiers = require "plugins.fuzzy_searcher.modifiers",
+  search = require "plugins.fuzzy_searcher.search",
   open_transition = require "plugins.fuzzy_searcher.open_transition",
   copy_feedback = require "core.copy_feedback",
   file_icons = require "core.file_icons",
@@ -708,6 +710,13 @@ local function sync_project_file_subscriptions(roots)
     if not fuzzy_file_watch_roots[path] then
       fuzzy_file_watch_roots[path] = fuzzy_file_watch_id
       project_files.subscribe(path, fuzzy_file_watch_id, function(_, event)
+        if active_view and active_view.query_modifiers and active_view.query_modifiers.active
+            and not active_view.query_modifiers.commit then
+          active_view.modifier_metadata = nil
+          active_view.force_refresh = true
+          active_view.dirty = true
+          active_view:schedule_update(true)
+        end
         if not (event and event.refreshed) then return end
         fuzzy_searcher.files_skip_next_picker_refresh = false
         fuzzy_searcher.files_materialized_cache = nil
@@ -1142,10 +1151,13 @@ end
 load_recent_commands()
 
 local function parse_query(s)
+  local modifiers = fuzzy_searcher.modifiers.parse(s)
+  s = modifiers.text
+  if modifiers.mode == "!" or modifiers.mode == ">" then return s end
   local before, grep, symbol = s, nil, nil
-  local grep_pos = s:find("#", 1, true)
-  local symbol_pos = s:find("$", 1, true)
-  if symbol_pos == 1 and s:sub(1, 2) == "$$" then symbol_pos = nil end
+  local marker = fuzzy_searcher.modifiers.parse(s)
+  local grep_pos = marker.mode == "#" and marker.marker_first
+  local symbol_pos = marker.mode == "$" and marker.marker_first
 
   if grep_pos and (not symbol_pos or grep_pos < symbol_pos) then
     before = s:sub(1, grep_pos - 1)
@@ -1194,18 +1206,9 @@ end
 
 function fuzzy_searcher.split_prompt_mode_marker(text)
   text = tostring(text or "")
-  local prefix, after = split_mode_prefix(text)
-  if prefix ~= "" then return "", prefix, after end
-
-  local grep_pos = text:find("#", 1, true)
-  local symbol_pos = text:find("$", 1, true)
-  local marker_pos = grep_pos
-  local marker = "#"
-  if symbol_pos and (not marker_pos or symbol_pos < marker_pos) then
-    marker_pos, marker = symbol_pos, "$"
-  end
-  if marker_pos then
-    return text:sub(1, marker_pos - 1), marker, text:sub(marker_pos + 1)
+  local parsed = fuzzy_searcher.modifiers.parse(text)
+  if parsed.marker_first then
+    return text:sub(1, parsed.marker_first - 1), parsed.mode, text:sub(parsed.marker_last + 1)
   end
   return text, "", ""
 end
@@ -1216,7 +1219,7 @@ function fuzzy_searcher.prompt_mode(text)
 end
 
 local function prompt_uses_file_index(text)
-  return fuzzy_searcher.prompt_mode(text) == ""
+  return not fuzzy_searcher.modifiers.parse(text).commit and fuzzy_searcher.prompt_mode(text) == ""
 end
 
 function fuzzy_searcher.prompt_query_start(text)
@@ -2031,6 +2034,53 @@ local function grep_accept_range(result)
   return line, result.col or 1
 end
 
+function fuzzy_searcher.compile_grep(grep)
+  local exact = quoted_exact_query(grep)
+  local terms = parse_code_search_terms(grep)
+  if exact ~= nil or #terms <= 1 then
+    local query = exact or trim_query(grep)
+    return {
+      seed = query,
+      match = function(text)
+        local spans = literal_spans(text, query)
+        if #spans == 0 then return end
+        local score, _, _, _, boundary = fuzzy_match(query, text)
+        return {
+          exact = true, grep_query = query, content_spans = spans,
+          content_selection_span = spans[1], content_match_start = spans[1][1],
+          fuzzy_score = score or 0, boundary_score = boundary or 0,
+        }
+      end,
+    }
+  end
+  local fuzzy_query = terms_fuzzy_query(terms)
+  return {
+    seed = seed_for_tokens(terms_to_legacy_tokens(terms)),
+    match = function(text)
+      local lower = text:lower()
+      local spans = exact_term_spans(lower, terms)
+      if not spans then return end
+      for _, term in ipairs(terms) do
+        if not term.exact and not lower:find(term.text, 1, true) then return end
+      end
+      local score, fuzzy_spans, selection, start, boundary = 0, {}, nil, nil, 0
+      if fuzzy_query ~= "" then
+        score, fuzzy_spans, selection, start, boundary = fuzzy_match(fuzzy_query, text)
+        if not score then return end
+      end
+      for _, span in ipairs(fuzzy_spans) do spans[#spans + 1] = span end
+      local selection_span, match_start = single_span_or_leftmost(spans)
+      if fuzzy_query ~= "" and selection and #spans == 1 then selection_span = selection end
+      return {
+        exact = false, grep_query = grep, fuzzy_query = fuzzy_query,
+        fuzzy_score = score + #spans * 4, boundary_score = boundary or 0,
+        content_spans = spans, content_selection_span = selection_span,
+        content_match_start = match_start or start,
+      }
+    end,
+  }
+end
+
 local function color_with_alpha(color, alpha)
   color = color or style.accent
   return { color[1] or 255, color[2] or 255, color[3] or 255, alpha or color[4] or 255 }
@@ -2400,6 +2450,7 @@ end
 
 function fuzzy_searcher.file_metadata_parts(r)
   local file_metadata = require "plugins.file_metadata"
+  if r.revision then return file_metadata.parts { type = "file", size = r.file_size } end
   local path = fullpath(r.abs_path or r.file or r.path)
   local last_edited, last_viewed = file_metadata.recent_times(path)
   local git = require("plugins.file_git_status"):lookup(path, r.is_folder)
@@ -2661,7 +2712,7 @@ local function project_path_prefix_color(role)
   return style.project_path_external
 end
 
-draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, prefix_span, root_role, show_file_icon, git_kind)
+draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, prefix_span, root_role, show_file_icon, git_kind, historical)
   file = tostring(file or "")
   spans = spans or {}
   prefix = prefix or ""
@@ -2682,7 +2733,8 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, 
   local prefix_color = style.dim
   local dir_color = style.dim
   local suffix_color = style.dim
-  local name_color = path_tree.git_text_color(git_kind or fuzzy_searcher.git_kind_for_file(file)) or style.text
+  local name_color = not historical
+    and path_tree.git_text_color(git_kind or fuzzy_searcher.git_kind_for_file(file)) or style.text
   local line_h = font:get_height()
   local name_y = y + math.max(0, math.floor((line_h - file_font:get_height()) / 2))
   local path_y = y + math.max(0, math.floor((line_h - path_font:get_height()) / 2))
@@ -2798,7 +2850,7 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
     local _end_x
     _end_x, line_x = draw_file_result_row(
       font, result.file or "", result.file_spans, prefix, x, y, file_width,
-      line_suffix, result.prefix_span, result.root_role, true
+      line_suffix, result.prefix_span, result.root_role, true, nil, result.revision
     )
   end
   local context_x = x + file_width + context_gap
@@ -2983,6 +3035,7 @@ local function probe_everything(view)
       core.log_quiet("Fuzzy Everything: probe %s%s", ok and "available" or "unavailable", err and (" — " .. tostring(err)) or "")
       if view and active_view == view
           and (view:is_path_search() or view.include_ignored) then
+        if view.query_modifiers and view.query_modifiers.active then view.force_refresh = true end
         view.dirty = true
         view:schedule_update(true)
       end
@@ -3451,18 +3504,33 @@ function FSView:new(prefix, opts)
   local default_input_draw_line_text = self.input.textview.draw_line_text
   function self.input.textview:draw_line_text(line, x, y)
     local text = self.buffer.lines[line] or ""
-    local before, mode_marker, after = fuzzy_searcher.split_prompt_mode_marker(text)
-    if mode_marker == "" or self.subparent.password then
+    local parsed = fuzzy_searcher.modifiers.parse(text)
+    local picker = self.subparent.parent
+    if self.subparent.password or picker.file_picker or picker.static_mode then
       return default_input_draw_line_text(self, line, x, y)
     end
-
+    local spans = {}
+    for _, token in ipairs(parsed.tokens) do
+      if token.valid or token.error then
+        spans[#spans + 1] = { token.first, token.last,
+          token.error and style.error or style.fuzzy_searcher_modifier }
+      end
+    end
+    if parsed.marker_first then
+      spans[#spans + 1] = { parsed.marker_first, parsed.marker_last, style.dim }
+    end
+    if #spans == 0 then return default_input_draw_line_text(self, line, x, y) end
+    table.sort(spans, function(a, b) return a[1] < b[1] end)
     local font = self:get_font()
     local ty = y + self:get_line_text_y_offset()
     local normal_color = style.syntax["normal"] or style.text
-    local cx = x
-    if before ~= "" then cx = renderer.draw_text(font, before, cx, ty, normal_color) end
-    cx = renderer.draw_text(font, mode_marker, cx, ty, style.dim)
-    renderer.draw_text(font, after, cx, ty, normal_color)
+    local cx, first = x, 1
+    for _, span in ipairs(spans) do
+      cx = renderer.draw_text(font, text:sub(first, span[1] - 1), cx, ty, normal_color)
+      cx = renderer.draw_text(font, text:sub(span[1], span[2]), cx, ty, span[3])
+      first = span[2] + 1
+    end
+    renderer.draw_text(font, text:sub(first), cx, ty, normal_color)
     return self:get_line_height()
   end
   local cursor_col = #(prefix or "") + 1
@@ -3745,8 +3813,13 @@ function FSView:fill_prompt_from_selected()
   local text = fuzzy_searcher.result_main_text(result)
   if not text then return false end
 
-  local before, marker = fuzzy_searcher.split_prompt_mode_marker(self.input:get_text())
+  local original = self.input:get_text()
+  local parsed = fuzzy_searcher.modifiers.parse(original)
+  local before, marker = fuzzy_searcher.split_prompt_mode_marker(parsed.text)
   local prefix = marker ~= "" and (before .. marker) or ""
+  local tokens = {}
+  for _, token in ipairs(parsed.tokens) do tokens[#tokens + 1] = original:sub(token.first, token.last) end
+  if #tokens > 0 then prefix = table.concat(tokens, " ") .. " " .. prefix end
   local prompt = prefix .. text
   self.input:set_text(prompt, false)
   self.input.textview.buffer:set_selection(1, #prefix + 1, 1, #prompt + 1)
@@ -3890,6 +3963,7 @@ function FSView:preview_contains(x, y)
 end
 
 function FSView:clear_preview_view()
+  if self.preview_git_job then self.preview_git_job:cancel(); self.preview_git_job = nil end
   if self:is_preview_focused() then
     self:set_preview_interactive(false)
   end
@@ -3989,14 +4063,55 @@ local function draw_view_in_rect(view, x, y, w, h, result)
   renderer.set_clip_rect(rx, ry, rw, rh)
 end
 
+function FSView:prepare_historical_preview(result)
+  local historical = require "plugins.git.historical_buffer"
+  local key = historical.key(result.repo, result.revision, result.revision_path)
+  if self.preview_key ~= key then
+    self:clear_preview_view()
+    self.preview_key = key
+    local reason
+    if result.file_size > fuzzy_searcher.preview_text_max_bytes then reason = "File is too large to preview"
+    elseif ImageView.is_supported(result.file) or binary_preview_extensions[file_extension(result.file)] then
+      reason = "Historical binary preview is not available"
+    end
+    self.preview_blocked = { reason = reason or "Loading historical text…", path = result.file }
+    if reason then return end
+    self.preview_git_job = require("plugins.git.backend").file_at(
+      result.repo, result.revision, result.revision_path,
+      { max_output = fuzzy_searcher.preview_text_max_bytes, env = { GIT_NO_LAZY_FETCH = "1" } }, function(text, err)
+        if self.preview_key ~= key or self.closing or self.closed then return end
+        self.preview_git_job = nil
+        local buffer
+        if text then buffer, err = historical.create_preview_buffer(result.repo, result.revision, result.revision_path, text) end
+        if buffer then
+          buffer.disable_language_services = true
+          buffer.disable_treesitter = true
+          buffer.disable_gitdiff_highlight = true
+          self.preview_view = PreviewTextView(buffer)
+          self.preview_view:set_wrapping_enabled(false)
+          self.preview_blocked = nil
+        else
+          self.preview_blocked = { reason = err and err.message or "Cannot load historical text", path = result.file }
+          core.log_quiet("Commit Search preview failed: %s", self.preview_blocked.reason)
+        end
+        self:schedule_update(true)
+      end
+    )
+  end
+  return self.preview_view
+end
+
 function FSView:update_preview_view()
   local r = self:selected_result()
-  if not r or not r.file then self:clear_preview_view(); return nil end
+  if not r or not r.file or r.is_folder then self:clear_preview_view(); return nil end
 
-  local path = fullpath(r)
+  local path = r.revision and r.revision_path or fullpath(r)
   local key = path
   local view
-  if ImageView.is_supported(path) then
+  if r.revision then
+    view = self:prepare_historical_preview(r)
+    if not view then return nil end
+  elseif ImageView.is_supported(path) then
     key = "image:" .. path
   else
     local blocked, reason = detect_binary_preview(path)
@@ -4012,7 +4127,7 @@ function FSView:update_preview_view()
     key = "text:" .. path
   end
 
-  if self.preview_key ~= key then
+  if not r.revision and self.preview_key ~= key then
     self:clear_preview_view()
     if key:sub(1, 6) == "image:" then
       view = ImageView(path, "fit")
@@ -5314,6 +5429,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
   end
   local exact_results = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
   local fuzzy_query = terms_fuzzy_query(terms)
+  local matcher = fuzzy_searcher.compile_grep(grep)
   local initial_settle_seconds = 0.10
   local initial_settle_visible_multiplier = 2
 
@@ -5386,27 +5502,9 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       local key = tostring(source.abs_path or source.file) .. ":" .. tostring(source.line)
       if candidate_seen[key] then return end
 
-      local low = (source.text or ""):lower()
-      local spans = exact_term_spans(low, terms)
-      if not spans then return end
-      for _, term in ipairs(terms) do
-        if not term.exact and not low:find(term.text, 1, true) then return end
-      end
-
-      local score, fuzzy_spans, fuzzy_selection_span, fuzzy_match_start, boundary_score = 0, {}, nil, nil, 0
-      if fuzzy_query ~= "" then
-        score, fuzzy_spans, fuzzy_selection_span, fuzzy_match_start, boundary_score = fuzzy_match(fuzzy_query, source.text)
-        if not score then return end
-      end
-      for _, span in ipairs(fuzzy_spans or {}) do spans[#spans+1] = span end
-      score = score + (#spans * 4)
-      local content_selection_span, content_match_start = single_span_or_leftmost(spans)
-      if fuzzy_query ~= "" and fuzzy_selection_span and #(spans or {}) == 1 then
-        content_selection_span = fuzzy_selection_span
-      end
-      content_match_start = content_match_start or fuzzy_match_start
-
-      local r = {
+      local match = matcher.match(source.text or "")
+      if not match then return end
+      local r = common.merge(match, {
         kind = "grep",
         file = source.file,
         abs_path = source.abs_path,
@@ -5421,13 +5519,8 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         exact = exact_results,
         grep_query = grep,
         fuzzy_query = fuzzy_query,
-        fuzzy_score = score,
-        boundary_score = boundary_score,
-        content_spans = spans or {},
-        content_selection_span = content_selection_span,
-        content_match_start = content_match_start,
         base_query = base_query,
-      }
+      })
       local current_scope_meta = scope_plan and scope_plan.meta or scope_meta
       local scope_key = source.abs_path and common.path_compare_key(source.abs_path)
       local path_info = scope_key and current_scope_meta and current_scope_meta.by_path
@@ -6218,6 +6311,71 @@ function FSView:set_static_results(results, status)
   self:schedule_update(true)
 end
 
+function FSView:start_modifier_search(base, line, col, grep, reset_selection)
+  if self.modifier_job then self.modifier_job:cancel() end
+  if self.open_revision_job then self.open_revision_job:cancel(); self.open_revision_job = nil end
+  self.revision_open_token = nil
+  kill_file_search()
+  kill_grep()
+  kill_fuzzy_grep_jobs()
+  fuzzy_searcher.cancel_symbol_search()
+  if self.path_search_query_key then self:clear_path_search_results(true) end
+  local path_plan = not self.query_modifiers.commit and path_search.plan(base, {
+    include_ignored = self.include_ignored and not grep,
+  })
+  self.path_search_active = path_plan and path_plan.external == true
+  self:cancel_deferred_loading_feedback()
+  self:clear_preview_view()
+  if reset_selection then self.selected, self.viewport_offset = 1, 1 end
+  self.results, self.has_more = {}, false
+  self.status = self.query_modifiers.error or "Searching files…"
+  if self.query_modifiers.error then return end
+  if path_plan and path_plan.external and everything.state == "unknown" then probe_everything(self) end
+  if path_plan and not path_plan.external then base = path_plan.query end
+  if not self.query_modifiers.commit and not self.path_search_active then
+    sync_project_file_subscriptions(project_paths.search_roots())
+  end
+  self.modifier_metadata = self.modifier_metadata or {}
+  self.modifier_history = self.modifier_history or {}
+  local job
+  job = fuzzy_searcher.search.start({
+    base = base, line = line, col = col, grep = grep, options = self.query_modifiers,
+    include_ignored = self.include_ignored, metadata = self.modifier_metadata,
+    limit = grep and self:max_result_limit() or self:result_limit(),
+    matcher = grep and fuzzy_searcher.compile_grep(grep), rg = fuzzy_searcher.rg,
+    grep_less = fuzzy_searcher.grep_order.better,
+    grep_results = fuzzy_searcher.grep_order.results,
+    path_match_class = fuzzy_searcher.grep_order.path_match_class,
+    path_plan = path_plan, everything_endpoint = everything_endpoint(),
+    everything_available = everything.state == "available",
+    project = core.root_project().path, history = self.modifier_history,
+    refresh_files = not self.modifier_first_scan,
+  }, function(results, status, has_more)
+    if self.modifier_job ~= job or active_view ~= self or self.closing then return end
+    local selected = self:selected_result()
+    for _, result in ipairs(results) do
+      if result.kind == "path" then
+        result.size_label = not result.is_folder and format_size(result.file_size) or ""
+        result.modified_label = compact_age(result.file_modified)
+      end
+    end
+    self.results, self.status, self.has_more = results, status, has_more
+    if selected then
+      for i, result in ipairs(results) do
+        if result.file == selected.file and result.line == selected.line then self.selected = i; break end
+      end
+    end
+    if self.pending_select_index then
+      self.selected, self.pending_select_index = self.pending_select_index, nil
+    end
+    self.selected = common.clamp(self.selected, 1, math.max(1, #results))
+    self:ensure_selection_visible()
+    self:schedule_update(true)
+  end)
+  self.modifier_first_scan = true
+  self.modifier_job = job
+end
+
 function FSView:refresh(text)
   if self.static_mode then
     self:refresh_static()
@@ -6226,6 +6384,7 @@ function FSView:refresh(text)
     return
   end
   text = text or self.input:get_text()
+  self.query_modifiers = self.file_picker and { active = false } or fuzzy_searcher.modifiers.parse(text)
   local files_changed = self.last_files_generation ~= fuzzy_searcher.files_generation
   local files_scope_changed = self.last_files_scope_generation ~= fuzzy_searcher.files_scope_generation
   local base, line, col, grep, symbol
@@ -6235,10 +6394,12 @@ function FSView:refresh(text)
   else
     base, line, col, grep, symbol = parse_query(text)
   end
-  local query_key = table.concat({ base, tostring(line or ""), tostring(col or ""), tostring(grep or ""), tostring(symbol or "") }, "\0")
+  local query_key = table.concat({ text, base, tostring(line or ""), tostring(col or ""), tostring(grep or ""), tostring(symbol or "") }, "\0")
   local query_changed = query_key ~= self.current_query_key
 
   if query_changed then
+    if self.open_revision_job then self.open_revision_job:cancel(); self.open_revision_job = nil end
+    self.revision_open_token = nil
     self.current_query_key = query_key
     self:reset_pagination()
   end
@@ -6250,13 +6411,20 @@ function FSView:refresh(text)
   self.last_files_generation = fuzzy_searcher.files_generation
   self.last_files_scope_generation = fuzzy_searcher.files_scope_generation
 
-  if grep ~= nil then
+  if self.query_modifiers.active then
+    if files_changed or files_scope_changed then self.modifier_metadata = nil end
+    if query_changed or force_refresh or files_changed or files_scope_changed then
+      self:start_modifier_search(base, line, col, grep, query_changed)
+    end
+  elseif grep ~= nil then
+    if self.modifier_job then self.modifier_job:cancel(); self.modifier_job = nil end
     self.path_search_active = false
     if self.path_search_query_key then self:clear_path_search_results(true) end
     fuzzy_searcher.cancel_symbol_search()
     local scoped_index_changed = (base ~= "" or line ~= nil) and files_scope_changed
     if query_changed or force_refresh or scoped_index_changed then self:start_grep(base, line, grep) end
   elseif symbol ~= nil then
+    if self.modifier_job then self.modifier_job:cancel(); self.modifier_job = nil end
     self.path_search_active = false
     if self.path_search_query_key then self:clear_path_search_results(true) end
     if fuzzy_searcher.files_indexing
@@ -6269,6 +6437,7 @@ function FSView:refresh(text)
     kill_fuzzy_grep_jobs()
     if query_changed or force_refresh then self:start_symbol_search(symbol, query_changed, base) end
   else
+    if self.modifier_job then self.modifier_job:cancel(); self.modifier_job = nil end
     fuzzy_searcher.cancel_symbol_search()
     kill_grep()
     kill_fuzzy_grep_jobs()
@@ -6359,6 +6528,9 @@ function FSView:close(reason)
   self:record_prompt_history()
   self:cancel_deferred_loading_feedback()
   self:cancel_deferred_everything_loading()
+  if self.modifier_job then self.modifier_job:cancel(); self.modifier_job = nil end
+  if self.open_revision_job then self.open_revision_job:cancel(); self.open_revision_job = nil end
+  self.revision_open_token = nil
   kill_file_search()
   kill_grep()
   kill_fuzzy_grep_jobs()
@@ -6392,6 +6564,7 @@ end
 
 function FSView:can_toggle_ignored_files()
   if self.static_mode or self.file_picker then return false end
+  if self.query_modifiers and self.query_modifiers.commit then return false end
   local mode = fuzzy_searcher.prompt_mode(self.input and self.input:get_text() or "")
   return mode == "#" or (mode == "" and not self:is_path_search())
 end
@@ -6400,6 +6573,9 @@ function FSView:active_search_modifiers()
   local modifiers = {}
   if self.include_ignored and self:can_toggle_ignored_files() then
     modifiers[#modifiers + 1] = "Ignored files included"
+  end
+  if self.query_modifiers and self.query_modifiers.commit then
+    modifiers[#modifiers + 1] = "Commit " .. self.query_modifiers.commit:sub(1, 8) .. " — read-only"
   end
   return modifiers
 end
@@ -6432,7 +6608,7 @@ end
 
 function FSView:selected_file_path()
   local r = self:selected_result()
-  if not r then return end
+  if not r or r.revision then return end
 
   if r.file or r.abs_path then
     return common.normalize_path(fullpath(r))
@@ -6458,7 +6634,55 @@ function FSView:restore_activation_focus(new_group)
   ensure_input_focus(self, "alternate-activation")
 end
 
+function FSView:open_historical_result(result, new_group, restore)
+  if self.open_revision_job then self.open_revision_job:cancel() end
+  local token = {}
+  self.revision_open_token = token
+  self.status = "Opening historical text…"
+  local opened_view
+  self.open_revision_job = require("plugins.git.backend").file_at(
+    result.repo, result.revision, result.revision_path, { env = { GIT_NO_LAZY_FETCH = "1" } }, function(text, err)
+      if self.revision_open_token ~= token or self.closing or self.closed then return end
+      self.open_revision_job = nil
+      local historical = require "plugins.git.historical_buffer"
+      local buffer
+      if text then buffer, err = historical.create_buffer(result.repo, result.revision, result.revision_path, text) end
+      if not buffer then
+        self.status = err and err.message or "Cannot open historical text"
+        core.log_quiet("Commit Search open failed: %s", self.status)
+        self:schedule_update(true)
+        return
+      end
+      if not new_group then self:close() end
+      local view, open_error = panes.place(function() return historical.View(buffer) end, {
+        pane = self.source_pane, placement = new_group and "new" or "current", focus = true,
+      })
+      if not view then core.error("Cannot open Historical Buffer: %s", tostring(open_error)); return end
+      opened_view = view
+      local line, col, line2, col2 = result.line or 1, result.col or 1
+      if result.kind == "grep" then line, col, line2, col2 = grep_accept_range(result) end
+      view:with_selection_state(function()
+        if restore and restore.selections then
+          buffer:set_selection_list(restore.selections, restore.last_selection, { sanitized = true })
+        else
+          buffer:set_selection(line, col, line2 or line, col2 or col)
+        end
+      end)
+      if restore and restore.scroll then
+        view.scroll.x, view.scroll.y = restore.scroll.x, restore.scroll.y
+        view.scroll.to.x, view.scroll.to.y = restore.scroll.x, restore.scroll.y
+      else
+        view:scroll_to_line(line, false, true)
+        view:scroll_to_make_visible(line, col, true, { line2 = line2, col2 = col2, vertical = false })
+      end
+      self:restore_activation_focus(new_group)
+    end
+  )
+  return opened_view
+end
+
 function FSView:open_file_result(r, new_group, restore)
+  if r.revision then return self:open_historical_result(r, new_group, restore) end
   local path = fullpath(r)
   local file_open = fuzzy_searcher._perf_file_open_begin(path, "fuzzy_searcher")
   local line, col, line2, col2 = r.line or 1, r.col or 1, nil, nil
@@ -6923,7 +7147,7 @@ function FSView:draw_open_content()
       elseif idx == self.hovered_result then
         renderer.draw_rect(x, yy, list_w, lh, style.fuzzy_searcher_result_hover_background)
       end
-      if r.kind == "file" or (r.kind == "path" and r.file) then
+      if not r.revision and (r.kind == "file" or (r.kind == "path" and r.file)) then
         local path = fullpath(r)
         local marker = path and pane_markers[common.path_compare_key(path)]
         if marker then
@@ -6952,7 +7176,7 @@ function FSView:draw_open_content()
           font, r, x + pad, row_y, row_text_w, metadata_rows[idx], metadata_columns)
         draw_file_result_row(
           font, r.file or r.label, r.match_spans, "", x + pad, row_y,
-          file_text_w, nil, r.prefix_span, r.root_role, true
+          file_text_w, nil, r.prefix_span, r.root_role, true, nil, r.revision
         )
       elseif r.kind == "folder" then
         previous_rendered_grep_file = nil

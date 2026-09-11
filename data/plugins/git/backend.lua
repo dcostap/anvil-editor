@@ -811,6 +811,7 @@ function backend.run_git(repo, args, opts, callback)
       stdin = process.REDIRECT_DISCARD,
       stdout = process.REDIRECT_PIPE,
       stderr = process.REDIRECT_PIPE,
+      env = opts.env,
     })
     if not proc then
       callback_once(job, callback, nil, {

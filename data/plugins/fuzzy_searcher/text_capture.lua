@@ -77,6 +77,7 @@ local function result_text(result, support)
     add_part(parts, main)
     add_part(parts, result.detail or result.info)
   end
+  if result.revision then add_part(parts, "commit:" .. result.revision) end
   return table.concat(parts, " — ")
 end
 
@@ -134,7 +135,7 @@ function M.build(view, support)
       "%s%d. %s", marker, index, result_text(result, support)
     )
     if index == view.selected then selected_capture_line = #lines end
-    if not result.header and (result.kind == "file" or result.kind == "grep"
+    if not result.header and not result.revision and (result.kind == "file" or result.kind == "grep"
         or result.kind == "symbol" or (result.kind == "path" and not result.is_folder)) then
       local path = result.abs_path or result.file or result.path
       if path or result.buffer then

@@ -200,6 +200,7 @@ style.search_selection_secondary_outline = c("777777")
 style.search_overview = c("4674b5")
 style.search_overview_secondary = c("4c7945")
 style.fuzzy_searcher_match = c("000000")
+style.fuzzy_searcher_modifier = style.accent
 style.fuzzy_searcher_match_background = { 186, 151, 82, 230 }
 style.fuzzy_searcher_recent_project_icon = c("ac88bf")
 style.selectionhighlight = c("274324")

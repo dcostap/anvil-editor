@@ -94,7 +94,7 @@ function modifiers.parse(text)
   end
   chunks[#chunks + 1] = text:sub(first)
   masked[#masked + 1] = text:sub(first)
-  result.text = table.concat(chunks):gsub("^%s+", ""):gsub("%s+$", "")
+  result.text = result.active and table.concat(chunks):gsub("^%s+", ""):gsub("%s+$", "") or text
   result.marker_first, result.marker_last, result.mode = mode_marker(table.concat(masked))
   if result.active and (result.mode == "$" or result.mode == "$$"
     or result.mode == "!" or result.mode == ">") then

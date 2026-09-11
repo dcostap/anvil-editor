@@ -83,6 +83,8 @@ local function normalize_historical_text(text)
 end
 
 local function make_read_only(buffer)
+  buffer.read_only = true
+  buffer.read_only_reason = "Historical Buffers are read-only"
   buffer.git_historical_read_only = true
   buffer.apply_edits = reject_edit
   buffer.text_input = reject_edit
@@ -107,11 +109,8 @@ function historical.find(key)
   end
 end
 
-function historical.create_buffer(repo, rev, relpath, text)
+function historical.create_preview_buffer(repo, rev, relpath, text)
   local key = historical.key(repo, rev, relpath)
-  local existing = historical.find(key)
-  if existing then return existing, false end
-
   local normalized, text_err = normalize_historical_text(text)
   if not normalized then return nil, text_err end
 
@@ -128,8 +127,16 @@ function historical.create_buffer(repo, rev, relpath, text)
   buffer.git_historical_path = relpath
   buffer.git_historical_title = title
   make_read_only(buffer)
+  return buffer
+end
+
+function historical.create_buffer(repo, rev, relpath, text)
+  local existing = historical.find(historical.key(repo, rev, relpath))
+  if existing then return existing, false end
+  local buffer, err = historical.create_preview_buffer(repo, rev, relpath, text)
+  if not buffer then return nil, err end
   table.insert(core.buffers, buffer)
-  core.log_quiet("Opened Historical Buffer %s", title)
+  core.log_quiet("Opened Historical Buffer %s", buffer.git_historical_title)
   return buffer, true
 end
 
