@@ -7350,6 +7350,9 @@ local function open_link_resolution(resolution)
     return common.open_in_system(resolution.path)
   end
   local target_view = core.open_file(resolution.path, { line = resolution.line, col = 1 })
+  if target_view and resolution.subtarget_missing then
+    core.warn("Markdown link target not found in note: %s", tostring(resolution.target))
+  end
   return target_view ~= nil
 end
 
@@ -7397,6 +7400,13 @@ function live.open_link(view, opts)
   local resolution = opts.resolution or resolve_live_link(view, link)
   if resolution.status == "ambiguous" then
     return open_ambiguous_picker(view, link, resolution), resolution.status
+  end
+  if resolution.status == "missing" then
+    local offered, reason = live.create_link_target(view, { link = link, resolution = resolution }, true)
+    if not offered then
+      core.warn("Markdown link target not found: %s (%s)", tostring(link.path), tostring(reason))
+    end
+    return offered, reason
   end
   if resolution.status ~= "resolved" and resolution.status ~= "external" then
     core.log_quiet("Markdown link not opened: status=%s target=%s", resolution.status, tostring(resolution.target))
@@ -7452,12 +7462,16 @@ function live.remote_image_allowed(view, url)
   return remote_image_allowed(view, url, project)
 end
 
-function live.create_link_target(view)
-  local target = live.link_at_caret(view)
+function live.create_link_target(view, target, confirm)
+  target = target or live.link_at_caret(view)
   if not target then return false, "no link at caret" end
   local resolution = target.resolution
   if resolution.status ~= "missing" then return false, resolution.status end
   local link_path = (target.link.path or ""):match("^[^#?]*") or ""
+  local ext = extension(link_path)
+  if target.link.kind == "image" or (ext and not MARKDOWN_EXTENSIONS[ext]) then
+    return false, "not a note"
+  end
   if link_path == "" or common.is_absolute_path(link_path)
     or link_path:match("^[%a][%w+.-]*:")
   then
@@ -7477,15 +7491,40 @@ function live.create_link_target(view)
   if not normalized or not abs or not common.path_belongs_to(abs, index.root) then
     return false, "outside Project"
   end
-  local parent = common.dirname(abs)
-  local parent_info = system.get_file_info(parent)
-  if not (parent_info and parent_info.type == "dir") then
-    local ok, err = common.mkdirp(parent)
-    if not ok then return false, err end
+  local function create()
+    local info = system.get_file_info(abs)
+    if info and info.type ~= "file" then return false, "target is not a file" end
+    if not info then
+      local parent = common.dirname(abs)
+      local parent_info = system.get_file_info(parent)
+      if not (parent_info and parent_info.type == "dir") then
+        local ok, err = common.mkdirp(parent)
+        if not ok then return false, err end
+      end
+      local file, err = io.open(abs, "wb")
+      if not file then return false, err end
+      local closed, close_err = file:close()
+      if not closed then return false, close_err end
+      core.log_quiet("Markdown link created note: %s", abs)
+      index:update_path(abs)
+    end
+    record_navigation_origin()
+    core.open_file(abs)
+    if target.link.subtarget then
+      core.warn("Markdown link target not found in note: %s", tostring(target.link.raw_target))
+    end
+    return true, abs
   end
-  record_navigation_origin()
-  core.open_file(abs)
-  return true, abs
+  if not confirm then return create() end
+  core.nag_view:show("Create Markdown Note", "Create note?\n" .. abs, {
+    { text = "Create Note", default_yes = true },
+    { text = "Cancel", default_no = true },
+  }, function(item)
+    if item.text ~= "Create Note" then return end
+    local ok, err = create()
+    if not ok then core.error("Could not create Markdown note: %s", tostring(err)) end
+  end)
+  return true, "confirmation"
 end
 
 function live.is_source_mode(view)
