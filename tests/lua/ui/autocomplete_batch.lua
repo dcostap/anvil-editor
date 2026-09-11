@@ -151,6 +151,35 @@ test.describe("autocomplete batch behavior", function()
     for _, path in ipairs(context.temp_files or {}) do os.remove(path) end
   end)
 
+  test.it("Markdown prose completes document words without Project headings", function(context)
+    local root, path = seed_odin_project_symbol(context, "prose.md")
+    config.plugins.autocomplete.suggestions_scope = "global"
+    local symbol = symbol_index.status(root).symbols[1]
+    symbol.name, symbol.text = "zqxprojectheading", "zqxprojectheading"
+    symbol.kind, symbol.language_id = "heading", "markdown"
+    symbol.parent_name = nil
+    open_editor(context, "zqxoutsideword")
+    write_file(path, "zqxlocalword\n\n")
+    local view, buffer = open_file_editor(context, path)
+    test.ok(wait_treesitter_ready(buffer), "Markdown parser should become ready")
+    set_view_selections(view, { 3, 1, 3, 1 })
+    coroutine.yield(1.1)
+    core.set_active_view(view)
+    core.root_panel:on_text_input("zqx")
+    local deadline = system.get_time() + 3
+    repeat
+      coroutine.yield(0.01)
+      core.set_active_view(view)
+      view:with_selection_state(function() autocomplete.trigger() end)
+    until autocomplete.is_open() or system.get_time() >= deadline
+    test.ok(autocomplete.is_open(), "document words should remain available")
+    local first = autocomplete.get_selected_suggestion().text
+    repeat
+      test.equal(autocomplete.get_selected_suggestion().text, "zqxlocalword")
+      command.perform("autocomplete:next")
+    until autocomplete.get_selected_suggestion().text == first
+  end)
+
   test.it("typing over many overlapping selected ranges should not be rejected into autocomplete-only state", function(context)
     local line = string.rep("alpha", 20)
     local selections = {}

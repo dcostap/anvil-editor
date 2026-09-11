@@ -1204,6 +1204,8 @@ function update_suggestions()
 
   -- Append the global, local or related text symbols if applicable
   local scope = config.plugins.autocomplete.suggestions_scope
+  local markdown = require("core.markdown.live_render").is_markdown_buffer(buffer)
+  if markdown then scope = "local" end
 
   if not lsp_available and force_basic_suggestions then
     local function source_location_fields(symbol, source_buffer)
@@ -1252,7 +1254,8 @@ function update_suggestions()
       end
     end
 
-    local locals = tree_sitter_locals_module()
+    -- Markdown headings belong in link completion, not prose completion.
+    local locals = not markdown and tree_sitter_locals_module()
     local symbols, visible_symbols = nil, false
     if locals and locals.get_visible_buffer_symbols then
       local _, line1, col1, line2, col2 = autocomplete.get_partial_symbol()
@@ -1309,7 +1312,7 @@ function update_suggestions()
     add_cache_symbols(text_symbols)
 
     local symbol_index = tree_sitter_symbol_index_module()
-    local project_language_ids = project_completion_language_ids(buffer)
+    local project_language_ids = not markdown and project_completion_language_ids(buffer)
     if symbol_index and project_language_ids then
       local function project_item(symbol)
         local name = symbol.name
