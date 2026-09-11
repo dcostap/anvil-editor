@@ -58,7 +58,7 @@ function TextView:draw_overlay(...)
   return result
 end
 
-function M.draw_floating(view)
+function M.floating_rect(view)
   local preview = previews[view]
   if not (preview and preview.floating) then return end
   preview.layout()
@@ -74,6 +74,13 @@ function M.draw_floating(view)
   if y + height > view.position.y + view.size.y - padding_y then
     y = math.max(view.position.y + padding_y, anchor.top - height - padding_y)
   end
+  return x, y, width, height
+end
+
+function M.draw_floating(view)
+  local x, y, width, height = M.floating_rect(view)
+  if not x then return end
+  local preview = previews[view]
   core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
   local row_y = y
   for _, row in ipairs(preview.rows) do
@@ -83,6 +90,28 @@ function M.draw_floating(view)
   end
   draw_frame(x, y, width, height)
   core.pop_clip_rect()
+end
+
+function M.contains_floating(view, x, y, include_gap)
+  local left, top, width, height = M.floating_rect(view)
+  if not left then return false end
+  local bottom = top + height
+  if include_gap then
+    local anchor = previews[view].floating
+    if top >= anchor.bottom then top = anchor.bottom
+    elseif bottom <= anchor.top then bottom = anchor.top end
+  end
+  return x >= left and x <= left + width and y >= top and y <= bottom
+end
+
+function M.scroll_floating(view, y, x)
+  local preview = previews[view]
+  if not (preview and preview.floating) then return false end
+  preview.layout()
+  if preview.content and preview.content.on_mouse_wheel then
+    preview.content:on_mouse_wheel(y, x)
+  end
+  return true
 end
 
 function M.for_view(view)

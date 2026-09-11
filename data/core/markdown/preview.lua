@@ -3,6 +3,7 @@ local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local TextView = require "core.textview"
 local common = require "core.common"
+local config = require "core.config"
 local style = require "core.style"
 local live = require "core.markdown.live_render"
 local model = require "core.markdown.model"
@@ -19,6 +20,7 @@ function Preview:new(path, text, line)
   buffer.read_only = true
   TextView.new(self, buffer)
   self.target_line = common.clamp(line, 1, #buffer.lines)
+  self.scroll_offset, self.max_scroll = 0, 0
   self.show_current_line_highlight = false
   self:set_wrapping_enabled(true)
   live.attach(self)
@@ -41,9 +43,20 @@ function Preview:layout(width, max_height)
   local first = self:get_visual_row(self.target_line, 1)
   local top = self:get_visual_row_y_offset(first)
   local bottom = self:get_visual_row_y_offset(self:get_scrollable_line_count() + 1)
-  self.scroll.y = top + style.padding.y
+  local height = math.min(max_height, math.max(self:get_line_height(), bottom - top))
+  self.max_scroll = math.max(0, bottom - top - height)
+  self.scroll_offset = common.clamp(self.scroll_offset, 0, self.max_scroll)
+  self.scroll.y = top + style.padding.y + self.scroll_offset
   self.scroll.to.y = self.scroll.y
-  return math.min(max_height, math.max(self:get_line_height(), bottom - top))
+  return height
+end
+
+function Preview:on_mouse_wheel(y)
+  local offset = common.clamp(self.scroll_offset - y * config.mouse_wheel_scroll, 0, self.max_scroll)
+  self.scroll.y = self.scroll.y + offset - self.scroll_offset
+  self.scroll.to.y, self.scroll_offset = self.scroll.y, offset
+  core.redraw = true
+  return true
 end
 
 function Preview:draw(x, y, width, height)

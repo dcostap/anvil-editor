@@ -14,6 +14,20 @@ local function write_file(path, text)
   file:close()
 end
 
+local function rendered_card(view)
+  local text = {}
+  local old_text, old_rect, old_clip = renderer.draw_text, renderer.draw_rect, renderer.set_clip_rect
+  renderer.draw_text = function(font, value, x, y, color, opts)
+    text[#text + 1] = value
+    return x + font:get_width(value, opts)
+  end
+  renderer.draw_rect, renderer.set_clip_rect = function() end, function() end
+  local ok, err = pcall(preview.draw_floating, view)
+  renderer.draw_text, renderer.draw_rect, renderer.set_clip_rect = old_text, old_rect, old_clip
+  if not ok then error(err, 0) end
+  return table.concat(text, "\n")
+end
+
 test.describe("Markdown link hover previews", function()
   test.before_each(function(c)
     c.projects, c.active_view = core.projects, core.active_view
@@ -110,5 +124,53 @@ test.describe("Markdown link hover previews", function()
     test.equal(preview.for_view(c.view), inline)
     c.view:on_mouse_left()
     test.equal(preview.for_view(c.view), inline)
+  end)
+
+  test.it("keeps the card open while the pointer crosses the gap and enters it", function(c)
+    c.view:on_mouse_moved(c.x, c.y, 0, 0)
+    c.now = c.now + config.markdown_link_hover_delay * 2
+    c.view:update()
+    local card = test.not_nil(preview.for_view(c.view))
+    local x, y, width = preview.floating_rect(c.view)
+    local padding = require("core.style").padding.y
+    c.view:on_mouse_moved(x + width / 2, y - padding / 2, 0, 0)
+    test.equal(preview.for_view(c.view), card, "crossing the gap closed the card")
+    c.view:on_mouse_moved(x + width / 2, y + padding, 0, 0)
+    test.equal(preview.for_view(c.view), card, "entering the card closed it")
+    c.view:on_mouse_moved(0, c.view.size.y, 0, 0)
+    test.equal(preview.for_view(c.view), nil)
+  end)
+
+  test.it("scrolls the card to its bounds without scrolling the source", function(c)
+    write_file(c.root .. PATHSEP .. "Target.md", "# Target\n\nFirst entry\n"
+      .. string.rep("Another entry in the note.\n", 50) .. "\nEnd of note\n")
+    c.view:on_mouse_moved(c.x, c.y, 0, 0)
+    c.now = c.now + config.markdown_link_hover_delay * 2
+    c.view:update()
+    local card = test.not_nil(preview.for_view(c.view))
+    local deadline = c.clock() + 5
+    local before
+    repeat
+      local pool = worker_pool.current_system()
+      if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+      before = rendered_card(c.view)
+      if before:find("First entry", 1, true) then break end
+      system.sleep(0.001)
+    until c.clock() >= deadline
+    test.contains(before, "First entry")
+    local x, y, width = preview.floating_rect(c.view)
+    c.view:on_mouse_moved(x + width / 2, y + 10, 0, 0)
+    local source_scroll = c.view.scroll.y
+    test.ok(c.view:on_mouse_wheel(-10000, 0), "card should consume the wheel event")
+    test.equal(preview.for_view(c.view), card)
+    local bottom = rendered_card(c.view)
+    test.contains(bottom, "End of note")
+    test.equal(bottom:find("First entry", 1, true), nil)
+    c.view:on_mouse_wheel(-10000, 0)
+    test.equal(rendered_card(c.view), bottom)
+    c.view:on_mouse_wheel(10000, 0)
+    test.equal(rendered_card(c.view), before)
+    test.equal(c.view.scroll.y, source_scroll)
+    test.equal(c.view.scroll.to.y, source_scroll)
   end)
 end)
