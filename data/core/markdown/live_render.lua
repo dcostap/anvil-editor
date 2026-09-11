@@ -5170,11 +5170,7 @@ function poi_provider:points_of_interest(view)
           semantic_id = node.id,
           link = link,
           preview = function(owner, point)
-            local resolution = resolve_live_link(owner, point.link)
-            if resolution.status ~= "resolved" or not resolution.path then return false end
-            return require("core.poi_preview").location(owner, {
-              line = point.line, path = resolution.path, target_line = resolution.line or 1,
-            })
+            return live.preview_link(owner, point.link, { line = point.line })
           end,
           activate = function(owner, point)
             return live.open_link(owner, {
@@ -7332,6 +7328,14 @@ function live.link_at_caret(view)
   if not best then return nil end
   return { line = line, col1 = best.col1, col2 = best.col2, link = best.link,
     resolution = resolve_live_link(view, best.link) }
+end
+
+function live.preview_link(view, link, options)
+  local resolution = resolve_live_link(view, link)
+  if resolution.status ~= "resolved" or not resolution.path then return false end
+  return require("core.poi_preview").location(view, {
+    line = options.line, path = resolution.path, target_line = resolution.line or 1,
+  }, options)
 end
 
 local function record_navigation_origin()

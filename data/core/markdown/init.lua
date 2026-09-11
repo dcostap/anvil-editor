@@ -2,6 +2,7 @@ local image_overlay = require "core.markdown.image_overlay"
 local live_render = require "core.markdown.live_render"
 image_overlay.install()
 live_render.install()
+require("core.markdown.hover_preview").install()
 
 return {
   parser = require "core.markdown.parser",
