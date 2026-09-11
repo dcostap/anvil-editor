@@ -5170,7 +5170,7 @@ function poi_provider:points_of_interest(view)
           semantic_id = node.id,
           link = link,
           preview = function(owner, point)
-            return live.preview_link(owner, point.link, { line = point.line })
+            return live.preview_link(owner, point.link, point.line)
           end,
           activate = function(owner, point)
             return live.open_link(owner, {
@@ -7330,7 +7330,7 @@ function live.link_at_caret(view)
     resolution = resolve_live_link(view, best.link) }
 end
 
-function live.preview_link(view, link, options)
+function live.preview_link(view, link, source_line)
   local owner = view.__markdown_live_owner
   local index = owner and owner.link_index
   local resolution = index and index:resolve_preview(link, view.buffer.abs_filename)
@@ -7340,10 +7340,9 @@ function live.preview_link(view, link, options)
     core.log_quiet("Markdown preview skipped missing target: %s (%s)", link.raw_target, resolution.reason)
     return false, "missing"
   end
-  if options.note_only and resolution.kind ~= "note" then return false end
   return require("core.poi_preview").location(view, {
-    line = options.line, path = resolution.path, target_line = resolution.line or 1,
-  }, options)
+    line = source_line, path = resolution.path, target_line = resolution.line or 1,
+  })
 end
 
 local function record_navigation_origin()

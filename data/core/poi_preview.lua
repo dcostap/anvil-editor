@@ -35,12 +35,6 @@ function TextView:draw_overlay(...)
   local result = draw_overlay(self, ...)
   local preview = previews[self]
   if not preview then return result end
-  if preview.floating then
-    core.root_panel:defer_draw_above_caret(function()
-      if previews[self] == preview then M.draw_floating(self) end
-    end)
-    return result
-  end
   -- Draw after all text rows so adjacent line backgrounds cannot erase the shadow.
   for entry in self:iter_visible_visual_rows() do
     local row = entry.provider_row
@@ -56,62 +50,6 @@ function TextView:draw_overlay(...)
     end
   end
   return result
-end
-
-function M.floating_rect(view)
-  local preview = previews[view]
-  if not (preview and preview.floating) then return end
-  preview.layout()
-  local width, height = preview.width, 0
-  for _, row in ipairs(preview.rows) do
-    height = height + (row.height or style.font:get_height() + style.padding.y)
-  end
-  local padding_x, padding_y = style.padding.x, style.padding.y
-  local anchor = preview.floating
-  local x = common.clamp(anchor.x, view.position.x + padding_x,
-    math.max(view.position.x + padding_x, view.position.x + view.size.x - width - padding_x))
-  local y = anchor.bottom + padding_y
-  if y + height > view.position.y + view.size.y - padding_y then
-    y = math.max(view.position.y + padding_y, anchor.top - height - padding_y)
-  end
-  return x, y, width, height
-end
-
-function M.draw_floating(view)
-  local x, y, width, height = M.floating_rect(view)
-  if not x then return end
-  local preview = previews[view]
-  core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
-  local row_y = y
-  for _, row in ipairs(preview.rows) do
-    local row_height = row.height or style.font:get_height() + style.padding.y
-    row.draw(view, row, x, row_y, width, row_height)
-    row_y = row_y + row_height
-  end
-  draw_frame(x, y, width, height)
-  core.pop_clip_rect()
-end
-
-function M.contains_floating(view, x, y, include_gap)
-  local left, top, width, height = M.floating_rect(view)
-  if not left then return false end
-  local bottom = top + height
-  if include_gap then
-    local anchor = previews[view].floating
-    if top >= anchor.bottom then top = anchor.bottom
-    elseif bottom <= anchor.top then bottom = anchor.top end
-  end
-  return x >= left and x <= left + width and y >= top and y <= bottom
-end
-
-function M.scroll_floating(view, y, x)
-  local preview = previews[view]
-  if not (preview and preview.floating) then return false end
-  preview.layout()
-  if preview.content and preview.content.on_mouse_wheel then
-    preview.content:on_mouse_wheel(y, x)
-  end
-  return true
 end
 
 function M.for_view(view)
@@ -168,11 +106,10 @@ end
 
 -- All content shares the card frame and lifetime. Custom content supplies
 -- layout(width, max_height), draw(x, y, width, height), and on_close().
--- A floating anchor supplies x, top, and bottom in screen coordinates.
 function M.show(view, point, title, lines, options)
   M.dismiss(view)
   local preview = { line = point.line, title = title, lines = lines,
-    content = options and options.content, floating = options and options.floating }
+    content = options and options.content }
   previews[view] = preview
   local rows = options and options.code and {} or {
     { id = "title", title = true, text = title, draw = draw_row },
@@ -200,32 +137,26 @@ function M.show(view, point, title, lines, options)
     rows[#rows + 1] = { id = "content", content = preview.content, draw = draw_row }
   end
   preview.row_count = #rows
-  preview.rows = rows
   for index, row in ipairs(rows) do
     row.preview, row.index = preview, index
   end
   local function layout()
-    -- Measurement and drawing must use the same centered content width.
-    local card_width = view:get_presentation_viewport_width() - view:get_gutter_width()
-    if preview.floating then card_width = math.min(card_width, view.size.x - style.padding.x * 2) end
-    preview.width = math.max(1, card_width)
     if not preview.content then return 0 end
-    local width = math.max(1, preview.width - style.padding.x * 2)
+    -- Measurement and drawing must use the same centered content width.
+    local width = math.max(1,
+      view:get_presentation_viewport_width() - view:get_gutter_width() - style.padding.x * 2)
     local limit = math.max(view:get_line_height(), math.min(view.size.y / 2, view:get_line_height() * 12))
     local height = preview.content:layout(width, limit) + style.padding.y * 2
     rows[#rows].height = height
     return table.concat({ width, height, style.font:get_height() }, ":")
   end
-  preview.layout = layout
-  if not preview.floating then
-    view:add_visual_row_provider(provider_id, {
-      generation = layout,
-      visual_rows = function(_, _, line, placement)
-        if line == preview.line and placement == "after" then return rows end
-      end,
-    })
-  end
-  if preview.content and not preview.floating then
+  view:add_visual_row_provider(provider_id, {
+    generation = layout,
+    visual_rows = function(_, _, line, placement)
+      if line == preview.line and placement == "after" then return rows end
+    end,
+  })
+  if preview.content then
     view:add_visual_metric_provider(provider_id, {
       -- Card rows own their height, regardless of the source line's presentation.
       priority = 100,
@@ -266,7 +197,7 @@ function M.show(view, point, title, lines, options)
   return true
 end
 
-function M.location(view, point, options)
+function M.location(view, point)
   local target = point.target_buffer
   if not target and point.path then
     for _, buffer in ipairs(core.buffers) do
@@ -295,10 +226,10 @@ function M.location(view, point, options)
     end
     local title = common.basename(path or target:get_name())
     if not text or #text > 1024 * 1024 then
-      return M.show(view, point, title, { "Preview unavailable" }, options)
+      return M.show(view, point, title, { "Preview unavailable" })
     end
     local content = require("core.markdown.preview")(path or title, text:gsub("\r\n", "\n"), line)
-    return M.show(view, point, title, {}, { content = content, floating = options and options.floating })
+    return M.show(view, point, title, {}, { content = content })
   end
   local first, last = math.max(1, line - 3), line + 3
   local lines = {}
@@ -309,10 +240,10 @@ function M.location(view, point, options)
   elseif point.path then
     local info = system.get_file_info(point.path)
     if not info or info.type ~= "file" or info.size > 1024 * 1024 then
-      return M.show(view, point, point.path, { "Preview unavailable" }, options)
+      return M.show(view, point, point.path, { "Preview unavailable" })
     end
     local file = io.open(point.path, "rb")
-    if not file then return M.show(view, point, point.path, { "Preview unavailable" }, options) end
+    if not file then return M.show(view, point, point.path, { "Preview unavailable" }) end
     local index = 0
     for text in file:lines() do
       index = index + 1
@@ -325,7 +256,7 @@ function M.location(view, point, options)
   else
     return false
   end
-  return M.show(view, point, point.path or target:get_name(), lines, options)
+  return M.show(view, point, point.path or target:get_name(), lines)
 end
 
 command.add(function()

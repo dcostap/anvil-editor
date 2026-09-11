@@ -89,7 +89,6 @@ function RootPanel:new()
   RootPanel.super.new(self)
   self.mouse = { x = 0, y = 0 }
   self.deferred_draws = {}
-  self.deferred_caret_overlays = {}
   self.app_overlay = nil
   self.grab = nil
   self.overlapping_view = nil
@@ -194,18 +193,6 @@ end
 
 function RootPanel:defer_draw(fn, ...)
   table.insert(self.deferred_draws, 1, { fn = fn, ... })
-end
-
----Draw a floating overlay above the global keyboard caret.
-function RootPanel:defer_draw_above_caret(fn, ...)
-  table.insert(self.deferred_caret_overlays, 1, { fn = fn, ... })
-end
-
-local function draw_deferred(draws)
-  while #draws > 0 do
-    local item = table.remove(draws)
-    item.fn(table.unpack(item, 1, #item))
-  end
 end
 
 local function quintic_ease_out(progress)
@@ -758,12 +745,12 @@ function RootPanel:draw()
   if navigation_history then navigation_history.draw_feedback(self) end
   perf_end("rootpanel_overlays_draw", overlay_started, overlay_scope)
   local deferred_started, deferred_scope = perf_begin("rootpanel_deferred_draw")
-  draw_deferred(self.deferred_draws)
+  while #self.deferred_draws > 0 do
+    local item = table.remove(self.deferred_draws)
+    item.fn(table.unpack(item, 1, #item))
+  end
   perf_end("rootpanel_deferred_draw", deferred_started, deferred_scope)
   self:draw_keyboard_caret()
-  local caret_overlays_started, caret_overlays_scope = perf_begin("rootpanel_caret_overlays_draw")
-  draw_deferred(self.deferred_caret_overlays)
-  perf_end("rootpanel_caret_overlays_draw", caret_overlays_started, caret_overlays_scope)
   if core.cursor_change_req then
     system.set_cursor(core.cursor_change_req)
     core.cursor_change_req = nil

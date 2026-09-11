@@ -3,7 +3,6 @@ local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local TextView = require "core.textview"
 local common = require "core.common"
-local config = require "core.config"
 local style = require "core.style"
 local live = require "core.markdown.live_render"
 local model = require "core.markdown.model"
@@ -20,7 +19,6 @@ function Preview:new(path, text, line)
   buffer.read_only = true
   TextView.new(self, buffer)
   self.target_line = common.clamp(line, 1, #buffer.lines)
-  self.scroll_offset, self.max_scroll = 0, 0
   self.show_current_line_highlight = false
   self:set_wrapping_enabled(true)
   live.attach(self)
@@ -43,20 +41,9 @@ function Preview:layout(width, max_height)
   local first = self:get_visual_row(self.target_line, 1)
   local top = self:get_visual_row_y_offset(first)
   local bottom = self:get_visual_row_y_offset(self:get_scrollable_line_count() + 1)
-  local height = math.min(max_height, math.max(self:get_line_height(), bottom - top))
-  self.max_scroll = math.max(0, bottom - top - height)
-  self.scroll_offset = common.clamp(self.scroll_offset, 0, self.max_scroll)
-  self.scroll.y = top + style.padding.y + self.scroll_offset
+  self.scroll.y = top + style.padding.y
   self.scroll.to.y = self.scroll.y
-  return height
-end
-
-function Preview:on_mouse_wheel(y)
-  local offset = common.clamp(self.scroll_offset - y * config.mouse_wheel_scroll, 0, self.max_scroll)
-  self.scroll.y = self.scroll.y + offset - self.scroll_offset
-  self.scroll.to.y, self.scroll_offset = self.scroll.y, offset
-  core.redraw = true
-  return true
+  return math.min(max_height, math.max(self:get_line_height(), bottom - top))
 end
 
 function Preview:draw(x, y, width, height)
@@ -64,9 +51,9 @@ function Preview:draw(x, y, width, height)
   self.size.x, self.size.y = width, height
   if not self.ready then
     local instance = model.peek(self.buffer)
-    local message = instance and instance.status == "error"
-      and "Preview unavailable" or "Loading preview…"
-    renderer.draw_text(style.font, message, x, y, style.dim)
+    if instance and instance.status == "error" then
+      renderer.draw_text(style.font, "Preview unavailable", x, y, style.dim)
+    end
     return
   end
   core.push_clip_rect(x, y, width, height)
