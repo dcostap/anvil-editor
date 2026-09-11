@@ -99,6 +99,7 @@ test.describe("Fuzzy Searcher Commit Search", function()
       return preview and preview.buffer and table.concat(preview.buffer.lines) == "old needle\n"
     end), "expected the committed text in the preview")
     test.equal(picker.preview_view.buffer.git_historical_rev, context.revision)
+    test.equal(picker.preview_view.buffer.treesitter, nil)
   end)
 
   test.it("opens a matching Historical Buffer without changing working files", function(context)

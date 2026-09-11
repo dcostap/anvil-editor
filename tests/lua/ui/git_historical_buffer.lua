@@ -35,6 +35,17 @@ test.describe("Git Historical Buffer", function()
     test.equal(ok, false)
   end)
 
+  test.test("does not attach Tree-sitter to disabled preview buffers", function()
+    local buffer = historical.create_preview_buffer(
+      { root = "C:/repo" }, "preview123", "src/app.cpp", "return true\n", {
+        disable_language_services = true,
+        disable_treesitter = true,
+      }
+    )
+
+    test.equal(buffer.treesitter, nil)
+  end)
+
   test.test("normalizes CRLF historical blobs to Buffer line semantics", function()
     local buffer = historical.create_buffer({ root = "C:/repo" }, "crlf123", "src/crlf.lua", "one\r\ntwo\r\n")
     test.equal(buffer_text(buffer), "one\ntwo\n")

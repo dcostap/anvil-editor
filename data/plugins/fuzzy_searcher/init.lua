@@ -4082,10 +4082,15 @@ function FSView:prepare_historical_preview(result)
         if self.preview_key ~= key or self.closing or self.closed then return end
         self.preview_git_job = nil
         local buffer
-        if text then buffer, err = historical.create_preview_buffer(result.repo, result.revision, result.revision_path, text) end
+        if text then
+          buffer, err = historical.create_preview_buffer(
+            result.repo, result.revision, result.revision_path, text, {
+              disable_language_services = true,
+              disable_treesitter = true,
+            }
+          )
+        end
         if buffer then
-          buffer.disable_language_services = true
-          buffer.disable_treesitter = true
           buffer.disable_gitdiff_highlight = true
           self.preview_view = PreviewTextView(buffer)
           self.preview_view:set_wrapping_enabled(false)

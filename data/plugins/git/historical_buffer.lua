@@ -109,7 +109,8 @@ function historical.find(key)
   end
 end
 
-function historical.create_preview_buffer(repo, rev, relpath, text)
+function historical.create_preview_buffer(repo, rev, relpath, text, opts)
+  opts = opts or {}
   local key = historical.key(repo, rev, relpath)
   local normalized, text_err = normalize_historical_text(text)
   if not normalized then return nil, text_err end
@@ -117,6 +118,8 @@ function historical.create_preview_buffer(repo, rev, relpath, text)
   local title = string.format("%s @ %s", relpath, short_rev(rev))
   local buffer = Buffer(nil, nil, true)
   buffer.filename = relpath
+  buffer.disable_language_services = opts.disable_language_services == true
+  buffer.disable_treesitter = opts.disable_treesitter == true
   set_buffer_text(buffer, normalized)
   buffer:reset_syntax()
   buffer:clear_undo_redo()
