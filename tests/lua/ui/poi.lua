@@ -87,6 +87,27 @@ test.describe("Point of Interest navigation", function()
     test.same(view.buffer.selections, { 2, 3, 2, 3 })
   end)
 
+  test.it("uses extra mouse buttons for local POI navigation in a Diff View", function(context)
+    local view, err = diffview.open({
+      contents = {
+        diffview.content.text("one\ntwo\nthree\nfour"),
+        diffview.content.text("one\nTWO\nthree\nFOUR"),
+      },
+    }, true)
+    test.ok(view, err)
+    context.diffviews = { view }
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    core.set_active_view(view.buffer_view_b)
+    view.buffer_view_b.buffer:set_selection(1, 1)
+
+    core.on_event("mousepressed", "y", 0, 0, 1)
+    test.same({ view.buffer_view_b.buffer:get_selection() }, { 2, 1, 2, 1 })
+    core.on_event("mousepressed", "y", 0, 0, 1)
+    test.same({ view.buffer_view_b.buffer:get_selection() }, { 4, 1, 4, 1 })
+    core.on_event("mousepressed", "x", 0, 0, 1)
+    test.same({ view.buffer_view_b.buffer:get_selection() }, { 2, 1, 2, 1 })
+  end)
+
   test.it("keeps Git-change navigation available across a file save", function(context)
     local path = USERDIR .. PATHSEP .. "poi-save-" .. system.get_process_id() .. ".txt"
     context.temp_path = path
