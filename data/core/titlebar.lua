@@ -55,6 +55,10 @@ local function project_name()
   return "Anvil"
 end
 
+local function project_title_font()
+  return style.get_small_font(style.prose_font)
+end
+
 local function contains(rect, x, y)
   return rect and x >= rect.x and y >= rect.y and x < rect.x + rect.w and y < rect.y + rect.h
 end
@@ -292,8 +296,9 @@ function TitleBar:update_geometry()
     }
   end
 
+  local project_font = project_title_font()
   local project_width = math.min(220 * SCALE, math.ceil(
-    style.font:get_width(project_name()) + style.padding.x * 2 + TEXT_FIT_RESERVE
+    project_font:get_width(project_name()) + style.padding.x * 2 + TEXT_FIT_RESERVE
   ))
   self.project_rect = {
     x = self.position.x,
@@ -688,9 +693,10 @@ function TitleBar:draw()
   if self.size.y <= 0 then return end
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.titlebar)
   local font = style.font
+  local project_font = project_title_font()
   local pane_entries = self:get_pane_entries()
-  draw_centered_text(font,
-    fit_text(font, project_name(), math.max(0, self.project_rect.w - style.padding.x * 2)),
+  draw_centered_text(project_font,
+    fit_text(project_font, project_name(), math.max(0, self.project_rect.w - style.padding.x * 2)),
     self.project_rect, style.text)
   core.push_clip_rect(self.tab_lane.x, self.tab_lane.y, self.tab_lane.w, self.tab_lane.h)
   for i, entry in ipairs(pane_entries) do
