@@ -6808,9 +6808,9 @@ function FSView:draw()
   end)
 end
 
-function FSView:draw_status(font, x, y)
-  local status = self.status or ""
-  local label = self:search_status_label()
+function FSView:draw_status(font, x, y, max_width)
+  local status = truncate_text(font, self.status, max_width)
+  local label = status:match("^(Searching.-…)") or status:match("^(Indexing.-…)")
   if not label then
     renderer.draw_text(font, status, x, y, style.dim)
     return
@@ -6851,7 +6851,7 @@ function FSView:draw_open_content()
   local row_padding = m.row_padding
   self:ensure_selection_visible()
 
-  self:draw_status(font, x + pad, y + self.input.size.y + pad * 1.5)
+  self:draw_status(font, x + pad, y + self.input.size.y + pad * 1.5, w - pad * 2)
   local full_width_mode = self:is_full_width_mode()
   local vertical_preview = m.vertical_preview
   local command_mode = self:is_command_mode()
