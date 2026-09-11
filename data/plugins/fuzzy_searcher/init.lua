@@ -2452,7 +2452,7 @@ function fuzzy_searcher.file_metadata_parts(r)
   local file_metadata = require "plugins.file_metadata"
   if r.revision then return file_metadata.parts { type = "file", size = r.file_size } end
   local path = fullpath(r.abs_path or r.file or r.path)
-  local last_edited, last_viewed = file_metadata.recent_times(path)
+  local last_edited = file_metadata.recent_times(path)
   local git = require("plugins.file_git_status"):lookup(path, r.is_folder)
   if r.file_size == nil or r.is_folder then
     local info = system.get_file_info(path)
@@ -2467,7 +2467,7 @@ function fuzzy_searcher.file_metadata_parts(r)
     type = r.is_folder and "dir" or "file", size = r.file_size,
     count = counts and counts.count, count_pending = count_pending,
     modified = r.file_modified, git = git,
-    last_edited = r.last_edited or last_edited, last_viewed = r.last_viewed or last_viewed,
+    last_edited = r.last_edited or last_edited,
   }
 end
 

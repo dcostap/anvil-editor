@@ -1808,11 +1808,11 @@ function FileTreeView:get_line_hint(line)
   if info.type == "dir" then
     counts, pending = folder_counts.get(entry.abs, info.modified, filetree_config.show_hidden)
   end
-  local edited, viewed = file_metadata.recent_times(entry.abs)
+  local edited = file_metadata.recent_times(entry.abs)
   local parts = file_metadata.parts {
     type = info.type, size = info.size, modified = info.modified, git = git,
     count = counts and counts.count, count_pending = pending,
-    last_edited = edited, last_viewed = viewed,
+    last_edited = edited,
   }
   if self.metadata_columns then
     file_metadata.include_columns(self.metadata_columns, self:get_font(), parts)

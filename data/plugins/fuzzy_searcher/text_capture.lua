@@ -62,9 +62,7 @@ local function result_text(result, support)
   elseif result.kind == "file" then
     add_part(parts, result.file or main)
     local edited = require("plugins.file_metadata").format_age(result.last_edited)
-    local viewed = require("plugins.file_metadata").format_age(result.last_viewed)
     add_part(parts, edited and ("edited " .. edited))
-    add_part(parts, viewed and ("viewed " .. viewed))
   elseif result.kind == "path" or result.kind == "create_path"
       or result.kind == "folder" or result.kind == "project"
       or result.kind == "new_project"

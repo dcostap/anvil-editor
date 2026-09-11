@@ -92,8 +92,6 @@ function metadata.parts(info)
   parts[#parts + 1] = { id = "size", text = size, sample = "999M" }
   parts[#parts + 1] = { id = "edited", icon = "pencil",
     text = metadata.format_age(info.last_edited or info.modified, info.now) or "", sample = "99yr" }
-  parts[#parts + 1] = { id = "viewed", icon = "eye",
-    text = metadata.format_age(info.last_viewed, info.now) or "", sample = "99yr" }
   return parts
 end
 
