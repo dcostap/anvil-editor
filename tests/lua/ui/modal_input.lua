@@ -18,6 +18,7 @@ test.describe("Modal input routing", function()
       next_active_view = core.next_active_view,
       nag_view = core.nag_view,
       set_active_view = core.set_active_view,
+      cursor_change_req = core.cursor_change_req,
       binding = keymap.map["f24"],
     }
     root = RootPanel()
@@ -40,6 +41,7 @@ test.describe("Modal input routing", function()
     core.next_active_view = saved.next_active_view
     core.nag_view = saved.nag_view
     core.set_active_view = saved.set_active_view
+    core.cursor_change_req = saved.cursor_change_req
   end)
 
   test.it("gives the top Modal Input Owner exclusive input", function()
@@ -136,13 +138,16 @@ test.describe("Modal input routing", function()
       end
     end
 
-    nag:on_mouse_moved(button_x, button_y, 0, 0)
+    core.cursor_change_req = nil
+    core.on_event("mousemoved", button_x, button_y, 0, 0)
     test.equal(nag.cursor, "hand")
+    test.equal(core.cursor_change_req, "hand")
 
     nag:on_mouse_pressed("left", button_x, button_y, 1)
     test.is_nil(selected)
-    nag:on_mouse_moved(0, 0, 0, 0)
+    core.on_event("mousemoved", 0, 0, 0, 0)
     test.equal(nag.cursor, "arrow")
+    test.equal(core.cursor_change_req, "arrow")
     nag:on_mouse_released("left", 0, 0)
     test.is_nil(selected)
 

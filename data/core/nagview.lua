@@ -40,6 +40,7 @@ local noop = function() end
 ---@field on_selected function? Current dialog selection callback
 ---@field hovered_item integer? Index of currently hovered button
 ---@field pressed_item integer? Index of the button pressed with the left mouse button
+---@field pressed_item_active boolean? Whether the pointer remains over the pressed button
 ---@field underline_progress number Animation progress for hover underline [0-1]
 local NagView = View:extend()
 
@@ -185,6 +186,8 @@ function NagView:on_mouse_moved(mx, my, ...)
   NagView.super.on_mouse_moved(self, mx, my, ...)
   local hovered = self:option_at(mx, my)
   self.cursor = hovered and "hand" or "arrow"
+  core.request_cursor(self.cursor)
+  self.pressed_item_active = self.pressed_item ~= nil and hovered == self.pressed_item
   if hovered then
     self:change_hovered(hovered)
   end
@@ -201,10 +204,12 @@ function NagView:on_mouse_pressed(button, mx, my, clicks)
   if not self.visible then return false end
   if NagView.super.on_mouse_pressed(self, button, mx, my, clicks) then return true end
   self.pressed_item = nil
+  self.pressed_item_active = false
   if button == "left" then
     local pressed = self:option_at(mx, my)
     if pressed then
       self.pressed_item = pressed
+      self.pressed_item_active = true
       self:change_hovered(pressed)
       core.redraw = true
     end
@@ -222,6 +227,7 @@ function NagView:on_mouse_released(button, mx, my)
   NagView.super.on_mouse_released(self, button, mx, my)
   local pressed = self.pressed_item
   self.pressed_item = nil
+  self.pressed_item_active = false
   core.redraw = true
   if self.visible and button == "left" and pressed and self:option_at(mx, my) == pressed then
     self:change_hovered(pressed)
@@ -329,7 +335,7 @@ local function draw_nagview_message(self)
 
     -- draw the button
     renderer.draw_rect(bx,by,bw,bh, style.nagbar_text)
-    local pressed = i == self.pressed_item and self:option_at(core.root_panel.mouse.x, core.root_panel.mouse.y) == i
+    local pressed = i == self.pressed_item and self.pressed_item_active
     renderer.draw_rect(fx,fy,fw,fh, pressed and style.nagbar_text or style.nagbar)
 
     if i == self.hovered_item then -- draw underline
@@ -397,6 +403,7 @@ function NagView:next()
     self.options = opts.options
     self.on_selected = opts.on_selected
     self.pressed_item = nil
+    self.pressed_item_active = false
 
     local message_height = self:get_message_height()
     -- self.target_height is the nagview height needed to display the message and
