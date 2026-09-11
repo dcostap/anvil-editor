@@ -1489,7 +1489,6 @@ function Widget:destroy()
     for idx, widget in ipairs(floating_widgets) do
       if widget == self then
         widget:destroy_childs()
-        floating_widgets[idx] = nil
         table.remove(floating_widgets, idx)
         break
       end
