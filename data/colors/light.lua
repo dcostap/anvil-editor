@@ -306,6 +306,7 @@ style.project_path_separator = style.dim
 -- keep their dark-theme color tables when the theme changes at runtime.
 style.markdown_live_heading_marker = style.dim
 style.markdown_live_link = c(C.ctrl_clickable)
+style.markdown_live_link_error = style.error
 style.markdown_live_inline_code_bg = style.background2
 style.markdown_live_code_background = style.background2
 style.markdown_live_code_header = style.dim

@@ -88,4 +88,24 @@ test.describe("Markdown missing link activation", function()
     test.is_nil(c.confirm)
     test.is_nil(c.opened)
   end)
+
+  test.it("visually distinguishes missing link targets from valid and unchecked links", function(c)
+    c.buffer:insert(1, #c.buffer.lines[1], "\n[[Source]] [[Missing]] [[Source#Absent]] [web](https://example.com)\n\n")
+    c.view:set_wrapping_enabled(false)
+    c.view:set_selection_state({ selections = { 3, 1, 3, 1 }, last_selection = 1 })
+    live.refresh_view(c.view)
+    local colors = {}
+    local deadline = system.get_time() + 5
+    repeat
+      coroutine.yield(0.01)
+      live.refresh_view(c.view)
+      for _, fragment in ipairs(c.view:iter_line_render_fragments(c.view:get_line_render(2))) do
+        if fragment.link then colors[fragment.link.raw_target] = fragment.color end
+      end
+    until colors["https://example.com"] or system.get_time() >= deadline
+    test.ok(colors.Source and colors.Missing and colors["Source#Absent"] and colors["https://example.com"])
+    test.ok(colors.Missing ~= colors.Source, "missing notes should look different from valid links")
+    test.ok(colors["Source#Absent"] ~= colors.Source, "missing headings should look different from valid links")
+    test.equal(colors["https://example.com"], colors.Source)
+  end)
 end)

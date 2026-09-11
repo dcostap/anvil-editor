@@ -1357,7 +1357,8 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
     return live.open_link(owner, { link = self.link, resolution = self.link_resolution })
   end
   if not fragment.widget and not fragment.image_status then
-    fragment.color = style.markdown_live_link
+    local missing = resolution.status == "missing" or resolution.subtarget_missing
+    fragment.color = missing and style.markdown_live_link_error or style.markdown_live_link
     fragment.underline = true
   end
   local bold, italic, strike, highlight, code = false, false, false, false, false
