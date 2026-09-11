@@ -7331,7 +7331,10 @@ function live.link_at_caret(view)
 end
 
 function live.preview_link(view, link, options)
-  local resolution = resolve_live_link(view, link)
+  local owner = view.__markdown_live_owner
+  local index = owner and owner.link_index
+  local resolution = index and index:resolve_preview(link, view.buffer.abs_filename)
+    or resolve_live_link(view, link)
   if resolution.status ~= "resolved" or not resolution.path then return false, resolution.status end
   if options.note_only and resolution.kind ~= "note" then return false end
   return require("core.poi_preview").location(view, {

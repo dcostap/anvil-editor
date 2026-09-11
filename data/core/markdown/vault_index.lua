@@ -1374,6 +1374,61 @@ function Index:resolve(link_or_target, source_path)
   return self:resolve_entry_result(entry, link, target)
 end
 
+function Index:resolve_preview(link, source_path)
+  if self:can_resolve() then return self:resolve(link, source_path) end
+  local files = project_files.cached(self.root)
+  if not files then return { status = "pending", reason = "listing files" } end
+
+  -- Reuse normal path precedence and ambiguity checks without parsing every note.
+  -- This temporary lookup never replaces the complete index or its Buffer overlays.
+  local paths = Index:new(self.root)
+  for _, file in ipairs(files) do
+    if is_markdown(file.path) then
+      paths:add_note_entry({
+        kind = "note", abs_path = file.path, rel_path = display_path(file.relative),
+        display_name = display_basename(strip_markdown_extension(file.relative)),
+      })
+    end
+  end
+  local target = link.path or link.raw_target or ""
+  if target == "" and link.subtarget then target = source_path or "" end
+  local result = paths:resolve({ path = target }, source_path)
+  if result.status == "missing" then
+    -- An alias needs note metadata. Do not guess while the full index is pending.
+    return { status = "pending", reason = "indexing aliases" }
+  end
+  if result.status ~= "resolved" then return result end
+  core.log_quiet("Markdown preview resolved one note before vault publication: %s", result.path)
+  if not link.subtarget then return result end
+
+  local text
+  for _, buffer in ipairs(core.buffers) do
+    if buffer.abs_filename and common.path_equals(buffer.abs_filename, result.path) then
+      text = buffer:get_text(1, 1, math.huge, math.huge)
+      break
+    end
+  end
+  if not text then
+    local info = system.get_file_info(result.path)
+    if info and info.type == "file" and info.size <= 1024 * 1024 then text = read_file(result.path) end
+  end
+  -- The preview body reports unavailable files and files above its size bound.
+  if not text or #text > 1024 * 1024 then return result end
+  local facts = anchors.index_buffer(text:gsub("\r\n", "\n"))
+  local entry = result.entry
+  entry.headings_by_path, entry.headings_by_slug, entry.headings_by_text, entry.blocks_by_id = {}, {}, {}, {}
+  for _, heading in ipairs(facts.headings) do
+    entry.headings_by_path[heading.path_slug] = entry.headings_by_path[heading.path_slug] or heading
+    entry.headings_by_slug[heading.slug] = entry.headings_by_slug[heading.slug] or heading
+    local key = anchors.normalize_heading(heading.text)
+    entry.headings_by_text[key] = entry.headings_by_text[key] or heading
+  end
+  for _, block in ipairs(facts.blocks) do
+    entry.blocks_by_id[block.id] = entry.blocks_by_id[block.id] or block
+  end
+  return self:resolve_entry_result(entry, link, target)
+end
+
 function vault_index.get_index(root)
   root = common.normalize_path(root)
   local key = path_key(root)
