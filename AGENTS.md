@@ -389,9 +389,33 @@ There is not a separate Lua framework for in-process UI tests: they are ordinary
 
 - **Headless/runtime tests** instantiate non-visual objects such as Documents, commands, fuzzy indexes, processes, threads, and pure helper modules, then assert their state.
 - **In-process UI tests** instantiate or reuse Anvil UI objects such as Document Views, panels, prompt bars, widgets, tabs/nodes, fuzzy pickers, and settings views. They drive behavior by calling methods/event handlers programmatically, such as `core.on_event(...)`, `core.root_panel:on_mouse_pressed(...)`, `view:on_mouse_moved(...)`, `node:set_active_view(...)`, or widget `on_change(...)`, then assert Lua state/layout/focus directly. These are the preferred layer for TDD of editor UI behavior.
-- **Actual GUI black-box tests** launch the real Windows GUI and send OS-level input or inspect screenshots/stats. Current examples are `tests/gui/smoke/d3d11-smoke-test.ps1` and `tools/anvil_*_perf_test.ps1`. Use these sparingly for renderer/window/input diagnostics, not as the main regression-test layer.
+- **Isolated renderer checks** run the real renderer on a private desktop. Use the [render performance gate](tools/RENDER_PERF_GATE.md) for pixel checks and renderer diagnostics.
+- **Native window tests** check platform behavior, such as `tests/gui/smoke/project-window-handoff-test.ps1`. Use these only for changes that require native window behavior.
 
 When adding or changing runtime/editor behavior, prefer adding or adjusting Lua tests in `tests/lua/runtime` or `tests/lua/ui` alongside the implementation. Use in-process UI tests for focus, layout, panel, widget, Document View, prompt bar, fuzzy picker, and command-routing behavior whenever possible.
+
+### Non-invasive visual verification
+
+Read [tools/RENDER_PERF_GATE.md](tools/RENDER_PERF_GATE.md) before checking rendered pixels.
+The existing runner uses a private desktop, isolated app data, and internal actions.
+It captures the D3D11 backbuffer or software surface, not the interactive desktop.
+It does not use the daily portable app or its user state.
+
+Use a relevant scenario:
+
+```sh
+python tools/run_render_perf_gate.py --scenario renderer-primitives --renderer software --no-build
+```
+
+Use `--no-build` only when the build outputs are current.
+For a new UI scene, add a focused scenario to this runner instead of creating another capture system.
+If no suitable scenario exists, use in-process UI tests until you add one.
+
+Do not capture the screen with `CopyFromScreen`, `PrintWindow`, or an ad hoc OS script.
+Do not find, focus, move, close, or reuse the user's windows for verification.
+Do not launch the daily portable app as an isolated test process.
+Its adjacent `user` directory takes priority over `ANVIL_USERDIR`.
+Legacy `tools/anvil_*_perf_test.ps1` scripts are not the default visual verification path.
 
 ## Git commits
 
