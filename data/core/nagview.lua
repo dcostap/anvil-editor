@@ -39,6 +39,7 @@ local noop = function() end
 ---@field options core.nagview.option[]? Current dialog options
 ---@field on_selected function? Current dialog selection callback
 ---@field hovered_item integer? Index of currently hovered button
+---@field pressed_item integer? Index of the button pressed with the left mouse button
 ---@field underline_progress number Animation progress for hover underline [0-1]
 local NagView = View:extend()
 
@@ -162,6 +163,19 @@ function NagView:each_option()
 end
 
 
+---Get the dialog option under a screen point.
+---@param mx number Screen x coordinate
+---@param my number Screen y coordinate
+---@return integer? index Option index, or nil outside the buttons
+function NagView:option_at(mx, my)
+  for i, _, x,y,w,h in self:each_option() do
+    if mx >= x and my >= y and mx < x + w and my < y + h then
+      return i
+    end
+  end
+end
+
+
 ---Handle mouse movement to update button hover states.
 ---@param mx number Screen x coordinate
 ---@param my number Screen y coordinate
@@ -169,11 +183,10 @@ function NagView:on_mouse_moved(mx, my, ...)
   if not self.visible then return end
   core.set_active_view(self)
   NagView.super.on_mouse_moved(self, mx, my, ...)
-  for i, _, x,y,w,h in self:each_option() do
-    if mx >= x and my >= y and mx < x + w and my < y + h then
-      self:change_hovered(i)
-      break
-    end
+  local hovered = self:option_at(mx, my)
+  self.cursor = hovered and "hand" or "arrow"
+  if hovered then
+    self:change_hovered(hovered)
   end
 end
 
@@ -187,13 +200,34 @@ end
 function NagView:on_mouse_pressed(button, mx, my, clicks)
   if not self.visible then return false end
   if NagView.super.on_mouse_pressed(self, button, mx, my, clicks) then return true end
-  for i, _, x,y,w,h in self:each_option() do
-    if mx >= x and my >= y and mx < x + w and my < y + h then
-      self:change_hovered(i)
-      command.perform "core:select_dialog_entry"
+  self.pressed_item = nil
+  if button == "left" then
+    local pressed = self:option_at(mx, my)
+    if pressed then
+      self.pressed_item = pressed
+      self:change_hovered(pressed)
+      core.redraw = true
     end
   end
   return true
+end
+
+
+---Activate a button when the left mouse button is released over its press target.
+---@param button core.view.mousebutton
+---@param mx number Screen x coordinate
+---@param my number Screen y coordinate
+---@return boolean handled True if event was handled
+function NagView:on_mouse_released(button, mx, my)
+  NagView.super.on_mouse_released(self, button, mx, my)
+  local pressed = self.pressed_item
+  self.pressed_item = nil
+  core.redraw = true
+  if self.visible and button == "left" and pressed and self:option_at(mx, my) == pressed then
+    self:change_hovered(pressed)
+    command.perform "core:select_dialog_entry"
+  end
+  return self.visible or pressed ~= nil
 end
 
 
@@ -295,7 +329,8 @@ local function draw_nagview_message(self)
 
     -- draw the button
     renderer.draw_rect(bx,by,bw,bh, style.nagbar_text)
-    renderer.draw_rect(fx,fy,fw,fh, style.nagbar)
+    local pressed = i == self.pressed_item and self:option_at(core.root_panel.mouse.x, core.root_panel.mouse.y) == i
+    renderer.draw_rect(fx,fy,fw,fh, pressed and style.nagbar_text or style.nagbar)
 
     if i == self.hovered_item then -- draw underline
       local uw = fw - 2 * UNDERLINE_MARGIN
@@ -306,7 +341,7 @@ local function draw_nagview_message(self)
       renderer.draw_rect(lx,ly,uw,UNDERLINE_WIDTH, style.nagbar_text)
     end
 
-    common.draw_text(style.font, style.nagbar_text, opt.text, "center", fx, fy, fw, fh)
+    common.draw_text(style.font, pressed and style.nagbar or style.nagbar_text, opt.text, "center", fx, fy, fw, fh)
   end
 
   self:draw_scrollbar()
@@ -361,6 +396,7 @@ function NagView:next()
     self.message = opts.message and opts.message .. "\n"
     self.options = opts.options
     self.on_selected = opts.on_selected
+    self.pressed_item = nil
 
     local message_height = self:get_message_height()
     -- self.target_height is the nagview height needed to display the message and

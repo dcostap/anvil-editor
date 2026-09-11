@@ -113,4 +113,46 @@ test.describe("Modal input routing", function()
     local ok, err = pcall(nag.update, nag)
     test.ok(ok, err)
   end)
+
+  test.it("gives confirmation buttons complete mouse interaction", function()
+    local selected
+    local nag = NagView()
+    core.nag_view = nag
+
+    nag:show("Confirm", "Choose", {
+      { text = "Continue", default_yes = true },
+      { text = "Cancel", default_no = true },
+    }, function(option)
+      selected = option.text
+    end)
+    nag.size.x = 600
+    nag.show_height = nag:get_target_height()
+
+    local button_x, button_y
+    for index, _, x, y, width, height in nag:each_option() do
+      if index == 1 then
+        button_x = x + width / 2
+        button_y = y + height / 2
+      end
+    end
+
+    nag:on_mouse_moved(button_x, button_y, 0, 0)
+    test.equal(nag.cursor, "hand")
+
+    nag:on_mouse_pressed("left", button_x, button_y, 1)
+    test.is_nil(selected)
+    nag:on_mouse_moved(0, 0, 0, 0)
+    test.equal(nag.cursor, "arrow")
+    nag:on_mouse_released("left", 0, 0)
+    test.is_nil(selected)
+
+    nag:on_mouse_moved(button_x, button_y, 0, 0)
+    nag:on_mouse_pressed("right", button_x, button_y, 1)
+    nag:on_mouse_released("right", button_x, button_y)
+    test.is_nil(selected)
+
+    nag:on_mouse_pressed("left", button_x, button_y, 1)
+    nag:on_mouse_released("left", button_x, button_y)
+    test.equal(selected, "Continue")
+  end)
 end)
