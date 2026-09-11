@@ -100,6 +100,18 @@ test.describe("Markdown link hover previews", function()
     test.equal(preview.for_view(c.view), nil)
   end)
 
+  for _, target in ipairs({ "#Missing heading", "Target#^missing-block" }) do
+    test.it("does not replace the broken target " .. target .. " with the start of its note", function(c)
+      local link = require("core.markdown.links").from_target("wiki", target)
+      local shown = markdown.live_render.preview_link(c.view, link, {
+        line = 1, note_only = true, floating = { x = c.x, top = c.y, bottom = c.y + 20 },
+      })
+      test.equal(shown, false, "a missing target must not show unrelated note content")
+      test.equal(preview.for_view(c.view), nil)
+      test.equal(core.active_view, c.view)
+    end)
+  end
+
   test.it("requires a new hover delay after the pointer leaves the link", function(c)
     c.view:on_mouse_moved(c.x, c.y, 0, 0)
     c.now = c.now + config.markdown_link_hover_delay * 0.75

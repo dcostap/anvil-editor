@@ -7336,6 +7336,10 @@ function live.preview_link(view, link, options)
   local resolution = index and index:resolve_preview(link, view.buffer.abs_filename)
     or resolve_live_link(view, link)
   if resolution.status ~= "resolved" or not resolution.path then return false, resolution.status end
+  if resolution.subtarget_missing then
+    core.log_quiet("Markdown preview skipped missing target: %s (%s)", link.raw_target, resolution.reason)
+    return false, "missing"
+  end
   if options.note_only and resolution.kind ~= "note" then return false end
   return require("core.poi_preview").location(view, {
     line = options.line, path = resolution.path, target_line = resolution.line or 1,
