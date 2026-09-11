@@ -1931,14 +1931,14 @@ function DiffView:draw_scrollbar()
   perf_end("diffview_overview_draw", started, scope)
 end
 
-function DiffView:reveal_first_change()
+function DiffView:reveal_change(direction)
   local points = self:diff_points_of_interest(false)
   local view, is_a = self.buffer_view_b, false
   if #points == 0 then
     points = self:diff_points_of_interest(true)
     view, is_a = self.buffer_view_a, true
   end
-  local point = points[1]
+  local point = points[direction == -1 and #points or 1]
   if not point then return false end
   view.buffer:set_selection(point.line, point.col or 1, point.line, point.col or 1)
   if view.scroll_to_line then
@@ -1947,7 +1947,7 @@ function DiffView:reveal_first_change()
     view:scroll_to_make_visible(point.line, point.col or 1)
   end
   self:sync_scroll_from(view, is_a)
-  core.log_quiet("Diff View revealed first change at line %d", point.line)
+  core.log_quiet("Diff View revealed boundary change at line %d", point.line)
   return true
 end
 
@@ -1982,7 +1982,7 @@ function DiffView:update()
   if self.pending_first_change_reveal and self.diff_model
       and self.buffer_view_a.size.x > 0 and self.buffer_view_a.size.y > 0 then
     self.pending_first_change_reveal = false
-    self:reveal_first_change()
+    self:reveal_change(self.initial_change_direction)
   end
   -- Fast comparisons must not flash a loading message between frames.
   local loading_visible = not self.comparison_message

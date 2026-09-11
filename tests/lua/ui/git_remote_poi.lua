@@ -34,6 +34,67 @@ test.describe("Commit remote POIs", function()
 
   test.after_each(function() panes.reset_for_tests() end)
 
+  for _, source_kind in ipairs { "Commit Diff View", "Git Log" } do
+  test.it("continues local changes across files from " .. source_kind, function(context)
+    if source_kind == "Git Log" then
+      local source = context.source
+      source.tab_id = "log"
+      local log = source.model:log_tab()
+      log.commits = {{ hash = "after", parents = { "before" }, subject = "Change",
+        changed_files = context.tab.changed_files, changed_files_loaded = true }}
+      log.selected_commit = 1
+      source.model.backend.diff_endpoint_for_commit = function()
+        return { left = "before", right = "after" }
+      end
+      source:update_pane_buffers(true)
+      poi.set_remote_source(source:pane_view("details"))
+    end
+    context.source.model.backend.file_at = function(_, revision, path, _, callback)
+      callback("same\n" .. revision .. " " .. path .. "\nkeep\nstill\n"
+        .. revision .. " end\n")
+    end
+    local destination = panes.create { factory = function() return View() end }
+    local function ready()
+      local view = destination.current_view
+      local deadline = system.get_time() + 3
+      while view.updater_idx and system.get_time() < deadline do coroutine.yield(0.01) end
+      test.equal(view.updater_idx, nil)
+      panes.present(view, { pane = destination })
+      view.size.x, view.size.y = 800, 600
+      view:update()
+      return view, view.buffer_view_b
+    end
+    test.ok(poi.navigate_remote(1))
+    local first, side = ready()
+    test.equal(side.buffer:get_selection(), 2)
+    poi.navigate(side, 1)
+    test.equal(destination.current_view, first)
+    test.equal(side.buffer:get_selection(), 5)
+    -- Moving the source selection must not change this comparison's position.
+    local tree = poi.get_remote_source()
+    poi.navigate(tree, 1)
+    poi.navigate(side, 1)
+    test.not_equal(destination.current_view, first)
+    local second
+    second, side = ready()
+    test.contains(table.concat(side.buffer.lines), "after src/b.lua")
+    test.equal(side.buffer:get_selection(), 2)
+    poi.navigate(side, -1)
+    test.not_equal(destination.current_view, second)
+    first, side = ready()
+    test.contains(table.concat(side.buffer.lines), "after src/a.lua")
+    test.equal(side.buffer:get_selection(), 5)
+    poi.navigate(side, -1)
+    test.equal(side.buffer:get_selection(), 2)
+    poi.navigate(side, -1)
+    test.equal(destination.current_view, first)
+    poi.navigate(side, 1)
+    poi.clear_remote_source(tree)
+    poi.navigate(side, 1)
+    test.equal(destination.current_view, first)
+  end)
+  end
+
   for _, activation in ipairs {
     "POI activation", "double-click", "commit activation", "commit activation after loading files",
   } do

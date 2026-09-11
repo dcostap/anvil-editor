@@ -1429,6 +1429,33 @@ function GitView:open_file_comparison(source, load, selection_is_current, opts)
   end
   local function present(comparison, tab)
     if not comparison then return end
+    if comparison.buffer_view_b then
+      local record = tab.changed_files[tab.selected_file]
+      comparison.initial_change_direction = opts.change_direction
+      if opts.change_direction then comparison.pending_first_change_reveal = true end
+      local function continue_navigation(_, direction)
+        if comparison.updater_idx or not comparison.diff_model then return false end
+        if poi.get_remote_source(project) ~= source then return false end
+        local points = poi.points_for_view(source, { remote = true }) or {}
+        for index, point in ipairs(points) do
+          if point.record == record then
+            local next_point = points[index + direction]
+            if not next_point then return false end
+            local pane = panes.pane_for_view(comparison)
+            if not pane then return false end
+            poi.select(source, next_point, { remote = true, preview = false })
+            core.log_quiet("Git comparison continues to %s", changed_file_path(next_point.record))
+            return poi.activate(source, next_point, {
+              pane = pane, placement = "current", remote = true,
+              change_direction = direction,
+            })
+          end
+        end
+        return false
+      end
+      comparison.buffer_view_a.continue_point_of_interest = continue_navigation
+      comparison.buffer_view_b.continue_point_of_interest = continue_navigation
+    end
     local placed, reason = panes.place(function() return comparison end, {
       pane = destination, placement = placement, focus = opts.preserve_focus ~= true,
       reason = "git-file-comparison",

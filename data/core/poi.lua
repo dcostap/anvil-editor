@@ -277,6 +277,12 @@ function M.navigate(view, direction, opts)
   view = provider_view(view)
   direction = normalize_direction(direction)
   local point, status = M.next(view, direction, opts)
+  -- Views may explicitly continue navigation outside their local scope.
+  if not point and (status == "boundary" or status == "empty")
+      and view and view.continue_point_of_interest then
+    local result = view:continue_point_of_interest(direction, opts)
+    if result then return result end
+  end
   if not point then return show_navigation_feedback(status, direction) end
   for _, source in pairs(M.remote_sources) do
     if source.view == view then source.initial = false end
