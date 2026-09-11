@@ -53,7 +53,8 @@ A temporary File Search or Text Search option that adds ignored files to that se
 _Avoid_: disable ignores, index ignored files
 
 **Search Modifier**:
-A temporary option that changes the current search without changing its query text.
+A temporary option that changes the search source, file filters, or result order without changing the text to match.
+Inline Search Modifiers use `modifier:value` and can combine in one search.
 _Avoid_: search modification, search mode
 
 **Workspace**:
