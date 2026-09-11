@@ -36,7 +36,7 @@ function TextView:draw_overlay(...)
   local preview = previews[self]
   if not preview then return result end
   if preview.floating then
-    core.root_panel:defer_draw(function()
+    core.root_panel:defer_draw_above_caret(function()
       if previews[self] == preview then M.draw_floating(self) end
     end)
     return result

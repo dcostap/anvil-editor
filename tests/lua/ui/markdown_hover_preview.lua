@@ -173,4 +173,50 @@ test.describe("Markdown link hover previews", function()
     test.equal(c.view.scroll.y, source_scroll)
     test.equal(c.view.scroll.to.y, source_scroll)
   end)
+
+  test.it("covers the document caret without hiding it after the card closes", function(c)
+    local RootPanel = require "core.rootpanel"
+    local style = require "core.style"
+    local root = RootPanel()
+    root.size.x, root.size.y = c.view.size.x, c.view.size.y
+    -- Render an isolated window containing this Editor.
+    root.pane_views = function() return { c.view } end
+    root.shell_views = function() return {} end
+    local old_root, old_clip_stack = core.root_panel, core.clip_rect_stack
+    local old_animated, old_blink = config.animated_caret, config.disable_blink
+    local old_text, old_rect, old_clip = renderer.draw_text, renderer.draw_rect, renderer.set_clip_rect
+    local old_rounded = renderer.draw_rounded_rect
+    local ok, err = pcall(function()
+      core.root_panel = root
+      core.clip_rect_stack = {{ 0, 0, root.size.x, root.size.y }}
+      config.animated_caret, config.disable_blink = true, true
+      c.view:set_selection_state({ selections = { 3, 5, 3, 5 }, last_selection = 1 })
+      c.view:on_mouse_moved(c.x, c.y, 0, 0)
+      c.now = c.now + config.markdown_link_hover_delay * 2
+      c.view:update()
+      test.not_nil(preview.for_view(c.view))
+      local x, y = c.view:get_line_screen_position(3, 5)
+      x, y = math.floor(x + 0.5), math.floor(y + c.view:get_line_height() / 2)
+      test.ok(preview.contains_floating(c.view, x, y), "caret must sit behind the card")
+      local pixel
+      renderer.draw_rect = function(left, top, width, height, color)
+        if x >= left and x < left + width and y >= top and y < top + height then pixel = color end
+      end
+      renderer.draw_text = function(font, text, left, top, color, opts)
+        return left + font:get_width(text, opts)
+      end
+      renderer.set_clip_rect = function() end
+      renderer.draw_rounded_rect = function() end
+      root:draw()
+      test.same(pixel, style.background2, "document caret is visible through the card")
+      preview.dismiss(c.view)
+      root:draw()
+      test.same(pixel, style.caret, "document caret should remain visible without the card")
+    end)
+    renderer.draw_text, renderer.draw_rect, renderer.set_clip_rect = old_text, old_rect, old_clip
+    renderer.draw_rounded_rect = old_rounded
+    config.animated_caret, config.disable_blink = old_animated, old_blink
+    core.root_panel, core.clip_rect_stack = old_root, old_clip_stack
+    if not ok then error(err, 0) end
+  end)
 end)
