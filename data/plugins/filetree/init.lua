@@ -3654,6 +3654,8 @@ end, {
 
 keymap.add {
   ["ctrl+\\"] = "filetree:open_at_project_root",
+  -- SDL reports the physical Spanish Ñ key as the US semicolon key.
+  ["ctrl+;"] = "filetree:open_at_project_root",
   ["ctrl+s"] = "filetree:apply_changes",
   ["f5"] = "filetree:reload",
   ["alt+shift+r"] = "filetree:open_selected_right",

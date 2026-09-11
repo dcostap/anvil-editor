@@ -66,5 +66,4 @@ command.add(predicate, {
 
 keymap.add {
   ["ctrl+shift+;"] = "core:toggle_macro_recording",
-  ["ctrl+;"] = "core:play_macro",
 }
