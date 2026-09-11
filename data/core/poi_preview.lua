@@ -137,7 +137,9 @@ function M.show(view, point, title, lines, options)
   end
   local function layout()
     if not preview.content then return 0 end
-    local width = math.max(1, view.size.x - view:get_gutter_width() - style.padding.x * 2)
+    -- Measurement and drawing must use the same centered content width.
+    local width = math.max(1,
+      view:get_presentation_viewport_width() - view:get_gutter_width() - style.padding.x * 2)
     local limit = math.max(view:get_line_height(), math.min(view.size.y / 2, view:get_line_height() * 12))
     local height = preview.content:layout(width, limit) + style.padding.y * 2
     rows[#rows].height = height

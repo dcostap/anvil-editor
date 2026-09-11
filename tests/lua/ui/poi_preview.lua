@@ -4,6 +4,47 @@ local TextView = require "core.textview"
 local test = require "core.test"
 
 test.describe("POI previews", function()
+  test.it("measures the card at its displayed width in a centered Editor", function()
+    local preview = require "core.poi_preview"
+    local centered = require "plugins.centered_editor"
+    local config = require "core.config"
+    local worker_pool = require "core.worker_pool"
+    local saved = config.plugins.centered_editor
+    config.plugins.centered_editor = setmetatable({
+      enabled = true, pane_views_only = false, max_width = 350,
+      scale_width = false,
+    }, { __index = saved })
+    local source = require("core.editor")(Buffer())
+    source.size.x, source.size.y = 1200, 1000
+    source:set_wrapping_enabled(true)
+    local target = Buffer("preview-layout.md", nil, true)
+    target:insert(1, 1, "#### Metadata\n- [x] First task\n"
+      .. "- [x] A longer task with enough words to wrap onto several rows in this preview.\n"
+      .. "\tFollowing paragraph.\n")
+    local ok, err = pcall(function()
+      preview.location(source, { line = 1, target_buffer = target })
+      local deadline = system.get_time() + 5
+      local host_height, displayed_height
+      repeat
+        local pool = worker_pool.current_system()
+        if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+        host_height = source:get_visual_row_height(3)
+        displayed_height = centered.with_editor_geometry(source, function()
+          return source:get_visual_row_height(3)
+        end)
+        system.sleep(0.001)
+      until displayed_height > source:get_line_height() * 3 or system.get_time() >= deadline
+      test.ok(displayed_height > source:get_line_height() * 3, "expected rendered task content")
+      test.equal(host_height, displayed_height, "card measurement changed inside centered drawing")
+    end)
+    preview.dismiss(source)
+    source:on_close()
+    core.buffer_registry:remove(source.buffer, true)
+    target:on_close()
+    config.plugins.centered_editor = saved
+    if not ok then error(err, 0) end
+  end)
+
   test.it("renders a linked Markdown heading and body without opening the note", function()
     local preview = require "core.poi_preview"
     local worker_pool = require "core.worker_pool"
