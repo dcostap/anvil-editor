@@ -8,6 +8,7 @@ local image_formats = require "core.image_formats"
 local range_marker = require "core.range_marker"
 local backend_default = require "plugins.git.backend"
 local diff_model = require "plugins.diff.model"
+local path_tree = require "plugins.path_tree"
 
 local default_status_service = require "plugins.file_git_status"
 
@@ -520,6 +521,7 @@ function Model:_new_diff_tab(commit, endpoint)
     right = endpoint.right,
     changed_files = {},
     selected_file = 1,
+    select_first_file = true,
     loading = false,
     loading_file = false,
     error = nil,
@@ -568,6 +570,7 @@ function Model:open_commit_diff(commit, callback, opts)
     listed_file = nil
   end
   if selected_path then
+    tab.select_first_file = nil
     tab.selected_file_path = selected_path
     local selected = changed_file_index_by_path(tab.changed_files, tab.selected_file_path)
     if selected then tab.selected_file = selected end
@@ -1267,6 +1270,17 @@ function Model:load_changed_files(tab, callback)
     tab.error = err
     tab.changed_files = files or {}
     if #tab.changed_files == 0 then tab.file_scroll = 0 end
+    if tab.select_first_file and #tab.changed_files > 0 then
+      local tree = path_tree.build(tab.changed_files, { record_path = changed_file_path })
+      for line in ipairs(tree.rows) do
+        local index = tree.line_to_record[line]
+        if index then
+          tab.selected_file = index
+          break
+        end
+      end
+      tab.select_first_file = nil
+    end
     if tab.selected_file_path then
       local selected_file = changed_file_index_by_path(tab.changed_files, tab.selected_file_path)
       tab.selected_file = selected_file or math.min(tab.selected_file or 1, math.max(1, #tab.changed_files))
