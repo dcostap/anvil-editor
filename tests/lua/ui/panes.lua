@@ -427,19 +427,20 @@ test.describe("Pane manager", function()
     test.not_ok(panes.contains(source))
   end)
 
-  test.it("keeps a disposable source entry when merging it into another Pane", function()
+  test.it("rejects merging an Untitled Editor into unrelated history", function()
     local destination = panes.create { factory = factory("destination") }
     test.ok(command.perform("pane:new_group"))
     local source = panes.active()
     local untitled = source.current_view
     test.ok(panes.is_disposable(source))
 
-    test.equal(panes.move_and_merge(source, destination), destination)
+    test.not_ok(panes.move_and_merge(source, destination))
 
-    test.equal(panes.history_length(destination), 2)
-    test.equal(destination.current_view, untitled)
-    test.equal(panes.back(destination):get_name(), "destination")
-    test.not_ok(panes.contains(source))
+    test.equal(panes.history_length(destination), 1)
+    test.equal(destination.current_view:get_name(), "destination")
+    test.equal(source.current_view, untitled)
+    test.ok(panes.contains(source))
+    test.ok(panes.validate())
   end)
 
   test.it("transfers retained source Views outside Navigation History", function()

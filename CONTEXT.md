@@ -265,6 +265,13 @@ _Avoid_: mouse-friendly UI, basic mouse support
 A numbered work area that shows one Current View and owns one Navigation History. Each Pane belongs to one Pane Group.
 _Avoid_: Left Pane, Right Pane, panel, split
 
+**Constrained Pane**:
+A Pane dedicated to one owner, such as a Terminal session, Git Log, commit comparison, or nonempty Untitled Editor.
+Its Navigation History contains only Views related to that owner, including its text captures.
+
+**Unconstrained Pane**:
+A Pane that accepts unrelated ordinary Views in its Navigation History.
+
 **Pane Number Marker**:
 A Fuzzy Searcher result marker that identifies each Pane whose Current View shows the file.
 _Avoid_: open file badge, tab number
@@ -509,7 +516,7 @@ _Avoid_: Git popup, Git panel, Git tab container
 
 **Git Log**:
 A View for browsing commits from one selected Git repository and opening commit-focused Views.
-A Project can have several independent Git Logs.
+A Project can have several independent Git Logs, each in its own Constrained Pane.
 _Avoid_: commit browser, main Git View
 
 **Selected Git Repository**:

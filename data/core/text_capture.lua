@@ -20,6 +20,7 @@ function TextCaptureView:new(capture)
   TextCaptureView.super.new(self, buffer)
   self.context = "workspace"
   self.text_capture = true
+  self.pane_constraint = capture.pane_constraint
   self.text_capture_title = capture.title or buffer.display_name
   self.text_capture_data = capture
   self.remote_poi_source = capture.remote_poi_source == true
@@ -48,6 +49,16 @@ end
 
 function TextCaptureView:get_name()
   return self.text_capture_title or "Text Capture"
+end
+
+function TextCaptureView:get_module() return "core.text_capture" end
+
+function TextCaptureView:get_state()
+  return {
+    text = table.concat(self.buffer.lines):gsub("\n$", ""), title = self:get_name(),
+    cursor_line = self.buffer:get_selection(), viewport_line = math.floor(self.scroll.y / self:get_line_height()) + 1,
+    wrapping = self:is_wrapping_enabled(),
+  }
 end
 
 function TextCaptureView:get_points_of_interest()
@@ -98,11 +109,16 @@ end
 
 local M = {
   View = TextCaptureView,
+  from_state = function(state) return TextCaptureView(state) end,
 }
 
 function M.open(capture, opts)
   opts = opts or {}
-  local view, err = panes.place(function() return TextCaptureView(capture) end, {
+  local view, err = panes.place(function()
+    local result = TextCaptureView(capture)
+    result.pane_constraint = opts.owner or result.pane_constraint
+    return result
+  end, {
     pane = opts.pane,
     placement = opts.placement or "current",
     direction = opts.direction,

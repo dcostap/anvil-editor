@@ -473,6 +473,7 @@ function GitView:open_text_capture()
   if not pane then return false end
   local view, open_error = require("core.text_capture").open(capture, {
     pane = pane,
+    owner = panes.constraint(pane),
     reason = "git-view-text-capture",
   })
   if not view then
@@ -485,6 +486,10 @@ function GitView:open_text_capture()
     tostring(tab and tab.kind or "unknown"), tostring(tab and tab.title or self:get_name())
   )
   return true
+end
+
+function GitView:get_pane_constraint()
+  return self
 end
 
 function GitView:set_refresh_pending(callback, force)
@@ -799,7 +804,7 @@ function GitView:on_mouse_released(button, x, y)
     if captured.git_pane then self:update_pane_action_hover(captured, x, y) end
     if button == "left" and pressed_line and released_line == pressed_line and pressed_clicks >= 2 then
       local point = self:point_of_interest_for_pane(captured, released_line)
-      if point and point.kind == "git-changed-file" then
+      if point then
         require("core.poi").activate(captured, point, { preserve_focus = false })
       else
         local source_tab = self:model_tab()
@@ -891,8 +896,8 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
   if index >= 1 and index <= #tab.commits then
     local commit = self.model:select_log_index(index, function() core.redraw = true end)
     if clicks and clicks > 1 and commit then
-      local tab = self.model:open_commit_diff(commit, function() core.redraw = true end)
-      if tab and self.on_model_tab_open then self:on_model_tab_open(tab) end
+      self:focus_pane_view("log-list")
+      self:activate_selected_point(function() core.redraw = true end)
       self.scroll.to.y, self.scroll.y = 0, 0
     end
     core.redraw = true
@@ -1193,7 +1198,7 @@ function GitView:sync_selection_from_pane()
   end
 end
 
-function GitView:activate_selected(callback)
+function GitView:activate_selected(callback, opts)
   self:sync_selection_from_pane()
   local active = core.active_view
   local details_commit, details_row, details_record = self:details_tree_item(
@@ -1230,7 +1235,7 @@ function GitView:activate_selected(callback)
       end
     end
     for _, point in ipairs(self:changed_file_points()) do
-      if point.index == tab.selected_file then self:open_changed_file(point); break end
+      if point.index == tab.selected_file then self:open_changed_file(point, opts); break end
     end
     return tab
   end
@@ -1242,7 +1247,7 @@ function GitView:activate_selected(callback)
   return self.model:open_selected_commit_diff(tab, callback or function() core.redraw = true end)
 end
 
-function GitView:activate_selected_point(callback)
+function GitView:activate_selected_point(callback, opts)
   self:sync_selection_from_pane()
   local source = core.active_view
   local commit, _, record = self:details_tree_item(
@@ -1258,7 +1263,7 @@ function GitView:activate_selected_point(callback)
     end, function()
       return self:detail_commit_for_tab(self:model_tab()) == commit
         and commit.selected_changed_file_path == path
-    end)
+    end, opts)
   end
   if source and source.git_pane == "log-list" then
     local log_commit = self.model:selected_commit()
@@ -1276,7 +1281,7 @@ function GitView:activate_selected_point(callback)
       end, function()
         return self.model:selected_commit() == log_commit
           and log_commit.selected_changed_file_path == path
-      end)
+      end, opts)
     end
     if log_commit.changed_files or log_commit.changed_files_loaded then
       return open_first_changed_file()
@@ -1291,7 +1296,7 @@ function GitView:activate_selected_point(callback)
     return true
   end
   local source_tab = self:model_tab()
-  local diff_tab, err = self:activate_selected(callback)
+  local diff_tab, err = self:activate_selected(callback, opts)
   if source_tab.kind == "log" and diff_tab and self.on_model_tab_open then
     self:on_model_tab_open(diff_tab)
   end
@@ -1429,35 +1434,14 @@ function GitView:open_file_comparison(source, load, selection_is_current, opts)
   end
   local function present(comparison, tab)
     if not comparison then return end
+    require("plugins.git.comparison").attach(comparison, self, tab, source)
+    local target = panes.pane_for_constraint(comparison.pane_constraint) or destination
     if comparison.buffer_view_b then
-      local record = tab.changed_files[tab.selected_file]
       comparison.initial_change_direction = opts.change_direction
       if opts.change_direction then comparison.pending_first_change_reveal = true end
-      local function continue_navigation(_, direction)
-        if comparison.updater_idx or not comparison.diff_model then return false end
-        if poi.get_remote_source(project) ~= source then return false end
-        local points = poi.points_for_view(source, { remote = true }) or {}
-        for index, point in ipairs(points) do
-          if point.record == record then
-            local next_point = points[index + direction]
-            if not next_point then return false end
-            local pane = panes.pane_for_view(comparison)
-            if not pane then return false end
-            poi.select(source, next_point, { remote = true, preview = false })
-            core.log_quiet("Git comparison continues to %s", changed_file_path(next_point.record))
-            return poi.activate(source, next_point, {
-              pane = pane, placement = "current", remote = true,
-              change_direction = direction,
-            })
-          end
-        end
-        return false
-      end
-      comparison.buffer_view_a.continue_point_of_interest = continue_navigation
-      comparison.buffer_view_b.continue_point_of_interest = continue_navigation
     end
     local placed, reason = panes.place(function() return comparison end, {
-      pane = destination, placement = placement, focus = opts.preserve_focus ~= true,
+      pane = target, placement = placement, focus = opts.preserve_focus ~= true,
       reason = "git-file-comparison",
     })
     if not placed then
@@ -1536,8 +1520,8 @@ function GitView:point_of_interest_for_pane(view, line)
     line2 = line,
     col2 = math.max(2, #text + 1),
     text_bounds = true,
-    activate = function()
-      local opened, err = self:activate_selected_point(function() core.redraw = true end)
+    activate = function(_, _, opts)
+      local opened, err = self:activate_selected_point(function() core.redraw = true end, opts)
       if not opened and err then
         core.log_quiet("Git View: Point of Interest Activation skipped: %s", err.message or err.kind)
       end

@@ -361,7 +361,7 @@ startup_measure("font_prose_and_heading_construction", function()
   )
 end)
 -- Keep scrollbars visible in a small/contracted form instead of expanding/fading.
--- Set this before constructing singleton views such as the File Tree.
+-- Set this before constructing Views such as the File Tree.
 config.force_scrollbar_status = "contracted"
 -- First-party editable file tree.
 require_core_plugin "custom_nagview"

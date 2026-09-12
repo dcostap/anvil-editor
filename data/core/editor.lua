@@ -50,6 +50,10 @@ function Editor:can_suspend()
   return self.buffer.abs_filename ~= nil
 end
 
+function Editor:get_pane_constraint()
+  if not self.buffer.abs_filename then return self end
+end
+
 function Editor:get_navigation_state()
   return {
     selection_state = self:get_selection_state(),

@@ -16,6 +16,34 @@ local M = {
 
 core.panes = M
 
+---An owner identifies the activity accepted by a constrained Pane.
+---Views share an opaque pane_constraint value, or provide get_pane_constraint for dynamic ownership.
+---A duplicate activity needs a new owner. An unrelated ordinary View returns nil.
+function M.view_constraint(view)
+  if not view then return nil end
+  if view.get_pane_constraint then return view:get_pane_constraint() end
+  return view.pane_constraint
+end
+
+function M.constraint(target)
+  local pane = M.find(target)
+  return pane and M.view_constraint(pane.current_view)
+end
+
+function M.accepts(target, view)
+  local pane = M.find(target)
+  if not pane then return false end
+  return M.is_disposable(pane)
+    or M.constraint(pane) == M.view_constraint(view)
+end
+
+function M.pane_for_constraint(owner)
+  if not owner then return nil end
+  for _, pane in ipairs(M.ordered()) do
+    if M.constraint(pane) == owner then return pane end
+  end
+end
+
 local function quiet(message, ...)
   if core.log_quiet then core.log_quiet(message, ...) end
 end
@@ -246,6 +274,9 @@ function M.create(opts)
     quiet("Pane create failed: %s", tostring(err))
     return nil, err
   end
+  if M.pane_for_constraint(M.view_constraint(view)) then
+    return nil, "Activity already belongs to a Pane"
+  end
   local pane = create_identity(view, opts)
   local after = opts.after_group and group_index(opts.after_group)
   local group = create_group(pane, after and after + 1)
@@ -269,11 +300,14 @@ function M.split(target, direction, opts)
     quiet("Pane split failed target=%s: %s", pane.id, tostring(err))
     return nil, err
   end
+  if M.pane_for_constraint(M.view_constraint(view)) then
+    return nil, "Activity already belongs to a Pane"
+  end
   local new_pane = create_identity(view, opts)
   new_pane.group = pane.group
   pane.group.root = layout.split(pane.group.root, pane, direction, new_pane, opts)
-  M.visible_group_value = pane.group
   if opts.focus ~= false then
+    M.visible_group_value = pane.group
     M.active_pane = new_pane
     focus_view(new_pane)
   end
@@ -766,7 +800,6 @@ function M.is_disposable(target)
   local Editor = require "core.editor"
   return view.extends and view:extends(Editor)
     and buffer
-    and buffer.intellij_untitled
     and buffer.new_file
     and not buffer.filename
     and not buffer.abs_filename
@@ -779,6 +812,9 @@ function M.move_and_merge(source_target, destination_target)
   local destination = M.find(destination_target)
   if not source or not destination then return false, "invalid source or destination Pane" end
   if source == destination then return false, "source and destination Pane are the same" end
+  if not M.accepts(destination, source.current_view) then
+    return nil, "Pane owners are incompatible"
+  end
 
   source.history.entries[source.history.index].state = capture_navigation_state(source.current_view)
   destination.history.entries[destination.history.index].state =
@@ -965,6 +1001,11 @@ function M.present(view, opts)
       history_limit = opts.history_limit,
     }
   end
+  local activity_pane = M.pane_for_constraint(M.view_constraint(view))
+  if activity_pane then
+    if activity_pane ~= pane then quiet("Pane admission: reusing activity Pane %s", activity_pane.id) end
+    pane = activity_pane
+  end
   flush_pending_edit(pane.current_view)
   local existing = M.pane_for_view(view)
   if existing and existing ~= pane then
@@ -982,27 +1023,25 @@ function M.present(view, opts)
     end
   end
   local current = pane.current_view
+  if current ~= view and not M.accepts(pane, view) then
+    if existing then return nil, "View is owned by an incompatible Pane" end
+    quiet("Pane admission: opening a new group after %s", pane.id)
+    return M.create {
+      factory = function() return view end, after_group = pane.group,
+      focus = opts.focus, history_limit = opts.history_limit,
+    }
+  end
   if current ~= view and current.can_suspend and current:can_suspend() == false then
-    local Editor = require "core.editor"
-    if not existing and current:extends(Editor) then
-      if M.is_disposable(pane) then
-        local committed = false
-        local function approved()
-          if not M.contains(pane) or pane.current_view ~= current then return end
-          commit_non_suspendable_replacement(pane, current, view, opts)
-          committed = true
-        end
-        if opts.force or not current.can_close then approved() else current:can_close(approved) end
-        if committed then return pane end
-        return nil, "View replacement is pending or was canceled"
+    if not existing and M.is_disposable(pane) then
+      local committed = false
+      local function approved()
+        if not M.contains(pane) or pane.current_view ~= current then return end
+        commit_non_suspendable_replacement(pane, current, view, opts)
+        committed = true
       end
-      quiet("Pane manager: opening a new group after %s to keep its Untitled Editor", pane.id)
-      return M.create {
-        factory = function() return view end,
-        after_group = pane.group,
-        focus = opts.focus,
-        history_limit = opts.history_limit,
-      }
+      if opts.force or not current.can_close then approved() else current:can_close(approved) end
+      if committed then return pane end
+      return nil, "View replacement is pending or was canceled"
     end
     return nil, "Current View requires transactional replacement"
   end
@@ -1179,6 +1218,10 @@ function M.move_current_view(source_target, destination_target, opts)
   local destination = M.find(destination_target)
   if not source or not destination then return nil, "invalid source or destination Pane" end
   if source == destination then return nil, "source and destination Pane are the same" end
+  if not M.accepts(destination, source.current_view) then return nil, "Pane owners are incompatible" end
+  if M.constraint(source) and #collect_owned_views(source) > 1 then
+    return nil, "Move the complete constrained Pane instead"
+  end
   flush_pending_edit(source.current_view)
 
   local old = destination.current_view
@@ -1210,6 +1253,9 @@ function M.move_current_view_to_split(source_target, direction, opts)
   opts = opts or {}
   local source = M.find(source_target or M.active_pane)
   if not source then return nil, "invalid source Pane" end
+  if M.constraint(source) and #collect_owned_views(source) > 1 then
+    return nil, "Move the complete constrained Pane instead"
+  end
   if direction ~= "left" and direction ~= "right"
       and direction ~= "up" and direction ~= "down" then
     return nil, "invalid split direction"
@@ -1243,6 +1289,9 @@ function M.move_current_view_to_new_group(source_target, opts)
   opts = opts or {}
   local source = M.find(source_target or M.active_pane)
   if not source then return nil, "invalid source Pane" end
+  if M.constraint(source) and #collect_owned_views(source) > 1 then
+    return nil, "Move the complete constrained Pane instead"
+  end
   flush_pending_edit(source.current_view)
   local transfer = detach_current_view_for_move(source)
   local moved = transfer.view
@@ -1263,8 +1312,7 @@ function M.replace_view(target, factory, opts)
   assert(type(factory) == "function", "View replacement requires a factory")
   local old = pane.current_view
   local suspendable = not old.can_suspend or old:can_suspend() ~= false
-  local Editor = require "core.editor"
-  if suspendable or old:extends(Editor) then
+  if suspendable or M.constraint(pane) then
     local view, err = construct_view(factory)
     if not view then return nil, err end
     local result, present_err = M.present(view, { pane = pane, focus = opts.focus })
@@ -1277,6 +1325,13 @@ function M.replace_view(target, factory, opts)
     if not view then
       old.discard_buffer_on_close = nil
       failure = err
+      return
+    end
+    if not M.accepts(pane, view) then
+      old.discard_buffer_on_close = nil
+      local placed
+      placed, failure = M.present(view, { pane = pane, focus = opts.focus })
+      result = placed and view or nil
       return
     end
     commit_non_suspendable_replacement(pane, old, view, opts)
@@ -1303,17 +1358,22 @@ function M.place(factory, opts)
       pane, err = M.create { factory = factory, focus = opts.focus }
       view = pane and pane.current_view or nil
     end
-  elseif placement == "new" then
-    pane, err = M.create { factory = factory, focus = opts.focus }
-    view = pane and pane.current_view or nil
-  elseif placement == "split" then
-    if not target then return nil, "split placement requires a target Pane" end
-    pane, err = M.split(target, opts.direction or "right", {
-      factory = factory,
-      focus = opts.focus,
-      ratio = opts.ratio,
-    })
-    view = pane and pane.current_view or nil
+  elseif placement == "new" or placement == "split" then
+    if placement == "split" and not target then return nil, "split placement requires a target Pane" end
+    view, err = construct_view(factory)
+    if view then
+      local activity_pane = M.pane_for_constraint(M.view_constraint(view))
+      if activity_pane then
+        pane, err = M.present(view, { pane = activity_pane, focus = opts.focus })
+      elseif placement == "split" then
+        pane, err = M.split(target, opts.direction or "right", {
+          factory = function() return view end, focus = opts.focus, ratio = opts.ratio,
+        })
+      else
+        pane, err = M.create { factory = function() return view end, focus = opts.focus }
+      end
+      if not pane then view = nil end
+    end
   else
     return nil, "invalid View placement"
   end
@@ -1380,6 +1440,11 @@ function M.close_view(target, opts)
   local pane = M.find(target or M.active_pane)
   if not pane then return false end
   local view = opts.view or pane.current_view
+  if M.pane_for_view(view) == pane
+      and (view.owns_pane_constraint or M.view_constraint(view) == view)
+      and #collect_owned_views(pane) > 1 then
+    return M.close(pane, opts)
+  end
   local found, other_view = false, false
   for _, candidate in ipairs(collect_owned_views(pane)) do
     if candidate == view then found = true else other_view = true end
@@ -1537,7 +1602,29 @@ function M.save_workspace_state(save_view)
     local ok, saved = pcall(save_view, pane.current_view)
     if ok and saved then
       valid[pane] = true
-      state.panes[#state.panes + 1] = { id = pane.id, view = saved }
+      local record = { id = pane.id, view = saved }
+      if M.constraint(pane) then
+        -- Keep the owner when a related capture is current at shutdown.
+        record.related_views = {}
+        local indices = {}
+        for _, view in ipairs(collect_owned_views(pane)) do
+          local saved_ok, related = pcall(save_view, view)
+          if saved_ok and related then
+            record.related_views[#record.related_views + 1] = related
+            indices[view] = #record.related_views
+          end
+        end
+        record.history = {}
+        for index, entry in ipairs(pane.history.entries) do
+          if indices[entry.view] then
+            record.history[#record.history + 1] = {
+              view_index = indices[entry.view], state = entry.state, kind = entry.kind,
+            }
+            if index == pane.history.index then record.history_index = #record.history end
+          end
+        end
+      end
+      state.panes[#state.panes + 1] = record
     elseif not ok then
       quiet("Workspace: skipped Pane %s after View save failed: %s", pane.id, tostring(saved))
     end
@@ -1596,13 +1683,56 @@ function M.restore_workspace_state(state, load_view)
   local restored = {}
   for _, record in ipairs(state.panes) do
     if type(record) == "table" and type(record.id) == "string" and not restored[record.id] then
-      local ok, view = pcall(load_view, record.view)
+      local related, owner = {}, nil
+      for index, saved in ipairs(record.related_views or {}) do
+        local ok, view = pcall(load_view, saved)
+        if ok and view then
+          if view.get_pane_constraint or view.owns_pane_constraint then
+            owner = M.view_constraint(view) or owner
+          else
+            owner = owner or M.view_constraint(view)
+          end
+          related[index] = view
+        end
+      end
+      -- Reconnect captures after loading their owner, even when the owner is outside history.
+      owner = owner or {}
+      for _, view in pairs(related) do view.pane_constraint = owner end
+      local selected = record.history and record.history[record.history_index or 1]
+      local view = selected and related[selected.view_index]
+      local ok = view ~= nil
+      if not view then ok, view = pcall(load_view, record.view) end
       if ok and view then
         local pane = create_restored_identity(view, record.id)
+        if selected and related[selected.view_index] then
+          pane.history.entries = {}
+          local referenced = {}
+          for index, entry in ipairs(record.history) do
+            local candidate = related[entry.view_index]
+            if candidate then
+              claim_view(pane, candidate)
+              referenced[candidate] = true
+              pane.history.entries[#pane.history.entries + 1] = {
+                view = candidate, state = entry.state, kind = entry.kind,
+              }
+              if index == record.history_index then pane.history.index = #pane.history.entries end
+            end
+          end
+          for _, candidate in pairs(related) do
+            if not referenced[candidate] then
+              claim_view(pane, candidate)
+              pane.retained_views[#pane.retained_views + 1] = candidate
+            end
+          end
+          restore_navigation_state(view, pane.history.entries[pane.history.index].state)
+        end
         restored[pane.id] = pane
         M.next_pane_id = math.max(M.next_pane_id, numeric_id(pane.id, "pane"))
       else
         quiet("Workspace: pruned invalid View for Pane %s: %s", record.id, tostring(view))
+      end
+      for _, candidate in pairs(related) do
+        if not M.pane_for_view(candidate) then call_lifecycle(candidate, "on_close") end
       end
     end
   end
@@ -1664,6 +1794,7 @@ end
 
 function M.validate()
   local seen_panes = {}
+  local activity_panes = {}
   local seen_current_views = {}
   local seen_owned_views = {}
   for _, group in ipairs(M.groups) do
@@ -1678,6 +1809,11 @@ function M.validate()
       assert(pane.group == group, "Pane points to the wrong Pane Group")
       assert(pane.id and M.panes_by_id[pane.id] == pane, "invalid Pane registry")
       assert(pane.current_view, "Pane has no Current View")
+      local activity = M.constraint(pane)
+      if activity then
+        assert(not activity_panes[activity], "Activity belongs to more than one Pane")
+        activity_panes[activity] = pane
+      end
       assert(pane.history and #pane.history.entries > 0, "Pane has no View history")
       assert(pane.history.index >= 1 and pane.history.index <= #pane.history.entries,
         "Pane View history index is invalid")
@@ -1688,6 +1824,7 @@ function M.validate()
       assert(pane.current_view.__pane_owner == pane, "Current View points to the wrong Pane")
       for _, entry in ipairs(pane.history.entries) do
         assert(entry.view, "Pane View history entry has no View")
+        assert(M.view_constraint(entry.view) == activity, "Pane contains an unrelated View")
         assert(not seen_owned_views[entry.view] or seen_owned_views[entry.view] == pane,
           "View is retained by more than one Pane")
         seen_owned_views[entry.view] = pane
@@ -1696,6 +1833,7 @@ function M.validate()
       for _, view in ipairs(pane.retained_views or {}) do
         assert(view and not history_has_view(pane, view),
           "retained View must not duplicate a Navigation Place")
+        assert(M.view_constraint(view) == activity, "Pane retains an unrelated View")
         assert(not seen_owned_views[view] or seen_owned_views[view] == pane,
           "View is retained by more than one Pane")
         seen_owned_views[view] = pane

@@ -65,6 +65,7 @@ test.describe("Commit remote POIs", function()
       return view, view.buffer_view_b
     end
     test.ok(poi.navigate_remote(1))
+    destination = panes.active()
     local first, side = ready()
     test.equal(side.buffer:get_selection(), 2)
     poi.navigate(side, 1)
@@ -161,7 +162,7 @@ test.describe("Commit remote POIs", function()
   end)
   end
 
-  test.it("keeps the tree local and opens remote comparisons in the requesting Pane", function(context)
+  test.it("keeps the tree local and opens remote comparisons in their own Pane", function(context)
     local source = context.source
     local tree = source:pane_view("file-list")
     test.equal(poi.get_remote_source(), tree)
@@ -171,6 +172,8 @@ test.describe("Commit remote POIs", function()
     poi.set_remote_source(tree)
     local destination = panes.create { factory = function() return View() end }
     test.ok(poi.navigate_remote(1))
+    test.not_equal(panes.active(), destination)
+    destination = panes.active()
     local first = destination.current_view
     test.not_equal(first, source)
     test.contains(table.concat(first.buffer_view_b.buffer.lines), "after src/a.lua")
@@ -188,7 +191,7 @@ test.describe("Commit remote POIs", function()
     tree:toggle_path_tree_folder(1)
     local destination = panes.create { factory = function() return View() end }
     test.ok(poi.navigate_remote(1))
-    test.not_nil(destination.current_view.buffer_view_a)
+    test.not_nil(panes.active().current_view.buffer_view_a)
     test.equal(tree:path_tree_record_for_line(tree.buffer:get_selection()).new_path, "src/a.lua")
   end)
 
@@ -214,6 +217,7 @@ test.describe("Commit remote POIs", function()
     context.source:update_pane_buffers(true)
     local destination = panes.create { factory = function() return View() end }
     test.ok(poi.navigate_remote(1))
+    destination = panes.active()
     local comparison = destination.current_view
     test.equal(tostring(comparison), "ImageComparisonView")
     local path = comparison.left_view.path

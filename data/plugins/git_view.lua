@@ -379,7 +379,7 @@ function git_view.restore_state(project, state, opts)
     if state and state.hidden then
       existing:hide()
     else
-      existing:show()
+      if not opts or opts.focus ~= false then existing:show() else existing.hidden = false end
       existing.git_view:set_refresh_pending()
     end
     return existing, existing.git_view

@@ -204,6 +204,8 @@ end
 
 function TerminalView:new(options)
   TerminalView.super.new(self)
+  self.pane_constraint = {}
+  self.owns_pane_constraint = true
   options = options or {}
   self.context = "workspace"
   self.terminal_view = true
@@ -343,6 +345,7 @@ function TerminalTextCaptureView:new(source, capture)
     read_only_reason = "Terminal text captures are read-only",
   })
   self.terminal_text_capture = true
+  self.pane_constraint = source and panes.view_constraint(source) or {}
   self.terminal_title = terminal_title
   self.terminal_capture = capture
   self.color_cache = {}
@@ -429,8 +432,18 @@ function TerminalView:duplicate()
   }
 end
 
+function TerminalTextCaptureView:get_module() return "plugins.terminal" end
+
+function TerminalTextCaptureView:get_state()
+  local capture = common.merge({}, self.terminal_capture)
+  capture.cursor_line, capture.cursor_col = self.buffer:get_selection()
+  capture.viewport_line = math.floor(self.scroll.y / self:get_line_height()) + 1
+  return { kind = "text_capture", capture = capture }
+end
+
 function TerminalView.from_state(state)
   if type(state) ~= "table" then return nil end
+  if state.kind == "text_capture" then return TerminalTextCaptureView(nil, state.capture) end
   return TerminalView { cwd = state.cwd, shell = state.shell }
 end
 

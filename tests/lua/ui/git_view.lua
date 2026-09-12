@@ -139,7 +139,7 @@ test.describe("Git View command", function()
     test.ok(first_view.model ~= second_view.model)
   end)
 
-  test.test("git:open_log creates the Git Log in the invoking Pane", function(context)
+  test.test("git:open_log preserves the invoking Pane and creates its own group", function(context)
     local first_session, first_view = open_fake_git_view(context.project)
     local first_pane = panes.pane_for_view(first_view)
     local invoking_pane = panes.split(first_pane, "right", {
@@ -151,8 +151,8 @@ test.describe("Git View command", function()
 
     test.equal(command.perform("git:open_log"), true)
 
-    local opened = invoking_pane.current_view
-    test.equal(panes.active(), invoking_pane)
+    local opened = panes.active().current_view
+    test.not_equal(panes.active().group, invoking_pane.group)
     test.ok(opened ~= first_view)
     test.ok(opened.git_session ~= first_session)
     test.equal(first_pane.current_view, first_view)
@@ -269,7 +269,7 @@ test.describe("Git View command", function()
     panes.present(second, { pane = active_pane })
 
     local git_pane = panes.split(active_pane, "right", {
-      factory = function() return View() end,
+      factory = function() return Editor(Buffer(nil, nil, true)) end,
       focus = true,
     })
     local _, view = open_fake_git_view(context.project)
@@ -919,11 +919,6 @@ test.describe("Git View command", function()
     }
     local backend = {}
     for key, value in pairs(fake_backend) do backend[key] = value end
-    local finish_files
-    backend.changed_files = function(repo, left, right, opts, callback)
-      finish_files = callback
-      return { cancel = function() end }
-    end
     backend.file_at = function(repo, rev, relpath, opts, callback)
       callback(rev .. ":" .. relpath .. "\n", nil)
       return { cancel = function() end }
@@ -950,8 +945,8 @@ test.describe("Git View command", function()
     test.not_nil(details:get_point_of_interest_at(line))
 
     test.equal(command.perform("core:activate_point_of_interest"), true)
-    test.equal(panes.active().current_view, view)
-    finish_files(commit.changed_files, nil)
+    test.equal(panes.pane_for_view(view).current_view, view)
+    test.not_equal(panes.active().group, panes.pane_for_view(view).group)
     local opened
     for _, candidate in ipairs(view.model.tabs) do
       if candidate.kind == "commit_diff" then opened = candidate end
@@ -1567,7 +1562,9 @@ test.describe("Git View command", function()
     local session, view = open_fake_git_view(context.project)
     view.model:log_tab().commits = {
       { hash = "a", short_hash = "a", subject = "First", parents = {} },
-      { hash = "b", short_hash = "b", subject = "Second", parents = {} },
+      { hash = "b", short_hash = "b", subject = "Second", parents = {},
+        changed_files_loaded = true,
+        changed_files = {{ status = "added", new_path = "b.lua" }} },
     }
     view:update_pane_buffers()
     local list = view:pane_view("log-list")
@@ -1608,7 +1605,8 @@ test.describe("Git View command", function()
 
     test.ok(view:on_mouse_pressed("left", x, y, 2))
     test.ok(view:on_mouse_released("left", x, y))
-    test.equal(#session_views(session), 2)
+    test.not_nil(panes.active().current_view.buffer_view_b)
+    test.not_equal(panes.active().group, panes.pane_for_view(view).group)
   end)
 
   test.it("uses mouse interaction for changed-file folders", function(context)
@@ -1982,7 +1980,11 @@ test.describe("Git View command", function()
     local state = panes.save_workspace_state(function(candidate)
       return { module = candidate:get_module(), state = candidate:get_state() }
     end)
-    test.equal(state.panes[1].view.state.tab_id, history_tab.id)
+    local saved_current
+    for _, record in ipairs(state.panes) do
+      if record.id == state.focused_pane_id then saved_current = record.view end
+    end
+    test.equal(saved_current.state.tab_id, history_tab.id)
 
     panes.reset_for_tests()
     test.equal(panes.git_sessions[session.key], session)
@@ -1994,6 +1996,47 @@ test.describe("Git View command", function()
     test.equal(restored.tab_id, history_tab.id)
     test.ok(restored ~= history_view)
     test.equal(panes.git_sessions[session.key].git_tab_views[history_tab.id], restored)
+  end)
+
+  test.it("restores a commit comparison and its capture without losing the shared destination", function(context)
+    core.projects = { context.project }
+    use_fake_command_git_views(context)
+    local session, source = open_fake_git_view(context.project)
+    local commit = {
+      hash = "saved-commit", parents = { "saved-parent" }, subject = "Saved",
+      changed_files_loaded = true,
+      changed_files = {
+        { status = "modified", old_path = "a.lua", new_path = "a.lua" },
+        { status = "modified", old_path = "b.lua", new_path = "b.lua" },
+      },
+    }
+    source.model:log_tab().commits = { commit }
+    source.model:log_tab().selected_commit = 1
+    source:update_pane_buffers(true)
+    local poi = require "core.poi"
+    test.ok(poi.activate(source:pane_view("details"), source:detail_file_points()[1]))
+    local destination = panes.active()
+    local comparison = destination.current_view
+    local owner = panes.constraint(destination)
+    test.ok(comparison:open_text_capture())
+    local state = panes.save_workspace_state(function(candidate)
+      return { module = candidate:get_module(), state = candidate:get_state() }
+    end)
+    test.ok(panes.restore_workspace_state(state, function(saved)
+      return require(saved.module).from_state(saved.state)
+    end))
+    destination = test.not_nil(panes.pane_for_constraint(owner))
+    test.ok(destination.current_view.text_capture)
+    test.not_nil(panes.back(destination).buffer_view_b)
+    local restored_source = panes.git_sessions[session.key].git_view
+    restored_source.model:log_tab().commits = { commit }
+    restored_source.model:log_tab().selected_commit = 1
+    restored_source:update_pane_buffers(true)
+    panes.focus(panes.pane_for_view(restored_source))
+    test.ok(poi.activate(restored_source:pane_view("details"), restored_source:detail_file_points()[2]))
+    test.equal(panes.active(), destination)
+    test.equal(panes.count(), 2)
+    test.ok(panes.validate())
   end)
 
   test.test("syncing real tabs follows model tab id changes", function(context)
