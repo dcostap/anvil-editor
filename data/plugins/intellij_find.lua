@@ -1005,21 +1005,20 @@ local textview_on_mouse_pressed_wrapper
 local function draw_find_overview(view)
   local state = visible_find_state(view)
   if not state or #state.matches == 0 then return end
-  local sx, sy, sw, sh = view.v_scrollbar:get_track_rect()
-  if sw <= 0 or sh <= 0 then return end
   local source_h = math.max(1, view:get_scrollable_size())
-  local min_h = math.min(sh, math.max(2, common.round(3 * SCALE)))
 
   local function draw_match(match, selected)
     local first_row = view:get_visual_row(match.line, match.col1, false)
     local last_row = view:get_visual_row(match.line, math.max(match.col1, match.col2 - 1), false)
     local start_offset = view:get_visual_row_y_offset(first_row)
     local end_offset = view:get_visual_row_y_offset(last_row + 1)
-    local y = sy + common.clamp(start_offset / source_h, 0, 1) * sh
-    local h = math.min(sh, math.max(min_h, (end_offset - start_offset) / source_h * sh))
-    y = math.min(y, sy + sh - h)
-    renderer.draw_rect(sx, y, sw, h,
-      selected and style.search_overview or style.search_overview_secondary)
+    local x, y, w, h = view.v_scrollbar:get_overview_marker_rect(
+      start_offset / source_h, end_offset / source_h
+    )
+    if x then
+      renderer.draw_rect(x, y, w, h,
+        selected and style.search_overview or style.search_overview_secondary)
+    end
   end
 
   for index, match in ipairs(state.matches) do

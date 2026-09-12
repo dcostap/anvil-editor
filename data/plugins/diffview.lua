@@ -1934,18 +1934,20 @@ function DiffView:draw_scrollbar()
   for _, side in ipairs { "a", "b" } do
     local view = side == "a" and self.buffer_view_a or self.buffer_view_b
     local scrollbar = view.v_scrollbar
-    local x, y, w, h = scrollbar:get_track_rect()
     for _, marker in ipairs(overview_geometry(self, side)) do
       local color = overview_marker_color(marker.tag)
 
       if color then
-        local marker_y = y + marker.first * h
-        local marker_h = math.max(common.round(4 * SCALE), (marker.last - marker.first) * h)
-        local marker_w = math.max(common.round(2 * SCALE), math.min(w, common.round(5 * SCALE)))
-        local marker_x = x + w - marker_w
-
-        renderer.draw_rect(marker_x, marker_y, marker_w, marker_h, color)
-
+        local x, marker_y, w, marker_h = scrollbar:get_overview_marker_rect(
+          marker.first, marker.last
+        )
+        if x then
+          local marker_w = math.max(
+            common.round(2 * SCALE), math.min(w, common.round(5 * SCALE))
+          )
+          local marker_x = x + w - marker_w
+          renderer.draw_rect(marker_x, marker_y, marker_w, marker_h, color)
+        end
       end
     end
   end

@@ -5,6 +5,7 @@ style.divider_size = common.round(1 * SCALE)
 style.scrollbar_size = common.round(12.6 * SCALE)
 style.expanded_scrollbar_size = common.round(25.2 * SCALE)
 style.minimum_thumb_size = common.round(28 * SCALE)
+style.scrollbar_overview_min_height = math.max(4, common.round(4 * SCALE))
 style.contracted_scrollbar_margin = common.round(8 * SCALE)
 style.expanded_scrollbar_margin = common.round(12 * SCALE)
 style.scrollbar_resize_edge_guard = 0

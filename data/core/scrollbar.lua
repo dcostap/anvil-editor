@@ -228,6 +228,28 @@ function Scrollbar:get_track_rect()
   return self:normal_to_real(self:_get_track_rect_normal())
 end
 
+---Map a normalized content range into this scrollbar's track.
+---Preserves the shared minimum size without extending beyond the track.
+---@param first number Normalized range start in [0, 1]
+---@param last number Normalized range end in [0, 1]
+---@return number? x
+---@return number? y
+---@return number? w
+---@return number? h
+function Scrollbar:get_overview_marker_rect(first, last)
+  local x, y, w, h = self:get_track_rect()
+  if w <= 0 or h <= 0 then return nil end
+
+  first = common.clamp(first, 0, 1)
+  last = common.clamp(last, first, 1)
+  local marker_h = math.min(h, math.max(
+    style.scrollbar_overview_min_height,
+    (last - first) * h
+  ))
+  local marker_y = common.clamp(y + first * h, y, y + h - marker_h)
+  return x, marker_y, w, marker_h
+end
+
 
 ---Check what part of scrollbar overlaps a point in normalized coordinates.
 ---Internal helper - use overlaps() for real coordinates.

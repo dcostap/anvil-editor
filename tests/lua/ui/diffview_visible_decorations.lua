@@ -235,4 +235,23 @@ test.describe("Diff View visible decorations", function()
     end
     if not ok then error(err, 0) end
   end)
+
+  test.it("uses the shared overview minimum for one-line changes", function(context)
+    local view = open_diff(context, fixture())
+    local previous = style.scrollbar_overview_min_height
+    style.scrollbar_overview_min_height = 17
+    local ok, err = pcall(function()
+      local _, markers = capture(view, "draw_scrollbar")
+      local _, track_y, _, track_h = view.buffer_view_a.v_scrollbar:get_track_rect()
+      test.ok(#markers > 0, "fixture needs overview markers")
+      for _, marker in ipairs(markers) do
+        test.ok(marker.h >= style.scrollbar_overview_min_height,
+          "one-line overview marker ignored the shared minimum")
+        test.ok(marker.y >= track_y and marker.y + marker.h <= track_y + track_h,
+          "overview marker extended beyond the scrollbar track")
+      end
+    end)
+    style.scrollbar_overview_min_height = previous
+    if not ok then error(err, 0) end
+  end)
 end)

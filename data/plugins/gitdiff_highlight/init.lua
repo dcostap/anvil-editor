@@ -681,11 +681,7 @@ function TextView:draw_scrollbar()
 	local state = get_state(self.buffer)
 	if not state.is_in_repo or not state.ranges or #state.ranges == 0 then return end
 
-	local sx, sy, sw, sh = self.v_scrollbar:get_track_rect()
-	if sw <= 0 or sh <= 0 then return end
-
 	local source_h = math.max(1, self:get_scrollable_size())
-	local min_h = style.gitdiff_overview_min_height
 
 	for _, range in ipairs(state.ranges) do
 		local count = math.max(0, range.current_end - range.current_start)
@@ -701,15 +697,14 @@ function TextView:draw_scrollbar()
 		end
 		local ratio_start = common.clamp(start_offset / source_h, 0, 1)
 		local ratio_end = common.clamp(end_offset / source_h, ratio_start, 1)
-		local y = sy + ratio_start * sh
-		local h = math.max(min_h, (ratio_end - ratio_start) * sh)
-		if y + h > sy + sh then h = sy + sh - y end
-		if h > 0 then
+		local marker_x, y, sw, h = self.v_scrollbar:get_overview_marker_rect(
+			ratio_start, ratio_end
+		)
+		if marker_x then
 			-- Overview markers are a narrow stripe aligned to the left edge of the
 			-- actual vertical scrollbar handle/track area. They are about a third of
 			-- the handle width and are drawn before the thumb is redrawn below.
 			local marker_w = math.max(1, sw / 3.5)
-			local marker_x = sx
 			renderer.draw_rect(marker_x, y, marker_w, h, overview_color_for_diff(range.type))
 		end
 	end
