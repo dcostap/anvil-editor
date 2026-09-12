@@ -1940,7 +1940,7 @@ function DiffView:draw_scrollbar()
 
       if color then
         local marker_y = y + marker.first * h
-        local marker_h = math.max(common.round(2 * SCALE), (marker.last - marker.first) * h)
+        local marker_h = math.max(common.round(4 * SCALE), (marker.last - marker.first) * h)
         local marker_w = math.max(common.round(2 * SCALE), math.min(w, common.round(5 * SCALE)))
         local marker_x = x + w - marker_w
 
