@@ -7,6 +7,7 @@ local style = require "core.style"
 local M = {}
 
 local candidates = setmetatable({}, { __mode = "k" })
+local ignored_dwell_positions = setmetatable({}, { __mode = "k" })
 local next_samples = setmetatable({}, { __mode = "k" })
 local pending_edits = setmetatable({}, { __mode = "k" })
 local feedback_started_at
@@ -77,6 +78,7 @@ function M.edited(view, now)
     state = navigation_state(view),
   }
   candidates[view] = nil
+  ignored_dwell_positions[view] = nil
   return true
 end
 
@@ -130,6 +132,7 @@ end
 
 function M.perform_jump(view, action, ...)
   local opts = options()
+  ignored_dwell_positions[view] = nil
   M.flush_edit(view, nil, true)
   local origin = navigation_state(view)
   local result = table.pack(action(view, ...))
@@ -152,15 +155,36 @@ function M.perform_jump(view, action, ...)
   return table.unpack(result, 1, result.n)
 end
 
+function M.ignore_current_dwell(view)
+  if not view then return false end
+  local state = navigation_state(view)
+  local caret = position(state.selection_state)
+  if not caret then return false end
+  candidates[view] = nil
+  ignored_dwell_positions[view] = caret
+  return true
+end
+
 function M.sample(view, now)
   local opts = options()
-  if not opts.enabled then candidates[view] = nil; return false end
+  if not opts.enabled then
+    candidates[view], ignored_dwell_positions[view] = nil, nil
+    return false
+  end
   local pane = panes.pane_for_view(view)
   if not pane or pane.current_view ~= view then candidates[view] = nil; return false end
 
   now = now or system.get_time()
   local state = navigation_state(view)
   local caret = position(state.selection_state)
+  local ignored = ignored_dwell_positions[view]
+  if ignored then
+    if caret and caret.line == ignored.line and caret.col == ignored.col then
+      candidates[view] = nil
+      return false
+    end
+    ignored_dwell_positions[view] = nil
+  end
   local recorded = current_recorded_position(pane)
   if not caret or not recorded then
     candidates[view] = nil
@@ -192,7 +216,8 @@ function M.update(view, now, force)
   local opts = options()
   now = now or system.get_time()
   if not opts.enabled then
-    candidates[view], next_samples[view], pending_edits[view] = nil, nil, nil
+    candidates[view], ignored_dwell_positions[view] = nil, nil
+    next_samples[view], pending_edits[view] = nil, nil
     return false
   end
   local edit_inserted = M.flush_edit(view, now)
@@ -233,6 +258,7 @@ end
 
 function M.reset()
   candidates = setmetatable({}, { __mode = "k" })
+  ignored_dwell_positions = setmetatable({}, { __mode = "k" })
   next_samples = setmetatable({}, { __mode = "k" })
   pending_edits = setmetatable({}, { __mode = "k" })
   feedback_started_at = nil

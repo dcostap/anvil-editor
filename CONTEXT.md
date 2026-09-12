@@ -487,7 +487,7 @@ _Avoid_: trigger, click action
 Supporting content shown for a selected Point of Interest without moving focus or opening its destination.
 
 **Local POI Navigation**:
-Navigation between Points of Interest in the focused View, with an optional preview but without explicit activation.
+Navigation between Points of Interest in the focused View, with an optional preview but without explicit activation. Intermediate targets do not become Navigation Places.
 
 **Remote POI Source**:
 A collection explicitly available for POI navigation from other Views. Each Project has at most one current Remote POI Source.

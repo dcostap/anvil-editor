@@ -4,6 +4,7 @@ local config = require "core.config"
 local Editor = require "core.editor"
 local navigation_history = require "core.navigation_history"
 local panes = require "core.panes"
+require "core.poi"
 local test = require "core.test"
 
 local function make_editor()
@@ -235,6 +236,33 @@ test.describe("automatic Editor Navigation History", function()
     test.equal(panes.history_length(pane), 2)
     test.equal(panes.back(pane), view)
     test.equal(view:get_selection_state().selections[1], 1)
+  end)
+
+  test.it("does not retain intermediate local POI navigation places", function()
+    local pane = panes.create { factory = make_editor, focus = false }
+    local view = pane.current_view
+    core.active_view = view
+    view.get_points_of_interest = function()
+      return {
+        { line = 10, col = 1 },
+        { line = 20, col = 1 },
+      }
+    end
+
+    test.ok(command.perform("core:next_point_of_interest"))
+    navigation_history.update(view, 100, true)
+    navigation_history.update(view, 104, true)
+    test.equal(panes.history_length(pane), 1)
+
+    test.ok(command.perform("core:next_point_of_interest"))
+    navigation_history.update(view, 110, true)
+    navigation_history.update(view, 114, true)
+    test.equal(panes.history_length(pane), 1)
+
+    test.equal(panes.back(pane), view)
+    test.equal(view:get_selection_state().selections[1], 1)
+    test.equal(panes.forward(pane), view)
+    test.equal(view:get_selection_state().selections[1], 20)
   end)
 
   test.it("returns to the latest dwell checkpoint before an older place", function()

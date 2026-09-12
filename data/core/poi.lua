@@ -2,6 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local navigation_feedback = require "core.navigation_feedback"
+local navigation_history = require "core.navigation_history"
 local panes = require "core.panes"
 
 local M = core.poi or {}
@@ -287,7 +288,9 @@ function M.navigate(view, direction, opts)
   for _, source in pairs(M.remote_sources) do
     if source.view == view then source.initial = false end
   end
-  return M.select(view, point, opts)
+  local selected = M.select(view, point, opts)
+  if selected then navigation_history.ignore_current_dwell(view) end
+  return selected
 end
 
 function M.navigate_remote(direction, opts)
