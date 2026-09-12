@@ -210,7 +210,7 @@ style.git_change_addition = c("08a91f")
 style.git_change_modification = {47, 169, 255, 255}
 style.git_change_deletion = c("ff5065")
 style.gitdiff_width = common.round(2 * SCALE)
-style.gitdiff_overview_min_height = math.max(4, common.round(4 * SCALE))
+style.gitdiff_overview_min_height = math.max(8, common.round(8 * SCALE))
 style.git_graph_colors = {
   c("0053ff"), c("08a91f"), c("7c3aed"), c("b66a00"), c("d82f55"), c("008c86"),
 }
