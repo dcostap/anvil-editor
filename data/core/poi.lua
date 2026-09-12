@@ -284,6 +284,11 @@ function M.navigate(view, direction, opts)
     local result = view:continue_point_of_interest(direction, opts)
     if result then return result end
   end
+  -- A caller may handle a final boundary before we show navigation feedback.
+  if not point and status == "boundary" and opts and opts.on_boundary then
+    local result = opts.on_boundary()
+    if result then return result end
+  end
   if not point then return show_navigation_feedback(status, direction) end
   for _, source in pairs(M.remote_sources) do
     if source.view == view then source.initial = false end

@@ -4,6 +4,7 @@ local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local Editor = require "core.editor"
 local poi = require "core.poi"
+local panes = require "core.panes"
 local test = require "core.test"
 
 local gitdiff = require "plugins.gitdiff_highlight"
@@ -45,6 +46,7 @@ test.describe("Point of Interest navigation", function()
   end)
 
   test.after_each(function(context)
+    if context.pane then panes.close(context.pane, { force = true }) end
     poi.remove_activation_provider("test-focused-activation")
     poi.remove_activation_provider("test-fallback-activation")
     for _, view in ipairs(context.diffviews or {}) do
@@ -106,6 +108,62 @@ test.describe("Point of Interest navigation", function()
     test.same({ view.buffer_view_b.buffer:get_selection() }, { 4, 1, 4, 1 })
     core.on_event("mousepressed", "x", 0, 0, 1)
     test.same({ view.buffer_view_b.buffer:get_selection() }, { 2, 1, 2, 1 })
+  end)
+
+  for _, direction in ipairs({ -1, 1 }) do
+    test.it("uses pane history at the Diff View POI boundary " .. direction, function(context)
+      local other = require("core.view")()
+      local pane = panes.create { factory = function() return other end }
+      context.pane = pane
+      local view, err = diffview.open({
+        contents = {
+          diffview.content.text("one\ntwo\nthree"),
+          diffview.content.text("one\nTWO\nthree"),
+        },
+      }, true)
+      test.ok(view, err)
+      context.diffviews = { view }
+      wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+      panes.present(view, { pane = pane })
+      if direction > 0 then
+        panes.present(other, { pane = pane })
+        test.equal(panes.back(pane), view)
+      end
+      core.set_active_view(view.buffer_view_b)
+      view.buffer_view_b.buffer:set_selection(2, 1)
+
+      -- Ordinary POI commands must not leave the Diff View.
+      command.perform(direction < 0 and "core:previous_point_of_interest" or "core:next_point_of_interest")
+      test.equal(pane.current_view, view)
+      core.on_event("mousepressed", direction < 0 and "x" or "y", 0, 0, 1)
+      test.equal(pane.current_view, other)
+    end)
+  end
+
+  test.it("keeps empty and computing Diff Views out of mouse history navigation", function(context)
+    local pane = panes.create { factory = function() return require("core.view")() end }
+    context.pane = pane
+    local view, err = diffview.open({
+      contents = {
+        diffview.content.text("same\n"),
+        diffview.content.text("same\n"),
+      },
+    }, true)
+    test.ok(view, err)
+    context.diffviews = { view }
+    panes.present(view, { pane = pane })
+    panes.present(require("core.view")(), { pane = pane })
+    test.equal(panes.back(pane), view)
+    core.set_active_view(view.buffer_view_b)
+    local function check_mouse()
+      for _, button in ipairs({ "x", "y" }) do
+        core.on_event("mousepressed", button, 0, 0, 1)
+        test.equal(pane.current_view, view)
+      end
+    end
+    check_mouse()
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    check_mouse()
   end)
 
   test.it("keeps Git-change navigation available across a file save", function(context)

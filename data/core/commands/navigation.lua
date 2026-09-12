@@ -12,16 +12,19 @@ command.add(function() return panes.is_forward_available() end, {
 })
 
 local function navigate_mouse(button, ...)
+  local command_name = button == "x" and "core:navigate_back" or "core:navigate_forward"
   local view = core.active_view
   local diff_view = view and view.diff_view_parent
   if diff_view then
-    local command_name = button == "x"
-      and "core:previous_point_of_interest"
-      or "core:next_point_of_interest"
-    return command.perform(command_name, ...)
+    require("core.poi").navigate(view, button == "x" and -1 or 1, {
+      on_boundary = function()
+        core.log_quiet("Diff View mouse navigation reached a POI boundary: %s", command_name)
+        return command.perform(command_name)
+      end,
+    })
+    return true
   end
 
-  local command_name = button == "x" and "core:navigate_back" or "core:navigate_forward"
   return command.perform(command_name, ...)
 end
 
