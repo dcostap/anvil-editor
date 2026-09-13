@@ -551,7 +551,9 @@ local function patch_buffer()
     treesitter.attach_or_update_buffer(self, "save")
     local path = buffer_path(self)
     if path and ts_symbol_index.reindex_file then
-      ts_symbol_index.reindex_file(path, { force = true, reason = "save" })
+      core.add_thread(function()
+        ts_symbol_index.reindex_file(path, { force = true, reason = "save" })
+      end)
     end
     return result
   end

@@ -301,6 +301,7 @@ local function start_project_watcher(index)
       symbol_index.mark_watch_paths_dirty(root, changed_paths, "project-watch", {
         project_files_refreshed = true,
         previous_membership = event and event.previous_membership,
+        file_info = event and event.file_info,
       })
     end
   end)
@@ -322,7 +323,7 @@ local function coalesce_scope_candidates(candidates)
     end
     if not covered then scopes[path] = value end
     processed = processed + 1
-    if processed % 128 == 0 then safe_yield(0) end
+    if processed % 32 == 0 then safe_yield(0) end
   end
   return scopes
 end
@@ -2136,29 +2137,25 @@ function symbol_index.clear_open_buffer(buffer, reason)
   return cleared
 end
 
-local function serializable_file_info(info)
-  if not info then return nil end
-  return {
-    type = info.type,
-    size = info.size,
-    modified = info.modified,
-  }
-end
-
 local function submit_targeted_file_reindex(index, path, opts)
   opts = opts or {}
   if not index or not path then return false, "no-index" end
   if not common.path_belongs_to(path, index.root) then return false, "outside-project" end
 
-  local reconciled, reconcile_error = project_files.reconcile(index.root, { [path] = true })
+  local reconciled, reconcile_error, _, file_info = project_files.reconcile(index.root, { [path] = true })
   if not reconciled then return false, reconcile_error or "Project file reconciliation failed" end
+  if index.status == "indexing" then
+    index.pending_reindex_paths = index.pending_reindex_paths or {}
+    index.pending_reindex_paths[path] = opts.reason or "file-dirty"
+    return true, "queued"
+  end
   local included = project_files.contains(index.root, path, "file") == true
-  local info = system.get_file_info(path)
+  local info = file_info[path]
   if index.native_snapshot then
     local language = included and info and info.type == "file" and registry.get(path) or nil
     local files = {}
     if language and language.query_sources and language.query_sources.outline then
-      files[1] = { path = path, root = index.root, info = serializable_file_info(info), language_id = language.id }
+      files[1] = { path = path }
     end
     index.generation = (index.generation or 0) + 1
     local scheduled, reason = submit_native_run(index, index.generation, {
@@ -2182,7 +2179,7 @@ local function submit_targeted_directories_reindex(index, dirs, opts)
       if not (common.path_equals(dir, index.root) or common.path_belongs_to(dir, index.root)) then
         return false, "outside-project"
       end
-      local info = system.get_file_info(dir)
+      local info = opts.file_info[dir]
       if info and info.type == "dir" then
         scan_roots[#scan_roots + 1] = dir
         remove_paths[#remove_paths + 1] = dir
@@ -2208,7 +2205,7 @@ local function submit_targeted_directories_reindex(index, dirs, opts)
           if common.path_equals(directory, index.root) then break end
           directory = common.dirname(directory)
         end
-        if i % 128 == 0 then safe_yield(0) end
+        if i % 32 == 0 then safe_yield(0) end
       end
     end
     index.generation = (index.generation or 0) + 1
@@ -2272,12 +2269,26 @@ function symbol_index.mark_directories_dirty(dirs, reason, opts)
   local matched = false
   local ignored = false
   for _, index in pairs(indexes) do
+    local file_info = opts.file_info
     if not opts.project_files_refreshed then
-      local reconciled, reconcile_error = project_files.reconcile(index.root, scopes)
+      local reconciled, reconcile_error, _, metadata = project_files.reconcile(index.root, scopes)
+      file_info = metadata
       if not reconciled then
         log_quiet("Tree-sitter Project directory reconciliation failed under %s: %s",
           tostring(index.root), tostring(reconcile_error))
       end
+    end
+    local missing = {}
+    for dir in pairs(scopes) do
+      if not file_info or file_info[dir] == nil then missing[#missing + 1] = dir end
+    end
+    if #missing > 0 then
+      local err
+      local metadata
+      metadata, err = project_files.stat_paths(missing)
+      if not metadata then return false, err end
+      file_info = file_info or {}
+      for path, info in pairs(metadata) do file_info[path] = info end
     end
     local index_dirs = {}
     for dir in pairs(scopes) do
@@ -2302,7 +2313,8 @@ function symbol_index.mark_directories_dirty(dirs, reason, opts)
             tostring(dir), tostring(index.root), tostring(opts.reason))
         end
       else
-        local submitted, submit_reason = submit_targeted_directories_reindex(index, index_dirs, opts)
+        local submitted, submit_reason = submit_targeted_directories_reindex(index, index_dirs,
+          common.merge(opts, { file_info = file_info }))
         if not submitted then
           index.status = "failed"
           index.symbol_status = "failed"
@@ -2380,16 +2392,23 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
       end
     end
     processed = processed + 1
-    if processed % 128 == 0 then safe_yield(0) end
+    if processed % 32 == 0 then safe_yield(0) end
   end
   local files_current = opts and opts.project_files_refreshed == true
+  local file_info = opts and opts.file_info
   if not files_current then
-    local reconciled, reconcile_error = project_files.reconcile(root, paths)
+    local reconciled, reconcile_error, _, metadata = project_files.reconcile(root, paths)
+    file_info = metadata
     files_current = reconciled == true
     if not reconciled then
       log_quiet("Tree-sitter Project watcher could not reconcile Project files under %s: %s",
         tostring(root), tostring(reconcile_error))
     end
+  end
+  if not file_info then
+    local err
+    file_info, err = project_files.stat_paths(paths)
+    if not file_info then return false, err end
   end
 
   local scope_candidates, file_candidates = {}, {}
@@ -2403,7 +2422,7 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
       if rules_scope then
         scope_candidates[rules_scope] = true
       else
-        local info = system.get_file_info(path)
+        local info = file_info[path]
         if info and info.type == "dir" then
           if watch_path_allowed(index, path, info, "dir") then
             scope_candidates[path] = true
@@ -2418,7 +2437,7 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
           local parent = common.dirname(path)
           if not old_membership[path] and not watch_path_allowed(index, path, nil, "dir") then
             ignored = ignored + 1
-          elseif watch_path_allowed(index, parent, system.get_file_info(parent), "dir") then
+          elseif watch_path_allowed(index, parent, file_info[parent], "dir") then
             scope_candidates[parent] = true
           else
             ignored = ignored + 1
@@ -2438,7 +2457,7 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
       end
     end
     processed = processed + 1
-    if processed % 128 == 0 then safe_yield(0) end
+    if processed % 32 == 0 then safe_yield(0) end
   end
 
   local scopes = coalesce_scope_candidates(scope_candidates)
@@ -2451,18 +2470,56 @@ function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
   local matched, refresh_reason = false, nil
   if next(scopes) then
     matched, refresh_reason = symbol_index.mark_directories_dirty(scopes, reason or "project-watch",
-      common.merge(opts or {}, { project_files_refreshed = files_current }))
+      common.merge(opts or {}, { project_files_refreshed = files_current, file_info = file_info }))
   end
+  local files = {}
+  local scope_keys = {}
+  for scope in pairs(scopes) do scope_keys[common.path_compare_key(scope)] = true end
+  processed = 0
   for path in pairs(file_candidates) do
     local covered = false
-    for scope in pairs(scopes) do
-      if common.path_belongs_to(path, scope) then covered = true; break end
+    local parent = common.dirname(path)
+    while parent do
+      if scope_keys[common.path_compare_key(parent)] then covered = true; break end
+      local ancestor = common.dirname(parent)
+      if ancestor == parent then break end
+      parent = ancestor
     end
     if not covered then
-      local file_matched, file_reason = symbol_index.reindex_file(path,
-        common.merge(opts or {}, { reason = reason or "project-watch" }))
-      matched = matched or file_matched
-      refresh_reason = refresh_reason or file_reason
+      files[#files + 1] = { path = path }
+    end
+    processed = processed + 1
+    if processed % 32 == 0 then safe_yield(0) end
+  end
+  if #files > 0 then
+    if index.status == "indexing" then
+      index.pending_reindex_paths = index.pending_reindex_paths or {}
+      for i, file in ipairs(files) do
+        index.pending_reindex_paths[file.path] = reason or "project-watch"
+        if i % 32 == 0 then safe_yield(0) end
+      end
+      matched = true
+    elseif index.native_snapshot then
+      -- Bound Lua-to-native copies. Keep the remainder for the next completed run.
+      if #files > 256 then
+        index.pending_reindex_paths = index.pending_reindex_paths or {}
+        for i = #files, 257, -1 do
+          index.pending_reindex_paths[files[i].path] = reason or "project-watch"
+          files[i] = nil
+        end
+      end
+      index.generation = (index.generation or 0) + 1
+      local submitted, submit_reason = submit_native_run(index, index.generation, {
+        reason = reason or "project-watch",
+        base_snapshot = index.native_snapshot,
+        files = files,
+      }, "targeted")
+      matched = matched or submitted
+      refresh_reason = refresh_reason or submit_reason
+      log_quiet("Tree-sitter Project watcher: submitted %d changed file(s) under %s: %s",
+        #files, root, tostring(submit_reason))
+    else
+      refresh_reason = refresh_reason or "native-snapshot-unavailable"
     end
   end
   if matched then return true end

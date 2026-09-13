@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local DirWatch = require "core.dirwatch"
 local process = require "core.process"
+local worker_pool = require "core.worker_pool"
 
 local project_files = {}
 local cache = {}
@@ -11,13 +12,30 @@ local WORK_SLICE_SECONDS = 0.002
 local WATCH_POLL_SECONDS = 0.02
 local WATCH_BATCH_SECONDS = 0.05
 
+local function run_file_worker(payload)
+  local chunks, done, failure = {}, false, nil
+  local handle, err = worker_pool.system():submit {
+    kind = "core.workers.project_files",
+    priority = "background",
+    payload = payload,
+    on_result = function(message) chunks[#chunks + 1] = message.payload end,
+    on_complete = function() done = true end,
+    on_error = function(message) failure, done = message.error, true end,
+    on_cancelled = function() failure, done = "Project file worker cancelled", true end,
+  }
+  if not handle then return nil, err end
+  while not done do coroutine.yield(0.001) end
+  if failure then return nil, failure end
+  return chunks
+end
+
 local function cooperative_state()
   return { deadline = system.get_time() + WORK_SLICE_SECONDS, checks = 0 }
 end
 
 local function yield_if_due(state)
   state.checks = state.checks + 1
-  if state.checks < 64 then return end
+  if state.checks < 16 then return end
   state.checks = 0
   if system.get_time() < state.deadline then return end
   local yieldable = coroutine.isyieldable and coroutine.isyieldable()
@@ -114,33 +132,20 @@ local function consume_ignore_debug(state, chunk, root)
 end
 
 local function scan_directories(root, ignored_paths, hidden_paths)
+  local chunks, err = run_file_worker {
+    operation = "directories", root = root,
+    ignored_paths = ignored_paths, hidden_paths = hidden_paths,
+  }
+  if not chunks then error(err) end
   local directories = { root }
-  local pending = { root }
   local searchable = { [common.path_compare_key(root)] = root }
   local pruned_ignored = 0
   local state = cooperative_state()
-  -- Windows enumeration already has metadata. POSIX would stat every file before filtering directories.
-  local enumeration_metadata = PLATFORM == "Windows"
-  while #pending > 0 do
-    local directory = table.remove(pending)
-    local entries = system.list_dir_info
-      and system.list_dir_info(directory, 2147483647, "dir", nil, enumeration_metadata) or nil
-    for _, entry in ipairs(entries or {}) do
-      local name = entry.name
-      if name and name ~= "" and name:sub(1, 1) ~= "." then
-        local path = common.normalize_path(directory .. PATHSEP .. name)
-        local info = enumeration_metadata and entry or path and system.get_file_info(path)
-        local key = path and common.path_compare_key(path)
-        if path and info and info.type == "dir" and info.symlink ~= nil and not hidden_paths[key] then
-          directories[#directories + 1] = path
-          if not info.symlink and not ignored_paths[key] then
-            searchable[key] = path
-            pending[#pending + 1] = path
-          elseif ignored_paths[key] then
-            pruned_ignored = pruned_ignored + 1
-          end
-        end
-      end
+  for _, chunk in ipairs(chunks) do
+    for _, entry in ipairs(chunk) do
+      directories[#directories + 1] = entry.path
+      if entry.searchable then searchable[entry.key] = entry.path end
+      if entry.ignored then pruned_ignored = pruned_ignored + 1 end
       yield_if_due(state)
     end
   end
@@ -399,25 +404,64 @@ local function is_ignore_rule(root, path)
     and common.path_belongs_to(path, root)
 end
 
+---Read changed-path metadata on workers. False means the path is absent.
+---Include parents so subscribers do not need synchronous filesystem checks.
+---Call from a coroutine. Result keys use normalized paths.
+function project_files.stat_paths(paths)
+  local result, batch, seen = {}, {}, {}
+  local state = cooperative_state()
+  local function flush()
+    if #batch == 0 then return true end
+    local chunks, err = run_file_worker { operation = "stat", paths = batch }
+    if not chunks then return nil, err end
+    for _, chunk in ipairs(chunks) do
+      for path, info in pairs(chunk) do result[path] = info end
+    end
+    batch = {}
+    return true
+  end
+  for key, value in pairs(paths or {}) do
+    local path = common.normalize_path(type(key) == "number" and value or key)
+    for _, candidate in ipairs { path, path and common.dirname(path) } do
+      if not seen[candidate] then
+        seen[candidate] = true
+        batch[#batch + 1] = candidate
+        if #batch >= 64 then
+          local ok, err = flush()
+          if not ok then return nil, err end
+        end
+      end
+    end
+    yield_if_due(state)
+  end
+  local ok, err = flush()
+  if not ok then return nil, err end
+  return result
+end
+
 function project_files.reconcile(root, paths, opts)
   opts = opts or {}
   root = common.normalize_path(root)
   local entry = get_entry(root, false)
+  local file_info, stat_error = project_files.stat_paths(paths)
+  if not file_info then return false, stat_error, false end
   if not entry.files then
     local files, err = project_files.list(root, { refresh = true })
-    return files ~= nil, err, true
+    return files ~= nil, err, true, file_info
   end
 
   local refresh = opts.force == true
+  local old_paths, old_directories = entry.paths, entry.directories
+  local searchable_directories = entry.searchable_directories
   local state = cooperative_state()
   for key, value in pairs(paths or {}) do
     local path = type(key) == "number" and value or key
     path = path and common.normalize_path(path)
     if path and (common.path_equals(path, root) or common.path_belongs_to(path, root)) then
       local precise = type(value) ~= "table" or value.precise ~= false
-      local info = system.get_file_info(path)
-      local old_file = entry.paths[common.path_compare_key(path)] == true
-      local old_dir = entry.directories[common.path_compare_key(path)] ~= nil
+      local info = file_info[path]
+      local old_file = old_paths[common.path_compare_key(path)] == true
+      local old_dir = old_directories[common.path_compare_key(path)] ~= nil
       if is_ignore_rule(root, path) or not precise then
         refresh = true
       elseif old_file then
@@ -426,17 +470,19 @@ function project_files.reconcile(root, paths, opts)
         if not info or info.type ~= "dir" then refresh = true end
       elseif info then
         local parent = common.dirname(path)
-        if entry.searchable_directories[common.path_compare_key(parent)] then refresh = true end
+        if searchable_directories[common.path_compare_key(parent)] then refresh = true end
       end
     end
     yield_if_due(state)
   end
-  if not refresh then return true, nil, false end
+  if not refresh and entry.paths == old_paths then return true, nil, false, file_info end
   local files, err = project_files.list(root, { refresh = true })
-  return files ~= nil, err, true
+  return files ~= nil, err, true, file_info
 end
 
-local function notify_subscribers(entry, paths, refreshed, err, previous_membership)
+local function notify_subscribers(entry, paths, refreshed, err, previous_membership, file_info)
+  local pending = 0
+  local watch_generation = entry.watch_generation
   for id, callback in pairs(entry.subscribers or {}) do
     local event = {
       root = entry.root,
@@ -444,11 +490,25 @@ local function notify_subscribers(entry, paths, refreshed, err, previous_members
       error = err,
       generation = entry.generation or 0,
       previous_membership = previous_membership,
+      file_info = file_info,
     }
-    core.add_thread(function()
-      if entry.subscribers[id] == callback then callback(paths, event) end
+    pending = pending + 1
+    local source = debug.getinfo(callback, "S")
+    local label = string.format("%s:%d", source.short_src, source.linedefined)
+    local handle = core.add_thread(function()
+      if entry.watch_generation == watch_generation and entry.subscribers[id] == callback then
+        local started = system.get_time()
+        core.try(callback, paths, event)
+        core.log_quiet("Project subscriber delivered: source=%s root=%s elapsed_ms=%.1f",
+          label, entry.root, (system.get_time() - started) * 1000)
+      end
+      pending = pending - 1
     end)
+    core.threads[handle].loc = label .. " (Project subscriber)"
   end
+  -- Keep delivery ordered. The watcher can collect changes while subscribers yield,
+  -- but a new batch must not replace membership under the current delivery.
+  while pending > 0 and entry.watch_generation == watch_generation do coroutine.yield(0.001) end
 end
 
 local function process_watch_batches(entry, generation)
@@ -469,17 +529,21 @@ local function process_watch_batches(entry, generation)
         end
         yield_if_due(state)
       end
-      local ok, err, refreshed = project_files.reconcile(entry.root, paths)
+      local started = system.get_time()
+      local ok, err, refreshed, file_info = project_files.reconcile(entry.root, paths)
       if entry.watch_generation ~= generation then return end
+      core.log_quiet("Project watcher batch: root=%s refreshed=%s elapsed_ms=%.1f error=%s",
+        entry.root, tostring(refreshed), (system.get_time() - started) * 1000, tostring(err))
       notify_subscribers(entry, paths, refreshed == true, ok and nil or err,
-        previous_membership)
+        previous_membership, file_info)
+      if entry.watch_generation ~= generation then return end
     end
     if not next(entry.pending_watch_paths) then
       entry.watch_processor_running = false
       return
     end
   end
-  entry.watch_processor_running = false
+  if entry.watch_generation == generation then entry.watch_processor_running = false end
 end
 
 local function start_watch_processor(entry)

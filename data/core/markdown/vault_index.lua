@@ -443,6 +443,15 @@ function Index:start_watcher()
   local serial = self.watcher_serial
   project_files.subscribe(self.root, self, function(paths, event)
     if not self.watcher or self.watcher_serial ~= serial then return end
+    local file_info = event and event.file_info
+    if not file_info then
+      local err
+      file_info, err = project_files.stat_paths(paths)
+      if not file_info then
+        core.log_quiet("Markdown watcher metadata failed for %s: %s", self.root, tostring(err))
+        return
+      end
+    end
     local changed = false
     for key, value in pairs(paths or {}) do
       local path = type(key) == "number" and value or key
@@ -453,7 +462,7 @@ function Index:start_watcher()
         local ignore_rule = name == ".gitignore" or name == ".ignore" or name == ".rgignore"
           or (name == "exclude" and common.basename(parent) == "info"
             and common.basename(common.dirname(parent)) == ".git")
-        local info = system.get_file_info(path)
+        local info = file_info[path]
         local included = project_files.contains(self.root, path, info and info.type or "file") == true
         local indexed = self:note(path) or self:attachment(path)
         if ignore_rule then
@@ -474,7 +483,7 @@ function Index:start_watcher()
         tostring(self.root), tostring(event.error))
     end
     if changed then
-      self:rebuild_async("watch", { project_files_refreshed = true })
+      self:rebuild_async("watch", { project_files_refreshed = true, file_info = file_info })
     end
   end)
   core.log_quiet("Markdown index subscribed to Project file changes for %s", self.root)
@@ -548,6 +557,10 @@ function Index:rebuild_async(reason, opts)
     return false
   end
   local classification_changed = self:refresh_obsidian_settings()
+  local dirty_scopes = self.dirty_manifest_scopes
+  self.dirty_manifest_scopes = {}
+  self.manifest_job = {}
+  local file_info
   self.rebuild_serial = self.rebuild_serial + 1
   local serial = self.rebuild_serial
   self.status, self.reason = "indexing", rebuild_reason
@@ -560,7 +573,6 @@ function Index:rebuild_async(reason, opts)
 
   local function submit_scan_paths(scan_paths, previous_manifest, remove_paths)
   remove_paths = remove_paths or {}
-  self.dirty_manifest_scopes = {}
   if classification_changed then
     core.log_quiet("Markdown vault attachment policy changed; forcing a full manifest rebuild: root=%s", self.root)
   end
@@ -651,7 +663,7 @@ function Index:rebuild_async(reason, opts)
           self.disk_snapshot = snapshot
           for key, removed in pairs(self.removed_paths) do
             if serial > (removed.serial or 0)
-              and file_exists(removed.path)
+              and file_info[removed.path] and file_info[removed.path].type == "file"
               and (snapshot:note(removed.path) or snapshot:attachment(removed.path))
             then
               self.removed_paths[key] = nil
@@ -717,34 +729,52 @@ function Index:rebuild_async(reason, opts)
   end
   end
 
-  local scoped_paths, scoped_remove_paths = {}, {}
-  local can_update_scopes = self.manifest_snapshot ~= nil and not classification_changed
-  local scoped_count = 0
-  for _, path in pairs(self.dirty_manifest_scopes) do
-    local info = system.get_file_info(path)
-    if info and info.type == "file"
-      and project_files.contains(self.root, path, "file") == true
-    then
-      scoped_paths[#scoped_paths + 1] = path
-    elseif not info then
-      scoped_remove_paths[#scoped_remove_paths + 1] = path
-    else
-      can_update_scopes = false
-      break
-    end
-    scoped_count = scoped_count + 1
-    if scoped_count % 128 == 0 then cooperative_yield(0) end
-  end
-  if #scoped_paths == 0 and #scoped_remove_paths == 0 then can_update_scopes = false end
-  if can_update_scopes then
-    -- Keep the published snapshot available while a known file is refreshed.
-    self.status, self.reason = "ready", nil
-    submit_scan_paths(scoped_paths, self.manifest_snapshot, scoped_remove_paths)
-    return false
-  end
-
-  self.manifest_job = {}
   core.add_thread(function()
+    local metadata_paths = {}
+    for _, path in pairs(dirty_scopes) do metadata_paths[path] = true end
+    for _, removed in pairs(self.removed_paths) do metadata_paths[removed.path] = true end
+    file_info = opts.file_info or {}
+    local missing = {}
+    for path in pairs(metadata_paths) do
+      if file_info[path] == nil then missing[#missing + 1] = path end
+    end
+    local metadata, metadata_error = project_files.stat_paths(missing)
+    if serial ~= self.rebuild_serial then return end
+    if not metadata then
+      for key, path in pairs(dirty_scopes) do self.dirty_manifest_scopes[key] = path end
+      self.manifest_job = nil
+      self.status, self.reason = "error", metadata_error
+      self:notify("error", metadata_error)
+      core.log_quiet("Markdown manifest metadata failed for %s: %s", self.root, tostring(metadata_error))
+      return
+    end
+    for path, info in pairs(metadata) do file_info[path] = info end
+    local scoped_paths, scoped_remove_paths = {}, {}
+    local can_update_scopes = self.manifest_snapshot ~= nil and not classification_changed
+    local scoped_count = 0
+    for _, path in pairs(dirty_scopes) do
+      local info = file_info[path]
+      if info and info.type == "file"
+        and project_files.contains(self.root, path, "file") == true
+      then
+        scoped_paths[#scoped_paths + 1] = path
+      elseif not info then
+        scoped_remove_paths[#scoped_remove_paths + 1] = path
+      else
+        can_update_scopes = false
+        break
+      end
+      scoped_count = scoped_count + 1
+      if scoped_count % 128 == 0 then cooperative_yield(0) end
+    end
+    if #scoped_paths == 0 and #scoped_remove_paths == 0 then can_update_scopes = false end
+    if can_update_scopes then
+      -- Keep the published snapshot available while a known file is refreshed.
+      self.status, self.reason = "ready", nil
+      submit_scan_paths(scoped_paths, self.manifest_snapshot, scoped_remove_paths)
+      return
+    end
+
     local listed = project_files_refreshed and project_files.cached(self.root) or nil
     local list_error
     if not listed then
@@ -753,6 +783,7 @@ function Index:rebuild_async(reason, opts)
     if serial ~= self.rebuild_serial then return end
     self.manifest_job = nil
     if not listed then
+      for key, path in pairs(dirty_scopes) do self.dirty_manifest_scopes[key] = path end
       self.status, self.reason = "error", list_error or "Project file listing failed"
       self:notify("error", self.reason)
       core.log_quiet("Markdown vault could not list Project files under %s: %s",
