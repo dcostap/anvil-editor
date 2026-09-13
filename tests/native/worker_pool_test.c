@@ -1,8 +1,10 @@
 #include "worker_pool.h"
+#include "treesitter/project_index.h"
 
 #include <SDL3/SDL.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define CHECK(expr) do { if (!(expr)) { fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #expr); return 1; } } while (0)
@@ -19,6 +21,12 @@ static int drain_until_type(AnvilWorkerPool *pool, uint64_t job_id, const char *
     SDL_Delay(1);
   }
   return 0;
+}
+
+static bool cancel_project_snapshot(void *payload) {
+  int *checks = (int *)payload;
+  (*checks)++;
+  return *checks >= 2;
 }
 
 int main(int argc, char **argv) {
@@ -198,6 +206,19 @@ int main(int argc, char **argv) {
   CHECK(anvil_worker_pool_completed_count(pool) >= 1);
   CHECK(anvil_worker_pool_cancelled_count(pool) >= 1);
   CHECK(anvil_worker_pool_failed_count(pool) >= 1);
+
+  AnvilTSProjectBuilder *cancelled_builder = anvil_ts_project_builder_create(100);
+  CHECK(cancelled_builder != NULL);
+  int snapshot_cancel_checks = 0;
+  char *snapshot_error = NULL;
+  AnvilTSProjectSnapshot *cancelled_snapshot = anvil_ts_project_builder_snapshot_cancellable(
+    cancelled_builder, "partial", false, cancel_project_snapshot, &snapshot_cancel_checks, &snapshot_error
+  );
+  CHECK(cancelled_snapshot == NULL);
+  CHECK(snapshot_cancel_checks >= 2);
+  CHECK(snapshot_error != NULL && strstr(snapshot_error, "cancelled") != NULL);
+  free(snapshot_error);
+  anvil_ts_project_builder_close(cancelled_builder);
 
   anvil_worker_pool_destroy(pool, true);
   SDL_Quit();

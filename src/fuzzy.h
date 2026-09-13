@@ -78,6 +78,7 @@ typedef struct {
 
 typedef struct FuzzyFileIndexBuilder FuzzyFileIndexBuilder;
 typedef struct FuzzyFileIndex FuzzyFileIndex;
+typedef bool (*FuzzyCancelFn)(void *payload);
 
 typedef struct {
   uint32_t candidates;
@@ -107,6 +108,14 @@ int fuzzy_match_buffer_score_parts(FuzzyMode mode, const FuzzyMatchBuffer *buffe
 uint32_t fuzzy_match_buffer_spans(FuzzyMode mode, const char *original, uint32_t original_len, const FuzzyMatchBuffer *buffer, const char *query, FuzzySpan *spans, uint32_t max_spans);
 
 bool fuzzy_index_build(FuzzyIndex *idx, const char **items, uint32_t count, FuzzyMode mode);
+bool fuzzy_index_build_cancellable(
+  FuzzyIndex *idx,
+  const char **items,
+  uint32_t count,
+  FuzzyMode mode,
+  FuzzyCancelFn cancel,
+  void *cancel_payload
+);
 void fuzzy_index_free(FuzzyIndex *idx);
 
 FuzzyFileIndexBuilder *fuzzy_file_index_builder_create(

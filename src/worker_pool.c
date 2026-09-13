@@ -1023,6 +1023,10 @@ static bool job_cancelled(const AnvilWorkerJob *job) {
   return SDL_GetAtomicInt((SDL_AtomicInt *)&job->cancel) != 0;
 }
 
+static bool project_snapshot_cancelled(void *payload) {
+  return job_cancelled((const AnvilWorkerJob *)payload);
+}
+
 static void sleep_cooperative(uint32_t ms) {
   if (ms > 0) SDL_Delay(ms);
 }
@@ -2606,9 +2610,17 @@ static SDL_EnumerationResult SDLCALL project_run_walk_callback(void *userdata, c
     SDL_free(path);
     return SDL_ENUM_CONTINUE;
   }
+  if (job_cancelled(walk->job)) {
+    SDL_free(path);
+    return SDL_ENUM_SUCCESS;
+  }
   bool ok = true;
   if (info.type == SDL_PATHTYPE_DIRECTORY) {
     bool enumerated = SDL_EnumerateDirectory(path, project_run_walk_callback, walk);
+    if (job_cancelled(walk->job)) {
+      SDL_free(path);
+      return SDL_ENUM_SUCCESS;
+    }
     if (!enumerated) {
       if (walk->error) ok = false;
       else project_run_record_metadata_skip(walk, path, SDL_GetError());
@@ -2717,8 +2729,7 @@ typedef struct ProjectRunExecution {
   char *fatal_error;
   char *first_skipped_path;
   char *first_skipped_reason;
-  uint32_t partial_publications;
-  uint64_t last_partial_publication_ns;
+  bool partial_published;
 } ProjectRunExecution;
 
 typedef enum ProjectRunFileSkipKind {
@@ -2906,19 +2917,14 @@ static int SDLCALL project_run_thread_main(void *userdata) {
         progress->symbols_found = execution->symbols > UINT32_MAX ? UINT32_MAX : (uint32_t)execution->symbols;
         progress->usages_found = execution->usages > UINT32_MAX ? UINT32_MAX : (uint32_t)execution->usages;
       }
-      bool publish_partial = job->project_publish_partial_snapshots &&
-        execution->partial_publications < 8 &&
-        (!execution->last_partial_publication_ns ||
-          SDL_GetTicksNS() - execution->last_partial_publication_ns >= UINT64_C(1000000000));
-      if (publish_partial) {
-        execution->partial_publications++;
-        execution->last_partial_publication_ns = SDL_GetTicksNS();
-      }
+      /* One early snapshot enables search without repeated full snapshot build and release work. */
+      bool publish_partial = job->project_publish_partial_snapshots && !execution->partial_published;
+      if (publish_partial) execution->partial_published = true;
       SDL_UnlockMutex(execution->mutex);
       if (progress && publish_partial) {
         char *partial_error = NULL;
-        progress->project_snapshot = anvil_ts_project_builder_snapshot(
-          execution->builder, "partial", false, &partial_error);
+        progress->project_snapshot = anvil_ts_project_builder_snapshot_cancellable(
+          execution->builder, "partial", false, project_snapshot_cancelled, job, &partial_error);
         SDL_free(partial_error);
       }
       if (progress) enqueue_result(context.pool, progress);
@@ -2976,7 +2982,7 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
   }
   bool enumerated = prepared;
   if (enumerated && job->project_scoped) {
-    for (uint32_t i = 0; enumerated && i < job->project_scan_path_count; i++) {
+    for (uint32_t i = 0; enumerated && !job_cancelled(job) && i < job->project_scan_path_count; i++) {
       enumerated = project_run_scan_path(&walk, job->project_scan_paths[i]);
     }
   } else if (enumerated) {
@@ -3225,7 +3231,8 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
   anvil_ts_project_snapshot_release(base_snapshot);
   char *snapshot_error = NULL;
   uint64_t snapshot_started = SDL_GetTicksNS();
-  AnvilTSProjectSnapshot *snapshot = anvil_ts_project_builder_snapshot(builder, "ready", true, &snapshot_error);
+  AnvilTSProjectSnapshot *snapshot = anvil_ts_project_builder_snapshot_cancellable(
+    builder, "ready", true, project_snapshot_cancelled, job, &snapshot_error);
   double snapshot_ms = ticks_ns_to_ms(SDL_GetTicksNS() - snapshot_started);
   if (!snapshot) {
     if (job_owns_builder) {
@@ -3235,22 +3242,39 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     } else if (!job->project_builder) {
       anvil_ts_project_builder_release(builder);
     }
-    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
-    AnvilWorkerResult *error_result = result_new(job, "error");
-    if (error_result) error_result->error = snapshot_error ? snapshot_error : pool_strdup("native Project snapshot failed");
-    else SDL_free(snapshot_error);
+    bool snapshot_cancelled = job_cancelled(job);
+    SDL_SetAtomicInt(&job->status, snapshot_cancelled
+      ? ANVIL_WORKER_STATUS_CANCELLED : ANVIL_WORKER_STATUS_FAILED);
     SDL_free(first_skipped_path);
     SDL_free(first_skipped_reason);
-    enqueue_result(context->pool, error_result);
+    if (snapshot_cancelled) {
+      SDL_free(snapshot_error);
+      enqueue_simple_result(context->pool, job, "cancelled");
+    } else {
+      AnvilWorkerResult *error_result = result_new(job, "error");
+      if (error_result) error_result->error = snapshot_error
+        ? snapshot_error : pool_strdup("native Project snapshot failed");
+      else SDL_free(snapshot_error);
+      enqueue_result(context->pool, error_result);
+    }
     return;
   }
   SDL_free(snapshot_error);
+  cancelled = job_cancelled(job);
   if (job_owns_builder) {
     job->project_builder = NULL;
     job->close_project_builder = false;
     anvil_ts_project_builder_close(builder);
   } else if (!job->project_builder) {
     anvil_ts_project_builder_release(builder);
+  }
+  if (cancelled) {
+    anvil_ts_project_snapshot_release(snapshot);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
+    SDL_free(first_skipped_path);
+    SDL_free(first_skipped_reason);
+    enqueue_simple_result(context->pool, job, "cancelled");
+    return;
   }
   AnvilWorkerResult *result = result_new(job, "result");
   if (result) {

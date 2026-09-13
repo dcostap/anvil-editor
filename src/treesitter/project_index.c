@@ -498,7 +498,11 @@ static int file_compare(const void *left, const void *right) {
   return strcmp(af ? af : "", bf ? bf : "");
 }
 
-static bool rebuild_snapshot_path_slots(AnvilTSProjectSnapshot *snapshot) {
+static bool rebuild_snapshot_path_slots(
+  AnvilTSProjectSnapshot *snapshot,
+  AnvilTSProjectQueryCancelFn cancel,
+  void *cancel_payload
+) {
   if (!snapshot->file_count) return true;
   uint32_t slot_count = 16;
   while (slot_count / 2 < snapshot->file_count) {
@@ -508,6 +512,10 @@ static bool rebuild_snapshot_path_slots(AnvilTSProjectSnapshot *snapshot) {
   uint32_t *slots = (uint32_t *)calloc(slot_count, sizeof(*slots));
   if (!slots) return false;
   for (uint32_t i = 0; i < snapshot->file_count; i++) {
+    if ((i & 255u) == 0 && cancel && cancel(cancel_payload)) {
+      free(slots);
+      return false;
+    }
     const char *path = anvil_ts_project_file_path(snapshot->files[i].file);
     uint32_t slot = (uint32_t)path_hash(path) & (slot_count - 1);
     while (slots[slot]) slot = (slot + 1) & (slot_count - 1);
@@ -598,7 +606,11 @@ static void snapshot_destroy(AnvilTSProjectSnapshot *snapshot) {
   free(snapshot);
 }
 
-static bool build_usage_name_lookup(AnvilTSProjectSnapshot *snapshot) {
+static bool build_usage_name_lookup(
+  AnvilTSProjectSnapshot *snapshot,
+  AnvilTSProjectQueryCancelFn cancel,
+  void *cancel_payload
+) {
   if (!snapshot->usage_count) return true;
   if (snapshot->usage_count > UINT32_MAX / 4) return false;
   uint32_t slot_count = 16;
@@ -609,6 +621,7 @@ static bool build_usage_name_lookup(AnvilTSProjectSnapshot *snapshot) {
   snapshot->usage_name_slot_count = slot_count;
   snapshot->usage_name_capacity = snapshot->usage_count;
   for (uint32_t usage_index = 0; usage_index < snapshot->usage_count; usage_index++) {
+    if ((usage_index & 255u) == 0 && cancel && cancel(cancel_payload)) return false;
     ProjectRecordRef ref = snapshot->usages[usage_index];
     AnvilTSProjectUsageView usage;
     if (!anvil_ts_project_file_usage_at(ref.file, ref.index, &usage)) return false;
@@ -635,14 +648,23 @@ static bool build_usage_name_lookup(AnvilTSProjectSnapshot *snapshot) {
   return true;
 }
 
-AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot(
+static AnvilTSProjectSnapshot *cancel_snapshot(AnvilTSProjectSnapshot *snapshot, char **error) {
+  snapshot_destroy(snapshot);
+  set_error(error, "native Project snapshot cancelled");
+  return NULL;
+}
+
+AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot_cancellable(
   AnvilTSProjectBuilder *builder,
   const char *status,
   bool freeze,
+  AnvilTSProjectQueryCancelFn cancel,
+  void *cancel_payload,
   char **error
 ) {
   if (error) *error = NULL;
   if (!builder) { set_error(error, "invalid native Project builder snapshot request"); return NULL; }
+  if (cancel && cancel(cancel_payload)) return cancel_snapshot(NULL, error);
   AnvilTSProjectSnapshot *snapshot = (AnvilTSProjectSnapshot *)calloc(1, sizeof(*snapshot));
   if (!snapshot) { set_error(error, "out of memory allocating native Project snapshot"); return NULL; }
   SDL_SetAtomicInt(&snapshot->refcount, 1);
@@ -668,6 +690,10 @@ AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot(
   }
   uint64_t symbol_total = 0, usage_total = 0;
   for (uint32_t i = 0; i < snapshot->file_count; i++) {
+    if ((i & 255u) == 0 && cancel && cancel(cancel_payload)) {
+      SDL_UnlockMutex(builder->mutex);
+      return cancel_snapshot(snapshot, error);
+    }
     ProjectFileEntry *source = &builder->files[i];
     anvil_ts_project_file_retain(source->file);
     snapshot->files[i].file = source->file;
@@ -686,15 +712,20 @@ AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot(
   uint32_t usage_cap = builder->usage_cap;
   SDL_UnlockMutex(builder->mutex);
 
+  if (cancel && cancel(cancel_payload)) return cancel_snapshot(snapshot, error);
+
   if (symbol_total > UINT32_MAX || usage_total > UINT32_MAX) {
     snapshot_destroy(snapshot);
     set_error(error, "native Project snapshot record count exceeds uint32 range");
     return NULL;
   }
   qsort(snapshot->files, snapshot->file_count, sizeof(*snapshot->files), file_compare);
-  if (!rebuild_snapshot_path_slots(snapshot)) {
+  if (cancel && cancel(cancel_payload)) return cancel_snapshot(snapshot, error);
+  if (!rebuild_snapshot_path_slots(snapshot, cancel, cancel_payload)) {
     snapshot_destroy(snapshot);
-    set_error(error, "out of memory building native Project path lookup");
+    set_error(error, cancel && cancel(cancel_payload)
+      ? "native Project snapshot cancelled"
+      : "out of memory building native Project path lookup");
     return NULL;
   }
   snapshot->symbol_count = (uint32_t)symbol_total;
@@ -710,16 +741,28 @@ AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot(
   }
   uint32_t symbol_index = 0, usage_index = 0;
   for (uint32_t file_index = 0; file_index < snapshot->file_count; file_index++) {
+    if ((file_index & 255u) == 0 && cancel && cancel(cancel_payload)) {
+      return cancel_snapshot(snapshot, error);
+    }
     AnvilTSProjectFileResult *file = snapshot->files[file_index].file;
     uint32_t count = anvil_ts_project_file_symbol_count(file);
-    for (uint32_t i = 0; i < count; i++) snapshot->symbols[symbol_index++] = (ProjectRecordRef) { file, i };
+    for (uint32_t i = 0; i < count; i++) {
+      if ((i & 255u) == 0 && cancel && cancel(cancel_payload)) {
+        return cancel_snapshot(snapshot, error);
+      }
+      snapshot->symbols[symbol_index++] = (ProjectRecordRef) { file, i };
+    }
     count = anvil_ts_project_file_usage_count(file);
     for (uint32_t i = 0; i < count && usage_index < snapshot->usage_count; i++) {
+      if ((i & 255u) == 0 && cancel && cancel(cancel_payload)) {
+        return cancel_snapshot(snapshot, error);
+      }
       snapshot->usages[usage_index++] = (ProjectRecordRef) { file, i };
     }
   }
   qsort(snapshot->symbols, snapshot->symbol_count, sizeof(*snapshot->symbols), symbol_ref_compare);
   qsort(snapshot->usages, snapshot->usage_count, sizeof(*snapshot->usages), usage_ref_compare);
+  if (cancel && cancel(cancel_payload)) return cancel_snapshot(snapshot, error);
   const char **fuzzy_items = snapshot->symbol_count
     ? (const char **)malloc((size_t)snapshot->symbol_count * sizeof(*fuzzy_items)) : NULL;
   if (snapshot->symbol_count && !fuzzy_items) {
@@ -728,20 +771,29 @@ AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot(
     return NULL;
   }
   for (uint32_t i = 0; i < snapshot->symbol_count; i++) {
+    if ((i & 255u) == 0 && cancel && cancel(cancel_payload)) {
+      free(fuzzy_items);
+      return cancel_snapshot(snapshot, error);
+    }
     AnvilTSProjectSymbolView symbol;
     anvil_ts_project_file_symbol_at(snapshot->symbols[i].file, snapshot->symbols[i].index, &symbol);
     fuzzy_items[i] = symbol.name;
   }
-  bool fuzzy_ok = fuzzy_index_build(&snapshot->symbol_fuzzy, fuzzy_items, snapshot->symbol_count, FUZZY_MODE_GENERIC);
+  bool fuzzy_ok = fuzzy_index_build_cancellable(&snapshot->symbol_fuzzy, fuzzy_items,
+    snapshot->symbol_count, FUZZY_MODE_GENERIC, cancel, cancel_payload);
   free(fuzzy_items);
   if (!fuzzy_ok) {
     snapshot_destroy(snapshot);
-    set_error(error, "out of memory building native Project symbol fuzzy index");
+    set_error(error, cancel && cancel(cancel_payload)
+      ? "native Project snapshot cancelled"
+      : "out of memory building native Project symbol fuzzy index");
     return NULL;
   }
-  if (!build_usage_name_lookup(snapshot)) {
+  if (!build_usage_name_lookup(snapshot, cancel, cancel_payload)) {
     snapshot_destroy(snapshot);
-    set_error(error, "out of memory building native Project usage-name lookup");
+    set_error(error, cancel && cancel(cancel_payload)
+      ? "native Project snapshot cancelled"
+      : "out of memory building native Project usage-name lookup");
     return NULL;
   }
   if (freeze) {
@@ -756,6 +808,17 @@ AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot(
     }
   }
   return snapshot;
+}
+
+AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot(
+  AnvilTSProjectBuilder *builder,
+  const char *status,
+  bool freeze,
+  char **error
+) {
+  return anvil_ts_project_builder_snapshot_cancellable(
+    builder, status, freeze, NULL, NULL, error
+  );
 }
 
 void anvil_ts_project_snapshot_retain(AnvilTSProjectSnapshot *snapshot) {

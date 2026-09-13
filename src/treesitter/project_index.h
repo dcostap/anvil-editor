@@ -68,6 +68,14 @@ AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot(
   bool freeze,
   char **error
 );
+AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot_cancellable(
+  AnvilTSProjectBuilder *builder,
+  const char *status,
+  bool freeze,
+  AnvilTSProjectQueryCancelFn cancel,
+  void *cancel_payload,
+  char **error
+);
 
 void anvil_ts_project_snapshot_retain(AnvilTSProjectSnapshot *snapshot);
 void anvil_ts_project_snapshot_release(AnvilTSProjectSnapshot *snapshot);

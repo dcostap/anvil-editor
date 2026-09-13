@@ -283,7 +283,14 @@ static uint32_t parse_query_words(FuzzyMode mode, const char *query, FuzzyWord w
   return count;
 }
 
-bool fuzzy_index_build(FuzzyIndex *idx, const char **items, uint32_t count, FuzzyMode mode) {
+bool fuzzy_index_build_cancellable(
+  FuzzyIndex *idx,
+  const char **items,
+  uint32_t count,
+  FuzzyMode mode,
+  FuzzyCancelFn cancel,
+  void *cancel_payload
+) {
   if (!idx) return false;
   memset(idx, 0, sizeof(*idx));
   idx->mode = mode;
@@ -291,6 +298,7 @@ bool fuzzy_index_build(FuzzyIndex *idx, const char **items, uint32_t count, Fuzz
   size_t text_arena_len = 0;
   size_t match_arena_len = 0;
   for (uint32_t i = 0; i < count; ++i) {
+    if ((i & 255u) == 0 && cancel && cancel(cancel_payload)) return false;
     const char *s = items[i] ? items[i] : "";
     size_t len = strlen(s);
     if (len > UINT32_MAX) return false;
@@ -312,6 +320,10 @@ bool fuzzy_index_build(FuzzyIndex *idx, const char **items, uint32_t count, Fuzz
 
   uint32_t text_offset = 0, match_offset = 0;
   for (uint32_t i = 0; i < count; ++i) {
+    if ((i & 255u) == 0 && cancel && cancel(cancel_payload)) {
+      fuzzy_index_free(idx);
+      return false;
+    }
     const char *s = items[i] ? items[i] : "";
     size_t len_sz = strlen(s);
     if (len_sz > UINT32_MAX) { fuzzy_index_free(idx); return false; }
@@ -341,6 +353,10 @@ bool fuzzy_index_build(FuzzyIndex *idx, const char **items, uint32_t count, Fuzz
   idx->lower_arena_len = match_offset;
   idx->generation++;
   return true;
+}
+
+bool fuzzy_index_build(FuzzyIndex *idx, const char **items, uint32_t count, FuzzyMode mode) {
+  return fuzzy_index_build_cancellable(idx, items, count, mode, NULL, NULL);
 }
 
 void fuzzy_index_free(FuzzyIndex *idx) {
