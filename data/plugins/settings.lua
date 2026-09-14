@@ -307,7 +307,7 @@ settings.add("Graphics",
     },
     {
       label = "Animation Rate",
-      description = "The speed of transitions, higher value means faster.",
+      description = "The speed of transitions without an explicit duration. Higher values are faster.",
       path = "animation_rate",
       type = settings.type.NUMBER,
       default = 1.0,
@@ -327,15 +327,26 @@ settings.add("Graphics",
       }
     },
     {
-      label = "Editor Scroll Animation Type",
-      description = "The type of animation system used on the editor scroll transition.",
+      label = "Viewport Scroll Animation Type",
+      description = "The type of animation used when a visible viewport scroll position changes.",
       path = "scroll_animation_type",
       type = settings.type.SELECTION,
-      default = "constant",
+      default = "cubic",
       values = {
+        {"Cubic Ease", "cubic"},
         {"Constant Velocity with Acceleration", "constant"},
         {"Linear Interpolation", "lerp"}
       }
+    },
+    {
+      label = "Viewport Scroll Duration",
+      description = "The duration of cubic viewport scroll transitions, in seconds.",
+      path = "scroll_transition_duration",
+      type = settings.type.NUMBER,
+      default = 0.125,
+      min = 0.05,
+      max = 0.5,
+      step = 0.025
     },
     {
       label = "Animate Mouse Drag Scroll",

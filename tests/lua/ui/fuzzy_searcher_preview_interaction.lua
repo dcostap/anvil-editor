@@ -185,7 +185,10 @@ test.describe("Fuzzy Searcher preview interaction", function()
     local view = core.active_view
     test.equal(view.buffer.abs_filename, path)
     test.same(selection_state(view), { 90, 7, 90, 13 })
-    test.ok(view.scroll.y > 0, "expected the accepted match to be in the opened viewport")
+    test.ok(
+      view.scroll.to.y > view.scroll.y,
+      "expected the accepted match to start a viewport scroll transition"
+    )
   end)
 
   test.it("places the caret at the first separated match chunk", function(context)
@@ -209,7 +212,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
 
     local view = core.active_view
     test.same(selection_state(view), { 40, 1, 40, 1 })
-    test.ok(view.scroll.y > 0)
+    test.ok(view.scroll.to.y > view.scroll.y)
   end)
 
   test.it("opens a focused preview at its current selection and viewport", function(context)

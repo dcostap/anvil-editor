@@ -257,11 +257,11 @@ function M.select(view, poi, opts)
     local col = poi.preserve_col and current_col or poi.col
     view.buffer:set_selection(poi.line, col, poi.line, col)
     if poi.scroll_to_line and type(view.scroll_to_line) == "function" then
-      view:scroll_to_line(poi.line, false, true)
+      view:scroll_to_line(poi.line, false, false)
     elseif type(view.scroll_to_make_visible) == "function" then
       view:scroll_to_make_visible(poi.line, col)
     elseif type(view.scroll_to_line) == "function" then
-      view:scroll_to_line(poi.line, false, true)
+      view:scroll_to_line(poi.line, false, false)
     end
     if opts.preview ~= false then
       if type(poi.preview) == "function" then

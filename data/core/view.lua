@@ -195,13 +195,38 @@ function View:move_towards(t, k, dest, rate, name)
     t[k] = dest
     t["move_data_"..k] = nil
   else
+    local cubic_scroll = name == "scroll"
+      and config.scroll_animation_type == "cubic"
     local constant_scroll = name == "scroll"
-      and self.buffer
       and config.scroll_animation_type == "constant"
     local constant_general = name ~= "scroll"
       and config.animation_type == "constant"
+    if cubic_scroll then
+      local mk = "move_data_"..k
+      local move = t[mk]
+      local now = system.get_time()
+      if not move or move.kind ~= "cubic" or move.dest ~= dest then
+        move = {
+          kind = "cubic",
+          start = val,
+          dest = dest,
+          started_at = now,
+        }
+        t[mk] = move
+      end
+      local duration = math.max(0, config.scroll_transition_duration or 0)
+      local progress = duration > 0
+        and common.clamp((now - move.started_at) / duration, 0, 1)
+        or 1
+      local eased = progress * progress * (3 - 2 * progress)
+      val = common.lerp(move.start, dest, eased)
+      if progress >= 1 or math.abs(dest - val) < 0.5 then
+        val = dest
+        t[mk] = nil
+      end
+      t[k] = val
     -- Timed Constant Velocity with Acceleration
-    if constant_scroll or constant_general then
+    elseif constant_scroll or constant_general then
       local mk = "move_data_"..k
       if not t[mk] or t[mk][2] ~= (dest > val and "f" or "b") then
         t[mk] = {
@@ -494,6 +519,9 @@ function View:on_touch_moved(x, y, dx, dy, i)
 
   self.scroll.to.y = self.scroll.to.y + -dy
   self.scroll.to.x = self.scroll.to.x + -dx
+  self:clamp_scroll_position()
+  self.scroll.x, self.scroll.y = self.scroll.to.x, self.scroll.to.y
+  self.scroll.move_data_x, self.scroll.move_data_y = nil, nil
 end
 
 
@@ -513,9 +541,19 @@ end
 function View:clamp_scroll_position()
   local max = self:get_scrollable_size() - self.size.y
   self.scroll.to.y = common.clamp(self.scroll.to.y, 0, max)
+  local y = common.clamp(self.scroll.y, 0, max)
+  if y ~= self.scroll.y then
+    self.scroll.y = y
+    self.scroll.move_data_y = nil
+  end
 
   max = self:get_h_scrollable_size() - self.size.x
   self.scroll.to.x = common.clamp(self.scroll.to.x, 0, max)
+  local x = common.clamp(self.scroll.x, 0, max)
+  if x ~= self.scroll.x then
+    self.scroll.x = x
+    self.scroll.move_data_x = nil
+  end
 end
 
 

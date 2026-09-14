@@ -338,12 +338,12 @@ function diagnostics.navigate(view, direction)
   end
   buffer:set_selection(item.line1, item.col1, item.line2, item.col2)
   if view.scroll_to_make_visible then
-    view:scroll_to_make_visible(item.line1, item.col1, true, {
+    view:scroll_to_make_visible(item.line1, item.col1, false, {
       range_line2 = item.line2,
       range_col2 = item.col2,
     })
   elseif view.scroll_to_line then
-    view:scroll_to_line(item.line1, true, true)
+    view:scroll_to_line(item.line1, true, false)
   end
   local diagnostic = item.diagnostic
   if core and core.log then

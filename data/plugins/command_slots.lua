@@ -498,7 +498,7 @@ function CommandOutputView:clear_for_run(command_text, cwd)
   self.displayed_entry = nil
   self.poi_cache = nil
   self.buffer:set_text(header)
-  self:scroll_to_make_visible(#self.buffer.lines, math.huge, true)
+  self:scroll_to_make_visible(#self.buffer.lines, math.huge, false)
 end
 
 function CommandOutputView:append_text(text)

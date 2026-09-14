@@ -245,6 +245,7 @@ config.disabled_transitions = {
 ---@alias config.animationtype
 ---| "constant" # Time based constant velocity with acceleration support.
 ---| "lerp" # Linear Interpolation, starts fast ends slow.
+---| "cubic" # Fixed-time cubic easing with a soft start and stop.
 
 ---The type of algorithm employed on general transitions.
 ---
@@ -252,13 +253,19 @@ config.disabled_transitions = {
 ---@type config.animationtype
 config.animation_type = "constant"
 
----The type of algorithm employed on the code editor scroll transition.
+---The type of algorithm employed on viewport scroll transitions.
 ---
----Defaults to "constant".
+---Defaults to "cubic".
 ---@type config.animationtype
-config.scroll_animation_type = "constant"
+config.scroll_animation_type = "cubic"
 
----The rate of all transitions.
+---The duration of a cubic viewport scroll transition, in seconds.
+---
+---Defaults to 0.125.
+---@type number
+config.scroll_transition_duration = 0.125
+
+---The rate of transitions that do not use an explicit duration.
 ---
 ---Defaults to 1.
 ---@type number

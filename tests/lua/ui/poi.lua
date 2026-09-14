@@ -89,6 +89,21 @@ test.describe("Point of Interest navigation", function()
     test.same(view.buffer.selections, { 2, 3, 2, 3 })
   end)
 
+  test.it("animates a visible POI scroll change", function()
+    local lines = {}
+    for i = 1, 100 do lines[i] = "line " .. i end
+    local view = make_editor(table.concat(lines, "\n"))
+    view.size.x, view.size.y = 300, 100
+    view.scroll.y, view.scroll.to.y = 0, 0
+
+    poi.select(view, { line = 100, col = 1, scroll_to_line = true }, {
+      preview = false,
+    })
+
+    test.ok(view.scroll.to.y > 0)
+    test.equal(view.scroll.y, 0)
+  end)
+
   test.it("uses extra mouse buttons for local POI navigation in a Diff View", function(context)
     local view, err = diffview.open({
       contents = {

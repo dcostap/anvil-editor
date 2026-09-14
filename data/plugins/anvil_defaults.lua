@@ -442,10 +442,11 @@ config.plugins.linewrapping.wrapping_indent = 6
 config.highlight_current_line = true
 -- Keep 28 lines of vertical context around the caret when moving/typing.
 config.scroll_context_lines = 28
--- Scrolling: enable smooth/interpolated vertical movement.
+-- Use one short cubic transition for visible viewport movement.
 config.transitions = true
 config.disabled_transitions.scroll = false
-config.scroll_animation_type = "constant"
+config.scroll_animation_type = "cubic"
+config.scroll_transition_duration = 0.125
 config.animation_rate = 4
 -- Mouse wheel step; default is 70 * SCALE.
 config.mouse_wheel_scroll = 120 * SCALE

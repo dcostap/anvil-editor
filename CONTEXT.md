@@ -229,6 +229,10 @@ _Avoid_: auto-pairing, wrapper conversion
 A background highlight that marks the visual row containing the active caret in a Text View.
 _Avoid_: Line highlighting, active line highlight
 
+**Viewport Scroll Transition**:
+A short animated movement between the previous visible content position and a requested scroll position.
+_Avoid_: smooth scroll, View displacement
+
 **Wrapped Visual Row**:
 A visual row produced when one Buffer line wraps; it is not a separate Buffer line.
 _Avoid_: Fake line, wrapped file line

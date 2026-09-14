@@ -4218,9 +4218,9 @@ function FSView:update_preview_view()
         end
         view.preview_search_ranges = search_ranges
       end)
-      view:scroll_to_line(target, false, true)
+      view:scroll_to_line(target, false, false)
       if reveal_col1 then
-        view:scroll_to_make_visible(target, reveal_col1, true, {
+        view:scroll_to_make_visible(target, reveal_col1, false, {
           line2 = target,
           col2 = reveal_col2,
           vertical = false,
@@ -6678,8 +6678,8 @@ function FSView:open_historical_result(result, new_group, restore)
         view.scroll.x, view.scroll.y = restore.scroll.x, restore.scroll.y
         view.scroll.to.x, view.scroll.to.y = restore.scroll.x, restore.scroll.y
       else
-        view:scroll_to_line(line, false, true)
-        view:scroll_to_make_visible(line, col, true, { line2 = line2, col2 = col2, vertical = false })
+        view:scroll_to_line(line, false, false)
+        view:scroll_to_make_visible(line, col, false, { line2 = line2, col2 = col2, vertical = false })
       end
       self:restore_activation_focus(new_group)
     end
@@ -6711,10 +6711,10 @@ function FSView:open_file_result(r, new_group, restore)
       view.scroll.x, view.scroll.y = restore.scroll.x, restore.scroll.y
       view.scroll.to.x, view.scroll.to.y = restore.scroll.x, restore.scroll.y
     elseif view.scroll_to_line then
-      view:scroll_to_line(line, false, true)
+      view:scroll_to_line(line, false, false)
     end
     if not restore and view.scroll_to_make_visible then
-      view:scroll_to_make_visible(line, col, true, {
+      view:scroll_to_make_visible(line, col, false, {
         line2 = line2 or line, col2 = col2 or col, vertical = false,
       })
     end

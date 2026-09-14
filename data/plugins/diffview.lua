@@ -1973,7 +1973,7 @@ function DiffView:reveal_change(direction)
   if not point then return false end
   view.buffer:set_selection(point.line, point.col or 1, point.line, point.col or 1)
   if view.scroll_to_line then
-    view:scroll_to_line(point.line, false, true)
+    view:scroll_to_line(point.line, false, false)
   else
     view:scroll_to_make_visible(point.line, point.col or 1)
   end
@@ -2238,7 +2238,7 @@ local function navigate_diff_change(dv, direction)
     end
     dv.buffer:set_selection(selected.line, selected.col or 1, selected.line, selected.col or 1)
     if selected.scroll_to_line and dv.scroll_to_line then
-      dv:scroll_to_line(selected.line, false, true)
+      dv:scroll_to_line(selected.line, false, false)
     elseif dv.scroll_to_make_visible then
       dv:scroll_to_make_visible(selected.line, selected.col or 1)
     end

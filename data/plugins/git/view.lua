@@ -1788,7 +1788,6 @@ function GitView:select_relative(delta)
     local row_y = (index - 1) * self:row_height()
     local visible = self.size.y - (self:commit_list_y() - self.position.y) - style.padding.y
     self.scroll.to.y = common.clamp(self.scroll.to.y, math.max(0, row_y - visible + self:row_height()), row_y)
-    self.scroll.y = self.scroll.to.y
     core.redraw = true
     return commit
   elseif tab.kind == "file_history" then
@@ -1798,7 +1797,7 @@ function GitView:select_relative(delta)
     self:update_pane_buffers()
     local list = self:pane_view("history-list")
     list.buffer:set_selection(index, 1, index, 1)
-    list:scroll_to_make_visible(index, 1, true)
+    list:scroll_to_make_visible(index, 1, false)
     tab.scroll = list.scroll.to.y
     core.redraw = true
     return tab.commits[index]
@@ -1827,8 +1826,8 @@ function GitView:select_relative(delta)
       or list.git_file_index_to_visible_line and list.git_file_index_to_visible_line[tab.selected_file]
       or tab.selected_file or 1
     list.buffer:set_selection(line, 1, line, 1)
-    list:scroll_to_make_visible(line, 1, true)
-    tab.file_scroll = list.scroll.y
+    list:scroll_to_make_visible(line, 1, false)
+    tab.file_scroll = list.scroll.to.y
     core.redraw = true
     return file
   end

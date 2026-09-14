@@ -377,7 +377,7 @@ local function prepare_file_destination(view, opts)
     else
       local line, col = opts.line, opts.col or 1
       view.buffer:set_selection(line, col, opts.line2 or line, opts.col2 or col)
-      view:scroll_to_line(line, false, true)
+      view:scroll_to_line(line, false, false)
     end
   end)
   local selection = view:get_selection_state().selections
