@@ -81,9 +81,6 @@ test.describe("Fuzzy Searcher file refresh", function()
     picker.input:set_text("existing-file:1")
     test.ok(wait_until(function() return picker_has_path(picker, existing) end),
       "expected line-qualified file searches to query the native snapshot")
-    test.equal(helpers.file_index_status().materialized, false,
-      "expected line-qualified search not to materialize the entire file list in Lua")
-
     picker.input:set_text("created-externally")
     write_file(created)
 

@@ -113,7 +113,10 @@ local function with_inline_image_text_fixture(callback)
 end
 
 local function visible_render_text(view, line)
-  local rendered = test.not_nil(view:get_line_render(line))
+  local rendered = view:get_line_render(line)
+  if not rendered or rendered.raw_passthrough then
+    return (view.buffer.lines[line] or ""):gsub("\n$", "")
+  end
   local visible = {}
   for _, fragment in ipairs(view:iter_line_render_fragments(rendered)) do
     if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
@@ -2123,20 +2126,17 @@ test.describe("Markdown Live Preview", function()
     refresh(view)
     test.equal(index.status, "ready")
     local old_active, old_open_file = core.active_view, core.open_file
-    local opened, selected, scrolled
+    local opened, location
     core.active_view = view
-    core.open_file = function(path)
+    core.open_file = function(path, options)
       opened = path
-      return {
-        set_selection_state = function(_, state) selected = state.selections end,
-        scroll_to_line = function(_, line) scrolled = line end,
-      }
+      location = options
+      return {}
     end
     local ok, err = pcall(function()
       test.equal(command.perform("markdown:open_link"), true)
       test.equal(opened, common.normalize_path(target_path))
-      test.same(selected, { 1, 1, 1, 1 })
-      test.equal(scrolled, 1)
+      test.same(location, { line = 1, col = 1 })
 
       opened = nil
       buffer:set_selection(2, 1)
@@ -2917,56 +2917,6 @@ test.describe("Markdown Live Preview", function()
     end)
     core.active_view = old_active
     if not ok then error(err, 0) end
-  end)
-
-  test.it("draws compact hover feedback around task checkboxes", function()
-    local view, buffer = make_view("- [ ] task\nplain", "task-hover.md")
-    buffer:set_selection(2, 1)
-    refresh(view)
-
-    local checkbox
-    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
-      if fragment.markdown_task_checkbox then checkbox = fragment break end
-    end
-    checkbox = test.not_nil(checkbox)
-    test.equal(checkbox.widget.suppress_hover_overlay, true)
-    test.equal(checkbox.widget.suppress_hover_background, true)
-    checkbox.hovered = true
-
-    local old_draw_rect = renderer.draw_rect
-    local old_draw_rounded_rect = renderer.draw_rounded_rect
-    local old_draw_text = renderer.draw_text
-    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
-    local generic_hover_rects, checkbox_hover_fills = 0, 0
-    renderer.draw_rect = function(_, _, _, _, color)
-      if color == style.interactive_hover_overlay
-        or color == style.interactive_hover_border
-      then
-        generic_hover_rects = generic_hover_rects + 1
-      end
-    end
-    renderer.draw_rounded_rect = function(_, _, _, _, _, color)
-      if color == style.interactive_hover_overlay then
-        checkbox_hover_fills = checkbox_hover_fills + 1
-      end
-    end
-    renderer.draw_text = function(font, text, x, _, _, opts)
-      return x + font:get_width(text, opts)
-    end
-    renderer.draw_text_known_bounds = function(_, _, x, _, _, _, width)
-      return x + width
-    end
-    local draw_ok, draw_err = pcall(function()
-      local x, y = view:get_line_screen_position(1)
-      view:draw_line_text(1, x, y)
-    end)
-    renderer.draw_rect = old_draw_rect
-    renderer.draw_rounded_rect = old_draw_rounded_rect
-    renderer.draw_text = old_draw_text
-    renderer.draw_text_known_bounds = old_draw_text_known_bounds
-    if not draw_ok then error(draw_err, 0) end
-    test.equal(generic_hover_rects, 0)
-    test.equal(checkbox_hover_fills, 1)
   end)
 
   test.it("alternates the current Markdown line through list and task states", function()

@@ -4097,7 +4097,7 @@ local function selection_reveals_pending_range(view, line, range_col1, range_col
         line1, col1, line2, col2 = line2, col2, line1, col1
       end
       if line1 == line2 and col1 == col2 then
-        if line == line1 and col1 >= range_col1 and col1 <= range_col2 then
+        if line == line1 and col1 >= range_col1 and col1 < range_col2 then
           return true
         end
       elseif line >= line1 and line <= line2 then
@@ -5004,6 +5004,12 @@ local function capture_pending_renders(view, transaction)
   end
   for old_line in pairs(previous_frontmatter) do
     retain_frontmatter(old_line)
+  end
+  local topology = owner.provisional_topology
+  if topology and topology.revision == view.buffer.text_revision then
+    for line in pairs(topology.frontmatter or {}) do
+      pending_frontmatter[line] = true
+    end
   end
   for _, range in ipairs(ranges) do
     local new_line1 = range.new_line1 or range.old_line1 or 1

@@ -989,7 +989,7 @@ function M.record_location(target, opts)
   return true
 end
 
-local commit_non_suspendable_replacement
+local commit_replacement
 
 function M.present(view, opts)
   opts = opts or {}
@@ -1036,7 +1036,7 @@ function M.present(view, opts)
       local committed = false
       local function approved()
         if not M.contains(pane) or pane.current_view ~= current then return end
-        commit_non_suspendable_replacement(pane, current, view, opts)
+        commit_replacement(pane, current, view, opts)
         committed = true
       end
       if opts.force or not current.can_close then approved() else current:can_close(approved) end
@@ -1085,7 +1085,7 @@ local function insert_history_transfer(history, insertion, transfer)
   history.index = insertion + transfer.index - 1
 end
 
-commit_non_suspendable_replacement = function(pane, old, view, opts, transfer)
+commit_replacement = function(pane, old, view, opts, transfer)
   local history = pane.history
   local insertion = history.index
   local kept = {}
@@ -1107,7 +1107,7 @@ commit_non_suspendable_replacement = function(pane, old, view, opts, transfer)
   call_lifecycle(old, "on_close")
   call_lifecycle(view, "on_resume")
   if not opts or opts.focus ~= false then M.focus(pane) end
-  after_mutation("replaced non-suspendable View in " .. pane.id)
+  after_mutation("replaced View in " .. pane.id)
   return pane
 end
 
@@ -1235,7 +1235,7 @@ function M.move_current_view(source_target, destination_target, opts)
       present_history_transfer(destination, transfer, opts)
       result = moved
     else
-      commit_non_suspendable_replacement(destination, old, moved, opts, transfer)
+      commit_replacement(destination, old, moved, opts, transfer)
       result = moved
     end
   end
@@ -1315,8 +1315,16 @@ function M.replace_view(target, factory, opts)
   if suspendable or M.constraint(pane) then
     local view, err = construct_view(factory)
     if not view then return nil, err end
-    local result, present_err = M.present(view, { pane = pane, focus = opts.focus })
-    return result and view or nil, present_err
+    if M.accepts(pane, view) then
+      local result, present_err = M.present(view, { pane = pane, focus = opts.focus })
+      return result and view or nil, present_err
+    end
+    if suspendable and #collect_owned_views(pane) == 1 then
+      commit_replacement(pane, old, view, opts)
+      return view
+    end
+    local placed, present_err = M.present(view, { pane = pane, focus = opts.focus })
+    return placed and view or nil, present_err
   end
 
   local result, failure
@@ -1327,14 +1335,7 @@ function M.replace_view(target, factory, opts)
       failure = err
       return
     end
-    if not M.accepts(pane, view) then
-      old.discard_buffer_on_close = nil
-      local placed
-      placed, failure = M.present(view, { pane = pane, focus = opts.focus })
-      result = placed and view or nil
-      return
-    end
-    commit_non_suspendable_replacement(pane, old, view, opts)
+    commit_replacement(pane, old, view, opts)
     result = view
   end
   if opts.force or not old.can_close then approved() else old:can_close(approved) end

@@ -7743,6 +7743,11 @@ return {
       return prewarm_file_index()
     end,
     cancel_file_index_for_test = cancel_file_index_scan,
+    clear_file_subscriptions_for_test = function()
+      cancel_file_index_scan()
+      sync_project_file_subscriptions({})
+      clear_native_file_index()
+    end,
     build_scope = build_scope,
     decorate_grep_result = decorate_grep_result,
     grep_path_match_class = fuzzy_searcher.grep_order.path_match_class,

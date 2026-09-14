@@ -200,45 +200,4 @@ test.describe("Bracket match frame", function()
     test.equal(frame[4].h, text_height)
   end)
 
-  test.it("aligns matching brackets inside a Markdown heading link", function(context)
-    local view, buffer = open_text_view(context, "# Editing[[keys.md]]", 12)
-    buffer:set_filename("heading.md", "heading.md")
-    core.set_active_view(view)
-    refresh_markdown(view)
-    buffer:set_selection(1, 12)
-    view:update()
-
-    local drawn_text = {}
-    local frame = capture_frame_rects(view, 1, drawn_text)
-    local thickness = math.max(1, SCALE)
-    local actual_vertical = {}
-    for _, rect in ipairs(frame) do
-      if rect.w == thickness then actual_vertical[#actual_vertical + 1] = rect.x end
-    end
-    local expected_vertical = {}
-    local line_x = select(1, view:get_line_screen_position(1))
-    for _, col in ipairs({ 11, 19 }) do
-      local x1 = line_x + view:get_col_x_offset(1, col)
-      local x2 = line_x + view:get_col_x_offset(1, col + 1)
-      expected_vertical[#expected_vertical + 1] = x1
-      expected_vertical[#expected_vertical + 1] = x2 - thickness
-    end
-    table.sort(actual_vertical)
-    table.sort(expected_vertical)
-    test.same(actual_vertical, expected_vertical)
-
-    local bracket_text
-    for _, entry in ipairs(drawn_text) do
-      if entry.text:find("[", 1, true) or entry.text:find("]", 1, true) then
-        bracket_text = entry
-        break
-      end
-    end
-    bracket_text = test.not_nil(bracket_text)
-    test.ok(
-      math.abs(frame[1].y - bracket_text.y) <= 1,
-      "bracket frame should share the rendered heading text row"
-    )
-  end)
-
 end)

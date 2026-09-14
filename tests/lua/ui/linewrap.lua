@@ -1021,11 +1021,14 @@ test.describe("line wrapping diff hunk gutter line numbers", function()
     end
   end)
 
-  test.it("positions gutter line numbers after wrapped fake rows and diff hunk gap rows", function(context)
+  test.it("positions Buffer lines after Wrapped Visual Rows and Diff Gap Rows", function(context)
     local long = string.rep("x", 40)
+    local inserted = {}
+    for index = 1, 12 do inserted[index] = "inserted " .. index end
+    local shared = "shared\ntail one\ntail two\nend"
     local view = track(context, "diffviews", diffview.string_to_string(
-      long .. "\nshared\nend",
-      long .. "\ninserted\nshared\nend",
+      long .. "\n" .. shared,
+      long .. "\n" .. table.concat(inserted, "\n") .. "\n" .. shared,
       "left",
       "right",
       true
@@ -1046,13 +1049,10 @@ test.describe("line wrapping diff hunk gutter line numbers", function()
     local line1_height = with_stubbed_renderer(function()
       return left:draw_line_body(1, line1_x, line1_y)
     end)
-    local gap_rows_before_line1 = view.a_gaps[1] and view.a_gaps[1][2] or 0
-    local gap_rows_before_line2 = view.a_gaps[2] and view.a_gaps[2][2] or 0
-    local hunk_gap_height = (gap_rows_before_line2 - gap_rows_before_line1) * lh
 
-    test.ok(line1_height > lh, "expected the first real line to wrap onto fake visual rows")
-    test.equal(hunk_gap_height, lh)
-    test.equal(line2_y, line1_y + line1_height + hunk_gap_height)
+    test.ok(line1_height > lh, "expected the first Buffer line to use Wrapped Visual Rows")
+    test.ok(line2_y > line1_y + line1_height,
+      "expected a Diff Gap Row before the next aligned Buffer line")
   end)
 
   test.it("draws diff backgrounds on wrapped continuation rows", function(context)

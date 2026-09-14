@@ -30,6 +30,18 @@ local function prepare(view)
   end)
 end
 
+local function settle_horizontal_extent(view)
+  view:get_h_content_size()
+  local deadline = system.get_time() + 2
+  while view:is_horizontal_extent_scan_pending() and system.get_time() < deadline do
+    view:get_h_content_size()
+    coroutine.yield(0.01)
+  end
+  test.not_ok(view:is_horizontal_extent_scan_pending(),
+    "horizontal extent scan did not finish")
+  view:update()
+end
+
 local function make_editor(context, buffer, width, height)
   local view = Editor(buffer)
   context.views[#context.views + 1] = view
@@ -164,13 +176,19 @@ test.describe("Markdown layout stability", function()
         prepare(editing)
         prepare(other)
       end
+      if not wrapped then settle_horizontal_extent(other) end
       local pending = position(other, 85, 1)
       local pending_size = other:get_scrollable_size()
       ready(model.peek(buffer))
       wrapping.complete_async_reconstruction(other)
       prepare(other)
+      if not wrapped then settle_horizontal_extent(other) end
       same_position(position(other, 85, 1), pending, "consecutive publication")
-      test.equal(other:get_scrollable_size(), pending_size, "consecutive publication changed the scrollable extent")
+      local published_size = other:get_scrollable_size()
+      test.equal(published_size, pending_size, string.format(
+        "consecutive publication changed the scrollable extent from %.2f to %.2f",
+        pending_size, published_size
+      ))
     end)
   end
 

@@ -75,8 +75,9 @@ test.describe("Project File Search folders", function()
 
   test.after_each(function(context)
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
-    fuzzy_searcher._test.cancel_file_index_for_test()
+    fuzzy_searcher._test.clear_file_subscriptions_for_test()
     project_files.invalidate(context.root)
+    coroutine.yield(0.05)
     project_paths.configure_workspace {}
     panes.reset_for_tests()
     if context.filetree_was_opened then coroutine.yield(0.3) end

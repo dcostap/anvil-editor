@@ -21,6 +21,17 @@ local function wait_ready(instance)
   return instance.status == "ready"
 end
 
+local function wait_vault_ready(index)
+  local deadline = system.get_time() + 5
+  repeat
+    local pool = worker_pool.current_system()
+    if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+    if index.status == "ready" then return true end
+    coroutine.yield(0.01)
+  until system.get_time() >= deadline
+  return index.status == "ready"
+end
+
 local function make_view(filename, text)
   local buffer = Buffer(filename, filename, true)
   buffer:insert(1, 1, text)
@@ -245,6 +256,7 @@ test.describe("Markdown pending visual continuity", function()
     local index = markdown.vault_index.get_index(root):rebuild(
       "pending-embed-continuity"
     )
+    test.ok(wait_vault_ready(index), index.reason)
     local view
     local ok, err = pcall(function()
       config.markdown_live_editor = true
@@ -255,7 +267,7 @@ test.describe("Markdown pending visual continuity", function()
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_ready(instance), instance.reason)
-      test.equal(index.status, "ready")
+      test.ok(wait_vault_ready(index), index.reason)
       test.equal(count_visuals(view, "embed_preview"), 1)
       buffer:apply_edits({
         { line1 = 2, col1 = 1, line2 = 2, col2 = 1, text = "![[Target]]\n" },
@@ -274,7 +286,7 @@ test.describe("Markdown pending visual continuity", function()
       markdown.live_render.refresh_view(view)
       instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_ready(instance), instance.reason)
-      test.equal(index.status, "ready")
+      test.ok(wait_vault_ready(index), index.reason)
       test.equal(count_visuals(view, "embed_preview"), 1)
 
       exit_empty_list(buffer)

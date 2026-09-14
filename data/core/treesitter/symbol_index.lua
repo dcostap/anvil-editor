@@ -2271,7 +2271,9 @@ function symbol_index.mark_directories_dirty(dirs, reason, opts)
   for _, index in pairs(indexes) do
     local file_info = opts.file_info
     if not opts.project_files_refreshed then
-      local reconciled, reconcile_error, _, metadata = project_files.reconcile(index.root, scopes)
+      local reconciled, reconcile_error, _, metadata = project_files.reconcile(
+        index.root, scopes, { force = true }
+      )
       file_info = metadata
       if not reconciled then
         log_quiet("Tree-sitter Project directory reconciliation failed under %s: %s",

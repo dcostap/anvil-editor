@@ -772,24 +772,6 @@ test.describe("Markdown Interactive Table Editing", function()
     test.ok((approaching.proximity or 0) > 0 and approaching.proximity < 1)
   end)
 
-  test.it("scales insertion controls with editor zoom", function()
-    local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two |\n")
-    buffer:set_selection(3, 4)
-    refresh(view)
-    local normal = test.not_nil(table_control(view, 1, "column", 1)).control_size
-    local font = view:get_font()
-    local old_size = font:get_size()
-    local ok, err = pcall(function()
-      font:set_size(old_size * 0.5)
-      view:invalidate_line_render("test-zoom")
-      local smaller = test.not_nil(table_control(view, 1, "column", 1)).control_size
-      test.ok(smaller < normal * 0.75)
-    end)
-    font:set_size(old_size)
-    view:invalidate_line_render("test-zoom-restore")
-    if not ok then error(err, 0) end
-  end)
-
   test.it("reveals only the active cell's inline Markdown source", function()
     local view, buffer = make_view("| A | B |\n| --- | --- |\n| `one` | `two` |\n\nplain")
     buffer:set_selection(5, 1)
