@@ -446,7 +446,7 @@ config.scroll_context_lines = 28
 config.transitions = true
 config.disabled_transitions.scroll = false
 config.scroll_animation_type = "cubic"
-config.scroll_transition_duration = 0.125
+config.scroll_transition_duration = 0.10
 config.animation_rate = 4
 -- Mouse wheel step; default is 70 * SCALE.
 config.mouse_wheel_scroll = 120 * SCALE

@@ -261,9 +261,9 @@ config.scroll_animation_type = "cubic"
 
 ---The duration of a cubic viewport scroll transition, in seconds.
 ---
----Defaults to 0.125.
+---Defaults to 0.10.
 ---@type number
-config.scroll_transition_duration = 0.125
+config.scroll_transition_duration = 0.10
 
 ---The rate of transitions that do not use an explicit duration.
 ---
