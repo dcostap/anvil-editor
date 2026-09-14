@@ -3,8 +3,10 @@
 -- Keep pending-state failures active. Do not replace expected output with raw source.
 local core = require "core"
 local config = require "core.config"
+local command = require "core.command"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
+local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local model = require "core.markdown.model"
 local workers = require "core.worker_pool"
@@ -62,6 +64,44 @@ local function visible_text(render, source)
   return table.concat(parts)
 end
 
+local function frame_state(view, line, sentinel_line)
+  local source = view.buffer.lines[line]:gsub("\n$", "")
+  local render = view:get_line_render(line)
+  local caret_line, caret_col = view.buffer:get_selection()
+  local caret_x, caret_y = view:get_line_screen_position(caret_line, caret_col)
+  local first_row = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line] or line
+  local sentinel_row = view.wrapped_line_to_idx
+    and view.wrapped_line_to_idx[sentinel_line] or sentinel_line
+  return {
+    visible = visible_text(render, source),
+    row_count = view:get_visual_row_count_for_line(line),
+    row_height = view:get_visual_row_height(first_row),
+    caret_line = caret_line,
+    caret_col = caret_col,
+    caret_x = caret_x,
+    caret_y = caret_y,
+    sentinel_y = view:get_visual_row_y_offset(sentinel_row),
+  }
+end
+
+local function published_frame(view, instance, line, sentinel_line)
+  core.ui_snapshot_active = false
+  ready(instance)
+  linewrapping.complete_async_reconstruction(view)
+  core.ui_snapshot_id = core.ui_snapshot_id + 1
+  core.ui_snapshot_active = true
+  view:update()
+  local published = frame_state(view, line, sentinel_line)
+  core.ui_snapshot_active = false
+  core.ui_snapshot_id = core.ui_snapshot_id + 1
+  core.ui_snapshot_active = true
+  view:update()
+  local settled = frame_state(view, line, sentinel_line)
+  core.ui_snapshot_active = false
+  test.same(settled, published)
+  return published
+end
+
 -- The drawing boundary exposes actual checkbox size, not its private closure state.
 local function checkbox_size(view, render)
   for _, fragment in ipairs(render and render.fragments or {}) do
@@ -89,6 +129,8 @@ test.describe("Markdown edit matrix", function()
     context.active = core.active_view
     context.live = config.markdown_live_editor
     context.merge = config.undo_merge_timeout
+    context.snapshot_active = core.ui_snapshot_active
+    context.snapshot_id = core.ui_snapshot_id
     config.markdown_live_editor = true
     config.undo_merge_timeout = 0
   end)
@@ -99,6 +141,8 @@ test.describe("Markdown edit matrix", function()
       context.view:on_close()
     end
     core.active_view = context.active
+    core.ui_snapshot_active = context.snapshot_active
+    core.ui_snapshot_id = context.snapshot_id
     config.markdown_live_editor = context.live
     config.undo_merge_timeout = context.merge
   end)
@@ -239,6 +283,97 @@ test.describe("Markdown edit matrix", function()
         check("- body")
         ready(instance)
         check("- body")
+      end)
+    end
+  end
+
+  local shifted_blocks = {
+    { name = "heading", source = "# Heading words that wrap across several visual rows" },
+    { name = "formatted prose", source = "**Bold words that wrap across several visual rows**" },
+    { name = "bullet", source = "- List words that wrap across several visual rows" },
+    { name = "ordered item", source = "12. List words that wrap across several visual rows" },
+    { name = "task", source = "- [ ] Task words that wrap across several visual rows" },
+    { name = "quote", source = "> Quote words that wrap across several visual rows" },
+    { name = "callout", source = "> [!NOTE] Callout words that wrap across several visual rows" },
+    { name = "thematic break", source = "---" },
+  }
+
+  for _, fixture in ipairs(shifted_blocks) do
+    for _, wrapped in ipairs({ false, true }) do
+      test.it("keeps a shifted " .. fixture.name .. " stable through each frame / "
+        .. (wrapped and "wrapped" or "unwrapped"), function(context)
+        local filename = USERDIR .. PATHSEP .. "markdown-frame-transition.md"
+        local buffer = Buffer(filename, filename, true)
+        buffer:insert(1, 1, fixture.source .. "\n\nsentinel")
+        buffer:clear_undo_redo()
+        local view = Editor(buffer)
+        context.view = view
+        view.size.x, view.size.y = wrapped and 320 or 700, 600
+        view:set_wrapping_enabled(wrapped)
+        core.active_view = view
+        buffer:set_selection(1, 1)
+        markdown.live_render.refresh_view(view)
+        local instance = test.not_nil(model.peek(buffer))
+        ready(instance)
+        linewrapping.complete_async_reconstruction(view)
+        core.ui_snapshot_id = (core.ui_snapshot_id or 0) + 1
+        core.ui_snapshot_active = true
+        for line = 1, #buffer.lines do view:get_line_render(line) end
+        view:get_visual_row_metric_cache()
+
+        test.equal(command.perform("core:newline"), true)
+        core.ui_snapshot_id = core.ui_snapshot_id + 1
+        view:update()
+        test.equal(instance.status, "pending")
+        test.equal(buffer.lines[2]:gsub("\n$", ""), fixture.source)
+        local pending = frame_state(view, 2, 4)
+        local published = published_frame(view, instance, 2, 4)
+        test.same(published, pending)
+      end)
+    end
+  end
+
+  local joined_blocks = {
+    shifted_blocks[1], -- heading
+    shifted_blocks[3], -- bullet
+    shifted_blocks[4], -- ordered item
+    shifted_blocks[5], -- task
+    shifted_blocks[6], -- quote
+    shifted_blocks[7], -- callout
+    shifted_blocks[8], -- thematic break
+  }
+
+  for _, fixture in ipairs(joined_blocks) do
+    for _, wrapped in ipairs({ false, true }) do
+      test.it("keeps a joined " .. fixture.name .. " stable through each frame / "
+        .. (wrapped and "wrapped" or "unwrapped"), function(context)
+        local filename = USERDIR .. PATHSEP .. "markdown-frame-transition.md"
+        local buffer = Buffer(filename, filename, true)
+        buffer:insert(1, 1, "\n" .. fixture.source .. "\n\nsentinel")
+        buffer:clear_undo_redo()
+        local view = Editor(buffer)
+        context.view = view
+        view.size.x, view.size.y = wrapped and 320 or 700, 600
+        view:set_wrapping_enabled(wrapped)
+        core.active_view = view
+        buffer:set_selection(2, 1)
+        markdown.live_render.refresh_view(view)
+        local instance = test.not_nil(model.peek(buffer))
+        ready(instance)
+        linewrapping.complete_async_reconstruction(view)
+        core.ui_snapshot_id = (core.ui_snapshot_id or 0) + 1
+        core.ui_snapshot_active = true
+        for line = 1, #buffer.lines do view:get_line_render(line) end
+        view:get_visual_row_metric_cache()
+
+        test.equal(command.perform("core:backspace"), true)
+        core.ui_snapshot_id = core.ui_snapshot_id + 1
+        view:update()
+        test.equal(instance.status, "pending")
+        test.equal(buffer.lines[1]:gsub("\n$", ""), fixture.source)
+        local pending = frame_state(view, 1, 3)
+        local published = published_frame(view, instance, 1, 3)
+        test.same(published, pending)
       end)
     end
   end

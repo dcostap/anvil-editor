@@ -3806,7 +3806,9 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
   return current_text
 end
 
-local function pending_list_marker_render(view, previous, current_text)
+local function pending_list_marker_render(
+  view, previous, current_text, reveal_source_range
+)
   if not current_text then return nil end
   local previous_marker
   if previous then
@@ -3855,6 +3857,9 @@ local function pending_list_marker_render(view, previous, current_text)
       body_text = unordered_body
     end
   end
+
+  local reveal_marker = reveal_source_range
+    and reveal_source_range(1, content_col)
 
   if not previous_marker then
     local body_font = markdown_live_body_font(view)
@@ -3907,7 +3912,30 @@ local function pending_list_marker_render(view, previous, current_text)
     )
     or indent_width + marker_control_width + body_font:get_width(" ")
 
-  if kind == "task" then
+  if reveal_marker then
+    marker.widget = nil
+    marker.color = style.markdown_live_list_marker
+    marker.text_x_offset = indent_width
+    if kind == "task" then
+      local prefix = bullet .. before_task .. "[" .. state .. "]"
+      marker.text = prefix
+      marker.width = math.max(
+        marker.width, indent_width + body_font:get_width(prefix .. " ")
+      )
+      marker.markdown_task_source_marker = true
+      marker.markdown_task_content_col = content_col
+      marker.suppress_bracketmatch = true
+    else
+      local prefix = current_text:sub(1, content_col - 1)
+      marker.text = prefix
+      marker.width = math.max(marker.width, body_font:get_width(prefix))
+      marker.text_x_offset = math.max(
+        0, (marker.width - body_font:get_width(prefix)) / 2
+      )
+      marker.ordered_list_source_marker = kind == "ordered" or nil
+      marker.unordered_list_source_marker = kind == "unordered" or nil
+    end
+  elseif kind == "task" then
     marker.text = ""
     marker.checked = checked
     marker.markdown_task_checkbox = true
@@ -4059,17 +4087,26 @@ end
 local pending_fenced_code_render
 local current_provisional_topology
 
-local function selection_reveals_pending_heading(view, line, line_text)
+local function selection_reveals_pending_range(view, line, range_col1, range_col2)
   local state = current_selection_state(view)
   for index = 1, #(state and state.selections or {}), 4 do
     local line1, col1 = state.selections[index], state.selections[index + 1]
     local line2, col2 = state.selections[index + 2], state.selections[index + 3]
-    if line1 and col1 and line2 and col2 and (
-      line1 == line2 and col1 == col2 and line == line1
-      or selection_touches_line(line, #line_text, line1, col1, line2, col2)
-    )
-    then
-      return true
+    if line1 and col1 and line2 and col2 then
+      if line1 > line2 or line1 == line2 and col1 > col2 then
+        line1, col1, line2, col2 = line2, col2, line1, col1
+      end
+      if line1 == line2 and col1 == col2 then
+        if line == line1 and col1 >= range_col1 and col1 <= range_col2 then
+          return true
+        end
+      elseif line >= line1 and line <= line2 then
+        local selected_col1 = line == line1 and col1 or 1
+        local selected_col2 = line == line2 and col2 or math.huge
+        if selected_col1 < range_col2 and selected_col2 > range_col1 then
+          return true
+        end
+      end
     end
   end
   return false
@@ -4102,7 +4139,11 @@ local function pending_source_render(view, line, render_line, current_text, code
     heading_for_line, heading_font, live.thematic_break_fragment,
     live.quote_prefix_fragment,
     reveal_code_delimiter,
-    pending_fenced_code_render, pending_list_marker_render
+    pending_fenced_code_render, pending_list_marker_render,
+    selection_reveals_pending_range(view, line, 1, #current_text + 1),
+    function(col1, col2)
+      return selection_reveals_pending_range(view, line, col1, col2)
+    end
   )
   local heading = not code and heading_for_line(current_text, line)
   if render and heading then
@@ -4115,21 +4156,6 @@ local function pending_source_render(view, line, render_line, current_text, code
     render.first_row_content_y_offset = gap
     render.highlight_height = text_row_height
     render.caret_height = text_row_height
-    if selection_reveals_pending_heading(view, line, current_text) then
-      local font = heading_font(view, heading.level)
-      for _, fragment in ipairs(render.fragments or {}) do
-        local col1 = fragment.source_col1 or 1
-        local col2 = fragment.source_col2 or col1
-        local marker = col2 <= heading.content_col1
-          or col1 >= heading.content_col2
-        if marker and fragment.hidden then
-          fragment.hidden = nil
-          fragment.text = current_text:sub(col1, col2 - 1)
-          fragment.font = font
-          fragment.color = style.markdown_live_heading_marker
-        end
-      end
-    end
   end
   return render
 end

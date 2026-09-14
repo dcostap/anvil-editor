@@ -25,7 +25,7 @@ function pending_render.current_source(
   view, line, previous, current_text, code,
   source_fallback, prose_render, scaled_font, heading_from_source, heading_font,
   thematic_break_fragment, quote_prefix_fragment, reveal_code_delimiter,
-  code_render, list_render
+  code_render, list_render, reveal_block_source, reveal_source_range
 )
   local function inline_fragments(text, base_col)
     local fragments = {}
@@ -177,7 +177,7 @@ function pending_render.current_source(
 
   if not code then
     -- Block context takes priority over list-like source text.
-    local render = list_render(view, previous, current_text)
+    local render = list_render(view, previous, current_text, reveal_source_range)
     if render then return render end
     local next_text = line and (view.buffer.lines[line + 1] or ""):gsub("\n$", "") or ""
     local next_compact = next_text:gsub("%s", "")
@@ -230,6 +230,13 @@ function pending_render.current_source(
       or compact:gsub("%-", "") == ""
     )
     if thematic then
+      if reveal_source_range
+        and reveal_source_range(1, #current_text + 1)
+      then
+        local render = source_fallback(view, previous, current_text, false)
+        render.markdown_pending_provenance = "unavailable"
+        return render
+      end
       local render = prose_render(view, current_text, {
         fragments = {
           thematic_break_fragment(view, 1, #current_text + 1),
@@ -277,6 +284,11 @@ function pending_render.current_source(
 
     local _, quote_end = current_text:find("^%s*>%s*")
     if quote_end then
+      if reveal_source_range and reveal_source_range(1, quote_end + 1) then
+        local render = source_fallback(view, previous, current_text, false)
+        render.markdown_pending_provenance = "unavailable"
+        return render
+      end
       local content_col1 = quote_end + 1
       local fragments = inline_fragments(
         current_text:sub(content_col1), content_col1
@@ -299,11 +311,17 @@ function pending_render.current_source(
     if heading then
       local font = heading_font(view, heading.level)
       local fragments = inline_fragments(heading.text, heading.content_col1)
-      table.insert(fragments, 1, {
+      local prefix = {
         source_col1 = 1,
         source_col2 = heading.content_col1,
-        hidden = true,
-      })
+        hidden = not reveal_block_source or nil,
+      }
+      if reveal_block_source then
+        prefix.text = current_text:sub(1, heading.content_col1 - 1)
+        prefix.font = font
+        prefix.color = style.markdown_live_heading_marker
+      end
+      table.insert(fragments, 1, prefix)
       if #fragments == 1 then
         fragments[#fragments + 1] = {
           source_col1 = heading.content_col1,
@@ -318,11 +336,17 @@ function pending_render.current_source(
         end
       end
       if heading.content_col2 <= #current_text then
-        fragments[#fragments + 1] = {
+        local suffix = {
           source_col1 = heading.content_col2,
           source_col2 = #current_text + 1,
-          hidden = true,
+          hidden = not reveal_block_source or nil,
         }
+        if reveal_block_source then
+          suffix.text = current_text:sub(heading.content_col2)
+          suffix.font = font
+          suffix.color = style.markdown_live_heading_marker
+        end
+        fragments[#fragments + 1] = suffix
       end
       local render = prose_render(view, current_text, {
         fragments = fragments,

@@ -112,9 +112,10 @@ function projection.source_topology(lines, line_limit)
   if frontmatter_delimiter == "---" or frontmatter_delimiter == "+++" then
     local frontmatter_close_pattern = frontmatter_delimiter == "+++"
       and "^%s*%+%+%+%s*$" or "^%s*%-%-%-%s*$"
-    frontmatter_lines[1] = true
-    for line = 2, line_count do
-      frontmatter_lines[line] = true
+    local close_line
+    -- A lone opening delimiter is Markdown. Scan past the output limit to
+    -- distinguish it from closed frontmatter.
+    for line = 2, #(lines or {}) do
       local text = (lines[line] or ""):gsub("\n$", "")
       local closes_frontmatter = text:match(frontmatter_close_pattern) ~= nil
       if frontmatter_delimiter == "---" then
@@ -122,7 +123,13 @@ function projection.source_topology(lines, line_limit)
           or text:match("^%s*%.%.%.%s*$") ~= nil
       end
       if closes_frontmatter then
+        close_line = line
         break
+      end
+    end
+    if close_line then
+      for line = 1, math.min(line_count, close_line) do
+        frontmatter_lines[line] = true
       end
     end
   end
