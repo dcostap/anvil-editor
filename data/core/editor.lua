@@ -61,14 +61,17 @@ function Editor:get_navigation_state()
   }
 end
 
-function Editor:set_navigation_state(state)
+function Editor:set_navigation_state(state, opts)
   if state.selection_state then self:set_selection_state(state.selection_state) end
   if state.scroll then
-    self.scroll.x, self.scroll.to.x = state.scroll.x or 0, state.scroll.x or 0
-    self.scroll.y, self.scroll.to.y = state.scroll.y or 0, state.scroll.y or 0
+    self.scroll.to.x = state.scroll.x or 0
+    self.scroll.to.y = state.scroll.y or 0
+    if not (opts and opts.animate_scroll) then
+      self.scroll.x, self.scroll.y = self.scroll.to.x, self.scroll.to.y
+    end
   end
-  -- Validate after layout, even when the restored selection did not change.
-  self.needs_initial_scroll_validation = true
+  -- Same-View history already has valid layout and must keep its transition.
+  self.needs_initial_scroll_validation = not (opts and opts.animate_scroll) or nil
 end
 
 function Editor:duplicate()

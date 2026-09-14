@@ -103,10 +103,10 @@ local function capture_navigation_state(view)
   if view and view.get_navigation_state then return view:get_navigation_state() end
 end
 
-local function restore_navigation_state(view, state)
+local function restore_navigation_state(view, state, opts)
   if view and state and view.set_navigation_state then
     view.__navigation_history_restoring = true
-    local ok, err = pcall(view.set_navigation_state, view, state)
+    local ok, err = pcall(view.set_navigation_state, view, state, opts)
     view.__navigation_history_restoring = nil
     if not ok then error(err) end
   end
@@ -657,7 +657,9 @@ local function set_history_index(pane, index, opts)
   if old ~= next_view then call_lifecycle(old, "on_suspend") end
   history.index = index
   pane.current_view = next_view
-  restore_navigation_state(next_view, history.entries[index].state)
+  restore_navigation_state(next_view, history.entries[index].state, {
+    animate_scroll = old == next_view,
+  })
   log_navigation_history(pane, "traverse")
   if old ~= next_view then call_lifecycle(next_view, "on_resume") end
   if not opts or opts.focus ~= false then M.focus(pane) end
@@ -1399,7 +1401,9 @@ function M.back(target)
     local live = capture_navigation_state(pane.current_view)
     if navigation_state_key(current.view, current.state)
         ~= navigation_state_key(pane.current_view, live) then
-      restore_navigation_state(pane.current_view, current.state)
+      restore_navigation_state(pane.current_view, current.state, {
+        animate_scroll = true,
+      })
       log_navigation_history(pane, "return-to-place")
       M.focus(pane)
       after_mutation("returned to recorded location in " .. pane.id)

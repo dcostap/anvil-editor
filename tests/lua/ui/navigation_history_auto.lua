@@ -109,10 +109,30 @@ test.describe("automatic Editor Navigation History", function()
     test.equal(panes.history_length(pane), 2)
     panes.back(pane)
     test.equal(view:get_selection_state().selections[1], 1)
-    test.equal(view:get_navigation_state().scroll.y, 40)
+    test.equal(view.scroll.to.y, 40)
     panes.forward(pane)
     test.equal(view:get_selection_state().selections[1], 10)
-    test.equal(view:get_navigation_state().scroll.y, 60)
+    test.equal(view.scroll.to.y, 60)
+  end)
+
+  test.it("animates scroll when history stays in the same View", function()
+    local pane = panes.create { factory = make_editor }
+    local view = pane.current_view
+    view:set_navigation_state {
+      selection_state = { selections = { 10, 1, 10, 1 }, last_selection = 1 },
+      scroll = { x = 0, y = 100 },
+    }
+    panes.record_location(pane)
+    view:set_navigation_state {
+      selection_state = { selections = { 80, 1, 80, 1 }, last_selection = 1 },
+      scroll = { x = 0, y = 500 },
+    }
+    panes.record_location(pane)
+
+    test.equal(panes.back(pane), view)
+    test.equal(view:get_selection_state().selections[1], 10)
+    test.equal(view.scroll.y, 500)
+    test.equal(view.scroll.to.y, 100)
   end)
 
   test.it("Back saves a distant departure without waiting for dwell", function()
