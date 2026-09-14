@@ -80,6 +80,14 @@ local function heading_caret_y(view, line, col)
   return test.not_nil(caret_y)
 end
 
+local function visible_text(view, line)
+  local parts = {}
+  for _, fragment in ipairs(test.not_nil(view:get_line_render(line)).fragments or {}) do
+    if not fragment.hidden then parts[#parts + 1] = fragment.text or "" end
+  end
+  return table.concat(parts)
+end
+
 test.describe("Markdown heading leading spacing", function()
   test.before_each(function(context)
     created_views = {}
@@ -382,6 +390,7 @@ test.describe("Markdown heading leading spacing", function()
     buffer:set_selection(1, 1)
     core.active_view = view
     refresh(view)
+    test.equal(visible_text(view, 1), "# Heading")
 
     core.ui_snapshot_id = (core.ui_snapshot_id or 0) + 1
     core.ui_snapshot_active = true
@@ -393,6 +402,10 @@ test.describe("Markdown heading leading spacing", function()
     view:update()
     test.equal(buffer.lines[1], "\n")
     test.equal(buffer.lines[2], "# Heading\n")
+    test.equal(
+      visible_text(view, 2), "# Heading",
+      "the active heading marker temporarily disappeared"
+    )
     local immediate_blank_height = view:get_position_visual_row_height(1, 1)
     test.equal(
       immediate_blank_height, expected_blank_height,
@@ -413,6 +426,7 @@ test.describe("Markdown heading leading spacing", function()
     local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_ready(instance), instance.reason)
     linewrapping.complete_async_reconstruction(view)
+    test.equal(visible_text(view, 2), "# Heading")
     test.equal(view:get_position_visual_row_height(1, 1), expected_blank_height)
     local _, published_heading_y = view:get_line_screen_position(2, 1)
     test.equal(published_heading_y, expected_heading_y)

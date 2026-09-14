@@ -4059,6 +4059,22 @@ end
 local pending_fenced_code_render
 local current_provisional_topology
 
+local function selection_reveals_pending_heading(view, line, line_text)
+  local state = current_selection_state(view)
+  for index = 1, #(state and state.selections or {}), 4 do
+    local line1, col1 = state.selections[index], state.selections[index + 1]
+    local line2, col2 = state.selections[index + 2], state.selections[index + 3]
+    if line1 and col1 and line2 and col2 and (
+      line1 == line2 and col1 == col2 and line == line1
+      or selection_touches_line(line, #line_text, line1, col1, line2, col2)
+    )
+    then
+      return true
+    end
+  end
+  return false
+end
+
 local function pending_source_render(view, line, render_line, current_text, code)
   local topology = current_provisional_topology(view, line)
   if topology then
@@ -4099,6 +4115,21 @@ local function pending_source_render(view, line, render_line, current_text, code
     render.first_row_content_y_offset = gap
     render.highlight_height = text_row_height
     render.caret_height = text_row_height
+    if selection_reveals_pending_heading(view, line, current_text) then
+      local font = heading_font(view, heading.level)
+      for _, fragment in ipairs(render.fragments or {}) do
+        local col1 = fragment.source_col1 or 1
+        local col2 = fragment.source_col2 or col1
+        local marker = col2 <= heading.content_col1
+          or col1 >= heading.content_col2
+        if marker and fragment.hidden then
+          fragment.hidden = nil
+          fragment.text = current_text:sub(col1, col2 - 1)
+          fragment.font = font
+          fragment.color = style.markdown_live_heading_marker
+        end
+      end
+    end
   end
   return render
 end
