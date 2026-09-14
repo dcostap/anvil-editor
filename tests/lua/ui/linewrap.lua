@@ -152,22 +152,27 @@ local function capture_drawn_caret(view)
   return drawn_caret
 end
 
-local function collect_current_line_highlights(view, fn)
+local function collect_current_line_highlights(fn)
   local highlights = {}
-  local old_draw_line_highlight = view.draw_line_highlight
-
-  view.draw_line_highlight = function(_, x, y)
-    highlights[#highlights + 1] = { x = x, y = y }
-  end
-
-  local ok, err = pcall(function()
-    with_stubbed_renderer(fn)
+  with_stubbed_renderer(function()
+    renderer.draw_rect = function(x, y, width, height, color)
+      if color == style.line_highlight then
+        highlights[#highlights + 1] = { x = x, y = y, width = width, height = height }
+      end
+    end
+    fn()
   end)
-
-  view.draw_line_highlight = old_draw_line_highlight
-
-  if not ok then error(err, 0) end
   return highlights
+end
+
+local function assert_highlighted_row(highlights, y, height)
+  test.ok(#highlights > 0, "the current row must have a highlight")
+  -- Multiple drawing stages may cover the same row. None may cover another row.
+  for _, rect in ipairs(highlights) do
+    test.equal(rect.y, y, "the highlight must stay on the current row")
+    test.equal(rect.height, height, "the highlight must cover only the current row")
+    test.ok(rect.width > 0, "the highlight must have visible width")
+  end
 end
 
 local function wait_until(predicate, timeout, message)
@@ -243,26 +248,24 @@ test.describe("line wrapping current line highlight", function()
 
     buffer:set_selection(1, 12, 1, 12)
 
-    local highlights = collect_current_line_highlights(view, function()
+    local highlights = collect_current_line_highlights(function()
       view:draw_line_body(1, first_x, first_y)
     end)
 
-    test.equal(#highlights, 1)
-    test.equal(highlights[1].y, second_visual_y)
+    assert_highlighted_row(highlights, second_visual_y, view:get_line_height())
   end)
 
-  test.it("draws a single current-line highlight during a full wrapped Text View draw", function(context)
+  test.it("highlights only the caret row during a full wrapped Text View draw", function(context)
     local view, buffer = open_editor(context, string.rep("x", 40) .. "\n")
     configure_wrapping_for_test(context, view)
     buffer:set_selection(1, 12, 1, 12)
 
     local _, expected_y = view:get_line_screen_position(1, 12)
-    local highlights = collect_current_line_highlights(view, function()
+    local highlights = collect_current_line_highlights(function()
       view:draw()
     end)
 
-    test.equal(#highlights, 1)
-    test.equal(highlights[1].y, expected_y)
+    assert_highlighted_row(highlights, expected_y, view:get_line_height())
   end)
 
   test.it("prefixes every soft-wrapped continuation row with an indicator", function(context)
@@ -309,10 +312,9 @@ test.describe("line wrapping current line highlight", function()
     config.disable_blink = true
     buffer:set_selection(2, 1, 2, 1)
 
-    local original_active_view = core.active_view
-    local original_window_has_focus = system.window_has_focus
-    core.active_view = {}
-    system.window_has_focus = function() return true end
+    local other = open_editor(context, "other\n")
+    test.equal(core.active_view, other)
+    local _, expected_y = view:get_line_screen_position(2, 1)
 
     local carets = {}
     local old_draw_caret = view.draw_caret
@@ -320,15 +322,13 @@ test.describe("line wrapping current line highlight", function()
       carets[#carets + 1] = { x = x, y = y, line = line, col = col }
     end
 
-    local highlights = collect_current_line_highlights(view, function()
+    local highlights = collect_current_line_highlights(function()
       view:draw()
     end)
 
     view.draw_caret = old_draw_caret
-    core.active_view = original_active_view
-    system.window_has_focus = original_window_has_focus
 
-    test.equal(#highlights, 1)
+    assert_highlighted_row(highlights, expected_y, view:get_line_height())
     test.equal(#carets, 0)
   end)
 
