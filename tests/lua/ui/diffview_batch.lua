@@ -1186,7 +1186,7 @@ test.describe("DiffView batch behavior", function()
 
   test.it("keeps a large final hunk compact", function(context)
     local inserted = { "before" }
-    for i = 1, 6 do inserted[#inserted + 1] = "insert " .. i end
+    for i = 1, 12 do inserted[#inserted + 1] = "insert " .. i end
     inserted[#inserted + 1] = "after"
     local view = track(context, "diffviews", diffview.string_to_string(
       "before\nafter",
@@ -1201,7 +1201,7 @@ test.describe("DiffView batch behavior", function()
     view:update()
 
     local _, left_after_y = view.buffer_view_a:get_line_screen_position(2, 1)
-    local _, right_after_y = view.buffer_view_b:get_line_screen_position(8, 1)
+    local _, right_after_y = view.buffer_view_b:get_line_screen_position(14, 1)
     test.ok(left_after_y < right_after_y, "a final hunk should not add Diff Gap Rows")
     test.ok(view.buffer_view_a:get_scrollable_line_count() < view.buffer_view_b:get_scrollable_line_count())
   end)
@@ -1225,6 +1225,40 @@ test.describe("DiffView batch behavior", function()
     local _, left_shared_y = view.buffer_view_a:get_line_screen_position(2, 1)
     local _, right_shared_y = view.buffer_view_b:get_line_screen_position(14, 1)
     test.equal(left_shared_y, right_shared_y, "a large hunk should align a substantial shared section")
+  end)
+
+  test.it("aligns the first useful comparison after a large insertion", function(context)
+    local right = { "before" }
+    for i = 1, 12 do right[#right + 1] = "insert " .. i end
+    right[#right + 1] = "const resume = true;"
+    right[#right + 1] = "const first = newFirst;"
+    right[#right + 1] = "const second = newSecond;"
+    right[#right + 1] = "shared tail 1"
+    right[#right + 1] = "shared tail 2"
+    right[#right + 1] = "shared tail 3"
+    local view = track(context, "diffviews", diffview.string_to_string(
+      table.concat({
+        "before",
+        "const resume = true;",
+        "const first = oldFirst;",
+        "const second = oldSecond;",
+        "shared tail 1",
+        "shared tail 2",
+        "shared tail 3",
+      }, "\n"),
+      table.concat(right, "\n"),
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 300
+    view:update()
+
+    local _, left_resume_y = view.buffer_view_a:get_line_screen_position(2, 1)
+    local _, right_resume_y = view.buffer_view_b:get_line_screen_position(14, 1)
+    test.equal(left_resume_y, right_resume_y, "the first useful comparison should resume alignment")
   end)
 
   test.it("keeps minor wrapped replacement offsets compact", function(context)

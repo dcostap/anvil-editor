@@ -910,19 +910,24 @@ function DiffView:get_side_path_target(index, side_view)
   return { path = path, line = line }
 end
 
--- Let connectors show small offsets and short shared tails without empty space.
--- Add Diff Gap Rows only when substantial shared content benefits from alignment.
+-- Let connectors show small offsets and short unchanged tails without empty space.
+-- After large offsets, resume alignment at the first pair when useful comparison remains.
 local MAX_UNPADDED_DIFF_ROWS = 8
-local MIN_SHARED_ROWS_FOR_DIFF_GAP = 3
+local MIN_UNCHANGED_TAIL_ROWS_FOR_DIFF_GAP = 3
 
-local function has_shared_alignment_context(view, alignment, index)
+local function has_useful_comparison_remaining(view, alignment, index)
+  local first = alignment[index]
+  if not (first and first.a and first.b) then return false end
   local a_rows, b_rows = 0, 0
   for i = index, #alignment do
     local pair = alignment[i]
-    if pair.tag ~= "equal" or not pair.a or not pair.b then break end
-    a_rows = a_rows + view.buffer_view_a:get_visual_row_count_for_line(pair.a)
-    b_rows = b_rows + view.buffer_view_b:get_visual_row_count_for_line(pair.b)
-    if math.min(a_rows, b_rows) >= MIN_SHARED_ROWS_FOR_DIFF_GAP then return true end
+    -- A later change makes alignment useful. Suppress only a short unchanged tail.
+    if pair.tag ~= "equal" then return true end
+    if pair.a and pair.b then
+      a_rows = a_rows + view.buffer_view_a:get_visual_row_count_for_line(pair.a)
+      b_rows = b_rows + view.buffer_view_b:get_visual_row_count_for_line(pair.b)
+      if math.min(a_rows, b_rows) >= MIN_UNCHANGED_TAIL_ROWS_FOR_DIFF_GAP then return true end
+    end
   end
   return false
 end
@@ -942,7 +947,7 @@ function DiffView:refresh_core_gap_rows(force)
     if a_height < b_height and pair.a then
       local delta = b_height - a_height
       if delta > MAX_UNPADDED_DIFF_ROWS
-        and has_shared_alignment_context(self, alignment, index)
+        and has_useful_comparison_remaining(self, alignment, index)
       then
         a_gap_total = a_gap_total + delta
         a_height = b_height
@@ -950,7 +955,7 @@ function DiffView:refresh_core_gap_rows(force)
     elseif b_height < a_height and pair.b then
       local delta = a_height - b_height
       if delta > MAX_UNPADDED_DIFF_ROWS
-        and has_shared_alignment_context(self, alignment, index)
+        and has_useful_comparison_remaining(self, alignment, index)
       then
         b_gap_total = b_gap_total + delta
         b_height = a_height
