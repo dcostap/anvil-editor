@@ -430,7 +430,7 @@ test.describe("Fuzzy Searcher Path Search", function()
       join_path(context.project_root, "missing.txt")))
   end)
 
-  test.it("does not offer bare file creation when a file matches", function(context)
+  test.it("offers bare file creation before a fuzzy file match", function(context)
     local file = join_path(context.project_root, "notes", "missing.txt")
     mkdirp(common.dirname(file))
     write_file(file)
@@ -446,9 +446,9 @@ test.describe("Fuzzy Searcher Path Search", function()
         end
       end
     end), "expected the matching file result")
-    for _, result in ipairs(picker.results) do
-      test.not_equal(result.kind, "create_path")
-    end
+    test.equal(picker.results[1].kind, "create_path")
+    test.ok(common.path_equals(picker.results[1].abs_path,
+      join_path(context.project_root, "missing.txt")))
   end)
 
   test.it("marks matching recent Projects before ordinary folders", function(context)
