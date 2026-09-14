@@ -146,6 +146,33 @@ local function surround_action(buffer, idx, line1, col1, line2, col2, swapped, o
   }
 end
 
+local function unwrap_action(buffer, idx, line1, col1, line2, col2, swapped, opener, closer)
+  if col1 <= #opener then return nil end
+  local before = buffer.lines[line1]:sub(col1 - #opener, col1 - 1)
+  local after = buffer.lines[line2]:sub(col2, col2 + #closer - 1)
+  if before ~= opener or after ~= closer then return nil end
+
+  local selected = buffer:get_text(line1, col1, line2, col2)
+  return {
+    edit = {
+      line1 = line1,
+      col1 = col1 - #opener,
+      line2 = line2,
+      col2 = col2 + #closer,
+      text = selected,
+      idx = idx,
+    },
+    first = swapped and #selected or 0,
+    second = swapped and 0 or #selected,
+  }
+end
+
+local function toggle_action(buffer, idx, line1, col1, line2, col2, swapped, opener, delimiter)
+  return unwrap_action(
+    buffer, idx, line1, col1, line2, col2, swapped, opener, delimiter.close
+  ) or surround_action(buffer, idx, line1, col1, line2, col2, swapped, opener, delimiter)
+end
+
 local function collapsed_action(buffer, idx, line, col, opener)
   local line2, col2 = line, col
   if buffer.overwrite and col < #buffer:get_utf8_line(line) then
@@ -165,7 +192,8 @@ local function collapsed_action(buffer, idx, line, col, opener)
   }
 end
 
-local function apply_surround(view, opener, delimiter)
+local function apply_surround(view, opener, delimiter, opts)
+  opts = opts or {}
   local buffer = view.buffer
   local actions = {}
   local edits = {}
@@ -173,8 +201,13 @@ local function apply_surround(view, opener, delimiter)
 
   for idx, line1, col1, line2, col2, swapped in buffer:get_selections(true, true) do
     local action
-    if line1 ~= line2 or col1 ~= col2 then
+    local selected = line1 ~= line2 or col1 ~= col2
+    if selected then
       has_selection = true
+    end
+    if opts.toggle then
+      action = toggle_action(buffer, idx, line1, col1, line2, col2, swapped, opener, delimiter)
+    elseif selected then
       action = surround_action(buffer, idx, line1, col1, line2, col2, swapped, opener, delimiter)
     else
       action = collapsed_action(buffer, idx, line1, col1, opener)
@@ -182,7 +215,7 @@ local function apply_surround(view, opener, delimiter)
     actions[idx] = action
     edits[#edits + 1] = action.edit
   end
-  if not has_selection then return nil end
+  if not has_selection and not opts.allow_collapsed then return nil end
 
   local normalized = buffer:plan_edits(edits)
   for i = 2, #normalized do
@@ -231,29 +264,31 @@ function TextView:on_text_input(text)
   return apply_surround(self, text, delimiter) or original_on_text_input(self, text)
 end
 
-local function selected_markdown_view()
+local function markdown_view()
   local view = core.active_view
   if view and view:extends(TextView)
     and markdown_live.is_markdown_buffer(view.buffer)
-    and view.buffer:has_any_selection()
   then
     return true, view
   end
   return false
 end
 
-local function surround_markdown_selection(view, opener, closer)
-  if not view:can_edit("format Markdown selection", { warn = true }) then return end
+local function toggle_markdown_format(view, opener, closer)
+  if not view:can_edit("format Markdown", { warn = true }) then return end
   view.buffer:clear_search_selections()
-  apply_surround(view, opener, { close = closer })
+  apply_surround(view, opener, { close = closer }, {
+    allow_collapsed = true,
+    toggle = true,
+  })
 end
 
-command.add(selected_markdown_view, {
+command.add(markdown_view, {
   ["markdown:surround_bold"] = command.palette(function(view)
-    surround_markdown_selection(view, "**", "**")
+    toggle_markdown_format(view, "**", "**")
   end),
   ["markdown:surround_italic"] = command.palette(function(view)
-    surround_markdown_selection(view, "_", "_")
+    toggle_markdown_format(view, "_", "_")
   end),
 })
 
