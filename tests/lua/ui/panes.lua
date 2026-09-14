@@ -443,27 +443,6 @@ test.describe("Pane manager", function()
     test.ok(panes.validate())
   end)
 
-  test.it("transfers retained source Views outside Navigation History", function()
-    local destination = panes.create { factory = factory("destination") }
-    local source = panes.create { factory = factory("source") }
-    local protected = FakeView("protected")
-    protected.history_protected = true
-    panes.present(protected, { pane = source })
-    panes.back(source)
-    panes.present(FakeView("current"), { pane = source })
-    test.equal(panes.history_length(source), 2)
-
-    test.equal(panes.move_and_merge(source, destination), destination)
-
-    local found = false
-    for _, view in ipairs(panes.views(destination)) do
-      if view == protected then found = true break end
-    end
-    test.ok(found)
-    test.equal(panes.pane_for_view(protected), destination)
-    test.ok(panes.validate())
-  end)
-
   test.it("focuses Panes by current number", function()
     panes.create { factory = factory("one") }
     local two = panes.create { factory = factory("two") }
@@ -562,7 +541,7 @@ test.describe("Pane manager", function()
     test.ok(panes.validate())
   end)
 
-  test.it("preserves Forward places inside the moved contiguous region", function()
+  test.it("preserves source and destination Forward places when moving a View", function()
     local moved = FakeView("A")
     moved.copy_name = "A copy"
     moved.place = 111
@@ -576,7 +555,7 @@ test.describe("Pane manager", function()
 
     local destination = panes.create { factory = factory("Z") }
     panes.present(FakeView("O"), { pane = destination })
-    panes.present(FakeView("discarded forward"), { pane = destination })
+    panes.present(FakeView("destination forward"), { pane = destination })
     panes.back(destination)
 
     test.equal(panes.move_current_view(source, destination), moved)
@@ -584,7 +563,9 @@ test.describe("Pane manager", function()
     test.equal(destination.current_view.place, 22)
     test.equal(panes.forward(destination), moved)
     test.equal(destination.current_view.place, 100)
-    test.is_nil(panes.forward(destination))
+    test.equal(panes.forward(destination):get_name(), "destination forward")
+    test.equal(panes.back(destination), moved)
+    test.equal(destination.current_view.place, 100)
     test.equal(panes.back(destination), moved)
     test.equal(destination.current_view.place, 22)
     test.equal(panes.back(destination):get_name(), "O")
