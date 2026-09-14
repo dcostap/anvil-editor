@@ -451,6 +451,31 @@ test.describe("Fuzzy Searcher Path Search", function()
       join_path(context.project_root, "missing.txt")))
   end)
 
+  test.it("uses an existing exact bare file instead of offering creation", function(context)
+    local file = join_path(context.project_root, "existing.txt")
+    write_file(file)
+    helpers.set_file_cache_for_test({ assert(helpers.file_display_item(file)) })
+
+    fuzzy_searcher.open("existing.txt")
+    local picker = core.fuzzy_searcher_active_view
+
+    test.ok(wait_until(function()
+      return picker.results[1] and picker.results[1].exact_path
+    end), "expected the exact file result")
+    test.not_equal(picker.results[1].kind, "create_path")
+    test.ok(common.path_equals(picker.results[1].abs_path, file))
+  end)
+
+  test.it("keeps a bare Path Search query as a search term", function()
+    helpers.set_everything_state("unavailable")
+
+    fuzzy_searcher.open("@missing.txt")
+
+    for _, result in ipairs(core.fuzzy_searcher_active_view.results) do
+      test.not_equal(result.kind, "create_path")
+    end
+  end)
+
   test.it("marks matching recent Projects before ordinary folders", function(context)
     local recent = join_path(context.external_root, "needle-project")
     mkdirp(recent)
