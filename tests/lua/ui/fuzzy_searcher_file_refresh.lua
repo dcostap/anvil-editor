@@ -247,6 +247,34 @@ test.describe("Fuzzy Searcher file refresh", function()
         .. " results=" .. tostring(#(picker.results or {})))
   end)
 
+  test.it("includes ignored files in a path-scoped text search", function(context)
+    local ignored_dir = context.root .. PATHSEP .. "ignored-scoped-text-search"
+    local ignored_file = ignored_dir .. PATHSEP .. "result.md"
+    test.ok(common.mkdirp(ignored_dir))
+    write_file(ignored_file, "SCOPED_IGNORED_TEXT_RESULT\n")
+    local ignore = assert(io.open(context.root .. PATHSEP .. ".ignore", "wb"))
+    ignore:write("ignored-scoped-text-search/\n")
+    ignore:close()
+
+    test.ok(helpers.prewarm_file_index_for_test())
+    test.ok(wait_until(function()
+      local status = helpers.file_index_status()
+      return status.native and not status.indexing
+    end), "expected the default Project file index to become ready")
+
+    helpers.set_everything_state("available")
+    fuzzy_searcher.open("ignored-scoped-text-search .md #SCOPED_IGNORED_TEXT_RESULT")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    coroutine.yield(0.1)
+    test.not_ok(picker_has_path(picker, ignored_file))
+
+    test.ok(command.perform("fuzzy:toggle_ignored_files"))
+    test.ok(wait_until(function() return picker_has_path(picker, ignored_file) end, 10),
+      "expected the ignored file in the path-scoped text search; status="
+        .. tostring(picker.status) .. " include=" .. tostring(picker.include_ignored)
+        .. " results=" .. tostring(#(picker.results or {})))
+  end)
+
   test.it("prewarms Project files and avoids a redundant scan on the first picker open", function(context)
     local existing = context.root .. PATHSEP .. "prewarmed-project-file.md"
     write_file(existing)

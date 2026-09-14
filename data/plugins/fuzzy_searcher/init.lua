@@ -5767,6 +5767,7 @@ function FSView:start_grep(base, line, grep)
   local roots = project_paths.search_roots("grep")
   local scope, scope_meta, scope_plan = nil, nil, nil
   if base ~= "" or line then
+    ensure_file_index()
     scope_plan = fuzzy_searcher.new_grep_scope_plan(base, line)
     scope = fuzzy_searcher.next_grep_scope_batch(scope_plan)
     scope_meta = scope_plan.meta
