@@ -3,6 +3,7 @@ local TextView = require "core.textview"
 local RootPanel = require "core.rootpanel"
 local command = require "core.command"
 local config = require "core.config"
+local keymap = require "core.keymap"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -36,6 +37,7 @@ local function with_caret_settings(fn)
     animated_caret_distance_max = config.animated_caret_distance_max,
     caret = style.caret,
     caret_trail = style.caret_trail,
+    keymap_on_mouse_pressed = keymap.on_mouse_pressed,
     redraw = core.redraw,
   }
   local old_time = system.get_time
@@ -60,6 +62,7 @@ local function with_caret_settings(fn)
   config.animated_caret_distance_max = saved.animated_caret_distance_max
   style.caret = saved.caret
   style.caret_trail = saved.caret_trail
+  keymap.on_mouse_pressed = saved.keymap_on_mouse_pressed
   core.redraw = saved.redraw
   system.get_time = old_time
   renderer.draw_rect = old_rect
@@ -94,6 +97,36 @@ local function y_bounds(points)
 end
 
 test.describe("caret trail", function()
+  for _, button in ipairs({ "x", "y" }) do
+    test.it("animates caret movement from auxiliary mouse button " .. button, function()
+      with_caret_settings(function()
+        local view = make_view()
+        local root = RootPanel()
+        core.root_panel = root
+        local now = 5
+        local polygon
+        system.get_time = function() return now end
+        renderer.draw_poly = function(points) polygon = points end
+        renderer.draw_rect = function() end
+        config.animated_caret = true
+        config.animated_caret_animation_length = 0.15
+        config.animated_caret_min_animation_length = 0.025
+        config.animated_caret_trail_size = 1
+        keymap.on_mouse_pressed = function() return true end
+
+        draw_frame(root, view, 10, 20, 1, 1)
+        core.on_event("mousepressed", button, -100, -100, 1)
+        now = now + 0.01
+        draw_frame(root, view, 210, 200, 2, 1)
+
+        test.ok(polygon, "expected auxiliary navigation to draw a caret trail")
+        local min_y, max_y = y_bounds(polygon)
+        test.ok(min_y < 200, "expected auxiliary navigation to keep the caret trail")
+        test.ok(max_y >= 200, "expected the trail to reach the new caret")
+      end)
+    end)
+  end
+
   test.it("snaps after a mouse press and animates later keyboard movement", function()
     with_caret_settings(function()
       local view = make_view()
@@ -117,12 +150,9 @@ test.describe("caret trail", function()
       core.on_event("mousereleased", "left", -100, -100, 1)
       now = now + 0.01
       draw_frame(root, view, 210, 200, 2, 1)
-      local min_x, max_x = x_bounds(polygon)
-      local min_y, max_y = y_bounds(polygon)
-      test.equal(min_x, rect.x)
-      test.equal(max_x, rect.x + rect.width)
-      test.equal(min_y, rect.y)
-      test.equal(max_y, rect.y + rect.height)
+      test.equal(polygon, nil)
+      test.equal(rect.x, 210)
+      test.equal(rect.y, 200)
 
       now = now + 0.01
       draw_frame(root, view, 10, 20, 1, 1)

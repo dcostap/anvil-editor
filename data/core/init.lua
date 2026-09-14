@@ -2194,9 +2194,11 @@ function core.on_event(type, ...)
     local modal = dispatch_modal_input("mouse_moved", ...)
     if not modal then core.root_panel:on_mouse_moved(...) end
   elseif type == "mousepressed" then
-    -- Mouse placement is immediate; the next caret starts a new animation origin.
-    core.root_panel.caret_renderer:reset()
     local button = ...
+    -- Pointer placement is immediate. Auxiliary buttons run navigation commands.
+    if button ~= "x" and button ~= "y" then
+      core.root_panel.caret_renderer:reset()
+    end
     local modal = dispatch_modal_input("mouse_pressed", ...)
     if modal then
       did_keymap = true
