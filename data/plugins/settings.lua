@@ -343,7 +343,7 @@ settings.add("Graphics",
       description = "The duration of cubic viewport scroll transitions, in seconds.",
       path = "scroll_transition_duration",
       type = settings.type.NUMBER,
-      default = 0.10,
+      default = 0.08,
       min = 0.05,
       max = 0.5,
       step = 0.025
