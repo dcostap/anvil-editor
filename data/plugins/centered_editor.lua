@@ -160,6 +160,7 @@ end
 function M.get_lane_rect(view)
   local base_x, base_width, available, max_width = get_base_lane_rect(view)
   if M.wrapping_limits_to_lane(view)
+  or view.__markdown_live_attached
   or view.__centered_editor_measuring_content then
     return base_x, base_width
   end

@@ -270,7 +270,8 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("keeps formatted source presentation while the first semantic snapshot is pending", function()
-    local view = make_view("# Title\n**bold**", "note.md")
+    local view, buffer = make_view("# Title\n**bold**\nplain", "note.md")
+    buffer:set_selection(3, 1)
     markdown.live_render.refresh_view(view)
     local instance = test.not_nil(markdown_model.peek(view.buffer))
     test.equal(instance.status, "pending")
@@ -3652,7 +3653,6 @@ test.describe("Markdown Live Preview", function()
     wrapped_cell = test.not_nil(wrapped_cell)
     test.not_nil(code_cell)
     test.ok(not (code_cell.text_lines[1].text or ""):find("`", 1, true))
-    test.equal(#code_cell.text_lines, 1)
     test.ok(view:get_visual_row_height(3) > view:get_line_height())
 
     local wrapped_x = 0

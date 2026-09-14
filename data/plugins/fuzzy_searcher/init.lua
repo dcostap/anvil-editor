@@ -6971,6 +6971,36 @@ function FSView:search_status_label()
   return status:match("^(Searching.-…)") or status:match("^(Indexing.-…)")
 end
 
+function FSView:poll_modifier_result_metadata()
+  local options = self.query_modifiers
+  if not (options and options.active and not options.commit)
+    or not (options.min_size or options.sort == "size" or options.sort == "date")
+  then
+    self.next_modifier_metadata_poll = nil
+    return
+  end
+  local now = system.get_time()
+  if now < (self.next_modifier_metadata_poll or 0) then return end
+  self.next_modifier_metadata_poll = now + 0.5
+  for _, result in ipairs(self.results or {}) do
+    local path = result.abs_path or result.path
+    if path and not result.is_folder then
+      local info = system.get_file_info(path)
+      local size_changed = options.min_size or options.sort == "size"
+      size_changed = size_changed and info and info.size ~= result.file_size
+      local date_changed = options.sort == "date"
+        and info and info.modified ~= result.file_modified
+      if not info or size_changed or date_changed then
+        self.modifier_metadata = nil
+        self.force_refresh = true
+        self.dirty = true
+        core.log_quiet("Fuzzy Searcher refreshed changed result metadata: %s", path)
+        return
+      end
+    end
+  end
+end
+
 function FSView:update()
   if self.closing then
     local _, _, _, complete = self:closing_transition()
@@ -7009,6 +7039,7 @@ function FSView:update()
   else
     self._last_unexpected_focus_state = nil
   end
+  self:poll_modifier_result_metadata()
   self:refresh(self.input:get_text())
   self:update_selected_preview()
   if self:is_visible() and self:search_status_label() then

@@ -85,9 +85,12 @@ test.describe("centered editor", function()
     panes.reset_for_tests()
     save_centered_config(context)
     use_test_centered_config()
+    context.markdown_live_editor = config.markdown_live_editor
+    config.markdown_live_editor = true
   end)
 
   test.after_each(function(context)
+    config.markdown_live_editor = context.markdown_live_editor
     restore_centered_config(context)
     panes.reset_for_tests()
     for _, view in ipairs(context.views or {}) do
@@ -148,9 +151,9 @@ test.describe("centered editor", function()
 
   test.it("keeps an unwrapped Markdown lane stable during caret movement and typing", function(context)
     local view, buffer = open_editor(context, string.rep("W", 50) .. "\nshort\n")
-    buffer.filename = "centered-stable.md"
-    buffer.abs_filename = buffer.filename
-    test.equal(markdown.live_render.refresh_view(view), true)
+    buffer:set_filename("centered-stable.md", nil)
+    markdown.live_render.refresh_view(view)
+    test.ok(markdown.live_render.is_live_mode(view))
     view.wrapping_enabled = false
     view.wrapped_settings = nil
     local function settle()
@@ -168,7 +171,8 @@ test.describe("centered editor", function()
       coroutine.yield(0.01)
     end
     settle()
-    local before = centered_editor.get_lane_rect(view)
+    local before, before_width = centered_editor.get_lane_rect(view)
+    test.equal(before_width, config.plugins.centered_editor.markdown_live_max_width)
     local function check_frames()
       for _ = 1, 8 do
         view:update()
@@ -223,9 +227,9 @@ test.describe("centered editor", function()
   test.it("uses the Markdown Live Preview width for centering", function(context)
     local standard_view = open_editor(context, "standard\n")
     local markdown_view, markdown_buffer = open_editor(context, "markdown\n")
-    markdown_buffer.filename = "centered-width.md"
-    markdown_buffer.abs_filename = "centered-width.md"
-    test.equal(markdown.live_render.refresh_view(markdown_view), true)
+    markdown_buffer:set_filename("centered-width.md", nil)
+    markdown.live_render.refresh_view(markdown_view)
+    test.ok(markdown.live_render.is_live_mode(markdown_view))
 
     standard_view.size.x = 150
     markdown_view.size.x = 150
