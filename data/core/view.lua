@@ -173,6 +173,25 @@ local function lerp_duration(rate)
   return frames / config.fps
 end
 
+local function cubic_scroll_sample(move, now, duration)
+  if duration <= 0 then return move.dest, 0, 1 end
+  local progress = common.clamp((now - move.started_at) / duration, 0, 1)
+  local progress2 = progress * progress
+  local progress3 = progress2 * progress
+  local start_weight = 2 * progress3 - 3 * progress2 + 1
+  local velocity_weight = progress3 - 2 * progress2 + progress
+  local target_weight = -2 * progress3 + 3 * progress2
+  local value = start_weight * move.start
+    + velocity_weight * duration * move.start_velocity
+    + target_weight * move.dest
+  local velocity = (
+    (6 * progress2 - 6 * progress) * move.start
+    + (3 * progress2 - 4 * progress + 1) * duration * move.start_velocity
+    + (-6 * progress2 + 6 * progress) * move.dest
+  ) / duration
+  return value, velocity, progress
+end
+
 ---Smoothly animate a value towards a destination.
 ---Use this for animations instead of direct assignment.
 ---@param t table Table containing the value
@@ -205,21 +224,34 @@ function View:move_towards(t, k, dest, rate, name)
       local mk = "move_data_"..k
       local move = t[mk]
       local now = system.get_time()
-      if not move or move.kind ~= "cubic" or move.dest ~= dest then
+      local duration = math.max(0, config.scroll_transition_duration or 0)
+      if not move or move.kind ~= "cubic" then
         move = {
           kind = "cubic",
           start = val,
           dest = dest,
           started_at = now,
+          start_velocity = 0,
+        }
+        t[mk] = move
+      elseif move.dest ~= dest then
+        local velocity
+        val, velocity = cubic_scroll_sample(move, now, duration)
+        local distance = dest - val
+        if distance * velocity <= 0 then velocity = 0 end
+        local max_velocity = duration > 0 and 3 * math.abs(distance) / duration or 0
+        velocity = common.clamp(velocity, -max_velocity, max_velocity)
+        move = {
+          kind = "cubic",
+          start = val,
+          dest = dest,
+          started_at = now,
+          start_velocity = velocity,
         }
         t[mk] = move
       end
-      local duration = math.max(0, config.scroll_transition_duration or 0)
-      local progress = duration > 0
-        and common.clamp((now - move.started_at) / duration, 0, 1)
-        or 1
-      local eased = progress * progress * (3 - 2 * progress)
-      val = common.lerp(move.start, dest, eased)
+      local unused_velocity, progress
+      val, unused_velocity, progress = cubic_scroll_sample(move, now, duration)
       if progress >= 1 or math.abs(dest - val) < 0.5 then
         val = dest
         t[mk] = nil
@@ -397,6 +429,7 @@ function View:on_mouse_moved(x, y, dx, dy)
       if not config.animate_drag_scroll then
         self:clamp_scroll_position()
         self.scroll.y = self.scroll.to.y
+        self.scroll.move_data_y = nil
       end
     end
     -- hide horizontal scrollbar
@@ -411,6 +444,7 @@ function View:on_mouse_moved(x, y, dx, dy)
       if not config.animate_drag_scroll then
         self:clamp_scroll_position()
         self.scroll.x = self.scroll.to.x
+        self.scroll.move_data_x = nil
       end
     end
     return true
@@ -601,9 +635,13 @@ function View:update()
   self:clamp_scroll_position()
   if self.scroll.x ~= self.scroll.to.x then
     self:move_towards(self.scroll, "x", self.scroll.to.x, 0.2, "scroll")
+  else
+    self.scroll.move_data_x = nil
   end
   if self.scroll.y ~= self.scroll.to.y then
     self:move_towards(self.scroll, "y", self.scroll.to.y, 0.2, "scroll")
+  else
+    self.scroll.move_data_y = nil
   end
   self:update_scrollbar()
 end

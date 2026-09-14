@@ -87,6 +87,47 @@ test.describe("Viewport scroll transitions", function()
     test.equal(view.scroll.y, 200)
   end)
 
+  test.it("preserves forward motion when the target moves forward", function(context)
+    local moving = ScrollView()
+    moving.scroll.to.y = 100
+    moving:update()
+
+    context.now = context.now + config.scroll_transition_duration * 0.4
+    moving:update()
+    local retarget_position = moving.scroll.y
+    moving.scroll.to.y = 200
+    moving:update()
+    test.equal(moving.scroll.y, retarget_position)
+
+    local fresh = ScrollView()
+    fresh.scroll.y = retarget_position
+    fresh.scroll.to.y = 200
+    fresh:update()
+
+    context.now = context.now + config.scroll_transition_duration * 0.08
+    moving:update()
+    fresh:update()
+
+    test.ok(moving.scroll.y > fresh.scroll.y)
+  end)
+
+  test.it("drops forward velocity when the target reverses", function(context)
+    local view = ScrollView()
+    view.scroll.to.y = 100
+    view:update()
+
+    context.now = context.now + config.scroll_transition_duration * 0.4
+    view:update()
+    local retarget_position = view.scroll.y
+    view.scroll.to.y = 0
+    view:update()
+
+    context.now = context.now + config.scroll_transition_duration * 0.08
+    view:update()
+    test.ok(view.scroll.y < retarget_position)
+    test.ok(view.scroll.y >= 0)
+  end)
+
   test.it("keeps touch scrolling under direct control", function()
     local view = ScrollView()
 

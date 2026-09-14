@@ -5595,6 +5595,7 @@ function TextView:scroll_to_line(line, ignore_if_visible, instant, opts)
     self.scroll.to.y = math.max(0, y - oy - (self.size.y - scroll_h) / 2)
     if instant then
       self.scroll.y = self.scroll.to.y
+      self.scroll.move_data_y = nil
     end
   end
   self:notify_scroll_listeners("scroll_to_line")
@@ -5750,6 +5751,7 @@ function TextView:scroll_to_make_visible(line, col, instant, opts)
   if instant then
     self.scroll.y = self.scroll.to.y
     self.scroll.x = self.scroll.to.x
+    self.scroll.move_data_x, self.scroll.move_data_y = nil, nil
   end
   self:notify_scroll_listeners("scroll_to_make_visible")
 end

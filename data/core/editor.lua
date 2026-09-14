@@ -68,6 +68,7 @@ function Editor:set_navigation_state(state, opts)
     self.scroll.to.y = state.scroll.y or 0
     if not (opts and opts.animate_scroll) then
       self.scroll.x, self.scroll.y = self.scroll.to.x, self.scroll.to.y
+      self.scroll.move_data_x, self.scroll.move_data_y = nil, nil
     end
   end
   -- Same-View history already has valid layout and must keep its transition.
