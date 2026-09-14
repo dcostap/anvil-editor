@@ -540,7 +540,7 @@ function TextView:scroll_to_make_visible(line, col, ...)
   -- We need to scroll the view to account for the sticky lines.
 
   local before_scroll = self.scroll.y
-  local _, ly = self:get_line_screen_position(line, col)
+  local _, ly = self:get_caret_screen_position(line, col)
   ly = ly - self.position.y + (before_scroll - self.scroll.to.y)
   local data = SS.managed_textviews[self]
   -- Avoid moving the caret under the sticky lines.

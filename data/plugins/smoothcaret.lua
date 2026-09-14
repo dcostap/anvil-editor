@@ -26,7 +26,7 @@ function TextView:update()
 
   local idx, v_idx = 1, 1
   for _, line, col in self.buffer:get_selections() do
-    local x, y = self:get_line_screen_position(line, col)
+    local x, y = self:get_caret_screen_position(line, col)
     -- Keep the position relative to the whole View
     -- This way scrolling won't animate the caret
     x = x + self.scroll.x

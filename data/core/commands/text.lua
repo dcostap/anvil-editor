@@ -1838,6 +1838,9 @@ local commands = {
     dv.last_col1 = 1
     dv.last_line2 = #dv.buffer.lines
     dv.last_col2 = #dv.buffer.lines[#dv.buffer.lines]
+    dv.last_line_end = false
+    local _, _, position_row = dv:get_position_line_render_row(1, 1)
+    dv.last_position_row = position_row
   end,
 
   ["core:select_lines"] = function(dv)

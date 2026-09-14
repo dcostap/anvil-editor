@@ -347,15 +347,6 @@ local function get_fast_ascii_monospace_x_offset(self, line, col, line_text, fon
   return (col - 1) * font:get_width(" ")
 end
 
-local function with_wrapped_caret_affinity(textview, fn, ...)
-  local old = textview.__use_wrapped_caret_affinity
-  textview.__use_wrapped_caret_affinity = true
-  local results = { pcall(fn, textview, ...) }
-  textview.__use_wrapped_caret_affinity = old
-  if not results[1] then error(results[2], 0) end
-  return table.unpack(results, 2)
-end
-
 local function apply_resolved_line_end_affinity(textview)
   linewrapping.apply_resolved_line_end_affinity(textview)
   if textview.apply_resolved_line_render_position_row_affinity then
@@ -4187,7 +4178,8 @@ function TextView:draw_fold_widget_body(fold, x, y, height)
 end
 
 
----Get the screen position of a line (and optionally column).
+---Get a Buffer position. Wrap boundaries default to the next row.
+---Use get_caret_screen_position to follow the visible caret instead.
 ---@param line integer Line number
 ---@param col? integer Optional column number
 ---@return number x Screen x coordinate
@@ -4199,9 +4191,6 @@ function TextView:get_line_screen_position(line, col, line_end)
     return row and (row.y_offset or 0) or 0
   end
   if self.wrapped_settings then
-    if line_end == nil and self.__use_wrapped_caret_affinity then
-      line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
-    end
     local idx
     if self:has_composed_visual_rows() then
       idx = self:get_composed_visual_row_for_position(line, col, line_end)
@@ -4220,6 +4209,16 @@ function TextView:get_line_screen_position(line, col, line_end)
   local content_y = render_y_offset() + self:get_visual_row_y_offset(row) + style.padding.y
   local x, y = self:get_content_offset()
   return x + gw + dx, y + content_y
+end
+
+
+---Get a caret position, including its side of a wrap boundary.
+---@return number x
+---@return number y
+function TextView:get_caret_screen_position(line, col)
+  return self:get_line_screen_position(
+    line, col, linewrapping.has_wrapped_line_end_affinity(self, line, col)
+  )
 end
 
 
@@ -4987,7 +4986,7 @@ function TextView:needs_line_render_position_navigation(command_name)
   return false
 end
 
----Resolve Current Line Highlight geometry for one caret position.
+---Resolve highlight geometry for a Buffer position with an explicit boundary side.
 ---@return number y
 ---@return number height
 function TextView:get_position_highlight_geometry(line, col, line_end)
@@ -5017,6 +5016,15 @@ function TextView:get_position_highlight_geometry(line, col, line_end)
     )
   end
   return y, row_height
+end
+
+---Resolve Current Line Highlight geometry on the visible caret row.
+---@return number y
+---@return number height
+function TextView:get_caret_highlight_geometry(line, col)
+  return self:get_position_highlight_geometry(
+    line, col, linewrapping.has_wrapped_line_end_affinity(self, line, col)
+  )
 end
 
 local function get_line_render_raw_col_x_offset(self, render_line, col)
@@ -5411,9 +5419,6 @@ function TextView:get_col_x_offset(line, col, line_end, skip_render)
       render_line, col, position_row
     )
     if self.wrapped_settings and not render_line.disable_wrapping then
-      if line_end == nil and self.__use_wrapped_caret_affinity then
-        line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
-      end
       local _, _, _, row_start = linewrapping.get_line_idx_col_count(self, line, col, line_end)
       local row_offset = self:get_line_render_col_x_offset(render_line, row_start)
       return (render_line.x_offset or 0)
@@ -5421,9 +5426,6 @@ function TextView:get_col_x_offset(line, col, line_end, skip_render)
         + rendered_offset - row_offset
     end
     return rendered_offset
-  end
-  if line_end == nil and self.__use_wrapped_caret_affinity then
-    line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
   end
   return self:get_plain_text_layout(line, col, line_end):x_at(col)
 end
@@ -5617,35 +5619,21 @@ end
 ---@param opts? table Optional range/scroll options
 function TextView:scroll_to_make_visible(line, col, instant, opts)
   if self.wrapping_enabled then self:update_wrap_cache() end
-  if self.wrapped_settings then
-    with_wrapped_caret_affinity(self, TextView.scroll_to_make_visible_unwrapped, line, col, instant, opts)
-    if self:get_h_scrollable_size() <= self.size.x then
-      self.scroll.to.x = 0
-      if instant then self.scroll.x = self.scroll.to.x end
-    end
-    self:notify_scroll_listeners("scroll_to_make_visible")
-    return
-  end
-  local result = self:scroll_to_make_visible_unwrapped(line, col, instant, opts)
-  self:notify_scroll_listeners("scroll_to_make_visible")
-  return result
-end
-
-function TextView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
   self:get_visual_row_metric_cache()
   opts = opts or {}
+  local line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
   if opts.vertical ~= false then
     self.scroll.y = math.max(0, self.scroll.y or 0)
     self.scroll.to.y = math.max(0, self.scroll.to.y or 0)
     local _, oy = self:get_content_offset()
     local _, position_row = self:get_position_line_render_row(line, col)
-    local ly, lh = self:get_position_highlight_geometry(line, col, false)
+    local ly, lh = self:get_position_highlight_geometry(line, col, line_end)
     -- The highlight may be taller or shorter than a normal editor row (for
     -- example, Markdown headings reserve leading block spacing).  Context is
     -- expressed in normal visual rows, so do not use the target highlight
     -- height as the pixel size of every surrounding context row.
     local context_lh = self:get_line_height()
-    local target_row = self:get_visual_row(line, col, false)
+    local target_row = self:get_visual_row(line, col, line_end)
     local target_row_height = self:get_visual_row_height(target_row)
     local target_row_y = oy + style.padding.y
       + self:get_visual_row_y_offset(target_row)
@@ -5721,7 +5709,7 @@ function TextView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
     local x2 = self:get_col_x_offset(line, math.max(col, col2))
     xinf, xsup = math.min(x1, x2), math.max(x1, x2)
   else
-    local xoffset = self:get_col_x_offset(line, col)
+    local xoffset = self:get_col_x_offset(line, col, line_end)
     xinf, xsup = xoffset, xoffset
   end
 
@@ -5756,10 +5744,14 @@ function TextView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
   ))
   self.scroll.to.x = next_scroll_x
 
+  if self.wrapped_settings and self:get_h_scrollable_size() <= self.size.x then
+    self.scroll.to.x = 0
+  end
   if instant then
     self.scroll.y = self.scroll.to.y
     self.scroll.x = self.scroll.to.x
   end
+  self:notify_scroll_listeners("scroll_to_make_visible")
 end
 
 
@@ -6090,6 +6082,8 @@ function TextView:update_ime_location()
   if core.active_view ~= self then return end
 
   local line1, col1, line2, col2 = self.buffer:get_selection(true)
+  local line_end = linewrapping.has_wrapped_line_end_affinity(self, line1, col1)
+  local _, _, position_row = self:get_position_line_render_row(line1, col1)
   if
     not self.ime_status and core.active_view == IME_VIEW
     and
@@ -6098,6 +6092,8 @@ function TextView:update_ime_location()
     IME_STATE.line2 == line2 and IME_STATE.col2 == col2
     and
     IME_STATE.w == self.size.x and IME_STATE.h == self.size.y
+    and IME_STATE.line_end == line_end and IME_STATE.position_row == position_row
+    and IME_STATE.scroll_x == self.scroll.x and IME_STATE.scroll_y == self.scroll.y
   then
     return
   end
@@ -6109,6 +6105,9 @@ function TextView:update_ime_location()
   IME_STATE.col2 = col2
   IME_STATE.w = self.size.x
   IME_STATE.h = self.size.y
+  IME_STATE.line_end = line_end
+  IME_STATE.position_row = position_row
+  IME_STATE.scroll_x, IME_STATE.scroll_y = self.scroll.x, self.scroll.y
 
   local col = math.min(col1, col2)
   local from_line, from_col, to_line, to_col = line1, col1, line2, col2
@@ -6127,8 +6126,8 @@ function TextView:update_ime_location()
     )()
   end
   if not x1 then
-    x1 = self:get_line_screen_position(from_line, from_col)
-    y, h = self:get_position_highlight_geometry(from_line, from_col, false)
+    x1 = self:get_caret_screen_position(from_line, from_col)
+    y, h = self:get_caret_highlight_geometry(from_line, from_col)
     x2 = x1
   end
   ime.set_location(x1, y, math.max(0, x2 - x1), h)
@@ -6197,9 +6196,19 @@ function TextView:update()
   -- scroll to make caret visible and reset blink timer if it moved
   phase_start = perf_active and system.get_time()
   local line1, col1, line2, col2 = self.buffer:get_selection()
+  local line_end = linewrapping.has_wrapped_line_end_affinity(self, line1, col1)
+  local _, _, position_row = self:get_position_line_render_row(line1, col1)
   local selection_moved = line1 ~= self.last_line1 or col1 ~= self.last_col1 or
       line2 ~= self.last_line2 or col2 ~= self.last_col2
-  if (selection_moved or self.needs_initial_scroll_validation) and self.size.x > 0 then
+  local caret_row_changed = line_end ~= (self.last_line_end or false)
+    or position_row ~= self.last_position_row
+  if (selection_moved or caret_row_changed or self.needs_initial_scroll_validation) and self.size.x > 0 then
+    if caret_row_changed and not selection_moved then
+      core.log_quiet(
+        "Caret row changed at %s:%d:%d: wrap_end=%s rendered_row=%s",
+        self.buffer:get_name(), line1, col1, tostring(line_end), tostring(position_row)
+      )
+    end
     if core.active_view == self and not ime.editing then
       local scroll_start = perf_active and system.get_time()
       self:scroll_to_make_visible(line1, col1, self.needs_initial_scroll_validation)
@@ -6209,6 +6218,7 @@ function TextView:update()
     core.blink_reset()
     self.last_line1, self.last_col1 = line1, col1
     self.last_line2, self.last_col2 = line2, col2
+    self.last_line_end, self.last_position_row = line_end, position_row
   end
   perf_elapsed("textview_update_selection_ms", phase_start)
 
@@ -8282,7 +8292,7 @@ function TextView:draw_ime_decoration(line1, col1, line2, col2)
       )
     end
   end
-  local caret_x, caret_y = self:get_line_screen_position(line1, from)
+  local caret_x, caret_y = self:get_caret_screen_position(line1, from)
   self:draw_caret(caret_x, caret_y, line1, from)
 end
 
@@ -8292,12 +8302,7 @@ end
 function TextView:draw_overlay()
   if self.wrapped_settings then
     linewrapping.draw_guide(self)
-    return with_wrapped_caret_affinity(self, TextView.draw_overlay_unwrapped)
   end
-  return self:draw_overlay_unwrapped()
-end
-
-function TextView:draw_overlay_unwrapped()
   local scope = perf_scope_begin("core_overlay")
   local stats = core.textview_frame_stats
   local overlay_start = stats and system.get_time()
@@ -8321,7 +8326,7 @@ function TextView:draw_overlay_unwrapped()
       if is_active and ime.editing then
         self:draw_ime_decoration(line1, col1, line2, col2)
       elseif blink_visible then
-        local x, y = self:get_line_screen_position(line1, col1)
+        local x, y = self:get_caret_screen_position(line1, col1)
         self:draw_caret(x, y, line1, col1, caret_idx, caret_color)
       end
     end
@@ -8333,7 +8338,7 @@ function TextView:draw_overlay_unwrapped()
         if is_active and ime.editing then
           self:draw_ime_decoration(line1, col1, line2, col2)
         elseif blink_visible then
-          local x, y = self:get_line_screen_position(line1, col1)
+          local x, y = self:get_caret_screen_position(line1, col1)
           self:draw_caret(x, y, line1, col1, caret_idx, caret_color)
         end
       end
@@ -8797,6 +8802,9 @@ Buffer.register_text_transaction_handler("textview-render-caches", function(buff
 end)
 
 for _, name in ipairs {
+  "get_caret_screen_position",
+  "get_caret_highlight_geometry",
+  "scroll_to_make_visible",
   "on_mouse_moved",
   "on_mouse_pressed",
   "on_mouse_released",

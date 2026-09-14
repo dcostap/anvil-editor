@@ -1558,11 +1558,11 @@ local function get_suggestions_rect(av)
     return 0, 0, 0, 0
   end
 
-  local _, partial_line, partial_col = autocomplete.get_partial_symbol()
-  local rect_x = av:get_line_screen_position(partial_line, partial_col)
-  local row_y, row_height = av:get_position_highlight_geometry(
-    partial_line, partial_col
-  )
+  local _, partial_line, partial_col, caret_line, caret_col = autocomplete.get_partial_symbol()
+  local rect_x, partial_y = av:get_line_screen_position(partial_line, partial_col)
+  local caret_x, caret_y = av:get_caret_screen_position(caret_line, caret_col)
+  if partial_y ~= caret_y then rect_x = caret_x end
+  local row_y, row_height = av:get_caret_highlight_geometry(caret_line, caret_col)
   local font = av:get_font()
   local th = font:get_height()
   local lh = th + style.padding.y
