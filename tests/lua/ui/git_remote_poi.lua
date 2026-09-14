@@ -75,12 +75,20 @@ test.describe("Commit remote POIs", function()
     local tree = poi.get_remote_source()
     poi.navigate(tree, 1)
     poi.navigate(side, 1)
+    test.equal(destination.current_view, first)
+    local deadline = system.get_time() + 3
+    while destination.current_view == first and system.get_time() < deadline do coroutine.yield(0.01) end
     test.not_equal(destination.current_view, first)
+    test.not_nil(destination.current_view.diff_model)
+    test.equal(destination.current_view.pending_first_change_reveal, false)
     local second
     second, side = ready()
     test.contains(table.concat(side.buffer.lines), "after src/b.lua")
     test.equal(side.buffer:get_selection(), 2)
     poi.navigate(side, -1)
+    test.equal(destination.current_view, second)
+    deadline = system.get_time() + 3
+    while destination.current_view == second and system.get_time() < deadline do coroutine.yield(0.01) end
     test.not_equal(destination.current_view, second)
     first, side = ready()
     test.contains(table.concat(side.buffer.lines), "after src/a.lua")

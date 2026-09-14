@@ -1432,13 +1432,36 @@ function GitView:open_file_comparison(source, load, selection_is_current, opts)
       and (not source.remote_poi_source or poi.get_remote_source(project) == source)
       and selection_is_current()
   end
-  local function present(comparison, tab)
+  local function present(comparison, tab, prepared)
     if not comparison then return end
+    if not prepared and opts.change_direction and comparison.buffer_view_b
+        and destination_view and destination_view.buffer_view_b then
+      -- Keep the visible comparison until the next change has a usable layout.
+      core.add_thread(function()
+        local deadline = system.get_time() + 0.1
+        while request_is_current() and comparison.updater_idx
+            and system.get_time() < deadline do
+          coroutine.yield(0.001)
+        end
+        if not request_is_current() then
+          comparison:dispose_integrations()
+          comparison:dispose_owned_buffers()
+          return
+        end
+        present(comparison, tab, true)
+      end)
+      return
+    end
     require("plugins.git.comparison").attach(comparison, self, tab, source)
     local target = panes.pane_for_constraint(comparison.pane_constraint) or destination
     if comparison.buffer_view_b then
       comparison.initial_change_direction = opts.change_direction
       if opts.change_direction then comparison.pending_first_change_reveal = true end
+    end
+    if prepared then
+      comparison.position.x, comparison.position.y = destination_view.position.x, destination_view.position.y
+      comparison.size.x, comparison.size.y = destination_view.size.x, destination_view.size.y
+      comparison:update()
     end
     local placed, reason = panes.place(function() return comparison end, {
       pane = target, placement = placement, focus = opts.preserve_focus ~= true,
