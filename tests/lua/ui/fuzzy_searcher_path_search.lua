@@ -413,12 +413,40 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.ok(common.path_equals(picker.results[1].abs_path, path))
   end)
 
-  test.it("does not offer creation for a missing bare name", function(context)
+  test.it("offers to create a missing bare file name when no files match", function(context)
     helpers.set_everything_state("unavailable")
+    helpers.set_file_cache_for_test({})
 
     fuzzy_searcher.open("missing.txt")
 
-    for _, result in ipairs(core.fuzzy_searcher_active_view.results) do
+    local picker = core.fuzzy_searcher_active_view
+    test.ok(wait_until(function()
+      return picker.results[1] and picker.results[1].kind == "create_path"
+    end), "expected a Create Path Result")
+    local result = picker.results[1]
+    test.equal(result.kind, "create_path")
+    test.equal(result.create_type, "file")
+    test.ok(common.path_equals(result.abs_path,
+      join_path(context.project_root, "missing.txt")))
+  end)
+
+  test.it("does not offer bare file creation when a file matches", function(context)
+    local file = join_path(context.project_root, "notes", "missing.txt")
+    mkdirp(common.dirname(file))
+    write_file(file)
+    helpers.set_file_cache_for_test({ assert(helpers.file_display_item(file)) })
+
+    fuzzy_searcher.open("missing.txt")
+    local picker = core.fuzzy_searcher_active_view
+
+    test.ok(wait_until(function()
+      for _, result in ipairs(picker.results) do
+        if result.file and common.path_equals(helpers.fullpath(result), file) then
+          return true
+        end
+      end
+    end), "expected the matching file result")
+    for _, result in ipairs(picker.results) do
       test.not_equal(result.kind, "create_path")
     end
   end)

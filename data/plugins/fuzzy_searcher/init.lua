@@ -3342,7 +3342,7 @@ function path_search.direct_result(text, line, col)
     }
   end
 
-  if not explicit then return nil end
+  if not explicit and mode ~= "" then return nil end
   local parts = path_search.external_path_parts(path)
   if not parts or parts.blocked or parts.search_terms or not parts.scope then return nil end
   return {
@@ -3352,6 +3352,7 @@ function path_search.direct_result(text, line, col)
     abs_path = path,
     is_folder = trailing_separator,
     create_path = true,
+    fallback_create = not explicit or nil,
     create_type = trailing_separator and "folder" or "file",
     query = query,
     line = line,
@@ -4525,6 +4526,8 @@ function FSView:start_file_search(query, line, reset_selection)
   kill_file_search()
   local gen = file_search_generation
   local direct = self.direct_path_result
+  local fallback_create = direct and direct.fallback_create and direct or nil
+  if fallback_create then direct = nil end
   local keep_limit = self:max_result_limit() + 1
   local roots_label = fuzzy_searcher.project_roots_label()
   local loading_status = fuzzy_searcher.files_indexing
@@ -4543,9 +4546,10 @@ function FSView:start_file_search(query, line, reset_selection)
     self:schedule_update(true)
   end
 
-  local function apply_results(out, has_more)
+  local function apply_results(out, has_more, include_fallback)
     self:cancel_deferred_loading_feedback()
-    out = path_search.prepend_direct(out, direct)
+    out = path_search.prepend_direct(out,
+      direct or (include_fallback and fallback_create))
     self.results = out
     self.has_more = has_more
     if self.pending_select_index then
@@ -4604,11 +4608,13 @@ function FSView:start_file_search(query, line, reset_selection)
             #recent_matches + #general_matches, has_more and "+" or "",
             file_index_count(), folder_index_count(), roots_label)
         end
-        if self.loading_feedback_pending and #out == 0 and not has_more and not direct then
+        local no_matches = #recent_matches + #general_matches == 0
+        if self.loading_feedback_pending and #out == 0 and not has_more
+            and not direct and not fallback_create then
           self.loading_feedback_status = status
           return
         end
-        apply_results(out, has_more)
+        apply_results(out, has_more, no_matches)
         self.status = status
         self:schedule_update(true)
         return
@@ -4631,8 +4637,9 @@ function FSView:start_file_search(query, line, reset_selection)
       local has_more = hidden or folder_has_more
         or matched_general + matched_folders > #general_matches
       local status
+      local total_matches
       if final then
-        local total_matches = #recent_matches + matched_general + matched_folders
+        total_matches = #recent_matches + matched_general + matched_folders
         if total_matches == 0 then
           status = fuzzy_searcher.files_indexing
             and string.format("Searching files… refreshing with %d files available — %s",
@@ -4650,12 +4657,13 @@ function FSView:start_file_search(query, line, reset_selection)
       else
         status = string.format("%d matches — scanning %d/%d files…", #recent_matches + matched_general, scanned, #items)
       end
-      if final and self.loading_feedback_pending and #out == 0 and not has_more and not direct then
+      if final and self.loading_feedback_pending and #out == 0 and not has_more
+          and not direct and not fallback_create then
         self.loading_feedback_status = status
         last_publish = system.get_time()
         return true
       end
-      apply_results(out, has_more)
+      apply_results(out, has_more, final and total_matches == 0)
       self.status = status
       self:schedule_update(true)
       last_publish = system.get_time()
