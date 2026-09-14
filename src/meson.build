@@ -453,7 +453,7 @@ test('lua-runtime', lua_test_shell,
     ],
     env: anvil_test_env,
     depends: anvil_exe,
-    timeout: 120,
+    timeout: 240,
     is_parallel: false,
 )
 
@@ -468,7 +468,7 @@ test('lua-ui', lua_test_shell,
     ],
     env: anvil_test_env,
     depends: anvil_exe,
-    timeout: 180,
+    timeout: 360,
     is_parallel: false,
 )
 

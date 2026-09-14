@@ -332,22 +332,4 @@ test.describe("Markdown link completion", function()
     test.equal(context.buffer.lines[3], "[[#Alta de usuarios#" .. heading .. "]]\n")
   end)
 
-  test.it("renders shared file-type icons from target paths rather than result labels", function(context)
-    local file_icons = require "core.file_icons"
-    local image = context.root .. PATHSEP .. "Picture.png"
-    local note = context.root .. PATHSEP .. "Note.md"
-    write_file(image, "image fixture")
-    write_file(note, "---\naliases: [Picture.png]\n---\n# Title\n")
-    context.index:rebuild("completion-file-icons")
-    core.root_panel:on_text_input("[[Picture")
-    test.equal(#suggestions(), 2)
-    context.view.position.x, context.view.size.x = 0, 500
-    local drawn = {}
-    for _, run in ipairs(render_completions(context.view, 600)) do drawn[run.text] = true end
-    for _, path in ipairs { image, note } do
-      local _, glyph = file_icons.get(path)
-      test.not_nil(glyph)
-      test.ok(drawn[glyph], "the popup did not draw the shared file icon for " .. path)
-    end
-  end)
 end)

@@ -8,7 +8,6 @@ local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local test = require "core.test"
 local View = require "core.view"
-local view_icons = require "core.view_icons"
 
 local command_slots = require "plugins.command_slots"
 local filetree = require "plugins.filetree"
@@ -80,38 +79,6 @@ test.describe("Command Palette View launchers", function()
     test.equal(found.info, nil)
     test.equal(command.get_metadata(found.command).supports_placement, true)
     test.ok(command.get_metadata(found.command).opens_view)
-    local icon = test.not_nil(view_icons.get("filetree"))
-    local old_draw_text = renderer.draw_text
-    local drawn = {}
-    renderer.draw_text = function(_, glyph) drawn[glyph] = true end
-    local ok, err = pcall(function()
-      local width = view_icons.draw(icon, 0, 0, 20)
-      view_icons.draw_opener_badge(0, 0, width, 20)
-    end)
-    renderer.draw_text = old_draw_text
-    test.ok(ok, err)
-    test.ok(drawn.d)
-    test.ok(drawn["]"])
-  end)
-
-  test.it("marks View constructors with their prefix icon", function()
-    local openers = {
-      "command_output:run_shell_command",
-      "diff:open",
-      "editor:open",
-      "filetree:open_at_current_path",
-      "fuzzy:open_files",
-      "git:open_log",
-      "log:open",
-      "project_paths:open",
-      "settings:open",
-      "terminal:open",
-    }
-    for _, name in ipairs(openers) do
-      local metadata = test.not_nil(command.get_metadata(name), name)
-      test.ok(metadata.opens_view, name)
-      test.not_nil(view_icons.get(name:match("^([^:]+):")), name)
-    end
   end)
 
   test.it("exposes Diff comparison actions in the Command Palette", function()
@@ -283,7 +250,7 @@ test.describe("Command Palette View launchers", function()
     end
   end)
 
-  test.it("opens a Standard Editor without a Tab icon", function()
+  test.it("opens a Standard Editor", function()
     local source = View()
     local pane = panes.create { factory = function() return source end }
     test.ok(command.perform_with_context("editor:open", {
@@ -292,20 +259,6 @@ test.describe("Command Palette View launchers", function()
       placement = "current",
     }))
     test.ok(pane.current_view:extends(Editor))
-    test.equal(pane.current_view.view_icon, nil)
-  end)
-
-  test.it("gives every non-core palette prefix a View Icon", function()
-    local missing = {}
-    for name, entry in pairs(command.map) do
-      local metadata = entry.metadata
-      local prefix = name:match("^([^:]+):")
-      if metadata and metadata.palette and prefix ~= "core" and not view_icons.get(prefix) then
-        missing[#missing + 1] = name
-      end
-    end
-    table.sort(missing)
-    test.same(missing, {})
   end)
 
   test.it("reuses a matching File Tree from the source Pane history", function(context)

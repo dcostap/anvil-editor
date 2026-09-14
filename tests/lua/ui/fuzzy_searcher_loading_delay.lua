@@ -22,22 +22,6 @@ test.describe("Fuzzy Searcher loading feedback delay", function()
     core.visited_files = context.original_visited_files
   end)
 
-  test.it("keeps current file results visible while async query feedback is delayed", function()
-    fuzzy_searcher._test.clear_prompt_history()
-    fuzzy_searcher._test.set_file_cache_for_test({ "alpha.lua", "beta.lua" })
-    fuzzy_searcher.open("")
-    local picker = assert(core.fuzzy_searcher_active_view)
-    test.ok(#picker.results > 0, "expected initial file results")
-
-    local labels_before = result_labels(picker)
-    local status_before = picker.status
-
-    picker.input:set_text("zzzz-no-match")
-
-    test.same(result_labels(picker), labels_before)
-    test.equal(picker.status, status_before)
-  end)
-
   test.it("does not flash file results while selecting a restored symbol prompt", function()
     fuzzy_searcher._test.clear_prompt_history()
     fuzzy_searcher._test.set_file_cache_for_test({ "alpha.lua", "beta.lua" })

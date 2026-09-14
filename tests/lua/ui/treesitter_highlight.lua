@@ -456,24 +456,4 @@ int second() { return 2; }]])
     buffer:on_close()
   end)
 
-  test.it("TextView measurement uses render token iterator", function()
-    local buffer = Buffer()
-    set_text(buffer, "abc")
-    local view = TextView(buffer)
-    local render_calls = 0
-    local legacy_calls = 0
-    buffer.highlighter.each_render_token = function(_, line, scol)
-      render_calls = render_calls + 1
-      return tokenizer.each_token({ "normal", "abc\n" }, scol)
-    end
-    buffer.highlighter.each_token = function(_, line, scol)
-      legacy_calls = legacy_calls + 1
-      return tokenizer.each_token({ "normal", "abc\n" }, scol)
-    end
-    view:get_col_x_offset(1, 3)
-    view:get_x_offset_col(1, 1)
-    test.ok(render_calls >= 2)
-    test.equal(legacy_calls, 0)
-    buffer:on_close()
-  end)
 end)

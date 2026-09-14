@@ -62,7 +62,8 @@ test.describe("Fuzzy Searcher exact grep", function()
   test.before_each(function(context)
     context.original_projects = core.projects
     context.original_cwd = system.getcwd()
-    context.root = USERDIR .. PATHSEP .. "fuzzy-exact-grep-" .. system.get_process_id()
+    context.root = USERDIR .. PATHSEP .. "fuzzy-exact-grep-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
     assert(common.mkdirp(context.root))
     core.projects = { Project(context.root) }
     system.chdir(context.root)
@@ -76,7 +77,8 @@ test.describe("Fuzzy Searcher exact grep", function()
     core.projects = context.original_projects
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
     if context.root and system.get_file_info(context.root) then
-      common.rm(context.root, true)
+      local ok, err = common.rm(context.root, true)
+      test.ok(ok, err)
     end
   end)
 

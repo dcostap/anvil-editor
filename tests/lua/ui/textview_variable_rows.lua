@@ -328,6 +328,7 @@ test.describe("TextView variable visual row metrics", function()
     view.draw_background = function() end
     view.draw_scrollbar = function() end
     view.draw_current_line_highlights = function() end
+    view.draw_content_left_edge = function() end
     view.draw_overlay = function() end
     view.prepare_line_body_draw_cache = function() end
     view.draw_line_gutter = function() end

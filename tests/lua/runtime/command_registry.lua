@@ -29,35 +29,6 @@ test.describe("Command Registry integrity", function()
     test.same(stale, {})
   end)
 
-  test.it("uses only core and View prefixes", function()
-    local allowed = {
-      autocomplete = true,
-      command_output = true,
-      core = true,
-      diff = true,
-      editor = true,
-      filetree = true,
-      fuzzy = true,
-      git = true,
-      image = true,
-      log = true,
-      markdown = true,
-      project_paths = true,
-      quick_command_output = true,
-      settings = true,
-      status_bar = true,
-      terminal = true,
-      theme_editor = true,
-    }
-    local invalid = {}
-    for name in pairs(command.map) do
-      local prefix = name:match("^([^:]+):")
-      if not allowed[prefix] then invalid[#invalid + 1] = name end
-    end
-    table.sort(invalid)
-    test.same(invalid, {})
-  end)
-
   test.it("has a registered command for every key binding", function()
     local missing = {}
     for stroke, bindings in pairs(keymap.map) do

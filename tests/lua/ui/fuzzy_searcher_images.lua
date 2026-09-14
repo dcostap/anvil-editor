@@ -34,11 +34,12 @@ test.describe("Fuzzy Searcher images", function()
       }, split)
       test.ok(view and view:extends(ImageView), "expected an Image View, not an Editor")
       test.not_nil(view.image)
-      test.equal(core.active_view, view)
       if split then
         test.equal(context.pane.current_view, context.source)
+        test.equal(core.fuzzy_searcher_active_view, picker)
       else
         test.equal(context.pane.current_view, view)
+        test.equal(core.active_view, view)
       end
     end)
   end

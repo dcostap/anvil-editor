@@ -90,6 +90,23 @@ local function log_output(records)
 end
 
 test.describe("plugins.git.model", function()
+  test.before_each(function(context)
+    context.get_file_info = system.get_file_info
+    system.get_file_info = function(path, ...)
+      local fake_root = common.normalize_path("C:/repo")
+      local normalized = common.normalize_path(path)
+      if common.path_equals(normalized, fake_root)
+          or common.path_belongs_to(normalized, fake_root) then
+        return nil
+      end
+      return context.get_file_info(path, ...)
+    end
+  end)
+
+  test.after_each(function(context)
+    system.get_file_info = context.get_file_info
+  end)
+
   test.test("creates a permanent Log tab", function()
     local model = Model.new({ path = "C:/repo" }, { backend = fake_backend("", "") })
     local tab = model:log_tab()
