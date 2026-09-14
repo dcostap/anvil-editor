@@ -178,6 +178,9 @@ end
 -- needlessly expensive and does not add filesystem identity guarantees (the
 -- Project Paths model intentionally uses lexical path identity too).
 local function child_path(parent, name)
+  if name ~= "." and name ~= ".." and not name:find("[\\/:%z]") then
+    return path_join(parent, name)
+  end
   local ok, path = pcall(common.normalize_path, path_join(parent, name))
   return ok and path or nil
 end
@@ -268,6 +271,26 @@ local function path_key(path)
   return common.path_compare_key(path) or tostring(path)
 end
 
+local function path_comparisons()
+  local keys = {}
+  local function key(path)
+    if not path then return nil end
+    if not keys[path] then keys[path] = path_key(path) end
+    return keys[path]
+  end
+  local function equals(a, b)
+    return a ~= nil and b ~= nil and key(a) == key(b)
+  end
+  local function belongs_to(path, parent)
+    local child_key, parent_key = key(path), key(parent)
+    if not child_key or not parent_key or child_key == "" or parent_key == ""
+        or child_key == parent_key then return false end
+    local prefix = parent_key:sub(-1) == PATHSEP and parent_key or parent_key .. PATHSEP
+    return child_key:sub(1, #prefix) == prefix
+  end
+  return key, equals, belongs_to
+end
+
 local function in_project(abs, project_root)
   return common.path_equals(abs, project_root) or common.path_belongs_to(abs, project_root)
 end
@@ -351,7 +374,7 @@ end
 local function cached_info_from_meta(meta, abs, entry_type)
   if type(meta) ~= "table" then return nil end
   if not meta.original_abs or meta.original_type ~= entry_type then return nil end
-  if not common.path_equals(meta.original_abs, abs) then return nil end
+  if meta.original_abs ~= abs and not common.path_equals(meta.original_abs, abs) then return nil end
   if meta.original_modified == nil then return nil end
   return {
     type = entry_type,
@@ -594,6 +617,7 @@ local function trash_paths(paths)
 end
 
 local function ordered_moves_or_cycle(moves)
+  local path_key, path_equals, path_belongs_to = path_comparisons()
   local by_from = {}
   for _, op in ipairs(moves or {}) do by_from[path_key(op.from)] = op end
 
@@ -613,9 +637,9 @@ local function ordered_moves_or_cycle(moves)
     -- rejecting ancestor cycles like A->B, B->A/child.
     for dep_from, dep in pairs(by_from) do
       local needs_dep = dep ~= op and (
-        common.path_equals(op.to, dep_from)
-        or common.path_belongs_to(op.to, dep_from)
-        or common.path_belongs_to(op.from, dep.to)
+        path_equals(op.to, dep_from)
+        or path_belongs_to(op.to, dep_from)
+        or path_belongs_to(op.from, dep.to)
       )
       if needs_dep then
         local ok, err, err_op = visit(dep)
@@ -666,14 +690,22 @@ local function recover_known_line_meta(view)
   local stack = {}
 
   for i, line in ipairs(view.buffer.lines) do
-    local parsed = parse_text(line_text(line))
+    local parsed, err = parse_text(line_text(line))
+    if err then stack = {} end
     if parsed then
+      local deeper = parsed.level
+      while stack[deeper] do
+        stack[deeper] = nil
+        deeper = deeper + 1
+      end
       local parent = parsed.level == 0 and root or stack[parsed.level - 1]
       if parent and parent.type == "dir" then
-        local abs = child_path(parent.abs, parsed.name)
-        if not abs then goto continue end
         local meta = type(view.line_meta[i]) == "table" and view.line_meta[i] or nil
-        local known = view.known_originals[path_key(abs)]
+        local abs = meta and meta.project_path_root and meta.original_abs
+          or child_path(parent.abs, parsed.name)
+        if not abs then goto continue end
+        local needs_original = not meta or (not meta.original_abs and not meta.force_create)
+        local known = needs_original and view.known_originals[path_key(abs)]
         local entry_type = parsed.wants_dir and "dir"
           or (meta and meta.original_type)
           or (known and known.type)
@@ -694,11 +726,6 @@ local function recover_known_line_meta(view)
 
         local entry = { abs = abs, type = entry_type, level = parsed.level }
         stack[parsed.level] = entry
-        local deeper = parsed.level + 1
-        while stack[deeper] do
-          stack[deeper] = nil
-          deeper = deeper + 1
-        end
       end
     end
     ::continue::
@@ -869,10 +896,12 @@ function FileTreeView:get_gutter_width()
 end
 
 function FileTreeView:get_inline_file_icon_generation(line)
+  local entry = self:get_line_hint_entry(line)
   return table.concat({
-    tostring(self.entry_snapshot_generation or 0),
+    entry and entry.abs or "",
+    entry and entry.type or "",
+    tostring(self:project_path_line_color(line)),
     tostring(self.git_status and self.git_status.generation or 0),
-    tostring(line),
   }, "\0")
 end
 
@@ -922,7 +951,6 @@ function FileTreeView:update()
   local generation = file_git_status.generation
   if generation ~= self.git_status.generation then
     self.git_status = { generation = generation }
-    self.status_cache = nil
     core.redraw = true
   end
   perf_phase_finish("filetree_git_update_ms", started)
@@ -1087,6 +1115,7 @@ end
 function FileTreeView:invalidate_entry_snapshots()
   self.entry_snapshot_generation = (self.entry_snapshot_generation or 0) + 1
   self.entry_snapshots = {}
+  self.status_cache, self.status_cache_snapshot = nil, nil
 end
 
 function FileTreeView:snapshot_lines()
@@ -1191,7 +1220,12 @@ function FileTreeView:sync_meta()
   end
 
   self.line_meta = new_meta
-  recover_known_line_meta(self)
+  for _, meta in ipairs(new_meta) do
+    if not meta or (not meta.original_abs and not meta.force_create and not meta.parent_directory) then
+      recover_known_line_meta(self)
+      break
+    end
+  end
   self:snapshot_lines()
   self.status_cache = nil
 end
@@ -2081,6 +2115,7 @@ function FileTreeView:build_entries(include_hidden)
       and cached.generation == generation
       and cached.change_id == change_id
       and cached.current_dir == self.current_dir
+      and cached.root_dir == self.root_dir
       and cached.project_paths_generation == project_paths_generation
       and cached.indent_size == current_indent_size then
     perf_add(stats, "filetree_entry_snapshot_hits", 1)
@@ -2095,6 +2130,29 @@ function FileTreeView:build_entries(include_hidden)
   local stack = {}
   local project = core.root_project and core.root_project()
   local root_tree = project and common.path_equals(self.root_dir, project.path)
+  -- Retain only paths used by this snapshot. Edits reuse path results without
+  -- retaining every intermediate name typed during the lifetime of the View.
+  local previous = self.entry_paths
+  local old_paths = previous and previous.root_dir == self.root_dir
+    and previous.project_root == (project and project.path)
+    and previous.project_paths_generation == project_paths_generation
+    and previous.paths or {}
+  local paths = {}
+  local function resolve_path(parent, name, explicit_path)
+    local id = explicit_path or (parent .. "\0" .. name)
+    local cached_path = paths[id] or old_paths[id]
+    if not cached_path then
+      local abs = explicit_path or child_path(parent, name)
+      cached_path = { abs = abs }
+      if abs then
+        cached_path.key = path_key(abs)
+        cached_path.browsable = not not (root_tree and project_paths.resolve(abs)
+          or (not root_tree and in_project(abs, self.root_dir)))
+      end
+    end
+    paths[id] = cached_path
+    return cached_path
+  end
 
   for _, row in ipairs(rows) do
     local meta = type(row.meta) == "table" and row.meta or nil
@@ -2117,9 +2175,16 @@ function FileTreeView:build_entries(include_hidden)
     local parsed, err = parse_text(row.text)
     if err then
       errors[row.line] = err
+      stack = {}
       goto continue
     end
     if not parsed then goto continue end -- blank lines are ignored
+
+    local deeper = parsed.level
+    while stack[deeper] do
+      stack[deeper] = nil
+      deeper = deeper + 1
+    end
 
     local parent = parsed.level == 0 and root or stack[parsed.level - 1]
     if not parent or parent.type ~= "dir" then
@@ -2127,20 +2192,14 @@ function FileTreeView:build_entries(include_hidden)
       goto continue
     end
 
-    local abs
-    if meta and meta.project_path_root and meta.original_abs then
-      abs = meta.original_abs
-    else
-      abs = child_path(parent.abs, parsed.name)
-      if not abs then
-        errors[row.line] = "invalid path"
-        goto continue
-      end
+    local resolved = resolve_path(parent.abs, parsed.name,
+      meta and meta.project_path_root and meta.original_abs)
+    local abs = resolved.abs
+    if not abs then
+      errors[row.line] = "invalid path"
+      goto continue
     end
-    local resolved = root_tree and project_paths.resolve(abs) or nil
-    local browsable = root_tree and resolved
-      or (not root_tree and in_project(abs, self.root_dir))
-    if not browsable then
+    if not resolved.browsable then
       errors[row.line] = "path escapes Project Paths"
       goto continue
     end
@@ -2156,10 +2215,13 @@ function FileTreeView:build_entries(include_hidden)
       hidden = row.hidden,
       text = parsed.name,
       abs = abs,
+      key = resolved.key,
       type = entry_type,
       level = parsed.level,
       meta = meta,
       original_abs = meta and meta.original_abs,
+      original_key = meta and meta.original_abs
+        and (meta.original_abs == abs and resolved.key or path_key(meta.original_abs)),
       original_type = meta and meta.original_type,
       original_size = meta and meta.original_size,
       original_modified = meta and meta.original_modified,
@@ -2173,12 +2235,7 @@ function FileTreeView:build_entries(include_hidden)
     }
     entries[#entries + 1] = entry
 
-    stack[parsed.level] = entry
-    local deeper = parsed.level + 1
-    while stack[deeper] do
-      stack[deeper] = nil
-      deeper = deeper + 1
-    end
+    if not errors[row.line] then stack[parsed.level] = entry end
 
     ::continue::
   end
@@ -2186,12 +2243,19 @@ function FileTreeView:build_entries(include_hidden)
   local by_line, by_abs = {}, {}
   for _, entry in ipairs(entries) do
     by_line[entry.line] = entry
-    by_abs[path_key(entry.abs)] = entry
+    by_abs[entry.key or path_key(entry.abs)] = entry
   end
+  self.entry_paths = {
+    root_dir = self.root_dir,
+    project_root = project and project.path,
+    project_paths_generation = project_paths_generation,
+    paths = paths,
+  }
   local snapshot = {
     generation = generation,
     change_id = change_id,
     current_dir = self.current_dir,
+    root_dir = self.root_dir,
     project_paths_generation = project_paths_generation,
     indent_size = current_indent_size,
     entries = entries,
@@ -2214,6 +2278,15 @@ function FileTreeView:build_entries(include_hidden)
 end
 
 function FileTreeView:plan_changes(status_only)
+  -- Comparisons and disk reads are local to this validation. A later command
+  -- must see current disk state, not the result of a previous validation.
+  local path_key, path_equals, path_belongs_to = path_comparisons()
+  local info_cache = {}
+  local function file_info(path)
+    local key = path_key(path)
+    if info_cache[key] == nil then info_cache[key] = system.get_file_info(path) or false end
+    return info_cache[key] or nil
+  end
   local entries, errors = self:build_entries(true)
   local status = {}
   local invalid = false
@@ -2244,7 +2317,7 @@ function FileTreeView:plan_changes(status_only)
     elseif e.project_path_root then
       local id = e.meta and e.meta.project_path_id
       if id then seen_project_path_roots[id] = true end
-      if id and e.original_type == e.type and common.path_equals(e.abs, e.original_abs) then
+      if id and e.original_type == e.type and path_equals(e.abs, e.original_abs) then
         local old_label = e.meta and e.meta.project_path_label
         local new_label = e.text:gsub("/+$", "")
         if new_label ~= "" and new_label ~= old_label then
@@ -2256,7 +2329,7 @@ function FileTreeView:plan_changes(status_only)
       end
     elseif e.readonly then
       if not e.original_abs
-          or not common.path_equals(e.abs, e.original_abs)
+          or not path_equals(e.abs, e.original_abs)
           or e.original_type ~= e.type then
         mark_invalid(e, "Project Path Role sections are browse/open-only")
       end
@@ -2332,7 +2405,7 @@ function FileTreeView:plan_changes(status_only)
         end
       else
         local replaces_existing = explicit_sources[path_key(e.abs)]
-        if system.get_file_info(e.abs) and not replaces_existing then
+        if file_info(e.abs) and not replaces_existing then
           mark_invalid(e, "target already exists: " .. op_path(e.abs))
         else
           creates[#creates + 1] = {
@@ -2360,25 +2433,25 @@ function FileTreeView:plan_changes(status_only)
     if self.known_originals[path_key(src)] then
       local kept_original = false
       for _, e in ipairs(list) do
-        if common.path_equals(e.abs, src) then kept_original = true; break end
+        if path_equals(e.abs, src) then kept_original = true; break end
       end
-      if not kept_original and system.get_file_info(src) then vacated_sources[path_key(src)] = src end
+      if not kept_original and file_info(src) then vacated_sources[path_key(src)] = src end
     end
   end
 
   local function check_target(op, e, allow_vacated_target)
-    if common.path_equals(op.to, op.from) then return false end
-    if op.type == "dir" and common.path_belongs_to(op.to, op.from) then
+    if path_equals(op.to, op.from) then return false end
+    if op.type == "dir" and path_belongs_to(op.to, op.from) then
       mark_invalid(e, "cannot move/copy a folder into itself: " .. op_path(op.from) .. " -> " .. op_path(op.to))
       return false
     end
     local target_vacated = vacated_sources[path_key(op.to)] ~= nil
     if allow_vacated_target and not target_vacated then
       for _, vacated in pairs(vacated_sources) do
-        if common.path_belongs_to(op.to, vacated) then target_vacated = true; break end
+        if path_belongs_to(op.to, vacated) then target_vacated = true; break end
       end
     end
-    if system.get_file_info(op.to) and not (allow_vacated_target and target_vacated) then
+    if file_info(op.to) and not (allow_vacated_target and target_vacated) then
       mark_invalid(e, "target already exists: " .. op_path(op.to))
       return false
     end
@@ -2397,13 +2470,13 @@ function FileTreeView:plan_changes(status_only)
     local kept_original
     local changed = {}
     for _, e in ipairs(list) do
-      if common.path_equals(e.abs, src) then
+      if path_equals(e.abs, src) then
         kept_original = e
       else
         changed[#changed + 1] = e
       end
     end
-    local source_info = #changed > 0 and system.get_file_info(src) or nil
+    local source_info = #changed > 0 and file_info(src) or nil
 
     if source_known_here and not kept_original and #changed == 0 then
       trashes[#trashes + 1] = { abs = src, type = source_type }
@@ -2479,7 +2552,7 @@ function FileTreeView:plan_changes(status_only)
   for _, op in ipairs(trashes) do
     local covered = false
     for dir in pairs(trashed_dirs) do
-      if common.path_belongs_to(op.abs, dir) then covered = true; break end
+      if path_belongs_to(op.abs, dir) then covered = true; break end
     end
     if not covered then
       filtered_trashes[#filtered_trashes + 1] = op
@@ -2537,10 +2610,10 @@ function FileTreeView:plan_changes(status_only)
   for _, op in ipairs(moves) do
     local skip = false
     for _, parent in ipairs(filtered_moves) do
-      if parent.type == "dir" and common.path_belongs_to(op.from, parent.from) then
+      if parent.type == "dir" and path_belongs_to(op.from, parent.from) then
         local suffix = op.from:sub(#parent.from + 1)
         local mapped = parent.to .. suffix
-        if common.path_equals(op.to, mapped) then
+        if path_equals(op.to, mapped) then
           skip = true
         else
           op.from = mapped
@@ -2559,11 +2632,11 @@ function FileTreeView:plan_changes(status_only)
   local move_from = {}
   for _, op in ipairs(moves) do move_from[path_key(op.from)] = true end
   for _, e in ipairs(entries) do
-    if e.original_abs and common.path_equals(e.abs, e.original_abs) and not move_from[path_key(e.original_abs)] then
+    if e.original_abs and path_equals(e.abs, e.original_abs) and not move_from[path_key(e.original_abs)] then
       for _, parent in ipairs(moves) do
-        if parent.type == "dir" and common.path_belongs_to(e.original_abs, parent.from) then
+        if parent.type == "dir" and path_belongs_to(e.original_abs, parent.from) then
           local mapped = parent.to .. e.original_abs:sub(#parent.from + 1)
-          if not common.path_equals(mapped, e.abs) then
+          if not path_equals(mapped, e.abs) then
             moves[#moves + 1] = {
               from = mapped,
               to = e.abs,
@@ -2593,8 +2666,8 @@ function FileTreeView:plan_changes(status_only)
     if copy.type == "dir" then
       for _, e in ipairs(entries) do
         local copied_child = e.original_abs
-          and (common.path_equals(e.original_abs, copy.from) or common.path_belongs_to(e.original_abs, copy.from))
-        if not common.path_equals(e.abs, copy.to) and common.path_belongs_to(e.abs, copy.to) and copied_child then
+          and (path_equals(e.original_abs, copy.from) or path_belongs_to(e.original_abs, copy.from))
+        if not path_equals(e.abs, copy.to) and path_belongs_to(e.abs, copy.to) and copied_child then
           expanded_copy_dirs[copy] = true
           creates[#creates + 1] = {
             path = copy.to,
@@ -2615,9 +2688,9 @@ function FileTreeView:plan_changes(status_only)
   for _, op in ipairs(copies) do
     local skip = expanded_copy_dirs[op]
     for _, parent in ipairs(filtered_copies) do
-      if parent.type == "dir" and common.path_belongs_to(op.from, parent.from) then
+      if parent.type == "dir" and path_belongs_to(op.from, parent.from) then
         local suffix = op.from:sub(#parent.from + 1)
-        if common.path_equals(op.to, parent.to .. suffix) then
+        if path_equals(op.to, parent.to .. suffix) then
           skip = true
           break
         end
@@ -2631,7 +2704,7 @@ function FileTreeView:plan_changes(status_only)
   table.sort(moves, function(a, b) return #a.from > #b.from end)
   for _, trash in ipairs(trashes) do
     for _, move in ipairs(moves) do
-      if common.path_equals(trash.abs, move.from) or common.path_belongs_to(trash.abs, move.from) then
+      if path_equals(trash.abs, move.from) or path_belongs_to(trash.abs, move.from) then
         trash.abs = move.to .. trash.abs:sub(#move.from + 1)
         break
       end
@@ -2645,7 +2718,7 @@ function FileTreeView:plan_changes(status_only)
   for _, copy in ipairs(copies) do
     local apply_from = copy.from
     for _, move in ipairs(ordered_for_mapping) do
-      if common.path_equals(apply_from, move.from) or common.path_belongs_to(apply_from, move.from) then
+      if path_equals(apply_from, move.from) or path_belongs_to(apply_from, move.from) then
         apply_from = move.to .. apply_from:sub(#move.from + 1)
       end
     end
@@ -2666,11 +2739,56 @@ function FileTreeView:plan_changes(status_only)
 end
 
 function FileTreeView:get_line_status(line)
-  self:sync_meta()
   if not self.has_possible_edits then return nil end
-  if not self.status_cache then
-    local plan = self:plan_changes(true)
-    self.status_cache = plan.status or {}
+  local entries, errors, snapshot = self:build_entries(false)
+  if not self.status_cache or self.status_cache_snapshot ~= snapshot then
+    -- Live feedback describes the draft, not a filesystem operation plan.
+    -- Disk checks and hidden subtree validation belong to explicit commands.
+    local status, targets, duplicate_targets, last_by_source, kept_sources = {}, {}, {}, {}, {}
+    for row in pairs(errors) do status[row] = "invalid" end
+    for _, entry in ipairs(entries) do
+      if not entry.parent_directory then
+        local key = entry.key
+        if not entry.readonly and not entry.project_path_root then
+          local prior = targets[key]
+          if prior and (prior.type ~= "dir" or entry.type ~= "dir") then
+            duplicate_targets[key] = true
+          end
+          targets[key] = entry
+          if entry.original_abs then
+            local source = entry.original_key
+            last_by_source[source] = entry
+            if key == source then kept_sources[source] = true end
+          end
+        end
+        if not entry.original_abs then status[entry.line] = status[entry.line] or "addition" end
+        if entry.project_path_root then
+          local meta = entry.meta
+          if entry.text:gsub("/+$", "") ~= meta.project_path_label then
+            status[entry.line] = status[entry.line] or "modification"
+          end
+        elseif entry.readonly and key ~= entry.original_key then
+          status[entry.line] = "invalid"
+        end
+        local draft = entry.meta and entry.meta.draft
+        if draft and draft.status then
+          if draft.status == "invalid" then status[entry.line] = "invalid"
+          else status[entry.line] = status[entry.line] or draft.status end
+        end
+      end
+    end
+    for _, entry in ipairs(entries) do
+      if not entry.readonly and not entry.project_path_root then
+        local source = entry.original_key
+        if duplicate_targets[entry.key] then
+          status[entry.line] = "invalid"
+        elseif source and entry.key ~= source then
+          local copy = kept_sources[source] or not self.known_originals[source] or last_by_source[source] ~= entry
+          status[entry.line] = status[entry.line] or (copy and "addition" or "modification")
+        end
+      end
+    end
+    self.status_cache, self.status_cache_snapshot = status, snapshot
   end
   return self.status_cache[line]
 end
@@ -2701,6 +2819,16 @@ function FileTreeView:relative_descendant_line(text, base_indent)
   if level and level >= base_indent then
     return strip_indent_levels(text, base_indent) .. "\n"
   end
+  if not level then
+    -- Keep invalid indentation invalid when a subtree collapses and expands.
+    local raw = text:match("^[\t ]*")
+    local _, tabs = raw:gsub("\t", "")
+    local columns = #raw + tabs * (indent_size() - 1)
+    local relative_columns = columns - base_indent * indent_size()
+    if relative_columns < 0 then relative_columns = columns % indent_size() end
+    return string.rep(" ", relative_columns)
+      .. text:sub(#raw + 1) .. "\n"
+  end
   return trim(text) .. "\n"
 end
 
@@ -2729,6 +2857,9 @@ function FileTreeView:collapse_folder(line, entry)
   local first, last = self:descendant_range(line, entry.level * INDENT)
   local draft = { lines = {}, meta = {} }
   for i = first, last do
+    local status = self:get_line_status(i)
+    if status == "invalid" then draft.status = status
+    else draft.status = draft.status or status end
     draft.lines[#draft.lines + 1] = self:relative_descendant_line(line_text(self.buffer.lines[i]), entry.level * INDENT + INDENT)
     draft.meta[#draft.meta + 1] = clone_meta(self.line_meta[i])
   end
@@ -3329,8 +3460,15 @@ end
 
 function FileTreeView:apply_edits()
   self:sync_meta()
-  local plan, err, _, reasons, ambiguities = self:plan_changes()
-  if not plan then self:show_plan_errors(err, reasons, ambiguities); return end
+  local plan, err, status, reasons, ambiguities = self:plan_changes()
+  if not plan then
+    local _, _, snapshot = self:build_entries(false)
+    self.status_cache, self.status_cache_snapshot = status, snapshot
+    core.redraw = true
+    core.log_quiet("File Tree validation rejected edits: reasons=%d", #(reasons or {}))
+    self:show_plan_errors(err, reasons, ambiguities)
+    return
+  end
 
   if self:operation_count(plan) == 0 then
     self.buffer:clean()
@@ -3340,6 +3478,7 @@ function FileTreeView:apply_edits()
     return
   end
 
+  core.log_quiet("File Tree validated edits: operations=%d", self:operation_count(plan))
   self:confirm_apply_plan(plan)
 end
 

@@ -132,6 +132,7 @@ case.
 - `wrapped-document-scroll` — deterministic one-line scrolling and cache churn
 - `tab-heavy-titlebar` — 40 Pane Tabs with a stable active Editor
 - `caret-repeat` — one `doc:move-to-next-line` command per redraw in an unwrapped Document View
+- `filetree-edit-repeat` — alternate text input and Backspace in a File Tree with 425 visible rows and 1,800 collapsed children
 - `markdown-long-link-caret-repeat` — one wrapped-row caret move per redraw inside a long revealed Markdown link
 - `renderer-primitives` — deterministic clipping, alpha, text, and shape scene
 - `font-raster-correctness` — connected glyph continuity across sizes, phases, hinting, antialiasing, and backgrounds
@@ -159,6 +160,11 @@ caches; doing that would disturb the desktop machine and make the isolation
 claim misleading.
 
 Fixtures are generated deterministically inside the isolated run directory. Their hash is recorded in every report.
+
+The File Tree scenario measures edits, not unchanged cache hits. It checks focus, the caret, and retained collapsed children.
+Its files have fixed modification times so metadata text does not change between repetitions.
+It never applies the draft filesystem operations. Use it when changing File Tree path resolution, edit feedback, or rendering.
+Live edit feedback uses the draft and cached metadata. Explicit apply commands validate disk state and collapsed subtrees.
 
 ## Results
 

@@ -492,6 +492,17 @@ local function setup_scenario()
     view = open_primitive_view()
   elseif benchmark.scenario == "font-raster-correctness" then
     view = open_font_raster_view()
+  elseif benchmark.scenario == "filetree-edit-repeat" then
+    local root = common.dirname(benchmark.fixture) .. PATHSEP .. "editable-tree"
+    view = require("plugins.filetree").new()
+    view:change_directory(root)
+    local folder_entry = assert(view:entry_for_line(2))
+    assert(folder_entry.type == "dir")
+    view:expand_folder(2, folder_entry, false)
+    view:collapse_folder(2, folder_entry)
+    assert(#view.buffer.lines == 425)
+    require("core.panes").place(function() return view end, { placement = "current", focus = true })
+    view:with_selection_state(function() view.buffer:set_selection(3, 1) end)
   else
     activate_view(view)
     set_position(view, benchmark.start_line)
@@ -521,6 +532,24 @@ local function scenario_is_ready()
   local view = benchmark.view
   if not view then return false end
   if not view.buffer then return true end
+  if benchmark.scenario == "filetree-edit-repeat" then
+    -- Workspace restore can refresh the File Tree during startup.
+    local folder = assert(view:entry_for_line(2))
+    if not folder.meta.draft then
+      view:expand_folder(2, folder, false)
+      view:collapse_folder(2, folder)
+      view:with_selection_state(function() view.buffer:set_selection(3, 1) end)
+      folder = assert(view:entry_for_line(2))
+    end
+    assert(#view:collect_rows(true) == 2225, "File Tree must retain its collapsed children")
+    benchmark.filetree_draft = folder.meta.draft
+    -- Fast frames must not finish measurement before metadata arrives.
+    local git = require("plugins.file_git_status"):state_for(view.current_dir, true)
+    if not git or not git.has_published then return false end
+    local _, pending = require("plugins.folder_counts").get(
+      folder.abs, folder.cached_info.modified, config.plugins.filetree.show_hidden)
+    if pending then return false end
+  end
   if view.__markdown_live_attached then
     local markdown_model = require "core.markdown.model"
     local instance = markdown_model.peek(view.buffer)
@@ -537,7 +566,19 @@ local function perform_action()
   local view = benchmark.view or active_textview()
   if not view then return end
   local started = system.get_time()
-  if benchmark.scenario == "wrapped-buffer-scroll"
+  if benchmark.scenario == "filetree-edit-repeat" then
+    assert(core.active_view == view, "File Tree must receive the edit")
+    assert(view:entry_for_line(2).meta.draft == benchmark.filetree_draft,
+      "File Tree lost its collapsed children")
+    local line = view:with_selection_state(function() return view.buffer:get_selection() end)
+    assert(line == 3, "File Tree caret left the edited row")
+    if benchmark.action_count % 2 == 0 then
+      core.on_event("textinput", "x")
+    else
+      assert(command.perform("core:backspace"))
+    end
+    benchmark.action_count = benchmark.action_count + 1
+  elseif benchmark.scenario == "wrapped-buffer-scroll"
       or benchmark.scenario == "specimen-scroll"
   then
     local line = benchmark.start_line + benchmark.action_count * benchmark.scroll_lines

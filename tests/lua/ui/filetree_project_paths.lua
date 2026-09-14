@@ -195,6 +195,17 @@ test.describe("File Tree Project Path Roles", function()
     test.not_nil(library_line)
     test.not_nil(find_line(filetree, "library1/"))
 
+    for _, name in ipairs { "\t\tlibrary1/", "library1/" } do
+      local line = find_line(filetree, name)
+      filetree:expand_folder(line, filetree:entry_for_line(line), false)
+      filetree:expand_folder(line + 1, filetree:entry_for_line(line + 1), false)
+    end
+    -- Both the editable tree and its browse-only section show Baz.java.
+    filetree.buffer:insert(1, 1, "\n")
+    for line = 1, #filetree.buffer.lines do
+      test.is_nil(filetree:get_line_status(line), "unchanged mirrors have no edit feedback")
+    end
+
     local plan = filetree:plan_changes(true)
     test.not_ok(plan.invalid, "unchanged vendored mirrors should not block File Tree operations")
   end)

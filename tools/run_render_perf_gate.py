@@ -72,6 +72,15 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "visual": True,
         "paced": True,
     },
+    "filetree-edit-repeat": {
+        "start_line": 1,
+        "visible_rows": 425,
+        "collapsed_children": 1800,
+        "window_width": 1400,
+        "window_height": 900,
+        "visual": False,
+        "paced": True,
+    },
     "markdown-long-link-caret-repeat": {
         "fixture": "markdown-long-link",
         "payload_repetitions": MARKDOWN_LONG_LINK_PAYLOAD_REPETITIONS,
@@ -449,6 +458,18 @@ def generate_fixture(work: Path) -> tuple[Path, Path, Path]:
         encoding="utf-8", newline="\n",
     )
     return fixture, tab_dir, markdown_fixture
+
+
+def generate_filetree_fixture(work: Path) -> None:
+    tree = work / "fixtures" / "editable-tree"
+    folder = tree / "folded"
+    folder.mkdir(parents=True)
+    for i in range(1, 2224):
+        path = (tree if i <= 423 else folder) / f"file-{i:04d}.txt"
+        path.write_text("File Tree edit fixture\n", encoding="utf-8", newline="\n")
+        os.utime(path, (1700000000, 1700000000))
+    for path in (folder, tree):
+        os.utime(path, (1700000000, 1700000000))
 
 
 def read_key_values(path: Path) -> dict[str, str]:
@@ -1197,6 +1218,8 @@ def main() -> int:
     user.mkdir(parents=True)
     exe = copy_app_tree(app_root)
     fixture, tab_dir, _markdown_fixture = generate_fixture(work)
+    if "filetree-edit-repeat" in selected_scenarios:
+        generate_filetree_fixture(work)
     external_fixture = None
     specimen_metadata = None
     if specimen_source:
