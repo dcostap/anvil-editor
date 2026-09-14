@@ -85,6 +85,8 @@ test.describe("Markdown heading leading spacing", function()
     created_views = {}
     context.old_markdown_live_editor = config.markdown_live_editor
     context.old_active_view = core.active_view
+    context.old_ui_snapshot_active = core.ui_snapshot_active
+    context.old_ui_snapshot_id = core.ui_snapshot_id
     config.markdown_live_editor = true
   end)
 
@@ -92,6 +94,8 @@ test.describe("Markdown heading leading spacing", function()
     autocomplete.close()
     config.markdown_live_editor = context.old_markdown_live_editor
     core.active_view = context.old_active_view
+    core.ui_snapshot_active = context.old_ui_snapshot_active
+    core.ui_snapshot_id = context.old_ui_snapshot_id
     for _, view in ipairs(created_views) do
       markdown.live_render.detach(view)
       if view.buffer:is_dirty() then view.buffer:clean() end
@@ -365,6 +369,53 @@ test.describe("Markdown heading leading spacing", function()
       active_y, inactive_y,
       string.format("separate edits moved following line from %d to %d", inactive_y, active_y)
     )
+  end)
+
+  test.it("uses settled row heights immediately when Enter splits a heading at its start", function()
+    local expected_view, expected_buffer = make_view("\n# Heading\nbody")
+    expected_buffer:set_selection(2, 1)
+    refresh(expected_view)
+    local expected_blank_height = expected_view:get_position_visual_row_height(1, 1)
+    local _, expected_heading_y = expected_view:get_line_screen_position(2, 1)
+
+    local view, buffer = make_view("# Heading\nbody")
+    buffer:set_selection(1, 1)
+    core.active_view = view
+    refresh(view)
+
+    core.ui_snapshot_id = (core.ui_snapshot_id or 0) + 1
+    core.ui_snapshot_active = true
+    view:get_line_render(1)
+    view:get_visual_row_metric_cache()
+
+    test.equal(command.perform("core:newline"), true)
+    core.ui_snapshot_id = core.ui_snapshot_id + 1
+    view:update()
+    test.equal(buffer.lines[1], "\n")
+    test.equal(buffer.lines[2], "# Heading\n")
+    local immediate_blank_height = view:get_position_visual_row_height(1, 1)
+    test.equal(
+      immediate_blank_height, expected_blank_height,
+      string.format(
+        "the new blank row temporarily used height %s instead of %s",
+        tostring(immediate_blank_height), tostring(expected_blank_height)
+      )
+    )
+    local _, immediate_heading_y = view:get_line_screen_position(2, 1)
+    test.equal(
+      immediate_heading_y, expected_heading_y,
+      string.format(
+        "the heading temporarily moved to y=%s instead of y=%s",
+        tostring(immediate_heading_y), tostring(expected_heading_y)
+      )
+    )
+
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_ready(instance), instance.reason)
+    linewrapping.complete_async_reconstruction(view)
+    test.equal(view:get_position_visual_row_height(1, 1), expected_blank_height)
+    local _, published_heading_y = view:get_line_screen_position(2, 1)
+    test.equal(published_heading_y, expected_heading_y)
   end)
 
   test.it("keeps a following heading aligned while exiting a task and inserting blank rows", function()

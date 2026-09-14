@@ -260,6 +260,11 @@ function projection.edit_changes_list_structure(edit)
     ~= projection.list_signature(edit.text)
 end
 
+local function atx_heading_content(text)
+  local indent, marks, content = tostring(text or ""):match("^( *)(#+)[ \t]+(.*)$")
+  if marks and #indent <= 3 and #marks <= 6 then return content end
+end
+
 function projection.block_signature(text)
   -- Nested lists can use tab indentation. Recognize their marker before the
   -- generic indented-block branch so indentation does not look like a change
@@ -270,7 +275,7 @@ function projection.block_signature(text)
   if body:match("^```+") or body:match("^~~~+") then return "fence" end
   if html_block_mode(text) then return "html" end
   if body:match("^>") then return "quote" end
-  if body:match("^#{1,6}%s") then return "heading" end
+  if atx_heading_content(body) ~= nil then return "heading" end
   local setext = body:gsub("%s", "")
   if setext:match("^=+$") or setext:match("^%-+$") then
     return "setext-or-rule:" .. math.min(#setext, 3)
@@ -345,8 +350,8 @@ local function link_target_signature(text)
   -- following block. Do not widen pending presentation for ordinary list
   -- edits as though a reference/heading target changed.
   if projection.list_signature(text) ~= "" then return "" end
-  local body = text:match("^%s*#{1,6}%s+(.+)$")
-  if body then return "heading:" .. body end
+  local body = atx_heading_content(text)
+  if body and body ~= "" then return "heading:" .. body end
   local setext = text:match("^%s*([=%-]+)%s*$")
   if setext then return "setext:" .. setext:sub(1, 1) end
   local block = text:match("%^([%w_-]+)%s*$")
