@@ -1030,7 +1030,8 @@ function DiffView:refresh_core_gap_rows(force)
 
   local alignment = model.alignment or {}
   for index, pair in ipairs(alignment) do
-    if a_height < b_height and pair.a then
+    -- Keep changed blocks together. Resume alignment only at unchanged content.
+    if pair.tag == "equal" and a_height < b_height and pair.a then
       local delta = b_height - a_height
       if delta > MAX_UNPADDED_DIFF_ROWS
         and has_useful_comparison_remaining(self, alignment, index)
@@ -1039,7 +1040,7 @@ function DiffView:refresh_core_gap_rows(force)
         a_inserts[line] = (a_inserts[line] or 0) + delta
         a_height = b_height
       end
-    elseif b_height < a_height and pair.b then
+    elseif pair.tag == "equal" and b_height < a_height and pair.b then
       local delta = a_height - b_height
       if delta > MAX_UNPADDED_DIFF_ROWS
         and has_useful_comparison_remaining(self, alignment, index)

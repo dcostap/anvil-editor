@@ -15,6 +15,34 @@ test.describe("Diff gap boundaries", function()
   end)
 
   for _, side in ipairs({ "left", "right" }) do
+    test.it("keeps a changed block together on the " .. side, function(context)
+      local tail = "end\nnext_step();\nfinish();\n"
+      local short = "begin\n  prepare(new_name);\n  save(new_name);\n  unlink(new_name);\n" .. tail
+      local lines = { "begin", "  prepare(old_name);" }
+      for i = 1, 16 do lines[#lines + 1] = "  removed_step_" .. i .. "();" end
+      local long = table.concat(lines, "\n")
+        .. "\n  save(old_name);\n  unlink(old_name);\n" .. tail
+      local view = diffview.string_to_string(side == "left" and short or long,
+        side == "left" and long or short, "left", "right", true)
+      context.view = view
+      local deadline = system.get_time() + 2
+      while view.updater_idx do
+        test.ok(system.get_time() < deadline, "diff computation did not finish")
+        coroutine.yield(0.01)
+      end
+      view.size.x, view.size.y = 900, 600
+      view:update()
+      local small = side == "left" and view.buffer_view_a or view.buffer_view_b
+      local large = side == "left" and view.buffer_view_b or view.buffer_view_a
+      local _, first_y = small:get_line_screen_position(2)
+      local _, last_y = small:get_line_screen_position(4)
+      test.equal(last_y - first_y, small:get_line_height() * 2,
+        "alignment must not split the changed statements")
+      local _, small_y = small:get_line_screen_position(6)
+      local _, large_y = large:get_line_screen_position(22)
+      test.equal(small_y, large_y, "unchanged content after the block must align")
+    end)
+
     for _, indent in ipairs({ "  ", "\t" }) do
       test.it("prefers the function boundary over an internal blank on the " .. side
         .. (indent == "\t" and " with tabs" or " with spaces"), function(context)
