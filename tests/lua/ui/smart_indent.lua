@@ -427,21 +427,31 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
   end)
 
-  test.it("outdents an empty nested Markdown list item on Backspace", function(context)
-    local buffer, view = new_editor(context, "- parent\n  - \nafter", "sample.md")
+  test.it("removes empty nested Markdown prefixes before changing indentation", function(context)
+    local buffer, view = new_editor(context, "- parent\n  - [ ] \nafter", "sample.md")
     core.set_active_view(view)
-    buffer:set_selection(2, 5, 2, 5)
+    buffer:set_selection(2, 9, 2, 9)
 
     test.ok(command.perform("core:backspace"))
 
-    test.equal(text(buffer), "- parent\n- \nafter\n")
+    test.equal(text(buffer), "- parent\n  - \nafter\n")
+    test.same(view:get_selection_state().selections, { 2, 5, 2, 5 })
+
+    test.ok(command.perform("core:backspace"))
+
+    test.equal(text(buffer), "- parent\n  \nafter\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
   end)
 
-  test.it("removes an empty top-level Markdown task marker on Backspace", function(context)
+  test.it("removes an empty top-level Markdown task marker before its list marker", function(context)
     local buffer, view = new_editor(context, "- [ ] \nafter", "sample.md")
     core.set_active_view(view)
     buffer:set_selection(1, 7, 1, 7)
+
+    test.ok(command.perform("core:backspace"))
+
+    test.equal(text(buffer), "- \nafter\n")
+    test.same(view:get_selection_state().selections, { 1, 3, 1, 3 })
 
     test.ok(command.perform("core:backspace"))
 
@@ -453,6 +463,11 @@ test.describe("smart indentation", function()
     local buffer, view = new_editor(context, "- [ ]\nafter", "sample.md")
     core.set_active_view(view)
     buffer:set_selection(1, 6, 1, 6)
+
+    test.ok(command.perform("core:backspace"))
+
+    test.equal(text(buffer), "- \nafter\n")
+    test.same(view:get_selection_state().selections, { 1, 3, 1, 3 })
 
     test.ok(command.perform("core:backspace"))
 

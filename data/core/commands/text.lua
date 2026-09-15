@@ -1701,17 +1701,17 @@ local commands = {
       if line1 == line2 and col1 == col2 then
         local line_text = dv.buffer.lines[line1] or ""
         local content_start, indent_length, task_start = markdown_list_content_start(
-          dv.buffer, line1, line_text
+          dv.buffer, line1, line_text, true
         )
         indent_length = indent_length or #(line_text:match("^[\t ]*") or "")
         local empty_list_item = markdown_empty_list_item(
           dv.buffer, line1, col1, line_text
         )
         local action
-        if empty_list_item then
-          action = indent_length > 0 and "outdent" or "clear"
-        elseif content_start and col1 == content_start then
+        if content_start and col1 == content_start then
           action = task_start and "remove_task" or "remove_marker"
+        elseif empty_list_item then
+          action = indent_length > 0 and "outdent" or "clear"
         end
         if action then
           list_action_count = list_action_count + 1
