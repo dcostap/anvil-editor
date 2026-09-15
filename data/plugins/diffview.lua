@@ -957,8 +957,25 @@ end
 local MAX_UNPADDED_DIFF_ROWS = 8
 local MIN_UNCHANGED_TAIL_ROWS_FOR_DIFF_GAP = 3
 
+local function gap_neighbor_indent(lines, line, direction, tab_size)
+  for distance = 1, 12 do
+    local text = lines[line + distance * direction]
+    if not text then return nil end
+    if text:find("%S") then
+      local columns = 0
+      for char in text:match("^[ \t]*"):gmatch(".") do
+        columns = columns + (char == "\t" and tab_size - columns % tab_size or 1)
+      end
+      return columns
+    end
+  end
+end
+
 local function gap_boundary(view, alignment, index, side)
-  local lines = view[side == "a" and "buffer_view_a" or "buffer_view_b"].buffer.lines
+  local buffer = view[side == "a" and "buffer_view_a" or "buffer_view_b"].buffer
+  local lines = buffer.lines
+  local _, tab_size = buffer:get_indent_info()
+  local best_line, best_indent, best_distance
   -- Stay local and do not move padding across a paired replacement.
   for _, direction in ipairs({ -1, 1 }) do
     for distance = 0, 12 do
@@ -967,11 +984,21 @@ local function gap_boundary(view, alignment, index, side)
       if direction == 1 and pair.tag ~= "equal" then break end
       if pair.tag == "equal" and pair.a and pair.b
         and lines[pair[side]]:match("^%s*$") then
-        return pair[side]
+        local before = gap_neighbor_indent(lines, pair[side], -1, tab_size)
+        local after = gap_neighbor_indent(lines, pair[side], 1, tab_size)
+        -- Blank lines often have no indentation. Use both adjacent code lines
+        -- so a blank before a closing brace still belongs to the deeper body.
+        if before and after then
+          local indent = math.max(before, after)
+          if not best_line or indent < best_indent
+            or (indent == best_indent and distance < best_distance) then
+            best_line, best_indent, best_distance = pair[side], indent, distance
+          end
+        end
       end
     end
   end
-  return alignment[index][side]
+  return best_line or alignment[index][side]
 end
 
 local function has_useful_comparison_remaining(view, alignment, index)
