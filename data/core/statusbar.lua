@@ -610,7 +610,7 @@ function StatusBar:register_imageview_items()
           StatusBar.separator,
           dimensions,
           StatusBar.separator,
-          string.format("Zoom: %sx", core.active_view.zoom_scale),
+          string.format("Image Zoom: %.0f%%", core.active_view.zoom_scale * 100),
         }
       else
         return {}

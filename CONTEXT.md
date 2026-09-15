@@ -202,6 +202,9 @@ _Avoid_: Raw source selection
 The user-facing way to make Anvil's interface and Buffer text larger or smaller without changing Buffer contents.
 _Avoid_: Scale in user-facing command names
 
+**Image Zoom**:
+The magnification of an image inside its View or preview. It does not change the image file or interface size.
+
 **Typography Role**:
 A globally configurable text style for a semantic use such as interface text, source code, prose, emphasis, or headings.
 _Avoid_: Global font, Markdown font

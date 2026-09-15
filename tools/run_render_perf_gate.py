@@ -114,6 +114,15 @@ SCENARIOS: dict[str, dict[str, Any]] = {
 
 STANDARD_SCENARIOS = tuple(SCENARIOS)
 
+# Use this focused scene explicitly until it has a full-suite baseline.
+SCENARIOS["image-viewer"] = {
+    "start_line": 1,
+    "window_width": 1400,
+    "window_height": 900,
+    "visual": True,
+    "paced": False,
+}
+
 
 def uses_performance_baseline(renderer: str) -> bool:
     return renderer == "d3d11"

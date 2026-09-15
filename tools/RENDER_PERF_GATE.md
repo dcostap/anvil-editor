@@ -137,6 +137,9 @@ case.
 - `renderer-primitives` — deterministic clipping, alpha, text, and shape scene
 - `font-raster-correctness` — connected glyph continuity across sizes, phases, hinting, antialiasing, and backgrounds
 
+Use `--scenario image-viewer` for image controls, transparency, a fit preview, and a clipped pan at actual size.
+This focused scene is not in the default suites. It does not yet have a full-suite performance baseline.
+
 The prior Edge comparison showed continuity at 15, 16, 18, and 24 ppem. It did
 not establish the first stable DirectWrite size. That threshold remains
 unverified. The report gives Anvil's first stable sampled fixture size only.
