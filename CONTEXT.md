@@ -226,7 +226,8 @@ The caret and selection state owned by a Text View.
 _Avoid_: Buffer selection, shared selection
 
 **Row Selection Mode**:
-A Text View mode for selecting complete rows without a text caret. Normal text navigation and selection remain available outside this mode.
+A Text View mode for selecting complete selectable rows without a text caret; other rows remain outside the selection.
+Normal text navigation and selection remain available outside this mode.
 _Avoid_: special mode, line cursor
 
 **Caret Trail**:

@@ -220,9 +220,23 @@ test.describe("Git Log row selection", function()
     end)
   end
 
-  test.it("paints whole rows without a caret, then shows the text caret after switching modes", function()
-    local _, list = open_log()
+  for _, surface in ipairs { "log-list", "details" } do
+  test.it(surface .. " paints only selectable rows without a caret, then restores the text caret", function()
+    local view, list = open_log()
+    if surface == "details" then
+      view.model:log_tab().commits[1].changed_files = {
+        { status = "modified", old_path = "alpha/a.txt", new_path = "alpha/a.txt" },
+        { status = "modified", old_path = "beta/b.txt", new_path = "beta/b.txt" },
+      }
+      view:update_pane_buffers()
+      view:focus_pane_view("details")
+      list = view:pane_view("details")
+      list.position.x, list.position.y = 0, 0
+      list.size.x, list.size.y = 600, 500
+      list.scroll.y, list.scroll.to.y = 0, 0
+    end
     command.perform("core:select_to_next_line")
+    test.equal(#list:get_selected_rows(), 2)
     local saved, paints, carets = {}, {}, {}
     local root = core.root_panel
     local submit, clip, blink = root.submit_keyboard_caret, core.clip_rect_stack, config.disable_blink
@@ -261,11 +275,17 @@ test.describe("Git Log row selection", function()
           if x >= rect[1] and x < rect[3] and y >= rect[2] and y < rect[4] then return true end
         end
       end
-      for _, row in ipairs { 1, 2 } do
+      for _, row in ipairs(list:get_selected_rows()) do
         local _, y = list:get_line_screen_position(row)
         y = y + list:get_line_height() / 2
-        test.ok(selected_at(list.position.x + 1, y), "the row highlight must include the graph gutter")
+        test.ok(selected_at(list.position.x + 1, y), "the row highlight must include the gutter")
         test.ok(selected_at(list.position.x + list.size.x - 1, y), "the row highlight must reach the right edge")
+      end
+      for row = 1, #list.buffer.lines do
+        if not list:is_selectable_row(row) then
+          local x, y = list:get_line_screen_position(row)
+          test.ok(not selected_at(x + 1, y + list:get_line_height() / 2), "non-selectable rows must not be highlighted")
+        end
       end
       command.perform("git:toggle_row_selection_mode")
       list:draw()
@@ -274,4 +294,5 @@ test.describe("Git Log row selection", function()
     restore()
     if not ok then error(err, 0) end
   end)
+  end
 end)

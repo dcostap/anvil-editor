@@ -52,7 +52,7 @@ local function set_buffer_lines(view, lines)
   local text = table.concat(lines or {}, "\n")
   if text ~= "" then text = text .. "\n" end
   if buffer.git_view_pane_text == text then return end
-  local selection = view.get_selected_rows and view:get_selection_state()
+  local selection = view.row_selection_mode ~= nil and view:get_selection_state()
   local old_line_count = #buffer.lines
   buffer.git_view_pane_text = text
   buffer.lines = {}
@@ -77,6 +77,7 @@ local function set_buffer_lines(view, lines)
   local line = math.max(1, math.min(#buffer.lines, current_line or 1))
   if selection then view:set_selection_state(selection)
   else buffer:set_selection(line, 1, line, 1) end
+  if view.row_selection_mode then view:normalize_row_selection(true) end
   if view.scroll_to_make_visible then view:scroll_to_make_visible(line, 1, true) end
 end
 
@@ -345,7 +346,9 @@ function GitView:pane_view(name)
     view.git_owner_view = self
     view.git_pane = name
     if name == "log-list" then
-      view.get_selectable_row_count = function() return #self.model:log_tab().commits end
+      view.get_row_count = function() return #self.model:log_tab().commits end
+    elseif name == "details" then
+      view:set_row_selection_mode(true)
     end
     view.open_text_capture = function()
       return self:open_text_capture()
@@ -852,7 +855,14 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     local action_line = button == "left" and not modified
       and self:action_row_at_point(pane, x, y) or nil
     local content_click = action_line ~= nil
-    if pane.row_selection_mode then
+    local tree_line = pane.row_selection_mode and pane.path_tree_row and pane:resolve_screen_position(x, y)
+    local tree_row = tree_line and pane:path_tree_row(tree_line)
+    if tree_row and tree_row.type == "dir" then
+      if button == "left" and not modified and (clicks or 1) == 1 then
+        self:toggle_details_tree_folder(pane, tree_line)
+      end
+      content_click = true
+    elseif pane.row_selection_mode then
       pane:on_mouse_pressed(button, x, y, clicks)
       content_click = true
       if action_line then
@@ -1238,6 +1248,7 @@ function GitView:activate_selected(callback, opts)
   local details_commit, details_row, details_record = self:details_tree_item(
     active, active and active.buffer and active.buffer:get_selection() or 1
   )
+  if active and active.git_pane == "details" and active.row_selection_mode and not details_record then return nil end
   if details_row and details_row.type == "dir" then
     self:toggle_details_tree_folder(active, active.buffer:get_selection())
     return nil
@@ -1290,6 +1301,7 @@ function GitView:activate_selected_point(callback, opts)
   local commit, _, record = self:details_tree_item(
     source, source and source.buffer and source.buffer:get_selection() or 1
   )
+  if source and source.git_pane == "details" and source.row_selection_mode and not record then return nil end
   if commit and record then
     local path = changed_file_path(record)
     return self:open_file_comparison(source, function(done)
@@ -1815,10 +1827,13 @@ function GitView:update_pane_buffers(force)
     local detail_lines, detail_meta, detail_tree, detail_tree_offset = commit_details_lines(
       self:detail_commit_for_tab(log_tab), details, log_tab.selection_error
     )
+    local detail_selection = details:get_path_tree_selection()
+    local detail_revision = details.buffer.text_revision
     self:set_pane_lines("details", detail_lines)
     details.git_detail_line_meta = detail_meta
-    if details.path_tree ~= detail_tree or details.path_tree_line_offset ~= (detail_tree_offset or 0) then
-      details:set_path_tree(detail_tree, detail_tree_offset or 0)
+    if details.path_tree ~= detail_tree or details.path_tree_line_offset ~= (detail_tree_offset or 0)
+        or details.buffer.text_revision ~= detail_revision then
+      details:set_path_tree(detail_tree, detail_tree_offset or 0, detail_selection)
     end
   end
   self.__pane_buffer_state = pane_buffer_state(self, tab)

@@ -666,11 +666,11 @@ end, {
 
 command.add(function()
   local view = core.active_view
-  return view and view.git_pane == "log-list", view
+  return view and (view.git_pane == "log-list" or view.git_pane == "details"), view
 end, {
   ["git:toggle_row_selection_mode"] = command.palette(function(view)
     view:set_row_selection_mode(not view.row_selection_mode)
-    core.log_quiet("Git Log Row Selection Mode: %s", tostring(view.row_selection_mode))
+    core.log_quiet("Git Log %s Row Selection Mode: %s", view.git_pane, tostring(view.row_selection_mode))
   end),
 })
 command.set_status("git:toggle_row_selection_mode", function()

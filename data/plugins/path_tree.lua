@@ -4,7 +4,7 @@
 local common = require "core.common"
 local core = require "core"
 local config = require "core.config"
-local TextView = require "core.textview"
+local RowTextView = require "core.rowtextview"
 local Object = require "core.object"
 local style = require "core.style"
 local file_icons = require "core.file_icons"
@@ -515,11 +515,11 @@ local INLINE_FILE_ICON_PROVIDER = {
   end,
 }
 
-local PathTreeView = TextView:extend()
+local PathTreeView = RowTextView:extend()
 PathTreeView.show_line_numbers = false
 
 function PathTreeView:new(buffer)
-  PathTreeView.super.new(self, buffer)
+  PathTreeView.super.new(self, buffer, false)
   self.font = "prose_font"
   self:add_line_render_provider("path-tree-inline-file-icons", INLINE_FILE_ICON_PROVIDER)
   self:set_wrapping_enabled(false)
@@ -559,7 +559,37 @@ function PathTreeView:invalidate_path_tree_buffer(old_line_count)
   self:invalidate_visual_metrics("path-tree-buffer")
 end
 
-function PathTreeView:set_path_tree(tree, line_offset)
+function PathTreeView:get_path_tree_selection()
+  if not self.row_selection_mode then return nil end
+  local state = self:get_selection_state()
+  local focus = self:path_tree_row(state.selections[(state.last_selection - 1) * 4 + 1])
+  local selection = { paths = {}, focus = focus and focus.path }
+  for _, line in ipairs(self:get_selected_rows()) do
+    selection.paths[#selection.paths + 1] = self:path_tree_row(line).path
+  end
+  return selection
+end
+
+function PathTreeView:restore_path_tree_selection(selection)
+  if not self.row_selection_mode then return end
+  local state = { selections = {}, last_selection = 1 }
+  for _, path in ipairs(selection and selection.paths or {}) do
+    local line = self.path_tree and self.path_tree:line_for_path(path, "file")
+    if line then
+      line = line + self.path_tree_line_offset
+      for _, value in ipairs { line, #self.buffer.lines[line], line, 1 } do
+        state.selections[#state.selections + 1] = value
+      end
+      if path == selection.focus then state.last_selection = #state.selections / 4 end
+    end
+  end
+  if #state.selections == 0 then state.selections = { 1, 1, 1, 1 } end
+  self:set_selection_state(state)
+  self:normalize_row_selection(true)
+end
+
+function PathTreeView:set_path_tree(tree, line_offset, selection)
+  selection = selection or self:get_path_tree_selection()
   self.path_tree = tree
   self.path_tree_line_offset = math.max(0, tonumber(line_offset) or 0)
   self.path_tree_embedded = line_offset ~= nil
@@ -573,6 +603,7 @@ function PathTreeView:set_path_tree(tree, line_offset)
     local line = math.max(1, math.min(#self.buffer.lines, self.buffer:get_selection() or 1))
     self.buffer:set_selection(line, 1, line, 1)
   end
+  self:restore_path_tree_selection(selection)
   return self
 end
 
@@ -600,12 +631,14 @@ end
 
 function PathTreeView:toggle_path_tree_folder(line)
   local row = self:path_tree_row(line)
+  local selection = self:get_path_tree_selection()
   if not (row and row.type == "dir" and self.path_tree:toggle(row.path)) then return false end
   self:refresh_path_tree_lines()
+  self:restore_path_tree_selection(selection)
   local new_line = self.path_tree:line_for_path(row.path, "dir")
   if new_line then
     new_line = new_line + self.path_tree_line_offset
-    self.buffer:set_selection(new_line, 1, new_line, 1)
+    if not self.row_selection_mode then self.buffer:set_selection(new_line, 1, new_line, 1) end
     self:scroll_to_make_visible(new_line, 1, true)
   end
   return true
@@ -619,6 +652,11 @@ end
 function PathTreeView:path_tree_record_for_line(line)
   if not self.path_tree then return nil end
   return self.path_tree:record_for_line(line - self.path_tree_line_offset)
+end
+
+function PathTreeView:is_selectable_row(line)
+  local row = self:path_tree_row(line)
+  return row and row.type == "file" or false
 end
 
 function PathTreeView:get_gutter_width()
@@ -656,6 +694,7 @@ end
 function PathTreeView:draw_line_gutter(line, x, y, width)
   local row = self:path_tree_row(line)
   path_tree.draw_folder_row_background(self, row and row.type == "dir", self.position.x, y, width)
+  self:draw_row_selection(line, x, y, width)
   return self:get_line_height()
 end
 
