@@ -1405,8 +1405,15 @@ end
 
 function DiffView:sync_scroll_from(buffer_view, is_a)
   local other = is_a and self.buffer_view_b or self.buffer_view_a
+  local y, target_y = buffer_view.scroll.y, buffer_view.scroll.to.y
+  local function apply(view)
+    local max_y = math.max(0, view:get_scrollable_size() - view.size.y)
+    view.scroll.y = common.clamp(y, 0, max_y)
+    view.scroll.to.y = common.clamp(target_y, 0, max_y)
+  end
+  apply(buffer_view)
+  apply(other)
   self.scroll.y, self.scroll.to.y = buffer_view.scroll.y, buffer_view.scroll.to.y
-  other.scroll.y, other.scroll.to.y = buffer_view.scroll.y, buffer_view.scroll.to.y
 end
 
 local function clamp_position_out_of_fold(buffer_view, folds, old_line, line, col)
