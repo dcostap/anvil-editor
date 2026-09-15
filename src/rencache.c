@@ -818,7 +818,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
           RenRect src = { 0, 0, surface->w, surface->h };
           RenRect dst = cvcmd->rect;
           if (!anvil_d3d11_push_texture(ren_cache->window, surface, src, dst, clip,
-                                        cvcmd->color, 2)) { fail_reason = "draw_canvas"; goto fail; }
+                                        cvcmd->color, ANVIL_D3D11_IMAGE_TEXTURE)) { fail_reason = "draw_canvas"; goto fail; }
         }
       } break;
       case DRAW_PIXELS: {

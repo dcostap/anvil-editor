@@ -4062,8 +4062,8 @@ test.describe("Markdown Live Preview", function()
       test.ok(image_fragment.widget:on_mouse_pressed(
         view, { line = 1, fragment = image_fragment }, "left"
       ))
-      test.equal(overlay.state.image:get_size(), 307)
-      test.equal(overlay.state.label, "Logo")
+      test.equal(overlay.get_view().image:get_size(), 307)
+      test.equal(overlay.get_view():get_name(), "Logo")
     end)
     overlay.close()
     canvas.load_image_data = old_load_image_data
@@ -4574,39 +4574,6 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("clamps image overlay zoom to renderer-safe scaled dimensions", function()
-    local overlay = require "core.markdown.image_overlay"
-    local old_root_panel = core.root_panel
-    local state = overlay.state
-    local max_w, max_h = overlay.max_scaled_size()
-    local scaled_called = false
-    core.root_panel = {
-      position = { x = 0, y = 0 },
-      size = { x = 1920, y = 1080 },
-    }
-    state.visible = true
-    state.image = {
-      get_size = function() return 20000, 10000 end,
-      scaled = function()
-        scaled_called = true
-      end,
-    }
-    state.scaled = nil
-    state.scale = 100
-    state.width, state.height = 0, 0
-    state.scroll.x, state.scroll.y = 0, 0
-
-    overlay.actual_size()
-    local final_scale, final_w, final_h = state.scale, state.width, state.height
-    overlay.close()
-    core.root_panel = old_root_panel
-
-    test.equal(scaled_called, false)
-    test.ok(final_w <= max_w)
-    test.ok(final_h <= max_h)
-    test.ok(final_scale < 1)
-  end)
-
   test.it("uses a hand cursor over clickable rendered images", function()
     local image_path = USERDIR .. PATHSEP .. "markdown-live-hover-image-" .. system.get_process_id() .. ".png"
     local fp = io.open(image_path, "wb")
@@ -4632,69 +4599,6 @@ test.describe("Markdown Live Preview", function()
     canvas.load_image = old_load_image
     os.remove(image_path)
     test.equal(cursor, "hand")
-  end)
-
-  test.it("uses image overlay cursors for pan targets and outside areas", function()
-    local overlay = require "core.markdown.image_overlay"
-    local old_root_panel = core.root_panel
-    local old_request_cursor = core.request_cursor
-    local state = overlay.state
-    local cursor
-    core.root_panel = {
-      position = { x = 0, y = 0 },
-      size = { x = 500, y = 400 },
-    }
-    core.request_cursor = function(value) cursor = value end
-    state.visible = true
-    state.width = 100
-    state.height = 100
-    state.scroll.x = 0
-    state.scroll.y = 0
-    state.dragging = false
-
-    overlay.on_mouse_moved(250, 200, 0, 0)
-    local image_cursor = cursor
-    overlay.on_mouse_moved(10, 10, 0, 0)
-    local outside_cursor = cursor
-    state.dragging = true
-    overlay.on_mouse_moved(250, 200, 1, 1)
-    local dragging_cursor = cursor
-    overlay.close()
-
-    core.request_cursor = old_request_cursor
-    core.root_panel = old_root_panel
-    test.equal(image_cursor, "crosshair")
-    test.equal(outside_cursor, "arrow")
-    test.equal(dragging_cursor, "hand")
-  end)
-
-  test.it("closes the image overlay when clicking outside the image", function()
-    local overlay = require "core.markdown.image_overlay"
-    local old_root_panel = core.root_panel
-    local state = overlay.state
-    core.root_panel = {
-      position = { x = 0, y = 0 },
-      size = { x = 500, y = 400 },
-    }
-
-    state.visible = true
-    state.width = 100
-    state.height = 100
-    state.scroll.x = 0
-    state.scroll.y = 0
-    state.dragging = false
-    overlay.on_mouse_pressed("left", 250, 200, 1)
-    test.equal(state.visible, true)
-    test.equal(state.dragging, true)
-    overlay.on_mouse_released("left", 250, 200)
-
-    state.visible = true
-    state.dragging = false
-    overlay.on_mouse_pressed("left", 10, 10, 1)
-    test.equal(state.visible, false)
-    test.equal(state.dragging, false)
-
-    core.root_panel = old_root_panel
   end)
 
   test.it("opens a clicked rendered image in the system application", function()

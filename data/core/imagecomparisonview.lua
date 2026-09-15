@@ -39,25 +39,27 @@ function ImageComparisonView:layout()
 end
 
 function ImageComparisonView:side_at(x, y)
-  if y < self.position.y or y >= self.position.y + self.size.y then return nil end
+  if y < self.position.y + self.header_height or y >= self.position.y + self.size.y then return nil end
   if x >= self.position.x and x < self.divider_x then return self.left_view, "left" end
   if x > self.divider_x and x < self.position.x + self.size.x then return self.right_view, "right" end
 end
 
 function ImageComparisonView:sync_from(source)
+  self.sync_source = source
   local target = source == self.left_view and self.right_view or self.left_view
-  if not (source and target) then return end
+  if not (source and source.image and target and target.image) then return end
   target.zoom_mode = source.zoom_mode
-  target.zoom_scale = source.zoom_scale
-  target:scale_image()
-  target.scroll.x, target.scroll.y = source.scroll.x, source.scroll.y
-  target.scroll.to.x, target.scroll.to.y = source.scroll.to.x, source.scroll.to.y
+  target.zoom_transition = nil
+  local scale = source.zoom_mode == "fit" and not source.zoom_transition and target:get_fit_scale()
+    or math.max(target:get_fit_scale(), source.zoom_scale)
+  target:apply_transform(scale, -source.scroll.x, -source.scroll.y)
 end
 
 function ImageComparisonView:update()
   self:layout()
   if self.left_view then self.left_view:update() end
   if self.right_view then self.right_view:update() end
+  if self.sync_source then self:sync_from(self.sync_source) end
   ImageComparisonView.super.update(self)
 end
 
@@ -119,7 +121,10 @@ function ImageComparisonView:on_mouse_pressed(button, x, y, clicks)
   local view = self:side_at(x, y)
   if not view then return false end
   self.drag_view = view
-  return view:on_mouse_pressed(button, x, y, clicks)
+  local handled = view:on_mouse_pressed(button, x, y, clicks)
+  if handled then self:sync_from(view) end
+  self.cursor = view.cursor
+  return handled
 end
 
 function ImageComparisonView:on_mouse_moved(x, y, dx, dy)
@@ -127,6 +132,7 @@ function ImageComparisonView:on_mouse_moved(x, y, dx, dy)
   local view = self.drag_view or self:side_at(x, y)
   if not view then return false end
   local handled = view:on_mouse_moved(x, y, dx, dy)
+  self.cursor = view.cursor
   if self.drag_view then self:sync_from(view) end
   return handled
 end
@@ -136,14 +142,16 @@ function ImageComparisonView:on_mouse_released(button, x, y)
   self.drag_view = nil
   if not view then return false end
   view:on_mouse_released(button, x, y)
+  self.cursor = view.cursor
   self:sync_from(view)
   return true
 end
 
 function ImageComparisonView:on_mouse_left()
   self.drag_view = nil
-  if self.left_view then self.left_view.mouse_pressed = false end
-  if self.right_view then self.right_view.mouse_pressed = false end
+  self.cursor = "arrow"
+  if self.left_view then self.left_view:on_mouse_left() end
+  if self.right_view then self.right_view:on_mouse_left() end
   return ImageComparisonView.super.on_mouse_left(self)
 end
 

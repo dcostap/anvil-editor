@@ -2,6 +2,7 @@ local core = require "core"
 local panes = require "core.panes"
 local ImageView = require "core.imageview"
 local View = require "core.view"
+local config = require "core.config"
 local test = require "core.test"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 
@@ -36,10 +37,12 @@ test.describe("Fuzzy Searcher images", function()
     context.path = USERDIR .. PATHSEP .. "fuzzy-image-test.bmp"
     write_blue_bmp(context.path, 1, 1)
     context.source = View()
+    context.transitions = config.transitions
     context.pane = panes.create { factory = function() return context.source end }
   end)
 
   test.after_each(function(context)
+    config.transitions = context.transitions
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     panes.reset_for_tests()
     os.remove(context.path)
@@ -76,5 +79,50 @@ test.describe("Fuzzy Searcher images", function()
 
     test.ok(preview.width <= preview.size.x, "expected the image width to fit")
     test.ok(preview.height <= preview.size.y, "expected the image height to fit")
+  end)
+
+  test.it("zooms and pans the image preview without changing the result or input focus", function(context)
+    write_blue_bmp(context.path, 1200, 2000)
+    config.transitions = false
+    fuzzy_searcher.open("")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker:layout()
+    picker.results = { { kind = "file", file = context.path, text = context.path } }
+    picker.selected = 1
+    local preview = test.not_nil(picker:update_preview_view())
+    local width = preview.width
+    local focus = core.active_view
+    local x, y = preview.position.x + preview.size.x / 2, preview.position.y + preview.size.y / 2
+    picker:on_mouse_moved(x, y, 0, 0)
+    picker:on_mouse_wheel(3, 0)
+    test.ok(preview.width > width)
+    local _, before = preview:get_image_rect()
+    picker:on_mouse_pressed("left", x, y, 1)
+    picker:on_mouse_moved(x, y + 10, 0, 10)
+    picker:on_mouse_released("left", x, y + 10)
+    local _, after = preview:get_image_rect()
+    test.ok(after > before, "expected direct image panning")
+    test.equal(picker.selected, 1)
+    test.equal(core.active_view, focus)
+  end)
+
+  test.it("stops image preview panning when the pointer leaves the window", function(context)
+    write_blue_bmp(context.path, 1200, 2000)
+    config.transitions = false
+    fuzzy_searcher.open("")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker:layout()
+    picker.results = { { kind = "file", file = context.path, text = context.path } }
+    picker.selected = 1
+    local preview = test.not_nil(picker:update_preview_view())
+    local x, y = preview.position.x + preview.size.x / 2, preview.position.y + preview.size.y / 2
+    picker:on_mouse_moved(x, y, 0, 0)
+    picker:on_mouse_wheel(3, 0)
+    picker:on_mouse_pressed("left", x, y, 1)
+    picker:on_mouse_left()
+    local _, before = preview:get_image_rect()
+    picker:on_mouse_moved(x, y + 10, 0, 10)
+    local _, after = preview:get_image_rect()
+    test.equal(after, before)
   end)
 end)

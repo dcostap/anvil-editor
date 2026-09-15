@@ -5,7 +5,7 @@ local ImageView = require "core.imageview"
 command.add(ImageView, {
   ["image:auto_fit"] = function(av)
     ---@cast av core.imageview
-    av.zoom_mode = "fit"
+    av:zoom_fit()
   end,
   ["image:zoom_out"] = function(av)
     ---@cast av core.imageview

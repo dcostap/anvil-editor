@@ -114,6 +114,16 @@ SCENARIOS: dict[str, dict[str, Any]] = {
 
 STANDARD_SCENARIOS = tuple(SCENARIOS)
 
+# Use this focused scene explicitly until it has a full-suite baseline.
+SCENARIOS["image-viewer"] = {
+    "start_line": 1,
+    "window_width": 1400,
+    "window_height": 900,
+    "visual": True,
+    "paced": False,
+}
+SCENARIOS["image-filtering"] = dict(SCENARIOS["image-viewer"])
+
 
 def uses_performance_baseline(renderer: str) -> bool:
     return renderer == "d3d11"
@@ -730,6 +740,7 @@ def run_case(
     timeout_dump_file = run_dir / "timeout.dmp"
     screenshot_file = run_dir / "screenshot.png"
     raster_metadata_file = run_dir / "font-raster-metadata.csv"
+    image_metadata_file = run_dir / "image-metadata.csv"
     case_fixture = (
         work / "fixtures" / "markdown-long-link.md"
         if settings.get("fixture") == "markdown-long-link" else fixture
@@ -758,6 +769,7 @@ def run_case(
         "ANVIL_PERF_BENCHMARK_LIFECYCLE": str(lifecycle_file),
         "ANVIL_PERF_BENCHMARK_SCREENSHOT": str(screenshot_file) if screenshot else "",
         "ANVIL_PERF_BENCHMARK_RASTER_METADATA": str(raster_metadata_file),
+        "ANVIL_PERF_BENCHMARK_IMAGE_METADATA": str(image_metadata_file),
         "ANVIL_PERF_BENCHMARK_CAPTURE_FRAMES": "3",
         "ANVIL_PERF_BENCHMARK_CAPTURE_SETTLE_FRAMES": "5",
         "ANVIL_PERF_BENCHMARK_WARMUP_FRAMES": str(warmup_frames),
@@ -874,6 +886,18 @@ def run_case(
             )
         result["screenshot"] = str(screenshot_file)
         result["stability_screenshots"] = [str(path) for path in stability_files]
+        if scenario == "image-filtering":
+            with Image.open(screenshot_file) as capture:
+                pixels = capture.convert("RGB")
+                with image_metadata_file.open(newline="", encoding="utf-8") as metadata:
+                    for sample in csv.DictReader(metadata):
+                        actual = pixels.getpixel((int(sample["x"]), int(sample["y"])))
+                        expected = tuple(int(sample[channel]) for channel in ("r", "g", "b"))
+                        if any(abs(a - e) > 3 for a, e in zip(actual, expected)):
+                            raise RuntimeError(
+                                f"image filtering failed: {sample['name']}: expected {expected}, got {actual}"
+                            )
+            result["image_filtering"] = "passed"
         if scenario == "font-raster-correctness":
             fixtures = read_font_raster_metadata(raster_metadata_file)
             result["font_raster"] = analyze_font_raster_seams(

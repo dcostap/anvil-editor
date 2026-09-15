@@ -4533,6 +4533,14 @@ function FSView:on_mouse_moved(x, y, dx, dy)
   return true
 end
 
+function FSView:on_mouse_left()
+  if self.preview_view and self.preview_view:extends(ImageView) then
+    self.preview_mouse_pressed = false
+    self.preview_view:on_mouse_left()
+  end
+  return FSView.super.on_mouse_left(self)
+end
+
 function FSView:on_mouse_wheel(y, x)
   if self.closing then return false end
   if scale_mouse_wheel_modkeys_pressed() then return false end

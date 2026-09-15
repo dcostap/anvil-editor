@@ -1,4 +1,5 @@
 #include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -606,7 +607,32 @@ static int f_wait_event(lua_State *L) {
 }
 
 
-static SDL_Cursor* cursor_cache[SDL_SYSTEM_CURSOR_POINTER + 1];
+static SDL_Cursor *create_grab_cursor(void) {
+  static const char svg[] =
+    "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>"
+    "<path fill='white' stroke='#202020' stroke-width='1.2' stroke-linejoin='round' d='"
+    "M8.5 21 C7.5 19 6 17 4.3 14.6 L2.8 12.5 C1.4 10.6 3.5 9.2 4.8 10.6 "
+    "L7 12.5 V5 C7 3 10 3 10 5 V10 H10.5 V3.5 C10.5 1.5 13.5 1.5 13.5 3.5 "
+    "V10 H14 V5 C14 3 17 3 17 5 V11 H17.5 V7.5 C17.5 5.5 20.5 5.5 20.5 7.5 "
+    "V14 C20.5 17 18.5 19.5 18 21 Z'/></svg>";
+  SDL_IOStream *stream = SDL_IOFromConstMem(svg, sizeof(svg) - 1);
+  if (!stream) return NULL;
+  SDL_Surface *surface = IMG_LoadSVG_IO(stream);
+  SDL_CloseIO(stream);
+  if (!surface) return NULL;
+  stream = SDL_IOFromConstMem(svg, sizeof(svg) - 1);
+  if (stream) {
+    SDL_Surface *large = IMG_LoadSizedSVG_IO(stream, 48, 48);
+    SDL_CloseIO(stream);
+    if (large) {
+      SDL_AddSurfaceAlternateImage(surface, large);
+      SDL_DestroySurface(large);
+    }
+  }
+  SDL_Cursor *cursor = SDL_CreateColorCursor(surface, 12, 12);
+  SDL_DestroySurface(surface);
+  return cursor;
+}
 
 static const char *cursor_opts[] = {
   "arrow",
@@ -616,6 +642,7 @@ static const char *cursor_opts[] = {
   "hand",
   "crosshair",
   "move",
+  "grab",
   NULL
 };
 
@@ -626,8 +653,11 @@ static const int cursor_enums[] = {
   SDL_SYSTEM_CURSOR_NS_RESIZE,
   SDL_SYSTEM_CURSOR_POINTER,
   SDL_SYSTEM_CURSOR_CROSSHAIR,
-  SDL_SYSTEM_CURSOR_MOVE
+  SDL_SYSTEM_CURSOR_MOVE,
+  -1
 };
+
+static SDL_Cursor *cursor_cache[SDL_arraysize(cursor_enums)];
 
 static int f_set_cursor(lua_State *L) {
 #if defined(_WIN32)
@@ -637,10 +667,10 @@ static int f_set_cursor(lua_State *L) {
 #endif
   int opt = luaL_checkoption(L, 1, "arrow", cursor_opts);
   int n = cursor_enums[opt];
-  SDL_Cursor *cursor = cursor_cache[n];
+  SDL_Cursor *cursor = cursor_cache[opt];
   if (!cursor) {
-    cursor = SDL_CreateSystemCursor(n);
-    cursor_cache[n] = cursor;
+    cursor = n < 0 ? create_grab_cursor() : SDL_CreateSystemCursor(n);
+    cursor_cache[opt] = cursor;
   }
   SDL_SetCursor(cursor);
   return 0;

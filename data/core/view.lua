@@ -28,7 +28,7 @@ local Scrollbar = require "core.scrollbar"
 ---@field w core.view.thumbtrackwidth
 ---@field h core.view.thumbtrack
 
----@alias core.view.cursor "'arrow'" | "'ibeam'" | "'sizeh'" | "'sizev'" | "'hand'"
+---@alias core.view.cursor "'arrow'" | "'ibeam'" | "'sizeh'" | "'sizev'" | "'hand'" | "'grab'" | "'move'" | "'crosshair'"
 
 ---@alias core.view.mousebutton "'left'" | "'middle'" | "'right'" | "'x'" | "'y'"
 

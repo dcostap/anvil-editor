@@ -41,6 +41,7 @@ local benchmark = {
   lifecycle_file = env_string("ANVIL_PERF_BENCHMARK_LIFECYCLE"),
   screenshot_file = env_string("ANVIL_PERF_BENCHMARK_SCREENSHOT"),
   raster_metadata_file = env_string("ANVIL_PERF_BENCHMARK_RASTER_METADATA"),
+  image_metadata_file = env_string("ANVIL_PERF_BENCHMARK_IMAGE_METADATA"),
   capture_frames = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_CAPTURE_FRAMES", 3))),
   capture_settle_frames = math.max(0, math.floor(env_number("ANVIL_PERF_BENCHMARK_CAPTURE_SETTLE_FRAMES", 5))),
   warmup_frames = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_WARMUP_FRAMES", 120))),
@@ -296,6 +297,93 @@ end
 
 local FontRasterView = View:extend()
 
+local function open_image_viewer_scene()
+  local ImageView = require "core.imageview"
+  local scene = View()
+  local image = canvas.new(1200, 800, { 0, 0, 0, 0 }, true)
+  image:draw_rect(80, 80, 680, 440, { 45, 140, 220, 255 }, true)
+  image:draw_rect(480, 260, 620, 460, { 245, 160, 70, 180 }, true)
+  for i = 0, 15 do
+    image:draw_rect(120 + i * 24, 130, 12, 300, { 245, 250, 255, 255 }, true)
+  end
+  scene.main = ImageView()
+  scene.preview = ImageView()
+  scene.main:set_image(image, "Image Zoom")
+  scene.preview:set_image(image, "Image preview")
+  function scene:get_name() return "Image Viewer" end
+  function scene:update()
+    local pad = style.padding.x * 2
+    local gap = style.padding.x * 3
+    local header = style.font:get_height() + style.padding.y * 2
+    local available = self.size.x - pad * 2 - gap
+    self.main.position.x, self.main.position.y = self.position.x + pad, self.position.y + header
+    self.main.size.x, self.main.size.y = available * 0.65, self.size.y - header - pad
+    self.preview.position.x = self.main.position.x + self.main.size.x + gap
+    self.preview.position.y = self.main.position.y
+    self.preview.size.x, self.preview.size.y = available * 0.35, self.main.size.y
+    self.main:update()
+    self.preview:update()
+    if self.main.size.x > 0 and not self.ready then
+      local transitions = config.transitions
+      config.transitions = false
+      self.main:zoom_reset()
+      local x = self.main.position.x + self.main.size.x / 2
+      local y = self.main.position.y + self.main.size.y / 2
+      self.main:on_mouse_pressed("left", x, y, 1)
+      self.main:on_mouse_moved(x + 70, y + 35, 70, 35)
+      self.main:on_mouse_released("left", x + 70, y + 35)
+      self.main:on_mouse_left()
+      config.transitions = transitions
+      self.ready = true
+    end
+  end
+  function scene:draw()
+    self:draw_background(style.background2)
+    renderer.draw_text(style.font, "Actual size · panned and clipped", self.main.position.x, self.position.y, style.text)
+    renderer.draw_text(style.font, "Preview · fit", self.preview.position.x, self.position.y, style.text)
+    self.main:draw()
+    self.preview:draw()
+  end
+  require("core.panes").place(function() return scene end, {
+    placement = "current", focus = true, reason = "perf-image-viewer",
+  })
+  return scene
+end
+
+local function open_image_filtering_scene()
+  local scene = View()
+  local stripes = canvas.new(512, 512, { 255, 255, 255, 255 }, true)
+  for x = 0, 510, 2 do stripes:draw_rect(x, 0, 1, 512, { 0, 0, 0, 255 }, true) end
+  stripes:render()
+  local colors = canvas.new(2, 1, { 255, 0, 0, 255 }, true)
+  colors:draw_rect(1, 0, 1, 1, { 0, 0, 255, 255 }, true)
+  colors:render()
+  local alpha = canvas.new(2, 1, { 255, 0, 0, 255 }, true)
+  alpha:draw_rect(1, 0, 1, 1, { 0, 0, 255, 0 }, true)
+  alpha:render()
+  function scene:get_name() return "Image Filtering" end
+  function scene:draw()
+    self:draw_background({ 255, 255, 255, 255 })
+    renderer.draw_canvas_scaled(stripes, 80, 140, 64, 64)
+    renderer.draw_canvas_scaled(colors, 200, 140, 129, 64)
+    renderer.draw_canvas_scaled(alpha, 400, 140, 129, 64)
+    renderer.draw_canvas(stripes, 80, 280)
+    renderer.draw_text(style.font, "Reduced detail · color blend · transparent edge", 80, 100, { 0, 0, 0, 255 })
+    renderer.draw_text(style.font, "Actual size keeps source pixels", 80, 240, { 0, 0, 0, 255 })
+  end
+  assert(write_atomic(benchmark.image_metadata_file,
+    "name,x,y,r,g,b\n"
+    .. "reduced-stripes,112,172,128,128,128\n"
+    .. "color-blend,264,172,128,0,128\n"
+    .. "transparent-edge,464,172,255,128,128\n"
+    .. "source-black,100,300,0,0,0\n"
+    .. "source-white,101,300,255,255,255\n"))
+  require("core.panes").place(function() return scene end, {
+    placement = "current", focus = true, reason = "perf-image-filtering",
+  })
+  return scene
+end
+
 local FONT_RASTER_PATH = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-SemiLight.ttf"
 local FONT_RASTER_REGULAR_PATH = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
 local FONT_RASTER_RUN = string.rep("─", 36)
@@ -490,6 +578,10 @@ local function setup_scenario()
   setup_tabs(view)
   if benchmark.scenario == "renderer-primitives" then
     view = open_primitive_view()
+  elseif benchmark.scenario == "image-viewer" then
+    view = open_image_viewer_scene()
+  elseif benchmark.scenario == "image-filtering" then
+    view = open_image_filtering_scene()
   elseif benchmark.scenario == "font-raster-correctness" then
     view = open_font_raster_view()
   elseif benchmark.scenario == "filetree-edit-repeat" then

@@ -7,6 +7,7 @@ Texture2D tex5 : register(t5);
 Texture2D tex6 : register(t6);
 Texture2D tex7 : register(t7);
 SamplerState smp0 : register(s0);
+SamplerState image_sampler : register(s1);
 cbuffer QuadConstants : register(b0) { float2 viewport; float2 _pad; };
 
 struct VSIn {
@@ -66,6 +67,17 @@ float4 sample_quad_texture(float slot, float2 uv) {
   return tex7.Sample(smp0, uv);
 }
 
+float4 sample_image_texture(float slot, float2 uv) {
+  if (slot < 0.5f) return tex0.Sample(image_sampler, uv);
+  if (slot < 1.5f) return tex1.Sample(image_sampler, uv);
+  if (slot < 2.5f) return tex2.Sample(image_sampler, uv);
+  if (slot < 3.5f) return tex3.Sample(image_sampler, uv);
+  if (slot < 4.5f) return tex4.Sample(image_sampler, uv);
+  if (slot < 5.5f) return tex5.Sample(image_sampler, uv);
+  if (slot < 6.5f) return tex6.Sample(image_sampler, uv);
+  return tex7.Sample(image_sampler, uv);
+}
+
 PSOut ps_main(VSOut input) {
   PSOut output;
   if (input.style.x > 3.5f) {
@@ -83,6 +95,13 @@ PSOut ps_main(VSOut input) {
   if (input.style.x > 2.5f) {
     float a = input.color.a;
     output.color = float4(input.color.rgb * a, a);
+    output.coverage = float4(a, a, a, a);
+    return output;
+  }
+  if (input.style.z > 0.5f) {
+    float4 s = sample_image_texture(input.style.y, input.uv);
+    float a = s.a * input.color.a;
+    output.color = float4(s.rgb * input.color.rgb * input.color.a, a);
     output.coverage = float4(a, a, a, a);
     return output;
   }
