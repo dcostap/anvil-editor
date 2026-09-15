@@ -6314,6 +6314,11 @@ function FSView:start_current_buffer_symbol_search(query, reset_selection)
   local gen = symbol_generation
   local limit = self:max_result_limit()
   query = trim_query(query)
+  if query == "" then
+    if reset_selection then self.current_buffer_caret_selection_pending = true end
+  else
+    self.current_buffer_caret_selection_pending = false
+  end
   self:defer_loading_feedback("Finding current Buffer symbols…", {
     clear_results = true,
     reset_selection = reset_selection,
@@ -6337,11 +6342,12 @@ function FSView:start_current_buffer_symbol_search(query, reset_selection)
       set_symbol_results(self, query, results, "current Buffer", status, reason, limit, {
         scope = "buffer",
         buffer = buffer,
-        select_preceding_position = query == "" and reset_selection and {
+        select_preceding_position = query == "" and self.current_buffer_caret_selection_pending and {
           line = self.source_file_line,
           col = self.source_file_col,
         } or nil,
       })
+      self.current_buffer_caret_selection_pending = false
       if #self.results == 0 and reason then self.status = "No current Buffer symbols: " .. tostring(reason) end
     else
       self:cancel_deferred_loading_feedback()

@@ -33,8 +33,9 @@ local function remove_buffer(buffer)
   end
 end
 
-local function open_editor(context, text)
+local function open_editor(context, text, filename)
   local buffer = track(context, "buffers", core.open_buffer())
+  if filename then buffer:set_filename(filename, nil) end
   if text and text ~= "" then buffer:text_input(text) end
   local view = track(context, "views", panes.place(function() return Editor(buffer) end,
     { placement = "new", focus = true }))
@@ -168,7 +169,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.same({ picker.input.textview.buffer:get_selection() }, { 1, 2, 1, 2 })
   end)
 
-  test.it("selects the nearest preceding symbol when Current Buffer Symbol Search opens blank", function(context)
+  test.it("keeps the caret-based default when blank Current Buffer Symbol Search loading restarts", function(context)
     local view, buffer = open_editor(context, ("line\n"):rep(24))
     buffer:set_selection(15, 4, 15, 4)
     core.set_active_view(view)
@@ -185,9 +186,31 @@ test.describe("Fuzzy Searcher mode switching", function()
 
     fuzzy_searcher.open("$$")
     local picker = core.fuzzy_searcher_active_view
+    picker:start_current_buffer_symbol_search("", false)
 
     test.ok(wait_until(function() return #(picker.results or {}) == 3 end))
     test.equal(picker:selected_result().label, "nearest")
+  end)
+
+  test.it("selects the nearest Markdown heading above the caret", function(context)
+    local view, buffer = open_editor(context, table.concat({
+      "# First",
+      "text",
+      "text",
+      "# Nearest",
+      "- [ ] task",
+      "- [ ] caret here",
+      "# Following",
+      "text",
+    }, "\n"), "current-buffer-symbol-search.md")
+    buffer:set_selection(6, 8, 6, 8)
+    core.set_active_view(view)
+
+    fuzzy_searcher.open("$$")
+    local picker = core.fuzzy_searcher_active_view
+
+    test.ok(wait_until(function() return #(picker.results or {}) == 3 end))
+    test.equal(picker:selected_result().label, "Nearest")
   end)
 
   test.it("preserves prompt text, replaces the mode prefix, and selects the query when another fuzzy mode is opened", function(context)
