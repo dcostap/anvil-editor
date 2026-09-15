@@ -4,8 +4,18 @@ local style = require "core.style"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
+local symbol_index = require "core.treesitter.symbol_index"
 local Editor = require "core.editor"
 local panes = require "core.panes"
+
+local function wait_until(predicate, timeout)
+  local deadline = system.get_time() + (timeout or 3)
+  while system.get_time() < deadline do
+    if predicate() then return true end
+    coroutine.yield(0.03)
+  end
+  return predicate()
+end
 
 local function track(context, kind, value)
   context[kind] = context[kind] or {}
@@ -71,6 +81,9 @@ test.describe("Fuzzy Searcher mode switching", function()
   end)
 
   test.after_each(function(context)
+    if context.original_current_buffer_symbols then
+      symbol_index.current_buffer_symbols = context.original_current_buffer_symbols
+    end
     if core.fuzzy_searcher_active_view then
       core.fuzzy_searcher_active_view:close()
     end
@@ -153,6 +166,28 @@ test.describe("Fuzzy Searcher mode switching", function()
     local picker = core.fuzzy_searcher_active_view
 
     test.same({ picker.input.textview.buffer:get_selection() }, { 1, 2, 1, 2 })
+  end)
+
+  test.it("selects the nearest preceding symbol when Current Buffer Symbol Search opens blank", function(context)
+    local view, buffer = open_editor(context, ("line\n"):rep(24))
+    buffer:set_selection(15, 4, 15, 4)
+    core.set_active_view(view)
+
+    context.original_current_buffer_symbols = symbol_index.current_buffer_symbols
+    symbol_index.current_buffer_symbols = function(_, query)
+      test.equal(query, "")
+      return {
+        { name = "first", kind = "function", start_line = 2, start_col = 1 },
+        { name = "nearest", kind = "function", start_line = 10, start_col = 1 },
+        { name = "following", kind = "function", start_line = 20, start_col = 1 },
+      }, nil, "fresh"
+    end
+
+    fuzzy_searcher.open("$$")
+    local picker = core.fuzzy_searcher_active_view
+
+    test.ok(wait_until(function() return #(picker.results or {}) == 3 end))
+    test.equal(picker:selected_result().label, "nearest")
   end)
 
   test.it("preserves prompt text, replaces the mode prefix, and selects the query when another fuzzy mode is opened", function(context)

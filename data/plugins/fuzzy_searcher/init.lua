@@ -3474,14 +3474,24 @@ function FSView:new(prefix, opts)
   local source_view = opts.source_view or core.active_view
   local source_buffer = source_view and source_view.buffer
   local source_target = file_context.view_path_target(source_view)
+  local source_selection_line, source_selection_col
+  if source_buffer and source_buffer.get_selection then
+    local function get_selection() return source_buffer:get_selection(false) end
+    if source_view.with_selection_state then
+      source_selection_line, source_selection_col = source_view:with_selection_state(get_selection)
+    else
+      source_selection_line, source_selection_col = get_selection()
+    end
+  end
   self.source_view = file_context.current_content_view(source_view) or source_view
   self.source_pane = opts.source_pane or panes.pane_for_view(source_view) or panes.active()
   self.source_buffer = source_buffer
   self.source_file_path = source_target and source_target.path
   self.source_context_path = file_context.view_context_path(source_view)
   self.source_file_line = source_target and source_target.line
-    or source_buffer and source_buffer:get_selection(false)
+    or source_selection_line
     or 1
+  self.source_file_col = source_selection_col or 1
   self.palette_commands = {}
   self.palette_command_set = {}
   for _, name in ipairs(command.get_all_valid()) do
@@ -6135,7 +6145,20 @@ local function set_symbol_results(view, query, results, source_label, status, re
     end
   end
   view.results = out
-  view.selected = common.clamp(view.selected or 1, 1, math.max(1, #out))
+  local selected = view.selected or 1
+  local target = opts.select_preceding_position
+  if target then
+    local best_line, best_col
+    for index, result in ipairs(out) do
+      local line, col = tonumber(result.line) or 1, tonumber(result.col) or 1
+      local precedes = line < target.line or (line == target.line and col <= target.col)
+      local is_nearer = not best_line or line > best_line or (line == best_line and col > best_col)
+      if precedes and is_nearer then
+        selected, best_line, best_col = index, line, col
+      end
+    end
+  end
+  view.selected = common.clamp(selected, 1, math.max(1, #out))
   view:ensure_selection_visible()
   if status == "fresh" or status == "stale" then
     local count = #out
@@ -6311,7 +6334,14 @@ function FSView:start_current_buffer_symbol_search(query, reset_selection)
     local ts_symbols = require "core.treesitter.symbol_index"
     local results, reason, status = ts_symbols.current_buffer_symbols(buffer, query, { limit = limit + 1 })
     if status == "fresh" or status == "stale" then
-      set_symbol_results(self, query, results, "current Buffer", status, reason, limit, { scope = "buffer", buffer = buffer })
+      set_symbol_results(self, query, results, "current Buffer", status, reason, limit, {
+        scope = "buffer",
+        buffer = buffer,
+        select_preceding_position = query == "" and reset_selection and {
+          line = self.source_file_line,
+          col = self.source_file_col,
+        } or nil,
+      })
       if #self.results == 0 and reason then self.status = "No current Buffer symbols: " .. tostring(reason) end
     else
       self:cancel_deferred_loading_feedback()
