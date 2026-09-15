@@ -108,15 +108,7 @@ function ImageView:scale_image()
 
   local img_w, img_h = self.image:get_size()
   if self.zoom_mode == "fit" then
-    if img_w < self.size.x then
-      self.zoom_scale = 1
-    else
-      self.zoom_scale = math.min(self.size.x / img_w, self.size.y / img_h)
-      self.zoom_scale = self.zoom_scale - 0.01
-      if self.zoom_scale > 1 then
-        self.zoom_scale = 1
-      end
-    end
+    self.zoom_scale = math.min(1, self.size.x / img_w, self.size.y / img_h)
   end
 
   -- the renderer cache cells can not handle more than 8k so we limit the
@@ -127,8 +119,10 @@ function ImageView:scale_image()
   local max_scale = math.min(max_scale_w, max_scale_h)
   if self.zoom_scale > max_scale then self.zoom_scale = max_scale end
 
-  self.zoom_scale = tonumber(string.format("%.2f", self.zoom_scale))
-    or self.zoom_scale
+  if self.zoom_mode ~= "fit" then
+    self.zoom_scale = tonumber(string.format("%.2f", self.zoom_scale))
+      or self.zoom_scale
+  end
 
   local new_w = math.floor(img_w * self.zoom_scale)
   local new_h = math.floor(img_h * self.zoom_scale)
