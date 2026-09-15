@@ -219,8 +219,10 @@ function ImageView:update_cursor()
   local hovered = control and control.action
   if self.hovered_control ~= hovered then core.redraw = true end
   self.hovered_control = hovered
-  self.cursor = (self.mouse_pressed or control and control.action) and "hand"
-    or (self.mouse.x and self:contains_image(self.mouse.x, self.mouse.y)) and "crosshair" or "arrow"
+  local cursor = self.mouse_pressed and "move" or (control and control.action) and "hand"
+    or (self.mouse.x and self:contains_image(self.mouse.x, self.mouse.y)) and "grab" or "arrow"
+  if self.cursor ~= cursor then core.redraw = true end
+  self.cursor = cursor
 end
 
 function ImageView:on_mouse_pressed(button, x, y, clicks)
@@ -237,6 +239,7 @@ function ImageView:on_mouse_pressed(button, x, y, clicks)
     self.mouse_pressed = self.width > self.size.x or self.height > self.size.y
   end
   self:update_cursor()
+  core.request_cursor(self.cursor)
   return true
 end
 
@@ -245,6 +248,7 @@ function ImageView:on_mouse_released(button, x, y)
   if button ~= "left" then return false end
   self.mouse_pressed = false
   self:update_cursor()
+  core.request_cursor(self.cursor)
   return true
 end
 

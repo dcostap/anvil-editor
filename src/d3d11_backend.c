@@ -163,6 +163,7 @@ typedef struct D3D11State {
   ID3D11Buffer *quad_vbuf;
   ID3D11Buffer *quad_cbuf;
   ID3D11SamplerState *quad_sampler;
+  ID3D11SamplerState *image_sampler;
   D3D11QuadInstance *quad_instances;
   int quad_instance_count;
   int quad_instance_capacity;
@@ -702,7 +703,7 @@ fail:
 
 static bool d3d11_ensure_quad_pipeline(D3D11SetupStats *setup_stats) {
   if (g_d3d11.quad_vs && g_d3d11.quad_ps && g_d3d11.quad_layout &&
-      g_d3d11.quad_vbuf && g_d3d11.quad_cbuf && g_d3d11.quad_sampler) {
+      g_d3d11.quad_vbuf && g_d3d11.quad_cbuf && g_d3d11.quad_sampler && g_d3d11.image_sampler) {
     return true;
   }
 
@@ -770,12 +771,16 @@ static bool d3d11_ensure_quad_pipeline(D3D11SetupStats *setup_stats) {
   sdesc.MaxLOD = D3D11_FLOAT32_MAX;
   hr = g_d3d11.device->lpVtbl->CreateSamplerState(g_d3d11.device, &sdesc, &g_d3d11.quad_sampler);
   if (FAILED(hr)) goto fail;
+  sdesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+  hr = g_d3d11.device->lpVtbl->CreateSamplerState(g_d3d11.device, &sdesc, &g_d3d11.image_sampler);
+  if (FAILED(hr)) goto fail;
   QueryPerformanceCounter(&end);
   if (setup_stats) setup_stats->quad_pipeline_resources_ms = d3d11_ms_between(start, end);
 
   return true;
 
 fail:
+  SAFE_RELEASE(g_d3d11.image_sampler);
   SAFE_RELEASE(g_d3d11.quad_sampler);
   SAFE_RELEASE(g_d3d11.quad_cbuf);
   SAFE_RELEASE(g_d3d11.quad_vbuf);
@@ -1290,12 +1295,17 @@ static bool d3d11_recreate_cached_texture(D3D11CachedTexture *t, SDL_Surface *su
   memset(&desc, 0, sizeof(desc));
   desc.Width = (UINT)t->width;
   desc.Height = (UINT)t->height;
-  desc.MipLevels = 1;
+  bool image = mode == ANVIL_D3D11_IMAGE_TEXTURE;
+  desc.MipLevels = image ? 0 : 1;
   desc.ArraySize = 1;
   desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
   desc.SampleDesc.Count = 1;
   desc.Usage = D3D11_USAGE_DEFAULT;
   desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+  if (image) {
+    desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
+    desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+  }
   HRESULT hr = g_d3d11.device->lpVtbl->CreateTexture2D(g_d3d11.device, &desc, NULL, &t->texture);
   if (FAILED(hr)) return false;
 
@@ -1303,7 +1313,7 @@ static bool d3d11_recreate_cached_texture(D3D11CachedTexture *t, SDL_Surface *su
   memset(&sdesc, 0, sizeof(sdesc));
   sdesc.Format = desc.Format;
   sdesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-  sdesc.Texture2D.MipLevels = 1;
+  sdesc.Texture2D.MipLevels = image ? (UINT)-1 : 1;
   hr = g_d3d11.device->lpVtbl->CreateShaderResourceView(g_d3d11.device,
                                                          (ID3D11Resource *)t->texture,
                                                          &sdesc, &t->srv);
@@ -1367,6 +1377,12 @@ static bool d3d11_update_cached_texture(D3D11CachedTexture *t, SDL_Surface *surf
           dst[2] = bpp > 2 ? p[2] : 255;
           dst[3] = bpp > 3 ? p[3] : 255;
         }
+        if (mode == ANVIL_D3D11_IMAGE_TEXTURE) {
+          /* Filter coverage with color so transparent pixels cannot add halos. */
+          for (int channel = 0; channel < 3; channel++) {
+            dst[channel] = (uint8_t)((dst[channel] * dst[3] + 127) / 255);
+          }
+        }
       }
     }
   }
@@ -1374,6 +1390,9 @@ static bool d3d11_update_cached_texture(D3D11CachedTexture *t, SDL_Surface *surf
   g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context,
                                              (ID3D11Resource *)t->texture,
                                              0, NULL, rgba, (UINT)(width * 4), 0);
+  if (mode == ANVIL_D3D11_IMAGE_TEXTURE) {
+    g_d3d11.context->lpVtbl->GenerateMips(g_d3d11.context, t->srv);
+  }
   g_d3d11.stats.frame.texture_uploads++;
   g_d3d11.stats.frame.texture_upload_bytes += rgba_size;
   t->last_update_frame = update_key;
@@ -1518,7 +1537,8 @@ static bool d3d11_flush_quads(void) {
   g_d3d11.context->lpVtbl->VSSetShader(g_d3d11.context, g_d3d11.quad_vs, NULL, 0);
   g_d3d11.context->lpVtbl->VSSetConstantBuffers(g_d3d11.context, 0, 1, &g_d3d11.quad_cbuf);
   g_d3d11.context->lpVtbl->PSSetShader(g_d3d11.context, g_d3d11.quad_ps, NULL, 0);
-  g_d3d11.context->lpVtbl->PSSetSamplers(g_d3d11.context, 0, 1, &g_d3d11.quad_sampler);
+  ID3D11SamplerState *samplers[] = { g_d3d11.quad_sampler, g_d3d11.image_sampler };
+  g_d3d11.context->lpVtbl->PSSetSamplers(g_d3d11.context, 0, 2, samplers);
   g_d3d11.context->lpVtbl->RSSetState(g_d3d11.context, g_d3d11.raster);
   g_d3d11.context->lpVtbl->OMSetBlendState(g_d3d11.context, g_d3d11.blend, blend_factor, 0xffffffffu);
 
@@ -1676,7 +1696,9 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
   float cg = color.g / 255.0f;
   float cb = color.b / 255.0f;
   float ca = color.a / 255.0f;
-  D3D11QuadInstance inst = { cx0, cy0, cx1, cy1, u0, v0, u1, v1, cr, cg, cb, ca, (float)mode, 0, 0, 0 };
+  bool image = mode == ANVIL_D3D11_IMAGE_TEXTURE;
+  D3D11QuadInstance inst = { cx0, cy0, cx1, cy1, u0, v0, u1, v1, cr, cg, cb, ca,
+    image ? 2.0f : (float)mode, 0, image ? 1.0f : 0.0f, 0 };
 
   bool result = d3d11_queue_quad(tex->srv, &inst, true);
   if (measure) {
@@ -1985,6 +2007,7 @@ void anvil_d3d11_shutdown(void) {
   free(g_d3d11.texture_upload_scratch);
   g_d3d11.texture_upload_scratch = NULL;
   g_d3d11.texture_upload_scratch_capacity = 0;
+  SAFE_RELEASE(g_d3d11.image_sampler);
   SAFE_RELEASE(g_d3d11.quad_sampler);
   SAFE_RELEASE(g_d3d11.quad_cbuf);
   SAFE_RELEASE(g_d3d11.quad_vbuf);

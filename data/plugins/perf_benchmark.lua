@@ -41,6 +41,7 @@ local benchmark = {
   lifecycle_file = env_string("ANVIL_PERF_BENCHMARK_LIFECYCLE"),
   screenshot_file = env_string("ANVIL_PERF_BENCHMARK_SCREENSHOT"),
   raster_metadata_file = env_string("ANVIL_PERF_BENCHMARK_RASTER_METADATA"),
+  image_metadata_file = env_string("ANVIL_PERF_BENCHMARK_IMAGE_METADATA"),
   capture_frames = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_CAPTURE_FRAMES", 3))),
   capture_settle_frames = math.max(0, math.floor(env_number("ANVIL_PERF_BENCHMARK_CAPTURE_SETTLE_FRAMES", 5))),
   warmup_frames = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_WARMUP_FRAMES", 120))),
@@ -349,6 +350,40 @@ local function open_image_viewer_scene()
   return scene
 end
 
+local function open_image_filtering_scene()
+  local scene = View()
+  local stripes = canvas.new(512, 512, { 255, 255, 255, 255 }, true)
+  for x = 0, 510, 2 do stripes:draw_rect(x, 0, 1, 512, { 0, 0, 0, 255 }, true) end
+  stripes:render()
+  local colors = canvas.new(2, 1, { 255, 0, 0, 255 }, true)
+  colors:draw_rect(1, 0, 1, 1, { 0, 0, 255, 255 }, true)
+  colors:render()
+  local alpha = canvas.new(2, 1, { 255, 0, 0, 255 }, true)
+  alpha:draw_rect(1, 0, 1, 1, { 0, 0, 255, 0 }, true)
+  alpha:render()
+  function scene:get_name() return "Image Filtering" end
+  function scene:draw()
+    self:draw_background({ 255, 255, 255, 255 })
+    renderer.draw_canvas_scaled(stripes, 80, 140, 64, 64)
+    renderer.draw_canvas_scaled(colors, 200, 140, 129, 64)
+    renderer.draw_canvas_scaled(alpha, 400, 140, 129, 64)
+    renderer.draw_canvas(stripes, 80, 280)
+    renderer.draw_text(style.font, "Reduced detail · color blend · transparent edge", 80, 100, { 0, 0, 0, 255 })
+    renderer.draw_text(style.font, "Actual size keeps source pixels", 80, 240, { 0, 0, 0, 255 })
+  end
+  assert(write_atomic(benchmark.image_metadata_file,
+    "name,x,y,r,g,b\n"
+    .. "reduced-stripes,112,172,128,128,128\n"
+    .. "color-blend,264,172,128,0,128\n"
+    .. "transparent-edge,464,172,255,128,128\n"
+    .. "source-black,100,300,0,0,0\n"
+    .. "source-white,101,300,255,255,255\n"))
+  require("core.panes").place(function() return scene end, {
+    placement = "current", focus = true, reason = "perf-image-filtering",
+  })
+  return scene
+end
+
 local FONT_RASTER_PATH = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-SemiLight.ttf"
 local FONT_RASTER_REGULAR_PATH = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
 local FONT_RASTER_RUN = string.rep("─", 36)
@@ -545,6 +580,8 @@ local function setup_scenario()
     view = open_primitive_view()
   elseif benchmark.scenario == "image-viewer" then
     view = open_image_viewer_scene()
+  elseif benchmark.scenario == "image-filtering" then
+    view = open_image_filtering_scene()
   elseif benchmark.scenario == "font-raster-correctness" then
     view = open_font_raster_view()
   elseif benchmark.scenario == "filetree-edit-repeat" then

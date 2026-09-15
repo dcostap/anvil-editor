@@ -140,6 +140,10 @@ case.
 Use `--scenario image-viewer` for image controls, transparency, a fit preview, and a clipped pan at actual size.
 This focused scene is not in the default suites. It does not yet have a full-suite performance baseline.
 
+Use `--scenario image-filtering --renderer d3d11` to check image sampling through captured pixels.
+The check covers reduced fine detail, enlarged color transitions, transparent edges, and unchanged pixels at actual size.
+It uses independent expected colors, not a visual golden, to test filtering behavior.
+
 The prior Edge comparison showed continuity at 15, 16, 18, and 24 ppem. It did
 not establish the first stable DirectWrite size. That threshold remains
 unverified. The report gives Anvil's first stable sampled fixture size only.

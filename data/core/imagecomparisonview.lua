@@ -142,12 +142,14 @@ function ImageComparisonView:on_mouse_released(button, x, y)
   self.drag_view = nil
   if not view then return false end
   view:on_mouse_released(button, x, y)
+  self.cursor = view.cursor
   self:sync_from(view)
   return true
 end
 
 function ImageComparisonView:on_mouse_left()
   self.drag_view = nil
+  self.cursor = "arrow"
   if self.left_view then self.left_view:on_mouse_left() end
   if self.right_view then self.right_view:on_mouse_left() end
   return ImageComparisonView.super.on_mouse_left(self)

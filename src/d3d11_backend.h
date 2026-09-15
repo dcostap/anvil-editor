@@ -6,6 +6,9 @@
 #include <SDL3/SDL.h>
 #include "renderer.h"
 
+/* Glyph texture modes remain 0..2. Images use filtered, premultiplied mipmaps. */
+enum { ANVIL_D3D11_IMAGE_TEXTURE = 3 };
+
 #if defined(_WIN32) && defined(ANVIL_USE_SDL_RENDERER)
 /* Runtime renderer selection is controlled by ANVIL_RENDERER.
    Default/unset: D3D11 command renderer. Set ANVIL_RENDERER=software
