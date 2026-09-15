@@ -4063,6 +4063,17 @@ local function draw_view_in_rect(view, x, y, w, h, result)
   renderer.set_clip_rect(rx, ry, rw, rh)
 end
 
+-- Automatic previews must not build text layouts for extreme source lines.
+function FSView:preview_line_limit_reason(buffer)
+  for line, text in ipairs(buffer.lines) do
+    if #text > 16 * 1024 then
+      core.log_quiet("Fuzzy Searcher preview skipped: %s line %d has %d bytes",
+        buffer:get_name(), line, #text)
+      return "Line too long to preview. Open the result to view the file."
+    end
+  end
+end
+
 function FSView:prepare_historical_preview(result)
   local historical = require "plugins.git.historical_buffer"
   local key = historical.key(result.repo, result.revision, result.revision_path)
@@ -4091,6 +4102,12 @@ function FSView:prepare_historical_preview(result)
           )
         end
         if buffer then
+          local reason = self:preview_line_limit_reason(buffer)
+          if reason then
+            self.preview_blocked = { reason = reason, path = result.file }
+            self:schedule_update(true)
+            return
+          end
           buffer.disable_gitdiff_highlight = true
           self.preview_view = PreviewTextView(buffer)
           self.preview_view:set_wrapping_enabled(false)
@@ -4152,6 +4169,12 @@ function FSView:update_preview_view()
         self.preview_blocked = { reason = "Cannot open file", path = path }
         return nil
       end
+      local reason = self:preview_line_limit_reason(buffer)
+      if reason then
+        self.preview_key = key
+        self.preview_blocked = { reason = reason, path = path }
+        return nil
+      end
       buffer.read_only = true
       buffer.read_only_reason = "Fuzzy Searcher previews are read-only"
       view = PreviewTextView(buffer)
@@ -4162,6 +4185,7 @@ function FSView:update_preview_view()
   end
 
   view = self.preview_view
+  if not view then return nil end
   local px, py, pw, ph = self:preview_bounds()
   view.position.x, view.position.y = px, py
   view.size.x, view.size.y = math.max(0, pw), math.max(0, ph)

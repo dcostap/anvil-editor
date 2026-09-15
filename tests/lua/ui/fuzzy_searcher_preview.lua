@@ -284,6 +284,31 @@ test.describe("Fuzzy Searcher preview", function()
     test.equal(preview:is_wrapping_enabled(), false)
   end)
 
+  test.it("keeps extreme lines out of automatic previews and preserves search results", function(context)
+    local path = temp_file_path("fuzzy-preview-minified-test.js")
+    local normal = temp_file_path("fuzzy-preview-normal-test.txt")
+    context.files = { path, normal }
+    write_file(path, "header\n" .. string.rep("x", 1024 * 1024) .. "_lg\n")
+    write_file(normal, "_lg\n")
+    fuzzy_searcher.open("#")
+    local picker = core.fuzzy_searcher_active_view
+    local result = { kind = "grep", file = path, line = 2,
+      grep_query = "_lg", exact = true, text = "_lg" }
+    picker.results = { result, { kind = "grep", file = normal, line = 1,
+      grep_query = "_lg", exact = true, text = "_lg" } }
+    picker.selected = 1
+
+    test.equal(picker:update_preview_view(), nil)
+    test.ok(picker.preview_blocked and picker.preview_blocked.reason)
+    test.equal(picker:selected_result(), result)
+    result.grep_query = "_l"
+    test.equal(picker:update_preview_view(), nil)
+
+    picker.selected = 2
+    test.ok(picker:update_preview_view(), "normal results must still show a preview")
+    test.equal(picker.preview_blocked, nil)
+  end)
+
   test.it("updates the selected file preview before drawing", function(context)
     local path = temp_file_path("fuzzy-preview-update-phase-test.txt")
     context.files = { path }
