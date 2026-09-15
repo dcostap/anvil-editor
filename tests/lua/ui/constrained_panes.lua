@@ -94,6 +94,21 @@ test.describe("Constrained Panes", function()
     test.equal(panes.count(), 2)
   end)
 
+  test.it("reuses an activity without replacing a non-suspendable unrelated View", function()
+    local owner = {}
+    local activity = panes.create { factory = function() return view(owner) end }
+    local original = view()
+    function original:can_suspend() return false end
+    local other = panes.create { factory = function() return original end }
+    local related = view(owner)
+    local opened, destination = panes.place(function() return related end, { pane = other })
+    test.equal(opened, related)
+    test.equal(destination, activity)
+    test.equal(other.current_view, original)
+    test.equal(panes.count(), 2)
+    test.ok(panes.validate())
+  end)
+
   test.it("restores a constrained activity and its current capture together", function()
     local owner = {}
     local original = view(owner)

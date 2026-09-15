@@ -1317,14 +1317,6 @@ function M.replace_view(target, factory, opts)
   if suspendable or M.constraint(pane) then
     local view, err = construct_view(factory)
     if not view then return nil, err end
-    if M.accepts(pane, view) then
-      local result, present_err = M.present(view, { pane = pane, focus = opts.focus })
-      return result and view or nil, present_err
-    end
-    if suspendable and #collect_owned_views(pane) == 1 then
-      commit_replacement(pane, old, view, opts)
-      return view
-    end
     local placed, present_err = M.present(view, { pane = pane, focus = opts.focus })
     return placed and view or nil, present_err
   end
@@ -1335,6 +1327,13 @@ function M.replace_view(target, factory, opts)
     if not view then
       old.discard_buffer_on_close = nil
       failure = err
+      return
+    end
+    if not M.accepts(pane, view) then
+      old.discard_buffer_on_close = nil
+      local placed
+      placed, failure = M.present(view, { pane = pane, focus = opts.focus })
+      result = placed and view or nil
       return
     end
     commit_replacement(pane, old, view, opts)
