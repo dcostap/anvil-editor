@@ -193,6 +193,11 @@ _Avoid_: permanent table toolbar, table context menu
 The smallest formatted Markdown construct whose source syntax becomes visible while it is being edited in Markdown Live Preview.
 _Avoid_: Raw rendering mode
 
+**Markdown Semantic Selection**:
+A selection path that grows and shrinks through visible inline content, Markdown constructs, blocks, heading sections, and the document.
+For fenced code, the path selects the code content before the complete block with its delimiters.
+_Avoid_: Raw source selection
+
 **Zoom**:
 The user-facing way to make Anvil's interface and Buffer text larger or smaller without changing Buffer contents.
 _Avoid_: Scale in user-facing command names

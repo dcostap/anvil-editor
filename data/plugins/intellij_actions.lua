@@ -10,6 +10,7 @@ local config = require "core.config"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local file_context = require "core.file_context"
+local markdown_selection = require "core.markdown.selection"
 local panes = require "core.panes"
 
 local function can_edit(dv, reason)
@@ -772,7 +773,10 @@ local function set_selection_offsets_idx(buffer, starts, idx, caret_l, caret_c, 
   end
 end
 
+local try_markdown_expand_selection
+
 local function expand_block_selection(dv)
+  if try_markdown_expand_selection(dv, true) then return end
   local buffer = dv.buffer
   local text, starts = build_text_index(buffer)
   local blocks = smart_selection_blocks(text)
@@ -991,6 +995,24 @@ local function try_treesitter_expand_selection(buffer)
   return false
 end
 
+try_markdown_expand_selection = function(dv, blocks_only)
+  local expanded, reason = markdown_selection.expand(dv, blocks_only)
+  if expanded then return true end
+  if reason ~= "not-live" and core.log_quiet then
+    core.log_quiet("Markdown semantic selection expand fallback: %s", tostring(reason))
+  end
+  return false
+end
+
+local function try_markdown_shrink_selection(dv)
+  local shrunk, reason = markdown_selection.shrink(dv)
+  if shrunk then return true end
+  if reason ~= "no-history" and core.log_quiet then
+    core.log_quiet("Markdown semantic selection shrink fallback: %s", tostring(reason))
+  end
+  return false
+end
+
 local function try_treesitter_shrink_selection(buffer)
   local ok, treesitter = pcall(require, "core.treesitter")
   if not ok or not treesitter or not treesitter.shrink_selection then return false end
@@ -1002,6 +1024,7 @@ end
 
 local function extend_smart_selection(dv)
   local buffer = dv.buffer
+  if try_markdown_expand_selection(dv, false) then return end
   if try_treesitter_expand_selection(buffer) then return end
   local text, starts = build_text_index(buffer)
   local blocks = smart_selection_blocks(text)
@@ -1038,6 +1061,7 @@ end
 
 local function shrink_smart_selection(dv)
   local buffer = dv.buffer
+  if try_markdown_shrink_selection(dv) then return end
   if try_treesitter_shrink_selection(buffer) then return end
   local key = selection_state_key(buffer)
   local history = selection_history[key]
