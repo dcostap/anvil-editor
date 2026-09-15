@@ -738,6 +738,8 @@ test.describe("Git View command", function()
     test.equal(hint[1].text, "+2")
     test.equal(hint[2].text, " −44")
     test.equal(hint[3].text, "    2K")
+    local folder_hint = list:get_line_hint(1)
+    test.equal(folder_hint[3].text, "      ")
 
     core.active_view = list
     list.buffer:set_selection(1, 1)

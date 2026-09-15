@@ -366,9 +366,11 @@ function path_tree.changed_stat_segments(stat, size)
     segments[#segments + 1] = { text = string.format("+%d", stat.additions or 0), font = font, color = style.filetree_git_line_additions }
     segments[#segments + 1] = { text = string.format(" −%d", stat.deletions or 0), font = font, color = style.filetree_git_line_deletions }
   end
-  if size ~= nil then
-    segments[#segments + 1] = { text = "  " .. path_tree.format_file_size(size), font = font, color = style.dim }
-  end
+  segments[#segments + 1] = {
+    text = size ~= nil and ("  " .. path_tree.format_file_size(size)) or "      ",
+    font = font,
+    color = style.dim,
+  }
   return segments
 end
 
