@@ -221,7 +221,7 @@ test.describe("Git Log row selection", function()
   end
 
   for _, surface in ipairs { "log-list", "details" } do
-  test.it(surface .. " paints only selectable rows without a caret, then restores the text caret", function()
+  test.it(surface .. " paints row selection for its focus state, then restores text selection", function()
     local view, list = open_log()
     if surface == "details" then
       view.model:log_tab().commits[1].changed_files = {
@@ -255,10 +255,10 @@ test.describe("Git Log row selection", function()
     renderer.draw_text = function(font, text, x, _, _, opts) return x + font:get_width(text, opts) end
     renderer.draw_rect = function(x, y, w, h, color)
       local bounds = core.clip_rect_stack[#core.clip_rect_stack]
-      if color == style.selection then
+      if color == style.selection or color == style.row_selection or color == style.row_selection_inactive then
         paints[#paints + 1] = {
           math.max(x, bounds[1]), math.max(y, bounds[2]),
-          math.min(x + w, bounds[1] + bounds[3]), math.min(y + h, bounds[2] + bounds[4]),
+          math.min(x + w, bounds[1] + bounds[3]), math.min(y + h, bounds[2] + bounds[4]), color,
         }
       end
       if color == style.caret then carets[#carets + 1] = { x, y } end
@@ -287,9 +287,30 @@ test.describe("Git Log row selection", function()
           test.ok(not selected_at(x + 1, y + list:get_line_height() / 2), "non-selectable rows must not be highlighted")
         end
       end
+      local focused_color = paints[1][5]
+      for _, paint in ipairs(paints) do
+        test.equal(paint[5], focused_color, "row selection must use one color across text and empty space")
+      end
+      local selected = list:get_selection_state()
+      view:focus_pane_view(surface == "log-list" and "details" or "log-list")
+      paints = {}
+      list:draw()
+      test.ok(#paints > 0, "unfocused rows must retain their selection highlight")
+      test.not_equal(paints[1][5], focused_color, "row selection must change when its surface loses focus")
+      for _, paint in ipairs(paints) do
+        test.equal(paint[5], paints[1][5], "unfocused row selection must use one color")
+      end
+      test.same(list:get_selection_state(), selected)
+      view:focus_pane_view(surface)
+      paints = {}
+      list:draw()
+      test.equal(paints[1][5], focused_color)
       command.perform("git:toggle_row_selection_mode")
+      paints = {}
       list:draw()
       test.ok(#carets > 0, "normal text mode must show a caret")
+      test.ok(#paints > 0)
+      test.equal(paints[1][5], style.selection, "normal text mode must use the ordinary text selection color")
     end)
     restore()
     if not ok then error(err, 0) end

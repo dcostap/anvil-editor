@@ -4165,7 +4165,7 @@ function TextView:draw_fold_widget_body(fold, x, y, height)
   local lh = height or self:get_line_height()
   local bx = x + self.scroll.x
   local bw = math.max(0, self.position.x + self.size.x - bx)
-  local bg = selection_covers_fold(self.buffer, fold) and style.selection or style.fold_widget_background
+  local bg = selection_covers_fold(self.buffer, fold) and self:get_selection_background_color() or style.fold_widget_background
   renderer.draw_rect(bx, y, bw, lh, bg)
   local border = style.fold_widget_border or style.fold_widget_effect or style.accent
   local t = math.max(1, common.round(SCALE))
@@ -6277,6 +6277,11 @@ function TextView:draw_content_left_edge()
   renderer.draw_rect(x, self.position.y, edge_w, self.size.y, style.textview_content_left_edge)
 end
 
+-- Return nil when a specialized View draws its own selection background.
+function TextView:get_selection_background_color()
+  return style.selection
+end
+
 function TextView:get_current_line_highlight_mode()
   if self.show_current_line_highlight == false then return false end
   return config.highlight_current_line
@@ -7495,6 +7500,7 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
   local prepare_start = stats and system.get_time()
   local highlight_cache = {}
   local selection_cache = {}
+  local selection_color = self:get_selection_background_color()
   local search_match_cache = {}
   local gutter_selection_cache = {}
   local visible_caret_cache = {}
@@ -7556,13 +7562,13 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
               search_match_cache[line] = search_list
             end
             search_list[#search_list + 1] = { c1, c2, true }
-          else
+          elseif selection_color then
             local list = selection_cache[line]
             if not list then
               list = {}
               selection_cache[line] = list
             end
-            list[#list + 1] = { c1, c2, style.selection, false }
+            list[#list + 1] = { c1, c2, selection_color, false }
             if stats then stats.selection_cache_ranges = stats.selection_cache_ranges + 1 end
           end
         end
@@ -7905,6 +7911,7 @@ local function line_search_matches(view, line)
 end
 
 function TextView:draw_line_body(line, x, y)
+  local selection_color = self:get_selection_background_color()
   if not self.buffer.lines[line] then
     core.log_quiet(
       "TextView draw_line_body: skipped stale line for %s (line=%s buffer_lines=%d)",
@@ -8008,23 +8015,23 @@ function TextView:draw_line_body(line, x, y)
     -- Background decorations stay below selection; text stays above it.
     draw_decoration_inline_ranges(self, line, x, y)
     local render_line = self:get_line_render(line)
-    draw_line_render_empty_cell_selections(
-      self, line, render_line, x, y, style.selection
-    )
+    if selection_color then
+      draw_line_render_empty_cell_selections(self, line, render_line, x, y, selection_color)
+    end
     for _, line1, col1, line2, col2 in self.buffer:get_selections(true) do
       if line >= line1 and line <= line2 then
         if line1 ~= line then col1 = 1 end
         if line2 ~= line then col2 = #self.buffer.lines[line] + 1 end
-        if col1 ~= col2 then
+        if col1 ~= col2 and selection_color then
           if self.buffer:is_search_selection(line1, col1, line, col2) then
             -- Search backgrounds were drawn before ordinary selections.
           elseif render_line and render_line.position_rows then
             draw_line_render_position_row_range(
-              self, render_line, col1, col2, x, y, style.selection
+              self, render_line, col1, col2, x, y, selection_color
             )
           elseif render_line then
             draw_line_render_source_range(
-              self, line, render_line, col1, col2, x, y, style.selection
+              self, line, render_line, col1, col2, x, y, selection_color
             )
           else
             local idx1 = linewrapping.get_line_idx_col_count(self, line, col1)
@@ -8034,7 +8041,7 @@ function TextView:draw_line_body(line, x, y)
               if x1 and x2 and x2 > x1 then
                 local row_y, row_height = wrapped_row_geometry(self, y, idx0, i)
                 renderer.draw_rect(
-                  x + x1, row_y, x2 - x1, row_height, style.selection
+                  x + x1, row_y, x2 - x1, row_height, selection_color
                 )
               end
             end
@@ -8112,10 +8119,10 @@ function TextView:draw_line_body(line, x, y)
   local lh = self:get_position_visual_row_height(line, 1)
   local selection_cache = self.__line_body_selection_cache
   local render_line = self:get_line_render(line)
-  draw_line_render_empty_cell_selections(
-    self, line, render_line, x, y, style.selection
-  )
-  local cached_selections = selection_cache and selection_cache[line]
+  if selection_color then
+    draw_line_render_empty_cell_selections(self, line, render_line, x, y, selection_color)
+  end
+  local cached_selections = selection_color and selection_cache and selection_cache[line]
   if cached_selections then
     for _, sel in ipairs(cached_selections) do
       if render_line and render_line.position_rows then
@@ -8136,7 +8143,7 @@ function TextView:draw_line_body(line, x, y)
         end
       end
     end
-  elseif not selection_cache then
+  elseif selection_color and not selection_cache then
     for lidx, line1, col1, line2, col2 in self.buffer:get_selections(true) do
       if line1 > line then break end
       if line >= line1 and line <= line2 then
@@ -8147,11 +8154,11 @@ function TextView:draw_line_body(line, x, y)
           -- Search backgrounds were drawn before ordinary selections.
         elseif render_line and render_line.position_rows then
           draw_line_render_position_row_range(
-            self, render_line, col1, col2, x, y, style.selection
+            self, render_line, col1, col2, x, y, selection_color
           )
         elseif render_line then
           draw_line_render_source_range(
-            self, line, render_line, col1, col2, x, y, style.selection
+            self, line, render_line, col1, col2, x, y, selection_color
           )
         else
           local x1 = x + self:get_col_x_offset(line, col1)
@@ -8159,7 +8166,7 @@ function TextView:draw_line_body(line, x, y)
           if x1 ~= x2 then
             local stats = core.textview_frame_stats
             if stats then stats.selection_rect_calls = stats.selection_rect_calls + 1 end
-            renderer.draw_rect(x1, y, x2 - x1, lh, style.selection)
+            renderer.draw_rect(x1, y, x2 - x1, lh, selection_color)
           end
         end
       end

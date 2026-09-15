@@ -226,12 +226,18 @@ function RowTextView:get_current_line_highlight_mode()
   return RowTextView.super.get_current_line_highlight_mode(self)
 end
 
+function RowTextView:get_selection_background_color()
+  if not self.row_selection_mode then return RowTextView.super.get_selection_background_color(self) end
+end
+
 function RowTextView:draw_row_selection(line, x, y, width)
   if self.row_selection_mode and self:is_selectable_row(line) then
     local s = self:get_selection_state().selections
     for i = 1, #s, 4 do
       if line >= math.min(s[i], s[i + 2]) and line <= math.max(s[i], s[i + 2]) then
-        renderer.draw_rect(x, y, width, self:get_line_height(), style.selection)
+        local color = core.active_view == self and self:active_window_has_focus()
+          and style.row_selection or style.row_selection_inactive
+        renderer.draw_rect(x, y, width, self:get_line_height(), color)
         break
       end
     end
