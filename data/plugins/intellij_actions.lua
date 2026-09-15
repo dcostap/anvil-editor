@@ -154,7 +154,6 @@ end, {
 local selection_history = setmetatable({}, { __mode = "k" })
 local selection_origin = setmetatable({}, { __mode = "k" })
 local add_next_occurrence_state = setmetatable({}, { __mode = "k" })
-local closed_tabs = {}
 local suppress_origin_clear = false
 
 local function selection_state_key(buffer)
@@ -461,15 +460,6 @@ end
 
 local function record_navigation_place(reason)
   panes.record_location()
-end
-
-local editor_on_close = Editor.on_close
-function Editor:on_close()
-  local path = active_file_path(self)
-  if path then
-    table.insert(closed_tabs, path)
-  end
-  return editor_on_close(self)
 end
 
 local selection_debug_log = USERDIR .. PATHSEP .. "selection-expansion-debug.log"
@@ -1169,20 +1159,6 @@ local function move_to_matching_bracket_with_history(dv)
     command.perform("editor:move_to_enclosing_bracket")
   end
 end
-
-local function reopen_last_closed_tab()
-  while #closed_tabs > 0 do
-    local filename = table.remove(closed_tabs)
-    if system.get_file_info(filename) then
-      core.open_file(filename)
-      return
-    end
-  end
-end
-
-command.add(nil, {
-  ["core:reopen_last_closed_pane"] = reopen_last_closed_tab,
-})
 
 local function line_comment_at_start(dv)
   if not can_edit(dv, "toggle comments") then return end

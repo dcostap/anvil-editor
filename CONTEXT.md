@@ -300,6 +300,9 @@ _Avoid_: swap Views, swap histories
 A Pane whose only Navigation History entry is a blank Untitled Editor and which has no retained Views. It remains disposable after its text is added and then removed.
 _Avoid_: void Pane, empty split
 
+**Reopen Closed Pane**:
+An action that restores the last closed Pane, including its Views and Navigation History. A restored Terminal starts a new session.
+
 **Pane Move and Merge**:
 An action that appends one Pane's complete Navigation History after another Pane's history, then removes the source Pane. The source Current View becomes current in the destination. A disposable destination contributes no placeholder entry.
 _Avoid_: move View, merge tabs

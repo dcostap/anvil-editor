@@ -3,6 +3,13 @@ local command = require "core.command"
 local keymap = require "core.keymap"
 local panes = require "core.panes"
 
+command.add(nil, {
+  ["core:reopen_last_closed_pane"] = function()
+    local pane, err = panes.reopen_last_closed()
+    if not pane then core.warn("Could not reopen Pane: %s", err) end
+  end,
+})
+
 command.add(function() return panes.is_back_available() end, {
   ["core:navigate_back"] = command.palette(function() panes.back() end),
 })

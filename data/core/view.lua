@@ -140,7 +140,7 @@ function View:get_module()
   local cls = getmetatable(self)
 
   -- cache module name on the class, not the instance
-  if not cls._module_name then
+  if not rawget(cls, "_module_name") then
     for name, mod in pairs(package.loaded) do
       if mod == cls then
         cls._module_name = name
@@ -149,7 +149,7 @@ function View:get_module()
     end
   end
 
-  return cls._module_name
+  return rawget(cls, "_module_name")
 end
 
 

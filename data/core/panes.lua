@@ -16,6 +16,15 @@ local M = {
 
 core.panes = M
 
+local closed_panes = {}
+
+local function copy_saved_data(value)
+  if type(value) ~= "table" then return value end
+  local result = {}
+  for key, item in pairs(value) do result[key] = copy_saved_data(item) end
+  return result
+end
+
 ---An owner identifies the activity accepted by a constrained Pane.
 ---Views share an opaque pane_constraint value, or provide get_pane_constraint for dynamic ownership.
 ---A duplicate activity needs a new owner. An unrelated ordinary View returns nil.
@@ -1483,7 +1492,84 @@ local function nearest_after_removal(old_order, old_index)
   return old_order[math.min(old_index, #old_order)] or old_order[old_index - 1]
 end
 
+local function save_closed_pane(pane)
+  local snapshot = { views = {}, history = {}, index = pane.history.index,
+    constrained = M.constraint(pane) ~= nil, limit = pane.history.limit }
+  local indices = {}
+  for _, view in ipairs(collect_owned_views(pane)) do
+    local state, module = view:get_state(), view:get_module()
+    if not state or not module then error("Cannot restore " .. view:get_name()) end
+    snapshot.views[#snapshot.views + 1] = { module = module, state = copy_saved_data(state) }
+    indices[view] = #snapshot.views
+  end
+  for index, entry in ipairs(pane.history.entries) do
+    snapshot.history[index] = { view_index = indices[entry.view], kind = entry.kind,
+      state = copy_saved_data(index == pane.history.index
+        and capture_navigation_state(pane.current_view) or entry.state) }
+  end
+  return snapshot
+end
+
+function M.reopen_last_closed()
+  local snapshot = table.remove(closed_panes)
+  if not snapshot then return nil, "No closed Pane is available" end
+  if snapshot.error then return nil, snapshot.error end
+  local views = {}
+  local ok, result = pcall(function()
+    local owner
+    for index, saved in ipairs(snapshot.views) do
+      local view = assert(require(saved.module).from_state(saved.state),
+        "Cannot restore " .. saved.module)
+      if M.pane_for_view(view) then error("Restored View already belongs to a Pane") end
+      views[index] = view
+      if view.get_pane_constraint or view.owns_pane_constraint then
+        owner = M.view_constraint(view) or owner
+      end
+    end
+    if snapshot.constrained then
+      owner = owner or {}
+      for _, view in ipairs(views) do view.pane_constraint = owner end
+    end
+    local current = views[snapshot.history[snapshot.index].view_index]
+    restore_navigation_state(current, snapshot.history[snapshot.index].state)
+    local pane, err = M.create { factory = function() return current end,
+      history_limit = snapshot.limit, focus = false }
+    assert(pane, err)
+    pane.history.entries = {}
+    pane.history.index = snapshot.index
+    local referenced = {}
+    for index, entry in ipairs(snapshot.history) do
+      local view = views[entry.view_index]
+      claim_view(pane, view)
+      referenced[view] = true
+      pane.history.entries[index] = { view = view, state = entry.state, kind = entry.kind }
+    end
+    for _, view in ipairs(views) do
+      if not referenced[view] then
+        claim_view(pane, view)
+        pane.retained_views[#pane.retained_views + 1] = view
+      end
+    end
+    M.focus(pane)
+    after_mutation("reopened " .. pane.id)
+    return pane
+  end)
+  if not ok then
+    for _, view in ipairs(views) do
+      if not M.pane_for_view(view) then call_lifecycle(view, "on_close") end
+    end
+    quiet("Pane reopen failed: %s", tostring(result))
+    return nil, tostring(result)
+  end
+  quiet("Pane reopened with %d Views", #views)
+  return result
+end
+
 local function commit_close(pane)
+  local ok, snapshot = pcall(save_closed_pane, pane)
+  closed_panes[#closed_panes + 1] = ok and snapshot or { error = tostring(snapshot) }
+  if #closed_panes > 20 then table.remove(closed_panes, 1) end
+  quiet("Pane close snapshot: %s (%s)", pane.id, ok and "saved" or tostring(snapshot))
   local old_order = M.ordered()
   local old_index = M.number(pane)
   local closed_active_view = M.pane_for_view(core.active_view) == pane
@@ -1782,6 +1868,7 @@ function M.restore_workspace_state(state, load_view)
 end
 
 function M.reset_for_tests()
+  closed_panes = {}
   for _, pane in ipairs(M.ordered()) do
     for _, view in ipairs(collect_owned_views(pane)) do release_view(pane, view) end
   end
