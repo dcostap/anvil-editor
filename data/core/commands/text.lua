@@ -16,6 +16,23 @@ local Editor = require "core.editor"
 local tokenizer = require "core.tokenizer"
 local panes = require "core.panes"
 
+-- Specialized Text Views can own selection without replacing text commands.
+local function selection_commands(map)
+  for name, registration in pairs(map) do
+    if name:match("^core:move_to_") or name:match("^core:select_")
+        or name:match("^core:set_cursor") or name == "core:split_cursor"
+        or name:match("^editor:create_cursor_") then
+      local action = type(registration) == "table" and registration.perform or registration
+      local function perform(view, ...)
+        if view.handle_selection_command and view:handle_selection_command(name, ...) then return end
+        return action(view, ...)
+      end
+      if type(registration) == "table" then registration.perform = perform
+      else map[name] = perform end
+    end
+  end
+  return map
+end
 
 local function buffer()
   return core.active_view.buffer
@@ -2544,7 +2561,7 @@ command.add(function(x, y)
   local dv = core.active_view
   local x1,y1,x2,y2 = dv.position.x, dv.position.y, dv.position.x + dv.size.x, dv.position.y + dv.size.y
   return x >= x1 + dv:get_gutter_width() and x < x2 and y >= y1 and y < y2, dv, x, y
-end, {
+end, selection_commands({
   ["core:set_cursor"] = function(dv, x, y)
     set_cursor(dv, x, y, "set")
   end,
@@ -2574,7 +2591,7 @@ end, {
     apply_resolved_wrap_affinity(dv)
     dv.mouse_selecting = { line, col, "set" }
   end
-})
+}))
 
 local function active_bom_buffer(view)
   view = view or core.active_view
@@ -3385,7 +3402,7 @@ command.add(function(...)
   local current_text_view = owner == view and pane and pane.current_view == view
     and view and view.extends and view:extends(TextView)
   return not not (owned_text_view or current_text_view), view, ...
-end, commands)
+end, selection_commands(commands))
 
 command.add_toggle("editor:toggle_line_wrapping", {
   palette = true,

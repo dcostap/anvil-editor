@@ -663,7 +663,21 @@ end, {
   ["git:close_selected_tab"] = close_git_view_tab,
 })
 
+command.add(function()
+  local view = core.active_view
+  return view and view.git_pane == "log-list", view
+end, {
+  ["git:toggle_row_selection_mode"] = command.palette(function(view)
+    view:set_row_selection_mode(not view.row_selection_mode)
+    core.log_quiet("Git Log Row Selection Mode: %s", tostring(view.row_selection_mode))
+  end),
+})
+command.set_status("git:toggle_row_selection_mode", function()
+  return core.active_view and core.active_view.row_selection_mode
+end)
+
 keymap.add({
+  ["f2"] = "git:toggle_row_selection_mode",
   ["ctrl+k"] = "git:open_log",
   ["return"] = "git:activate_selected_row",
 })

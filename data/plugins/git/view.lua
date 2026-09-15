@@ -13,6 +13,7 @@ local Buffer = require "core.buffer"
 local ImageComparisonView = require "core.imagecomparisonview"
 local ImageView = require "core.imageview"
 local TextView = require "core.textview"
+local RowTextView = require "core.rowtextview"
 local View = require "core.view"
 local view_icons = require "core.view_icons"
 local GitModel = require "plugins.git.model"
@@ -51,6 +52,7 @@ local function set_buffer_lines(view, lines)
   local text = table.concat(lines or {}, "\n")
   if text ~= "" then text = text .. "\n" end
   if buffer.git_view_pane_text == text then return end
+  local selection = view.get_selected_rows and view:get_selection_state()
   local old_line_count = #buffer.lines
   buffer.git_view_pane_text = text
   buffer.lines = {}
@@ -73,7 +75,8 @@ local function set_buffer_lines(view, lines)
   buffer:clean()
   local current_line = buffer:get_selection()
   local line = math.max(1, math.min(#buffer.lines, current_line or 1))
-  buffer:set_selection(line, 1, line, 1)
+  if selection then view:set_selection_state(selection)
+  else buffer:set_selection(line, 1, line, 1) end
   if view.scroll_to_make_visible then view:scroll_to_make_visible(line, 1, true) end
 end
 
@@ -333,12 +336,16 @@ function GitView:pane_view(name)
   self.pane_views = self.pane_views or {}
   local view = self.pane_views[name]
   if not view then
-    local ViewType = (name == "file-list" or name == "details") and path_tree.View or TextView
+    local ViewType = (name == "file-list" or name == "details") and path_tree.View
+      or name == "log-list" and RowTextView or TextView
     view = ViewType(make_pane_buffer("Git " .. name))
     view.font = "prose_font"
     view:set_wrapping_enabled(false)
     view.git_owner_view = self
     view.git_pane = name
+    if name == "log-list" then
+      view.get_selectable_row_count = function() return #self.model:log_tab().commits end
+    end
     view.open_text_capture = function()
       return self:open_text_capture()
     end
@@ -371,7 +378,7 @@ function GitView:pane_view(name)
       end
       view.select_point_of_interest = function(_, point) self:select_changed_file_point(point) end
     end
-    if ViewType == TextView then
+    if ViewType == TextView or ViewType == RowTextView then
       if name == "log-list" then
         view.get_gutter_width = graph_gutter_width
         view.draw_line_gutter = draw_graph_gutter
@@ -720,7 +727,7 @@ function GitView:update_pane_action_hover(view, x, y)
   if line then
     view.cursor = "hand"
   elseif not view:scrollbar_hovering() and not view:scrollbar_dragging() then
-    view.cursor = view.hovering_gutter and "arrow" or "ibeam"
+    view.cursor = (view.row_selection_mode or view.hovering_gutter) and "arrow" or "ibeam"
   end
   return line
 end
@@ -797,10 +804,10 @@ function GitView:on_mouse_released(button, x, y)
   if captured then
     local pressed_line = captured.git_pressed_action_line
     local pressed_clicks = captured.git_pressed_action_clicks or 1
-    local released_line = pressed_line and self:action_row_at_point(captured, x, y) or nil
     captured.git_pressed_action_line = nil
     captured.git_pressed_action_clicks = nil
     local result = self.mouse_router:release(button, x, y)
+    local released_line = pressed_line and self:action_row_at_point(captured, x, y) or nil
     if captured.git_pane then self:update_pane_action_hover(captured, x, y) end
     if button == "left" and pressed_line and released_line == pressed_line and pressed_clicks >= 2 then
       local point = self:point_of_interest_for_pane(captured, released_line)
@@ -844,7 +851,14 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     local action_line = button == "left" and not modified
       and self:action_row_at_point(pane, x, y) or nil
     local content_click = action_line ~= nil
-    if action_line then
+    if pane.row_selection_mode then
+      pane:on_mouse_pressed(button, x, y, clicks)
+      content_click = true
+      if action_line then
+        pane.git_pressed_action_line = action_line
+        pane.git_pressed_action_clicks = clicks or 1
+      end
+    elseif action_line and pane.row_selection_mode == nil then
       local text = pane.buffer.lines[action_line] or ""
       pane.buffer:clear_search_selections()
       pane.buffer:set_selection(action_line, 1, action_line, #text)
@@ -1616,6 +1630,39 @@ local function same_pane_buffer_state(a, b)
   return true
 end
 
+local function remap_log_selection(list, commits, focus)
+  local ids, indices = {}, {}
+  for i, commit in ipairs(commits) do
+    local id = commit.hash or commit.local_scope or commit
+    ids[i], indices[id] = id, i
+  end
+  local old_ids = list.git_row_ids
+  list.git_row_ids = ids
+  if not old_ids then return end
+  local state = list:get_selection_state()
+  local fallback = { selections = { focus, 1, focus, 1 } }
+  local mapped = {}
+  for i = 1, #state.selections, 4 do
+    local s = state.selections
+    local head, anchor = indices[old_ids[s[i]]], indices[old_ids[s[i + 2]]]
+    if not head or not anchor then
+      core.log_quiet("Git Log selection cleared: a selected row is no longer available")
+      return fallback
+    end
+    if math.abs(head - anchor) == math.abs(s[i] - s[i + 2]) then
+      for _, value in ipairs { head, s[i + 1], anchor, s[i + 3] } do mapped[#mapped + 1] = value end
+    else
+      -- Preserve the selected commits, not new rows inserted between them.
+      for row = math.min(s[i], s[i + 2]), math.max(s[i], s[i + 2]) do
+        local index = indices[old_ids[row]]
+        if not index then return fallback end
+        for _, value in ipairs { index, math.huge, index, 1 } do mapped[#mapped + 1] = value end
+      end
+    end
+  end
+  return { selections = mapped, last_selection = state.last_selection }
+end
+
 function GitView:update_pane_buffers(force)
   local tab = self:model_tab()
   if not tab then return end
@@ -1728,10 +1775,14 @@ function GitView:update_pane_buffers(force)
         line_meta[#lines] = { role = "message", text = lines[#lines] }
       end
     end
-    local list_view = self:set_pane_lines("log-list", lines)
+    local list_view = self:pane_view("log-list")
+    local selection = remap_log_selection(list_view, log_tab.commits, log_tab.selected_commit)
+    self:set_pane_lines("log-list", lines)
+    if selection then list_view:set_selection_state(selection) end
     list_view.git_commit_line_meta = line_meta
     list_view.git_graph_rows = graph_rows
-    sync_inactive_pane_line(list_view, log_tab.selected_commit)
+    if not selection then sync_inactive_pane_line(list_view, log_tab.selected_commit) end
+    if list_view.row_selection_mode then list_view:normalize_row_selection() end
     local details = self:pane_view("details")
     local detail_lines, detail_meta, detail_tree, detail_tree_offset = commit_details_lines(
       self:detail_commit_for_tab(log_tab), details

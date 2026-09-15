@@ -225,6 +225,10 @@ _Avoid_: global Pane cycle, internal split focus
 The caret and selection state owned by a Text View.
 _Avoid_: Buffer selection, shared selection
 
+**Row Selection Mode**:
+A Text View mode for selecting complete rows without a text caret. Normal text navigation and selection remain available outside this mode.
+_Avoid_: special mode, line cursor
+
 **Caret Trail**:
 A global animated extension of the focused input caret. It follows that caret across Views and Panes.
 _Avoid_: Cursor trail, mouse trail
@@ -539,9 +543,13 @@ The repository whose commits a Git Log currently displays.
 _Avoid_: active repository, current repo
 
 **Commit Diff View**:
-A closable View listing files changed by a commit or working-tree state against another Git state.
+A closable View listing files changed by a commit, commit range, or working-tree state against another Git state.
 Its files form a Remote POI Source whose entries open separate comparisons.
 _Avoid_: commit diff tab
+
+**Commit Range Diff**:
+The net changes from one continuous first-parent chain of selected commits, compared from the oldest commit's parent to the newest commit.
+_Avoid_: multi-commit diff, combined patches
 
 **File History View**:
 A closable View showing revisions affecting one Project file or a selection within that file.
