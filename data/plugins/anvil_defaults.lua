@@ -402,7 +402,9 @@ keymap.add_direct({
   ["ctrl+shift+d"] = "editor:go_to_line",
   ["ctrl+shift+D"] = "editor:go_to_line",
   ["ctrl+pageup"] = "core:previous_point_of_interest",
+  ["f6"] = "core:previous_point_of_interest",
   ["ctrl+pagedown"] = "core:next_point_of_interest",
+  ["f7"] = "core:next_point_of_interest",
   ["alt+8"] = "core:previous_remote_point_of_interest",
   ["alt+9"] = "core:next_remote_point_of_interest",
 })
