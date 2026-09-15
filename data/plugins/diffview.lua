@@ -577,7 +577,43 @@ function DiffView:new(a, b, compare_type, names)
 end
 
 function DiffView:get_focus_view()
-  return self.buffer_view_b
+  return self.navigation_focus_side == "left" and self.buffer_view_a or self.buffer_view_b
+end
+
+function DiffView:get_navigation_state()
+  if core.active_view == self.buffer_view_a then
+    self.navigation_focus_side = "left"
+  elseif core.active_view == self.buffer_view_b then
+    self.navigation_focus_side = "right"
+  end
+  return {
+    selection_state = {
+      side = self.navigation_focus_side or "right",
+      left = self.buffer_view_a:get_selection_state(),
+      right = self.buffer_view_b:get_selection_state(),
+    },
+    left_scroll = { x = self.buffer_view_a.scroll.x, y = self.buffer_view_a.scroll.y },
+    right_scroll = { x = self.buffer_view_b.scroll.x, y = self.buffer_view_b.scroll.y },
+  }
+end
+
+function DiffView:set_navigation_state(state, opts)
+  local selection = state.selection_state
+  self.navigation_focus_side = selection.side
+  self.pending_first_change_reveal = false
+  self.syncing_diff_caret = true
+  local function restore(view, saved, scroll)
+    view:set_selection_state(saved)
+    view.scroll.to.x, view.scroll.to.y = scroll.x, scroll.y
+    if not (opts and opts.animate_scroll) then
+      view.scroll.x, view.scroll.y = scroll.x, scroll.y
+      view.scroll.move_data_x, view.scroll.move_data_y = nil, nil
+    end
+  end
+  restore(self.buffer_view_a, selection.left, state.left_scroll)
+  restore(self.buffer_view_b, selection.right, state.right_scroll)
+  self.syncing_diff_caret = nil
+  core.log_quiet("Diff View: restored Navigation Place on %s side", selection.side)
 end
 
 function DiffView:get_surface_focus_targets()
