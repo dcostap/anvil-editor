@@ -33,6 +33,10 @@ except ImportError:  # The non-visual harness remains usable without Pillow.
     Image = None  # type: ignore[assignment]
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from tools import perf_diagnostics, perf_workloads
+
 BUILD = ROOT / "build-windows-x86_64"
 RESULTS_ROOT = ROOT / "tools" / "perf-results" / "render-gate"
 BASELINE_PATH = ROOT / "tools" / "baselines" / "render_perf_windows.json"
@@ -171,12 +175,16 @@ SPECIMEN_SCENARIOS: dict[str, dict[str, Any]] = {
     },
 }
 SCENARIOS.update(SPECIMEN_SCENARIOS)
+SCENARIOS.update(perf_workloads.SCENARIOS)
 
 SUITES = {
     "quick": ["wrapped-document-steady", "wrapped-document-scroll", "tab-heavy-titlebar"],
     "full": list(STANDARD_SCENARIOS),
     "visual": [name for name in STANDARD_SCENARIOS if SCENARIOS[name]["visual"]],
     "specimen": list(SPECIMEN_SCENARIOS),
+    "stress": list(perf_workloads.SCENARIOS) + ["filetree-edit-repeat", "markdown-long-link-caret-repeat"],
+    "interactive": [name for name, settings in perf_workloads.SCENARIOS.items() if settings["kind"] != "diff"],
+    "diff": [name for name, settings in perf_workloads.SCENARIOS.items() if settings["kind"] == "diff"],
 }
 
 LOWER_IS_BETTER = {
@@ -561,7 +569,9 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         "rencache_command_bytes", "display_packet_replays",
         "display_packet_commands_replayed", "display_packet_frame_bytes_copied",
         "display_packet_replay_ms", "text_render_calls", "text_render_glyphs",
-        "text_render_hb_shape_ms", "lua_heap_kib",
+        "text_render_hb_shape_ms", "lua_heap_kib", "event_ms", "pre_draw_ms",
+        "run_threads_ms", "gc_ms", "text_width_calls", "text_width_bytes",
+        "text_render_shaped_cache_hits", "text_render_shaped_cache_misses",
     ):
         vals = numbers(key)
         result[f"{key}_avg"] = statistics.fmean(vals)
@@ -662,10 +672,12 @@ def summarize_resource_samples(path: Path) -> dict[str, float]:
     return result
 
 
-def median_metric_summaries(summaries: list[dict[str, float]]) -> dict[str, float]:
+def summarize_runs(summaries: list[dict[str, float]]) -> dict[str, float]:
+    """Use representative costs, but do not hide a rare stall or memory peak."""
     keys = sorted(set().union(*(summary.keys() for summary in summaries)))
     return {
-        key: statistics.median(summary[key] for summary in summaries if key in summary)
+        key: (max if key.endswith(("_max", "_peak_bytes")) else statistics.median)(
+            summary[key] for summary in summaries if key in summary)
         for key in keys
     }
 
@@ -730,6 +742,7 @@ def run_case(
     frames: int, warmup_frames: int, screenshot: bool,
     total_timeout_seconds: int | None = None, startup_timeout_seconds: int = 30,
     heartbeat_timeout_seconds: int = 15,
+    action_timeout_seconds: int = 30,
 ) -> dict[str, Any]:
     run_dir.mkdir(parents=True)
     result_file = run_dir / "result.txt"
@@ -741,6 +754,10 @@ def run_case(
     screenshot_file = run_dir / "screenshot.png"
     raster_metadata_file = run_dir / "font-raster-metadata.csv"
     image_metadata_file = run_dir / "image-metadata.csv"
+    actions_file = run_dir / "actions.csv"
+    workload_file = run_dir / "workload.json"
+    if settings.get("kind"):
+        workload_file.write_text(json.dumps(dict(settings, root=str(work / scenario))), encoding="utf-8")
     case_fixture = (
         work / "fixtures" / "markdown-long-link.md"
         if settings.get("fixture") == "markdown-long-link" else fixture
@@ -752,6 +769,8 @@ def run_case(
     environment = {
         "ANVIL_USERDIR": str(user),
         "USERPROFILE": str(user),
+        "HOME": str(user),
+        "GIT_CEILING_DIRECTORIES": str(work.parent),
         "ANVIL_RENDERER": renderer,
         # The IPC plugin uses a process-global shared-memory channel. Disable
         # it before startup so a benchmark can never hand its fixture to the
@@ -759,12 +778,18 @@ def run_case(
         "ANVIL_TEST_DISABLE_PLUGINS": "ipc,autorestart,autoreload,autosave_fast,autosaveonfocuslost",
         "ANVIL_D3D11_PRESENT_SYNC_INTERVAL": "1" if mode == "paced-metrics" else "0",
         "ANVIL_PERF_BENCHMARK": "1",
+        "ANVIL_PERF_CAPTURE": "0",
+        "ANVIL_PERF_CADENCE_ONLY": "0",
         "ANVIL_PERF_BENCHMARK_SCENARIO": scenario,
         "ANVIL_PERF_BENCHMARK_MODE": mode,
         "ANVIL_PERF_BENCHMARK_FILE": str(case_fixture),
         "ANVIL_PERF_BENCHMARK_TAB_DIR": str(tab_dir),
         "ANVIL_PERF_BENCHMARK_RESULT": str(result_file),
         "ANVIL_PERF_BENCHMARK_METRICS": str(metrics_file),
+        "ANVIL_PERF_BENCHMARK_ACTIONS": str(actions_file),
+        "ANVIL_PERF_BENCHMARK_WORKLOAD": str(workload_file) if settings.get("kind") else "",
+        "ANVIL_PERF_BENCHMARK_PROFILE_DIR": str(run_dir),
+        "ANVIL_PERF_BENCHMARK_ACTION_TIMEOUT": str(action_timeout_seconds),
         "ANVIL_PERF_BENCHMARK_HEARTBEAT": str(heartbeat_file),
         "ANVIL_PERF_BENCHMARK_LIFECYCLE": str(lifecycle_file),
         "ANVIL_PERF_BENCHMARK_SCREENSHOT": str(screenshot_file) if screenshot else "",
@@ -782,7 +807,7 @@ def run_case(
     }
     launch_config = {
         "exe": str(exe),
-        "working_directory": str(work),
+        "working_directory": str(work / scenario if settings.get("kind") else work),
         # The benchmark plugin owns file/view activation. Passing the fixture
         # on the command line would enqueue a second deferred open that can
         # steal focus back from custom visual scenes during warmup.
@@ -803,6 +828,7 @@ def run_case(
     if launcher.get("timed_out") or int(launcher.get("exit_code", 0)) != 0:
         failure = classify_case_failure(launcher, heartbeat)
         failure.update({"scenario": scenario, "mode": mode, "run_dir": str(run_dir)})
+        failure["error"] = values.get("error", "")
         raise BenchmarkCaseError(
             f"benchmark {failure['status']}: scenario={scenario} mode={mode} "
             f"kind={failure['failure_kind']} phase={failure['last_phase']}",
@@ -849,7 +875,7 @@ def run_case(
             "scroll_to_y": float(values.get("scroll_to_y", 0)),
         },
         "state": {
-            "doc_lines": int(values.get("doc_lines", 0)),
+            "doc_lines": int(values.get("buffer_lines", 0)),
             "wrapped_rows": int(values.get("wrapped_rows", 0)),
             "text_revision": int(values.get("text_revision", 0)),
             "selection_line": int(values.get("selection_line", 0)),
@@ -858,15 +884,33 @@ def run_case(
             "scroll_y": float(values.get("scroll_y", 0)),
         },
     }
-    if result["measured_frames"] != frames:
+    if settings.get("kind"):
+        actions = perf_diagnostics.read_actions(actions_file, settings["actions"])
+        result["actions"] = actions["summary"]
+        result["action_rows"] = actions["rows"]
+        result["state"]["action_sequence"] = actions["sequence"]
+        result["state"].update({key: value for key, value in values.items()
+                                if key.startswith(("workload_", "diff_")) or key == "code_scale"})
+    elif result["measured_frames"] != frames:
         raise RuntimeError(f"workload mismatch: expected {frames}, got {result['measured_frames']}")
+    if settings.get("scroll_lines") and result["action_count"] == 0:
+        raise RuntimeError("scroll workload completed without sending any scroll actions")
     if renderer == "d3d11" and result["renderer_path"] != "commands":
         raise RuntimeError(f"expected D3D11 command renderer, got {result['renderer_path']!r}")
     if renderer == "software" and result["renderer_path"] != "none":
         raise RuntimeError(f"expected software renderer path 'none', got {result['renderer_path']!r}")
-    if mode in ("metrics", "paced-metrics"):
+    if mode in ("metrics", "paced-metrics", "diagnostic"):
         result["metrics"] = summarize_metrics(metrics_file)
+        if result["metrics"]["frames"] != result["measured_frames"]:
+            raise RuntimeError("metrics row count does not match the completed redraw count")
         result["metrics_file"] = str(metrics_file)
+        perf_diagnostics.write_timeline(run_dir)
+    if mode == "diagnostic":
+        if not (run_dir / "profile_summary.txt").exists():
+            raise RuntimeError("diagnostic capture did not produce a summary")
+        result["diagnostics"] = perf_diagnostics.build_profile(run_dir)
+        if result["diagnostics"]["imbalanced_frames"]:
+            raise RuntimeError("diagnostic draw scopes are imbalanced")
     if screenshot:
         if not screenshot_file.exists():
             raise RuntimeError(f"screenshot missing: {screenshot_file}")
@@ -918,7 +962,7 @@ def summarize_case_lifecycle(cases: list[dict[str, Any]]) -> dict[str, float]:
     lifecycle_rows = [case.get("lifecycle", {}) for case in cases if case.get("lifecycle")]
     if not lifecycle_rows:
         return {}
-    lifecycle = median_metric_summaries(lifecycle_rows)
+    lifecycle = summarize_runs(lifecycle_rows)
     launch_to_plugin = statistics.median(
         float(case.get("launch_to_plugin_loaded_ms") or 0) for case in cases
     )
@@ -1014,6 +1058,18 @@ def compare_performance(current: dict[str, Any], baseline: dict[str, Any]) -> li
                 "baseline_state": before.get("state"),
             })
         pairs = {"active_fps": (now["active_fps"], before["active_fps"])}
+        lower_limits = dict(LOWER_IS_BETTER)
+        for action, values in now.get("actions", {}).items():
+            for stat in ("latency_ms_p50", "latency_ms_p95"):
+                if stat not in values:
+                    continue
+                metric = f"action.{action}.{stat}"
+                previous = before.get("actions", {}).get(action, {})
+                if stat not in previous:
+                    findings.append({"scenario": scenario, "metric": metric, "status": "missing"})
+                    continue
+                pairs[metric] = (values[stat], previous[stat])
+                lower_limits[metric] = (0.10, 2.0)
         if now.get("paced") and before.get("paced"):
             pairs["paced_active_fps"] = (
                 now["paced"]["active_fps"], before["paced"]["active_fps"]
@@ -1048,8 +1104,8 @@ def compare_performance(current: dict[str, Any], baseline: dict[str, Any]) -> li
                 else -1.0 if value < 0
                 else 0.0
             )
-            if metric in LOWER_IS_BETTER:
-                rel_limit, abs_limit = LOWER_IS_BETTER[metric]
+            if metric in lower_limits:
+                rel_limit, abs_limit = lower_limits[metric]
                 failed = value - reference > abs_limit and relative > rel_limit
             else:
                 rel_limit, abs_limit = HIGHER_IS_BETTER[metric]
@@ -1079,7 +1135,9 @@ def compare_performance(current: dict[str, Any], baseline: dict[str, Any]) -> li
 
 
 def markdown_report(report: dict[str, Any]) -> str:
-    hard_failure = any(
+    hard_failure = report.get("budget_failed") or any(
+        case.get("status") == "failed" for case in report.get("scenarios", {}).values()
+    ) or any(
         item.get("status") in ("regression", "missing")
         for item in report.get("performance_findings", [])
     ) or any(
@@ -1100,6 +1158,7 @@ def markdown_report(report: dict[str, Any]) -> str:
         f"- Renderer: `{report.get('renderer', 'd3d11')}`",
         f"- Performance baseline: `{report.get('baseline_status', 'compared')}`",
         f"- Result: **{verdict}**",
+        f"- Absolute budget flags: {sum(len(case.get('red_flags', [])) for case in report['scenarios'].values())}",
         f"- Run directory: `{report['run_dir']}`",
         "",
         "| Scenario | Active FPS | Paced FPS | Startup ready | Metrics tax | Frame p50 | Frame p95 | Frame max | >33ms | Draw p50 | Renderer p50 | Visual |",
@@ -1127,6 +1186,27 @@ def markdown_report(report: dict[str, Any]) -> str:
             f"{metrics['draw_emit_ms_p50']:.3f} | "
             f"{metrics['renderer_end_ms_p50']:.3f} | {visual} |"
         )
+    action_cases = [(name, action, values) for name, case in report["scenarios"].items()
+                    for action, values in case.get("actions", {}).items()]
+    if action_cases:
+        lines.extend(["", "## Action latency (unprofiled)", "",
+                      "| Scenario | Action | Count | Dispatch p95 | Ready p95 | Completed p50 | Completed p95 | Completed max |",
+                      "|---|---|---:|---:|---:|---:|---:|---:|"])
+        for name, action, values in action_cases:
+            lines.append(f"| {name} | {action} | {values['latency_ms_count']:.0f} | "
+                         f"{values['dispatch_ms_p95']:.3f} | {values['ready_ms_p95']:.3f} | "
+                         f"{values['latency_ms_p50']:.3f} | {values['latency_ms_p95']:.3f} | "
+                         f"{values['latency_ms_max']:.3f} |")
+    flags = [dict(scenario=name, **flag) for name, case in report["scenarios"].items()
+             for flag in case.get("red_flags", [])]
+    if flags:
+        lines.extend(["", "## Absolute budget flags", "",
+                      "These flags show measured costs. They do not prove a cause.", ""])
+        for flag in sorted(flags, key=lambda item: item["ratio"], reverse=True)[:20]:
+            lines.append(f"- `{flag['scenario']}` `{flag.get('action') or 'frame'}` "
+                         f"`{flag['metric']}`: {flag['value']:.2f} ms; budget {flag['budget']:.2f} ms.")
+    if report.get("diagnose"):
+        lines.extend(["", "Open `report.html` for ranked draw scopes, flame graphs, timelines, and raw captures."])
     regressions = [item for item in report.get("performance_findings", []) if item["status"] == "regression"]
     if regressions:
         lines.extend(["", "## Regressions", ""])
@@ -1176,10 +1256,21 @@ def main() -> int:
     parser.add_argument("--update-goldens", action="store_true")
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--no-visual", action="store_true")
+    parser.add_argument("--diagnose", action="store_true",
+                        help="repeat each workload with draw scopes and LuaJIT stack samples")
+    parser.add_argument("--report-only", action="store_true",
+                        help="report costs and budget flags without requiring a local baseline")
+    parser.add_argument("--actions", type=int, help="measured actions per stress workload (first-open stays one)")
+    parser.add_argument("--action-timeout-seconds", type=int, default=30)
+    parser.add_argument("--frame-budget-ms", type=float, default=16.67)
+    parser.add_argument("--action-budget-ms", type=float, default=100)
+    parser.add_argument("--fail-on-budget", action="store_true",
+                        help="return failure when an absolute action or frame budget is exceeded")
     args = parser.parse_args()
 
     if os.name != "nt":
         raise RuntimeError("the isolated D3D11 gate requires Windows")
+    stress = args.suite in ("stress", "interactive", "diff") or args.scenario in perf_workloads.SCENARIOS
     full = args.suite == "full"
     runs = args.runs if args.runs is not None else (5 if full else 3)
     metrics_runs = args.metrics_runs if args.metrics_runs is not None else 2
@@ -1187,8 +1278,8 @@ def main() -> int:
     # Quick and full suites use identical per-scenario workloads so both can
     # compare against one full-suite baseline. Quick is faster by selecting
     # fewer scenarios and repetitions, not by changing the workload.
-    frames = args.frames if args.frames is not None else 600
-    warmup_frames = args.warmup_frames if args.warmup_frames is not None else 180
+    frames = args.frames if args.frames is not None else (120 if stress else 600)
+    warmup_frames = args.warmup_frames if args.warmup_frames is not None else (20 if stress else 180)
     if (runs < 1 or metrics_runs < 1 or paced_runs < 1 or frames < 2
             or warmup_frames < 1 or args.max_runs < 1):
         parser.error("run and frame counts must be positive")
@@ -1199,8 +1290,16 @@ def main() -> int:
         parser.error("--max-runs must be greater than or equal to --runs")
     if args.update_baseline and not uses_performance_baseline(args.renderer):
         parser.error("software runs do not use a performance baseline")
+    if args.report_only and (args.update_baseline or args.update_goldens):
+        parser.error("report-only runs cannot update baselines or goldens")
+    if (args.actions is not None and args.actions < 1) or args.action_timeout_seconds < 1:
+        parser.error("action counts and timeouts must be positive")
+    if any(not math.isfinite(value) or value <= 0 for value in (args.frame_budget_ms, args.action_budget_ms)):
+        parser.error("budgets must be finite and positive")
 
     selected_scenarios = [args.scenario] if args.scenario else SUITES[args.suite]
+    if args.user_state_mode == "reuse" and any(SCENARIOS[name].get("kind") == "open" for name in selected_scenarios):
+        parser.error("first-open workloads require --user-state-mode clean")
     suite_label = f"scenario:{args.scenario}" if args.scenario else args.suite
     specimen_selected = any(name in SPECIMEN_SCENARIOS for name in selected_scenarios)
     if specimen_selected and not args.specimen:
@@ -1244,6 +1343,11 @@ def main() -> int:
     fixture, tab_dir, _markdown_fixture = generate_fixture(work)
     if "filetree-edit-repeat" in selected_scenarios:
         generate_filetree_fixture(work)
+    workload_manifests = {}
+    for name in selected_scenarios:
+        if name in perf_workloads.SCENARIOS:
+            workload_manifests[name] = perf_workloads.generate(work / name, SCENARIOS[name])
+            (work / name / "manifest.json").write_text(json.dumps(workload_manifests[name], indent=2), encoding="utf-8")
     external_fixture = None
     specimen_metadata = None
     if specimen_source:
@@ -1268,6 +1372,10 @@ def main() -> int:
         "repository": repository_info(),
         "scenarios": {},
         "passed": True,
+        "diagnose": args.diagnose,
+        "report_only": args.report_only,
+        "budgets": {"frame_ms": args.frame_budget_ms, "action_ms": args.action_budget_ms},
+        "workload_manifests": workload_manifests,
     }
 
     if args.update_baseline and partial_baseline_update:
@@ -1302,11 +1410,16 @@ def main() -> int:
             )
 
     for scenario in selected_scenarios:
-        settings = SCENARIOS[scenario]
+        settings = dict(SCENARIOS[scenario])
+        if settings.get("kind"):
+            settings["fixture_sha256"] = workload_manifests[scenario]["sha256"]
+            if args.actions and settings["kind"] != "open":
+                settings["actions"] = args.actions
         case_watchdogs = {
             "total_timeout_seconds": args.timeout_seconds,
             "startup_timeout_seconds": args.startup_timeout_seconds,
             "heartbeat_timeout_seconds": args.heartbeat_timeout_seconds,
+            "action_timeout_seconds": args.action_timeout_seconds,
         }
         throughput_runs = []
         case_failures = []
@@ -1361,7 +1474,7 @@ def main() -> int:
             if len(throughput_runs) < runs:
                 continue
             noise = relative_mad([item["active_fps"] for item in throughput_runs])
-            if (not uses_performance_baseline(args.renderer)
+            if (args.report_only or not uses_performance_baseline(args.renderer)
                     or noise <= 0.06 or len(throughput_runs) >= args.max_runs):
                 break
             print(f"  throughput noise {noise:.1%}; automatically adding a repetition", flush=True)
@@ -1420,16 +1533,20 @@ def main() -> int:
             "active_fps": statistics.median(item["active_fps"] for item in throughput_runs),
             "active_fps_runs": [item["active_fps"] for item in throughput_runs],
             "metrics_active_fps": statistics.median(item["active_fps"] for item in metric_runs),
-            "metrics": median_metric_summaries([item["metrics"] for item in metric_runs]),
+            "metrics": summarize_runs([item["metrics"] for item in metric_runs]),
             "throughput_runs": throughput_runs,
             "metric_runs": metric_runs,
             "settings": settings,
             "lifecycle": summarize_case_lifecycle(throughput_runs),
-            "resources": median_metric_summaries([
+            "resources": summarize_runs([
                 item.get("resources", {}) for item in throughput_runs if item.get("resources")
             ]),
             "state": throughput_runs[0].get("state"),
             "state_primer": state_primer,
+            "actions": {
+                name: summarize_runs([item["actions"][name] for item in throughput_runs])
+                for name in throughput_runs[0].get("actions", {})
+            },
         }
         states = [item.get("state") for item in throughput_runs + metric_runs]
         scenario_report["state_consistent"] = states_consistent(states)
@@ -1450,7 +1567,7 @@ def main() -> int:
             scenario_report["active_fps_runs"]
         )
         scenario_report["throughput_stable"] = scenario_report["throughput_relative_mad"] <= 0.06
-        if (uses_performance_baseline(args.renderer)
+        if (not args.report_only and uses_performance_baseline(args.renderer)
                 and not scenario_report["throughput_stable"]):
             report["passed"] = False
         scenario_report["telemetry_overhead_fraction"] = (
@@ -1458,6 +1575,29 @@ def main() -> int:
             / scenario_report["active_fps"]
             if scenario_report["active_fps"] else 0.0
         )
+        scenario_report["red_flags"] = perf_diagnostics.red_flags(
+            scenario_report, args.frame_budget_ms, args.action_budget_ms)
+        if args.diagnose:
+            print(f"[{scenario}] diagnostic replay (excluded from scores)", flush=True)
+            diagnostic = run_case_safely(
+                exe=exe, work=work, user=case_user("diagnostic", 1),
+                fixture=fixture, external_fixture=external_fixture, tab_dir=tab_dir,
+                scenario=scenario, settings=settings, renderer=args.renderer,
+                mode="diagnostic", run_dir=run_root / scenario / "diagnostic-1",
+                frames=frames, warmup_frames=warmup_frames, screenshot=False, **case_watchdogs,
+            )
+            scenario_report["diagnostic_runs"] = [diagnostic]
+            if diagnostic.get("status") != "passed":
+                print(f"  diagnostic failed: {diagnostic.get('failure_kind')} "
+                      f"phase={diagnostic.get('last_phase')}: {diagnostic.get('error', '')[:250]}", flush=True)
+                scenario_report["status"] = "failed"
+                scenario_report["failures"] = [diagnostic]
+                report["passed"] = False
+            elif not states_consistent([scenario_report["state"], diagnostic["state"]]):
+                scenario_report["status"] = "failed"
+                scenario_report["failures"] = [{"failure_kind": "diagnostic_state_instability",
+                                                "states": [scenario_report["state"], diagnostic["state"]]}]
+                report["passed"] = False
         if settings.get("paced"):
             print(f"[{scenario}] present-paced runs: {paced_runs}", flush=True)
             paced_results = []
@@ -1494,7 +1634,7 @@ def main() -> int:
                 "active_fps": statistics.median(item["active_fps"] for item in paced_results),
                 "active_fps_runs": [item["active_fps"] for item in paced_results],
                 "target_fps": statistics.median(item["target_fps"] for item in paced_results),
-                "metrics": median_metric_summaries([item["metrics"] for item in paced_results]),
+                "metrics": summarize_runs([item["metrics"] for item in paced_results]),
                 "runs": paced_results,
             }
             scenario_report["paced"]["target_attainment"] = (
@@ -1514,7 +1654,9 @@ def main() -> int:
                         "details": visual_run["font_raster"]["failures"],
                     })
                     report["passed"] = False
-            if args.update_goldens:
+            if args.report_only:
+                scenario_report["visual"] = {"status": "captured", "current": str(current)}
+            elif args.update_goldens:
                 scenario_report["visual"] = {
                     "status": "pending_update",
                     "golden": str(golden), "current": str(current),
@@ -1545,7 +1687,10 @@ def main() -> int:
         )
     )
 
-    if not uses_performance_baseline(args.renderer):
+    if args.report_only:
+        report["performance_findings"] = []
+        report["baseline_status"] = "not_requested"
+    elif not uses_performance_baseline(args.renderer):
         report["performance_findings"] = []
         report["baseline_status"] = "not_applicable"
     elif baseline and not args.update_baseline:
@@ -1593,6 +1738,10 @@ def main() -> int:
         if not args.update_baseline:
             report["passed"] = False
 
+    report["budget_failed"] = args.fail_on_budget and any(case.get("red_flags") for case in report["scenarios"].values())
+    if report["budget_failed"]:
+        report["passed"] = False
+
     if args.update_goldens:
         for scenario in report["scenarios"].values():
             visual = scenario.get("visual")
@@ -1610,6 +1759,7 @@ def main() -> int:
     report_md_path = run_root / "report.md"
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     report_md_path.write_text(markdown_report(report), encoding="utf-8")
+    perf_diagnostics.write_report(report, run_root)
 
     if args.update_baseline and report["passed"]:
         args.baseline.parent.mkdir(parents=True, exist_ok=True)
@@ -1643,6 +1793,7 @@ def main() -> int:
                         "metrics": item["paced"]["metrics"],
                     } if item.get("paced") else None),
                     "metrics": item["metrics"],
+                    "actions": item.get("actions", {}),
                     "lifecycle": item.get("lifecycle", {}),
                     "resources": item.get("resources", {}),
                     "state": item.get("state"),
@@ -1664,6 +1815,7 @@ def main() -> int:
 
     print(report_md_path.read_text(encoding="utf-8"))
     print(f"JSON report: {report_path}")
+    print(f"HTML report: {run_root / 'report.html'}")
     return 0 if report["passed"] else 1
 
 

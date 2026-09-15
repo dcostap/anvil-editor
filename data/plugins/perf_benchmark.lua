@@ -31,12 +31,16 @@ end
 local SCROLL_SETTLE_EPSILON = 1e-8
 
 local benchmark = {
-  scenario = env_string("ANVIL_PERF_BENCHMARK_SCENARIO", "wrapped-buffer-steady"),
+  scenario = env_string("ANVIL_PERF_BENCHMARK_SCENARIO", "wrapped-document-steady"),
   mode = env_string("ANVIL_PERF_BENCHMARK_MODE", "metrics"),
   fixture = env_string("ANVIL_PERF_BENCHMARK_FILE"),
   tab_dir = env_string("ANVIL_PERF_BENCHMARK_TAB_DIR"),
   result_file = env_string("ANVIL_PERF_BENCHMARK_RESULT"),
   metrics_file = env_string("ANVIL_PERF_BENCHMARK_METRICS"),
+  actions_file = env_string("ANVIL_PERF_BENCHMARK_ACTIONS"),
+  workload_file = env_string("ANVIL_PERF_BENCHMARK_WORKLOAD"),
+  profile_dir = env_string("ANVIL_PERF_BENCHMARK_PROFILE_DIR"),
+  action_timeout = env_number("ANVIL_PERF_BENCHMARK_ACTION_TIMEOUT", 30),
   heartbeat_file = env_string("ANVIL_PERF_BENCHMARK_HEARTBEAT"),
   lifecycle_file = env_string("ANVIL_PERF_BENCHMARK_LIFECYCLE"),
   screenshot_file = env_string("ANVIL_PERF_BENCHMARK_SCREENSHOT"),
@@ -55,6 +59,7 @@ local benchmark = {
   window_width = math.max(320, math.floor(env_number("ANVIL_PERF_BENCHMARK_WINDOW_WIDTH", 1400))),
   window_height = math.max(240, math.floor(env_number("ANVIL_PERF_BENCHMARK_WINDOW_HEIGHT", 900))),
   rows = {},
+  action_rows = {},
   action_count = 0,
   phase = "setup",
   warmup_count = 0,
@@ -73,7 +78,7 @@ local benchmark = {
 }
 
 local metric_fields = {
-  "completion_ms", "action_ms", "event_ms", "update_ms", "pre_draw_ms",
+  "completion_ms", "action_id", "action_age_ms", "action_ms", "event_ms", "update_ms", "pre_draw_ms",
   "draw_emit_ms", "renderer_end_ms", "frame_ms", "present_ms", "core_step_ms",
   "total_ms", "draw_calls", "quad_instances", "texture_batch_breaks",
   "quad_batches", "unique_batch_srvs", "repeated_batch_srvs", "texture_uploads",
@@ -81,7 +86,8 @@ local metric_fields = {
   "display_packet_replays", "display_packet_commands_replayed",
   "display_packet_frame_bytes_copied", "display_packet_replay_ms",
   "text_render_calls", "text_render_glyphs", "text_render_hb_shape_ms",
-  "lua_heap_kib",
+  "lua_heap_kib", "run_threads_ms", "gc_ms", "text_width_calls",
+  "text_width_bytes", "text_render_shaped_cache_hits", "text_render_shaped_cache_misses",
 }
 
 local function write_atomic(path, contents)
@@ -176,7 +182,7 @@ write_result {
 }
 
 local function write_metrics()
-  if benchmark.mode ~= "metrics" and benchmark.mode ~= "paced-metrics" then return true end
+  if benchmark.mode == "throughput" then return true end
   if benchmark.metrics_file == "" then return true end
   local lines = { table.concat(metric_fields, ",") }
   for _, row in ipairs(benchmark.rows) do
@@ -187,6 +193,20 @@ local function write_metrics()
     lines[#lines + 1] = table.concat(values, ",")
   end
   return write_atomic(benchmark.metrics_file, table.concat(lines, "\n") .. "\n")
+end
+
+local function write_actions()
+  if benchmark.actions_file == "" then return true end
+  local fields = { "id", "name", "start_ms", "dispatch_ms", "ready_ms", "latency_ms", "redraws", "result" }
+  local lines = { table.concat(fields, ",") }
+  for _, row in ipairs(benchmark.action_rows) do
+    local values = {}
+    for i, field in ipairs(fields) do
+      values[i] = '"' .. tostring(row[field] or ""):gsub('"', '""') .. '"'
+    end
+    lines[#lines + 1] = table.concat(values, ",")
+  end
+  return write_atomic(benchmark.actions_file, table.concat(lines, "\n") .. "\n")
 end
 
 local function active_textview()
@@ -559,6 +579,12 @@ end
 
 local function setup_scenario()
   set_phase("setup", "setup_started")
+  if benchmark.mode == "diagnostic" then
+    benchmark.profile = require("core.perf_profile").start(benchmark.profile_dir, function()
+      local pending = benchmark.actions and benchmark.actions.pending
+      return benchmark.phase, pending and pending.name or benchmark.scenario
+    end)
+  end
   assert(benchmark.fixture ~= "", "ANVIL_PERF_BENCHMARK_FILE is required")
   system.set_window_size(core.window, benchmark.window_width, benchmark.window_height, 0, 0)
   config.auto_fps = false
@@ -571,6 +597,18 @@ local function setup_scenario()
   if core.status_bar then
     core.status_bar:display_messages(false)
     core.status_bar.message = nil
+  end
+
+  if benchmark.workload_file ~= "" then
+    local fp = assert(io.open(benchmark.workload_file, "rb"))
+    local settings = require("core.json").decode(fp:read("*a"))
+    fp:close()
+    benchmark.workload = require("core.perf_workloads").new(settings, settings.root)
+    benchmark.actions = require("core.perf_actions")(system.get_time, benchmark.action_timeout)
+    benchmark.view = benchmark.workload:setup()
+    mark_lifecycle("fixture_opened")
+    collectgarbage("collect")
+    return
   end
 
   local view = open_file(benchmark.fixture)
@@ -601,7 +639,7 @@ local function setup_scenario()
   end
   benchmark.view = view
 
-  if benchmark.scenario:find("wrapped%-buffer", 1, false) then
+  if benchmark.scenario:find("wrapped%-document", 1, false) then
     view:set_wrapping_enabled(true)
     linewrapping.update_textview_breaks(view)
   elseif benchmark.scenario == "markdown-long-link-caret-repeat" then
@@ -621,6 +659,7 @@ local function setup_scenario()
 end
 
 local function scenario_is_ready()
+  if benchmark.workload then return benchmark.workload:setup_ready() end
   local view = benchmark.view
   if not view then return false end
   if not view.buffer then return true end
@@ -655,6 +694,19 @@ local function scenario_is_ready()
 end
 
 local function perform_action()
+  if benchmark.workload then
+    if benchmark.phase == "measure" then
+      local index = benchmark.workload.completed + 1
+      benchmark.actions:start(benchmark.workload:action_name(index), function()
+        benchmark.workload:dispatch(index)
+        benchmark.view = benchmark.workload.view
+      end, function() return benchmark.workload:action_ready() end)
+      benchmark.pending_action_ms = benchmark.actions.pending.dispatch_ms
+      benchmark.action_count = index
+    end
+    core.redraw = true
+    return
+  end
   local view = benchmark.view or active_textview()
   if not view then return end
   local started = system.get_time()
@@ -670,7 +722,7 @@ local function perform_action()
       assert(command.perform("core:backspace"))
     end
     benchmark.action_count = benchmark.action_count + 1
-  elseif benchmark.scenario == "wrapped-buffer-scroll"
+  elseif benchmark.scenario == "wrapped-document-scroll"
       or benchmark.scenario == "specimen-scroll"
   then
     local line = benchmark.start_line + benchmark.action_count * benchmark.scroll_lines
@@ -706,12 +758,15 @@ local function metric_row(snapshot)
     completion_ms = (system.get_time() - benchmark.measure_start) * 1000,
     action_ms = benchmark.pending_action_ms,
     lua_heap_kib = collectgarbage("count"),
+    action_id = benchmark.actions and benchmark.actions.sequence or 0,
+    action_age_ms = benchmark.actions and benchmark.actions.pending
+      and (system.get_time() - benchmark.actions.pending.started) * 1000 or 0,
   }
   benchmark.pending_action_ms = 0
   for _, key in ipairs({
     "event_ms", "update_ms", "pre_draw_ms", "draw_emit_ms", "renderer_end_ms",
     "frame_ms", "present_ms", "core_step_ms", "total_ms", "draw_calls",
-    "quad_instances",
+    "quad_instances", "run_threads_ms", "gc_ms",
   }) do
     row[key] = tonumber(snapshot[key]) or 0
   end
@@ -721,7 +776,8 @@ local function metric_row(snapshot)
     "rencache_command_bytes", "display_packet_replays",
     "display_packet_commands_replayed", "display_packet_frame_bytes_copied",
     "display_packet_replay_ms", "text_render_calls", "text_render_glyphs",
-    "text_render_hb_shape_ms",
+    "text_render_hb_shape_ms", "text_width_calls", "text_width_bytes",
+    "text_render_shaped_cache_hits", "text_render_shaped_cache_misses", "texture_uploads",
   }) do
     row[key] = tonumber(renderer_stats[key]) or 0
   end
@@ -759,7 +815,9 @@ local function finish_success()
     selection_line, selection_col = benchmark.view.buffer:get_selection()
   end
   local metrics_ok, metrics_err = write_metrics()
-  local result_ok, result_err = write_result {
+  local actions_ok, actions_err = write_actions()
+  if not actions_ok then metrics_ok, metrics_err = nil, actions_err end
+  local fields = {
     done = metrics_ok and 1 or 0,
     error = metrics_ok and "" or tostring(metrics_err),
     scenario = benchmark.scenario,
@@ -769,6 +827,8 @@ local function finish_success()
     state_settle_frames = benchmark.state_settle_count,
     state_settle_max_frames = benchmark.state_settle_max_frames,
     elapsed_ms = string.format("%.6f", elapsed * 1000),
+    clock_origin_seconds = string.format("%.9f", benchmark.started_at),
+    measurement_origin_seconds = string.format("%.9f", benchmark.measure_start),
     active_fps = string.format("%.6f", benchmark.measure_count / elapsed),
     action_count = benchmark.action_count,
     renderer_path = renderer_stats.path or "unknown",
@@ -796,6 +856,10 @@ local function finish_success()
     scroll_to_y = benchmark.view and benchmark.view.scroll and benchmark.view.scroll.to
       and benchmark.view.scroll.to.y or 0,
   }
+  if benchmark.workload then
+    for key, value in pairs(benchmark.workload:state()) do fields[key] = value end
+  end
+  local result_ok, result_err = write_result(fields)
   if not result_ok then
     core.log_quiet("Performance benchmark result write failed: %s", tostring(result_err))
   end
@@ -813,6 +877,9 @@ local function fail(err)
   if benchmark.finished then return end
   benchmark.finished = true
   set_phase("failed", "failed")
+  if benchmark.profile then pcall(benchmark.profile.stop, benchmark.profile) end
+  write_actions()
+  write_metrics()
   write_result {
     done = 0,
     scenario = benchmark.scenario,
@@ -824,6 +891,16 @@ local function fail(err)
     coroutine.yield()
     core.quit(true, 1)
   end)
+end
+
+-- Check readiness after updates, before drawing. A later result needs another redraw.
+local old_root_draw = core.root_panel.draw
+core.root_panel.draw = function(self, ...)
+  if benchmark.actions and benchmark.phase == "measure" and not benchmark.finished then
+    local ok, err = pcall(benchmark.actions.before_draw, benchmark.actions)
+    if not ok then fail(err) end
+  end
+  return old_root_draw(self, ...)
 end
 
 local function request_screenshot()
@@ -861,7 +938,12 @@ end
 local old_on_frame = perf.on_frame
 function perf.on_frame(snapshot)
   old_on_frame(snapshot)
-  if benchmark.finished or not snapshot or not snapshot.did_redraw then return end
+  if benchmark.finished or not snapshot then return end
+  if benchmark.actions then
+    local ok, err = pcall(benchmark.actions.check_timeout, benchmark.actions)
+    if not ok then fail(err); return end
+  end
+  if not snapshot.did_redraw then return end
   if not benchmark.first_redraw_recorded then
     benchmark.first_redraw_recorded = true
     mark_lifecycle("first_redraw")
@@ -874,22 +956,37 @@ function perf.on_frame(snapshot)
         collectgarbage("collect")
         set_phase("measure", "measurement_started")
         benchmark.measure_start = system.get_time()
+        if benchmark.actions then benchmark.actions.origin = benchmark.measure_start end
         perform_action()
       else
         perform_action()
       end
     elseif benchmark.phase == "measure" then
       benchmark.measure_count = benchmark.measure_count + 1
-      if benchmark.mode == "metrics" or benchmark.mode == "paced-metrics" then
+      if benchmark.mode ~= "throughput" then
         benchmark.rows[#benchmark.rows + 1] = metric_row(snapshot)
       else
         benchmark.pending_action_ms = 0
       end
-      if benchmark.measure_count >= benchmark.measured_frames then
+      local complete = benchmark.measure_count >= benchmark.measured_frames
+      local next_action = true
+      if benchmark.actions then
+        local row = benchmark.actions:after_frame(true)
+        next_action = row ~= nil
+        if row then
+          benchmark.action_rows[#benchmark.action_rows + 1] = row
+          benchmark.workload.completed = benchmark.workload.completed + 1
+        end
+        complete = benchmark.workload.completed >= benchmark.workload.settings.actions
+      end
+      if complete then
         benchmark.measure_end = system.get_time()
+        if benchmark.profile then benchmark.profile:stop() end
         begin_state_settle()
-      else
+      elseif next_action then
         perform_action()
+      else
+        core.redraw = true
       end
     elseif benchmark.phase == "capture_settle" then
       benchmark.capture_settle_count = benchmark.capture_settle_count + 1

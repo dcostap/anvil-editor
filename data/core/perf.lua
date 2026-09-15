@@ -339,7 +339,7 @@ function perf.begin_draw_frame()
   end
   record.redraw_begin_count = (record.redraw_begin_count or 0) + 1
   local capture_detail = record.redraw_begin_count == 1
-    or record.redraw_begin_count % detail_frame_interval == 0
+    or record.redraw_begin_count % record.detail_interval == 0
   record.capture_detail = capture_detail
   if not capture_detail then
     core.perf_draw_scope_active = false
@@ -347,7 +347,10 @@ function perf.begin_draw_frame()
     return
   end
   core.perf_draw_scope_active = true
+  local phase, action
+  if record.scope_context then phase, action = record.scope_context() end
   draw_scope_frame = {
+    phase = phase or "", action = action or "",
     started = system.get_time(),
     stack = {},
     paths = {},
@@ -911,6 +914,7 @@ local function publish_draw_scope_frame(snapshot)
     record.scope_file:write(table.concat({
       tostring(frame.index),
       string.format("%.6f", frame.time),
+      csv_escape(frame.phase), csv_escape(frame.action),
       string.format("%.3f", frame.draw_emit_ms),
       csv_escape(row.path),
       tostring(row.calls),
@@ -1377,8 +1381,8 @@ local function write_summary(path)
   file:write(string.format("Frame target: target_fps=%s budget_ms=%.3f\n",
     tostring(record.target_fps), 1000 / math.max(1, record.target_fps or 1)))
   file:write(string.format(
-    "Recording overhead: draw scopes and API callers sample frame 1 and each %dth frame; Lua samples each %d instructions; D3D glyph timing samples each 32nd texture push.\n",
-    detail_frame_interval, sample_interval
+    "Recording overhead: draw scopes and API callers sample frame 1 and each %dth frame; instruction sample interval=%d (0 means disabled); D3D glyph timing samples each 32nd texture push.\n",
+    record.detail_interval, record.instruction_samples and sample_interval or 0
   ))
   file:write("Numeric frame and renderer costs cover each redraw. Detailed probes cover sampled redraws only.\n")
   file:write("Redraw costs: totals, averages, and maxima use redraw samples only. Nested timings overlap.\n")
@@ -1831,9 +1835,10 @@ function perf.is_recording()
   return recording
 end
 
-function perf.start_recording()
+function perf.start_recording(options)
   if recording then return record and record.dir end
-  local base = output_dir() .. PATHSEP .. timestamp_name()
+  options = options or {}
+  local base = options.base_path or (output_dir() .. PATHSEP .. timestamp_name())
   local frames_path = base .. "_frames.csv"
   local file = assert(io.open(frames_path, "wb"))
   local scope_path = base .. "_draw_scopes.csv"
@@ -1841,9 +1846,13 @@ function perf.start_recording()
   local file_open_path = base .. "_file_opens.csv"
   local file_open_file = assert(io.open(file_open_path, "wb"))
   write_frame_header(file)
-  scope_file:write("frame,time,draw_emit_ms,path,calls,inclusive_ms,exclusive_ms,scope_heap_delta_kb,scope_heap_drop_calls,frame_heap_delta_kb,scope_imbalance\n")
+  scope_file:write("frame,time,phase,action,draw_emit_ms,path,calls,inclusive_ms,exclusive_ms,scope_heap_delta_kb,scope_heap_drop_calls,frame_heap_delta_kb,scope_imbalance\n")
   file_open_file:write("open_id,event,time,offset_ms,duration_ms,depth,path,source,detail\n")
   record = {
+    quiet = options.quiet,
+    scope_context = options.context,
+    instruction_samples = options.instruction_samples ~= false,
+    detail_interval = math.max(1, options.detail_interval or detail_frame_interval),
     base = base,
     frames_path = frames_path,
     summary_path = base .. "_summary.txt",
@@ -1905,13 +1914,13 @@ function perf.start_recording()
   wrap_system_api("absolute_path")
   wrap_system_api("set_text_input_rect")
   wrap_system_api("window_has_focus")
-  debug.sethook(hook, "", sample_interval)
+  if record.instruction_samples then debug.sethook(hook, "", sample_interval) end
   return frames_path
 end
 
 function perf.stop_recording()
   if not recording or not record then return nil end
-  debug.sethook()
+  if record.instruction_samples then debug.sethook() end
   unwrap_renderer_api()
   unwrap_system_api()
   record.stop_time = system.get_time()
@@ -1926,6 +1935,7 @@ function perf.stop_recording()
   write_counts_csv(record.detail_path, "value,metric", sorted_counts(record.detail_counts))
   write_summary(record.summary_path)
   local summary_path = record.summary_path
+  local quiet = record.quiet
   recording = false
   record = nil
   draw_scope_frame = nil
@@ -1933,8 +1943,12 @@ function perf.stop_recording()
   active_file_open = nil
   core.perf_draw_scope_active = false
   core.perf_file_open_tracking_active = false
-  system.set_clipboard(summary_path)
-  core.log("Performance recording saved: %s", summary_path)
+  if quiet then
+    core.log_quiet("Performance recording saved: %s", summary_path)
+  else
+    system.set_clipboard(summary_path)
+    core.log("Performance recording saved: %s", summary_path)
+  end
   return summary_path
 end
 

@@ -7,6 +7,7 @@ subprojects/.wraplock
 /appimage*
 .vscode
 .cache
+__pycache__/
 .ccls-cache
 .pragtical-debug.log
 .run*

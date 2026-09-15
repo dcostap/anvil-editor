@@ -2,6 +2,156 @@
 
 `run_render_perf_gate.py` measures the D3D11 command renderer and its software fallback. It checks deterministic captures without touching the interactive desktop.
 
+## Editor workload benchmarks and diagnosis
+
+The same runner also measures interactive workloads. Do not create a separate
+hidden-window runner for editor benchmarks.
+
+Run the stress workloads and their diagnostic replays:
+
+```sh
+python tools/run_render_perf_gate.py --suite stress --diagnose --report-only
+```
+
+Use `--suite interactive` for search, file switching, file opens, and edits.
+Use `--suite diff` for the Diff View size variants.
+Use `--scenario NAME` for one workload.
+
+For a short verification run:
+
+```sh
+python tools/run_render_perf_gate.py --suite stress --diagnose --report-only \
+  --runs 1 --metrics-runs 1 --max-runs 1 --actions 4 \
+  --frames 12 --warmup-frames 2
+```
+
+Open the printed `report.html` path. The runner does not open a browser.
+The report contains:
+
+- ranked absolute frame and action budget flags;
+- action dispatch, readiness, and completed-redraw latency distributions;
+- raw action results and per-frame timings;
+- frame work counts, lifecycle timings, and memory growth;
+- exclusive and inclusive draw-scope costs, separated by phase and action;
+- offline SVG flame graphs and a Speedscope JSON export;
+- a Chrome Trace timeline with actions, frame counters, lifecycle marks, and file-open stages;
+- backbuffer or software-surface checkpoints;
+- links to full profiler counters, slow frames, and sampled stacks.
+
+The default budgets are 16.67 ms per frame and 100 ms per action.
+For a 165 Hz target, use `--frame-budget-ms 6.06`.
+Set another action limit with `--action-budget-ms`.
+Flags report measured costs, not proven causes. Compare size variants before
+you conclude that cost grows with file size or change count.
+Run summaries use medians for typical costs. Maxima and memory peaks retain
+the worst recorded value across repetitions.
+
+`--report-only` does not require a baseline or golden image. It still fails
+on crashes, missing results, timeouts, unstable state, or unstable captures.
+A passing run can contain budget flags. Add `--fail-on-budget` to make those
+flags fail the command.
+
+You can pass a previous `report.json` as `--baseline PATH` for a relative comparison.
+Use the same workload settings and frame counts. Use `--no-visual` when you
+only want numeric comparisons without stored goldens. Do not use `--report-only`
+for that comparison. Action p50 and p95 regress when both 10% and 2 ms limits are exceeded.
+
+### Stress workloads
+
+| Scenario | Workload |
+|---|---|
+| `diff-scroll-medium` | 4,000 source lines, dense changes, traversal across the file |
+| `diff-scroll-large` | 40,000 source lines, the same change density and traversal |
+| `diff-steady-large` | Repeated redraws of the large Diff View |
+| `diff-navigate-large` | Commands that move to successive changes |
+| `fuzzy-files-medium` | Real Project File Search over 1,000 generated files |
+| `fuzzy-files-large` | The same search over 10,000 files |
+| `fuzzy-text-large` | Exact text queries over 10,000 files |
+| `file-switch-large` | Cached switching among 16 files with 4,000 lines each |
+| `file-open-large` | First open of a generated 100,000-line file |
+| `file-open-huge` | First open of a generated 500,000-line file |
+| `long-line-edit` | Insert and undo in 32 lines with 64 KiB per line |
+| `multi-caret-edit` | Insert and undo at 1,024 carets |
+
+The stress suite also includes the File Tree edit and long Markdown link workloads.
+Stress windows use fixed dimensions. The new workloads use low code zoom
+through the normal scale API. Diff fixtures contain replacements, removals,
+and unequal insertions. They use the real Diff View, not a mock Git response.
+
+Fixture generation runs outside measurement. Each fixture has a content hash
+and a manifest. Each new workload uses its own working directory. Git discovery
+cannot reach the source repository above the private run directory.
+
+### Action completion contract
+
+The runner dispatches one action, then continues the real event loop.
+It checks the requested result after updates and before drawing.
+It completes the action only after that redraw finishes.
+An asynchronous result that arrives later needs another redraw.
+
+File search completes when the requested result appears in the visible result list.
+This measures result availability, not completion of all background index work.
+The first query has a separate first-query label. Later queries reuse the picker.
+Startup index preparation can finish before the first query. This is not an index-cold measurement.
+Queries stay within the generated Project. They do not use the user's Everything service.
+
+First-open workloads start with a neutral View. They do not open the large file
+during warmup. Each process measures exactly one first open. File switching
+preloads its files because it measures cached switching, not first opens.
+Here, cached means that the Buffer is already loaded. View and renderer caches
+can still need work after a switch.
+First-open workloads require `--user-state-mode clean`.
+The runner checks loaded line counts, file identity, edit results, and navigation results.
+It also rejects a scroll scene that sends no scroll actions.
+Older baselines can fail state checks after these corrections. Inspect the
+results before you replace a baseline.
+
+`--actions N` controls new workloads. First-open workloads always use one action.
+`--frames N` controls the existing frame-driven scenes, not asynchronous action counts.
+New action workloads warm up by redrawing without sending actions.
+The stress suites default to 20 warmup frames and 12 actions.
+
+Action timeouts are independent of heartbeat activity. A picker that keeps
+redrawing without producing its result still fails. Use
+`--action-timeout-seconds N` to change the 30-second action deadline.
+
+Compare action latency for interactive workloads. FPS alone can be misleading:
+a pending search can produce many frames before it produces a result.
+Completed-redraw latency does not include physical display scanout or OS input delivery.
+
+### Diagnostic pass limits
+
+`--diagnose` repeats the same workload in another private process.
+Diagnostic costs never replace throughput or action scores.
+The runner compares its final state and action results with the scoring runs.
+
+The diagnostic pass records draw scopes on every redraw.
+It also uses LuaJIT's timer sampler with a requested 1 ms interval.
+Flame graphs include Lua call stacks, compiled Lua, C boundaries, GC, and JIT compilation.
+They separate setup, readiness, warmup, and measured actions.
+Heap deltas show net growth, not total allocations. Profiler allocations affect them.
+
+Native call stacks are not captured. A C address identifies a Lua call boundary,
+not the full native call tree. Native renderer counters and file-open stage
+timers provide further evidence. Worker threads and child processes need a
+separate native profile when those boundaries own the cost.
+
+The report states when LuaJIT sampling is unavailable. Short phases can have
+few samples or no samples. The sampler retains at most 50,000 distinct stacks;
+an overflow row retains the remaining sample count.
+Diagnostic files can contain Buffer text and paths. Keep run folders private.
+
+### Adding a workload
+
+1. Add fixed settings and fixture generation in `tools/perf_workloads.py`.
+2. Add real actions and result checks in `data/core/perf_workloads.lua`.
+3. Keep fixture generation out of measured actions.
+4. Define what makes the result ready to draw.
+5. Verify the workload through the private runner and inspect its checkpoint.
+
+Use commands, input handlers, and View or Buffer methods. Do not inject OS input.
+Do not use arbitrary delays as evidence that an asynchronous action completed.
+
 ## Isolation guarantees
 
 Every benchmark process receives:
@@ -29,11 +179,12 @@ Git and can contain Document contents, so do not publish specimen run folders.
 
 ## Measurement modes
 
-Each scenario runs in two modes:
+The runner supports these modes:
 
-- **throughput**: records only frame count and elapsed time; this is the authoritative active-FPS score
+- **throughput**: records frame count, elapsed time, and action latency; this is the authoritative scoring run
 - **metrics**: retains per-frame production timing and renderer counters in memory, then writes one CSV after measurement
 - **paced metrics**: repeats user-facing scenarios with D3D11 vsync enabled and records completion-interval percentiles
+- **diagnostic**: repeats the workload with detailed scopes and LuaJIT samples; these costs do not affect scores
 
 Metrics include p50/p95/p99/max, frame-budget miss counts, the longest run of
 missed 16.67 ms budgets, first/last-quarter averages, rolling p95 maxima, and
@@ -204,7 +355,7 @@ tools/baselines/render_perf_windows.json
 Only D3D11 runs compare results with this performance baseline. Software runs
 still report timing, image stability, and seam results. Their performance
 baseline status is `not_applicable`. Software timing variation does not change
-the command exit status.
+the command exit status unless `--fail-on-budget` is set.
 
 Tracked renderer-specific visual goldens live under:
 
@@ -253,4 +404,12 @@ reaps a spawned descendant and writes a minidump:
 
 ```sh
 python -m unittest tests.tools.test_render_perf_harness -v
+python -m unittest tests.tools.test_perf_diagnostics -v
+```
+
+The action scheduler and isolated capture checks also run through Meson:
+
+```sh
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/perf_actions.lua
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/perf_frame_costs.lua
 ```

@@ -39,6 +39,42 @@ test.describe("performance frame cost report", function()
     test.match(text, "Renderer paths: test")
   end)
 
+  test.it("writes an isolated capture without changing the clipboard or debug hook", function()
+    local base = USERDIR .. PATHSEP .. "isolated-performance"
+    local clipboard = system.get_clipboard()
+    local hook, mask, count = debug.gethook()
+    frames = perf.start_recording {
+      base_path = base, quiet = true, instruction_samples = false, detail_interval = 1,
+    }
+    local active_hook, active_mask, active_count = debug.gethook()
+    test.equal(active_hook, hook)
+    test.equal(active_mask, mask)
+    test.equal(active_count, count)
+    perf.on_frame { did_redraw = true, draw_emit_ms = 7 }
+    local summary = perf.stop_recording()
+    test.equal(frames, base .. "_frames.csv")
+    test.equal(summary, base .. "_summary.txt")
+    test.equal(system.get_clipboard(), clipboard)
+  end)
+
+  test.it("labels captured draw scopes with their phase and action", function()
+    frames = perf.start_recording {
+      quiet = true, instruction_samples = false,
+      context = function() return "measure", "query" end,
+    }
+    perf.begin_draw_frame()
+    local scope = perf.scope_begin("result-list")
+    perf.scope_end(scope)
+    perf.finish_draw_frame()
+    perf.on_frame { did_redraw = true, draw_emit_ms = 1 }
+    perf.stop_recording()
+    local file = assert(io.open(frames:gsub("_frames%.csv$", "_draw_scopes.csv"), "rb"))
+    local text = file:read("*a")
+    file:close()
+    test.match(text, ",measure,query,")
+    test.match(text, "result%-list")
+  end)
+
   test.it("reports small timers even when large counters fill the detail list", function()
     frames = perf.start_recording()
     for i = 1, 80 do perf.add_detail("large_counter_" .. i, 10000) end
