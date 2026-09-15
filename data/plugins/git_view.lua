@@ -407,6 +407,7 @@ command.add(nil, {
     perform = function()
       local session, view = active_or_open_view()
       local function open_diff(v)
+        v:sync_selection_from_pane()
         local source = v:model_tab()
         if source and source.kind == "file_history" and source.loading then
           v.model:load_file_history(source, function() open_diff(v) end)

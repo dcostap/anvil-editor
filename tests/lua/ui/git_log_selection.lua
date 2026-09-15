@@ -1,6 +1,8 @@
 local core = require "core"
 local command = require "core.command"
 local keymap = require "core.keymap"
+local config = require "core.config"
+local style = require "core.style"
 local panes = require "core.panes"
 local test = require "core.test"
 local git_view = require "plugins.git_view"
@@ -12,6 +14,7 @@ local function open_log()
   })
   view.refresh_pending = nil
   view.model.repo = { root = "C:/row-selection-repo" }
+  view.refresh_started = true
   view.model.backend = setmetatable({
     changed_files = function(_, _, _, _, done) done({}, nil) end,
   }, { __index = backend })
@@ -114,5 +117,161 @@ test.describe("Git Log row selection", function()
     local s = selection(list)
     test.equal(s[1], s[3])
     test.equal(s[2], s[4])
+    keymap.modkeys.shift = true
+    view:on_mouse_pressed("left", x + 15, y2 + 1, 1)
+    view:on_mouse_released("left", x + 15, y2 + 1)
+    test.same(list:get_selected_rows(), { 1, 2 })
+  end)
+
+  test.it("uses the selected range for details and the Commit Diff command", function()
+    local view, list = open_log()
+    view.model.backend.changed_files = function(_, left, right, _, done)
+      done({ { status = "modified", old_path = "range.txt", new_path = "range.txt" } })
+    end
+    view.model.backend.file_at = function(_, revision, _, _, done)
+      done(revision == "aaaa" and "before\n" or "after\n")
+    end
+    command.perform("core:select_to_next_line")
+    view:sync_selection_from_pane()
+    view:update_pane_buffers()
+    local details = table.concat(view:pane_view("details").buffer.lines)
+    test.ok(details:find("2 commits", 1, true), details)
+    test.ok(details:find("range.txt", 1, true), details)
+    command.perform("git:open_selected_commit_diff")
+    local diff = panes.active().current_view:model_tab()
+    test.equal(diff.kind, "commit_diff")
+    test.equal(diff.left, "aaaa")
+    test.equal(diff.right, "cccc")
+    test.same(list:get_selected_rows(), { 1, 2 })
+  end)
+
+  test.it("shows an unsupported selection instead of opening one selected commit", function()
+    local view, list = open_log()
+    list:set_selection_state({ selections = { 1, 1, 1, 1, 3, 1, 3, 1 }, last_selection = 2 })
+    view:sync_selection_from_pane()
+    view:update_pane_buffers()
+    local details = table.concat(view:pane_view("details").buffer.lines)
+    test.ok(details:find("gaps", 1, true), details)
+    local opened, err = view:activate_selected()
+    test.equal(opened, nil)
+    test.ok(err and err.kind == "non_contiguous")
+    opened, err = view:activate_selected_point()
+    test.equal(opened, nil)
+    test.ok(err and err.kind == "non_contiguous")
+    test.same(list:get_selected_rows(), { 1, 3 })
+    test.equal(#view.model.tabs, 1)
+  end)
+
+  test.it("keeps separate selected rows during an added mouse selection", function()
+    local _, list = open_log()
+    keymap.modkeys.ctrl = true
+    local x, y = list:get_line_screen_position(3)
+    list:on_mouse_pressed("left", x + 5, y + 1, 1)
+    list:on_mouse_moved(x + 6, y + 1, 1, 0)
+    list:on_mouse_released("left", x + 6, y + 1)
+    test.same(list:get_selected_rows(), { 1, 3 })
+  end)
+
+  test.it("compares text-selected commits without including an untouched final row", function()
+    local view, list = open_log()
+    command.perform("git:toggle_row_selection_mode")
+    list:set_selection_state({ selections = { 3, 1, 1, 1 } })
+    view:sync_selection_from_pane()
+    local revision = view.model:selected_log_revision()
+    test.equal(revision.left, "aaaa")
+    test.equal(revision.right, "cccc")
+    command.perform("git:toggle_row_selection_mode")
+    test.same(list:get_selected_rows(), { 1, 2 })
+  end)
+
+  test.it("includes the selected range and its changed files in a Text Capture", function()
+    local view = open_log()
+    view.model.backend.changed_files = function(_, _, _, _, done)
+      done({ { status = "modified", old_path = "range.txt", new_path = "range.txt" } })
+    end
+    command.perform("core:select_to_next_line")
+    view:sync_selection_from_pane()
+    local capture = view:text_capture()
+    test.ok(capture.text:find("2 commits", 1, true), capture.text)
+    test.ok(capture.text:find("range.txt", 1, true), capture.text)
+  end)
+
+  for _, source in ipairs { "log-list", "details" } do
+    test.it("opens a range file comparison through " .. source .. " activation", function()
+      local view = open_log()
+      view.model.backend.changed_files = function(_, _, _, _, done)
+        done({ { status = "modified", old_path = "range.txt", new_path = "range.txt" } })
+      end
+      view.model.backend.file_at = function(_, revision, _, _, done)
+        done(revision .. "\n")
+      end
+      command.perform("core:select_to_next_line")
+      view:sync_selection_from_pane()
+      view:update_pane_buffers()
+      if source == "details" then
+        view:focus_pane_view("details")
+        view:select_detail_file_point(view:detail_file_points()[1])
+      end
+      command.perform("git:activate_selected_row")
+      local comparison = panes.active().current_view
+      test.not_nil(comparison.buffer_view_a)
+      test.equal(comparison.buffer_view_a.buffer:get_utf8_line(1), "aaaa\n")
+      test.equal(comparison.buffer_view_b.buffer:get_utf8_line(1), "cccc\n")
+    end)
+  end
+
+  test.it("paints whole rows without a caret, then shows the text caret after switching modes", function()
+    local _, list = open_log()
+    command.perform("core:select_to_next_line")
+    local saved, paints, carets = {}, {}, {}
+    local root = core.root_panel
+    local submit, clip, blink = root.submit_keyboard_caret, core.clip_rect_stack, config.disable_blink
+    local function restore()
+      for name, fn in pairs(saved) do renderer[name] = fn end
+      root.submit_keyboard_caret, core.clip_rect_stack, config.disable_blink = submit, clip, blink
+    end
+    for _, name in ipairs {
+      "draw_rect", "draw_poly", "draw_rect_grid", "draw_rounded_rect", "draw_text",
+      "draw_text_known_bounds", "set_clip_rect", "display_packet",
+    } do
+      saved[name] = renderer[name]
+      renderer[name] = function() end
+    end
+    renderer.display_packet = nil
+    renderer.draw_text = function(font, text, x, _, _, opts) return x + font:get_width(text, opts) end
+    renderer.draw_rect = function(x, y, w, h, color)
+      local bounds = core.clip_rect_stack[#core.clip_rect_stack]
+      if color == style.selection then
+        paints[#paints + 1] = {
+          math.max(x, bounds[1]), math.max(y, bounds[2]),
+          math.min(x + w, bounds[1] + bounds[3]), math.min(y + h, bounds[2] + bounds[4]),
+        }
+      end
+      if color == style.caret then carets[#carets + 1] = { x, y } end
+    end
+    root.submit_keyboard_caret = function(_, target) carets[#carets + 1] = target end
+    core.clip_rect_stack = { { 0, 0, 900, 600 } }
+    config.disable_blink = true
+    list.active_window_has_focus = function() return true end
+    local ok, err = pcall(function()
+      list:draw()
+      test.equal(#carets, 0)
+      local function selected_at(x, y)
+        for _, rect in ipairs(paints) do
+          if x >= rect[1] and x < rect[3] and y >= rect[2] and y < rect[4] then return true end
+        end
+      end
+      for _, row in ipairs { 1, 2 } do
+        local _, y = list:get_line_screen_position(row)
+        y = y + list:get_line_height() / 2
+        test.ok(selected_at(list.position.x + 1, y), "the row highlight must include the graph gutter")
+        test.ok(selected_at(list.position.x + list.size.x - 1, y), "the row highlight must reach the right edge")
+      end
+      command.perform("git:toggle_row_selection_mode")
+      list:draw()
+      test.ok(#carets > 0, "normal text mode must show a caret")
+    end)
+    restore()
+    if not ok then error(err, 0) end
   end)
 end)

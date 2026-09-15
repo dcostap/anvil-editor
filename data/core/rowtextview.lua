@@ -57,8 +57,8 @@ function RowTextView:select_row(row, extend, add)
   row = common.clamp(row, 1, count)
   local state = self:get_selection_state()
   local anchor = extend and state.selections[(state.last_selection - 1) * 4 + 3] or row
-  local s = add and state.selections or {}
-  local i = #s + 1
+  local s = (add or extend) and state.selections or {}
+  local i = add and (#s + 1) or extend and ((state.last_selection - 1) * 4 + 1) or 1
   s[i], s[i + 1], s[i + 2], s[i + 3] = row, 1, anchor, 1
   self:set_selection_state({ selections = s, last_selection = (i + 3) / 4 })
   self:normalize_row_selection()
@@ -67,9 +67,23 @@ function RowTextView:select_row(row, extend, add)
 end
 
 function RowTextView:set_row_selection_mode(enabled)
+  local state = self:get_selection_state()
+  if enabled and not self.row_selection_mode then
+    for i = 1, #state.selections, 4 do
+      local s = state.selections
+      local endpoint = s[i] > s[i + 2] and i or s[i + 2] > s[i] and (i + 2)
+      if endpoint and s[endpoint + 1] == 1 then
+        s[endpoint] = s[endpoint] - 1
+        s[endpoint + 1] = #self.buffer.lines[s[endpoint]]
+      end
+    end
+  end
   self.row_selection_mode = enabled
   self.mouse_selecting = nil
-  if enabled then self:normalize_row_selection() end
+  if enabled then
+    self:set_selection_state(state)
+    self:normalize_row_selection()
+  end
   self:invalidate_line_render("row-selection-mode")
   core.blink_reset()
   core.redraw = true
@@ -145,16 +159,20 @@ function RowTextView:get_current_line_highlight_mode()
   return RowTextView.super.get_current_line_highlight_mode(self)
 end
 
-function RowTextView:draw_line_body(line, x, y)
-  if self.row_selection_mode then
+function RowTextView:draw_row_selection(line, x, y, width)
+  if self.row_selection_mode and line <= self:get_selectable_row_count() then
     local s = self:get_selection_state().selections
     for i = 1, #s, 4 do
       if line >= math.min(s[i], s[i + 2]) and line <= math.max(s[i], s[i + 2]) then
-        renderer.draw_rect(self.position.x, y, self.size.x, self:get_line_height(), style.selection)
+        renderer.draw_rect(x, y, width, self:get_line_height(), style.selection)
         break
       end
     end
   end
+end
+
+function RowTextView:draw_line_body(line, x, y)
+  self:draw_row_selection(line, self.position.x, y, self.size.x)
   return RowTextView.super.draw_line_body(self, line, x, y)
 end
 

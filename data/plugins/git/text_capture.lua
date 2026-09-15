@@ -111,12 +111,17 @@ local function append_files(lines, files, selected)
 end
 
 local function append_commit_details(lines, commit)
-  section(lines, "Selected commit")
+  section(lines, commit and commit.kind == "commit_range" and "Selected commit range" or "Selected commit")
   if not commit then
     add(lines, "(none)")
     return
   end
   add_field(lines, "Subject", commit.subject)
+  if commit.kind == "commit_range" then
+    add_field(lines, "Commits", commit.count)
+    add_field(lines, "Left revision", commit.left)
+    add_field(lines, "Right revision", commit.right)
+  end
   if commit.kind ~= "working_tree" and commit.kind ~= "local_changes" then
     add_field(lines, "Hash", commit.hash)
   end
@@ -177,7 +182,9 @@ local function build_log(view, tab, lines)
   add_field(lines, "Loading", (tab.loading or tab.loading_more) and "yes" or "no")
   if tab.error then add_field(lines, "Error", tab.error.message or tab.error.kind or tab.error) end
   local selected_line = append_commits(lines, tab.commits, tab.selected_commit, "Commits")
-  append_commit_details(lines, tab.commits and tab.commits[tab.selected_commit])
+  local revision, err = view.model:selected_log_revision()
+  if err then add_field(lines, "Selection error", err.message) end
+  append_commit_details(lines, revision)
   return selected_line
 end
 

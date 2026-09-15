@@ -258,6 +258,7 @@ local function graph_gutter_width(view)
 end
 
 local function draw_graph_gutter(view, line, x, y)
+  view:draw_row_selection(line, x, y, view:get_gutter_width())
   local row = view.git_graph_rows and view.git_graph_rows[line]
   local height = view:get_line_height()
   if not row then return height end
@@ -871,6 +872,10 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
       core.blink_reset()
     elseif button == "left" and pane.buffer and pane.resolve_screen_position then
       local cmd = clicks == 2 and "core:set_cursor_word" or clicks and clicks >= 3 and "core:set_cursor_line" or "core:set_cursor"
+      if pane.row_selection_mode == false then
+        if keymap.modkeys.shift then cmd = "core:select_to_cursor"
+        elseif keymap.modkeys.ctrl or keymap.modkeys.cmd then cmd = "core:split_cursor" end
+      end
       content_click = command.perform(cmd, x, y, clicks)
     end
     self.mouse_router:capture(pane)
@@ -1070,7 +1075,7 @@ local function sync_changed_file_tree_mappings(tab, cache)
   tab.file_line_meta = cache and cache.line_meta or nil
 end
 
-local function commit_details_lines(commit, view)
+local function commit_details_lines(commit, view, selection_error)
   local lines, line_meta = {}, {}
   local tree, tree_offset
   local function add(text, meta)
@@ -1078,11 +1083,15 @@ local function commit_details_lines(commit, view)
     line_meta[#lines] = meta
   end
   if not commit then
-    add("Select a commit", { role = "message", text = "Select a commit" })
+    local text = selection_error and selection_error.message or "Select a commit"
+    add(text, { role = "message", text = text, error = selection_error ~= nil })
     return lines, line_meta
   end
   add(commit.subject or "", { role = "subject", text = commit.subject or "" })
-  if commit.kind ~= "working_tree" then
+  if commit.kind == "commit_range" then
+    local value = commit.left .. " → " .. commit.right
+    add("Compare: " .. value, { role = "field", label = "Compare: ", value = value, value_is_code = true })
+  elseif commit.kind ~= "working_tree" then
     add("Hash: " .. tostring(commit.hash or ""), {
       role = "field",
       label = "Hash: ",
@@ -1136,6 +1145,12 @@ local function commit_details_lines(commit, view)
   return lines, line_meta, tree, tree_offset
 end
 
+local function detail_key(commit)
+  if not commit then return nil end
+  if commit.kind == "commit_range" then return commit.left .. ":" .. commit.right end
+  return commit.local_scope or (commit.kind == "working_tree" and "WORKING_TREE" or commit.hash)
+end
+
 function GitView:detail_commit_for_tab(tab)
   if not tab then return nil end
   local commit
@@ -1143,11 +1158,9 @@ function GitView:detail_commit_for_tab(tab)
     commit = tab.commits and tab.commits[tab.selected_commit]
     if tab.selected_commit_hash and (not commit or commit.hash ~= tab.selected_commit_hash) then return nil end
   else
-    local log_tab = self.model:log_tab()
-    commit = log_tab.commits and log_tab.commits[log_tab.selected_commit]
-    if log_tab.selected_commit_hash and (not commit or commit.hash ~= log_tab.selected_commit_hash) then return nil end
+    commit = self.model:selected_log_revision()
   end
-  local key = commit and (commit.local_scope or (commit.kind == "working_tree" and "WORKING_TREE" or commit.hash))
+  local key = detail_key(commit)
   local collapsed = key and self.model.details_tree_collapsed and self.model.details_tree_collapsed[key]
   if collapsed then commit.details_tree_collapsed = collapsed end
   return commit
@@ -1176,7 +1189,7 @@ function GitView:toggle_details_tree_folder(view, line)
   if not (commit and row and row.type == "dir" and view:toggle_path_tree_folder(line)) then return false end
   refresh_view_changed_file_tree_cache(view)
   commit.details_tree_collapsed = view.path_tree.collapsed
-  local key = commit.local_scope or (commit.kind == "working_tree" and "WORKING_TREE" or commit.hash)
+  local key = detail_key(commit)
   if key then
     self.model.details_tree_collapsed = self.model.details_tree_collapsed or {}
     self.model.details_tree_collapsed[key] = commit.details_tree_collapsed
@@ -1192,10 +1205,7 @@ function GitView:sync_selection_from_pane()
   local line = active.buffer and active.buffer:get_selection() or 1
   local tab = self:model_tab()
   if active.git_pane == "log-list" then
-    local log_tab = self.model:log_tab()
-    if line >= 1 and line <= #(log_tab.commits or {}) and line ~= log_tab.selected_commit then
-      self.model:select_log_index(line, function() core.redraw = true end)
-    end
+    self:sync_log_selection()
   elseif active.git_pane == "history-list" and tab and tab.kind == "file_history" then
     if line >= 1 and line <= #(tab.commits or {}) and line ~= tab.selected_commit then
       self.model:select_history_index(tab, line, function() core.redraw = true end)
@@ -1212,8 +1222,18 @@ function GitView:sync_selection_from_pane()
   end
 end
 
+function GitView:sync_log_selection()
+  local list = self:pane_view("log-list")
+  local state = list:get_selection_state()
+  local focus = state.selections[(state.last_selection - 1) * 4 + 1]
+  return self.model:select_log_rows(list:get_selected_rows(), focus)
+end
+
 function GitView:activate_selected(callback, opts)
   self:sync_selection_from_pane()
+  if self.tab_id == "log" and self.model:log_tab().selection_error then
+    return nil, self.model:log_tab().selection_error
+  end
   local active = core.active_view
   local details_commit, details_row, details_record = self:details_tree_item(
     active, active and active.buffer and active.buffer:get_selection() or 1
@@ -1263,6 +1283,9 @@ end
 
 function GitView:activate_selected_point(callback, opts)
   self:sync_selection_from_pane()
+  if self.tab_id == "log" and self.model:log_tab().selection_error then
+    return nil, self.model:log_tab().selection_error
+  end
   local source = core.active_view
   local commit, _, record = self:details_tree_item(
     source, source and source.buffer and source.buffer:get_selection() or 1
@@ -1280,7 +1303,7 @@ function GitView:activate_selected_point(callback, opts)
     end, opts)
   end
   if source and source.git_pane == "log-list" then
-    local log_commit = self.model:selected_commit()
+    local log_commit = self.model:selected_log_revision()
     if not log_commit then return nil end
     local function open_first_changed_file()
       local first_point = self:detail_file_points()[1]
@@ -1294,7 +1317,7 @@ function GitView:activate_selected_point(callback, opts)
           if callback then callback(self.model, err) end
         end, { selected_file_path = path })
       end, function()
-        return self.model:selected_commit() == log_commit
+        return self.model:selected_log_revision() == log_commit
           and log_commit.selected_changed_file_path == path
       end, opts)
     end
@@ -1306,7 +1329,7 @@ function GitView:activate_selected_point(callback, opts)
         if callback then callback(self.model, err) end
         return
       end
-      if self.model:selected_commit() == log_commit then open_first_changed_file() end
+      if self.model:selected_log_revision() == log_commit then open_first_changed_file() end
     end)
     return true
   end
@@ -1610,6 +1633,7 @@ local function pane_buffer_state(view, tab)
     log_loading_more = log_tab and log_tab.loading_more,
     log_error = log_tab and log_tab.error,
     log_selected_commit = log_tab and log_tab.selected_commit,
+    log_selection_error = log_tab and log_tab.selection_error,
     detail = detail,
     detail_files = detail and detail.changed_files,
     detail_file_count = detail and #(detail.changed_files or {}) or 0,
@@ -1639,6 +1663,9 @@ local function remap_log_selection(list, commits, focus)
   local old_ids = list.git_row_ids
   list.git_row_ids = ids
   if not old_ids then return end
+  local same = #old_ids == #ids
+  for i, id in ipairs(ids) do same = same and old_ids[i] == id end
+  if same then return end
   local state = list:get_selection_state()
   local fallback = { selections = { focus, 1, focus, 1 } }
   local mapped = {}
@@ -1783,9 +1810,10 @@ function GitView:update_pane_buffers(force)
     list_view.git_graph_rows = graph_rows
     if not selection then sync_inactive_pane_line(list_view, log_tab.selected_commit) end
     if list_view.row_selection_mode then list_view:normalize_row_selection() end
+    self:sync_log_selection()
     local details = self:pane_view("details")
     local detail_lines, detail_meta, detail_tree, detail_tree_offset = commit_details_lines(
-      self:detail_commit_for_tab(log_tab), details
+      self:detail_commit_for_tab(log_tab), details, log_tab.selection_error
     )
     self:set_pane_lines("details", detail_lines)
     details.git_detail_line_meta = detail_meta

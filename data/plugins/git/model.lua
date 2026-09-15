@@ -84,6 +84,9 @@ local function lightweight_commit(commit)
   if type(commit) ~= "table" then return nil end
   return {
     kind = commit.kind,
+    left = commit.left,
+    right = commit.right,
+    count = commit.count,
     local_scope = commit.local_scope,
     hash = commit.hash,
     short_hash = commit.short_hash,
@@ -297,6 +300,7 @@ end
 
 function Model:select_log_index(index, callback)
   local tab = self:log_tab()
+  tab.selected_range, tab.selection_error, tab.selection_key = nil, nil, nil
   if #tab.commits == 0 then
     tab.selected_commit = 1
     return nil
@@ -308,6 +312,83 @@ function Model:select_log_index(index, callback)
   tab.selected_commit_hash = commit and commit.kind ~= "working_tree" and commit.hash or nil
   self:load_commit_changed_files(commit, callback)
   return tab.commits[index]
+end
+
+function Model:selected_log_revision()
+  local tab = self:log_tab()
+  if tab.selection_error then return nil, tab.selection_error end
+  return tab.selected_range or self:selected_commit()
+end
+
+-- Rows are a set. Their display order and first-parent links must both be continuous.
+function Model:select_log_rows(rows, focus)
+  local tab = self:log_tab()
+  local ordered, seen, keys = {}, {}, { self.repo and self.repo.root or "" }
+  for _, row in ipairs(rows) do
+    if not seen[row] then ordered[#ordered + 1], seen[row] = row, true end
+  end
+  table.sort(ordered)
+  for _, row in ipairs(ordered) do
+    local commit = tab.commits[row]
+    keys[#keys + 1] = tostring(row) .. ":" .. (commit and (commit.hash or commit.local_scope) or "missing")
+  end
+  local key = table.concat(keys, "|")
+  local index = focus or ordered[1] or 1
+  local focused = tab.commits[index]
+  tab.selected_commit = index
+  tab.selected_commit_hash = focused and focused.hash
+  tab.selected_local_scope = focused and focused.local_scope
+  if tab.selection_key == key then
+    return self:selected_log_revision()
+  end
+  tab.selection_key, tab.selected_range, tab.selection_error = key, nil, nil
+  local function reject(kind, message)
+    tab.selection_error = { kind = kind, message = message }
+    core.log_quiet("Git Log range rejected: %s", message)
+    return nil, tab.selection_error
+  end
+  if #ordered == 0 then return reject("no_commit", "Select a commit") end
+  for i, row in ipairs(ordered) do
+    local commit = tab.commits[row]
+    if not commit then return reject("no_commit", "Select a loaded commit") end
+    if i > 1 and row ~= ordered[i - 1] + 1 then
+      return reject("non_contiguous", "Select consecutive commit rows. A Commit Range Diff cannot contain gaps.")
+    end
+    if #ordered > 1 then
+      if not commit.hash or commit.kind == "working_tree" then
+        return reject("local_changes_range", "Select commits only; Local Changes cannot join a commit range")
+      end
+      local previous = tab.commits[ordered[i - 1]]
+      if previous and (previous.parents or {})[1] ~= commit.hash then
+        return reject("mixed_history", "Select one continuous first-parent chain. A Commit Range Diff cannot mix branch histories.")
+      end
+    end
+  end
+  if #ordered > 1 then
+    local newest, oldest = tab.commits[ordered[1]], tab.commits[ordered[#ordered]]
+    tab.selected_range = {
+      kind = "commit_range", count = #ordered,
+      left = (oldest.parents or {})[1] or self.backend.EMPTY_TREE,
+      right = newest.hash,
+      subject = string.format("%d commits: %s → %s", #ordered, oldest.hash:sub(1, 8), newest.hash:sub(1, 8)),
+    }
+    core.log_quiet("Git Log range selected: %d commits, %s → %s",
+      #ordered, tab.selected_range.left, tab.selected_range.right)
+  end
+  local revision = tab.selected_range or tab.commits[ordered[1]]
+  self:load_commit_changed_files(revision)
+  return revision
+end
+
+function Model:diff_endpoint_for_revision(revision)
+  if revision.kind == "commit_range" then return { left = revision.left, right = revision.right } end
+  if revision.kind == "working_tree" then
+    return {
+      left = revision.local_scope == "unstaged" and self.backend.INDEX or self:working_tree_left_revision(),
+      right = revision.local_scope == "staged" and self.backend.INDEX or self.backend.WORKING_TREE,
+    }
+  end
+  return self.backend.diff_endpoint_for_commit(revision)
 end
 
 function Model:dispose_tab(tab)
@@ -399,6 +480,7 @@ function history_tab_title(relpath, context)
 end
 
 function diff_tab_title(commit, left, right)
+  if commit and commit.kind == "commit_range" then return "Diff " .. commit.subject end
   if commit and commit.local_scope then return "Diff " .. commit.subject end
   if commit and commit.kind == "working_tree" then return "Diff Working Tree" end
   return "Diff " .. short_rev(right) .. " ← " .. short_rev(left)
@@ -555,15 +637,7 @@ function Model:open_commit_diff(commit, callback, opts)
   if not commit then return nil, { kind = "no_commit", message = "No commit selected" } end
   if not self.repo then return nil, { kind = "no_repo", message = "Git repository is not loaded" } end
 
-  local endpoint
-  if commit.kind == "working_tree" then
-    endpoint = {
-      left = commit.local_scope == "unstaged" and self.backend.INDEX or self:working_tree_left_revision(),
-      right = commit.local_scope == "staged" and self.backend.INDEX or self.backend.WORKING_TREE,
-    }
-  else
-    endpoint = self.backend.diff_endpoint_for_commit(commit)
-  end
+  local endpoint = self:diff_endpoint_for_revision(commit)
   local id = diff_tab_id(self.repo, endpoint.left, endpoint.right)
   local tab = self:find_tab(id)
   if not tab then
@@ -603,7 +677,14 @@ function Model:open_commit_diff(commit, callback, opts)
 end
 
 function Model:open_selected_commit_diff(source_tab, callback, opts)
-  return self:open_commit_diff(self:selected_commit(source_tab), callback, opts)
+  local revision, err
+  if source_tab and source_tab.kind == "file_history" then
+    revision = self:selected_commit(source_tab)
+  else
+    revision, err = self:selected_log_revision()
+  end
+  if err then return nil, err end
+  return self:open_commit_diff(revision, callback, opts)
 end
 
 function Model:open_working_tree_diff(callback, opts)
@@ -673,7 +754,7 @@ function Model:load_commit_changed_files(commit, callback)
   if not (self.repo and self.backend and self.backend.changed_files and self.backend.diff_endpoint_for_commit) then
     return false
   end
-  local endpoint = self.backend.diff_endpoint_for_commit(commit)
+  local endpoint = self:diff_endpoint_for_revision(commit)
   if not (endpoint and endpoint.right) then return false end
   commit.changed_files_generation = (commit.changed_files_generation or 0) + 1
   local generation = commit.changed_files_generation
