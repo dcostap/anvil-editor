@@ -29,6 +29,7 @@
 
 #define READ_BUF_SIZE 2048
 #define PROCESS_DRAIN_BUDGET (64 * 1024)
+#define PROCESS_COLLECT_LIMIT (1024 * 1024)
 #define PROCESS_TERM_TRIES 3
 #define PROCESS_TERM_DELAY 50
 #define PROCESS_KILL_LIST_NAME "__process_kill_list__"
@@ -73,6 +74,11 @@ typedef struct process_s {
   size_t pending_len[2];
   size_t pending_cap[2];
   bool pending_eof[3];
+  int pending_error[3];
+  SDL_Mutex *output_mutex;
+  SDL_Condition *output_ready;
+  SDL_Thread *output_thread;
+  bool output_stop;
   bool native;
   bool running;
   bool detached;
@@ -104,6 +110,8 @@ typedef struct {
   process_kill_t *tail;
   process_t *processes;
 } process_kill_list_t;
+
+static void process_close(process_t *self, process_kill_list_t *list);
 
 static const char *process_error_message(int code) {
   switch (code) {
@@ -469,6 +477,7 @@ static const char *stream_property_name(int stream) {
 }
 
 static void close_stream_handle(process_t *self, int stream) {
+  SDL_LockMutex(self->output_mutex);
   SDL_IOStream *stream_handle = self->streams[stream];
   const char *prop = stream_property_name(stream);
 
@@ -480,6 +489,8 @@ static void close_stream_handle(process_t *self, int stream) {
     SDL_CloseIO(stream_handle);
   }
   clear_pending(self, stream);
+  SDL_SignalCondition(self->output_ready);
+  SDL_UnlockMutex(self->output_mutex);
 }
 
 static int get_timeout(process_t *self, int timeout) {
@@ -488,19 +499,27 @@ static int get_timeout(process_t *self, int timeout) {
   return timeout;
 }
 
-static bool drain_stream(process_t *self, int stream, int *error) {
+/* The caller holds output_mutex. A zero limit preserves wait-before-read. */
+static bool drain_stream_locked(process_t *self, int stream, int *error, size_t limit) {
   uint8_t buffer[READ_BUF_SIZE];
   SDL_IOStream *io = self->streams[stream];
   size_t drained = 0;
 
   if (error) *error = 0;
+  if (self->pending_error[stream]) {
+    if (error) *error = self->pending_error[stream];
+    return false;
+  }
   if (!io || self->pending_eof[stream])
     return true;
 
   while (drained < PROCESS_DRAIN_BUDGET) {
+    if (limit && self->pending_len[pending_index(stream)] >= limit)
+      return true;
     size_t amount = SDL_ReadIO(io, buffer, sizeof(buffer));
     if (amount > 0) {
       if (!append_pending(self, stream, buffer, amount)) {
+        self->pending_error[stream] = ERROR_NOMEM;
         if (error) *error = ERROR_NOMEM;
         return false;
       }
@@ -517,11 +536,57 @@ static bool drain_stream(process_t *self, int stream, int *error) {
       case SDL_IO_STATUS_READY:
         return true;
       default:
+        self->pending_error[stream] = ERROR_PIPE;
         if (error) *error = ERROR_PIPE;
         return false;
     }
   }
   return true;
+}
+
+static bool drain_stream(process_t *self, int stream, int *error) {
+  SDL_LockMutex(self->output_mutex);
+  bool ok = drain_stream_locked(self, stream, error, 0);
+  SDL_UnlockMutex(self->output_mutex);
+  return ok;
+}
+
+/* Read pipes independently of Lua/UI polling. Stop at the high-water mark;
+   callers that do not consume output must still apply backpressure. */
+static int collect_output(void *userdata) {
+  process_t *self = userdata;
+  int idle_ms = 1;
+  SDL_LockMutex(self->output_mutex);
+  while (!self->output_stop) {
+    size_t before = self->pending_len[0] + self->pending_len[1];
+    drain_stream_locked(self, STDOUT_FD, NULL, PROCESS_COLLECT_LIMIT);
+    drain_stream_locked(self, STDERR_FD, NULL, PROCESS_COLLECT_LIMIT);
+    if ((self->pending_eof[STDOUT_FD] || self->pending_error[STDOUT_FD]) &&
+        (self->pending_eof[STDERR_FD] || self->pending_error[STDERR_FD]))
+      break;
+    size_t after = self->pending_len[0] + self->pending_len[1];
+    if (after != before) {
+      idle_ms = 1;
+      SDL_UnlockMutex(self->output_mutex);
+      SDL_Delay(0);
+      SDL_LockMutex(self->output_mutex);
+    } else {
+      SDL_WaitConditionTimeout(self->output_ready, self->output_mutex, idle_ms);
+      idle_ms = SDL_min(idle_ms * 2, 16);
+    }
+  }
+  SDL_UnlockMutex(self->output_mutex);
+  return 0;
+}
+
+static void stop_output_collector(process_t *self) {
+  if (!self->output_thread) return;
+  SDL_LockMutex(self->output_mutex);
+  self->output_stop = true;
+  SDL_SignalCondition(self->output_ready);
+  SDL_UnlockMutex(self->output_mutex);
+  SDL_WaitThread(self->output_thread, NULL);
+  self->output_thread = NULL;
 }
 
 static bool poll_process(process_t *self, int timeout) {
@@ -1242,6 +1307,17 @@ static int process_start(lua_State *L) {
     self->process_group = true;
 #endif
 
+  if (self->streams[STDOUT_FD] || self->streams[STDERR_FD]) {
+    self->output_mutex = SDL_CreateMutex();
+    self->output_ready = SDL_CreateCondition();
+    if (self->output_mutex && self->output_ready)
+      self->output_thread = SDL_CreateThread(collect_output, "process_output", self);
+    if (!self->output_thread) {
+      process_close(self, NULL);
+      return push_error(L, "cannot start child output collector", ERROR_NOMEM);
+    }
+  }
+
   if (lua_getfield(L, LUA_REGISTRYINDEX, PROCESS_KILL_LIST_NAME) == LUA_TUSERDATA)
     process_list_add((process_kill_list_t *) lua_touserdata(L, -1), self);
   lua_pop(L, 1);
@@ -1259,17 +1335,31 @@ static int g_read(lua_State *L, int stream, lua_Integer read_size) {
   if (!drain_stream(self, stream, &error))
     return push_error(L, "cannot read from child process", error);
 
+  bool running = poll_process(self, 0);
+  SDL_LockMutex(self->output_mutex);
   if (self->pending_len[pending_index(stream)] > 0) {
     size_t amount = (size_t) read_size;
     int idx = pending_index(stream);
     if (amount > self->pending_len[idx])
       amount = self->pending_len[idx];
-    lua_pushlstring(L, self->pending[idx], amount);
+    /* Lua allocation can raise an error. Do not hold the mutex across it. */
+    char *copy = SDL_malloc(amount ? amount : 1);
+    if (!copy) {
+      SDL_UnlockMutex(self->output_mutex);
+      return push_error(L, "cannot copy child output", ERROR_NOMEM);
+    }
+    SDL_memcpy(copy, self->pending[idx], amount);
     consume_pending(self, stream, amount);
+    SDL_SignalCondition(self->output_ready);
+    SDL_UnlockMutex(self->output_mutex);
+    lua_pushlstring(L, copy, amount);
+    SDL_free(copy);
     return 1;
   }
 
-  if (!poll_process(self, 0) && self->pending_eof[stream])
+  bool eof = self->pending_eof[stream];
+  SDL_UnlockMutex(self->output_mutex);
+  if (!running && eof)
     return 0;
 
   lua_pushliteral(L, "");
@@ -1381,6 +1471,7 @@ static int f_interrupt(lua_State *L) { return self_signal(L, SIGNAL_INTERRUPT); 
 
 static void process_close(process_t *self, process_kill_list_t *list) {
   process_kill_t *task = NULL;
+  stop_output_collector(self);
 
   if ((self->process || self->native) && !self->detached && poll_process(self, 0)) {
     signal_process(self, SIGNAL_TERM);
@@ -1422,6 +1513,10 @@ static void process_close(process_t *self, process_kill_list_t *list) {
     self->process = NULL;
   }
   self->native = false;
+  SDL_DestroyCondition(self->output_ready);
+  SDL_DestroyMutex(self->output_mutex);
+  self->output_ready = NULL;
+  self->output_mutex = NULL;
 }
 
 static int f_gc(lua_State *L) {
