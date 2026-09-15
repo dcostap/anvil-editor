@@ -917,9 +917,26 @@ function DiffView:get_side_path_target(index, side_view)
 end
 
 -- Let connectors show small offsets and short unchanged tails without empty space.
--- After large offsets, resume alignment at the first pair when useful comparison remains.
+-- Prefer nearby blank boundaries when a large offset needs empty space.
 local MAX_UNPADDED_DIFF_ROWS = 8
 local MIN_UNCHANGED_TAIL_ROWS_FOR_DIFF_GAP = 3
+
+local function gap_boundary(view, alignment, index, side)
+  local lines = view[side == "a" and "buffer_view_a" or "buffer_view_b"].buffer.lines
+  -- Stay local and do not move padding across a paired replacement.
+  for _, direction in ipairs({ -1, 1 }) do
+    for distance = 0, 12 do
+      local pair = alignment[index + distance * direction]
+      if not pair or (pair.tag ~= "equal" and pair.a and pair.b) then break end
+      if direction == 1 and pair.tag ~= "equal" then break end
+      if pair.tag == "equal" and pair.a and pair.b
+        and lines[pair[side]]:match("^%s*$") then
+        return pair[side]
+      end
+    end
+  end
+  return alignment[index][side]
+end
 
 local function has_useful_comparison_remaining(view, alignment, index)
   local first = alignment[index]
@@ -945,8 +962,8 @@ function DiffView:refresh_core_gap_rows(force)
   if not force and signature == self.__diff_gap_layout_signature then return end
 
   local a_gaps, b_gaps = {}, {}
+  local a_inserts, b_inserts = {}, {}
   local a_height, b_height = 0, 0
-  local a_gap_total, b_gap_total = 0, 0
 
   local alignment = model.alignment or {}
   for index, pair in ipairs(alignment) do
@@ -955,7 +972,8 @@ function DiffView:refresh_core_gap_rows(force)
       if delta > MAX_UNPADDED_DIFF_ROWS
         and has_useful_comparison_remaining(self, alignment, index)
       then
-        a_gap_total = a_gap_total + delta
+        local line = gap_boundary(self, alignment, index, "a")
+        a_inserts[line] = (a_inserts[line] or 0) + delta
         a_height = b_height
       end
     elseif b_height < a_height and pair.b then
@@ -963,18 +981,31 @@ function DiffView:refresh_core_gap_rows(force)
       if delta > MAX_UNPADDED_DIFF_ROWS
         and has_useful_comparison_remaining(self, alignment, index)
       then
-        b_gap_total = b_gap_total + delta
+        local line = gap_boundary(self, alignment, index, "b")
+        b_inserts[line] = (b_inserts[line] or 0) + delta
         b_height = a_height
       end
     end
 
     if pair.a then
-      a_gaps[pair.a] = { 0, a_gap_total }
       a_height = a_height + self.buffer_view_a:get_visual_row_count_for_line(pair.a)
     end
     if pair.b then
-      b_gaps[pair.b] = { 0, b_gap_total }
       b_height = b_height + self.buffer_view_b:get_visual_row_count_for_line(pair.b)
+    end
+  end
+
+  -- Measure offsets first, then place the gaps at the selected boundaries.
+  -- A boundary can precede or follow the line that triggered alignment.
+  local a_gap_total, b_gap_total = 0, 0
+  for _, pair in ipairs(alignment) do
+    if pair.a then
+      a_gap_total = a_gap_total + (a_inserts[pair.a] or 0)
+      a_gaps[pair.a] = { 0, a_gap_total }
+    end
+    if pair.b then
+      b_gap_total = b_gap_total + (b_inserts[pair.b] or 0)
+      b_gaps[pair.b] = { 0, b_gap_total }
     end
   end
 
