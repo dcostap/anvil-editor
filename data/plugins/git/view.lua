@@ -1419,6 +1419,17 @@ function GitView:open_file_comparison(source, load, selection_is_current, opts)
   local destination = opts.pane or panes.pane_for_view(self) or panes.active()
   local destination_view = destination and destination.current_view
   local request = {}
+  local trace_started = system.get_time()
+  local trace_previous = trace_started
+  local trace_path = self:model_tab().selected_file_path
+  local function trace(phase)
+    local now = system.get_time()
+    core.log_quiet("Git transition: request=%s path=%s phase=%s elapsed_ms=%.3f delta_ms=%.3f",
+      tostring(request), tostring(trace_path), phase,
+      (now - trace_started) * 1000, (now - trace_previous) * 1000)
+    trace_previous = now
+  end
+  trace("requested")
   self.comparison_request = request
   local placement = opts.placement or "current"
   local project = core.root_project()
@@ -1444,6 +1455,7 @@ function GitView:open_file_comparison(source, load, selection_is_current, opts)
           coroutine.yield(0.001)
         end
         if not request_is_current() then
+          trace("cancelled_before_placement")
           comparison:dispose_integrations()
           comparison:dispose_owned_buffers()
           return
@@ -1468,15 +1480,19 @@ function GitView:open_file_comparison(source, load, selection_is_current, opts)
       reason = "git-file-comparison",
     })
     if not placed then
+      trace("placement_failed")
       comparison:on_close()
       core.log_quiet("Git comparison placement failed: %s", tostring(reason))
     else
+      trace("placed")
       core.log_quiet("Git comparison opened: path=%s placement=%s", tab.selected_file_path, placement)
     end
   end
   return load(function(tab, err)
-    if not request_is_current() then return end
+    trace("content_load_complete")
+    if not request_is_current() then trace("superseded") return end
     if err or tab.file_error then
+      trace("load_failed")
       core.error("Could not open Git comparison: %s", tostring((err or tab.file_error).message))
       return
     end
@@ -1501,7 +1517,9 @@ function GitView:open_file_comparison(source, load, selection_is_current, opts)
       core.warn("%s", tab.non_text.message)
       return
     end
-    local comparison = self:ensure_diff_view(tab)
+    trace("comparison_creation_start")
+    local comparison = self:ensure_diff_view(tab, trace)
+    trace("comparison_creation_complete")
     tab.diff_view = nil
     present(comparison, tab)
   end)
@@ -1899,8 +1917,12 @@ function GitView:ensure_image_comparison_view(tab)
   return view
 end
 
-function GitView:ensure_diff_view(tab)
+function GitView:ensure_diff_view(tab, transition_trace)
   if tab.diff_view and tab.diff_view_seen_generation == tab.diff_generation then
+    if transition_trace then
+      tab.diff_view.request.user_data.transition_trace = transition_trace
+      transition_trace("comparison_reused")
+    end
     return tab.diff_view
   end
   local selected_file = tab.changed_files and tab.changed_files[tab.selected_file]
@@ -1958,6 +1980,7 @@ function GitView:ensure_diff_view(tab)
     editable_policy = "content",
     auto_reveal_first_change = presentation == nil,
     user_data = {
+      transition_trace = transition_trace,
       source = "git",
       tab = tab,
       selected_file = selected_file,

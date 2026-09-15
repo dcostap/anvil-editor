@@ -666,6 +666,9 @@ function DiffView:update_diff()
   self:cancel_diff_update()
 
   local start_time = system.get_time()
+  local transition_trace = self.request and self.request.user_data
+    and self.request.user_data.transition_trace
+  if transition_trace then transition_trace("diff_queued") end
   self.diff_started_at = start_time
   self.diff_loading_visible = false
 
@@ -679,6 +682,7 @@ function DiffView:update_diff()
   self.diff_generation = (self.diff_generation or 0) + 1
   local generation = self.diff_generation
   local idx = core.add_thread(function()
+    if transition_trace then transition_trace("diff_compute_start") end
     local computing_start = system.get_time()
     local model = diff_model.compute(self.buffer_view_a.buffer.lines, self.buffer_view_b.buffer.lines, {
       ignore_whitespace = ignore_whitespace,
@@ -690,6 +694,7 @@ function DiffView:update_diff()
         return false
       end,
     })
+    if transition_trace then transition_trace("diff_compute_complete") end
     if self.disposed or generation ~= self.diff_generation then return end
 
     if self.diff_equal_blocks and self.diff_fold_identity_counts then self:save_diff_fold_state() end
@@ -702,6 +707,7 @@ function DiffView:update_diff()
     self.diff_equal_blocks = model.equal_blocks
     self:rebuild_diff_folds()
     self:refresh_core_gap_rows(true)
+    if transition_trace then transition_trace("diff_layout_complete") end
 
     self.updater_idx = nil
 
@@ -2069,6 +2075,11 @@ function DiffView:draw()
   self:draw_divider_changes()
   self:draw_scrollbar()
   perf_end("diffview_draw", started, scope)
+  local user_data = self.request and self.request.user_data
+  if user_data and user_data.transition_trace then
+    user_data.transition_trace("first_content_draw_complete")
+    user_data.transition_trace = nil
+  end
 end
 
 
