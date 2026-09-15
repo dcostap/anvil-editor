@@ -1920,20 +1920,28 @@ function core.open_image(filename, opts)
 end
 
 
----Opens the given file path in an Editor in the Root Panel.
+---Opens the given file path in its appropriate View in the Root Panel.
 ---@param filename string Path to the file to open
 ---@param opts? table
----@return core.editor
+---@return core.view?
 function core.open_file(filename, opts)
   local operation = file_open_begin(filename, "core.open_file")
   local total_stage = operation and file_open_stage_begin("core_open_file")
   local path_stage = file_open_stage_begin("open_file_stat")
-  local info = system.get_file_info(filename)
+  local abs_filename = core.root_project():absolute_path(filename)
+  local info = system.get_file_info(abs_filename)
   file_open_stage_end(path_stage)
   if info and info.type == "dir" then
     file_open_stage_end(total_stage)
     file_open_fail("directory")
     return nil, "cannot open a directory as a file"
+  end
+  if info and ImageView.is_supported(abs_filename) then
+    core.log_quiet("Opening image in Image View: %s", abs_filename)
+    local view = core.open_image(abs_filename, opts)
+    file_open_stage_end(total_stage)
+    if view then file_open_attach_view(view) else file_open_fail("image_load") end
+    return view
   end
   local result = table.pack(core.root_panel:open_file(filename, opts))
   local view = result[1]

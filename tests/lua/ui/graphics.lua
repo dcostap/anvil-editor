@@ -1,6 +1,5 @@
 local common = require "core.common"
 local core = require "core"
-local Editor = require "core.editor"
 local ImageView = require "core.imageview"
 local test = require "core.test"
 local panes = require "core.panes"
@@ -260,7 +259,7 @@ test.describe("graphics apis", function()
     test.equal(svg_height, 32)
   end)
 
-  test.test("opens project-relative images in an Editor through core.open_file", function(context)
+  test.test("opens project-relative images in an Image View through core.open_file", function(context)
     local c = canvas.new(2, 2, {255, 0, 0, 255}, true)
     local image_path = context.project_temp_root .. PATHSEP .. "open-file-image.png"
     local saved, save_err = c:save_image(image_path)
@@ -273,8 +272,8 @@ test.describe("graphics apis", function()
     system.chdir(cwd)
 
     test.not_nil(view)
-    test.ok(view:extends(Editor))
-    test.equal(view.buffer.abs_filename, image_path)
+    test.ok(view:extends(ImageView))
+    test.equal(view.path, image_path)
   end)
 
   test.test("uses smooth filtering when the image viewer scales raster images", function(context)
