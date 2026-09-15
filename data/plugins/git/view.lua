@@ -1269,10 +1269,11 @@ function GitView:activate_selected_point(callback, opts)
     local log_commit = self.model:selected_commit()
     if not log_commit then return nil end
     local function open_first_changed_file()
-      local record = log_commit.changed_files and log_commit.changed_files[1]
+      local first_point = self:detail_file_points()[1]
+      local record = first_point and first_point.record
       local path = record and changed_file_path(record)
       if not path then return nil end
-      self:select_detail_file_point { commit = log_commit, record = record }
+      self:select_detail_file_point(first_point)
       return self:open_file_comparison(self:pane_view("details"), function(done)
         return self.model:open_commit_diff(log_commit, function(_, err, tab)
           done(tab, err)

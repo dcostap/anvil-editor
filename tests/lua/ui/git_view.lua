@@ -832,7 +832,7 @@ test.describe("Git View command", function()
     test.equal(list.buffer:get_selection(), 1)
   end)
 
-  test.it("opens the first changed file directly from a Git Log commit row", function(context)
+  test.it("opens the first visible changed file directly from a Git Log row", function(context)
     local session, view = open_fake_git_view(context.project)
     local commit = {
       hash = "log-row-file",
@@ -840,8 +840,8 @@ test.describe("Git View command", function()
       parents = { "log-row-parent" },
     }
     local files = {
-      { status = "modified", old_path = "src/App.kt", new_path = "src/App.kt" },
-      { status = "modified", old_path = "README.md", new_path = "README.md" },
+      { status = "modified", old_path = "MainScreen.kt", new_path = "MainScreen.kt" },
+      { status = "modified", old_path = "src/AlmacenPendientesScreen.kt", new_path = "src/AlmacenPendientesScreen.kt" },
     }
     local backend = {}
     for key, value in pairs(fake_backend) do backend[key] = value end
@@ -867,7 +867,8 @@ test.describe("Git View command", function()
     test.not_equal(panes.active().current_view, view)
     test.not_nil(panes.active().current_view.buffer_view_a)
     test.not_nil(panes.active().current_view.buffer_view_b)
-    test.equal(panes.active().current_view.buffer_view_a.buffer:get_utf8_line(1), "log-row-parent:src/App.kt\n")
+    test.equal(panes.active().current_view.buffer_view_a.buffer:get_utf8_line(1),
+      "log-row-parent:src/AlmacenPendientesScreen.kt\n")
   end)
 
   test.it("keeps folder collapse state with its commit when changed-file data is shared", function(context)
