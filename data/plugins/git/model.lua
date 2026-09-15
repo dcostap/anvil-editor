@@ -509,6 +509,18 @@ local function add_dirty_buffer_records(repo, records, seen)
   end
 end
 
+local function apply_working_tree_file_sizes(repo, records)
+  local root = repo and repo.root
+  if not root then return end
+  for _, record in ipairs(records or {}) do
+    if record.size == nil and record.status ~= "deleted" then
+      local path = record.new_path or record.path or record.old_path
+      local info = path and system.get_file_info(root .. PATHSEP .. path)
+      if info and info.type == "file" then record.size = info.size end
+    end
+  end
+end
+
 function Model:_new_diff_tab(commit, endpoint)
   local id = diff_tab_id(self.repo, endpoint.left, endpoint.right)
   return {
@@ -1321,6 +1333,7 @@ function Model:load_changed_files(tab, callback)
         if path and not seen[path] then records[#records + 1] = record end
       end
       add_dirty_buffer_records(self.repo, records, seen)
+      apply_working_tree_file_sizes(self.repo, records)
       finish(records, (#records == 0) and final_err or nil)
     end
     local diff_job, diff_done
@@ -1658,6 +1671,12 @@ local function apply_changed_file_stats(records, stats)
   end
 end
 
+local function apply_changed_file_sizes(records, sizes)
+  for index, size in pairs(sizes or {}) do
+    if records and records[index] then records[index].size = size end
+  end
+end
+
 function Model:_finish_refresh(generation, total_commits, log_page, local_changes, err, callback)
   if generation ~= self.generation then return end
   local tab = self:log_tab()
@@ -1725,13 +1744,46 @@ function Model:_start_refresh_jobs(repo, generation, callback)
   local pending = (self.backend.commit_count and 3 or 2) + (load_changed_stats and 2 or 0)
   local total_commits, log_page, local_changes, final_err
   local local_stats = {}
+  local function finish_refresh()
+    self:_finish_refresh(generation, total_commits, log_page, local_changes, final_err, callback)
+  end
+  local function load_local_sizes()
+    if type(self.backend.changed_file_sizes) ~= "function" then
+      finish_refresh()
+      return
+    end
+    local sizes_pending = 2
+    local function sizes_done()
+      sizes_pending = sizes_pending - 1
+      if sizes_pending == 0 then finish_refresh() end
+    end
+    local head = log_page and log_page.commits and log_page.commits[1]
+    local left = head and head.hash or self.backend.EMPTY_TREE
+    for _, scope in ipairs { "staged", "unstaged" } do
+      local scope_name = scope
+      local size_job, size_done
+      local from = scope_name == "staged" and left or self.backend.INDEX
+      local to = scope_name == "staged" and self.backend.INDEX or self.backend.WORKING_TREE
+      size_job = self.backend.changed_file_sizes(repo, local_changes and local_changes[scope_name], from, to, {}, function(sizes, size_err)
+        size_done = true
+        self:_untrack_job(size_job)
+        if generation ~= self.generation then return end
+        apply_changed_file_sizes(local_changes and local_changes[scope_name], sizes)
+        if size_err then
+          core.log_quiet("Git Log %s file sizes unavailable: %s", scope_name, size_err.message or size_err.kind)
+        end
+        sizes_done()
+      end)
+      if not size_done then self:_track_job(size_job) end
+    end
+  end
   local function done()
     pending = pending - 1
     if pending == 0 then
       for scope, records in pairs(local_changes or {}) do
         apply_changed_file_stats(records, local_stats[scope])
       end
-      self:_finish_refresh(generation, total_commits, log_page, local_changes, final_err, callback)
+      load_local_sizes()
     end
   end
 

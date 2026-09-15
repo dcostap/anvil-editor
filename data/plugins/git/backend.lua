@@ -192,6 +192,69 @@ local function merge_changed_file_stats(records, stats)
   return records
 end
 
+local function changed_file_size_target(record, left, right)
+  if not record then return nil, nil end
+  if record.status == "deleted" then return left, record.old_path end
+  return right, record.new_path or record.path or record.old_path
+end
+
+local function object_size_spec(revision, path)
+  if not revision or revision == "" or revision == backend.EMPTY_TREE or not path then return nil end
+  if revision == backend.INDEX then return ":" .. path end
+  return revision .. ":" .. path
+end
+
+local function parse_object_sizes(output, requests, sizes)
+  local index = 1
+  for line in (tostring(output or "") .. "\n"):gmatch("(.-)\n") do
+    if index > #requests then break end
+    local object_type, size = line:match("^(%S+) (%d+)$")
+    if object_type == "blob" then sizes[requests[index].index] = tonumber(size) end
+    index = index + 1
+  end
+  return sizes
+end
+
+---Load the displayed blob size for each changed file.
+---Deleted files use the left revision because they do not exist on the right.
+function backend.changed_file_sizes(repo, records, left, right, opts, callback)
+  opts = opts or {}
+  local root = type(repo) == "table" and repo.root or repo
+  local sizes, requests, input = {}, {}, {}
+  for index, record in ipairs(records or {}) do
+    local revision, path = changed_file_size_target(record, left, right)
+    if revision == backend.WORKING_TREE then
+      local info = root and path and system.get_file_info(root .. PATHSEP .. path)
+      if info and info.type == "file" then sizes[index] = info.size end
+    else
+      local spec = object_size_spec(revision, path)
+      if spec then
+        requests[#requests + 1] = { index = index }
+        input[#input + 1] = spec .. "\0"
+      end
+    end
+  end
+  if #requests == 0 then
+    if callback then callback(sizes, nil) end
+    return nil
+  end
+  local run_opts = {}
+  for key, value in pairs(opts) do run_opts[key] = value end
+  run_opts.stdin_data = table.concat(input)
+  return backend.run_git(repo, {
+    "cat-file", "-z", "--batch-check=%(objecttype) %(objectsize)",
+  }, run_opts, function(result, err)
+    if callback then callback(result and parse_object_sizes(result.stdout, requests, sizes) or sizes, err) end
+  end)
+end
+
+local function merge_changed_file_sizes(records, sizes)
+  for index, size in pairs(sizes or {}) do
+    if records[index] then records[index].size = size end
+  end
+  return records
+end
+
 local UNMERGED_STATUS = {
   DD = true, AU = true, UD = true, UA = true,
   DU = true, AA = true, UU = true,
@@ -648,6 +711,11 @@ function backend.changed_files(repo, left, right, opts, callback)
     end
     if composite.cancelled then return end
     local records = backend.parse_name_status_z(result.stdout)
+    local pending = 2
+    local function child_complete()
+      pending = pending - 1
+      if pending == 0 then complete(records, nil) end
+    end
     local stats_job = backend.run_git(repo, backend.build_changed_file_stats_args(left, right, opts), opts, function(stat_result, stat_err)
       if composite.cancelled then return end
       if stat_result then
@@ -655,9 +723,18 @@ function backend.changed_files(repo, left, right, opts, callback)
       elseif stat_err then
         core.log_quiet("Git backend: changed-file statistics unavailable: %s", stat_err.message or stat_err.kind)
       end
-      complete(records, nil)
+      child_complete()
     end)
     composite.jobs[#composite.jobs + 1] = stats_job
+    local sizes_job = backend.changed_file_sizes(repo, records, left, right, opts, function(sizes, sizes_err)
+      if composite.cancelled then return end
+      merge_changed_file_sizes(records, sizes)
+      if sizes_err then
+        core.log_quiet("Git backend: changed-file sizes unavailable: %s", sizes_err.message or sizes_err.kind)
+      end
+      child_complete()
+    end)
+    composite.jobs[#composite.jobs + 1] = sizes_job
   end)
   composite.jobs[#composite.jobs + 1] = name_job
   return composite
@@ -808,7 +885,7 @@ function backend.run_git(repo, args, opts, callback)
     append_args(command, args)
     core.log_quiet("Git backend: start job=%s cwd=%s args=%s", tostring(job.id), tostring(root), table.concat(args or {}, " "))
     local proc, start_err, start_code = process.start(command, {
-      stdin = process.REDIRECT_DISCARD,
+      stdin = opts.stdin_data and process.REDIRECT_PIPE or process.REDIRECT_DISCARD,
       stdout = process.REDIRECT_PIPE,
       stderr = process.REDIRECT_PIPE,
       env = opts.env,
@@ -826,6 +903,34 @@ function backend.run_git(repo, args, opts, callback)
     local stdout, stderr = {}, {}
     local out_cap = { total = 0, max = max_output }
     local err_cap = { total = 0, max = opts.max_stderr or 512 * 1024 }
+
+    if opts.stdin_data then
+      local offset = 1
+      while offset <= #opts.stdin_data do
+        if job.cancelled then
+          if proc.terminate then proc:terminate() end
+          callback_once(job, callback, nil, { kind = "cancelled", message = "Git job cancelled" })
+          return
+        end
+        local chunk = opts.stdin_data:sub(offset, offset + 16383)
+        local written, write_err, write_code = proc.stdin:write(chunk, { scan = opts.scan or 0.01 })
+        if not written then
+          if proc.terminate then proc:terminate() end
+          callback_once(job, callback, nil, {
+            kind = "write_failed", message = write_err or "Git input write failed", code = write_code,
+          })
+          return
+        end
+        offset = offset + written
+        local ok, read_err = read_available(proc, process.STREAM_STDOUT, stdout, out_cap)
+        if not ok then
+          if proc.terminate then proc:terminate() end
+          callback_once(job, callback, nil, { kind = "output_too_large", message = read_err })
+          return
+        end
+      end
+      proc.stdin:close()
+    end
 
     while proc:running() do
       if job.cancelled then

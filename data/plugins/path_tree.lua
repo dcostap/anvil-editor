@@ -220,6 +220,7 @@ function Tree:flatten(node, visual_depth)
       type = row_node.type,
       kind = child.kind,
       stat = clone_stat(child.stat),
+      size = row_node.record and tonumber(row_node.record.size) or nil,
       record = row_node.record,
       record_index = row_node.record_index,
       record_indices = row_node.record_indices,
@@ -356,13 +357,19 @@ function path_tree.git_gutter_color(kind)
   if kind == "deletion" or kind == "deleted" then return style.git_change_deletion end
 end
 
-function path_tree.changed_stat_segments(stat)
-  if not (stat and ((stat.additions or 0) > 0 or (stat.deletions or 0) > 0)) then return nil end
+function path_tree.changed_stat_segments(stat, size)
+  local has_stat = stat and ((stat.additions or 0) > 0 or (stat.deletions or 0) > 0)
+  if not has_stat and size == nil then return nil end
   local font = style.get_small_font(style.code_font)
-  return {
-    { text = string.format("+%d", stat.additions or 0), font = font, color = style.filetree_git_line_additions },
-    { text = string.format(" −%d", stat.deletions or 0), font = font, color = style.filetree_git_line_deletions },
-  }
+  local segments = {}
+  if has_stat then
+    segments[#segments + 1] = { text = string.format("+%d", stat.additions or 0), font = font, color = style.filetree_git_line_additions }
+    segments[#segments + 1] = { text = string.format(" −%d", stat.deletions or 0), font = font, color = style.filetree_git_line_deletions }
+  end
+  if size ~= nil then
+    segments[#segments + 1] = { text = "  " .. path_tree.format_file_size(size), font = font, color = style.dim }
+  end
+  return segments
 end
 
 function path_tree.draw_folder_row_background(view, is_dir, x, y, width)
@@ -652,7 +659,7 @@ end
 
 function PathTreeView:get_line_hint(line)
   local row = self:path_tree_row(line)
-  return row and path_tree.changed_stat_segments(row.stat) or nil
+  return row and path_tree.changed_stat_segments(row.stat, row.size) or nil
 end
 
 path_tree.Tree = Tree

@@ -713,7 +713,7 @@ test.describe("Git View command", function()
       title = "Diff tree",
       closable = true,
       changed_files = {
-        { status = "modified", old_path = "src/main/App.kt", new_path = "src/main/App.kt", stat = { additions = 2, deletions = 44 } },
+        { status = "modified", old_path = "src/main/App.kt", new_path = "src/main/App.kt", size = 1536, stat = { additions = 2, deletions = 44 } },
         { status = "deleted", old_path = "README.md", new_path = "README.md", stat = { additions = 0, deletions = 5 } },
         { status = "added", old_path = "src/main/Util.kt", new_path = "src/main/Util.kt", stat = { additions = 3, deletions = 0 } },
       },
@@ -737,6 +737,7 @@ test.describe("Git View command", function()
     local hint = list:get_line_hint(2)
     test.equal(hint[1].text, "+2")
     test.equal(hint[2].text, " −44")
+    test.equal(hint[3].text, "    2K")
 
     core.active_view = list
     list.buffer:set_selection(1, 1)

@@ -122,6 +122,10 @@ test.describe("plugins.git.model", function()
       callback({ ["src/app.lua"] = { additions = 4, deletions = 2 } }, nil)
       return { cancel = function() end }
     end
+    backend.changed_file_sizes = function(repo, records, left, right, opts, callback)
+      callback({ [1] = 1536 }, nil)
+      return { cancel = function() end }
+    end
     local model = Model.new({ path = "C:/repo" }, { backend = backend })
     local done = false
     model:refresh_log(function() done = true end)
@@ -135,6 +139,7 @@ test.describe("plugins.git.model", function()
     test.equal(commits[1].parents[1], "abc123")
     test.equal(commits[1].changed_files[1].path, "src/app.lua")
     test.same(commits[1].changed_files[1].stat, { additions = 4, deletions = 2 })
+    test.equal(commits[1].changed_files[1].size, 1536)
     test.equal(commits[2].hash, "abc123")
     test.equal(model:selected_commit(), commits[1])
     test.equal(model:get_state().tabs[1].selected_commit_hash, nil)

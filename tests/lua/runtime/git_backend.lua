@@ -233,6 +233,34 @@ test.describe("plugins.git.backend", function()
       test.same(stats["src/app.lua"], { additions = 4, deletions = 2 })
     end)
 
+    test.it("loads changed-file blob sizes from the displayed revision side", function()
+      local old_run_git = backend.run_git
+      local size_input
+      backend.run_git = function(repo, args, opts, callback)
+        if backend._contains_arg(args, "--name-status") then
+          callback({ stdout = "M\0src/app.lua\0D\0old.txt\0A\0new.txt\0" }, nil)
+        elseif backend._contains_arg(args, "--numstat") then
+          callback({ stdout = "" }, nil)
+        else
+          test.equal(args[1], "cat-file")
+          size_input = opts.stdin_data
+          callback({ stdout = "blob 1536\nblob 12\nblob 4096\n" }, nil)
+        end
+        return { cancel = function() end }
+      end
+      local files
+
+      backend.changed_files({ root = "repo" }, "parent", "child", {}, function(result)
+        files = result
+      end)
+      backend.run_git = old_run_git
+
+      test.equal(size_input, "child:src/app.lua\0parent:old.txt\0child:new.txt\0")
+      test.equal(files[1].size, 1536)
+      test.equal(files[2].size, 12)
+      test.equal(files[3].size, 4096)
+    end)
+
     test.it("cancels every changed-file child job", function()
       local old_run_git = backend.run_git
       local callbacks, cancelled = {}, 0
@@ -253,7 +281,7 @@ test.describe("plugins.git.backend", function()
       job:cancel()
       backend.run_git = old_run_git
 
-      test.equal(cancelled, 2)
+      test.equal(cancelled, #callbacks)
       test.equal(calls, 1)
       test.equal(callback_err.kind, "cancelled")
     end)
@@ -400,6 +428,34 @@ test.describe("plugins.git.backend", function()
       wait_until(function() return result ~= nil or callback_err ~= nil end, 5, "git status callback did not run")
       test.equal(result, nil)
       test.equal(callback_err.kind, "output_too_large")
+    end)
+
+    test.test("reads an actual historical blob size through batched Git input", function(context)
+      local code = run({ backend.git_path(), "--version" })
+      test.skip_if(code ~= 0, "git executable is not available")
+
+      local root = join_path(USERDIR, "git-backend-size-" .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000))
+      context.root = root
+      local ok, err = common.mkdirp(root)
+      test.ok(ok, err)
+      local git_root = root:gsub("\\", "/")
+      test.equal(run({ backend.git_path(), "-C", git_root, "init" }), 0)
+      test.equal(run({ backend.git_path(), "-C", git_root, "config", "user.email", "anvil@example.test" }), 0)
+      test.equal(run({ backend.git_path(), "-C", git_root, "config", "user.name", "Anvil Test" }), 0)
+      write_file(join_path(root, "sized.txt"), string.rep("x", 1536))
+      test.equal(run({ backend.git_path(), "-C", git_root, "add", "sized.txt" }), 0)
+      test.equal(run({ backend.git_path(), "-C", git_root, "commit", "-m", "sized" }), 0)
+
+      local sizes, callback_err
+      backend.changed_file_sizes(
+        { root = root },
+        { { status = "added", new_path = "sized.txt" } },
+        backend.EMPTY_TREE, "HEAD", {},
+        function(result, size_err) sizes, callback_err = result, size_err end
+      )
+      wait_until(function() return sizes ~= nil or callback_err ~= nil end, 5, "blob-size callback did not run")
+      test.equal(callback_err, nil)
+      test.equal(sizes[1], 1536)
     end)
 
     test.test("reports success for a completed Git command", function()
