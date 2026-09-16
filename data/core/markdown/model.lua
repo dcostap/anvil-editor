@@ -246,6 +246,16 @@ function Model:publish(result, revision, signature, generation, changed_range)
   else
     self.diagnostics.full_publications = self.diagnostics.full_publications + 1
   end
+  if summary.changed_line1 then
+    changed_range = changed_range or {}
+    changed_range.line1 = math.min(
+      changed_range.line1 or math.huge, summary.changed_line1
+    )
+    changed_range.line2 = math.max(
+      changed_range.line2 or -math.huge,
+      summary.changed_line2 or summary.changed_line1
+    )
+  end
   self.changed_ranges = changed_range and { common.merge({}, changed_range) } or {}
   self.active_changed_range = nil
   self.active_structural_change = false

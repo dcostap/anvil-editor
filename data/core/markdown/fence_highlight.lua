@@ -887,6 +887,21 @@ function Service:contains_line(line)
   return false
 end
 
+function Service:is_body_line(line)
+  if self.awaiting_reload_revision then return false end
+  local buffer = self:buffer()
+  for _, block in pairs(self.blocks) do
+    if block.service_generation == self.generation
+      and block.source_revision == (buffer and buffer.text_revision)
+      and not block.structurally_unsafe
+      and line >= block.body_line1 and line <= block.body_line2
+    then
+      return true
+    end
+  end
+  return false
+end
+
 function Service:is_opening_line(line)
   if self.awaiting_reload_revision then return false end
   local buffer = self:buffer()

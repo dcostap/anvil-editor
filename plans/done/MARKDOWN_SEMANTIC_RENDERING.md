@@ -1,63 +1,70 @@
 # Semantic Markdown Rendering Bridge
 
-Implemented July 10, 2026 as the sixth Phase 2 slice in `plans/done/MARKDOWN_LIVE_EDITOR_PLAN.md`.
+Implemented July 10, 2026. Simplified September 16, 2026.
 
-## Shared model ownership
+## Semantic authority
 
-Every attached Markdown Live Preview `DocView` subscribes to the shared per-Document `core.markdown.model`. Split views retain independent listeners and view-local caches while sharing native parse snapshots. Detach and owned-feature release remove the listener deterministically.
+The native Tree-sitter Markdown model is the only authority that selects Markdown presentation or hides source syntax.
 
-The first async publication invalidates the view and establishes semantic render identities. Later publications use changed ranges. While publication is pending, each view builds a revision-tagged presentation from current source, exact transaction-mapped retained lines, and provisional block topology. Publication then replaces that presentation with current semantic identities.
+Each Markdown Buffer owns one semantic model. Editors share its immutable native snapshot. Each Editor keeps its own reveal state, render cache, metrics, widgets, and interaction state.
 
-## Semantic identity bridge
+Native incremental results publish the semantic line range changed by Tree-sitter. The model merges that range with the Buffer transaction range. Editors invalidate the complete semantic range after publication. This includes dependencies such as a Setext title above its edited marker.
 
-The existing Phase 2 renderer remains deliberately narrow, but heading render lines and emphasis fragments now adopt stable IDs from semantic nodes. This includes emphasis nested inside headings and triple-delimiter strong/emphasis reconciliation. Render results expose the semantic generation used to construct them.
+## Edit projection
 
-Cold and pending semantic states use a non-interactive current-source projection rather than exposing a transient raw-source frame. Exact unchanged lines may retain presentation after transaction mapping; changed or context-dependent lines are rebuilt from current source. Every projected line records the Document revision, semantic revision, and `current`, `retained`, `active-source-reveal`, or `unavailable` provenance. Unsupported semantic states still use source presentation as their stable result.
+An edit can occur before the worker publishes current semantics. This interval uses a non-semantic edit projection.
 
-## Live Preview typography
+The projection can:
 
-Markdown Live Preview uses Anvil's reusable proportional prose typography roles for prose, headings, links, lists, quotes, tables, frontmatter, callouts, and revealed Markdown source outside raw blocks. Regular, Emphasis, Strong, and Strong Emphasis roles use bundled real Inter face variants; headings use bundled Merriweather faces without synthetic emboldening or duplicate shifted overdraw. Body metrics follow the Editor's current text size so zoom remains coherent. The roles are exposed as `style.prose_font`, `style.prose_emphasis_font`, `style.prose_strong_font`, `style.prose_strong_emphasis_font`, `style.prose_heading_font`, and `style.prose_heading_emphasis_font`. Navigation-oriented Document Views may share the regular prose role without changing the general UI font.
+- map an unchanged source line to its new line number;
+- retain an exact render and its resolved metrics for unchanged source;
+- apply a text edit inside one ordinary visible fragment;
+- split a retained render when one edit splits its source line;
+- retain known image, callout, table, and code-block presentation from the previous snapshot;
+- show current source when a safe edit mapping is not available.
 
-Inline code, fenced and indented code blocks, math source, raw HTML blocks, and Source Mode retain `style.code_font`. A cold semantic model can temporarily use the normal code font until its first snapshot is published. Incremental ordinary prose edits retain their prior proportional presentation while the replacement snapshot is pending. The Inter font is distributed under the SIL Open Font License recorded in `licenses/licenses.md`.
+The projection cannot recognize a new heading, list, comment, link, callout, fence, table, or inline construct. It cannot hide new syntax. New syntax remains readable until the native model publishes it.
 
-## Contextual invalidation
+`data/core/markdown/edit_projection.lua` only maps transaction lines and detects link-target changes for cache invalidation. It does not parse Markdown presentation.
 
-A generic line-render-provider transaction hook can widen ordinary changed-line invalidation. Markdown widens edits to the suffix because fenced/raw-block and reference context can affect later lines. Sparse line-render caches clear only resident entries in that range. Line-count changes already invalidate shifted suffixes; semantic publication now also re-adopts those suffixes after pending projection.
+The old `pending_render.lua` source parser and provisional block-topology scanner were removed. This removed the parallel Markdown presentation engine.
 
-The pending projection computes current fence, Obsidian-comment, display-math,
-frontmatter, and raw-HTML ownership in one source pass bounded to the relevant
-visible region and extends that topology on demand. Context-changing block
-signatures reject otherwise identical retained lines, including Setext-heading,
-quote/callout, list, thematic-break, and reference-definition transitions.
-Retained fragments and widgets have interaction callbacks removed until
-authoritative semantics publish.
+## Parse scheduling
 
-Line cache signatures no longer include the global Document revision. Source text, explicit transaction ranges, provider generations, metadata/provider changes, selection state, and async publication notifications are the authoritative invalidation seams. Legacy raw insert/remove and full load/reload paths now publish the same transaction contract (without duplicate wrapping work), so undo, reload, Tree-sitter, range observers, and the Markdown model cannot bypass cache/model refresh. Identical reloads still publish a full-refresh transaction because `Doc:reset()` advances the revision. Snapshot transactions distinguish changed content so range markers invalidate on unrelated replacement text but survive an identical reload. Views attached while a shared model is already pending conservatively invalidate their whole fallback cache on the first publication. This preserves unaffected cached lines across same-line edits without accepting stale contextual Markdown.
+A model whose previous native publication took at most 8 ms dispatches its next edit immediately. Slower models retain the 15 ms debounce and worker cancellation path.
 
-## Regression and benchmark evidence
+All parsing stays on the worker. Large Buffers cannot block the UI thread.
 
-Red-green tests cover:
+Measurements on the development machine showed:
 
-- heading and inline semantic identity adoption;
-- heading-contained and triple-delimiter emphasis identities;
-- retention of an unaffected heading cache entry across a same-line edit/publication;
-- immediate rendered text and typography across repeated pending paragraph edits;
-- stable revealed inline syntax while typing inside a construct;
-- semantic re-adoption after a line-shifting edit rendered while pending;
-- fence, comment, display-math, and frontmatter ownership changes;
-- newly completed highlights, blockquotes, callouts, thematic breaks, and Setext headings without transient raw presentation;
-- comment/fence/inline-code precedence in provisional topology;
-- a fence edit changing a later line from source presentation to a rendered heading; and
-- proportional prose/heading rendering with monospaced inline, fenced, and Source Mode code paths.
+- normal incremental native parse p50: 1 ms;
+- normal incremental native parse p95: 2 ms;
+- normal incremental native total p95: 4 ms;
+- 10 KiB immediate worker publication: usually 2–3 ms;
+- 100 KiB immediate worker publication: usually one 16 ms frame;
+- 1 MiB immediate worker publication: approximately 79–131 ms.
 
-The representative benchmark (`tests/lua/benchmarks/markdown_live_render.lua`) measured on August 6, 2026:
+The large path therefore stays asynchronous and cancellable.
 
-- 102,482 bytes / 1,201 lines;
-- cached 60-line viewport query: **0.225 ms p95 / 0.315 ms p99**;
-- caret-transition render/update: **0.234 ms p95 / 0.414 ms p99**;
-- one-pass 1 MiB provisional topology: **12.3 ms p95 / 13.0 ms p99**;
-- 100 KiB edit-to-pending presentation: **3.2 ms p95 / 10.2 ms p99**;
-- the same path with wrapping: **3.4 ms p95 / 7.3 ms p99**;
-- visible-bounded 1 MiB structural edit-to-pending presentation: **7.4 ms**.
+## Render and metric ownership
 
-The benchmark reports timings rather than asserting brittle machine-specific thresholds. Cached viewport and caret work remain well below their Phase 2 targets; the topology scan is reserved for edits that can change cross-line ownership.
+A cached line render remains the common source for drawing, wrapping, hit testing, selection geometry, caret geometry, and IME geometry.
+
+Unchanged source retains its last resolved geometry during an edit. Changed source uses mapped fragments or readable source. Semantic publication replaces affected fragments and metrics together while preserving the viewport anchor.
+
+Interactive Table Editing keeps its explicit row projection. It edits an existing semantic table model and does not classify new Markdown tables.
+
+## Behavioral contract
+
+Tests require these rules:
+
+- changed source never disappears while semantics are pending;
+- new Markdown syntax stays raw until native semantics publish;
+- source created after a line split does not inherit presentation from the old line;
+- ordinary text inside an existing presentation keeps that presentation;
+- unchanged shifted rows retain their render and geometry;
+- native semantic ranges invalidate dependencies outside the direct edit line;
+- published semantics replace retained or source presentation;
+- no pending path parses Markdown formatting.
+
+The focused model, Live Preview, edit-matrix, pending-visual, heading, wrapping, list, link, and table tests cover these transitions.

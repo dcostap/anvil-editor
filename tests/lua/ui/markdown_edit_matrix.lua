@@ -1,6 +1,6 @@
 -- Run with anvil:lua-ui --test-args ui/markdown_edit_matrix.lua through Meson.
 -- These cases check edit transitions, not screenshots or exact theme values.
--- Keep pending-state failures active. Do not replace expected output with raw source.
+-- Pending edits can retain exact presentation or show readable current source.
 local core = require "core"
 local config = require "core.config"
 local command = require "core.command"
@@ -214,10 +214,23 @@ test.describe("Markdown edit matrix", function()
           if operation.indent then
             buffer:insert(line, 1, "  ")
             test.equal(instance.status, "pending")
-            check("  " .. fixture.source, original_visible)
+            local indented_source = "  " .. fixture.source
+            test.equal(buffer.lines[line]:gsub("\n$", ""), indented_source)
+            test.equal(
+              visible_text(view:get_line_render(line), indented_source),
+              indented_source
+            )
             ready(instance)
             check("  " .. fixture.source, original_visible)
             buffer:remove(line, 1, line, 3)
+            test.equal(instance.status, "pending")
+            test.equal(
+              visible_text(view:get_line_render(line), fixture.source),
+              fixture.source
+            )
+            ready(instance)
+            check(fixture.source, original_visible)
+            return
           elseif operation.split then
             buffer:insert(line, col, "\n")
             test.equal(instance.status, "pending")
@@ -275,12 +288,12 @@ test.describe("Markdown edit matrix", function()
         check("- body")
         buffer:remove(1, 1, 1, #delimiter + 1)
         test.equal(instance.status, "pending")
-        check("body")
+        check("- body")
         ready(instance)
         check("body")
         buffer:insert(1, 1, delimiter)
         test.equal(instance.status, "pending")
-        check("- body")
+        check("body")
         ready(instance)
         check("- body")
       end)

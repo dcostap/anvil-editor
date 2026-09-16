@@ -75,13 +75,15 @@ test.describe("Markdown task completion during edits", function()
       view:on_text_input("new item")
       test.equal(instance.status, "pending")
       check_completion(view, 1, "completed item", true)
-      check_completion(view, 2, "new item", false)
+      -- The generated row has no current semantic snapshot yet. Show its
+      -- readable source without inheriting strike-through from the old row.
+      check_completion(view, 2, "- [ ] new item", false)
       local other = Editor(buffer)
       context.other_view = other
       other.size.x, other.size.y = view.size.x, view.size.y
       other:set_wrapping_enabled(wrapped)
       markdown.live_render.refresh_view(other)
-      check_completion(other, 1, "completed item", true)
+      check_completion(other, 1, "- [x] completed item", false)
       ready(instance)
       check_completion(other, 1, "completed item", true)
       check_completion(view, 1, "completed item", true)

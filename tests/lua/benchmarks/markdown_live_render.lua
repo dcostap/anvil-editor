@@ -4,7 +4,6 @@ local Editor = require "core.editor"
 local markdown = require "core.markdown"
 local fence_highlight = require "core.markdown.fence_highlight"
 local markdown_model = require "core.markdown.model"
-local pending_projection = require "core.markdown.pending_projection"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
 
@@ -67,21 +66,6 @@ local function measure(samples, fn)
 end
 
 test.describe("Markdown live render benchmark", function()
-  test.it("reports provisional source-topology latency", function()
-    local buffer = Buffer("topology-benchmark.md", "topology-benchmark.md", true)
-    buffer:insert(1, 1, representative_source(1024 * 1024))
-    buffer:clear_undo_redo()
-    local p95, p99 = measure(20, function()
-      pending_projection.source_topology(buffer.lines)
-    end)
-    print(string.format(
-      "Markdown pending topology benchmark: bytes=%d lines=%d p95_ms=%.3f p99_ms=%.3f",
-      #table.concat(buffer.lines), #buffer.lines, p95, p99
-    ))
-    test.ok(p95 >= 0)
-    test.ok(p99 >= p95)
-  end)
-
   test.it("reports lazy fenced-code demand and cache diagnostics", function()
     local old_enabled = config.markdown_live_editor
     config.markdown_live_editor = true
@@ -182,7 +166,7 @@ test.describe("Markdown live render benchmark", function()
       values[sample] = (system.get_time() - started) * 1000
       local owner = test.not_nil(view.__markdown_live_owner)
       capture_values[sample] = owner.last_pre_edit_capture_ms or 0
-      projection_values[sample] = owner.last_pending_projection_ms or 0
+      projection_values[sample] = owner.last_edit_projection_ms or 0
       test.equal(render.source_text, (buffer.lines[line] or ""):gsub("\n$", ""))
       test.ok(wait_ready(instance), instance.reason)
     end
@@ -191,7 +175,7 @@ test.describe("Markdown live render benchmark", function()
     local projection_p95 = percentile(projection_values, 0.95)
     local edit_p95 = percentile(edit_values, 0.95)
     print(string.format(
-      "Markdown pending presentation benchmark: bytes=%d samples=%d p95_ms=%.3f p99_ms=%.3f edit_p95_ms=%.3f capture_p95_ms=%.3f projection_p95_ms=%.3f",
+      "Markdown pending presentation benchmark: bytes=%d samples=%d p95_ms=%.3f p99_ms=%.3f edit_p95_ms=%.3f capture_p95_ms=%.3f edit_projection_p95_ms=%.3f",
       #table.concat(buffer.lines), #values, p95, p99,
       edit_p95, capture_p95, projection_p95
     ))
@@ -226,12 +210,12 @@ test.describe("Markdown live render benchmark", function()
       values[sample] = (system.get_time() - started) * 1000
       local owner = test.not_nil(view.__markdown_live_owner)
       capture_values[sample] = owner.last_pre_edit_capture_ms or 0
-      projection_values[sample] = owner.last_pending_projection_ms or 0
+      projection_values[sample] = owner.last_edit_projection_ms or 0
       test.ok(wait_ready(instance), instance.reason)
     end
     local p95, p99 = percentile(values, 0.95), percentile(values, 0.99)
     print(string.format(
-      "Markdown wrapped pending presentation benchmark: bytes=%d samples=%d p95_ms=%.3f p99_ms=%.3f edit_p95_ms=%.3f capture_p95_ms=%.3f projection_p95_ms=%.3f",
+      "Markdown wrapped pending presentation benchmark: bytes=%d samples=%d p95_ms=%.3f p99_ms=%.3f edit_p95_ms=%.3f capture_p95_ms=%.3f edit_projection_p95_ms=%.3f",
       #table.concat(buffer.lines), #values, p95, p99,
       percentile(edit_values, 0.95), percentile(capture_values, 0.95),
       percentile(projection_values, 0.95)
@@ -256,7 +240,7 @@ test.describe("Markdown live render benchmark", function()
     local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_ready(instance), instance.reason)
 
-    local values, topology_values, capture_values, projection_values = {}, {}, {}, {}
+    local values, capture_values, projection_values = {}, {}, {}
     for sample = 1, 5 do
       local line = sample * 20
       buffer:set_selection(line, #buffer.lines[line])
@@ -265,17 +249,15 @@ test.describe("Markdown live render benchmark", function()
       test.not_nil(view:get_line_render(line))
       values[sample] = (system.get_time() - started) * 1000
       local owner = test.not_nil(view.__markdown_live_owner)
-      topology_values[sample] = owner.last_topology_ms or 0
       capture_values[sample] = owner.last_pre_edit_capture_ms or 0
-      projection_values[sample] = owner.last_pending_projection_ms or 0
+      projection_values[sample] = owner.last_edit_projection_ms or 0
       test.ok(wait_ready(instance), instance.reason)
     end
     local p95, p99 = percentile(values, 0.95), percentile(values, 0.99)
     print(string.format(
-      "Markdown large structural pending benchmark: bytes=%d samples=%d p95_ms=%.3f p99_ms=%.3f topology_p95_ms=%.3f capture_p95_ms=%.3f projection_p95_ms=%.3f",
+      "Markdown large structural pending benchmark: bytes=%d samples=%d p95_ms=%.3f p99_ms=%.3f capture_p95_ms=%.3f edit_projection_p95_ms=%.3f",
       #table.concat(buffer.lines), #values, p95, p99,
-      percentile(topology_values, 0.95), percentile(capture_values, 0.95),
-      percentile(projection_values, 0.95)
+      percentile(capture_values, 0.95), percentile(projection_values, 0.95)
     ))
     test.ok(p95 >= 0)
     test.ok(p99 >= p95)

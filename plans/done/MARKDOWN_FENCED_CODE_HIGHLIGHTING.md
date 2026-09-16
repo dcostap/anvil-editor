@@ -306,10 +306,10 @@ queued request, and active worker generation immediately. Do not map old fence
 bounds onto the replacement source and never widen an uncertain block to the
 whole Document.
 
-Until a ready semantic model for the loaded Document revision is reconciled,
+Until a ready semantic model for the loaded Buffer revision is reconciled,
 the fence service reports no authoritative block membership and rejects token
-requests. Live Preview uses its current-source provisional topology during this
-interval. Structurally unsafe, stale-revision, and stale-service-generation
+requests. Markdown Live Preview shows current source during this interval.
+Structurally unsafe, stale-revision, and stale-service-generation
 blocks must never satisfy membership queries. Worker publications retain the
 same Document/service generation checks so pre-reload work cannot repopulate
 the reset cache.
@@ -326,7 +326,7 @@ The plain pending state also applies to unchanged-text suffix lines invalidated 
 
 ### Optimistic-render interaction
 
-`live_render.lua` currently considers optimistic cached rows before its semantic fence path. Fenced-code safety must take precedence:
+`live_render.lua` retains exact unchanged rows before semantic publication. Fenced-code safety takes precedence:
 
 - immediately discard optimistic rows for a cached/semantically known fence suffix invalidated by a transaction;
 - consult the fenced-code service's unsafe/pending range before returning an optimistic render;

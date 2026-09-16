@@ -658,6 +658,30 @@ bool anvil_worker_treesitter_index_result_incremental(const AnvilWorkerTreeSitte
   return result && result->incremental;
 }
 
+bool anvil_worker_treesitter_index_result_markdown_changed_lines(
+  const AnvilWorkerTreeSitterIndexResult *result,
+  uint32_t *line1,
+  uint32_t *line2
+) {
+  if (!result || !result->markdown_tree) return false;
+  uint32_t count = anvil_markdown_tree_changed_range_count(result->markdown_tree);
+  if (count == 0) return false;
+  uint32_t first = UINT32_MAX;
+  uint32_t last = 0;
+  for (uint32_t i = 0; i < count; i++) {
+    TSRange range = anvil_markdown_tree_changed_range(result->markdown_tree, i);
+    uint32_t range_line1 = range.start_point.row + 1;
+    uint32_t range_line2 = range.end_point.row + 1;
+    if (range.end_point.column == 0 && range_line2 > range_line1) range_line2--;
+    if (range_line1 < first) first = range_line1;
+    if (range_line2 > last) last = range_line2;
+  }
+  if (first == UINT32_MAX) return false;
+  if (line1) *line1 = first;
+  if (line2) *line2 = last;
+  return true;
+}
+
 uint32_t anvil_worker_treesitter_index_result_reused_block_capture_count(const AnvilWorkerTreeSitterIndexResult *result) {
   return result ? result->reused_block_capture_count : 0;
 }

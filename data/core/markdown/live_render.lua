@@ -10,8 +10,7 @@ local link_completion = require "core.markdown.completion"
 local linewrapping = require "core.linewrapping"
 local markdown_links = require "core.markdown.links"
 local markdown_model = require "core.markdown.model"
-local pending_projection = require "core.markdown.pending_projection"
-local pending_renderer = require "core.markdown.pending_render"
+local edit_projection = require "core.markdown.edit_projection"
 local markdown_tables = require "core.markdown.tables"
 local tokenizer = require "core.tokenizer"
 local vault_index = require "core.markdown.vault_index"
@@ -21,7 +20,8 @@ local live = {}
 live.view_icon = require("core.view_icons").register(
   "markdown", require("core.view_icons").file("view.md")
 )
-local pending_visual_projection = {}
+local edit_visual_projection = {}
+local refresh_projected_reveal
 
 local PROVIDER_ID = "markdown-live"
 local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
@@ -744,7 +744,7 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
   for i = 1, #cols - 1 do
     local col1, col2 = cols[i], cols[i + 1]
     if col1 < col2 then
-      local marker, marker_revealed, active_spans = false, false, {}
+      local marker, marker_span, marker_revealed, active_spans = false, nil, false, {}
       local comment, comment_marker, escape_marker, escape_content
       for _, special in ipairs(specials) do
         if special.col1 <= col1 and special.col2 >= col2 then
@@ -763,6 +763,7 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
         for _, range in ipairs(span.markers or {}) do
           if range.col1 <= col1 and range.col2 >= col2 then
             marker = true
+            marker_span = marker_span or span
             marker_revealed = marker_revealed or revealed_spans[span]
             break
           end
@@ -819,6 +820,7 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
           fragments[#fragments + 1] = {
             source_col1 = col1, source_col2 = col2,
             hidden = true, semantic_id = comment.id,
+            markdown_comment = true,
           }
         end
       elseif marker or escape_marker then
@@ -831,6 +833,8 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
           color = style.markdown_live_hidden_syntax,
           escape = escape_marker ~= nil or nil,
           semantic_id = escape_marker and escape_marker.id or nil,
+          markdown_reveal_col1 = marker_span and marker_span.col1 or nil,
+          markdown_reveal_col2 = marker_span and marker_span.col2 or nil,
         }
       elseif #active_spans > 0 or escape_content then
         local fragment = composed_fragment(escape_content and escape_content.id)
@@ -3783,6 +3787,20 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
     )
     return updated_text
   end
+  if owner and owner.hidden and owner.markdown_comment then
+    local delta = #replacement - (end_col - start_col)
+    owner.source_col2 = (owner.source_col2 or owner.source_col1 or 1) + delta
+    for i = owner_index + 1, #render_line.fragments do
+      local fragment = render_line.fragments[i]
+      fragment.source_col1 = (fragment.source_col1 or 1) + delta
+      fragment.source_col2 = (fragment.source_col2 or fragment.source_col1) + delta
+    end
+    current_text = current_text:sub(1, start_col - 1)
+      .. replacement .. current_text:sub(end_col)
+    render_line.source_text = current_text
+    render_line.markdown_pending_provenance = "retained"
+    return current_text
+  end
   if not owner or owner.hidden or owner.widget or owner.width or owner.text_x_offset then return nil end
   local owner_col1 = owner.source_col1 or 1
   local owner_col2 = owner.source_col2 or owner_col1
@@ -3804,253 +3822,21 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
     if fragment.text_source_col1 then fragment.text_source_col1 = fragment.text_source_col1 + delta end
     if fragment.text_source_col2 then fragment.text_source_col2 = fragment.text_source_col2 + delta end
   end
+  for _, fragment in ipairs(render_line.fragments) do
+    if fragment.markdown_reveal_col1 then
+      if fragment.markdown_reveal_col1 >= end_col then
+        fragment.markdown_reveal_col1 = fragment.markdown_reveal_col1 + delta
+      end
+      if fragment.markdown_reveal_col2 >= end_col then
+        fragment.markdown_reveal_col2 = fragment.markdown_reveal_col2 + delta
+      end
+    end
+  end
   current_text = current_text:sub(1, start_col - 1)
     .. replacement .. current_text:sub(end_col)
   render_line.source_text = current_text
   render_line.markdown_pending_provenance = "active-source-reveal"
   return current_text
-end
-
-local function pending_list_marker_render(
-  view, previous, current_text, reveal_source_range
-)
-  if not current_text then return nil end
-  local previous_marker
-  if previous then
-    for _, fragment in ipairs(previous.fragments or {}) do
-      if fragment.markdown_task_checkbox
-        or fragment.markdown_task_source_marker
-        or fragment.unordered_list_marker
-        or fragment.unordered_list_source_marker
-        or fragment.ordered_list_marker
-        or fragment.ordered_list_source_marker
-      then
-        previous_marker = fragment
-        break
-      end
-    end
-  end
-
-  local kind, indent, content_col, checked, marker_text, body_text
-  local task_indent, bullet, before_task, state, after_task, task_body = current_text:match(
-    "^([\t ]*)([-%*%+])([\t ]+)%[([ xX])%]([\t ]*)(.*)$"
-  )
-  if task_indent then
-    kind = "task"
-    indent = task_indent
-    content_col = #indent + #bullet + #before_task + 3 + #after_task + 1
-    checked = state == "x" or state == "X"
-    body_text = task_body
-  else
-    local ordered_indent, number, delimiter, spaces, ordered_body = current_text:match(
-      "^([\t ]*)(%d+)([.)])([\t ]+)(.*)$"
-    )
-    if ordered_indent then
-      kind = "ordered"
-      indent = ordered_indent
-      content_col = #indent + #number + 1 + #spaces + 1
-      marker_text = number .. delimiter
-      body_text = ordered_body
-    else
-      local bullet_indent, unordered_bullet, unordered_spaces, unordered_body = current_text:match(
-        "^([\t ]*)([-%*%+])([\t ]+)(.*)$"
-      )
-      if not bullet_indent then return nil end
-      kind = "unordered"
-      indent = bullet_indent
-      content_col = #indent + #unordered_bullet + #unordered_spaces + 1
-      body_text = unordered_body
-    end
-  end
-
-  local reveal_marker = reveal_source_range
-    and reveal_source_range(1, content_col)
-
-  if not previous_marker then
-    local body_font = markdown_live_body_font(view)
-    local indent_width = body_font:get_width(
-      string.rep(" ", markdown_list_visual_indent_width(indent))
-    )
-    local marker_control_width = math.max(
-      body_font:get_width("-"), math.max(
-        math.floor(SCALE * 10), math.floor(body_font:get_height() * 0.72)
-      )
-    )
-    local marker_text_width = kind == "ordered"
-      and body_font:get_width(marker_text .. " ")
-      or marker_control_width + body_font:get_width(" ")
-    previous_marker = {
-      width = indent_width + marker_text_width,
-    }
-  end
-  local render = clone_render_line(previous or {})
-  render.source_text = current_text
-  render.markdown_pending_provenance = "active-source-reveal"
-  render.fragments = {}
-  local marker = {}
-  for key, value in pairs(previous_marker) do marker[key] = value end
-  marker.source_col1 = 1
-  marker.source_col2 = content_col
-  marker.text_source_col1 = nil
-  marker.text_source_col2 = nil
-  marker.text_x_offset = nil
-  marker.draw_x_offset = nil
-  marker.hit_width = nil
-  marker.markdown_list_content_col = content_col
-  marker.markdown_task_content_col = nil
-  marker.markdown_task_source_marker = nil
-  marker.unordered_list_source_marker = nil
-  marker.ordered_list_source_marker = nil
-  local body_font = markdown_live_body_font(view)
-  local indent_width = body_font:get_width(
-    string.rep(" ", markdown_list_visual_indent_width(indent))
-  )
-  local marker_control_width = math.max(
-    body_font:get_width("-"), math.max(
-      math.floor(SCALE * 12), math.floor(body_font:get_height() * 0.84)
-    )
-  )
-  marker.width = kind == "ordered"
-    and indent_width + math.max(
-      marker_control_width + body_font:get_width(" "),
-      body_font:get_width(marker_text .. " ")
-    )
-    or indent_width + marker_control_width + body_font:get_width(" ")
-
-  if reveal_marker then
-    marker.widget = nil
-    marker.color = style.markdown_live_list_marker
-    marker.text_x_offset = indent_width
-    if kind == "task" then
-      local prefix = bullet .. before_task .. "[" .. state .. "]"
-      marker.text = prefix
-      marker.width = math.max(
-        marker.width, indent_width + body_font:get_width(prefix .. " ")
-      )
-      marker.markdown_task_source_marker = true
-      marker.markdown_task_content_col = content_col
-      marker.suppress_bracketmatch = true
-    else
-      local prefix = current_text:sub(1, content_col - 1)
-      marker.text = prefix
-      marker.width = math.max(marker.width, body_font:get_width(prefix))
-      marker.text_x_offset = math.max(
-        0, (marker.width - body_font:get_width(prefix)) / 2
-      )
-      marker.ordered_list_source_marker = kind == "ordered" or nil
-      marker.unordered_list_source_marker = kind == "unordered" or nil
-    end
-  elseif kind == "task" then
-    marker.text = ""
-    marker.checked = checked
-    marker.markdown_task_checkbox = true
-    marker.suppress_bracketmatch = true
-    marker.unordered_list_marker = nil
-    marker.ordered_list_marker = nil
-    marker.markdown_task_content_col = content_col
-    marker.color = checked and style.markdown_live_task_checked
-      or style.markdown_live_task_unchecked
-    local box_size = math.max(
-      math.floor(SCALE * 12), math.floor(body_font:get_height() * 0.84)
-    )
-    marker_control_width = math.max(body_font:get_width("-"), box_size)
-    local checkmark_font = markdown_live_scaled_font(
-      view, style.prose_strong_font,
-      math.max(1, math.floor(body_font:get_size() * 0.88))
-    )
-    local widget = task_checkbox_widget(
-      marker.width, markdown_live_body_line_height(view), box_size,
-      checked, checkmark_font, body_font:get_width(
-        string.rep(" ", markdown_list_visual_indent_width(indent))
-      ), marker_control_width
-    )
-    widget.on_mouse_pressed = nil
-    marker.widget = widget
-  elseif kind == "ordered" then
-    marker.text = marker_text
-    marker.markdown_task_checkbox = nil
-    marker.checked = nil
-    marker.unordered_list_marker = nil
-    marker.ordered_list_marker = true
-    marker.color = style.markdown_live_list_marker
-    marker.widget = nil
-    marker.text_x_offset = indent_width
-  else
-    marker.text = ""
-    marker.markdown_task_checkbox = nil
-    marker.checked = nil
-    marker.ordered_list_marker = nil
-    marker.unordered_list_marker = true
-    marker.color = style.markdown_live_list_marker
-    local marker_size = math.max(2, math.floor(body_font:get_height() * 0.24))
-    marker.widget = list_bullet_widget(
-      marker.width, markdown_live_body_line_height(view),
-      indent_width, marker_control_width, marker_size
-    )
-  end
-  render.fragments[1] = marker
-  local preserved_body = false
-  local previous_content_col = previous_marker.markdown_list_content_col
-  if not previous_content_col and previous and previous.source_text then
-    local old_indent, old_bullet, old_spaces = previous.source_text:match(
-      "^([\t ]*)([-%*%+])([\t ]+)"
-    )
-    if old_indent then
-      previous_content_col = #old_indent + #old_bullet + #old_spaces + 1
-      local old_task = previous.source_text:sub(previous_content_col):match(
-        "^%[[ xX]%]([\t ]*)"
-      )
-      if old_task then previous_content_col = previous_content_col + 3 + #old_task end
-    else
-      local old_number, old_delimiter
-      old_indent, old_number, old_delimiter, old_spaces = previous.source_text:match(
-        "^([\t ]*)(%d+)([.)])([\t ]+)"
-      )
-      if old_indent then
-        previous_content_col = #old_indent + #old_number + #old_delimiter
-          + #old_spaces + 1
-      end
-    end
-  end
-  if previous and previous.source_text and previous_content_col
-    and previous.source_text:sub(previous_content_col) == (body_text or "")
-  then
-    local delta = content_col - previous_content_col
-    for _, fragment in ipairs(previous.fragments or {}) do
-      local col1 = fragment.source_col1 or 1
-      if fragment ~= previous_marker and col1 >= previous_content_col
-        and not fragment.widget
-      then
-        local copy = {}
-        for key, value in pairs(fragment) do copy[key] = value end
-        copy.source_col1 = (copy.source_col1 or previous_content_col) + delta
-        copy.source_col2 = (copy.source_col2 or copy.source_col1) + delta
-        if copy.text_source_col1 then copy.text_source_col1 = copy.text_source_col1 + delta end
-        if copy.text_source_col2 then copy.text_source_col2 = copy.text_source_col2 + delta end
-        if copy.image_block_col1 then copy.image_block_col1 = copy.image_block_col1 + delta end
-        if copy.image_block_col2 then copy.image_block_col2 = copy.image_block_col2 + delta end
-        copy.semantic_id = nil
-        copy.link = nil
-        copy.link_resolution = nil
-        copy.on_mouse_pressed = nil
-        render.fragments[#render.fragments + 1] = copy
-        preserved_body = true
-      end
-    end
-  end
-  if not preserved_body and body_text and body_text ~= "" then
-    render.fragments[2] = {
-      source_col1 = content_col,
-      source_col2 = #current_text + 1,
-      text = body_text,
-      font = markdown_live_body_font(view),
-      color = style.text,
-    }
-  end
-  if kind == "task" then
-    set_render_line_task_completion(render, checked, content_col)
-  end
-  return render
 end
 
 local function raw_pending_source_render(view, render_line, current_text, code)
@@ -4077,6 +3863,9 @@ local function raw_pending_source_render(view, render_line, current_text, code)
   replacement.disable_wrapping = nil
   replacement.table_row = nil
   replacement.table_row_height = nil
+  replacement.markdown_pending_code_background = nil
+  replacement.markdown_code_block = nil
+  if code then replacement.x_offset = view:get_font():get_width(" ") end
   replacement.fragments = {
     {
       source_col1 = 1,
@@ -4087,88 +3876,6 @@ local function raw_pending_source_render(view, render_line, current_text, code)
     },
   }
   return code and replacement or prose_render_line(view, current_text, replacement)
-end
-
-local pending_fenced_code_render
-local current_provisional_topology
-
-local function selection_reveals_pending_range(view, line, range_col1, range_col2, inclusive_right_edge)
-  local state = current_selection_state(view)
-  for index = 1, #(state and state.selections or {}), 4 do
-    local line1, col1 = state.selections[index], state.selections[index + 1]
-    local line2, col2 = state.selections[index + 2], state.selections[index + 3]
-    if line1 and col1 and line2 and col2 then
-      if line1 > line2 or line1 == line2 and col1 > col2 then
-        line1, col1, line2, col2 = line2, col2, line1, col1
-      end
-      if line1 == line2 and col1 == col2 then
-        if line == line1 and (config.markdown_live_reveal_mode == "line"
-          or col1 >= range_col1 and (col1 < range_col2
-            or inclusive_right_edge and col1 == range_col2)) then
-          return true
-        end
-      elseif line >= line1 and line <= line2 then
-        local selected_col1 = line == line1 and col1 or 1
-        local selected_col2 = line == line2 and col2 or math.huge
-        if selected_col1 < range_col2 and selected_col2 > range_col1 then
-          return true
-        end
-      end
-    end
-  end
-  return false
-end
-
-local function pending_source_render(view, line, render_line, current_text, code)
-  local topology = current_provisional_topology(view, line)
-  if topology then
-    local owner = view.__markdown_live_owner
-    code = topology.fenced[line] == true
-      or owner.pending_indented_lines and owner.pending_indented_lines[line] == true
-  end
-  local reveal_code_delimiter = false
-  if code then
-    local state = current_selection_state(view)
-    for index = 1, #(state and state.selections or {}), 4 do
-      local line1 = state.selections[index]
-      local line2 = state.selections[index + 2] or line1
-      if line1 and line >= math.min(line1, line2)
-        and line <= math.max(line1, line2)
-      then
-        reveal_code_delimiter = true
-        break
-      end
-    end
-  end
-  local render = pending_renderer.current_source(
-    view, line, render_line, current_text, code,
-    raw_pending_source_render, prose_render_line, markdown_live_scaled_font,
-    heading_for_line, heading_font, live.thematic_break_fragment,
-    live.quote_prefix_fragment,
-    reveal_code_delimiter,
-    pending_fenced_code_render, pending_list_marker_render,
-    selection_reveals_pending_range(view, line, 1, #current_text + 1, true),
-    function(col1, col2, inclusive_right_edge)
-      return selection_reveals_pending_range(view, line, col1, col2, inclusive_right_edge)
-    end
-  )
-  local heading = not code and heading_for_line(current_text, line)
-  if render and heading then
-    local text_row_height = math.max(
-      markdown_live_body_line_height(view),
-      heading_text_row_height(view, heading.level)
-    )
-    local gap = markdown_block_gap(view)
-    render.text_row_height = text_row_height
-    render.first_row_content_y_offset = gap
-    render.highlight_height = text_row_height
-    render.caret_height = text_row_height
-  end
-  return render
-end
-
-local function current_source_render(view, line, previous, current_text, code)
-  return pending_source_render(view, line, previous, current_text, code)
 end
 
 local interactive_table_render_line
@@ -4197,8 +3904,7 @@ end
 function metric_records.clear(state, line1, line2)
   if not state then return end
   if not line1 then state.pending_sparse_metrics = nil end
-  for _, records in ipairs({ state.published_metrics or {}, state.pending_metrics or {},
-    state.adoption_metrics or {} }) do
+  for _, records in ipairs({ state.published_metrics or {}, state.pending_metrics or {} }) do
     if line1 then
       for line = line1, line2 or line1 do records[line] = nil end
     else
@@ -4210,45 +3916,13 @@ function metric_records.clear(state, line1, line2)
   end
 end
 
-function metric_records.check_adoption(view, line, record)
-  -- Unchanged source can gain new meaning from surrounding Markdown.
-  -- Report the first measurement change per revision without rejecting valid layout changes.
-  local owner = view.__markdown_live_owner
-  local previous = owner and owner.adoption_metrics and owner.adoption_metrics[line]
-  if not previous then return end
-  owner.adoption_metrics[line] = nil
-  if previous.source_text ~= view.buffer.lines[line] then return end
-  local same = previous.row_count == record.row_count
-  local changed_row = 1
-  if same then
-    for row = 1, record.row_count do
-      local before, after = metric_records.height(previous, row), metric_records.height(record, row)
-      if before ~= after and (not before or not after or math.abs(before - after) > 0.01) then
-        same = false
-        changed_row = row
-        break
-      end
-    end
-  end
-  if same or owner.metric_diagnostic_revision == view.buffer.text_revision then return end
-  owner.metric_diagnostic_revision = view.buffer.text_revision
-  core.log_quiet(
-    "Markdown layout changed on semantic adoption: buffer=%s view=%s revision=%d line=%d "
-      .. "rows=%d->%d row=%d height=%s->%s source_unchanged=true context_changed=%s",
-    view.buffer:get_name(), owner.listener_id, view.buffer.text_revision, line,
-    previous.row_count, record.row_count, changed_row,
-    tostring(metric_records.height(previous, changed_row)), tostring(metric_records.height(record, changed_row)),
-    tostring(owner.adoption_context_changed)
-  )
-end
-
 function metric_records.restore_edit_anchor(view, transaction)
   local owner = view.__markdown_live_owner
   local anchor = owner and owner.pre_edit_anchor
   if not anchor then return end
   owner.pre_edit_anchor = nil
-  local line = pending_projection.map_unchanged_line(
-    pending_projection.ordered_changed_ranges(transaction), anchor.line
+  local line = edit_projection.map_unchanged_line(
+    edit_projection.ordered_changed_ranges(transaction), anchor.line
   )
   if line then
     anchor.line = line
@@ -4341,20 +4015,24 @@ local function split_pending_render(render_line, text)
     local line_render = clone_render_line(render_line)
     line_render.source_text = source
     line_render.fragments = {}
-    for _, fragment in ipairs(render_line.fragments or {}) do
-      local col1 = fragment.source_col1 or 1
-      local col2 = fragment.source_col2 or col1
-      local from, to = math.max(col1, line_start), math.min(col2, line_end)
-      if from < to or (from == to and col1 == col2 and from == line_start) then
-        if fragment.widget and (from ~= col1 or to ~= col2) then return nil end
-        local copy = {}
-        for key, value in pairs(fragment) do copy[key] = value end
-        copy.source_col1 = from - line_start + 1
-        copy.source_col2 = to - line_start + 1
-        if copy.text and not copy.widget then
-          copy.text = copy.text:sub(from - col1 + 1, to - col1)
+    if source == "" then
+      line_render = { source_text = "", fragments = {} }
+    else
+      for _, fragment in ipairs(render_line.fragments or {}) do
+        local col1 = fragment.source_col1 or 1
+        local col2 = fragment.source_col2 or col1
+        local from, to = math.max(col1, line_start), math.min(col2, line_end)
+        if from < to or (from == to and col1 == col2 and from == line_start) then
+          if fragment.widget and (from ~= col1 or to ~= col2) then return nil end
+          local copy = {}
+          for key, value in pairs(fragment) do copy[key] = value end
+          copy.source_col1 = from - line_start + 1
+          copy.source_col2 = to - line_start + 1
+          if copy.text and not copy.widget then
+            copy.text = copy.text:sub(from - col1 + 1, to - col1)
+          end
+          line_render.fragments[#line_render.fragments + 1] = copy
         end
-        line_render.fragments[#line_render.fragments + 1] = copy
       end
     end
     lines[#lines + 1] = line_render
@@ -4362,6 +4040,77 @@ local function split_pending_render(render_line, text)
     line_start = newline + 1
   end
   return lines
+end
+
+local function join_projected_renders(view, pre_edit_lines, edit, source)
+  if not edit or edit.line1 >= edit.line2 or (edit.text or "") ~= "" then
+    return nil
+  end
+  local first = pre_edit_lines[edit.line1]
+  local last = pre_edit_lines[edit.line2]
+  if first and not first.render_line then
+    first.render_line = raw_pending_source_render(
+      view, nil, first.source_text or "", false
+    )
+  end
+  if not (first and first.render_line and last and last.render_line) then
+    core.log_quiet(
+      "Markdown edit projection could not join lines %d-%d: first=%s last=%s",
+      edit.line1, edit.line2,
+      tostring(first and first.render_line ~= nil),
+      tostring(last and last.render_line ~= nil)
+    )
+    return nil
+  end
+
+  local use_last_geometry = first.source_text == ""
+    and edit.col1 == 1 and edit.col2 == 1
+  local render = clone_render_line(
+    use_last_geometry and last.render_line or first.render_line
+  )
+  render.source_text = source
+  render.fragments = {}
+  render.semantic_id = nil
+  render.semantic_generation = nil
+  render.markdown_pending_provenance = "retained"
+
+  local function append(fragment, shift)
+    if fragment.widget then return false end
+    local copy = {}
+    for key, value in pairs(fragment) do copy[key] = value end
+    copy.source_col1 = (copy.source_col1 or 1) + shift
+    copy.source_col2 = (copy.source_col2 or copy.source_col1) + shift
+    for _, name in ipairs({
+      "text_source_col1", "text_source_col2",
+      "image_block_col1", "image_block_col2",
+      "markdown_reveal_col1", "markdown_reveal_col2",
+    }) do
+      if copy[name] then copy[name] = copy[name] + shift end
+    end
+    render.fragments[#render.fragments + 1] = copy
+    return true
+  end
+
+  for _, fragment in ipairs(first.render_line.fragments or {}) do
+    if (fragment.source_col2 or fragment.source_col1 or 1) > edit.col1 then
+      core.log_quiet("Markdown edit projection join crossed the first line fragment")
+      return nil
+    end
+    if not append(fragment, 0) then return nil end
+  end
+  local shift = edit.col1 - edit.col2
+  for _, fragment in ipairs(last.render_line.fragments or {}) do
+    if (fragment.source_col1 or 1) < edit.col2 then
+      core.log_quiet("Markdown edit projection join crossed the last line fragment")
+      return nil
+    end
+    if not append(fragment, shift) then return nil end
+  end
+  render.text_row_height = math.max(
+    render.text_row_height or 0,
+    last.render_line.text_row_height or 0
+  )
+  return render
 end
 
 local function cached_render_line(view, line)
@@ -4378,13 +4127,13 @@ end
 -- move that line before the callback fires, so rebase consumers immediately
 -- instead of making completion invalidate an unrelated line (or no longer
 -- invalidating the visible image at all).
-pending_visual_projection.rebase_image_consumers = function(view, ranges)
+edit_visual_projection.rebase_image_consumers = function(view, ranges)
   local references = view and view.__markdown_live_image_references
   local cache = view and view.__markdown_live_image_cache
   if not (references and cache and ranges and #ranges > 0) then return end
   for _, record in pairs(cache) do
     for reference_id, old_line in pairs(record.consumers or {}) do
-      local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+      local new_line = edit_projection.map_unchanged_line(ranges, old_line)
       if new_line and view.buffer.lines[new_line] then
         record.consumers[reference_id] = new_line
       else
@@ -4397,14 +4146,7 @@ pending_visual_projection.rebase_image_consumers = function(view, ranges)
   end
 end
 
-pending_visual_projection.provisional_frontmatter_for_line = function(view, line)
-  local _, _, _, frontmatter = pending_projection.source_topology(
-    view.buffer.lines, line
-  )
-  return frontmatter and frontmatter[line] == true or false
-end
-
-pending_visual_projection.rebind_image_consumers = function(view, render_line, line)
+edit_visual_projection.rebind_image_consumers = function(view, render_line, line)
   local references = view and view.__markdown_live_image_references
   local cache = view and view.__markdown_live_image_cache
   if not (references and cache and render_line) then return end
@@ -4471,7 +4213,6 @@ local function capture_pre_edit_renders(view, change)
     for line = edit.line1 or 1, edit.line2 or edit.line1 or 1 do lines[line] = true end
     if edit.line1 ~= edit.line2
       or (edit.text or ""):find("\n", 1, true)
-      or pending_projection.edit_changes_list_structure(edit)
     then
       structural = true
     end
@@ -4525,12 +4266,6 @@ local function capture_pre_edit_renders(view, change)
     visible_line1, visible_line2 = capture_line1, capture_line2
   end
   owner.pre_edit_lines = {}
-  local old_topology_limit = owner.pending_visible_line2 or 1
-  for line in pairs(lines) do
-    old_topology_limit = math.max(old_topology_limit, line)
-  end
-  local _, old_comments, old_math, old_frontmatter =
-    pending_projection.source_topology(view.buffer.lines, old_topology_limit)
   local metric_cache = view.__visual_metric_cache
   local metrics_current = metric_cache
     and metric_cache.signature == view:get_visual_metric_signature()
@@ -4569,22 +4304,38 @@ local function capture_pre_edit_renders(view, change)
       or pending and pending.metrics
       or owner.pending_metrics and owner.pending_metrics[line]
       or owner.published_metrics and owner.published_metrics[line]
+    local fenced = service and service:contains_line(line) or false
+    local raw_passthrough = line_in_raw_block(view, line)
+    if not render and raw_passthrough then
+      if fenced and service:is_body_line(line) then
+        render = raw_pending_source_render(view, nil, source_text, true)
+        render.markdown_code_block = true
+      else
+        render = {
+          source_text = source_text,
+          raw_passthrough = true,
+          markdown_code_block = fenced or nil,
+        }
+      end
+    end
     owner.pre_edit_lines[line] = {
+      source_line = line,
       source_text = source_text,
       render_line = render and clone_render_line(render) or nil,
+      raw_passthrough = raw_passthrough,
       metrics = captured_metrics,
-      fenced = service and service:contains_line(line) or false,
+      fenced = fenced,
       indented = owner.pending_indented_lines
         and owner.pending_indented_lines[line]
         or indented_node ~= nil,
       indented_line1 = indented_node and indented_node.source.line1 or nil,
       indented_line2 = indented_end_line,
-      frontmatter = frontmatter_node ~= nil or old_frontmatter[line] == true,
+      frontmatter = frontmatter_node ~= nil,
       frontmatter_line1 = frontmatter_node
         and frontmatter_node.source.line1 or nil,
       frontmatter_line2 = frontmatter_end_line,
-      comment = old_comments[line] == true or line_in_semantic_comment(view, line),
-      math = old_math[line] == true or line_in_semantic_math(view, line),
+      comment = line_in_semantic_comment(view, line),
+      math = line_in_semantic_math(view, line),
       callout_record = callout_runtime.for_line(view, line),
     }
     captured = captured + 1
@@ -4597,8 +4348,9 @@ local function capture_pre_edit_renders(view, change)
   owner.last_pre_edit_capture_ms = (system.get_time() - capture_started) * 1000
 end
 
-function pending_visual_projection.contains_retainable_presentation(render_line)
+function edit_visual_projection.contains_retainable_presentation(render_line)
   if render_line and render_line.table_row then return false end
+  if render_line and render_line.markdown_code_block then return true end
   -- These presentations are either source-local (tags, escapes, footnotes,
   -- hard breaks) or attached to a source-ranged link/asset. They can be
   -- carried across a structural pending edit when the raw block topology is
@@ -4620,45 +4372,11 @@ function pending_visual_projection.contains_retainable_presentation(render_line)
   return false
 end
 
-function pending_visual_projection.context_is_safe(view, line, render_line)
-  local owner = view.__markdown_live_owner
-  if owner and owner.link_targets_changed_revision == view.buffer.text_revision then
-    -- A resolved attachment/image/embed can change when a reference
-    -- definition changes. The retained fragment does not carry enough source
-    -- context to prove that its old target is still valid, so do not carry
-    -- any target-dependent presentation across that transaction.
-    render_line = render_line or view.__line_render_cache
-      and view.__line_render_cache.lines[line]
-      and view.__line_render_cache.lines[line].render_line
-    for _, fragment in ipairs(render_line and render_line.fragments or {}) do
-      if fragment.attachment_chip or fragment.image_status
-        or fragment.embed_preview
-        or fragment.widget and (
-          fragment.widget.type == "image"
-          or fragment.widget.type == "markdown-embed-preview"
-        )
-      then
-        return false
-      end
-    end
-  end
-  local topology = owner and owner.provisional_topology
-  if not topology or topology.revision ~= view.buffer.text_revision then return true end
-  return not (topology.fenced[line] or topology.comments[line]
-    or topology.math[line] or topology.frontmatter[line]
-    or topology.html[line])
-end
-
-function pending_visual_projection.find_capture(view, pre_edit_lines, source)
-  if not source:find("[", 1, true) and not source:find("#", 1, true)
-    and not source:find("\\", 1, true) and not source:find("$", 1, true)
-    and not source:find(">", 1, true) and not source:match("  $")
-  then
-    return nil
-  end
+function edit_visual_projection.find_capture(view, pre_edit_lines, source, any_exact)
   for _, captured in pairs(pre_edit_lines or {}) do
     if captured.source_text == source
-      and pending_visual_projection.contains_retainable_presentation(captured.render_line)
+      and (any_exact
+        or edit_visual_projection.contains_retainable_presentation(captured.render_line))
     then
       return captured
     end
@@ -4673,7 +4391,8 @@ function pending_visual_projection.find_capture(view, pre_edit_lines, source)
     local cached_source = cached.source_line
       and cached.source_line:gsub("\n$", "")
     if cached_source == source
-      and pending_visual_projection.contains_retainable_presentation(render)
+      and (any_exact
+        or edit_visual_projection.contains_retainable_presentation(render))
     then
       return {
         source_text = source,
@@ -4684,9 +4403,8 @@ function pending_visual_projection.find_capture(view, pre_edit_lines, source)
   end
 end
 
-function pending_visual_projection.can_retain(view, line, render_line)
-  return pending_visual_projection.contains_retainable_presentation(render_line)
-    and pending_visual_projection.context_is_safe(view, line, render_line)
+function edit_visual_projection.can_retain(view, line, render_line)
+  return edit_visual_projection.contains_retainable_presentation(render_line)
 end
 
 local function pending_entry(view, render_line, source_text, metrics, provenance)
@@ -4701,58 +4419,45 @@ local function pending_entry(view, render_line, source_text, metrics, provenance
   }
 end
 
-local function build_pending_projection(view, transaction, pre_edit_lines)
+local function build_edit_projection(view, transaction, pre_edit_lines)
   local owner = view.__markdown_live_owner
   if not owner or not transaction or transaction.type == "load" then return {}, {} end
   pre_edit_lines = pre_edit_lines or {}
-  local ranges = pending_projection.ordered_changed_ranges(transaction)
+  local ranges = edit_projection.ordered_changed_ranges(transaction)
   local previous_metrics = owner.pending_metrics or owner.published_metrics or {}
   local next_lines, next_metrics = {}, {}
-  local context_changed, global_context =
-    pending_projection.transaction_changes_block_context(
-    view.buffer, transaction, pre_edit_lines
-  )
-  local context_line1, context_line2
-  if context_changed then
-    if global_context then
-      context_line1, context_line2 = 1, #view.buffer.lines
-    else
-      for _, range in ipairs(ranges) do
-        local line1 = math.min(
-          range.old_line1 or range.new_line1 or 1,
-          range.new_line1 or range.old_line1 or 1
-        )
-        local line2 = math.max(
-          range.old_line2 or range.new_line2 or line1,
-          range.new_line2 or range.old_line2 or line1
-        )
-        context_line1 = math.min(context_line1 or line1, math.max(1, line1 - 1))
-        context_line2 = math.max(
-          context_line2 or line2, math.min(#view.buffer.lines, line2 + 1)
-        )
-      end
-    end
+  local selection_state = current_selection_state(view)
+  local projected_selection_state = selection_state
+  if transaction.new_selections and core.active_view == view then
+    projected_selection_state = {
+      selections = transaction.new_selections,
+      last_selection = transaction.new_last_selection,
+      owner_id = transaction.selection_owner_id,
+    }
   end
 
-  local function retain(old_line, render_line, metrics)
-    local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+  local function retain(old_line, render_line, metrics, fenced)
+    local new_line = edit_projection.map_unchanged_line(ranges, old_line)
     if not new_line or next_lines[new_line] then return end
     render_line = render_line or cached_render_line(view, old_line)
-    if context_changed
-      and new_line >= (context_line1 or new_line)
-      and new_line <= (context_line2 or new_line)
-      and not pending_visual_projection.can_retain(view, new_line, render_line)
-    then
-      return
-    end
     local source = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
     if render_line and render_line.source_text == source then
+      local retained_render = clone_render_line(render_line)
+      retained_render.markdown_pending_code_background =
+        fenced or retained_render.markdown_code_block or nil
+      local retained_metrics = metrics or previous_metrics[old_line]
+      if new_line ~= old_line and (
+        retained_render.first_row_content_y_offset
+        or retained_render.callout_record
+      ) then
+        retained_metrics = nil
+      end
       local entry = pending_entry(
-        view, clone_render_line(render_line), source,
-        metrics or previous_metrics[old_line], "retained"
+        view, retained_render, source,
+        retained_metrics, "retained"
       )
       if entry then
-        pending_visual_projection.rebind_image_consumers(
+        edit_visual_projection.rebind_image_consumers(
           view, entry.render_line, new_line
         )
         next_lines[new_line] = entry
@@ -4762,15 +4467,13 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
   end
 
   for old_line, captured in pairs(pre_edit_lines) do
-    retain(old_line, captured.render_line, captured.metrics)
+    retain(old_line, captured.render_line, captured.metrics, captured.fenced)
   end
   local function retain_metrics(old_line, metrics)
     -- Rebase numbers without creating render plans for offscreen lines.
-    local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+    local new_line = edit_projection.map_unchanged_line(ranges, old_line)
     if metrics and new_line and not next_lines[new_line]
       and not next_metrics[new_line]
-      and not (context_changed and new_line >= (context_line1 or new_line)
-        and new_line <= (context_line2 or new_line))
     then
       next_metrics[new_line] = metrics
     end
@@ -4781,72 +4484,73 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
   local function publish(line, render, captured, provenance)
     if not render then return false end
     local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
-    if captured and pending_projection.block_signature(captured.source_text or "")
-      ~= pending_projection.block_signature(source)
-    then
-      -- Source-class changes need the new render plan's metric contract.
-      -- Carrying row heights from an active task onto the blank row produced
-      -- by Enter leaves following headings vertically displaced.
-      captured = nil
-    end
     if render.position_rows then
       render.position_rows = nil
       render.layout_height = nil
       render = layout_inline_image_rows(view, source, render)
     end
+    render.markdown_pending_code_background = captured and captured.fenced
+      or render.markdown_code_block or nil
+    local captured_metrics = captured and captured.source_text == source
+      and captured.metrics or nil
+    if captured_metrics and captured.source_line ~= line and (
+      render.first_row_content_y_offset or render.callout_record
+    ) then
+      captured_metrics = nil
+    end
     local entry = pending_entry(
       view, render, source,
-      captured and captured.source_text == source and captured.metrics or nil,
+      captured_metrics,
       provenance or render.markdown_pending_provenance
     )
     if not entry then return false end
-    pending_visual_projection.rebind_image_consumers(view, entry.render_line, line)
+    edit_visual_projection.rebind_image_consumers(view, entry.render_line, line)
     next_lines[line] = entry
     next_metrics[line] = nil
+    if refresh_projected_reveal then
+      refresh_projected_reveal(view, line, projected_selection_state, entry)
+    end
     return true
   end
 
   if #ranges == 1 and #(transaction.edits or {}) == 1 then
     local range, edit = ranges[1], transaction.edits[1]
     local captured = pre_edit_lines[edit.line1]
+    local new_line1 = range.new_line1 or edit.line1
+    local new_line2 = range.new_line2 or new_line1
+    if new_line1 == new_line2 then
+      local source = (view.buffer.lines[new_line1] or ""):gsub("\n$", "")
+      local joined = join_projected_renders(view, pre_edit_lines, edit, source)
+      if joined then publish(new_line1, joined, nil, "retained") end
+    end
     local old_render = captured and captured.render_line or cached_render_line(view, edit.line1)
     local transformed = old_render and clone_render_line(old_render)
-    local new_source = (view.buffer.lines[range.new_line1 or edit.line1] or "")
-      :gsub("\n$", "")
-    if transformed and pending_projection.block_signature(transformed.source_text or "")
-      ~= pending_projection.block_signature(new_source)
-    then
-      transformed = nil
-    end
     local combined = transformed and apply_inline_edit_to_render(
       transformed, transformed.source_text, edit
     )
     local split = combined and split_pending_render(transformed, combined)
-    local new_line1 = range.new_line1 or edit.line1
-    local new_line2 = range.new_line2 or new_line1
     if split and #split == new_line2 - new_line1 + 1 then
       for index, render in ipairs(split) do
         local line = new_line1 + index - 1
         local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
-        local visual_capture = pending_visual_projection.find_capture(
-          view, pre_edit_lines, source
+        local visual_capture = edit_visual_projection.find_capture(
+          view, pre_edit_lines, source,
+          index > 1 and (edit.text or ""):find("\n", 1, true) ~= nil
         )
-        if visual_capture and pending_visual_projection.can_retain(
-          view, line, visual_capture.render_line
-        ) then
+        if visual_capture then
           publish(
             line, clone_render_line(visual_capture.render_line),
             visual_capture, "retained"
           )
         else
-          if index > 1 and pending_projection.list_signature(source) ~= "" then
-            -- A new list item cannot inherit the preceding item's body style.
-            render = current_source_render(
-              view, line, nil, source,
-              owner.fence_service and owner.fence_service:contains_line(line)
+          -- A replacement that creates a line can include generated source,
+          -- such as a new list marker. Do not copy presentation flags from
+          -- the fragment before the newline onto that new source.
+          if index > 1 and (edit.text or ""):find("\n", 1, true) then
+            render = raw_pending_source_render(
+              view, render, source, captured and captured.fenced
             )
           end
-          -- Keep the existing item's fragments and inline formatting.
           publish(line, render, captured, "active-source-reveal")
         end
       end
@@ -4870,24 +4574,14 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
             break
           end
         end
-        if exact and (not context_changed
-          or pending_visual_projection.can_retain(view, new_line, exact.render_line))
-        then
+        if exact then
           publish(new_line, clone_render_line(exact.render_line), exact, "retained")
         else
           local previous = fallback and fallback.render_line or nil
-          if previous and pending_projection.block_signature(previous.source_text or "")
-            ~= pending_projection.block_signature(source)
-          then
-            -- Block-class changes cannot inherit the previous row's metric
-            -- contract. In particular, exiting an empty task must not clone
-            -- its checkbox height onto the resulting blank prose row.
-            previous = nil
-          end
-          local visual_capture = pending_visual_projection.find_capture(
+          local visual_capture = edit_visual_projection.find_capture(
             view, pre_edit_lines, source
           )
-          if visual_capture and pending_visual_projection.can_retain(
+          if visual_capture and edit_visual_projection.can_retain(
             view, new_line, visual_capture.render_line
           ) then
             publish(
@@ -4895,12 +4589,18 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
               visual_capture, "retained"
             )
           else
-            local render = current_source_render(
-              view, new_line, previous, source,
-              owner.fence_service and owner.fence_service:contains_line(new_line)
-            )
+            local render = fallback and fallback.raw_passthrough
+              and {
+                source_text = source,
+                raw_passthrough = true,
+                markdown_edit_provenance = "retained",
+              }
+              or raw_pending_source_render(
+                view, previous, source,
+                owner.fence_service and owner.fence_service:contains_line(new_line)
+              )
             publish(
-              new_line, render, context_changed and nil or fallback,
+              new_line, render, fallback,
               render.markdown_pending_provenance
             )
           end
@@ -4909,29 +4609,26 @@ local function build_pending_projection(view, transaction, pre_edit_lines)
     end
   end
 
-  return next_lines, next_metrics, context_changed, context_line1, context_line2
+  return next_lines, next_metrics
 end
 
-local function capture_pending_renders(view, transaction)
+local function capture_edit_projection(view, transaction)
   local projection_started = system.get_time()
   local owner = view.__markdown_live_owner
   if not owner or not transaction or transaction.type == "load" then return end
   local pre_edit_lines = owner.pre_edit_lines or {}
   local previous_indented = owner.pending_indented_lines or {}
   local previous_indented_sources = owner.pending_indented_sources or {}
-  local previous_frontmatter = owner.pending_frontmatter_lines or {}
   local previous_callouts = owner.pending_callouts or {}
-  local ranges = pending_projection.ordered_changed_ranges(transaction)
-  pending_visual_projection.rebase_image_consumers(view, ranges)
-  local context_changed, context_line1, context_line2
-  owner.pending_lines, owner.pending_metrics, context_changed,
-    context_line1, context_line2 = build_pending_projection(
+  local ranges = edit_projection.ordered_changed_ranges(transaction)
+  edit_visual_projection.rebase_image_consumers(view, ranges)
+  owner.pending_lines, owner.pending_metrics = build_edit_projection(
     view, transaction, pre_edit_lines
   )
   local pending_indented = {}
   local pending_indented_sources = {}
   local function retain_indented(old_line, source_text)
-    local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+    local new_line = edit_projection.map_unchanged_line(ranges, old_line)
     if not new_line then return end
     local current = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
     if source_text ~= current then return end
@@ -4941,7 +4638,7 @@ local function capture_pending_renders(view, transaction)
   local function retain_indented_range(line1, line2)
     if not line1 or not line2 then return end
     for old_line = line1, line2 do
-      local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+      local new_line = edit_projection.map_unchanged_line(ranges, old_line)
       if new_line then
         local current = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
         pending_indented[new_line] = true
@@ -4960,22 +4657,12 @@ local function capture_pending_renders(view, transaction)
     if source then retain_indented(old_line, source) end
   end
   -- A changed range can create a second copy of an unchanged indented-code
-  -- line. The transaction map cannot identify that new line because it has
-  -- no old coordinate, but the pre-edit capture can still prove its source
-  -- ownership. Keep this bounded to the changed ranges and reject current
-  -- raw-block owners, which have a stricter provisional topology.
-  local function current_indented_context_is_safe(line)
-    local topology = owner.provisional_topology
-    if not topology or topology.revision ~= view.buffer.text_revision then return true end
-    return not (topology.fenced[line] or topology.comments[line]
-      or topology.math[line] or topology.frontmatter[line]
-      or topology.html[line])
-  end
+  -- line. The pre-edit snapshot can retain that known presentation.
   for _, range in ipairs(ranges) do
     local new_line1 = range.new_line1 or range.old_line1 or 1
     local new_line2 = range.new_line2 or new_line1
     for new_line = new_line1, new_line2 do
-      if not pending_indented[new_line] and current_indented_context_is_safe(new_line) then
+      if not pending_indented[new_line] then
         local source = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
         for _, captured in pairs(pre_edit_lines) do
           if captured.indented and captured.source_text == source then
@@ -4989,71 +4676,11 @@ local function capture_pending_renders(view, transaction)
   end
   owner.pending_indented_lines = pending_indented
   owner.pending_indented_sources = pending_indented_sources
-  local pending_frontmatter = {}
-  local function retain_frontmatter(old_line)
-    local new_line = pending_projection.map_unchanged_line(ranges, old_line)
-    if new_line
-      and pending_visual_projection.provisional_frontmatter_for_line(view, new_line)
-    then
-      pending_frontmatter[new_line] = true
-    end
-  end
-  local function retain_frontmatter_range(line1, line2)
-    if not line1 or not line2 then return end
-    for old_line = line1, line2 do retain_frontmatter(old_line) end
-  end
-  for _, captured in pairs(pre_edit_lines) do
-    if captured.frontmatter then
-      retain_frontmatter_range(
-        captured.frontmatter_line1, captured.frontmatter_line2
-      )
-    end
-  end
-  for old_line in pairs(previous_frontmatter) do
-    retain_frontmatter(old_line)
-  end
-  local topology = owner.provisional_topology
-  if topology and topology.revision == view.buffer.text_revision then
-    for line in pairs(topology.frontmatter or {}) do
-      pending_frontmatter[line] = true
-    end
-  end
-  for _, range in ipairs(ranges) do
-    local new_line1 = range.new_line1 or range.old_line1 or 1
-    local new_line2 = range.new_line2 or new_line1
-    for new_line = new_line1, new_line2 do
-      if not pending_frontmatter[new_line]
-        and pending_visual_projection.provisional_frontmatter_for_line(
-          view, new_line
-        )
-      then
-        for _, captured in pairs(pre_edit_lines) do
-          if captured.frontmatter then
-            pending_frontmatter[new_line] = true
-            break
-          end
-        end
-      end
-    end
-  end
-  owner.pending_frontmatter_lines = pending_frontmatter
-  -- Frontmatter always uses the ordinary source presentation. Do not retain
-  -- Markdown body metrics while the semantic parser catches up. Those metrics
-  -- can be taller than source rows and make the block change height on each
-  -- edit.
-  for line in pairs(pending_frontmatter) do
-    local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
-    local render = current_source_render(view, line, nil, source, false)
-    local entry = pending_entry(
-      view, render, source, nil, render.markdown_pending_provenance
-    )
-    metric_records.store(owner, line, entry)
-  end
   local pending_callouts = {}
   local function shifted_callout(record)
     if not record then return nil end
-    local line1 = pending_projection.map_unchanged_line(ranges, record.line1)
-    local line2 = pending_projection.map_unchanged_line(ranges, record.line2)
+    local line1 = edit_projection.map_unchanged_line(ranges, record.line1)
+    local line2 = edit_projection.map_unchanged_line(ranges, record.line2)
     if not line1 or not line2 then return nil end
     local copy = {}
     for key, value in pairs(record) do copy[key] = value end
@@ -5092,7 +4719,7 @@ local function capture_pending_renders(view, transaction)
       end
     end
     for old_line = record.line1, record.line2 do
-      local new_line = pending_projection.map_unchanged_line(ranges, old_line)
+      local new_line = edit_projection.map_unchanged_line(ranges, old_line)
       if new_line then pending_callouts[new_line] = shifted end
     end
     if extend_to then pending_callouts[extend_to] = shifted end
@@ -5131,10 +4758,7 @@ local function capture_pending_renders(view, transaction)
     end
   end
   owner.pending_callouts = pending_callouts
-  owner.pending_context_revision = context_changed and view.buffer.text_revision or nil
-  owner.pending_context_line1 = context_line1
-  owner.pending_context_line2 = context_line2
-  owner.last_pending_projection_ms = (system.get_time() - projection_started) * 1000
+  owner.last_edit_projection_ms = (system.get_time() - projection_started) * 1000
   owner.pre_edit_lines = nil
   owner.pre_edit_transaction = nil
   owner.pre_edit_revision = nil
@@ -5146,7 +4770,7 @@ local function capture_pending_renders(view, transaction)
     view.buffer.text_revision,
     tostring(capture and capture.line1), tostring(capture and capture.line2),
     capture and capture.captured or 0, retained,
-    owner.last_pre_edit_capture_ms or 0, owner.last_pending_projection_ms or 0
+    owner.last_pre_edit_capture_ms or 0, owner.last_edit_projection_ms or 0
   )
   owner.pre_edit_capture = nil
 end
@@ -5171,29 +4795,14 @@ local function pending_render(view, line)
     return entry
   end
   local function current_entry()
-    local topology = current_provisional_topology
-      and current_provisional_topology(view, line)
-      or owner and owner.provisional_topology
-    local code
-    if topology and topology.revision == view.buffer.text_revision
-      and line <= (topology.line_limit or 0)
-    then
-      code = topology.fenced[line] == true
-    elseif owner and owner.fence_service then
-      code = owner.fence_service:contains_line(line)
-    end
+    local code = owner and not owner.reload_projection_revision
+      and owner.fence_service and owner.fence_service:contains_line(line)
     code = code or owner and owner.pending_indented_lines
       and owner.pending_indented_lines[line] == true
-    local render = current_source_render(view, line, nil, text, code == true)
+    local render = raw_pending_source_render(view, nil, text, code == true)
     return pending_entry(
       view, render, text, nil, render.markdown_pending_provenance
     )
-  end
-  if owner and owner.pending_context_revision == view.buffer.text_revision
-    and line >= (owner.pending_context_line1 or line)
-    and line <= (owner.pending_context_line2 or line)
-  then
-    return current_entry()
   end
   if owner and owner.pre_edit_transaction
     and owner.pre_edit_revision == view.buffer.text_revision
@@ -5283,37 +4892,6 @@ indented_code_for_line = function(view, line)
   end
 end
 
-current_provisional_topology = function(view, line)
-  local owner = view.__markdown_live_owner
-  local topology = owner and owner.provisional_topology
-  if not topology or topology.revision ~= view.buffer.text_revision then return nil end
-  if line and line > (topology.line_limit or 0) then
-    local old_limit = topology.line_limit or 0
-    local line_limit = math.min(
-      #view.buffer.lines,
-      math.max(line, old_limit + 256)
-    )
-    local fenced, comments, math, frontmatter, html, fence_delimiters =
-      pending_projection.source_topology(view.buffer.lines, line_limit)
-    topology = {
-      revision = view.buffer.text_revision,
-      line_limit = line_limit,
-      fenced = fenced,
-      comments = comments,
-      math = math,
-      frontmatter = frontmatter,
-      html = html,
-      fence_delimiters = fence_delimiters,
-    }
-    owner.provisional_topology = topology
-    core.log_quiet(
-      "Markdown Live Preview extended provisional topology from line %d to %d",
-      old_limit, line_limit
-    )
-  end
-  return topology
-end
-
 local function fenced_code_delimiter_kind(view, fenced, line)
   if line == fenced.source.line1 then return "open" end
   if line ~= fenced.effective_line2 then return nil end
@@ -5379,19 +4957,6 @@ local function fenced_code_fragments(text, entry)
   return fragments
 end
 
-pending_fenced_code_render = function(view, line, text)
-  local owner = view.__markdown_live_owner
-  local service = owner and owner.fence_service
-  local entry = service and service.peek_line_tokens_at_line
-    and service:peek_line_tokens_at_line(line)
-  return {
-    source_text = text,
-    x_offset = view:get_font():get_width(" "),
-    text_row_height = fenced_code_line_height(view),
-    fragments = fenced_code_fragments(text, entry),
-  }
-end
-
 local function fenced_code_content_render_line(view, line, text, fenced)
   local owner = view.__markdown_live_owner
   local service = owner and owner.fence_service
@@ -5400,6 +4965,7 @@ local function fenced_code_content_render_line(view, line, text, fenced)
     source_text = text,
     x_offset = view:get_font():get_width(" "),
     text_row_height = fenced_code_line_height(view),
+    markdown_code_block = true,
     fragments = fenced_code_fragments(text, entry),
   }
   local callout = callout_runtime.for_line(view, line)
@@ -5417,7 +4983,6 @@ function decoration_provider:line_background_descriptor(view, line)
   local callout = callout_runtime.for_line(view, line)
   if not callout and owner and owner.pending_callouts
     and owner.pending_callouts[line]
-    and pending_visual_projection.context_is_safe(view, line)
   then
     callout = owner and owner.pending_callouts and owner.pending_callouts[line]
   end
@@ -5456,45 +5021,34 @@ function decoration_provider:line_background(view, line)
     model.status == "pending" or model.published_revision ~= view.buffer.text_revision
   )
   if semantics_pending then
-    local provisional = current_provisional_topology(view, line)
-    if provisional and provisional.revision == view.buffer.text_revision then
-      if provisional.comments[line] then return nil end
-      if provisional.fenced[line] then return style.markdown_live_code_background end
-    elseif owner.fence_service and owner.fence_service:contains_line(line) then
+    local pending = pending_render(view, line)
+    if pending and (pending.render_line.markdown_pending_code_background
+      or pending.render_line.markdown_code_block)
+    then
       return style.markdown_live_code_background
     end
+    if pending and pending.provenance == "retained"
+      and owner.fence_service and owner.fence_service:contains_line(line)
+    then
+      return style.markdown_live_code_background
+    end
+    if not pending and not owner.reload_projection_revision
+      and owner.fence_service and owner.fence_service:contains_line(line)
+    then
+      return style.markdown_live_code_background
+    end
+    if owner.pending_indented_lines and owner.pending_indented_lines[line] then
+      return style.markdown_live_code_background
+    end
+    return nil
   end
-  local topology = current_provisional_topology(view, line)
-  if not (topology and topology.revision == view.buffer.text_revision)
-    and line_in_semantic_comment(view, line)
-  then
+  if line_in_semantic_comment(view, line) then
     return nil
   end
   local fenced = fenced_code_for_line(view, line)
   if fenced then
     if callout_runtime.for_line(view, line) then return nil end
     return style.markdown_live_code_background
-  end
-  if owner and owner.pending_indented_lines
-    and owner.pending_indented_lines[line]
-    and (not topology or topology.revision ~= view.buffer.text_revision
-      or not (topology.fenced[line] or topology.comments[line]
-        or topology.math[line] or topology.frontmatter[line]
-        or topology.html[line]))
-  then
-    if callout_runtime.for_line(view, line) then return nil end
-    return style.markdown_live_code_background
-  end
-  if not current_semantic_model(view) and owner then
-    local provisional = current_provisional_topology(view, line)
-    if provisional and provisional.revision == view.buffer.text_revision then
-      if provisional.fenced[line] then return style.markdown_live_code_background end
-    elseif owner.fence_service and owner.fence_service:contains_line(line) then
-      -- The fence service transaction-maps unchanged block ownership before
-      -- the semantic worker publishes. Unlike a retained render fragment,
-      -- this membership belongs to the current Buffer revision.
-      return style.markdown_live_code_background
-    end
   end
   if indented_code_for_line(view, line) then
     if callout_runtime.for_line(view, line) then return nil end
@@ -5765,11 +5319,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     owner.pending_sparse_metrics = nil
     owner.pending_indented_lines = {}
     owner.pending_indented_sources = {}
-    owner.pending_frontmatter_lines = {}
     owner.pending_callouts = {}
-    owner.pending_context_revision = view.buffer.text_revision
-    owner.pending_context_line1 = 1
-    owner.pending_context_line2 = #view.buffer.lines
     owner.semantic_pending_line = 1
     owner.semantic_pending_wrap_line = 1
     owner.pre_edit_lines = nil
@@ -5791,23 +5341,10 @@ function provider:on_text_transaction(view, transaction, line1, line2)
   local pre_edit_lines = owner and owner.pre_edit_lines
   if owner then
     owner.link_targets_changed_revision =
-      pending_projection.transaction_changes_link_targets(
+      edit_projection.transaction_changes_link_targets(
         view.buffer, transaction, pre_edit_lines
       ) and view.buffer.text_revision or nil
   end
-  local raw_context_changed = pending_projection.transaction_changes_raw_context(
-    view.buffer, transaction, pre_edit_lines
-  )
-  local block_context_changed, global_context_changed =
-    pending_projection.transaction_changes_block_context(
-    view.buffer, transaction, pre_edit_lines
-  )
-  local frontmatter_changed = pending_projection.transaction_changes_frontmatter(
-    view.buffer, transaction, pre_edit_lines
-  )
-  local html_changed = pending_projection.transaction_changes_html(
-    view.buffer, transaction, pre_edit_lines
-  )
   local line_structure_changed = false
   for _, edit in ipairs(transaction and transaction.edits or {}) do
     if edit.line1 ~= edit.line2 or (edit.text or ""):find("\n", 1, true) then
@@ -5823,42 +5360,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
       end
     end
   end
-  local topology_changed = raw_context_changed or block_context_changed
-    or frontmatter_changed or html_changed or line_structure_changed
-    or owner and owner.reload_projection_revision ~= nil
-  if topology_changed and owner then
-    local topology_started = system.get_time()
-    local topology_limit = math.max(
-      line1 or 1,
-      owner.pending_visible_line2 or 1
-    )
-    if not external_reload then
-      for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
-        topology_limit = math.max(
-          topology_limit,
-          range.new_line2 or range.new_line1 or 1
-        )
-      end
-    end
-    topology_limit = math.min(#view.buffer.lines, topology_limit)
-    local fenced, comments, math, frontmatter, html, fence_delimiters =
-      pending_projection.source_topology(view.buffer.lines, topology_limit)
-    owner.provisional_topology = {
-      revision = view.buffer.text_revision,
-      line_limit = topology_limit,
-      fenced = fenced,
-      comments = comments,
-      math = math,
-      frontmatter = frontmatter,
-      html = html,
-      fence_delimiters = fence_delimiters,
-    }
-    owner.last_topology_ms = (system.get_time() - topology_started) * 1000
-  elseif owner then
-    owner.provisional_topology = nil
-    owner.last_topology_ms = 0
-  end
-  capture_pending_renders(view, transaction)
+  capture_edit_projection(view, transaction)
   owner = view.__markdown_live_owner
   local fence_line1, fence_line2
   if owner and owner.fence_service then
@@ -5948,55 +5450,12 @@ function provider:on_text_transaction(view, transaction, line1, line2)
   end
   local structural_change = transaction and transaction.type == "load"
     or line_structure_changed
-  -- A newline edit can replace one logical line with one logical line (for
-  -- example, pressing Enter on an empty Markdown list item exits the list),
-  -- so a zero net line delta does not prove that block structure is stable.
-  local list_structure_changed = pending_projection.transaction_changes_list_structure(
-    view.buffer, transaction, pre_edit_lines
-  )
-  structural_change = structural_change or list_structure_changed
-  if topology_changed and owner then
-    local topology = owner.provisional_topology
-    local fenced = topology.fenced
-    for pending_line, pending in pairs(owner.pending_lines or {}) do
-      local was_fenced = owner.fence_service
-        and owner.fence_service:contains_line(pending_line) or false
-      local is_fenced = fenced[pending_line] == true
-      local was_comment = line_in_semantic_comment(view, pending_line)
-      if not was_comment then
-        local fragments = pending.render_line and pending.render_line.fragments or {}
-        was_comment = #fragments > 0
-        for _, fragment in ipairs(fragments) do
-          if not fragment.hidden then was_comment = false break end
-        end
-      end
-      local is_comment = topology.comments[pending_line] == true
-      local was_math = line_in_semantic_math(view, pending_line)
-      local is_math = topology.math[pending_line] == true
-      local was_frontmatter = frontmatter_for_line(view, pending_line) ~= nil
-      local is_frontmatter = topology.frontmatter[pending_line] == true
-      local was_html = line_in_raw_block(view, pending_line)
-      local is_html = topology.html[pending_line] == true
-      -- The fence service can already reflect this edit. Its current state
-      -- cannot prove that a retained row still has the same block context.
-      if raw_context_changed or was_fenced ~= is_fenced or was_comment ~= is_comment
-        or was_math ~= is_math or was_frontmatter ~= is_frontmatter
-        or was_html ~= is_html
-      then
-        pending.render_line = current_source_render(
-          view, pending_line, pending.render_line,
-          pending.source_text, is_fenced
-        )
-        pending.metrics = nil
-      end
-    end
-  end
-  local suffix_changed = structural_change or topology_changed or block_context_changed
+  local suffix_changed = structural_change or fence_line1 ~= nil
   if not suffix_changed then
     local affected_line1 = math.min(table_line1 or math.huge, fence_line1 or math.huge)
     local affected_line2 = math.max(table_line2 or -math.huge, fence_line2 or -math.huge)
     core.log_quiet(
-      "Markdown Live Preview transaction revision=%d type=%s structural=false raw_context=false changed=%s-%s provider=%s-%s pending=%d",
+      "Markdown Live Preview transaction revision=%d type=%s structural=false changed=%s-%s provider=%s-%s pending=%d",
       view.buffer.text_revision, tostring(transaction and transaction.type),
       tostring(line1), tostring(line2),
       tostring(affected_line1 ~= math.huge and affected_line1 or nil),
@@ -6012,27 +5471,14 @@ function provider:on_text_transaction(view, transaction, line1, line2)
       affected_line2 ~= -math.huge and affected_line2 or nil,
       true
   end
-  -- Setext markers own the previous line. Only reference definitions can
-  -- change presentation before that; do not turn every local block edit into
-  -- a whole-Buffer invalidation.
-  local context_line1 = global_context_changed and 1
-    or block_context_changed and math.max(1, line1 - 1)
-    or line1
+  local context_line1 = math.min(line1, fence_line1 or line1)
   if owner then
     owner.semantic_pending_line = math.min(
       owner.semantic_pending_line or context_line1, context_line1
     )
-    if raw_context_changed then
-      -- A delimiter edit can change the meaning of untouched suffix text.
-      -- Visible projections handle that change above. Discard offscreen
-      -- measurements instead of retaining the previous block's geometry.
-      for line in pairs(owner.pending_metrics or {}) do
-        if line >= line1 then owner.pending_metrics[line] = nil end
-      end
-      owner.semantic_pending_wrap_line = math.min(
-        owner.semantic_pending_wrap_line or line1, line1
-      )
-    end
+    owner.semantic_pending_wrap_line = math.min(
+      owner.semantic_pending_wrap_line or context_line1, context_line1
+    )
   end
   local affected_line1 = math.min(
     context_line1, table_line1 or context_line1, fence_line1 or context_line1
@@ -6041,9 +5487,9 @@ function provider:on_text_transaction(view, transaction, line1, line2)
   local pending_count = 0
   for _ in pairs(owner and owner.pending_lines or {}) do pending_count = pending_count + 1 end
   core.log_quiet(
-    "Markdown Live Preview transaction revision=%d type=%s structural=%s raw_context=%s changed=%s-%s provider=%s-%s pending=%d pending_from=%s",
+    "Markdown Live Preview transaction revision=%d type=%s structural=%s changed=%s-%s provider=%s-%s pending=%d pending_from=%s",
     view.buffer.text_revision, tostring(transaction and transaction.type),
-    tostring(structural_change), tostring(raw_context_changed),
+    tostring(structural_change),
     tostring(line1), tostring(line2),
     tostring(affected_line1), tostring(affected_line2), pending_count,
     tostring(owner and owner.semantic_pending_line)
@@ -6262,7 +5708,6 @@ function provider:line_metrics(view, line, row_count)
   }
   if semantic_model and owner then
     record.source_text = view.buffer.lines[line]
-    metric_records.check_adoption(view, line, record)
     owner.published_metrics = owner.published_metrics or {}
     owner.published_metrics[line] = record
   elseif owner then
@@ -6303,7 +5748,7 @@ function provider:sparse_line_metrics(view)
   local owner = view.__markdown_live_owner
   if not instance then
     if not owner or not owner.pending_sparse_metrics
-      or owner.pending_context_revision or owner.semantic_pending_wrap_line
+      or owner.semantic_pending_wrap_line
     then return nil end
     local lines = {}
     for line in pairs(owner.pending_metrics or {}) do lines[line] = true end
@@ -6390,16 +5835,11 @@ local function build_render_line(view, line, _context)
       and (not owner.semantic_pending_line or line >= owner.semantic_pending_line)
     then
       local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
-      local provisional = current_provisional_topology(view, line)
-      local code
-      if provisional and provisional.revision == view.buffer.text_revision then
-        code = provisional.fenced[line] == true
-      else
-        code = owner.fence_service and owner.fence_service:contains_line(line)
-      end
+      local code = not owner.reload_projection_revision
+        and owner.fence_service and owner.fence_service:contains_line(line)
       code = code or owner and owner.pending_indented_lines
         and owner.pending_indented_lines[line] == true
-      return current_source_render(view, line, nil, text, code == true)
+      return raw_pending_source_render(view, nil, text, code == true)
     end
     record_raw_fallback(view, line, "semantic-unavailable")
     return { raw_passthrough = true }
@@ -6421,6 +5861,7 @@ local function build_render_line(view, line, _context)
         return {
           source_text = text,
           metric_height = view:get_line_height(),
+          markdown_code_block = true,
           semantic_generation = select(2, semantic_line(view, line)),
           fragments = {
             {
@@ -6551,16 +5992,11 @@ function provider:render_line(view, line, context)
       tostring(render_line.markdown_semantic_revision)
     )
     local owner = view.__markdown_live_owner
-    local topology = current_provisional_topology(view, line)
-    local code
-    if topology and topology.revision == revision then
-      code = topology.fenced[line] == true
-    elseif owner and owner.fence_service then
-      code = owner.fence_service:contains_line(line)
-    end
+    local code = owner and not owner.reload_projection_revision
+      and owner.fence_service and owner.fence_service:contains_line(line)
     code = code or owner and owner.pending_indented_lines
       and owner.pending_indented_lines[line] == true
-    local safe = current_source_render(view, line, nil, source, code == true)
+    local safe = raw_pending_source_render(view, nil, source, code == true)
     safe.markdown_provenance = "unavailable"
     safe.markdown_buffer_revision = revision
     safe.markdown_semantic_revision = render_line.markdown_semantic_revision
@@ -6711,16 +6147,13 @@ local function invalidate_semantic_publication(view, instance, reason)
   local pending_line = owner and owner.semantic_pending_line
   local pending_wrap_line = owner and owner.semantic_pending_wrap_line
   if owner then
-    owner.adoption_metrics = owner.pending_metrics or {}
-    owner.adoption_context_changed = owner.pending_context_revision ~= nil
     -- Local publications can remeasure only a few rows. Keep measurements for every unchanged line.
     local published_metrics = {}
-    for line, record in pairs(owner.adoption_metrics) do published_metrics[line] = record end
+    for line, record in pairs(owner.pending_metrics or {}) do
+      published_metrics[line] = record
+    end
     for line, pending in pairs(owner.pending_lines or {}) do
       if pending.metrics then published_metrics[line] = pending.metrics end
-      if pending.provenance == "retained" and pending.metrics then
-        owner.adoption_metrics[line] = pending.metrics
-      end
     end
     owner.published_metrics = published_metrics
     local raw = owner.raw_fallback_record
@@ -6733,7 +6166,6 @@ local function invalidate_semantic_publication(view, instance, reason)
     end
     owner.raw_fallback_record = nil
     owner.unavailable_projection_record = nil
-    owner.provisional_topology = nil
     owner.reload_projection_revision = nil
     if owner.fence_service then
       local reconcile_started = system.get_time()
@@ -6745,11 +6177,7 @@ local function invalidate_semantic_publication(view, instance, reason)
     owner.pending_sparse_metrics = nil
     owner.pending_indented_lines = nil
     owner.pending_indented_sources = nil
-    owner.pending_frontmatter_lines = nil
     owner.pending_callouts = nil
-    owner.pending_context_revision = nil
-    owner.pending_context_line1 = nil
-    owner.pending_context_line2 = nil
     owner.pending_visible_line1 = nil
     owner.pending_visible_line2 = nil
   end
@@ -7109,6 +6537,55 @@ local function unbind_link_index(view)
   owner.link_listener_id = nil
 end
 
+local function selection_reveals_projected_range(state, line, col1, col2)
+  for index = 1, #(state and state.selections or {}), 4 do
+    local line1, selection_col1 = state.selections[index], state.selections[index + 1]
+    local line2, selection_col2 = state.selections[index + 2], state.selections[index + 3]
+    if line1 and line2 then
+      line1, selection_col1, line2, selection_col2 = ordered_selection(
+        line1, selection_col1, line2, selection_col2
+      )
+      if line1 == line2 and selection_col1 == selection_col2 then
+        if line == line1 and selection_col1 >= col1 and selection_col1 <= col2 then
+          return true
+        end
+      elseif source_intersects_selection(
+        { line1 = line, col1 = col1, line2 = line, col2 = col2 },
+        line1, selection_col1, line2, selection_col2
+      ) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+refresh_projected_reveal = function(view, line, state, projected_entry)
+  local owner = view.__markdown_live_owner
+  local entry = projected_entry
+    or owner and owner.pending_lines and owner.pending_lines[line]
+  if not entry then return false end
+  local changed = false
+  local render = clone_render_line(entry.render_line)
+  for _, fragment in ipairs(render.fragments or {}) do
+    if fragment.markdown_reveal_col1 and fragment.markdown_reveal_col2 then
+      local reveal = selection_reveals_projected_range(
+        state, line, fragment.markdown_reveal_col1,
+        fragment.markdown_reveal_col2
+      )
+      if reveal == (fragment.hidden == true) then changed = true end
+      fragment.hidden = not reveal or nil
+      fragment.text = reveal and entry.source_text:sub(
+        fragment.source_col1, fragment.source_col2 - 1
+      ) or nil
+    end
+  end
+  if not changed then return false end
+  entry.render_line = render
+  entry.metrics = nil
+  return true
+end
+
 local function invalidate_selection_lines(view, new_state, old_state)
   local lines = {}
   local states = { old_state, new_state }
@@ -7249,21 +6726,7 @@ local function invalidate_selection_lines(view, new_state, old_state)
     end
   end
   for line in pairs(reveal_candidates) do
-    -- Pending prose is a saved presentation, not just a text cache. Its
-    -- delimiter visibility must follow selection changes before parsing ends.
-    -- Keep asset and table presentations on their own projection paths.
-    local pending = not current_semantic_model(view) and pending_render(view, line)
-    if pending and not pending.render_line.table_row
-      and not pending_visual_projection.contains_retainable_presentation(pending.render_line)
-    then
-      local render = current_source_render(
-        view, line, pending.render_line, pending.source_text, false
-      )
-      metric_records.store(view.__markdown_live_owner, line,
-        pending_entry(view, render, pending.source_text, nil, render.markdown_pending_provenance)
-      )
-      lines[line] = true
-    end
+    if refresh_projected_reveal(view, line, new_state) then lines[line] = true end
     if not same_reveal_units(
       state_reveal_units(1, line), state_reveal_units(2, line)
     ) then

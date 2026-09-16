@@ -204,6 +204,11 @@ double anvil_worker_treesitter_index_result_prepare_input_ms(const AnvilWorkerTr
 double anvil_worker_treesitter_index_result_parser_setup_ms(const AnvilWorkerTreeSitterIndexResult *result);
 double anvil_worker_treesitter_index_result_precise_parse_ms(const AnvilWorkerTreeSitterIndexResult *result);
 bool anvil_worker_treesitter_index_result_incremental(const AnvilWorkerTreeSitterIndexResult *result);
+bool anvil_worker_treesitter_index_result_markdown_changed_lines(
+  const AnvilWorkerTreeSitterIndexResult *result,
+  uint32_t *line1,
+  uint32_t *line2
+);
 uint32_t anvil_worker_treesitter_index_result_reused_block_capture_count(const AnvilWorkerTreeSitterIndexResult *result);
 uint32_t anvil_worker_treesitter_index_result_reused_inline_count(const AnvilWorkerTreeSitterIndexResult *result);
 uint64_t anvil_worker_treesitter_index_result_query_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);

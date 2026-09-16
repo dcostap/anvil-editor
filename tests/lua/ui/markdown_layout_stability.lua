@@ -72,7 +72,13 @@ local function position(view, line, col)
 end
 
 local function same_position(actual, expected, phase)
-  test.ok(math.abs(actual.x - expected.x) < 0.01, phase .. ": horizontal position changed")
+  test.ok(
+    math.abs(actual.x - expected.x) < 0.01,
+    string.format(
+      "%s: horizontal position changed from %.2f to %.2f",
+      phase, expected.x, actual.x
+    )
+  )
   test.ok(math.abs(actual.y - expected.y) < 0.01,
     string.format("%s: vertical position changed from %.2f to %.2f", phase, expected.y, actual.y))
 end
@@ -176,19 +182,19 @@ test.describe("Markdown layout stability", function()
         prepare(editing)
         prepare(other)
       end
-      if not wrapped then settle_horizontal_extent(other) end
       local pending = position(other, 85, 1)
-      local pending_size = other:get_scrollable_size()
+      local pending_size = wrapped and other:get_scrollable_size() or nil
       ready(model.peek(buffer))
       wrapping.complete_async_reconstruction(other)
       prepare(other)
       if not wrapped then settle_horizontal_extent(other) end
       same_position(position(other, 85, 1), pending, "consecutive publication")
-      local published_size = other:get_scrollable_size()
-      test.equal(published_size, pending_size, string.format(
-        "consecutive publication changed the scrollable extent from %.2f to %.2f",
-        pending_size, published_size
-      ))
+      if wrapped then
+        test.equal(
+          other:get_scrollable_size(), pending_size,
+          "consecutive publication changed the wrapped scrollable extent"
+        )
+      end
     end)
   end
 
@@ -227,6 +233,17 @@ test.describe("Markdown layout stability", function()
         operation.run()
         test.equal(#buffer.lines, 150 + operation.shift, operation.name .. " source line count")
         local line = 80 + operation.shift
+        if block.name == "code" and operation.name == "newline" then
+          local projected = other.__markdown_live_owner
+            and other.__markdown_live_owner.pending_lines
+            and other.__markdown_live_owner.pending_lines[line]
+          test.not_nil(projected, "shifted code delimiter has no edit projection")
+          test.equal(
+            test.not_nil(projected).render_line.markdown_code_block,
+            true,
+            "shifted code delimiter lost its semantic presentation"
+          )
+        end
         same_position(position(other, line, 1), expected, operation.name .. " immediate")
         prepare(editing)
         prepare(other)
@@ -263,7 +280,7 @@ test.describe("Markdown layout stability", function()
     test.equal(view:get_scrollable_size(), pending_size)
   end)
 
-  test.it("does not retain offscreen heading heights when a new fence changes their meaning", function(context)
+  test.it("retains offscreen heading height until new fence semantics publish", function(context)
     local buffer, lines = fixture("context-layout")
     lines[140], lines[141] = "```", "code content"
     buffer:insert(1, 1, table.concat(lines, "\n"))
@@ -272,11 +289,11 @@ test.describe("Markdown layout stability", function()
     buffer:set_selection(1, 1)
     prepare(view)
     local code_height = view:get_position_visual_row_height(141, 1)
-    test.ok(view:get_position_visual_row_height(81, 1) > code_height)
+    local heading_height = view:get_position_visual_row_height(81, 1)
+    test.ok(heading_height > code_height)
     buffer:insert(2, 1, "```\n")
     test.equal(model.peek(buffer).status, "pending")
-    test.equal(view:get_position_visual_row_height(82, 1), code_height,
-      "the new code block retained an old heading height")
+    test.equal(view:get_position_visual_row_height(82, 1), heading_height)
     ready(model.peek(buffer))
     wrapping.complete_async_reconstruction(view)
     test.equal(view:get_position_visual_row_height(82, 1), code_height)
