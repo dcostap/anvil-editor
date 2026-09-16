@@ -1150,7 +1150,13 @@ if not core.__untitled_recovery_patched then
 
   local core_exit = core.exit
   function core.exit(quit_fn, force)
+    if force then core.begin_shutdown_diagnostics() end
+    local started = system.get_time()
+    system.log_shutdown("Untitled Buffer recovery save begin")
     local result = M.flush_all("application exit", true)
+    core.log_quiet("Shutdown recovery save: force=%s all_safe=%s elapsed_ms=%.3f",
+      tostring(force), tostring(result.all_safe), (system.get_time() - started) * 1000)
+    system.log_shutdown("Untitled Buffer recovery save end all_safe=" .. tostring(result.all_safe))
     if not result.all_safe then
       report_recovery_failure("Application exit", result)
       return false

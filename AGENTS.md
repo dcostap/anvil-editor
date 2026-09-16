@@ -186,6 +186,9 @@ C:\Projects\c_projects\anvil-portable\user\logs\anvil-*.log
 
 Check the newest file first when you investigate a crash or unexpected behavior. These logs are machine-local state and must stay outside the repo.
 
+Accepted exits also write `anvil-<date>-<time>-p<pid>-shutdown.log` beside the matching session log.
+Use both files when you investigate a slow close. See [shutdown diagnostics](tools/SHUTDOWN_DIAGNOSTICS.md).
+
 When adding new functionality, use `core.log_quiet(...)` liberally for diagnostics that could help debug future bugs or unexpected behavior. Prefer quiet logs for feature probes, optional integrations, state transitions, fallback decisions, and background task results. Quiet logs are useful in pasted logs without annoying the user. Use visible `core.log`, `core.warn`, or `core.error` only when the user should actively notice something.
 
 ## Refactoring / compatibility policy

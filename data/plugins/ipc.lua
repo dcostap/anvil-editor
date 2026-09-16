@@ -880,7 +880,12 @@ end
 local core_exit = core.exit
 
 core.exit = function(quit_fn, force)
-  if force then ipc:stop() end
+  if force then
+    core.begin_shutdown_diagnostics()
+    system.log_shutdown("IPC stop begin")
+    ipc:stop()
+    system.log_shutdown("IPC stop end")
+  end
   core_exit(quit_fn, force)
 end
 

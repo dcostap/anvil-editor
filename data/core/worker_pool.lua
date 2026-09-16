@@ -327,7 +327,7 @@ function worker_pool:cancel(handle)
     if not ok then
       log_quiet("worker_pool native cancel for job %s failed: %s", tostring(job.id), tostring(result))
     end
-    log_quiet("worker_pool %s cancelled native job %d kind=%s", tostring(self.name), job.id, tostring(job.handle.kind))
+    log_quiet("worker_pool %s requested native job cancellation job=%d kind=%s native_id=%s accepted=%s", tostring(self.name), job.id, tostring(job.handle.kind), tostring(job.native_id), tostring(ok and result or false))
     return ok and result or false
   end
   if job.native_cancel_token then
@@ -578,6 +578,8 @@ function worker_pool:shutdown(options)
   options = options or {}
   if self.closed then return true end
   self.closed = true
+  local shutdown_started = now()
+  system.log_shutdown("Lua worker pool shutdown begin pool=" .. tostring(self.name))
 
   if options.cancel_running ~= false then
     for _, job in pairs(self.jobs) do
@@ -588,6 +590,7 @@ function worker_pool:shutdown(options)
   for _, worker in ipairs(self.workers) do
     worker.input:push({ type = "shutdown" })
   end
+  system.log_shutdown("Lua worker shutdown requests sent; acknowledgement wait begin")
 
   local timeout_ms = options.timeout_ms or 1000
   local deadline = now() + math.max(0, timeout_ms) / 1000
@@ -607,33 +610,44 @@ function worker_pool:shutdown(options)
       system.sleep(0.001)
     end
   until now() >= deadline
+  system.log_shutdown(string.format("Lua worker acknowledgement wait end elapsed_ms=%.3f", (now() - shutdown_started) * 1000))
 
   for _, worker in ipairs(self.workers) do
     if worker.shutdown then
+      system.log_shutdown(string.format("Lua worker join begin worker=%d", worker.id))
       local ok, err = pcall(function() return worker.thread:wait() end)
+      system.log_shutdown(string.format("Lua worker join end worker=%d ok=%s", worker.id, tostring(ok)))
       if not ok then
         log_quiet("worker_pool %s worker %d wait failed: %s", tostring(self.name), worker.id, tostring(err))
       end
     else
+      system.log_shutdown(string.format("Lua worker acknowledgement timeout worker=%d timeout_ms=%d", worker.id, timeout_ms))
       log_quiet("worker_pool %s worker %d did not shut down within %dms; leaving thread detached by runtime", tostring(self.name), worker.id, timeout_ms)
     end
+    system.log_shutdown(string.format("Lua worker channel cleanup begin worker=%d", worker.id))
     worker.input:clear()
     worker.output:clear()
+    system.log_shutdown(string.format("Lua worker channel cleanup end worker=%d", worker.id))
   end
 
   if self.native then
+    system.log_shutdown("native worker pool shutdown call begin")
     local ok, err = pcall(function() self.native:shutdown({ cancel_running = options.cancel_running ~= false }) end)
+    system.log_shutdown("native worker pool shutdown call end ok=" .. tostring(ok))
     if not ok then log_quiet("worker_pool %s native shutdown failed: %s", tostring(self.name), tostring(err)) end
     self.native = nil
     self.native_jobs = {}
   end
 
+  system.log_shutdown("Lua job handle cleanup begin")
   for _, job in pairs(self.jobs) do
     if job.cancel_channel then job.cancel_channel:clear() end
     job.native_cancel_token = nil
     job.native_cancel_token_name = nil
   end
+  system.log_shutdown("Lua job handle cleanup end")
   log_quiet("worker_pool %s shut down", tostring(self.name))
+  system.log_shutdown(string.format("Lua worker pool shutdown complete pool=%s total_ms=%.3f", tostring(self.name), (now() - shutdown_started) * 1000))
   return true
 end
 

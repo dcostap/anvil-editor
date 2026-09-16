@@ -20,6 +20,7 @@
 #include "../system_events.h"
 #include "../win32_frame.h"
 #include "../resize_diagnostics.h"
+#include "../shutdown_diagnostics.h"
 #include "../win32_single_instance.h"
 #include "../win32_window_handoff.h"
 #ifdef _WIN32
@@ -2408,7 +2409,25 @@ static int f_get_display_info(lua_State* L) {
 }
 
 
+static int f_set_shutdown_log(lua_State *L) {
+  const char *path = luaL_optstring(L, 1, NULL);
+  if (!anvil_shutdown_diag_open(path)) {
+    lua_pushnil(L);
+    lua_pushstring(L, SDL_GetError());
+    return 2;
+  }
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+static int f_log_shutdown(lua_State *L) {
+  anvil_shutdown_diag_log("%s", luaL_checkstring(L, 1));
+  return 0;
+}
+
 static const luaL_Reg lib[] = {
+  { "set_shutdown_log",      f_set_shutdown_log      },
+  { "log_shutdown",          f_log_shutdown          },
   { "poll_event",            f_poll_event            },
   { "wait_event",            f_wait_event            },
   { "has_pending_events",    f_has_pending_events    },

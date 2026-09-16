@@ -15,7 +15,7 @@ end
 
 local function session_id_for_name(name)
   if not name:match("^anvil%-%d%d%d%d%d%d%d%d%-%d%d%d%d%d%d%-p%d+.*%.log$") then return nil end
-  return name:gsub("%-part%d+%.log$", ""):gsub("%.log$", "")
+  return name:gsub("%-shutdown%.log$", ""):gsub("%-part%d+%.log$", ""):gsub("%.log$", "")
 end
 
 local function remove_session(session)

@@ -10,6 +10,7 @@
 #include "renderer.h"
 #include "custom_events.h"
 #include "resize_diagnostics.h"
+#include "shutdown_diagnostics.h"
 #include "win32_single_instance.h"
 #include "win32_window_handoff.h"
 #include "treesitter/service.h"
@@ -533,7 +534,10 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
 
     if (restart) {
       /* Re-initialize the Lua state in place — mirrors the goto in old main(). */
+      anvil_shutdown_diag_log("restart Lua close begin");
       lua_close(app->L);
+      anvil_shutdown_diag_log("restart Lua close end");
+      anvil_shutdown_diag_open(NULL);
       app->L = NULL;
       app->has_restarted = 1;
       if (!init_lua_state(app))
@@ -675,24 +679,38 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
 
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
-  (void)result;
+  anvil_shutdown_diag_log("SDL_AppQuit begin result=%d", (int)result);
   AppState *app = appstate;
   if (app) {
     if (live_resize_app == app) live_resize_app = NULL;
+    anvil_shutdown_diag_log("Tree-sitter service shutdown begin");
     anvil_ts_service_shutdown();
+    anvil_shutdown_diag_log("Tree-sitter service shutdown end");
     /* The CLI test command exits the process immediately after reporting.
      * Avoid LuaJIT close-time allocator teardown in that path; native services
      * are still shut down above, and the OS reclaims the short-lived test state. */
-    if (app->L && !app->running_lua_tests) lua_close(app->L);
+    if (app->L && !app->running_lua_tests) {
+      anvil_shutdown_diag_log("Lua close begin");
+      lua_close(app->L);
+      anvil_shutdown_diag_log("Lua close end");
+    }
     SDL_free(app);
   }
+  anvil_shutdown_diag_log("native single instance stop begin");
   anvil_single_instance_stop();
+  anvil_shutdown_diag_log("native single instance stop end");
   if (custom_events_initialized) {
+    anvil_shutdown_diag_log("custom event cleanup begin");
     free_custom_events();
+    anvil_shutdown_diag_log("custom event cleanup end");
     custom_events_initialized = false;
   }
   if (renderer_initialized) {
+    anvil_shutdown_diag_log("renderer cleanup begin");
     ren_free();
+    anvil_shutdown_diag_log("renderer cleanup end");
     renderer_initialized = false;
   }
+  anvil_shutdown_diag_log("SDL_AppQuit complete");
+  anvil_shutdown_diag_open(NULL);
 }

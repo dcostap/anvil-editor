@@ -917,12 +917,31 @@ function core.temp_filename(ext, dir)
 end
 
 
+function core.begin_shutdown_diagnostics()
+  if core.shutdown_log_started then return end
+  core.shutdown_log_started = true
+  local logger = core.session_log
+  if not logger then return end
+  local path = logger.root .. PATHSEP .. logger.session_id .. "-shutdown.log"
+  local ok, err = system.set_shutdown_log(path)
+  core.log_quiet("Shutdown diagnostics: %s", ok and path or tostring(err))
+  logger:flush()
+  system.log_shutdown("exit accepted project=" .. tostring(core.root_project() and core.root_project().path))
+end
+
+
 function core.exit(quit_fn, force)
   if force then
+    core.begin_shutdown_diagnostics()
+    system.log_shutdown("temporary file cleanup begin")
     core.delete_temp_files()
+    system.log_shutdown("temporary file cleanup end; Project removal begin")
     while #core.projects > 1 do core.remove_project(core.projects[#core.projects]) end
+    system.log_shutdown("Project removal end; App State save begin")
     save_app_state()
+    system.log_shutdown("App State save end; exit callback begin")
     quit_fn()
+    system.log_shutdown("exit callback end")
   else
     core.confirm_close_buffers(core.buffers, core.exit, quit_fn, true)
   end
@@ -930,6 +949,8 @@ end
 
 
 function core.quit(force, exit_code)
+  core.log_quiet("Shutdown requested: quit force=%s time=%.6f", tostring(force), system.get_time())
+  if core.session_log then core.session_log:flush() end
   if type(exit_code) == "number" then
     core.exit_status = exit_code
   end
@@ -938,6 +959,8 @@ end
 
 
 function core.restart()
+  core.log_quiet("Shutdown requested: restart time=%.6f", system.get_time())
+  if core.session_log then core.session_log:flush() end
   core.exit(function()
     core.restart_request = true
     core.window:_persist()
@@ -3497,19 +3520,26 @@ function core.run_step(options)
       startup_run_step = nil
     end
     if core.restart_request or core.quit_request then
+      core.begin_shutdown_diagnostics()
+      system.log_shutdown("main loop shutdown begin")
       if startup and startup.active() then
         startup.finish("stopped", core.restart_request and "restart" or "quit")
       end
       local worker_pool_module = package.loaded["core.worker_pool"]
       if worker_pool_module and worker_pool_module.shutdown_system then
+        system.log_shutdown("system worker pool shutdown begin")
         worker_pool_module.shutdown_system({ cancel_running = true, timeout_ms = 1000 })
+        system.log_shutdown("system worker pool shutdown end")
       end
       core.worker_pool_frame_stats = nil
       if core.session_log then
+        system.log_shutdown("session log close begin")
         pcall(core.session_log.close, core.session_log)
         core.session_log = nil
+        system.log_shutdown("session log close end")
       end
       core.in_live_resize_frame = previous_live_resize_frame
+      system.log_shutdown("main loop shutdown end")
       return false
     end
     if not did_redraw then

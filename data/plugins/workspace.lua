@@ -390,6 +390,8 @@ if not core.__workspace_hooks_installed then
   local exit = core.exit
   function core.exit(quit_fn, force)
     if force then
+      core.begin_shutdown_diagnostics()
+      system.log_shutdown("Workspace exit save begin")
       if suppress_next_exit_workspace_save then
         suppress_next_exit_workspace_save = false
         if core.log_quiet then
@@ -401,6 +403,7 @@ if not core.__workspace_hooks_installed then
       else
         core.try(save_workspace)
       end
+      system.log_shutdown("Workspace exit save end")
     end
     exit(quit_fn, force)
   end

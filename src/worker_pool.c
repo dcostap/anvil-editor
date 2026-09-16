@@ -1,4 +1,5 @@
 #include "worker_pool.h"
+#include "shutdown_diagnostics.h"
 
 #include "git_status_index.h"
 #include "project_file_manifest.h"
@@ -227,6 +228,13 @@ typedef struct AnvilWorkerContext {
   struct AnvilWorkerPool *pool;
   TSParser *parser;
   TSQueryCursor *query_cursor;
+  struct AnvilWorkerContext *diagnostic_next;
+  uint64_t diagnostic_job_id;
+  SDL_ThreadID diagnostic_thread;
+  const char *diagnostic_phase;
+  Uint64 diagnostic_started_ns;
+  char diagnostic_kind[64];
+  char diagnostic_path[1024];
 } AnvilWorkerContext;
 
 struct AnvilWorkerPool {
@@ -237,6 +245,8 @@ struct AnvilWorkerPool {
   SDL_Mutex *queue_mutex;
   SDL_Condition *queue_cond;
   SDL_Mutex *result_mutex;
+  SDL_Mutex *diagnostic_mutex;
+  AnvilWorkerContext *diagnostic_contexts;
   AnvilWorkerJob *input_first;
   AnvilWorkerJob **input_last;
   AnvilWorkerJob *running_first;
@@ -252,6 +262,63 @@ struct AnvilWorkerPool {
   uint32_t active_project_runs;
   uint32_t active_background_jobs;
 };
+
+/* The mutex protects copied paths and stack-owned Project worker contexts.
+ * Record only the current phase until shutdown starts. */
+static void worker_diag_log_locked(AnvilWorkerContext *context, const char *event) {
+  if (!anvil_shutdown_diag_enabled()) return;
+  anvil_shutdown_diag_log(
+    "worker %s pool=%s worker_thread=%llu job=%llu kind=%s phase=%s phase_ms=%.3f path=%s",
+    event, context->pool->name, (unsigned long long)context->diagnostic_thread,
+    (unsigned long long)context->diagnostic_job_id, context->diagnostic_kind,
+    context->diagnostic_phase,
+    (double)(SDL_GetTicksNS() - context->diagnostic_started_ns) / 1000000.0,
+    context->diagnostic_path);
+}
+
+static void worker_diag_register(AnvilWorkerContext *context, const AnvilWorkerJob *job) {
+  context->diagnostic_job_id = job ? job->id : 0;
+  context->diagnostic_thread = SDL_GetCurrentThreadID();
+  context->diagnostic_phase = "run-job";
+  context->diagnostic_started_ns = SDL_GetTicksNS();
+  SDL_strlcpy(context->diagnostic_kind, job ? job->kind : "thread-exit", sizeof(context->diagnostic_kind));
+  SDL_strlcpy(context->diagnostic_path,
+    job && job->path ? job->path : (job && job->project_root ? job->project_root : ""),
+    sizeof(context->diagnostic_path));
+  SDL_LockMutex(context->pool->diagnostic_mutex);
+  context->diagnostic_next = context->pool->diagnostic_contexts;
+  context->pool->diagnostic_contexts = context;
+  worker_diag_log_locked(context, "begin");
+  SDL_UnlockMutex(context->pool->diagnostic_mutex);
+}
+
+static void worker_diag_phase(AnvilWorkerContext *context, const char *phase, const char *path) {
+  SDL_LockMutex(context->pool->diagnostic_mutex);
+  worker_diag_log_locked(context, "end");
+  context->diagnostic_phase = phase;
+  context->diagnostic_started_ns = SDL_GetTicksNS();
+  if (path) SDL_strlcpy(context->diagnostic_path, path, sizeof(context->diagnostic_path));
+  worker_diag_log_locked(context, "begin");
+  SDL_UnlockMutex(context->pool->diagnostic_mutex);
+}
+
+static void worker_diag_unregister(AnvilWorkerContext *context) {
+  SDL_LockMutex(context->pool->diagnostic_mutex);
+  worker_diag_log_locked(context, "end");
+  AnvilWorkerContext **cursor = &context->pool->diagnostic_contexts;
+  while (*cursor && *cursor != context) cursor = &(*cursor)->diagnostic_next;
+  if (*cursor) *cursor = context->diagnostic_next;
+  SDL_UnlockMutex(context->pool->diagnostic_mutex);
+}
+
+static void worker_diag_dump(AnvilWorkerPool *pool) {
+  if (!pool->diagnostic_mutex) return;
+  SDL_LockMutex(pool->diagnostic_mutex);
+  for (AnvilWorkerContext *context = pool->diagnostic_contexts; context; context = context->diagnostic_next) {
+    worker_diag_log_locked(context, "active-at-shutdown");
+  }
+  SDL_UnlockMutex(pool->diagnostic_mutex);
+}
 
 static char *pool_memdup0(const char *source, size_t len) {
   if (!source || len == SIZE_MAX) return NULL;
@@ -1590,6 +1657,7 @@ static AnvilWorkerTreeSitterIndexResult *execute_treesitter_index_text(
     job->text = NULL;
     job->text_len = 0;
   } else {
+    worker_diag_phase(context, "read-file", job->path);
     owned_text = read_file_text(job->path, &owned_text_len, job->max_file_bytes, &error);
   }
   if (!owned_text) {
@@ -1599,6 +1667,7 @@ static AnvilWorkerTreeSitterIndexResult *execute_treesitter_index_text(
   }
 
   uint32_t normalized_text_len = 0;
+  worker_diag_phase(context, "normalize-text", job->path);
   if (!normalize_text_in_place(owned_text, owned_text_len, &normalized_text_len, &error)) {
     free(owned_text);
     if (out_error) *out_error = error ? error : pool_strdup("failed to normalize Tree-sitter input");
@@ -1606,6 +1675,7 @@ static AnvilWorkerTreeSitterIndexResult *execute_treesitter_index_text(
     return NULL;
   }
 
+  worker_diag_phase(context, "input-snapshot", NULL);
   AnvilTSSnapshot *snapshot = anvil_ts_snapshot_new_take_text(owned_text, normalized_text_len, &error);
   if (!snapshot) {
     if (out_error) *out_error = error ? pool_strdup(error) : pool_strdup("failed to create Tree-sitter snapshot");
@@ -1615,6 +1685,7 @@ static AnvilWorkerTreeSitterIndexResult *execute_treesitter_index_text(
 
   uint64_t prepare_input_ns = SDL_GetTicksNS() - prepare_input_started_ns;
   uint64_t parser_setup_started_ns = SDL_GetTicksNS();
+  worker_diag_phase(context, "parser-setup", NULL);
   AnvilWorkerCancelToken *cancel_token = job->cancel_token ? anvil_worker_cancel_token_open(job->cancel_token) : NULL;
   bool parser_reused = context->parser != NULL;
   if (!context->parser) context->parser = ts_parser_new();
@@ -1646,6 +1717,7 @@ static AnvilWorkerTreeSitterIndexResult *execute_treesitter_index_text(
   parse_options.progress_callback = treesitter_parse_progress;
   TSInput input = anvil_ts_snapshot_input(snapshot);
   uint64_t parse_started_ns = SDL_GetTicksNS();
+  worker_diag_phase(context, "parse", NULL);
   TSTree *tree = ts_parser_parse_with_options(parser, NULL, input, parse_options);
   uint64_t parse_ns = SDL_GetTicksNS() - parse_started_ns;
   uint64_t parse_ms = SDL_GetTicks() - run.started_ticks;
@@ -1690,6 +1762,7 @@ static AnvilWorkerTreeSitterIndexResult *execute_treesitter_index_text(
   bool have_fatal_error = false;
   char *fatal_error = NULL;
   if (job->outline_query) {
+    worker_diag_phase(context, "outline-query", NULL);
     run_treesitter_index_query(index_result, language, "outline", job->outline_query,
       (uint32_t)job->outline_query_len, tree, snapshot, 0, snapshot->byte_len, &run,
       context->query_cursor, job->match_limit ? job->match_limit : 50000,
@@ -1698,6 +1771,7 @@ static AnvilWorkerTreeSitterIndexResult *execute_treesitter_index_text(
     have_fatal_error = fatal_error != NULL;
   }
   if (!have_fatal_error && job->usage_query) {
+    worker_diag_phase(context, "usage-query", NULL);
     run_treesitter_index_query(index_result, language, "usage", job->usage_query,
       (uint32_t)job->usage_query_len, tree, snapshot, 0, snapshot->byte_len, &run,
       context->query_cursor,
@@ -1708,12 +1782,14 @@ static AnvilWorkerTreeSitterIndexResult *execute_treesitter_index_text(
     have_fatal_error = fatal_error != NULL;
   }
   if (!have_fatal_error && (job->result_capabilities & ANVIL_WORKER_TS_COMPACT_PROJECT_RECORDS) != 0) {
+    worker_diag_phase(context, "build-project-records", NULL);
     uint64_t project_record_started_ns = SDL_GetTicksNS();
     bool project_records_built = build_project_file_records(index_result, job, snapshot, &fatal_error);
     index_result->project_record_ns = SDL_GetTicksNS() - project_record_started_ns;
     have_fatal_error = !project_records_built;
   }
   if ((job->result_capabilities & ANVIL_WORKER_TS_LINE_RANGE_LOOKUP) != 0) {
+    worker_diag_phase(context, "query-line-index", NULL);
     uint64_t line_index_started_ns = SDL_GetTicksNS();
     build_query_line_index(&index_result->outline);
     index_result->outline.line_index_ns = SDL_GetTicksNS() - line_index_started_ns;
@@ -1726,6 +1802,7 @@ static AnvilWorkerTreeSitterIndexResult *execute_treesitter_index_text(
   }
   index_result->total_ms = SDL_GetTicks() - job_started;
   index_result->total_ns = SDL_GetTicksNS() - job_started_ns;
+  worker_diag_phase(context, "free-parse-data", NULL);
   ts_tree_delete(tree);
   anvil_worker_cancel_token_release(cancel_token);
   anvil_ts_snapshot_free(snapshot);
@@ -2708,7 +2785,7 @@ static bool project_run_adopt_chunk(
 
 
 typedef struct ProjectRunExecution {
-  AnvilWorkerContext parent_context;
+  AnvilWorkerPool *pool;
   AnvilWorkerJob *job;
   ProjectRunWalk *walk;
   AnvilTSProjectBuilder *builder;
@@ -2809,10 +2886,13 @@ static int SDLCALL project_run_thread_main(void *userdata) {
   ProjectRunThread *thread = (ProjectRunThread *)userdata;
   ProjectRunExecution *execution = thread->execution;
   AnvilWorkerJob *job = execution->job;
-  AnvilWorkerContext context = { .pool = execution->parent_context.pool };
+  AnvilWorkerContext context = { .pool = execution->pool };
+  worker_diag_register(&context, job);
+  worker_diag_phase(&context, "wait-parse-slot", NULL);
   SDL_Semaphore *parse_slots = project_run_parse_slots();
   if (!parse_slots) {
     project_run_set_fatal(execution, pool_strdup("failed to reserve native Project parse capacity"));
+    worker_diag_unregister(&context);
     return 0;
   }
   SDL_WaitSemaphore(parse_slots);
@@ -2825,6 +2905,7 @@ static int SDLCALL project_run_thread_main(void *userdata) {
   double local_parse_ms = 0.0, local_record_ms = 0.0;
   for (uint32_t i = thread->start; !job_cancelled(job) && i < thread->end; i++) {
     ProjectRunFile *file = &execution->walk->files[i];
+    worker_diag_phase(&context, "check-file-fingerprint", file->path);
     AnvilWorkerProjectRunLanguageSpec *language = &job->project_languages[file->language_index];
     if (anvil_ts_project_builder_fingerprint_matches(execution->builder, file->path, file->fingerprint)) {
       local_completed++;
@@ -2887,12 +2968,14 @@ static int SDLCALL project_run_thread_main(void *userdata) {
     uint32_t progress_files = job->project_progress_files ? job->project_progress_files : 64;
     if (progress_files > 64) progress_files = 64;
     if (chunk_count >= progress_files || i + 1 == thread->end) {
+      worker_diag_phase(&context, "adopt-project-records", NULL);
       char *adopt_error = NULL;
       if (job_cancelled(job) || !project_run_adopt_chunk(execution->builder, chunk_results, chunk_fingerprints,
           chunk_usage_complete, chunk_count, &adopt_error)) {
         if (!job_cancelled(job)) project_run_set_fatal(execution, adopt_error); else SDL_free(adopt_error);
         break;
       }
+      worker_diag_phase(&context, "free-adopted-results", NULL);
       for (uint32_t c = 0; c < chunk_count; c++) {
         anvil_worker_treesitter_index_result_free(chunk_results[c]);
         chunk_results[c] = NULL;
@@ -2922,6 +3005,7 @@ static int SDLCALL project_run_thread_main(void *userdata) {
       if (publish_partial) execution->partial_published = true;
       SDL_UnlockMutex(execution->mutex);
       if (progress && publish_partial) {
+        worker_diag_phase(&context, "partial-project-snapshot", NULL);
         char *partial_error = NULL;
         progress->project_snapshot = anvil_ts_project_builder_snapshot_cancellable(
           execution->builder, "partial", false, project_snapshot_cancelled, job, &partial_error);
@@ -2931,12 +3015,14 @@ static int SDLCALL project_run_thread_main(void *userdata) {
     }
   }
   if (chunk_count && !job_cancelled(job)) {
+    worker_diag_phase(&context, "adopt-final-project-records", NULL);
     char *adopt_error = NULL;
     if (!project_run_adopt_chunk(execution->builder, chunk_results, chunk_fingerprints,
         chunk_usage_complete, chunk_count, &adopt_error)) {
       project_run_set_fatal(execution, adopt_error);
     }
   }
+  worker_diag_phase(&context, "free-pending-results", NULL);
   for (uint32_t i = 0; i < chunk_count; i++) anvil_worker_treesitter_index_result_free(chunk_results[i]);
   SDL_LockMutex(execution->mutex);
   execution->completed += local_completed;
@@ -2947,13 +3033,16 @@ static int SDLCALL project_run_thread_main(void *userdata) {
   execution->parse_ms += local_parse_ms;
   execution->project_record_ms += local_record_ms;
   SDL_UnlockMutex(execution->mutex);
+  worker_diag_phase(&context, "project-parser-cleanup", NULL);
   if (context.query_cursor) ts_query_cursor_delete(context.query_cursor);
   if (context.parser) ts_parser_delete(context.parser);
   SDL_SignalSemaphore(parse_slots);
+  worker_diag_unregister(&context);
   return 0;
 }
 
 static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJob *job) {
+  worker_diag_phase(context, "create-project-builder", job->project_root);
   uint64_t started = SDL_GetTicksNS();
   uint64_t builder_started = SDL_GetTicksNS();
   bool worker_created_builder = !job->project_builder && !job->project_builder_id;
@@ -2972,6 +3061,7 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     enqueue_result(context->pool, result);
     return;
   }
+  worker_diag_phase(context, "enumerate-project-files", NULL);
   ProjectRunWalk walk = { .job = job };
   walk.languages = job->project_language_count
     ? (ProjectRunPatternSet *)SDL_calloc(job->project_language_count, sizeof(*walk.languages)) : NULL;
@@ -2989,6 +3079,7 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     enumerated = SDL_EnumerateDirectory(job->project_root, project_run_walk_callback, &walk);
   }
   if (enumerated && walk.file_count > 1) {
+    worker_diag_phase(context, "sort-project-files", NULL);
     qsort(walk.files, walk.file_count, sizeof(*walk.files), project_run_file_compare);
     uint32_t out = 1;
     for (uint32_t i = 1; i < walk.file_count; i++) {
@@ -3003,8 +3094,9 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     }
     walk.file_count = out;
   }
+  worker_diag_phase(context, "prepare-project-workers", NULL);
   ProjectRunExecution execution = {
-    .parent_context = *context,
+    .pool = context->pool,
     .job = job,
     .walk = &walk,
     .builder = builder,
@@ -3033,6 +3125,7 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
   /* Clear explicit replacement scopes before scanned files are adopted. This
      lets a caller reconcile a directory from an exact external file list. */
   if (!execution.fatal_error && !job_cancelled(job) && job->project_remove_path_count) {
+    worker_diag_phase(context, "remove-project-scopes", NULL);
     char *remove_error = NULL;
     if (!anvil_ts_project_builder_remove_scope_missing(builder,
         (const char *const *)job->project_remove_paths, job->project_remove_path_count,
@@ -3083,7 +3176,13 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     }
     created++;
   }
-  for (uint32_t i = 0; i < created; i++) SDL_WaitThread(threads[i], NULL);
+  worker_diag_phase(context, "join-project-workers", NULL);
+  for (uint32_t i = 0; i < created; i++) {
+    anvil_shutdown_diag_log("Project worker join begin job=%llu lane=%u", (unsigned long long)job->id, i);
+    SDL_WaitThread(threads[i], NULL);
+    anvil_shutdown_diag_log("Project worker join end job=%llu lane=%u", (unsigned long long)job->id, i);
+  }
+  worker_diag_phase(context, "retry-project-usages", NULL);
   /* Deterministically spend capacity left unused by another lane. Replacing
      truncated files in sorted path order preserves the global usage cap
      without making results depend on worker completion order. */
@@ -3175,6 +3274,7 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     }
     SDL_free(seen_paths);
   }
+  worker_diag_phase(context, "free-project-run-data", job->project_root);
   SDL_free(threads);
   SDL_free(thread_data);
   SDL_free(boundaries);
@@ -3194,6 +3294,7 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
   bool cancelled = job_cancelled(job);
   project_run_walk_free(&walk);
   if (fatal_error) {
+    worker_diag_phase(context, "release-failed-project-builder", NULL);
     if (job_owns_builder) {
       job->project_builder = NULL;
       job->close_project_builder = false;
@@ -3210,6 +3311,7 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     return;
   }
   if (cancelled) {
+    worker_diag_phase(context, "release-cancelled-project-builder", NULL);
     if (job_owns_builder) {
       job->project_builder = NULL;
       job->close_project_builder = false;
@@ -3228,12 +3330,15 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
    * needs to prolong its lifetime until Lua handle collection. */
   AnvilTSProjectSnapshot *base_snapshot = job->project_base_snapshot;
   job->project_base_snapshot = NULL;
+  worker_diag_phase(context, "release-base-project-snapshot", NULL);
   anvil_ts_project_snapshot_release(base_snapshot);
   char *snapshot_error = NULL;
   uint64_t snapshot_started = SDL_GetTicksNS();
+  worker_diag_phase(context, "final-project-snapshot", NULL);
   AnvilTSProjectSnapshot *snapshot = anvil_ts_project_builder_snapshot_cancellable(
     builder, "ready", true, project_snapshot_cancelled, job, &snapshot_error);
   double snapshot_ms = ticks_ns_to_ms(SDL_GetTicksNS() - snapshot_started);
+  worker_diag_phase(context, "release-project-builder", NULL);
   if (!snapshot) {
     if (job_owns_builder) {
       job->project_builder = NULL;
@@ -3760,10 +3865,13 @@ static int worker_main(void *userdata) {
     }
     if (pool->terminate && !selected) {
       SDL_UnlockMutex(pool->queue_mutex);
+      worker_diag_register(context, NULL);
+      worker_diag_phase(context, "worker-parser-cleanup", NULL);
       if (context->query_cursor) ts_query_cursor_delete(context->query_cursor);
       if (context->parser) ts_parser_delete(context->parser);
       context->query_cursor = NULL;
       context->parser = NULL;
+      worker_diag_unregister(context);
       return 0;
     }
     AnvilWorkerJob *job = *selected;
@@ -3777,7 +3885,12 @@ static int worker_main(void *userdata) {
     running_add_locked(pool, job);
     SDL_UnlockMutex(pool->queue_mutex);
 
+    worker_diag_register(context, job);
     run_job(context, job);
+    anvil_shutdown_diag_log("native job returned pool=%s job=%llu kind=%s status=%s cancel_requested=%d",
+      pool->name, (unsigned long long)job->id, job->kind,
+      anvil_worker_job_status_string(job), job_cancelled(job));
+    worker_diag_phase(context, "release-job", NULL);
     int status = SDL_GetAtomicInt(&job->status);
     SDL_LockMutex(pool->result_mutex);
     if (status == ANVIL_WORKER_STATUS_COMPLETE) pool->completed++;
@@ -3791,6 +3904,7 @@ static int worker_main(void *userdata) {
     SDL_BroadcastCondition(pool->queue_cond);
     SDL_UnlockMutex(pool->queue_mutex);
     anvil_worker_job_release(job);
+    worker_diag_unregister(context);
   }
 }
 
@@ -3806,9 +3920,10 @@ AnvilWorkerPool *anvil_worker_pool_create(const char *name, int worker_count) {
   pool->queue_mutex = SDL_CreateMutex();
   pool->queue_cond = SDL_CreateCondition();
   pool->result_mutex = SDL_CreateMutex();
+  pool->diagnostic_mutex = SDL_CreateMutex();
   pool->workers = (SDL_Thread **)SDL_calloc((size_t)worker_count, sizeof(SDL_Thread *));
   pool->contexts = (AnvilWorkerContext *)SDL_calloc((size_t)worker_count, sizeof(*pool->contexts));
-  if (!pool->name || !pool->queue_mutex || !pool->queue_cond || !pool->result_mutex || !pool->workers || !pool->contexts) {
+  if (!pool->name || !pool->queue_mutex || !pool->queue_cond || !pool->result_mutex || !pool->diagnostic_mutex || !pool->workers || !pool->contexts) {
     anvil_worker_pool_destroy(pool, true);
     return NULL;
   }
@@ -3846,8 +3961,13 @@ static void cancel_and_release_detached_queued(AnvilWorkerPool *pool, AnvilWorke
 
 void anvil_worker_pool_destroy(AnvilWorkerPool *pool, bool cancel_running) {
   if (!pool) return;
+  Uint64 started = SDL_GetTicksNS();
+  anvil_shutdown_diag_log("native pool shutdown begin pool=%s cancel_running=%d workers=%d",
+    pool->name ? pool->name : "", cancel_running, pool->worker_count);
+  worker_diag_dump(pool);
   AnvilWorkerJob *detached_queued = NULL;
   if (pool->queue_mutex) {
+    anvil_shutdown_diag_log("native pool queue lock begin");
     SDL_LockMutex(pool->queue_mutex);
     pool->terminate = true;
     if (cancel_running) {
@@ -3856,17 +3976,28 @@ void anvil_worker_pool_destroy(AnvilWorkerPool *pool, bool cancel_running) {
     }
     if (pool->queue_cond) SDL_BroadcastCondition(pool->queue_cond);
     SDL_UnlockMutex(pool->queue_mutex);
+    anvil_shutdown_diag_log("native pool cancellation signalled");
   } else {
     pool->terminate = true;
   }
 
+  anvil_shutdown_diag_log("native pool queued job cleanup begin");
   if (detached_queued) cancel_and_release_detached_queued(pool, detached_queued);
+  anvil_shutdown_diag_log("native pool queued job cleanup end");
 
   for (int i = 0; i < pool->worker_count; ++i) {
-    if (pool->workers && pool->workers[i]) SDL_WaitThread(pool->workers[i], NULL);
+    if (pool->workers && pool->workers[i]) {
+      Uint64 join_started = SDL_GetTicksNS();
+      anvil_shutdown_diag_log("native worker join begin pool=%s worker=%d thread=%llu",
+        pool->name, i, (unsigned long long)SDL_GetThreadID(pool->workers[i]));
+      SDL_WaitThread(pool->workers[i], NULL);
+      anvil_shutdown_diag_log("native worker join end pool=%s worker=%d wait_ms=%.3f",
+        pool->name, i, (double)(SDL_GetTicksNS() - join_started) / 1000000.0);
+    }
   }
 
   AnvilWorkerResult *result = NULL;
+  anvil_shutdown_diag_log("native pool result cleanup begin");
   if (pool->result_mutex) {
     while ((result = anvil_worker_pool_pop_result(pool)) != NULL) anvil_worker_result_free(result);
   } else {
@@ -3879,10 +4010,14 @@ void anvil_worker_pool_destroy(AnvilWorkerPool *pool, bool cancel_running) {
   }
 
   if (pool->queue_cond) SDL_DestroyCondition(pool->queue_cond);
+  anvil_shutdown_diag_log("native pool result cleanup end");
   if (pool->queue_mutex) SDL_DestroyMutex(pool->queue_mutex);
   if (pool->result_mutex) SDL_DestroyMutex(pool->result_mutex);
+  if (pool->diagnostic_mutex) SDL_DestroyMutex(pool->diagnostic_mutex);
   SDL_free(pool->workers);
   SDL_free(pool->contexts);
+  anvil_shutdown_diag_log("native pool shutdown complete pool=%s total_ms=%.3f",
+    pool->name ? pool->name : "", (double)(SDL_GetTicksNS() - started) / 1000000.0);
   SDL_free(pool->name);
   SDL_free(pool);
 }
@@ -4215,10 +4350,12 @@ project_run_copy_done:
 }
 
 bool anvil_worker_pool_cancel(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
-  (void)pool;
   if (!job) return false;
   int status = SDL_GetAtomicInt(&job->status);
   if (status == ANVIL_WORKER_STATUS_COMPLETE || status == ANVIL_WORKER_STATUS_CANCELLED || status == ANVIL_WORKER_STATUS_FAILED) return false;
+  anvil_shutdown_diag_log("native job cancellation requested job=%llu kind=%s status=%s",
+    (unsigned long long)job->id, job->kind, anvil_worker_job_status_string(job));
+  if (pool && anvil_shutdown_diag_enabled()) worker_diag_dump(pool);
   SDL_SetAtomicInt(&job->cancel, 1);
   return true;
 }
