@@ -1551,6 +1551,17 @@ function vault_index.install_buffer_hooks()
   if buffer_hooks_installed then return end
   buffer_hooks_installed = true
   local Buffer = require "core.buffer"
+  Buffer.register_text_transaction_handler("markdown-vault-load", function(buffer, transaction)
+    if not (transaction and transaction.type == "load"
+      and buffer.abs_filename and is_markdown(buffer.abs_filename)) then return end
+    local index = vault_index.index_for_path(buffer.abs_filename)
+    if not index.buffer_listeners[buffer] then return end
+    -- Loads replace the text without calling the per-edit listeners. Replace
+    -- any pending empty snapshot captured when the filename was assigned.
+    if index:update_buffer(buffer) then
+      core.log_quiet("Markdown vault refreshed loaded Buffer: %s", buffer.abs_filename)
+    end
+  end)
   local old_set_filename = Buffer.set_filename
   function Buffer:set_filename(...)
     local old_abs_filename = self.abs_filename
