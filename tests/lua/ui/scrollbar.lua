@@ -20,6 +20,70 @@ local function make_scrollbar()
   return scrollbar
 end
 
+test.describe("Scrollbar native window inset", function()
+  local function with_native_metrics(context, metrics)
+    context.old_window = core.window
+    context.old_root_panel = core.root_panel
+    context.old_window_mode = core.window_mode
+    context.old_metrics = system.get_window_frame_metrics
+    context.old_frame_active = core.render_frame_active
+    context.old_frame_id = core.render_frame_id
+    core.window = {}
+    core.root_panel = { position = { x = 0, y = 0 }, size = { x = 100, y = 100 } }
+    core.window_mode = "normal"
+    system.get_window_frame_metrics = metrics
+    core.render_frame_active = true
+    core.render_frame_id = 900001
+  end
+
+  local function restore_native_metrics(context)
+    core.render_frame_active = context.old_frame_active
+    core.render_frame_id = context.old_frame_id
+    core.window = context.old_window
+    core.root_panel = context.old_root_panel
+    core.window_mode = context.old_window_mode
+    system.get_window_frame_metrics = context.old_metrics
+  end
+
+  test.it("reads native window metrics once per redraw frame", function(context)
+    local border = 4
+    with_native_metrics(context, function()
+      border = border + 2
+      return 0, 0, border
+    end)
+
+    local scrollbar = make_scrollbar()
+    local first_draw = { scrollbar:get_track_rect() }
+    local repeated = { scrollbar:get_track_rect() }
+
+    core.render_frame_id = 900002
+    local next_frame = { scrollbar:get_track_rect() }
+    restore_native_metrics(context)
+
+    test.same(first_draw, repeated, "one frame must reuse one window metric query")
+    test.ok(next_frame[1] < first_draw[1],
+      "the next redraw frame must adopt the new native border")
+  end)
+
+  test.it("rereads native window metrics outside a redraw frame", function(context)
+    local border = 4
+    with_native_metrics(context, function()
+      border = border + 2
+      return 0, 0, border
+    end)
+    core.render_frame_active = false
+    core.render_frame_id = nil
+
+    local scrollbar = make_scrollbar()
+    local first = { scrollbar:get_track_rect() }
+    local second = { scrollbar:get_track_rect() }
+    restore_native_metrics(context)
+
+    test.ok(second[1] < first[1],
+      "queries outside a redraw frame must not reuse a stale border")
+  end)
+end)
+
 test.describe("Scrollbar hover rendering", function()
   test.it("does not keep hover feedback in the invisible leading hitbox padding", function()
     local old_scrollbar_color = style.scrollbar

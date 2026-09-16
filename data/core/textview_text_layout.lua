@@ -1,20 +1,34 @@
 local core = require "core"
 local style = require "core.style"
 local MAX_RUN_BYTES = 512
-local MAX_CACHED_ROWS = 64
+-- Keep a full viewport of rows plus reuse from the divider and caret queries.
+local MAX_CACHED_ROWS = 256
 
 -- Drawing and position mapping must use the same text, font, and tab origin.
 local Layout = {}
 Layout.__index = Layout
 
+local font_key_frame, font_key_cache
 local function font_key(font)
+  -- Font metrics only change between frames. One frame reuses one result per font.
+  local frame = core.render_frame_active and core.render_frame_id
+  if frame and frame ~= font_key_frame then
+    font_key_frame, font_key_cache = frame, {}
+  end
+  local cache = frame and font_key_cache
+  local cached = cache and cache[font]
+  if cached then return cached end
+  local key
   if type(font) == "table" then
     local parts = { tostring(font) }
     for _, child in ipairs(font) do parts[#parts + 1] = font_key(child) end
-    return table.concat(parts, ":")
+    key = table.concat(parts, ":")
+  else
+    key = tostring(font) .. ":" .. font:get_generation()
+      .. ":" .. font:get_surface_scale()
   end
-  return tostring(font) .. ":" .. font:get_generation()
-    .. ":" .. font:get_surface_scale()
+  if cache then cache[font] = key end
+  return key
 end
 
 local function same_tokens(a, b)
@@ -45,12 +59,23 @@ function Layout.get(view, line, first, last, leading, wrapped)
   key = table.concat(key, "\0")
   local cache = view.__plain_text_layouts
   if not cache then
-    cache = {}
+    -- Ring buffer: reuse keeps the newest rows, and eviction costs no shifting.
+    cache = { slots = {}, head = 1, count = 0 }
     view.__plain_text_layouts = cache
     core.log_quiet("Shared text layout enabled for %s", view.buffer:get_name())
   end
-  for _, entry in ipairs(cache) do
-    if entry.key == key and same_tokens(entry.tokens, tokens) then return entry end
+  local token_id = override and view.buffer.lines[line] or tokens
+  local slots, count = cache.slots, cache.count
+  for i = 1, count do
+    local entry = slots[i]
+    if entry.key == key then
+      if entry.token_id == token_id then return entry end
+      -- Some providers hand out equal tokens in a new table. Accept them once.
+      if same_tokens(entry.tokens, tokens) then
+        entry.token_id = token_id
+        return entry
+      end
+    end
   end
 
   local self = setmetatable({ key = key, tokens = {}, runs = {}, first = first,
@@ -111,8 +136,15 @@ function Layout.get(view, line, first, last, leading, wrapped)
     self.width = self.width + run.width
   end
   self.tabs = tabs
-  if #cache >= MAX_CACHED_ROWS then table.remove(cache, 1) end
-  cache[#cache + 1] = self
+  self.token_id = token_id
+  if count < MAX_CACHED_ROWS then
+    count = count + 1
+    slots[count] = self
+    cache.count = count
+  else
+    slots[cache.head] = self
+    cache.head = cache.head % MAX_CACHED_ROWS + 1
+  end
   return self
 end
 

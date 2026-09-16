@@ -511,6 +511,25 @@ function Scrollbar:set_percent(percent)
 end
 
 
+---Return the native window resize border, queried once per draw frame.
+---Frame metrics are window state, not scrollbar state.
+---@return number border Resize border width in pixels, or 0 when unavailable
+local frame_metrics_frame, frame_metrics_border
+local function window_resize_border()
+  local frame = core.render_frame_active and core.render_frame_id
+  if frame and frame == frame_metrics_frame then return frame_metrics_border end
+
+  local border = 0
+  if core.window and system.get_window_frame_metrics then
+    local ok, _, _, resize_border = pcall(system.get_window_frame_metrics, core.window)
+    border = ok and tonumber(resize_border) or 0
+  end
+  if frame then
+    frame_metrics_frame, frame_metrics_border = frame, border
+  end
+  return border
+end
+
 ---Return native window resize border width when this scrollbar reaches the
 ---outer right edge.  The OS owns that strip for resize hit-tests, so the
 ---visible scrollbar should be inset from it instead of sitting underneath it.
@@ -520,8 +539,7 @@ function Scrollbar:get_native_window_resize_edge_width()
   if not core.window or not core.root_panel or not system.get_window_frame_metrics then return 0 end
   if core.window_mode == "maximized" or core.window_mode == "fullscreen" then return 0 end
 
-  local ok, _, _, resize_border = pcall(system.get_window_frame_metrics, core.window)
-  resize_border = ok and tonumber(resize_border) or 0
+  local resize_border = window_resize_border()
   if resize_border <= 0 then return 0 end
 
   local root = core.root_panel
