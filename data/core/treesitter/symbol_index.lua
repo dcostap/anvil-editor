@@ -998,7 +998,12 @@ local function combined_usages_for_name(index, name)
 end
 
 
-local function symbol_fuzzy_text(symbol)
+local function symbol_fuzzy_text(symbol, opts)
+  if opts and opts.search_declaration then
+    local declaration = symbol and symbol.declaration
+    if declaration and declaration ~= "" then return tostring(declaration) end
+    return tostring(symbol and (symbol.search_text or symbol.text or symbol.name) or "")
+  end
   return tostring(symbol and (symbol.search_text or symbol.text or symbol.name) or "")
 end
 
@@ -1161,7 +1166,7 @@ local function filtered_symbols(symbols, query, limit, opts)
   end
   if native_fuzzy then
     local texts = {}
-    for i, symbol in ipairs(symbols) do texts[i] = symbol_fuzzy_text(symbol) end
+    for i, symbol in ipairs(symbols) do texts[i] = symbol_fuzzy_text(symbol, opts) end
     local matches = native_fuzzy.filter(texts, query, {
       mode = "generic",
       limit = math.min(#texts, limit + 1),
@@ -1170,7 +1175,17 @@ local function filtered_symbols(symbols, query, limit, opts)
     for i = 1, math.min(limit, #matches) do out[i] = symbols[matches[i].index] end
     return out, #matches > #out
   end
-  local items = common.fuzzy_match(symbols, query, false)
+  local source = symbols
+  if opts.search_declaration then
+    source = {}
+    for i, symbol in ipairs(symbols) do
+      source[i] = { text = symbol_fuzzy_text(symbol, opts), symbol = symbol }
+    end
+  end
+  local items = common.fuzzy_match(source, query, false)
+  if opts.search_declaration then
+    for i, item in ipairs(items) do items[i] = item.symbol end
+  end
   for i = 1, math.min(limit, #items) do out[i] = items[i] end
   return out, #items > #out
 end
@@ -1242,13 +1257,13 @@ local function bounded_overlay_symbols(index, suppressed, query, opts, capacity)
         if symbol_kind_allowed(symbol, kinds)
         and symbol_language_allowed(symbol, opts.language_ids or opts.languages)
         and symbol_parent_allowed(symbol, opts.parent_names) then
-          local score = query == "" and 0 or (native_fuzzy and native_fuzzy.score(symbol_fuzzy_text(symbol), query, { mode = "generic" }))
+          local score = query == "" and 0 or (native_fuzzy and native_fuzzy.score(symbol_fuzzy_text(symbol, opts), query, { mode = "generic" }))
           if query == "" or score then
             matched = matched + 1
             local candidate = { symbol = symbol, score = score or 0 }
             insert_bounded(candidates, candidate, function(a, b)
               if a.score ~= b.score then return a.score > b.score end
-              local an, bn = symbol_fuzzy_text(a.symbol), symbol_fuzzy_text(b.symbol)
+              local an, bn = symbol_fuzzy_text(a.symbol, opts), symbol_fuzzy_text(b.symbol, opts)
               if an ~= bn then return an < bn end
               return symbol_less(a.symbol, b.symbol)
             end, capacity)
@@ -1273,6 +1288,7 @@ local function native_project_symbols(index, snapshot, query, opts)
   local page = snapshot:query_symbols(query, {
     offset = 0,
     limit = native_limit,
+    search_declaration = opts.search_declaration == true,
     kinds = opts.symbol_kinds or opts.kinds,
     parent_names = opts.parent_names,
     languages = opts.language_ids or opts.languages,
@@ -1643,6 +1659,7 @@ local function native_workspace_symbols_async(query, opts, roots)
       native_payload = {
         query_snapshot = child.snapshot,
         value = tostring(query or ""),
+        search_declaration = opts.search_declaration == true,
         offset = 0,
         limit = candidate_limit,
         kinds = opts.symbol_kinds or opts.kinds,

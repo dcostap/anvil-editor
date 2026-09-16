@@ -215,14 +215,31 @@ test.describe("Fuzzy Searcher Project symbols", function()
     test.same(row.file_spans, {})
   end)
 
+  test.it("highlights multiword matches in the symbol declaration", function()
+    local row = helpers.symbol_result_from_item({
+      name = "setup_blank_screen",
+      kind = "method",
+      declaration = "int RGE_Base_Game::setup_blank_screen()",
+      declaration_name_span = { 20, 37 },
+      path = "C:/project/game.cpp",
+      start_line = 10,
+      start_col = 3,
+    }, "base setup", { scope = "project", search_declaration = true })
+
+    test.ok(row)
+    test.ok(#(row.declaration_spans or {}) > 0, "expected declaration highlighting")
+  end)
+
   test.it("scopes inline symbol search by path and highlights each query in its own column", function(context)
     context.original_lsp_enabled = lsp_manager.is_enabled
     context.original_ts_workspace_symbols_async = symbol_index.workspace_symbols_async
 
     lsp_manager.is_enabled = function() return false end
     local received_query
-    symbol_index.workspace_symbols_async = function(query)
+    local received_search_declaration
+    symbol_index.workspace_symbols_async = function(query, opts)
       received_query = query
+      received_search_declaration = opts and opts.search_declaration
       return {
         done = true,
         status = "fresh",
@@ -240,6 +257,7 @@ test.describe("Fuzzy Searcher Project symbols", function()
 
     test.ok(wait_until(function() return #(picker.results or {}) == 1 end))
     test.equal(received_query, "parse package")
+    test.ok(received_search_declaration)
     test.equal(picker.results[1].label, "parse_package")
     test.ok(#picker.results[1].match_spans > 0, "expected symbol query highlighting in the symbol column")
     test.ok(#picker.results[1].file_spans > 0, "expected path query highlighting in the path column")

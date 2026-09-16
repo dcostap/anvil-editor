@@ -2511,9 +2511,17 @@ function fuzzy_searcher.symbol_declaration_text(symbol, include_suffix)
   return include_suffix and signature ~= "" and (label .. " " .. signature) or label
 end
 
-function fuzzy_searcher.draw_symbol_declaration(font, symbol, x, y, width, name_spans, include_suffix)
+function fuzzy_searcher.draw_symbol_declaration(font, symbol, x, y, width, name_spans, include_suffix, declaration_spans)
   if include_suffix == nil then include_suffix = true end
   local declaration = tostring(symbol and symbol.declaration or "")
+  if declaration_spans and #declaration_spans > 0 and declaration ~= "" then
+    local text = declaration
+    if not include_suffix and symbol.declaration_name_span then
+      local name_end = math.min(#text, tonumber(symbol.declaration_name_span[2]) or 0)
+      text = text:sub(1, name_end)
+    end
+    return draw_highlighted_text(font, text, x, y, width, style.dim, declaration_spans)
+  end
   if declaration ~= "" and symbol.declaration_name_span then
     local name_start = math.max(1, tonumber(symbol.declaration_name_span[1]) or 1)
     local name_end = math.min(#declaration, tonumber(symbol.declaration_name_span[2]) or 0)
@@ -2611,7 +2619,7 @@ local function draw_symbol_result_row(font, r, x, y, width, row_height, file_wid
   local preview_y = y + math.max(0, math.floor((font:get_height() - preview_font:get_height()) / 2))
   local text_x = x + path_w + gap
   fuzzy_searcher.draw_symbol_declaration(
-    preview_font, r, text_x, preview_y, text_w, r.match_spans or {}
+    preview_font, r, text_x, preview_y, text_w, r.match_spans or {}, nil, r.declaration_spans
   )
 end
 
@@ -6106,6 +6114,10 @@ local function symbol_result_from_item(item, query, opts)
   local line2 = item.line2 or (item.name_range and item.name_range["end"] and item.name_range["end"].line) or item.end_line
   local col2 = item.col2 or (item.name_range and item.name_range["end"] and item.name_range["end"].col) or item.end_col
   local _, name_spans = fuzzy_match(query, label)
+  local declaration_spans
+  if opts.search_declaration and item.declaration and item.declaration ~= "" then
+    _, declaration_spans = fuzzy_match(query, item.declaration)
+  end
   local path_query = trim_query(opts.path_query)
   local path_score, file_spans = fuzzy_match_file_fast(path_query, file)
   if path_query ~= "" and not path_score then return nil end
@@ -6133,6 +6145,7 @@ local function symbol_result_from_item(item, query, opts)
     col2 = col2,
     query = query,
     match_spans = name_spans or {},
+    declaration_spans = declaration_spans,
     file_spans = file_spans or {},
     path_score = path_score or 0,
     path_query = path_query,
@@ -6217,6 +6230,8 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
   local limit = self:max_result_limit()
   query = trim_query(query)
   path_query = trim_query(path_query)
+  -- A multiword query can use the declaration line to identify a symbol.
+  local search_declaration = query:find("%s") ~= nil
   local candidate_limit = path_query ~= ""
     and math.max(limit + 1, fuzzy_searcher.fuzzy_candidate_limit or 500)
     or (limit + 1)
@@ -6258,9 +6273,15 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
             force = false,
             limit = candidate_limit,
             allow_stale = false,
+            search_declaration = search_declaration,
           })
         else
-          results, reason, status, meta = ts_symbols.workspace_symbols(query, { force = false, limit = candidate_limit, allow_stale = false })
+          results, reason, status, meta = ts_symbols.workspace_symbols(query, {
+            force = false,
+            limit = candidate_limit,
+            allow_stale = false,
+            search_declaration = search_declaration,
+          })
         end
         if async_request then
           self.symbol_search_request = async_request
@@ -6306,6 +6327,7 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
       set_symbol_results(self, query, results, source_label, status, reason, limit, {
         scope = "project",
         path_query = path_query,
+        search_declaration = search_declaration,
       })
     else
       self:cancel_deferred_loading_feedback()
@@ -6322,6 +6344,7 @@ function FSView:start_current_buffer_symbol_search(query, reset_selection)
   local gen = symbol_generation
   local limit = self:max_result_limit()
   query = trim_query(query)
+  local search_declaration = query:find("%s") ~= nil
   if query == "" then
     if reset_selection then self.current_buffer_caret_selection_pending = true end
   else
@@ -6345,11 +6368,15 @@ function FSView:start_current_buffer_symbol_search(query, reset_selection)
     end
     if gen ~= symbol_generation or active_view ~= self then return end
     local ts_symbols = require "core.treesitter.symbol_index"
-    local results, reason, status = ts_symbols.current_buffer_symbols(buffer, query, { limit = limit + 1 })
+    local results, reason, status = ts_symbols.current_buffer_symbols(buffer, query, {
+      limit = limit + 1,
+      search_declaration = search_declaration,
+    })
     if status == "fresh" or status == "stale" then
       set_symbol_results(self, query, results, "current Buffer", status, reason, limit, {
         scope = "buffer",
         buffer = buffer,
+        search_declaration = search_declaration,
         select_preceding_position = query == "" and self.current_buffer_caret_selection_pending and {
           line = self.source_file_line,
           col = self.source_file_col,

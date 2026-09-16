@@ -93,12 +93,14 @@ bool anvil_ts_project_snapshot_enclosing_symbol(
   AnvilTSProjectFileResult **file,
   uint32_t *file_symbol_index
 );
-/* Language, kind, and parent-name filters are exact allowlists. Path filters are scope rules:
+/* Language, kind, and parent-name filters are exact allowlists. A declaration search matches
+ * the same fuzzy query against each symbol's declaration line. Path filters are scope rules:
  * the longest matching included/excluded path wins, with exclusion winning
  * ties. Returned indices use snapshot order and are owned by the caller. */
 bool anvil_ts_project_snapshot_query_symbols(
   const AnvilTSProjectSnapshot *snapshot,
   const char *query,
+  bool search_declaration,
   uint32_t offset,
   uint32_t limit,
   const char *const *kinds,

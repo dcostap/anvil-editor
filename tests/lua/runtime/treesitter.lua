@@ -650,6 +650,32 @@ fun use(item: TargetThing): Int {
     end
   end)
 
+  test.it("Tree-sitter Project symbol search matches words in a declaration", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-declaration-search-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    write_file(root .. PATHSEP .. "Game.cpp", [[class RGE_Base_Game {
+public:
+  int setup_blank_screen();
+};
+
+int RGE_Base_Game::setup_blank_screen() { return 0; }
+]])
+
+    local symbols, reason, status = wait_workspace_symbols("base setup", {
+      root = root,
+      force = true,
+      limit = 20,
+      search_declaration = true,
+    })
+    test.equal(status, "fresh", reason)
+    local setup = symbols and symbols[1]
+    test.ok(setup and setup.name == "setup_blank_screen", "symbols: " .. common.serialize(symbols))
+    test.ok(setup.declaration and setup.declaration:find("int RGE_Base_Game::setup_blank_screen", 1, true))
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter Project search includes External and Vendored Project Directories", function()
     symbol_index.reset_for_tests()
     local original_projects = core.projects

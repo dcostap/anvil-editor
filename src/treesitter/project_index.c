@@ -55,6 +55,7 @@ struct AnvilTSProjectSnapshot {
   ProjectRecordRef *symbols;
   uint32_t symbol_count;
   FuzzyIndex symbol_fuzzy;
+  FuzzyIndex symbol_declaration_fuzzy;
   ProjectRecordRef *usages;
   uint32_t usage_count;
   ProjectUsageNameEntry *usage_names;
@@ -601,6 +602,7 @@ static void snapshot_destroy(AnvilTSProjectSnapshot *snapshot) {
   free(snapshot->files);
   free(snapshot->path_slots);
   fuzzy_index_free(&snapshot->symbol_fuzzy);
+  fuzzy_index_free(&snapshot->symbol_declaration_fuzzy);
   free(snapshot->symbols);
   free(snapshot->usages);
   free(snapshot);
@@ -765,7 +767,11 @@ AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot_cancellable(
   if (cancel && cancel(cancel_payload)) return cancel_snapshot(snapshot, error);
   const char **fuzzy_items = snapshot->symbol_count
     ? (const char **)malloc((size_t)snapshot->symbol_count * sizeof(*fuzzy_items)) : NULL;
-  if (snapshot->symbol_count && !fuzzy_items) {
+  const char **declaration_items = snapshot->symbol_count
+    ? (const char **)malloc((size_t)snapshot->symbol_count * sizeof(*declaration_items)) : NULL;
+  if (snapshot->symbol_count && (!fuzzy_items || !declaration_items)) {
+    free(fuzzy_items);
+    free(declaration_items);
     snapshot_destroy(snapshot);
     set_error(error, "out of memory preparing native Project symbol fuzzy index");
     return NULL;
@@ -773,16 +779,23 @@ AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot_cancellable(
   for (uint32_t i = 0; i < snapshot->symbol_count; i++) {
     if ((i & 255u) == 0 && cancel && cancel(cancel_payload)) {
       free(fuzzy_items);
+      free(declaration_items);
       return cancel_snapshot(snapshot, error);
     }
     AnvilTSProjectSymbolView symbol;
     anvil_ts_project_file_symbol_at(snapshot->symbols[i].file, snapshot->symbols[i].index, &symbol);
     fuzzy_items[i] = symbol.name;
+    declaration_items[i] = symbol.declaration && symbol.declaration_len
+      ? symbol.declaration : symbol.name;
   }
   bool fuzzy_ok = fuzzy_index_build_cancellable(&snapshot->symbol_fuzzy, fuzzy_items,
     snapshot->symbol_count, FUZZY_MODE_GENERIC, cancel, cancel_payload);
+  bool declaration_fuzzy_ok = fuzzy_ok && fuzzy_index_build_cancellable(
+    &snapshot->symbol_declaration_fuzzy, declaration_items,
+    snapshot->symbol_count, FUZZY_MODE_GENERIC, cancel, cancel_payload);
   free(fuzzy_items);
-  if (!fuzzy_ok) {
+  free(declaration_items);
+  if (!fuzzy_ok || !declaration_fuzzy_ok) {
     snapshot_destroy(snapshot);
     set_error(error, cancel && cancel(cancel_payload)
       ? "native Project snapshot cancelled"
@@ -1141,6 +1154,7 @@ static void query_insert_fuzzy(
 
 static uint32_t query_collect_fuzzy_symbols(
   const AnvilTSProjectSnapshot *snapshot,
+  const FuzzyIndex *fuzzy,
   const char *query,
   const char *const *kinds,
   uint32_t kind_count,
@@ -1165,15 +1179,15 @@ static uint32_t query_collect_fuzzy_symbols(
     }
     if (!query_symbol_allowed(snapshot, i, kinds, kind_count, parent_names, parent_name_count,
         languages, language_count, path_rules)) continue;
-    const FuzzyEntry *entry = &snapshot->symbol_fuzzy.entries[i];
-    const char *text = snapshot->symbol_fuzzy.match_arena + entry->match_offset;
-    const char *lower = snapshot->symbol_fuzzy.lower_arena + entry->lower_offset;
+    const FuzzyEntry *entry = &fuzzy->entries[i];
+    const char *text = fuzzy->match_arena + entry->match_offset;
+    const char *lower = fuzzy->lower_arena + entry->lower_offset;
     int score = fuzzy_match_score(FUZZY_MODE_GENERIC, text, lower, entry->len, entry->basename_start, query);
     if (score == INT_MIN) continue;
     FuzzySearchResult candidate = { i, i + 1, score };
     matched++;
-    if (after && !query_fuzzy_better(&snapshot->symbol_fuzzy, after, &candidate)) continue;
-    query_insert_fuzzy(&snapshot->symbol_fuzzy, top, &top_count, capacity, candidate);
+    if (after && !query_fuzzy_better(fuzzy, after, &candidate)) continue;
+    query_insert_fuzzy(fuzzy, top, &top_count, capacity, candidate);
   }
   if (matched_total) *matched_total = matched;
   return top_count;
@@ -1182,6 +1196,7 @@ static uint32_t query_collect_fuzzy_symbols(
 bool anvil_ts_project_snapshot_query_symbols(
   const AnvilTSProjectSnapshot *snapshot,
   const char *query,
+  bool search_declaration,
   uint32_t offset,
   uint32_t limit,
   const char *const *kinds,
@@ -1230,6 +1245,8 @@ bool anvil_ts_project_snapshot_query_symbols(
       matched++;
     }
   } else {
+    const FuzzyIndex *fuzzy = search_declaration
+      ? &snapshot->symbol_declaration_fuzzy : &snapshot->symbol_fuzzy;
     FuzzySearchResult cursor;
     const FuzzySearchResult *after = NULL;
     uint32_t remaining = offset;
@@ -1239,7 +1256,7 @@ bool anvil_ts_project_snapshot_query_symbols(
       FuzzySearchResult *scratch = (FuzzySearchResult *)malloc((size_t)step * sizeof(*scratch));
       if (!scratch) { free(out); project_path_rules_free(&path_rules); return false; }
       bool cancelled = false;
-      uint32_t top_count = query_collect_fuzzy_symbols(snapshot, query, kinds, kind_count,
+      uint32_t top_count = query_collect_fuzzy_symbols(snapshot, fuzzy, query, kinds, kind_count,
         parent_names, parent_name_count, languages, language_count, &path_rules, after, scratch,
         step, &matched, cancel, cancel_payload, &cancelled);
       if (cancelled) { free(scratch); free(out); project_path_rules_free(&path_rules); return false; }
@@ -1257,7 +1274,7 @@ bool anvil_ts_project_snapshot_query_symbols(
       FuzzySearchResult *page = limit ? (FuzzySearchResult *)malloc((size_t)limit * sizeof(*page)) : NULL;
       if (limit && !page) { free(out); project_path_rules_free(&path_rules); return false; }
       bool cancelled = false;
-      uint32_t page_count = query_collect_fuzzy_symbols(snapshot, query, kinds, kind_count,
+      uint32_t page_count = query_collect_fuzzy_symbols(snapshot, fuzzy, query, kinds, kind_count,
         parent_names, parent_name_count, languages, language_count, &path_rules, after, page,
         limit, &matched, cancel, cancel_payload, &cancelled);
       if (cancelled) { free(page); free(out); project_path_rules_free(&path_rules); return false; }
