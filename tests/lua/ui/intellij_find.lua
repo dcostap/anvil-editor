@@ -6,6 +6,7 @@ local test = require "core.test"
 local MessageBox = require "widget.messagebox"
 local LineWrapping = require "core.linewrapping"
 local Editor = require "core.editor"
+local navigation_history = require "core.navigation_history"
 local panes = require "core.panes"
 
 require "plugins.intellij_find"
@@ -99,6 +100,34 @@ test.describe("TextView Prompt Bar find", function()
     test.ok(command.perform("editor:find"))
 
     assert_selection(view, 1, 1, 1, 6)
+  end)
+
+  test.it("records the position before local find moves to its first match", function(context)
+    local old_options = config.plugins.navigation_history
+    config.plugins.navigation_history = {
+      enabled = true,
+      far_lines = 5,
+      far_columns = 80,
+      near_lines = 2,
+      near_columns = 4,
+    }
+    navigation_history.reset()
+
+    local lines = {}
+    for i = 1, 20 do lines[i] = "xxxxx" end
+    lines[20] = "NEEDLE"
+    local view, buffer = open_editor(context, table.concat(lines, "\n"))
+    view:with_selection_state(function() buffer:set_selection(10, 1) end)
+
+    test.ok(command.perform("editor:find"))
+    type_into_active_view("NEEDLE")
+
+    test.equal(panes.history_length(panes.pane_for_view(view)), 3)
+    test.ok(command.perform("core:navigate_back"))
+    assert_selection(view, 10, 1, 10, 1)
+
+    config.plugins.navigation_history = old_options
+    navigation_history.reset()
   end)
 
   test.it("keeps local find focus ownership valid when opening another View", function(context)

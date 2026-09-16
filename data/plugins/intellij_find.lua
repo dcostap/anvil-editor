@@ -16,6 +16,7 @@ local prompt_bar_renderer = require "core.prompt_bar_renderer"
 local common = require "core.common"
 local file_context = require "core.file_context"
 local panes = require "core.panes"
+local navigation_history = require "core.navigation_history"
 local translate = require "core.buffer.translate"
 local Buffer = require "core.buffer"
 local Highlighter = require "core.buffer.highlighter"
@@ -475,7 +476,7 @@ local function set_status(state)
   end
 end
 
-local function select_match(view, state, index, scroll)
+local function select_match_without_history(view, state, index, scroll)
   local match = state.matches and state.matches[index]
   state.current = match and index or 0
   if not match then return false end
@@ -500,6 +501,12 @@ local function select_match(view, state, index, scroll)
   state.found = true
   set_status(state)
   return true
+end
+
+local function select_match(view, state, index, scroll)
+  return navigation_history.perform_jump(view, function()
+    return select_match_without_history(view, state, index, scroll)
+  end)
 end
 
 local function refresh_matches(view, state, opts)
