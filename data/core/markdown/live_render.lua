@@ -4147,7 +4147,7 @@ local function pending_source_render(view, line, render_line, current_text, code
     live.quote_prefix_fragment,
     reveal_code_delimiter,
     pending_fenced_code_render, pending_list_marker_render,
-    selection_reveals_pending_range(view, line, 1, #current_text + 1),
+    selection_reveals_pending_range(view, line, 1, #current_text + 1, true),
     function(col1, col2, inclusive_right_edge)
       return selection_reveals_pending_range(view, line, col1, col2, inclusive_right_edge)
     end
@@ -6115,6 +6115,9 @@ local function active_heading_fragments(view, text, heading, font, reveal_units)
 end
 
 local function inactive_heading_fragments(view, text, heading, font, reveal_units)
+  if heading.text == "" then
+    return active_heading_fragments(view, text, heading, font, reveal_units)
+  end
   local fragments = {}
   if heading.content_col1 > 1 then
     fragments[#fragments + 1] = { source_col1 = 1, source_col2 = heading.content_col1, hidden = true }

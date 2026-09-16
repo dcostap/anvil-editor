@@ -173,6 +173,30 @@ test.describe("Markdown heading leading spacing", function()
     )
   end)
 
+  test.it("keeps a heading marker visible at the caret while typing", function()
+    local view, buffer = make_view("")
+    buffer:set_selection(1, 1)
+    core.active_view = view
+    refresh(view)
+
+    for _, character in ipairs({ "#", " ", "H", "e", "a", "d" }) do
+      view:on_text_input(character)
+      test.equal(
+        visible_text(view, 1),
+        (buffer.lines[1] or ""):gsub("\n$", ""),
+        "typing must not hide the active heading marker while semantics are pending"
+      )
+    end
+  end)
+
+  test.it("shows the marker for an empty heading without the caret", function()
+    local view, buffer = make_view("# \nbody")
+    buffer:set_selection(2, 1)
+    refresh(view)
+
+    test.equal(visible_text(view, 1), "# ")
+  end)
+
   test.it("keeps typed following text from changing heading spacing on reveal", function()
     local view, buffer = make_view("# Heading\n")
     buffer:set_selection(2, 1)
