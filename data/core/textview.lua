@@ -3562,15 +3562,33 @@ local function metric_tree_sum(tree, row)
   return total
 end
 
----Capture the source row displayed at the top of the measured viewport.
+local function current_line_scroll_anchor(view)
+  local jump = view.__line_scroll_anchor
+  if not jump then return nil end
+  local line1, col1, line2, col2 = view.buffer:get_selection()
+  if view.scroll.to.y == jump.target_y and view.buffer.text_revision == jump.revision
+    and line1 == jump.line1 and col1 == jump.col1
+    and line2 == jump.line2 and col2 == jump.col2
+  then return jump end
+  view.__line_scroll_anchor = nil
+end
+
+---Keep an explicit line jump fixed; otherwise preserve the viewport's top row.
 ---Do not resolve new provider state while capturing the previous layout.
 function TextView:capture_viewport_anchor()
   if self.__pending_viewport_anchor then self:get_visual_row_metric_cache() end
   local cache = self.__visual_metric_cache
-  if not cache or self.scroll.y <= 0
+  if not cache
     or cache.wrap_layout_generation ~= (self.__wrap_layout_generation or 0)
     or cache.text_revision ~= (self.buffer.text_revision or 0)
   then return nil end
+  local jump = current_line_scroll_anchor(self)
+  if jump then
+    local row = common.clamp(self:get_visual_row(jump.line, 1), 1, cache.row_count)
+    return { line = jump.line, col = 1,
+      content_y = metric_tree_sum(cache.height_tree, row - 1), jump = jump }
+  end
+  if self.scroll.y <= 0 then return nil end
   local row = metric_tree_row_at_y(cache.height_tree, cache.row_count,
     math.max(0, self.scroll.y - style.padding.y))
   local line, col = self:get_visual_row_line_col(row)
@@ -3589,11 +3607,19 @@ local function apply_viewport_anchor(view, cache)
   local anchor = view.__pending_viewport_anchor
   if not anchor then return end
   view.__pending_viewport_anchor = nil
+  if anchor.jump and current_line_scroll_anchor(view) ~= anchor.jump then return end
   local row = view:get_visual_row(anchor.line, anchor.col)
   row = common.clamp(row, 1, cache.row_count)
   local delta = metric_tree_sum(cache.height_tree, row - 1) - anchor.content_y
   view.scroll.y = math.max(0, view.scroll.y + delta)
   view.scroll.to.y = math.max(0, view.scroll.to.y + delta)
+  if anchor.jump then
+    anchor.jump.target_y = view.scroll.to.y
+    if delta ~= 0 then
+      core.log_quiet("Line jump kept at %s:%d after layout changed by %.1f",
+        view.buffer:get_name(), anchor.line, delta)
+    end
+  end
 end
 
 metric_tree_row_at_y = function(tree, row_count, y)
@@ -5597,6 +5623,12 @@ function TextView:scroll_to_line(line, ignore_if_visible, instant, opts)
       self.scroll.y = self.scroll.to.y
       self.scroll.move_data_y = nil
     end
+    local line1, col1, line2, col2 = self.buffer:get_selection()
+    self.__line_scroll_anchor = {
+      line = line, target_y = self.scroll.to.y,
+      revision = self.buffer.text_revision,
+      line1 = line1, col1 = col1, line2 = line2, col2 = col2,
+    }
   end
   self:notify_scroll_listeners("scroll_to_line")
 end
@@ -6198,6 +6230,7 @@ function TextView:update()
   -- scroll to make caret visible and reset blink timer if it moved
   phase_start = perf_active and system.get_time()
   local line1, col1, line2, col2 = self.buffer:get_selection()
+  local jump = current_line_scroll_anchor(self)
   local line_end = linewrapping.has_wrapped_line_end_affinity(self, line1, col1)
   local _, _, position_row = self:get_position_line_render_row(line1, col1)
   local selection_moved = line1 ~= self.last_line1 or col1 ~= self.last_col1 or
@@ -6213,7 +6246,8 @@ function TextView:update()
     end
     if core.active_view == self and not ime.editing then
       local scroll_start = perf_active and system.get_time()
-      self:scroll_to_make_visible(line1, col1, self.needs_initial_scroll_validation)
+      self:scroll_to_make_visible(line1, col1, self.needs_initial_scroll_validation,
+        jump and { vertical = false } or nil)
       perf_elapsed("textview_scroll_to_make_visible_ms", scroll_start)
       self.needs_initial_scroll_validation = nil
     end

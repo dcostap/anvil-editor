@@ -75,6 +75,47 @@ test.describe("Markdown heading navigation scrolling", function()
     core.active_view = context.old_active_view
   end)
 
+  for _, manual_scroll in ipairs({ false, true }) do
+    test.it(manual_scroll
+      and "preserves manual scrolling while Markdown finishes loading"
+      or "keeps a line jump centered when Markdown finishes loading", function(context)
+      config.transitions = true
+      local lines = {}
+      for line = 1, 900 do
+        lines[line] = line % 3 == 1 and "# Heading" or string.rep("Paragraph text. ", 30)
+      end
+      local name = manual_scroll and "markdown-jump-scroll.md" or "markdown-jump.md"
+      local buffer = Buffer(name, name, true)
+      buffer:insert(1, 1, table.concat(lines, "\n"))
+      local view = Editor(buffer)
+      context.view = view
+      view.size.x, view.size.y = 900, 500
+      view:set_wrapping_enabled(true)
+      core.set_active_view(view)
+      buffer:set_selection(639, 1)
+      view:scroll_to_line(639, false, false)
+      view:update()
+      local first_visible
+      if manual_scroll then
+        view:on_touch_moved(0, 0, 0, -view.size.y * 2, 1)
+        first_visible = view:get_visible_line_range()
+      end
+      refresh(view)
+      require("core.linewrapping").complete_async_reconstruction(view)
+      config.transitions = false
+      for _ = 1, 3 do view:update() end
+      if manual_scroll then
+        test.equal(view:get_visible_line_range(), first_visible)
+        return
+      end
+      local y = highlight_top(view, 639)
+      test.ok(y >= view.position.y and y < view.position.y + view.size.y,
+        string.format("jump caret left the viewport after Markdown loaded: %.1f", y))
+      test.ok(math.abs(y - (view.position.y + view.size.y / 2)) <= view:get_line_height(),
+        string.format("jump lost its centered position after Markdown loaded: %.1f", y))
+    end)
+  end
+
   test.it("keeps a rendered heading in the same navigation context as adjacent lines", function(context)
     local view, buffer = make_view()
     context.view = view
