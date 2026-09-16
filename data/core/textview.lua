@@ -4204,6 +4204,45 @@ function TextView:draw_fold_widget_body(fold, x, y, height)
 end
 
 
+---Resolve the y offset of a Buffer position inside the View content area.
+---Does not measure text, so geometry-only callers stay cheap.
+---@param line integer Line number
+---@param col? integer Optional column number
+---@param line_end? boolean Whether the position sits at the visual line end
+---@return number y Offset from the top of the content area
+function TextView:get_position_row_y_offset(line, col, line_end)
+  local row_y_offset = 0
+  if col then
+    local _, row = self:get_position_line_render_row(line, col)
+    row_y_offset = row and (row.y_offset or 0) or 0
+  end
+  local visual_row
+  if self.wrapped_settings then
+    if self:has_composed_visual_rows() then
+      visual_row = self:get_composed_visual_row_for_position(line, col, line_end)
+    else
+      visual_row = linewrapping.get_line_idx_col_count(self, line, col, line_end)
+    end
+  elseif self:has_composed_visual_rows() then
+    visual_row = self:get_composed_visual_row_for_position(line, col, line_end)
+  else
+    visual_row = line
+  end
+  return row_y_offset + self:get_visual_row_y_offset(visual_row) + style.padding.y
+end
+
+
+---Get the screen y of a Buffer position without measuring its text width.
+---@param line integer Line number
+---@param col? integer Optional column number
+---@param line_end? boolean Whether the position sits at the visual line end
+---@return number y Screen y coordinate
+function TextView:get_position_screen_y(line, col, line_end)
+  local _, y = self:get_content_offset()
+  return y + self:get_position_row_y_offset(line, col, line_end)
+end
+
+
 ---Get a Buffer position. Wrap boundaries default to the next row.
 ---Use get_caret_screen_position to follow the visible caret instead.
 ---@param line integer Line number
@@ -4211,30 +4250,9 @@ end
 ---@return number x Screen x coordinate
 ---@return number y Screen y coordinate
 function TextView:get_line_screen_position(line, col, line_end)
-  local function render_y_offset()
-    if not col then return 0 end
-    local _, row = self:get_position_line_render_row(line, col)
-    return row and (row.y_offset or 0) or 0
-  end
-  if self.wrapped_settings then
-    local idx
-    if self:has_composed_visual_rows() then
-      idx = self:get_composed_visual_row_for_position(line, col, line_end)
-    else
-      idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
-    end
-    local gw = self:get_gutter_width()
-    local dx = col and self:get_col_x_offset(line, col, line_end) or 0
-    local content_y = render_y_offset() + self:get_visual_row_y_offset(idx) + style.padding.y
-    local x, y = self:get_content_offset()
-    return x + gw + dx, y + content_y
-  end
-  local gw = self:get_gutter_width()
-  local row = self:has_composed_visual_rows() and self:get_composed_visual_row_for_position(line, col, line_end) or line
-  local dx = col and self:get_col_x_offset(line, col) or 0
-  local content_y = render_y_offset() + self:get_visual_row_y_offset(row) + style.padding.y
+  local dx = col and self:get_col_x_offset(line, col, line_end) or 0
   local x, y = self:get_content_offset()
-  return x + gw + dx, y + content_y
+  return x + self:get_gutter_width() + dx, y + self:get_position_row_y_offset(line, col, line_end)
 end
 
 
@@ -5022,7 +5040,7 @@ function TextView:get_position_highlight_geometry(line, col, line_end)
     return line_y + (row.highlight_y_offset or row.y_offset or 0),
       math.max(1, row.highlight_height or row.height or self:get_line_height())
   end
-  local _, y = self:get_line_screen_position(line, col, line_end)
+  local y = self:get_position_screen_y(line, col, line_end)
   local row_height = self:get_position_visual_row_height(
     line, col or 1, line_end
   )
