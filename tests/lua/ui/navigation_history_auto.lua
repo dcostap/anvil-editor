@@ -5,6 +5,7 @@ local Editor = require "core.editor"
 local navigation_history = require "core.navigation_history"
 local panes = require "core.panes"
 require "core.poi"
+require "plugins.intellij_actions"
 local test = require "core.test"
 
 local function make_editor()
@@ -113,6 +114,30 @@ test.describe("automatic Editor Navigation History", function()
     panes.forward(pane)
     test.equal(view:get_selection_state().selections[1], 10)
     test.equal(view.scroll.to.y, 60)
+  end)
+
+  test.it("treats paragraph movement as ordinary cursor movement", function()
+    local pane = panes.create { factory = function()
+      local view = make_editor()
+      view.buffer.lines = {
+        "first\n", "\n", "second\n", "\n", "third\n", "\n",
+        "fourth\n", "\n", "fifth\n", "\n", "sixth\n",
+      }
+      return view
+    end }
+    local view = pane.current_view
+    core.active_view = view
+
+    for _ = 1, 3 do
+      test.ok(command.perform("editor:move_caret_next_paragraph"))
+    end
+    test.equal(view:get_selection_state().selections[1], 6)
+    test.equal(panes.history_length(pane), 1)
+
+    navigation_history.update(view, 100, true)
+    test.equal(panes.history_length(pane), 1)
+    navigation_history.update(view, 104, true)
+    test.equal(panes.history_length(pane), 2)
   end)
 
   test.it("animates scroll when history stays in the same View", function()

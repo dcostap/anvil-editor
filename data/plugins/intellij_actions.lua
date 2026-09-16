@@ -11,7 +11,6 @@ local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local file_context = require "core.file_context"
 local markdown_selection = require "core.markdown.selection"
-local panes = require "core.panes"
 
 local function can_edit(dv, reason)
   return not (dv and dv.can_edit) or dv:can_edit(reason, { warn = true })
@@ -459,10 +458,6 @@ local function open_terminal_at_active_file(dv)
   end
 end
 
-local function record_navigation_place(reason)
-  panes.record_location()
-end
-
 local selection_debug_log = USERDIR .. PATHSEP .. "selection-expansion-debug.log"
 
 local function selection_debug_write(message)
@@ -885,7 +880,6 @@ local function move_caret_paragraph(dv, direction)
     end
   end
 
-  if target_line ~= line or target_col ~= col then record_navigation_place("paragraph") end
   buffer:set_selection(target_line, target_col, target_line, target_col)
   dv:scroll_to_make_visible(target_line, target_col)
 end
