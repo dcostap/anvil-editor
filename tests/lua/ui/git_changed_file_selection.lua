@@ -6,7 +6,7 @@ local test = require "core.test"
 local git_view = require "plugins.git_view"
 local backend = require "plugins.git.backend"
 
-local function open_details(files)
+local function open_details(files, collapsed)
   local _, view = git_view.open_log({ path = "C:/changed-file-selection" }, {
     git_view_opts = { defer_refresh = true },
   })
@@ -18,6 +18,7 @@ local function open_details(files)
   local commit = {
     hash = "newest", parents = { "parent" }, subject = "Changed files", author_name = "Anvil Test",
     body = "A message that must not be selected in row mode.", changed_files_loaded = true,
+    details_tree_collapsed = collapsed,
     changed_files = files or {
       { status = "modified", old_path = "alpha/a.txt", new_path = "alpha/a.txt" },
       { status = "modified", old_path = "beta/b.txt", new_path = "beta/b.txt" },
@@ -157,6 +158,42 @@ test.describe("Git Log changed-file row selection", function()
     command.perform("git:toggle_row_selection_mode")
     test.same(selected_paths(details), { "alpha/a.txt" })
     test.equal(view:pane_view("log-list").row_selection_mode, true)
+  end)
+
+  test.it("keeps the viewport still when a folder row is clicked", function()
+    local files = {}
+    for index = 1, 8 do
+      local path = string.format("alpha/a-%02d.txt", index)
+      files[#files + 1] = { status = "modified", old_path = path, new_path = path }
+    end
+    for index = 1, 30 do
+      local path = string.format("beta/b-%02d.txt", index)
+      files[#files + 1] = { status = "modified", old_path = path, new_path = path }
+    end
+    for index = 1, 30 do
+      local path = string.format("gamma/g-%02d.txt", index)
+      files[#files + 1] = { status = "modified", old_path = path, new_path = path }
+    end
+    local view, details = open_details(files, { beta = true })
+    local offset = details.path_tree_line_offset
+    details:select_row(offset + details.path_tree:line_for_path("gamma/g-05.txt", "file"))
+    details:update()
+    details:update()
+    local scroll_before = details.scroll.to.y
+    local folder_line = offset + details.path_tree:line_for_path("beta", "dir")
+    local x, y = details:get_line_screen_position(folder_line)
+    test.ok(y >= 0 and y < details.size.y, "the clicked folder must be visible")
+    view:on_mouse_pressed("left", x + 10, y + 1, 1)
+    view:on_mouse_released("left", x + 10, y + 1)
+    test.equal(details.path_tree:is_expanded("beta"), true)
+    for _ = 1, 4 do details:update() end
+    test.equal(details.scroll.to.y, scroll_before)
+    test.equal(details.scroll.y, scroll_before)
+    -- The selected file moved below the viewport. The viewport must not follow
+    -- it, so the click cannot replay a caret scroll.
+    local selected_line = offset + details.path_tree:line_for_path("gamma/g-05.txt", "file")
+    local _, selected_y = details:get_line_screen_position(selected_line)
+    test.ok(selected_y >= details.size.y, "the selected file must be outside the viewport")
   end)
 
   test.it("opens the selected file after navigating across a folder row", function()

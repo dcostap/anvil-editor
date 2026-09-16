@@ -638,8 +638,21 @@ function PathTreeView:toggle_path_tree_folder(line)
   local new_line = self.path_tree:line_for_path(row.path, "dir")
   if new_line then
     new_line = new_line + self.path_tree_line_offset
-    if not self.row_selection_mode then self.buffer:set_selection(new_line, 1, new_line, 1) end
-    self:scroll_to_make_visible(new_line, 1, true)
+    if self.row_selection_mode then
+      -- Row selection keeps its selected files. A clicked folder row is already
+      -- visible, so the toggle must not move the viewport. Without this step the
+      -- restored selection line replays the caret scroll on the next update.
+      local line1, col1, line2, col2 = self.buffer:get_selection()
+      self.last_line1, self.last_col1, self.last_line2, self.last_col2 = line1, col1, line2, col2
+      local _, line_y = self:get_line_screen_position(new_line, 1)
+      local line_height = self:get_line_height()
+      if line_y < self.position.y or line_y + line_height > self.position.y + self.size.y then
+        self:scroll_to_make_visible(new_line, 1, true)
+      end
+    else
+      self.buffer:set_selection(new_line, 1, new_line, 1)
+      self:scroll_to_make_visible(new_line, 1, true)
+    end
   end
   return true
 end
