@@ -96,6 +96,20 @@ test.describe("Markdown semantic model", function()
     test.equal(pcall(function() published_result:summary() end), false)
   end)
 
+  test.it("dispatches edits immediately after a fast publication", function()
+    local buffer = make_buffer("# Heading\n\nBody\n")
+    local instance = markdown_model.get(buffer)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.ok(instance.diagnostics.last_total_ms <= 8)
+    local requests = instance.diagnostics.requests
+
+    buffer:insert(3, 5, " text")
+
+    test.equal(instance.status, "pending")
+    test.equal(instance.diagnostics.requests, requests + 1)
+    markdown_model.close(buffer, "test")
+  end)
+
   test.it("drops stale inline captures when an edited construct becomes plain source", function()
     local buffer = make_buffer("Text with **bold**.\n")
     local instance = markdown_model.get(buffer)
@@ -250,6 +264,7 @@ test.describe("Markdown semantic model", function()
     local buffer = make_buffer("# Before\n")
     local instance = markdown_model.get(buffer)
     test.ok(wait_status(instance, "ready"), instance.reason)
+    instance.diagnostics.last_total_ms = math.huge
     buffer:insert(2, 1, "change\n")
     local requests = instance.diagnostics.requests
     test.equal(instance.status, "pending")
@@ -294,6 +309,7 @@ test.describe("Markdown semantic model", function()
     local buffer = make_buffer("# Heading\n", "note.md")
     local instance = markdown_model.get(buffer)
     test.ok(wait_status(instance, "ready"), instance.reason)
+    instance.diagnostics.last_total_ms = math.huge
     local requests = instance.diagnostics.requests
 
     buffer:insert(1, #buffer.lines[1], " changed")
@@ -310,6 +326,7 @@ test.describe("Markdown semantic model", function()
     local buffer = make_buffer("first\nsecond\nthird\nfourth\n")
     local instance = markdown_model.get(buffer)
     test.ok(wait_status(instance, "ready"), instance.reason)
+    instance.diagnostics.last_total_ms = math.huge
 
     buffer:insert(2, 1, "changed ")
     test.equal(instance.status, "pending")
@@ -338,6 +355,7 @@ test.describe("Markdown semantic model", function()
     local buffer = make_buffer("one\ntwo\nthree\n")
     local instance = markdown_model.get(buffer)
     test.ok(wait_status(instance, "ready"), instance.reason)
+    instance.diagnostics.last_total_ms = math.huge
 
     buffer:insert(2, 1, "inserted\n")
     test.ok(instance:submit("active-structural-test"))

@@ -11,6 +11,7 @@ Model.__index = Model
 local models_by_buffer = setmetatable({}, { __mode = "k" })
 local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
 local DEBOUNCE_SECONDS = 0.015
+local FAST_PUBLICATION_MS = 8
 local METADATA_LISTENER_ID = "markdown-semantic-model"
 
 local function active_perf()
@@ -415,6 +416,13 @@ function Model:schedule(reason, transaction)
   if serial > 1 then self.diagnostics.coalesced = self.diagnostics.coalesced + 1 end
   self.status = "pending"
   self.reason = reason or "change"
+  if self.result and self.diagnostics.last_total_ms <= FAST_PUBLICATION_MS then
+    core.log_quiet(
+      "Markdown model dispatched revision %d immediately after %.3fms publication",
+      self:buffer().text_revision, self.diagnostics.last_total_ms
+    )
+    return self:submit(reason)
+  end
   core.add_thread(function()
     coroutine.yield(DEBOUNCE_SECONDS)
     if self.debounce_serial ~= serial then return end
