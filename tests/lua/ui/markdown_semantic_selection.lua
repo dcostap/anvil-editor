@@ -155,6 +155,27 @@ test.describe("Markdown semantic selection", function()
     test.equal(selected_text(buffer), "```java\nint value = 1;\nreturn value;\n```")
   end)
 
+  for _, marker in ipairs({ "`", "``" }) do
+    test.it("expands inline code before its paragraph with " .. #marker .. " backticks", function(context)
+      local code = marker .. "some code" .. marker
+      local paragraph = "Run " .. code .. " now."
+      local _, buffer = open_markdown(context, paragraph .. "\n")
+      buffer:set_selection(1, 5 + #marker + 2)
+
+      perform("editor:expand_selection_block")
+      test.equal(selected_text(buffer), "some code")
+      perform("editor:expand_selection_block")
+      test.equal(selected_text(buffer), code)
+      perform("editor:expand_selection_block")
+      test.equal(selected_text(buffer), paragraph)
+
+      perform("editor:shrink_selection_smart")
+      test.equal(selected_text(buffer), code)
+      perform("editor:shrink_selection_smart")
+      test.equal(selected_text(buffer), "some code")
+    end)
+  end
+
   test.it("selects link text before the complete Markdown link", function(context)
     local _, buffer = open_markdown(context, "Read [the guide](guide.md) today.\n")
     buffer:set_selection(1, 9)

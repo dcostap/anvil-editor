@@ -292,8 +292,9 @@ local function candidates_for(buffer, line1, col1, line2, col2, blocks_only)
       and not is_redundant_strong_emphasis(node, nodes, starts, text)
     then
       local inline = INLINE_TYPES[node.type] == true
-      if not blocks_only and inline then add_inline_content(candidates, seen, node, starts) end
-      if not blocks_only or not inline then
+      local include_inline = not blocks_only or node.type == "code"
+      if include_inline and inline then add_inline_content(candidates, seen, node, starts) end
+      if include_inline or not inline then
         if inline then
           add_range(candidates, seen, node.source, starts, node.type)
         else
