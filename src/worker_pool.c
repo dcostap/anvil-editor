@@ -6,6 +6,7 @@
 #include "markdown_vault_index.h"
 #include "markdown_parser.h"
 #include "markdown_extensions.h"
+#include "language_detector.h"
 #include "treesitter/languages.h"
 #include "treesitter/query_cache.h"
 #include "treesitter/project_index.h"
@@ -1128,6 +1129,54 @@ static void run_test_fail(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
   AnvilWorkerResult *result = result_new(job, "error");
   if (result) result->error = pool_strdup(job->value ? job->value : "native worker test failure");
   enqueue_result(pool, result);
+}
+
+static void run_language_detect(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
+  AnvilLanguageDetection detection;
+  char *error = NULL;
+  if (!job->path || !job->text
+      || !anvil_language_detect(job->path, job->text, job->text_len, &detection, &error)) {
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    AnvilWorkerResult *result = result_new(job, "error");
+    if (result) result->error = error ? error : pool_strdup("native language detection failed");
+    else SDL_free(error);
+    enqueue_result(pool, result);
+    return;
+  }
+  if (job_cancelled(job)) {
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
+    enqueue_simple_result(pool, job, "cancelled");
+    return;
+  }
+
+  char scores[2048];
+  size_t used = 0;
+  for (size_t i = 0; i < ANVIL_LANGUAGE_DETECTOR_CLASS_COUNT; i++) {
+    int written = snprintf(
+      scores + used, sizeof(scores) - used, "%s %.9g\n",
+      anvil_language_detector_slug(i), detection.probabilities[i]
+    );
+    if (written < 0 || (size_t)written >= sizeof(scores) - used) {
+      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+      AnvilWorkerResult *result = result_new(job, "error");
+      if (result) result->error = pool_strdup("native language detection result is too large");
+      enqueue_result(pool, result);
+      return;
+    }
+    used += (size_t)written;
+  }
+  AnvilWorkerResult *result = result_new(job, "result");
+  if (!result || !(result->value = pool_textdup(scores, used))) {
+    anvil_worker_result_free(result);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    AnvilWorkerResult *failed = result_new(job, "error");
+    if (failed) failed->error = pool_strdup("out of memory publishing language detection");
+    enqueue_result(pool, failed);
+    return;
+  }
+  enqueue_result(pool, result);
+  SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
+  enqueue_simple_result(pool, job, "final");
 }
 
 typedef struct AnvilWorkerTSParseRun {
@@ -3786,6 +3835,8 @@ static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
     run_test_count(pool, job);
   } else if (strcmp(kind, "test_fail") == 0) {
     run_test_fail(pool, job);
+  } else if (strcmp(kind, "language_detect") == 0) {
+    run_language_detect(pool, job);
   } else if (strcmp(kind, "treesitter_index_text") == 0) {
     run_treesitter_index_text(context, job);
   } else if (strcmp(kind, "treesitter_project_run") == 0) {

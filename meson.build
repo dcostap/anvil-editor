@@ -420,6 +420,7 @@ endif
 install_data('licenses/licenses.md', 'licenses/tree-sitter.md', install_dir : anvil_docdir)
 
 install_subdir('data/core' , install_dir : anvil_datadir, exclude_files : 'start.lua')
+install_subdir('data/models', install_dir : anvil_datadir)
 install_subdir('resources/icons' , install_dir : anvil_datadir)
 
 fs = import('fs')

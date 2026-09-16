@@ -2521,6 +2521,7 @@ function Buffer:on_text_transaction(transaction)
       core.log_quiet("Buffer text transaction handler %s failed for %s: %s", tostring(id), self:get_name(), tostring(err))
     end
   end
+  language_mode.on_text_transaction(self, transaction)
 end
 
 -- For plugins to add custom actions of buffer change
@@ -2529,6 +2530,7 @@ end
 
 -- For plugins to get notified when a buffer is closed
 function Buffer:on_close()
+  language_mode.cancel_content_detection(self)
   self:notify_metadata_listeners({
     kind = "close",
     reason = "buffer-close",

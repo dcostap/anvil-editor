@@ -3,7 +3,6 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local keymap = require "core.keymap"
-local language_mode = require "core.language_mode"
 local linewrapping = require "core.linewrapping"
 local intelligence = require "core.language_intelligence"
 local navigation_history = require "core.navigation_history"
@@ -1127,18 +1126,6 @@ local function paste_matching_whole_lines(buffer, text_by_idx)
   return paste_whole_lines_by_selection(buffer, function(idx) return text_by_idx[idx] end)
 end
 
-local function finish_text_paste(buffer, infer_language, transaction)
-  if not (infer_language and transaction and transaction.changed) then return transaction end
-  local changed = language_mode.infer_from_content(buffer)
-  if changed then
-    local ok, recovery = pcall(require, "plugins.untitled_recovery")
-    if ok and recovery.update_buffer_metadata then
-      recovery.update_buffer_metadata(buffer, "Language Mode inference")
-    end
-  end
-  return transaction
-end
-
 local function previous_indent_stop_start_col(buffer, line, col, indent_size)
   if col <= 1 then return nil end
   indent_size = math.max(1, tonumber(indent_size) or 1)
@@ -1258,7 +1245,6 @@ local commands = {
     if not clipboard or clipboard == "" then
     	return
     end
-    local infer_language = language_mode.can_infer_complete_paste(dv.buffer)
     local transaction
     -- If the clipboard has changed since our last look, use that instead
     if core.cursor_clipboard["full"] ~= clipboard then
@@ -1297,7 +1283,7 @@ local commands = {
         end
       end
     end
-    return finish_text_paste(dv.buffer, infer_language, transaction)
+    return transaction
   end,
 
   ["core:paste_primary_selection"] = function(dv, x, y)
@@ -1307,12 +1293,11 @@ local commands = {
       -- Workaround to avoid that a middle mouse drag starts selecting
       dv.mouse_selecting = nil
     end
-    local infer_language = language_mode.can_infer_complete_paste(dv.buffer)
     local text = tostring(system.get_primary_selection() or ""):gsub("\r", "")
     local transaction = dv.buffer:text_input_by_selection(function(_, line1, col1)
       return smart_paste_text(dv.buffer, line1, col1, text)
     end, nil, { type = "insert" })
-    return finish_text_paste(dv.buffer, infer_language, transaction)
+    return transaction
   end,
 
   ["core:newline"] = function(dv)

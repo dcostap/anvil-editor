@@ -23,6 +23,7 @@ anvil_sources = [
     'markdown_extensions.c',
     'project_file_manifest.c',
     'markdown_vault_index.c',
+    'language_detector.c',
     'treesitter/languages.c',
     'treesitter/project_file.c',
     'treesitter/project_index.c',
@@ -291,6 +292,7 @@ worker_pool_test = executable('worker_pool_test',
         'markdown_vault_index.c',
         'markdown_parser.c',
         'markdown_extensions.c',
+        'language_detector.c',
         'treesitter/languages.c',
         'treesitter/project_file.c',
         'treesitter/project_index.c',
@@ -304,6 +306,20 @@ worker_pool_test = executable('worker_pool_test',
     c_args: anvil_cargs,
 )
 test('worker_pool', worker_pool_test, env: anvil_test_env)
+
+language_detector_test = executable('language_detector_test',
+    [
+        '../tests/native/language_detector_test.c',
+        'language_detector.c',
+    ],
+    include_directories: anvil_includes,
+    dependencies: [sdl_dep, libm],
+)
+
+test('language_detector', language_detector_test,
+    args: files('../data/models/betlang-source-student-q4.bin'),
+    env: anvil_test_env,
+)
 
 treesitter_test = executable('treesitter_test',
     [

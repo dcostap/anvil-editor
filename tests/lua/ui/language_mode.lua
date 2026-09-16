@@ -4,9 +4,9 @@ local core = require "core"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local language_mode = require "core.language_mode"
-local syntax = require "core.syntax"
 local test = require "core.test"
 local untitled = require "plugins.untitled_tabs"
+local worker_pool = require "core.worker_pool"
 
 require "core.commands.language"
 
@@ -52,6 +52,17 @@ test.describe("Language Mode", function()
     core.cursor_clipboard = { full = "different" }
     core.cursor_clipboard_whole_line = {}
     return command.perform("core:paste")
+  end
+
+  local function wait_for_language(buffer, name)
+    local deadline = system.get_time() + 2
+    repeat
+      local pool = worker_pool.current_system()
+      if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+      if buffer.syntax.name == name then return true end
+      coroutine.yield(0.01)
+    until system.get_time() >= deadline
+    return buffer.syntax.name == name
   end
 
   test.it("overrides filename detection until Automatic is selected", function()
@@ -152,26 +163,30 @@ test.describe("Language Mode", function()
 
   test.it("infers JSON from a complete Untitled Buffer paste", function(context)
     local buffer = new_untitled_editor(context)
-    test.ok(language_mode.can_infer_complete_paste(buffer))
-
     test.ok(paste('{"name":"Anvil","enabled":true}'))
-
-    local detected, confidence = syntax.detect_content(buffer:get_text(1, 1, math.huge, math.huge))
-    test.equal(detected and detected.name, "JSON")
-    test.equal(confidence, 1)
+    test.ok(wait_for_language(buffer, "JSON"), "pasted JSON stayed " .. buffer.syntax.name)
     test.equal(buffer.language_mode_inferred, "JSON")
     test.equal(buffer.syntax.name, "JSON")
   end)
 
-  test.it("does not infer a Language Mode from typing or a partial paste", function(context)
+  test.it("detects the Language Mode while an Untitled Buffer is edited", function(context)
     local buffer, editor = new_untitled_editor(context)
-    editor:on_text_input('{"typed":true}')
-    test.equal(buffer.syntax.name, "Plain Text")
+    editor:on_text_input('fn main() { println!("hello from Anvil"); }')
+    test.ok(wait_for_language(buffer, "Rust"), "typed Rust stayed " .. buffer.syntax.name)
 
-    buffer:set_selection(1, 2)
-    test.ok(paste('{"pasted":true}'))
+    test.ok(command.perform("core:select_all"))
+    test.ok(paste('def greet(name):\n    print(f"hello {name}")\n\ngreet("Anvil")'))
+    test.ok(wait_for_language(buffer, "Python"), "pasted Python stayed " .. buffer.syntax.name)
+  end)
 
-    test.is_nil(buffer.language_mode_inferred)
+  test.it("does not replace an explicit Language Mode while editing", function(context)
+    local buffer, editor = new_untitled_editor(context)
+    buffer:set_language_mode("Plain Text")
+    editor:on_text_input('fn main() { println!("explicit plain text"); }')
+    coroutine.yield(0.5)
+    local pool = worker_pool.current_system()
+    if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+    test.equal(buffer.language_mode_override, "Plain Text")
     test.equal(buffer.syntax.name, "Plain Text")
   end)
 
@@ -190,23 +205,25 @@ test.describe("Language Mode", function()
 
   test.it("redetects after a paste replaces the complete Untitled Buffer", function(context)
     local buffer = new_untitled_editor(context)
-    test.ok(paste('{"kind":"json"}'))
-    test.equal(buffer.syntax.name, "JSON")
+    test.ok(paste('{"kind":"json","editor":"Anvil"}'))
+    test.ok(wait_for_language(buffer, "JSON"))
 
     test.ok(command.perform("core:select_all"))
     test.ok(paste('<?xml version="1.0"?><root/>'))
+    test.ok(wait_for_language(buffer, "XML"))
     test.equal(buffer.language_mode_inferred, "XML")
     test.equal(buffer.syntax.name, "XML")
 
     test.ok(command.perform("core:select_all"))
-    test.ok(paste("ordinary prose"))
-    test.is_nil(buffer.language_mode_inferred)
-    test.equal(buffer.syntax.name, "Plain Text")
+    test.ok(paste('package main\n\nimport "fmt"\n\nfunc main() { fmt.Println("hello") }'))
+    test.ok(wait_for_language(buffer, "Go"))
+    test.equal(buffer.language_mode_inferred, "Go")
   end)
 
   test.it("keeps inferred and explicit Language Modes sticky", function(context)
     local buffer = new_untitled_editor(context)
-    test.ok(paste('{"kind":"json"}'))
+    test.ok(paste('{"kind":"json","editor":"Anvil"}'))
+    test.ok(wait_for_language(buffer, "JSON"))
     buffer:insert(1, 1, "not json ")
     test.equal(buffer.syntax.name, "JSON")
 

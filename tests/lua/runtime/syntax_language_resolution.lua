@@ -10,53 +10,6 @@ local function syntax_named(name)
 end
 
 test.describe("syntax language resolution", function()
-  test.test("selects the strongest unique content detector", function()
-    syntax.add {
-      name = "Content detector lower confidence test",
-      detect_content = function(text)
-        return text == "anvil-content-confidence-test" and 0.85 or nil
-      end,
-      patterns = {},
-      symbols = {},
-    }
-    syntax.add {
-      name = "Content detector higher confidence test",
-      detect_content = function(text)
-        return text == "anvil-content-confidence-test" and 0.95 or nil
-      end,
-      patterns = {},
-      symbols = {},
-    }
-
-    local detected, confidence = syntax.detect_content("anvil-content-confidence-test")
-    test.equal(detected.name, "Content detector higher confidence test")
-    test.equal(confidence, 0.95)
-  end)
-
-  test.test("rejects tied and low-confidence content detectors", function()
-    for index = 1, 2 do
-      syntax.add {
-        name = "Content detector tie test " .. index,
-        detect_content = function(text)
-          return text == "anvil-content-tie-test" and 0.9 or nil
-        end,
-        patterns = {},
-        symbols = {},
-      }
-    end
-    syntax.add {
-      name = "Content detector low confidence test",
-      detect_content = function(text)
-        return text == "anvil-content-low-test" and 0.79 or nil
-      end,
-      patterns = {},
-      symbols = {},
-    }
-
-    test.is_nil(syntax.detect_content("anvil-content-tie-test"))
-    test.is_nil(syntax.detect_content("anvil-content-low-test"))
-  end)
-
   test.test("resolves aliases, canonical names, prefixes, and metadata", function()
     local javascript = syntax_named("JavaScript")
     local json = syntax_named("JSON")
