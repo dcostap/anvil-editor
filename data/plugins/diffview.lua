@@ -2482,7 +2482,7 @@ end
 
 local function open_diff_source_at_caret()
   local _, side_view, _, content = active_diff_side()
-  if not content or (content.kind ~= "file" and content.kind ~= "buffer" and content.kind ~= "fragment") then
+  if not content then
     diff_status("This Diff Side has no current file")
     return false
   end
