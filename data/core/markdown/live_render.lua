@@ -3799,6 +3799,10 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
     local col2 = fragment.source_col2 or col1
     fragment.source_col1 = col1 + delta
     fragment.source_col2 = col2 + delta
+    -- Wrapping and drawing use the label range, not only the full link range.
+    -- Move both ranges together while the parser processes the edit.
+    if fragment.text_source_col1 then fragment.text_source_col1 = fragment.text_source_col1 + delta end
+    if fragment.text_source_col2 then fragment.text_source_col2 = fragment.text_source_col2 + delta end
   end
   current_text = current_text:sub(1, start_col - 1)
     .. replacement .. current_text:sub(end_col)
