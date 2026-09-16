@@ -65,7 +65,27 @@ function pending_render.current_source(
         fragment.color = style.markdown_live_link
         fragment.underline = true
       end
-      fragments[#fragments + 1] = fragment
+      local revealed = content and not span.link and reveal_source_range
+        and reveal_source_range(span.col1, span.col2, true)
+      if revealed then
+        local function append_marker(col1, col2)
+          if col1 >= col2 then return end
+          fragments[#fragments + 1] = {
+            source_col1 = col1,
+            source_col2 = col2,
+            text = text:sub(col1 - base_col + 1, col2 - base_col),
+            color = style.markdown_live_hidden_syntax,
+          }
+        end
+        append_marker(span.col1, content.col1)
+        fragment.source_col1, fragment.source_col2 = content.col1, content.col2
+        fragment.text = text:sub(content.col1 - base_col + 1, content.col2 - base_col)
+        fragment.hidden = nil
+        fragments[#fragments + 1] = fragment
+        append_marker(content.col2, span.col2)
+      else
+        fragments[#fragments + 1] = fragment
+      end
     end
     return fragments
   end

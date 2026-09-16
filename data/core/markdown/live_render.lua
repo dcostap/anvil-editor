@@ -4087,7 +4087,7 @@ end
 local pending_fenced_code_render
 local current_provisional_topology
 
-local function selection_reveals_pending_range(view, line, range_col1, range_col2)
+local function selection_reveals_pending_range(view, line, range_col1, range_col2, inclusive_right_edge)
   local state = current_selection_state(view)
   for index = 1, #(state and state.selections or {}), 4 do
     local line1, col1 = state.selections[index], state.selections[index + 1]
@@ -4097,7 +4097,9 @@ local function selection_reveals_pending_range(view, line, range_col1, range_col
         line1, col1, line2, col2 = line2, col2, line1, col1
       end
       if line1 == line2 and col1 == col2 then
-        if line == line1 and col1 >= range_col1 and col1 < range_col2 then
+        if line == line1 and (config.markdown_live_reveal_mode == "line"
+          or col1 >= range_col1 and (col1 < range_col2
+            or inclusive_right_edge and col1 == range_col2)) then
           return true
         end
       elseif line >= line1 and line <= line2 then
@@ -4141,8 +4143,8 @@ local function pending_source_render(view, line, render_line, current_text, code
     reveal_code_delimiter,
     pending_fenced_code_render, pending_list_marker_render,
     selection_reveals_pending_range(view, line, 1, #current_text + 1),
-    function(col1, col2)
-      return selection_reveals_pending_range(view, line, col1, col2)
+    function(col1, col2, inclusive_right_edge)
+      return selection_reveals_pending_range(view, line, col1, col2, inclusive_right_edge)
     end
   )
   local heading = not code and heading_for_line(current_text, line)
@@ -7237,6 +7239,21 @@ local function invalidate_selection_lines(view, new_state, old_state)
     end
   end
   for line in pairs(reveal_candidates) do
+    -- Pending prose is a saved presentation, not just a text cache. Its
+    -- delimiter visibility must follow selection changes before parsing ends.
+    -- Keep asset and table presentations on their own projection paths.
+    local pending = not current_semantic_model(view) and pending_render(view, line)
+    if pending and not pending.render_line.table_row
+      and not pending_visual_projection.contains_retainable_presentation(pending.render_line)
+    then
+      local render = current_source_render(
+        view, line, pending.render_line, pending.source_text, false
+      )
+      metric_records.store(view.__markdown_live_owner, line,
+        pending_entry(view, render, pending.source_text, nil, render.markdown_pending_provenance)
+      )
+      lines[line] = true
+    end
     if not same_reveal_units(
       state_reveal_units(1, line), state_reveal_units(2, line)
     ) then
