@@ -1933,6 +1933,17 @@ function M.validate()
     end
   end
   for _, pane in pairs(M.panes_by_id) do assert(seen_panes[pane], "registered Pane is missing from layout") end
+  local stale_focus_targets = {}
+  for child, owner in pairs(M.focus_owners) do
+    if child ~= owner and (not seen_owned_views[owner]
+        or owner.__pane_owner ~= seen_owned_views[owner]) then
+      stale_focus_targets[#stale_focus_targets + 1] = child
+    end
+  end
+  for _, child in ipairs(stale_focus_targets) do M.focus_owners[child] = nil end
+  if #stale_focus_targets > 0 then
+    quiet("Pane manager: removed %d stale focus target(s)", #stale_focus_targets)
+  end
   for child, owner in pairs(M.focus_owners) do
     assert(child ~= owner, "focus target cannot own itself")
     assert(seen_owned_views[owner], "focus target owner is not retained by a Pane")

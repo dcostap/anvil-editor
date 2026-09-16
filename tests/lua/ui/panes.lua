@@ -510,6 +510,18 @@ test.describe("Pane manager", function()
     test.ok(panes.validate())
   end)
 
+  test.it("drops focus targets whose owners were never placed", function()
+    local pane = panes.create { factory = factory("one") }
+    local owner = FakeView("unplaced owner")
+    local child = FakeView("child")
+    panes.register_focus_target(owner, child)
+
+    pane.current_view.place = 1
+    test.ok(panes.record_location(pane))
+    test.is_nil(panes.pane_for_view(child))
+    test.ok(panes.contains(pane))
+  end)
+
   test.it("moves the current contiguous View history region", function()
     local moved = FakeView("A")
     moved.copy_name = "A copy"

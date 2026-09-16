@@ -101,6 +101,17 @@ test.describe("TextView Prompt Bar find", function()
     assert_selection(view, 1, 1, 1, 6)
   end)
 
+  test.it("keeps local find focus ownership valid when opening another View", function(context)
+    local view = open_editor(context, "first\n")
+    test.ok(command.perform("editor:find"))
+    active_find_input_for(view)
+
+    local buffer = track(context, "buffers", core.open_buffer())
+    local opened = core.root_panel:open_buffer(buffer, { placement = "current" })
+    test.equal(opened.buffer, buffer)
+    test.ok(panes.validate())
+  end)
+
   test.it("finds new matches after edits that do not record undo", function(context)
     local view, buffer = open_editor(context, "hit\nmiss\nhit")
     test.ok(command.perform("editor:find"))

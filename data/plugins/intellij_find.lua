@@ -222,7 +222,7 @@ local function focus_field(view, state, field_name)
   state.focus = field_name or state.focus or "find"
   local field = state.focus == "replace" and state.replace or state.find
   field.local_find_owner = view
-  panes.register_focus_target(view, field)
+  if panes.pane_for_view(view) then panes.register_focus_target(view, field) end
   core.set_active_view(field)
   core.blink_reset()
   core.redraw = true
