@@ -267,6 +267,83 @@ local function is_redundant_strong_emphasis(node, nodes, starts, text)
   return false
 end
 
+local PAIR_CONTAINERS = {
+  paragraph = true, heading = true, table_cell = true,
+  code = true, code_fenced = true, code_indented = true,
+}
+
+local LINK_TYPES = {
+  link = true, image = true, wiki_link = true, embed = true,
+}
+
+local function add_pairs(candidates, seen, text, nodes, starts)
+  local opens = { ["("] = ")", ["["] = "]", ["{"] = "}" }
+  local closes = { [")"] = true, ["]"] = true, ["}"] = true }
+  local links, code = {}, {}
+  for _, node in ipairs(nodes) do
+    if node.source and (LINK_TYPES[node.type] or node.type == "code") then
+      local first, last = range_offsets(node.source, starts)
+      local ranges = LINK_TYPES[node.type] and links or code
+      ranges[#ranges + 1] = { first, last, node = node }
+    end
+  end
+
+  local function is_link_marker(first, last)
+    for _, link in ipairs(links) do
+      if first >= link[1] and last <= link[2] then
+        -- Keep Markdown link syntax whole. Nested pairs in its text remain scopes.
+        for _, range in ipairs(link.node.content_ranges or {}) do
+          local a, b = range_offsets(range, starts)
+          if first >= a and last <= b and a > link[1] and b < link[2] then
+            return false
+          end
+        end
+        return true
+      end
+    end
+    return false
+  end
+
+  for _, node in ipairs(nodes) do
+    if node.source and PAIR_CONTAINERS[node.type] then
+      local first, last = range_offsets(node.source, starts)
+      local stack = {}
+      local pos = first
+      while pos < last do
+        local skip_to
+        if node.type ~= "code" then
+          for _, range in ipairs(code) do
+            if pos == range[1] then skip_to = range[2]; break end
+          end
+        end
+        local ch = text:sub(pos + 1, pos + 1)
+        if skip_to then
+          pos = skip_to
+        elseif ch == "\\" then
+          pos = pos + 2
+        else
+          if opens[ch] then
+            stack[#stack + 1] = { close = opens[ch], offset = pos }
+          elseif closes[ch] then
+            local opening = stack[#stack]
+            if opening and opening.close == ch then
+              stack[#stack] = nil
+              if not is_link_marker(opening.offset, pos + 1) then
+                add_candidate(candidates, seen, opening.offset + 1, pos, "pair_content")
+                add_candidate(candidates, seen, opening.offset, pos + 1, "pair")
+              end
+            else
+              -- A crossed or unmatched closer cannot complete an enclosing pair.
+              stack = {}
+            end
+          end
+          pos = pos + 1
+        end
+      end
+    end
+  end
+end
+
 local function candidates_for(buffer, line1, col1, line2, col2, blocks_only)
   local instance = markdown_model.peek(buffer)
   if not instance or instance.status ~= "ready"
@@ -285,6 +362,8 @@ local function candidates_for(buffer, line1, col1, line2, col2, blocks_only)
   local candidates, seen = {}, {}
 
   if not blocks_only and start_offset == end_offset then add_word(candidates, seen, text, start_offset) end
+
+  add_pairs(candidates, seen, text, nodes, starts)
 
   local containers = paragraph_container_ranges(nodes, starts)
   for _, node in ipairs(nodes) do
@@ -382,6 +461,34 @@ function selection.shrink(view)
   buffer:set_selection_list(previous.selections, previous.last_selection,
     { sanitized = true, merge_cursors = true })
   return true
+end
+
+function selection.move_to_boundary(view)
+  local buffer = view and view.buffer
+  if not buffer or view.__markdown_live_attached ~= true then return false, "not-live" end
+  local line, col = buffer:get_selection()
+  local candidates, reason, starts, caret = candidates_for(buffer, line, col, line, col, true)
+  if not candidates then return false, reason end
+  for _, candidate in ipairs(candidates) do
+    -- Pair navigation lands on delimiters, like ordinary bracket navigation.
+    -- Other scopes use the same start/end positions as block selection.
+    local first = candidate.start_offset
+    local last = candidate.end_offset - (candidate.kind == "pair" and 1 or 0)
+    if candidate.kind ~= "pair_content" and first <= caret and caret <= last then
+      local target = caret == first and last or first
+      local next_line, next_col = offset_position(buffer, starts, target)
+      local panes = require "core.panes"
+      local pane = panes.pane_for_view(view)
+      if pane then panes.record_location(pane) end
+      buffer:set_selection(next_line, next_col)
+      view:scroll_to_make_visible(next_line, next_col)
+      if pane then panes.record_location(pane) end
+      require("core").log_quiet("Markdown scope navigation: %s at %d:%d",
+        candidate.kind, next_line, next_col)
+      return true
+    end
+  end
+  return false, "no-scope"
 end
 
 return selection

@@ -1176,6 +1176,11 @@ local function duplicate_current_line(dv)
 end
 
 local function move_to_matching_bracket_with_history(dv)
+  local moved, reason = markdown_selection.move_to_boundary(dv)
+  if moved then return end
+  if reason ~= "not-live" then
+    core.log_quiet("Markdown scope navigation fallback: %s", tostring(reason))
+  end
   local line, col = dv.buffer:get_selection()
   command.perform("editor:move_to_matching")
   local next_line, next_col = dv.buffer:get_selection()

@@ -188,6 +188,98 @@ test.describe("Markdown semantic selection", function()
     test.equal(selected_text(buffer), "[the guide](guide.md)")
   end)
 
+  test.it("expands nested prose pairs before Markdown blocks and restores selections", function(context)
+    local _, buffer = open_markdown(context, "Text (outer [inner {value}] tail) end.\n")
+    buffer:set_selection(1, 22)
+    for _, expected in ipairs({ "value", "{value}", "inner {value}",
+      "[inner {value}]", "outer [inner {value}] tail", "(outer [inner {value}] tail)",
+      "Text (outer [inner {value}] tail) end." }) do
+      perform("editor:expand_selection_block")
+      test.equal(selected_text(buffer), expected)
+    end
+    perform("editor:shrink_selection_smart")
+    test.equal(selected_text(buffer), "(outer [inner {value}] tail)")
+  end)
+
+  test.it("includes pairs in smart expansion inside inline code", function(context)
+    local _, buffer = open_markdown(context, "Run `call(first, second)` now.\n")
+    buffer:set_selection(1, 13)
+    for _, expected in ipairs({ "first", "first, second", "(first, second)",
+      "call(first, second)", "`call(first, second)`" }) do
+      perform("editor:extend_selection_smart")
+      test.equal(selected_text(buffer), expected)
+    end
+  end)
+
+  test.it("expands code pairs before the fenced code body", function(context)
+    local _, buffer = open_markdown(context, "```js\nif (ready) {\n  call(value);\n}\n```\n")
+    buffer:set_selection(3, 9)
+    for _, expected in ipairs({ "value", "(value)", "\n  call(value);\n",
+      "{\n  call(value);\n}", "if (ready) {\n  call(value);\n}",
+      "```js\nif (ready) {\n  call(value);\n}\n```" }) do
+      perform("editor:expand_selection_block")
+      test.equal(selected_text(buffer), expected)
+    end
+  end)
+
+  test.it("does not create scopes from crossed or escaped prose pairs", function(context)
+    for _, text in ipairs({ "Text ([value)] end.", "Text \\(value\\) end." }) do
+      local _, buffer = open_markdown(context, text .. "\n")
+      buffer:set_selection(1, 10)
+      perform("editor:expand_selection_block")
+      test.equal(selected_text(buffer), text)
+      buffer:set_selection(1, 10)
+      perform("editor:move_to_matching_bracket_with_history")
+      test.same({ buffer:get_selection() }, { 1, 1, 1, 1 })
+    end
+  end)
+
+  test.it("jumps to the enclosing prose pair and toggles its delimiters", function(context)
+    local _, buffer = open_markdown(context, "Text (outer [value] tail) end.\n")
+    buffer:set_selection(1, 16)
+    for _, col in ipairs({ 13, 19, 13 }) do
+      perform("editor:move_to_matching_bracket_with_history")
+      test.same({ buffer:get_selection() }, { 1, col, 1, col })
+    end
+  end)
+
+  test.it("jumps between Markdown block boundaries without brackets", function(context)
+    local _, buffer = open_markdown(context, "# Title\n\nFirst paragraph.\n\n- first item\n- second item\n")
+    buffer:set_selection(3, 8)
+    for _, col in ipairs({ 1, 17, 1 }) do
+      perform("editor:move_to_matching_bracket_with_history")
+      test.same({ buffer:get_selection() }, { 3, col, 3, col })
+    end
+    buffer:set_selection(6, 6)
+    perform("editor:move_to_matching_bracket_with_history")
+    test.same({ buffer:get_selection() }, { 6, 1, 6, 1 })
+    perform("editor:move_to_matching_bracket_with_history")
+    test.same({ buffer:get_selection() }, { 6, 14, 6, 14 })
+  end)
+
+  test.it("navigates pairs inside fenced code", function(context)
+    local _, buffer = open_markdown(context, "```js\ncall(value);\n```\n")
+    buffer:set_selection(2, 8)
+    for _, col in ipairs({ 5, 11, 5 }) do
+      perform("editor:move_to_matching_bracket_with_history")
+      test.same({ buffer:get_selection() }, { 2, col, 2, col })
+    end
+  end)
+
+  test.it("navigates inline code and fenced content without bracket pairs", function(context)
+    local _, buffer = open_markdown(context, "Run `some code` now.\n\n```text\nfirst line\nlast line\n```\n")
+    buffer:set_selection(1, 9)
+    for _, col in ipairs({ 6, 15, 6 }) do
+      perform("editor:move_to_matching_bracket_with_history")
+      test.same({ buffer:get_selection() }, { 1, col, 1, col })
+    end
+    buffer:set_selection(5, 4)
+    for _, expected in ipairs({ { 4, 1, 4, 1 }, { 5, 10, 5, 10 }, { 4, 1, 4, 1 } }) do
+      perform("editor:move_to_matching_bracket_with_history")
+      test.same({ buffer:get_selection() }, expected)
+    end
+  end)
+
   test.it("uses table cells, rows, and the complete table as blocks", function(context)
     local _, buffer = open_markdown(context, table.concat({
       "| Name | Value |",
