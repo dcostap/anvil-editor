@@ -7549,7 +7549,8 @@ end
 
 local function open_current_file()
   local view = current_picker()
-  local path = view and view.source_context_path or file_context.current_context_path()
+  local path = view and (view:selected_file_path() or view.source_context_path)
+    or file_context.current_context_path()
   if view and view.static_mode then
     view:close()
     view = nil

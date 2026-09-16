@@ -93,6 +93,22 @@ test.describe("Fuzzy Searcher current file query", function()
     test.ok(common.path_equals(picker.results[1].abs_path, path))
   end)
 
+  test.it("uses the selected Fuzzy Searcher file instead of its source file", function(context)
+    local source = join_path(context.root, "src", "source.lua")
+    local selected = join_path(context.root, "lib", "selected.lua")
+    write_file(source)
+    write_file(selected)
+    core.active_view = FileView(source)
+
+    fuzzy_searcher.open("")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker.results = { { kind = "file", file = selected, abs_path = selected } }
+    picker.selected = 1
+
+    test.ok(command.perform("fuzzy:open_current_file"))
+    test.equal(picker.input:get_text(), join_path("lib", "selected.lua"))
+  end)
+
   test.it("keeps the source Path Target for path-aware commands", function(context)
     local path = join_path(context.root, "src", "target.lua")
     write_file(path)
