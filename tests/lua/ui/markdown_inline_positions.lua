@@ -48,6 +48,59 @@ end
 
 test.describe("Markdown inline positions", function()
   for _, wrapped in ipairs({ false, true }) do
+    test.it("aligns prose and code after a task, wrapping=" .. tostring(wrapped), function()
+      local name = "inline-after-task-" .. tostring(wrapped) .. ".md"
+      local buffer = Buffer(name, name, true)
+      buffer:insert(1, 1, "### 1. Stock company\n"
+        .. "- [ ] DECIDE WHAT TO DO LOOKING AT EXISTING SAGE CODE\n"
+        .. "TODO: `C:/Projects/GLP4/src/main/appi/almacen/AlmacenData.kt:48`\n")
+      local view = Editor(buffer)
+      view.size.x, view.size.y = 960, 400
+      view:set_wrapping_enabled(wrapped)
+      markdown.live_render.refresh_view(view)
+      wait_ready(view)
+      buffer:set_selection(3, 1)
+      test.ok(math.abs(view:get_col_x_offset(3, 1) - view:get_col_x_offset(2, 7)) < 0.5,
+        "the continuation must align with the task text")
+      for col = 1, 12 do
+        buffer:set_selection(3, col)
+        local positions = {}
+        local draw_text = renderer.draw_text
+        renderer.draw_text = function(font, text, x, y, color, opts)
+          local source_col = text:find("TODO:", 1, true) and 1
+            or text:find("C:/Projects/", 1, true) and 8
+          if source_col then
+            local layout = font:text_layout(text, opts)
+            for i = 0, math.min(#text, 5) do
+              positions[source_col + i] = x + layout:width_at(i)
+            end
+          end
+          return draw_text(font, text, x, y, color, opts)
+        end
+        local window = renwindow.create("Markdown task positions", 1000, 400)
+        renderer.begin_frame(window)
+        local ok, err = pcall(function() view:draw_line_text(3, 0, 0) end)
+        renderer.end_frame()
+        renderer.draw_text = draw_text
+        if not ok then error(err, 0) end
+        if col ~= 7 then
+          test.not_nil(positions[col], "the source character must be drawn")
+          local caret_x = view:get_col_x_offset(3, col)
+          test.ok(math.abs(caret_x - positions[col]) < 0.5,
+            string.format("column %d: caret %.3f, drawn text %.3f", col, caret_x, positions[col]))
+          local line_x, line_y = view:get_line_screen_position(3)
+          local hit_line, hit_col = view:resolve_screen_position(
+            line_x + positions[col], line_y + view:get_line_height() / 2)
+          test.equal(hit_line, 3)
+          test.equal(hit_col, col, "mouse placement must follow the drawn text")
+        end
+        test.equal(visible_text(view, 3):find("`", 1, true) ~= nil, col >= 7,
+          "delimiters must follow the source position")
+      end
+      model.close(buffer, "test")
+    end)
+  end
+  for _, wrapped in ipairs({ false, true }) do
     test.it("keeps code reveal and positions current after a line join, wrapping=" .. tostring(wrapped), function()
       local name = "inline-position-" .. tostring(wrapped) .. ".md"
       local buffer = Buffer(name, name, true)

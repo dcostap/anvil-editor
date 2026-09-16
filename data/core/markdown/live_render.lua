@@ -3078,6 +3078,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
     seen.quote = true
     end
   end
+  local continuation_indent
   local current_list_marker = list_marker_for_line(view, line) ~= nil
   local continuation_parent
   for _, candidate in ipairs(semantic_nodes) do
@@ -3113,10 +3114,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       )
       local width = target_x - source_leading_width
       if width > 0.1 then
-        fragments[#fragments + 1] = {
-          source_col1 = 1, source_col2 = 1, text = "", width = width,
-          font = body_font, markdown_list_continuation_indent = true,
-        }
+        continuation_indent = width
       end
     end
   end
@@ -3397,12 +3395,15 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       end
     end
   end
-  return fragments
+  return fragments, continuation_indent
 end
 
 local function inline_fragments(line_text, line, view, reveal_units)
   local fragments, occupied = {}, {}
-  for _, fragment in ipairs(semantic_block_fragments(view, line_text, line, reveal_units)) do
+  local block_fragments, continuation_indent = semantic_block_fragments(
+    view, line_text, line, reveal_units
+  )
+  for _, fragment in ipairs(block_fragments) do
     add_fragment(fragments, occupied, fragment)
   end
   for _, fragment in ipairs(semantic_link_fragments(view, line_text, line, reveal_units)) do
@@ -3424,7 +3425,7 @@ local function inline_fragments(line_text, line, view, reveal_units)
     add_fragment(fragments, occupied, fragment)
   end
   table.sort(fragments, function(a, b) return (a.source_col1 or 1) < (b.source_col1 or 1) end)
-  return fragments
+  return fragments, continuation_indent
 end
 
 local function prose_render_line(view, line_text, render_line)
@@ -6476,13 +6477,15 @@ local function build_render_line(view, line, _context)
     end
   end
 
-  local fragments = inline_fragments(text, line, view, reveal_units)
-  if #fragments > 0 then
+  local fragments, continuation_indent = inline_fragments(text, line, view, reveal_units)
+  if #fragments > 0 or continuation_indent then
     local _, semantic_generation = semantic_line(view, line)
     local render_line = layout_inline_image_rows(view, text, prose_render_line(view, text, {
       source_text = text,
       semantic_generation = semantic_generation,
       fragments = fragments,
+      -- Indentation belongs to line geometry, not to a zero-length source span.
+      x_offset = continuation_indent,
     }))
     return apply_task_completion_presentation(view, text, line, render_line)
   end
