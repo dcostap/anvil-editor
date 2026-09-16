@@ -2908,6 +2908,7 @@ bool ren_text_wrap_opportunity_after(
     case '/': case '\\': case ':':
       return true;
     case '.':
+      if (next_byte == '.') return false;
       return !(previous_byte >= 0 && next_byte >= 0
         && ascii_digit((unsigned char)previous_byte)
         && ascii_digit((unsigned char)next_byte));

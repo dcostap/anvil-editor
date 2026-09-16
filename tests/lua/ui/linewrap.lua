@@ -473,6 +473,36 @@ test.describe("line wrapping visual navigation", function()
     end
   end)
 
+  test.it("keeps an ellipsis with the preceding word", function(context)
+    local view = open_editor(context, "slow loading...\nslow loading…\nlént loading...")
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.mode = "word"
+    config.plugins.linewrapping.width_override = view:get_font():get_width("slow loading..")
+    LineWrapping.update_textview_breaks(view)
+
+    local first_idx, _, count = LineWrapping.get_line_idx_col_count(view, 1)
+    test.equal(count, 2)
+    local line, col = LineWrapping.get_idx_line_col(view, first_idx + 1)
+    test.equal(line, 1)
+    test.equal(col, 6, "the whole word and ellipsis must move to the next row")
+
+    config.plugins.linewrapping.width_override = view:get_font():get_width("lént loading..")
+    LineWrapping.update_textview_breaks(view)
+    first_idx, _, count = LineWrapping.get_line_idx_col_count(view, 3)
+    test.equal(count, 2)
+    line, col = LineWrapping.get_idx_line_col(view, first_idx + 1)
+    test.equal(line, 3)
+    test.equal(col, 7, "UTF-8 text must keep consecutive periods with the word")
+
+    config.plugins.linewrapping.width_override = view:get_font():get_width("slow loading")
+    LineWrapping.update_textview_breaks(view)
+    first_idx, _, count = LineWrapping.get_line_idx_col_count(view, 2)
+    test.equal(count, 2)
+    line, col = LineWrapping.get_idx_line_col(view, first_idx + 1)
+    test.equal(line, 2)
+    test.equal(col, 6, "the Unicode ellipsis must stay with the word")
+  end)
+
   test.it("uses letter fast path for long no-space ASCII in word mode", function(context)
     local view, buffer = open_editor(context, string.rep("f", 80))
     configure_wrapping_for_test(context, view)

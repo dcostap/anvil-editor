@@ -344,6 +344,7 @@ local function is_word_wrap_opportunity(text, position, byte)
     return true
   end
   if byte == 46 then
+    if text:byte(position + 1) == 46 then return false end
     return not (ascii_digit(text:byte(position - 1)) and ascii_digit(text:byte(position + 1)))
   end
   if byte == 45 then
