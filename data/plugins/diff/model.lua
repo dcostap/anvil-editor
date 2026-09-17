@@ -4,14 +4,30 @@ local function max_line(lines)
   return math.max(1, #(lines or {}))
 end
 
-local function comparable_lines(lines, ignore_whitespace)
+local function trim_line(line)
+  local content, ending = line, ""
+  if line:sub(-2) == "\r\n" then
+    content, ending = line:sub(1, -3), "\r\n"
+  elseif line:sub(-1) == "\n" then
+    content, ending = line:sub(1, -2), "\n"
+  end
+  content = content:gsub("^[ \t]+", "")
+  content = content:gsub("[ \t]+$", "")
+  return content .. ending
+end
+
+local function comparable_lines(lines, whitespace_mode)
   lines = lines or {}
   -- A Buffer always keeps one newline-only placeholder line. It is not file
   -- content and must not become an equality anchor against a real blank line.
   if #lines == 1 and lines[1] == "\n" then return {} end
-  if ignore_whitespace then
+  if whitespace_mode == "ignore" then
     local normalized = {}
     for i, line in ipairs(lines) do normalized[i] = line:gsub("%s", "") end
+    return normalized
+  elseif whitespace_mode == "trim" then
+    local normalized = {}
+    for i, line in ipairs(lines) do normalized[i] = trim_line(line) end
     return normalized
   end
   return lines
@@ -163,10 +179,12 @@ local function whitespace_inline_ranges(from, target)
   return ranges
 end
 
-local function inline_change(from, to, ignore_whitespace)
+local function inline_change(from, to, whitespace_mode)
   from, to = from or "", to or ""
   if from == to then return nil, {} end
-  if ignore_whitespace then return nil, whitespace_inline_ranges(from, to) end
+  if whitespace_mode == "ignore" then
+    return nil, whitespace_inline_ranges(from, to)
+  end
   return nil, token_inline_ranges(from, to)
 end
 
@@ -243,8 +261,9 @@ end
 
 function M.compute(a_lines, b_lines, opts)
   opts = opts or {}
-  local comparable_a = comparable_lines(a_lines, opts.ignore_whitespace)
-  local comparable_b = comparable_lines(b_lines, opts.ignore_whitespace)
+  local whitespace_mode = opts.whitespace_mode or "none"
+  local comparable_a = comparable_lines(a_lines, whitespace_mode)
+  local comparable_b = comparable_lines(b_lines, whitespace_mode)
   local ai, bi = 1, 1
   local a_offset, b_offset = 0, 0
   local a_offset_total, b_offset_total = 0, 0
@@ -292,7 +311,7 @@ function M.compute(a_lines, b_lines, opts)
       if edit.a then
         local changes, inline_ranges = nil, {}
         if edit.tag ~= "equal" then
-          changes, inline_ranges = inline_change(edit.b, edit.a, opts.ignore_whitespace)
+          changes, inline_ranges = inline_change(edit.b, edit.a, whitespace_mode)
         end
         a_changes[#a_changes + 1] = {
           tag = edit.tag,
@@ -305,7 +324,7 @@ function M.compute(a_lines, b_lines, opts)
       if edit.b then
         local changes, inline_ranges = nil, {}
         if edit.tag ~= "equal" then
-          changes, inline_ranges = inline_change(edit.a, edit.b, opts.ignore_whitespace)
+          changes, inline_ranges = inline_change(edit.a, edit.b, whitespace_mode)
         end
         b_changes[#b_changes + 1] = {
           tag = edit.tag,

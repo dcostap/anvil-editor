@@ -57,12 +57,12 @@ test.describe("Diff View one-sided change positions", function()
   test.before_each(function(context)
     context.views = {}
     context.active_view = core.active_view
-    context.ignore_whitespace = config.plugins.diffview.ignore_whitespace
-    config.plugins.diffview.ignore_whitespace = false
+    context.whitespace_mode = config.plugins.diffview.whitespace_mode
+    config.plugins.diffview.whitespace_mode = "none"
   end)
 
   test.after_each(function(context)
-    config.plugins.diffview.ignore_whitespace = context.ignore_whitespace
+    config.plugins.diffview.whitespace_mode = context.whitespace_mode
     core.active_view = context.active_view
     for _, view in ipairs(context.views) do view:on_close() end
   end)

@@ -55,16 +55,16 @@ test.describe("Diff View visible decorations", function()
   test.before_each(function(context)
     context.views = {}
     context.active_view = core.active_view
-    context.ignore_whitespace = config.plugins.diffview.ignore_whitespace
+    context.whitespace_mode = config.plugins.diffview.whitespace_mode
     context.fold_unchanged = config.plugins.diffview.fold_unchanged_by_default
     context.probe_font = style.diff_test_font
     style.diff_test_font = style.code_font:copy(style.code_font:get_size() * 1.5)
-    config.plugins.diffview.ignore_whitespace = false
+    config.plugins.diffview.whitespace_mode = "none"
     config.plugins.diffview.fold_unchanged_by_default = false
   end)
 
   test.after_each(function(context)
-    config.plugins.diffview.ignore_whitespace = context.ignore_whitespace
+    config.plugins.diffview.whitespace_mode = context.whitespace_mode
     config.plugins.diffview.fold_unchanged_by_default = context.fold_unchanged
     style.diff_test_font = context.probe_font
     core.active_view = context.active_view

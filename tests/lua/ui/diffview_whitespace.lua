@@ -15,52 +15,57 @@ end
 test.describe("Diff View whitespace preference", function()
   test.before_each(function(context)
     context.active_view = core.active_view
-    context.ignore_whitespace = config.plugins.diffview.ignore_whitespace
+    context.whitespace_mode = config.plugins.diffview.whitespace_mode
   end)
 
   test.after_each(function(context)
     core.active_view = context.active_view
-    config.plugins.diffview.ignore_whitespace = context.ignore_whitespace
+    config.plugins.diffview.whitespace_mode = context.whitespace_mode
     if context.view then context.view:on_close() end
   end)
 
-  test.it("toggles whitespace comparison from a Diff Side and its parent View", function(context)
-    config.plugins.diffview.ignore_whitespace = true
+  test.it("cycles whitespace comparison modes from a Diff Side", function(context)
+    config.plugins.diffview.whitespace_mode = "trim"
     local view = diffview.string_to_string("loading = false", "    loading=false", "Before", "After", true)
     context.view = view
     wait_for_diff(view)
 
     core.active_view = view.buffer_view_b
-    test.equal(command.get_status("diff:toggle_ignore_whitespace", view.buffer_view_b), true)
-    test.equal(command.perform("diff:toggle_ignore_whitespace"), true)
-    test.equal(command.get_status("diff:toggle_ignore_whitespace", view.buffer_view_b), false)
+    test.equal(command.get_status("diff:cycle_whitespace_mode", view.buffer_view_b), "Trim Whitespace")
+    test.equal(command.perform("diff:cycle_whitespace_mode"), true)
+    test.equal(command.get_status("diff:cycle_whitespace_mode", view.buffer_view_b), "Ignore All Whitespace")
+    view:update()
+    wait_for_diff(view)
+    test.equal(view.diff_model:line_state("b", 1), "equal")
+
+    test.equal(command.perform("diff:cycle_whitespace_mode"), true)
+    test.equal(command.get_status("diff:cycle_whitespace_mode", view), "None")
     view:update()
     wait_for_diff(view)
     test.equal(view.diff_model:line_state("b", 1), "modify")
 
-    core.active_view = view
-    test.equal(command.perform("diff:toggle_ignore_whitespace"), true)
-    test.equal(command.get_status("diff:toggle_ignore_whitespace", view), true)
+    test.equal(command.perform("diff:cycle_whitespace_mode"), true)
+    test.equal(command.get_status("diff:cycle_whitespace_mode", view), "Trim Whitespace")
     view:update()
     wait_for_diff(view)
-    test.equal(view.diff_model:line_state("b", 1), "equal")
+    test.equal(view.diff_model:line_state("b", 1), "modify")
   end)
 
-  test.it("ignores formatting by default and updates an open comparison when the preference changes", function(context)
+  test.it("trims line edges by default and updates an open comparison when the preference changes", function(context)
     local before = "before\n    loading = false\n    value = oldValue\nend"
-    local after = "before\n        loading=false  \n    value = newValue\nend"
+    local after = "before\n        loading = false  \n    value = newValue\nend"
     local view = diffview.string_to_string(before, after, "Before", "After", true)
     context.view = view
     wait_for_diff(view)
     test.equal(view.diff_model:line_state("b", 2), "equal")
     test.equal(view:diff_points_of_interest(false)[1].line, 3)
 
-    config.plugins.diffview.ignore_whitespace = false
+    config.plugins.diffview.whitespace_mode = "none"
     view:update()
     wait_for_diff(view)
     test.equal(view.diff_model:line_state("b", 2), "modify")
 
-    config.plugins.diffview.ignore_whitespace = true
+    config.plugins.diffview.whitespace_mode = "ignore"
     view:update()
     wait_for_diff(view)
     test.equal(view.diff_model:line_state("b", 2), "equal")

@@ -19,8 +19,8 @@ local FragmentBuffer = require "plugins.diff.fragment_buffer"
 ---@class config.plugins.diffview
 ---Logs the amount of time taken to recompute differences.
 ---@field log_times boolean
----Ignore whitespace within lines when comparing text.
----@field ignore_whitespace boolean
+---The whitespace comparison policy used by the Diff View.
+---@field whitespace_mode "none"|"trim"|"ignore"
 ---Disable syntax coloring on changed lines to improve visibility.
 ---@field plain_text boolean
 ---The color used on changed lines when plain text is enabled.
@@ -34,11 +34,16 @@ local FragmentBuffer = require "plugins.diff.fragment_buffer"
 config.plugins.diffview.config_spec = {
     name = "Differences Viewer",
     {
-      label = "Ignore Whitespace",
-      description = "Ignore whitespace within lines, including strings. Added or removed blank lines still count as changes.",
-      path = "ignore_whitespace",
-      type = "toggle",
-      default = config.plugins.diffview.ignore_whitespace
+      label = "Whitespace Comparison",
+      description = "Choose whether the Diff View compares line-edge or all whitespace. Added or removed blank lines still count as changes.",
+      path = "whitespace_mode",
+      type = "selection",
+      default = config.plugins.diffview.whitespace_mode,
+      values = {
+        { "None", "none" },
+        { "Trim Whitespace", "trim" },
+        { "Ignore All Whitespace", "ignore" },
+      },
     },
     {
       label = "Log Times",
@@ -716,11 +721,11 @@ end
 
 function DiffView:update_diff()
   if self.skip_update_diff then self.skip_update_diff = false return end
-  local ignore_whitespace = config.plugins.diffview.ignore_whitespace
-  if self.diff_ignore_whitespace ~= ignore_whitespace then
-    core.log_quiet("Diff View ignore whitespace: %s", tostring(ignore_whitespace))
+  local whitespace_mode = config.plugins.diffview.whitespace_mode or "trim"
+  if self.diff_whitespace_mode ~= whitespace_mode then
+    core.log_quiet("Diff View whitespace comparison: %s", whitespace_mode)
   end
-  self.diff_ignore_whitespace = ignore_whitespace
+  self.diff_whitespace_mode = whitespace_mode
   self.comparison_message = comparison_rejection(self.side_buffers)
   if self.comparison_message then
     self.diff_generation = (self.diff_generation or 0) + 1
@@ -754,7 +759,7 @@ function DiffView:update_diff()
     if transition_trace then transition_trace("diff_compute_start") end
     local computing_start = system.get_time()
     local model = diff_model.compute(self.buffer_view_a.buffer.lines, self.buffer_view_b.buffer.lines, {
-      ignore_whitespace = ignore_whitespace,
+      whitespace_mode = whitespace_mode,
       should_yield = function()
         if system.get_time() - computing_start >= 0.5 then
           computing_start = system.get_time()
@@ -1832,7 +1837,7 @@ local function diff_decoration_provider(parent, is_a)
       local other_text = other.buffer.lines[mapping[line]]
       local added_width = 0
       -- A pending edit can remove a paired line before the next comparison.
-      if other_text and not parent.diff_ignore_whitespace then
+      if other_text and parent.diff_whitespace_mode == "none" then
         local indent = view.buffer.lines[line]:match("^[ \t]*")
         local other_indent = other_text:match("^[ \t]*")
         local font = view:get_font()
@@ -2243,7 +2248,7 @@ function DiffView:update()
   local super_started, super_scope = perf_begin("diffview_super_update")
   DiffView.super.update(self)
   perf_end("diffview_super_update", super_started, super_scope)
-  if self.diff_ignore_whitespace ~= config.plugins.diffview.ignore_whitespace then
+  if self.diff_whitespace_mode ~= config.plugins.diffview.whitespace_mode then
     self:update_diff()
   end
   local divider_half = self:get_divider_width() / 2
@@ -2589,22 +2594,32 @@ end, {
   end, { keywords = { "clipboard", "git", "unified", "share" } }),
 })
 
-command.add_toggle("diff:toggle_ignore_whitespace", {
-  predicate = function()
-    local view = core.active_view
-    if view and view.diff_view_parent then return true, view.diff_view_parent end
-    if view and view.is and view:is(DiffView) then return true, view end
-    return false
-  end,
-  palette = true,
-  metadata = { keywords = { "compare", "spaces", "indentation" } },
-  get = function()
-    return config.plugins.diffview.ignore_whitespace
-  end,
-  set = function(enabled)
-    config.plugins.diffview.ignore_whitespace = enabled
-  end,
+local whitespace_mode_labels = {
+  none = "None",
+  trim = "Trim Whitespace",
+  ignore = "Ignore All Whitespace",
+}
+
+command.add(function()
+  local view = core.active_view
+  if view and view.diff_view_parent then return true, view.diff_view_parent end
+  if view and view.is and view:is(DiffView) then return true, view end
+  return false
+end, {
+  ["diff:cycle_whitespace_mode"] = command.palette(function()
+    local current = config.plugins.diffview.whitespace_mode
+    local next_mode = current == "none" and "trim"
+      or current == "trim" and "ignore"
+      or "none"
+    config.plugins.diffview.whitespace_mode = next_mode
+  end, {
+    keywords = { "compare", "spaces", "indentation", "formatting" },
+  }),
 })
+
+command.set_status("diff:cycle_whitespace_mode", function()
+  return whitespace_mode_labels[config.plugins.diffview.whitespace_mode] or "Trim Whitespace"
+end)
 
 local function active_diff_side()
   local side_view = core.active_view
