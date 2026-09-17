@@ -304,13 +304,15 @@ local function apply_resolved_wrap_affinity(dv)
 end
 
 local function set_cursor(dv, x, y, snap_type)
-  if dv.begin_line_render_interaction then dv:begin_line_render_interaction("mouse-selection") end
+  -- Set the new caret before freezing rendered-line selection state. Markdown
+  -- may change a caret's horizontal presentation when it enters a blank line.
   local line, col = dv:resolve_screen_position(x, y)
   dv.buffer:set_selection(line, col, line, col)
   if snap_type == "word" or snap_type == "lines" then
     command.perform("core:select_" .. snap_type)
   end
   apply_resolved_wrap_affinity(dv)
+  if dv.begin_line_render_interaction then dv:begin_line_render_interaction("mouse-selection") end
   dv.mouse_selecting = { line, col, snap_type }
   core.blink_reset()
 end

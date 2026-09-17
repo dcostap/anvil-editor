@@ -6815,7 +6815,15 @@ function live.attach(view)
     -- the frozen selection captured at interaction start. Rebuilding rows for
     -- every transient selection is therefore both expensive and ineffective;
     -- the interaction-end hook invalidates the final old/new ranges once.
-    if owner.__line_render_interaction_state then return end
+    -- The initial click has the new selection in its interaction snapshot, so
+    -- publish that state before the mouse drag starts.
+    local interaction = owner.__line_render_interaction_state
+    if interaction
+      and selection_snapshot_key(interaction.selection_state)
+        ~= selection_snapshot_key(new_state)
+    then
+      return
+    end
     local affinity = owner.__markdown_task_source_affinity
     if affinity and affinity.selection_key ~= selection_snapshot_key(new_state) then
       owner.__markdown_task_source_affinity = nil
