@@ -3,7 +3,9 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local keymap = require "core.keymap"
+local markdown = require "core.markdown"
 local test = require "core.test"
+local worker_pool = require "core.worker_pool"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local Buffer = require "core.buffer"
@@ -62,6 +64,26 @@ local function range_x(view, line, col1, col2)
   local x1 = view:get_col_x_offset(line, col1) + gw
   local x2 = view:get_col_x_offset(line, col2) + gw
   return math.min(x1, x2), math.max(x1, x2)
+end
+
+local function wait_for_markdown(view)
+  local model = test.not_nil(markdown.model.peek(view.buffer))
+  local deadline = system.get_time() + 5
+  while model.status ~= "ready" and system.get_time() < deadline do
+    local pool = worker_pool.current_system()
+    if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+    if model.status ~= "ready" then coroutine.yield(0.01) end
+  end
+  test.equal(model.status, "ready", model.reason)
+end
+
+local function visible_render_text(view, line)
+  local rendered = test.not_nil(view:get_line_render(line))
+  local text = {}
+  for _, fragment in ipairs(view:iter_line_render_fragments(rendered)) do
+    if not fragment.hidden then text[#text + 1] = fragment.text or "" end
+  end
+  return table.concat(text)
 end
 
 local function press_command_binding(name)
@@ -298,6 +320,43 @@ test.describe("Fuzzy Searcher preview", function()
     test.equal(preview.buffer.disable_treesitter, true)
     test.equal(preview.buffer.disable_gitdiff_highlight, true)
     test.equal(preview:is_wrapping_enabled(), false)
+  end)
+
+  test.it("presents Markdown files with the same live formatting as Editors", function(context)
+    local path = temp_file_path("fuzzy-preview-markdown-live-test.md")
+    context.files = { path }
+    write_file(path, "# Preview heading\n\nPlain **strong** text.\n")
+
+    fuzzy_searcher.open_static_results("Files", {
+      { kind = "file", file = path, text = path },
+    })
+    local picker = core.fuzzy_searcher_active_view
+
+    local preview = test.not_nil(picker:update_preview_view())
+
+    test.ok(markdown.live_render.is_live_mode(preview),
+      "expected Markdown Live Preview formatting")
+    test.ok(preview:is_wrapping_enabled(),
+      "expected Markdown preview prose to wrap")
+    wait_for_markdown(preview)
+    test.equal(visible_render_text(preview, 1), "Preview heading")
+  end)
+
+  test.it("reveals matched Markdown syntax in a formatted preview", function(context)
+    local path = temp_file_path("fuzzy-preview-markdown-match-test.md")
+    context.files = { path }
+    write_file(path, "# Matched heading\n")
+
+    fuzzy_searcher.open_static_results("Files", { {
+      kind = "grep", file = path, line = 1, grep_query = "#",
+      exact = true, content_spans = { { 1, 1 } }, text = "# Matched heading",
+    } })
+    local picker = core.fuzzy_searcher_active_view
+    local preview = test.not_nil(picker:update_preview_view())
+    wait_for_markdown(preview)
+
+    test.equal(visible_render_text(preview, 1), "# Matched heading")
+    test.not_nil(next(preview.buffer.search_selections))
   end)
 
   test.it("keeps extreme lines out of automatic previews and preserves search results", function(context)

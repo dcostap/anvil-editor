@@ -1,10 +1,13 @@
 local command = require "core.command"
 local core = require "core"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
+local linewrapping = require "core.linewrapping"
+local markdown = require "core.markdown"
 local panes = require "core.panes"
 local poi = require "core.poi"
 local test = require "core.test"
 local View = require "core.view"
+local worker_pool = require "core.worker_pool"
 
 local function temp_file_path(name)
   return system.absolute_path(".") .. PATHSEP .. name
@@ -18,6 +21,18 @@ end
 
 local function selection_state(view)
   return view:get_selection_state().selections
+end
+
+local function wait_for_markdown(view)
+  local model = test.not_nil(markdown.model.peek(view.buffer))
+  local deadline = system.get_time() + 5
+  while model.status ~= "ready" and system.get_time() < deadline do
+    local pool = worker_pool.current_system()
+    if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+    if model.status ~= "ready" then coroutine.yield(0.01) end
+  end
+  test.equal(model.status, "ready", model.reason)
+  linewrapping.complete_async_reconstruction(view)
 end
 
 test.describe("Fuzzy Searcher preview interaction", function()
@@ -86,6 +101,33 @@ test.describe("Fuzzy Searcher preview interaction", function()
 
     test.equal(preview:get_current_line_highlight_mode(), false)
     test.equal(preview.buffer.read_only, true)
+  end)
+
+  test.it("keeps Markdown controls display-only in a file preview", function(context)
+    local path = temp_file_path("fuzzy-preview-markdown-read-only-test.md")
+    context.files = { path }
+    write_file(path, "- [ ] Task\n")
+
+    fuzzy_searcher.open_static_results("Files", {
+      { kind = "file", file = path, text = path },
+    })
+    local picker = core.fuzzy_searcher_active_view
+    local preview = test.not_nil(picker:update_preview_view())
+    wait_for_markdown(preview)
+
+    local rendered = test.not_nil(preview:get_line_render(1))
+    local checkbox
+    for _, fragment in ipairs(preview:iter_line_render_fragments(rendered)) do
+      if fragment.markdown_task_checkbox then checkbox = fragment break end
+    end
+    checkbox = test.not_nil(checkbox)
+    local line_x, line_y = preview:get_line_screen_position(1)
+    local checkbox_x = line_x
+      + preview:get_line_render_col_x_offset(rendered, checkbox.source_col1) + 2
+
+    preview:on_mouse_pressed("left", checkbox_x, line_y + 2, 1)
+
+    test.equal(preview.buffer.lines[1], "- [ ] Task\n")
   end)
 
   test.it("cycles local focus into the preview for cursor movement", function(context)
@@ -242,6 +284,33 @@ test.describe("Fuzzy Searcher preview interaction", function()
     test.same(selection_state(view), { 82, 3, 82, 6 })
     test.equal(view.scroll.x, 14)
     test.equal(view.scroll.y, 900)
+  end)
+
+  test.it("opens a focused Markdown preview with its source selection visible", function(context)
+    local path = temp_file_path("fuzzy-preview-focused-markdown-test.md")
+    context.files = { path }
+    local lines = {}
+    for line = 1, 120 do lines[line] = "Paragraph line " .. line end
+    write_file(path, table.concat(lines, "\n") .. "\n")
+
+    fuzzy_searcher.open_static_results("Files", {
+      { kind = "file", file = path, text = path, line = 80 },
+    })
+    local picker = core.fuzzy_searcher_active_view
+    local preview = test.not_nil(picker:update_preview_view())
+    wait_for_markdown(preview)
+    test.ok(picker:cycle_local_focus(1))
+    preview.buffer:set_selection(82, 3, 82, 6)
+    preview.scroll.x, preview.scroll.to.x = 0, 0
+    preview.scroll.y, preview.scroll.to.y = 100000, 100000
+
+    test.ok(command.perform("core:activate_point_of_interest"))
+
+    local view = core.active_view
+    local first, last = view:get_visible_line_range()
+    test.same(selection_state(view), { 82, 3, 82, 6 })
+    test.ok(82 >= first and 82 <= last,
+      "expected the Markdown source selection inside the opened viewport")
   end)
 
   test.it("restores a focused preview after a post-open error", function(context)

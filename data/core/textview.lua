@@ -49,6 +49,7 @@ local IME_STATE = {line1 = 0, col1 = 0, line2 = 0, col2 = 0, w = 0, h = 0}
 ---@field last_line2 integer
 ---@field last_col2 integer
 ---@field hovered_render_fragment table?
+---@field render_content_interactions_enabled? boolean Set false for display-only rendered content
 local TextView = View:extend()
 
 function TextView:__tostring() return "TextView" end
@@ -5813,6 +5814,7 @@ end
 ---@param y number Screen y coordinate
 function TextView:on_mouse_moved(x, y, ...)
   local selecting = self.mouse_selecting ~= nil
+  local render_interactions_enabled = self.render_content_interactions_enabled ~= false
   TextView.super.on_mouse_moved(self, x, y, ...)
 
   self.hovering_gutter = false
@@ -5826,7 +5828,7 @@ function TextView:on_mouse_moved(x, y, ...)
   else
     self.cursor = "ibeam"
     self.hovered_fold_widget = nil
-    if self:has_collapsed_folds() then
+    if render_interactions_enabled and self:has_collapsed_folds() then
       local line = self:resolve_screen_position(x, y)
       local resolved_widget = self.resolved_fold_widget
       local fold = resolved_widget or self:get_collapsed_fold_at_line(line)
@@ -5839,7 +5841,7 @@ function TextView:on_mouse_moved(x, y, ...)
   end
 
   local hovered_fragment
-  if not selecting and not self.hovering_gutter and
+  if render_interactions_enabled and not selecting and not self.hovering_gutter and
     not self:scrollbar_hovering() and not self:scrollbar_dragging()
   then
     local hit = self:get_render_widget_at_position(x, y)
@@ -5863,7 +5865,7 @@ function TextView:on_mouse_moved(x, y, ...)
   end
 
   local proximity_fragment, proximity = nil, 0
-  if not selecting and not self.hovering_gutter and
+  if render_interactions_enabled and not selecting and not self.hovering_gutter and
     not self:scrollbar_hovering() and not self:scrollbar_dragging()
   then
     local near = self:get_render_widget_near_position(x, y)
@@ -5974,39 +5976,42 @@ end
 function TextView:on_mouse_pressed(button, x, y, clicks)
   if button == "left" then self.buffer:clear_search_selections() end
   if button == "left" and not self.hovering_gutter then
-    local widget_hit = self:get_render_widget_at_position(x, y)
-    if widget_hit and widget_hit.widget.on_mouse_pressed then
-      local ok, handled = pcall(
-        widget_hit.widget.on_mouse_pressed,
-        widget_hit.widget, self, widget_hit, button, x, y, clicks
-      )
-      if not ok then
-        core.log_quiet(
-          "TextView render widget click failed for %s: %s",
-          self.buffer:get_name(), tostring(handled)
+    local render_interactions_enabled = self.render_content_interactions_enabled ~= false
+    if render_interactions_enabled then
+      local widget_hit = self:get_render_widget_at_position(x, y)
+      if widget_hit and widget_hit.widget.on_mouse_pressed then
+        local ok, handled = pcall(
+          widget_hit.widget.on_mouse_pressed,
+          widget_hit.widget, self, widget_hit, button, x, y, clicks
         )
+        if not ok then
+          core.log_quiet(
+            "TextView render widget click failed for %s: %s",
+            self.buffer:get_name(), tostring(handled)
+          )
+        end
+        if ok and handled ~= false then return true end
       end
-      if ok and handled ~= false then return true end
-    end
-    local fragment_hit = self:get_render_fragment_at_position(x, y)
-    if fragment_hit and fragment_hit.fragment.on_mouse_pressed then
-      local ok, handled = pcall(
-        fragment_hit.fragment.on_mouse_pressed,
-        fragment_hit.fragment, self, fragment_hit, button, x, y, clicks
-      )
-      if not ok then
-        core.log_quiet(
-          "TextView render fragment click failed for %s: %s",
-          self.buffer:get_name(), tostring(handled)
+      local fragment_hit = self:get_render_fragment_at_position(x, y)
+      if fragment_hit and fragment_hit.fragment.on_mouse_pressed then
+        local ok, handled = pcall(
+          fragment_hit.fragment.on_mouse_pressed,
+          fragment_hit.fragment, self, fragment_hit, button, x, y, clicks
         )
+        if not ok then
+          core.log_quiet(
+            "TextView render fragment click failed for %s: %s",
+            self.buffer:get_name(), tostring(handled)
+          )
+        end
+        if ok and handled ~= false then return true end
       end
-      if ok and handled ~= false then return true end
     end
     self.resolved_provider_row = nil
     local line = self:resolve_screen_position(x, y)
     local provider_entry = self.resolved_provider_row
     self.resolved_provider_row = nil
-    if provider_entry then
+    if provider_entry and render_interactions_enabled then
       local row = provider_entry.provider_row
       if row and row.on_click then
         local ok, handled = pcall(row.on_click, self, row, button, x, y, clicks)
@@ -6017,7 +6022,9 @@ function TextView:on_mouse_pressed(button, x, y, clicks)
     local resolved_widget = self.resolved_fold_widget
     local fold = resolved_widget or self:get_collapsed_fold_at_line(line)
     self.resolved_fold_widget = nil
-    if fold and (resolved_widget or fold.show_widget ~= false) then
+    if render_interactions_enabled
+      and fold and (resolved_widget or fold.show_widget ~= false)
+    then
       self:expand_fold_region(fold.id, "mouse")
       self.buffer:set_selection(fold.line1, 1, fold.line1, 1)
       return true

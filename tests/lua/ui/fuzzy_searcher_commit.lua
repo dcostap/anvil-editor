@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
+local markdown = require "core.markdown"
 local test = require "core.test"
 local backend = require "plugins.git.backend"
 local fuzzy = require "plugins.fuzzy_searcher"
@@ -45,6 +46,7 @@ test.describe("Fuzzy Searcher Commit Search", function()
     write_file(context.root, ".hidden.txt", "hidden needle\n")
     write_file(context.root, ".gitignore", "ignored.txt\n")
     write_file(context.root, "ignored.txt", "ignored needle\n")
+    write_file(context.root, "note.md", "# Historical heading\n")
     git(context.root, { "add", "-f", "." })
     git(context.root, { "commit", "-qm", "First state" })
     context.revision = git(context.root, { "rev-parse", "HEAD" })
@@ -55,6 +57,7 @@ test.describe("Fuzzy Searcher Commit Search", function()
     git(context.root, { "commit", "-qm", "Second state" })
     context.second_revision = git(context.root, { "rev-parse", "HEAD" })
     write_file(context.root, "same.txt", "working needle\n")
+    write_file(context.root, "note.md", "# Current heading\n")
   end)
 
   test.after_each(function(context)
@@ -100,6 +103,21 @@ test.describe("Fuzzy Searcher Commit Search", function()
     end), "expected the committed text in the preview")
     test.equal(picker.preview_view.buffer.git_historical_rev, context.revision)
     test.equal(picker.preview_view.buffer.treesitter, nil)
+  end)
+
+  test.it("presents historical Markdown with live formatting", function(context)
+    fuzzy.open("note.md commit:" .. context.revision)
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function()
+      return #picker.results == 1 and picker.results[1].file == "note.md"
+    end), tostring(picker.status))
+    test.ok(wait_until(function()
+      local preview = picker:update_preview_view()
+      return preview and table.concat(preview.buffer.lines) == "# Historical heading\n"
+    end), "expected the historical Markdown source")
+
+    test.ok(markdown.live_render.is_live_mode(picker.preview_view))
+    test.ok(picker.preview_view:is_wrapping_enabled())
   end)
 
   test.it("opens a matching Historical Buffer without changing working files", function(context)

@@ -23,49 +23,7 @@ local path_tree = require "plugins.path_tree"
 local Widget = require "widget"
 local TextBox = require "widget.textbox"
 local fuzzy_native = require "fuzzy"
-
-local PreviewTextView = TextView:extend()
-
-function PreviewTextView:new(buffer)
-  PreviewTextView.super.new(self, buffer)
-  self.interactive = false
-  self.show_current_line_highlight = false
-end
-
-function PreviewTextView:set_interactive(interactive)
-  self.interactive = interactive == true
-  self.show_current_line_highlight = self.interactive
-end
-
-function PreviewTextView:restore_preview_search_ranges()
-  if not self.preview_search_ranges or next(self.buffer.search_selections) ~= nil then return end
-  for _, range in ipairs(self.preview_search_ranges) do
-    self.buffer:add_search_selection(range[1], range[2], range[3], range[4])
-  end
-end
-
-function PreviewTextView:get_line_number_gutter_width()
-  return self:get_font():get_width("00000")
-end
-
-function PreviewTextView:draw_line_gutter(line, x, y, width)
-  local lh = self:get_line_height()
-  if self:line_numbers_visible() then
-    local color = style.line_number
-    if self.interactive then
-      for _, line1, _, line2 in self.buffer:get_selections(true) do
-        if line >= line1 and line <= line2 then
-          color = style.line_number2
-          break
-        end
-      end
-    end
-    -- Preview gutters are fixed-width and left-aligned so the label itself
-    -- stays anchored when the visible range changes from 1 to 2+ digits.
-    renderer.draw_text(self:get_font(), tostring(line), x + style.padding.x, y + self:get_line_text_y_offset(), color)
-  end
-  return lh
-end
+local preview_text_view = require "plugins.fuzzy_searcher.preview_text_view"
 
 local BUNDLED_PLUGIN_DIR = DATADIR .. PATHSEP .. "plugins" .. PATHSEP .. "fuzzy_searcher"
 local USER_PLUGIN_DIR = USERDIR .. PATHSEP .. "plugins" .. PATHSEP .. "fuzzy_searcher"
@@ -2086,10 +2044,6 @@ local function color_with_alpha(color, alpha)
   return { color[1] or 255, color[2] or 255, color[3] or 255, alpha or color[4] or 255 }
 end
 
-function PreviewTextView:get_font()
-  return style.get_small_font(TextView.get_font(self))
-end
-
 local function text_span_for_anchor(spans, text_len, anchor_pos)
   local first, best, best_distance
   anchor_pos = tonumber(anchor_pos)
@@ -3993,13 +3947,15 @@ function FSView:clear_preview_view()
   if self:is_preview_focused() then
     self:set_preview_interactive(false)
   end
-  if self.preview_view and self.preview_view.buffer then
-    if self.preview_view.cancel_horizontal_extent_scan then
-      self.preview_view:cancel_horizontal_extent_scan()
+  local preview = self.preview_view
+  if preview and preview.buffer then
+    if preview.cancel_horizontal_extent_scan then
+      preview:cancel_horizontal_extent_scan()
     end
-    self.preview_view.buffer:clear_search_selections()
+    preview.buffer:clear_search_selections()
   end
   self.preview_view = nil
+  if preview and preview.on_close then preview:on_close() end
   self.preview_key = nil
   self.preview_target_line = nil
   self.preview_highlight_key = nil
@@ -4135,8 +4091,7 @@ function FSView:prepare_historical_preview(result)
             return
           end
           buffer.disable_gitdiff_highlight = true
-          self.preview_view = PreviewTextView(buffer)
-          self.preview_view:set_wrapping_enabled(false)
+          self.preview_view = preview_text_view.new(buffer)
           self.preview_blocked = nil
         else
           self.preview_blocked = { reason = err and err.message or "Cannot load historical text", path = result.file }
@@ -4203,8 +4158,7 @@ function FSView:update_preview_view()
       end
       buffer.read_only = true
       buffer.read_only_reason = "Fuzzy Searcher previews are read-only"
-      view = PreviewTextView(buffer)
-      view:set_wrapping_enabled(false)
+      view = preview_text_view.new(buffer)
     end
     self.preview_view = view
     self.preview_key = key
@@ -4253,6 +4207,7 @@ function FSView:update_preview_view()
           table.insert(selections, line2)
           table.insert(selections, col2)
         end
+        view.preview_search_ranges = search_ranges
         if #selections > 0 then
           view.buffer:set_selection(selections[1], selections[2], selections[3], selections[4])
           for i = 5, #selections, 4 do
@@ -4266,7 +4221,6 @@ function FSView:update_preview_view()
         else
           view.buffer:set_selection(target, 1, target, 1)
         end
-        view.preview_search_ranges = search_ranges
       end)
       view:scroll_to_line(target, false, false)
       if reveal_col1 then
@@ -6743,6 +6697,34 @@ function FSView:restore_activation_focus(new_group)
   ensure_input_focus(self, "alternate-activation")
 end
 
+function FSView:restore_opened_preview_position(view, restore, line, col, line2, col2)
+  if restore and restore.scroll then
+    view.scroll.x, view.scroll.y = restore.scroll.x, restore.scroll.y
+    view.scroll.to.x, view.scroll.to.y = restore.scroll.x, restore.scroll.y
+    return
+  end
+  if restore and restore.reveal_selection then
+    local index = ((restore.last_selection or 1) - 1) * 4 + 1
+    local selection_line = restore.selections[index] or line
+    local selection_col = restore.selections[index + 1] or col
+    local selection_line2 = restore.selections[index + 2] or selection_line
+    local selection_col2 = restore.selections[index + 3] or selection_col
+    if view.scroll_to_line then view:scroll_to_line(selection_line, false, true) end
+    if view.scroll_to_make_visible then
+      view:scroll_to_make_visible(selection_line, selection_col, true, {
+        line2 = selection_line2, col2 = selection_col2, vertical = false,
+      })
+    end
+    return
+  end
+  if view.scroll_to_line then view:scroll_to_line(line, false, false) end
+  if view.scroll_to_make_visible then
+    view:scroll_to_make_visible(line, col, false, {
+      line2 = line2 or line, col2 = col2 or col, vertical = false,
+    })
+  end
+end
+
 function FSView:open_historical_result(result, new_group, restore)
   if self.open_revision_job then self.open_revision_job:cancel() end
   local token = {}
@@ -6777,13 +6759,7 @@ function FSView:open_historical_result(result, new_group, restore)
           buffer:set_selection(line, col, line2 or line, col2 or col)
         end
       end)
-      if restore and restore.scroll then
-        view.scroll.x, view.scroll.y = restore.scroll.x, restore.scroll.y
-        view.scroll.to.x, view.scroll.to.y = restore.scroll.x, restore.scroll.y
-      else
-        view:scroll_to_line(line, false, false)
-        view:scroll_to_make_visible(line, col, false, { line2 = line2, col2 = col2, vertical = false })
-      end
+      self:restore_opened_preview_position(view, restore, line, col, line2, col2)
       self:restore_activation_focus(new_group)
     end
   )
@@ -6810,17 +6786,7 @@ function FSView:open_file_result(r, new_group, restore)
     else
       view.buffer:set_selection(line, col, line2 or line, col2 or col)
     end
-    if restore and restore.scroll then
-      view.scroll.x, view.scroll.y = restore.scroll.x, restore.scroll.y
-      view.scroll.to.x, view.scroll.to.y = restore.scroll.x, restore.scroll.y
-    elseif view.scroll_to_line then
-      view:scroll_to_line(line, false, false)
-    end
-    if not restore and view.scroll_to_make_visible then
-      view:scroll_to_make_visible(line, col, false, {
-        line2 = line2 or line, col2 = col2 or col, vertical = false,
-      })
-    end
+    self:restore_opened_preview_position(view, restore, line, col, line2, col2)
   end
   local opened, view = xpcall(function()
     local open_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_core_open_file")
@@ -6877,7 +6843,9 @@ function FSView:open_focused_preview(new_group)
   local restore = {
     selections = { table.unpack(state.selections or {}) },
     last_selection = state.last_selection,
-    scroll = { x = preview.scroll.x, y = preview.scroll.y },
+    scroll = not preview.__fuzzy_markdown_preview
+      and { x = preview.scroll.x, y = preview.scroll.y } or nil,
+    reveal_selection = preview.__fuzzy_markdown_preview == true,
   }
   return self:open_file_result(result, new_group, restore)
 end
