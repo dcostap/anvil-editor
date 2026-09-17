@@ -20,6 +20,7 @@ end
 
 function Editor:new(buffer)
   Editor.super.new(self, buffer)
+  self.remote_poi_source_capable = true
   self:add_poi_provider("core.editor-file-location", editor_file_pois, { priority = 0 })
   if core.buffer_registry then core.buffer_registry:retain(buffer, self) end
 end
@@ -46,6 +47,7 @@ function Editor:on_history_discarded()
 end
 
 function Editor:on_close()
+  require("core.poi").clear_remote_source(self)
   Editor.super.on_close(self)
   self:release_buffer()
   if self.discard_buffer_on_close and core.buffer_registry

@@ -1,5 +1,6 @@
 local core = require "core"
 local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local TextView = require "core.textview"
 local panes = require "core.panes"
 local poi = require "core.poi"
@@ -50,6 +51,24 @@ test.describe("Remote POI navigation", function()
     poi.clear_remote_source(source, first)
     test.equal(poi.get_remote_source(first), nil)
     source.buffer:on_close()
+  end)
+
+  test.it("allows an Editor with file POIs as an explicit remote source", function()
+    local buffer = Buffer()
+    buffer:insert(1, 1, "target.cpp:12:4\n")
+    buffer:clear_undo_redo()
+    local source = Editor(buffer)
+    source.get_points_of_interest = function()
+      return {{ line = 1, col = 1, activate = function() return true end }}
+    end
+    local project = {}
+
+    test.ok(poi.set_remote_source(source, { project = project }))
+    test.equal(poi.get_remote_source(project), source)
+
+    poi.clear_remote_source(source, project)
+    source:on_close()
+    buffer:on_close()
   end)
 
   test.it("previews local navigation without activating the POI", function()

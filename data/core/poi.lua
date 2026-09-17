@@ -13,7 +13,10 @@ M.remote_sources = M.remote_sources or setmetatable({}, { __mode = "k" })
 function M.set_remote_source(view, opts)
   opts = opts or {}
   local project = opts.project or core.root_project()
-  if not project or not view or view.remote_poi_source ~= true then return false end
+  if not project or not view
+      or (view.remote_poi_source ~= true and view.remote_poi_source_capable ~= true) then
+    return false
+  end
   M.remote_sources[project] = { view = view, initial = opts.from_start ~= false }
   local preview = package.loaded["core.poi_preview"]
   if preview then preview.dismiss(view) end
@@ -372,7 +375,7 @@ command.add(nil, {
 
 command.add(function()
   local view = provider_view(core.active_view)
-  return view and view.remote_poi_source == true, view
+  return view and (view.remote_poi_source == true or view.remote_poi_source_capable == true), view
 end, {
   ["core:use_remote_point_of_interest_source"] = command.palette(function(view)
     M.set_remote_source(view, { from_start = false })
