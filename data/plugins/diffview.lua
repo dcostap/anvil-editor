@@ -2212,17 +2212,16 @@ local function draw_diff_header(view)
     local title = view:get_side_title(index)
     local items = index == 2 and header_stat_items(view:get_change_stats(), false) or nil
     if items then
-      local full_width = header_items_width(font, items, gap)
-      local title_width = math.max(0, available - full_width - gap)
-      if title_width < font:get_width(title) then
+      local items_width = header_items_width(font, items, gap)
+      if items_width > available then
         items = header_stat_items(view:get_change_stats(), true)
-        local compact_width = header_items_width(font, items, gap)
-        title_width = math.max(0, available - compact_width - gap)
+        items_width = header_items_width(font, items, gap)
       end
+      local title_width = math.max(0, available - items_width - gap)
       title = truncate_header_title(font, title, title_width)
       renderer.draw_text(font, title, x, y, style.dim)
-      local items_x = x + font:get_width(title) + gap
-      if items_x < x + available then draw_header_items(font, items, items_x, y, gap) end
+      local items_x = x + available - items_width
+      if items_width <= available then draw_header_items(font, items, items_x, y, gap) end
     else
       title = truncate_header_title(font, title, available)
       renderer.draw_text(font, title, x, y, style.dim)
