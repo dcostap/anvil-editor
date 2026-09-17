@@ -1,4 +1,5 @@
 local core = require "core"
+local editor_file_pois = require "core.editor_file_pois"
 local language_mode = require "core.language_mode"
 local navigation_history = require "core.navigation_history"
 local TextView = require "core.textview"
@@ -19,7 +20,14 @@ end
 
 function Editor:new(buffer)
   Editor.super.new(self, buffer)
+  self:add_poi_provider("core.editor-file-location", editor_file_pois, { priority = 0 })
   if core.buffer_registry then core.buffer_registry:retain(buffer, self) end
+end
+
+function Editor:draw_line_body(line, x, y)
+  local height = Editor.super.draw_line_body(self, line, x, y)
+  editor_file_pois.draw_line(self, line, x, y)
+  return height
 end
 
 function Editor:update()

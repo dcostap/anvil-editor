@@ -1,6 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local Buffer = require "core.buffer"
+local common = require "core.common"
 local TextView = require "core.textview"
 local Editor = require "core.editor"
 local poi = require "core.poi"
@@ -47,14 +48,23 @@ test.describe("Point of Interest navigation", function()
 
   test.after_each(function(context)
     if context.pane then panes.close(context.pane, { force = true }) end
+    if context.original_root_project then core.root_project = context.original_root_project end
     poi.remove_activation_provider("test-focused-activation")
     poi.remove_activation_provider("test-fallback-activation")
     for _, view in ipairs(context.diffviews or {}) do
       view.buffer_view_a.buffer:on_close()
       view.buffer_view_b.buffer:on_close()
     end
+    for _, view in ipairs(context.views or {}) do
+      view:on_close()
+    end
     for _, buffer in ipairs(context.buffers or {}) do
       buffer:on_close()
+    end
+    if context.temp_root and system.get_file_info(context.temp_root) then
+      coroutine.yield(0.1)
+      local ok, err = common.rm(context.temp_root, true)
+      test.ok(ok, err)
     end
     if context.temp_path then pcall(os.remove, context.temp_path) end
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
@@ -87,6 +97,50 @@ test.describe("Point of Interest navigation", function()
 
     test.ok(command.perform("core:previous_point_of_interest"))
     test.same(view.buffer.selections, { 2, 3, 2, 3 })
+  end)
+
+  test.it("merges Editor file-location POIs with Git changes", function(context)
+    local root = USERDIR .. PATHSEP .. "editor-file-pois-" .. system.get_process_id()
+    context.temp_root = root
+    context.original_root_project = core.root_project
+    test.ok(common.mkdirp(root))
+    local source_path = root .. PATHSEP .. "source.cpp"
+    local target_path = root .. PATHSEP .. "target.cpp"
+    local target = assert(io.open(target_path, "wb"))
+    target:write("target\n")
+    target:close()
+    core.root_project = function() return { path = root } end
+
+    local buffer = Buffer()
+    buffer:set_filename("source.cpp", source_path)
+    buffer:insert(1, 1, "// target.cpp:12:4\nchanged\n")
+    buffer:clear_undo_redo()
+    context.buffers = { buffer }
+    local view = Editor(buffer)
+    context.views = { view }
+    gitdiff._set_state_for_tests(buffer, {
+      is_in_repo = true,
+      ranges = { { type = "modification", current_start = 2, current_end = 3 } },
+      line_index = {},
+    })
+    core.set_active_view(view)
+
+    local points = view:get_points_of_interest()
+    local file_point, git_point
+    for _, point in ipairs(points) do
+      if point.kind == "editor-file-location" then file_point = point end
+      if point.kind == "git-change" then git_point = point end
+    end
+    test.not_nil(file_point)
+    test.not_nil(git_point)
+    test.equal(file_point.path, common.normalize_path(target_path))
+    test.same({ file_point.target_line, file_point.target_col }, { 12, 4 })
+
+    buffer:set_selection(1, 1)
+    test.ok(command.perform("core:next_point_of_interest"))
+    test.same({ buffer:get_selection() }, { 1, 4, 1, 4 })
+    test.ok(command.perform("core:next_point_of_interest"))
+    test.same({ buffer:get_selection() }, { 2, 4, 2, 4 })
   end)
 
   test.it("animates a visible POI scroll change", function()
