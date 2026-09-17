@@ -105,6 +105,35 @@ test.describe("DiffView batch behavior", function()
     test.equal(view.buffer_view_b, core.active_view)
   end)
 
+  test.it("provides line change counts for the Diff View heading", function(context)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      "same\nremoved\nchanged before\nkeep",
+      "same\nchanged after\nadded\nkeep",
+      "Before",
+      "After",
+      true
+    ))
+    wait_until(function() return not view.updater_idx end, 2, "diff computation did not finish")
+
+    test.same(view:get_change_stats(), {
+      deleted = 1,
+      inserted = 1,
+      changed = 1,
+      total = 3,
+    })
+
+    local equal_view = track(context, "diffviews", diffview.string_to_string(
+      "same", "same", "Before", "After", true
+    ))
+    wait_until(function() return not equal_view.updater_idx end, 2, "equal diff computation did not finish")
+    test.same(equal_view:get_change_stats(), {
+      deleted = 0,
+      inserted = 0,
+      changed = 0,
+      total = 0,
+    })
+  end)
+
   test.it("reuses the canonical Buffer for a file-backed Diff Side", function(context)
     local path = core.project_absolute_path("tmp-diff-shared-buffer.txt")
     pcall(os.remove, path)
@@ -498,6 +527,8 @@ test.describe("DiffView batch behavior", function()
 
     test.equal("caller", view.buffer_view_a.buffer:get_name())
     test.equal("Title Override", view.buffer_view_b.buffer:get_name())
+    test.equal("Buffer Content Name", view:get_side_title(1))
+    test.equal("Title Override", view:get_side_title(2))
 
     local closed = false
     view:try_close(function() closed = true end)

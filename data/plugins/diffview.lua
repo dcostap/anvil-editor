@@ -670,6 +670,39 @@ function DiffView:get_name()
   return "Diff Viewer"
 end
 
+---Return the line counts used by the change summary in the Diff View heading.
+---@return table|nil
+function DiffView:get_change_stats()
+  if not self.diff_model then return nil end
+  local deleted, inserted, changed = 0, 0, 0
+  for _, change in ipairs(self.a_changes or {}) do
+    if change.tag == "delete" then
+      deleted = deleted + 1
+    elseif change.tag == "modify" then
+      changed = changed + 1
+    end
+  end
+  for _, change in ipairs(self.b_changes or {}) do
+    if change.tag == "insert" then inserted = inserted + 1 end
+  end
+  return {
+    deleted = deleted,
+    inserted = inserted,
+    changed = changed,
+    total = deleted + inserted + changed,
+  }
+end
+
+---Return the display title for one Diff View side.
+---@param index integer
+---@return string
+function DiffView:get_side_title(index)
+  local content = self.request and self.request.contents and self.request.contents[index]
+  local title = self.request and self.request.content_titles
+    and self.request.content_titles[index]
+  return title_for_content(content or {}, title) or (index == 1 and "Left" or "Right")
+end
+
 ---Updates the registered differences between current side A and B.
 function DiffView:cancel_diff_update()
   if not self.updater_idx then return end
@@ -2090,6 +2123,113 @@ function DiffView:reveal_change(direction)
   return true
 end
 
+local function header_line_count_text(count, marker, suffix)
+  return string.format("%s %d %s %s", marker, count, count == 1 and "line" or "lines", suffix)
+end
+
+local function header_stat_items(stats, compact)
+  if not stats then return nil end
+  if stats.total == 0 then
+    return { { text = "No differences", color = style.dim } }
+  end
+
+  local items = {}
+  if stats.deleted > 0 then
+    items[#items + 1] = {
+      text = compact and string.format("- %d", stats.deleted)
+        or header_line_count_text(stats.deleted, "-", "deleted"),
+      color = common.blend_colors(style.text, style.diff_marker_delete),
+    }
+  end
+  if stats.inserted > 0 then
+    items[#items + 1] = {
+      text = compact and string.format("+ %d", stats.inserted)
+        or header_line_count_text(stats.inserted, "+", "added"),
+      color = common.blend_colors(style.text, style.diff_marker_insert),
+    }
+  end
+  if stats.changed > 0 then
+    items[#items + 1] = {
+      text = compact and string.format("~ %d", stats.changed)
+        or header_line_count_text(stats.changed, "~", "changed"),
+      color = common.blend_colors(style.text, style.diff_marker_modify),
+    }
+  end
+  return items
+end
+
+local function header_items_width(font, items, gap)
+  local width = 0
+  for index, item in ipairs(items or {}) do
+    if index > 1 then width = width + gap end
+    width = width + font:get_width(item.text)
+  end
+  return width
+end
+
+local function truncate_header_title(font, title, max_width)
+  if max_width <= 0 then return "" end
+  if font:get_width(title) <= max_width then return title end
+  local ellipsis = "..."
+  if font:get_width(ellipsis) > max_width then return "" end
+  local length = title:ulen()
+  local low, high = 0, length
+  while low < high do
+    local middle = math.ceil((low + high) / 2)
+    local prefix = title:usub(1, middle)
+    if font:get_width(prefix .. ellipsis) <= max_width then
+      low = middle
+    else
+      high = middle - 1
+    end
+  end
+  return title:usub(1, low) .. ellipsis
+end
+
+local function draw_header_items(font, items, x, y, gap)
+  local cursor = x
+  for index, item in ipairs(items or {}) do
+    if index > 1 then cursor = cursor + gap end
+    renderer.draw_text(font, item.text, cursor, y, item.color)
+    cursor = cursor + font:get_width(item.text)
+  end
+end
+
+local function draw_diff_header(view)
+  local font = style.prose_font
+  local header_height = view.diff_header_height or 0
+  if header_height <= 0 then return end
+
+  local y = view.position.y + (header_height - font:get_height()) / 2
+  local padding = style.padding.x
+  local gap = font:get_width("  ")
+  local half_width = view.size.x / 2
+  local side_width = math.max(0, half_width - view:get_divider_width() / 2)
+
+  for index, side_view in ipairs { view.buffer_view_a, view.buffer_view_b } do
+    local x = side_view.position.x + padding
+    local available = math.max(0, side_width - padding * 2)
+    local title = view:get_side_title(index)
+    local items = index == 2 and header_stat_items(view:get_change_stats(), false) or nil
+    if items then
+      local full_width = header_items_width(font, items, gap)
+      local title_width = math.max(0, available - full_width - gap)
+      if title_width < font:get_width(title) then
+        items = header_stat_items(view:get_change_stats(), true)
+        local compact_width = header_items_width(font, items, gap)
+        title_width = math.max(0, available - compact_width - gap)
+      end
+      title = truncate_header_title(font, title, title_width)
+      renderer.draw_text(font, title, x, y, style.dim)
+      local items_x = x + font:get_width(title) + gap
+      if items_x < x + available then draw_header_items(font, items, items_x, y, gap) end
+    else
+      title = truncate_header_title(font, title, available)
+      renderer.draw_text(font, title, x, y, style.dim)
+    end
+  end
+end
+
 function DiffView:update()
   local started, scope = perf_begin("diffview_update")
   local super_started, super_scope = perf_begin("diffview_super_update")
@@ -2101,8 +2241,7 @@ function DiffView:update()
   local divider_half = self:get_divider_width() / 2
 
   self.buffer_view_a.position.x = self.position.x
-  local titles = self.request and self.request.content_titles
-  local header_height = titles and style.prose_font:get_height() + style.padding.y or 0
+  local header_height = style.prose_font:get_height() + style.padding.y
   self.diff_header_height = header_height
   self.buffer_view_a.position.y = self.position.y + header_height
   self.buffer_view_a.size.x = math.max(0, (self.size.x / 2) - divider_half)
@@ -2141,12 +2280,7 @@ function DiffView:draw()
   local chrome_started, chrome_scope = perf_begin("diffview_draw_chrome")
   DiffView.super.draw(self)
   self:draw_background(style.background)
-  local titles = self.request and self.request.content_titles
-  if titles and self.diff_header_height and self.diff_header_height > 0 then
-    local y = self.position.y + (self.diff_header_height - style.prose_font:get_height()) / 2
-    renderer.draw_text(style.prose_font, titles[1] or "Left", self.buffer_view_a.position.x + style.padding.x, y, style.dim)
-    renderer.draw_text(style.prose_font, titles[2] or "Right", self.buffer_view_b.position.x + style.padding.x, y, style.dim)
-  end
+  draw_diff_header(self)
   if self.comparison_message then
     renderer.draw_text(
       style.prose_font, self.comparison_message,
