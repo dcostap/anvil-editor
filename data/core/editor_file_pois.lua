@@ -155,9 +155,6 @@ local function draw_line_underlines(view, line, x, y, points)
 end
 
 function M.draw_line(view, line, x, y)
-  -- Do not scan a complete source file during the first paint. Navigation or
-  -- activation creates the cache before underlines become visible.
-  if not view.editor_file_poi_cache then return end
   draw_line_underlines(view, line, x, y, points_for_view(view, { silent = true }))
 end
 

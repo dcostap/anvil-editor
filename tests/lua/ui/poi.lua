@@ -143,6 +143,38 @@ test.describe("Point of Interest navigation", function()
     test.same({ buffer:get_selection() }, { 2, 4, 2, 4 })
   end)
 
+  test.it("draws Editor file-location POIs before navigation", function(context)
+    local root = USERDIR .. PATHSEP .. "editor-file-poi-paint-" .. system.get_process_id()
+    context.temp_root = root
+    context.original_root_project = core.root_project
+    test.ok(common.mkdirp(root))
+    local source_path = root .. PATHSEP .. "source.cpp"
+    local target_path = root .. PATHSEP .. "target.cpp"
+    local target = assert(io.open(target_path, "wb"))
+    target:write("target\n")
+    target:close()
+    core.root_project = function() return { path = root } end
+
+    local buffer = Buffer()
+    buffer:set_filename("source.cpp", source_path)
+    buffer:insert(1, 1, "// target.cpp:12:4\n")
+    buffer:clear_undo_redo()
+    context.buffers = { buffer }
+    local view = Editor(buffer)
+    context.views = { view }
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 200
+
+    local editor_file_pois = require "core.editor_file_pois"
+    local draw_rect = renderer.draw_rect
+    local draw_count = 0
+    renderer.draw_rect = function(...) draw_count = draw_count + 1 end
+    local ok, err = pcall(editor_file_pois.draw_line, view, 1, 0, 0)
+    renderer.draw_rect = draw_rect
+    test.ok(ok, err)
+    test.ok(draw_count > 0)
+  end)
+
   test.it("animates a visible POI scroll change", function()
     local lines = {}
     for i = 1, 100 do lines[i] = "line " .. i end
