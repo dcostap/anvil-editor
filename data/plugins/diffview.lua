@@ -475,7 +475,7 @@ local function comparison_rejection(buffers)
       if line:find("\0", 1, true) then return "Binary content cannot use the text Diff View" end
     end
   end
-  if total_bytes > 24 * 1024 * 1024 or total_lines > 600000 then
+  if total_bytes > 48 * 1024 * 1024 or total_lines > 1200000 then
     return "Content is too large for the text Diff View"
   end
 end
