@@ -2197,12 +2197,15 @@ end
 
 local function draw_diff_header(view)
   local font = style.prose_font
+  local stat_font = style.get_small_font(font)
   local header_height = view.diff_header_height or 0
   if header_height <= 0 then return end
 
   local y = view.position.y + (header_height - font:get_height()) / 2
+  local stat_y = view.position.y + (header_height - stat_font:get_height()) / 2
   local padding = style.padding.x
-  local gap = font:get_width("  ")
+  local title_gap = font:get_width("  ")
+  local stat_gap = stat_font:get_width("  ")
   local half_width = view.size.x / 2
   local side_width = math.max(0, half_width - view:get_divider_width() / 2)
 
@@ -2212,16 +2215,16 @@ local function draw_diff_header(view)
     local title = view:get_side_title(index)
     local items = index == 2 and header_stat_items(view:get_change_stats(), false) or nil
     if items then
-      local items_width = header_items_width(font, items, gap)
+      local items_width = header_items_width(stat_font, items, stat_gap)
       if items_width > available then
         items = header_stat_items(view:get_change_stats(), true)
-        items_width = header_items_width(font, items, gap)
+        items_width = header_items_width(stat_font, items, stat_gap)
       end
-      local title_width = math.max(0, available - items_width - gap)
+      local title_width = math.max(0, available - items_width - title_gap)
       title = truncate_header_title(font, title, title_width)
       renderer.draw_text(font, title, x, y, style.dim)
       local items_x = x + available - items_width
-      if items_width <= available then draw_header_items(font, items, items_x, y, gap) end
+      if items_width <= available then draw_header_items(stat_font, items, items_x, stat_y, stat_gap) end
     else
       title = truncate_header_title(font, title, available)
       renderer.draw_text(font, title, x, y, style.dim)
