@@ -117,11 +117,28 @@ function metadata.draw(font, parts, x, y, width, columns)
   local icon_gap = -math.max(3, 2 * (SCALE or 1))
   local total = 0
   local widths = {}
+  local leading_empty = 0
+  local leading = true
   for index, part in ipairs(parts) do
     widths[index] = columns and columns[part.id]
       or math.max(text_width(small_font, cache, part.sample), text_width(small_font, cache, part.text))
-    total = total + widths[index] + (part.icon and icon_size + icon_gap or 0)
-    if index > 1 then total = total + text_width(small_font, cache, part.separator or "  ") end
+    local part_width = widths[index] + (part.icon and icon_size + icon_gap or 0)
+    local separator = part.separator or "  "
+    local separator_width = index > 1 and text_width(small_font, cache, separator) or 0
+    total = total + part_width + separator_width
+    if leading then
+      local has_content = part.icon or part.text ~= ""
+      if has_content then
+        leading = false
+        -- The separator is whitespace in the shared metadata schema. Do not
+        -- reclaim it for custom metadata if it contains visible characters.
+        if index > 1 and not separator:find("%S") then
+          leading_empty = leading_empty + separator_width
+        end
+      else
+        leading_empty = leading_empty + part_width + separator_width
+      end
+    end
   end
   local outer_gap = math.max(1, math.floor(style.padding.x / 2))
   if total + outer_gap >= width then return width end
@@ -144,7 +161,9 @@ function metadata.draw(font, parts, x, y, width, columns)
     end
     cx = cx + widths[index]
   end
-  return math.max(0, width - total - outer_gap)
+  -- Keep global columns aligned, but let the row text use leading columns
+  -- that have no content in this row.
+  return math.max(0, width - total - outer_gap + leading_empty)
 end
 
 function metadata.line_hint(font, parts, columns)

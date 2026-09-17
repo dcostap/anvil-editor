@@ -53,6 +53,30 @@ test.describe("Shared file metadata", function()
     test.ok(found)
     for _, part in ipairs(ordinary) do test.ok(part.id ~= "ignored") end
   end)
+
+  test.it("lets rows without leading metadata use its reserved space", function()
+    local font = style.code_font:copy(style.code_font:get_size())
+    local changed = {
+      { id = "additions", text = "+3", sample = "+999" },
+      { id = "deletions", text = "−1", sample = "−999", separator = " " },
+      { id = "size", text = "1K", sample = "999M" },
+      { id = "age", text = "2m", sample = "99yr" },
+    }
+    local ordinary = {
+      { id = "additions", text = "", sample = "+999" },
+      { id = "deletions", text = "", sample = "−999", separator = " " },
+      { id = "size", text = "1K", sample = "999M" },
+      { id = "age", text = "2m", sample = "99yr" },
+    }
+    local columns = {}
+    metadata.include_columns(columns, font, changed)
+    metadata.include_columns(columns, font, ordinary)
+
+    local _, changed_width = capture(font, changed, columns)
+    local _, ordinary_width = capture(font, ordinary, columns)
+    test.ok(ordinary_width > changed_width,
+      "ordinary rows should reclaim empty leading metadata columns")
+  end)
 end)
 
 test.describe("File metadata reuse", function()
