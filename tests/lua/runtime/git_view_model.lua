@@ -36,6 +36,11 @@ local function fake_backend(status_output, log_output)
     repo_for_path = function(path) return { root = path } end,
     build_log_args = function(opts) return { "log", tostring(opts and opts.offset or "") } end,
     parse_status_z = real_backend.parse_status_z,
+    parse_status_v2_z = function(output)
+      return output:match("^[12u?!] ")
+        and real_backend.parse_status_v2_z(output)
+        or real_backend.parse_status_z(output)
+    end,
     parse_log_page = real_backend.parse_log_page,
     WORKING_TREE = real_backend.WORKING_TREE,
     INDEX = real_backend.INDEX,
@@ -1309,6 +1314,64 @@ test.describe("plugins.git.model", function()
     test.equal(tab.left_text, "left b")
     test.equal(tab.right_text, "right b")
     test.equal(tab.left_name, "b.lua")
+  end)
+
+  test.it("loads a selected index side through its immutable blob identity", function()
+    local object_id = string.rep("a", 40)
+    local requests = {}
+    local backend = fake_backend("", log_output())
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      requests[#requests + 1] = { rev = rev, relpath = relpath, object_id = opts.object_id }
+      callback(rev == backend.WORKING_TREE and "working\n" or "indexed\n", nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model.repo = { root = "C:/repo" }
+    local tab = {
+      kind = "commit_diff",
+      left = backend.INDEX,
+      right = backend.WORKING_TREE,
+      changed_files = {{
+        status = "modified", old_path = "src/app.lua", new_path = "src/app.lua",
+        left_object_id = object_id,
+      }},
+      selected_file = 1,
+      diff_generation = 0,
+    }
+
+    test.ok(model:load_selected_diff_file(tab))
+
+    test.equal(requests[1].rev, backend.INDEX)
+    test.equal(requests[1].object_id, object_id)
+    test.equal(requests[2].rev, backend.WORKING_TREE)
+    test.equal(requests[2].object_id, nil)
+    test.equal(tab.left_text, "indexed\n")
+    test.equal(tab.right_current_path, "src/app.lua")
+  end)
+
+  test.it("carries refreshed index identities into listed local comparisons", function()
+    local head_id = string.rep("1", 40)
+    local index_id = string.rep("2", 40)
+    local status = table.concat({
+      "1 .M N... 100644 100644 100644 " .. head_id .. " " .. index_id .. " src/app.lua",
+      "",
+    }, "\0")
+    local backend = fake_backend(status, log_output())
+    local requested_object_id
+    backend.file_at = function(repo, rev, relpath, opts, callback)
+      if rev == backend.INDEX then requested_object_id = opts.object_id end
+      callback(rev == backend.WORKING_TREE and "working\n" or "indexed\n", nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+
+    model:refresh_log()
+    local revision = model:log_tab().commits[1]
+    test.equal(revision.local_scope, "unstaged")
+    test.equal(revision.changed_files[1].left_object_id, index_id)
+    model:open_commit_diff(revision, nil, { selected_file_path = "src/app.lua" })
+
+    test.equal(requested_object_id, index_id)
   end)
 
   test.it("keeps a binary selection after stale text loads complete", function()

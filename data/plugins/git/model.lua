@@ -555,6 +555,11 @@ local function path_for_file(file, side)
   return file.new_path or file.path
 end
 
+local function object_id_for_file(file, side)
+  if not file then return nil end
+  return side == "left" and file.left_object_id or file.right_object_id
+end
+
 local function missing_side_for_status(file, side)
   local status = file and (file.status or file.kind)
   return (side == "left" and (status == "added" or status == "untracked"))
@@ -1324,7 +1329,9 @@ function Model:load_selected_binary_files(tab, callback)
       return
     end
     local job, done
-    job = self.backend.file_at(self.repo, rev, relpath, {}, function(content, err)
+    job = self.backend.file_at(self.repo, rev, relpath, {
+      object_id = object_id_for_file(file, side),
+    }, function(content, err)
       done = true
       self:_untrack_job(job)
       if generation ~= tab.binary_generation then return end
@@ -1601,7 +1608,9 @@ function Model:load_selected_diff_file(tab, callback)
       return
     end
     local job, done
-    job = self.backend.file_at(self.repo, rev, relpath, {}, function(text, err)
+    job = self.backend.file_at(self.repo, rev, relpath, {
+      object_id = object_id_for_file(file, side),
+    }, function(text, err)
       done = true
       self:_untrack_job(job)
       if generation ~= tab.file_generation then return end
@@ -1917,7 +1926,7 @@ function Model:_start_refresh_jobs(repo, generation, callback)
   local status_job, status_done
   status_job = self.backend.run_git(
     repo,
-    { "status", "--porcelain=v1", "-z", "--untracked-files=all" },
+    { "status", "--porcelain=v2", "-z", "--untracked-files=all" },
     { optional_locks = false },
     function(result, err)
       status_done = true
@@ -1926,7 +1935,8 @@ function Model:_start_refresh_jobs(repo, generation, callback)
       local_changes = { staged = {}, unstaged = {} }
       local seen = {}
       if result then
-        for _, record in ipairs(self.backend.parse_status_z(result.stdout)) do
+        local parse_status = self.backend.parse_status_v2_z or backend_default.parse_status_v2_z
+        for _, record in ipairs(parse_status(result.stdout)) do
           if not untracked_directory_summary(record) then
             local path = changed_file_path(record)
             if record.kind == "untracked" or record.kind == "unmerged" then

@@ -71,6 +71,36 @@ test.describe("plugins.git.backend", function()
     end)
   end)
 
+  test.describe("parse_raw_diff_z", function()
+    test.it("keeps immutable blob identities for both diff sides", function()
+      local old_a = string.rep("a", 40)
+      local new_a = string.rep("b", 40)
+      local old_r = string.rep("c", 40)
+      local new_r = string.rep("d", 40)
+      local old_d = string.rep("e", 40)
+      local zero = string.rep("0", 40)
+      local records = backend.parse_raw_diff_z(table.concat({
+        ":100644 100644 " .. old_a .. " " .. new_a .. " M", "src/app.lua",
+        ":100644 100644 " .. old_r .. " " .. new_r .. " R087", "old/name.lua", "new/name.lua",
+        ":100644 000000 " .. old_d .. " " .. zero .. " D", "gone.lua",
+        "",
+      }, "\0"))
+
+      test.equal(#records, 3)
+      test.equal(records[1].left_object_id, old_a)
+      test.equal(records[1].right_object_id, new_a)
+      test.equal(records[2].status, "renamed")
+      test.equal(records[2].score, 87)
+      test.equal(records[2].old_path, "old/name.lua")
+      test.equal(records[2].new_path, "new/name.lua")
+      test.equal(records[2].left_object_id, old_r)
+      test.equal(records[2].right_object_id, new_r)
+      test.equal(records[3].status, "deleted")
+      test.equal(records[3].left_object_id, old_d)
+      test.equal(records[3].right_object_id, nil)
+    end)
+  end)
+
   test.describe("parse_numstat_z", function()
     test.it("parses simple and rename stats by displayed path", function()
       local stats = backend.parse_numstat_z(table.concat({
@@ -121,6 +151,28 @@ test.describe("plugins.git.backend", function()
 
       test.equal(status[1].kind, "unmerged")
       test.equal(status[2].kind, "unmerged")
+    end)
+
+    test.it("parses porcelain v2 blob identities", function()
+      local head = string.rep("1", 40)
+      local index = string.rep("2", 40)
+      local records = backend.parse_status_v2_z(table.concat({
+        "1 .M N... 100644 100644 100644 " .. head .. " " .. index .. " src/app.lua",
+        "? new file.lua",
+        "",
+      }, "\0"))
+
+      test.equal(records[1].xy, ".M")
+      test.equal(records[1].path, "src/app.lua")
+      test.equal(records[1].head_object_id, head)
+      test.equal(records[1].index_object_id, index)
+      test.equal(records[2].kind, "untracked")
+      test.equal(records[2].path, "new file.lua")
+
+      test.equal(backend.status_column_change(records[1], 1), nil)
+      local unstaged = backend.status_column_change(records[1], 2)
+      test.equal(unstaged.left_object_id, index)
+      test.equal(unstaged.right_object_id, nil)
     end)
   end)
 
@@ -187,7 +239,8 @@ test.describe("plugins.git.backend", function()
     test.test("builds changed-file diff args for commits and working tree", function()
       local args = backend.build_changed_files_args("parent", "child", { relpath = "src/app.lua" })
       test.equal(args[1], "diff")
-      test.ok(backend._contains_arg(args, "--name-status"), "missing name-status")
+      test.ok(backend._contains_arg(args, "--raw"), "missing raw diff data")
+      test.ok(backend._contains_arg(args, "--abbrev=64"), "missing complete object IDs")
       test.ok(backend._contains_arg(args, "-z"), "missing NUL delimiter")
       test.ok(backend._contains_arg(args, "parent"), "missing left revision")
       test.ok(backend._contains_arg(args, "child"), "missing right revision")
@@ -237,8 +290,16 @@ test.describe("plugins.git.backend", function()
       local old_run_git = backend.run_git
       local size_input
       backend.run_git = function(repo, args, opts, callback)
-        if backend._contains_arg(args, "--name-status") then
-          callback({ stdout = "M\0src/app.lua\0D\0old.txt\0A\0new.txt\0" }, nil)
+        if backend._contains_arg(args, "--raw") then
+          local zero = string.rep("0", 40)
+          local one = string.rep("1", 40)
+          local two = string.rep("2", 40)
+          local three = string.rep("3", 40)
+          callback({ stdout = table.concat({
+            ":100644 100644 " .. one .. " " .. two .. " M", "src/app.lua",
+            ":100644 000000 " .. three .. " " .. zero .. " D", "old.txt",
+            ":000000 100644 " .. zero .. " " .. one .. " A", "new.txt", "",
+          }, "\0") }, nil)
         elseif backend._contains_arg(args, "--numstat") then
           callback({ stdout = "" }, nil)
         else
@@ -277,7 +338,10 @@ test.describe("plugins.git.backend", function()
       local job = backend.changed_files({ root = "repo" }, "left", "right", {}, function(_, err)
         calls, callback_err = calls + 1, err
       end)
-      callbacks[1]({ stdout = "M\0src/app.lua\0" }, nil)
+      callbacks[1]({ stdout = table.concat({
+        ":100644 100644 " .. string.rep("a", 40) .. " " .. string.rep("b", 40) .. " M",
+        "src/app.lua", "",
+      }, "\0") }, nil)
       job:cancel()
       backend.run_git = old_run_git
 

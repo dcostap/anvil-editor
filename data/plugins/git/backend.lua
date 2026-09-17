@@ -107,6 +107,14 @@ local function score_from_token(token)
   return value and tonumber(value) or nil
 end
 
+local function immutable_object_id(value)
+  if type(value) ~= "string" or (#value ~= 40 and #value ~= 64)
+      or not value:match("^%x+$") or not value:find("[^0]", 1) then
+    return nil
+  end
+  return value:lower()
+end
+
 local function record_path(record)
   return record and (record.path or record.new_path or record.old_path) or nil
 end
@@ -141,6 +149,55 @@ function backend.parse_name_status_z(output)
         elseif status == "deleted" then
           record.old_path = path
           record.new_path = nil
+        else
+          record.old_path = path
+          record.new_path = path
+        end
+      end
+      records[#records + 1] = record
+    end
+  end
+  return records
+end
+
+---Parse NUL-delimited `git diff --raw -z` records.
+---@param output string
+---@return table[] records
+function backend.parse_raw_diff_z(output)
+  local fields = split_nul(output)
+  local records = {}
+  local i = 1
+  while i <= #fields do
+    local header = fields[i]
+    i = i + 1
+    if header and header ~= "" then
+      local old_mode, new_mode, old_id, new_id, token = header:match(
+        "^:([^ ]+) ([^ ]+) ([0-9a-fA-F]+) ([0-9a-fA-F]+) ([A-Z][0-9]*)$"
+      )
+      if not token then
+        return records, { kind = "parse", message = "Git raw diff record is invalid" }
+      end
+      local status = status_from_name_token(token)
+      local record = {
+        raw_status = token,
+        status = status,
+        score = score_from_token(token),
+        old_mode = old_mode,
+        new_mode = new_mode,
+        left_object_id = immutable_object_id(old_id),
+        right_object_id = immutable_object_id(new_id),
+      }
+      if status == "renamed" or status == "copied" then
+        record.old_path = normalize_relpath(fields[i])
+        record.new_path = normalize_relpath(fields[i + 1])
+        i = i + 2
+      else
+        local path = normalize_relpath(fields[i])
+        i = i + 1
+        if status == "added" then
+          record.new_path = path
+        elseif status == "deleted" then
+          record.old_path = path
         else
           record.old_path = path
           record.new_path = path
@@ -300,18 +357,78 @@ function backend.parse_status_z(output)
   return records
 end
 
+---Parse NUL-delimited `git status --porcelain=v2 -z` records.
+function backend.parse_status_v2_z(output)
+  local fields = split_nul(output)
+  local records = {}
+  local i = 1
+  while i <= #fields do
+    local field = fields[i]
+    i = i + 1
+    local record
+    local kind = field and field:sub(1, 1)
+    if kind == "1" or kind == "2" then
+      local xy, sub, head_mode, index_mode, worktree_mode, head_id, index_id, extra, path
+      if kind == "1" then
+        xy, sub, head_mode, index_mode, worktree_mode, head_id, index_id, path = field:match(
+          "^1 (%S+) (%S+) (%S+) (%S+) (%S+) (%x+) (%x+) (.*)$"
+        )
+      else
+        xy, sub, head_mode, index_mode, worktree_mode, head_id, index_id, extra, path = field:match(
+          "^2 (%S+) (%S+) (%S+) (%S+) (%S+) (%x+) (%x+) (%S+) (.*)$"
+        )
+      end
+      if xy then
+        record = {
+          xy = xy,
+          submodule = sub,
+          head_mode = head_mode,
+          index_mode = index_mode,
+          worktree_mode = worktree_mode,
+          head_object_id = immutable_object_id(head_id),
+          index_object_id = immutable_object_id(index_id),
+          kind = status_kind(xy),
+          path = normalize_relpath(path),
+        }
+        if kind == "2" then
+          record.old_path = normalize_relpath(fields[i])
+          record.new_path = record.path
+          record.score = score_from_token(extra)
+          i = i + 1
+        end
+      end
+    elseif kind == "?" then
+      record = { xy = "??", kind = "untracked", path = normalize_relpath(field:sub(3)) }
+    elseif kind == "!" then
+      record = { xy = "!!", kind = "ignored", path = normalize_relpath(field:sub(3)) }
+    elseif kind == "u" then
+      local xy, path = field:match("^u (%S+) %S+ %S+ %S+ %S+ %S+ %x+ %x+ %x+ (.*)$")
+      if xy then record = { xy = xy, kind = "unmerged", path = normalize_relpath(path) } end
+    end
+    if record then records[#records + 1] = record end
+  end
+  return records
+end
+
 ---Return the change on one side of a tracked, merged status record.
 function backend.status_column_change(record, column)
   local code = record.xy:sub(column, column)
-  if code == " " then return nil end
+  if code == " " or code == "." then return nil end
   local status = status_from_name_token(code)
   local renamed = status == "renamed" or status == "copied"
-  return {
+  local change = {
     status = status,
     path = record.path,
     old_path = status ~= "added" and (renamed and record.old_path or record.path) or nil,
     new_path = status ~= "deleted" and record.path or nil,
   }
+  if column == 1 then
+    change.left_object_id = record.head_object_id
+    change.right_object_id = record.index_object_id
+  else
+    change.left_object_id = record.index_object_id
+  end
+  return change
 end
 
 local function parse_parents(text)
@@ -671,7 +788,7 @@ local function build_diff_range_args(base, left, right, opts)
 end
 
 function backend.build_changed_files_args(left, right, opts)
-  return build_diff_range_args({ "diff", "--name-status", "-z" }, left, right, opts)
+  return build_diff_range_args({ "diff", "--raw", "-z", "--abbrev=64" }, left, right, opts)
 end
 
 function backend.build_changed_file_stats_args(left, right, opts)
@@ -703,14 +820,18 @@ function backend.changed_files(repo, left, right, opts, callback)
     end
     complete(nil, { kind = "cancelled", message = "Git command cancelled" })
   end
-  local name_job
-  name_job = backend.run_git(repo, backend.build_changed_files_args(left, right, opts), opts, function(result, err)
+  local raw_job
+  raw_job = backend.run_git(repo, backend.build_changed_files_args(left, right, opts), opts, function(result, err)
     if not result then
       complete(nil, err)
       return
     end
     if composite.cancelled then return end
-    local records = backend.parse_name_status_z(result.stdout)
+    local records, parse_err = backend.parse_raw_diff_z(result.stdout)
+    if parse_err then
+      complete(nil, parse_err)
+      return
+    end
     local pending = 2
     local function child_complete()
       pending = pending - 1
@@ -736,7 +857,7 @@ function backend.changed_files(repo, left, right, opts, callback)
     end)
     composite.jobs[#composite.jobs + 1] = sizes_job
   end)
-  composite.jobs[#composite.jobs + 1] = name_job
+  composite.jobs[#composite.jobs + 1] = raw_job
   return composite
 end
 
@@ -783,11 +904,11 @@ function backend.file_at(repo, rev, relpath, opts, callback)
     return nil
   end
   -- Only complete object IDs are immutable. HEAD, index, and branch names are not.
-  local key
-  if type(rev) == "string" and (#rev == 40 or #rev == 64) and rev:match("^%x+$") then
-    local root = type(repo) == "table" and repo.root or repo
-    key = tostring(root) .. "\0" .. rev .. "\0" .. git_arg_path(relpath)
-  end
+  local root = type(repo) == "table" and repo.root or repo
+  local object_id = immutable_object_id(opts.object_id)
+  local revision_id = immutable_object_id(rev)
+  local key = object_id and (tostring(root) .. "\0blob\0" .. object_id)
+    or revision_id and (tostring(root) .. "\0revision\0" .. revision_id .. "\0" .. git_arg_path(relpath))
   local cached = key and revision_content[key]
   if cached and backend.is_enabled() then
     local cfg = git_config()
@@ -795,13 +916,19 @@ function backend.file_at(repo, rev, relpath, opts, callback)
     if #cached > limit then
       if callback then callback(nil, { kind = "output_too_large", message = "output too large" }) end
     else
-      core.log_quiet("Git backend: reused immutable revision content for %s", relpath)
+      core.log_quiet("Git backend: reused immutable Git content for %s", relpath)
       if callback then callback(cached, nil) end
     end
     return nil
   end
-  local prefix = rev == backend.INDEX and "" or tostring(rev)
-  return backend.run_git(repo, { "show", prefix .. ":" .. git_arg_path(relpath) }, opts, function(result, err)
+  local args
+  if object_id then
+    args = { "cat-file", "blob", object_id }
+  else
+    local prefix = rev == backend.INDEX and "" or tostring(rev)
+    args = { "show", prefix .. ":" .. git_arg_path(relpath) }
+  end
+  return backend.run_git(repo, args, opts, function(result, err)
     if not result then
       if callback then callback(nil, err) end
       return
