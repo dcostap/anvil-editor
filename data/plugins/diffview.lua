@@ -2123,35 +2123,26 @@ function DiffView:reveal_change(direction)
   return true
 end
 
-local function header_line_count_text(count, marker, suffix)
-  return string.format("%s %d %s %s", marker, count, count == 1 and "line" or "lines", suffix)
-end
-
-local function header_stat_items(stats, compact)
+local function header_stat_items(stats)
   if not stats then return nil end
-  if stats.total == 0 then
-    return { { text = "No differences", color = style.dim } }
-  end
+  if stats.total == 0 then return nil end
 
   local items = {}
   if stats.deleted > 0 then
     items[#items + 1] = {
-      text = compact and string.format("- %d", stats.deleted)
-        or header_line_count_text(stats.deleted, "-", "deleted"),
+      text = string.format("- %d", stats.deleted),
       color = common.blend_colors(style.text, style.diff_marker_delete),
     }
   end
   if stats.inserted > 0 then
     items[#items + 1] = {
-      text = compact and string.format("+ %d", stats.inserted)
-        or header_line_count_text(stats.inserted, "+", "added"),
+      text = string.format("+ %d", stats.inserted),
       color = common.blend_colors(style.text, style.diff_marker_insert),
     }
   end
   if stats.changed > 0 then
     items[#items + 1] = {
-      text = compact and string.format("~ %d", stats.changed)
-        or header_line_count_text(stats.changed, "~", "changed"),
+      text = string.format("~ %d", stats.changed),
       color = common.blend_colors(style.text, style.diff_marker_modify),
     }
   end
@@ -2213,13 +2204,9 @@ local function draw_diff_header(view)
     local x = side_view.position.x + padding
     local available = math.max(0, side_width - padding * 2)
     local title = view:get_side_title(index)
-    local items = index == 2 and header_stat_items(view:get_change_stats(), false) or nil
+    local items = index == 2 and header_stat_items(view:get_change_stats()) or nil
     if items then
       local items_width = header_items_width(stat_font, items, stat_gap)
-      if items_width > available then
-        items = header_stat_items(view:get_change_stats(), true)
-        items_width = header_items_width(stat_font, items, stat_gap)
-      end
       local title_width = math.max(0, available - items_width - title_gap)
       title = truncate_header_title(font, title, title_width)
       renderer.draw_text(font, title, x, y, style.dim)
