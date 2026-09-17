@@ -20,6 +20,17 @@ test.describe("Diff whitespace comparison", function()
     test.equal(internal:line_state("b", 1), "modify")
   end)
 
+  test.it("highlights internal whitespace changes in trim mode", function()
+    local before, after = "label = value", "label=value"
+    local m = model.compute({ before }, { after }, { whitespace_mode = "trim" })
+    local old_ranges, new_ranges = m:inline_ranges("a", 1), m:inline_ranges("b", 1)
+    test.equal(#old_ranges, 2)
+    for _, range in ipairs(old_ranges) do
+      test.equal(before:sub(range.col1, range.col2 - 1), " ")
+    end
+    test.same(new_ranges, {})
+  end)
+
   test.it("ignores whitespace throughout a line without changing the source text", function()
     local before = { '\t label = "a b" \t\n', "    loading = false\n" }
     local after = { 'label="ab"\n', "        loading=false  \n" }

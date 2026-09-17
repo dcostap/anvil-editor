@@ -143,6 +143,75 @@ local function token_inline_ranges(from, target)
   return ranges
 end
 
+local function is_trim_space(byte)
+  return byte == 32 or byte == 9
+end
+
+local function trim_content_bounds(text)
+  local end_col = #text
+  if text:sub(-1) == "\n" then
+    end_col = end_col - 1
+    if end_col > 0 and text:sub(end_col, end_col) == "\r" then
+      end_col = end_col - 1
+    end
+  end
+
+  local first = 1
+  while first <= end_col and is_trim_space(text:byte(first)) do first = first + 1 end
+  local last = end_col
+  while last >= first and is_trim_space(text:byte(last)) do last = last - 1 end
+  return first, last
+end
+
+local function is_trim_edge_column(text, col)
+  if not is_trim_space(text:byte(col)) then return false end
+  local first, last = trim_content_bounds(text)
+  return col < first or col > last
+end
+
+local function append_inline_range(ranges, col)
+  local previous = ranges[#ranges]
+  if previous and col <= previous.col2 then
+    previous.col2 = math.max(previous.col2, col + 1)
+  else
+    ranges[#ranges + 1] = { col1 = col, col2 = col + 1 }
+  end
+end
+
+local function merge_inline_ranges(ranges)
+  table.sort(ranges, function(a, b) return a.col1 < b.col1 end)
+  local merged = {}
+  for _, range in ipairs(ranges) do
+    local previous = merged[#merged]
+    if previous and range.col1 <= previous.col2 then
+      previous.col2 = math.max(previous.col2, range.col2)
+    else
+      merged[#merged + 1] = { col1 = range.col1, col2 = range.col2 }
+    end
+  end
+  return merged
+end
+
+local function trim_whitespace_inline_ranges(from, target)
+  local ranges = token_inline_ranges(from, target)
+  local target_col = 1
+  for _, edit in ipairs(diff.inline_diff(from, target) or {}) do
+    local value = edit.val or ""
+    if edit.tag ~= "delete" then
+      if edit.tag ~= "equal" then
+        for offset = 0, #value - 1 do
+          local col = target_col + offset
+          if is_trim_space(target:byte(col)) and not is_trim_edge_column(target, col) then
+            append_inline_range(ranges, col)
+          end
+        end
+      end
+      target_col = target_col + #value
+    end
+  end
+  return merge_inline_ranges(ranges)
+end
+
 local function whitespace_inline_ranges(from, target)
   local from_values = diff.split(from:gsub("%s", ""), "char")
   local target_values, source_columns = {}, {}
@@ -184,6 +253,9 @@ local function inline_change(from, to, whitespace_mode)
   if from == to then return nil, {} end
   if whitespace_mode == "ignore" then
     return nil, whitespace_inline_ranges(from, to)
+  end
+  if whitespace_mode == "trim" then
+    return nil, trim_whitespace_inline_ranges(from, to)
   end
   return nil, token_inline_ranges(from, to)
 end
