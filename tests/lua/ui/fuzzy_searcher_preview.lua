@@ -163,6 +163,22 @@ test.describe("Fuzzy Searcher preview", function()
     test.ok(ph > 0)
   end)
 
+  test.it("uses a vertical preview layout for narrow file searches", function(context)
+    fuzzy_searcher.open("")
+    local picker = core.fuzzy_searcher_active_view
+    local narrow_width = math.max(1, (fuzzy_searcher.min_width or 1200 * SCALE) / 2)
+    picker:set_size(narrow_width, picker.size.y)
+
+    local metrics = picker:list_metrics()
+    local px, py, pw, ph = picker:preview_bounds()
+    test.ok(metrics.vertical_preview, "expected narrow file search to use vertical preview layout")
+    test.equal(metrics.list_w, metrics.w)
+    test.ok(py > metrics.top, "expected preview below the narrow results list")
+    test.ok(px >= metrics.x, "expected preview to stay inside the picker")
+    test.ok(pw > 0, "expected a visible preview pane")
+    test.ok(ph > 0)
+  end)
+
   test.it("keeps the picker focused after opening an Editor in a new Pane Group", function(context)
     local path = temp_file_path("fuzzy-confirm-side-focus-test.txt")
     context.files = { path }

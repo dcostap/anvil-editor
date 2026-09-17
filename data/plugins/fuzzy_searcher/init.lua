@@ -3653,6 +3653,14 @@ function FSView:is_full_width_mode()
   return self:is_command_mode() or self:is_shell_mode()
 end
 
+function FSView:uses_vertical_preview(width)
+  if self:is_full_width_mode() then return false end
+  if self:is_deep_code_mode() then return true end
+  -- Below the popup's normal minimum width, a horizontal preview leaves both
+  -- the result list and the preview too narrow to be useful.
+  return width < (fuzzy_searcher.min_width or 1200 * SCALE)
+end
+
 function FSView:list_metrics(font)
   font = font or style.code_font
   local pad = style.padding.x
@@ -3661,7 +3669,7 @@ function FSView:list_metrics(font)
   local x, y = self.position.x, self.position.y
   local w, h = self.size.x, self.size.y
   local top = y + self.input.size.y + pad * 3 + lh
-  local vertical_preview = self:is_deep_code_mode()
+  local vertical_preview = self:uses_vertical_preview(w)
   local list_w = (self:is_full_width_mode() or vertical_preview) and w or w * (1 - fuzzy_searcher.preview_width)
   local available_h = math.max(0, h - (top - y))
   local list_h = available_h
