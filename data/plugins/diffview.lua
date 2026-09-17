@@ -990,16 +990,20 @@ end
 local MAX_UNPADDED_DIFF_ROWS = 8
 local MIN_UNCHANGED_TAIL_ROWS_FOR_DIFF_GAP = 3
 
+local function gap_line_indent(text, tab_size)
+  local columns = 0
+  for char in text:match("^[ \t]*"):gmatch(".") do
+    columns = columns + (char == "\t" and tab_size - columns % tab_size or 1)
+  end
+  return columns
+end
+
 local function gap_neighbor_indent(lines, line, direction, tab_size)
   for distance = 1, 12 do
     local text = lines[line + distance * direction]
     if not text then return nil end
     if text:find("%S") then
-      local columns = 0
-      for char in text:match("^[ \t]*"):gmatch(".") do
-        columns = columns + (char == "\t" and tab_size - columns % tab_size or 1)
-      end
-      return columns
+      return gap_line_indent(text, tab_size)
     end
   end
 end
@@ -1031,7 +1035,22 @@ local function gap_boundary(view, alignment, index, side)
       end
     end
   end
-  return best_line or alignment[index][side]
+  if best_line then return best_line end
+
+  -- An unchanged continuation can be the first alignment pair after a large
+  -- change. Keep it with its statement and use the following dedent instead.
+  local trigger_line = alignment[index][side]
+  local trigger_indent = gap_line_indent(lines[trigger_line], tab_size)
+  for distance = 1, 12 do
+    local pair = alignment[index + distance]
+    if not pair or pair.tag ~= "equal" then break end
+    local line = pair[side]
+    if line and lines[line]:find("%S")
+      and gap_line_indent(lines[line], tab_size) < trigger_indent then
+      return line
+    end
+  end
+  return trigger_line
 end
 
 local function has_useful_comparison_remaining(view, alignment, index)

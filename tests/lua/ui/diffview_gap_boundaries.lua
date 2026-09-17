@@ -43,6 +43,46 @@ test.describe("Diff gap boundaries", function()
       test.equal(small_y, large_y, "unchanged content after the block must align")
     end)
 
+    test.it("keeps a multiline statement together on the " .. side, function(context)
+      local short = table.concat({
+        "begin",
+        "  source->do_attack(node->node, source, world_x,",
+        "                    world_y, world_z);",
+        "  next_statement();",
+        "  shared_tail_one();",
+        "  shared_tail_two();",
+      }, "\n")
+      local lines = { "begin" }
+      for i = 1, 12 do lines[#lines + 1] = "  removed_step_" .. i .. "();" end
+      lines[#lines + 1] = "  source->do_attack("
+      lines[#lines + 1] = "                    world_y, world_z);"
+      lines[#lines + 1] = "  next_statement();"
+      lines[#lines + 1] = "  shared_tail_one();"
+      lines[#lines + 1] = "  shared_tail_two();"
+      local long = table.concat(lines, "\n")
+      local view = diffview.string_to_string(side == "left" and short or long,
+        side == "left" and long or short, "left", "right", true)
+      context.view = view
+      local deadline = system.get_time() + 2
+      while view.updater_idx do
+        test.ok(system.get_time() < deadline, "diff computation did not finish")
+        coroutine.yield(0.01)
+      end
+      view.buffer_view_a:set_wrapping_enabled(false)
+      view.buffer_view_b:set_wrapping_enabled(false)
+      view.size.x, view.size.y = 900, 600
+      view:update()
+      local small = side == "left" and view.buffer_view_a or view.buffer_view_b
+      local large = side == "left" and view.buffer_view_b or view.buffer_view_a
+      local _, call_y = small:get_line_screen_position(2)
+      local _, continuation_y = small:get_line_screen_position(3)
+      test.equal(continuation_y - call_y, small:get_line_height(),
+        "a Diff Gap Row must not split a multiline statement")
+      local _, next_y = small:get_line_screen_position(4)
+      local _, other_y = large:get_line_screen_position(16)
+      test.equal(next_y, other_y, "alignment must resume after the multiline statement")
+    end)
+
     for _, indent in ipairs({ "  ", "\t" }) do
       test.it("prefers the function boundary over an internal blank on the " .. side
         .. (indent == "\t" and " with tabs" or " with spaces"), function(context)
