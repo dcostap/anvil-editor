@@ -5,6 +5,8 @@ local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local lsp_manager = require "core.lsp.manager"
 local lsp_provider = require "core.lsp.provider"
 local symbol_index = require "core.treesitter.symbol_index"
+local file_icons = require "core.file_icons"
+local symbol_icons = require "core.symbol_icons"
 
 local helpers = fuzzy_searcher._test
 
@@ -18,11 +20,30 @@ local function wait_until(predicate, timeout)
 end
 
 test.describe("Fuzzy Searcher Project symbols", function()
+  test.before_each(function(context)
+    context.renderer_draw_text = renderer.draw_text
+    context.renderer_draw_rect = renderer.draw_rect
+    context.renderer_draw_rounded_rect = renderer.draw_rounded_rect
+    context.renderer_draw_text_known_bounds = renderer.draw_text_known_bounds
+    context.renderer_set_clip_rect = renderer.set_clip_rect
+    context.renderer_draw_canvas = renderer.draw_canvas
+    context.file_icons_draw = file_icons.draw
+    context.symbol_icons_draw = symbol_icons.draw
+  end)
+
   test.after_each(function(context)
     if context.original_lsp_enabled then lsp_manager.is_enabled = context.original_lsp_enabled end
     if context.original_lsp_workspace_symbols then lsp_provider.workspace_symbols = context.original_lsp_workspace_symbols end
     if context.original_ts_workspace_symbols_async then symbol_index.workspace_symbols_async = context.original_ts_workspace_symbols_async end
     if context.original_ts_status then symbol_index.status = context.original_ts_status end
+    renderer.draw_text = context.renderer_draw_text
+    renderer.draw_rect = context.renderer_draw_rect
+    renderer.draw_rounded_rect = context.renderer_draw_rounded_rect
+    renderer.draw_text_known_bounds = context.renderer_draw_text_known_bounds
+    renderer.set_clip_rect = context.renderer_set_clip_rect
+    renderer.draw_canvas = context.renderer_draw_canvas
+    file_icons.draw = context.file_icons_draw
+    symbol_icons.draw = context.symbol_icons_draw
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
   end)
 
@@ -297,5 +318,89 @@ test.describe("Fuzzy Searcher Project symbols", function()
     test.equal(ts_query, "parse")
     test.equal(picker.results[1].label, "parse")
     test.equal(picker.status, "1 symbol — Tree-sitter")
+  end)
+
+  test.it("puts file and symbol icons in their matching columns", function()
+    local picker = fuzzy_searcher.open_static_results("Project symbols", {
+      {
+        kind = "symbol", file = "src/basegame.cpp", line = 12,
+        label = "check_damage", name = "check_damage", symbol_kind = "method",
+      },
+    })
+    picker.position.x, picker.position.y = 0, 0
+    picker:set_size(1200, 500)
+    picker.open_transition_complete = true
+    picker.update_selected_preview = function() end
+    picker:update()
+
+    local calls = {}
+    local file_icon_x, symbol_icon_x
+    renderer.draw_text = function(font, text, x, y)
+      calls[#calls + 1] = { text = text, x = x, y = y }
+      return x + font:get_width(text)
+    end
+    renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
+    renderer.draw_text_known_bounds = function() end
+    renderer.set_clip_rect = function() end
+    renderer.draw_canvas = function() end
+    file_icons.draw = function(_, x) file_icon_x = x end
+    symbol_icons.draw = function(_, x) symbol_icon_x = x end
+
+    picker:draw()
+
+    local file_x, label_x
+    for _, call in ipairs(calls) do
+      if call.text == "basegame.cpp" then file_x = call.x end
+      if call.text == "check_damage" then label_x = call.x end
+    end
+    test.not_nil(file_icon_x, "expected a file icon in the file column")
+    test.not_nil(symbol_icon_x, "expected a symbol icon in the symbol column")
+    test.not_nil(file_x, "expected the file name")
+    test.not_nil(label_x, "expected the symbol label")
+    test.ok(file_icon_x < file_x, "the file icon must precede the file name")
+    test.ok(file_x < symbol_icon_x, "the symbol icon must follow the file column")
+    test.ok(symbol_icon_x < label_x, "the symbol icon must precede the symbol label")
+  end)
+
+  test.it("shows only line numbers after the first symbol from a file", function()
+    local picker = fuzzy_searcher.open_static_results("Project symbols", {
+      {
+        kind = "symbol", file = "src/basegame.cpp", line = 12,
+        label = "first_symbol", name = "first_symbol", symbol_kind = "method",
+      },
+      {
+        kind = "symbol", file = "src/basegame.cpp", line = 34,
+        label = "second_symbol", name = "second_symbol", symbol_kind = "method",
+      },
+    })
+    picker.position.x, picker.position.y = 0, 0
+    picker:set_size(1200, 500)
+    picker.open_transition_complete = true
+    picker.update_selected_preview = function() end
+    picker:update()
+
+    local names, lines, file_icon_count, symbol_icon_count = 0, 0, 0, 0
+    renderer.draw_text = function(font, text, x)
+      if text == "basegame.cpp" then names = names + 1 end
+      if text:find(":12", 1, true) == 1 or text:find(":34", 1, true) == 1 then
+        lines = lines + 1
+      end
+      return x + font:get_width(text)
+    end
+    renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
+    renderer.draw_text_known_bounds = function() end
+    renderer.set_clip_rect = function() end
+    renderer.draw_canvas = function() end
+    file_icons.draw = function() file_icon_count = file_icon_count + 1 end
+    symbol_icons.draw = function() symbol_icon_count = symbol_icon_count + 1 end
+
+    picker:draw()
+
+    test.equal(names, 1, "a symbol group must show its file name once")
+    test.equal(lines, 2, "each symbol row must show its line number")
+    test.equal(file_icon_count, 1, "a symbol group must show its file icon once")
+    test.equal(symbol_icon_count, 2, "each symbol row must show its symbol icon")
   end)
 end)

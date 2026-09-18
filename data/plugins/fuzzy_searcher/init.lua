@@ -2657,30 +2657,68 @@ function fuzzy_searcher.file_result_filename_width(font, file, prefix, suffix, s
     + file_font:get_width(name) + font:get_width(suffix) + directory_gap
 end
 
-local function draw_symbol_result_row(font, r, x, y, width, row_height, file_width)
+function fuzzy_searcher.draw_grouped_file_location(
+  font, result, prefix, line_suffix, x, y, file_width, metadata_right,
+  collapse_file, collapsed_line_x, metadata_parts, metadata_columns
+)
+  if not collapse_file then
+    local filename_width = fuzzy_searcher.file_result_filename_width(
+      font, result.file, prefix, line_suffix, true
+    )
+    local metadata_width = math.max(0, file_width - filename_width)
+    local remaining = fuzzy_searcher.draw_file_metadata(
+      font, result, metadata_right - metadata_width, y, metadata_width,
+      metadata_parts, metadata_columns, false
+    )
+    file_width = file_width - metadata_width + remaining
+  end
+
+  local line_x = collapsed_line_x
+  if collapse_file then
+    line_x = common.clamp(line_x or x, x, x + file_width)
+    renderer.draw_text(
+      font, truncate_text(font, line_suffix, math.max(0, x + file_width - line_x)),
+      line_x, y, style.dim
+    )
+  else
+    local _end_x
+    _end_x, line_x = draw_file_result_row(
+      font, result.file or "", result.file_spans, prefix, x, y, file_width,
+      line_suffix, result.prefix_span, result.root_role, true, nil, result.revision
+    )
+  end
+  return line_x, file_width
+end
+
+function fuzzy_searcher.draw_symbol_result_row(
+  font, r, x, y, width, row_height, collapse_file, collapsed_line_x,
+  metadata_parts, metadata_columns
+)
+  local path_w, gap, text_w = grep_row_columns(width, 0.33)
   local symbol_icons = require "core.symbol_icons"
   local icon_size = symbol_icons.size_for_row(row_height)
   local icon_column_width = icon_size + math.max(4 * (SCALE or 1), style.padding.x / 2)
-  if symbol_icons.resolve_kind(r.symbol_kind or "symbol") then
-    symbol_icons.draw(r.symbol_kind or "symbol", x, y, row_height, icon_size)
-  end
-
-  x = x + icon_column_width
-  width = math.max(0, width - icon_column_width)
-  local path_w, gap, text_w = grep_row_columns(width, 0.33)
-  file_width = file_width or path_w
   local line = tonumber(r.line) or 1
   local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
   local prefix = r.symbol_scope == "buffer" and "$$" or "$"
-  draw_file_result_row(font, r.file or "", r.file_spans, prefix, x, y, file_width, line_suffix, r.prefix_span, r.root_role)
-  if text_w <= 0 then return end
+  local line_x = fuzzy_searcher.draw_grouped_file_location(
+    font, r, prefix, line_suffix, x, y, path_w, x + path_w,
+    collapse_file, collapsed_line_x, metadata_parts, metadata_columns
+  )
+  if text_w <= 0 then return line_x end
 
   local preview_font = style.get_small_font(font)
   local preview_y = y + math.max(0, math.floor((font:get_height() - preview_font:get_height()) / 2))
   local text_x = x + path_w + gap
+  if symbol_icons.resolve_kind(r.symbol_kind or "symbol") then
+    symbol_icons.draw(r.symbol_kind or "symbol", text_x, y, row_height, icon_size)
+  end
+  text_x = text_x + icon_column_width
   fuzzy_searcher.draw_symbol_declaration(
-    preview_font, r, text_x, preview_y, text_w, r.match_spans or {}, nil, r.declaration_spans
+    preview_font, r, text_x, preview_y, math.max(0, text_w - icon_column_width),
+    r.match_spans or {}, nil, r.declaration_spans
   )
+  return line_x
 end
 
 local function draw_path_result_row(font, r, x, y, width)
@@ -2900,28 +2938,12 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
     if context_width < min_context then symbol = nil; context_width = 0 end
   end
   local file_width = math.max(0, path_w - (symbol and context_width + context_gap or 0))
-  if not collapse_file then
-    local filename_width = fuzzy_searcher.file_result_filename_width(
-      font, result.file, prefix, line_suffix, true
-    )
-    local metadata_width = math.max(0, file_width - filename_width)
-    -- Text Search keeps empty Git columns reserved for stable symbol labels.
-    local remaining = fuzzy_searcher.draw_file_metadata(
-      font, result, x + path_w - metadata_width, y, metadata_width, nil, nil, false
-    )
-    file_width = file_width - metadata_width + remaining
-  end
-  local line_x = collapsed_line_x
-  if collapse_file then
-    line_x = common.clamp(line_x or x, x, x + file_width)
-    renderer.draw_text(font, truncate_text(font, line_suffix, math.max(0, x + file_width - line_x)), line_x, y, style.dim)
-  else
-    local _end_x
-    _end_x, line_x = draw_file_result_row(
-      font, result.file or "", result.file_spans, prefix, x, y, file_width,
-      line_suffix, result.prefix_span, result.root_role, true, nil, result.revision
-    )
-  end
+  -- Keep empty Git columns reserved so each symbol context starts at one x position.
+  local line_x
+  line_x, file_width = fuzzy_searcher.draw_grouped_file_location(
+    font, result, prefix, line_suffix, x, y, file_width, x + path_w,
+    collapse_file, collapsed_line_x
+  )
   local context_x = x + file_width + context_gap
   if collapse_file and collapsed_context_x then
     context_x = math.min(context_x, collapsed_context_x)
@@ -7283,10 +7305,16 @@ function FSView:draw_open_content()
   local metadata_rows, metadata_columns = fuzzy_searcher.visible_file_metadata(
     self, font, self.viewport_offset, last
   )
-  local previous_rendered_grep_file = nil
-  local previous_rendered_grep_line_x = nil
-  local previous_rendered_grep_context_x = nil
-  local previous_rendered_was_grep = false
+  local previous_rendered_file_kind = nil
+  local previous_rendered_file = nil
+  local previous_rendered_line_x = nil
+  local previous_rendered_context_x = nil
+  local function reset_rendered_file_group()
+    previous_rendered_file_kind = nil
+    previous_rendered_file = nil
+    previous_rendered_line_x = nil
+    previous_rendered_context_x = nil
+  end
   for idx = self.viewport_offset, last do
     local r = self.results[idx]
     local yy = m.results_top + (idx - self.viewport_offset) * lh
@@ -7298,9 +7326,7 @@ function FSView:draw_open_content()
       )
     end
     if r.header then
-      previous_rendered_grep_file = nil
-      previous_rendered_grep_line_x = nil
-      previous_rendered_was_grep = false
+      reset_rendered_file_group()
       if r.separator then
         renderer.draw_rect(x + pad, yy + math.floor(lh / 2), math.max(0, row_text_w), style.divider_size, style.divider)
       else
@@ -7327,16 +7353,15 @@ function FSView:draw_open_content()
       end
       if r.kind == "grep" then
         local file = tostring(r.file or "")
-        local collapse_file = file ~= "" and previous_rendered_was_grep and file == previous_rendered_grep_file
-        previous_rendered_grep_line_x, previous_rendered_grep_context_x = draw_grep_result_row(
+        local collapse_file = file ~= "" and previous_rendered_file_kind == "grep"
+          and file == previous_rendered_file
+        previous_rendered_line_x, previous_rendered_context_x = draw_grep_result_row(
           font, r, x + pad, row_y, row_text_w, collapse_file,
-          previous_rendered_grep_line_x, previous_rendered_grep_context_x)
-        previous_rendered_grep_file = file
-        previous_rendered_was_grep = true
+          previous_rendered_line_x, previous_rendered_context_x)
+        previous_rendered_file_kind = "grep"
+        previous_rendered_file = file
       elseif r.kind == "file" then
-        previous_rendered_grep_file = nil
-        previous_rendered_grep_line_x = nil
-        previous_rendered_was_grep = false
+        reset_rendered_file_group()
         local file_text_w = fuzzy_searcher.draw_file_metadata(
           font, r, x + pad, row_y, row_text_w, metadata_rows[idx], metadata_columns, true)
         draw_file_result_row(
@@ -7344,65 +7369,48 @@ function FSView:draw_open_content()
           file_text_w, nil, r.prefix_span, r.root_role, true, nil, r.revision
         )
       elseif r.kind == "folder" then
-        previous_rendered_grep_file = nil
-        previous_rendered_grep_line_x = nil
-        previous_rendered_was_grep = false
+        reset_rendered_file_group()
         local file_text_w = fuzzy_searcher.draw_file_metadata(
           font, r, x + pad, row_y, row_text_w, metadata_rows[idx], metadata_columns, true)
         draw_path_result_row(font, r, x + pad, row_y, file_text_w)
       elseif r.kind == "symbol" then
-        previous_rendered_grep_file = nil
-        previous_rendered_grep_line_x = nil
-        previous_rendered_was_grep = false
         local symbol_x = x + pad
-        local symbol_icon_size = require("core.symbol_icons").size_for_row(lh)
-        local symbol_icon_width = symbol_icon_size + math.max(4 * (SCALE or 1), style.padding.x / 2)
-        local symbol_path_w, symbol_gap = grep_row_columns(row_text_w - symbol_icon_width, 0.33)
-        -- Symbol Search shares the file-column layout with Text Search.
-        local metadata_remaining = fuzzy_searcher.draw_file_metadata(
-          font, r, symbol_x + symbol_icon_width, row_y, symbol_path_w,
-          metadata_rows[idx], metadata_columns, false)
-        local symbol_file_w = metadata_remaining
-        draw_symbol_result_row(font, r, symbol_x, row_y, row_text_w, lh, symbol_file_w)
+        local symbol_path_w, symbol_gap = grep_row_columns(row_text_w, 0.33)
+        local file = tostring(r.file or "")
+        local collapse_file = file ~= "" and previous_rendered_file_kind == "symbol"
+          and file == previous_rendered_file
+        previous_rendered_line_x = fuzzy_searcher.draw_symbol_result_row(
+          font, r, symbol_x, row_y, row_text_w, lh, collapse_file,
+          previous_rendered_line_x, metadata_rows[idx], metadata_columns
+        )
+        previous_rendered_context_x = nil
+        previous_rendered_file_kind = "symbol"
+        previous_rendered_file = file
         renderer.draw_rect(
-          symbol_x + symbol_icon_width + symbol_path_w + math.floor(symbol_gap / 2),
+          symbol_x + symbol_path_w + math.floor(symbol_gap / 2),
           yy, style.divider_size, lh, style.divider)
       elseif r.kind == "command" then
-        previous_rendered_grep_file = nil
-        previous_rendered_grep_line_x = nil
-        previous_rendered_was_grep = false
+        reset_rendered_file_group()
         draw_command_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "shell_command" then
-        previous_rendered_grep_file = nil
-        previous_rendered_grep_line_x = nil
-        previous_rendered_was_grep = false
+        reset_rendered_file_group()
         fuzzy_searcher.draw_shell_command_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "project" and r.path_search then
-        previous_rendered_grep_file = nil
-        previous_rendered_grep_line_x = nil
-        previous_rendered_was_grep = false
+        reset_rendered_file_group()
         draw_path_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "project" then
-        previous_rendered_grep_file = nil
-        previous_rendered_grep_line_x = nil
-        previous_rendered_was_grep = false
+        reset_rendered_file_group()
         draw_project_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "path" or r.kind == "create_path" then
-        previous_rendered_grep_file = nil
-        previous_rendered_grep_line_x = nil
-        previous_rendered_was_grep = false
+        reset_rendered_file_group()
         draw_path_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "new_project" then
-        previous_rendered_grep_file = nil
-        previous_rendered_grep_line_x = nil
-        previous_rendered_was_grep = false
+        reset_rendered_file_group()
         draw_new_project_result_row(font, r, x + pad, row_y, row_text_w)
       else
         local label, spans, prefix = result_list_label_and_spans(r)
         draw_prefixed_highlighted_text(font, prefix, label, x + pad, row_y, row_text_w, style.text, spans)
-        previous_rendered_grep_file = nil
-        previous_rendered_grep_line_x = nil
-        previous_rendered_was_grep = false
+        reset_rendered_file_group()
       end
       -- Draw after the row so copied-result feedback takes precedence over
       -- fuzzy-match backgrounds as well as the selected-row background.
