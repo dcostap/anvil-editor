@@ -108,7 +108,8 @@ function metadata.include_columns(columns, font, parts)
   end
 end
 
-function metadata.draw(font, parts, x, y, width, columns)
+function metadata.draw(font, parts, x, y, width, columns, reclaim_empty)
+  reclaim_empty = reclaim_empty ~= false
   local small_font = metadata.font(font)
   local cache = widths_for(small_font)
   local text_y = y + math.max(0, math.floor((font:get_height() - small_font:get_height()) / 2))
@@ -126,7 +127,7 @@ function metadata.draw(font, parts, x, y, width, columns)
     local separator = part.separator or "  "
     local separator_width = index > 1 and text_width(small_font, cache, separator) or 0
     total = total + part_width + separator_width
-    if leading then
+    if reclaim_empty and leading then
       local has_content = part.icon or part.text ~= ""
       if has_content then
         leading = false
@@ -166,8 +167,12 @@ function metadata.draw(font, parts, x, y, width, columns)
   return math.max(0, width - total - outer_gap + leading_empty)
 end
 
-function metadata.line_hint(font, parts, columns)
-  return { draw = function(x, y, width) return metadata.draw(font, parts, x, y, width, columns) end }
+function metadata.line_hint(font, parts, columns, reclaim_empty)
+  return {
+    draw = function(x, y, width)
+      return metadata.draw(font, parts, x, y, width, columns, reclaim_empty)
+    end,
+  }
 end
 
 return metadata

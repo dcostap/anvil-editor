@@ -18,6 +18,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
       draw_canvas = renderer.draw_canvas,
       draw_file_icon = file_icons.draw,
       draw_symbol_icon = symbol_icons.draw,
+      file_metadata_parts = fuzzy_searcher.file_metadata_parts,
     }
   end)
 
@@ -28,6 +29,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
     renderer.draw_canvas = saved.draw_canvas
     file_icons.draw = saved.draw_file_icon
     symbol_icons.draw = saved.draw_symbol_icon
+    fuzzy_searcher.file_metadata_parts = saved.file_metadata_parts
   end)
 
   test.it("draws the enclosing function without parameters at the file column edge", function()
@@ -110,6 +112,63 @@ test.describe("Fuzzy Searcher Text Search context", function()
     for _, call in ipairs(calls) do
       test.ok(call.text ~= size_text, "continuation rows must not repeat file metadata")
     end
+  end)
+
+  test.it("keeps enclosing symbols aligned when file metadata is sparse", function()
+    local calls = {}
+    renderer.draw_canvas = function() end
+    renderer.draw_rect = function() end
+    file_icons.draw = function() end
+    symbol_icons.draw = function() end
+    symbol_index.enclosing_symbol = function()
+      return {
+        name = "WinMain",
+        kind = "function",
+        declaration = "int __stdcall WinMain()",
+        declaration_name_span = { 15, 21 },
+      }
+    end
+    fuzzy_searcher.file_metadata_parts = function(result)
+      return result.metadata_parts
+    end
+    renderer.draw_text = function(font, text, x)
+      calls[#calls + 1] = { text = text, x = x }
+      return x + font:get_width(text)
+    end
+
+    local function draw(metadata_parts)
+      calls = {}
+      helpers.draw_grep_result_row(style.font, {
+        kind = "grep", file = "src/main.cpp", abs_path = "C:/project/src/main.cpp",
+        line = 27, col = 1, text = "return WinMain()", exact = true,
+        metadata_parts = metadata_parts,
+      }, 0, 0, 1400, false)
+      local positions = {}
+      for _, call in ipairs(calls) do
+        if call.text == "WinMain" then positions.symbol = call.x end
+        if call.text == "3K" then positions.size = call.x end
+      end
+      return positions
+    end
+
+    local sparse = draw {
+      { id = "additions", text = "", sample = "+999" },
+      { id = "deletions", text = "", sample = "−999", separator = " " },
+      { id = "size", text = "3K", sample = "999M" },
+      { id = "age", text = "4h", sample = "99yr" },
+    }
+    local changed = draw {
+      { id = "additions", text = "+27", sample = "+999" },
+      { id = "deletions", text = "−58", sample = "−999", separator = " " },
+      { id = "size", text = "3K", sample = "999M" },
+      { id = "age", text = "4h", sample = "99yr" },
+    }
+    test.not_nil(sparse.symbol, "expected the sparse enclosing symbol name")
+    test.not_nil(changed.symbol, "expected the changed enclosing symbol name")
+    test.equal(sparse.symbol, changed.symbol,
+      "sparse metadata must not move the enclosing symbol column")
+    test.equal(sparse.size, changed.size,
+      "sparse metadata must not move the size column")
   end)
 
   test.it("keeps the full filename and a clear gap before the declaration", function()

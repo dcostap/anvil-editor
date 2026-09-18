@@ -4,14 +4,14 @@ local core = require "core"
 local config = require "core.config"
 local style = require "core.style"
 
-local function capture(font, parts, columns)
+local function capture(font, parts, columns, reclaim_empty)
   local saved = renderer.draw_text
   local result = {}
   renderer.draw_text = function(text_font, text, x, y, color)
     if text:find("%S") then result[#result + 1] = { text = text, x = x, y = y, color = color } end
     return x + text_font:get_width(text)
   end
-  local ok, width = pcall(metadata.draw, font, parts, 0, 0, 800, columns)
+  local ok, width = pcall(metadata.draw, font, parts, 0, 0, 800, columns, reclaim_empty)
   renderer.draw_text = saved
   if not ok then error(width, 0) end
   return result, width
@@ -76,6 +76,30 @@ test.describe("Shared file metadata", function()
     local _, ordinary_width = capture(font, ordinary, columns)
     test.ok(ordinary_width > changed_width,
       "ordinary rows should reclaim empty leading metadata columns")
+  end)
+
+  test.it("can preserve leading metadata columns for aligned rows", function()
+    local font = style.code_font:copy(style.code_font:get_size())
+    local changed = {
+      { id = "additions", text = "+3", sample = "+999" },
+      { id = "deletions", text = "−1", sample = "−999", separator = " " },
+      { id = "size", text = "1K", sample = "999M" },
+      { id = "age", text = "2m", sample = "99yr" },
+    }
+    local ordinary = {
+      { id = "additions", text = "", sample = "+999" },
+      { id = "deletions", text = "", sample = "−999", separator = " " },
+      { id = "size", text = "1K", sample = "999M" },
+      { id = "age", text = "2m", sample = "99yr" },
+    }
+    local columns = {}
+    metadata.include_columns(columns, font, changed)
+    metadata.include_columns(columns, font, ordinary)
+
+    local _, changed_width = capture(font, changed, columns, false)
+    local _, ordinary_width = capture(font, ordinary, columns, false)
+    test.equal(ordinary_width, changed_width,
+      "aligned rows must keep empty leading metadata columns reserved")
   end)
 end)
 

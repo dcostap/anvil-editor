@@ -2425,8 +2425,10 @@ function fuzzy_searcher.file_metadata_parts(r)
   }
 end
 
-function fuzzy_searcher.draw_file_metadata(font, r, x, y, width, parts, columns)
-  return require("plugins.file_metadata").draw(font, parts or fuzzy_searcher.file_metadata_parts(r), x, y, width, columns)
+function fuzzy_searcher.draw_file_metadata(font, r, x, y, width, parts, columns, reclaim_empty)
+  return require("plugins.file_metadata").draw(
+    font, parts or fuzzy_searcher.file_metadata_parts(r), x, y, width, columns, reclaim_empty
+  )
 end
 
 local function draw_new_project_result_row(font, r, x, y, width)
@@ -2799,8 +2801,9 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
       font, result.file, prefix, line_suffix, true
     )
     local metadata_width = math.max(0, file_width - filename_width)
+    -- Text Search keeps empty Git columns reserved for stable symbol labels.
     local remaining = fuzzy_searcher.draw_file_metadata(
-      font, result, x + path_w - metadata_width, y, metadata_width
+      font, result, x + path_w - metadata_width, y, metadata_width, nil, nil, false
     )
     file_width = file_width - metadata_width + remaining
   end
@@ -7281,7 +7284,7 @@ function FSView:draw_open_content()
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
         local file_text_w = fuzzy_searcher.draw_file_metadata(
-          font, r, x + pad, row_y, row_text_w, metadata_rows[idx], metadata_columns)
+          font, r, x + pad, row_y, row_text_w, metadata_rows[idx], metadata_columns, true)
         draw_file_result_row(
           font, r.file or r.label, r.match_spans, "", x + pad, row_y,
           file_text_w, nil, r.prefix_span, r.root_role, true, nil, r.revision
@@ -7291,7 +7294,7 @@ function FSView:draw_open_content()
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
         local file_text_w = fuzzy_searcher.draw_file_metadata(
-          font, r, x + pad, row_y, row_text_w, metadata_rows[idx], metadata_columns)
+          font, r, x + pad, row_y, row_text_w, metadata_rows[idx], metadata_columns, true)
         draw_path_result_row(font, r, x + pad, row_y, file_text_w)
       elseif r.kind == "symbol" then
         previous_rendered_grep_file = nil
@@ -7301,9 +7304,10 @@ function FSView:draw_open_content()
         local symbol_icon_size = require("core.symbol_icons").size_for_row(lh)
         local symbol_icon_width = symbol_icon_size + math.max(4 * (SCALE or 1), style.padding.x / 2)
         local symbol_path_w, symbol_gap = grep_row_columns(row_text_w - symbol_icon_width, 0.33)
+        -- Symbol Search shares the file-column layout with Text Search.
         local metadata_remaining = fuzzy_searcher.draw_file_metadata(
           font, r, symbol_x + symbol_icon_width, row_y, symbol_path_w,
-          metadata_rows[idx], metadata_columns)
+          metadata_rows[idx], metadata_columns, false)
         local symbol_file_w = metadata_remaining
         draw_symbol_result_row(font, r, symbol_x, row_y, row_text_w, lh, symbol_file_w)
         renderer.draw_rect(
