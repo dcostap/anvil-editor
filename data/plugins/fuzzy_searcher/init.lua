@@ -2690,6 +2690,11 @@ function fuzzy_searcher.draw_grouped_file_location(
   return line_x, file_width
 end
 
+function fuzzy_searcher.symbol_icon_column_width(row_height)
+  local icon_size = require("core.symbol_icons").size_for_row(row_height)
+  return icon_size + math.max(4 * (SCALE or 1), style.padding.x / 2)
+end
+
 function fuzzy_searcher.draw_symbol_result_row(
   font, r, x, y, width, row_height, collapse_file, collapsed_line_x,
   metadata_parts, metadata_columns
@@ -2697,7 +2702,7 @@ function fuzzy_searcher.draw_symbol_result_row(
   local path_w, gap, text_w = grep_row_columns(width, 0.33)
   local symbol_icons = require "core.symbol_icons"
   local icon_size = symbol_icons.size_for_row(row_height)
-  local icon_column_width = icon_size + math.max(4 * (SCALE or 1), style.padding.x / 2)
+  local icon_column_width = fuzzy_searcher.symbol_icon_column_width(row_height)
   local line = tonumber(r.line) or 1
   local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
   local prefix = r.symbol_scope == "buffer" and "$$" or "$"
@@ -4009,10 +4014,18 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
   local x = row_x
   local width = row_text_w
 
-  if r.kind == "grep" or r.kind == "symbol" then
+  if r.kind == "grep" then
     local path_w, gap = grep_row_columns(row_text_w)
     x = row_x + path_w + gap
     width = math.max(0, row_text_w - path_w - gap)
+    text_font = style.get_small_font(font)
+  elseif r.kind == "symbol" then
+    local path_w, gap = grep_row_columns(row_text_w, 0.33)
+    local row_height = font:get_height() + style.fuzzy_searcher_result_row_padding * 2
+    local icon_column_width = fuzzy_searcher.symbol_icon_column_width(row_height)
+    x = row_x + path_w + gap + icon_column_width
+    width = math.max(0, row_text_w - path_w - gap - icon_column_width)
+    text_font = style.get_small_font(font)
   elseif r.kind == "command" then
     local icon_column_width = font:get_height()
       + math.max(2 * (SCALE or 1), style.padding.x / 3)

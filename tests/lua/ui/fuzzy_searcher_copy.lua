@@ -104,6 +104,52 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     test.ok(draw_order.copy > draw_order.match, "expected copy feedback to overlay fuzzy matches")
   end)
 
+  test.it("starts symbol copy feedback at the rendered symbol label", function()
+    local picker = fuzzy_searcher.open_static_results("Project symbols", {
+      {
+        kind = "symbol", file = "src/basegame.cpp", line = 12,
+        label = "check_damage", name = "check_damage", symbol_kind = "method",
+      },
+    })
+    picker.position.x, picker.position.y = 0, 0
+    picker:set_size(1200, 500)
+    picker.open_transition_complete = true
+    picker.update_selected_preview = function() end
+    test.ok(picker:copy_selected())
+    picker:update()
+
+    local original_draw_rect = renderer.draw_rect
+    local original_draw_rounded_rect = renderer.draw_rounded_rect
+    local original_draw_text = renderer.draw_text
+    local original_draw_text_known_bounds = renderer.draw_text_known_bounds
+    local original_set_clip_rect = renderer.set_clip_rect
+    local original_draw_canvas = renderer.draw_canvas
+    local label_x, feedback_x
+    renderer.draw_rect = function(x, _, _, _, color)
+      if same_rgb(color, style.fuzzy_searcher_copy_feedback) then feedback_x = x end
+    end
+    renderer.draw_rounded_rect = function() end
+    renderer.draw_text = function(font, text, x)
+      if text == "check_damage" then label_x = x end
+      return x + (font and font:get_width(text) or 0)
+    end
+    renderer.draw_text_known_bounds = function() end
+    renderer.set_clip_rect = function() end
+    renderer.draw_canvas = function() end
+    local ok, err = pcall(function() picker:draw() end)
+    renderer.draw_rect = original_draw_rect
+    renderer.draw_rounded_rect = original_draw_rounded_rect
+    renderer.draw_text = original_draw_text
+    renderer.draw_text_known_bounds = original_draw_text_known_bounds
+    renderer.set_clip_rect = original_set_clip_rect
+    renderer.draw_canvas = original_draw_canvas
+    if not ok then error(err, 0) end
+
+    test.not_nil(label_x, "expected the rendered symbol label")
+    test.not_nil(feedback_x, "expected symbol copy feedback")
+    test.equal(feedback_x, label_x)
+  end)
+
   test.it("uses integer outline thickness at fractional UI scales", function()
     local picker = fuzzy_searcher.open_static_results("Results", {
       { kind = "command", label = "core:copy", command = "core:copy", match_spans = { { 1, 3 } } },
