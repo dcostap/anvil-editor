@@ -179,6 +179,27 @@ test.describe("Fuzzy Searcher Text Search context", function()
     test.equal(directory_count, 2, "Text Search must keep complete file paths when they fit")
   end)
 
+  test.it("right-aligns enclosing symbol labels within their column", function()
+    renderer.draw_canvas = function() end
+    renderer.draw_text = function(font, text, x)
+      return x + font:get_width(text)
+    end
+    local icon_x
+    symbol_icons.draw = function(_, x)
+      icon_x = x
+    end
+    local content_width = helpers.draw_grep_symbol_context(style.font, {
+      name = "run",
+      kind = "method",
+      declaration = "Worker::run()",
+      declaration_name_span = { 9, 11 },
+    }, 100, 0, 400, style.font:get_height())
+
+    test.not_nil(icon_x, "expected the enclosing symbol icon")
+    test.equal(icon_x + content_width, 500,
+      "the enclosing symbol label must end at the column edge")
+  end)
+
   test.it("keeps grouped text rows collapsed when scrolling starts inside a file group", function()
     local results = {}
     for index = 1, 30 do

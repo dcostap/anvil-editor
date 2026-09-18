@@ -2632,7 +2632,7 @@ function fuzzy_searcher.draw_grep_symbol_context(font, symbol, x, y, width, row_
     context_font:get_width(declaration), math.max(0, width - icon_width - content_gap)
   )
   local content_width = icon_width + content_gap + declaration_width
-  local cx = x
+  local cx = x + math.max(0, width - content_width)
   if icon_width > 0 then
     symbol_icons.draw(symbol.kind or "symbol", cx, y, row_height, icon_size)
     cx = cx + icon_width + content_gap
@@ -3038,14 +3038,11 @@ local function draw_grep_result_row(
     local icon_width = symbol_icons.resolve_kind(symbol.kind or "symbol")
       and symbol_icons.size_for_row(font:get_height()) or 0
     local icon_gap = icon_width > 0 and math.max(3 * (SCALE or 1), style.padding.x / 3) or 0
-    local desired = icon_width + icon_gap
-      + context_font:get_width(fuzzy_searcher.symbol_declaration_text(symbol, false))
-      + math.max(1, math.ceil(2 * (SCALE or 1)))
     local max_context = math.max(0, right - context_x)
     local min_context = icon_width + icon_gap + context_font:get_width("…")
     if filename_width <= file_column_width and max_context >= min_context then
       fuzzy_searcher.draw_grep_symbol_context(
-        font, symbol, context_x, y, math.min(desired, max_context), font:get_height()
+        font, symbol, context_x, y, max_context, font:get_height()
       )
     end
   end
@@ -8029,6 +8026,7 @@ return {
     file_metadata_parts = fuzzy_searcher.file_metadata_parts,
     draw_file_metadata = fuzzy_searcher.draw_file_metadata,
     draw_file_result_row = draw_file_result_row,
+    draw_grep_symbol_context = fuzzy_searcher.draw_grep_symbol_context,
     draw_grep_result_row = draw_grep_result_row,
     split_mode_prefix = split_mode_prefix,
     prompt_uses_file_index = prompt_uses_file_index,
