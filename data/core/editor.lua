@@ -33,6 +33,7 @@ end
 
 function Editor:update()
   Editor.super.update(self)
+  editor_file_pois.update(self)
   navigation_history.update(self)
 end
 

@@ -1,13 +1,12 @@
 local core = require "core"
 local common = require "core.common"
-local file_context = require "core.file_context"
 local style = require "core.style"
 local text_poi_locations = require "core.text_poi_locations"
 
 local M = {}
 
 local MAX_CANDIDATES = 32768
-local VALIDATION_INTERVAL = 1
+local ACTION_REVALIDATION_INTERVAL = 1
 
 local function normalize_root(path)
   if type(path) ~= "string" or path == "" then return nil end
@@ -15,12 +14,18 @@ local function normalize_root(path)
   return ok and normalized or nil
 end
 
-local function project_root()
+local function project_path()
   local project = core.root_project and core.root_project()
-  return normalize_root(project and project.path)
+  return project and project.path or nil
 end
 
-local function roots_for_view(view)
+local function source_path(view)
+  local buffer = view and view.buffer
+  return buffer and buffer.abs_filename
+    or (view and type(view.path) == "string" and view.path or nil)
+end
+
+local function roots_for_paths(source, project)
   local roots, seen = {}, {}
   local function add(path)
     path = normalize_root(path)
@@ -32,14 +37,10 @@ local function roots_for_view(view)
 
   -- A relative location in a source file is often relative to that file,
   -- while a copied compiler diagnostic is often relative to the Project.
-  add(file_context.source_directory(view))
-  add(project_root())
+  add(source and common.dirname(source))
+  add(project)
   if #roots == 0 then add(system.getcwd()) end
   return roots
-end
-
-local function roots_key(roots)
-  return table.concat(roots, "\0")
 end
 
 local function buffer_revision(buffer)
@@ -69,20 +70,47 @@ local function resolve_candidates(candidates, roots)
   return points
 end
 
-local function cache_for(view, roots)
+local function build_line_index(points)
+  local by_line = {}
+  for _, point in ipairs(points or {}) do
+    local line_points = by_line[point.line]
+    if not line_points then
+      line_points = {}
+      by_line[point.line] = line_points
+    end
+    line_points[#line_points + 1] = point
+  end
+  return by_line
+end
+
+local function resolve_cache(cache)
+  cache.points = resolve_candidates(cache.candidates, cache.roots)
+  cache.by_line = build_line_index(cache.points)
+  cache.validated_at = system.get_time()
+end
+
+local function cache_for(view)
   local buffer = view and view.buffer
   local revision = buffer_revision(buffer)
-  local key = tostring(revision) .. "\0" .. roots_key(roots)
+  local source = source_path(view)
+  local project = project_path()
   local cache = view.editor_file_poi_cache
-  if cache and cache.key == key then return cache end
+  if cache
+      and cache.revision == revision
+      and cache.source_path == source
+      and cache.project_path == project then
+    return cache
+  end
 
   local text = table.concat(buffer.lines or {})
   cache = {
-    key = key,
     revision = revision,
-    roots = roots,
+    source_path = source,
+    project_path = project,
+    roots = roots_for_paths(source, project),
     candidates = text_poi_locations.extract_candidates(text, MAX_CANDIDATES),
     points = nil,
+    by_line = nil,
     validated_at = 0,
   }
   view.editor_file_poi_cache = cache
@@ -93,17 +121,22 @@ local function points_for_view(view, opts)
   local buffer = view and view.buffer
   if not buffer or buffer.binary then return {} end
 
-  local roots = roots_for_view(view)
-  local cache = cache_for(view, roots)
+  local cache = cache_for(view)
   opts = opts or {}
   local now = system.get_time()
   if opts.force_revalidate == true
       or not cache.points
-      or now - cache.validated_at >= VALIDATION_INTERVAL then
-    cache.points = resolve_candidates(cache.candidates, cache.roots)
-    cache.validated_at = now
+      or now - cache.validated_at >= ACTION_REVALIDATION_INTERVAL then
+    resolve_cache(cache)
   end
   return cache.points
+end
+
+function M.update(view)
+  local buffer = view and view.buffer
+  if not buffer or buffer.binary then return end
+  local cache = cache_for(view)
+  if not cache.points then resolve_cache(cache) end
 end
 
 function M.points_of_interest(_, view, opts)
@@ -130,13 +163,13 @@ function M.activate(view, point, opts)
 end
 
 local function draw_line_underlines(view, line, x, y, points)
+  if not points or #points == 0 then return end
   local thickness = math.max(1, math.floor(SCALE))
   local min_x = view.position.x
   local max_x = view.position.x + view.size.x
-  for _, point in ipairs(points or {}) do
+  for _, point in ipairs(points) do
     if point.kind == "editor-file-location"
         and point.text_bounds
-        and point.line == line
         and (point.line2 or point.line) == line then
       for x1, row_y, x2, row_height in view:iter_text_range_screen_segments(
         line, point.col, point.col2 or point.col, x, y
@@ -155,7 +188,9 @@ local function draw_line_underlines(view, line, x, y, points)
 end
 
 function M.draw_line(view, line, x, y)
-  draw_line_underlines(view, line, x, y, points_for_view(view, { silent = true }))
+  local cache = view and view.editor_file_poi_cache
+  if not cache or cache.revision ~= buffer_revision(view.buffer) then return end
+  draw_line_underlines(view, line, x, y, cache.by_line and cache.by_line[line])
 end
 
 return M
