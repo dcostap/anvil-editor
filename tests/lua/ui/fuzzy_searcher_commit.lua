@@ -1,5 +1,6 @@
 local core = require "core"
 local common = require "core.common"
+local config = require "core.config"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local markdown = require "core.markdown"
@@ -33,6 +34,7 @@ end
 test.describe("Fuzzy Searcher Commit Search", function()
   test.before_each(function(context)
     context.projects, context.cwd, context.recents = core.projects, system.getcwd(), core.visited_files
+    context.fuzzy_searcher_markdown_preview = config.fuzzy_searcher_markdown_preview
     context.root = USERDIR .. PATHSEP .. "commit-search-" .. math.floor(system.get_time() * 1000000)
     assert(common.mkdirp(context.root))
     core.projects, core.visited_files = { Project(context.root) }, {}
@@ -61,6 +63,7 @@ test.describe("Fuzzy Searcher Commit Search", function()
   end)
 
   test.after_each(function(context)
+    config.fuzzy_searcher_markdown_preview = context.fuzzy_searcher_markdown_preview
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     fuzzy._test.cancel_file_index_for_test()
     for _, pane in ipairs(panes.ordered()) do
@@ -106,6 +109,7 @@ test.describe("Fuzzy Searcher Commit Search", function()
   end)
 
   test.it("presents historical Markdown with live formatting", function(context)
+    config.fuzzy_searcher_markdown_preview = true
     fuzzy.open("note.md commit:" .. context.revision)
     local picker = assert(core.fuzzy_searcher_active_view)
     test.ok(wait_until(function()

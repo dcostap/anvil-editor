@@ -1,4 +1,5 @@
 local style = require "core.style"
+local config = require "core.config"
 local Editor = require "core.editor"
 local TextView = require "core.textview"
 
@@ -113,7 +114,11 @@ local M = {}
 
 function M.new(buffer)
   local live = require "core.markdown.live_render"
-  if live.is_markdown_buffer(buffer) then return MarkdownPreviewTextView(buffer) end
+  if config.fuzzy_searcher_markdown_preview == true
+    and live.is_markdown_buffer(buffer)
+  then
+    return MarkdownPreviewTextView(buffer)
+  end
   return PreviewTextView(buffer)
 end
 

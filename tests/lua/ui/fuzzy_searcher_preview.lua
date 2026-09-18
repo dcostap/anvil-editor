@@ -121,10 +121,12 @@ test.describe("Fuzzy Searcher preview", function()
     panes.reset_for_tests()
     context.source_pane = panes.create { factory = function() return View() end }
     context.linewrapping_enable_by_default = config.plugins.linewrapping.enable_by_default
+    context.fuzzy_searcher_markdown_preview = config.fuzzy_searcher_markdown_preview
   end)
 
   test.after_each(function(context)
     config.plugins.linewrapping.enable_by_default = context.linewrapping_enable_by_default
+    config.fuzzy_searcher_markdown_preview = context.fuzzy_searcher_markdown_preview
     if context.open_project_in_same_window then
       core.open_project_in_same_window = context.open_project_in_same_window
     end
@@ -322,7 +324,27 @@ test.describe("Fuzzy Searcher preview", function()
     test.equal(preview:is_wrapping_enabled(), false)
   end)
 
+  test.it("keeps Markdown previews as raw text when live rendering is disabled", function(context)
+    config.fuzzy_searcher_markdown_preview = false
+    local path = temp_file_path("fuzzy-preview-markdown-raw-test.md")
+    context.files = { path }
+    write_file(path, "# Preview heading\n\nPlain **strong** text.\n")
+
+    fuzzy_searcher.open_static_results("Files", {
+      { kind = "file", file = path, text = path },
+    })
+    local picker = core.fuzzy_searcher_active_view
+    local preview = test.not_nil(picker:update_preview_view())
+
+    test.ok(not markdown.live_render.is_live_mode(preview),
+      "expected raw Markdown preview text")
+    test.equal(preview:is_wrapping_enabled(), false)
+    test.equal(table.concat(preview.buffer.lines),
+      "# Preview heading\n\nPlain **strong** text.\n")
+  end)
+
   test.it("presents Markdown files with the same live formatting as Editors", function(context)
+    config.fuzzy_searcher_markdown_preview = true
     local path = temp_file_path("fuzzy-preview-markdown-live-test.md")
     context.files = { path }
     write_file(path, "# Preview heading\n\nPlain **strong** text.\n")
@@ -343,6 +365,7 @@ test.describe("Fuzzy Searcher preview", function()
   end)
 
   test.it("reveals matched Markdown syntax in a formatted preview", function(context)
+    config.fuzzy_searcher_markdown_preview = true
     local path = temp_file_path("fuzzy-preview-markdown-match-test.md")
     context.files = { path }
     write_file(path, "# Matched heading\n")
