@@ -1,4 +1,5 @@
 local core = require "core"
+local style = require "core.style"
 local test = require "core.test"
 
 test.describe("Global Prompt Bar pointer interception", function()
@@ -10,6 +11,32 @@ test.describe("Global Prompt Bar pointer interception", function()
     test.ok(ok, err)
   end)
 
+end)
+
+test.describe("Global Prompt Bar suggestion geometry", function()
+  test.it("lets the suggestion dropdown reach the prompt bar", function()
+    local bar = core.global_prompt_bar
+    bar:exit(true)
+    local previous_active = core.active_view
+    local previous_x, previous_y = bar.position.x, bar.position.y
+    local previous_width = bar.size.x
+    local previous_height = bar.suggestions_height
+
+    bar:enter("Suggestions", { suggest = function() return { "one" } end })
+    bar.position.x, bar.position.y = 0, 100
+    bar.size.x = 300
+    bar.suggestions_height = 20
+    bar.mouse_position.x = 10
+    bar.mouse_position.y = bar.position.y - math.max(1, style.divider_size or 1) / 2
+
+    test.ok(bar:is_mouse_on_suggestions())
+
+    bar:exit(true)
+    bar.position.x, bar.position.y = previous_x, previous_y
+    bar.size.x = previous_width
+    bar.suggestions_height = previous_height
+    if previous_active then core.set_active_view(previous_active) end
+  end)
 end)
 
 test.describe("Global Prompt Bar focus restoration", function()

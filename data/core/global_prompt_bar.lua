@@ -509,9 +509,8 @@ end
 function GlobalPromptBar:is_mouse_on_suggestions()
   if self.state.show_suggestions and #self.suggestions > 0 then
     local mx, my = self.mouse_position.x, self.mouse_position.y
-    local dh = style.divider_size
     local sh = math.ceil(self.suggestions_height)
-    local x, y, w, h = self.position.x, self.position.y - sh - dh, self.size.x, sh
+    local x, y, w, h = self.position.x, self.position.y - sh, self.size.x, sh
     if mx >= x and mx <= x+w and my >= y and my <= y+h then
       return true
     end
@@ -528,7 +527,7 @@ local function draw_suggestions_box(self)
   local dh = style.divider_size
   local x, _ = self:get_line_screen_position()
   local h = math.ceil(self.suggestions_height)
-  local rx, ry, rw, rh = self.position.x, self.position.y - h - dh, self.size.x, h
+  local rx, ry, rw, rh = self.position.x, self.position.y - h, self.size.x, h
 
   if #self.suggestions > 0 then
     -- draw suggestions background
@@ -564,7 +563,7 @@ local function draw_suggestions_box(self)
     for i=first, last do
       local item = self.suggestions[i]
       local color = (i == current) and style.accent or style.text
-      local y = self.position.y - (i - offset) * lh - dh
+      local y = self.position.y - (i - offset) * lh
       if i == current then
         renderer.draw_rect(rx, y, rw, lh, style.line_highlight)
       end
