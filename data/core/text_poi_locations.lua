@@ -77,6 +77,15 @@ local function starts_in_uri(line, col)
 end
 
 local function add_line_matches(list, seen, limit, line, line_no)
+  -- Every supported source location has a numeric line and one of these
+  -- separators. Most editor text can skip all pattern scans.
+  if not line:find("%d") or not (
+    line:find(":", 1, true)
+    or line:find("(", 1, true)
+    or line:find("line", 1, true)
+  ) then
+    return
+  end
   local function add(col1, col2, path, target_line, target_col, label)
     if #list < limit and not starts_in_uri(line, col1) then
       add_candidate(
@@ -130,6 +139,17 @@ local function sort(candidates)
     return a.line ~= b.line and a.line < b.line or a.line == b.line and a.col < b.col
   end)
   return candidates
+end
+
+function locations.extract_line_candidates(text, line_no, limit)
+  limit = math.max(0, math.floor(tonumber(limit) or math.huge))
+  local candidates = {}
+  add_line_matches(
+    candidates, {}, limit,
+    tostring(text or ""):gsub("[\r\n]+$", ""),
+    math.max(1, math.floor(tonumber(line_no) or 1))
+  )
+  return sort(candidates)
 end
 
 function locations.extract_candidates(text, limit)

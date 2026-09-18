@@ -1635,6 +1635,9 @@ local function write_summary(path)
   file:write("  UI update metrics:\n")
   drill_metric("filetree super update ms", "filetree_super_update_ms", update_denom, "update")
   drill_metric("filetree Git update ms", "filetree_git_update_ms", update_denom, "update")
+  drill_metric("Editor file POI update ms", "editor_file_poi_update_ms", update_denom, "update")
+  drill_metric("Editor file POI incremental ms", "editor_file_poi_incremental_ms", run_denom, "run_loop")
+  drill_metric("Editor file POI incremental lines", "editor_file_poi_incremental_lines", run_denom, "run_loop")
   for _, row in ipairs(sorted_counts(record.detail_counts)) do
     if row.key:match("^rootpanel_.*_update_ms$") then
       drill_metric(row.key, row.key, update_denom, "update")
