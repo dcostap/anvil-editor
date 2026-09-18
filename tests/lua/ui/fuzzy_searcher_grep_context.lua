@@ -1,4 +1,5 @@
 local test = require "core.test"
+local core = require "core"
 local style = require "core.style"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local symbol_index = require "core.treesitter.symbol_index"
@@ -23,6 +24,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
   end)
 
   test.after_each(function()
+    if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     symbol_index.enclosing_symbol = saved.enclosing_symbol
     renderer.draw_text = saved.draw_text
     renderer.draw_rect = saved.draw_rect
@@ -169,6 +171,59 @@ test.describe("Fuzzy Searcher Text Search context", function()
       "sparse metadata must not move the enclosing symbol column")
     test.equal(sparse.size, changed.size,
       "sparse metadata must not move the size column")
+  end)
+
+  test.it("keeps grouped text rows collapsed when scrolling starts inside a file group", function()
+    local results = {}
+    for index = 1, 30 do
+      results[#results + 1] = {
+        kind = "grep", file = "src/basegame.cpp", abs_path = "C:/project/src/basegame.cpp",
+        line = index == 1 and 12 or 347 + index,
+        text = "match " .. tostring(index), file_size = 122 * 1024,
+      }
+    end
+    local picker = fuzzy_searcher.open_static_results("Text Search", results)
+    picker.position.x, picker.position.y = 0, 0
+    picker:set_size(1200, 500)
+    picker.selected = 20
+    picker.viewport_offset = 20
+    picker.open_transition_complete = true
+    picker.update_selected_preview = function() end
+    picker:refresh_static()
+    picker:update()
+    picker.viewport_offset = 20
+
+    local metrics = picker:list_metrics()
+    local visible = {}
+    local saved_draw_text = renderer.draw_text
+    local saved_draw_rect = renderer.draw_rect
+    local saved_draw_rounded_rect = renderer.draw_rounded_rect
+    local saved_draw_text_known_bounds = renderer.draw_text_known_bounds
+    local saved_set_clip_rect = renderer.set_clip_rect
+    local saved_draw_canvas = renderer.draw_canvas
+    renderer.draw_text = function(font, text, x, y)
+      if y >= metrics.results_top then visible[#visible + 1] = text end
+      return x + font:get_width(text)
+    end
+    renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
+    renderer.draw_text_known_bounds = function() end
+    renderer.set_clip_rect = function() end
+    renderer.draw_canvas = function() end
+    local ok, err = pcall(function() picker:draw() end)
+    renderer.draw_text = saved_draw_text
+    renderer.draw_rect = saved_draw_rect
+    renderer.draw_rounded_rect = saved_draw_rounded_rect
+    renderer.draw_text_known_bounds = saved_draw_text_known_bounds
+    renderer.set_clip_rect = saved_set_clip_rect
+    renderer.draw_canvas = saved_draw_canvas
+    if not ok then error(err, 0) end
+
+    test.ok(#visible > 0, "expected visible text-search rows")
+    for _, text in ipairs(visible) do
+      test.ok(not text:find("basegame", 1, true),
+        "a continuation row must not redraw the file name at the viewport top: " .. text)
+    end
   end)
 
   test.it("keeps the full filename and a clear gap before the declaration", function()

@@ -7315,6 +7315,38 @@ function FSView:draw_open_content()
     previous_rendered_line_x = nil
     previous_rendered_context_x = nil
   end
+  if self.viewport_offset > 1 then
+    local first = self.results[self.viewport_offset]
+    local before = self.results[self.viewport_offset - 1]
+    local kind = first and (first.kind == "grep" or first.kind == "symbol") and first.kind
+    local file = kind and tostring(first.file or "") or ""
+    if file ~= "" and before and before.kind == kind
+        and tostring(before.file or "") == file then
+      local group_start = self.viewport_offset - 1
+      while group_start > 1 do
+        local candidate = self.results[group_start - 1]
+        if not candidate or candidate.kind ~= kind
+            or tostring(candidate.file or "") ~= file then
+          break
+        end
+        group_start = group_start - 1
+      end
+      -- Seed the collapsed-row layout from the group head. Without this, the
+      -- first visible continuation row redraws the file path until it moves
+      -- below the viewport top.
+      local seed_y = m.top - lh + row_padding
+      if kind == "grep" then
+        previous_rendered_line_x, previous_rendered_context_x = draw_grep_result_row(
+          font, self.results[group_start], x + pad, seed_y, row_text_w, false)
+      else
+        previous_rendered_line_x = fuzzy_searcher.draw_symbol_result_row(
+          font, self.results[group_start], x + pad, seed_y, row_text_w, lh, false
+        )
+      end
+      previous_rendered_file_kind = kind
+      previous_rendered_file = file
+    end
+  end
   for idx = self.viewport_offset, last do
     local r = self.results[idx]
     local yy = m.results_top + (idx - self.viewport_offset) * lh
