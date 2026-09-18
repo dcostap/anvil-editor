@@ -2632,7 +2632,7 @@ function fuzzy_searcher.draw_grep_symbol_context(font, symbol, x, y, width, row_
     context_font:get_width(declaration), math.max(0, width - icon_width - content_gap)
   )
   local content_width = icon_width + content_gap + declaration_width
-  local cx = x + math.max(0, width - content_width)
+  local cx = x
   if icon_width > 0 then
     symbol_icons.draw(symbol.kind or "symbol", cx, y, row_height, icon_size)
     cx = cx + icon_width + content_gap
@@ -2912,7 +2912,10 @@ grep_row_columns = function(width, ratio)
   return path_w, gap, math.max(0, width - path_w - gap)
 end
 
-local function draw_grep_result_row(font, result, x, y, width, collapse_file, collapsed_line_x, collapsed_context_x)
+local function draw_grep_result_row(
+  font, result, x, y, width, collapse_file, collapsed_line_x,
+  collapsed_context_x, metadata_parts, metadata_columns
+)
   local path_w, gap, text_w = grep_row_columns(width)
   local symbol = fuzzy_searcher.grep_enclosing_symbol(result)
   local context_width = 0
@@ -2920,29 +2923,39 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
   local prefix = result.exact and "# " or "~# "
   local line = tonumber(result.line) or 1
   local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
+  metadata_parts = metadata_parts or fuzzy_searcher.file_metadata_parts(result)
   if symbol then
     local context_font = style.get_small_font(font)
     local symbol_icons = require "core.symbol_icons"
     local icon_width = symbol_icons.resolve_kind(symbol.kind or "symbol")
       and symbol_icons.size_for_row(font:get_height()) or 0
     local icon_gap = icon_width > 0 and math.max(3 * (SCALE or 1), style.padding.x / 3) or 0
-    local desired = icon_width + icon_gap
-      + context_font:get_width(fuzzy_searcher.symbol_declaration_text(symbol, false))
     local file_width = fuzzy_searcher.file_result_filename_width(
       font, result.file, prefix, line_suffix, true
     )
-    local max_context = math.max(0, path_w - file_width - context_gap)
-    local min_context = icon_width + icon_gap
-      + context_font:get_width(tostring(symbol.name or ""))
-    context_width = math.min(desired, max_context)
-    if context_width < min_context then symbol = nil; context_width = 0 end
+    local metadata_width = require("plugins.file_metadata").required_width(
+      font, metadata_parts, metadata_columns
+    )
+    local max_context = math.max(
+      0, path_w - file_width - metadata_width - context_gap
+    )
+    local min_context = icon_width + icon_gap + context_font:get_width("…")
+    -- Use one left edge for every visible context. If it does not fit beside
+    -- the complete filename and metadata, keep the filename and omit it.
+    local column_width = math.max(min_context, math.floor(path_w * 0.32))
+    if max_context >= column_width then
+      context_width = column_width
+    else
+      symbol = nil
+      context_width = 0
+    end
   end
   local file_width = math.max(0, path_w - (symbol and context_width + context_gap or 0))
   -- Keep empty Git columns reserved so each symbol context starts at one x position.
   local line_x
   line_x, file_width = fuzzy_searcher.draw_grouped_file_location(
     font, result, prefix, line_suffix, x, y, file_width, x + path_w,
-    collapse_file, collapsed_line_x
+    collapse_file, collapsed_line_x, metadata_parts, metadata_columns
   )
   local context_x = x + file_width + context_gap
   if collapse_file and collapsed_context_x then

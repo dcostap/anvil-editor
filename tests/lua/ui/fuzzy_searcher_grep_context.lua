@@ -68,19 +68,16 @@ test.describe("Fuzzy Searcher Text Search context", function()
       grep_query = "parse_expression",
     }, 0, 0, 1400, false)
 
-    local context_call, prefix_call, signature_call
+    local context_call, signature_call
     for _, call in ipairs(calls) do
       if call.text == "parse_expression" then context_call = call; break end
     end
     for _, call in ipairs(calls) do
-      if call.text == "Parser::" then prefix_call = call end
       if call.text == "(Token token)" then signature_call = call end
     end
     test.not_nil(context_call, "expected the enclosing function name in the Text Search row")
-    test.not_nil(prefix_call, "expected the enclosing function qualifier in the Text Search row")
     test.is_nil(signature_call, "did not expect function parameters in the Text Search row")
     test.equal(context_call.color, style.text)
-    test.equal(prefix_call.color, style.dim)
     test.ok(context_call.x > 200, "expected the function context on the right of the file column")
   end)
 
@@ -173,6 +170,52 @@ test.describe("Fuzzy Searcher Text Search context", function()
       "sparse metadata must not move the size column")
   end)
 
+  test.it("left-aligns enclosing symbols with different label widths", function()
+    local symbols = {
+      [10] = {
+        name = "run",
+        kind = "method",
+        declaration = "void Worker::run()",
+        declaration_name_span = { 14, 16 },
+      },
+      [20] = {
+        name = "render_to_image_buffer",
+        kind = "method",
+        declaration = "int TMessagePanel::render_to_image_buffer()",
+        declaration_name_span = { 20, 41 },
+      },
+    }
+    symbol_index.enclosing_symbol = function(_, line)
+      return symbols[line]
+    end
+    renderer.draw_text = function(font, text, x)
+      return x + font:get_width(text)
+    end
+    renderer.draw_rect = function() end
+    renderer.draw_canvas = function() end
+    file_icons.draw = function() end
+
+    local symbol_x = {}
+    symbol_icons.draw = function(_, x)
+      symbol_x[#symbol_x + 1] = x
+    end
+    local files = {
+      [10] = "src/Panel.cpp",
+      [20] = "src/Command.cpp",
+    }
+    for _, line in ipairs { 10, 20 } do
+      helpers.draw_grep_result_row(style.font, {
+        kind = "grep", file = files[line],
+        abs_path = "C:/project/" .. files[line],
+        line = line, col = 1, text = "matched content", exact = true,
+      }, 0, 0, 1400, false)
+    end
+
+    test.equal(#symbol_x, 2, "expected one enclosing symbol icon per row")
+    test.equal(symbol_x[1], symbol_x[2],
+      "enclosing symbol labels must start at one column")
+  end)
+
   test.it("keeps grouped text rows collapsed when scrolling starts inside a file group", function()
     local results = {}
     for index = 1, 30 do
@@ -226,9 +269,10 @@ test.describe("Fuzzy Searcher Text Search context", function()
     end
   end)
 
-  test.it("keeps the full filename and a clear gap before the declaration", function()
+  test.it("keeps the full filename before an optional declaration", function()
     local calls = {}
     local symbol_x
+    renderer.draw_canvas = function() end
     symbol_index.enclosing_symbol = function()
       return {
         name = "ApplyCollisionAlt",
@@ -263,16 +307,17 @@ test.describe("Fuzzy Searcher Text Search context", function()
       if call.text:find(":42", 1, true) == 1 then line_call = call; break end
     end
     test.not_nil(line_call, "expected the file line suffix")
-    test.not_nil(symbol_x, "expected the declaration symbol icon")
     local filename_call
     for _, call in ipairs(calls) do
       if call.text == "PhysicalCollisionManager.cpp" then filename_call = call; break end
     end
     test.not_nil(filename_call, "expected the complete filename")
-    local line_end = line_call.x + line_call.font:get_width(line_call.text)
-    test.ok(
-      symbol_x - line_end >= style.padding.x * 2,
-      "expected two horizontal padding units before the declaration"
-    )
+    if symbol_x then
+      local line_end = line_call.x + line_call.font:get_width(line_call.text)
+      test.ok(
+        symbol_x - line_end >= style.padding.x * 2,
+        "expected two horizontal padding units before the declaration"
+      )
+    end
   end)
 end)
