@@ -946,6 +946,37 @@ class VendorThing
     common.rm(root, true)
   end)
 
+  test.it("coalesces open Buffer overlays while the Project index is indexing", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-overlay-indexing-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = symbol_index.status(root)
+    index.status = "indexing"
+    local path = common.normalize_path(root .. PATHSEP .. "Overlay.kt")
+    local buffer = seed_open_buffer_overlay(index, path, {
+      symbols = {},
+      usages_by_name = {},
+      change_id = 2,
+      buffer = {
+        abs_filename = path,
+        filename = path,
+        treesitter = { status = "ready" },
+        get_change_id = function() return 3 end,
+        is_dirty = function() return false end,
+        on_close = function() end,
+      },
+    })
+
+    test.ok(symbol_index.update_open_buffer(buffer, "test"))
+    test.equal(index.open_buffer_jobs[path], nil)
+    test.equal(index.pending_open_buffer_paths[path], "test")
+
+    symbol_index.clear_open_buffer(buffer, "test")
+    symbol_index.reset_for_tests()
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter workspace symbol cache invalidates when dirty open buffers suppress disk symbols", function()
     symbol_index.reset_for_tests()
     local original_buffers = core.buffers
