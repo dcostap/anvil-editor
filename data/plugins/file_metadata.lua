@@ -108,10 +108,11 @@ function metadata.include_columns(columns, font, parts)
   end
 end
 
-local function layout(font, parts, columns, reclaim_empty)
+function metadata.draw(font, parts, x, y, width, columns, reclaim_empty)
   reclaim_empty = reclaim_empty ~= false
   local small_font = metadata.font(font)
   local cache = widths_for(small_font)
+  local text_y = y + math.max(0, math.floor((font:get_height() - small_font:get_height()) / 2))
   local row_height = small_font:get_height()
   local icon_size = icons.size_for_row(row_height)
   local icon_gap = -math.max(3, 2 * (SCALE or 1))
@@ -141,20 +142,6 @@ local function layout(font, parts, columns, reclaim_empty)
     end
   end
   local outer_gap = math.max(1, math.floor(style.padding.x / 2))
-  return small_font, cache, widths, total, leading_empty, outer_gap,
-    icon_size, icon_gap
-end
-
-function metadata.required_width(font, parts, columns)
-  local _, _, _, total, _, outer_gap = layout(font, parts, columns, false)
-  return total + outer_gap + 1
-end
-
-function metadata.draw(font, parts, x, y, width, columns, reclaim_empty)
-  local small_font, cache, widths, total, leading_empty, outer_gap,
-    icon_size, icon_gap = layout(font, parts, columns, reclaim_empty)
-  local text_y = y + math.max(0, math.floor((font:get_height() - small_font:get_height()) / 2))
-  local row_height = small_font:get_height()
   if total + outer_gap >= width then return width end
   local cx = x + width - total
   for index, part in ipairs(parts) do

@@ -19,7 +19,6 @@ test.describe("Fuzzy Searcher Text Search context", function()
       draw_canvas = renderer.draw_canvas,
       draw_file_icon = file_icons.draw,
       draw_symbol_icon = symbol_icons.draw,
-      file_metadata_parts = fuzzy_searcher.file_metadata_parts,
     }
   end)
 
@@ -31,7 +30,6 @@ test.describe("Fuzzy Searcher Text Search context", function()
     renderer.draw_canvas = saved.draw_canvas
     file_icons.draw = saved.draw_file_icon
     symbol_icons.draw = saved.draw_symbol_icon
-    fuzzy_searcher.file_metadata_parts = saved.file_metadata_parts
   end)
 
   test.it("draws the enclosing function without parameters at the file column edge", function()
@@ -81,7 +79,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
     test.ok(context_call.x > 200, "expected the function context on the right of the file column")
   end)
 
-  test.it("shows file metadata only on the first row of a text match group", function()
+  test.it("omits file metadata from text results", function()
     local calls = {}
     renderer.draw_canvas = function() end
     symbol_index.enclosing_symbol = function() end
@@ -96,78 +94,11 @@ test.describe("Fuzzy Searcher Text Search context", function()
       text = "matched content", file_size = 123456, exact = true,
     }
     local width = 2400
-    local line_x = helpers.draw_grep_result_row(style.font, row, 0, 0, width, false)
+    helpers.draw_grep_result_row(style.font, row, 0, 0, width, false)
     local size_text = require("plugins.path_tree").format_file_size(row.file_size)
-    local size_call, content_call
     for _, call in ipairs(calls) do
-      if call.text == size_text then size_call = call end
-      if call.text == row.text then content_call = call end
+      test.ok(call.text ~= size_text, "Text Search must not show file metadata")
     end
-    test.not_nil(size_call, "expected file size beside the file path")
-    test.not_nil(content_call)
-    test.ok(size_call.right < content_call.x, "metadata must stay in the file column")
-    calls = {}
-    helpers.draw_grep_result_row(style.font, row, 0, 0, width, true, line_x)
-    for _, call in ipairs(calls) do
-      test.ok(call.text ~= size_text, "continuation rows must not repeat file metadata")
-    end
-  end)
-
-  test.it("keeps enclosing symbols aligned when file metadata is sparse", function()
-    local calls = {}
-    renderer.draw_canvas = function() end
-    renderer.draw_rect = function() end
-    file_icons.draw = function() end
-    symbol_icons.draw = function() end
-    symbol_index.enclosing_symbol = function()
-      return {
-        name = "WinMain",
-        kind = "function",
-        declaration = "int __stdcall WinMain()",
-        declaration_name_span = { 15, 21 },
-      }
-    end
-    fuzzy_searcher.file_metadata_parts = function(result)
-      return result.metadata_parts
-    end
-    renderer.draw_text = function(font, text, x)
-      calls[#calls + 1] = { text = text, x = x }
-      return x + font:get_width(text)
-    end
-
-    local function draw(metadata_parts)
-      calls = {}
-      helpers.draw_grep_result_row(style.font, {
-        kind = "grep", file = "src/main.cpp", abs_path = "C:/project/src/main.cpp",
-        line = 27, col = 1, text = "return WinMain()", exact = true,
-        metadata_parts = metadata_parts,
-      }, 0, 0, 1400, false)
-      local positions = {}
-      for _, call in ipairs(calls) do
-        if call.text == "WinMain" then positions.symbol = call.x end
-        if call.text == "3K" then positions.size = call.x end
-      end
-      return positions
-    end
-
-    local sparse = draw {
-      { id = "additions", text = "", sample = "+999" },
-      { id = "deletions", text = "", sample = "−999", separator = " " },
-      { id = "size", text = "3K", sample = "999M" },
-      { id = "age", text = "4h", sample = "99yr" },
-    }
-    local changed = draw {
-      { id = "additions", text = "+27", sample = "+999" },
-      { id = "deletions", text = "−58", sample = "−999", separator = " " },
-      { id = "size", text = "3K", sample = "999M" },
-      { id = "age", text = "4h", sample = "99yr" },
-    }
-    test.not_nil(sparse.symbol, "expected the sparse enclosing symbol name")
-    test.not_nil(changed.symbol, "expected the changed enclosing symbol name")
-    test.equal(sparse.symbol, changed.symbol,
-      "sparse metadata must not move the enclosing symbol column")
-    test.equal(sparse.size, changed.size,
-      "sparse metadata must not move the size column")
   end)
 
   test.it("left-aligns enclosing symbols with different label widths", function()
@@ -188,32 +119,54 @@ test.describe("Fuzzy Searcher Text Search context", function()
     symbol_index.enclosing_symbol = function(_, line)
       return symbols[line]
     end
-    renderer.draw_text = function(font, text, x)
-      return x + font:get_width(text)
-    end
-    renderer.draw_rect = function() end
-    renderer.draw_canvas = function() end
-    file_icons.draw = function() end
+    local line_right
+    local picker = fuzzy_searcher.open_static_results("Text Search", {
+      {
+        kind = "grep", file = "src/Panel.cpp", abs_path = "C:/project/src/Panel.cpp",
+        line = 10, col = 1, text = "matched content", exact = true,
+      },
+      {
+        kind = "grep", file = "src/Command.cpp", abs_path = "C:/project/src/Command.cpp",
+        line = 20, col = 1, text = "matched content", exact = true,
+      },
+    })
+    picker.position.x, picker.position.y = 0, 0
+    picker:set_size(1400, 500)
+    picker.open_transition_complete = true
+    picker.update_selected_preview = function() end
+    picker:update()
 
+    local original_draw_rounded_rect = renderer.draw_rounded_rect
+    local original_draw_text_known_bounds = renderer.draw_text_known_bounds
+    local original_set_clip_rect = renderer.set_clip_rect
     local symbol_x = {}
     symbol_icons.draw = function(_, x)
       symbol_x[#symbol_x + 1] = x
     end
-    local files = {
-      [10] = "src/Panel.cpp",
-      [20] = "src/Command.cpp",
-    }
-    for _, line in ipairs { 10, 20 } do
-      helpers.draw_grep_result_row(style.font, {
-        kind = "grep", file = files[line],
-        abs_path = "C:/project/" .. files[line],
-        line = line, col = 1, text = "matched content", exact = true,
-      }, 0, 0, 1400, false)
+    renderer.draw_text = function(font, text, x)
+      if text:find(":10", 1, true) == 1 or text:find(":20", 1, true) == 1 then
+        line_right = math.max(line_right or 0, x + font:get_width(text))
+      end
+      return x + font:get_width(text)
     end
+    renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
+    renderer.draw_text_known_bounds = function() end
+    renderer.set_clip_rect = function() end
+    renderer.draw_canvas = function() end
+    file_icons.draw = function() end
+    local ok, err = pcall(function() picker:draw() end)
+    renderer.draw_rounded_rect = original_draw_rounded_rect
+    renderer.draw_text_known_bounds = original_draw_text_known_bounds
+    renderer.set_clip_rect = original_set_clip_rect
+    if not ok then error(err, 0) end
 
     test.equal(#symbol_x, 2, "expected one enclosing symbol icon per row")
     test.equal(symbol_x[1], symbol_x[2],
       "enclosing symbol labels must start at one column")
+    test.not_nil(line_right, "expected the file line suffix")
+    test.ok(symbol_x[1] - line_right <= math.max(8 * (SCALE or 1), style.padding.x * 2) + 1,
+      "the symbol column must start after the filename without unused space")
   end)
 
   test.it("keeps grouped text rows collapsed when scrolling starts inside a file group", function()

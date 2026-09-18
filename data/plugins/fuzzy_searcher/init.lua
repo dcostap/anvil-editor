@@ -2659,9 +2659,10 @@ end
 
 function fuzzy_searcher.draw_grouped_file_location(
   font, result, prefix, line_suffix, x, y, file_width, metadata_right,
-  collapse_file, collapsed_line_x, metadata_parts, metadata_columns
+  collapse_file, collapsed_line_x, metadata_parts, metadata_columns,
+  show_metadata
 )
-  if not collapse_file then
+  if not collapse_file and show_metadata ~= false then
     local filename_width = fuzzy_searcher.file_result_filename_width(
       font, result.file, prefix, line_suffix, true
     )
@@ -2917,9 +2918,48 @@ grep_row_columns = function(width, ratio)
   return path_w, gap, math.max(0, width - path_w - gap)
 end
 
+function FSView:grep_file_column_width(font, path_w)
+  local results = self.results
+  local count = #results
+  local cache = self._grep_file_column_width
+  local font_size = font:get_size()
+  local prose_size = style.prose_font:get_size()
+  if cache and cache.results == results and cache.count == count
+      and cache.first == results[1] and cache.last == results[count]
+      and cache.path_w == path_w and cache.font == font
+      and cache.font_size == font_size and cache.prose_size == prose_size then
+    return cache.width
+  end
+
+  local width = 0
+  for _, result in ipairs(results) do
+    if result.kind == "grep" then
+      local line = tonumber(result.line) or 1
+      local suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
+      local prefix = result.exact and "# " or "~# "
+      width = math.max(width, fuzzy_searcher.file_result_filename_width(
+        font, result.file, prefix, suffix, true
+      ))
+    end
+  end
+  width = math.min(path_w, width)
+  self._grep_file_column_width = {
+    results = results,
+    count = count,
+    first = results[1],
+    last = results[count],
+    path_w = path_w,
+    font = font,
+    font_size = font_size,
+    prose_size = prose_size,
+    width = width,
+  }
+  return width
+end
+
 local function draw_grep_result_row(
   font, result, x, y, width, collapse_file, collapsed_line_x,
-  collapsed_context_x, metadata_parts, metadata_columns
+  collapsed_context_x, file_column_width
 )
   local path_w, gap, text_w = grep_row_columns(width)
   local symbol = fuzzy_searcher.grep_enclosing_symbol(result)
@@ -2928,39 +2968,32 @@ local function draw_grep_result_row(
   local prefix = result.exact and "# " or "~# "
   local line = tonumber(result.line) or 1
   local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
-  metadata_parts = metadata_parts or fuzzy_searcher.file_metadata_parts(result)
+  local filename_width = fuzzy_searcher.file_result_filename_width(
+    font, result.file, prefix, line_suffix, true
+  )
+  file_column_width = common.clamp(
+    tonumber(file_column_width) or filename_width, 0, path_w
+  )
   if symbol then
     local context_font = style.get_small_font(font)
     local symbol_icons = require "core.symbol_icons"
     local icon_width = symbol_icons.resolve_kind(symbol.kind or "symbol")
       and symbol_icons.size_for_row(font:get_height()) or 0
     local icon_gap = icon_width > 0 and math.max(3 * (SCALE or 1), style.padding.x / 3) or 0
-    local file_width = fuzzy_searcher.file_result_filename_width(
-      font, result.file, prefix, line_suffix, true
-    )
-    local metadata_width = require("plugins.file_metadata").required_width(
-      font, metadata_parts, metadata_columns
-    )
-    local max_context = math.max(
-      0, path_w - file_width - metadata_width - context_gap
-    )
+    local max_context = math.max(0, path_w - file_column_width - context_gap)
     local min_context = icon_width + icon_gap + context_font:get_width("…")
-    -- Use one left edge for every visible context. If it does not fit beside
-    -- the complete filename and metadata, keep the filename and omit it.
-    local column_width = math.max(min_context, math.floor(path_w * 0.32))
-    if max_context >= column_width then
-      context_width = column_width
+    if filename_width <= file_column_width and max_context >= min_context then
+      context_width = max_context
     else
       symbol = nil
       context_width = 0
     end
   end
-  local file_width = math.max(0, path_w - (symbol and context_width + context_gap or 0))
-  -- Keep empty Git columns reserved so each symbol context starts at one x position.
+  local file_width = filename_width > file_column_width and path_w or file_column_width
   local line_x
   line_x, file_width = fuzzy_searcher.draw_grouped_file_location(
     font, result, prefix, line_suffix, x, y, file_width, x + path_w,
-    collapse_file, collapsed_line_x, metadata_parts, metadata_columns
+    collapse_file, collapsed_line_x, nil, nil, false
   )
   local context_x = x + file_width + context_gap
   if collapse_file and collapsed_context_x then
@@ -7325,6 +7358,11 @@ function FSView:draw_open_content()
     local r = self.results[idx]
     if r and r.kind == "grep" then has_visible_split = true; break end
   end
+  local grep_file_column_width
+  if has_visible_split then
+    local path_w = grep_row_columns(row_text_w)
+    grep_file_column_width = self:grep_file_column_width(font, path_w)
+  end
   fuzzy_searcher._perf_scope_end(phase_scope)
 
   local results_scope = fuzzy_searcher._perf_scope_begin("result_rows")
@@ -7363,7 +7401,8 @@ function FSView:draw_open_content()
       local seed_y = m.top - lh + row_padding
       if kind == "grep" then
         previous_rendered_line_x, previous_rendered_context_x = draw_grep_result_row(
-          font, self.results[group_start], x + pad, seed_y, row_text_w, false)
+          font, self.results[group_start], x + pad, seed_y, row_text_w,
+          false, nil, nil, grep_file_column_width)
       else
         previous_rendered_line_x = fuzzy_searcher.draw_symbol_result_row(
           font, self.results[group_start], x + pad, seed_y, row_text_w, lh, false
@@ -7415,7 +7454,8 @@ function FSView:draw_open_content()
           and file == previous_rendered_file
         previous_rendered_line_x, previous_rendered_context_x = draw_grep_result_row(
           font, r, x + pad, row_y, row_text_w, collapse_file,
-          previous_rendered_line_x, previous_rendered_context_x)
+          previous_rendered_line_x, previous_rendered_context_x,
+          grep_file_column_width)
         previous_rendered_file_kind = "grep"
         previous_rendered_file = file
       elseif r.kind == "file" then
