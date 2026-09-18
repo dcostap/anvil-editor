@@ -620,8 +620,8 @@ settings.add("Editor",
       default = {
         fonts = {
           {
-            name = "CaskaydiaCove Nerd Font Mono SemiLight",
-            path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-SemiLight.ttf"
+            name = "CaskaydiaCove Nerd Font Mono Regular",
+            path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
           }
         },
         options = {

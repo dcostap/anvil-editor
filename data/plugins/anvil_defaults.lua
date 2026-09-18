@@ -234,7 +234,7 @@ if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
 local font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
-local code_font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-SemiLight.ttf"
+local code_font_path = font_path
 local prose_font_path = DATADIR .. "/fonts/Inter-Regular.ttf"
 local prose_strong_font_path = DATADIR .. "/fonts/Inter-SemiBold.ttf"
 local prose_emphasis_font_path = DATADIR .. "/fonts/Inter-Italic.ttf"
