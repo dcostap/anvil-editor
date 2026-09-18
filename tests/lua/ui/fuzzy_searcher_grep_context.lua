@@ -104,7 +104,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
       if call.text == row.text then found_inline_match = true end
     end
     test.ok(found_age, "Text Search must keep edit-time metadata")
-    test.not_ok(found_inline_match, "the match belongs in the separate preview")
+    test.ok(found_inline_match, "the match must stay in its separate inline column")
   end)
 
   test.it("left-aligns enclosing symbols with different label widths", function()
