@@ -4231,16 +4231,18 @@ local function capture_pre_edit_renders(view, change)
     end
   end
   local service = owner.fence_service
-  local edit_touches_fence = false
+  local edit_touches_fence_opening = false
   for _, edit in ipairs(transaction and transaction.edits or {}) do
-    if service and (service:contains_line(edit.line1 or -1)
-      or service:contains_line(edit.line2 or edit.line1 or -1))
+    if service and service:is_opening_line(edit.line1 or -1)
     then
-      edit_touches_fence = true
+      edit_touches_fence_opening = true
       break
     end
   end
-  if edit_touches_fence then
+  -- A body edit only needs the changed and visible lines. The fence service
+  -- reparses its suffix separately. Copying every cached body row here made
+  -- one character at the end of a large fence clone thousands of rows.
+  if edit_touches_fence_opening then
     for cached_line in pairs(
       view.__line_render_cache and view.__line_render_cache.lines or {}
     ) do
