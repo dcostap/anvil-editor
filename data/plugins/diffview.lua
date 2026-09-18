@@ -1502,9 +1502,16 @@ function DiffView:sync_caret_from(buffer_view, is_a)
   local row = visual_rows_before_line(buffer_view, line)
   local target_line = line_for_visual_row(other, row)
   local target_col = math.max(1, math.min(col or 1, #(other.buffer.lines[target_line] or "")))
-  target_line, target_col = clamp_position_out_of_fold(other, target_folds, other.buffer:get_selection(), target_line, target_col)
+  local other_line = with_textview_selection(other, function()
+    return other.buffer:get_selection()
+  end)
+  target_line, target_col = clamp_position_out_of_fold(
+    other, target_folds, other_line, target_line, target_col
+  )
   self.syncing_diff_caret = true
-  other.buffer:set_selection(target_line, target_col, target_line, target_col)
+  with_textview_selection(other, function()
+    other.buffer:set_selection(target_line, target_col, target_line, target_col)
+  end)
   self.syncing_diff_caret = false
 end
 
@@ -2136,7 +2143,9 @@ function DiffView:reveal_change(direction)
   end
   local point = points[direction == -1 and #points or 1]
   if not point then return false end
-  view.buffer:set_selection(point.line, point.col or 1, point.line, point.col or 1)
+  with_textview_selection(view, function()
+    view.buffer:set_selection(point.line, point.col or 1, point.line, point.col or 1)
+  end)
   if view.scroll_to_line then
     view:scroll_to_line(point.line, false, false)
   else

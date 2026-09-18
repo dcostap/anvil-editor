@@ -163,6 +163,31 @@ test.describe("DiffView batch behavior", function()
     test.equal(core.buffer_registry:reference_count(canonical), 0)
   end)
 
+  test.it("keeps the first-change caret on a shared file-backed Diff Side", function(context)
+    local path = core.project_absolute_path("tmp-diff-shared-caret.txt")
+    pcall(os.remove, path)
+    local prefix = string.rep("same\n", 40)
+    write_file(path, prefix .. "new\n")
+    context.cleanup_shared_file = path
+    local canonical = core.open_buffer(path)
+    local editor = TextView(canonical)
+    local view = track(context, "diffviews", diffview.open({
+      contents = {
+        diffview.content.text(prefix .. "old\n"),
+        diffview.content.file(path),
+      },
+    }, true))
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 200
+    wait_until(function() return view.updater_idx == nil end, 1, "shared caret diff computation did not finish")
+    view:update()
+
+    test.equal(view.buffer_view_a:get_selection_state().selections[1], 41)
+    test.equal(view.buffer_view_b:get_selection_state().selections[1], 41)
+    test.equal(editor:get_selection_state().selections[1], 1)
+    editor:on_close()
+  end)
+
   test.it("keeps a selected fragment connected to its source Buffer", function(context)
     local source = Buffer(nil, nil, true)
     source:insert(1, 1, "one target three")
