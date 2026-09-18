@@ -63,8 +63,12 @@ function SingleLineBuffer:reset()
   self:reset_syntax()
 end
 
+function SingleLineBuffer:normalize_edit_text(text, edit, opts)
+  return tostring(text or ""):gsub("[\r\n]", "")
+end
+
 function SingleLineBuffer:insert(line, col, text)
-  SingleLineBuffer.super.insert(self, line, col, text:gsub("\n", ""))
+  SingleLineBuffer.super.insert(self, line, col, self:normalize_edit_text(text))
 end
 
 ---@class widget.textbox.TextView : core.textview
