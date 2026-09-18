@@ -7607,9 +7607,9 @@ function open(prefix, opts)
   active_view = FSView(initial_text, opts)
   core.fuzzy_searcher_active_view = active_view
   if select_seeded_query then
-    -- Keep the grep mode marker and quotes in place.  Put the caret at the
-    -- query end so typing replaces only the selected query text.
-    active_view.input.textview.buffer:set_selection(1, #initial_text, 1, 3)
+    -- Keep the grep mode marker in place.  Put the caret after the quotes so
+    -- typing replaces the selected exact-query text.
+    active_view.input.textview.buffer:set_selection(1, #initial_text + 1, 1, 2)
   end
   if select_restored_query then
     fuzzy_searcher.apply_prompt_history_text(active_view, initial_text, true)

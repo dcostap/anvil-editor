@@ -180,9 +180,9 @@ test.describe("Fuzzy Searcher mode switching", function()
     local input_buffer = picker.input.textview.buffer
     local prompt = '#"dwTotalVirtual"'
     test.equal(picker.input:get_text(), prompt)
-    test.same({ input_buffer:get_selection() }, { 1, #prompt, 1, 3 })
+    test.same({ input_buffer:get_selection() }, { 1, #prompt + 1, 1, 2 })
     local line1, col1, line2, col2 = input_buffer:get_selection(true)
-    test.equal(input_buffer:get_text(line1, col1, line2, col2), "dwTotalVirtual")
+    test.equal(input_buffer:get_text(line1, col1, line2, col2), '"dwTotalVirtual"')
   end)
 
   test.it("keeps the caret-based default when blank Current Buffer Symbol Search loading restarts", function(context)
