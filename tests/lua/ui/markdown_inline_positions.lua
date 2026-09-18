@@ -4,6 +4,7 @@ local Editor = require "core.editor"
 local markdown = require "core.markdown"
 local model = require "core.markdown.model"
 local linewrapping = require "core.linewrapping"
+local style = require "core.style"
 local worker_pool = require "core.worker_pool"
 local test = require "core.test"
 local renwindow = require "renwindow"
@@ -48,6 +49,51 @@ local function visible_text(view, line)
 end
 
 test.describe("Markdown inline positions", function()
+  test.it("keeps selection background above inline code background", function()
+    local buffer = Buffer("inline-selection.md", "inline-selection.md", true)
+    buffer:insert(1, 1, "before `code` after\n")
+    buffer:clear_undo_redo()
+    local view = Editor(buffer)
+    view.size.x, view.size.y = 960, 400
+    view:set_wrapping_enabled(false)
+    markdown.live_render.refresh_view(view)
+    wait_ready(view)
+
+    -- Select the visible code, without its Markdown delimiters.
+    buffer:set_selection(1, 9, 1, 13)
+    view:prepare_line_body_draw_cache(1, 1)
+    local x, y = view:get_line_screen_position(1)
+    local code_x1 = x + view:get_col_x_offset(1, 9)
+    local code_x2 = x + view:get_col_x_offset(1, 13)
+    local point_x = (code_x1 + code_x2) / 2
+    local point_y = y + view:get_line_height() / 2
+    local calls = {}
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    renderer.draw_rect = function(rx, ry, width, height, color)
+      calls[#calls + 1] = { rx, ry, width, height, color }
+    end
+    renderer.draw_text = function(font, text, tx, _, _, opts)
+      return tx + font:get_width(text, opts)
+    end
+    local ok, err = pcall(function() view:draw_line_body(1, x, y) end)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    if not ok then error(err, 0) end
+
+    local top_color
+    for _, call in ipairs(calls) do
+      if point_x >= call[1] and point_x <= call[1] + call[3]
+      and point_y >= call[2] and point_y <= call[2] + call[4]
+      then
+        top_color = call[5]
+      end
+    end
+    test.equal(top_color, style.selection)
+    test.not_equal(top_color, style.markdown_live_inline_code_bg)
+    model.close(buffer, "test")
+  end)
+
   for _, wrapped in ipairs({ false, true }) do
     test.it("aligns prose and code after a task, wrapping=" .. tostring(wrapped), function()
       local name = "inline-after-task-" .. tostring(wrapped) .. ".md"

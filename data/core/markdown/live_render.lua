@@ -801,6 +801,7 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
           strikethrough = strike or nil,
           background = code and style.markdown_live_inline_code_bg
             or highlight and style.markdown_live_highlight_bg or nil,
+          background_under_selection = code or nil,
           semantic_id = table.concat(ids, "+"),
         }
       end
@@ -849,6 +850,7 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
     if previous and previous.source_col2 == fragment.source_col1
       and previous.hidden == fragment.hidden and previous.font == fragment.font
       and previous.color == fragment.color and previous.background == fragment.background
+      and previous.background_under_selection == fragment.background_under_selection
       and previous.strikethrough == fragment.strikethrough
       and previous.overdraw == fragment.overdraw and previous.semantic_id == fragment.semantic_id
     then
@@ -1393,6 +1395,7 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
   fragment.strikethrough = strike or nil
   fragment.background = code and style.markdown_live_inline_code_bg
     or highlight and style.markdown_live_highlight_bg or fragment.background
+  fragment.background_under_selection = code or nil
   fragment.semantic_id = #ids > 0 and table.concat(ids, "+") or fragment.semantic_id
   return fragment
 end
@@ -3434,6 +3437,12 @@ end
 
 local function prose_render_line(view, line_text, render_line)
   local font = markdown_live_body_font(view)
+  for _, fragment in ipairs(render_line.fragments or {}) do
+    if fragment.background_under_selection then
+      render_line.under_selection_backgrounds = true
+      break
+    end
+  end
   render_line.text_row_height = render_line.text_row_height
     or markdown_live_body_line_height(view)
   render_line.caret_height = render_line.caret_height or render_line.text_row_height
