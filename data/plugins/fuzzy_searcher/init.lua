@@ -3031,7 +3031,6 @@ local function draw_grep_result_row(
   end
 
   local right = x + content_width
-  local symbol_width = 0
   if symbol then
     local context_font = style.get_small_font(font)
     local symbol_icons = require "core.symbol_icons"
@@ -3044,28 +3043,11 @@ local function draw_grep_result_row(
     local max_context = math.max(0, right - context_x)
     local min_context = icon_width + icon_gap + context_font:get_width("…")
     if filename_width <= file_column_width and max_context >= min_context then
-      symbol_width = fuzzy_searcher.draw_grep_symbol_context(
+      fuzzy_searcher.draw_grep_symbol_context(
         font, symbol, context_x, y, math.min(desired, max_context), font:get_height()
       )
-    else
-      symbol = nil
     end
   end
-  local text_x = context_x + (symbol and symbol_width + context_gap or 0)
-  local text_w = math.max(0, right - text_x)
-  if text_w <= 0 then return line_x, context_x end
-  local preview_font = style.get_small_font(font)
-  local preview_y = y + math.max(0, math.floor((font:get_height() - preview_font:get_height()) / 2))
-  local text = tostring(result.text or "")
-  local spans = grep_content_spans(text, result, 0)
-  local anchor = result.col or true
-  local leading = #(text:match("^%s*") or "")
-  if leading > 0 then
-    text = text:sub(leading + 1)
-    spans = project_spans(spans, leading + 1, leading + #text, 0)
-    if type(anchor) == "number" then anchor = math.max(1, anchor - leading) end
-  end
-  draw_highlighted_text(preview_font, text, text_x, preview_y, text_w, style.text, spans, nil, anchor)
   return line_x, context_x
 end
 

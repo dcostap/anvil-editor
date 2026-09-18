@@ -97,12 +97,14 @@ test.describe("Fuzzy Searcher Text Search context", function()
     local width = 2400
     helpers.draw_grep_result_row(style.font, row, 0, 0, width, false)
     local size_text = require("plugins.path_tree").format_file_size(row.file_size)
-    local found_age = false
+    local found_age, found_inline_match = false, false
     for _, call in ipairs(calls) do
       test.ok(call.text ~= size_text, "Text Search must not show file size metadata")
       if call.text == "2h" then found_age = true end
+      if call.text == row.text then found_inline_match = true end
     end
     test.ok(found_age, "Text Search must keep edit-time metadata")
+    test.not_ok(found_inline_match, "the match belongs in the separate preview")
   end)
 
   test.it("left-aligns enclosing symbols with different label widths", function()
