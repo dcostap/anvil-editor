@@ -100,7 +100,6 @@ local function new_index(root)
     open_buffer_jobs = {},
     pending_reindex_paths = {},
     pending_reindex_dirs = {},
-    pending_open_buffer_paths = {},
     watch_running = false,
     watch_ignored_events = 0,
     watch_irrelevant_events = 0,
@@ -243,9 +242,6 @@ local function sort_usages(usages)
   table.sort(usages, usage_less)
 end
 
-local buffer_path
-local submit_open_buffer_overlay
-
 local function drain_pending_reindexes(index)
   if not index or index.status == "indexing" then return false end
   local drained = false
@@ -273,30 +269,6 @@ local function drain_pending_reindexes(index)
       symbol_index.mark_watch_paths_dirty(index.root, paths, "queued-during-indexing", {
         project_files_refreshed = true,
       })
-    end
-  end
-  return drained
-end
-
-local function drain_pending_open_buffer_paths(index)
-  if not index or index.status == "indexing" then return false end
-  local pending = index.pending_open_buffer_paths
-  if not pending or next(pending) == nil then return false end
-  index.pending_open_buffer_paths = {}
-  local drained = false
-  for path, reason in pairs(pending) do
-    local buffer = open_buffers[path]
-    if not buffer then
-      for _, candidate in pairs(core.buffers or {}) do
-        if common.path_equals(buffer_path(candidate), path) then
-          buffer = candidate
-          break
-        end
-      end
-    end
-    if buffer then
-      local scheduled = submit_open_buffer_overlay(index, buffer, path, reason)
-      drained = scheduled or drained
     end
   end
   return drained
@@ -450,15 +422,11 @@ local function finish_worker_scan(index, message, status)
       safe_yield(0)
       local pending_started = now()
       local drained = drain_pending_reindexes(index)
-      local overlays_drained = drain_pending_open_buffer_paths(index)
       local pending_ms = elapsed_ms(pending_started)
       add_ui_metric(index, "pending_reindexes_drain_ms", pending_ms)
       max_ui_metric(index, "pending_reindexes_drain_max_ms", pending_ms)
       if drained then
         log_quiet("Tree-sitter Project index: drained pending reindexes for %s in %.1fms", tostring(index.root), pending_ms)
-      end
-      if overlays_drained then
-        log_quiet("Tree-sitter Project index: drained pending open Buffer overlays for %s", tostring(index.root))
       end
     end)
   else
@@ -904,10 +872,7 @@ local function buffer_can_overlay_project_index(buffer)
 end
 
 local function has_pending_open_buffer_overlay(index)
-  return index and (
-    index.open_buffer_jobs and next(index.open_buffer_jobs) ~= nil
-    or index.pending_open_buffer_paths and next(index.pending_open_buffer_paths) ~= nil
-  )
+  return index and index.open_buffer_jobs and next(index.open_buffer_jobs) ~= nil
 end
 
 local function overlay_paths(index)
@@ -1932,7 +1897,7 @@ function symbol_index.query_usages_async(name, opts)
   return symbol_index.workspace_usages_async(name, opts)
 end
 
-buffer_path = function(buffer)
+local function buffer_path(buffer)
   local path = buffer and (buffer.abs_filename or buffer.filename)
   return path and common.normalize_path(path) or nil
 end
@@ -1953,7 +1918,7 @@ local function cancel_open_buffer_job(index, path)
   if index and index.open_buffer_jobs then index.open_buffer_jobs[path] = nil end
 end
 
-submit_open_buffer_overlay = function(index, buffer, path, reason)
+local function submit_open_buffer_overlay(index, buffer, path, reason)
   if not buffer_can_overlay_project_index(buffer) then return false, "disabled" end
   local ts = buffer and buffer.treesitter
   if not ts or ts.status ~= "ready" then return false, "not-ready" end
@@ -2096,18 +2061,12 @@ refresh_open_buffer_overlays = function(index)
       local current = index.open_buffers[path]
       local change_id = buffer.get_change_id and buffer:get_change_id() or 0
       if not buffer_can_overlay_project_index(buffer) then
-        if index.pending_open_buffer_paths then index.pending_open_buffer_paths[path] = nil end
         local job = index.open_buffer_jobs and index.open_buffer_jobs[path]
         if job then cancel_open_buffer_job(index, path); changed = true end
         if current then index.open_buffers[path] = nil; changed = true end
       elseif not current or current.buffer ~= buffer or current.change_id ~= change_id then
-        if index.status == "indexing" then
-          index.pending_open_buffer_paths[path] = "refresh"
-          changed = true
-        else
-          local scheduled = submit_open_buffer_overlay(index, buffer, path, "refresh")
-          changed = scheduled or changed
-        end
+        local scheduled = submit_open_buffer_overlay(index, buffer, path, "refresh")
+        changed = scheduled or changed
       end
     end
   end
@@ -2139,9 +2098,6 @@ function symbol_index.update_open_buffer(buffer, reason)
     if common.path_belongs_to(path, index.root) then
       local current = index.open_buffers[path]
       if current and current.buffer == buffer and current.change_id == change_id then
-        updated = true
-      elseif index.status == "indexing" and buffer_can_overlay_project_index(buffer) then
-        index.pending_open_buffer_paths[path] = reason or "change"
         updated = true
       else
         local scheduled, err = submit_open_buffer_overlay(index, buffer, path, reason)
@@ -2177,7 +2133,6 @@ function symbol_index.clear_open_buffer(buffer, reason)
     local index_cleared = false
     for overlay_path, entry in pairs(index.open_buffers or {}) do
       if entry.buffer == buffer then
-        if index.pending_open_buffer_paths then index.pending_open_buffer_paths[overlay_path] = nil end
         cancel_open_buffer_job(index, overlay_path)
         index.open_buffers[overlay_path] = nil
         cleared = true
@@ -2188,11 +2143,6 @@ function symbol_index.clear_open_buffer(buffer, reason)
       if job.buffer == buffer then
         cancel_open_buffer_job(index, overlay_path)
         cleared = true
-      end
-    end
-    for overlay_path in pairs(index.pending_open_buffer_paths or {}) do
-      if not open_buffers[overlay_path] then
-        index.pending_open_buffer_paths[overlay_path] = nil
       end
     end
     if index_cleared then bump_overlay_generation(index) end

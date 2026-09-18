@@ -2633,6 +2633,34 @@ test.describe("Markdown Live Preview", function()
     )
   end)
 
+  test.it("keeps wrapped layout work local while fenced text is reparsed", function()
+    local lines = { "```lua" }
+    for index = 1, 300 do
+      lines[#lines + 1] = "local value_" .. index .. " = " .. index
+    end
+    lines[#lines + 1] = "```"
+    lines[#lines + 1] = "tail"
+    local view, buffer = make_view(table.concat(lines, "\n"), "fence-edit-layout.md")
+    view:set_wrapping_enabled(true)
+    refresh(view)
+    view:get_visual_row_metric_cache()
+    local rebuilds_before = view:get_render_cache_diagnostics().metric_full_rebuilds
+
+    local edit_line = 301
+    buffer:insert(edit_line, #buffer.lines[edit_line], "x")
+    view:get_visual_row_metric_cache()
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    linewrapping.complete_async_reconstruction(view)
+    view:get_visual_row_metric_cache()
+
+    test.equal(
+      view:get_render_cache_diagnostics().metric_full_rebuilds,
+      rebuilds_before,
+      "a local fenced edit rebuilt the complete Markdown layout"
+    )
+  end)
+
   test.it("reveals the complete task-list prefix when the caret enters its checkbox", function()
     local view, buffer = make_view(" - [ ] todo\nplain", "task-reveal.md")
     buffer:set_selection(2, 1)

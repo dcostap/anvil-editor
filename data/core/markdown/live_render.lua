@@ -5192,12 +5192,12 @@ function provider:generation_seed(view)
   return metric_records.validate_geometry(view)
 end
 
-function provider:generation(view)
+local function provider_metric_generation(view)
   perf_frame_add("markdown_live_provider_generation_requests", 1)
   local state = metric_records.validate_geometry(view)
-  if state.generation then
+  if state.metric_generation then
     perf_frame_add("markdown_live_provider_generation_cache_hits", 1)
-    return state.generation
+    return state.metric_generation
   end
   local font = markdown_live_body_font(view)
   local table_width = table_available_width(view)
@@ -5220,10 +5220,21 @@ function provider:generation(view)
   -- `markdown_live_body_font()` may return a fresh size-adjusted copy. Keying
   -- by that temporary object's identity makes an unchanged layout look new
   -- whenever wrapping is locally refreshed.
-  state.generation = state.prose_typography_signature .. ":" .. tostring(font:get_size())
+  state.metric_generation = state.prose_typography_signature .. ":" .. tostring(font:get_size())
     .. ":width:" .. tostring(table_width)
     .. ":image-width:" .. tostring(image_width)
     .. ":interactive-tables:" .. tostring(state.interactive_tables)
+  return state.metric_generation
+end
+
+function provider:metric_generation(view)
+  return provider_metric_generation(view)
+end
+
+function provider:generation(view)
+  local state = metric_records.validate_geometry(view)
+  if state.generation then return state.generation end
+  state.generation = provider_metric_generation(view)
     -- Text transactions and semantic publications invalidate their changed
     -- lines directly. Model status and revision are not global layout state.
     -- Including them here rebuilt every row for a one-character task toggle.
