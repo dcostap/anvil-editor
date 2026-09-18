@@ -2684,7 +2684,15 @@ local function suggest_monospace_fonts(text)
   local choices = core.get_monospace_font_choices()
   local names = {}
   local by_name = {}
+  local current_id = core.get_monospace_font_id()
+  local ordered = {}
   for _, choice in ipairs(choices) do
+    if choice.id == current_id then ordered[#ordered + 1] = choice end
+  end
+  for _, choice in ipairs(choices) do
+    if choice.id ~= current_id then ordered[#ordered + 1] = choice end
+  end
+  for _, choice in ipairs(ordered) do
     names[#names + 1] = choice.name
     by_name[choice.name] = choice
   end
@@ -2703,14 +2711,30 @@ end
 
 command.add(nil, {
   ["editor:select_monospace_font"] = command.palette(function()
+    local original_id = core.get_monospace_font_id()
     core.global_prompt_bar:enter("Monospace Font", {
       suggest = suggest_monospace_fonts,
+      on_suggestion = function(item)
+        if item and item.id and item.id ~= core.get_monospace_font_id() then
+          core.set_monospace_font(item.id)
+        end
+      end,
+      cancel = function()
+        if original_id and original_id ~= core.get_monospace_font_id() then
+          core.set_monospace_font(original_id)
+        end
+      end,
       validate = function(text, item)
         return not not ((item and item.id) or monospace_font_choice(text))
       end,
       submit = function(text, item)
         local choice = item and item.id and item or monospace_font_choice(text)
-        if not choice or not core.set_monospace_font(choice.id) then return end
+        if not choice then return end
+        if choice.id ~= core.get_monospace_font_id()
+          and not core.set_monospace_font(choice.id)
+        then
+          return
+        end
         settings.config.monospace_font = choice.id
         save_settings()
       end,

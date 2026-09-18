@@ -65,6 +65,7 @@ local noop = function() end
 ---Configuration state for one Global Prompt Bar interaction.
 ---@class core.global_prompt_bar.state
 ---@field submit fun(text: string, suggestion: table?) Callback when prompt text is submitted
+---@field on_suggestion fun(suggestion: table?) Callback when the highlighted suggestion changes
 ---@field suggest fun(text: string): table[]? Function returning suggestion list
 ---@field cancel fun(explicit: boolean) Callback when prompt interaction is cancelled
 ---@field validate fun(text: string, suggestion: table?): boolean Validate before submission
@@ -76,6 +77,7 @@ local noop = function() end
 ---@field wrap boolean Whether suggestion cycling wraps around
 local default_state = {
   submit = noop,
+  on_suggestion = noop,
   suggest = noop,
   cancel = noop,
   validate = function() return true end,
@@ -93,6 +95,7 @@ function GlobalPromptBar:new()
   GlobalPromptBar.super.new(self, SingleLineBuffer())
   self.suggestion_idx = 1
   self.suggestions = {}
+  self.notified_suggestion = nil
   self.suggestions_height = 0
   self.suggestions_offset = 0
   self.suggestions_first = 1
@@ -230,6 +233,16 @@ function GlobalPromptBar:complete()
   if #self.suggestions > 0 and self.suggestions[self.suggestion_idx] then
     self:set_text(self.suggestions[self.suggestion_idx].text)
   end
+  self:notify_suggestion()
+end
+
+---Notify the prompt owner when the highlighted suggestion changes.
+---@param suggestion table? Currently highlighted suggestion
+function GlobalPromptBar:notify_suggestion()
+  local suggestion = self.suggestions[self.suggestion_idx]
+  if self.notified_suggestion == suggestion then return end
+  self.notified_suggestion = suggestion
+  self.state.on_suggestion(suggestion)
 end
 
 
@@ -333,6 +346,7 @@ function GlobalPromptBar:exit(submitted, inexplicit)
   self.state = default_state
   self.buffer:reset()
   self.suggestions = {}
+  self.notified_suggestion = nil
   if not submitted then cancel(not inexplicit) end
   self.save_suggestion = nil
   self.last_text = ""
@@ -376,6 +390,8 @@ function GlobalPromptBar:update_suggestions()
   end
   self.suggestions = res
   self.suggestion_idx = 1
+  self.notified_suggestion = nil
+  self:notify_suggestion()
 end
 
 

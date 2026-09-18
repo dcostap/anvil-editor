@@ -31,6 +31,17 @@ test.describe("Monospace font selection", function()
     test.equal(#core.global_prompt_bar.suggestions, 2)
   end)
 
+  test.it("previews a highlighted font and restores it on cancel", function()
+    test.ok(command.perform("editor:select_monospace_font"))
+    core.global_prompt_bar:move_suggestion_idx(1)
+
+    test.equal(core.get_monospace_font_id(), "jetbrains_mono")
+    test.ok(primary_path(style.font):find("JetBrainsMono-Regular.ttf", 1, true))
+
+    core.global_prompt_bar:exit(false)
+    test.equal(core.get_monospace_font_id(), previous_id)
+  end)
+
   test.it("applies the selected font to UI, code, and terminal roles", function()
     test.ok(command.perform("editor:select_monospace_font"))
     core.global_prompt_bar:set_text("JetBrains Mono")
