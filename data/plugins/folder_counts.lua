@@ -5,6 +5,7 @@ local common = require "core.common"
 local counts = {}
 local cache, pending, queue = {}, {}, {}
 local running = false
+counts.generation = 0
 
 function counts.get(path, modified, show_hidden)
   local key = (show_hidden and "1" or "0") .. "\0" .. common.path_compare_key(path)
@@ -37,6 +38,7 @@ function counts.get(path, modified, show_hidden)
           local latest = system.get_file_info(task.path)
           if latest and latest.type == "dir" and latest.modified == task.modified then
             cache[task.key] = { modified = task.modified, count = entries and total or nil, error = err }
+            counts.generation = counts.generation + 1
             if not entries then
               core.log_quiet("Folder count failed for %s: %s", task.path, err or "cannot list directory")
             end

@@ -2404,31 +2404,135 @@ end
 
 function fuzzy_searcher.file_metadata_parts(r)
   local file_metadata = require "plugins.file_metadata"
-  if r.revision then return file_metadata.parts { type = "file", size = r.file_size } end
+  local cache = r._file_metadata_cache
+  if r.revision then
+    if cache and cache.revision == r.revision and cache.file_size == r.file_size
+      and cache.additions_color == style.filetree_git_line_additions
+      and cache.deletions_color == style.filetree_git_line_deletions
+    then
+      return cache.parts
+    end
+    local parts = file_metadata.parts { type = "file", size = r.file_size }
+    r._file_metadata_cache = {
+      revision = r.revision,
+      file_size = r.file_size,
+      additions_color = style.filetree_git_line_additions,
+      deletions_color = style.filetree_git_line_deletions,
+      parts = parts,
+    }
+    return parts
+  end
   local path = fullpath(r.abs_path or r.file or r.path)
   local last_edited = file_metadata.recent_times(path)
-  local git = require("plugins.file_git_status"):lookup(path, r.is_folder)
-  if r.file_size == nil or r.is_folder then
+  if r.file_size == nil then
     local info = system.get_file_info(path)
     r.file_size = info and info.size or false
     r.file_modified = info and info.modified
   end
+  local git_status = require "plugins.file_git_status"
+  local folder_counts = require "plugins.folder_counts"
+  local age_minute = math.floor(os.time() / 60)
+  local git_generation = git_status.generation
+  local folder_generation = folder_counts.generation
+  cache = r._file_metadata_cache
+  if cache and cache.path == path and cache.is_folder == r.is_folder
+    and cache.file_size == r.file_size and cache.file_modified == r.file_modified
+    and cache.result_last_edited == r.last_edited and cache.last_edited == last_edited
+    and cache.recent_source == core.visited_files and cache.age_minute == age_minute
+    and cache.git_generation == git_generation
+    and cache.folder_generation == folder_generation
+    and cache.additions_color == style.filetree_git_line_additions
+    and cache.deletions_color == style.filetree_git_line_deletions
+    and cache.warn_color == style.warn
+    and cache.ignored_color == style.filetree_git_status_ignored
+  then
+    return cache.parts
+  end
+  local git = git_status:lookup(path, r.is_folder)
   local counts, count_pending
   if r.is_folder then
-    counts, count_pending = require("plugins.folder_counts").get(path, r.file_modified, false)
+    counts, count_pending = folder_counts.get(path, r.file_modified, false)
   end
-  return file_metadata.parts {
+  local parts = file_metadata.parts {
     type = r.is_folder and "dir" or "file", size = r.file_size,
     count = counts and counts.count, count_pending = count_pending,
     modified = r.file_modified, git = git,
     last_edited = r.last_edited or last_edited,
   }
+  r._file_metadata_cache = {
+    path = path,
+    is_folder = r.is_folder,
+    file_size = r.file_size,
+    file_modified = r.file_modified,
+    result_last_edited = r.last_edited,
+    last_edited = last_edited,
+    recent_source = core.visited_files,
+    age_minute = age_minute,
+    git_generation = git_generation,
+    folder_generation = folder_generation,
+    additions_color = style.filetree_git_line_additions,
+    deletions_color = style.filetree_git_line_deletions,
+    warn_color = style.warn,
+    ignored_color = style.filetree_git_status_ignored,
+    parts = parts,
+  }
+  return parts
 end
 
 function fuzzy_searcher.draw_file_metadata(font, r, x, y, width, parts, columns, reclaim_empty)
   return require("plugins.file_metadata").draw(
     font, parts or fuzzy_searcher.file_metadata_parts(r), x, y, width, columns, reclaim_empty
   )
+end
+
+function fuzzy_searcher.visible_file_metadata(view, font, first, last)
+  local file_metadata = require "plugins.file_metadata"
+  local metadata_font = file_metadata.font(font)
+  local font_generation = metadata_font:get_generation()
+  local font_scale = metadata_font:get_surface_scale()
+  if type(font_generation) == "table" then font_generation = table.concat(font_generation, "\0") end
+  if type(font_scale) == "table" then font_scale = table.concat(font_scale, "\0") end
+  local cache = view._file_metadata_layout_cache
+  local reusable = cache and cache.results == view.results
+    and cache.first == first and cache.last == last
+    and cache.font == metadata_font and cache.font_size == metadata_font:get_size()
+    and cache.font_generation == font_generation and cache.font_scale == font_scale
+  local rows = reusable and cache.rows or {}
+  local changed = not reusable
+  for idx = first, last do
+    local r = view.results[idx]
+    local parts
+    if r and (r.kind == "file" or r.kind == "folder" or r.kind == "symbol")
+      and not r.header
+    then
+      parts = fuzzy_searcher.file_metadata_parts(r)
+    end
+    if rows[idx] ~= parts then
+      rows[idx] = parts
+      changed = true
+    end
+  end
+  if reusable and not changed then return rows, cache.columns end
+  local columns = reusable and cache.columns or nil
+  if changed then
+    columns = {}
+    for idx = first, last do
+      local parts = rows[idx]
+      if parts then file_metadata.include_columns(columns, font, parts) end
+    end
+  end
+  view._file_metadata_layout_cache = {
+    results = view.results,
+    first = first,
+    last = last,
+    font = metadata_font,
+    font_size = metadata_font:get_size(),
+    font_generation = font_generation,
+    font_scale = font_scale,
+    rows = rows,
+    columns = columns,
+  }
+  return rows, columns
 end
 
 local function draw_new_project_result_row(font, r, x, y, width)
@@ -7176,15 +7280,9 @@ function FSView:draw_open_content()
   fuzzy_searcher._perf_scope_end(phase_scope)
 
   local results_scope = fuzzy_searcher._perf_scope_begin("result_rows")
-  local metadata_rows, metadata_columns = {}, {}
-  for idx = self.viewport_offset, last do
-    local r = self.results[idx]
-    if (r.kind == "file" or r.kind == "folder" or r.kind == "symbol") and not r.header then
-      local parts = fuzzy_searcher.file_metadata_parts(r)
-      metadata_rows[idx] = parts
-      require("plugins.file_metadata").include_columns(metadata_columns, font, parts)
-    end
-  end
+  local metadata_rows, metadata_columns = fuzzy_searcher.visible_file_metadata(
+    self, font, self.viewport_offset, last
+  )
   local previous_rendered_grep_file = nil
   local previous_rendered_grep_line_x = nil
   local previous_rendered_grep_context_x = nil
@@ -7771,6 +7869,7 @@ return {
       everything.search_generation = everything.search_generation + 1
     end,
     git_kind_for_file = fuzzy_searcher.git_kind_for_file,
+    file_metadata_parts = fuzzy_searcher.file_metadata_parts,
     draw_file_metadata = fuzzy_searcher.draw_file_metadata,
     draw_file_result_row = draw_file_result_row,
     draw_grep_result_row = draw_grep_result_row,
