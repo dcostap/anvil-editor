@@ -21,7 +21,9 @@ local MARKDOWN_EXTENSIONS = {}
 for _, ext in ipairs(MARKDOWN_EXTENSION_LIST) do MARKDOWN_EXTENSIONS[ext] = true end
 
 local MAX_COOPERATIVE_NOTE_BYTES = 512 * 1024
-local DOC_UPDATE_DEBOUNCE_SECONDS = 0.03
+-- Keep rapid typing out of the native vault overlay queue. The published
+-- snapshot remains valid while this short idle window collects edits.
+local DOC_UPDATE_DEBOUNCE_SECONDS = 0.20
 
 local ATTACHMENT_EXTENSIONS = {
   ["3gp"] = true,
