@@ -4201,6 +4201,7 @@ local function capture_pre_edit_renders(view, change)
   local transaction = change and change.transaction
   owner.pre_edit_transaction = transaction
   owner.pre_edit_revision = view.buffer.text_revision + 1
+  if transaction and transaction.type == "load" then return end
   if view.get_visible_line_range then
     owner.pending_visible_line1, owner.pending_visible_line2 =
       pending_capture_visible_range(view, owner)
@@ -5326,8 +5327,9 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     owner.pre_edit_transaction = nil
     owner.pre_edit_revision = nil
     owner.pre_edit_capture = nil
+    local reload_anchor = owner.pre_edit_anchor
     owner.pre_edit_anchor = nil
-    view:restore_viewport_anchor(nil)
+    view:restore_viewport_anchor(reload_anchor)
     owner.pending_visible_line1, owner.pending_visible_line2 =
       pending_capture_visible_range(view, owner)
     owner.reload_projection_revision = view.buffer.text_revision

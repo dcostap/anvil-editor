@@ -332,6 +332,10 @@ test.describe("Markdown Live Preview", function()
     buffer:set_selection(#buffer.lines, 1)
     refresh(view)
     local old_stable_row = view:get_visual_row(100, 1)
+    local _, anchor_content_y = view:get_line_screen_position(100, 1)
+    local anchor_scroll_y = anchor_content_y - style.padding.y
+    view.scroll.y, view.scroll.to.y = anchor_scroll_y, anchor_scroll_y
+    local _, anchor_screen_y = view:get_line_screen_position(100, 1)
 
     write(fixture("New", 2))
     buffer:load(path)
@@ -354,6 +358,14 @@ test.describe("Markdown Live Preview", function()
     test.equal(visible_render_text(view, 2), "New task")
     test.equal(visible_render_text(view, 3), "New text")
     test.not_equal(view:get_visual_row(100, 1), old_stable_row)
+    local _, reloaded_screen_y = view:get_line_screen_position(100, 1)
+    test.ok(
+      math.abs(reloaded_screen_y - anchor_screen_y) < 0.01,
+      string.format(
+        "reload moved the anchored source line from %.2f to %.2f",
+        anchor_screen_y, reloaded_screen_y
+      )
+    )
     os.remove(path)
   end)
 
