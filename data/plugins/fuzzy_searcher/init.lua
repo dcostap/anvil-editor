@@ -2657,6 +2657,40 @@ function fuzzy_searcher.file_result_filename_width(font, file, prefix, suffix, s
     + file_font:get_width(name) + font:get_width(suffix) + directory_gap
 end
 
+function fuzzy_searcher.file_result_full_width(font, file, prefix, suffix, show_file_icon)
+  file = tostring(file or "")
+  prefix = tostring(prefix or "")
+  suffix = tostring(suffix or "")
+  local row_height = font:get_height()
+  local icon_width = show_file_icon and fuzzy_searcher.file_icons.column_width(row_height) or 0
+  local file_font = style.prose_font:get_size() == font:get_size()
+    and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
+  local path_font = style.get_small_font(file_font)
+  local name = basename(file)
+  local directory = file:sub(1, math.max(0, #file - #name))
+  return icon_width + font:get_width(prefix) + path_font:get_width(directory)
+    + file_font:get_width(name) + font:get_width(suffix)
+    + math.max(1, math.ceil(2 * (SCALE or 1)))
+end
+
+fuzzy_searcher.grep_edit_metadata_template = {
+  { id = "edited", icon = "pencil", text = "", sample = "99yr" },
+}
+
+function fuzzy_searcher.grep_edit_metadata_parts(result)
+  local parts = fuzzy_searcher.file_metadata_parts(result)
+  for _, part in ipairs(parts) do
+    if part.id == "edited" then return { part } end
+  end
+  return fuzzy_searcher.grep_edit_metadata_template
+end
+
+function fuzzy_searcher.grep_edit_metadata_width(font, parts)
+  return require("plugins.file_metadata").required_width(
+    font, parts or fuzzy_searcher.grep_edit_metadata_template
+  )
+end
+
 function fuzzy_searcher.draw_grouped_file_location(
   font, result, prefix, line_suffix, x, y, file_width, metadata_right,
   collapse_file, collapsed_line_x, metadata_parts, metadata_columns,
@@ -2937,7 +2971,7 @@ function FSView:grep_file_column_width(font, path_w)
       local line = tonumber(result.line) or 1
       local suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
       local prefix = result.exact and "# " or "~# "
-      width = math.max(width, fuzzy_searcher.file_result_filename_width(
+      width = math.max(width, fuzzy_searcher.file_result_full_width(
         font, result.file, prefix, suffix, true
       ))
     end
@@ -2959,55 +2993,69 @@ end
 
 local function draw_grep_result_row(
   font, result, x, y, width, collapse_file, collapsed_line_x,
-  collapsed_context_x, file_column_width
+  collapsed_context_x, file_column_width, edit_metadata_width
 )
-  local path_w, gap, text_w = grep_row_columns(width)
   local symbol = fuzzy_searcher.grep_enclosing_symbol(result)
-  local context_width = 0
   local context_gap = math.max(8 * (SCALE or 1), style.padding.x * 2)
   local prefix = result.exact and "# " or "~# "
   local line = tonumber(result.line) or 1
   local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
-  local filename_width = fuzzy_searcher.file_result_filename_width(
+  local filename_width = fuzzy_searcher.file_result_full_width(
     font, result.file, prefix, line_suffix, true
   )
-  file_column_width = common.clamp(
-    tonumber(file_column_width) or filename_width, 0, path_w
-  )
-  if symbol then
-    local context_font = style.get_small_font(font)
-    local symbol_icons = require "core.symbol_icons"
-    local icon_width = symbol_icons.resolve_kind(symbol.kind or "symbol")
-      and symbol_icons.size_for_row(font:get_height()) or 0
-    local icon_gap = icon_width > 0 and math.max(3 * (SCALE or 1), style.padding.x / 3) or 0
-    local max_context = math.max(0, path_w - file_column_width - context_gap)
-    local min_context = icon_width + icon_gap + context_font:get_width("…")
-    if filename_width <= file_column_width and max_context >= min_context then
-      context_width = max_context
-    else
-      symbol = nil
-      context_width = 0
-    end
+  edit_metadata_width = tonumber(edit_metadata_width)
+    or fuzzy_searcher.grep_edit_metadata_width(font)
+  local content_width = math.max(0, width - edit_metadata_width)
+  local show_metadata = filename_width <= content_width
+  if not show_metadata then
+    edit_metadata_width = 0
+    content_width = width
+  elseif not collapse_file then
+    local metadata_parts = fuzzy_searcher.grep_edit_metadata_parts(result)
+    fuzzy_searcher.draw_file_metadata(
+      font, result, x, y, width, metadata_parts, nil, false
+    )
   end
-  local file_width = filename_width > file_column_width and path_w or file_column_width
+  file_column_width = common.clamp(
+    tonumber(file_column_width) or filename_width, 0, content_width
+  )
+  local file_width = filename_width > file_column_width and content_width or file_column_width
   local line_x
   line_x, file_width = fuzzy_searcher.draw_grouped_file_location(
-    font, result, prefix, line_suffix, x, y, file_width, x + path_w,
+    font, result, prefix, line_suffix, x, y, file_width, x + width,
     collapse_file, collapsed_line_x, nil, nil, false
   )
   local context_x = x + file_width + context_gap
   if collapse_file and collapsed_context_x then
     context_x = math.min(context_x, collapsed_context_x)
   end
+
+  local right = x + content_width
+  local symbol_width = 0
   if symbol then
-    fuzzy_searcher.draw_grep_symbol_context(
-      font, symbol, context_x, y, context_width, font:get_height()
-    )
+    local context_font = style.get_small_font(font)
+    local symbol_icons = require "core.symbol_icons"
+    local icon_width = symbol_icons.resolve_kind(symbol.kind or "symbol")
+      and symbol_icons.size_for_row(font:get_height()) or 0
+    local icon_gap = icon_width > 0 and math.max(3 * (SCALE or 1), style.padding.x / 3) or 0
+    local desired = icon_width + icon_gap
+      + context_font:get_width(fuzzy_searcher.symbol_declaration_text(symbol, false))
+      + math.max(1, math.ceil(2 * (SCALE or 1)))
+    local max_context = math.max(0, right - context_x)
+    local min_context = icon_width + icon_gap + context_font:get_width("…")
+    if filename_width <= file_column_width and max_context >= min_context then
+      symbol_width = fuzzy_searcher.draw_grep_symbol_context(
+        font, symbol, context_x, y, math.min(desired, max_context), font:get_height()
+      )
+    else
+      symbol = nil
+    end
   end
+  local text_x = context_x + (symbol and symbol_width + context_gap or 0)
+  local text_w = math.max(0, right - text_x)
   if text_w <= 0 then return line_x, context_x end
   local preview_font = style.get_small_font(font)
   local preview_y = y + math.max(0, math.floor((font:get_height() - preview_font:get_height()) / 2))
-  local text_x = x + path_w + gap
   local text = tostring(result.text or "")
   local spans = grep_content_spans(text, result, 0)
   local anchor = result.col or true
@@ -4048,10 +4096,35 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
   local width = row_text_w
 
   if r.kind == "grep" then
-    local path_w, gap = grep_row_columns(row_text_w)
-    x = row_x + path_w + gap
-    width = math.max(0, row_text_w - path_w - gap)
+    local gap = math.max(8 * (SCALE or 1), style.padding.x * 2)
+    local metadata_width = fuzzy_searcher.grep_edit_metadata_width(font)
+    local content_width = math.max(0, row_text_w - metadata_width)
+    local line = tonumber(r.line) or 1
+    local suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
+    local prefix = r.exact and "# " or "~# "
+    local own_file_width = fuzzy_searcher.file_result_full_width(
+      font, r.file, prefix, suffix, true
+    )
+    if own_file_width > content_width then content_width = row_text_w end
+    local file_width = self:grep_file_column_width(font, content_width)
+    x = row_x + file_width + gap
+    width = math.max(0, content_width - file_width - gap)
     text_font = style.get_small_font(font)
+    local symbol = fuzzy_searcher.grep_enclosing_symbol(r)
+    if symbol and width > 0 then
+      local symbol_icons = require "core.symbol_icons"
+      local icon_width = symbol_icons.resolve_kind(symbol.kind or "symbol")
+        and symbol_icons.size_for_row(font:get_height()) or 0
+      local icon_gap = icon_width > 0
+        and math.max(3 * (SCALE or 1), style.padding.x / 3) or 0
+      local symbol_width = math.min(
+        width,
+        icon_width + icon_gap
+          + text_font:get_width(fuzzy_searcher.symbol_declaration_text(symbol, false))
+      )
+      x = x + symbol_width + gap
+      width = math.max(0, width - symbol_width - gap)
+    end
   elseif r.kind == "symbol" then
     local path_w, gap = grep_row_columns(row_text_w, 0.33)
     local row_height = font:get_height() + style.fuzzy_searcher_result_row_padding * 2
@@ -7358,10 +7431,12 @@ function FSView:draw_open_content()
     local r = self.results[idx]
     if r and r.kind == "grep" then has_visible_split = true; break end
   end
-  local grep_file_column_width
+  local grep_file_column_width, grep_edit_metadata_width
   if has_visible_split then
-    local path_w = grep_row_columns(row_text_w)
-    grep_file_column_width = self:grep_file_column_width(font, path_w)
+    grep_edit_metadata_width = fuzzy_searcher.grep_edit_metadata_width(font)
+    grep_file_column_width = self:grep_file_column_width(
+      font, math.max(0, row_text_w - grep_edit_metadata_width)
+    )
   end
   fuzzy_searcher._perf_scope_end(phase_scope)
 
@@ -7402,7 +7477,7 @@ function FSView:draw_open_content()
       if kind == "grep" then
         previous_rendered_line_x, previous_rendered_context_x = draw_grep_result_row(
           font, self.results[group_start], x + pad, seed_y, row_text_w,
-          false, nil, nil, grep_file_column_width)
+          false, nil, nil, grep_file_column_width, grep_edit_metadata_width)
       else
         previous_rendered_line_x = fuzzy_searcher.draw_symbol_result_row(
           font, self.results[group_start], x + pad, seed_y, row_text_w, lh, false
@@ -7455,7 +7530,7 @@ function FSView:draw_open_content()
         previous_rendered_line_x, previous_rendered_context_x = draw_grep_result_row(
           font, r, x + pad, row_y, row_text_w, collapse_file,
           previous_rendered_line_x, previous_rendered_context_x,
-          grep_file_column_width)
+          grep_file_column_width, grep_edit_metadata_width)
         previous_rendered_file_kind = "grep"
         previous_rendered_file = file
       elseif r.kind == "file" then
@@ -7521,11 +7596,6 @@ function FSView:draw_open_content()
       end
     end
     fuzzy_searcher._perf_scope_end(row_scope)
-  end
-  if has_visible_split then
-    local path_w, gap = grep_row_columns(row_text_w)
-    local sx = x + pad + path_w + gap / 2
-    renderer.draw_rect(sx, m.results_top, style.divider_size, math.max(0, last - self.viewport_offset + 1) * lh, style.divider)
   end
   core.pop_clip_rect()
   fuzzy_searcher._perf_scope_end(results_scope)

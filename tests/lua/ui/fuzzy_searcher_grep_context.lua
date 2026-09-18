@@ -79,7 +79,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
     test.ok(context_call.x > 200, "expected the function context on the right of the file column")
   end)
 
-  test.it("omits file metadata from text results", function()
+  test.it("keeps only edit-time metadata in text results", function()
     local calls = {}
     renderer.draw_canvas = function() end
     symbol_index.enclosing_symbol = function() end
@@ -91,14 +91,18 @@ test.describe("Fuzzy Searcher Text Search context", function()
     file_icons.draw = function() end
     local row = {
       kind = "grep", file = "example.lua", line = 12, col = 1,
-      text = "matched content", file_size = 123456, exact = true,
+      text = "matched content", file_size = 123456,
+      file_modified = os.time() - 7200, exact = true,
     }
     local width = 2400
     helpers.draw_grep_result_row(style.font, row, 0, 0, width, false)
     local size_text = require("plugins.path_tree").format_file_size(row.file_size)
+    local found_age = false
     for _, call in ipairs(calls) do
-      test.ok(call.text ~= size_text, "Text Search must not show file metadata")
+      test.ok(call.text ~= size_text, "Text Search must not show file size metadata")
+      if call.text == "2h" then found_age = true end
     end
+    test.ok(found_age, "Text Search must keep edit-time metadata")
   end)
 
   test.it("left-aligns enclosing symbols with different label widths", function()
@@ -119,7 +123,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
     symbol_index.enclosing_symbol = function(_, line)
       return symbols[line]
     end
-    local line_right
+    local line_right, directory_count, long_name_drawn = nil, 0, false
     local picker = fuzzy_searcher.open_static_results("Text Search", {
       {
         kind = "grep", file = "src/Panel.cpp", abs_path = "C:/project/src/Panel.cpp",
@@ -147,6 +151,8 @@ test.describe("Fuzzy Searcher Text Search context", function()
       if text:find(":10", 1, true) == 1 or text:find(":20", 1, true) == 1 then
         line_right = math.max(line_right or 0, x + font:get_width(text))
       end
+      if text == "src/" then directory_count = directory_count + 1 end
+      if text == "render_to_image_buffer" then long_name_drawn = true end
       return x + font:get_width(text)
     end
     renderer.draw_rect = function() end
@@ -165,8 +171,12 @@ test.describe("Fuzzy Searcher Text Search context", function()
     test.equal(symbol_x[1], symbol_x[2],
       "enclosing symbol labels must start at one column")
     test.not_nil(line_right, "expected the file line suffix")
-    test.ok(symbol_x[1] - line_right <= math.max(8 * (SCALE or 1), style.padding.x * 2) + 1,
+    local layout_slack = math.max(1, math.ceil(2 * (SCALE or 1)))
+    test.ok(symbol_x[1] - line_right
+        <= math.max(8 * (SCALE or 1), style.padding.x * 2) + layout_slack + 1,
       "the symbol column must start after the filename without unused space")
+    test.equal(directory_count, 2, "Text Search must keep complete file paths when they fit")
+    test.ok(long_name_drawn, "the symbol label must use available row space")
   end)
 
   test.it("keeps grouped text rows collapsed when scrolling starts inside a file group", function()
