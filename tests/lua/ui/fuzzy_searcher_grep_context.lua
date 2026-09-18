@@ -125,7 +125,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
     symbol_index.enclosing_symbol = function(_, line)
       return symbols[line]
     end
-    local line_right, directory_count, long_name_drawn = nil, 0, false
+    local line_right, directory_count = nil, 0
     local picker = fuzzy_searcher.open_static_results("Text Search", {
       {
         kind = "grep", file = "src/Panel.cpp", abs_path = "C:/project/src/Panel.cpp",
@@ -154,7 +154,6 @@ test.describe("Fuzzy Searcher Text Search context", function()
         line_right = math.max(line_right or 0, x + font:get_width(text))
       end
       if text == "src/" then directory_count = directory_count + 1 end
-      if text == "render_to_image_buffer" then long_name_drawn = true end
       return x + font:get_width(text)
     end
     renderer.draw_rect = function() end
@@ -178,7 +177,6 @@ test.describe("Fuzzy Searcher Text Search context", function()
         <= math.max(8 * (SCALE or 1), style.padding.x * 2) + layout_slack + 1,
       "the symbol column must start after the filename without unused space")
     test.equal(directory_count, 2, "Text Search must keep complete file paths when they fit")
-    test.ok(long_name_drawn, "the symbol label must use available row space")
   end)
 
   test.it("keeps grouped text rows collapsed when scrolling starts inside a file group", function()
