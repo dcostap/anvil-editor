@@ -129,6 +129,7 @@ function LineWrapping.notify_buffer_text_transaction(buffer, transaction)
         if textview.buffer ~= buffer
           or textview.__wrap_reload_reconstruction_serial ~= serial
           or not textview.wrapped_settings
+          or textview.__presentation_reload_frozen
         then
           return
         end

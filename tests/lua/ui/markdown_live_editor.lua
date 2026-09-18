@@ -303,7 +303,7 @@ test.describe("Markdown Live Preview", function()
     test.equal(visible_render_text(view, 1), "Before bold after!?")
   end)
 
-  test.it("uses current-source presentation and atomically adopts wrapping after reload", function()
+  test.it("keeps the rendered viewport frozen and atomically adopts wrapping after reload", function()
     local path = USERDIR .. PATHSEP .. "markdown-live-external-reload-"
       .. tostring(system.get_process_id()) .. ".md"
     local function write(text)
@@ -336,6 +336,7 @@ test.describe("Markdown Live Preview", function()
     local anchor_scroll_y = anchor_content_y - style.padding.y
     view.scroll.y, view.scroll.to.y = anchor_scroll_y, anchor_scroll_y
     local _, anchor_screen_y = view:get_line_screen_position(100, 1)
+    local frozen_visible_text = visible_render_text(view, 100)
 
     write(fixture("New", 2))
     buffer:load(path)
@@ -348,6 +349,7 @@ test.describe("Markdown Live Preview", function()
     test.equal(line1.raw_passthrough, nil)
     test.equal(line2.raw_passthrough, nil)
     test.equal(line3.raw_passthrough, nil)
+    test.equal(visible_render_text(view, 100), frozen_visible_text)
     test.equal(visible_render_text(view, 1), "# New heading")
     test.equal(visible_render_text(view, 2), "- [ ] New task")
     test.equal(visible_render_text(view, 3), "**New text**")

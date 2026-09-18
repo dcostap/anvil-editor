@@ -1846,6 +1846,7 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
   self.__visual_metric_snapshot_kind = nil
   self.__visual_metric_snapshot_id = nil
   self.__visual_metric_snapshot_cache = nil
+  if self.__presentation_reload_frozen then return end
   local cache = self.__visual_metric_cache
   local wrap_change = self.__line_render_wrap_change
   self.__line_render_wrap_change = nil
@@ -2104,7 +2105,9 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
   self.__line_render_wrap_change = nil
   self.__line_render_cache = nil
   self.__line_width_cache = {}
-  if self.wrapped_settings and not self.__line_render_wrap_invalidating then
+  if self.wrapped_settings and not self.__line_render_wrap_invalidating
+    and not self.__presentation_reload_frozen
+  then
     self.__line_render_wrap_invalidating = true
     if opts.defer_wrapped_reconstruction
       or #self.buffer.lines > MAX_SYNC_LINE_RENDER_WRAP_LINES
@@ -3738,6 +3741,9 @@ end
 
 function TextView:get_visual_row_metric_cache()
   if not self:has_visual_metric_providers() then return nil end
+  if self.__presentation_reload_frozen and self.__frozen_visual_metric_cache then
+    return self.__frozen_visual_metric_cache
+  end
   -- One UI phase observes one coherent provider state. Explicit
   -- invalidation clears this snapshot immediately.
   local snapshot_kind = core.ui_snapshot_active and "ui"
