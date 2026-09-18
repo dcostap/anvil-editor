@@ -169,6 +169,22 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.same({ picker.input.textview.buffer:get_selection() }, { 1, 2, 1, 2 })
   end)
 
+  test.it("selects a selected editor query when opening grep mode", function(context)
+    local view, buffer = open_editor(context, "dwTotalVirtual\n")
+    buffer:set_selection(1, 1, 1, #"dwTotalVirtual" + 1)
+    core.set_active_view(view)
+
+    fuzzy_searcher.open("#")
+
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    local input_buffer = picker.input.textview.buffer
+    local prompt = '#"dwTotalVirtual"'
+    test.equal(picker.input:get_text(), prompt)
+    test.same({ input_buffer:get_selection() }, { 1, #prompt, 1, 3 })
+    local line1, col1, line2, col2 = input_buffer:get_selection(true)
+    test.equal(input_buffer:get_text(line1, col1, line2, col2), "dwTotalVirtual")
+  end)
+
   test.it("keeps the caret-based default when blank Current Buffer Symbol Search loading restarts", function(context)
     local view, buffer = open_editor(context, ("line\n"):rep(24))
     buffer:set_selection(15, 4, 15, 4)

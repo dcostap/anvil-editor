@@ -7581,6 +7581,7 @@ end
 function open(prefix, opts)
   prefix = prefix or ""
   opts = opts or {}
+  local select_seeded_query = false
   local view = current_picker()
   if view and view.file_picker then
     view:close("replaced")
@@ -7592,7 +7593,10 @@ function open(prefix, opts)
   end
   if prefix == "#" then
     local selection = selected_text_for_search()
-    if selection ~= "" then prefix = "#" .. quote_exact_query(selection) end
+    if selection ~= "" then
+      prefix = "#" .. quote_exact_query(selection)
+      select_seeded_query = true
+    end
   end
   local initial_text, select_restored_query
   if prefix == "" or prefix == "@" then
@@ -7602,6 +7606,11 @@ function open(prefix, opts)
   end
   active_view = FSView(initial_text, opts)
   core.fuzzy_searcher_active_view = active_view
+  if select_seeded_query then
+    -- Keep the grep mode marker and quotes in place.  Put the caret at the
+    -- query end so typing replaces only the selected query text.
+    active_view.input.textview.buffer:set_selection(1, #initial_text, 1, 3)
+  end
   if select_restored_query then
     fuzzy_searcher.apply_prompt_history_text(active_view, initial_text, true)
   end
