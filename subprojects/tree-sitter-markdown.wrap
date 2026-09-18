@@ -3,6 +3,7 @@ url = https://github.com/tree-sitter-grammars/tree-sitter-markdown.git
 revision = c3570720f7f7bbad22fe96603f106276618e0cf5
 depth = 1
 patch_directory = tree-sitter-markdown
+diff_files = tree-sitter-markdown-scanner-state-bounds.patch
 
 [provide]
 tree-sitter-markdown = tree_sitter_markdown_dep

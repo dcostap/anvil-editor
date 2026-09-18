@@ -1,0 +1,34 @@
+diff --git a/tree-sitter-markdown/src/scanner.c b/tree-sitter-markdown/src/scanner.c
+index fda19bd..75e9081 100644
+--- a/tree-sitter-markdown/src/scanner.c
++++ b/tree-sitter-markdown/src/scanner.c
+@@ -244,6 +244,11 @@ static unsigned serialize(Scanner *s, char *buffer) {
+     buffer[size++] = (char)s->column;
+     buffer[size++] = (char)s->fenced_code_block_delimiter_length;
+     size_t blocks_count = s->open_blocks.size;
++    size_t max_blocks =
++        (TREE_SITTER_SERIALIZATION_BUFFER_SIZE - size) / sizeof(Block);
++    if (blocks_count > max_blocks) {
++        return 0;
++    }
+     if (blocks_count > 0) {
+         memcpy(&buffer[size], s->open_blocks.items,
+                blocks_count * sizeof(Block));
+@@ -262,7 +267,7 @@ static void deserialize(Scanner *s, const char *buffer, unsigned length) {
+     s->indentation = 0;
+     s->column = 0;
+     s->fenced_code_block_delimiter_length = 0;
+-    if (length > 0) {
++    if (length >= 5 && length <= TREE_SITTER_SERIALIZATION_BUFFER_SIZE) {
+         size_t size = 0;
+         s->state = (uint8_t)buffer[size++];
+         s->matched = (uint8_t)buffer[size++];
+@@ -1459,4 +1464,8 @@ static bool scan(Scanner *s, TSLexer *lexer, const bool *valid_symbols) {
+         if (!(s->state & STATE_WAS_SOFT_LINE_BREAK)) {
++            if (s->open_blocks.size == 0) {
++                s->state &= (~STATE_MATCHING);
++                return false;
++            }
+             lexer->result_symbol = BLOCK_CLOSE;
+             pop_block(s);
+             if (s->matched == s->open_blocks.size) {
