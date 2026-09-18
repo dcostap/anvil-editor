@@ -632,6 +632,23 @@ settings.add("Editor",
       }
     },
     {
+      label = "Monospace Font",
+      description = "The bundled monospace font used by the UI, code editor, and terminal.",
+      path = "monospace_font",
+      type = settings.type.SELECTION,
+      default = "caskaydia_cove",
+      values = (function()
+        local values = {}
+        for _, choice in ipairs(core.get_monospace_font_choices()) do
+          values[#values + 1] = { choice.name, choice.id }
+        end
+        return values
+      end)(),
+      on_apply = function(value)
+        core.set_monospace_font(value)
+      end,
+    },
+    {
       label = "Indentation Type",
       description = "The character inserted when pressing the tab key.",
       path = "tab_type",
@@ -2651,6 +2668,55 @@ command.add(nil, {
   end, {
     keywords = { "preferences", "configuration", "options" },
     opens_view = true,
+  }),
+})
+
+local function monospace_font_choice(text)
+  local needle = tostring(text or ""):lower()
+  for _, choice in ipairs(core.get_monospace_font_choices()) do
+    if choice.id:lower() == needle or choice.name:lower() == needle then
+      return choice
+    end
+  end
+end
+
+local function suggest_monospace_fonts(text)
+  local choices = core.get_monospace_font_choices()
+  local names = {}
+  local by_name = {}
+  for _, choice in ipairs(choices) do
+    names[#names + 1] = choice.name
+    by_name[choice.name] = choice
+  end
+
+  local suggestions = {}
+  for _, name in ipairs(common.fuzzy_match(names, text or "")) do
+    local choice = by_name[name]
+    suggestions[#suggestions + 1] = {
+      text = choice.name,
+      id = choice.id,
+      info = "bundled monospace font",
+    }
+  end
+  return suggestions
+end
+
+command.add(nil, {
+  ["editor:select_monospace_font"] = command.palette(function()
+    core.global_prompt_bar:enter("Monospace Font", {
+      suggest = suggest_monospace_fonts,
+      validate = function(text, item)
+        return not not ((item and item.id) or monospace_font_choice(text))
+      end,
+      submit = function(text, item)
+        local choice = item and item.id and item or monospace_font_choice(text)
+        if not choice or not core.set_monospace_font(choice.id) then return end
+        settings.config.monospace_font = choice.id
+        save_settings()
+      end,
+    })
+  end, {
+    keywords = { "font", "typeface", "monospace", "terminal" },
   }),
 })
 
