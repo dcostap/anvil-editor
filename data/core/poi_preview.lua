@@ -109,7 +109,8 @@ end
 function M.show(view, point, title, lines, options)
   M.dismiss(view)
   local preview = { line = point.line, title = title, lines = lines,
-    content = options and options.content }
+    content = options and options.content,
+    placement = options and options.placement or "after" }
   previews[view] = preview
   local rows = options and options.code and {} or {
     { id = "title", title = true, text = title, draw = draw_row },
@@ -153,7 +154,7 @@ function M.show(view, point, title, lines, options)
   view:add_visual_row_provider(provider_id, {
     generation = layout,
     visual_rows = function(_, _, line, placement)
-      if line == preview.line and placement == "after" then return rows end
+      if line == preview.line and placement == preview.placement then return rows end
     end,
   })
   if preview.content then

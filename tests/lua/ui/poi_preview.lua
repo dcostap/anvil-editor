@@ -194,6 +194,30 @@ test.describe("Git change POIs", function()
     editor.buffer:on_close()
   end)
 
+  test.it("previews a deleted Git range before its next surviving line", function()
+    local Editor = require "core.editor"
+    local gitdiff = require "plugins.gitdiff_highlight"
+    local poi = require "core.poi"
+    local preview = require "core.poi_preview"
+    local editor = Editor(Buffer())
+    editor.size.x, editor.size.y = 800, 600
+    editor.buffer:insert(1, 1, "before\nafter\n")
+    editor.buffer:set_selection(1, 1)
+    gitdiff._set_state_for_tests(editor.buffer, {
+      is_in_repo = true, base_lines = { "before\n", "deleted\n", "after\n" },
+      ranges = {{ type = "deletion", current_start = 2, current_end = 2, base_start = 2, base_end = 3 }},
+      line_index = {},
+    })
+
+    test.ok(poi.navigate(editor, 1))
+    test.equal(editor.buffer:get_selection(), 2)
+    test.equal(editor:get_visual_row_entry(2).type, "provider")
+    test.equal(editor:get_visual_row_entry(3).line, 2)
+
+    preview.dismiss(editor)
+    editor.buffer:on_close()
+  end)
+
   test.it("navigates pure additions without showing a preview", function()
     local Editor = require "core.editor"
     local gitdiff = require "plugins.gitdiff_highlight"

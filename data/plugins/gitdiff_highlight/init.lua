@@ -777,6 +777,10 @@ local function preview_git_change(view, point)
     preview.dismiss(view)
     return true
   end
+  -- A deletion is anchored at the next surviving line. Show its removed text
+  -- before that line. A deletion beyond the Buffer ends after its final line.
+  local placement = range.type == "deletion" and range.current_start <= #view.buffer.lines
+    and "before" or "after"
   local lines = {}
   for line = range.base_start or 1, (range.base_end or 1) - 1 do
     if #lines >= 24 then lines[#lines + 1] = "..."; break end
@@ -784,7 +788,9 @@ local function preview_git_change(view, point)
   end
   -- Keep large previews bounded. Do not compare incomplete blocks.
   if #lines > 24 or range.current_end - range.current_start > 24 then
-    return preview.show(view, point, "Previous code", lines, { code = true })
+    return preview.show(view, point, "Previous code", lines, {
+      code = true, placement = placement,
+    })
   end
   local current = {}
   for line = range.current_start, range.current_end - 1 do
@@ -794,6 +800,7 @@ local function preview_git_change(view, point)
   return preview.show(view, point, "Previous code", lines, {
     code = true, changes = model.a_changes,
     current_changes = model.b_changes, current_start = range.current_start,
+    placement = placement,
   })
 end
 
