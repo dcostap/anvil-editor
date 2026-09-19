@@ -4682,7 +4682,10 @@ function FSView:on_mouse_released(button, x, y)
 
   self.pressed_result = nil
   self.pressed_clicks = 0
-  if self:is_visible() then
+  -- A double-click can open another View and start the close transition
+  -- inside confirm(). Do not restore the picker's input after that focus
+  -- change, or the newly opened View loses its caret and command context.
+  if self:is_visible() and not self.closing then
     if self:is_preview_focused() then
       self:set_preview_interactive(false)
     else

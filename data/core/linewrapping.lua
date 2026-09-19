@@ -129,7 +129,18 @@ function LineWrapping.notify_buffer_text_transaction(buffer, transaction)
         if textview.buffer ~= buffer
           or textview.__wrap_reload_reconstruction_serial ~= serial
           or not textview.wrapped_settings
+          or textview.__presentation_reload_frozen
         then
+          return
+        end
+        local pending = textview.__async_wrap_reconstruction
+        if pending and pending.buffer == buffer
+          and pending.revision == (buffer.text_revision or 0)
+        then
+          core.log_quiet(
+            "Reused pending wrapped layout after loaded snapshot for %s revision=%d",
+            buffer:get_name(), buffer.text_revision or 0
+          )
           return
         end
         local settings = textview.wrapped_settings

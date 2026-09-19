@@ -801,6 +801,7 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
           strikethrough = strike or nil,
           background = code and style.markdown_live_inline_code_bg
             or highlight and style.markdown_live_highlight_bg or nil,
+          background_under_selection = code or nil,
           semantic_id = table.concat(ids, "+"),
         }
       end
@@ -849,6 +850,7 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
     if previous and previous.source_col2 == fragment.source_col1
       and previous.hidden == fragment.hidden and previous.font == fragment.font
       and previous.color == fragment.color and previous.background == fragment.background
+      and previous.background_under_selection == fragment.background_under_selection
       and previous.strikethrough == fragment.strikethrough
       and previous.overdraw == fragment.overdraw and previous.semantic_id == fragment.semantic_id
     then
@@ -1393,6 +1395,7 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
   fragment.strikethrough = strike or nil
   fragment.background = code and style.markdown_live_inline_code_bg
     or highlight and style.markdown_live_highlight_bg or fragment.background
+  fragment.background_under_selection = code or nil
   fragment.semantic_id = #ids > 0 and table.concat(ids, "+") or fragment.semantic_id
   return fragment
 end
@@ -3434,6 +3437,12 @@ end
 
 local function prose_render_line(view, line_text, render_line)
   local font = markdown_live_body_font(view)
+  for _, fragment in ipairs(render_line.fragments or {}) do
+    if fragment.background_under_selection then
+      render_line.under_selection_backgrounds = true
+      break
+    end
+  end
   render_line.text_row_height = render_line.text_row_height
     or markdown_live_body_line_height(view)
   render_line.caret_height = render_line.caret_height or render_line.text_row_height
@@ -4201,6 +4210,10 @@ local function capture_pre_edit_renders(view, change)
   local transaction = change and change.transaction
   owner.pre_edit_transaction = transaction
   owner.pre_edit_revision = view.buffer.text_revision + 1
+  if transaction and transaction.type == "load" then
+    view.__presentation_reload_frozen = true
+    view.__frozen_visual_metric_cache = view.__visual_metric_cache
+  end
   if view.get_visible_line_range then
     owner.pending_visible_line1, owner.pending_visible_line2 =
       pending_capture_visible_range(view, owner)
@@ -4218,16 +4231,18 @@ local function capture_pre_edit_renders(view, change)
     end
   end
   local service = owner.fence_service
-  local edit_touches_fence = false
+  local edit_touches_fence_opening = false
   for _, edit in ipairs(transaction and transaction.edits or {}) do
-    if service and (service:contains_line(edit.line1 or -1)
-      or service:contains_line(edit.line2 or edit.line1 or -1))
+    if service and service:is_opening_line(edit.line1 or -1)
     then
-      edit_touches_fence = true
+      edit_touches_fence_opening = true
       break
     end
   end
-  if edit_touches_fence then
+  -- A body edit only needs the changed and visible lines. The fence service
+  -- reparses its suffix separately. Copying every cached body row here made
+  -- one character at the end of a large fence clone thousands of rows.
+  if edit_touches_fence_opening then
     for cached_line in pairs(
       view.__line_render_cache and view.__line_render_cache.lines or {}
     ) do
@@ -4777,6 +4792,17 @@ end
 
 local function pending_render(view, line)
   local owner = view.__markdown_live_owner
+  local frozen = owner and owner.reload_frozen_lines
+    and owner.reload_frozen_lines[line]
+  if frozen and frozen.render_line then
+    return {
+      revision = view.buffer.text_revision,
+      source_text = frozen.source_text,
+      render_line = frozen.render_line,
+      metrics = frozen.metrics,
+      provenance = "reload-frozen",
+    }
+  end
   local entry = owner and owner.pending_lines and owner.pending_lines[line]
   local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
   if entry and entry.revision == view.buffer.text_revision and entry.source_text == text then
@@ -5166,12 +5192,12 @@ function provider:generation_seed(view)
   return metric_records.validate_geometry(view)
 end
 
-function provider:generation(view)
+local function provider_metric_generation(view)
   perf_frame_add("markdown_live_provider_generation_requests", 1)
   local state = metric_records.validate_geometry(view)
-  if state.generation then
+  if state.metric_generation then
     perf_frame_add("markdown_live_provider_generation_cache_hits", 1)
-    return state.generation
+    return state.metric_generation
   end
   local font = markdown_live_body_font(view)
   local table_width = table_available_width(view)
@@ -5194,10 +5220,21 @@ function provider:generation(view)
   -- `markdown_live_body_font()` may return a fresh size-adjusted copy. Keying
   -- by that temporary object's identity makes an unchanged layout look new
   -- whenever wrapping is locally refreshed.
-  state.generation = state.prose_typography_signature .. ":" .. tostring(font:get_size())
+  state.metric_generation = state.prose_typography_signature .. ":" .. tostring(font:get_size())
     .. ":width:" .. tostring(table_width)
     .. ":image-width:" .. tostring(image_width)
     .. ":interactive-tables:" .. tostring(state.interactive_tables)
+  return state.metric_generation
+end
+
+function provider:metric_generation(view)
+  return provider_metric_generation(view)
+end
+
+function provider:generation(view)
+  local state = metric_records.validate_geometry(view)
+  if state.generation then return state.generation end
+  state.generation = provider_metric_generation(view)
     -- Text transactions and semantic publications invalidate their changed
     -- lines directly. Model status and revision are not global layout state.
     -- Including them here rebuilt every row for a one-character task toggle.
@@ -5309,10 +5346,10 @@ function provider:on_text_transaction(view, transaction, line1, line2)
   local owner = view.__markdown_live_owner
   local external_reload = transaction and transaction.type == "load"
   if owner and external_reload then
-    -- A loaded snapshot has no positional relationship to the previous
-    -- source. Do not retain semantic nodes or pending render entries across
-    -- this revision boundary; render from the new source until its semantic
-    -- model is published.
+    -- Keep the visible presentation frozen while the replacement semantic
+    -- model is pending. The frozen rows are display-only snapshots with all
+    -- edit and mouse callbacks removed by clone_render_line().
+    owner.reload_frozen_lines = owner.pre_edit_lines
     owner.pending_lines = {}
     owner.pending_metrics = {}
     owner.published_metrics = {}
@@ -5326,14 +5363,19 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     owner.pre_edit_transaction = nil
     owner.pre_edit_revision = nil
     owner.pre_edit_capture = nil
+    local reload_anchor = owner.pre_edit_anchor
     owner.pre_edit_anchor = nil
-    view:restore_viewport_anchor(nil)
+    owner.reload_viewport_anchor = reload_anchor
     owner.pending_visible_line1, owner.pending_visible_line2 =
       pending_capture_visible_range(view, owner)
     owner.reload_projection_revision = view.buffer.text_revision
+    local frozen_count = 0
+    for _ in pairs(owner.reload_frozen_lines or {}) do
+      frozen_count = frozen_count + 1
+    end
     core.log_quiet(
-      "Markdown Live Preview reset pending presentation for loaded revision %d",
-      view.buffer.text_revision
+      "Markdown Live Preview froze %d visible line(s) for loaded revision %d",
+      frozen_count, view.buffer.text_revision
     )
   elseif owner and owner.reload_projection_revision then
     owner.reload_projection_revision = view.buffer.text_revision
@@ -5985,7 +6027,7 @@ function provider:render_line(view, line, context)
   end
 
   local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
-  if render_line.source_text ~= source then
+  if render_line.source_text ~= source and provenance ~= "reload-frozen" then
     core.log_quiet(
       "Markdown Live Preview rejected mismatched render provenance=%s line=%d buffer_revision=%d semantic_revision=%s",
       provenance, line, revision,
@@ -6134,7 +6176,11 @@ local function ensure_owner(view)
 end
 
 local function invalidate_semantic_publication(view, instance, reason)
-  local viewport_anchor = view:capture_viewport_anchor()
+  local owner = view.__markdown_live_owner
+  local viewport_anchor = owner and owner.reload_viewport_anchor
+    or view:capture_viewport_anchor()
+  view.__presentation_reload_frozen = nil
+  view.__frozen_visual_metric_cache = nil
   local perf = active_perf()
   local publication_started = system.get_time()
   local reset_started = system.get_time()
@@ -6143,7 +6189,6 @@ local function invalidate_semantic_publication(view, instance, reason)
   local previous_table_cache = view.__markdown_live_table_layout_cache
   view.__markdown_live_semantic_line_cache = nil
   view.__markdown_live_reference_prepare_pending = nil
-  local owner = view.__markdown_live_owner
   local pending_line = owner and owner.semantic_pending_line
   local pending_wrap_line = owner and owner.semantic_pending_wrap_line
   if owner then
@@ -6167,6 +6212,8 @@ local function invalidate_semantic_publication(view, instance, reason)
     owner.raw_fallback_record = nil
     owner.unavailable_projection_record = nil
     owner.reload_projection_revision = nil
+    owner.reload_frozen_lines = nil
+    owner.reload_viewport_anchor = nil
     if owner.fence_service then
       local reconcile_started = system.get_time()
       owner.fence_service:reconcile(instance)

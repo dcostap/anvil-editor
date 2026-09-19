@@ -489,6 +489,15 @@ Pi emits OSC 133 A as a zero-width marker during synchronized TUI repaints. Ghos
 
 When updating Ghostty, verify this patch still applies. Remove it only after Pi and Ghostty agree on OSC 133 A behavior during TUI repaints.
 
+Current Anvil Tree-sitter Markdown patch:
+
+- `subprojects/packagefiles/tree-sitter-markdown-scanner-state-bounds.patch`
+- listed by `diff_files` in `subprojects/tree-sitter-markdown.wrap`
+- prevents the external scanner from closing an empty block stack
+- keeps serialized scanner state within Tree-sitter's fixed buffer
+
+When updating Tree-sitter Markdown, verify this patch still applies. Remove it only after upstream includes equivalent scanner bounds.
+
 ## Why not Program Files for dev?
 
 Do not use `C:\Program Files` for this dev install. It causes admin/write-permission issues and makes junction/rebuild workflows annoying. Use the writable dev portable folder instead.

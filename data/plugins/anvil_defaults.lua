@@ -466,6 +466,10 @@ keymap.add_direct({
 -- Enable Markdown Live Preview by default while preserving an explicit
 -- USERDIR/project-module override loaded before first-party defaults.
 if config.markdown_live_editor == nil then config.markdown_live_editor = true end
+-- Keep fuzzy searcher previews raw until live preview cost is addressed.
+if config.fuzzy_searcher_markdown_preview == nil then
+  config.fuzzy_searcher_markdown_preview = false
+end
 if config.markdown_live_reveal_mode == nil then config.markdown_live_reveal_mode = "construct" end
 if config.markdown_live_interactive_tables == nil then
   config.markdown_live_interactive_tables = true

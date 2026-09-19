@@ -230,6 +230,10 @@ function Buffer:load(filename)
   local open_stage = file_open_stage_begin("buffer_file_open")
   local fp = assert( io.open(filename, "rb") )
   file_open_stage_end(open_stage)
+  self:notify_text_change_listeners("before", {
+    kind = "load",
+    transaction = { type = "load", full_snapshot = true },
+  })
   local reset_stage = file_open_stage_begin("buffer_reset_after_open")
   self:reset()
   file_open_stage_end(reset_stage)

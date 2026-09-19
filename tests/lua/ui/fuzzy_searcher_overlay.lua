@@ -81,4 +81,26 @@ test.describe("Fuzzy Searcher attention overlay", function()
     test.equal(confirmations, 1)
   end)
 
+  test.it("keeps the opened view focused after a double-click activation", function()
+    local previous_view = core.active_view
+    local picker = fuzzy_searcher.open_static_results("Results", {
+      { kind = "file", label = "opened.lua", file = "opened.lua" },
+    })
+    local target = {}
+    local metrics = picker:list_metrics()
+    local x = metrics.x + 20
+    local y = metrics.results_top + metrics.lh * 0.5
+    picker.confirm = function()
+      picker:swap_active_child(nil)
+      picker.closing = true
+      core.active_view = target
+    end
+
+    picker:on_mouse_pressed("left", x, y, 2)
+    picker:on_mouse_released("left", x, y)
+
+    test.equal(core.active_view, target)
+    core.active_view = previous_view
+  end)
+
 end)

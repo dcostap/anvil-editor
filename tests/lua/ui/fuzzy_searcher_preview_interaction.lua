@@ -1,5 +1,6 @@
 local command = require "core.command"
 local core = require "core"
+local config = require "core.config"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
@@ -40,9 +41,11 @@ test.describe("Fuzzy Searcher preview interaction", function()
     panes.reset_for_tests()
     panes.create { factory = function() return View() end }
     context.files = {}
+    context.fuzzy_searcher_markdown_preview = config.fuzzy_searcher_markdown_preview
   end)
 
   test.after_each(function(context)
+    config.fuzzy_searcher_markdown_preview = context.fuzzy_searcher_markdown_preview
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     panes.reset_for_tests()
     for _, path in ipairs(context.files) do pcall(os.remove, path) end
@@ -104,6 +107,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
   end)
 
   test.it("keeps Markdown controls display-only in a file preview", function(context)
+    config.fuzzy_searcher_markdown_preview = true
     local path = temp_file_path("fuzzy-preview-markdown-read-only-test.md")
     context.files = { path }
     write_file(path, "- [ ] Task\n")
@@ -287,6 +291,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
   end)
 
   test.it("opens a focused Markdown preview with its source selection visible", function(context)
+    config.fuzzy_searcher_markdown_preview = true
     local path = temp_file_path("fuzzy-preview-focused-markdown-test.md")
     context.files = { path }
     local lines = {}

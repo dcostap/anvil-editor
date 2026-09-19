@@ -1,5 +1,6 @@
 #include "markdown_parser.h"
 #include "treesitter/languages.h"
+#include "../../subprojects/tree-sitter-markdown/tree-sitter-markdown/src/tree_sitter/parser.h"
 
 #include <tree_sitter/api.h>
 
@@ -26,6 +27,26 @@
     return 1; \
   } \
 } while (0)
+
+void *tree_sitter_markdown_external_scanner_create(void);
+void tree_sitter_markdown_external_scanner_destroy(void *payload);
+bool tree_sitter_markdown_external_scanner_scan(
+  void *payload,
+  TSLexer *lexer,
+  const bool *valid_symbols
+);
+unsigned tree_sitter_markdown_external_scanner_serialize(void *payload, char *buffer);
+void tree_sitter_markdown_external_scanner_deserialize(
+  void *payload,
+  const char *buffer,
+  unsigned length
+);
+
+static void test_lexer_advance(TSLexer *lexer, bool skip) { (void)lexer; (void)skip; }
+static void test_lexer_mark_end(TSLexer *lexer) { (void)lexer; }
+static uint32_t test_lexer_get_column(TSLexer *lexer) { (void)lexer; return 0; }
+static bool test_lexer_range_start(const TSLexer *lexer) { (void)lexer; return false; }
+static bool test_lexer_eof(const TSLexer *lexer) { (void)lexer; return false; }
 
 static TSNode find_descendant(TSNode node, const char *type) {
   if (strcmp(ts_node_type(node), type) == 0) return node;
@@ -152,6 +173,33 @@ static int test_block_fixture_ranges(void) {
   CHECK(!ts_node_is_null(find_descendant(root, "html_block")));
   ts_tree_delete(tree);
   ts_parser_delete(parser);
+  return 0;
+}
+
+static int test_markdown_scanner_does_not_close_an_empty_block_stack(void) {
+  enum { SERIALIZATION_BUFFER_SIZE = 1024, SCANNER_SYMBOL_COUNT = 64 };
+  void *scanner = tree_sitter_markdown_external_scanner_create();
+  CHECK(scanner != NULL);
+
+  /* STATE_MATCHING with no serialized blocks is a valid recoverable state.
+   * It must not underflow the scanner's block-stack size. */
+  const char state[] = { 1, 0, 0, 0, 0 };
+  tree_sitter_markdown_external_scanner_deserialize(scanner, state, sizeof(state));
+  TSLexer lexer = {
+    .lookahead = 'x',
+    .advance = test_lexer_advance,
+    .mark_end = test_lexer_mark_end,
+    .get_column = test_lexer_get_column,
+    .is_at_included_range_start = test_lexer_range_start,
+    .eof = test_lexer_eof,
+  };
+  bool valid_symbols[SCANNER_SYMBOL_COUNT] = { false };
+  CHECK(!tree_sitter_markdown_external_scanner_scan(scanner, &lexer, valid_symbols));
+
+  char serialized[SERIALIZATION_BUFFER_SIZE];
+  unsigned length = tree_sitter_markdown_external_scanner_serialize(scanner, serialized);
+  CHECK(length <= sizeof(serialized));
+  tree_sitter_markdown_external_scanner_destroy(scanner);
   return 0;
 }
 
@@ -328,6 +376,7 @@ int main(void) {
   if (test_registry() != 0) return 1;
   if (test_exact_split_ranges() != 0) return 1;
   if (test_block_fixture_ranges() != 0) return 1;
+  if (test_markdown_scanner_does_not_close_an_empty_block_stack() != 0) return 1;
   if (test_composite_parser() != 0) return 1;
   if (test_incremental_composite_parser() != 0) return 1;
   if (test_incremental_utf8_width_change() != 0) return 1;

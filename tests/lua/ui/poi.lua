@@ -215,6 +215,84 @@ test.describe("Point of Interest navigation", function()
     test.equal(file_info_calls, 0)
   end)
 
+  test.it("does not recheck unchanged file locations after an unrelated edit", function(context)
+    local root = USERDIR .. PATHSEP .. "editor-file-poi-edit-cache-" .. system.get_process_id()
+    context.temp_root = root
+    context.original_root_project = core.root_project
+    test.ok(common.mkdirp(root))
+    local source_path = root .. PATHSEP .. "source.cpp"
+    local target_path = root .. PATHSEP .. "target.cpp"
+    local target = assert(io.open(target_path, "wb"))
+    target:write("target\n")
+    target:close()
+    core.root_project = function() return { path = root } end
+
+    local buffer = Buffer()
+    buffer:set_filename("source.cpp", source_path)
+    buffer:insert(1, 1, "// target.cpp:12:4\nplain\n")
+    buffer:clear_undo_redo()
+    context.buffers = { buffer }
+    local view = Editor(buffer)
+    context.views = { view }
+    view:update()
+
+    local get_file_info = system.get_file_info
+    local file_info_calls = 0
+    system.get_file_info = function(...)
+      file_info_calls = file_info_calls + 1
+      return get_file_info(...)
+    end
+    local ok, err = pcall(function()
+      buffer:insert(2, 1, "changed ")
+      view:update()
+    end)
+    system.get_file_info = get_file_info
+
+    test.ok(ok, err)
+    test.equal(file_info_calls, 0)
+    local points = view:get_points_of_interest()
+    test.equal(#points, 1)
+    test.equal(points[1].path, common.normalize_path(target_path))
+
+    buffer:insert(2, 1, "target.cpp:7:2\n")
+    view:update()
+    points = view:get_points_of_interest()
+    test.equal(#points, 2)
+    test.same(
+      { points[2].line, points[2].target_line, points[2].target_col },
+      { 2, 7, 2 }
+    )
+  end)
+
+  test.it("moves cached file locations with unaffected lines", function(context)
+    local root = USERDIR .. PATHSEP .. "editor-file-poi-rebase-" .. system.get_process_id()
+    context.temp_root = root
+    context.original_root_project = core.root_project
+    test.ok(common.mkdirp(root))
+    local source_path = root .. PATHSEP .. "source.cpp"
+    local target_path = root .. PATHSEP .. "target.cpp"
+    local target = assert(io.open(target_path, "wb"))
+    target:write("target\n")
+    target:close()
+    core.root_project = function() return { path = root } end
+
+    local buffer = Buffer()
+    buffer:set_filename("source.cpp", source_path)
+    buffer:insert(1, 1, "plain\n// target.cpp:12:4\n")
+    buffer:clear_undo_redo()
+    context.buffers = { buffer }
+    local view = Editor(buffer)
+    context.views = { view }
+    view:update()
+
+    buffer:insert(1, 1, "new line\n")
+    view:update()
+    local points = view:get_points_of_interest()
+    test.equal(#points, 1)
+    test.equal(points[1].line, 3)
+    test.equal(points[1].path, common.normalize_path(target_path))
+  end)
+
   test.it("animates a visible POI scroll change", function()
     local lines = {}
     for i = 1, 100 do lines[i] = "line " .. i end

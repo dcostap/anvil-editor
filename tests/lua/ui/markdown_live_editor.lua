@@ -303,7 +303,7 @@ test.describe("Markdown Live Preview", function()
     test.equal(visible_render_text(view, 1), "Before bold after!?")
   end)
 
-  test.it("uses current-source presentation and atomically adopts wrapping after reload", function()
+  test.it("keeps the rendered viewport frozen and atomically adopts wrapping after reload", function()
     local path = USERDIR .. PATHSEP .. "markdown-live-external-reload-"
       .. tostring(system.get_process_id()) .. ".md"
     local function write(text)
@@ -332,6 +332,11 @@ test.describe("Markdown Live Preview", function()
     buffer:set_selection(#buffer.lines, 1)
     refresh(view)
     local old_stable_row = view:get_visual_row(100, 1)
+    local _, anchor_content_y = view:get_line_screen_position(100, 1)
+    local anchor_scroll_y = anchor_content_y - style.padding.y
+    view.scroll.y, view.scroll.to.y = anchor_scroll_y, anchor_scroll_y
+    local _, anchor_screen_y = view:get_line_screen_position(100, 1)
+    local frozen_visible_text = visible_render_text(view, 100)
 
     write(fixture("New", 2))
     buffer:load(path)
@@ -344,6 +349,7 @@ test.describe("Markdown Live Preview", function()
     test.equal(line1.raw_passthrough, nil)
     test.equal(line2.raw_passthrough, nil)
     test.equal(line3.raw_passthrough, nil)
+    test.equal(visible_render_text(view, 100), frozen_visible_text)
     test.equal(visible_render_text(view, 1), "# New heading")
     test.equal(visible_render_text(view, 2), "- [ ] New task")
     test.equal(visible_render_text(view, 3), "**New text**")
@@ -354,6 +360,14 @@ test.describe("Markdown Live Preview", function()
     test.equal(visible_render_text(view, 2), "New task")
     test.equal(visible_render_text(view, 3), "New text")
     test.not_equal(view:get_visual_row(100, 1), old_stable_row)
+    local _, reloaded_screen_y = view:get_line_screen_position(100, 1)
+    test.ok(
+      math.abs(reloaded_screen_y - anchor_screen_y) < 0.01,
+      string.format(
+        "reload moved the anchored source line from %.2f to %.2f",
+        anchor_screen_y, reloaded_screen_y
+      )
+    )
     os.remove(path)
   end)
 
@@ -2616,6 +2630,34 @@ test.describe("Markdown Live Preview", function()
       service:get_diagnostics().requests,
       requests_before,
       "the checkbox toggle requested highlighting for an unrelated code block"
+    )
+  end)
+
+  test.it("keeps wrapped layout work local while fenced text is reparsed", function()
+    local lines = { "```lua" }
+    for index = 1, 300 do
+      lines[#lines + 1] = "local value_" .. index .. " = " .. index
+    end
+    lines[#lines + 1] = "```"
+    lines[#lines + 1] = "tail"
+    local view, buffer = make_view(table.concat(lines, "\n"), "fence-edit-layout.md")
+    view:set_wrapping_enabled(true)
+    refresh(view)
+    view:get_visual_row_metric_cache()
+    local rebuilds_before = view:get_render_cache_diagnostics().metric_full_rebuilds
+
+    local edit_line = 301
+    buffer:insert(edit_line, #buffer.lines[edit_line], "x")
+    view:get_visual_row_metric_cache()
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    linewrapping.complete_async_reconstruction(view)
+    view:get_visual_row_metric_cache()
+
+    test.equal(
+      view:get_render_cache_diagnostics().metric_full_rebuilds,
+      rebuilds_before,
+      "a local fenced edit rebuilt the complete Markdown layout"
     )
   end)
 

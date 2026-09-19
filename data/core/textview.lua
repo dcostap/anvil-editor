@@ -1846,6 +1846,7 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
   self.__visual_metric_snapshot_kind = nil
   self.__visual_metric_snapshot_id = nil
   self.__visual_metric_snapshot_cache = nil
+  if self.__presentation_reload_frozen then return end
   local cache = self.__visual_metric_cache
   local wrap_change = self.__line_render_wrap_change
   self.__line_render_wrap_change = nil
@@ -2104,7 +2105,9 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
   self.__line_render_wrap_change = nil
   self.__line_render_cache = nil
   self.__line_width_cache = {}
-  if self.wrapped_settings and not self.__line_render_wrap_invalidating then
+  if self.wrapped_settings and not self.__line_render_wrap_invalidating
+    and not self.__presentation_reload_frozen
+  then
     self.__line_render_wrap_invalidating = true
     if opts.defer_wrapped_reconstruction
       or #self.buffer.lines > MAX_SYNC_LINE_RENDER_WRAP_LINES
@@ -3431,6 +3434,12 @@ function TextView:get_metric_row_entry(row)
   return { type = "line", line = row, row_in_line = 1, absolute_row = row, row = row }
 end
 
+local function visual_metric_generation_functions(provider)
+  if not provider then return nil, nil end
+  return provider.metric_generation or provider.generation,
+    provider.metric_generation_seed or provider.generation_seed
+end
+
 function TextView:get_visual_metric_signature(
   wrap_layout_generation, row_count_override, text_revision_override
 )
@@ -3447,7 +3456,8 @@ function TextView:get_visual_metric_signature(
     and row_count_override == nil and text_revision_override == nil
   for _, entry in ipairs(entries) do
     local provider = entry.provider
-    if provider and provider.generation and not provider.generation_seed then
+    local generation_fn, seed_fn = visual_metric_generation_functions(provider)
+    if generation_fn and not seed_fn then
       cacheable = false
       break
     end
@@ -3467,7 +3477,7 @@ function TextView:get_visual_metric_signature(
   if same then
     for index, entry in ipairs(entries) do
       local provider = entry.provider
-      local seed_fn = provider and provider.generation and provider.generation_seed
+      local _, seed_fn = visual_metric_generation_functions(provider)
       if seed_fn then
         local ok, seed = pcall(seed_fn, provider, self)
         if state.provider_seeds[index] ~= (ok and seed or "error") then
@@ -3501,8 +3511,9 @@ function TextView:get_visual_metric_signature(
     parts[#parts + 1] = tostring(entry.id)
     parts[#parts + 1] = tostring(entry.priority)
     local provider = entry.provider
-    if provider and provider.generation then
-      local ok, gen = pcall(provider.generation, provider, self)
+    local generation_fn = visual_metric_generation_functions(provider)
+    if generation_fn then
+      local ok, gen = pcall(generation_fn, provider, self)
       parts[#parts + 1] = ok and tostring(gen) or "error"
     end
   end
@@ -3514,7 +3525,7 @@ function TextView:get_visual_metric_signature(
     local provider_seeds = {}
     for index, entry in ipairs(entries) do
       local provider = entry.provider
-      local seed_fn = provider and provider.generation and provider.generation_seed
+      local _, seed_fn = visual_metric_generation_functions(provider)
       if seed_fn then
         local ok, seed = pcall(seed_fn, provider, self)
         provider_seeds[index] = ok and seed or "error"
@@ -3738,6 +3749,9 @@ end
 
 function TextView:get_visual_row_metric_cache()
   if not self:has_visual_metric_providers() then return nil end
+  if self.__presentation_reload_frozen and self.__frozen_visual_metric_cache then
+    return self.__frozen_visual_metric_cache
+  end
   -- One UI phase observes one coherent provider state. Explicit
   -- invalidation clears this snapshot immediately.
   local snapshot_kind = core.ui_snapshot_active and "ui"

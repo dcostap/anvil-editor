@@ -1,12 +1,20 @@
 local core = require "core"
+local Buffer = require "core.buffer"
 local common = require "core.common"
 local style = require "core.style"
 local text_poi_locations = require "core.text_poi_locations"
+local TextView = require "core.textview"
 
 local M = {}
 
 local MAX_CANDIDATES = 32768
 local ACTION_REVALIDATION_INTERVAL = 1
+
+local function perf_add(name, value)
+  if not core.perf_frame_stats then return end
+  local perf = package.loaded["core.perf"]
+  if perf then perf.frame_add(name, value) end
+end
 
 local function normalize_root(path)
   if type(path) ~= "string" or path == "" then return nil end
@@ -89,6 +97,41 @@ local function resolve_cache(cache)
   cache.validated_at = system.get_time()
 end
 
+local function sort_entries(values)
+  table.sort(values, function(left, right)
+    return left.line ~= right.line and left.line < right.line
+      or left.line == right.line and left.col < right.col
+  end)
+  return values
+end
+
+local function scan_buffer(buffer)
+  local candidates = {}
+  for line, text in ipairs(buffer.lines or {}) do
+    if #candidates >= MAX_CANDIDATES then break end
+    local found = text_poi_locations.extract_line_candidates(
+      text, line, MAX_CANDIDATES - #candidates
+    )
+    for _, candidate in ipairs(found) do candidates[#candidates + 1] = candidate end
+  end
+  return candidates
+end
+
+local function new_cache(view, revision, source, project)
+  local cache = {
+    revision = revision,
+    source_path = source,
+    project_path = project,
+    roots = roots_for_paths(source, project),
+    candidates = scan_buffer(view.buffer),
+    points = nil,
+    by_line = nil,
+    validated_at = 0,
+  }
+  resolve_cache(cache)
+  return cache
+end
+
 local function cache_for(view)
   local buffer = view and view.buffer
   local revision = buffer_revision(buffer)
@@ -101,20 +144,100 @@ local function cache_for(view)
       and cache.project_path == project then
     return cache
   end
-
-  local text = table.concat(buffer.lines or {})
-  cache = {
-    revision = revision,
-    source_path = source,
-    project_path = project,
-    roots = roots_for_paths(source, project),
-    candidates = text_poi_locations.extract_candidates(text, MAX_CANDIDATES),
-    points = nil,
-    by_line = nil,
-    validated_at = 0,
-  }
+  cache = new_cache(view, revision, source, project)
   view.editor_file_poi_cache = cache
   return cache
+end
+
+local function ordered_ranges(transaction)
+  local ranges = {}
+  for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
+    ranges[#ranges + 1] = range
+  end
+  table.sort(ranges, function(left, right)
+    return (left.old_line1 or left.new_line1 or 1)
+      < (right.old_line1 or right.new_line1 or 1)
+  end)
+  return ranges
+end
+
+local function map_unchanged_line(ranges, old_line)
+  local delta = 0
+  for _, range in ipairs(ranges) do
+    local old_line1 = range.old_line1 or range.new_line1 or 1
+    local old_line2 = range.old_line2 or old_line1
+    if old_line < old_line1 then return old_line + delta end
+    if old_line <= old_line2 then return nil end
+    delta = delta + (range.line_delta or 0)
+  end
+  return old_line + delta
+end
+
+local function rebase_entries(entries, ranges)
+  local rebased = {}
+  for _, entry in ipairs(entries or {}) do
+    local old_line = entry.line
+    local new_line = map_unchanged_line(ranges, old_line)
+    if new_line then
+      local delta = new_line - old_line
+      if delta == 0 then
+        rebased[#rebased + 1] = entry
+      else
+        local copy = {}
+        for key, value in pairs(entry) do copy[key] = value end
+        copy.line = new_line
+        if copy.line2 then copy.line2 = copy.line2 + delta end
+        rebased[#rebased + 1] = copy
+      end
+    end
+  end
+  return sort_entries(rebased)
+end
+
+local function refresh_changed_lines(view, cache, transaction)
+  local started = core.perf_frame_stats and system.get_time()
+  local ranges = ordered_ranges(transaction)
+  if #ranges == 0 then return false end
+  local candidates = rebase_entries(cache.candidates, ranges)
+  local points = rebase_entries(cache.points, ranges)
+  local scanned = 0
+  for _, range in ipairs(ranges) do
+    local line1 = range.new_line1 or range.old_line1 or 1
+    local line2 = range.new_line2 or line1
+    for line = line1, line2 do
+      local found = text_poi_locations.extract_line_candidates(
+        view.buffer.lines[line], line, MAX_CANDIDATES - #candidates
+      )
+      for _, candidate in ipairs(found) do candidates[#candidates + 1] = candidate end
+      for _, point in ipairs(resolve_candidates(found, cache.roots)) do
+        points[#points + 1] = point
+      end
+      scanned = scanned + 1
+    end
+  end
+  cache.candidates = sort_entries(candidates)
+  cache.points = sort_entries(points)
+  cache.by_line = build_line_index(cache.points)
+  cache.revision = buffer_revision(view.buffer)
+  cache.validated_at = system.get_time()
+  perf_add("editor_file_poi_incremental_lines", scanned)
+  if started then
+    perf_add("editor_file_poi_incremental_ms", (system.get_time() - started) * 1000)
+  end
+  return true
+end
+
+function M.on_text_transaction(view, transaction)
+  local cache = view and view.editor_file_poi_cache
+  if not cache or not transaction or not transaction.changed then return false end
+  local source = source_path(view)
+  local project = project_path()
+  if cache.source_path ~= source or cache.project_path ~= project
+      or not refresh_changed_lines(view, cache, transaction) then
+    view.editor_file_poi_cache = nil
+    return false
+  end
+  return true
 end
 
 local function points_for_view(view, opts)
@@ -133,10 +256,14 @@ local function points_for_view(view, opts)
 end
 
 function M.update(view)
+  local started = core.perf_frame_stats and system.get_time()
   local buffer = view and view.buffer
   if not buffer or buffer.binary then return end
   local cache = cache_for(view)
   if not cache.points then resolve_cache(cache) end
+  if started then
+    perf_add("editor_file_poi_update_ms", (system.get_time() - started) * 1000)
+  end
 end
 
 function M.points_of_interest(_, view, opts)
@@ -192,5 +319,11 @@ function M.draw_line(view, line, x, y)
   if not cache or cache.revision ~= buffer_revision(view.buffer) then return end
   draw_line_underlines(view, line, x, y, cache.by_line and cache.by_line[line])
 end
+
+Buffer.register_text_transaction_handler("editor-file-pois", function(buffer, transaction)
+  for view in pairs(TextView.registry[buffer] or {}) do
+    if view.editor_file_poi_cache then M.on_text_transaction(view, transaction) end
+  end
+end)
 
 return M
