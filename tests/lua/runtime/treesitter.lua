@@ -413,6 +413,26 @@ test.describe("core.treesitter phase 3 buffer integration", function()
     buffer:on_close()
   end)
 
+  test.it("C++ outline includes qualified functions with pointer return types", function()
+    local buffer = cpp_buffer([[char* RGE_Base_Game::get_string(long text_id) {
+  return nullptr;
+}
+
+RGE_Scenario* RGE_Base_Game::get_scenario_info(char* scenario_file, int from_campaign) {
+  return nullptr;
+}
+
+void RGE_Base_Game::write_scenario_header(int outfile) {}
+]])
+    test.ok(wait_ready(buffer))
+
+    local symbols = treesitter.get_buffer_outline(buffer)
+    test.ok(find_symbol(symbols, "get_string", "method"))
+    test.ok(find_symbol(symbols, "get_scenario_info", "method"))
+    test.ok(find_symbol(symbols, "write_scenario_header", "method"))
+    buffer:on_close()
+  end)
+
   test.it("shares compiled Tree-sitter queries across Buffers", function()
     local first = c_buffer("int first(void) { return 1; }")
     local second = c_buffer("int second(void) { return 2; }")
