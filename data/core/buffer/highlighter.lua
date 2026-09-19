@@ -124,8 +124,6 @@ function Highlighter:soft_reset()
   self:invalidate_render_cache()
   self.first_invalid_line = 1
   self.max_wanted_line = 0
-  self.packet_reset_generation = (self.packet_reset_generation or 0) + 1
-  invalidate_line_packets(self)
 end
 
 function Highlighter:invalidate(idx)
@@ -187,6 +185,12 @@ end
 
 function Highlighter:invalidate_render_cache(first_line, last_line)
   self.render_line_frame_cache = nil
+  self.packet_reset_generation = (self.packet_reset_generation or 0) + 1
+  if first_line then
+    invalidate_line_packets(self, first_line, math.max(0, (last_line or first_line) - first_line))
+  else
+    invalidate_line_packets(self)
+  end
   local intelligence = get_language_intelligence()
   if intelligence and self.buffer then
     intelligence.invalidate_render_cache(self.buffer, first_line, last_line)

@@ -1,11 +1,13 @@
 local core = require "core"
 local command = require "core.command"
+local Editor = require "core.editor"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local test = require "core.test"
 local tokenizer = require "core.tokenizer"
 local treesitter = require "core.treesitter"
 local intelligence = require "core.language_intelligence"
+local line_packets = require "core.textview_line_packets"
 
 local function set_text(buffer, text)
   buffer.lines = {}
@@ -113,6 +115,26 @@ test.describe("Tree-sitter TextView highlighting", function()
     local drawn = {}
     for _, call in ipairs(calls) do drawn[#drawn + 1] = call.text end
     test.equal(table.concat(drawn), buffer.lines[1]:sub(1, -2))
+    buffer:on_close()
+  end)
+
+  test.it("invalidates cached line packets when Tree-sitter becomes ready", function()
+    local buffer = cpp_buffer("int main(void) { return VALUE; }")
+    local view = Editor(buffer)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 1000, 1000
+    view.__test_force_line_packets = true
+    view:set_wrapping_enabled(true)
+
+    pcall(line_packets.draw_content, view, 1, 0, 0)
+    local before = line_packets.diagnostics(view)
+    test.equal(before.builds, 1)
+
+    test.ok(wait_ready(buffer))
+    pcall(line_packets.draw_content, view, 1, 0, 0)
+    local after = line_packets.diagnostics(view)
+    test.ok(after.builds > before.builds,
+      "expected Tree-sitter readiness to rebuild the cached line packet")
     buffer:on_close()
   end)
 
