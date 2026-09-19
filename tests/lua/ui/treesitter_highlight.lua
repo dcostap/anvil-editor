@@ -116,6 +116,47 @@ test.describe("Tree-sitter TextView highlighting", function()
     buffer:on_close()
   end)
 
+  test.it("keeps C++ syntax colors stable when line wrapping changes", function()
+    local config = require "core.config"
+    local buffer = cpp_buffer("class Box { void draw() { return; } };")
+    test.ok(wait_ready(buffer))
+    local view = TextView(buffer)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 1000, 1000
+
+    local wrapping = config.plugins.linewrapping
+    local old_mode = wrapping.mode
+    local old_width_override = wrapping.width_override
+    wrapping.mode = "letter"
+    wrapping.width_override = view:get_font():get_width("class Box { void")
+
+    local function color_signature(wrapped)
+      view:set_wrapping_enabled(wrapped)
+      local calls = with_fake_draw_text(function()
+        view:draw_line_text(1, 0, 0)
+      end)
+      local signature = {}
+      for _, call in ipairs(calls) do
+        local color = call.color
+        for i = 1, #call.text do
+          signature[#signature + 1] = call.text:sub(i, i) .. ":"
+            .. table.concat(color, ",")
+        end
+      end
+      return table.concat(signature, "|")
+    end
+
+    local ok, unwrapped, wrapped = pcall(function()
+      return color_signature(false), color_signature(true)
+    end)
+    wrapping.mode = old_mode
+    wrapping.width_override = old_width_override
+    view:set_wrapping_enabled(false)
+    buffer:on_close()
+    if not ok then error(unwrapped, 0) end
+    test.equal(wrapped, unwrapped)
+  end)
+
   test.it("TextView draw uses Tree-sitter Odin render tokens when ready", function()
     local buffer = odin_buffer("package demo\n\nmain :: proc() {\n  value := 42\n}")
     test.ok(wait_ready(buffer))

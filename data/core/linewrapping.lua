@@ -264,8 +264,9 @@ local function perf_elapsed(key, start_time)
   if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
 end
 
--- Optimization iterator. The tokenizer is relatively slow, so if wrapping does
--- not need syntax fonts, expose the whole line as a single normal token.
+-- Optimization iterator. The render tokenizer is relatively slow, so if
+-- wrapping does not need syntax fonts, expose the whole line as one normal
+-- token.
 local function spew_tokens(state, emitted)
   if emitted then return end
   local text = state.text or state.buffer:get_utf8_line(state.line)
@@ -279,7 +280,7 @@ local function get_tokens(buffer, line, scol, line_text, measurement)
     require_tokenization = config.plugins.linewrapping.require_tokenization
   end
   if require_tokenization then
-    return buffer.highlighter:each_token(line, scol)
+    return buffer.highlighter:each_render_token(line, scol)
   end
   return spew_tokens, { buffer = buffer, line = line, scol = scol, text = line_text }, nil
 end

@@ -37,13 +37,14 @@ local function same_tokens(a, b)
   return true
 end
 
-function Layout.get(view, line, first, last, leading, wrapped)
+function Layout.get(view, line, first, last, leading, _wrapped)
   local default_font = view:get_font()
   local _, tabs = view.buffer:get_indent_info()
   local override = view:decoration_text_color(line)
+  -- Visible text must use the render token provider in both modes. Wrapping
+  -- changes row geometry, not the syntax highlighter that supplies colors.
   local tokens = override and { "normal", view.buffer.lines[line] }
-    or (wrapped and view.buffer.highlighter:get_line(line)
-      or view.buffer.highlighter:get_render_line(line)).tokens
+    or view.buffer.highlighter:get_render_line(line).tokens
   local key = { tostring(first), tostring(last), tostring(leading), tostring(tabs),
     font_key(default_font), tostring(override) }
   local kinds = {}
