@@ -3147,7 +3147,9 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         string.rep(" ", markdown_indent_width(leading))
       )
       local width = target_x - source_leading_width
-      if width > 0.1 then
+      -- Keep unindented lazy continuations at their source margin.
+      -- Caret reveal must not change their geometry.
+      if (leading ~= "" or line_text == "") and width > 0.1 then
         continuation_indent = width
       end
     end

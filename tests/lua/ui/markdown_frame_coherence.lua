@@ -233,6 +233,39 @@ test.describe("Markdown frame coherence", function()
     )
   end)
 
+  test.it("keeps unindented lazy list continuations at the source margin", function(context)
+    local view, buffer = make_view(context, table.concat({
+      "- first",
+      "- parent",
+      "    - nested one",
+      "    - nested two",
+      "- final item" .. string.rep(" ", 6),
+      "following text",
+      "(following note)",
+    }, "\n"))
+    buffer:set_selection(1, 3)
+
+    for line = 6, 7 do
+      local inactive_x = view:get_col_x_offset(line, 1)
+      buffer:set_selection(line, 1)
+      local active_x = view:get_col_x_offset(line, 1)
+      test.ok(
+        math.abs(inactive_x - active_x) < 0.01,
+        string.format(
+          "moving the caret to line %d changed its indent from %.2f to %.2f",
+          line, inactive_x, active_x
+        )
+      )
+      test.ok(
+        math.abs(inactive_x) < 0.01,
+        string.format(
+          "lazy continuation line %d was indented by %.2f pixels",
+          line, inactive_x
+        )
+      )
+    end
+  end)
+
   test.it("keeps a joined task prefix unchanged at publication", function(context)
     local view, buffer, instance = make_view(
       context, "before\n\n- [ ] after\nplain"
