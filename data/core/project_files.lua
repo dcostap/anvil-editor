@@ -11,6 +11,7 @@ local start_watcher
 local WORK_SLICE_SECONDS = 0.002
 local WATCH_POLL_SECONDS = 0.02
 local WATCH_BATCH_SECONDS = 0.05
+local WATCH_PATH_LIMIT = 512
 
 local function run_file_worker(payload)
   local chunks, done, failure = {}, false, nil
@@ -517,6 +518,8 @@ local function process_watch_batches(entry, generation)
     if entry.watch_generation ~= generation then return end
     local paths = entry.pending_watch_paths
     entry.pending_watch_paths = {}
+    entry.pending_watch_path_count = 0
+    entry.pending_watch_root_refresh = false
     if next(paths) then
       local previous_membership = {}
       local state = cooperative_state()
@@ -553,6 +556,13 @@ local function start_watch_processor(entry)
   core.add_thread(function() process_watch_batches(entry, generation) end)
 end
 
+local function require_watch_root_refresh(entry, reason)
+  entry.pending_watch_paths = { [entry.root] = { precise = false } }
+  entry.pending_watch_path_count = 1
+  entry.pending_watch_root_refresh = true
+  core.log_quiet("Project watcher: using a root refresh for %s (%s)", entry.root, reason)
+end
+
 start_watcher = function(entry)
   if entry.watcher or entry.include_ignored then return end
   local ok, watcher = pcall(DirWatch)
@@ -563,6 +573,8 @@ start_watcher = function(entry)
   entry.watcher = watcher
   entry.watched_dirs = {}
   entry.pending_watch_paths = {}
+  entry.pending_watch_path_count = 0
+  entry.pending_watch_root_refresh = false
   entry.watch_generation = entry.watch_generation + 1
   local generation = entry.watch_generation
   watcher:watch(entry.root)
@@ -574,10 +586,23 @@ start_watcher = function(entry)
         if changed_path and (common.path_equals(changed_path, entry.root)
           or common.path_belongs_to(changed_path, entry.root))
         then
-          local existing = entry.pending_watch_paths[changed_path]
-          entry.pending_watch_paths[changed_path] = {
-            precise = (not existing or existing.precise ~= false) and precise ~= false,
-          }
+          if precise == false and common.path_equals(changed_path, entry.root) then
+            if not entry.pending_watch_root_refresh then
+              require_watch_root_refresh(entry, "imprecise root event")
+            end
+          elseif not entry.pending_watch_root_refresh then
+            local existing = entry.pending_watch_paths[changed_path]
+            entry.pending_watch_paths[changed_path] = {
+              precise = (not existing or existing.precise ~= false) and precise ~= false,
+            }
+            if not existing then
+              entry.pending_watch_path_count = entry.pending_watch_path_count + 1
+              if entry.pending_watch_path_count > WATCH_PATH_LIMIT then
+                require_watch_root_refresh(entry,
+                  string.format("more than %d changed paths", WATCH_PATH_LIMIT))
+              end
+            end
+          end
         end
       end, WORK_SLICE_SECONDS, 0)
       if next(entry.pending_watch_paths) then
@@ -597,6 +622,8 @@ local function stop_watcher(entry)
   entry.watch_generation = entry.watch_generation + 1
   entry.watch_processor_running = false
   entry.pending_watch_paths = {}
+  entry.pending_watch_path_count = 0
+  entry.pending_watch_root_refresh = false
   local watched_dirs = entry.watched_dirs or {}
   entry.watched_dirs = {}
   core.add_thread(function()

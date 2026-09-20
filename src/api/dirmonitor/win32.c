@@ -5,15 +5,35 @@
 
 struct dirmonitor_internal {
   HANDLE handle;
+  int rescan_required;
 };
 
 
 static int get_changes_dirmonitor(struct dirmonitor_internal* monitor, char* buffer, int buffer_size) {
   HANDLE handle = monitor->handle;
   if (handle && handle != INVALID_HANDLE_VALUE) {
-    DWORD bytes_transferred;
-    if (ReadDirectoryChangesW(handle, buffer, buffer_size, TRUE,  FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME, &bytes_transferred, NULL, NULL) == 0)
+    DWORD bytes_transferred = 0;
+    if (ReadDirectoryChangesW(
+      handle,
+      buffer,
+      buffer_size,
+      TRUE,
+      FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+        FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE,
+      &bytes_transferred,
+      NULL,
+      NULL
+    ) == 0) {
+      if (GetLastError() == ERROR_NOTIFY_ENUM_DIR) {
+        monitor->rescan_required = 1;
+        return 1;
+      }
       return 0;
+    }
+    if (bytes_transferred == 0) {
+      monitor->rescan_required = 1;
+      return 1;
+    }
     return bytes_transferred;
   }
   return 0;
@@ -41,6 +61,11 @@ static void deinit_dirmonitor(struct dirmonitor_internal* monitor) {
 
 
 static int translate_changes_dirmonitor(struct dirmonitor_internal* monitor, char* buffer, int buffer_size, int (*change_callback)(int, const char*, void*), void* data) {
+  if (monitor->rescan_required) {
+    monitor->rescan_required = 0;
+    change_callback(1, NULL, data);
+    return 0;
+  }
   for (FILE_NOTIFY_INFORMATION* info = (FILE_NOTIFY_INFORMATION*)buffer; (char*)info < buffer + buffer_size; info = (FILE_NOTIFY_INFORMATION*)(((char*)info) + info->NextEntryOffset)) {
     char transform_buffer[MAX_PATH*4];
     int count = WideCharToMultiByte(CP_UTF8, 0, (WCHAR*)info->FileName, info->FileNameLength / 2, transform_buffer, MAX_PATH*4 - 1, NULL, NULL);

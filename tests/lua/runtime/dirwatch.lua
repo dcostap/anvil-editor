@@ -77,4 +77,39 @@ test.describe("core.dirwatch", function()
     common.rm(root, true)
     context.temp_root = nil
   end)
+
+  test.it("reports an in-place file write from a native directory watch", function(context)
+    local root = common.normalize_path(USERDIR .. PATHSEP .. "dirmonitor-write-test")
+    local path = root .. PATHSEP .. "changed.txt"
+    context.temp_root = root
+    common.rm(root, true)
+    test.ok(common.mkdirp(root))
+    local file = assert(io.open(path, "wb"))
+    file:write("before")
+    file:close()
+
+    local monitor = dirmonitor.new()
+    context.monitor = monitor
+    local watch_id = monitor:watch(root)
+    context.watch_id = watch_id
+    test.ok(watch_id and watch_id >= 0)
+    coroutine.yield(0.02)
+
+    file = assert(io.open(path, "r+b"))
+    file:write("after!")
+    file:close()
+
+    local changed = false
+    local deadline = system.get_time() + 2
+    repeat
+      monitor:check(function() changed = true end)
+      if not changed then coroutine.yield(0.01) end
+    until changed or system.get_time() >= deadline
+
+    test.ok(changed, "The native directory watch missed an in-place file write")
+    monitor:unwatch(watch_id)
+    context.watch_id = nil
+    common.rm(root, true)
+    context.temp_root = nil
+  end)
 end)

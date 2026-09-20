@@ -104,4 +104,77 @@ test.describe("Project file worker I/O", function()
     test.equal(events[2].file_info[path], false)
     test.not_ok(project_files.contains(root, path))
   end)
+
+  test.it("uses one conservative root event for a large watch burst", function(context)
+    local DirWatch = require "core.dirwatch"
+    local root = common.normalize_path(USERDIR .. PATHSEP .. "project-watch-burst-" .. system.get_process_id())
+    assert(common.mkdirp(root))
+    write(root .. PATHSEP .. "source.lua", "return 1\n")
+    assert(project_files.list(root))
+    local check, pending = DirWatch.check, true
+    local id, delivered_paths, delivered_event = {}, nil, nil
+    context.cleanup = function()
+      DirWatch.check = check
+      project_files.unsubscribe(root, id)
+      project_files.invalidate(root)
+      common.rm(root, true)
+    end
+    DirWatch.check = function(_, callback)
+      if pending then
+        pending = false
+        for i = 1, 1024 do
+          callback(root, root .. PATHSEP .. string.format("generated-%04d.tmp", i), true)
+        end
+      end
+      return false
+    end
+    project_files.subscribe(root, id, function(paths, event)
+      delivered_paths, delivered_event = paths, event
+    end)
+
+    local deadline = system.get_time() + 10
+    while not delivered_paths and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.not_nil(delivered_paths, "The watcher did not deliver the large burst")
+    local count = 0
+    for _ in pairs(delivered_paths) do count = count + 1 end
+    test.equal(count, 1)
+    test.equal(test.not_nil(delivered_paths[root]).precise, false)
+    test.ok(delivered_event.refreshed)
+  end)
+
+  test.it("lets an imprecise root event supersede later leaf events", function(context)
+    local DirWatch = require "core.dirwatch"
+    local root = common.normalize_path(USERDIR .. PATHSEP .. "project-watch-overflow-" .. system.get_process_id())
+    assert(common.mkdirp(root))
+    write(root .. PATHSEP .. "source.lua", "return 1\n")
+    assert(project_files.list(root))
+    local check, pending = DirWatch.check, true
+    local id, delivered_paths = {}, nil
+    context.cleanup = function()
+      DirWatch.check = check
+      project_files.unsubscribe(root, id)
+      project_files.invalidate(root)
+      common.rm(root, true)
+    end
+    DirWatch.check = function(_, callback)
+      if pending then
+        pending = false
+        callback(root, root, false)
+        callback(root, root .. PATHSEP .. "later-one.tmp", true)
+        callback(root, root .. PATHSEP .. "later-two.tmp", true)
+      end
+      return false
+    end
+    project_files.subscribe(root, id, function(paths)
+      delivered_paths = paths
+    end)
+
+    local deadline = system.get_time() + 10
+    while not delivered_paths and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.not_nil(delivered_paths, "The watcher did not deliver the imprecise event")
+    local count = 0
+    for _ in pairs(delivered_paths) do count = count + 1 end
+    test.equal(count, 1)
+    test.equal(test.not_nil(delivered_paths[root]).precise, false)
+  end)
 end)
