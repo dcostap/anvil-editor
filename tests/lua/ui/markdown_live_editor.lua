@@ -1365,7 +1365,7 @@ test.describe("Markdown Live Preview", function()
     test.not_nil(marker.widget)
   end)
 
-  test.it("keeps a split Markdown list suffix raw until semantics publish", function()
+  test.it("keeps a split Markdown list suffix presented until semantics publish", function()
     local view, buffer = make_view("- first item\nplain", "pending-split-list.md")
     buffer:set_selection(2, 1)
     refresh(view)
@@ -1376,10 +1376,14 @@ test.describe("Markdown Live Preview", function()
     core.active_view = old_active
 
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
-    test.equal(
-      visible_render_text(view, 2),
-      (buffer.lines[2] or ""):gsub("\n$", "")
-    )
+    local pending_marker
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(2)).fragments or {}) do
+      if fragment.unordered_list_marker and fragment.widget then
+        pending_marker = fragment
+        break
+      end
+    end
+    test.not_nil(pending_marker, "the pending suffix lost its list marker")
     local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     local marker
@@ -2500,16 +2504,21 @@ test.describe("Markdown Live Preview", function()
       local indented = buffer.lines[2]:gsub("\n$", "")
       local indent = test.not_nil(indented:match("^([\t ]+)%- See"))
       test.equal(indented:sub(#indent + 1), source)
-      test.equal(visible_render_text(view, 2), indented)
+      test.equal(visible_render_text(view, 2), "See Alias now")
       local pending = test.not_nil(view:get_line_render(2))
-      test.equal(pending.markdown_provenance, "unavailable")
       test.equal(pending.markdown_buffer_revision, buffer.text_revision)
+      local pending_marker
       for _, fragment in ipairs(pending.fragments or {}) do
+        if fragment.unordered_list_marker and fragment.widget then
+          pending_marker = fragment
+        end
         test.equal(fragment.on_mouse_pressed, nil)
         if fragment.widget then test.equal(fragment.widget.on_mouse_pressed, nil) end
       end
+      test.not_nil(pending_marker, "the pending row lost its list marker")
       local body_col = #indent + 3
-      test.ok(view:get_col_x_offset(2, body_col) > before_body_x)
+      local pending_body_x = view:get_col_x_offset(2, body_col)
+      test.ok(pending_body_x > before_body_x)
       local end_col = #indented + 1
       local end_x = view:get_col_x_offset(2, end_col)
       test.equal(view:get_x_offset_col(2, end_x), end_col)
@@ -2520,6 +2529,10 @@ test.describe("Markdown Live Preview", function()
       local published = test.not_nil(view:get_line_render(2))
       test.equal(published.markdown_provenance, "current")
       test.equal(published.markdown_semantic_revision, buffer.text_revision)
+      test.ok(
+        math.abs(view:get_col_x_offset(2, body_col) - pending_body_x) < 0.5,
+        "the list body moved when the indented semantics published"
+      )
       local published_end_x = view:get_col_x_offset(2, end_col)
       test.equal(view:get_x_offset_col(2, published_end_x), end_col)
     end)
