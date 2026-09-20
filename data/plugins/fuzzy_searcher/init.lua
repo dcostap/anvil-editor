@@ -135,10 +135,22 @@ local function modal_normalize_stroke(stroke)
   return table.concat(stroke_table, "+")
 end
 
-local function modal_key_to_stroke(key)
+local function modal_modkey_pressed(mod, event)
+  if type(event) == "table" then
+    local pressed = event[mod]
+    if mod == "super" and pressed == nil then pressed = event.gui end
+    if pressed ~= nil then
+      if event.altgr and (mod == "ctrl" or mod == "alt") then return false end
+      return pressed == true
+    end
+  end
+  return keymap.modkeys[mod] == true
+end
+
+local function modal_key_to_stroke(key, event)
   local keys = { key }
   for _, mod in ipairs(modal_modkeys) do
-    if keymap.modkeys[mod] then table.insert(keys, mod) end
+    if modal_modkey_pressed(mod, event) then table.insert(keys, mod) end
   end
   return modal_normalize_stroke(table.concat(keys, "+"))
 end
@@ -292,17 +304,17 @@ local modal_non_text_keys = {
 }
 for i = 1, 24 do modal_non_text_keys["f" .. i] = true end
 
-local function modal_should_let_text_input_through(key, stroke)
+local function modal_should_let_text_input_through(key, stroke, event)
   -- Printable text arrives through a later textinput event. If we consume the
   -- keypressed event for plain/shifted characters, Anvil/SDL can suppress
   -- that textinput, so normal typing appears broken. Ctrl/Alt/Super combos are
   -- shortcuts and stay modal-blocked unless explicitly allowed.
-  if keymap.modkeys.super then return false end
-  if keymap.modkeys.ctrl or keymap.modkeys.alt then
+  if modal_modkey_pressed("super", event) then return false end
+  if modal_modkey_pressed("ctrl", event) or modal_modkey_pressed("alt", event) then
     -- On Windows AltGr can appear as ctrl+alt, but it is used to enter
     -- printable characters like @/# on many layouts. If the physical AltGr
     -- modifier is down, do not treat ctrl/alt as shortcut blockers.
-    if not keymap.modkeys.altgr then return false end
+    if not modal_modkey_pressed("altgr", event) then return false end
   end
   if modal_textbox_command(stroke) or modal_non_text_keys[key] then return false end
   return type(key) == "string" and key ~= ""
@@ -4512,7 +4524,8 @@ end
 function FSView:on_modal_key_pressed(key, ...)
   if modal_modkey_map[key] then return "keymap" end
 
-  local stroke = modal_key_to_stroke(key)
+  local event = ...
+  local stroke = modal_key_to_stroke(key, event)
   local picker_cmd = modal_picker_command(stroke, self)
   local textbox_cmd = not picker_cmd and modal_textbox_command(stroke)
   if picker_cmd == "pane:focus_local_next" then
@@ -4537,7 +4550,7 @@ function FSView:on_modal_key_pressed(key, ...)
       "key=" .. tostring(key) .. " stroke=" .. tostring(stroke)
         .. " cmd=" .. tostring(textbox_cmd))
     command.perform(textbox_cmd, ...)
-  elseif modal_should_let_text_input_through(key, stroke) and not self.static_mode then
+  elseif modal_should_let_text_input_through(key, stroke, event) and not self.static_mode then
     ensure_input_focus(self)
     self._awaiting_textinput = {
       time = system.get_time(),

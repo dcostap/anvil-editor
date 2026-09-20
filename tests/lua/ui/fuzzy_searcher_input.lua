@@ -23,6 +23,9 @@ test.describe("Fuzzy Searcher input", function()
   test.after_each(function(context)
     local picker = core.fuzzy_searcher_active_view
     if picker and picker.close then pcall(function() picker:close() end) end
+    if context.event_modifier_binding then
+      keymap.unbind(context.event_modifier_binding, "fuzzy:close")
+    end
     system.set_clipboard(context.clipboard or "")
     core.cursor_clipboard = context.cursor_clipboard
     core.cursor_clipboard_whole_line = context.cursor_clipboard_whole_line
@@ -75,6 +78,17 @@ test.describe("Fuzzy Searcher input", function()
 
     test.not_ok(consumed)
     test.equal(picker.input:get_text(), "x")
+  end)
+
+  test.it("uses key event modifiers when modal modifier state is stale", function(context)
+    context.event_modifier_binding = "alt+f24"
+    keymap.add({ [context.event_modifier_binding] = "fuzzy:close" })
+    fuzzy_searcher.open("")
+
+    test.not_ok(keymap.modkeys.alt)
+    core.on_event("keypressed", "f24", { alt = true })
+
+    test.is_nil(core.fuzzy_searcher_active_view)
   end)
 
   test.it("keeps multiline clipboard paste on one row and keeps the caret", function()
