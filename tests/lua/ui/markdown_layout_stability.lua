@@ -214,6 +214,46 @@ test.describe("Markdown layout stability", function()
     )
   end)
 
+  test.it("keeps newline and join publications out of suffix-wide wrapped reconstruction", function(context)
+    local buffer, lines = fixture("local-newline-publication-layout")
+    for line = #lines + 1, 600 do
+      lines[line] = string.rep("More ordinary paragraph content. ", 8)
+    end
+    buffer:insert(1, 1, table.concat(lines, "\n"))
+    local view = make_editor(context, buffer, 420, 400)
+    core.set_active_view(view)
+    buffer:set_selection(194, 10)
+    prepare(view)
+
+    view:on_text_input("\n")
+    ready(model.peek(buffer))
+    local deadline = system.get_time() + 2
+    while view.__markdown_live_owner.presentation_snapshot
+      and system.get_time() < deadline
+    do
+      coroutine.yield(0.01)
+    end
+
+    test.equal(
+      view.__async_wrap_reconstruction, nil,
+      "a newline publication started a suffix-wide wrapped reconstruction"
+    )
+
+    buffer:set_selection(195, 1)
+    test.equal(command.perform("core:backspace"), true)
+    ready(model.peek(buffer))
+    deadline = system.get_time() + 2
+    while view.__markdown_live_owner.presentation_snapshot
+      and system.get_time() < deadline
+    do
+      coroutine.yield(0.01)
+    end
+    test.equal(
+      view.__async_wrap_reconstruction, nil,
+      "a line join publication started a suffix-wide wrapped reconstruction"
+    )
+  end)
+
   for _, wrapped in ipairs({ true, false }) do
     test.it("keeps measurements across consecutive edits " .. (wrapped and "with wrapping" or "without wrapping"), function(context)
       local buffer, lines = fixture("repeated-layout-" .. tostring(wrapped))

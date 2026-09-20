@@ -205,6 +205,36 @@ test.describe("Markdown frame coherence", function()
     )
   end)
 
+  test.it("uses source-margin geometry immediately after removing an empty list marker", function(context)
+    local view, buffer, instance = make_view(
+      context, "- parent\n- \nafter", { wrapped = true }
+    )
+    buffer:set_selection(2, 3)
+    view:get_line_render(2)
+    view:update()
+
+    test.equal(perform(view, "core:backspace"), true)
+    test.equal(buffer.lines[2], "\n")
+    test.equal(instance.status, "pending")
+    local line, col = buffer:get_selection()
+    local pending_x = view:get_col_x_offset(line, col)
+    local pending_height = view:get_position_visual_row_height(line, col)
+    local margin_x = view:get_col_x_offset(3, 1)
+    test.ok(
+      math.abs(pending_x - margin_x) < 0.01,
+      string.format(
+        "the empty item caret stayed indented at %.2f instead of %.2f",
+        pending_x, margin_x
+      )
+    )
+
+    wait_ready(instance)
+    local published_x = view:get_col_x_offset(line, col)
+    local published_height = view:get_position_visual_row_height(line, col)
+    test.ok(math.abs(published_x - pending_x) < 0.01)
+    test.equal(published_height, pending_height)
+  end)
+
   test.it("moves right for the first character on a source-empty list continuation", function(context)
     local view, buffer, instance = make_view(context, "- item\n\nplain")
     buffer:set_selection(2, 1)

@@ -6718,9 +6718,9 @@ local function invalidate_semantic_publication(view, instance, reason)
   local reset_ms = math.max(0, elapsed_ms(reset_started) - fence_reconcile_ms)
   local range_expand_started = system.get_time()
   local ranges
-  if reason == "published" and pending_wrap_line then
-    ranges = { { line1 = pending_wrap_line, line2 = #view.buffer.lines } }
-  elseif reason == "published" then
+  if reason == "published" then
+    -- The text transaction already shifted wrapping and cached rows. The
+    -- snapshot rebased unchanged semantics. Invalidate only parser changes.
     ranges = instance.changed_ranges
   end
   if ranges and #ranges > 0 then
