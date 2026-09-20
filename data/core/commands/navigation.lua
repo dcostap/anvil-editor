@@ -25,6 +25,10 @@ local function navigate_mouse(button, ...)
   if diff_view then
     require("core.poi").navigate(view, button == "x" and -1 or 1, {
       on_boundary = function()
+        if view.continue_point_of_interest then
+          core.log_quiet("Diff View mouse navigation reached the end of its extended POI source")
+          return
+        end
         core.log_quiet("Diff View mouse navigation reached a POI boundary: %s", command_name)
         return command.perform(command_name)
       end,

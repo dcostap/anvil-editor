@@ -359,6 +359,29 @@ test.describe("Point of Interest navigation", function()
     end)
   end
 
+  test.it("stays at an exhausted cross-View POI boundary", function(context)
+    local other = require("core.view")()
+    local pane = panes.create { factory = function() return other end }
+    context.pane = pane
+    local view, err = diffview.open({
+      contents = {
+        diffview.content.text("one\ntwo\nthree"),
+        diffview.content.text("one\nTWO\nthree"),
+      },
+    }, true)
+    test.ok(view, err)
+    context.diffviews = { view }
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    panes.present(view, { pane = pane })
+    core.set_active_view(view.buffer_view_b)
+    view.buffer_view_b.buffer:set_selection(2, 1)
+    view.buffer_view_b.continue_point_of_interest = function() return false end
+
+    core.on_event("mousepressed", "x", 0, 0, 1)
+
+    test.equal(pane.current_view, view)
+  end)
+
   test.it("keeps empty and computing Diff Views out of mouse history navigation", function(context)
     local pane = panes.create { factory = function() return require("core.view")() end }
     context.pane = pane
