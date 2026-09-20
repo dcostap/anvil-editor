@@ -7455,6 +7455,7 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
       owner = self,
       line = line,
       col = col,
+      revision = self.buffer.text_revision,
       cell_width = self:get_font():get_width("n"),
       cell_height = lh,
       -- The renderer uses these to follow this caret while its view scrolls.

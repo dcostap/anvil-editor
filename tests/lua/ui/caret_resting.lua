@@ -69,4 +69,30 @@ test.describe("Resting caret", function()
     renderer.draw_rect, renderer.draw_poly = old_rect, old_poly
     if not ok then error(err, 0) end
   end)
+
+  test.it("snaps to caret positions from a new text revision", function()
+    local caret = CaretRenderer.new()
+    local owner = {}
+    local drawn = {}
+    local old_rect = renderer.draw_rect
+    renderer.draw_rect = function(x, y, width, height)
+      drawn[#drawn + 1] = { x, y, width, height }
+    end
+    local ok, err = pcall(function()
+      local function draw(now, x, col, revision, height)
+        caret:begin_frame(true)
+        caret:submit {
+          x = x, y = 10, width = 2, height = height,
+          owner = owner, line = 1, col = col, revision = revision,
+          color = { 0, 0, 0, 255 }, cell_width = 10, cell_height = height,
+        }
+        return caret:draw(now, 0.15, 0.025, 1, 1, 6)
+      end
+      test.equal(draw(0, 80, 8, 1, 28), false)
+      test.equal(draw(0.01, 10, 1, 2, 20), false)
+      test.same(drawn[#drawn], { 10, 10, 2, 20 })
+    end)
+    renderer.draw_rect = old_rect
+    if not ok then error(err, 0) end
+  end)
 end)
