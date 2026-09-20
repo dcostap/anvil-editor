@@ -5822,82 +5822,89 @@ function TextView:scroll_to_make_visible(line, col, instant, opts)
 end
 
 
----Handle mouse movement for cursor changes and text selection.
----Updates cursor icon, gutter hover state, and extends selection if dragging.
----@param x number Screen x coordinate
----@param y number Screen y coordinate
-function TextView:on_mouse_moved(x, y, ...)
-  local selecting = self.mouse_selecting ~= nil
-  local render_interactions_enabled = self.render_content_interactions_enabled ~= false
-  TextView.super.on_mouse_moved(self, x, y, ...)
+local function update_render_hover_state(view, x, y)
+  local selecting = view.mouse_selecting ~= nil
+  local render_interactions_enabled = view.render_content_interactions_enabled ~= false
 
-  self.hovering_gutter = false
-  local gw = self:get_gutter_width()
+  view.hovering_gutter = false
+  local gw = view:get_gutter_width()
 
-  if self:scrollbar_hovering() or self:scrollbar_dragging() then
-    self.cursor = "arrow"
-  elseif gw > 0 and x >= self.position.x and x <= (self.position.x + gw) then
-    self.cursor = "arrow"
-    self.hovering_gutter = true
+  if view:scrollbar_hovering() or view:scrollbar_dragging() then
+    view.cursor = "arrow"
+  elseif gw > 0 and x >= view.position.x and x <= (view.position.x + gw) then
+    view.cursor = "arrow"
+    view.hovering_gutter = true
   else
-    self.cursor = "ibeam"
-    self.hovered_fold_widget = nil
-    if render_interactions_enabled and self:has_collapsed_folds() then
-      local line = self:resolve_screen_position(x, y)
-      local resolved_widget = self.resolved_fold_widget
-      local fold = resolved_widget or self:get_collapsed_fold_at_line(line)
-      self.resolved_fold_widget = nil
+    view.cursor = "ibeam"
+    view.hovered_fold_widget = nil
+    if render_interactions_enabled and view:has_collapsed_folds() then
+      local line = view:resolve_screen_position(x, y)
+      local resolved_widget = view.resolved_fold_widget
+      local fold = resolved_widget or view:get_collapsed_fold_at_line(line)
+      view.resolved_fold_widget = nil
       if fold and (resolved_widget or fold.show_widget ~= false) then
-        self.cursor = "hand"
-        self.hovered_fold_widget = fold
+        view.cursor = "hand"
+        view.hovered_fold_widget = fold
       end
     end
   end
 
   local hovered_fragment
-  if render_interactions_enabled and not selecting and not self.hovering_gutter and
-    not self:scrollbar_hovering() and not self:scrollbar_dragging()
+  if render_interactions_enabled and not selecting and not view.hovering_gutter and
+    not view:scrollbar_hovering() and not view:scrollbar_dragging()
   then
-    local hit = self:get_render_widget_at_position(x, y)
+    local hit = view:get_render_widget_at_position(x, y)
     if hit and hit.widget.cursor then
-      self.cursor = hit.widget.cursor
-      if self.cursor == "hand" then hovered_fragment = hit.fragment end
+      view.cursor = hit.widget.cursor
+      if view.cursor == "hand" then hovered_fragment = hit.fragment end
     else
-      hit = self:get_render_fragment_at_position(x, y)
+      hit = view:get_render_fragment_at_position(x, y)
       if hit and hit.fragment.cursor then
-        self.cursor = hit.fragment.cursor
-        if self.cursor == "hand" then hovered_fragment = hit.fragment end
+        view.cursor = hit.fragment.cursor
+        if view.cursor == "hand" then hovered_fragment = hit.fragment end
       end
     end
   end
 
-  if self.hovered_render_fragment ~= hovered_fragment then
-    if self.hovered_render_fragment then self.hovered_render_fragment.hovered = nil end
-    self.hovered_render_fragment = hovered_fragment
+  if view.hovered_render_fragment ~= hovered_fragment then
+    if view.hovered_render_fragment then view.hovered_render_fragment.hovered = nil end
+    view.hovered_render_fragment = hovered_fragment
     if hovered_fragment then hovered_fragment.hovered = true end
     core.redraw = true
   end
 
   local proximity_fragment, proximity = nil, 0
-  if render_interactions_enabled and not selecting and not self.hovering_gutter and
-    not self:scrollbar_hovering() and not self:scrollbar_dragging()
+  if render_interactions_enabled and not selecting and not view.hovering_gutter and
+    not view:scrollbar_hovering() and not view:scrollbar_dragging()
   then
-    local near = self:get_render_widget_near_position(x, y)
+    local near = view:get_render_widget_near_position(x, y)
     if near then
       proximity_fragment, proximity = near.fragment, near.proximity
     end
   end
-  local previous_proximity = self.proximity_render_fragment
+  local previous_proximity = view.proximity_render_fragment
   local previous_value = previous_proximity and previous_proximity.proximity or 0
   if previous_proximity ~= proximity_fragment then
     if previous_proximity then previous_proximity.proximity = nil end
-    self.proximity_render_fragment = proximity_fragment
+    view.proximity_render_fragment = proximity_fragment
     if proximity_fragment then proximity_fragment.proximity = proximity end
     core.redraw = true
   elseif proximity_fragment and math.abs(previous_value - proximity) > 0.01 then
     proximity_fragment.proximity = proximity
     core.redraw = true
   end
+end
+
+
+---Handle mouse movement for cursor changes and text selection.
+---Updates cursor icon, gutter hover state, and extends selection if dragging.
+---@param x number Screen x coordinate
+---@param y number Screen y coordinate
+function TextView:on_mouse_moved(x, y, ...)
+  local selecting = self.mouse_selecting ~= nil
+  TextView.super.on_mouse_moved(self, x, y, ...)
+
+  update_render_hover_state(self, x, y)
 
   if self.mouse_selecting then
     local l1, c1 = self:resolve_screen_position(x, y)
@@ -6320,7 +6327,20 @@ function TextView:update()
   perf_elapsed("textview_update_ime_ms", phase_start)
 
   phase_start = perf_active and system.get_time()
+  local old_scroll_x, old_scroll_y = self.scroll.x, self.scroll.y
   TextView.super.update(self)
+  if old_scroll_x ~= self.scroll.x or old_scroll_y ~= self.scroll.y then
+    local root = core.root_panel
+    local mouse = root and root.mouse
+    local hovered_view = root and root.overlapping_view
+    if hovered_view ~= self and root and root.view_at and mouse then
+      hovered_view = root:view_at(mouse.x, mouse.y)
+    end
+    if mouse and hovered_view == self then
+      update_render_hover_state(self, mouse.x, mouse.y)
+      core.request_cursor(self.cursor)
+    end
+  end
   line_packets.update_contributors(self)
   perf_elapsed("textview_update_super_ms", phase_start)
   perf_elapsed("textview_update_ms", update_start)

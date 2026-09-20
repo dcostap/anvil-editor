@@ -4689,6 +4689,60 @@ test.describe("Markdown Live Preview", function()
     test.equal(cursor, "hand")
   end)
 
+  test.it("updates image hover under a stationary pointer while scrolling", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-scroll-hover-image-"
+      .. system.get_process_id() .. ".png"
+    local fp = test.not_nil(io.open(image_path, "wb"))
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path)
+      or image_path:match("[^" .. PATHSEP .. "]+$")
+    local view
+    local old_load_image = canvas.load_image
+    local old_transitions = config.transitions
+    local root = core.root_panel
+    local old_mouse_x, old_mouse_y = root.mouse.x, root.mouse.y
+    local old_overlapping_view = root.overlapping_view
+    local ok, err = pcall(function()
+      canvas.load_image = function()
+        return {
+          get_size = function() return 80, 40 end,
+          scaled = function(self) return self end,
+        }
+      end
+      local buffer
+      view, buffer = make_view(
+        "![[" .. image_url .. "]]\n" .. string.rep("other\n", 20),
+        USERDIR .. PATHSEP .. "scroll-hover-note.md"
+      )
+      buffer:set_selection(2, 1)
+      refresh(view)
+      view:update()
+
+      local x, y = view:get_line_screen_position(1)
+      x, y = x + 10, y + 10
+      root.mouse.x, root.mouse.y = x, y
+      root.overlapping_view = view
+      view:on_mouse_moved(x, y, 0, 0)
+      local hovered = test.not_nil(view.hovered_render_fragment)
+      test.equal(hovered.widget.type, "image")
+
+      config.transitions = false
+      view.scroll.y, view.scroll.to.y = 0, 80
+      view:update()
+      test.equal(view.hovered_render_fragment, nil)
+      test.equal(view.cursor, "ibeam")
+      test.not_ok(hovered.hovered)
+    end)
+    canvas.load_image = old_load_image
+    config.transitions = old_transitions
+    root.mouse.x, root.mouse.y = old_mouse_x, old_mouse_y
+    root.overlapping_view = old_overlapping_view
+    if view then markdown.live_render.detach(view) end
+    os.remove(image_path)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("opens a clicked rendered image in the system application", function()
     local image_path = USERDIR .. PATHSEP .. "markdown-live-click-image-" .. system.get_process_id() .. ".png"
     local fp = io.open(image_path, "wb")
