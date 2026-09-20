@@ -12,6 +12,7 @@ local markdown_links = require "core.markdown.links"
 local markdown_model = require "core.markdown.model"
 local edit_projection = require "core.markdown.edit_projection"
 local markdown_tables = require "core.markdown.tables"
+local presentation_snapshot = require "core.markdown.presentation_snapshot"
 local tokenizer = require "core.tokenizer"
 local vault_index = require "core.markdown.vault_index"
 local style = require "core.style"
@@ -22,6 +23,7 @@ live.view_icon = require("core.view_icons").register(
 )
 local edit_visual_projection = {}
 local refresh_projected_reveal
+local heading_render_line
 
 local PROVIDER_ID = "markdown-live"
 local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
@@ -68,6 +70,7 @@ end
 
 local semantic_line
 local indented_code_for_line
+local semantic_line_background
 
 local function line_in_raw_block(view, line)
   for _, node in ipairs(semantic_line(view, line) or {}) do
@@ -121,6 +124,8 @@ end
 local function render_semantic_model(view, line)
   local instance = current_semantic_model(view)
   if instance then return instance end
+  instance = presentation_snapshot.semantic_line(view, line)
+  if instance then return instance end
   local owner = view.__markdown_live_owner
   if owner and owner.semantic_pending_line and line >= owner.semantic_pending_line then return nil end
   instance = markdown_model.peek(view.buffer)
@@ -134,18 +139,40 @@ end
 semantic_line = function(view, line)
   local instance = render_semantic_model(view, line)
   if not instance then return nil end
+  local projected_instance, query_line = presentation_snapshot.semantic_line(view, line)
+  query_line = projected_instance == instance and query_line or line
   local cache = view.__markdown_live_semantic_line_cache
-  if not cache or cache.generation ~= instance.generation then
-    cache = { generation = instance.generation, lines = {} }
+  if not cache or cache.generation ~= instance.generation
+    or cache.revision ~= view.buffer.text_revision
+  then
+    cache = {
+      generation = instance.generation,
+      revision = view.buffer.text_revision,
+      lines = {},
+      projected_nodes = {},
+    }
     view.__markdown_live_semantic_line_cache = cache
   end
   if cache.lines[line] == nil then
-    local nodes, reason = instance:nodes_for_lines(line, line, {
+    local nodes, reason = instance:nodes_for_lines(query_line, query_line, {
       limit = 512, allow_pending_result = instance.status == "pending",
     })
     if reason == "limit" then
       core.log_quiet("Markdown semantic render query was truncated on line %d; using fallback", line)
       nodes = nil
+    end
+    if projected_instance == instance then
+      local projected = {}
+      for _, node in ipairs(nodes or {}) do
+        local key = node.id
+        local copy = key and cache.projected_nodes[key] or nil
+        if copy == nil then
+          copy = presentation_snapshot.semantic_node(view, node) or false
+          if key then cache.projected_nodes[key] = copy end
+        end
+        if copy then projected[#projected + 1] = copy end
+      end
+      nodes = projected
     end
     cache.lines[line] = nodes or false
   end
@@ -3929,6 +3956,19 @@ function edit_visual_projection.selection_reveals_list_prefix(
   return false
 end
 
+function edit_visual_projection.selection_reveals_line(state, line)
+  for index = 1, #(state and state.selections or {}), 4 do
+    local line1 = state.selections[index]
+    local line2 = state.selections[index + 2]
+    if line1 and line2 and line >= math.min(line1, line2)
+      and line <= math.max(line1, line2)
+    then
+      return true
+    end
+  end
+  return false
+end
+
 -- List prefixes are source-local and have stable presentation rules. Keep
 -- that presentation while the semantic worker processes an edit instead of
 -- replacing the complete row with raw Markdown source.
@@ -4133,19 +4173,11 @@ local function raw_pending_source_render(view, render_line, current_text, code)
   else
     font = font or markdown_live_body_font(view)
   end
-  local replacement = clone_render_line(render_line or {})
-  replacement.source_text = current_text
+  local replacement = { source_text = current_text }
   local source_needs_semantics = not code
     and current_text:find("[\\`*_~%[%]!<>#|$]", 1) ~= nil
   replacement.markdown_pending_provenance = source_needs_semantics
     and "unavailable" or "active-source-reveal"
-  replacement.position_rows = nil
-  replacement.layout_height = nil
-  replacement.disable_wrapping = nil
-  replacement.table_row = nil
-  replacement.table_row_height = nil
-  replacement.markdown_pending_code_background = nil
-  replacement.markdown_code_block = nil
   if code then replacement.x_offset = view:get_font():get_width(" ") end
   replacement.fragments = {
     {
@@ -4577,6 +4609,9 @@ local function capture_pre_edit_renders(view, change)
       pending = nil
     end
     if not render and pending then render = pending.render_line end
+    local background = semantic_line_background
+      and semantic_line_background(view, line) or nil
+    if not background and pending then background = pending.background end
     local row_heights
     if view.wrapped_settings and metrics_current then
       local first, _, count = linewrapping.get_line_idx_col_count(view, line)
@@ -4592,7 +4627,13 @@ local function capture_pre_edit_renders(view, change)
       or owner.pending_metrics and owner.pending_metrics[line]
       or owner.published_metrics and owner.published_metrics[line]
     local fenced = service and service:contains_line(line) or false
+    fenced = fenced or pending and pending.render_line
+      and (pending.render_line.markdown_code_block
+        or pending.render_line.markdown_pending_code_background)
+      or false
     local raw_passthrough = line_in_raw_block(view, line)
+      or pending and pending.render_line
+        and pending.render_line.raw_passthrough == true
     if not render and raw_passthrough then
       if fenced and service:is_body_line(line) then
         render = raw_pending_source_render(view, nil, source_text, true)
@@ -4624,6 +4665,7 @@ local function capture_pre_edit_renders(view, change)
       comment = line_in_semantic_comment(view, line),
       math = line_in_semantic_math(view, line),
       callout_record = callout_runtime.for_line(view, line),
+      background = background,
     }
     captured = captured + 1
   end
@@ -4723,7 +4765,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     }
   end
 
-  local function retain(old_line, render_line, metrics, fenced)
+  local function retain(old_line, render_line, metrics, fenced, background)
     local new_line = edit_projection.map_unchanged_line(ranges, old_line)
     if not new_line or next_lines[new_line] then return end
     render_line = render_line or cached_render_line(view, old_line)
@@ -4744,6 +4786,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
         retained_metrics, "retained"
       )
       if entry then
+        entry.background = background
         edit_visual_projection.rebind_image_consumers(
           view, entry.render_line, new_line
         )
@@ -4754,7 +4797,10 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
   end
 
   for old_line, captured in pairs(pre_edit_lines) do
-    retain(old_line, captured.render_line, captured.metrics, captured.fenced)
+    retain(
+      old_line, captured.render_line, captured.metrics, captured.fenced,
+      captured.background
+    )
   end
   local function retain_metrics(old_line, metrics)
     -- Rebase numbers without creating render plans for offscreen lines.
@@ -4771,6 +4817,50 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
   local function publish(line, render, captured, provenance)
     if not render then return false end
     local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
+    if not (captured and (
+      captured.fenced or captured.raw_passthrough or captured.frontmatter
+    )) then
+      if edit_visual_projection.source_list_prefix(source)
+        and (not edit_visual_projection.has_list_prefix(render)
+          or #(transaction.edits or {}) == 1
+            and transaction.edits[1].line1 < transaction.edits[1].line2)
+      then
+        local list_render = edit_visual_projection.pending_list_render(
+          view, line, render, source, projected_selection_state
+        )
+        if list_render then render = list_render end
+      end
+      local heading = heading_for_line(source, line)
+      if heading and edit_visual_projection.selection_reveals_line(
+        projected_selection_state, line
+      ) then
+        local retained_heading = false
+        for _, fragment in ipairs(render.fragments or {}) do
+          if fragment.markdown_reveal_col1 then
+            retained_heading = true
+            break
+          end
+        end
+        if retained_heading then
+          local font = heading_font(view, heading.level)
+          for _, fragment in ipairs(render.fragments or {}) do
+            if fragment.hidden then
+              fragment.hidden = nil
+              fragment.text = source:sub(
+                fragment.source_col1, fragment.source_col2 - 1
+              )
+              fragment.font = fragment.font or font
+              fragment.color = fragment.color
+                or style.markdown_live_heading_marker
+            end
+          end
+        else
+          render = heading_render_line(
+            view, source, heading, { { whole_line = true } }
+          )
+        end
+      end
+    end
     if render.position_rows then
       render.position_rows = nil
       render.layout_height = nil
@@ -4791,12 +4881,10 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
       provenance or render.markdown_pending_provenance
     )
     if not entry then return false end
+    entry.background = captured and captured.background or nil
     edit_visual_projection.rebind_image_consumers(view, entry.render_line, line)
     next_lines[line] = entry
     next_metrics[line] = nil
-    if refresh_projected_reveal then
-      refresh_projected_reveal(view, line, projected_selection_state, entry)
-    end
     return true
   end
 
@@ -4808,7 +4896,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     if new_line1 == new_line2 then
       local source = (view.buffer.lines[new_line1] or ""):gsub("\n$", "")
       local joined = join_projected_renders(view, pre_edit_lines, edit, source)
-      if joined then publish(new_line1, joined, nil, "retained") end
+      if joined then publish(new_line1, joined, captured, "retained") end
     end
     local old_render = captured and captured.render_line or cached_render_line(view, edit.line1)
     local transformed = old_render and clone_render_line(old_render)
@@ -4954,6 +5042,12 @@ local function capture_edit_projection(view, transaction)
   owner.pending_lines, owner.pending_metrics = build_edit_projection(
     view, transaction, pre_edit_lines
   )
+  local snapshot = owner.presentation_snapshot
+  if snapshot then
+    snapshot.revision = view.buffer.text_revision
+    snapshot.rows = owner.pending_lines
+    snapshot.metrics = owner.pending_metrics
+  end
   local pending_indented = {}
   local pending_indented_sources = {}
   local function retain_indented(old_line, source_text)
@@ -5087,6 +5181,7 @@ local function capture_edit_projection(view, transaction)
     end
   end
   owner.pending_callouts = pending_callouts
+  if snapshot then snapshot.callouts = pending_callouts end
   owner.last_edit_projection_ms = (system.get_time() - projection_started) * 1000
   owner.pre_edit_lines = nil
   owner.pre_edit_transaction = nil
@@ -5117,7 +5212,10 @@ local function pending_render(view, line)
       provenance = "reload-frozen",
     }
   end
-  local entry = owner and owner.pending_lines and owner.pending_lines[line]
+  local rows = owner and owner.presentation_snapshot
+    and owner.presentation_snapshot.rows
+    or owner and owner.pending_lines
+  local entry = rows and rows[line]
   local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
   if entry and entry.revision == view.buffer.text_revision and entry.source_text == text then
     if entry.render_line and entry.render_line.table_row
@@ -5321,10 +5419,11 @@ function decoration_provider:line_background_descriptor(view, line)
   if view_in_source_mode(view) then return nil end
   local owner = view.__markdown_live_owner
   local callout = callout_runtime.for_line(view, line)
-  if not callout and owner and owner.pending_callouts
-    and owner.pending_callouts[line]
-  then
-    callout = owner and owner.pending_callouts and owner.pending_callouts[line]
+  local pending_callouts = owner and owner.presentation_snapshot
+    and owner.presentation_snapshot.callouts
+    or owner and owner.pending_callouts
+  if not callout and pending_callouts and pending_callouts[line] then
+    callout = pending_callouts[line]
   end
   if not callout then return nil end
   local palette = callout.palette or callouts.palette(style, callout.canonical_type)
@@ -5353,35 +5452,7 @@ function decoration_provider:line_background_descriptor(view, line)
   }
 end
 
-function decoration_provider:line_background(view, line)
-  if view_in_source_mode(view) then return nil end
-  local owner = view.__markdown_live_owner
-  local model = owner and owner.semantic_model
-  local semantics_pending = model and (
-    model.status == "pending" or model.published_revision ~= view.buffer.text_revision
-  )
-  if semantics_pending then
-    local pending = pending_render(view, line)
-    if pending and (pending.render_line.markdown_pending_code_background
-      or pending.render_line.markdown_code_block)
-    then
-      return style.markdown_live_code_background
-    end
-    if pending and pending.provenance == "retained"
-      and owner.fence_service and owner.fence_service:contains_line(line)
-    then
-      return style.markdown_live_code_background
-    end
-    if not pending and not owner.reload_projection_revision
-      and owner.fence_service and owner.fence_service:contains_line(line)
-    then
-      return style.markdown_live_code_background
-    end
-    if owner.pending_indented_lines and owner.pending_indented_lines[line] then
-      return style.markdown_live_code_background
-    end
-    return nil
-  end
+semantic_line_background = function(view, line)
   if line_in_semantic_comment(view, line) then
     return nil
   end
@@ -5402,6 +5473,38 @@ function decoration_provider:line_background(view, line)
     end
   end
   return nil
+end
+
+function decoration_provider:line_background(view, line)
+  if view_in_source_mode(view) then return nil end
+  local owner = view.__markdown_live_owner
+  local model = owner and owner.semantic_model
+  local semantics_pending = model and (
+    model.status == "pending" or model.published_revision ~= view.buffer.text_revision
+  )
+  if semantics_pending then
+    local pending = pending_render(view, line)
+    if pending and pending.background then return pending.background end
+    if pending and (pending.render_line.markdown_pending_code_background
+      or pending.render_line.markdown_code_block)
+    then
+      return style.markdown_live_code_background
+    end
+    if pending and pending.provenance == "retained"
+      and owner.fence_service and owner.fence_service:contains_line(line)
+    then
+      return style.markdown_live_code_background
+    end
+    if not pending and not owner.reload_projection_revision
+      and owner.fence_service and owner.fence_service:contains_line(line)
+    then
+      return style.markdown_live_code_background
+    end
+    if owner.pending_indented_lines and owner.pending_indented_lines[line] then
+      return style.markdown_live_code_background
+    end
+  end
+  return semantic_line_background(view, line)
 end
 
 function decoration_provider:line_number_visible(view)
@@ -5659,6 +5762,9 @@ function provider:on_text_transaction(view, transaction, line1, line2)
   end
   local owner = view.__markdown_live_owner
   local external_reload = transaction and transaction.type == "load"
+  if owner and not external_reload then
+    presentation_snapshot.begin(view, transaction)
+  end
   if owner and external_reload then
     -- Keep the visible presentation frozen while the replacement semantic
     -- model is pending. The frozen rows are display-only snapshots with all
@@ -5932,7 +6038,7 @@ local function inactive_heading_fragments(view, text, heading, font, reveal_unit
   return fragments
 end
 
-local function heading_render_line(view, text, heading, reveal_units)
+heading_render_line = function(view, text, heading, reveal_units)
   local font = heading_font(view, heading.level)
   local text_row_height = math.max(
     markdown_live_body_line_height(view),
@@ -5993,6 +6099,7 @@ local function compute_line_height(view, line, entry)
   if view_in_source_mode(view) then return nil end
   local wrapped = line_is_wrapped(view, line)
   local semantic_model = current_semantic_model(view)
+  local render_model = render_semantic_model(view, line)
   local pending = pending_render(view, line)
   local owner = view.__markdown_live_owner
   if not semantic_model then
@@ -6003,7 +6110,7 @@ local function compute_line_height(view, line, entry)
       return metric_records.height(record, entry and entry.row_in_line or 1)
     end
   end
-  if not pending and not semantic_model and owner and owner.semantic_pending_line
+  if not pending and not render_model and owner and owner.semantic_pending_line
     and line >= owner.semantic_pending_line
   then
     return view:get_line_height()
@@ -6103,6 +6210,58 @@ function provider:sparse_line_metrics(view)
   local instance = current_semantic_model(view)
   local owner = view.__markdown_live_owner
   if not instance then
+    local snapshot = owner and owner.presentation_snapshot
+    if snapshot and snapshot.sparse_lines then
+      for line in pairs(owner.pending_metrics or {}) do
+        snapshot.sparse_lines[line] = true
+      end
+      for line in pairs(owner.pending_lines or {}) do
+        snapshot.sparse_lines[line] = true
+      end
+      return {
+        complete = true,
+        default_height = markdown_live_body_line_height(view),
+        lines = snapshot.sparse_lines,
+      }
+    end
+    local projected = markdown_model.peek(view.buffer)
+    if projected and projected.result and projected.status == "pending"
+      and presentation_snapshot.changes(view)
+    then
+      local nodes, reason = projected:nodes_for_lines(
+        1, projected.published_line_count or #view.buffer.lines,
+        { limit = 100000, allow_pending_result = true }
+      )
+      if nodes and reason ~= "limit" then
+        local lines = {}
+        for _, node in ipairs(nodes) do
+          if sparse_metric_node_types[node.type] then
+            local source = node.source
+            local line1 = source and presentation_snapshot.map_published_line(
+              view, source.line1
+            )
+            local line2 = source and presentation_snapshot.map_published_line(
+              view, source.line2
+            )
+            if line1 and line2
+              and line1 - source.line1 == line2 - source.line2
+            then
+              line1 = math.max(1, line1)
+              line2 = math.min(#view.buffer.lines, line2)
+              for line = line1, line2 do lines[line] = true end
+            end
+          end
+        end
+        for line in pairs(owner.pending_metrics or {}) do lines[line] = true end
+        for line in pairs(owner.pending_lines or {}) do lines[line] = true end
+        if snapshot then snapshot.sparse_lines = lines end
+        return {
+          complete = true,
+          default_height = markdown_live_body_line_height(view),
+          lines = lines,
+        }
+      end
+    end
     if not owner or not owner.pending_sparse_metrics
       or owner.semantic_pending_wrap_line
     then return nil end
@@ -6541,6 +6700,7 @@ local function invalidate_semantic_publication(view, instance, reason)
     owner.pending_callouts = nil
     owner.pending_visible_line1 = nil
     owner.pending_visible_line2 = nil
+    owner.presentation_snapshot = nil
   end
   if owner and reason ~= "pending" then
     owner.semantic_pending_line = nil
@@ -6928,12 +7088,14 @@ refresh_projected_reveal = function(view, line, state, projected_entry)
   if not entry then return false end
   local changed = false
   local render = clone_render_line(entry.render_line)
+  local heading_revealed = heading_for_line(entry.source_text, line)
+    and edit_visual_projection.selection_reveals_line(state, line)
   for _, fragment in ipairs(render.fragments or {}) do
     if fragment.markdown_reveal_col1 and fragment.markdown_reveal_col2 then
-      local reveal = selection_reveals_projected_range(
-        state, line, fragment.markdown_reveal_col1,
-        fragment.markdown_reveal_col2
-      )
+      local reveal = heading_revealed or selection_reveals_projected_range(
+          state, line, fragment.markdown_reveal_col1,
+          fragment.markdown_reveal_col2
+        )
       if reveal == (fragment.hidden == true) then changed = true end
       fragment.hidden = not reveal or nil
       fragment.text = reveal and entry.source_text:sub(

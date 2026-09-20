@@ -4279,9 +4279,37 @@ end
 ---@return number x Screen x coordinate
 ---@return number y Screen y coordinate
 function TextView:get_line_screen_position(line, col, line_end)
-  local dx = col and self:get_col_x_offset(line, col, line_end) or 0
+  local function render_y_offset()
+    if not col then return 0 end
+    local _, row = self:get_position_line_render_row(line, col)
+    return row and (row.y_offset or 0) or 0
+  end
+  -- Resolve both axes from one row topology. Width lookup can refresh line
+  -- rendering, so resolving the row after it can mix two presentation states.
+  if self.wrapped_settings then
+    local visual_row
+    if self:has_composed_visual_rows() then
+      visual_row = self:get_composed_visual_row_for_position(
+        line, col, line_end
+      )
+    else
+      visual_row = linewrapping.get_line_idx_col_count(
+        self, line, col, line_end
+      )
+    end
+    local dx = col and self:get_col_x_offset(line, col, line_end) or 0
+    local content_y = render_y_offset()
+      + self:get_visual_row_y_offset(visual_row) + style.padding.y
+    local x, y = self:get_content_offset()
+    return x + self:get_gutter_width() + dx, y + content_y
+  end
+  local visual_row = self:has_composed_visual_rows()
+    and self:get_composed_visual_row_for_position(line, col, line_end) or line
+  local dx = col and self:get_col_x_offset(line, col) or 0
+  local content_y = render_y_offset()
+    + self:get_visual_row_y_offset(visual_row) + style.padding.y
   local x, y = self:get_content_offset()
-  return x + self:get_gutter_width() + dx, y + self:get_position_row_y_offset(line, col, line_end)
+  return x + self:get_gutter_width() + dx, y + content_y
 end
 
 

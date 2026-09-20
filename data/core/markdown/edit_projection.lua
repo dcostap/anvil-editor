@@ -24,6 +24,18 @@ function projection.map_unchanged_line(ranges, old_line)
   return old_line + delta
 end
 
+function projection.map_unchanged_new_line(ranges, new_line)
+  local delta = 0
+  for _, range in ipairs(ranges) do
+    local new_line1 = range.new_line1 or range.old_line1 or 1
+    local new_line2 = range.new_line2 or new_line1
+    if new_line < new_line1 then return new_line - delta end
+    if new_line <= new_line2 then return nil end
+    delta = delta + (range.line_delta or 0)
+  end
+  return new_line - delta
+end
+
 local function list_marker(text)
   text = tostring(text or ""):gsub("\n$", "")
   return text:match("^[\t ]*[-%*%+][\t ]+") ~= nil
