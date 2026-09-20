@@ -57,7 +57,7 @@ static struct dirmonitor_backend* find_backend(const char* name)
   return NULL;
 }
 
-static int f_check_dir_callback(int watch_id, const char* path, void* L) {
+static int f_check_dir_callback(int watch_id, const char* path, int change_kind, void* L) {
   // using absolute indices from f_dirmonitor_check (2: callback, 3: error_callback, 4: watch_id notified table)
 
   // Directory-only backends can emit several records for one watch in a
@@ -80,9 +80,10 @@ static int f_check_dir_callback(int watch_id, const char* path, void* L) {
   else
     lua_pushnumber(L, watch_id);
   lua_pushinteger(L, watch_id);
+  lua_pushinteger(L, change_kind);
 
   int result = 0;
-  if (lua_pcall(L, 2, 1, 3) == LUA_OK)
+  if (lua_pcall(L, 3, 1, 3) == LUA_OK)
     result = lua_toboolean(L, -1);
   lua_pop(L, 1);
   return !result;
@@ -301,6 +302,14 @@ int luaopen_dirmonitor(lua_State* L) {
   }
   luaL_newmetatable(L, API_TYPE_DIRMONITOR);
   luaL_setfuncs(L, dirmonitor_lib, 0);
+  lua_pushinteger(L, DIRMONITOR_CHANGE_UNKNOWN);
+  lua_setfield(L, -2, "CHANGE_UNKNOWN");
+  lua_pushinteger(L, DIRMONITOR_CHANGE_CONTENT);
+  lua_setfield(L, -2, "CHANGE_CONTENT");
+  lua_pushinteger(L, DIRMONITOR_CHANGE_MEMBERSHIP);
+  lua_setfield(L, -2, "CHANGE_MEMBERSHIP");
+  lua_pushinteger(L, DIRMONITOR_CHANGE_RESCAN);
+  lua_setfield(L, -2, "CHANGE_RESCAN");
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");
   return 1;

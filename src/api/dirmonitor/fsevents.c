@@ -148,13 +148,13 @@ static int translate_changes_dirmonitor(
   struct dirmonitor_internal* monitor,
   char* buffer,
   int buffer_size,
-  int (*change_callback)(int, const char*, void*),
+  int (*change_callback)(int, const char*, int, void*),
   void* L
 ) {
   SDL_LockMutex(monitor->lock);
   if (monitor->count > 0) {
     for (size_t i = 0; i < monitor->count; i++) {
-      change_callback(strlen(monitor->changes[i]), monitor->changes[i], L);
+      change_callback(strlen(monitor->changes[i]), monitor->changes[i], DIRMONITOR_CHANGE_UNKNOWN, L);
       SDL_free(monitor->changes[i]);
     }
     SDL_free(monitor->changes);

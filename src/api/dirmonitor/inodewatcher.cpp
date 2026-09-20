@@ -14,7 +14,7 @@ extern "C" {
 struct dirmonitor_internal* init_dirmonitor();
 void deinit_dirmonitor(struct dirmonitor_internal*);
 int get_changes_dirmonitor(struct dirmonitor_internal*, char*, int);
-int translate_changes_dirmonitor(struct dirmonitor_internal*, char*, int, int (*)(int, const char*, void*), void*);
+int translate_changes_dirmonitor(struct dirmonitor_internal*, char*, int, int (*)(int, const char*, int, void*), void*);
 int add_dirmonitor(struct dirmonitor_internal*, const char*);
 void remove_dirmonitor(struct dirmonitor_internal*, int);
 int get_mode_dirmonitor();
@@ -52,9 +52,9 @@ static int get_changes_dirmonitor(struct dirmonitor_internal* monitor, char* buf
 }
 
 
-static int translate_changes_dirmonitor(struct dirmonitor_internal* monitor, char* buffer, int length, int (*change_callback)(int, const char*, void*), void* data) {
+static int translate_changes_dirmonitor(struct dirmonitor_internal* monitor, char* buffer, int length, int (*change_callback)(int, const char*, int, void*), void* data) {
   InodeWatcherEvent* event = (InodeWatcherEvent*)buffer;
-  change_callback(event->watch_descriptor, NULL, data);
+  change_callback(event->watch_descriptor, NULL, DIRMONITOR_CHANGE_UNKNOWN, data);
   return 0;
 }
 

@@ -60,10 +60,10 @@ static void deinit_dirmonitor(struct dirmonitor_internal* monitor) {
 }
 
 
-static int translate_changes_dirmonitor(struct dirmonitor_internal* monitor, char* buffer, int buffer_size, int (*change_callback)(int, const char*, void*), void* data) {
+static int translate_changes_dirmonitor(struct dirmonitor_internal* monitor, char* buffer, int buffer_size, int (*change_callback)(int, const char*, int, void*), void* data) {
   if (monitor->rescan_required) {
     monitor->rescan_required = 0;
-    change_callback(1, NULL, data);
+    change_callback(1, NULL, DIRMONITOR_CHANGE_RESCAN, data);
     return 0;
   }
   for (FILE_NOTIFY_INFORMATION* info = (FILE_NOTIFY_INFORMATION*)buffer; (char*)info < buffer + buffer_size; info = (FILE_NOTIFY_INFORMATION*)(((char*)info) + info->NextEntryOffset)) {
@@ -71,7 +71,10 @@ static int translate_changes_dirmonitor(struct dirmonitor_internal* monitor, cha
     int count = WideCharToMultiByte(CP_UTF8, 0, (WCHAR*)info->FileName, info->FileNameLength / 2, transform_buffer, MAX_PATH*4 - 1, NULL, NULL);
     if (count < 0) count = 0;
     transform_buffer[count] = '\0';
-    change_callback(count, transform_buffer, data);
+    int kind = info->Action == FILE_ACTION_MODIFIED
+      ? DIRMONITOR_CHANGE_CONTENT
+      : DIRMONITOR_CHANGE_MEMBERSHIP;
+    change_callback(count, transform_buffer, kind, data);
     if (!info->NextEntryOffset)
       break;
   }

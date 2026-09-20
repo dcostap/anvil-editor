@@ -105,14 +105,15 @@ test.describe("Project file worker I/O", function()
     test.not_ok(project_files.contains(root, path))
   end)
 
-  test.it("uses one conservative root event for a large watch burst", function(context)
+  test.it("delivers a large watch burst in bounded path batches", function(context)
     local DirWatch = require "core.dirwatch"
     local root = common.normalize_path(USERDIR .. PATHSEP .. "project-watch-burst-" .. system.get_process_id())
     assert(common.mkdirp(root))
     write(root .. PATHSEP .. "source.lua", "return 1\n")
     assert(project_files.list(root))
     local check, pending = DirWatch.check, true
-    local id, delivered_paths, delivered_event = {}, nil, nil
+    local id, seen, delivered = {}, {}, 0
+    local largest_batch = 0
     context.cleanup = function()
       DirWatch.check = check
       project_files.unsubscribe(root, id)
@@ -128,26 +129,31 @@ test.describe("Project file worker I/O", function()
       end
       return false
     end
-    project_files.subscribe(root, id, function(paths, event)
-      delivered_paths, delivered_event = paths, event
+    project_files.subscribe(root, id, function(paths)
+      local count = 0
+      for path in pairs(paths) do
+        seen[path] = true
+        count = count + 1
+      end
+      largest_batch = math.max(largest_batch, count)
+      delivered = delivered + count
     end)
 
     local deadline = system.get_time() + 10
-    while not delivered_paths and system.get_time() < deadline do coroutine.yield(0.01) end
-    test.not_nil(delivered_paths, "The watcher did not deliver the large burst")
-    local count = 0
-    for _ in pairs(delivered_paths) do count = count + 1 end
-    test.equal(count, 1)
-    test.equal(test.not_nil(delivered_paths[root]).precise, false)
-    test.ok(delivered_event.refreshed)
+    while delivered < 1024 and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.equal(delivered, 1024)
+    test.ok(largest_batch < 1024, "The watcher delivered the full burst as one batch")
+    test.is_nil(seen[root])
   end)
 
-  test.it("lets an imprecise root event supersede later leaf events", function(context)
+  test.it("turns an overflow rescan into exact membership changes", function(context)
     local DirWatch = require "core.dirwatch"
     local root = common.normalize_path(USERDIR .. PATHSEP .. "project-watch-overflow-" .. system.get_process_id())
     assert(common.mkdirp(root))
     write(root .. PATHSEP .. "source.lua", "return 1\n")
     assert(project_files.list(root))
+    local added = root .. PATHSEP .. "added.lua"
+    write(added, "return 2\n")
     local check, pending = DirWatch.check, true
     local id, delivered_paths = {}, nil
     context.cleanup = function()
@@ -159,9 +165,7 @@ test.describe("Project file worker I/O", function()
     DirWatch.check = function(_, callback)
       if pending then
         pending = false
-        callback(root, root, false)
-        callback(root, root .. PATHSEP .. "later-one.tmp", true)
-        callback(root, root .. PATHSEP .. "later-two.tmp", true)
+        callback(root, root, false, "rescan")
       end
       return false
     end
@@ -175,6 +179,54 @@ test.describe("Project file worker I/O", function()
     local count = 0
     for _ in pairs(delivered_paths) do count = count + 1 end
     test.equal(count, 1)
-    test.equal(test.not_nil(delivered_paths[root]).precise, false)
+    test.not_nil(delivered_paths[added])
+    test.is_nil(delivered_paths[root])
+  end)
+
+  test.it("drops content events outside cached Project membership", function(context)
+    local DirWatch = require "core.dirwatch"
+    local root = common.normalize_path(USERDIR .. PATHSEP .. "project-watch-content-" .. system.get_process_id())
+    assert(common.mkdirp(root .. PATHSEP .. "build"))
+    local source = root .. PATHSEP .. "source.lua"
+    local generated = root .. PATHSEP .. "build" .. PATHSEP .. "generated-0001.tmp"
+    local ignore_rule = root .. PATHSEP .. ".gitignore"
+    write(ignore_rule, "build/\n")
+    write(source, "return 1\n")
+    write(generated, "generated\n")
+    assert(project_files.list(root))
+    local check, pending = DirWatch.check, true
+    local id, delivered_paths = {}, nil
+    context.cleanup = function()
+      DirWatch.check = check
+      project_files.unsubscribe(root, id)
+      project_files.invalidate(root)
+      common.rm(root, true)
+    end
+    DirWatch.check = function(_, callback)
+      if pending then
+        pending = false
+        for i = 1, 1024 do
+          callback(root, root .. PATHSEP .. "build" .. PATHSEP
+            .. string.format("generated-%04d.tmp", i), true, "content")
+        end
+        callback(root, source, true, "content")
+        callback(root, ignore_rule, true, "content")
+      end
+      return false
+    end
+    project_files.subscribe(root, id, function(paths)
+      delivered_paths = paths
+    end)
+
+    local deadline = system.get_time() + 10
+    while not delivered_paths and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.not_nil(delivered_paths, "The watcher did not deliver the Project content event")
+    local count = 0
+    for _ in pairs(delivered_paths) do count = count + 1 end
+    test.equal(count, 2)
+    test.not_nil(delivered_paths[source])
+    test.not_nil(delivered_paths[ignore_rule])
+    test.is_nil(delivered_paths[generated])
+    test.equal(project_files.watch_status(root).ignored_content_events, 1024)
   end)
 end)

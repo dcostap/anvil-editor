@@ -11,7 +11,8 @@ local start_watcher
 local WORK_SLICE_SECONDS = 0.002
 local WATCH_POLL_SECONDS = 0.02
 local WATCH_BATCH_SECONDS = 0.05
-local WATCH_PATH_LIMIT = 512
+local WATCH_BATCH_PATH_LIMIT = 512
+local WATCH_RESCAN_QUIET_SECONDS = 0.5
 
 local function run_file_worker(payload)
   local chunks, done, failure = {}, false, nil
@@ -512,36 +513,122 @@ local function notify_subscribers(entry, paths, refreshed, err, previous_members
   while pending > 0 and entry.watch_generation == watch_generation do coroutine.yield(0.001) end
 end
 
+local function membership_snapshot(entry)
+  local snapshot = {}
+  local state = cooperative_state()
+  for _, file in ipairs(entry.files or {}) do
+    snapshot[common.path_compare_key(file.path)] = { path = file.path, kind = "file" }
+    yield_if_due(state)
+  end
+  for _, path in ipairs(entry.directory_list or {}) do
+    snapshot[common.path_compare_key(path)] = { path = path, kind = "dir" }
+    yield_if_due(state)
+  end
+  return snapshot
+end
+
+local function rescan_membership(entry)
+  local had_snapshot = entry.files ~= nil
+  local before = membership_snapshot(entry)
+  local files, err = project_files.list(entry.root, { refresh = true })
+  if not files then return nil, err end
+  if not had_snapshot then return {}, nil, {} end
+  local after = membership_snapshot(entry)
+  local paths, previous_membership = {}, {}
+  local state = cooperative_state()
+  local function add(path, previous)
+    paths[path] = { precise = true, kind = "membership" }
+    previous_membership[path] = previous
+  end
+  for key, old in pairs(before) do
+    local new = after[key]
+    if not new or old.kind ~= new.kind then
+      add(old.path, true)
+    elseif old.path ~= new.path then
+      add(old.path, true)
+      add(new.path, false)
+    end
+    yield_if_due(state)
+  end
+  for key, new in pairs(after) do
+    local old = before[key]
+    if not old or old.kind ~= new.kind then add(new.path, old ~= nil) end
+    yield_if_due(state)
+  end
+  return paths, nil, previous_membership
+end
+
+local function take_paths(source)
+  local paths, count = {}, 0
+  for path, value in pairs(source) do
+    paths[path] = value
+    source[path] = nil
+    count = count + 1
+    if count >= WATCH_BATCH_PATH_LIMIT then break end
+  end
+  return paths
+end
+
+local function take_watch_paths(entry)
+  return take_paths(entry.pending_watch_paths)
+end
+
 local function process_watch_batches(entry, generation)
   while entry.watcher and entry.watch_generation == generation do
     coroutine.yield(WATCH_BATCH_SECONDS)
     if entry.watch_generation ~= generation then return end
-    local paths = entry.pending_watch_paths
-    entry.pending_watch_paths = {}
-    entry.pending_watch_path_count = 0
-    entry.pending_watch_root_refresh = false
-    if next(paths) then
-      local previous_membership = {}
-      local state = cooperative_state()
-      for key, value in pairs(paths) do
-        local path = type(key) == "number" and value or key
-        if path then
-          previous_membership[common.normalize_path(path)] =
-            project_files.contains(entry.root, path, "file") == true
-            or project_files.contains(entry.root, path, "dir") == true
-        end
-        yield_if_due(state)
-      end
+    if entry.pending_watch_rescan then
+      entry.pending_watch_rescan = false
       local started = system.get_time()
-      local ok, err, refreshed, file_info = project_files.reconcile(entry.root, paths)
+      local paths, err, previous_membership = rescan_membership(entry)
       if entry.watch_generation ~= generation then return end
-      core.log_quiet("Project watcher batch: root=%s refreshed=%s elapsed_ms=%.1f error=%s",
-        entry.root, tostring(refreshed), (system.get_time() - started) * 1000, tostring(err))
-      notify_subscribers(entry, paths, refreshed == true, ok and nil or err,
-        previous_membership, file_info)
+      local changed = paths and next(paths) ~= nil
+      core.log_quiet(
+        "Project watcher recovery scan: root=%s changes=%s elapsed_ms=%.1f error=%s",
+        entry.root, changed and "yes" or "no", (system.get_time() - started) * 1000,
+        tostring(err)
+      )
+      if changed or err then
+        local first = true
+        repeat
+          local batch = take_paths(paths or {})
+          local batch_previous = {}
+          for path in pairs(batch) do
+            batch_previous[path] = previous_membership and previous_membership[path] or false
+          end
+          local file_info, stat_error = project_files.stat_paths(batch)
+          notify_subscribers(entry, batch, changed and first, err or stat_error,
+            batch_previous, file_info or {})
+          first = false
+          if entry.watch_generation ~= generation then return end
+        until not paths or not next(paths)
+      end
       if entry.watch_generation ~= generation then return end
+    else
+      local paths = take_watch_paths(entry)
+      if next(paths) then
+        local previous_membership = {}
+        local state = cooperative_state()
+        for key, value in pairs(paths) do
+          local path = type(key) == "number" and value or key
+          if path then
+            previous_membership[common.normalize_path(path)] =
+              project_files.contains(entry.root, path, "file") == true
+              or project_files.contains(entry.root, path, "dir") == true
+          end
+          yield_if_due(state)
+        end
+        local started = system.get_time()
+        local ok, err, refreshed, file_info = project_files.reconcile(entry.root, paths)
+        if entry.watch_generation ~= generation then return end
+        core.log_quiet("Project watcher batch: root=%s refreshed=%s elapsed_ms=%.1f error=%s",
+          entry.root, tostring(refreshed), (system.get_time() - started) * 1000, tostring(err))
+        notify_subscribers(entry, paths, refreshed == true, ok and nil or err,
+          previous_membership, file_info)
+        if entry.watch_generation ~= generation then return end
+      end
     end
-    if not next(entry.pending_watch_paths) then
+    if not entry.pending_watch_rescan and not next(entry.pending_watch_paths) then
       entry.watch_processor_running = false
       return
     end
@@ -556,11 +643,25 @@ local function start_watch_processor(entry)
   core.add_thread(function() process_watch_batches(entry, generation) end)
 end
 
-local function require_watch_root_refresh(entry, reason)
-  entry.pending_watch_paths = { [entry.root] = { precise = false } }
-  entry.pending_watch_path_count = 1
-  entry.pending_watch_root_refresh = true
-  core.log_quiet("Project watcher: using a root refresh for %s (%s)", entry.root, reason)
+local function request_watch_rescan(entry, generation)
+  entry.watch_rescan_activity_at = system.get_time()
+  if entry.watch_rescan_waiting then return end
+  entry.watch_rescan_waiting = true
+  core.log_quiet("Project watcher: waiting for file activity to settle before recovery scan for %s",
+    entry.root)
+  core.add_thread(function()
+    while entry.watcher and entry.watch_generation == generation and entry.watch_rescan_waiting do
+      local remaining = WATCH_RESCAN_QUIET_SECONDS
+        - (system.get_time() - entry.watch_rescan_activity_at)
+      if remaining > 0 then
+        coroutine.yield(math.min(remaining, WATCH_POLL_SECONDS))
+      else
+        entry.watch_rescan_waiting = false
+        entry.pending_watch_rescan = true
+        return
+      end
+    end
+  end)
 end
 
 start_watcher = function(entry)
@@ -573,39 +674,45 @@ start_watcher = function(entry)
   entry.watcher = watcher
   entry.watched_dirs = {}
   entry.pending_watch_paths = {}
-  entry.pending_watch_path_count = 0
-  entry.pending_watch_root_refresh = false
+  entry.pending_watch_rescan = false
+  entry.watch_rescan_waiting = false
+  entry.watch_ignored_content_events = 0
   entry.watch_generation = entry.watch_generation + 1
   local generation = entry.watch_generation
   watcher:watch(entry.root)
   entry.watched_dirs[common.path_compare_key(entry.root)] = entry.root
   core.add_thread(function()
     while entry.watcher == watcher and entry.watch_generation == generation do
-      watcher:check(function(_, changed_path, precise)
+      watcher:check(function(_, changed_path, precise, kind)
         changed_path = changed_path and common.normalize_path(changed_path)
         if changed_path and (common.path_equals(changed_path, entry.root)
           or common.path_belongs_to(changed_path, entry.root))
         then
-          if precise == false and common.path_equals(changed_path, entry.root) then
-            if not entry.pending_watch_root_refresh then
-              require_watch_root_refresh(entry, "imprecise root event")
+          if entry.watch_rescan_waiting then
+            entry.watch_rescan_activity_at = system.get_time()
+          end
+          if kind == "rescan" then
+            request_watch_rescan(entry, generation)
+          elseif kind == "content" and not is_ignore_rule(entry.root, changed_path) and entry.paths
+            and entry.paths[common.path_compare_key(changed_path)] ~= true
+          then
+            entry.watch_ignored_content_events = entry.watch_ignored_content_events + 1
+            if entry.watch_ignored_content_events == 1 then
+              core.log_quiet(
+                "Project watcher: filtering content changes outside Project membership for %s",
+                entry.root
+              )
             end
-          elseif not entry.pending_watch_root_refresh then
+          else
             local existing = entry.pending_watch_paths[changed_path]
             entry.pending_watch_paths[changed_path] = {
               precise = (not existing or existing.precise ~= false) and precise ~= false,
+              kind = kind or (existing and existing.kind) or "unknown",
             }
-            if not existing then
-              entry.pending_watch_path_count = entry.pending_watch_path_count + 1
-              if entry.pending_watch_path_count > WATCH_PATH_LIMIT then
-                require_watch_root_refresh(entry,
-                  string.format("more than %d changed paths", WATCH_PATH_LIMIT))
-              end
-            end
           end
         end
       end, WORK_SLICE_SECONDS, 0)
-      if next(entry.pending_watch_paths) then
+      if entry.pending_watch_rescan or next(entry.pending_watch_paths) then
         start_watch_processor(entry)
       end
       coroutine.yield(WATCH_POLL_SECONDS)
@@ -622,8 +729,8 @@ local function stop_watcher(entry)
   entry.watch_generation = entry.watch_generation + 1
   entry.watch_processor_running = false
   entry.pending_watch_paths = {}
-  entry.pending_watch_path_count = 0
-  entry.pending_watch_root_refresh = false
+  entry.pending_watch_rescan = false
+  entry.watch_rescan_waiting = false
   local watched_dirs = entry.watched_dirs or {}
   entry.watched_dirs = {}
   core.add_thread(function()
@@ -684,7 +791,15 @@ end
 
 function project_files.watch_status(root)
   local entry = cache[cache_key(root, false)]
-  if not entry then return { running = false, subscribers = 0, pending = 0 } end
+  if not entry then
+    return {
+      running = false,
+      subscribers = 0,
+      pending = 0,
+      recovery_pending = false,
+      ignored_content_events = 0,
+    }
+  end
   local subscribers, pending = 0, 0
   for _ in pairs(entry.subscribers or {}) do subscribers = subscribers + 1 end
   for _ in pairs(entry.pending_watch_paths or {}) do pending = pending + 1 end
@@ -692,6 +807,8 @@ function project_files.watch_status(root)
     running = entry.watcher ~= nil,
     subscribers = subscribers,
     pending = pending,
+    recovery_pending = entry.pending_watch_rescan == true or entry.watch_rescan_waiting == true,
+    ignored_content_events = entry.watch_ignored_content_events or 0,
     generation = entry.generation or 0,
     phase = entry.phase,
   }

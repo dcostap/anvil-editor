@@ -20,19 +20,20 @@ test.describe("core.dirwatch", function()
     watch.monitor = {
       mode = function() return "multiple" end,
       check = function(_, callback)
-        callback("active-session.log", watch_id)
+        callback("active-session.log", watch_id, dirmonitor.CHANGE_CONTENT)
       end,
       unwatch = function() end,
     }
 
-    local parent, changed, precise
-    watch:check(function(path, changed_path, has_leaf)
-      parent, changed, precise = path, changed_path, has_leaf
+    local parent, changed, precise, kind
+    watch:check(function(path, changed_path, has_leaf, change_kind)
+      parent, changed, precise, kind = path, changed_path, has_leaf, change_kind
     end)
 
     test.equal(parent, watched)
     test.equal(changed, common.normalize_path(watched .. PATHSEP .. "active-session.log"))
     test.ok(precise)
+    test.equal(kind, "content")
   end)
 
   test.it("queues one native wake notification for an unread change batch", function(context)
@@ -69,9 +70,10 @@ test.describe("core.dirwatch", function()
     diagnostics = monitor:diagnostics()
     test.equal(diagnostics.notifications_pushed, 1)
 
-    local changed = false
-    monitor:check(function() changed = true end)
+    local changed, change_kind = false, nil
+    monitor:check(function(_, _, kind) changed, change_kind = true, kind end)
     test.ok(changed)
+    test.equal(change_kind, dirmonitor.CHANGE_MEMBERSHIP)
     monitor:unwatch(watch_id)
     context.watch_id = nil
     common.rm(root, true)
@@ -99,14 +101,15 @@ test.describe("core.dirwatch", function()
     file:write("after!")
     file:close()
 
-    local changed = false
+    local changed, change_kind = false, nil
     local deadline = system.get_time() + 2
     repeat
-      monitor:check(function() changed = true end)
+      monitor:check(function(_, _, kind) changed, change_kind = true, kind end)
       if not changed then coroutine.yield(0.01) end
     until changed or system.get_time() >= deadline
 
     test.ok(changed, "The native directory watch missed an in-place file write")
+    test.equal(change_kind, dirmonitor.CHANGE_CONTENT)
     monitor:unwatch(watch_id)
     context.watch_id = nil
     common.rm(root, true)

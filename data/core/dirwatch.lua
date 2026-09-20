@@ -20,6 +20,12 @@ local Object = require "core.object"
 ---@field single_watch_count number Number of files that are being watched.
 local DirWatch = Object:extend()
 
+local change_kinds = {
+  [dirmonitor.CHANGE_CONTENT] = "content",
+  [dirmonitor.CHANGE_MEMBERSHIP] = "membership",
+  [dirmonitor.CHANGE_RESCAN] = "rescan",
+}
+
 
 ---Constructor.
 function DirWatch:new()
@@ -122,7 +128,7 @@ end
 
 ---Checks each watched paths for changes.
 ---This function must be called in a coroutine, e.g. inside a thread created with `core.add_thread()`.
----@param change_callback fun(path: string, changed_path: string) The containing watched path and, when available, the changed leaf path.
+---@param change_callback fun(path: string, changed_path: string, precise: boolean, kind: string) The containing watched path, changed leaf path, precision, and change kind.
 ---@param scan_time? number Maximum amount of time, in seconds, before the function yields execution.
 ---@param wait_time? number The duration to yield execution (in seconds).
 ---@return boolean # If true, a path had changed.
@@ -130,15 +136,15 @@ function DirWatch:check(change_callback, scan_time, wait_time)
   local had_change = false
   local last_error
   local native_events = {}
-  self.monitor:check(function(id, native_watch_id)
-    native_events[#native_events + 1] = { id, native_watch_id }
+  self.monitor:check(function(id, native_watch_id, native_kind)
+    native_events[#native_events + 1] = { id, native_watch_id, change_kinds[native_kind] or "unknown" }
   end, function(err)
     last_error = err
   end)
   if last_error ~= nil then error(last_error) end
   local start_time = system.get_time()
   for _, event in ipairs(native_events) do
-    local id, native_watch_id = event[1], event[2]
+    local id, native_watch_id, kind = event[1], event[2], event[3]
     had_change = true
     if self.monitor:mode() == "single" then
       local changed_path = id
@@ -148,9 +154,9 @@ function DirWatch:check(change_callback, scan_time, wait_time)
       end
       if precise then
         changed_path = common.normalize_path(changed_path)
-        change_callback(common.dirname(changed_path), changed_path, true)
+        change_callback(common.dirname(changed_path), changed_path, true, kind)
       elseif self.single_watch_top then
-        change_callback(self.single_watch_top, self.single_watch_top, false)
+        change_callback(self.single_watch_top, self.single_watch_top, false, kind)
       end
     else
       local watch_id = native_watch_id or id
@@ -171,7 +177,7 @@ function DirWatch:check(change_callback, scan_time, wait_time)
             end
             changed_path = common.normalize_path(changed_path)
           end
-          change_callback(path, changed_path, precise)
+          change_callback(path, changed_path, precise, kind)
           -- The watch may get lost when a file is deleted and re-added, eg:
           -- git checkout <branch>. We register modified timestamp to prevent
           -- sending unnecessary notifications or duplicating them.
@@ -193,7 +199,7 @@ function DirWatch:check(change_callback, scan_time, wait_time)
       local info = system.get_file_info(directory)
       local new_modified = info and info.modified
       if old_modified ~= new_modified then
-        change_callback(directory, directory)
+        change_callback(directory, directory, false, "unknown")
         had_change = true
         self.scanned[directory] = new_modified
       end
