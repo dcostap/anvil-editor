@@ -5914,7 +5914,10 @@ function provider:on_text_transaction(view, transaction, line1, line2)
   end
   local structural_change = transaction and transaction.type == "load"
     or line_structure_changed
-  local suffix_changed = structural_change or fence_line1 ~= nil
+  -- Fence token state can change through the rest of one fenced block. It
+  -- does not change Markdown structure after that block. Keep its invalidation
+  -- in the bounded provider range returned below.
+  local suffix_changed = structural_change
   if not suffix_changed then
     local affected_line1 = math.min(table_line1 or math.huge, fence_line1 or math.huge)
     local affected_line2 = math.max(table_line2 or -math.huge, fence_line2 or -math.huge)
@@ -7020,25 +7023,12 @@ local function bind_link_index(view)
     for _, range in ipairs(ranges) do
       prune_image_references(view, range.line1, range.line2)
     end
-    if #ranges > 0 then
-      if view.wrapped_settings then
-        -- Link ranges commonly span most of a note. Rebuilding all affected
-        -- wrap rows synchronously blocked the worker-result callback for
-        -- 40-65 ms in ordinary editing logs.
-        view:invalidate_line_render(PROVIDER_ID, nil, nil, {
-          defer_wrapped_reconstruction = true,
-          on_wrapped_reconstructed = function()
-            if view.__markdown_live_attached then
-              view:invalidate_visual_metrics(PROVIDER_ID)
-            end
-          end,
-        })
-      else
-        local refresh_line1 = ranges[1].line1
-        local refresh_line2 = ranges[#ranges].line2
-        view:invalidate_line_render(PROVIDER_ID, refresh_line1, refresh_line2)
-        view:invalidate_visual_metrics(PROVIDER_ID, refresh_line1, refresh_line2)
-      end
+    for _, range in ipairs(ranges) do
+      -- Keep the committed rows for unrelated text. A full wrapped rebuild
+      -- made each edited heading reconstruct the complete document when its
+      -- vault target changed.
+      view:invalidate_line_render(PROVIDER_ID, range.line1, range.line2)
+      view:invalidate_visual_metrics(PROVIDER_ID, range.line1, range.line2)
     end
     core.log_quiet(
       "Markdown Live Preview refreshed %d link-dependent range(s) after vault %s in %.1fms",

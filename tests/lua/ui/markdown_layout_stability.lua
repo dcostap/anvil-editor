@@ -162,6 +162,58 @@ test.describe("Markdown layout stability", function()
     test.equal(other:get_scrollable_size(), pending_size, "publication changed the scrollable extent")
   end)
 
+  test.it("keeps a heading link refresh out of full wrapped reconstruction", function(context)
+    local buffer, lines = fixture("local-link-refresh-layout")
+    for line = #lines + 1, 1000 do
+      lines[line] = string.rep("More ordinary paragraph content. ", 8)
+    end
+    for line = 100, 1000, 100 do
+      lines[line] = "Paragraph with [[Target]] and more ordinary content."
+    end
+    buffer:insert(1, 1, table.concat(lines, "\n"))
+    local view = make_editor(context, buffer, 420, 400)
+    core.set_active_view(view)
+    buffer:set_selection(1, #buffer.lines[1])
+    prepare(view)
+
+    view:on_text_input("x")
+    local owner = view.__markdown_live_owner
+    test.equal(owner.link_targets_changed_revision, buffer.text_revision)
+    owner.link_index:notify("buffer-updated", buffer)
+
+    test.equal(
+      view.__async_wrap_reconstruction, nil,
+      "a link refresh started a full wrapped reconstruction"
+    )
+  end)
+
+  test.it("keeps a fenced body publication out of full wrapped reconstruction", function(context)
+    local buffer, lines = fixture("local-fence-publication-layout")
+    for line = #lines + 1, 600 do
+      lines[line] = string.rep("More ordinary paragraph content. ", 8)
+    end
+    lines[10], lines[11], lines[12] = "```lua", "local value = 1", "```"
+    buffer:insert(1, 1, table.concat(lines, "\n"))
+    local view = make_editor(context, buffer, 420, 400)
+    core.set_active_view(view)
+    buffer:set_selection(11, #buffer.lines[11])
+    prepare(view)
+
+    view:on_text_input("0")
+    ready(model.peek(buffer))
+    local deadline = system.get_time() + 2
+    while view.__markdown_live_owner.presentation_snapshot
+      and system.get_time() < deadline
+    do
+      coroutine.yield(0.01)
+    end
+
+    test.equal(
+      view.__async_wrap_reconstruction, nil,
+      "a fenced body publication started a full wrapped reconstruction"
+    )
+  end)
+
   for _, wrapped in ipairs({ true, false }) do
     test.it("keeps measurements across consecutive edits " .. (wrapped and "with wrapping" or "without wrapping"), function(context)
       local buffer, lines = fixture("repeated-layout-" .. tostring(wrapped))
