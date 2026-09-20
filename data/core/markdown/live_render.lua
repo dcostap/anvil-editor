@@ -3848,6 +3848,278 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
   return current_text
 end
 
+function edit_visual_projection.source_list_prefix(text)
+  local indent, token, spaces, body = text:match(
+    "^([\t ]*)([-%*%+])([\t ]+)(.*)$"
+  )
+  local ordered
+  if not indent then
+    local number, delimiter
+    indent, number, delimiter, spaces, body = text:match(
+      "^([\t ]*)(%d+)([.)])([\t ]+)(.*)$"
+    )
+    if not indent then return nil end
+    token = number .. delimiter
+    ordered = true
+  end
+
+  local marker_content_col = #indent + #token + #spaces + 1
+  local task_state, task_spaces, task_body = body:match(
+    "^%[([ xX])%]([\t ]*)(.*)$"
+  )
+  local task
+  local content_col = marker_content_col
+  if task_state then
+    task = true
+    content_col = marker_content_col + 3 + #task_spaces
+    body = task_body
+  end
+  return {
+    indent = indent,
+    token = token,
+    ordered = ordered == true,
+    marker_content_col = marker_content_col,
+    task = task,
+    checked = task_state == "x" or task_state == "X",
+    task_state = task_state,
+    content_col = content_col,
+    body = body,
+  }
+end
+
+function edit_visual_projection.is_list_prefix_fragment(fragment)
+  return fragment.markdown_task_checkbox
+    or fragment.markdown_task_source_marker
+    or fragment.unordered_list_marker
+    or fragment.unordered_list_source_marker
+    or fragment.ordered_list_marker
+    or fragment.ordered_list_source_marker
+end
+
+function edit_visual_projection.has_list_prefix(render)
+  for _, fragment in ipairs(render and render.fragments or {}) do
+    if edit_visual_projection.is_list_prefix_fragment(fragment) then return true end
+  end
+  return false
+end
+
+function edit_visual_projection.selection_reveals_list_prefix(
+  state, line, content_col, inclusive_right_edge
+)
+  for index = 1, #(state and state.selections or {}), 4 do
+    local line1, col1 = state.selections[index], state.selections[index + 1]
+    local line2, col2 = state.selections[index + 2], state.selections[index + 3]
+    if line1 and col1 and line2 and col2 then
+      line1, col1, line2, col2 = ordered_selection(line1, col1, line2, col2)
+      if line >= line1 and line <= line2 then
+        if line1 == line2 and col1 == col2 then
+          if col1 >= 1 and (col1 < content_col
+            or inclusive_right_edge and col1 == content_col)
+          then
+            return true
+          end
+        else
+          local from = line == line1 and col1 or 1
+          local to = line == line2 and col2 or math.huge
+          if from < content_col and to > 1 then return true end
+        end
+      end
+    end
+  end
+  return false
+end
+
+-- List prefixes are source-local and have stable presentation rules. Keep
+-- that presentation while the semantic worker processes an edit instead of
+-- replacing the complete row with raw Markdown source.
+function edit_visual_projection.pending_list_render(
+  view, line, previous, current_text, selection_state
+)
+  local parsed = edit_visual_projection.source_list_prefix(current_text)
+  if not parsed then return nil end
+
+  local body_font = markdown_live_body_font(view)
+  local row_height = markdown_live_body_line_height(view)
+  local indent_width = body_font:get_width(string.rep(
+    " ", markdown_list_visual_indent_width(parsed.indent)
+  ))
+  local control_size = math.max(
+    math.floor(SCALE * 12), math.floor(body_font:get_height() * 0.84)
+  )
+  local marker_control_width = math.max(body_font:get_width("-"), control_size)
+  local marker_gap_width = body_font:get_width(" ")
+  local marker_width = indent_width + math.max(
+    marker_control_width + marker_gap_width,
+    parsed.ordered and body_font:get_width(parsed.token .. " ") or 0
+  )
+  local old_prefix = previous and edit_visual_projection.source_list_prefix(
+    previous.source_text or ""
+  )
+  local previous_revealed = false
+  for _, fragment in ipairs(previous and previous.fragments or {}) do
+    if fragment.markdown_task_source_marker
+      or fragment.unordered_list_source_marker
+      or fragment.ordered_list_source_marker
+    then
+      previous_revealed = true
+      break
+    end
+  end
+  local task_prefix_will_reveal = parsed.task and old_prefix and old_prefix.task
+    and old_prefix.indent ~= parsed.indent
+    and edit_visual_projection.selection_reveals_list_prefix(
+      selection_state, line, parsed.content_col, true
+    )
+  -- List commands can update source before they restore the body caret. Keep
+  -- the prior task presentation instead of revealing that transient caret.
+  local stable_task_prefix = parsed.task and old_prefix and old_prefix.task
+    and old_prefix.indent == parsed.indent
+    and old_prefix.token == parsed.token
+    and old_prefix.task_state == parsed.task_state
+  local reveal = previous_revealed or (not parsed.task or stable_task_prefix)
+    and edit_visual_projection.selection_reveals_list_prefix(
+      selection_state, line, parsed.content_col
+    )
+  local render = clone_render_line(previous or {})
+  render.source_text = current_text
+  render.markdown_pending_provenance = "retained-list-presentation"
+  render.position_rows = nil
+  render.layout_height = nil
+  render.fragments = {}
+
+  local function add(fragment)
+    render.fragments[#render.fragments + 1] = fragment
+    return fragment
+  end
+
+  if reveal then
+    local prefix = current_text:sub(1, parsed.content_col - 1)
+    local visible_prefix = parsed.task and prefix:gsub("[\t ]+$", "") or prefix
+    add {
+      source_col1 = 1,
+      source_col2 = parsed.content_col,
+      text = visible_prefix,
+      width = math.max(marker_width, body_font:get_width(prefix)),
+      text_x_offset = indent_width,
+      color = style.markdown_live_list_marker,
+      markdown_task_source_marker = parsed.task or nil,
+      ordered_list_source_marker = parsed.ordered and not parsed.task or nil,
+      unordered_list_source_marker = not parsed.ordered and not parsed.task or nil,
+      markdown_list_content_col = parsed.content_col,
+      suppress_bracketmatch = parsed.task or nil,
+    }
+  else
+    if parsed.ordered then
+      add {
+        source_col1 = 1,
+        source_col2 = parsed.marker_content_col,
+        text = parsed.token,
+        width = marker_width,
+        text_x_offset = indent_width,
+        color = style.markdown_live_list_marker,
+        ordered_list_marker = true,
+        markdown_list_content_col = parsed.content_col,
+      }
+    end
+
+    if parsed.task then
+      local checkbox_width = parsed.ordered and math.max(
+        body_font:get_width("[ ]"), body_font:get_width("[x]"),
+        body_font:get_width("[X]"), control_size + math.floor(SCALE * 2)
+      ) or marker_width
+      if task_prefix_will_reveal then
+        local source_width = body_font:get_width(
+          current_text:sub(1, parsed.content_col - 1)
+        )
+        checkbox_width = math.max(
+          checkbox_width, source_width - (parsed.ordered and marker_width or 0)
+        )
+      end
+      local box_area_x = parsed.ordered and 0 or indent_width
+      local box_area_width = parsed.ordered and checkbox_width or marker_control_width
+      local checkmark_font = markdown_live_scaled_font(
+        view, style.prose_strong_font,
+        math.max(1, math.floor(body_font:get_size() * 0.88))
+      )
+      add {
+        source_col1 = parsed.ordered and parsed.marker_content_col or 1,
+        source_col2 = parsed.content_col,
+        text = "",
+        width = checkbox_width,
+        color = parsed.checked and style.markdown_live_task_checked
+          or style.markdown_live_task_unchecked,
+        markdown_task_checkbox = true,
+        checked = parsed.checked,
+        suppress_bracketmatch = true,
+        markdown_list_content_col = parsed.content_col,
+        draw_x_offset = box_area_x
+          + math.floor((box_area_width - control_size) / 2),
+        hit_width = control_size,
+        widget = task_checkbox_widget(
+          checkbox_width, row_height, control_size, parsed.checked,
+          checkmark_font, box_area_x, box_area_width
+        ),
+      }
+    elseif not parsed.ordered then
+      local marker_size = math.max(2, math.floor(body_font:get_height() * 0.24))
+      add {
+        source_col1 = 1,
+        source_col2 = parsed.marker_content_col,
+        text = "",
+        width = marker_width,
+        color = style.markdown_live_list_marker,
+        unordered_list_marker = true,
+        markdown_list_content_col = parsed.content_col,
+        widget = list_bullet_widget(
+          marker_width, row_height, indent_width,
+          marker_control_width, marker_size
+        ),
+      }
+    end
+  end
+
+  local preserved_body = false
+  if old_prefix and old_prefix.body == parsed.body then
+    local delta = parsed.content_col - old_prefix.content_col
+    for _, fragment in ipairs(previous.fragments or {}) do
+      local col1 = fragment.source_col1 or 1
+      if col1 >= old_prefix.content_col
+        and not edit_visual_projection.is_list_prefix_fragment(fragment)
+        and not fragment.widget
+      then
+        local copy = {}
+        for key, value in pairs(fragment) do copy[key] = value end
+        for _, name in ipairs({
+          "source_col1", "source_col2", "text_source_col1", "text_source_col2",
+          "image_block_col1", "image_block_col2", "markdown_reveal_col1",
+          "markdown_reveal_col2",
+        }) do
+          if copy[name] then copy[name] = copy[name] + delta end
+        end
+        copy.semantic_id = nil
+        copy.link = nil
+        copy.link_resolution = nil
+        copy.on_mouse_pressed = nil
+        add(copy)
+        preserved_body = true
+      end
+    end
+  end
+  if not preserved_body and parsed.body ~= "" then
+    add {
+      source_col1 = parsed.content_col,
+      source_col2 = #current_text + 1,
+      text = parsed.body,
+      font = body_font,
+      color = style.text,
+    }
+  end
+  if parsed.task then
+    set_render_line_task_completion(render, parsed.checked, parsed.content_col)
+  end
+  return render
+end
+
 local function raw_pending_source_render(view, render_line, current_text, code)
   local font
   for _, fragment in ipairs(render_line and render_line.fragments or {}) do
@@ -4558,10 +4830,19 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
             visual_capture, "retained"
           )
         else
+          if not (captured and (
+            captured.fenced or captured.raw_passthrough or captured.frontmatter
+          ))
+            and edit_visual_projection.source_list_prefix(source)
+            and not edit_visual_projection.has_list_prefix(render)
+          then
+            render = edit_visual_projection.pending_list_render(
+              view, line, render, source, projected_selection_state
+            )
           -- A replacement that creates a line can include generated source,
           -- such as a new list marker. Do not copy presentation flags from
           -- the fragment before the newline onto that new source.
-          if index > 1 and (edit.text or ""):find("\n", 1, true) then
+          elseif index > 1 and (edit.text or ""):find("\n", 1, true) then
             render = raw_pending_source_render(
               view, render, source, captured and captured.fenced
             )
@@ -4590,7 +4871,16 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
           end
         end
         if exact then
-          publish(new_line, clone_render_line(exact.render_line), exact, "retained")
+          local render = clone_render_line(exact.render_line)
+          if not exact.raw_passthrough and not exact.frontmatter
+            and edit_visual_projection.source_list_prefix(source)
+            and not edit_visual_projection.has_list_prefix(render)
+          then
+            render = edit_visual_projection.pending_list_render(
+              view, new_line, render, source, projected_selection_state
+            ) or render
+          end
+          publish(new_line, render, exact, "retained")
         else
           local previous = fallback and fallback.render_line or nil
           local visual_capture = edit_visual_projection.find_capture(
@@ -4604,16 +4894,40 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
               visual_capture, "retained"
             )
           else
-            local render = fallback and fallback.raw_passthrough
-              and {
+            local render
+            if fallback and (fallback.raw_passthrough or fallback.frontmatter) then
+              render = {
                 source_text = source,
                 raw_passthrough = true,
                 markdown_edit_provenance = "retained",
               }
-              or raw_pending_source_render(
+            else
+              local list_capture = edit_visual_projection.source_list_prefix(source)
+                and edit_visual_projection.find_capture(
+                  view, pre_edit_lines, source, true
+                ) or nil
+              local list_previous = list_capture and list_capture.render_line
+                or visual_capture and visual_capture.render_line
+                or previous
+              if edit_visual_projection.source_list_prefix(source) then
+                for old_line = old_line1, old_line2 do
+                  local candidate = pre_edit_lines[old_line]
+                  if candidate and edit_visual_projection.has_list_prefix(
+                    candidate.render_line
+                  ) then
+                    list_previous = candidate.render_line
+                    break
+                  end
+                end
+              end
+              render = edit_visual_projection.pending_list_render(
+                view, new_line, list_previous, source,
+                projected_selection_state
+              ) or raw_pending_source_render(
                 view, previous, source,
                 owner.fence_service and owner.fence_service:contains_line(new_line)
               )
+            end
             publish(
               new_line, render, fallback,
               render.markdown_pending_provenance

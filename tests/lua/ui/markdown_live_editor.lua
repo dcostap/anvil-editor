@@ -1346,7 +1346,7 @@ test.describe("Markdown Live Preview", function()
     end
   end)
 
-  test.it("keeps a new Markdown list marker raw until semantics publish", function()
+  test.it("keeps a new Markdown list marker presented until semantics publish", function()
     local view, buffer = make_view("- item\nplain", "pending-list-marker.md")
     buffer:set_selection(2, 1)
     refresh(view)
@@ -1357,7 +1357,9 @@ test.describe("Markdown Live Preview", function()
     core.active_view = old_active
 
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
-    test.equal(visible_render_text(view, 2), "- ")
+    local pending_marker = test.not_nil(view:get_line_render(2)).fragments[1]
+    test.ok(pending_marker.unordered_list_marker)
+    test.not_nil(pending_marker.widget)
     local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     local marker = test.not_nil(view:get_line_render(2)).fragments[1]
@@ -1394,7 +1396,7 @@ test.describe("Markdown Live Preview", function()
     test.not_nil(marker.widget)
   end)
 
-  test.it("keeps new task and parenthesized list markers raw until semantics publish", function()
+  test.it("keeps new task and parenthesized list markers presented while pending", function()
     local cases = {
       { source = "- [ ] item", field = "markdown_task_checkbox" },
       { source = "3) item", field = "ordered_list_marker" },
@@ -1410,10 +1412,11 @@ test.describe("Markdown Live Preview", function()
       core.active_view = old_active
 
       test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
-      test.equal(
-        visible_render_text(view, 2),
-        (buffer.lines[2] or ""):gsub("\n$", "")
-      )
+      local pending_marker
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(2)).fragments or {}) do
+        if fragment[item.field] then pending_marker = fragment break end
+      end
+      test.not_nil(pending_marker, "pending marker missing for " .. item.source)
       local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_status(instance, "ready"), instance.reason)
       local marker
@@ -2995,7 +2998,8 @@ test.describe("Markdown Live Preview", function()
         end
       end
 
-      test.equal(visible_render_text(view, 2), "    - [ ] a")
+      test.not_nil(task_checkbox())
+      test.equal(visible_render_text(view, 2), "a")
       local instance = test.not_nil(markdown_model.peek(buffer))
       test.ok(wait_status(instance, "ready"), instance.reason)
       test.not_nil(task_checkbox())
