@@ -921,9 +921,23 @@ function TextView:new(buffer)
   })
   register_fold_view(self)
   linewrapping.register_textview(self)
-  self:set_wrapping_enabled(
-    config.plugins.linewrapping.enable_by_default and not self.buffer.binary
+  local max_default_size = tonumber(
+    config.plugins.linewrapping.max_default_file_size
   )
+  local file_size = tonumber(self.buffer.loaded_file_size)
+  local file_is_too_large = max_default_size and file_size
+    and file_size > max_default_size
+  local wrapping_enabled = config.plugins.linewrapping.enable_by_default
+    and not self.buffer.binary and not file_is_too_large
+  self:set_wrapping_enabled(wrapping_enabled)
+  if file_is_too_large and config.plugins.linewrapping.enable_by_default
+    and not self.buffer.binary
+  then
+    core.log_quiet(
+      "Default line wrapping disabled for %s: bytes=%d limit=%d",
+      self.buffer:get_name(), file_size, max_default_size
+    )
+  end
 end
 
 

@@ -211,6 +211,8 @@ local copy_file, prompt_stale_backup
 function Buffer:load(filename)
   local load_stage = file_open_stage_begin("buffer_load_contents")
   if prompt_stale_backup then prompt_stale_backup(filename) end
+  local file_info = system.get_file_info(filename)
+  self.loaded_file_size = file_info and file_info.size or nil
   local old_text = table.concat(self.lines or {})
   local old_line_count = #(self.lines or {})
   local selection_snapshots = snapshot_registered_selection_states(self)

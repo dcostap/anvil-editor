@@ -193,6 +193,7 @@ plugin_defaults("linewrapping", {
   wrapping_indent = 0,
   continuation_indicator = "↪",
   enable_by_default = true,
+  max_default_file_size = 2 * 1024 * 1024,
   require_tokenization = false,
 })
 plugin_defaults("scale", {

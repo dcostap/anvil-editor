@@ -180,6 +180,7 @@ end
 ---@field wrapping_indent integer | "none" | "indent" | "deepIndent"
 ---@field continuation_indicator string
 ---@field enable_by_default boolean
+---@field max_default_file_size number
 ---@field require_tokenization boolean
 config.plugins.linewrapping.config_spec = {
   name = "Line Wrapping",
@@ -228,6 +229,13 @@ config.plugins.linewrapping.config_spec = {
     path = "enable_by_default",
     type = "toggle",
     default = false
+  },
+  {
+    label = "Maximum Default File Size",
+    description = "Maximum file size in bytes for default wrapping.",
+    path = "max_default_file_size",
+    type = "number",
+    default = 2 * 1024 * 1024
   },
   {
     label = "Require Tokenization",
