@@ -552,29 +552,6 @@ local function markdown_indent_width(indent)
   return width
 end
 
-local function markdown_list_indent_width(buffer, line, line_text)
-  local content_start, indent_length = markdown_list_content_start(
-    buffer, line, line_text, true
-  )
-  if not content_start then return nil end
-  return markdown_indent_width(tostring(line_text or ""):sub(1, indent_length))
-end
-
-local function markdown_list_can_indent(buffer, line, line_text)
-  local indent_width = markdown_list_indent_width(buffer, line, line_text)
-  if indent_width == nil then return false end
-  for previous_line = line - 1, 1, -1 do
-    local previous_width = markdown_list_indent_width(
-      buffer, previous_line, buffer.lines[previous_line] or ""
-    )
-    if previous_width ~= nil then
-      if previous_width == indent_width then return true end
-      if previous_width < indent_width then return false end
-    end
-  end
-  return false
-end
-
 local function markdown_space_indent(line_text, indent_length)
   return string.rep(
     " ", markdown_indent_width(tostring(line_text or ""):sub(1, indent_length))
@@ -1926,12 +1903,9 @@ local commands = {
         local content_start, indent_length = markdown_list_content_start(
           dv.buffer, line1, line_text, true
         )
-        local prefix_start = (indent_length or 0) + 1
-        if content_start and col1 >= prefix_start and col1 <= content_start then
+        if content_start then
           list_indent_count = list_indent_count + 1
-          if markdown_list_can_indent(dv.buffer, line1, line_text)
-            and not list_indent_lines[line1]
-          then
+          if not list_indent_lines[line1] then
             local indent_end = line_text:find("[^\t ]")
             indent_end = indent_end and indent_end - 1 or 0
             -- A literal tab before a Markdown marker is parsed as indented
@@ -1965,7 +1939,7 @@ local commands = {
         })
       end
       core.log_quiet(
-        "Markdown indent moved %d eligible list item(s) at their content start in %s",
+        "Markdown indent moved %d eligible list item(s) in %s",
         #list_indent_edits, dv.buffer:get_name()
       )
       return

@@ -95,6 +95,49 @@ test.describe("Markdown list navigation", function()
     end
   end)
 
+  test.it("indents a list item from any caret position", function()
+    local cases = {
+      {
+        source = "- parent\n- child",
+        line = 2,
+        col = 6,
+        expected_source = "    - child\n",
+        expected_col = 10,
+      },
+      {
+        source = "- parent\n- [ ] task item",
+        line = 2,
+        col = 12,
+        expected_source = "    - [ ] task item\n",
+        expected_col = 16,
+      },
+      {
+        source = "- root item",
+        line = 1,
+        col = 8,
+        expected_source = "    - root item\n",
+        expected_col = 12,
+      },
+      {
+        source = "        - deeply indented",
+        line = 1,
+        col = 18,
+        expected_source = "            - deeply indented\n",
+        expected_col = 22,
+      },
+    }
+    for _, case in ipairs(cases) do
+      local view, buffer = make_view(case.source)
+      buffer:set_selection(case.line, case.col)
+
+      test.equal(perform(view, "core:indent"), true)
+
+      test.equal(buffer.lines[case.line], case.expected_source)
+      local line, col = buffer:get_selection()
+      test.same({ line, col }, { case.line, case.expected_col })
+    end
+  end)
+
   test.it("does not treat list-looking source in another Language Mode as Markdown", function()
     local view, buffer = make_view("- [ ] source text", "list-navigation.lua")
     buffer:set_selection(1, #buffer.lines[1])
