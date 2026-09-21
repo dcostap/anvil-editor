@@ -59,6 +59,21 @@ test.describe("font scaling", function()
     test.near(fallback:get_size(), fallback_size * factor, 0.001)
   end)
 
+  test.it("moves global zoom by one logical font point", function(context)
+    context.interface_scale = scale.get()
+    context.code_scale = scale.get_code()
+
+    scale.set(DEFAULT_SCALE)
+    scale.set_code(DEFAULT_SCALE)
+    local ui_size = style.font:get_size()
+    local code_size = style.code_font:get_size()
+
+    scale.increase()
+
+    test.near(style.font:get_size(), ui_size + DEFAULT_SCALE, 0.001)
+    test.near(style.code_font:get_size(), code_size + DEFAULT_SCALE, 0.001)
+  end)
+
   test.it("restores Fuzzy Search row spacing after a theme change while zoomed", function(context)
     context.interface_scale = scale.get()
     local row_padding = style.fuzzy_searcher_result_row_padding

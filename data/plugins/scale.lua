@@ -14,13 +14,16 @@ local style = require "core.style"
 ---@field default_scale number
 ---Allow using CTRL + MouseWheel for changing the scale.
 ---@field use_mousewheel boolean
-local scale_factor = 1.1
+local MIN_SCALE = 0.7
+local MAX_SCALE = 6
+local FONT_ZOOM_STEP = 1
 local current_scale = SCALE
 local current_code_scale = SCALE
 local configured_scale = tonumber(os.getenv("ANVIL_SCALE"))
 local restart_scale = tonumber(os.getenv("ANVIL_SCALE_RESTART"))
 local user_scale = restart_scale or configured_scale
 local project_zoom_modified = false
+local base_font_size = style.font:get_size() / SCALE
 
 local function scale_font_once(font, factor, seen)
   if seen[font] then return end
@@ -58,12 +61,27 @@ end
 local scale = {}
 
 local function project_default_scale()
-  if configured_scale then return common.clamp(configured_scale, 0.7, 6) end
+  if configured_scale then return common.clamp(configured_scale, MIN_SCALE, MAX_SCALE) end
   if config.plugins.scale.autodetect == false
   and type(config.plugins.scale.default_scale) == "number" then
-    return common.clamp(config.plugins.scale.default_scale, 0.7, 6)
+    return common.clamp(config.plugins.scale.default_scale, MIN_SCALE, MAX_SCALE)
   end
   return DEFAULT_SCALE
+end
+
+local function zoomed_scale(current, direction)
+  local default = project_default_scale()
+  local current_size = common.round(current / default * base_font_size)
+  local min_size = math.ceil(MIN_SCALE / default * base_font_size)
+  local max_size = math.floor(MAX_SCALE / default * base_font_size)
+  local target_size = common.clamp(
+    current_size + direction * FONT_ZOOM_STEP, min_size, max_size
+  )
+  local target = common.clamp(
+    default * target_size / base_font_size, MIN_SCALE, MAX_SCALE
+  )
+  -- Keep generated Project Zoom values stable after Lua serialization.
+  return math.floor(target * 1000000000000 + 0.5) / 1000000000000
 end
 
 local function at_project_default_zoom()
@@ -80,7 +98,7 @@ function scale.set(scale)
   if current_scale == scale then return end
   system.setenv("ANVIL_SCALE_RESTART", scale)
 
-  scale = common.clamp(scale, 0.7, 6)
+  scale = common.clamp(scale, MIN_SCALE, MAX_SCALE)
 
   local active_caret_y = capture_active_textview_caret_y()
 
@@ -165,7 +183,7 @@ function scale.set_code(scale)
   if current_code_scale == scale then return end
   system.setenv("ANVIL_SCALE_CODE_RESTART", scale)
 
-  scale = common.clamp(scale, 0.7, 6)
+  scale = common.clamp(scale, MIN_SCALE, MAX_SCALE)
 
   local active_caret_y = capture_active_textview_caret_y()
 
@@ -202,14 +220,14 @@ function scale.reset()
 end
 
 function scale.increase()
-  scale.set(current_scale * scale_factor)
-  scale.set_code(current_code_scale * scale_factor)
+  scale.set(zoomed_scale(current_scale, 1))
+  scale.set_code(zoomed_scale(current_code_scale, 1))
   mark_project_zoom_changed()
 end
 
 function scale.decrease()
-  scale.set(current_scale / scale_factor)
-  scale.set_code(current_code_scale / scale_factor)
+  scale.set(zoomed_scale(current_scale, -1))
+  scale.set_code(zoomed_scale(current_code_scale, -1))
   mark_project_zoom_changed()
 end
 
@@ -235,8 +253,8 @@ function scale.load_workspace_state(state)
   end
   local explicit = interface ~= nil
   if explicit then
-    interface = common.clamp(interface, 0.7, 6)
-    code = common.clamp(code or interface, 0.7, 6)
+    interface = common.clamp(interface, MIN_SCALE, MAX_SCALE)
+    code = common.clamp(code or interface, MIN_SCALE, MAX_SCALE)
   else
     interface = project_default_scale()
     code = interface
@@ -257,11 +275,11 @@ function scale.reset_code()
 end
 
 function scale.increase_code()
-  scale.set_code(current_code_scale * scale_factor)
+  scale.set_code(zoomed_scale(current_code_scale, 1))
 end
 
 function scale.decrease_code()
-  scale.set_code(current_code_scale / scale_factor)
+  scale.set_code(zoomed_scale(current_code_scale, -1))
 end
 
 if DEFAULT_SCALE ~= config.plugins.scale.default_scale then

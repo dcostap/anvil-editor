@@ -2070,21 +2070,16 @@ function core.try(fn, ...)
 end
 
 ---This function rescales the interface to the system default scale
----by incrementing or decrementing current user scale.
+---while preserving the user's global zoom ratio.
 ---@param new_scale number
 local function update_scale(new_scale)
   local prev_default = DEFAULT_SCALE
   DEFAULT_SCALE = new_scale
   if SCALE == prev_default or config.plugins.scale.autodetect then
     if new_scale == SCALE then return end
-    local target, target_code
-    if new_scale > prev_default then
-      target = scale.get() + (new_scale - prev_default)
-      target_code = scale.get_code() + (new_scale - prev_default)
-    else
-      target = scale.get() - (prev_default - new_scale)
-      target_code = scale.get_code() - (prev_default - new_scale)
-    end
+    local display_ratio = new_scale / prev_default
+    local target = scale.get() * display_ratio
+    local target_code = scale.get_code() * display_ratio
     -- do not scale smaller than new_scale
     scale.set(target < new_scale and new_scale or target)
     scale.set_code(target_code < new_scale and new_scale or target_code)
