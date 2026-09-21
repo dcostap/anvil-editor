@@ -115,7 +115,7 @@ plugin_defaults("navigation_history", {
 })
 plugin_defaults("centered_editor", {
   enabled = true,
-  max_width = 1400,
+  max_width = 1300,
   markdown_live_max_width = 800,
   scale_width = true,
   min_margin = 0,
