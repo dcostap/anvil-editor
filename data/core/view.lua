@@ -192,15 +192,6 @@ local function cubic_scroll_sample(move, now, duration)
   return value, velocity, progress
 end
 
-local function should_snap_two_line_scroll(view, key, value, dest, name)
-  if name ~= "scroll" or key ~= "y" or type(view.get_line_height) ~= "function" then
-    return false
-  end
-  local line_height = view:get_line_height()
-  if not line_height or line_height <= 0 then return false end
-  return math.abs(math.abs(dest - value) - line_height * 2) <= line_height / 2
-end
-
 ---Smoothly animate a value towards a destination.
 ---Use this for animations instead of direct assignment.
 ---@param t table Table containing the value
@@ -219,9 +210,7 @@ function View:move_towards(t, k, dest, rate, name)
   if math.abs(dest - val) < 1e-8 then return end
   local disabled_transition = config.disabled_transitions[name]
     or (name == "global_prompt_bar" and config.disabled_transitions.commandview)
-  local snap_two_line_scroll = should_snap_two_line_scroll(self, k, val, dest, name)
-  if core.in_live_resize_frame or not config.transitions or disabled_transition
-      or config.fps < 30 or snap_two_line_scroll then
+  if core.in_live_resize_frame or not config.transitions or disabled_transition or config.fps < 30 then
     t[k] = dest
     t["move_data_"..k] = nil
   else
