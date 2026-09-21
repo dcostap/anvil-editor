@@ -4001,7 +4001,10 @@ function edit_visual_projection.pending_list_render(
 )
   local parsed = edit_visual_projection.source_list_prefix(current_text)
   if not parsed then return nil end
-  if previous and previous.markdown_preserve_list_source then
+  local allow_list_reindent = previous and previous.markdown_allow_list_reindent
+  if previous and previous.markdown_preserve_list_source
+    and not allow_list_reindent
+  then
     local render = raw_pending_source_render(view, previous, current_text, false)
     render.markdown_preserve_list_source = true
     return render
@@ -4020,7 +4023,9 @@ function edit_visual_projection.pending_list_render(
     and old_prefix and old_prefix.body ~= ""
   if old_prefix and previous
     and not edit_visual_projection.has_list_prefix(previous)
-    and (parsed.body ~= "" or same_prefix and deleting_body)
+    and same_prefix
+    and not allow_list_reindent
+    and (parsed.body ~= "" or deleting_body)
   then
     local render = raw_pending_source_render(view, previous, current_text, false)
     render.markdown_preserve_list_source = true
@@ -4078,6 +4083,7 @@ function edit_visual_projection.pending_list_render(
     )
   local render = clone_render_line(previous or {})
   render.source_text = current_text
+  render.markdown_allow_list_reindent = nil
   render.markdown_pending_provenance = "retained-list-presentation"
   render.position_rows = nil
   render.layout_height = nil
@@ -4864,6 +4870,31 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     }
   end
 
+  local function list_prefix_reindented(previous_text, source)
+    local previous = edit_visual_projection.source_list_prefix(previous_text or "")
+    local current = edit_visual_projection.source_list_prefix(source)
+    return previous and current
+      and previous.token == current.token
+      and previous.task_state == current.task_state
+      and previous.body == current.body
+      and previous.indent ~= current.indent
+  end
+
+  local function can_reindent_list_projection(captured, source)
+    return captured
+      and not captured.raw_passthrough
+      and not captured.indented
+      and list_prefix_reindented(captured.source_text, source)
+  end
+
+  local function retains_raw_list_source(captured)
+    if not captured then return false end
+    if captured.fenced or captured.frontmatter then
+      return true
+    end
+    return captured.raw_passthrough or captured.indented or false
+  end
+
   local function retain(old_line, render_line, metrics, fenced, background)
     local new_line = edit_projection.map_unchanged_line(ranges, old_line)
     if not new_line or next_lines[new_line] then return end
@@ -4943,19 +4974,28 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     if suppress_list_projection then
       render = raw_pending_source_render(view, nil, source, false)
     end
-    if captured and captured.raw_source_removed then
+    if captured and captured.raw_source_removed
+      and not can_reindent_list_projection(captured, source)
+    then
       -- Source ownership, not the old row's style, decides whether a deleted
       -- construct can keep raw geometry in the next revision.
       render = raw_pending_source_render(view, nil, source, false)
       captured = nil
+    elseif captured and captured.raw_source_removed then
+      captured.raw_source_removed = nil
+      captured.raw_passthrough = nil
+      captured.indented = nil
+    end
+    local list_reindented = can_reindent_list_projection(captured, source)
+    if list_reindented then
+      render.markdown_preserve_list_source = nil
+      render.markdown_allow_list_reindent = true
     end
     if not suppress_list_projection
-      and not render.raw_passthrough
+      and (not render.raw_passthrough
+        or list_reindented)
       and not render.markdown_preserve_list_source
-      and not (captured and (
-        captured.fenced or captured.indented
-          or captured.raw_passthrough or captured.frontmatter
-      ))
+      and not retains_raw_list_source(captured)
     then
       if edit_visual_projection.source_list_prefix(source)
         and (not edit_visual_projection.has_list_prefix(render)
@@ -5055,11 +5095,9 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
             visual_capture, "retained"
           )
         else
-          if not render.raw_passthrough
-            and not (captured and (
-              captured.fenced or captured.indented
-                or captured.raw_passthrough or captured.frontmatter
-            ))
+          if (not render.raw_passthrough
+              or can_reindent_list_projection(captured, source))
+            and not retains_raw_list_source(captured)
             and edit_visual_projection.source_list_prefix(source)
             and not edit_visual_projection.has_list_prefix(render)
           then
@@ -5099,8 +5137,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
         end
         if exact then
           local render = clone_render_line(exact.render_line)
-          if not exact.raw_passthrough and not exact.indented
-            and not exact.frontmatter
+          if not retains_raw_list_source(exact)
             and edit_visual_projection.source_list_prefix(source)
             and not edit_visual_projection.has_list_prefix(render)
           then
@@ -5123,9 +5160,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
             )
           else
             local render
-            if fallback and (
-              fallback.raw_passthrough or fallback.indented or fallback.frontmatter
-            ) then
+            if fallback and retains_raw_list_source(fallback) then
               render = {
                 source_text = source,
                 raw_passthrough = true,

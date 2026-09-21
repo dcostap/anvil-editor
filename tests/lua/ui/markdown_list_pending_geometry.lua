@@ -268,6 +268,52 @@ test.describe("Markdown list pending geometry", function()
     end)
   end
 
+  test.it("keeps a deep list stable while the unindent command runs", function()
+    local view, buffer = make_view(
+      "- parent\n        - BODY\nplain\n", "pending-deep-unindent.md"
+    )
+    buffer:set_selection(2, #buffer.lines[2])
+    test.equal(perform(view, "core:unindent"), true)
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.equal(instance.status, "pending")
+    local pending_x = body_x(view, 2, "BODY")
+    local pending_marker = has_presented_list_marker(view, 2)
+    local pending_detail = render_detail(view, 2)
+    wait_ready(view)
+    local ready_x = body_x(view, 2, "BODY")
+    markdown_model.close(buffer, "test")
+    assert_same_position(
+      "deep unindentation", pending_x, ready_x,
+      pending_marker, pending_detail
+    )
+  end)
+
+  test.it("keeps a source-revealed list stable while unindenting", function()
+    local view, buffer = make_view(
+      "- parent\n- BODY\nplain\n", "pending-unindent-after-indent.md"
+    )
+    buffer:set_selection(2, 3)
+    test.equal(perform(view, "core:indent"), true)
+    wait_ready(view)
+    test.equal(perform(view, "core:indent"), true)
+    wait_ready(view)
+    buffer:set_selection(2, #buffer.lines[2])
+    test.equal(perform(view, "core:unindent"), true)
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.equal(instance.status, "pending")
+    local pending_x = body_x(view, 2, "BODY")
+    local pending_marker = has_presented_list_marker(view, 2)
+    local pending_detail = render_detail(view, 2)
+
+    wait_ready(view)
+    local ready_x = body_x(view, 2, "BODY")
+    markdown_model.close(buffer, "test")
+    assert_same_position(
+      "source-revealed unindentation", pending_x, ready_x,
+      pending_marker, pending_detail
+    )
+  end)
+
   test.it("keeps an indented list prefix raw while typing", function()
     local view, buffer = make_view(
       "- parent\n- item\nplain\n", "pending-indented-list-code.md"
