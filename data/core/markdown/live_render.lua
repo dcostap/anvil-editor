@@ -4320,7 +4320,7 @@ interactive_table_render_line = function(view, table_node, line, allow_pending)
   })
 end
 
-local function split_pending_render(render_line, text)
+local function split_pending_render(view, render_line, text)
   local lines, line_start = {}, 1
   while true do
     local newline = text:find("\n", line_start, true)
@@ -4331,7 +4331,7 @@ local function split_pending_render(render_line, text)
     line_render.fragments = {}
     -- Empty content does not remove its enclosing block's geometry.
     if source == "" and not render_line.markdown_code_block then
-      line_render = { source_text = "", fragments = {} }
+      line_render = prose_render_line(view, "", { source_text = "", fragments = {} })
     else
       for _, fragment in ipairs(render_line.fragments or {}) do
         local col1 = fragment.source_col1 or 1
@@ -4743,6 +4743,9 @@ function edit_visual_projection.contains_retainable_presentation(render_line)
 end
 
 function edit_visual_projection.find_capture(view, pre_edit_lines, source, any_exact)
+  -- Blank source carries no presentation identity. Its row can belong to a
+  -- list, a fence, or ordinary prose. Keep the edit's own geometry instead.
+  if source:match("^%s*$") then return nil end
   for _, captured in pairs(pre_edit_lines or {}) do
     if captured.source_text == source
       and (any_exact
@@ -4969,7 +4972,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     local combined = transformed and apply_inline_edit_to_render(
       transformed, transformed.source_text, edit
     )
-    local split = combined and split_pending_render(transformed, combined)
+    local split = combined and split_pending_render(view, transformed, combined)
     if split and #split == new_line2 - new_line1 + 1 then
       for index, render in ipairs(split) do
         local line = new_line1 + index - 1

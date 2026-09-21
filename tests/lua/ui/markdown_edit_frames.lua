@@ -134,6 +134,10 @@ local function check_edit(context, source, selection, action, options)
   action(view, buffer)
   test.equal(instance.status, "pending")
   local first = frame(context, view)
+  if options.keep_margin then
+    test.equal(first.x, before.x, string.format(
+      "Enter on an empty prose row moved the caret from %.3f to %.3f", before.x, first.x))
+  end
   if options.keep_row then
     test.equal(first.to_y, before.to_y, "typing the first character must not move the viewport")
     test.equal(first.y, before.y, "typing the first character must not move the row")
@@ -188,6 +192,31 @@ test.describe("Markdown edit frames", function()
     check_edit(context, "# Heading\n\nordinary prose\n\nafter\n", { 3, 15, 3, 1 }, function(view)
       test.ok(command.perform("core:backspace", view))
     end)
+  end)
+
+  test.it("keeps new empty rows at the margin between task lists", function(context)
+    local source = "- item\n- [x] done\n- [ ] later\n\n\n\n"
+      .. "- [x] next\n    - [x] nested\n    - [ ] other\n\n# Heading\n"
+    check_edit(context, source, { 5, 1 }, function(view)
+      test.ok(command.perform("core:newline", view))
+    end, { keep_margin = true })
+  end)
+
+  test.it("keeps the empty-row margin through repeated Enter and publication", function(context)
+    local view, buffer, instance = make_view(context,
+      "- [x] done\n- [ ] later\n\n\n\n- next\n\n# Heading\n")
+    buffer:set_selection(4, 1)
+    local before = frame(context, view)
+    for index = 1, 4 do
+      test.ok(command.perform("core:newline", view))
+      local pending = frame(context, view)
+      test.equal(pending.x, before.x, "Enter must not borrow another empty row's indentation")
+      test.equal(pending.height, before.height, "Enter must keep empty prose caret height")
+      if index % 2 == 0 then
+        ready(instance)
+        same_frame(frame(context, view), pending, "repeated Enter publication")
+      end
+    end
   end)
 
   test.it("keeps the caret and viewport fixed after joining into an empty line", function(context)
