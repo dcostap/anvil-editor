@@ -10,8 +10,6 @@ Model.__index = Model
 
 local models_by_buffer = setmetatable({}, { __mode = "k" })
 local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
-local DEBOUNCE_SECONDS = 0.015
-local FAST_PUBLICATION_MS = 8
 local METADATA_LISTENER_ID = "markdown-semantic-model"
 
 local function active_perf()
@@ -63,7 +61,6 @@ function Model:new(buffer)
     published_metadata = nil,
     result = nil,
     request = nil,
-    debounce_serial = 0,
     pending_changed_range = nil,
     pending_structural_change = false,
     active_changed_range = nil,
@@ -157,7 +154,6 @@ function Model:on_metadata(event)
     models_by_buffer[buffer] = nil
     return
   end
-  self.debounce_serial = self.debounce_serial + 1
   if not model.is_markdown_buffer(buffer) then
     self:cancel_request("metadata-detach")
     if self.result then self.result:close() end
@@ -421,24 +417,9 @@ function Model:schedule(reason, transaction)
     end
     if (range.line_delta or 0) ~= 0 then self.pending_structural_change = true end
   end
-  self.debounce_serial = self.debounce_serial + 1
-  local serial = self.debounce_serial
-  if serial > 1 then self.diagnostics.coalesced = self.diagnostics.coalesced + 1 end
   self.status = "pending"
   self.reason = reason or "change"
-  if self.result and self.diagnostics.last_total_ms <= FAST_PUBLICATION_MS then
-    core.log_quiet(
-      "Markdown model dispatched revision %d immediately after %.3fms publication",
-      self:buffer().text_revision, self.diagnostics.last_total_ms
-    )
-    return self:submit(reason)
-  end
-  core.add_thread(function()
-    coroutine.yield(DEBOUNCE_SECONDS)
-    if self.debounce_serial ~= serial then return end
-    self:submit(reason)
-  end)
-  return true
+  return self:submit(reason)
 end
 
 function Model:can_render_published_line(line)
@@ -645,7 +626,6 @@ function Model:close(reason)
   local buffer = self:buffer()
   if buffer and buffer.remove_metadata_listener then buffer:remove_metadata_listener(METADATA_LISTENER_ID) end
   self:cancel_request(reason or "close")
-  self.debounce_serial = self.debounce_serial + 1
   self.parse_generation = self.parse_generation + 1
   if self.result then self.result:close() end
   self.result = nil
