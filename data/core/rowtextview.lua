@@ -298,6 +298,10 @@ function RowTextView:draw_row_selection(line, x, y, width)
       if line >= math.min(s[i], s[i + 2]) and line <= math.max(s[i], s[i + 2]) then
         local color = core.active_view == self and self:active_window_has_focus()
           and style.row_selection or style.row_selection_inactive
+        local focus = s[(self.buffer.last_selection - 1) * 4 + 1]
+        if line == focus and self.row_selection_marks[line] then
+          color = common.darken_color(color, 10)
+        end
         renderer.draw_rect(x, y, width, self:get_line_height(), color)
         break
       end
