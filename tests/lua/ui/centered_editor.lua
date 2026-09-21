@@ -195,13 +195,13 @@ test.describe("centered editor", function()
     test.equal(centered_editor.get_lane_rect(view), before)
   end)
 
-  test.it("reduces unwrapped centering to fit the widest Buffer line", function(context)
+  test.it("keeps unwrapped centering stable after width measurement", function(context)
     local text = string.rep("W", 50)
     local view = open_editor(context, text .. "\nshort\n")
     view.wrapping_enabled = false
     view.wrapped_settings = nil
 
-    local initial_x, initial_width = centered_editor.get_lane_rect(view)
+    local _, initial_width = centered_editor.get_lane_rect(view)
     test.equal(initial_width, config.plugins.centered_editor.max_width)
 
     view:get_h_scrollable_size()
@@ -211,17 +211,11 @@ test.describe("centered editor", function()
     end, 2), "expected the horizontal extent scan to complete")
 
     local lane_x, lane_width = centered_editor.get_lane_rect(view)
-    local _, _, scrollbar_width = view.v_scrollbar:get_track_rect()
-    local content_width = view:get_gutter_width()
-      + view:get_font():get_width(text)
-      + math.max(style.padding.x, scrollbar_width or 0)
-    local expected_x = view.position.x
-      + math.floor((view.size.x - content_width) / 2)
-
-    test.ok(content_width > initial_width and content_width < view.size.x)
-    test.ok(lane_x < initial_x, "expected the wide Buffer to reduce the left margin")
-    test.equal(lane_x, expected_x)
-    test.equal(lane_width, content_width)
+    test.equal(lane_width, initial_width)
+    test.equal(
+      lane_x,
+      view.position.x + math.floor((view.size.x - initial_width) / 2)
+    )
   end)
 
   test.it("uses the Markdown Live Preview width for centering", function(context)

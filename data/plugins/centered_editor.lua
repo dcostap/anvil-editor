@@ -154,29 +154,13 @@ local function get_base_lane_rect(view)
     math.max(0, math.min(max_width, available))
   )
   local lane_x = view.position.x + math.floor((view.size.x - lane_width) / 2)
-  return lane_x, lane_width, available, max_width
+  return lane_x, lane_width
 end
 
 function M.get_lane_rect(view)
-  local base_x, base_width, available, max_width = get_base_lane_rect(view)
-  if M.wrapping_limits_to_lane(view)
-  or view.__markdown_live_attached
-  or view.__centered_editor_measuring_content then
-    return base_x, base_width
-  end
-
-  local old_measuring = view.__centered_editor_measuring_content
-  view.__centered_editor_measuring_content = true
-  local ok, content_width = pcall(view.get_h_content_size, view)
-  view.__centered_editor_measuring_content = old_measuring
-  if not ok then error(content_width, 0) end
-
-  local lane_width = math.min(
-    view.size.x,
-    math.max(0, math.min(math.max(max_width, content_width), available))
-  )
-  local lane_x = view.position.x + math.floor((view.size.x - lane_width) / 2)
-  return lane_x, lane_width
+  -- Keep the lane stable while the Text View measures unwrapped content.
+  -- Wide lines use horizontal scrolling instead of moving the editor.
+  return get_base_lane_rect(view)
 end
 
 function M.wrapping_limits_to_lane(view)
@@ -277,10 +261,6 @@ function TextView:get_presentation_viewport_width(...)
     return originals.textview.get_presentation_viewport_width(self, ...)
   end
   if self.__centered_editor_in_geometry then return self.size.x end
-  if self.__centered_editor_measuring_content then
-    local base_x = get_base_lane_rect(self)
-    return self.position.x + self.size.x - base_x
-  end
   if M.should_center(self) then
     local _, width = M.get_editor_rect(self)
     return width
