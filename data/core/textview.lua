@@ -1153,8 +1153,13 @@ function TextView:get_scrollable_line_count()
 end
 
 
-local function normalize_scroll_context_lines()
-  return math.max(0, math.floor(tonumber(config.scroll_context_lines) or 0))
+local function normalize_scroll_context_lines(view)
+  local context_lines = config.scroll_context_lines
+  if view.__markdown_live_attached
+  and config.markdown_live_scroll_context_lines ~= nil then
+    context_lines = config.markdown_live_scroll_context_lines
+  end
+  return math.max(0, math.floor(tonumber(context_lines) or 0))
 end
 
 
@@ -1164,7 +1169,7 @@ function TextView:get_visible_scroll_context_lines()
   local lh = self:get_line_height()
   if lh <= 0 then return 0 end
   local visible_span = math.max(0, math.floor((self:get_vertical_viewport_height() - style.padding.y) / lh))
-  return math.min(normalize_scroll_context_lines(), math.floor(visible_span / 2))
+  return math.min(normalize_scroll_context_lines(self), math.floor(visible_span / 2))
 end
 
 

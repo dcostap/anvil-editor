@@ -19,12 +19,13 @@ local function wait_ready(instance)
   return instance.status == "ready"
 end
 
-local function make_view()
+local function make_view(filename)
   local lines = {}
   for line = 1, 60 do
     lines[line] = line == 36 and "### Customize callouts" or ""
   end
-  local buffer = Buffer("markdown-heading-scroll.md", "markdown-heading-scroll.md", true)
+  filename = filename or "markdown-heading-scroll.md"
+  local buffer = Buffer(filename, filename, true)
   buffer:insert(1, 1, table.concat(lines, "\n"))
   buffer:clear_undo_redo()
 
@@ -58,10 +59,12 @@ test.describe("Markdown heading navigation scrolling", function()
     context.old_active_view = core.active_view
     context.old_markdown_live_editor = config.markdown_live_editor
     context.old_scroll_context_lines = config.scroll_context_lines
+    context.old_markdown_live_scroll_context_lines = config.markdown_live_scroll_context_lines
     context.old_scroll_past_end = config.scroll_past_end
     context.old_transitions = config.transitions
     config.markdown_live_editor = true
     config.scroll_context_lines = 28
+    config.markdown_live_scroll_context_lines = 28
     config.scroll_past_end = true
     config.transitions = false
   end)
@@ -70,9 +73,22 @@ test.describe("Markdown heading navigation scrolling", function()
     if context.view then context.view:release_owned_features("test") end
     config.markdown_live_editor = context.old_markdown_live_editor
     config.scroll_context_lines = context.old_scroll_context_lines
+    config.markdown_live_scroll_context_lines = context.old_markdown_live_scroll_context_lines
     config.scroll_past_end = context.old_scroll_past_end
     config.transitions = context.old_transitions
     core.active_view = context.old_active_view
+  end)
+
+  test.it("uses separate context lines in Markdown Live Editor", function(context)
+    config.scroll_context_lines = 28
+    config.markdown_live_scroll_context_lines = 10
+    local view = make_view("markdown-heading-context.md")
+    context.view = view
+    view.size.y = 1200
+    refresh(view)
+
+    test.ok(markdown.live_render.is_live_mode(view))
+    test.equal(view:get_visible_scroll_context_lines(), 10)
   end)
 
   for _, manual_scroll in ipairs({ false, true }) do

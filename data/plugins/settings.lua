@@ -702,6 +702,15 @@ settings.add("Editor",
       default = true
     },
     {
+      label = "Markdown editor: Context Lines",
+      description = "Minimum number of lines to keep visible above and below the cursor when scrolling the Markdown editor.",
+      path = "markdown_live_scroll_context_lines",
+      type = settings.type.NUMBER,
+      default = 10,
+      min = 0,
+      step = 1
+    },
+    {
       label = "Line Limit",
       description = "Amount of characters at which the line breaking column will be drawn.",
       path = "line_limit",
