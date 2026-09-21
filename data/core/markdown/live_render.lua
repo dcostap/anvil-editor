@@ -5418,6 +5418,17 @@ local function fenced_code_delimiter_kind(view, fenced, line)
   return marker and closes_fence(closing, marker, count) and "close" or nil
 end
 
+local function fenced_code_line_height(view)
+  local base_font = style.syntax_fonts.normal or view:get_font()
+  local height = base_font:get_height()
+  -- Keep every code row stable while lazy tokenization publishes new token
+  -- categories with potentially different font metrics.
+  for _, font in pairs(style.syntax_fonts) do
+    if font and font.get_height then height = math.max(height, font:get_height()) end
+  end
+  return math.max(math.floor(height * config.line_height), height)
+end
+
 local function fenced_code_is_active(view, fenced, state)
   state = state or current_selection_state(view)
   for i = 1, #(state and state.selections or {}), 4 do
@@ -5432,15 +5443,136 @@ local function fenced_code_is_active(view, fenced, state)
   return false
 end
 
-local function fenced_code_line_height(view)
-  local base_font = style.syntax_fonts.normal or view:get_font()
-  local height = base_font:get_height()
-  -- Keep every code row stable while lazy tokenization publishes new token
-  -- categories with potentially different font metrics.
-  for _, font in pairs(style.syntax_fonts) do
-    if font and font.get_height then height = math.max(height, font:get_height()) end
+function live._markdown_code_block_id(fenced)
+  local source = fenced and fenced.source or {}
+  return fenced and (fenced.id
+    or string.format("code:%s:%s", source.start_byte or source.line1 or 0,
+      source.end_byte or source.line2 or 0))
+end
+
+function live._markdown_code_copy_text(view, fenced)
+  if not (view and fenced and fenced.source) then return "" end
+  local first_line = fenced.source.line1 + 1
+  local last_line = fenced.effective_line2 or fenced.source.line2
+  if fenced_code_delimiter_kind(view, fenced, last_line) == "close" then
+    last_line = last_line - 1
   end
-  return math.max(math.floor(height * config.line_height), height)
+  if first_line > last_line then return "" end
+
+  local opening = (view.buffer.lines[fenced.source.line1] or ""):gsub("\n$", "")
+  local prefix = opening:sub(1, math.max(0, (fenced.source.col1 or 1) - 1))
+  local lines = {}
+  for line = first_line, math.min(last_line, #view.buffer.lines) do
+    local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+    if prefix ~= "" and text:sub(1, #prefix) == prefix then
+      text = text:sub(#prefix + 1)
+    end
+    lines[#lines + 1] = text
+  end
+  return table.concat(lines, "\n")
+end
+
+function live._copy_fenced_code_block(view, fenced)
+  local text = live._markdown_code_copy_text(view, fenced)
+  system.set_clipboard(text)
+  core.cursor_clipboard = {}
+  core.cursor_clipboard_whole_line = {}
+  if core.status_bar then
+    core.status_bar:show_message("i", style.text, "Copied code block")
+  end
+  core.log_quiet(
+    "Markdown Live Preview: copied fenced code block from %s",
+    view.buffer:get_name()
+  )
+  return true
+end
+
+function live._markdown_code_copy_button_fragment(view, fenced)
+  local block_id = live._markdown_code_block_id(fenced)
+  local line_height = fenced_code_line_height(view)
+  local button_size = math.max(16 * SCALE, math.floor(line_height * 0.82))
+  local hit_padding = math.max(2 * SCALE, math.floor(button_size * 0.16))
+  local hit_size = button_size + hit_padding * 2
+  local right_padding = math.max(4 * SCALE, math.floor(line_height * 0.28))
+
+  local function draw_outline(x, y, size, thickness, color)
+    renderer.draw_rect(x, y, size, thickness, color)
+    renderer.draw_rect(x, y + size - thickness, size, thickness, color)
+    renderer.draw_rect(x, y + thickness, thickness, size - thickness * 2, color)
+    renderer.draw_rect(
+      x + size - thickness, y + thickness,
+      thickness, size - thickness * 2, color
+    )
+  end
+
+  return {
+    source_col1 = 1,
+    source_col2 = 1,
+    text = "",
+    width = 0,
+    hit_width = hit_size,
+    layout_x = math.max(0, image_available_width(view) - hit_size - right_padding),
+    markdown_code_copy_button = true,
+    markdown_code_block_id = block_id,
+    widget = {
+      width = hit_size,
+      height = hit_size,
+      cursor = "hand",
+      suppress_hover_overlay = true,
+      draw = function(_, fragment, x, y, row_height)
+        local owner = view.__markdown_live_owner
+        if not owner or owner.markdown_code_copy_hover_id ~= block_id then return end
+        local button_x = x + hit_padding
+        local button_y = y + math.max(0, (row_height - button_size) / 2)
+        local background = { table.unpack(style.accent) }
+        background[4] = (background[4] or 255) * (fragment.hovered and 0.95 or 0.72)
+        renderer.draw_rounded_rect(
+          button_x, button_y, button_size, button_size,
+          math.max(2 * SCALE, button_size * 0.18), background
+        )
+
+        local foreground = { table.unpack(style.background) }
+        foreground[4] = (foreground[4] or 255) * (fragment.hovered and 1 or 0.9)
+        local thickness = math.max(1, math.floor(SCALE))
+        local icon_size = math.max(6 * SCALE, math.floor(button_size * 0.42))
+        local icon_x = button_x + math.floor((button_size - icon_size) / 2)
+        local icon_y = button_y + math.floor((button_size - icon_size) / 2)
+        draw_outline(icon_x + thickness, icon_y, icon_size, thickness, foreground)
+        draw_outline(icon_x, icon_y + thickness, icon_size, thickness, foreground)
+      end,
+      on_mouse_pressed = function(_, owner, _, button)
+        if button ~= "left" then return false end
+        return live._copy_fenced_code_block(owner, fenced)
+      end,
+    },
+  }
+end
+
+function live._update_code_copy_hover(view, x, y)
+  local owner = view.__markdown_live_owner
+  if not owner then return end
+  local block_id
+  if not view_in_source_mode(view)
+    and view.render_content_interactions_enabled ~= false
+    and not view.mouse_selecting
+    and not view.hovering_gutter
+    and not view:scrollbar_hovering()
+    and not view:scrollbar_dragging()
+  then
+    local ok, line = pcall(view.resolve_screen_position, view, x, y)
+    if ok and line then
+      local fenced = fenced_code_for_line(view, line)
+      if fenced and fenced.effective_line2 > fenced.source.line1
+        and not fenced_code_is_active(view, fenced)
+      then
+        block_id = live._markdown_code_block_id(fenced)
+      end
+    end
+  end
+  if owner.markdown_code_copy_hover_id ~= block_id then
+    owner.markdown_code_copy_hover_id = block_id
+    core.redraw = true
+  end
 end
 
 local function fenced_code_fragments(text, entry)
@@ -6445,18 +6577,24 @@ local function build_render_line(view, line, _context)
     local delimiter_kind = fenced_code_delimiter_kind(view, fenced, line)
     if delimiter_kind then
       if not fenced_code_is_active(view, fenced) then
+        local fragments = {
+          {
+            source_col1 = 1, source_col2 = #text + 1,
+            hidden = true,
+            semantic_id = fenced.id .. ":" .. delimiter_kind,
+          },
+        }
+        if delimiter_kind == "open"
+          and fenced.effective_line2 > fenced.source.line1
+        then
+          fragments[#fragments + 1] = live._markdown_code_copy_button_fragment(view, fenced)
+        end
         return {
           source_text = text,
           metric_height = view:get_line_height(),
           markdown_code_block = true,
           semantic_generation = select(2, semantic_line(view, line)),
-          fragments = {
-            {
-              source_col1 = 1, source_col2 = #text + 1,
-              hidden = true,
-              semantic_id = fenced.id .. ":" .. delimiter_kind,
-            },
-          },
+          fragments = fragments,
         }
       end
       return { raw_passthrough = true }
@@ -6608,6 +6746,7 @@ local function apply_source_mode(view, enabled, reason)
   enabled = enabled == true
   if owner.source_mode == enabled then return false end
   owner.source_mode = enabled
+  owner.markdown_code_copy_hover_id = nil
   metric_records.clear(owner)
   view.view_icon = live.view_icon
   if enabled then view.view_icon = nil end
@@ -7360,10 +7499,47 @@ function provider:on_selection_interaction_end(view, new_state, old_state)
   return true
 end
 
+function live._install_code_copy_hover(view)
+  local previous_mouse_moved = view.on_mouse_moved
+  local previous_mouse_left = view.on_mouse_left
+  view.__markdown_live_previous_mouse_moved = previous_mouse_moved
+  view.__markdown_live_previous_mouse_left = previous_mouse_left
+  view.on_mouse_moved = function(owner, x, y, ...)
+    local result = previous_mouse_moved(owner, x, y, ...)
+    live._update_code_copy_hover(owner, x, y)
+    return result
+  end
+  view.on_mouse_left = function(owner, ...)
+    local result = previous_mouse_left(owner, ...)
+    local markdown_owner = owner.__markdown_live_owner
+    if markdown_owner and markdown_owner.markdown_code_copy_hover_id then
+      markdown_owner.markdown_code_copy_hover_id = nil
+      core.redraw = true
+    end
+    return result
+  end
+end
+
+function live._remove_code_copy_hover(view)
+  if view.__markdown_live_previous_mouse_moved then
+    view.on_mouse_moved = view.__markdown_live_previous_mouse_moved
+  else
+    view.on_mouse_moved = nil
+  end
+  if view.__markdown_live_previous_mouse_left then
+    view.on_mouse_left = view.__markdown_live_previous_mouse_left
+  else
+    view.on_mouse_left = nil
+  end
+  view.__markdown_live_previous_mouse_moved = nil
+  view.__markdown_live_previous_mouse_left = nil
+end
+
 function live.attach(view)
   if not (view and view.extends and view:extends(Editor)) then return false end
   if view.__markdown_live_attached then return false end
   ensure_owner(view)
+  live._install_code_copy_hover(view)
   view:add_visual_metric_provider(PROVIDER_ID, provider)
   view:add_decoration_provider(PROVIDER_ID, decoration_provider)
   -- Install gutter policy before the render provider reconstructs soft-wrap
@@ -7432,6 +7608,7 @@ end
 
 function live.detach(view)
   if not (view and view.__markdown_live_attached) then return false end
+  live._remove_code_copy_hover(view)
   unbind_link_index(view)
   unbind_fence_service(view)
   unbind_semantic_model(view)

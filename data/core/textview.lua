@@ -4680,7 +4680,9 @@ function TextView:get_render_widget_at_position(x, y)
         local anchored = col1 == col2 and col1 >= row_start
           and (col1 < row_end or (last_row and col1 == row_end))
         if anchored then
-          left = self:get_line_render_col_x_offset(render_line, col1) - width
+          left = fragment.layout_x ~= nil
+            and fragment.layout_x
+            or self:get_line_render_col_x_offset(render_line, col1) - width
         elseif from < to and from == col1 and to == col2 then
           left = (render_line.x_offset or 0) + begin_width
             + self:get_line_render_col_x_offset(render_line, col1)
@@ -7215,8 +7217,9 @@ function TextView:draw_line_text(line, x, y)
           local width = fragment.width or fragment.widget.width or 0
           -- Column mapping places the anchor caret after this widget; drawing
           -- still starts one widget width before that caret.
-          local anchor_x = x
-            + self:get_line_render_col_x_offset(render_line, col1) - width
+          local anchor_x = fragment.layout_x ~= nil
+            and x + fragment.layout_x
+            or x + self:get_line_render_col_x_offset(render_line, col1) - width
           draw_render_widget(
             self, fragment, anchor_x, content_y, content_height,
             "wrapped anchored widget"

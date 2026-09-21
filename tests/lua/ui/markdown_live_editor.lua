@@ -3621,6 +3621,47 @@ test.describe("Markdown Live Preview", function()
     test.equal(view:get_line_render(3), nil)
   end)
 
+  test.it("copies a fenced code block from its hover button", function(context)
+    context.clipboard = system.get_clipboard()
+    context.old_set_clipboard = system.set_clipboard
+    local copied
+    system.set_clipboard = function(text) copied = text end
+    local ok, err = pcall(function()
+      local view, buffer = make_view(
+        "before\n```lua\nprint('one')\nprint('two')\n```\nafter",
+        "fence-copy-button.md"
+      )
+      view:set_wrapping_enabled(true)
+      buffer:set_selection(6, 1)
+      refresh(view)
+
+      local opening = test.not_nil(view:get_line_render(2))
+      local button
+      for _, fragment in ipairs(opening.fragments or {}) do
+        if fragment.markdown_code_copy_button then button = fragment break end
+      end
+      button = test.not_nil(button)
+      test.not_nil(button.widget)
+      test.equal(view.__markdown_live_owner.markdown_code_copy_hover_id, nil)
+
+      local body_x, body_y = view:get_line_screen_position(3)
+      view:on_mouse_moved(body_x + 2, body_y + 2, 0, 0)
+      test.equal(
+        view.__markdown_live_owner.markdown_code_copy_hover_id,
+        button.markdown_code_block_id
+      )
+
+      local button_x, button_y = view:get_line_screen_position(2)
+      button_x = button_x + button.layout_x + button.widget.width / 2
+      button_y = button_y + view:get_line_height() / 2
+      test.ok(view:on_mouse_pressed("left", button_x, button_y, 1))
+      test.equal(copied, "print('one')\nprint('two')")
+    end)
+    system.set_clipboard = context.old_set_clipboard
+    system.set_clipboard(context.clipboard or "")
+    if not ok then error(err, 0) end
+  end)
+
   test.it("insets fenced code content without moving revealed fence delimiters", function()
     local view, buffer = make_view("```lua\nprint('ok')\n```\nplain", "fence-padding.md")
     buffer:set_selection(4, 1)
