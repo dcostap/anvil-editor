@@ -47,12 +47,15 @@ test.describe("binary Buffer performance guards", function()
   test.before_each(function(context)
     context.buffers = {}
     context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
+    context.linewrapping_enable_by_default = config.plugins.linewrapping.enable_by_default
+    config.plugins.linewrapping.enable_by_default = true
     panes.reset_for_tests()
   end)
 
   test.after_each(function(context)
     autocomplete.close()
     config.plugins.autocomplete.suggestions_scope = context.autocomplete_scope
+    config.plugins.linewrapping.enable_by_default = context.linewrapping_enable_by_default
     panes.reset_for_tests()
     for _, buffer in ipairs(context.buffers) do
       if buffer:is_dirty() then buffer:clean() end
@@ -61,7 +64,6 @@ test.describe("binary Buffer performance guards", function()
   end)
 
   test.it("does not enable default wrapping for a binary Buffer", function(context)
-    test.equal(config.plugins.linewrapping.enable_by_default, true)
     local view = open_binary_view(context, "binary data")
 
     test.equal(view:is_wrapping_enabled(), false)
