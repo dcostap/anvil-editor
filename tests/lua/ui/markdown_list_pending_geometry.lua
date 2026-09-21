@@ -314,6 +314,27 @@ test.describe("Markdown list pending geometry", function()
     )
   end)
 
+  test.it("keeps an empty source-revealed list stable while unindenting", function()
+    local view, buffer = make_view(
+      "- parent\n- item\nplain\n", "pending-empty-unindent-after-indent.md"
+    )
+    buffer:set_selection(2, 3)
+    test.equal(perform(view, "core:indent"), true)
+    wait_ready(view)
+    test.equal(perform(view, "core:indent"), true)
+    wait_ready(view)
+    buffer:set_selection(2, #buffer.lines[2])
+    for _ = 1, 4 do test.equal(perform(view, "core:backspace"), true) end
+    wait_ready(view)
+    test.equal(perform(view, "core:unindent"), true)
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.equal(instance.status, "pending")
+    local pending_marker = has_presented_list_marker(view, 2)
+    local pending_detail = render_detail(view, 2)
+    wait_ready(view)
+    test.ok(pending_marker, pending_detail)
+  end)
+
   test.it("keeps an indented list prefix raw while typing", function()
     local view, buffer = make_view(
       "- parent\n- item\nplain\n", "pending-indented-list-code.md"

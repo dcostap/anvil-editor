@@ -4036,7 +4036,9 @@ function edit_visual_projection.pending_list_render(
   -- heading, not a nested list item.  Do not invent a list presentation for
   -- that transition.  A non-empty body will be checked by the semantic model
   -- soon; an empty body must stay conservative until then.
-  if edit_visual_projection.empty_list_prefix_transition(
+  local empty_list_reindent = allow_list_reindent and old_prefix
+    and #old_prefix.indent > #parsed.indent
+  if not empty_list_reindent and edit_visual_projection.empty_list_prefix_transition(
     previous and previous.source_text or nil, current_text
   ) then
     return nil
@@ -4966,7 +4968,14 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
   local function publish(line, render, captured, provenance)
     if not render then return false end
     local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
-    local suppress_list_projection = captured
+    local list_reindented = can_reindent_list_projection(captured, source)
+    local previous_list = captured
+      and edit_visual_projection.source_list_prefix(captured.source_text or "")
+    local current_list = edit_visual_projection.source_list_prefix(source)
+    local empty_list_reindented = list_reindented and previous_list and current_list
+      and previous_list.body == "" and current_list.body == ""
+      and #previous_list.indent > #current_list.indent
+    local suppress_list_projection = not empty_list_reindented and captured
       and captured.source_line == line
       and edit_visual_projection.empty_list_prefix_transition(
         captured.source_text, source
@@ -4986,7 +4995,6 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
       captured.raw_passthrough = nil
       captured.indented = nil
     end
-    local list_reindented = can_reindent_list_projection(captured, source)
     if list_reindented then
       render.markdown_preserve_list_source = nil
       render.markdown_allow_list_reindent = true
