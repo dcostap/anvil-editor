@@ -328,6 +328,16 @@ function RowTextView:draw_row_selection(line, x, y, width)
           color = increase_opacity(color, 43)
         end
         renderer.draw_rect(x, y, width, self:get_line_height(), color)
+        if self.row_selection_marks[line] then
+          local border = increase_opacity(
+            core.active_view == self and self:active_window_has_focus()
+              and style.row_selection or style.row_selection_inactive,
+            75
+          )
+          local thickness = math.max(1, style.divider_size or 1)
+          renderer.draw_rect(x, y, width, thickness, border)
+          renderer.draw_rect(x, y + self:get_line_height() - thickness, width, thickness, border)
+        end
         break
       end
     end
