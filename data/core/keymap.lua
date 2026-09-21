@@ -374,6 +374,7 @@ keymap.add_direct {
   ["ctrl+shift+return"] = "core:newline_above",
   ["ctrl+j"] = "editor:join_lines",
   ["ctrl+a"] = "core:select_all",
+  ["space"] = "core:toggle_row_mark",
   ["ctrl+d"] = "editor:add_selection_next_match",
   ["ctrl+f3"] = "editor:select_next",
   ["ctrl+shift+f3"] = "editor:select_previous",

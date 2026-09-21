@@ -226,9 +226,13 @@ The caret and selection state owned by a Text View.
 _Avoid_: Buffer selection, shared selection
 
 **Row Selection Mode**:
-A Text View mode for selecting complete selectable rows without a text caret; other rows remain outside the selection.
-Normal text navigation and selection remain available outside this mode.
+A non-editable Text View mode for selecting complete selectable rows without a text caret; other rows remain outside the selection.
+Normal text editing and selection remain available outside this mode.
 _Avoid_: special mode, line cursor
+
+**Marked Row**:
+A row retained in a Row Selection Mode selection when navigation moves to another row. The focused row remains selected without being marked.
+_Avoid_: permanently selected row, pinned row
 
 **Caret Trail**:
 A global animated extension of the focused input caret. It follows that caret across Views and Panes.

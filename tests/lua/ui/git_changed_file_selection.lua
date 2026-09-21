@@ -162,12 +162,26 @@ test.describe("Git Log changed-file row selection", function()
   test.it("keeps file selection by path when changed-file rows move", function()
     local view, details, commit = open_details()
     command.perform("core:move_to_next_line")
+    command.perform("core:toggle_row_mark")
     commit.changed_files = {
       { status = "modified", old_path = "beta/b.txt", new_path = "beta/b.txt" },
       { status = "modified", old_path = "delta/d.txt", new_path = "delta/d.txt" },
     }
     view:update_pane_buffers()
     test.same(selected_paths(details), { "beta/b.txt" })
+    command.perform("core:move_to_next_line")
+    test.same(selected_paths(details), { "beta/b.txt", "delta/d.txt" })
+  end)
+
+  test.it("keeps marked files when their folder closes and reopens", function()
+    local view, details = open_details()
+    command.perform("core:toggle_row_mark")
+    local folder = details.path_tree_line_offset + details.path_tree:line_for_path("alpha", "dir")
+    test.ok(view:toggle_details_tree_folder(details, folder))
+    test.same(selected_paths(details), { "beta/b.txt" })
+    folder = details.path_tree_line_offset + details.path_tree:line_for_path("alpha", "dir")
+    test.ok(view:toggle_details_tree_folder(details, folder))
+    test.same(selected_paths(details), { "alpha/a.txt", "beta/b.txt" })
   end)
 
   test.it("leaves no selected file when all folders close", function()

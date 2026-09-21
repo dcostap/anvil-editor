@@ -563,9 +563,17 @@ function PathTreeView:get_path_tree_selection()
   if not self.row_selection_mode then return nil end
   local state = self:get_selection_state()
   local focus = self:path_tree_row(state.selections[(state.last_selection - 1) * 4 + 1])
-  local selection = { paths = {}, focus = focus and focus.path }
+  local selection = { paths = {}, marked_paths = {}, focus = focus and focus.path }
   for _, line in ipairs(self:get_selected_rows()) do
     selection.paths[#selection.paths + 1] = self:path_tree_row(line).path
+  end
+  if self.path_tree_marked_paths then
+    for path in pairs(self.path_tree_marked_paths) do selection.marked_paths[#selection.marked_paths + 1] = path end
+    table.sort(selection.marked_paths)
+  else
+    for _, line in ipairs(self:get_marked_rows()) do
+      selection.marked_paths[#selection.marked_paths + 1] = self:path_tree_row(line).path
+    end
   end
   return selection
 end
@@ -573,10 +581,12 @@ end
 function PathTreeView:restore_path_tree_selection(selection)
   if not self.row_selection_mode then return end
   local state = { selections = {}, last_selection = 1 }
+  local selected_lines = {}
   for _, path in ipairs(selection and selection.paths or {}) do
     local line = self.path_tree and self.path_tree:line_for_path(path, "file")
     if line then
       line = line + self.path_tree_line_offset
+      selected_lines[line] = true
       for _, value in ipairs { line, #self.buffer.lines[line], line, 1 } do
         state.selections[#state.selections + 1] = value
       end
@@ -584,8 +594,35 @@ function PathTreeView:restore_path_tree_selection(selection)
     end
   end
   if #state.selections == 0 then state.selections = { 1, 1, 1, 1 } end
+  local marked_rows = {}
+  self.path_tree_marked_paths = {}
+  for _, path in ipairs(selection and selection.marked_paths or {}) do
+    self.path_tree_marked_paths[path] = true
+    local line = self.path_tree and self.path_tree:line_for_path(path, "file")
+    if line then
+      line = line + self.path_tree_line_offset
+      marked_rows[#marked_rows + 1] = line
+      if not selected_lines[line] then
+        for _, value in ipairs { line, #self.buffer.lines[line], line, 1 } do
+          state.selections[#state.selections + 1] = value
+        end
+      end
+    end
+  end
+  self:set_marked_rows(marked_rows, true)
   self:set_selection_state(state)
   self:normalize_row_selection(true)
+end
+
+function PathTreeView:on_row_mark_toggled(line, marked)
+  local row = self:path_tree_row(line)
+  if not row then return end
+  self.path_tree_marked_paths = self.path_tree_marked_paths or {}
+  self.path_tree_marked_paths[row.path] = marked or nil
+end
+
+function PathTreeView:on_row_marks_cleared()
+  self.path_tree_marked_paths = nil
 end
 
 function PathTreeView:set_path_tree(tree, line_offset, selection)

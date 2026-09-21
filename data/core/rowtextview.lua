@@ -10,6 +10,13 @@ local RowTextView = TextView:extend()
 
 function RowTextView:new(buffer, enable_row_selection)
   RowTextView.super.new(self, buffer)
+  self.row_selection_marks = {}
+  self:add_edit_guard("row-selection-mode", function(view)
+    if view.row_selection_mode then
+      return false, "Disable Row Selection Mode to edit"
+    end
+    return true
+  end)
   self:set_wrapping_enabled(false)
   self:add_selection_listener("row-selection", function()
     if self.row_selection_mode then self:normalize_row_selection() end
@@ -62,6 +69,14 @@ local function append_row_range(view, selections, head, anchor)
     else finish(row - direction) end
   end
   finish(head)
+end
+
+local function append_marked_rows(view, selections, first, last)
+  for row in pairs(view.row_selection_marks or {}) do
+    if view:is_selectable_row(row) and not (first and row >= first and row <= last) then
+      append_row_range(view, selections, row, row)
+    end
+  end
 end
 
 function RowTextView:set_row_selection_state(state)
@@ -118,12 +133,54 @@ function RowTextView:select_row(row, extend, add, direction)
   if not row then return false end
   local state = self:get_selection_state()
   local anchor = extend and (self.row_selection_anchor or state.selections[(state.last_selection - 1) * 4 + 3]) or row
-  local base = add and state.selections or extend and self.row_selection_base or {}
+  local base
+  if add then
+    base = state.selections
+  elseif extend then
+    base = self.row_selection_base or {}
+  else
+    base = {}
+    append_marked_rows(self, base, row, row)
+  end
   local selections = { table.unpack(base) }
   append_row_range(self, selections, row, anchor)
   self:set_row_selection_state({ selections = selections, last_selection = #selections / 4 })
   self.row_selection_anchor, self.row_selection_base = anchor, base
   core.redraw = true
+  return true
+end
+
+function RowTextView:get_marked_rows()
+  local rows = {}
+  for row in pairs(self.row_selection_marks or {}) do
+    if self:is_selectable_row(row) then rows[#rows + 1] = row end
+  end
+  table.sort(rows)
+  return rows
+end
+
+function RowTextView:set_marked_rows(rows, preserve_selection)
+  self.row_selection_marks = {}
+  for _, row in ipairs(rows or {}) do
+    if self:is_selectable_row(row) then self.row_selection_marks[row] = true end
+  end
+  if not preserve_selection then
+    local state = self:get_selection_state()
+    local row = state.selections[(state.last_selection - 1) * 4 + 1]
+    self:select_row(row)
+  end
+end
+
+function RowTextView:toggle_row_mark()
+  if not self.row_selection_mode then return false end
+  local state = self:get_selection_state()
+  local row = state.selections[(state.last_selection - 1) * 4 + 1]
+  if not self:is_selectable_row(row) then return false end
+  local marked = not self.row_selection_marks[row]
+  self.row_selection_marks[row] = marked or nil
+  if self.on_row_mark_toggled then self:on_row_mark_toggled(row, marked) end
+  self:select_row(row)
+  core.log_quiet("Row Selection Mode row %d %s", row, marked and "marked" or "unmarked")
   return true
 end
 
@@ -140,6 +197,10 @@ function RowTextView:set_row_selection_mode(enabled)
     end
   end
   self.row_selection_mode = enabled
+  if not enabled then
+    self.row_selection_marks = {}
+    if self.on_row_marks_cleared then self:on_row_marks_cleared() end
+  end
   self.mouse_selecting = nil
   self.row_selection_snapshot = nil
   if enabled then

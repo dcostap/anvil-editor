@@ -3391,6 +3391,15 @@ command.add(function(...)
   return not not (owned_text_view or current_text_view), view, ...
 end, selection_commands(commands))
 
+command.add(function()
+  local view = core.active_view
+  return not not (view and view.row_selection_mode and view.toggle_row_mark), view
+end, {
+  ["core:toggle_row_mark"] = function(view)
+    view:toggle_row_mark()
+  end,
+})
+
 command.add_toggle("editor:toggle_line_wrapping", {
   palette = true,
   get = function(view)
