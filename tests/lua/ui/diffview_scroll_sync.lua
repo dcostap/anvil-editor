@@ -93,4 +93,60 @@ test.describe("Diff Side scroll synchronization", function()
     test.ok(left.scroll.y <= left_max, "selection must not overscroll the shorter side")
     test.ok(left.scroll.to.y <= left_max, "selection must not overscroll the shorter side target")
   end)
+
+  test.it("keeps the edited side as the scroll source during a diff update", function(context)
+    local old_fold_default = config.plugins.diffview.fold_unchanged_by_default
+    config.plugins.diffview.fold_unchanged_by_default = false
+    context.restore_fold_default = function()
+      config.plugins.diffview.fold_unchanged_by_default = old_fold_default
+    end
+
+    local left_lines, right_lines = {}, {}
+    for i = 1, 200 do
+      left_lines[i] = "same " .. i
+      right_lines[i] = left_lines[i]
+    end
+    left_lines[100], right_lines[100] = "old value", "new value"
+    local view = diffview.open({
+      contents = {
+        diffview.content.text(table.concat(left_lines, "\n")),
+        diffview.content.text(table.concat(right_lines, "\n")),
+      },
+      auto_reveal_first_change = false,
+    }, true)
+    context.view = view
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 300
+    view:update()
+
+    local deadline = system.get_time() + 2
+    while view.updater_idx do
+      test.ok(system.get_time() < deadline, "initial diff computation did not finish")
+      coroutine.yield(0.01)
+    end
+
+    local left, right = view.buffer_view_a, view.buffer_view_b
+    left.scroll.y, left.scroll.to.y = 400, 600
+    right.scroll.y, right.scroll.to.y = 400, 600
+    core.set_active_view(right)
+    right.buffer:set_selection(100, 1)
+    right.buffer:apply_edits({
+      { line1 = 100, col1 = 1, line2 = 100, col2 = 1, text = "inserted\n" },
+    }, { type = "insert" })
+
+    -- The active side can request a new animated target before the worker
+    -- publishes the updated alignment.
+    right.scroll.y, right.scroll.to.y = 450, 900
+
+    deadline = system.get_time() + 2
+    while view.updater_idx do
+      test.ok(system.get_time() < deadline, "edited diff computation did not finish")
+      coroutine.yield(0.01)
+    end
+
+    test.equal(left.scroll.y, right.scroll.y)
+    test.equal(left.scroll.to.y, right.scroll.to.y)
+    test.equal(right.scroll.y, 450)
+    test.equal(right.scroll.to.y, 900)
+  end)
 end)

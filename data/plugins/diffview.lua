@@ -719,7 +719,7 @@ function DiffView:cancel_diff_update()
   self.updater_idx = nil
 end
 
-function DiffView:update_diff()
+function DiffView:update_diff(scroll_source)
   if self.skip_update_diff then self.skip_update_diff = false return end
   local whitespace_mode = config.plugins.diffview.whitespace_mode or "trim"
   if self.diff_whitespace_mode ~= whitespace_mode then
@@ -745,6 +745,7 @@ function DiffView:update_diff()
   if transition_trace then transition_trace("diff_queued") end
   self.diff_started_at = start_time
   self.diff_loading_visible = false
+  local generation_scroll_source = scroll_source
 
   if config.plugins.diffview.log_times then
     core.log(
@@ -785,8 +786,16 @@ function DiffView:update_diff()
 
     self.updater_idx = nil
 
-    self.buffer_view_b.scroll.to.y = self.buffer_view_a.scroll.y
-    self.buffer_view_b.scroll.y = self.buffer_view_a.scroll.y
+    local scroll_view = generation_scroll_source
+    if scroll_view ~= self.buffer_view_a and scroll_view ~= self.buffer_view_b then
+      local active_view = core.active_view
+      if active_view == self.buffer_view_a or active_view == self.buffer_view_b then
+        scroll_view = active_view
+      else
+        scroll_view = self.buffer_view_a
+      end
+    end
+    self:sync_scroll_from(scroll_view, scroll_view == self.buffer_view_a)
 
     if config.plugins.diffview.log_times then
       core.log(
@@ -1920,7 +1929,7 @@ function DiffView:install_view_integrations()
       after_change = function()
         local reset = self.request.user_data and self.request.user_data.on_navigation_state_change
         if reset then reset() end
-        self:update_diff()
+        self:update_diff(side.view)
       end,
     })
   end
