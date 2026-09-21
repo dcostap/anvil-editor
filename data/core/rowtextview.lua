@@ -320,7 +320,7 @@ function RowTextView:draw_row_selection(line, x, y, width)
           and style.row_selection or style.row_selection_inactive
         local focus = s[(self.buffer.last_selection - 1) * 4 + 1]
         if line == focus and self.row_selection_marks[line] then
-          color = increase_opacity(color, 40)
+          color = increase_opacity(color, 43)
         end
         renderer.draw_rect(x, y, width, self:get_line_height(), color)
         break
