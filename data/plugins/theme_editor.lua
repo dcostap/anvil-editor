@@ -130,9 +130,9 @@ local FRIENDLY_NAMES = {
   ["style.good"] = { "Status / Diagnostics", "Good" },
   ["style.warn"] = { "Status / Diagnostics", "Warning" },
   ["style.error"] = { "Status / Diagnostics", "Error" },
-  ["style.git_change_addition"] = { "Git / File Tree", "Git changed-line addition" },
-  ["style.git_change_modification"] = { "Git / File Tree", "Git changed-line modification" },
-  ["style.git_change_deletion"] = { "Git / File Tree", "Git changed-line deletion" },
+  ["style.git_change_addition"] = { "File Changes / File Tree", "Changed-line addition" },
+  ["style.git_change_modification"] = { "File Changes / File Tree", "Changed-line modification" },
+  ["style.git_change_deletion"] = { "File Changes / File Tree", "Changed-line deletion" },
   ["style.filetree_git_status_ignored"] = { "Git / File Tree", "File tree ignored status" },
   ["style.filetree_git_status_untracked"] = { "Git / File Tree", "File tree untracked status" },
   ["style.filetree_git_status_added"] = { "Git / File Tree", "File tree added-file status" },
@@ -160,7 +160,7 @@ local function entry_presentation(entry)
 
   local key = expr:match("^style%.(.+)$") or expr
   if key:match("^diff_") then return "Diff View", prettify_key(key:gsub("^diff_", "")) end
-  if key:match("^git_change_") then return "Git / File Tree", prettify_key(key:gsub("^git_change_", "Git changed line ")) end
+  if key:match("^git_change_") then return "File Changes / File Tree", prettify_key(key:gsub("^git_change_", "Changed line ")) end
   if key:match("^filetree_git_status_") then return "Git / File Tree", prettify_key(key:gsub("^filetree_git_status_", "File tree git status ")) end
   if key:match("^filetree_git_line_") then return "Git / File Tree", prettify_key(key:gsub("^filetree_git_line_", "File tree git line ")) end
   if key:match("^filetree_operation_") then return "File Operations", prettify_key(key:gsub("^filetree_operation_", "")) end

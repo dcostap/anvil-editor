@@ -101,6 +101,16 @@ _Avoid_: file history, tab history, global history
 In-memory text that can be untitled, file-backed, editable, or read-only.
 _Avoid_: Document, Doc
 
+**Buffer Baseline**:
+A retained Buffer state used to show later text changes through an Editor's in-file change markers when a useful Git comparison is unavailable.
+Commands that act on those visible changes use the same Buffer Baseline, including patch commands scoped to the file, caret, or selection.
+It does not add changes to Git status or Git Views.
+An empty Untitled Buffer starts without one. A paste sets its initial Buffer Baseline only when the pasted text exceeds 100 characters and supplies all non-whitespace content left in the Buffer.
+An existing file without a useful Git comparison uses its contents at first open. A new file uses the same initial-paste rule as an Untitled Buffer.
+The Buffer Baseline remains available after Anvil restarts and after an Untitled Buffer becomes file-backed.
+The user can set or replace the Buffer Baseline with the Buffer's current contents at any time.
+_Avoid_: local commit, fake Git state
+
 **Autosave**:
 The default behavior that saves edits to file-backed Buffers without a manual save action. Save failures and disk conflicts remain visible.
 _Avoid_: background save, auto-save

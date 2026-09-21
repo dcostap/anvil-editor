@@ -65,6 +65,8 @@ local function tag_buffer(buffer, name, id)
   buffer.display_name = buffer.intellij_untitled_name
   ensure_untitled_id(buffer, id)
   untitled_recovery.ensure_buffer_backing(buffer, { no_manifest = true })
+  local file_changes = package.loaded["plugins.gitdiff_highlight"]
+  if file_changes and file_changes.initialize_buffer then file_changes.initialize_buffer(buffer) end
   return buffer
 end
 M.tag_buffer = tag_buffer
@@ -248,6 +250,8 @@ if not core.__untitled_tabs_patched then
     if view and view.buffer and state and state.intellij_untitled then
       tag_buffer(view.buffer, state.intellij_untitled_name, state.intellij_untitled_id)
       local loaded_backing = untitled_recovery.attach_from_workspace_state(view.buffer, state)
+      local file_changes = package.loaded["plugins.gitdiff_highlight"]
+      if file_changes and file_changes.refresh_buffer then file_changes.refresh_buffer(view.buffer) end
       if loaded_backing then apply_view_state(view, state) end
     end
     return view

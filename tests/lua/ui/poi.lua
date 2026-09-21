@@ -70,7 +70,7 @@ test.describe("Point of Interest navigation", function()
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
-  test.it("navigates an Editor's Git-change provider without wrapping", function()
+  test.it("navigates an Editor's file-change provider without wrapping", function()
     local view = make_editor("one\ntwo\nthree\nfour\n")
     gitdiff._set_state_for_tests(view.buffer, {
       is_in_repo = true,
@@ -99,7 +99,7 @@ test.describe("Point of Interest navigation", function()
     test.same(view.buffer.selections, { 2, 3, 2, 3 })
   end)
 
-  test.it("merges Editor file-location POIs with Git changes", function(context)
+  test.it("merges Editor file-location POIs with file changes", function(context)
     local root = USERDIR .. PATHSEP .. "editor-file-pois-" .. system.get_process_id()
     context.temp_root = root
     context.original_root_project = core.root_project
@@ -126,13 +126,13 @@ test.describe("Point of Interest navigation", function()
     core.set_active_view(view)
 
     local points = view:get_points_of_interest()
-    local file_point, git_point
+    local file_point, file_change_point
     for _, point in ipairs(points) do
       if point.kind == "editor-file-location" then file_point = point end
-      if point.kind == "git-change" then git_point = point end
+      if point.kind == "file-change" then file_change_point = point end
     end
     test.not_nil(file_point)
-    test.not_nil(git_point)
+    test.not_nil(file_change_point)
     test.equal(file_point.path, common.normalize_path(target_path))
     test.same({ file_point.target_line, file_point.target_col }, { 12, 4 })
 
@@ -408,7 +408,7 @@ test.describe("Point of Interest navigation", function()
     check_mouse()
   end)
 
-  test.it("keeps Git-change navigation available across a file save", function(context)
+  test.it("keeps file-change navigation available across a file save", function(context)
     local path = USERDIR .. PATHSEP .. "poi-save-" .. system.get_process_id() .. ".txt"
     context.temp_path = path
     local file = assert(io.open(path, "wb"))

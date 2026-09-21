@@ -1090,6 +1090,10 @@ end
 function M.handle_confirmed_discard(buffer)
   if not is_untitled_buffer(buffer) then return end
   M.ensure_buffer_backing(buffer)
+  local file_changes = package.loaded["plugins.gitdiff_highlight"]
+  if file_changes and file_changes.discard_buffer_baseline then
+    file_changes.discard_buffer_baseline(buffer)
+  end
   local id = buffer.intellij_untitled_id
   local path = buffer.intellij_untitled_backing_path
   local project = buffer.intellij_untitled_project_path or current_project_path()

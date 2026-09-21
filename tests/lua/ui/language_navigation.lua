@@ -189,9 +189,9 @@ target :: proc() {}
       test.ok(wait_ready(view.buffer))
       test.ok(wait_until(function()
         for _, point in ipairs(view:get_points_of_interest() or {}) do
-          if point.kind == "git-change" and point.label == change and point.line == 2 then return true end
+          if point.kind == "file-change" and point.label == change and point.line == 2 then return true end
         end
-      end), "expected the method call to belong to a Git change")
+      end), "expected the method call to belong to a file change")
       test.ok(wait_until(function()
         local symbols, _, status = symbol_index.workspace_symbols("setVisibleAndLoadInitialSize")
         return status == "fresh" and symbols and #symbols == 1

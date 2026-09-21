@@ -48,7 +48,7 @@ local function git_point_count(view)
   local points, unavailable = view:get_points_of_interest()
   local count = 0
   for _, point in ipairs(points or {}) do
-    if point.kind == "git-change" then count = count + 1 end
+    if point.kind == "file-change" then count = count + 1 end
   end
   return count, unavailable
 end
@@ -154,7 +154,28 @@ test.describe("Git Editor baseline", function()
     wait_for_git_count(view, 0, "clean staged rename did not settle")
   end)
 
-  test.test("rechecks an index path after a staged rename becomes an addition", function(context)
+  for _, case in ipairs({
+    { name = "untracked", stage = false },
+    { name = "staged-addition", stage = true },
+  }) do
+    test.test("uses opened contents for an " .. case.name .. " file", function(context)
+      local root, root_arg = make_repo(context, case.name)
+      local name = case.name .. ".txt"
+      local path = join(root, name)
+      write_file(path, "old\nkeep\n")
+      if case.stage then test.equal(run({ "git", "-C", root_arg, "add", name }), 0) end
+
+      local buffer, view = open_editor(context, path)
+      wait_for_git_count(view, 0, case.name .. " file did not capture a clean Buffer Baseline")
+      buffer:replace(function() return "new\nkeep\n" end)
+      wait_until(function()
+        local points, unavailable = view:get_points_of_interest()
+        return unavailable == nil and points and points[1] and points[1].label == "modification"
+      end, 8, case.name .. " file did not show a modification against its Buffer Baseline")
+    end)
+  end
+
+  test.test("keeps the opened contents as baseline when a rename becomes a staged addition", function(context)
     local root, root_arg = make_repo(context, "rename-add")
     local old_name, new_name = "old.txt", "new.txt"
     local old_path, new_path = join(root, old_name), join(root, new_name)
@@ -172,8 +193,8 @@ test.describe("Git Editor baseline", function()
 
     wait_until(function()
       local points, unavailable = view:get_points_of_interest()
-      return unavailable == nil and points and points[1] and points[1].label == "addition"
-    end, 8, "staged rename path did not reload as an addition")
+      return unavailable == nil and points and points[1] and points[1].label == "modification"
+    end, 8, "staged addition did not retain its Buffer Baseline")
   end)
 
   test.test("reloads the Editor baseline after an external commit", function(context)

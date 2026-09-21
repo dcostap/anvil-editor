@@ -961,7 +961,7 @@ local function paste_all_normal_clipboards(buffer)
   end
   if #edits == 0 then return end
   return buffer:apply_edits(edits, {
-    type = "insert",
+    type = "paste",
     selections = buffer:selections_after_edits(edits, final_by_idx),
     last_selection = buffer.last_selection,
     merge_cursors = false,
@@ -1107,7 +1107,7 @@ local function paste_whole_lines_by_selection(buffer, text_for_idx)
   end
 
   return buffer:apply_edits(edits, {
-    type = "insert",
+    type = "paste",
     selections = selections,
     last_selection = buffer.last_selection,
     merge_cursors = false,
@@ -1255,7 +1255,7 @@ local commands = {
       local text = clipboard:gsub("\r", "")
       transaction = dv.buffer:text_input_by_selection(function(_, line1, col1)
         return smart_paste_text(dv.buffer, line1, col1, text)
-      end, nil, { type = "insert" })
+      end, nil, { type = "paste" })
     else
       -- Use internal clipboard(s)
       -- If there are mixed whole lines and normal lines, consider them all as normal
@@ -1274,7 +1274,7 @@ local commands = {
         else
           transaction = dv.buffer:text_input_by_selection(function(idx, line1, col1)
             return smart_paste_text(dv.buffer, line1, col1, tostring(core.cursor_clipboard[idx] or ""):gsub("\r", ""))
-          end, nil, { type = "insert" })
+          end, nil, { type = "paste" })
         end
       else
         -- Paste every clipboard and add a selection at the end of each one
@@ -1298,7 +1298,7 @@ local commands = {
     local text = tostring(system.get_primary_selection() or ""):gsub("\r", "")
     local transaction = dv.buffer:text_input_by_selection(function(_, line1, col1)
       return smart_paste_text(dv.buffer, line1, col1, text)
-    end, nil, { type = "insert" })
+    end, nil, { type = "paste" })
     return transaction
   end,
 

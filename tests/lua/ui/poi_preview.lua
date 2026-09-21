@@ -134,7 +134,7 @@ test.describe("POI previews", function()
   end)
 end)
 
-test.describe("Git change POIs", function()
+test.describe("file change POIs", function()
   test.it("highlights changed words on both sides until the preview closes", function()
     local Editor = require "core.editor"
     local gitdiff = require "plugins.gitdiff_highlight"
@@ -169,7 +169,7 @@ test.describe("Git change POIs", function()
     editor.buffer:on_close()
   end)
 
-  test.it("previews a local Git change without replacing the remote source", function()
+  test.it("previews a local file change without replacing the remote source", function()
     local Editor = require "core.editor"
     local gitdiff = require "plugins.gitdiff_highlight"
     local poi = require "core.poi"

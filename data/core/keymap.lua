@@ -308,7 +308,7 @@ end
 keymap.add_direct {
   ["ctrl+,"] = "core:open_user_module",
   ["ctrl+alt+r"] = "core:restart",
-  ["ctrl+alt+z"] = "editor:revert_git_change",
+  ["ctrl+alt+z"] = "editor:revert_file_change",
   ["ctrl+shift+r"] = "core:restart",
   ["alt+return"] = "core:toggle_fullscreen",
   ["f11"] = "core:toggle_fullscreen",
