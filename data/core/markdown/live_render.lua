@@ -3994,21 +3994,37 @@ end
 -- List prefixes are source-local and have stable presentation rules. Keep
 -- that presentation while the semantic worker processes an edit instead of
 -- replacing the complete row with raw Markdown source.
+local raw_pending_source_render
+
 function edit_visual_projection.pending_list_render(
   view, line, previous, current_text, selection_state
 )
   local parsed = edit_visual_projection.source_list_prefix(current_text)
   if not parsed then return nil end
+  if previous and previous.markdown_preserve_list_source then
+    local render = raw_pending_source_render(view, previous, current_text, false)
+    render.markdown_preserve_list_source = true
+    return render
+  end
 
   local old_prefix = previous and edit_visual_projection.source_list_prefix(
     previous.source_text or ""
   )
-  -- Do not turn a settled raw line into a list while only its body changes.
-  -- The semantic result already rejected this source as a list.
-  if parsed.body ~= "" and old_prefix and previous
+  -- Keep an existing raw source presentation while its body changes.
+  -- Do not invent a widget transition before the semantic render arrives.
+  local same_prefix = old_prefix
+    and old_prefix.indent == parsed.indent
+    and old_prefix.token == parsed.token
+    and old_prefix.task_state == parsed.task_state
+  local deleting_body = parsed.body == ""
+    and old_prefix and old_prefix.body ~= ""
+  if old_prefix and previous
     and not edit_visual_projection.has_list_prefix(previous)
+    and (parsed.body ~= "" or same_prefix and deleting_body)
   then
-    return nil
+    local render = raw_pending_source_render(view, previous, current_text, false)
+    render.markdown_preserve_list_source = true
+    return render
   end
   -- An empty marker can change meaning when its indentation changes.  In
   -- particular, `- test` followed by an indented `- ` can be a setext
@@ -4200,7 +4216,7 @@ function edit_visual_projection.pending_list_render(
   return render
 end
 
-local function raw_pending_source_render(view, render_line, current_text, code)
+raw_pending_source_render = function(view, render_line, current_text, code)
   local font
   for _, fragment in ipairs(render_line and render_line.fragments or {}) do
     if fragment.font and fragment.text and fragment.text ~= "" then
@@ -4935,6 +4951,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     end
     if not suppress_list_projection
       and not render.raw_passthrough
+      and not render.markdown_preserve_list_source
       and not (captured and (
         captured.fenced or captured.indented
           or captured.raw_passthrough or captured.frontmatter
