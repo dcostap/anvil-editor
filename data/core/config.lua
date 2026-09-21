@@ -170,9 +170,9 @@ config.select_add_next_no_case = false
 
 ---The spacing between each line of text.
 ---
----The default is 130% of the height of the text (1.3).
+---The default is 120% of the height of the text (1.2).
 ---@type number
-config.line_height = 1.3
+config.line_height = 1.2
 
 ---Minimum number of lines to keep visible above and below the cursor
 ---when scrolling the buffer.
