@@ -5477,6 +5477,26 @@ function live._copy_fenced_code_block(view, fenced)
   system.set_clipboard(text)
   core.cursor_clipboard = {}
   core.cursor_clipboard_whole_line = {}
+  local owner = view.__markdown_live_owner
+  local feedback_token = {}
+  local feedback_until = system.get_time() + 2
+  owner.markdown_code_copy_feedback_token = feedback_token
+  owner.markdown_code_copy_feedback_until = feedback_until
+  owner.markdown_code_copy_feedback_block_id = live._markdown_code_block_id(fenced)
+  core.add_thread(function()
+    while owner.markdown_code_copy_feedback_token == feedback_token
+      and system.get_time() < feedback_until
+    do
+      core.redraw = true
+      coroutine.yield(0.05)
+    end
+    if owner.markdown_code_copy_feedback_token == feedback_token then
+      owner.markdown_code_copy_feedback_token = nil
+      owner.markdown_code_copy_feedback_until = nil
+      owner.markdown_code_copy_feedback_block_id = nil
+      core.redraw = true
+    end
+  end)
   if core.status_bar then
     core.status_bar:show_message("i", style.text, "Copied code block")
   end
@@ -5511,7 +5531,9 @@ function live._markdown_code_copy_button_fragment(view, fenced)
     text = "",
     width = 0,
     hit_width = hit_size,
-    layout_x = math.max(0, image_available_width(view) - hit_size - right_padding),
+    layout_x = math.max(
+      0, image_available_width(view) - button_size - hit_padding - right_padding
+    ),
     markdown_code_copy_button = true,
     markdown_code_block_id = block_id,
     widget = {
@@ -5524,7 +5546,11 @@ function live._markdown_code_copy_button_fragment(view, fenced)
         if not owner or owner.markdown_code_copy_hover_id ~= block_id then return end
         local button_x = x + hit_padding
         local button_y = y + math.max(0, (row_height - button_size) / 2)
-        local background = { table.unpack(style.accent) }
+        local feedback = owner.markdown_code_copy_feedback_token
+          and owner.markdown_code_copy_feedback_until
+          and owner.markdown_code_copy_feedback_block_id == block_id
+          and system.get_time() < owner.markdown_code_copy_feedback_until
+        local background = { table.unpack(feedback and style.good or style.accent) }
         background[4] = (background[4] or 255) * (fragment.hovered and 0.95 or 0.72)
         renderer.draw_rounded_rect(
           button_x, button_y, button_size, button_size,
@@ -5534,12 +5560,26 @@ function live._markdown_code_copy_button_fragment(view, fenced)
         local foreground = { table.unpack(style.background) }
         foreground[4] = (foreground[4] or 255) * (fragment.hovered and 1 or 0.9)
         local thickness = math.max(1, math.floor(SCALE))
-        local icon_size = math.max(9 * SCALE, math.floor(button_size * 0.58))
-        local icon_offset = math.max(2 * SCALE, math.floor(icon_size * 0.24))
-        local icon_x = button_x + math.floor((button_size - icon_size) / 2)
-        local icon_y = button_y + math.floor((button_size - icon_size) / 2)
-        draw_outline(icon_x + icon_offset, icon_y, icon_size, thickness, foreground)
-        draw_outline(icon_x, icon_y + icon_offset, icon_size, thickness, foreground)
+        if feedback then
+          local glyph = "✓"
+          renderer.draw_text(
+            style.font, glyph,
+            button_x + math.floor((button_size - style.font:get_width(glyph)) / 2),
+            button_y + math.floor((button_size - style.font:get_height()) / 2),
+            foreground
+          )
+        else
+          local icon_size = math.max(9 * SCALE, math.floor(button_size * 0.58))
+          local icon_offset = math.max(2 * SCALE, math.floor(icon_size * 0.24))
+          local icon_x = button_x + math.floor(
+            (button_size - icon_size - icon_offset) / 2
+          )
+          local icon_y = button_y + math.floor(
+            (button_size - icon_size - icon_offset) / 2
+          )
+          draw_outline(icon_x + icon_offset, icon_y, icon_size, thickness, foreground)
+          draw_outline(icon_x, icon_y + icon_offset, icon_size, thickness, foreground)
+        end
       end,
       on_mouse_pressed = function(_, owner, _, button)
         if button ~= "left" then return false end

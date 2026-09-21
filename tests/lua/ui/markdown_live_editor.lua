@@ -3656,6 +3656,11 @@ test.describe("Markdown Live Preview", function()
       button_y = button_y + view:get_line_height() / 2
       test.ok(view:on_mouse_pressed("left", button_x, button_y, 1))
       test.equal(copied, "print('one')\nprint('two')")
+      test.equal(
+        view.__markdown_live_owner.markdown_code_copy_feedback_block_id,
+        button.markdown_code_block_id
+      )
+      test.not_nil(view.__markdown_live_owner.markdown_code_copy_feedback_until)
     end)
     system.set_clipboard = context.old_set_clipboard
     system.set_clipboard(context.clipboard or "")
