@@ -8,6 +8,16 @@ local View = require "core.view"
 -- A text-backed list. Selection State remains the source of selected rows.
 local RowTextView = TextView:extend()
 
+local function darken_preserving_alpha(color, percent)
+  local scale = 1 - percent / 100
+  return {
+    math.floor(color[1] * scale),
+    math.floor(color[2] * scale),
+    math.floor(color[3] * scale),
+    color[4],
+  }
+end
+
 function RowTextView:new(buffer, enable_row_selection)
   RowTextView.super.new(self, buffer)
   self.row_selection_marks = {}
@@ -300,7 +310,7 @@ function RowTextView:draw_row_selection(line, x, y, width)
           and style.row_selection or style.row_selection_inactive
         local focus = s[(self.buffer.last_selection - 1) * 4 + 1]
         if line == focus and self.row_selection_marks[line] then
-          color = common.darken_color(color, 10)
+          color = darken_preserving_alpha(color, 10)
         end
         renderer.draw_rect(x, y, width, self:get_line_height(), color)
         break
