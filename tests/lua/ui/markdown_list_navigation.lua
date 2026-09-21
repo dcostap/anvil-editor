@@ -77,15 +77,22 @@ test.describe("Markdown list navigation", function()
     test.same({ line, col }, { 1, 1 })
   end)
 
-  test.it("keeps the caret at list content start after unindent", function()
-    local view, buffer = make_view("    - nested item")
-    buffer:set_selection(1, 7)
+  test.it("keeps the caret position within a list item after unindent", function()
+    local cases = {
+      { source = "    - nested item", col = 7, expected_source = "- nested item\n", expected_col = 3 },
+      { source = "    - nested item", col = 12, expected_source = "- nested item\n", expected_col = 8 },
+      { source = "- root item", col = 8, expected_source = "- root item\n", expected_col = 8 },
+    }
+    for _, case in ipairs(cases) do
+      local view, buffer = make_view(case.source)
+      buffer:set_selection(1, case.col)
 
-    test.equal(perform(view, "core:unindent"), true)
+      test.equal(perform(view, "core:unindent"), true)
 
-    test.equal(buffer.lines[1], "- nested item\n")
-    local line, col = buffer:get_selection()
-    test.same({ line, col }, { 1, 3 })
+      test.equal(buffer.lines[1], case.expected_source)
+      local line, col = buffer:get_selection()
+      test.same({ line, col }, { 1, case.expected_col })
+    end
   end)
 
   test.it("does not treat list-looking source in another Language Mode as Markdown", function()

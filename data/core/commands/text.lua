@@ -2031,12 +2031,19 @@ local commands = {
       local content_start = markdown_list_content_start(
         dv.buffer, line1, line_text, true
       )
-      local keep_list_content_position = line1 == line2 and col1 == col2
-        and content_start == col1
+      local keep_list_caret_position = line1 == line2 and col1 == col2
+        and content_start ~= nil
       local old_indent_length = #(line_text:match("^[\t ]*") or "")
-      local l1, c1, l2, c2 = dv.buffer:indent_text(true, line1, col1, line2, col2)
+      local l1, c1, l2, c2
+      if keep_list_caret_position and old_indent_length == 0 then
+        l1, c1, l2, c2 = line1, col1, line2, col2
+      else
+        l1, c1, l2, c2 = dv.buffer:indent_text(
+          true, line1, col1, line2, col2
+        )
+      end
       if l1 then
-        if keep_list_content_position then
+        if keep_list_caret_position then
           local new_line_text = dv.buffer.lines[l1] or ""
           local new_indent_length = #(new_line_text:match("^[\t ]*") or "")
           c1 = math.max(1, col1 - (old_indent_length - new_indent_length))
