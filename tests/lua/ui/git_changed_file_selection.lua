@@ -182,6 +182,8 @@ test.describe("Git Log changed-file row selection", function()
     folder = details.path_tree_line_offset + details.path_tree:line_for_path("alpha", "dir")
     test.ok(view:toggle_details_tree_folder(details, folder))
     test.same(selected_paths(details), { "alpha/a.txt", "beta/b.txt" })
+    command.perform("core:select_none")
+    test.same(selected_paths(details), { "beta/b.txt" })
   end)
 
   test.it("leaves no selected file when all folders close", function()

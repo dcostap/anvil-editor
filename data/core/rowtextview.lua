@@ -180,6 +180,16 @@ function RowTextView:set_marked_rows(rows, preserve_selection)
   end
 end
 
+function RowTextView:clear_row_marks(preserve_selection)
+  self.row_selection_marks = {}
+  if self.on_row_marks_cleared then self:on_row_marks_cleared() end
+  if not preserve_selection then
+    local state = self:get_selection_state()
+    local row = state.selections[(state.last_selection - 1) * 4 + 1]
+    self:select_row(row)
+  end
+end
+
 function RowTextView:toggle_row_mark()
   if not self.row_selection_mode then return false end
   local state = self:get_selection_state()
@@ -207,8 +217,7 @@ function RowTextView:set_row_selection_mode(enabled)
   end
   self.row_selection_mode = enabled
   if not enabled then
-    self.row_selection_marks = {}
-    if self.on_row_marks_cleared then self:on_row_marks_cleared() end
+    self:clear_row_marks(true)
   end
   self.mouse_selecting = nil
   self.row_selection_snapshot = nil
@@ -244,7 +253,9 @@ function RowTextView:handle_selection_command(name, x, y)
     self:select_row(1)
     self:select_row(self:get_row_count(), true, false, -1)
     return true
-  elseif name ~= "core:select_none" then
+  elseif name == "core:select_none" then
+    self:clear_row_marks(true)
+  else
     -- Character, word, and extra-caret commands have no effect in row mode.
     return true
   end
