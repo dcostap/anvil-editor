@@ -5669,10 +5669,6 @@ local function fenced_code_content_render_line(view, line, text, fenced)
     render.callout_record = callout
     render.callout_semantic_id = callout.semantic_id
   end
-  if line == fenced.source.line1 + 1 and fenced_code_is_active(view, fenced) then
-    render.fragments[#render.fragments + 1] =
-      live._markdown_code_copy_button_fragment(view, fenced)
-  end
   return render
 end
 
@@ -6626,29 +6622,30 @@ local function build_render_line(view, line, _context)
     local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
     local delimiter_kind = fenced_code_delimiter_kind(view, fenced, line)
     if delimiter_kind then
-      if not fenced_code_is_active(view, fenced) then
-        local fragments = {
-          {
-            source_col1 = 1, source_col2 = #text + 1,
-            hidden = true,
-            semantic_id = fenced.id .. ":" .. delimiter_kind,
-          },
-        }
-        if delimiter_kind == "open"
-          and fenced.effective_line2 > fenced.source.line1
-        then
-          fragments[#fragments + 1] =
-            live._markdown_code_copy_button_fragment(view, fenced)
-        end
-        return {
-          source_text = text,
-          metric_height = view:get_line_height(),
-          markdown_code_block = true,
-          semantic_generation = select(2, semantic_line(view, line)),
-          fragments = fragments,
-        }
+      local active = fenced_code_is_active(view, fenced)
+      local fragments = {
+        {
+          source_col1 = 1, source_col2 = #text + 1,
+          hidden = not active,
+          text = active and text or nil,
+          font = active and style.syntax_fonts.normal or nil,
+          color = active and style.syntax.normal or nil,
+          semantic_id = fenced.id .. ":" .. delimiter_kind,
+        },
+      }
+      if delimiter_kind == "open"
+        and fenced.effective_line2 > fenced.source.line1
+      then
+        fragments[#fragments + 1] =
+          live._markdown_code_copy_button_fragment(view, fenced)
       end
-      return { raw_passthrough = true }
+      return {
+        source_text = text,
+        metric_height = view:get_line_height(),
+        markdown_code_block = true,
+        semantic_generation = select(2, semantic_line(view, line)),
+        fragments = fragments,
+      }
     end
     return fenced_code_content_render_line(view, line, text, fenced)
   end

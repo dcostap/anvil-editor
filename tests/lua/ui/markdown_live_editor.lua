@@ -3617,8 +3617,8 @@ test.describe("Markdown Live Preview", function()
     test.equal(closing.fragments[1].hidden, true)
 
     buffer:set_selection(2, 4)
-    test.equal(view:get_line_render(1), nil)
-    test.equal(view:get_line_render(3), nil)
+    test.equal(visible_render_text(view, 1), "```lua")
+    test.equal(visible_render_text(view, 3), "```")
   end)
 
   test.it("copies a fenced code block from its hover button", function(context)
@@ -3635,9 +3635,9 @@ test.describe("Markdown Live Preview", function()
       buffer:set_selection(3, 1)
       refresh(view)
 
-      local body = test.not_nil(view:get_line_render(3))
+      local opening = test.not_nil(view:get_line_render(2))
       local button
-      for _, fragment in ipairs(body.fragments or {}) do
+      for _, fragment in ipairs(opening.fragments or {}) do
         if fragment.markdown_code_copy_button then button = fragment break end
       end
       button = test.not_nil(button)
@@ -3651,7 +3651,7 @@ test.describe("Markdown Live Preview", function()
         button.markdown_code_block_id
       )
 
-      local button_x, button_y = view:get_line_screen_position(3)
+      local button_x, button_y = view:get_line_screen_position(2)
       button_x = button_x + button.layout_x + button.widget.width / 2
       button_y = button_y + view:get_line_height() / 2
       test.ok(view:on_mouse_pressed("left", button_x, button_y, 1))
@@ -3744,8 +3744,8 @@ test.describe("Markdown Live Preview", function()
 
     buffer:set_selection(1, 1, 5, 1)
 
-    test.equal(view:get_line_render(2), nil)
-    test.equal(view:get_line_render(4), nil)
+    test.equal(visible_render_text(view, 2), "```lua")
+    test.equal(visible_render_text(view, 4), "```")
   end)
 
   test.it("presents Setext headings through the semantic heading path", function()
