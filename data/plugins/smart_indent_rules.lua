@@ -1,6 +1,7 @@
 -- mod-version:3 priority:1
 local core = require "core"
 local intelligence = require "core.language_intelligence"
+local syntax = require "core.syntax"
 
 local smart_indent = {}
 
@@ -206,7 +207,24 @@ local function extension(name)
   return tostring(name or ""):match("%.([^%.]+)$")
 end
 
+local function rule_for_syntax(buffer)
+  local current = buffer and buffer.syntax
+  if not current then return nil end
+  for id, rule in pairs(rules) do
+    if syntax.resolve_language(id, { source = "smart-indent" }) == current then
+      return rule
+    end
+  end
+end
+
 function smart_indent.rule_for_buffer(buffer)
+  if buffer and (
+    buffer.language_mode_override
+    or buffer.language_mode_inferred
+    or not buffer.filename
+  ) then
+    return rule_for_syntax(buffer)
+  end
   local name = basename(buffer and (buffer.filename or buffer.abs_filename or buffer:get_name()) or "")
   local lower_name = name:lower()
   local by_name = filename_to_rule[lower_name]

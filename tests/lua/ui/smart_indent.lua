@@ -443,6 +443,18 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
   end)
 
+  test.it("continues lists in an Untitled Buffer with Markdown Language Mode", function(context)
+    local buffer, view = new_editor(context, "- item")
+    buffer:set_language_mode("Markdown")
+    core.set_active_view(view)
+    buffer:set_selection(1, #"- item" + 1, 1, #"- item" + 1)
+
+    test.ok(command.perform("core:newline"))
+
+    test.equal(text(buffer), "- item\n- \n")
+    test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
+  end)
+
   test.it("removes an empty top-level Markdown task marker before its list marker", function(context)
     local buffer, view = new_editor(context, "- [ ] \nafter", "sample.md")
     core.set_active_view(view)
