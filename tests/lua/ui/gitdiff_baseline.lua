@@ -2,10 +2,11 @@ local core = require "core"
 local common = require "core.common"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
+local command = require "core.command"
 local process = require "core.process"
 local test = require "core.test"
 
-require "plugins.gitdiff_highlight"
+local file_changes = require "plugins.gitdiff_highlight"
 local git_status = require "plugins.file_git_status"
 
 local function join(...)
@@ -90,7 +91,12 @@ local function open_editor(context, path)
 end
 
 test.describe("Git Editor baseline", function()
+  test.before_each(function(context)
+    context.active_view = core.active_view
+  end)
+
   test.after_each(function(context)
+    core.active_view = context.active_view
     if context.buffer then context.buffer:on_close() end
     if context.root then remove_tree(context.root) end
     core.redraw = true
@@ -105,6 +111,28 @@ test.describe("Git Editor baseline", function()
 
     local _, view = open_editor(context, path)
     wait_for_git_count(view, 0, "clean UTF-8 pathname did not settle")
+  end)
+
+  test.test("clears a manual Changes Baseline and returns to Git", function(context)
+    local root, root_arg = make_repo(context, "clear-manual")
+    local name = "clear-manual.txt"
+    local path = join(root, name)
+    write_file(path, "old\n")
+    commit_file(root_arg, name, "baseline")
+
+    local buffer, view = open_editor(context, path)
+    core.active_view = view
+    wait_for_git_count(view, 0, "initial Git baseline did not settle")
+    buffer:insert(1, 1, "local ")
+    test.ok(command.perform("editor:set_changes_baseline"))
+    buffer:insert(1, 1, "after ")
+    wait_until(function() return git_point_count(view) > 0 end)
+
+    test.ok(command.perform("editor:clear_changes_baseline"))
+    wait_until(function()
+      local source = file_changes.get_patch_source(buffer)
+      return source and source.before and source.before[1] == "old\n"
+    end, 8, "clearing the Changes Baseline did not restore Git")
   end)
 
   test.test("keeps a clean UTF-8 BOM file clean", function(context)
@@ -166,12 +194,12 @@ test.describe("Git Editor baseline", function()
       if case.stage then test.equal(run({ "git", "-C", root_arg, "add", name }), 0) end
 
       local buffer, view = open_editor(context, path)
-      wait_for_git_count(view, 0, case.name .. " file did not capture a clean Buffer Baseline")
+      wait_for_git_count(view, 0, case.name .. " file did not capture a clean Changes Baseline")
       buffer:replace(function() return "new\nkeep\n" end)
       wait_until(function()
         local points, unavailable = view:get_points_of_interest()
         return unavailable == nil and points and points[1] and points[1].label == "modification"
-      end, 8, case.name .. " file did not show a modification against its Buffer Baseline")
+      end, 8, case.name .. " file did not show a modification against its Changes Baseline")
     end)
   end
 
@@ -194,7 +222,7 @@ test.describe("Git Editor baseline", function()
     wait_until(function()
       local points, unavailable = view:get_points_of_interest()
       return unavailable == nil and points and points[1] and points[1].label == "modification"
-    end, 8, "staged addition did not retain its Buffer Baseline")
+    end, 8, "staged addition did not retain its Changes Baseline")
   end)
 
   test.test("reloads the Editor baseline after an external commit", function(context)

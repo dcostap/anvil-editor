@@ -1,5 +1,5 @@
 -- mod-version:3
--- Highlights changed lines against Git or a retained Buffer Baseline.
+-- Highlights changed lines against Git or a retained Changes Baseline.
 -- Also supports MiniMap, if user has it installed and activated.
 local core = require "core"
 local common = require "core.common"
@@ -7,6 +7,7 @@ local config = require "core.config"
 local TextView = require "core.textview"
 local Buffer = require "core.buffer"
 local command = require "core.command"
+local json = require "core.json"
 local style = require "core.style"
 local file_context = require "core.file_context"
 local ranges = require "plugins.gitdiff_highlight.ranges"
@@ -42,7 +43,7 @@ end
 
 local states = setmetatable({}, { __mode = "k" })
 local git_missing_warned = false
-local BASELINE_DIR = USERDIR .. PATHSEP .. "buffer-baselines"
+local CHANGES_BASELINE_DIR = USERDIR .. PATHSEP .. "changes-baselines"
 local AUTOMATIC_PASTE_MIN_CHARACTERS = 100
 
 local bit_ok, bit = pcall(require, "bit")
@@ -81,21 +82,49 @@ local function baseline_identity(buffer)
 end
 
 local function baseline_path(identity)
-	return identity and (BASELINE_DIR .. PATHSEP .. hash_text(identity) .. ".lua")
+	return identity and (CHANGES_BASELINE_DIR .. PATHSEP .. hash_text(identity) .. ".json")
+end
+
+local function current_file_id(buffer)
+	if not buffer.abs_filename then return nil end
+	local info = system.get_file_info(buffer.abs_filename)
+	return info and info.file_id or nil
 end
 
 local function read_persisted_baseline(buffer)
 	local identity = baseline_identity(buffer)
 	local path = baseline_path(identity)
-	if not path or not system.get_file_info(path) then return end
-	local fn, err = loadfile(path)
-	if not fn then
-		core.log_quiet("File changes: could not load Buffer Baseline %s: %s", path, tostring(err))
+	local info = path and system.get_file_info(path)
+	if not info then return end
+	local max_sidecar_size = plugin_config.max_file_size * 6 + 4096
+	if info.size > max_sidecar_size then
+		core.log_quiet("File changes: ignored oversized Changes Baseline %s", path)
 		return
 	end
-	local ok, data = pcall(fn)
+	local file, err = io.open(path, "rb")
+	if not file then
+		core.log_quiet("File changes: could not read Changes Baseline %s: %s", path, tostring(err))
+		return
+	end
+	local body = file:read(max_sidecar_size + 1)
+	file:close()
+	if not body or #body > max_sidecar_size then
+		core.log_quiet("File changes: ignored oversized Changes Baseline %s", path)
+		return
+	end
+	local ok, data = pcall(json.decode, body or "")
 	if not ok or type(data) ~= "table" or data.identity ~= identity or type(data.text) ~= "string" then
-		core.log_quiet("File changes: ignored invalid Buffer Baseline %s", path)
+		core.log_quiet("File changes: ignored invalid Changes Baseline %s", path)
+		return
+	end
+	if #data.text > plugin_config.max_file_size then
+		core.log_quiet("File changes: ignored oversized Changes Baseline text %s", path)
+		return
+	end
+	local file_id = current_file_id(buffer)
+	if buffer.abs_filename and (not data.file_id or not file_id or data.file_id ~= file_id) then
+		core.log_quiet("File changes: discarded stale Changes Baseline %s", path)
+		os.remove(path)
 		return
 	end
 	return data.text, data.origin == "manual" and "manual" or "automatic"
@@ -105,20 +134,21 @@ local function write_persisted_baseline(buffer, text, origin)
 	local identity = baseline_identity(buffer)
 	local path = baseline_path(identity)
 	if not path then return false end
-	local info = system.get_file_info(BASELINE_DIR)
+	local info = system.get_file_info(CHANGES_BASELINE_DIR)
 	if not (info and info.type == "dir") then
-		local ok, err = common.mkdirp(BASELINE_DIR)
+		local ok, err = common.mkdirp(CHANGES_BASELINE_DIR)
 		if not ok then
-			core.log_quiet("File changes: could not create Buffer Baseline directory: %s", tostring(err))
+			core.log_quiet("File changes: could not create Changes Baseline directory: %s", tostring(err))
 			return false
 		end
 	end
-	local body = "return " .. common.serialize({
+	local body = json.encode({
 		version = 1, identity = identity, origin = origin, text = text,
-	}, { pretty = true, sort = true })
+		file_id = current_file_id(buffer),
+	})
 	local ok, err = pcall(Buffer.write_text_safely, path, body)
 	if not ok then
-		core.log_quiet("File changes: could not save Buffer Baseline %s: %s", path, tostring(err))
+		core.log_quiet("File changes: could not save Changes Baseline %s: %s", path, tostring(err))
 		return false
 	end
 	return true
@@ -165,30 +195,33 @@ end
 local schedule_local_diff
 local schedule_base_reload
 
-local function activate_buffer_baseline(buffer, text, origin, persist)
+local function activate_changes_baseline(buffer, text, origin, persist)
 	if type(text) ~= "string" or #text > plugin_config.max_file_size then return false end
 	local state = ensure_state(buffer)
-	state.buffer_baseline_text = text
-	state.buffer_baseline_origin = origin or "automatic"
+	state.changes_baseline_text = text
+	state.changes_baseline_origin = origin or "automatic"
+	state.changes_baseline_file_id = current_file_id(buffer)
 	state.awaiting_initial_baseline = false
-	state.baseline_kind = "buffer"
+	state.baseline_kind = "changes"
 	state.base_text = text
 	state.base_lines = ranges.split_buffer_lines(text)
 	state.operational = true
 	state.loading = false
 	state.too_large = false
 	state.error = nil
-	if persist ~= false then write_persisted_baseline(buffer, text, state.buffer_baseline_origin) end
+	state.ranges = {}
+	state.line_index = {}
+	local persisted = persist == false or write_persisted_baseline(buffer, text, state.changes_baseline_origin)
 	if schedule_local_diff then schedule_local_diff(buffer, "buffer-baseline") end
 	core.redraw = true
-	return true
+	return true, persisted
 end
 
-local function load_buffer_baseline(buffer)
+local function load_changes_baseline(buffer)
 	local state = ensure_state(buffer)
-	if state.buffer_baseline_text then return true end
+	if state.changes_baseline_text then return true end
 	local text, origin = read_persisted_baseline(buffer)
-	if text then return activate_buffer_baseline(buffer, text, origin, false) end
+	if text then return activate_changes_baseline(buffer, text, origin, false) end
 	return false
 end
 
@@ -201,9 +234,9 @@ local function use_buffer_fallback(buffer, error_message)
 	state.base_from_head_path = false
 	state.loading = false
 	state.background_reload = false
-	if load_buffer_baseline(buffer) then return state end
+	if load_changes_baseline(buffer) then return state end
 	if state.initial_text and not buffer.new_file and not buffer.binary then
-		if activate_buffer_baseline(buffer, state.initial_text, "automatic", true) then return state end
+		if activate_changes_baseline(buffer, state.initial_text, "automatic", true) then return state end
 	end
 	state.operational = false
 	state.error = error_message
@@ -235,6 +268,24 @@ local function clear_state(buffer, error_message)
 		core.log_quiet("[gitdiff_highlight] baseline unavailable %s: %s", buffer.abs_filename or "?", tostring(error_message))
 	end
 	return state
+end
+
+local function clear_changes_baseline(buffer, reload_git)
+	if not buffer then return false end
+	local state = ensure_state(buffer)
+	remove_persisted_identity(baseline_identity(buffer))
+	if state.baseline_kind ~= "changes" and not state.changes_baseline_text then return false end
+	state.base_generation = (state.base_generation or 0) + 1
+	state.local_generation = (state.local_generation or 0) + 1
+	state.changes_baseline_text = nil
+	state.changes_baseline_origin = nil
+	state.changes_baseline_file_id = nil
+	clear_state(buffer, "Changes Baseline cleared")
+	if reload_git and buffer.abs_filename and schedule_base_reload then
+		schedule_base_reload(buffer, "changes-baseline-cleared")
+	end
+	core.redraw = true
+	return true
 end
 
 local function git_executable()
@@ -350,7 +401,8 @@ local function write_debug_dump(buffer)
 	w("")
 	w("state.is_in_repo=%s", tostring(state.is_in_repo))
 	w("state.baseline_kind=%s", tostring(state.baseline_kind))
-	w("state.buffer_baseline_origin=%s", tostring(state.buffer_baseline_origin))
+	w("state.changes_baseline_origin=%s", tostring(state.changes_baseline_origin))
+	w("state.changes_baseline_file_id=%s", tostring(state.changes_baseline_file_id))
 	w("state.operational=%s", tostring(state.operational))
 	w("state.loading=%s", tostring(state.loading))
 	w("state.too_large=%s", tostring(state.too_large))
@@ -727,15 +779,16 @@ schedule_base_reload = function(buffer, reason)
 		end
 
 		local current_state = ensure_state(buffer)
-		if current_state.buffer_baseline_text and current_state.buffer_baseline_origin == "manual" then
-			activate_buffer_baseline(buffer, current_state.buffer_baseline_text, "manual", false)
+		if current_state.changes_baseline_text and current_state.changes_baseline_origin == "manual" then
+			activate_changes_baseline(buffer, current_state.changes_baseline_text, "manual", false)
 			finish_base_worker(buffer, current_state)
 			return
 		end
-		if current_state.buffer_baseline_origin == "automatic" then
+		if current_state.changes_baseline_origin == "automatic" then
 			remove_persisted_identity(baseline_identity(buffer))
-			current_state.buffer_baseline_text = nil
-			current_state.buffer_baseline_origin = nil
+			current_state.changes_baseline_text = nil
+			current_state.changes_baseline_origin = nil
+			current_state.changes_baseline_file_id = nil
 		end
 		current_state.is_in_repo = true
 		current_state.operational = true
@@ -859,6 +912,16 @@ function Buffer:on_text_change(change_type, transaction, ...)
 	local result = old_text_change(self, change_type, transaction, ...)
 	if not buffer_gitdiff_disabled(self) then
 		local state = ensure_state(self)
+		local file_id = current_file_id(self)
+		if state.changes_baseline_text and state.changes_baseline_file_id
+			and file_id and state.changes_baseline_file_id ~= file_id then
+			remove_persisted_identity(baseline_identity(self))
+			state.changes_baseline_text = nil
+			state.changes_baseline_origin = nil
+			state.changes_baseline_file_id = nil
+			clear_state(self, "file identity changed")
+			state.initial_text = nil
+		end
 		if change_type == "paste" and not state.base_lines
 			and (self.intellij_untitled or self.new_file or state.awaiting_initial_baseline)
 			and transaction and type(transaction.edits) == "table" and #transaction.edits == 1 then
@@ -867,8 +930,8 @@ function Buffer:on_text_change(change_type, transaction, ...)
 			local meaningful_buffer = table.concat(self.lines or {}):gsub("%s", "")
 			if pasted:ulen() > AUTOMATIC_PASTE_MIN_CHARACTERS
 				and meaningful_paste ~= "" and meaningful_buffer == meaningful_paste then
-				activate_buffer_baseline(self, table.concat(self.lines or {}), "automatic", true)
-				core.log_quiet("File changes: captured initial pasted Buffer Baseline for %s", self:get_name())
+				activate_changes_baseline(self, table.concat(self.lines or {}), "automatic", true)
+				core.log_quiet("File changes: captured initial pasted Changes Baseline for %s", self:get_name())
 			end
 		end
 		if ensure_state(self).base_lines then schedule_local_diff(self, "text-change") end
@@ -881,11 +944,11 @@ function Buffer:load(...)
 	local results = pack_results(old_buffer_load(self, ...))
 	if not buffer_gitdiff_disabled(self) then
 		local state = ensure_state(self)
-		if not state.buffer_baseline_text
+		if state.initial_text == nil and not state.changes_baseline_text
 			and (not self.loaded_file_size or self.loaded_file_size <= plugin_config.max_file_size) then
 			state.initial_text = table.concat(self.lines or {})
 		end
-		load_buffer_baseline(self)
+		load_changes_baseline(self)
 		schedule_base_reload(self, "load")
 	end
 	return unpack(results, 1, results.n)
@@ -898,8 +961,8 @@ function Buffer:set_filename(...)
 	local old_path = self.abs_filename
 	local old_identity = baseline_identity(self)
 	local previous = get_state(self)
-	local retained_text = previous.buffer_baseline_text
-	local retained_origin = previous.buffer_baseline_origin
+	local retained_text = previous.changes_baseline_text
+	local retained_origin = previous.changes_baseline_origin
 	local results = pack_results(old_set_filename(self, ...))
 	if self.new_file and self.abs_filename then
 		ensure_state(self).awaiting_initial_baseline = true
@@ -913,18 +976,32 @@ function Buffer:set_filename(...)
 	clear_state(self, "path changed")
 	state.initial_text = nil
 	if retained_text then
-		state.buffer_baseline_text = retained_text
-		state.buffer_baseline_origin = retained_origin
-		activate_buffer_baseline(self, retained_text, retained_origin, true)
+		state.changes_baseline_text = retained_text
+		state.changes_baseline_origin = retained_origin
+		local _, persisted = activate_changes_baseline(self, retained_text, retained_origin, true)
 		local new_identity = baseline_identity(self)
-		if old_identity and old_identity ~= new_identity then remove_persisted_identity(old_identity) end
+		if not old_path and persisted and old_identity and old_identity ~= new_identity then
+			remove_persisted_identity(old_identity)
+		end
 	else
-		local loaded = load_buffer_baseline(self)
+		local loaded = load_changes_baseline(self)
 		if not loaded and old_path and not self.binary then
-			activate_buffer_baseline(self, table.concat(self.lines or {}), "automatic", true)
+			activate_changes_baseline(self, table.concat(self.lines or {}), "automatic", true)
 		end
 	end
 	if self.abs_filename and not buffer_gitdiff_disabled(self) then schedule_base_reload(self, "path-change") end
+	return unpack(results, 1, results.n)
+end
+
+local old_buffer_save = Buffer.save
+function Buffer:save(...)
+	local results = pack_results(old_buffer_save(self, ...))
+	local state = ensure_state(self)
+	state.awaiting_initial_baseline = false
+	if state.changes_baseline_text then
+		write_persisted_baseline(self, state.changes_baseline_text, state.changes_baseline_origin)
+		state.changes_baseline_file_id = current_file_id(self)
+	end
 	return unpack(results, 1, results.n)
 end
 
@@ -1063,12 +1140,17 @@ command.add(function()
 	return file_context.is_editor_view(view) and view:supports_text_input()
 		and not buffer_gitdiff_disabled(view.buffer), view
 end, {
-	["editor:set_buffer_baseline"] = command.palette(function(view)
+	["editor:set_changes_baseline"] = command.palette(function(view)
 		local text = table.concat(view.buffer.lines or {})
-		if activate_buffer_baseline(view.buffer, text, "manual", true) then
-			core.log_quiet("File changes: set Buffer Baseline for %s", view.buffer:get_name())
+		if activate_changes_baseline(view.buffer, text, "manual", true) then
+			core.log_quiet("File changes: set Changes Baseline for %s", view.buffer:get_name())
 		end
 	end, { keywords = { "change", "markers", "snapshot", "diff" } }),
+	["editor:clear_changes_baseline"] = command.palette(function(view)
+		if clear_changes_baseline(view.buffer, true) then
+			core.log_quiet("File changes: cleared Changes Baseline for %s", view.buffer:get_name())
+		end
+	end, { keywords = { "change", "markers", "git", "reset" } }),
 	["editor:revert_file_change"] = function(view)
 		local buffer = view.buffer
 		local state = get_state(buffer)
@@ -1145,7 +1227,7 @@ git_status:subscribe(gitdiff_highlight, refresh_published_repository)
 
 function gitdiff_highlight.initialize_buffer(buffer)
 	if not buffer or buffer_gitdiff_disabled(buffer) then return false end
-	local loaded = load_buffer_baseline(buffer)
+	local loaded = load_changes_baseline(buffer)
 	if loaded then schedule_local_diff(buffer, "initialize-buffer") end
 	return loaded
 end
@@ -1157,15 +1239,8 @@ function gitdiff_highlight.refresh_buffer(buffer)
 	return true
 end
 
-function gitdiff_highlight.discard_buffer_baseline(buffer)
-	if not buffer then return false end
-	remove_persisted_identity(baseline_identity(buffer))
-	local state = ensure_state(buffer)
-	if state.baseline_kind ~= "buffer" and not state.buffer_baseline_text then return false end
-	state.buffer_baseline_text = nil
-	state.buffer_baseline_origin = nil
-	clear_state(buffer, "Buffer Baseline discarded")
-	return true
+function gitdiff_highlight.discard_changes_baseline(buffer)
+	return clear_changes_baseline(buffer, false)
 end
 
 function gitdiff_highlight._set_state_for_tests(buffer, state)

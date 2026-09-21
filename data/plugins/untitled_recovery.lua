@@ -363,6 +363,11 @@ local function load_text_into_buffer(buffer, text, crlf)
   estimate_buffer_bytes(buffer)
   buffer:reset_syntax()
   buffer:clear_undo_redo()
+  local file_changes = package.loaded["plugins.gitdiff_highlight"]
+  if file_changes and file_changes.initialize_buffer then
+    file_changes.initialize_buffer(buffer)
+    file_changes.refresh_buffer(buffer)
+  end
 end
 
 local function update_manifest_entry(buffer, fields)
@@ -1091,8 +1096,8 @@ function M.handle_confirmed_discard(buffer)
   if not is_untitled_buffer(buffer) then return end
   M.ensure_buffer_backing(buffer)
   local file_changes = package.loaded["plugins.gitdiff_highlight"]
-  if file_changes and file_changes.discard_buffer_baseline then
-    file_changes.discard_buffer_baseline(buffer)
+  if file_changes and file_changes.discard_changes_baseline then
+    file_changes.discard_changes_baseline(buffer)
   end
   local id = buffer.intellij_untitled_id
   local path = buffer.intellij_untitled_backing_path

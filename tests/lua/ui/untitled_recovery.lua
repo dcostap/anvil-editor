@@ -3,8 +3,10 @@ local common = require "core.common"
 local Project = require "core.project"
 local Editor = require "core.editor"
 local BufferRegistry = require "core.buffer_registry"
+local command = require "core.command"
 local storage = require "core.storage"
 local recovery = require "plugins.untitled_recovery"
+local file_changes = require "plugins.gitdiff_highlight"
 require "plugins.untitled_tabs"
 local test = require "core.test"
 
@@ -632,6 +634,9 @@ test.describe("untitled recovery integration", function()
   test.test("manifest restore recovers untitled content without workspace state", function(context)
     local buffer = tag_untitled(core.open_buffer(), "Untitled-1", "buffer-manifest")
     buffer:insert(1, 1, "manifest text")
+    core.active_view = Editor(buffer)
+    test.ok(command.perform("editor:set_changes_baseline"))
+    buffer:insert(1, 1, "changed ")
     test.ok(recovery.flush_buffer(buffer, "test", true))
 
     core.buffers = {}
@@ -643,7 +648,10 @@ test.describe("untitled recovery integration", function()
     test.equal(restored_count, 1)
     test.equal(#core.buffers, 1)
     test.equal(core.buffers[1].intellij_untitled_id, "buffer-manifest")
-    test.equal(core.buffers[1]:get_text(1, 1, math.huge, math.huge), "manifest text")
+    test.equal(core.buffers[1]:get_text(1, 1, math.huge, math.huge), "changed manifest text")
+    local source = file_changes.get_patch_source(core.buffers[1])
+    test.not_nil(source, "manifest recovery did not restore the Changes Baseline")
+    test.equal(table.concat(source.before), "manifest text\n")
     test.ok(core.buffers[1]:is_dirty())
   end)
 
