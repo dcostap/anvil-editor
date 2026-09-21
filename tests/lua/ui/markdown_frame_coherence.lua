@@ -235,6 +235,20 @@ test.describe("Markdown frame coherence", function()
     test.equal(published_height, pending_height)
   end)
 
+  test.it("does not guess an empty nested dash during indentation", function(context)
+    local view, buffer, instance = make_view(context, "- test\n- \nafter")
+    buffer:set_selection(2, 3)
+    view:get_line_render(2)
+
+    test.equal(perform(view, "core:indent"), true)
+    test.equal(buffer.lines[2], "    - \n")
+    local pending = visible_signature(view, 2)
+    test.equal(pending, "    - ")
+
+    wait_ready(instance)
+    test.equal(visible_signature(view, 2), pending)
+  end)
+
   test.it("moves right for the first character on a source-empty list continuation", function(context)
     local view, buffer, instance = make_view(context, "- item\n\nplain")
     buffer:set_selection(2, 1)

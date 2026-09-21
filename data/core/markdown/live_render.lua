@@ -3925,6 +3925,17 @@ function edit_visual_projection.source_list_prefix(text)
   }
 end
 
+function edit_visual_projection.empty_list_prefix_transition(previous_text, current_text)
+  local current = edit_visual_projection.source_list_prefix(current_text)
+  if not current or current.body ~= "" then return false end
+  local previous = edit_visual_projection.source_list_prefix(previous_text or "")
+  if previous and previous.body ~= "" then return false end
+  return not previous
+    or previous.indent ~= current.indent
+    or previous.token ~= current.token
+    or previous.task_state ~= current.task_state
+end
+
 function edit_visual_projection.is_list_prefix_fragment(fragment)
   return fragment.markdown_task_checkbox
     or fragment.markdown_task_source_marker
@@ -3989,6 +4000,20 @@ function edit_visual_projection.pending_list_render(
   local parsed = edit_visual_projection.source_list_prefix(current_text)
   if not parsed then return nil end
 
+  local old_prefix = previous and edit_visual_projection.source_list_prefix(
+    previous.source_text or ""
+  )
+  -- An empty marker can change meaning when its indentation changes.  In
+  -- particular, `- test` followed by an indented `- ` can be a setext
+  -- heading, not a nested list item.  Do not invent a list presentation for
+  -- that transition.  A non-empty body will be checked by the semantic model
+  -- soon; an empty body must stay conservative until then.
+  if edit_visual_projection.empty_list_prefix_transition(
+    previous and previous.source_text or nil, current_text
+  ) then
+    return nil
+  end
+
   local body_font = markdown_live_body_font(view)
   local row_height = markdown_live_body_line_height(view)
   local indent_width = body_font:get_width(string.rep(
@@ -4002,9 +4027,6 @@ function edit_visual_projection.pending_list_render(
   local marker_width = indent_width + math.max(
     marker_control_width + marker_gap_width,
     parsed.ordered and body_font:get_width(parsed.token .. " ") or 0
-  )
-  local old_prefix = previous and edit_visual_projection.source_list_prefix(
-    previous.source_text or ""
   )
   local previous_revealed = false
   for _, fragment in ipairs(previous and previous.fragments or {}) do
@@ -4890,13 +4912,21 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
   local function publish(line, render, captured, provenance)
     if not render then return false end
     local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
+    local suppress_list_projection = captured
+      and captured.source_line == line
+      and edit_visual_projection.empty_list_prefix_transition(
+        captured.source_text, source
+      )
+    if suppress_list_projection then
+      render = raw_pending_source_render(view, nil, source, false)
+    end
     if captured and captured.raw_source_removed then
       -- Source ownership, not the old row's style, decides whether a deleted
       -- construct can keep raw geometry in the next revision.
       render = raw_pending_source_render(view, nil, source, false)
       captured = nil
     end
-    if not (captured and (
+    if not suppress_list_projection and not (captured and (
       captured.fenced or captured.raw_passthrough or captured.frontmatter
     )) then
       if edit_visual_projection.source_list_prefix(source)
