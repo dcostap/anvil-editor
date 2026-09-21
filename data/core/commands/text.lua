@@ -552,30 +552,6 @@ local function markdown_indent_width(indent)
   return width
 end
 
-local function markdown_list_can_indent(buffer, line, indent_length, indent_size)
-  local line_text = buffer.lines[line] or ""
-  local current_indent = markdown_indent_width(line_text:sub(1, indent_length))
-  local parent_indent = current_indent
-  -- Do not create a deeper level from the first child alone. Find the
-  -- previous item at this level or above and allow one step below it.
-  for previous = line - 1, 1, -1 do
-    local previous_text = buffer.lines[previous] or ""
-    local _, previous_indent_length = markdown_list_content_start(
-      buffer, previous, previous_text, true
-    )
-    if previous_indent_length then
-      local previous_indent = markdown_indent_width(
-        previous_text:sub(1, previous_indent_length)
-      )
-      if previous_indent <= current_indent then
-        parent_indent = previous_indent
-        break
-      end
-    end
-  end
-  return current_indent < parent_indent + indent_size
-end
-
 local function markdown_space_indent(line_text, indent_length)
   return string.rep(
     " ", markdown_indent_width(tostring(line_text or ""):sub(1, indent_length))
@@ -1919,8 +1895,7 @@ local commands = {
   ["core:indent"] = function(dv)
     if not can_edit(dv, "indent") then return end
     local list_indent_edits, list_indent_lines = {}, {}
-    local selection_count = 0
-    local list_item_count = 0
+    local selection_count, list_indent_count = 0, 0
     for _, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       selection_count = selection_count + 1
       if line1 == line2 and col1 == col2 then
@@ -1929,11 +1904,8 @@ local commands = {
           dv.buffer, line1, line_text, true
         )
         if content_start then
-          list_item_count = list_item_count + 1
-          if markdown_list_can_indent(
-            dv.buffer, line1, indent_length, config.indent_size
-          ) and not list_indent_lines[line1]
-          then
+          list_indent_count = list_indent_count + 1
+          if not list_indent_lines[line1] then
             local indent_end = line_text:find("[^\t ]")
             indent_end = indent_end and indent_end - 1 or 0
             -- A literal tab before a Markdown marker is parsed as indented
@@ -1954,7 +1926,7 @@ local commands = {
         end
       end
     end
-    if selection_count > 0 and list_item_count == selection_count then
+    if selection_count > 0 and list_indent_count == selection_count then
       if #list_indent_edits > 0 then
         local selections, last_selection = dv.buffer:selections_after_edits(
           list_indent_edits, nil, dv.buffer.last_selection
