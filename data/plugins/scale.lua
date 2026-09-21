@@ -84,6 +84,18 @@ local function zoomed_scale(current, direction)
   return math.floor(target * 1000000000000 + 0.5) / 1000000000000
 end
 
+local function logical_font_size(scale)
+  return common.round(scale / project_default_scale() * base_font_size)
+end
+
+local function show_zoom_message()
+  if core.status_bar and core.status_bar.show_message then
+    core.status_bar:show_message(
+      "i", style.accent, string.format("Font size: %d", logical_font_size(current_code_scale))
+    )
+  end
+end
+
 local function at_project_default_zoom()
   local default = project_default_scale()
   return math.abs(current_scale - default) < 0.000001
@@ -217,18 +229,21 @@ function scale.reset()
     scale.set_code(project_default_scale())
   end
   mark_project_zoom_changed()
+  show_zoom_message()
 end
 
 function scale.increase()
   scale.set(zoomed_scale(current_scale, 1))
   scale.set_code(zoomed_scale(current_code_scale, 1))
   mark_project_zoom_changed()
+  show_zoom_message()
 end
 
 function scale.decrease()
   scale.set(zoomed_scale(current_scale, -1))
   scale.set_code(zoomed_scale(current_code_scale, -1))
   mark_project_zoom_changed()
+  show_zoom_message()
 end
 
 function scale.get_code()
@@ -272,14 +287,17 @@ end
 
 function scale.reset_code()
   scale.set_code(DEFAULT_SCALE)
+  show_zoom_message()
 end
 
 function scale.increase_code()
   scale.set_code(zoomed_scale(current_code_scale, 1))
+  show_zoom_message()
 end
 
 function scale.decrease_code()
   scale.set_code(zoomed_scale(current_code_scale, -1))
+  show_zoom_message()
 end
 
 if DEFAULT_SCALE ~= config.plugins.scale.default_scale then

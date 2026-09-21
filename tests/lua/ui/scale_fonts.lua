@@ -5,6 +5,9 @@ local test = require "core.test"
 
 test.describe("font scaling", function()
   test.after_each(function(context)
+    if context.original_status_message then
+      core.status_bar.show_message = context.original_status_message
+    end
     if context.project_zoom_state ~= nil then
       scale.load_workspace_state(context.project_zoom_state)
     end
@@ -72,6 +75,22 @@ test.describe("font scaling", function()
 
     test.near(style.font:get_size(), ui_size + DEFAULT_SCALE, 0.001)
     test.near(style.code_font:get_size(), code_size + DEFAULT_SCALE, 0.001)
+  end)
+
+  test.it("reports the new font size after global zoom", function(context)
+    context.interface_scale = scale.get()
+    context.code_scale = scale.get_code()
+    context.original_status_message = core.status_bar.show_message
+    local message
+    core.status_bar.show_message = function(_, _, _, text)
+      message = text
+    end
+
+    scale.set(DEFAULT_SCALE)
+    scale.set_code(DEFAULT_SCALE)
+    scale.increase()
+
+    test.equal(message, "Font size: 15")
   end)
 
   test.it("restores Fuzzy Search row spacing after a theme change while zoomed", function(context)
