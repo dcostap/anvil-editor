@@ -363,6 +363,11 @@ style.syntax["string.escape"] = c(C.invalid_string_escape)
 style.syntax["punctuation.delimiter"] = c(C.semicolon)
 style.syntax["punctuation.bracket"] = c(C.semicolon)
 
+-- Keep type names distinct from ordinary identifiers.
+style.syntax_fonts["type"] = style.code_font:copy(
+  style.code_font:get_size(), { bold = true }
+)
+
 style.log["INFO"] = { icon = "i", color = style.text }
 style.log["WARN"] = { icon = "!", color = style.warn }
 style.log["ERROR"] = { icon = "!", color = style.error }

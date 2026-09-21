@@ -434,7 +434,7 @@ end
 local function new_measurement_context(buffer, default_font, textview)
   local _, indent_size = buffer:get_indent_info()
   local default_cell_width = default_font:get_width(" ")
-  local syntax_fonts = {}
+  local syntax_fonts = setmetatable({}, getmetatable(style.syntax_fonts))
   for name, font in pairs(style.syntax_fonts) do syntax_fonts[name] = font end
   local has_line_render_providers = false
   if textview and textview.get_line_render then

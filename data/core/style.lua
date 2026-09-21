@@ -114,7 +114,19 @@ style.syntax = style.apply_syntax_fallbacks({})
 -- The syntax highlighter will take existing values from this table and
 -- override style.code_font on a per-token basis, so you can choose to eg.
 -- render comments in an italic font if you want to.
-style.syntax_fonts = {}
+local syntax_font_fallback_mt = {
+  __index = function(fonts, token_type)
+    if type(token_type) ~= "string" then return nil end
+    local parent = token_type:match("^(.*)%.[^%.]+$")
+    while parent do
+      local font = rawget(fonts, parent)
+      if font ~= nil then return font end
+      parent = parent:match("^(.*)%.[^%.]+$")
+    end
+  end,
+}
+
+style.syntax_fonts = setmetatable({}, syntax_font_fallback_mt)
 -- style.syntax_fonts["comment"] = renderer.font.load(path_to_font, size_of_font, rendering_options)
 
 style.log = {}
