@@ -162,7 +162,7 @@ test.describe("Git Log changed-file row selection", function()
   test.it("keeps file selection by path when changed-file rows move", function()
     local view, details, commit = open_details()
     command.perform("core:move_to_next_line")
-    command.perform("core:toggle_row_mark")
+    command.perform("core:toggle_selected_row_marks")
     commit.changed_files = {
       { status = "modified", old_path = "beta/b.txt", new_path = "beta/b.txt" },
       { status = "modified", old_path = "delta/d.txt", new_path = "delta/d.txt" },
@@ -175,7 +175,7 @@ test.describe("Git Log changed-file row selection", function()
 
   test.it("keeps marked files when their folder closes and reopens", function()
     local view, details = open_details()
-    command.perform("core:toggle_row_mark")
+    command.perform("core:toggle_selected_row_marks")
     local folder = details.path_tree_line_offset + details.path_tree:line_for_path("alpha", "dir")
     test.ok(view:toggle_details_tree_folder(details, folder))
     test.same(selected_paths(details), { "beta/b.txt" })

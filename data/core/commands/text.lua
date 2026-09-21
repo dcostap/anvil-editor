@@ -3393,10 +3393,10 @@ end, selection_commands(commands))
 
 command.add(function()
   local view = core.active_view
-  return not not (view and view.row_selection_mode and view.toggle_row_mark), view
+  return not not (view and view.row_selection_mode and view.toggle_selected_row_marks), view
 end, {
-  ["core:toggle_row_mark"] = function(view)
-    view:toggle_row_mark()
+  ["core:toggle_selected_row_marks"] = function(view)
+    view:toggle_selected_row_marks()
   end,
 })
 

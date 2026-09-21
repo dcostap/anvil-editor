@@ -190,16 +190,21 @@ function RowTextView:clear_row_marks(preserve_selection)
   end
 end
 
-function RowTextView:toggle_row_mark()
+function RowTextView:toggle_selected_row_marks()
   if not self.row_selection_mode then return false end
   local state = self:get_selection_state()
-  local row = state.selections[(state.last_selection - 1) * 4 + 1]
-  if not self:is_selectable_row(row) then return false end
-  local marked = not self.row_selection_marks[row]
-  self.row_selection_marks[row] = marked or nil
-  if self.on_row_mark_toggled then self:on_row_mark_toggled(row, marked) end
-  self:select_row(row)
-  core.log_quiet("Row Selection Mode row %d %s", row, marked and "marked" or "unmarked")
+  local focus = state.selections[(state.last_selection - 1) * 4 + 1]
+  if not self:is_selectable_row(focus) then return false end
+  local rows = self:get_selected_rows()
+  local all_marked = #rows > 0
+  for _, row in ipairs(rows) do all_marked = all_marked and self.row_selection_marks[row] == true end
+  local marked = not all_marked
+  for _, row in ipairs(rows) do
+    self.row_selection_marks[row] = marked or nil
+    if self.on_row_mark_toggled then self:on_row_mark_toggled(row, marked) end
+  end
+  self:select_row(focus)
+  core.log_quiet("Row Selection Mode %s %d selected rows", marked and "marked" or "unmarked", #rows)
   return true
 end
 
