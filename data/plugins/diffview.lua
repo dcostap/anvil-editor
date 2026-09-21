@@ -400,6 +400,24 @@ local function content_read_only_reason(content)
   return content.read_only_reason or "This Diff View side is read-only"
 end
 
+local function set_buffer_text(buffer, text)
+  text = tostring(text or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+  local lines, start = {}, 1
+  while start <= #text do
+    local newline = text:find("\n", start, true)
+    if newline then
+      lines[#lines + 1] = text:sub(start, newline)
+      start = newline + 1
+    else
+      lines[#lines + 1] = text:sub(start) .. "\n"
+      break
+    end
+  end
+  if #lines == 0 then lines[1] = "\n" end
+  buffer.lines = lines
+  buffer:set_selection(1, 1, 1, 1)
+end
+
 local function buffer_needs_dirty_prompt(buffer)
   if not (buffer and buffer.is_dirty and buffer:is_dirty()) then return false end
   if buffer.intellij_untitled and table.concat(buffer.lines or {}):gsub("\n$", "") == "" then return false end
@@ -443,7 +461,7 @@ local function buffer_for_content(content, title)
   -- Language detection must not give generated content a disk identity.
   buffer.syntax_path = content.source_path
   local text = content.kind == "empty" and "" or (content.text or "")
-  if text ~= "" then buffer:insert(1, 1, text) end
+  set_buffer_text(buffer, text)
   buffer:reset_syntax()
   buffer:clear_undo_redo()
   buffer:clean()

@@ -66,6 +66,7 @@ test.describe("DiffView batch behavior", function()
     if context.cleanup_adopt_left then pcall(os.remove, context.cleanup_adopt_left) end
     if context.cleanup_adopt_right then pcall(os.remove, context.cleanup_adopt_right) end
     if context.cleanup_shared_file then pcall(os.remove, context.cleanup_shared_file) end
+    if context.cleanup_eof_file then pcall(os.remove, context.cleanup_eof_file) end
     for _, view in ipairs(context.diffviews or {}) do
       local pane = panes.pane_for_view(view)
       if pane then panes.close_view(pane, { view = view, force = true }) end
@@ -91,6 +92,27 @@ test.describe("DiffView batch behavior", function()
     test.equal("right\n", text(view.buffer_view_b.buffer))
     test.equal("Old", view.request.content_titles[1])
     test.equal("New", view.request.content_titles[2])
+  end)
+
+  test.it("does not create a trailing row for text with a final newline", function(context)
+    local path = core.temp_filename(".kt")
+    local file = assert(io.open(path, "wb"))
+    file:write("left\nright\n")
+    file:close()
+    context.cleanup_eof_file = path
+    local view, err = diffview.open({
+      contents = {
+        diffview.content.text("left\nright\n"),
+        diffview.content.file(path),
+      },
+      auto_reveal_first_change = false,
+    }, true)
+    test.ok(view, err)
+    track(context, "diffviews", view)
+    test.equal(2, #view.buffer_view_a.buffer.lines)
+    test.equal(2, #view.buffer_view_b.buffer.lines)
+    test.equal("left\nright\n", text(view.buffer_view_a.buffer))
+    test.equal("left\nright\n", text(view.buffer_view_b.buffer))
   end)
 
   test.it("opens a Diff View with the right side focused", function(context)
