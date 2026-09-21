@@ -19,6 +19,10 @@ function ScrollView:get_h_scrollable_size()
   return self.content_width
 end
 
+function ScrollView:get_line_height()
+  return 10
+end
+
 test.describe("Viewport scroll transitions", function()
   test.before_each(function(context)
     context.get_time = system.get_time
@@ -66,6 +70,16 @@ test.describe("Viewport scroll transitions", function()
     context.now = context.now + config.scroll_transition_duration * 3 / 4
     view:update()
     test.equal(view.scroll.y, 100)
+  end)
+
+  test.it("snaps vertical scrolls close to two line heights", function()
+    local view = ScrollView()
+    view.scroll.to.y = 19
+
+    view:update()
+
+    test.equal(view.scroll.y, 19)
+    test.equal(view.scroll.move_data_y, nil)
   end)
 
   test.it("restarts a changed target without moving the visible position", function(context)
