@@ -5513,7 +5513,7 @@ function live._markdown_code_copy_button_fragment(view, fenced)
   local button_size = math.max(16 * SCALE, math.floor(line_height * 0.82))
   local hit_padding = math.max(2 * SCALE, math.floor(button_size * 0.16))
   local hit_size = button_size + hit_padding * 2
-  local right_padding = math.max(4 * SCALE, math.floor(line_height * 0.28))
+  local right_padding = math.max(1 * SCALE, math.floor(line_height * 0.10))
 
   local function draw_outline(x, y, size, thickness, color)
     renderer.draw_rect(x, y, size, thickness, color)
@@ -5532,7 +5532,9 @@ function live._markdown_code_copy_button_fragment(view, fenced)
     width = 0,
     hit_width = hit_size,
     layout_x = math.max(
-      0, image_available_width(view) - button_size - hit_padding - right_padding
+      0,
+      view:get_presentation_viewport_width() - view:get_gutter_width()
+        - button_size - hit_padding - right_padding
     ),
     markdown_code_copy_button = true,
     markdown_code_block_id = block_id,
@@ -5667,7 +5669,7 @@ local function fenced_code_content_render_line(view, line, text, fenced)
     render.callout_record = callout
     render.callout_semantic_id = callout.semantic_id
   end
-  if line == fenced.source.line1 + 1 then
+  if line == fenced.source.line1 + 1 and fenced_code_is_active(view, fenced) then
     render.fragments[#render.fragments + 1] =
       live._markdown_code_copy_button_fragment(view, fenced)
   end
@@ -6632,6 +6634,12 @@ local function build_render_line(view, line, _context)
             semantic_id = fenced.id .. ":" .. delimiter_kind,
           },
         }
+        if delimiter_kind == "open"
+          and fenced.effective_line2 > fenced.source.line1
+        then
+          fragments[#fragments + 1] =
+            live._markdown_code_copy_button_fragment(view, fenced)
+        end
         return {
           source_text = text,
           metric_height = view:get_line_height(),
