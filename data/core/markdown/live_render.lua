@@ -4003,6 +4003,13 @@ function edit_visual_projection.pending_list_render(
   local old_prefix = previous and edit_visual_projection.source_list_prefix(
     previous.source_text or ""
   )
+  -- Do not turn a settled raw line into a list while only its body changes.
+  -- The semantic result already rejected this source as a list.
+  if parsed.body ~= "" and old_prefix and previous
+    and not edit_visual_projection.has_list_prefix(previous)
+  then
+    return nil
+  end
   -- An empty marker can change meaning when its indentation changes.  In
   -- particular, `- test` followed by an indented `- ` can be a setext
   -- heading, not a nested list item.  Do not invent a list presentation for
@@ -4926,9 +4933,13 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
       render = raw_pending_source_render(view, nil, source, false)
       captured = nil
     end
-    if not suppress_list_projection and not (captured and (
-      captured.fenced or captured.raw_passthrough or captured.frontmatter
-    )) then
+    if not suppress_list_projection
+      and not render.raw_passthrough
+      and not (captured and (
+        captured.fenced or captured.indented
+          or captured.raw_passthrough or captured.frontmatter
+      ))
+    then
       if edit_visual_projection.source_list_prefix(source)
         and (not edit_visual_projection.has_list_prefix(render)
           or #(transaction.edits or {}) == 1
@@ -5027,9 +5038,11 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
             visual_capture, "retained"
           )
         else
-          if not (captured and (
-            captured.fenced or captured.raw_passthrough or captured.frontmatter
-          ))
+          if not render.raw_passthrough
+            and not (captured and (
+              captured.fenced or captured.indented
+                or captured.raw_passthrough or captured.frontmatter
+            ))
             and edit_visual_projection.source_list_prefix(source)
             and not edit_visual_projection.has_list_prefix(render)
           then
@@ -5069,7 +5082,8 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
         end
         if exact then
           local render = clone_render_line(exact.render_line)
-          if not exact.raw_passthrough and not exact.frontmatter
+          if not exact.raw_passthrough and not exact.indented
+            and not exact.frontmatter
             and edit_visual_projection.source_list_prefix(source)
             and not edit_visual_projection.has_list_prefix(render)
           then
@@ -5092,10 +5106,13 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
             )
           else
             local render
-            if fallback and (fallback.raw_passthrough or fallback.frontmatter) then
+            if fallback and (
+              fallback.raw_passthrough or fallback.indented or fallback.frontmatter
+            ) then
               render = {
                 source_text = source,
                 raw_passthrough = true,
+                markdown_code_block = fallback.indented or nil,
                 markdown_edit_provenance = "retained",
               }
             else

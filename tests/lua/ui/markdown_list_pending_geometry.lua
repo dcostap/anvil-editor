@@ -70,17 +70,19 @@ local function render_detail(view, line)
   local fragments = {}
   for _, fragment in ipairs(render.fragments or {}) do
     fragments[#fragments + 1] = string.format(
-      "%s-%s:%q:w=%s:widget=%s:list=%s:task=%s",
+      "%s-%s:%q:w=%s:widget=%s:list=%s:source_list=%s:task=%s",
       tostring(fragment.source_col1), tostring(fragment.source_col2),
       tostring(fragment.text), tostring(fragment.width),
       tostring(fragment.widget ~= nil),
       tostring(fragment.unordered_list_marker or fragment.ordered_list_marker or false),
+      tostring(fragment.unordered_list_source_marker or fragment.ordered_list_source_marker or false),
       tostring(fragment.markdown_task_checkbox or false)
     )
   end
   return string.format(
-    "provenance=%s source=%q fragments=[%s]",
-    tostring(render.markdown_provenance), tostring(render.source_text),
+    "provenance=%s pending=%s raw=%s source=%q fragments=[%s]",
+    tostring(render.markdown_provenance), tostring(render.markdown_pending_provenance),
+    tostring(render.raw_passthrough), tostring(render.source_text),
     table.concat(fragments, ", ")
   )
 end
@@ -265,6 +267,32 @@ test.describe("Markdown list pending geometry", function()
       )
     end)
   end
+
+  test.it("keeps an indented list-like code line raw while typing", function()
+    local view, buffer = make_view(
+      "- parent\n- item\nplain\n", "pending-indented-list-code.md"
+    )
+    buffer:set_selection(2, 3)
+    test.equal(perform(view, "core:indent"), true)
+    wait_ready(view)
+    test.equal(perform(view, "core:indent"), true)
+    wait_ready(view)
+
+    local source = (buffer.lines[2] or ""):gsub("\n$", "")
+    test.ok(source:match("^%s+%-%s+item$"))
+    test.ok(
+      not render_detail(view, 2):find("list=true", 1, true),
+      render_detail(view, 2)
+    )
+
+    buffer:set_selection(2, #buffer.lines[2])
+    test.equal(view:on_text_input("x"), true)
+    test.equal(markdown_model.peek(buffer).status, "pending")
+    test.ok(not has_presented_list_marker(view, 2), render_detail(view, 2))
+
+    wait_ready(view)
+    test.ok(not has_presented_list_marker(view, 2), render_detail(view, 2))
+  end)
 
   test.it("keeps the marker presented when Backspace removes the final body character", function()
     local view, buffer = make_view("- x\nplain\n", "pending-empty-list-item.md")
