@@ -92,6 +92,44 @@ test.describe("Git Log changed-file row selection", function()
     test.ok(not copied:find("Changed files", 1, true), copied)
   end)
 
+  test.it("commits the selected Local Unstaged Changes files with a prompted message", function()
+    local view, details, commit = open_details()
+    commit.kind = "working_tree"
+    commit.local_scope = "unstaged"
+    commit.subject = "Local Unstaged Changes"
+    commit.hash = nil
+    view.model:log_tab().selected_commit_hash = nil
+    local request
+    view.model.backend.commit_files = function(repo, paths, message, done)
+      request = { repo = repo, paths = paths, message = message }
+      done({}, nil)
+    end
+    view.model.refresh_log = function(_, done)
+      if done then done(view.model, nil) end
+    end
+    command.perform("core:select_to_next_line")
+
+    test.same(view:selected_unstaged_paths(details), { "alpha/a.txt", "beta/b.txt" })
+    test.ok(command.perform("git:commit_selected_files"))
+    test.equal(core.active_view, core.global_prompt_bar)
+    core.global_prompt_bar:set_text("Commit selected files")
+    core.global_prompt_bar:submit()
+
+    test.equal(request.repo, view.model.repo)
+    test.same(request.paths, { "alpha/a.txt", "beta/b.txt" })
+    test.equal(request.message, "Commit selected files")
+  end)
+
+  test.it("does not offer selected-file commits for Local Staged Changes", function()
+    local view, _, commit = open_details()
+    commit.kind = "working_tree"
+    commit.local_scope = "staged"
+    commit.subject = "Local Staged Changes"
+    commit.hash = nil
+    view.model:log_tab().selected_commit_hash = nil
+    test.equal(command.perform("git:commit_selected_files"), false)
+  end)
+
   test.it("ignores commit text and keeps the selected file when a folder closes", function()
     local view, details = open_details()
     command.perform("core:move_to_end_of_buffer")

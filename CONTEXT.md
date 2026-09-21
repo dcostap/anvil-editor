@@ -574,6 +574,9 @@ A Git Log row showing changes prepared for the next commit, compared with HEAD.
 **Local Unstaged Changes**:
 A Git Log row showing current files and Buffers compared with staged content, including untracked files.
 
+**Commit Selected Files**:
+A Git View action that commits selected files from Local Unstaged Changes. Other staged and unstaged files stay uncommitted.
+
 **Historical Buffer**:
 A read-only Buffer containing file text from a past Git revision.
 _Avoid_: Historical Document, snapshot buffer

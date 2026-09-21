@@ -1194,6 +1194,29 @@ function GitView:details_tree_item(view, line)
   return commit, row, record
 end
 
+function GitView:selected_unstaged_paths(view)
+  view = view or core.active_view
+  if not (view and view.git_owner_view == self and view.git_pane == "details") then return {}, 0 end
+  local commit = self:detail_commit_for_tab(self:model_tab())
+  if not (commit and commit.kind == "working_tree" and commit.local_scope == "unstaged") then return {}, 0 end
+  local paths, seen, file_count = {}, {}, 0
+  local function add(path)
+    if path and path ~= "" and not seen[path] then
+      paths[#paths + 1] = path
+      seen[path] = true
+    end
+  end
+  for _, line in ipairs(view:get_selected_rows()) do
+    local record = view:path_tree_record_for_line(line)
+    if record then
+      file_count = file_count + 1
+      add(record.old_path)
+      add(record.new_path or record.path)
+    end
+  end
+  return paths, file_count
+end
+
 function GitView:toggle_details_tree_folder(view, line)
   local commit, row = self:details_tree_item(view, line)
   if not (commit and row and row.type == "dir" and view:toggle_path_tree_folder(line)) then return false end

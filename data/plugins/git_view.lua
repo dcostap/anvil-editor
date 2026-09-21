@@ -614,6 +614,58 @@ end, {
   end,
 })
 
+local function save_selected_buffers(repo, paths)
+  if not (repo and repo.root and core.buffer_registry) then return true end
+  local selected = {}
+  for _, path in ipairs(paths) do selected[path:gsub("\\", "/")] = true end
+  for _, buffer in ipairs(core.buffer_registry:list()) do
+    if buffer.abs_filename and buffer.is_dirty and buffer:is_dirty() then
+      local relpath = common.relative_path(repo.root, buffer.abs_filename):gsub("\\", "/")
+      if selected[relpath] then
+        local ok, err = pcall(buffer.save, buffer)
+        if not ok then return false, err end
+      end
+    end
+  end
+  return true
+end
+
+command.add(function()
+  local pane = core.active_view
+  local view = pane and pane.git_owner_view
+  local paths, file_count
+  if view and view.selected_unstaged_paths then paths, file_count = view:selected_unstaged_paths(pane) end
+  paths = paths or {}
+  return #paths > 0, view, paths, file_count or 0
+end, {
+  ["git:commit_selected_files"] = command.palette(function(view, paths, file_count)
+    core.global_prompt_bar:enter(string.format("Commit message (%d %s)", file_count, file_count == 1 and "file" or "files"), {
+      show_suggestions = false,
+      validate = function(message)
+        if message:find("%S") then return true end
+        core.warn("Git View: Enter a commit message")
+        return false
+      end,
+      submit = function(message)
+        local saved, save_err = save_selected_buffers(view.model.repo, paths)
+        if not saved then
+          core.warn("Git View: Cannot save a selected Buffer before commit: %s", tostring(save_err))
+          return
+        end
+        show_git_progress(string.format("Committing %d selected %s…", file_count, file_count == 1 and "file" or "files"))
+        view.model.backend.commit_files(view.model.repo, paths, message, function(_, err)
+          if err then
+            core.warn("Git View: Cannot commit the selected files: %s", err.message or err.kind)
+            return
+          end
+          core.log_quiet("Git View committed %d selected Local Unstaged Changes paths", file_count)
+          view.model:refresh_log(function() core.redraw = true end)
+        end)
+      end,
+    })
+  end),
+})
+
 local function close_git_view_tab(view)
   if not view then return end
   local session = view.git_session
