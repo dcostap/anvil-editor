@@ -593,6 +593,10 @@ A Git Log row showing current files and Buffers compared with staged content, in
 **Commit Selected Files**:
 A Git View action that commits selected files from Local Unstaged Changes. Other staged and unstaged files stay uncommitted.
 
+**Amend Selected Files**:
+A Git View action that amends the most recent commit with selected files from Local Unstaged Changes.
+It starts with that commit's message. The user can edit it.
+
 **Historical Buffer**:
 A read-only Buffer containing file text from a past Git revision.
 _Avoid_: Historical Document, snapshot buffer

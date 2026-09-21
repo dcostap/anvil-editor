@@ -564,6 +564,54 @@ test.describe("plugins.git.backend", function()
       test.ok(status:find(" M other.txt", 1, true), status)
     end)
 
+    test.test("amends only selected working-tree files and keeps other staged changes", function(context)
+      local code = run({ backend.git_path(), "--version" })
+      test.skip_if(code ~= 0, "git executable is not available")
+
+      local root = join_path(USERDIR, "git-backend-amend-files-" .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000))
+      context.root = root
+      local ok, err = common.mkdirp(root)
+      test.ok(ok, err)
+      local git_root = root:gsub("\\", "/")
+      test.equal(run({ backend.git_path(), "-C", git_root, "init" }), 0)
+      test.equal(run({ backend.git_path(), "-C", git_root, "config", "user.email", "anvil@example.test" }), 0)
+      test.equal(run({ backend.git_path(), "-C", git_root, "config", "user.name", "Anvil Test" }), 0)
+      write_file(join_path(root, "selected.txt"), "old selected\n")
+      write_file(join_path(root, "staged.txt"), "old staged\n")
+      write_file(join_path(root, "other.txt"), "old other\n")
+      test.equal(run({ backend.git_path(), "-C", git_root, "add", "." }), 0)
+      test.equal(run({ backend.git_path(), "-C", git_root, "commit", "-m", "initial" }), 0)
+
+      write_file(join_path(root, "other.txt"), "prior other\n")
+      test.equal(run({ backend.git_path(), "-C", git_root, "add", "other.txt" }), 0)
+      test.equal(run({ backend.git_path(), "-C", git_root, "commit", "-m", "prior" }), 0)
+
+      write_file(join_path(root, "selected.txt"), "new selected\n")
+      write_file(join_path(root, "staged.txt"), "new staged\n")
+      write_file(join_path(root, "other.txt"), "working other\n")
+      test.equal(run({ backend.git_path(), "-C", git_root, "add", "staged.txt" }), 0)
+
+      local result, callback_err
+      backend.amend_files(
+        { root = root }, { "selected.txt" }, "amended files",
+        function(commit_result, commit_err) result, callback_err = commit_result, commit_err end
+      )
+      wait_until(function() return result ~= nil or callback_err ~= nil end, 5, "amend-files callback did not run")
+      test.equal(callback_err, nil)
+
+      local _, names = run({ backend.git_path(), "-C", git_root, "show", "--format=", "--name-only", "HEAD" })
+      test.ok(names:find("selected.txt", 1, true))
+      test.ok(not names:find("staged.txt", 1, true))
+      test.ok(names:find("other.txt", 1, true))
+      local _, staged_head = run({ backend.git_path(), "-C", git_root, "show", "HEAD:staged.txt" })
+      test.equal(staged_head, "old staged\n")
+      local _, message = run({ backend.git_path(), "-C", git_root, "log", "-1", "--format=%s" })
+      test.equal(message:gsub("%s+$", ""), "amended files")
+      local _, status = run({ backend.git_path(), "-C", git_root, "status", "--short" })
+      test.ok(status:find("M  staged.txt", 1, true), status)
+      test.ok(status:find(" M other.txt", 1, true), status)
+    end)
+
     test.test("reports success for a completed Git command", function()
       local code = run({ backend.git_path(), "--version" })
       test.skip_if(code ~= 0, "git executable is not available")

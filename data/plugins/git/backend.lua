@@ -1124,9 +1124,7 @@ function backend.run_git(repo, args, opts, callback)
   return job
 end
 
----Commit the current working-tree content of selected paths only.
----Other staged paths remain staged and other unstaged paths remain unstaged.
-function backend.commit_files(repo, paths, message, callback)
+local function commit_selected_files(repo, paths, message, callback, amend)
   local operation = { cancelled = false }
   local function finish(result, err)
     if callback then callback(result, err) end
@@ -1141,11 +1139,27 @@ function backend.commit_files(repo, paths, message, callback)
   operation.job = backend.run_git(repo, intent_args, {}, function(_, intent_err)
     if intent_err then finish(nil, intent_err); return end
     if operation.cancelled then return end
-    local commit_args = { "commit", "--only", "-m", message, "--" }
+    local commit_args = { "commit", "--only" }
+    if amend then commit_args[#commit_args + 1] = "--amend" end
+    commit_args[#commit_args + 1] = "-m"
+    commit_args[#commit_args + 1] = message
+    commit_args[#commit_args + 1] = "--"
     for _, path in ipairs(paths or {}) do commit_args[#commit_args + 1] = normalize_relpath(path) end
     operation.job = backend.run_git(repo, commit_args, {}, finish)
   end)
   return operation
+end
+
+---Commit the current working-tree content of selected paths only.
+---Other staged paths remain staged and other unstaged paths remain unstaged.
+function backend.commit_files(repo, paths, message, callback)
+  return commit_selected_files(repo, paths, message, callback, false)
+end
+
+---Amend the current commit with the current working-tree content of selected paths only.
+---Other staged paths remain staged and other unstaged paths remain unstaged.
+function backend.amend_files(repo, paths, message, callback)
+  return commit_selected_files(repo, paths, message, callback, true)
 end
 
 local function trim(text)

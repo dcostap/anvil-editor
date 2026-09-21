@@ -630,13 +630,25 @@ local function save_selected_buffers(repo, paths)
   return true
 end
 
-command.add(function()
+local function latest_commit(view)
+  local model = view and view.model
+  local tab = model and model.log_tab and model:log_tab()
+  for _, commit in ipairs(tab and tab.commits or {}) do
+    if commit and commit.hash and commit.kind ~= "working_tree" then return commit end
+  end
+end
+
+local function selected_unstaged_context()
   local pane = core.active_view
   local view = pane and pane.git_owner_view
   local paths, file_count
   if view and view.selected_unstaged_paths then paths, file_count = view:selected_unstaged_paths(pane) end
-  paths = paths or {}
-  return #paths > 0, view, paths, file_count or 0
+  return view, paths or {}, file_count or 0
+end
+
+command.add(function()
+  local view, paths, file_count = selected_unstaged_context()
+  return #paths > 0, view, paths, file_count
 end, {
   ["git:commit_selected_files"] = command.palette(function(view, paths, file_count)
     core.global_prompt_bar:enter(string.format("Commit message (%d %s)", file_count, file_count == 1 and "file" or "files"), {
@@ -659,6 +671,41 @@ end, {
             return
           end
           core.log_quiet("Git View committed %d selected Local Unstaged Changes paths", file_count)
+          view.model:refresh_log(function() core.redraw = true end)
+        end)
+      end,
+    })
+  end),
+})
+
+command.add(function()
+  local view, paths, file_count = selected_unstaged_context()
+  local commit = latest_commit(view)
+  return #paths > 0 and commit ~= nil, view, paths, file_count, commit
+end, {
+  ["git:commit_amend_selected_files"] = command.palette(function(view, paths, file_count, commit)
+    if not commit then return end
+    core.global_prompt_bar:enter(string.format("Amend commit message (%d %s)", file_count, file_count == 1 and "file" or "files"), {
+      text = commit.subject or "",
+      show_suggestions = false,
+      validate = function(message)
+        if message:find("%S") then return true end
+        core.warn("Git View: Enter a commit message")
+        return false
+      end,
+      submit = function(message)
+        local saved, save_err = save_selected_buffers(view.model.repo, paths)
+        if not saved then
+          core.warn("Git View: Cannot save a selected Buffer before amend: %s", tostring(save_err))
+          return
+        end
+        show_git_progress(string.format("Amending %d selected %s…", file_count, file_count == 1 and "file" or "files"))
+        view.model.backend.amend_files(view.model.repo, paths, message, function(_, err)
+          if err then
+            core.warn("Git View: Cannot amend the selected files: %s", err.message or err.kind)
+            return
+          end
+          core.log_quiet("Git View amended %d selected Local Unstaged Changes paths", file_count)
           view.model:refresh_log(function() core.redraw = true end)
         end)
       end,
