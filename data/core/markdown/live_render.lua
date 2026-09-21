@@ -5550,15 +5550,19 @@ function live._markdown_code_copy_button_fragment(view, fenced)
           and owner.markdown_code_copy_feedback_until
           and owner.markdown_code_copy_feedback_block_id == block_id
           and system.get_time() < owner.markdown_code_copy_feedback_until
-        local background = { table.unpack(feedback and style.good or style.accent) }
-        background[4] = (background[4] or 255) * (fragment.hovered and 0.95 or 0.72)
+        local background = { table.unpack(
+          feedback and style.good or style.markdown_live_code_header
+        ) }
+        background[4] = (background[4] or 255) * (
+          feedback and 0.68 or (fragment.hovered and 0.55 or 0.32)
+        )
         renderer.draw_rounded_rect(
           button_x, button_y, button_size, button_size,
           math.max(2 * SCALE, button_size * 0.18), background
         )
 
-        local foreground = { table.unpack(style.background) }
-        foreground[4] = (foreground[4] or 255) * (fragment.hovered and 1 or 0.9)
+        local foreground = { table.unpack(style.text) }
+        foreground[4] = (foreground[4] or 255) * (feedback and 1 or 0.9)
         local thickness = math.max(1, math.floor(SCALE))
         if feedback then
           local glyph = "✓"
