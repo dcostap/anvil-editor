@@ -5510,10 +5510,10 @@ end
 function live._markdown_code_copy_button_fragment(view, fenced)
   local block_id = live._markdown_code_block_id(fenced)
   local line_height = fenced_code_line_height(view)
-  local button_size = math.max(16 * SCALE, math.floor(line_height * 0.82))
+  local button_size = math.max(12 * SCALE, math.floor(line_height * 0.72))
   local hit_padding = math.max(2 * SCALE, math.floor(button_size * 0.16))
   local hit_size = button_size + hit_padding * 2
-  local right_padding = math.max(1 * SCALE, math.floor(line_height * 0.10))
+  local right_padding = math.max(6 * SCALE, math.floor(line_height * 0.30))
 
   local function draw_outline(x, y, size, thickness, color)
     renderer.draw_rect(x, y, size, thickness, color)
