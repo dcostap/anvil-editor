@@ -7642,6 +7642,7 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
   local selection_cache = {}
   local selection_color = self:get_selection_background_color()
   local search_match_cache = {}
+  local selection_newline_cache = {}
   local gutter_selection_cache = {}
   local visible_caret_cache = {}
   local hcl = self:get_current_line_highlight_mode()
@@ -7693,8 +7694,11 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
         local text = self.buffer.lines[line]
         local c1 = line1 ~= line and 1 or col1
         local c2 = line2 ~= line and #text + 1 or col2
+        local is_search_selection = self.buffer:is_search_selection(line1, c1, line, c2)
+        if line < line2 and not is_search_selection and selection_color then
+          selection_newline_cache[line] = selection_color
+        end
         if c1 ~= c2 then
-          local is_search_selection = self.buffer:is_search_selection(line1, c1, line, c2)
           if is_search_selection then
             local search_list = search_match_cache[line]
             if not search_list then
@@ -7749,6 +7753,7 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
   self.__line_body_highlight_cache = highlight_cache
   self.__line_body_selection_cache = selection_cache
   self.__line_body_search_match_cache = search_match_cache
+  self.__line_body_selection_newline_cache = selection_newline_cache
   self.__line_gutter_selection_cache = gutter_selection_cache
   self.__visible_caret_cache = visible_caret_cache
 end
@@ -8033,6 +8038,38 @@ local function draw_line_render_empty_cell_selections(
   return drawn
 end
 
+local function draw_line_selected_newline(view, line, x, y, color)
+  local col = #view.buffer.lines[line] + 1
+  local x1 = x + view:get_col_x_offset(line, col, true)
+  local row_y, row_height = y, view:get_position_visual_row_height(line, col, true)
+  if view.wrapped_settings then
+    local idx0 = linewrapping.get_line_idx_col_count(view, line)
+    local idx = linewrapping.get_line_idx_col_count(view, line, col, true)
+    row_y, row_height = wrapped_row_geometry(view, y, idx0, idx)
+  else
+    local _, row = view:get_position_line_render_row(line, col)
+    if row then
+      row_y = y + (row.y_offset or 0)
+      row_height = row.height or row_height
+    end
+  end
+  local right = view.position.x + view.size.x
+  if right > x1 then renderer.draw_rect(x1, row_y, right - x1, row_height, color) end
+end
+
+local function selected_newline_color(view, line, selection_color)
+  local cache = view.__line_body_selection_newline_cache
+  if cache then return cache[line] end
+  for _, line1, col1, line2, col2 in view.buffer:get_selections(true) do
+    if line1 > line then break end
+    if line >= line1 and line < line2
+      and not view.buffer:is_search_selection(line1, col1, line2, col2)
+    then
+      return selection_color
+    end
+  end
+end
+
 local function line_search_matches(view, line)
   local cache = view.__line_body_search_match_cache
   if cache then return cache[line] end
@@ -8157,6 +8194,10 @@ function TextView:draw_line_body(line, x, y)
     local render_line = self:get_line_render(line)
     if selection_color then
       draw_line_render_empty_cell_selections(self, line, render_line, x, y, selection_color)
+      local newline_color = selected_newline_color(self, line, selection_color)
+      if newline_color then
+        draw_line_selected_newline(self, line, x, y, newline_color)
+      end
     end
     for _, line1, col1, line2, col2 in self.buffer:get_selections(true) do
       if line >= line1 and line <= line2 then
@@ -8261,6 +8302,10 @@ function TextView:draw_line_body(line, x, y)
   local render_line = self:get_line_render(line)
   if selection_color then
     draw_line_render_empty_cell_selections(self, line, render_line, x, y, selection_color)
+    local newline_color = selected_newline_color(self, line, selection_color)
+    if newline_color then
+      draw_line_selected_newline(self, line, x, y, newline_color)
+    end
   end
   local cached_selections = selection_color and selection_cache and selection_cache[line]
   if cached_selections then
