@@ -72,15 +72,14 @@ local semantic_line
 local indented_code_for_line
 local semantic_line_background
 
-local function line_in_raw_block(view, line)
+local function raw_block_for_line(view, line)
   for _, node in ipairs(semantic_line(view, line) or {}) do
     if node.type == "code_fenced" or node.type == "code_indented"
       or node.type == "html" or node.type == "frontmatter"
     then
-      return true
+      return node
     end
   end
-  return false
 end
 
 local function current_selection_state(view)
@@ -4330,7 +4329,8 @@ local function split_pending_render(render_line, text)
     local line_render = clone_render_line(render_line)
     line_render.source_text = source
     line_render.fragments = {}
-    if source == "" then
+    -- Empty content does not remove its enclosing block's geometry.
+    if source == "" and not render_line.markdown_code_block then
       line_render = { source_text = "", fragments = {} }
     else
       for _, fragment in ipairs(render_line.fragments or {}) do
@@ -4506,6 +4506,35 @@ local function pending_capture_visible_range(view, owner)
   return line1, line2
 end
 
+local function removes_block_source(view, transaction, node)
+  local source = node and node.source
+  if not source then return false end
+  local line2, col2 = source.line2, source.col2
+  for _, edit in ipairs(transaction and transaction.edits or {}) do
+    if edit.text == ""
+      and (edit.line1 < source.line1
+        or edit.line1 == source.line1 and edit.col1 <= source.col1)
+    then
+      -- Query ranges can include trailing blank rows. They do not keep a raw
+      -- construct alive after its complete nonblank source has been removed.
+      while line2 >= source.line1 do
+        local text = (view.buffer.lines[line2] or ""):sub(1, col2 - 1)
+        local content = text:match("^(.-)%s*$")
+        if content ~= "" then
+          col2 = #content + 1
+          break
+        end
+        line2 = line2 - 1
+        col2 = #(view.buffer.lines[line2] or "") + 1
+      end
+      if edit.line2 > line2 or edit.line2 == line2 and edit.col2 >= col2 then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 local function capture_pre_edit_renders(view, change)
   local capture_started = system.get_time()
   local owner = view.__markdown_live_owner
@@ -4594,7 +4623,7 @@ local function capture_pre_edit_renders(view, change)
   local sparse = metrics_current and metric_cache.sparse_metrics
     and metric_cache.sparse_metrics[PROVIDER_ID]
   owner.pending_sparse_metrics = owner.pending_sparse_metrics or sparse and sparse.complete
-  local captured = 0
+  local captured, removed_raw_rows = 0, 0
   for line in pairs(lines) do
     local render = cached_render_line(view, line)
     local source_text = (view.buffer.lines[line] or ""):gsub("\n$", "")
@@ -4633,7 +4662,10 @@ local function capture_pre_edit_renders(view, change)
       and (pending.render_line.markdown_code_block
         or pending.render_line.markdown_pending_code_background)
       or false
-    local raw_passthrough = line_in_raw_block(view, line)
+    local raw_block = raw_block_for_line(view, line)
+    local raw_source_removed = removes_block_source(view, transaction, raw_block)
+    if raw_source_removed then removed_raw_rows = removed_raw_rows + 1 end
+    local raw_passthrough = raw_block ~= nil
       or pending and pending.render_line
         and pending.render_line.raw_passthrough == true
     if not render and raw_passthrough then
@@ -4653,6 +4685,7 @@ local function capture_pre_edit_renders(view, change)
       source_text = source_text,
       render_line = render and clone_render_line(render) or nil,
       raw_passthrough = raw_passthrough,
+      raw_source_removed = raw_source_removed,
       metrics = captured_metrics,
       fenced = fenced,
       indented = owner.pending_indented_lines
@@ -4677,6 +4710,12 @@ local function capture_pre_edit_renders(view, change)
     captured = captured,
   } or nil
   owner.last_pre_edit_capture_ms = (system.get_time() - capture_started) * 1000
+  if removed_raw_rows > 0 then
+    core.log_quiet(
+      "Markdown pending presentation: removed raw source ownership from %d captured row(s)",
+      removed_raw_rows
+    )
+  end
 end
 
 function edit_visual_projection.contains_retainable_presentation(render_line)
@@ -4794,6 +4833,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
         )
         next_lines[new_line] = entry
         next_metrics[new_line] = nil
+        return true
       end
     end
   end
@@ -4802,6 +4842,24 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     retain(
       old_line, captured.render_line, captured.metrics, captured.fenced,
       captured.background
+    )
+  end
+  -- Pending edits can outlive a viewport change. Keep their presentation
+  -- until publication, even when the next pre-edit capture cannot see them.
+  -- Prefer the capture above because it includes current selection reveal.
+  local snapshot = owner.presentation_snapshot
+  local retained_rows = 0
+  for old_line, entry in pairs(snapshot and snapshot.rows or {}) do
+    if retain(
+      old_line, entry.render_line, entry.metrics,
+      entry.render_line and entry.render_line.markdown_pending_code_background,
+      entry.background
+    ) then retained_rows = retained_rows + 1 end
+  end
+  if retained_rows > 0 then
+    core.log_quiet(
+      "Markdown pending presentation: retained %d row(s) outside the pre-edit capture at revision %d",
+      retained_rows, view.buffer.text_revision
     )
   end
   local function retain_metrics(old_line, metrics)
@@ -4819,6 +4877,12 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
   local function publish(line, render, captured, provenance)
     if not render then return false end
     local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
+    if captured and captured.raw_source_removed then
+      -- Source ownership, not the old row's style, decides whether a deleted
+      -- construct can keep raw geometry in the next revision.
+      render = raw_pending_source_render(view, nil, source, false)
+      captured = nil
+    end
     if not (captured and (
       captured.fenced or captured.raw_passthrough or captured.frontmatter
     )) then
@@ -6010,35 +6074,27 @@ local function heading_content_fragments(view, text, heading, font, reveal_units
   return normalized
 end
 
-local function active_heading_fragments(view, text, heading, font, reveal_units)
+local function heading_fragments(view, text, heading, font, reveal_units, revealed)
+  revealed = revealed or heading.text == ""
   local fragments = {}
-  if heading.content_col1 > 1 then
-    fragments[#fragments + 1] = {
-      source_col1 = 1, source_col2 = heading.content_col1,
-      text = text:sub(1, heading.content_col1 - 1), font = font,
-      color = style.markdown_live_heading_marker,
+  local function marker(col1, col2)
+    return {
+      source_col1 = col1, source_col2 = col2,
+      text = revealed and text:sub(col1, col2 - 1) or nil,
+      hidden = not revealed or nil,
+      font = font, color = style.markdown_live_heading_marker,
+      -- Retained fragments use the same reveal range as semantic rendering.
+      -- An empty heading keeps its marker visible even without a selection.
+      markdown_reveal_col1 = heading.text ~= "" and 1 or nil,
+      markdown_reveal_col2 = heading.text ~= "" and #text + 1 or nil,
     }
   end
-  for _, fragment in ipairs(heading_content_fragments(view, text, heading, font, reveal_units)) do fragments[#fragments + 1] = fragment end
-  if heading.content_col2 < #text + 1 then
-    fragments[#fragments + 1] = { source_col1 = heading.content_col2, source_col2 = #text + 1,
-      text = text:sub(heading.content_col2), font = font, color = style.markdown_live_heading_marker }
-  end
-  return fragments
-end
-
-local function inactive_heading_fragments(view, text, heading, font, reveal_units)
-  if heading.text == "" then
-    return active_heading_fragments(view, text, heading, font, reveal_units)
-  end
-  local fragments = {}
   if heading.content_col1 > 1 then
-    fragments[#fragments + 1] = { source_col1 = 1, source_col2 = heading.content_col1, hidden = true }
+    fragments[#fragments + 1] = marker(1, heading.content_col1)
   end
   for _, fragment in ipairs(heading_content_fragments(view, text, heading, font, reveal_units)) do fragments[#fragments + 1] = fragment end
   if heading.content_col2 < #text + 1 then
-    fragments[#fragments + 1] = { source_col1 = heading.content_col2,
-      source_col2 = #text + 1, hidden = true }
+    fragments[#fragments + 1] = marker(heading.content_col2, #text + 1)
   end
   return fragments
 end
@@ -6060,9 +6116,7 @@ heading_render_line = function(view, text, heading, reveal_units)
     caret_height = text_row_height,
     semantic_id = heading.semantic_id,
     semantic_generation = heading.semantic_generation,
-    fragments = heading_revealed
-      and active_heading_fragments(view, text, heading, font, reveal_units)
-      or inactive_heading_fragments(view, text, heading, font, reveal_units),
+    fragments = heading_fragments(view, text, heading, font, reveal_units, heading_revealed),
   })
 end
 
@@ -6397,7 +6451,7 @@ local function build_render_line(view, line, _context)
     return fenced_code_content_render_line(view, line, text, fenced)
   end
   local table_node = table_for_line(view, line)
-  if not in_comment and not table_node and line_in_raw_block(view, line) then
+  if not in_comment and not table_node and raw_block_for_line(view, line) then
     return { raw_passthrough = true }
   end
 
