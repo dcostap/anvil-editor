@@ -41,11 +41,11 @@ style.margin = {
 --
 -- On High DPI monitor or non RGB monitor you may consider using antialiasing grayscale instead.
 -- The antialiasing grayscale with full hinting is interesting for crisp font rendering.
-style.font = renderer.font.load(DATADIR .. "/fonts/FiraSans-Regular.ttf", 15 * SCALE)
+style.font = renderer.font.load(DATADIR .. "/fonts/FiraSans-Regular.ttf", 14 * SCALE)
 style.big_font = style.font:copy(46 * SCALE)
 style.icon_font = renderer.font.load(DATADIR .. "/fonts/icons.ttf", 16 * SCALE, {antialiasing="grayscale", hinting="full"})
 style.icon_big_font = style.icon_font:copy(23 * SCALE)
-style.code_font = renderer.font.load(DATADIR .. "/fonts/JetBrainsMono-Regular.ttf", 15 * SCALE)
+style.code_font = renderer.font.load(DATADIR .. "/fonts/JetBrainsMono-Regular.ttf", 14 * SCALE)
 style.terminal_font = style.code_font
 style.terminal_bold_font = style.terminal_font:copy(
   style.terminal_font:get_size(), { ligatures = false, bold = true }
@@ -59,13 +59,13 @@ style.terminal_bold_italic_font = style.terminal_font:copy(
 -- Reusable proportional typography roles. Markdown Live Preview, navigation
 -- trees, and other prose-oriented surfaces may share these faces without
 -- making the fonts belong to any one feature.
-style.prose_font = renderer.font.load(DATADIR .. "/fonts/Inter-Regular.ttf", 15 * SCALE)
+style.prose_font = renderer.font.load(DATADIR .. "/fonts/Inter-Regular.ttf", 14 * SCALE)
 style.markdown_body_font = style.prose_font
-style.prose_strong_font = renderer.font.load(DATADIR .. "/fonts/Inter-SemiBold.ttf", 15 * SCALE)
-style.prose_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Inter-Italic.ttf", 15 * SCALE)
-style.prose_strong_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Inter-SemiBoldItalic.ttf", 15 * SCALE)
-style.prose_heading_font = renderer.font.load(DATADIR .. "/fonts/Merriweather_24pt-SemiBold.ttf", 15 * SCALE)
-style.prose_heading_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Merriweather_24pt-SemiBoldItalic.ttf", 15 * SCALE)
+style.prose_strong_font = renderer.font.load(DATADIR .. "/fonts/Inter-SemiBold.ttf", 14 * SCALE)
+style.prose_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Inter-Italic.ttf", 14 * SCALE)
+style.prose_strong_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Inter-SemiBoldItalic.ttf", 14 * SCALE)
+style.prose_heading_font = renderer.font.load(DATADIR .. "/fonts/Merriweather_24pt-SemiBold.ttf", 14 * SCALE)
+style.prose_heading_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Merriweather_24pt-SemiBoldItalic.ttf", 14 * SCALE)
 
 local scaled_font_cache = {}
 

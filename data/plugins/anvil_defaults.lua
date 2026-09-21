@@ -91,7 +91,7 @@ plugin_defaults("autocomplete", {
   max_symbols = 10000,
   max_symbol_length = 40,
   suggestions_scope = "local",
-  desc_font_size = 15,
+  desc_font_size = 14,
   hide_icons = false,
   icon_position = "left",
   hide_info = false,
@@ -255,7 +255,7 @@ local prose_heading_font_path = DATADIR
   .. "/fonts/Merriweather_24pt-SemiBold.ttf"
 local prose_heading_emphasis_font_path = DATADIR
   .. "/fonts/Merriweather_24pt-SemiBoldItalic.ttf"
-local font_size = 15 * SCALE
+local font_size = 14 * SCALE
 local max_default_font_group = 10 -- native renderer FONT_FALLBACK_MAX
 
 local default_font_fallbacks = {
@@ -395,7 +395,7 @@ end)
 startup_measure("font_prose_and_heading_construction", function()
   style.prose_font = load_text_font(prose_font_path, nil, interface_fallbacks)
   style.markdown_body_font = load_text_font(
-    prose_font_path, nil, interface_fallbacks, 16 * SCALE
+    prose_font_path, nil, interface_fallbacks, 15 * SCALE
   )
   -- Keep the wrap arrow on Inter's monochrome text glyph instead of allowing
   -- the code-font fallback group to select Segoe UI Emoji's boxed arrow.
