@@ -207,12 +207,20 @@ local REVEAL_TYPES = {
   math = true,
 }
 
+local function list_marker_has_gap(line_text, marker)
+  if not marker then return false end
+  local raw = line_text:sub(marker.col1, marker.col2 - 1)
+  return raw:match("[ \t]$") ~= nil
+    or line_text:sub(marker.col2, marker.col2):match("[ \t]") ~= nil
+end
+
 local function list_marker_for_line(view, line)
   for _, node in ipairs(semantic_line(view, line) or {}) do
     if node.type == "list" or node.type == "list_item" then
       local marker = node.attributes and node.attributes.list
       if marker and marker.line1 == line then
         local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+        if not list_marker_has_gap(text, marker) then return nil end
         local raw = text:sub(marker.col1, marker.col2 - 1)
         local _, token_end = raw:find("%S+")
         return marker, node, marker.col1 + (token_end or #raw)
@@ -3237,7 +3245,9 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
 
       local task_control_in_marker = false
       local marker_key = marker and table.concat({ marker.line1, marker.col1, marker.col2 }, ":")
-      if marker and marker.line1 == line and not seen[marker_key] then
+      if marker and marker.line1 == line
+        and list_marker_has_gap(line_text, marker) and not seen[marker_key]
+      then
         seen[marker_key] = true
         local captured_raw = line_text:sub(marker.col1, marker.col2 - 1)
         local token_start = captured_raw:find("%S") or 1
@@ -4009,7 +4019,7 @@ function edit_visual_projection.pending_list_render(
   local task_prefix_will_reveal = parsed.task and old_prefix and old_prefix.task
     and old_prefix.indent ~= parsed.indent
     and edit_visual_projection.selection_reveals_list_prefix(
-      selection_state, line, parsed.content_col, true
+      selection_state, line, parsed.content_col
     )
   -- List commands can update source before they restore the body caret. Keep
   -- the prior task presentation instead of revealing that transient caret.

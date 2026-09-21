@@ -2027,8 +2027,21 @@ local commands = {
   ["core:unindent"] = function(dv)
     if not can_edit(dv, "unindent") then return end
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
+      local line_text = dv.buffer.lines[line1] or ""
+      local content_start = markdown_list_content_start(
+        dv.buffer, line1, line_text, true
+      )
+      local keep_list_content_position = line1 == line2 and col1 == col2
+        and content_start == col1
+      local old_indent_length = #(line_text:match("^[\t ]*") or "")
       local l1, c1, l2, c2 = dv.buffer:indent_text(true, line1, col1, line2, col2)
       if l1 then
+        if keep_list_content_position then
+          local new_line_text = dv.buffer.lines[l1] or ""
+          local new_indent_length = #(new_line_text:match("^[\t ]*") or "")
+          c1 = math.max(1, col1 - (old_indent_length - new_indent_length))
+          c2 = c1
+        end
         dv.buffer:set_selections(idx, l1, c1, l2, c2)
       end
     end

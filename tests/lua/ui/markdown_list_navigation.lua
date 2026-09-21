@@ -77,6 +77,17 @@ test.describe("Markdown list navigation", function()
     test.same({ line, col }, { 1, 1 })
   end)
 
+  test.it("keeps the caret at list content start after unindent", function()
+    local view, buffer = make_view("    - nested item")
+    buffer:set_selection(1, 7)
+
+    test.equal(perform(view, "core:unindent"), true)
+
+    test.equal(buffer.lines[1], "- nested item\n")
+    local line, col = buffer:get_selection()
+    test.same({ line, col }, { 1, 3 })
+  end)
+
   test.it("does not treat list-looking source in another Language Mode as Markdown", function()
     local view, buffer = make_view("- [ ] source text", "list-navigation.lua")
     buffer:set_selection(1, #buffer.lines[1])

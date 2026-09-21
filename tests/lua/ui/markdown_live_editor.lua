@@ -179,6 +179,23 @@ test.describe("Markdown Live Preview", function()
     test.equal(txt.__markdown_live_attached, nil)
   end)
 
+  test.it("renders a lone hyphen as plain source text", function()
+    local view, buffer = make_view("-", "lone-hyphen.md")
+    buffer:set_selection(1, 2)
+    refresh(view)
+
+    local render, fragments = collect_render_fragments(view, 1)
+    test.equal(visible_render_text(view, 1), "-")
+    test.equal(render.x_offset, nil)
+    for _, fragment in ipairs(fragments) do
+      test.not_ok(fragment.unordered_list_marker)
+      test.not_ok(fragment.unordered_list_source_marker)
+      test.equal(fragment.widget, nil)
+    end
+    test.equal(view:get_col_x_offset(1, 1), 0)
+    test.equal(view:get_col_x_offset(1, 2), live_body_font(view):get_width("-"))
+  end)
+
   test.it("enables soft wrapping for Live Preview", function()
     local view = make_view(
       string.rep("wrapped text ", 40), "wrapped.md",
