@@ -480,7 +480,7 @@ if config.markdown_live_heading_line_height == nil then
 end
 -- Keep a smaller context around the caret in the Markdown Live Editor.
 if config.markdown_live_scroll_context_lines == nil then
-  config.markdown_live_scroll_context_lines = 10
+  config.markdown_live_scroll_context_lines = 14
 end
 if config.markdown_live_list_indent_spaces == nil then
   config.markdown_live_list_indent_spaces = 8

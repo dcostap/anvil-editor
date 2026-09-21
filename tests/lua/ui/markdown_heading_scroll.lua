@@ -81,14 +81,14 @@ test.describe("Markdown heading navigation scrolling", function()
 
   test.it("uses separate context lines in Markdown Live Editor", function(context)
     config.scroll_context_lines = 28
-    config.markdown_live_scroll_context_lines = 10
+    config.markdown_live_scroll_context_lines = 14
     local view = make_view("markdown-heading-context.md")
     context.view = view
     view.size.y = 1200
     refresh(view)
 
     test.ok(markdown.live_render.is_live_mode(view))
-    test.equal(view:get_visible_scroll_context_lines(), 10)
+    test.equal(view:get_visible_scroll_context_lines(), 14)
   end)
 
   for _, manual_scroll in ipairs({ false, true }) do

@@ -706,7 +706,7 @@ settings.add("Editor",
       description = "Minimum number of lines to keep visible above and below the cursor when scrolling the Markdown editor.",
       path = "markdown_live_scroll_context_lines",
       type = settings.type.NUMBER,
-      default = 10,
+      default = 14,
       min = 0,
       step = 1
     },
