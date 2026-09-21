@@ -39,7 +39,7 @@ local function wait_until(predicate, timeout)
 end
 
 local test_buffer_id = 0
-local function make_view(text, filename)
+local function make_view(text, filename, opts)
   test_buffer_id = test_buffer_id + 1
   local buffer
   if filename then
@@ -55,7 +55,9 @@ local function make_view(text, filename)
   local view = Editor(buffer)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 500, 200
-  view:set_wrapping_enabled(false)
+  if not (opts and opts.use_default_wrapping) then
+    view:set_wrapping_enabled(false)
+  end
   return view, buffer
 end
 
@@ -175,6 +177,16 @@ test.describe("Markdown Live Preview", function()
     test.equal(md.__markdown_live_attached, true)
     refresh(txt)
     test.equal(txt.__markdown_live_attached, nil)
+  end)
+
+  test.it("enables soft wrapping for Live Preview", function()
+    local view = make_view(
+      string.rep("wrapped text ", 40), "wrapped.md",
+      { use_default_wrapping = true }
+    )
+    test.equal(view:is_wrapping_enabled(), false)
+    refresh(view)
+    test.equal(view:is_wrapping_enabled(), true)
   end)
 
   test.it("uses the dedicated Markdown body font for plain text", function()

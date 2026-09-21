@@ -122,6 +122,9 @@ function TextView:update_wrap_cache()
 end
 
 function TextView:set_wrapping_enabled(enabled)
+  if self.__wrapping_initialized then
+    self.__wrapping_user_override = true
+  end
   self.wrapping_enabled = not not enabled
   if self.wrapping_enabled then
     self:cancel_horizontal_extent_scan()
@@ -930,6 +933,7 @@ function TextView:new(buffer)
   local wrapping_enabled = config.plugins.linewrapping.enable_by_default
     and not self.buffer.binary and not file_is_too_large
   self:set_wrapping_enabled(wrapping_enabled)
+  self.__wrapping_initialized = true
   if file_is_too_large and config.plugins.linewrapping.enable_by_default
     and not self.buffer.binary
   then

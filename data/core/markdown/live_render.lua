@@ -7349,6 +7349,11 @@ function live.attach(view)
     invalidate_selection_lines(owner, new_state, old_state)
   end)
   view.__markdown_live_attached = true
+  -- Live Preview needs soft wraps to keep prose inside its reading lane.
+  -- Ordinary Editors may still keep the global unwrapped default.
+  if not view.__wrapping_user_override then
+    view:set_wrapping_enabled(true)
+  end
   view.view_icon = live.view_icon
   if view_in_source_mode(view) then view.view_icon = nil end
   bind_semantic_model(view)
