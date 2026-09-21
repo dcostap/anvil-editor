@@ -5534,11 +5534,12 @@ function live._markdown_code_copy_button_fragment(view, fenced)
         local foreground = { table.unpack(style.background) }
         foreground[4] = (foreground[4] or 255) * (fragment.hovered and 1 or 0.9)
         local thickness = math.max(1, math.floor(SCALE))
-        local icon_size = math.max(6 * SCALE, math.floor(button_size * 0.42))
+        local icon_size = math.max(9 * SCALE, math.floor(button_size * 0.58))
+        local icon_offset = math.max(2 * SCALE, math.floor(icon_size * 0.24))
         local icon_x = button_x + math.floor((button_size - icon_size) / 2)
         local icon_y = button_y + math.floor((button_size - icon_size) / 2)
-        draw_outline(icon_x + thickness, icon_y, icon_size, thickness, foreground)
-        draw_outline(icon_x, icon_y + thickness, icon_size, thickness, foreground)
+        draw_outline(icon_x + icon_offset, icon_y, icon_size, thickness, foreground)
+        draw_outline(icon_x, icon_y + icon_offset, icon_size, thickness, foreground)
       end,
       on_mouse_pressed = function(_, owner, _, button)
         if button ~= "left" then return false end
@@ -5622,6 +5623,10 @@ local function fenced_code_content_render_line(view, line, text, fenced)
     render.x_offset = callout_runtime.content_inset(view, callout)
     render.callout_record = callout
     render.callout_semantic_id = callout.semantic_id
+  end
+  if line == fenced.source.line1 + 1 then
+    render.fragments[#render.fragments + 1] =
+      live._markdown_code_copy_button_fragment(view, fenced)
   end
   return render
 end
@@ -6584,11 +6589,6 @@ local function build_render_line(view, line, _context)
             semantic_id = fenced.id .. ":" .. delimiter_kind,
           },
         }
-        if delimiter_kind == "open"
-          and fenced.effective_line2 > fenced.source.line1
-        then
-          fragments[#fragments + 1] = live._markdown_code_copy_button_fragment(view, fenced)
-        end
         return {
           source_text = text,
           metric_height = view:get_line_height(),
@@ -7500,14 +7500,15 @@ function provider:on_selection_interaction_end(view, new_state, old_state)
 end
 
 function live._install_code_copy_hover(view)
-  local previous_mouse_moved = view.on_mouse_moved
+  local previous_render_hover_updated = view.on_render_hover_updated
   local previous_mouse_left = view.on_mouse_left
-  view.__markdown_live_previous_mouse_moved = previous_mouse_moved
+  view.__markdown_live_previous_render_hover_updated = previous_render_hover_updated
   view.__markdown_live_previous_mouse_left = previous_mouse_left
-  view.on_mouse_moved = function(owner, x, y, ...)
-    local result = previous_mouse_moved(owner, x, y, ...)
+  view.on_render_hover_updated = function(owner, x, y)
+    if previous_render_hover_updated then
+      previous_render_hover_updated(owner, x, y)
+    end
     live._update_code_copy_hover(owner, x, y)
-    return result
   end
   view.on_mouse_left = function(owner, ...)
     local result = previous_mouse_left(owner, ...)
@@ -7521,17 +7522,17 @@ function live._install_code_copy_hover(view)
 end
 
 function live._remove_code_copy_hover(view)
-  if view.__markdown_live_previous_mouse_moved then
-    view.on_mouse_moved = view.__markdown_live_previous_mouse_moved
+  if view.__markdown_live_previous_render_hover_updated then
+    view.on_render_hover_updated = view.__markdown_live_previous_render_hover_updated
   else
-    view.on_mouse_moved = nil
+    view.on_render_hover_updated = nil
   end
   if view.__markdown_live_previous_mouse_left then
     view.on_mouse_left = view.__markdown_live_previous_mouse_left
   else
     view.on_mouse_left = nil
   end
-  view.__markdown_live_previous_mouse_moved = nil
+  view.__markdown_live_previous_render_hover_updated = nil
   view.__markdown_live_previous_mouse_left = nil
 end
 

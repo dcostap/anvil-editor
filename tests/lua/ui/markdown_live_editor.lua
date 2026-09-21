@@ -3635,9 +3635,9 @@ test.describe("Markdown Live Preview", function()
       buffer:set_selection(6, 1)
       refresh(view)
 
-      local opening = test.not_nil(view:get_line_render(2))
+      local body = test.not_nil(view:get_line_render(3))
       local button
-      for _, fragment in ipairs(opening.fragments or {}) do
+      for _, fragment in ipairs(body.fragments or {}) do
         if fragment.markdown_code_copy_button then button = fragment break end
       end
       button = test.not_nil(button)
@@ -3651,7 +3651,7 @@ test.describe("Markdown Live Preview", function()
         button.markdown_code_block_id
       )
 
-      local button_x, button_y = view:get_line_screen_position(2)
+      local button_x, button_y = view:get_line_screen_position(3)
       button_x = button_x + button.layout_x + button.widget.width / 2
       button_y = button_y + view:get_line_height() / 2
       test.ok(view:on_mouse_pressed("left", button_x, button_y, 1))
@@ -3659,6 +3659,42 @@ test.describe("Markdown Live Preview", function()
     end)
     system.set_clipboard = context.old_set_clipboard
     system.set_clipboard(context.clipboard or "")
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("updates the code copy hover while scrolling", function()
+    local root = core.root_panel
+    local old_mouse_x, old_mouse_y = root.mouse.x, root.mouse.y
+    local old_overlapping_view = root.overlapping_view
+    local view
+    local ok, err = pcall(function()
+      local lines = { "before", "```lua" }
+      for index = 1, 10 do lines[#lines + 1] = "print(" .. index .. ")" end
+      lines[#lines + 1] = "```"
+      for _ = 1, 20 do lines[#lines + 1] = "after" end
+      view = make_view(table.concat(lines, "\n"), "fence-copy-scroll.md")
+      view.size.y = 160
+      view:set_wrapping_enabled(true)
+      view.buffer:set_selection(#lines, 1)
+      refresh(view)
+
+      local x, y = view:get_line_screen_position(3)
+      x, y = x + 2, y + 2
+      root.mouse.x, root.mouse.y = x, y
+      root.overlapping_view = view
+      view:on_mouse_moved(x, y, 0, 0)
+      test.not_nil(view.__markdown_live_owner.markdown_code_copy_hover_id)
+
+      local old_transitions = config.transitions
+      config.transitions = false
+      view.scroll.y, view.scroll.to.y = 0, 500
+      view:update()
+      config.transitions = old_transitions
+      test.equal(view.__markdown_live_owner.markdown_code_copy_hover_id, nil)
+    end)
+    root.mouse.x, root.mouse.y = old_mouse_x, old_mouse_y
+    root.overlapping_view = old_overlapping_view
+    if view then markdown.live_render.detach(view) end
     if not ok then error(err, 0) end
   end)
 

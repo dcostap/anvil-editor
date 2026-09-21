@@ -5941,6 +5941,16 @@ local function update_render_hover_state(view, x, y)
     proximity_fragment.proximity = proximity
     core.redraw = true
   end
+
+  if view.on_render_hover_updated then
+    local ok, err = pcall(view.on_render_hover_updated, view, x, y)
+    if not ok then
+      core.log_quiet(
+        "TextView render hover callback failed for %s: %s",
+        view.buffer:get_name(), tostring(err)
+      )
+    end
+  end
 end
 
 
