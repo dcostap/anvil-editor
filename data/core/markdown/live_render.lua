@@ -5604,7 +5604,6 @@ function live._update_code_copy_hover(view, x, y)
     if ok and line then
       local fenced = fenced_code_for_line(view, line)
       if fenced and fenced.effective_line2 > fenced.source.line1
-        and not fenced_code_is_active(view, fenced)
       then
         block_id = live._markdown_code_block_id(fenced)
       end

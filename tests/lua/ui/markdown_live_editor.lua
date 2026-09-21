@@ -3632,7 +3632,7 @@ test.describe("Markdown Live Preview", function()
         "fence-copy-button.md"
       )
       view:set_wrapping_enabled(true)
-      buffer:set_selection(6, 1)
+      buffer:set_selection(3, 1)
       refresh(view)
 
       local body = test.not_nil(view:get_line_render(3))
