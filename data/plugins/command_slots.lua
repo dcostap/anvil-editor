@@ -113,6 +113,26 @@ local function output_history_limit()
   return math.max(1, math.floor(tonumber(config.plugins.command_slots.max_output_history) or 100))
 end
 
+local function output_entry_text(entry)
+  if not entry then return "" end
+  if entry.text == nil then
+    entry.text = table.concat(entry.text_chunks or {})
+    entry.text_chunks = nil
+  end
+  return entry.text
+end
+
+local function append_output_entry_text(entry, text)
+  local chunks = entry.text_chunks
+  if not chunks then
+    chunks = {}
+    if entry.text and entry.text ~= "" then chunks[1] = entry.text end
+    entry.text_chunks = chunks
+    entry.text = nil
+  end
+  chunks[#chunks + 1] = text
+end
+
 local function current_output_entry(slot)
   local history = slot and slot.output_history or nil
   if not history or #history == 0 then return nil end
@@ -285,6 +305,9 @@ function CommandOutputBuffer:__tostring() return "CommandOutputBuffer" end
 function CommandOutputBuffer:new()
   CommandOutputBuffer.super.new(self)
   self.output_text = ""
+  self.output_chunks = nil
+  self.output_length = 0
+  self.output_ends_with_newline = false
   self:clean()
 end
 
@@ -346,11 +369,69 @@ function CommandOutputBuffer:indent_text()
 end
 
 function CommandOutputBuffer:_display_text()
-  local text = self.output_text or ""
+  local text = self:materialize_output_text()
   if text == "" or text:sub(-1) ~= "\n" then
     text = text .. "\n"
   end
   return text
+end
+
+function CommandOutputBuffer:materialize_output_text()
+  if self.output_text == nil then
+    local chunks = self.output_chunks
+    self.output_text = table.concat(chunks or {})
+    self.output_chunks = nil
+  end
+  return self.output_text
+end
+
+function CommandOutputBuffer:_restore_preserved_selections(old_last_line, old_selections, old_last_selection)
+  self.selections = {}
+  for i = 1, #old_selections, 4 do
+    local function adjusted_position(line, col)
+      if line == old_last_line then line = #self.lines end
+      return self:sanitize_position(line, col)
+    end
+    local line1, col1 = adjusted_position(old_selections[i], old_selections[i + 1])
+    local line2, col2 = adjusted_position(old_selections[i + 2], old_selections[i + 3])
+    self:set_selections((i - 1) / 4 + 1, line1, col1, line2, col2)
+  end
+  self.last_selection = common.clamp(old_last_selection, 1, math.max(1, #self.selections / 4))
+end
+
+function CommandOutputBuffer:_append_display_text(text)
+  -- Command output is append-only. Update the line array in place instead of
+  -- rebuilding the complete display for every process chunk.
+  local line
+  if self.output_ends_with_newline then
+    line = #self.lines + 1
+    self.lines[line] = ""
+  else
+    line = #self.lines
+    local current = self.lines[line] or ""
+    if current:sub(-1) == "\n" then
+      self.lines[line] = current:sub(1, -2)
+    end
+  end
+
+  local pos = 1
+  while true do
+    local newline = text:find("\n", pos, true)
+    if not newline then
+      self.lines[line] = self.lines[line] .. text:sub(pos)
+      break
+    end
+    self.lines[line] = self.lines[line] .. text:sub(pos, newline)
+    line = line + 1
+    self.lines[line] = ""
+    pos = newline + 1
+  end
+
+  if self.lines[#self.lines] == "" then
+    self.lines[#self.lines] = nil
+  elseif self.lines[#self.lines]:sub(-1) ~= "\n" then
+    self.lines[#self.lines] = self.lines[#self.lines] .. "\n"
+  end
 end
 
 function CommandOutputBuffer:_replace_display_text(selection_mode)
@@ -368,17 +449,7 @@ function CommandOutputBuffer:_replace_display_text(selection_mode)
   CommandOutputBuffer.super.insert(self, 1, 1, self:_display_text())
 
   if selection_mode == "preserve" and #old_selections >= 4 then
-    self.selections = {}
-    for i = 1, #old_selections, 4 do
-      local function adjusted_position(line, col)
-        if line == old_last_line then line = #self.lines end
-        return self:sanitize_position(line, col)
-      end
-      local line1, col1 = adjusted_position(old_selections[i], old_selections[i + 1])
-      local line2, col2 = adjusted_position(old_selections[i + 2], old_selections[i + 3])
-      self:set_selections((i - 1) / 4 + 1, line1, col1, line2, col2)
-    end
-    self.last_selection = common.clamp(old_last_selection, 1, math.max(1, #self.selections / 4))
+    self:_restore_preserved_selections(old_last_line, old_selections, old_last_selection)
   else
     self:set_selection(#self.lines, 1)
   end
@@ -389,6 +460,9 @@ end
 
 function CommandOutputBuffer:set_text(text)
   self.output_text = tostring(text or "")
+  self.output_chunks = nil
+  self.output_length = #self.output_text
+  self.output_ends_with_newline = self.output_text:sub(-1) == "\n"
   self:_with_internal_mutation(function()
     self:_replace_display_text("end")
   end)
@@ -396,10 +470,40 @@ end
 
 function CommandOutputBuffer:append(text)
   if not text or text == "" then return end
-  self.output_text = (self.output_text or "") .. text
-  self:_with_internal_mutation(function()
-    self:_replace_display_text("preserve")
-  end)
+  local old_last_line = #self.lines
+  local old_selections = { table.unpack(self.selections or {}) }
+  local old_last_selection = self.last_selection or 1
+  local was_empty = self.output_length == 0
+
+  if not self.output_chunks then
+    self.output_chunks = {}
+    if self.output_text and self.output_text ~= "" then
+      self.output_chunks[1] = self.output_text
+    end
+    self.output_text = nil
+  end
+  self.output_chunks[#self.output_chunks + 1] = text
+  self.output_length = self.output_length + #text
+
+  if was_empty then
+    -- Build the initial sentinel line once. Later chunks use an incremental
+    -- edit and never rebuild the complete output.
+    self.output_text = text
+    self:_with_internal_mutation(function()
+      self:_replace_display_text("preserve")
+    end)
+    self.output_text = nil
+  else
+    self:_append_display_text(text)
+    self.clean_lines = {}
+    self.cache = { col_x = {}, ulen = {} }
+    self.highlighter:soft_reset()
+    self.text_revision = (self.text_revision or 0) + 1
+    self:_restore_preserved_selections(old_last_line, old_selections, old_last_selection)
+    self:clear_undo_redo()
+    self:clean()
+  end
+  self.output_ends_with_newline = text:sub(-1) == "\n"
 end
 
 local CommandOutputView = TextView:extend()
@@ -474,7 +578,7 @@ function CommandOutputView:show_entry(entry, opts)
 
   self.displayed_entry = entry
   self.poi_cache = nil
-  self.buffer:set_text(entry and entry.text or "")
+  self.buffer:set_text(output_entry_text(entry))
 
   if entry and entry.selection_state then
     self:set_selection_state(entry.selection_state)
@@ -523,7 +627,7 @@ end
 
 function CommandOutputView:cache_key_for_pois()
   local entry = self.displayed_entry
-  return entry or self.buffer.output_text or ""
+  return entry or self.buffer:materialize_output_text()
 end
 
 local function build_poi_line_index(points)
@@ -540,7 +644,10 @@ local function build_poi_line_index(points)
 end
 
 function CommandOutputView:get_points_of_interest(opts)
-  local text = self.buffer.output_text or ""
+  if self.slot and self.slot.running and self.buffer.output_text == nil then
+    return self.poi_cache and self.poi_cache.points or {}
+  end
+  local text = self.buffer:materialize_output_text()
   local key = self:cache_key_for_pois()
   local entry = self.displayed_entry
   local root = entry and entry.cwd or root_project_path()
@@ -1014,7 +1121,7 @@ local function append_output_text(slot, text)
   local entry = slot.current_output_entry or current_output_entry(slot)
   local view = slot.view
   if entry then
-    entry.text = (entry.text or "") .. text
+    append_output_entry_text(entry, text)
     if view and view.displayed_entry == entry then
       view:append_text(text)
     end
@@ -1087,6 +1194,12 @@ local function finish_run(slot, kind, exit_code, detail)
   end
 
   append_to_output(slot, footer, true)
+  local entry = slot.current_output_entry or current_output_entry(slot)
+  if entry then output_entry_text(entry) end
+  if slot.view and slot.view.displayed_entry == entry then
+    slot.view.buffer:materialize_output_text()
+    slot.view.poi_cache = nil
+  end
   core.log_quiet(
     "Command Output %s: run finished kind=%s exit=%s detail=%s elapsed=%.1fs",
     tostring(slot.index or "one-time"),

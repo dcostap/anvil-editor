@@ -454,7 +454,18 @@ function json.prettify(text, indent_width)
     return ""
   end
 
-  local out = ""
+  local out = {}
+  local function append(...)
+    for i = 1, select("#", ...) do
+      local value = select(i, ...)
+      if value ~= "" then out[#out + 1] = value end
+    end
+  end
+
+  local function remove_trailing_newline()
+    if out[#out] == "\n" then out[#out] = nil end
+  end
+
   indent_width = indent_width or 2
 
   local indent_level = 0
@@ -469,9 +480,9 @@ function json.prettify(text, indent_width)
   for char in text:gmatch(".") do
     if (char == "{" or char == "[") and not inside_string then
       if not in_value or last_was_bracket then
-        out = out .. indent(char, indent_level, indent_width) .. "\n"
+        append(indent(char, indent_level, indent_width), "\n")
       else
-        out = out .. char .. "\n"
+        append(char, "\n")
       end
       last_was_bracket = true
       in_value = false
@@ -480,9 +491,9 @@ function json.prettify(text, indent_width)
       inside_string = true
       string_char = char
       if not in_value then
-        out = out .. indent(char, indent_level, indent_width)
+        append(indent(char, indent_level, indent_width))
       else
-        out = out .. char
+        append(char)
       end
     elseif inside_string then
       local pe_set = false
@@ -492,7 +503,7 @@ function json.prettify(text, indent_width)
         previous_was_escape = true
         pe_set = true
       end
-      out = out .. char
+      append(char)
       if char == string_char and not previous_was_escape then
         inside_string = false
       elseif previous_was_escape and not pe_set then
@@ -501,11 +512,11 @@ function json.prettify(text, indent_width)
     elseif char == ":" then
       in_value = true
       last_was_bracket = false
-      out = out .. char .. " "
+      append(char, " ")
     elseif char == "," then
       in_value = false
       reading_literal = false
-      out = out .. char .. "\n"
+      append(char, "\n")
     elseif char == "}" or char == "]" then
       indent_level = indent_level - 1
       if
@@ -513,20 +524,21 @@ function json.prettify(text, indent_width)
         or
         (char == "]" and last_char == "[")
       then
-        out = out:gsub("%s*\n$", "") .. char
+        remove_trailing_newline()
+        append(char)
       else
-        out = out .. "\n" .. indent(char, indent_level, indent_width)
+        append("\n", indent(char, indent_level, indent_width))
       end
     elseif not char:match("%s") and not reading_literal then
       reading_literal = true
       if not in_value or last_was_bracket then
-        out = out .. indent(char, indent_level, indent_width)
+        append(indent(char, indent_level, indent_width))
         last_was_bracket = false
       else
-        out = out .. char
+        append(char)
       end
     elseif not char:match("%s") then
-      out = out .. char
+      append(char)
     end
 
     if not char:match("%s") then
@@ -534,7 +546,7 @@ function json.prettify(text, indent_width)
     end
   end
 
-  return out
+  return table.concat(out)
 end
 
 

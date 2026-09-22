@@ -239,6 +239,19 @@ test.describe("Command Slots", function()
     test.ok(panes.history_length(pane) > pane_history_before)
   end)
 
+  test.it("keeps chunked output exact in the view and its history", function(context)
+    local output = command_slots.run_command(1, "chunked")
+    local run = context.runs[1]
+    run.opts.on_output("one\n")
+    run.opts.on_output("two")
+    run.opts.on_output("\nthree")
+    run.opts.on_exit { code = 0, elapsed = 0.1, truncated = false }
+
+    test.contains(output.buffer.output_text, "one\ntwo\nthree")
+    test.contains(table.concat(output.buffer.lines), "one\ntwo\nthree")
+    test.equal(command_slots.slots[1].output_history[1].text, output.buffer.output_text)
+  end)
+
   test.it("keeps slot runtime state scoped to the Root Project", function(context)
     context.original_root_project = core.root_project
     local project = { path = "C:/project-one" }
