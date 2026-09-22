@@ -150,6 +150,32 @@ test.describe("TextView selection scrolling", function()
     test.equal(last_y + lh, view.position.y + view.size.y - config.scroll_context_lines * lh)
   end)
 
+  test.it("defers line centering until the view has a layout", function(context)
+    local view, buffer = open_editor(context, numbered_lines(40))
+    open_editor(context, "other")
+    local target_line = 20
+
+    buffer:set_selection(target_line, 1)
+    view.size.y = 0
+    view:scroll_to_line(target_line, false, false)
+
+    view.size.y = 180
+    local _, target_y = view:get_line_screen_position(target_line)
+    local _, content_y = view:get_content_offset()
+    local _, _, _, scrollbar_height = view.h_scrollbar:get_track_rect()
+    local expected_scroll = math.max(
+      0, target_y - content_y - (view.size.y - scrollbar_height) / 2
+    )
+    view:update()
+    core.set_active_view(view)
+    view:update()
+
+    test.ok(
+      math.abs(view.scroll.to.y - expected_scroll) <= style.padding.y,
+      "expected the destination to be centered after layout"
+    )
+  end)
+
   test.it("does not add bottom overscroll when a fitting buffer is already past the context boundary", function(context)
     config.scroll_past_end = true
     config.scroll_context_lines = 1

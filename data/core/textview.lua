@@ -5693,6 +5693,19 @@ end
 ---@param instant? boolean Jump immediately without animation
 ---@param opts? table Optional scroll behavior options
 function TextView:scroll_to_line(line, ignore_if_visible, instant, opts)
+  -- File destinations can be prepared before the new view receives its
+  -- layout.  A zero-height view cannot calculate a centered target, so wait
+  -- for the first update with real geometry instead of pinning the line at
+  -- the top of the viewport.
+  if self.size.y <= 0 then
+    self.__pending_line_scroll = {
+      line = line,
+      ignore_if_visible = ignore_if_visible,
+      instant = instant,
+      opts = opts,
+    }
+    return
+  end
   if self.wrapping_enabled then self:update_wrap_cache() end
   local min, max = self:get_visible_line_range()
   local visible_margin_lines = opts and opts.visible_margin_lines or 0
@@ -6334,6 +6347,14 @@ function TextView:update()
     local wrap_start = perf_active and system.get_time()
     self:update_wrap_cache()
     perf_elapsed("textview_update_wrap_cache_ms", wrap_start)
+  end
+
+  if self.__pending_line_scroll and self.size.y > 0 then
+    local pending = self.__pending_line_scroll
+    self.__pending_line_scroll = nil
+    self:scroll_to_line(
+      pending.line, pending.ignore_if_visible, pending.instant, pending.opts
+    )
   end
 
   -- scroll to make caret visible and reset blink timer if it moved
