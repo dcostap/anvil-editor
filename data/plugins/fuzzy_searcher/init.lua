@@ -3666,6 +3666,7 @@ function FSView:new(prefix, opts)
   self.open_transition_ready_at = nil
   self.open_transition_complete = false
   self.open_transition_started_logged = false
+  self.open_transition_wait_logged = false
 
   local source_view = opts.source_view or core.active_view
   local source_buffer = source_view and source_view.buffer
@@ -4371,16 +4372,30 @@ function FSView:update_preview_view()
         buffer.disable_treesitter = true
         buffer.disable_gitdiff_highlight = true
         local filename = core.normalize_to_project_dir(path)
+        local load_started = system.get_time()
+        core.log_quiet("Fuzzy Searcher preview load started: path=%s size=%s",
+          path, tostring(r.file_size or "unknown"))
         ok = pcall(function()
           buffer:set_filename(filename, path)
           buffer:load(path)
         end)
+        local load_elapsed_ms = (system.get_time() - load_started) * 1000
+        core.log_quiet(
+          "Fuzzy Searcher preview load finished: path=%s elapsed=%.1fms ok=%s lines=%d",
+          path, load_elapsed_ms, tostring(ok), #buffer.lines)
       end
       if not ok or not buffer then
         self.preview_blocked = { reason = "Cannot open file", path = path }
         return nil
       end
+      local limit_started = system.get_time()
       local reason = self:preview_line_limit_reason(buffer)
+      local limit_elapsed_ms = (system.get_time() - limit_started) * 1000
+      if limit_elapsed_ms >= 25 then
+        core.log_quiet(
+          "Fuzzy Searcher preview line-limit scan slow: path=%s elapsed=%.1fms lines=%d",
+          path, limit_elapsed_ms, #buffer.lines)
+      end
       if reason then
         self.preview_key = key
         self.preview_blocked = { reason = reason, path = path }
@@ -4466,7 +4481,14 @@ function FSView:update_preview_view()
     view:restore_preview_search_ranges()
   end
 
+  local update_started = system.get_time()
   call_preview_view_method(view, view.update)
+  local update_elapsed_ms = (system.get_time() - update_started) * 1000
+  if update_elapsed_ms >= 25 then
+    core.log_quiet(
+      "Fuzzy Searcher preview update slow: path=%s elapsed=%.1fms",
+      path, update_elapsed_ms)
+  end
   return view
 end
 

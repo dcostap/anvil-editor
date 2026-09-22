@@ -38,8 +38,21 @@ function transition.state(view, now)
   now = now or system.get_time()
   if not view.open_transition_ready_at and ready(view) then
     view.open_transition_ready_at = now
+    if view.open_transition_wait_logged then
+      core.log_quiet(
+        "Fuzzy Searcher: opening transition became ready after %.1f ms",
+        (now - view.open_transition_requested_at) * 1000
+      )
+    end
   end
   if not view.open_transition_ready_at then
+    if not view.open_transition_wait_logged then
+      view.open_transition_wait_logged = true
+      core.log_quiet(
+        "Fuzzy Searcher: opening transition waiting: feedback_pending=%s everything_pending=%s",
+        tostring(view.loading_feedback_pending), tostring(view.everything_loading_pending)
+      )
+    end
     core.redraw = true
     return 0, START_SCALE, false
   end
