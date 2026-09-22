@@ -1,4 +1,5 @@
 local common = require "core.common"
+local uri = require "core.lsp.uri"
 
 local locations = {}
 
@@ -16,6 +17,12 @@ local function clean_path(path)
   return path
 end
 
+local function path_from_file_uri(path)
+  if not uri.is_file_uri(path) then return nil end
+  local ok, converted = pcall(uri.uri_to_path, path)
+  return ok and converted or nil
+end
+
 local function existing_file(path)
   local info = path and system.get_file_info(path)
   return info and info.type ~= "dir"
@@ -23,7 +30,13 @@ end
 
 function locations.resolve_path(path, root)
   path = clean_path(path)
-  if path == "" or is_uri_like_path(path) then return nil end
+  if path == "" then return nil end
+  local file_path = path_from_file_uri(path)
+  if file_path then
+    path = file_path
+  elseif is_uri_like_path(path) then
+    return nil
+  end
   local ok, candidate = pcall(function()
     return common.is_absolute_path(path)
       and common.normalize_path(path)
@@ -55,7 +68,7 @@ local function add_candidate(
 )
   if #list >= limit then return end
   path = clean_path(path)
-  if path == "" or is_uri_like_path(path) then return end
+  if path == "" or (is_uri_like_path(path) and not uri.is_file_uri(path)) then return end
   target_line = math.max(1, math.floor(tonumber(target_line) or 1))
   target_col = math.max(1, math.floor(tonumber(target_col) or 1))
   col1 = math.max(1, math.floor(tonumber(col1) or 1))
@@ -93,7 +106,63 @@ local function add_line_matches(list, seen, limit, line, line_no)
       )
     end
   end
+  local function add_file_uri(col1, col2, path, target_line, target_col)
+    if #list < limit then
+      add_candidate(
+        list, seen, limit, line_no, col1, col2, path, target_line, target_col
+      )
+    end
+  end
   local init = 1
+  while true do
+    local s, e, path, target_line, target_col = line:find(
+      "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+):(%d+):(%d+)", init
+    )
+    if not s then break end
+    add_file_uri(s, e + 1, path, target_line, target_col)
+    init = e + 1
+  end
+  init = 1
+  while true do
+    local s, e, path, target_line, target_col = line:find(
+      "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+):(%d+),(%d+)", init
+    )
+    if not s then break end
+    add_file_uri(s, e + 1, path, target_line, target_col)
+    init = e + 1
+  end
+  init = 1
+  while true do
+    local s, e, path, target_line = line:find(
+      "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+):(%d+)", init
+    )
+    if not s then break end
+    if not line:sub(e + 1):match("^[:,]%d") then
+      add_file_uri(s, e + 1, path, target_line, 1)
+    end
+    init = e + 1
+  end
+  init = 1
+  while true do
+    local s, e, path, target_line, target_col = line:find(
+      "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+)%((%d+),(%d+)%)", init
+    )
+    if not s then break end
+    add_file_uri(s, e + 1, path, target_line, target_col)
+    init = e + 1
+  end
+  init = 1
+  while true do
+    local s, e, path, target_line = line:find(
+      "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+)%((%d+)%)", init
+    )
+    if not s then break end
+    if line:sub(e + 1, e + 1) ~= "," then
+      add_file_uri(s, e + 1, path, target_line, 1)
+    end
+    init = e + 1
+  end
+  init = 1
   while true do
     local s, e, path, target_line = line:find("File%s+\"([^\"]+)\"%,%s+line%s+(%d+)", init)
     if not s then break end

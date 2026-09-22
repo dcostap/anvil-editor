@@ -143,6 +143,35 @@ test.describe("Point of Interest navigation", function()
     test.same({ buffer:get_selection() }, { 2, 4, 2, 4 })
   end)
 
+  test.it("resolves Editor file-location POIs from local file URIs", function(context)
+    local root = USERDIR .. PATHSEP .. "editor-file-uri-poi-" .. system.get_process_id()
+    context.temp_root = root
+    context.original_root_project = core.root_project
+    test.ok(common.mkdirp(root))
+    local target_path = root .. PATHSEP .. "PlanificacionSimulacionTablaPanel.kt"
+    local target = assert(io.open(target_path, "wb"))
+    target:write("target\n")
+    target:close()
+    core.root_project = function() return { path = root } end
+
+    local buffer = Buffer()
+    buffer:insert(
+      1, 1,
+      "e: " .. require("core.lsp.uri").path_to_uri(target_path)
+        .. ":1335:7 Unresolved reference 'logError'\n"
+    )
+    buffer:clear_undo_redo()
+    context.buffers = { buffer }
+    local view = Editor(buffer)
+    context.views = { view }
+
+    local points = view:get_points_of_interest()
+    test.equal(#points, 1)
+    test.equal(points[1].kind, "editor-file-location")
+    test.equal(points[1].path, common.normalize_path(target_path))
+    test.same({ points[1].target_line, points[1].target_col }, { 1335, 7 })
+  end)
+
   test.it("draws Editor file-location POIs before navigation", function(context)
     local root = USERDIR .. PATHSEP .. "editor-file-poi-paint-" .. system.get_process_id()
     context.temp_root = root
