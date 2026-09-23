@@ -31,6 +31,17 @@ test.describe("session log", function()
     test.ok(text:find(marker, 1, true))
   end)
 
+  test.it("records a fatal error in the active session before exit", function()
+    test.ok(core.session_log, "expected an active core session log")
+    local marker = "fatal error integration marker"
+    core.on_error(marker .. "\nstack traceback:\n\ttest frame")
+    local file = assert(io.open(core.session_log.path, "rb"))
+    local text = file:read("*a")
+    file:close()
+    test.ok(text:find("[ERROR] Fatal error: " .. marker, 1, true))
+    test.ok(text:find("test frame", 1, true))
+  end)
+
   test.it("writes and rolls one process session", function()
     local SessionLog = require "core.session_log"
     local root = join(USERDIR, "session-log-roll")

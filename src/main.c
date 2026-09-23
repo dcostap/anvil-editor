@@ -262,6 +262,27 @@ static const char *init_code =
   "  os.exit(1)\n"
   "end)\n";
 
+static int lua_error_traceback(lua_State *L) {
+  const char *message = lua_tostring(L, 1);
+  if (message) {
+    luaL_traceback(L, L, message, 1);
+  } else {
+    lua_pushvalue(L, 1);
+  }
+  return 1;
+}
+
+static void report_run_step_error(lua_State *L, const char *message) {
+  lua_getglobal(L, "core");
+  lua_getfield(L, -1, "on_error");
+  lua_remove(L, -2);
+  lua_pushstring(L, message);
+  if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+    fprintf(stderr, "Could not save run-loop error: %s\n", lua_tostring(L, -1));
+    lua_pop(L, 1);
+  }
+}
+
 /* (Re-)create a Lua interpreter and run the init code. */
 static bool init_lua_state(AppState *app) {
   app->L = luaL_newstate();
@@ -472,6 +493,8 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
   }
 
   app->in_run_step = true;
+  lua_pushcfunction(app->L, lua_error_traceback);
+  int error_handler = lua_gettop(app->L);
   lua_rawgeti(app->L, LUA_REGISTRYINDEX, app->core_run_step_ref);
   int nargs = 0;
   if (immediate) {
@@ -484,11 +507,12 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
     lua_setfield(app->L, -2, "live_resize");
     nargs = 1;
   }
-  if (lua_pcall(app->L, nargs, 1, 0) != LUA_OK) {
+  if (lua_pcall(app->L, nargs, 1, error_handler) != LUA_OK) {
     app->in_run_step = false;
     const char *errmsg = lua_tostring(app->L, -1);
-    lua_pop(app->L, 1);
+    if (!errmsg) errmsg = "unknown Lua error";
     fprintf(stderr, "Error in core.run_step: %s\n", errmsg);
+    report_run_step_error(app->L, errmsg);
 
     if (!app->running_lua_tests && !SDL_getenv("ANVIL_HEADLESS_TEST")) {
       lua_getglobal(app->L, "system");
@@ -502,14 +526,15 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
         errmsg
       );
       lua_call(app->L, 2, 0);
-      lua_pop(app->L, 1);
     }
+
+    lua_pop(app->L, 2); /* error and traceback handler */
 
     return SDL_APP_FAILURE;
   }
 
   bool should_continue = lua_toboolean(app->L, -1);
-  lua_pop(app->L, 1);
+  lua_pop(app->L, 2); /* result and traceback handler */
   app->in_run_step = false;
   Uint64 run_end_ns = SDL_GetTicksNS();
   anvil_resize_diag_log(&(AnvilResizeDiagEvent){

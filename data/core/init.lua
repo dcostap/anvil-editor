@@ -4091,6 +4091,8 @@ end
 
 
 function core.on_error(err)
+  core.custom_log("ERROR", false, false, "Fatal error: %s", tostring(err))
+  if core.session_log then core.session_log:flush() end
   if startup and startup.active() then
     startup.finish("error", tostring(err))
   end
