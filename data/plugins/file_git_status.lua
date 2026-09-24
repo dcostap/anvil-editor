@@ -198,14 +198,16 @@ function Service:marker_change_directory(path)
   if not path then return nil end
   path = common.normalize_path(path) or path
   local direct = self:marker_directory(path)
-  if direct then return direct end
-  local marker_token = PATHSEP .. ".git" .. PATHSEP
-  local marker_start = path and path:find(marker_token, 1, true)
-  if not marker_start then return nil end
-  local directory = path:sub(1, marker_start - 1)
+  local directory = direct
+  if not directory then
+    local marker_token = PATHSEP .. ".git" .. PATHSEP
+    local marker_start = path:find(marker_token, 1, true)
+    if not marker_start then return nil end
+    directory = path:sub(1, marker_start - 1)
+  end
   local key = common.path_compare_key(directory)
   local cached = key and self.marker_cache[key]
-  if not cached then return nil end
+  if not cached then return direct end
   local ok, exists = pcall(self.marker_probe, directory)
   if not ok then return nil end
   if exists and (not cached.root or not common.path_equals(cached.root, directory)) then

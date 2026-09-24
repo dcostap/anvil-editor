@@ -143,6 +143,29 @@ test.describe("Shared repository Git status", function()
     service:close()
   end)
 
+  test.it("keeps published file colors when a known Git marker reports changes", function()
+    local markers = { ["C:/repo"] = true }
+    local service, discoveries, commands, clock = marker_fixture(markers)
+    local path = "C:/repo/one/file.lua"
+    service:lookup(path)
+    discoveries[1].callback({ root = "C:/repo" })
+    clock.advance(1)
+    service:update()
+    commands[1].callback({ stdout = " M one/file.lua\0" })
+    commands[2].callback({ stdout = "2\t1\tone/file.lua\0" })
+    test.equal(service:lookup(path).kind, "modified")
+
+    clock.change("C:/repo/.git")
+    service:update()
+    local info = service:lookup(path)
+    test.equal(info and info.kind, "modified", "an unchanged marker must retain published colors")
+    test.equal(#discoveries, 1, "an unchanged marker must not restart repository discovery")
+    clock.advance(1)
+    service:update()
+    test.equal(#commands, 4, "a Git metadata event must still refresh status")
+    service:close()
+  end)
+
   test.it("does not discard positive discovery routes on ordinary file writes", function()
     local markers = { ["C:/repo"] = true }
     local service, discoveries, commands, clock = marker_fixture(markers)
