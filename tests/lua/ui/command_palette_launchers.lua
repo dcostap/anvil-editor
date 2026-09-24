@@ -258,7 +258,8 @@ test.describe("Command Palette View launchers", function()
       source_view = source,
       placement = "current",
     }))
-    test.ok(pane.current_view:extends(Editor))
+    test.ok(panes.active().current_view:extends(Editor))
+    test.equal(pane.current_view, source)
   end)
 
   test.it("reuses a matching File Tree from the source Pane history", function(context)

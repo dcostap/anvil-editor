@@ -27,6 +27,16 @@ local function write_file(path)
   fp:close()
 end
 
+local function wait_for_result(picker, path)
+  local deadline = system.get_time() + 5
+  repeat
+    local first = picker.results[1]
+    if first and first.abs_path and common.path_equals(first.abs_path, path) then return true end
+    coroutine.yield(0.02)
+  until system.get_time() >= deadline
+  return false
+end
+
 test.describe("Fuzzy Searcher current file query", function()
   test.before_each(function(context)
     context.projects = core.projects
@@ -73,7 +83,7 @@ test.describe("Fuzzy Searcher current file query", function()
 
     test.equal(picker.input:get_text(), join_path("src", "main.lua"))
     test.equal(system.get_clipboard(), "keep me")
-    test.ok(common.path_equals(picker.results[1].abs_path, path))
+    test.ok(wait_for_result(picker, path))
   end)
 
   test.it("uses the selected File Tree path", function(context)
@@ -90,7 +100,7 @@ test.describe("Fuzzy Searcher current file query", function()
     test.equal(picker.input:get_text(), query)
     local line1, col1, line2, col2 = picker.input.textview.buffer:get_selection(true)
     test.same({ line1, col1, line2, col2 }, { 1, #query - #"module.obj" + 1, 1, #query + 1 })
-    test.ok(common.path_equals(picker.results[1].abs_path, path))
+    test.ok(wait_for_result(picker, path))
   end)
 
   test.it("uses the selected Fuzzy Searcher file instead of its source file", function(context)
@@ -124,7 +134,7 @@ test.describe("Fuzzy Searcher current file query", function()
 
     test.equal(picker.source_file_path, common.normalize_path(path))
     test.equal(picker.source_file_line, 37)
-    test.ok(common.path_equals(picker.results[1].abs_path, path))
+    test.ok(wait_for_result(picker, path))
   end)
 
   test.it("uses an absolute query for a Vendored Project Directory file", function(context)
@@ -139,7 +149,7 @@ test.describe("Fuzzy Searcher current file query", function()
 
     test.equal(picker.input:get_text(), common.normalize_path(path))
     test.not_ok(picker.path_search_active)
-    test.ok(common.path_equals(picker.results[1].abs_path, path))
+    test.ok(wait_for_result(picker, path))
   end)
 
   test.it("uses an absolute query and Path Search for a file outside Project Search Scope", function(context)

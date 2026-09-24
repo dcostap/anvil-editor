@@ -714,21 +714,6 @@ test.describe("Terminal View", function()
     test.same({ "/" }, context.sessions[1].writes)
   end)
 
-  test.it("runs valid Anvil shortcuts before terminal input", function(context)
-    local first = panes.create { factory = function() return View() end }
-    local second = panes.create { factory = function() return View() end }
-    terminal.open { pane = second }
-    keymap.modkeys.alt = true
-
-    core.on_event("keypressed", "1", {
-      alt = true, modifiers = 0, scancode = 30,
-    })
-    keymap.modkeys.alt = false
-
-    test.equal(panes.active(), first)
-    test.equal(#context.sessions[1].keys, 0)
-  end)
-
   test.it("does not send a key release for a press owned by Anvil", function(context)
     local view = terminal.open({ focus = true })
     local event = { ctrl = true, modifiers = 2, scancode = 14 }

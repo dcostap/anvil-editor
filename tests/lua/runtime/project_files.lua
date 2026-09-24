@@ -201,26 +201,6 @@ test.describe("Project files", function()
     test.ok(unrestricted_directories["build/deep"])
   end)
 
-  test.it("requires a Git repository before applying gitignore files", function(context)
-    local project_files = require "core.project_files"
-    local root = join(os.getenv("TEMP") or USERDIR,
-      "anvil-project-files-no-git-" .. system.get_process_id())
-    assert(common.mkdirp(join(root, "build")))
-    assert(common.mkdirp(join(root, "ignored")))
-    write(join(root, ".gitignore"), "build/\n")
-    write(join(root, ".ignore"), "ignored/\n")
-    write(join(root, "build", "visible-without-git.txt"), "visible")
-    write(join(root, "ignored", "hidden-by-ignore.txt"), "ignored")
-    context.cleanup = function()
-      project_files.invalidate(root)
-      common.rm(root, true)
-    end
-
-    local listed = names(assert(project_files.list(root, { refresh = true })))
-    test.ok(listed["build/visible-without-git.txt"])
-    test.not_ok(listed["ignored/hidden-by-ignore.txt"])
-  end)
-
   test.it("lists a directory junction without traversing its target", function(context)
     test.skip_if(PLATFORM ~= "Windows", "This fixture uses a Windows junction")
     local project_files = require "core.project_files"

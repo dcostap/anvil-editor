@@ -644,7 +644,9 @@ local function build_poi_line_index(points)
 end
 
 function CommandOutputView:get_points_of_interest(opts)
-  if self.slot and self.slot.running and self.buffer.output_text == nil then
+  opts = opts or {}
+  if self.slot and self.slot.running and self.buffer.output_text == nil
+    and not opts.force_revalidate and not opts.remote then
     return self.poi_cache and self.poi_cache.points or {}
   end
   local text = self.buffer:materialize_output_text()
@@ -662,7 +664,6 @@ function CommandOutputView:get_points_of_interest(opts)
     self.poi_cache = cache
   end
 
-  opts = opts or {}
   local now = system.get_time()
   local should_revalidate = opts.force_revalidate == true
     or not cache.points

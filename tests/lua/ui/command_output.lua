@@ -93,7 +93,7 @@ test.describe("Command Output Views", function()
     context.runs[1].opts.on_output("background output\n")
 
     test.not_equal(pane.current_view, view)
-    test.contains(view.buffer.output_text, "background output")
+    test.contains(table.concat(view.buffer.lines), "background output")
   end)
 
   test.it("opens a hidden run's first error in the Pane requesting remote navigation", function(context)
