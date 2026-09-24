@@ -127,6 +127,17 @@ SCENARIOS["image-viewer"] = {
     "paced": False,
 }
 SCENARIOS["image-filtering"] = dict(SCENARIOS["image-viewer"])
+SCENARIOS["markdown-callout-shift"] = {
+    "fixture": "video-callout",
+    "window_width": 320,
+    "window_height": 400,
+    "visual": False,
+    "paced": False,
+    "video": True,
+}
+SCENARIOS["markdown-task-overindent"] = dict(
+    SCENARIOS["markdown-callout-shift"], fixture="video-task", window_width=420,
+)
 
 
 def uses_performance_baseline(renderer: str) -> bool:
@@ -745,6 +756,8 @@ def run_case(
     action_timeout_seconds: int = 30,
 ) -> dict[str, Any]:
     run_dir.mkdir(parents=True)
+    if mode == "video":
+        (run_dir / "frames").mkdir()
     result_file = run_dir / "result.txt"
     metrics_file = run_dir / "metrics.csv"
     heartbeat_file = run_dir / "heartbeat.txt"
@@ -762,6 +775,10 @@ def run_case(
         work / "fixtures" / "markdown-long-link.md"
         if settings.get("fixture") == "markdown-long-link" else fixture
     )
+    if settings.get("fixture") == "video-callout":
+        case_fixture = work / "fixtures" / "markdown-callout.md"
+    elif settings.get("fixture") == "video-task":
+        case_fixture = work / "fixtures" / "markdown-task.md"
     if settings.get("fixture") == "external":
         if not external_fixture:
             raise RuntimeError(f"scenario {scenario} requires an external specimen")
@@ -793,6 +810,7 @@ def run_case(
         "ANVIL_PERF_BENCHMARK_HEARTBEAT": str(heartbeat_file),
         "ANVIL_PERF_BENCHMARK_LIFECYCLE": str(lifecycle_file),
         "ANVIL_PERF_BENCHMARK_SCREENSHOT": str(screenshot_file) if screenshot else "",
+        "ANVIL_PERF_BENCHMARK_VIDEO_DIR": str(run_dir / "frames") if mode == "video" else "",
         "ANVIL_PERF_BENCHMARK_RASTER_METADATA": str(raster_metadata_file),
         "ANVIL_PERF_BENCHMARK_IMAGE_METADATA": str(image_metadata_file),
         "ANVIL_PERF_BENCHMARK_CAPTURE_FRAMES": "3",
@@ -846,6 +864,12 @@ def run_case(
             f"error={values.get('error', 'missing result')}",
             failure,
         )
+    if mode == "video":
+        captured = sorted((run_dir / "frames").glob("frame-*.png"))
+        if len(captured) != int(values.get("capture_frames", 0)) or not captured:
+            raise RuntimeError("video frame count does not match the completed capture")
+        return {"status": "passed", "frames": len(captured), "run_dir": str(run_dir),
+                "reproduced": values.get("video_reproduced") == "true"}
     result: dict[str, Any] = {
         "scenario": scenario,
         "renderer": renderer,
@@ -1256,6 +1280,8 @@ def main() -> int:
     parser.add_argument("--update-goldens", action="store_true")
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--no-visual", action="store_true")
+    parser.add_argument("--video", action="store_true",
+                        help="record one explicit visual repro instead of running the performance gate")
     parser.add_argument("--diagnose", action="store_true",
                         help="repeat each workload with draw scopes and LuaJIT stack samples")
     parser.add_argument("--report-only", action="store_true",
@@ -1298,6 +1324,10 @@ def main() -> int:
         parser.error("budgets must be finite and positive")
 
     selected_scenarios = [args.scenario] if args.scenario else SUITES[args.suite]
+    if args.video and (not args.scenario or not SCENARIOS[args.scenario].get("video")):
+        parser.error("--video requires a video-enabled --scenario")
+    if not args.video and any(SCENARIOS[name].get("video") for name in selected_scenarios):
+        parser.error("video scenarios require --video")
     if args.user_state_mode == "reuse" and any(SCENARIOS[name].get("kind") == "open" for name in selected_scenarios):
         parser.error("first-open workloads require --user-state-mode clean")
     suite_label = f"scenario:{args.scenario}" if args.scenario else args.suite
@@ -1341,6 +1371,43 @@ def main() -> int:
     user.mkdir(parents=True)
     exe = copy_app_tree(app_root)
     fixture, tab_dir, _markdown_fixture = generate_fixture(work)
+    if args.video:
+        scenario = args.scenario
+        if scenario == "markdown-callout-shift":
+            fixture_name = "markdown-callout.md"
+            source = "> [!NOTE] Callout words that wrap across several visual rows\n\nsentinel\n"
+        else:
+            fixture_name = "markdown-task.md"
+            source = "- [ ] parent\n    - [ ] \n    - [ ] sibling\nplain\n"
+        (work / "fixtures" / fixture_name).write_text(source, encoding="utf-8")
+        case = run_case_safely(
+            exe=exe, work=work, user=user, fixture=fixture, tab_dir=tab_dir,
+            scenario=scenario, settings=SCENARIOS[scenario], renderer=args.renderer,
+            mode="video", run_dir=run_root / scenario / "video-1",
+            frames=2, warmup_frames=1, screenshot=False,
+            total_timeout_seconds=args.timeout_seconds,
+            startup_timeout_seconds=args.startup_timeout_seconds,
+            heartbeat_timeout_seconds=args.heartbeat_timeout_seconds,
+        )
+        if case["status"] != "passed":
+            print(f"Video replay failed: {case.get('error', case.get('failure_kind'))}")
+            print(f"Artifacts: {case['run_dir']}")
+            return 1
+        video_dir = Path(case["run_dir"])
+        video = video_dir / "repro.mp4"
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("FFmpeg is required to encode the video")
+        run([
+            ffmpeg, "-y", "-loglevel", "error", "-framerate", "4",
+            "-i", str(video_dir / "frames" / "frame-%04d.png"),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            str(video),
+        ])
+        print(f"Video: {video}")
+        print(f"Frames: {case['frames']} ({video_dir / 'frames'})")
+        print(f"Test failure visible: {'yes' if case['reproduced'] else 'no'}")
+        return 0
     if "filetree-edit-repeat" in selected_scenarios:
         generate_filetree_fixture(work)
     workload_manifests = {}

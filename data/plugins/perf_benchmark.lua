@@ -44,6 +44,7 @@ local benchmark = {
   heartbeat_file = env_string("ANVIL_PERF_BENCHMARK_HEARTBEAT"),
   lifecycle_file = env_string("ANVIL_PERF_BENCHMARK_LIFECYCLE"),
   screenshot_file = env_string("ANVIL_PERF_BENCHMARK_SCREENSHOT"),
+  video_dir = env_string("ANVIL_PERF_BENCHMARK_VIDEO_DIR"),
   raster_metadata_file = env_string("ANVIL_PERF_BENCHMARK_RASTER_METADATA"),
   image_metadata_file = env_string("ANVIL_PERF_BENCHMARK_IMAGE_METADATA"),
   capture_frames = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_CAPTURE_FRAMES", 3))),
@@ -611,6 +612,9 @@ local function setup_scenario()
     return
   end
 
+  if benchmark.mode == "video" then
+    config.markdown_live_editor = true
+  end
   local view = open_file(benchmark.fixture)
   mark_lifecycle("fixture_opened")
   setup_tabs(view)
@@ -646,6 +650,16 @@ local function setup_scenario()
     assert(view.__markdown_live_attached, "Markdown Live Preview did not attach")
     view:set_wrapping_enabled(true)
     view.buffer:set_selection(1, 1000)
+    linewrapping.update_textview_breaks(view)
+  elseif benchmark.mode == "video" then
+    assert(view.__markdown_live_attached, "Markdown Live Preview did not attach")
+    view:set_wrapping_enabled(true)
+    if benchmark.scenario == "markdown-task-overindent" then
+      config.tab_type, config.indent_size = "soft", 4
+      view.buffer:set_selection(2, 11)
+    else
+      view.buffer:set_selection(1, 1)
+    end
     linewrapping.update_textview_breaks(view)
   elseif benchmark.scenario == "caret-repeat" then
     view:set_wrapping_enabled(false)
@@ -859,6 +873,7 @@ local function finish_success()
   if benchmark.workload then
     for key, value in pairs(benchmark.workload:state()) do fields[key] = value end
   end
+  if benchmark.mode == "video" then fields.video_reproduced = benchmark.video_reproduced == true end
   local result_ok, result_err = write_result(fields)
   if not result_ok then
     core.log_quiet("Performance benchmark result write failed: %s", tostring(result_err))
@@ -891,6 +906,90 @@ local function fail(err)
     coroutine.yield()
     core.quit(true, 1)
   end)
+end
+
+local function record_video()
+  assert(benchmark.video_dir ~= "", "video output directory is required")
+  local view = assert(benchmark.view)
+  local model = require "core.markdown.model"
+  local renwindow = require "renwindow"
+  local frame_count = 0
+  local rows = { "frame,stage,semantic_status,sentinel_y,task_indent" }
+  local software = os.getenv("ANVIL_RENDERER") == "software"
+  local pending_y, ready_y
+
+  local function capture(stage)
+    frame_count = frame_count + 1
+    local path = benchmark.video_dir .. PATHSEP .. string.format("frame-%04d.png", frame_count)
+    if not software then
+      local ok, err = renwindow.request_frame_capture(core.window, path)
+      assert(ok, err)
+    end
+    local before = benchmark.video_draws or 0
+    core.redraw = true
+    repeat
+      heartbeat(false)
+      coroutine.yield()
+    until (benchmark.video_draws or 0) > before
+    if software then
+      local ok, err = renwindow.request_frame_capture(core.window, path)
+      assert(ok, err)
+    end
+    assert(system.get_file_info(path), "video frame was not saved: " .. path)
+    local status = model.peek(view.buffer).status
+    local line = #view.buffer.lines
+    local row = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line] or line
+    local y = view:get_visual_row_y_offset(row)
+    local indent = view.buffer.lines[2]:match("^( *)")
+    rows[#rows + 1] = string.format("%d,%s,%s,%.6f,%d",
+      frame_count, stage, status, y, #indent)
+    if stage == "after-edit" and status == "pending" then pending_y = y end
+    if stage == "published" and status == "ready" then ready_y = y end
+    benchmark.measure_count = frame_count
+  end
+
+  for _ = 1, 5 do capture("before") end
+  if benchmark.scenario == "markdown-callout-shift" then
+    -- The in-process test inspects pending presentation before worker delivery.
+    local drain_limit = config.worker_pool_drain_max_messages
+    config.worker_pool_drain_max_messages = 0
+    assert(command.perform("core:newline"), "newline action failed")
+    assert(view.buffer.lines[2] == "> [!NOTE] Callout words that wrap across several visual rows\n",
+      "the callout did not move to line two")
+    assert(model.peek(view.buffer).status == "pending", "Markdown did not enter pending state")
+    benchmark.action_count = 1
+    for _ = 1, 4 do capture("after-edit") end
+    config.worker_pool_drain_max_messages = drain_limit
+    local deadline = system.get_time() + 5
+    while model.peek(view.buffer).status ~= "ready" and system.get_time() < deadline do
+      capture("after-edit")
+    end
+    assert(model.peek(view.buffer).status == "ready", "Markdown did not publish")
+    linewrapping.complete_async_reconstruction(view)
+  elseif benchmark.scenario == "markdown-task-overindent" then
+    assert(command.perform("core:indent"), "indent action failed")
+    benchmark.action_count = 1
+    benchmark.video_reproduced = view.buffer.lines[2] == "        - [ ] \n"
+  else
+    error("unknown video scenario: " .. benchmark.scenario)
+  end
+  for _ = 1, 8 do capture("published") end
+  if benchmark.scenario == "markdown-task-overindent" then
+    -- Move the caret off the task so Live Preview shows its new depth.
+    view.buffer:set_selection(4, 1)
+    for _ = 1, 5 do capture("inspect-result") end
+    assert(command.perform("markdown:source_mode"), "Markdown Source Mode failed")
+    for _ = 1, 5 do capture("source-result") end
+  end
+  if benchmark.scenario == "markdown-callout-shift" then
+    benchmark.video_reproduced = pending_y and ready_y and pending_y ~= ready_y
+  end
+  local fp = assert(io.open(benchmark.video_dir .. PATHSEP .. "frames.csv", "wb"))
+  fp:write(table.concat(rows, "\n"), "\n")
+  fp:close()
+  benchmark.capture_index = frame_count
+  benchmark.measure_end = system.get_time()
+  finish_success()
 end
 
 -- Check readiness after updates, before drawing. A later result needs another redraw.
@@ -939,6 +1038,11 @@ local old_on_frame = perf.on_frame
 function perf.on_frame(snapshot)
   old_on_frame(snapshot)
   if benchmark.finished or not snapshot then return end
+  if benchmark.mode == "video" then
+    if snapshot.did_redraw then benchmark.video_draws = (benchmark.video_draws or 0) + 1 end
+    heartbeat(false)
+    return
+  end
   if benchmark.actions then
     local ok, err = pcall(benchmark.actions.check_timeout, benchmark.actions)
     if not ok then fail(err); return end
@@ -1049,6 +1153,13 @@ core.add_thread(function()
     coroutine.yield()
   end
   mark_lifecycle("first_ready_frame")
+  if benchmark.mode == "video" then
+    benchmark.measure_start = system.get_time()
+    set_phase("video", "video_started")
+    local recorded, reason = xpcall(record_video, debug.traceback)
+    if not recorded then fail(reason) end
+    return
+  end
   set_phase("warmup", "warmup_started")
   perform_action()
 end)

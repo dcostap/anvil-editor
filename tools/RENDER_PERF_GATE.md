@@ -199,6 +199,26 @@ stability remains a separate three-capture check after measurement.
 
 The detailed F11 profiler remains a diagnostic tool and is intentionally not used for performance scores.
 
+### Explicit visual replays
+
+Record a private video only when you ask for one:
+
+```sh
+python tools/run_render_perf_gate.py --scenario markdown-task-overindent --video --no-build
+python tools/run_render_perf_gate.py --scenario markdown-callout-shift --video --no-build
+```
+
+The video scenarios are not in any normal suite. `--video` requires one video-enabled scenario.
+The runner performs the edit in its private app and captures renderer frames.
+FFmpeg encodes `repro.mp4` beside the numbered PNG frames and `frames.csv`.
+The terminal reports whether the captured state matches the test failure.
+Do not call a captured edit a reproduced visual bug when it reports `no`.
+
+The callout replay pauses worker result delivery for four frames.
+This shows the pending presentation that its in-process test inspects.
+The task replay moves the caret away, then opens Markdown Source Mode to show the changed indentation.
+Capture and encoding can change timing. Use the PNG frames and `frames.csv` to inspect each stage.
+
 ## Commands
 
 From `cmd.exe`:
