@@ -1584,6 +1584,7 @@ local function edit_position_map(old_lines, edits, starts, total)
 end
 
 function Buffer:apply_edits(edits, opts)
+  local diagnostic_started = system.get_time()
   local perf_t = perf_start()
   perf_add("buffer_apply_edits_calls", 1)
   opts = opts or {}
@@ -1665,8 +1666,11 @@ function Buffer:apply_edits(edits, opts)
   end
 
   local changed = #normalized > 0
+  local before_listener_ms = 0
   if changed then
+    local started = system.get_time()
     self:notify_text_change_listeners("before", { type = transaction.type, kind = "apply_edits", transaction = transaction })
+    before_listener_ms = (system.get_time() - started) * 1000
   end
   local out = { "" }
   local cursor_line, cursor_col = 1, 1
@@ -1785,9 +1789,23 @@ function Buffer:apply_edits(edits, opts)
       push_batch_undo(self.undo_stack, time, transaction, old_selections, old_last_selection, transaction.new_selections, transaction.new_last_selection)
     end
     self.text_revision = (self.text_revision or 0) + 1
+    local transaction_started = system.get_time()
     self:on_text_transaction(transaction)
+    local transaction_ms = (system.get_time() - transaction_started) * 1000
     if opts.notify ~= false then self:on_text_change(transaction.type, transaction) end
+    local after_started = system.get_time()
     self:notify_text_change_listeners("after", { type = transaction.type, kind = "apply_edits", transaction = transaction })
+    local after_listener_ms = (system.get_time() - after_started) * 1000
+    local total_ms = (system.get_time() - diagnostic_started) * 1000
+    if total_ms >= 16 then
+      core.log_quiet(
+        "Buffer slow batch edit: total=%.1fms before=%.1fms transaction=%.1fms after=%.1fms other=%.1fms type=%s edits=%d lines=%d revision=%d path=%s",
+        total_ms, before_listener_ms, transaction_ms, after_listener_ms,
+        math.max(0, total_ms - before_listener_ms - transaction_ms - after_listener_ms),
+        tostring(transaction.type), #normalized, #self.lines,
+        self.text_revision, self:get_name()
+      )
+    end
     core.log_quiet("Applied batch edit to %s: edits=%d lines=%d", self:get_name(), #normalized, #self.lines)
   else
     sync_unbound_selection_mutation(self)
@@ -2494,7 +2512,15 @@ function Buffer:notify_text_change_listeners(phase, change)
   for id, listener in pairs(listeners) do
     local fn = type(listener) == "function" and listener or listener[phase == "before" and "before_change" or "after_change"]
     if fn then
+      local started = system.get_time()
       local ok, err = pcall(fn, self, change or {})
+      local elapsed = (system.get_time() - started) * 1000
+      if elapsed >= 8 then
+        core.log_quiet(
+          "Buffer slow text listener: id=%s phase=%s elapsed=%.1fms revision=%d path=%s",
+          tostring(id), phase, elapsed, self.text_revision, self:get_name()
+        )
+      end
       if not ok and core and core.log_quiet then
         core.log_quiet("Buffer text change listener %s failed for %s: %s", tostring(id), self:get_name(), tostring(err))
       end
@@ -2519,15 +2545,30 @@ end
 -- Internal transaction hook for batch-aware buffer change observers.
 function Buffer:on_text_transaction(transaction)
   if not (transaction and transaction.linewrapping_already_notified) then
+    local started = system.get_time()
     linewrapping.notify_buffer_text_transaction(self, transaction)
+    local elapsed = (system.get_time() - started) * 1000
+    if elapsed >= 8 then
+      core.log_quiet("Buffer slow linewrap transaction: elapsed=%.1fms revision=%d path=%s", elapsed, self.text_revision, self:get_name())
+    end
   end
   for id, handler in pairs(text_transaction_handlers) do
+    local started = system.get_time()
     local ok, err = pcall(handler, self, transaction)
+    local elapsed = (system.get_time() - started) * 1000
+    if elapsed >= 8 then
+      core.log_quiet("Buffer slow transaction handler: id=%s elapsed=%.1fms revision=%d path=%s", tostring(id), elapsed, self.text_revision, self:get_name())
+    end
     if not ok and core and core.log_quiet then
       core.log_quiet("Buffer text transaction handler %s failed for %s: %s", tostring(id), self:get_name(), tostring(err))
     end
   end
+  local started = system.get_time()
   language_mode.on_text_transaction(self, transaction)
+  local elapsed = (system.get_time() - started) * 1000
+  if elapsed >= 8 then
+    core.log_quiet("Buffer slow language transaction: elapsed=%.1fms revision=%d path=%s", elapsed, self.text_revision, self:get_name())
+  end
 end
 
 -- For plugins to add custom actions of buffer change

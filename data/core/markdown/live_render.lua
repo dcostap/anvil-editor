@@ -1776,16 +1776,19 @@ function callout_runtime.reconcile_folds(view, reason)
   end
   local instance = current_semantic_model(view)
   if not instance then return end
+  local started = system.get_time()
   local nodes, query_reason = instance:nodes_for_lines(1, #view.buffer.lines, {
     limit = 100000,
   })
+  local query_ms = elapsed_ms(started)
   if not nodes or query_reason == "limit" then
     core.log_quiet(
-      "Markdown Callout fold reconciliation skipped for %s: %s",
-      view.buffer:get_name(), tostring(query_reason or "semantic query unavailable")
+      "Markdown Callout fold reconciliation skipped for %s: %s query=%.1fms",
+      view.buffer:get_name(), tostring(query_reason or "semantic query unavailable"), query_ms
     )
     return
   end
+  local phase_started = system.get_time()
   local wanted = {}
   local wanted_position_keys = {}
   for _, node in ipairs(nodes) do
@@ -1796,6 +1799,10 @@ function callout_runtime.reconcile_folds(view, reason)
       end
     end
   end
+  local classify_ms = elapsed_ms(phase_started)
+  local wanted_count = 0
+  for _ in pairs(wanted) do wanted_count = wanted_count + 1 end
+  phase_started = system.get_time()
 
   for semantic_id, fold in pairs(owner.callout_folds) do
     if not wanted[semantic_id] then
@@ -1875,17 +1882,28 @@ function callout_runtime.reconcile_folds(view, reason)
       owner.callout_fold_position_states[position_key] = nil
     end
   end
+  local folds_ms = elapsed_ms(phase_started)
+  phase_started = system.get_time()
   core.log_quiet(
     "Markdown Callout folds reconciled for %s: %d foldable callout(s), reason=%s",
-    view.buffer:get_name(), (function()
-      local count = 0
-      for _ in pairs(wanted) do count = count + 1 end
-      return count
-    end)(), tostring(reason or "semantic publication")
+    view.buffer:get_name(), wanted_count, tostring(reason or "semantic publication")
   )
+  local log_ms = elapsed_ms(phase_started)
+  phase_started = system.get_time()
   callout_runtime.expand_folds_for_selection(
     view, current_selection_state(view), "markdown-callout-caret-already-in-body"
   )
+  local selection_ms = elapsed_ms(phase_started)
+  local total_ms = elapsed_ms(started)
+  if total_ms >= 16 then
+    core.log_quiet(
+      "Markdown Callout slow reconciliation: total=%.1fms query=%.1fms classify=%.1fms folds=%.1fms log=%.1fms selection=%.1fms nodes=%d callouts=%d lines=%d generation=%d revision=%d active=%s listener=%s reason=%s path=%s",
+      total_ms, query_ms, classify_ms, folds_ms, log_ms, selection_ms, #nodes,
+      wanted_count, #view.buffer.lines, instance.generation,
+      view.buffer.text_revision, tostring(core.active_view == view),
+      tostring(owner.semantic_listener_id), tostring(reason), view.buffer:get_name()
+    )
+  end
 end
 
 function callout_runtime.expand_folds_for_selection(view, state, reason)
@@ -7169,17 +7187,9 @@ local function invalidate_semantic_publication(view, instance, reason)
     view:invalidate_visual_metrics(PROVIDER_ID)
     metric_invalidate_ms = elapsed_ms(phase_started)
   end
-  local total_ms = elapsed_ms(publication_started)
-  if total_ms >= 8 then
-    core.log_quiet(
-      "Markdown Live Preview slow publication: total=%.1fms reset=%.1fms fence=%.1fms expand=%.1fms render_invalidate=%.1fms metric_invalidate=%.1fms ranges=%d lines=%d deferred_wrap=%s",
-      total_ms, reset_ms, fence_reconcile_ms, range_expand_ms,
-      line_invalidate_ms, metric_invalidate_ms, #(ranges or {}),
-      publication_lines, tostring(deferred_wrapped_invalidation)
-    )
-  end
+  local publication_ms = elapsed_ms(publication_started)
   if perf then
-    perf.frame_add("markdown_live_publication_listener_ms", total_ms)
+    perf.frame_add("markdown_live_publication_listener_ms", publication_ms)
     perf.frame_add("markdown_live_publication_reset_ms", reset_ms)
     perf.frame_add("markdown_live_publication_fence_reconcile_ms", fence_reconcile_ms)
     perf.frame_add("markdown_live_publication_range_expand_ms", range_expand_ms)
@@ -7190,7 +7200,7 @@ local function invalidate_semantic_publication(view, instance, reason)
     local pane = panes.pane_for_view(view)
     perf.record_markdown_view_publication({
       time = system.get_time(),
-      elapsed_ms = total_ms,
+      elapsed_ms = publication_ms,
       path = view.buffer.abs_filename or view.buffer.filename or view.buffer:get_name(),
       bytes = instance.published_byte_len or 0,
       lines = instance.published_line_count or #view.buffer.lines,
@@ -7211,7 +7221,21 @@ local function invalidate_semantic_publication(view, instance, reason)
       metric_invalidate_ms = metric_invalidate_ms,
     })
   end
+  local callout_started = system.get_time()
   callout_runtime.reconcile_folds(view, reason)
+  local callout_ms = elapsed_ms(callout_started)
+  local callback_ms = elapsed_ms(publication_started)
+  if callback_ms >= 16 then
+    core.log_quiet(
+      "Markdown Live Preview slow publication callback: total=%.1fms publication=%.1fms callouts=%.1fms reset=%.1fms fence=%.1fms expand=%.1fms render_invalidate=%.1fms metric_invalidate=%.1fms ranges=%d lines=%d generation=%d revision=%d active=%s listener=%s reason=%s path=%s",
+      callback_ms, publication_ms, callout_ms, reset_ms, fence_reconcile_ms,
+      range_expand_ms, line_invalidate_ms, metric_invalidate_ms,
+      #(ranges or {}), publication_lines, instance.generation,
+      view.buffer.text_revision, tostring(core.active_view == view),
+      tostring(owner and owner.semantic_listener_id), tostring(reason),
+      view.buffer:get_name()
+    )
+  end
   core.redraw = true
 end
 

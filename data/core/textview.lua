@@ -3853,7 +3853,8 @@ function TextView:get_visual_row_metric_cache()
     )
   end
 
-  local rebuild_start = perf_active and system.get_time()
+  local had_cache = cache ~= nil
+  local rebuild_start = system.get_time()
   local row_count = self:get_scrollable_line_count()
   local sparse_metrics
   sparse_metrics, default_height = prepare_sparse_visual_metrics(
@@ -3896,7 +3897,16 @@ function TextView:get_visual_row_metric_cache()
     self.__visual_metric_snapshot_id = snapshot_id
     self.__visual_metric_snapshot_cache = cache
   end
-  perf_elapsed("textview_visual_metric_full_rebuild_ms", rebuild_start)
+  local rebuild_ms = (system.get_time() - rebuild_start) * 1000
+  perf_elapsed("textview_visual_metric_full_rebuild_ms", perf_active and rebuild_start)
+  if rebuild_ms >= 16 then
+    core.log_quiet(
+      "Text View slow metric rebuild: elapsed=%.1fms rows=%d revision=%d previous_cache=%s wrapped=%s active=%s path=%s",
+      rebuild_ms, row_count, self.buffer.text_revision or 0,
+      tostring(had_cache), tostring(self.wrapped_settings ~= nil),
+      tostring(core.active_view == self), self.buffer:get_name()
+    )
+  end
   perf_elapsed("textview_visual_metric_cache_lookup_ms", lookup_start)
   return cache
 end

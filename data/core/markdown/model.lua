@@ -111,10 +111,18 @@ function Model:notify(reason)
   local listener_count, total_ms = 0, 0
   local slowest_listener_ms, slowest_listener_id = 0, ""
   for id, fn in pairs(self.listeners) do
-    local started = perf and system.get_time()
+    local started = system.get_time()
     local ok, err = pcall(fn, self, reason)
+    local listener_ms = elapsed_ms(started)
+    if listener_ms >= 16 then
+      local buffer = self:buffer()
+      core.log_quiet(
+        "Markdown model slow listener: id=%s reason=%s elapsed=%.1fms generation=%d revision=%s lines=%d path=%s",
+        id, reason, listener_ms, self.generation, tostring(self.published_revision),
+        self.published_line_count or 0, buffer and buffer:get_name() or "<closed>"
+      )
+    end
     if perf then
-      local listener_ms = elapsed_ms(started)
       listener_count = listener_count + 1
       total_ms = total_ms + listener_ms
       if listener_ms > slowest_listener_ms then
