@@ -1375,7 +1375,7 @@ def main() -> int:
         scenario = args.scenario
         if scenario == "markdown-callout-shift":
             fixture_name = "markdown-callout.md"
-            source = "> [!NOTE] Callout words that wrap across several visual rows\n\nsentinel\n"
+            source = "> [!NOTE] Callout words that wrap across several visual rows\n\nsentinel"
         else:
             fixture_name = "markdown-task.md"
             source = "- [ ] parent\n    - [ ] \n    - [ ] sibling\nplain\n"

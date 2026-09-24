@@ -917,7 +917,7 @@ local function record_video()
   local model = require "core.markdown.model"
   local renwindow = require "renwindow"
   local frame_count = 0
-  local rows = { "frame,stage,semantic_status,sentinel_y,task_indent" }
+  local rows = { "frame,stage,semantic_status,sentinel_y,task_indent,view_width,callout_rows,callout_heights,blank_height,provenance,blank_render" }
   local software = os.getenv("ANVIL_RENDERER") == "software"
   local pending_y, ready_y
 
@@ -944,8 +944,29 @@ local function record_video()
     local row = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line] or line
     local y = view:get_visual_row_y_offset(row)
     local indent = view.buffer.lines[2]:match("^( *)")
-    rows[#rows + 1] = string.format("%d,%s,%s,%.6f,%d",
-      frame_count, stage, status, y, #indent)
+    local callout_rows, callout_heights, blank_height, provenance, blank_render = 0, "", 0, "", ""
+    if benchmark.scenario == "markdown-callout-shift" then
+      local callout_line = stage == "before" and 1 or 2
+      callout_rows = view:get_visual_row_count_for_line(callout_line)
+      local first = view.wrapped_line_to_idx and view.wrapped_line_to_idx[callout_line]
+        or callout_line
+      local heights = {}
+      for index = 0, callout_rows - 1 do
+        heights[#heights + 1] = view:get_visual_row_height(first + index)
+      end
+      callout_heights = table.concat(heights, ":")
+      local blank_line = callout_line + 1
+      local blank_row = view.wrapped_line_to_idx and view.wrapped_line_to_idx[blank_line]
+        or blank_line
+      blank_height = view:get_visual_row_height(blank_row)
+      provenance = (view:get_line_render(callout_line) or {}).markdown_provenance or ""
+      local render = view:get_line_render(blank_line)
+      blank_render = render and string.format("%s:%s",
+        tostring(render.markdown_provenance), tostring(render.text_row_height)) or "raw"
+    end
+    rows[#rows + 1] = string.format("%d,%s,%s,%.6f,%d,%.2f,%d,%s,%d,%s,%s",
+      frame_count, stage, status, y, #indent, view.size.x, callout_rows,
+      callout_heights, blank_height, provenance, blank_render)
     if stage == "after-edit" and status == "pending" then pending_y = y end
     if stage == "published" and status == "ready" then ready_y = y end
     benchmark.measure_count = frame_count
