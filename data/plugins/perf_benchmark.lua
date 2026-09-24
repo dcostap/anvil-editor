@@ -653,6 +653,9 @@ local function setup_scenario()
     linewrapping.update_textview_breaks(view)
   elseif benchmark.mode == "video" then
     assert(view.__markdown_live_attached, "Markdown Live Preview did not attach")
+    -- A private Win32 desktop cannot own foreground focus. Show the caret
+    -- for this View without changing the user's desktop or input focus.
+    view.active_window_has_focus = function() return true end
     view:set_wrapping_enabled(true)
     if benchmark.scenario == "markdown-task-overindent" then
       config.tab_type, config.indent_size = "soft", 4

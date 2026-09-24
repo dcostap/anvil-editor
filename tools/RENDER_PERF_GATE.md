@@ -210,7 +210,9 @@ python tools/run_render_perf_gate.py --scenario markdown-callout-shift --video -
 
 The video scenarios are not in any normal suite. `--video` requires one video-enabled scenario.
 The runner performs the edit in its private app and captures renderer frames.
+The private video View draws its caret as if focused; the runner never focuses the user's window.
 FFmpeg encodes `repro.mp4` beside the numbered PNG frames and `frames.csv`.
+The MP4 doubles pixel size to make the caret easier to see. The PNG frames keep the original pixels.
 The terminal reports whether the captured state matches the test failure.
 Do not call a captured edit a reproduced visual bug when it reports `no`.
 

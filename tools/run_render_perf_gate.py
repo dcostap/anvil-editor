@@ -1401,6 +1401,7 @@ def main() -> int:
         run([
             ffmpeg, "-y", "-loglevel", "error", "-framerate", "4",
             "-i", str(video_dir / "frames" / "frame-%04d.png"),
+            "-vf", "scale=iw*2:ih*2:flags=neighbor",
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
             str(video),
         ])
