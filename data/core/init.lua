@@ -2167,13 +2167,6 @@ end
 function core.on_event(type, ...)
   core.current_event_context = event_summary(type, ...)
   record_focus_input_event(type, ...)
-  local diagnostic = package.loaded["core.markdown.diagnostic_capture"]
-  if diagnostic and diagnostic.is_active(core.active_view)
-    and (type == "keypressed" or type == "keyreleased" or type == "textinput"
-      or type == "mousepressed" or type == "mousereleased"
-      or type == "mousemoved" or type == "mousewheel") then
-    diagnostic.input(core.active_view, type, ...)
-  end
   local did_keymap = false
   local active = core.active_view
   local active_type = active and active.type_name

@@ -51,22 +51,6 @@ end, {
   ["markdown:toggle_source_mode"] = command.palette(function(view)
     markdown_live.toggle_source_mode(view, "command-toggle")
   end),
-  ["markdown:toggle_diagnostic_capture"] = command.palette(function(view)
-    local capture = require "core.markdown.diagnostic_capture"
-    if capture.is_active(view) then
-      capture.stop(view)
-      core.log("Markdown diagnostic capture stopped")
-    else
-      local ok, err = capture.start(view)
-      if not ok then core.warn("Markdown diagnostic capture: %s", err); return end
-      core.log("Markdown diagnostic capture started for this Editor")
-    end
-  end),
-  ["markdown:save_diagnostic_capture"] = command.palette(function(view)
-    local path, err = require("core.markdown.diagnostic_capture").save(view)
-    if path then core.log("Markdown diagnostic saved: %s", path)
-    else core.warn("Markdown diagnostic capture: %s", err) end
-  end),
   ["markdown:source_mode"] = command.palette(function(view)
     markdown_live.set_source_mode(view, true, "command-source")
   end),
@@ -98,10 +82,6 @@ end, {
     alternate_list_item_checkbox(view)
   end),
 })
-command.set_status("markdown:toggle_diagnostic_capture", function()
-  local capture = package.loaded["core.markdown.diagnostic_capture"]
-  return capture and capture.is_active(core.active_view) or false
-end)
 
 
 command.add(function()

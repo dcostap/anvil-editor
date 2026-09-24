@@ -382,10 +382,6 @@ local function perform(name, ...)
       "Command: name=%s active=%s event=%s",
       tostring(name), tostring(core.active_view), core.current_event_context or "none"
     )
-    local diagnostic = package.loaded["core.markdown.diagnostic_capture"]
-    if diagnostic then
-      diagnostic.command(first_textview_arg(args, n) or active_textview(), name)
-    end
     local result = with_view_selection(first_textview_arg(args, n) or active_textview(), function()
       cmd.perform(table.unpack(args, 1, n))
       return true
