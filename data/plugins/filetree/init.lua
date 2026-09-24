@@ -240,8 +240,7 @@ local function sorted_dir(path, show_hidden)
   local entries = list_dir_metadata(path) or {}
   for _, info in ipairs(entries) do
     local name = info.name
-    if info.modified ~= nil and name ~= ".git"
-        and (show_hidden or name:sub(1, 1) ~= ".") then
+    if info.modified ~= nil and (show_hidden or name:sub(1, 1) ~= ".") then
       local abs = path_join(path, name)
       table.insert(items, {
         name = name,
@@ -1000,7 +999,7 @@ function FileTreeView:filesystem_dir_signature(dir)
   local parts = {}
   for _, info in ipairs(entries) do
     local name = info.name
-    if info.modified ~= nil and name ~= ".git"
+    if info.modified ~= nil
         and (filetree_config.show_hidden or name:sub(1, 1) ~= ".") then
       parts[#parts + 1] = table.concat({
         name,

@@ -64,7 +64,7 @@ test.describe("File Tree instances", function()
     test.not_equal(one.selection_state, two.selection_state)
   end)
 
-  test.it("shows dot-named files and folders but not Git metadata", function()
+  test.it("shows dot-named files and folders, including Git metadata", function()
     test.ok(common.mkdirp(root .. PATHSEP .. ".pi"))
     test.ok(common.mkdirp(root .. PATHSEP .. ".gradle"))
     test.ok(common.mkdirp(root .. PATHSEP .. ".git"))
@@ -75,7 +75,7 @@ test.describe("File Tree instances", function()
     test.ok(has_row(view, ".pi/"))
     test.ok(has_row(view, ".gradle/"))
     test.ok(has_row(view, ".gitignore"))
-    test.not_ok(has_row(view, ".git/"))
+    test.ok(has_row(view, ".git/"))
 
     for line, text in ipairs(view.buffer.lines) do
       if text == ".pi/\n" then
