@@ -142,7 +142,7 @@ plugin_defaults("diffview", {
   fold_min_lines = 16,
 })
 plugin_defaults("filetree", {
-  show_hidden = false,
+  show_hidden = true,
   delete_to_trash = PLATFORM == "Windows",
   folder_color = nil,
   folder_row_background = style.filetree_folder_row_background,

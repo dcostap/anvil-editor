@@ -8,6 +8,13 @@ local View = require "core.view"
 local test = require "core.test"
 local filetree = require "plugins.filetree"
 
+local function has_row(view, text)
+  for _, line in ipairs(view.buffer.lines) do
+    if line:gsub("\n$", "") == text then return true end
+  end
+  return false
+end
+
 local function write_file(path, text)
   local handle = assert(io.open(path, "wb"))
   handle:write(text or "")
@@ -55,6 +62,28 @@ test.describe("File Tree instances", function()
     two.buffer:set_selection(math.min(2, #two.buffer.lines), 1)
     test.not_equal(one.buffer, two.buffer)
     test.not_equal(one.selection_state, two.selection_state)
+  end)
+
+  test.it("shows dot-named files and folders but not Git metadata", function()
+    test.ok(common.mkdirp(root .. PATHSEP .. ".pi"))
+    test.ok(common.mkdirp(root .. PATHSEP .. ".gradle"))
+    test.ok(common.mkdirp(root .. PATHSEP .. ".git"))
+    write_file(root .. PATHSEP .. ".gitignore", "build/\n")
+    write_file(root .. PATHSEP .. ".pi" .. PATHSEP .. "settings.json", "{}\n")
+
+    local view = assert(filetree.new(root))
+    test.ok(has_row(view, ".pi/"))
+    test.ok(has_row(view, ".gradle/"))
+    test.ok(has_row(view, ".gitignore"))
+    test.not_ok(has_row(view, ".git/"))
+
+    for line, text in ipairs(view.buffer.lines) do
+      if text == ".pi/\n" then
+        view:expand_folder(line, view:entry_for_line(line), false)
+        break
+      end
+    end
+    test.ok(has_row(view, "\tsettings.json"))
   end)
 
   test.it("selects an absolute file outside Project Paths", function()

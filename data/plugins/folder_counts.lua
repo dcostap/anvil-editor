@@ -26,7 +26,8 @@ function counts.get(path, modified, show_hidden)
           local entries, err = system.list_dir_info(task.path, 2147483647, nil, nil, true)
           local total, start = 0, system.get_time()
           for _, entry in ipairs(entries or {}) do
-            if entry.modified ~= nil and (task.show_hidden or entry.name:sub(1, 1) ~= ".")
+            if entry.modified ~= nil and entry.name ~= ".git"
+                and (task.show_hidden or entry.name:sub(1, 1) ~= ".")
                 and (entry.type == "file" or entry.type == "dir") then
               total = total + 1
             end
