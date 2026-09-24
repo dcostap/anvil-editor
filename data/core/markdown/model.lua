@@ -265,6 +265,11 @@ function Model:publish(result, revision, signature, generation, changed_range)
     self.diagnostics.last_parse_ms,
     self.diagnostics.last_total_ms
   )
+  local diagnostic = package.loaded["core.markdown.diagnostic_capture"]
+  if diagnostic then diagnostic.phase(self:buffer(), "publication", {
+    generation = self.generation, revision = revision,
+    changed_ranges = self.changed_ranges,
+  }) end
   local notify_started = perf and system.get_time()
   local notify_stats = self:notify("published")
   local notify_ms = elapsed_ms(notify_started)

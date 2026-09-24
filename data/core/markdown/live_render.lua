@@ -5382,6 +5382,11 @@ local function capture_edit_projection(view, transaction)
     capture and capture.captured or 0, retained,
     owner.last_pre_edit_capture_ms or 0, owner.last_edit_projection_ms or 0
   )
+  local diagnostic = package.loaded["core.markdown.diagnostic_capture"]
+  if diagnostic then diagnostic.phase(view.buffer, "projection", {
+    retained = retained, visible_line1 = capture and capture.line1,
+    visible_line2 = capture and capture.line2,
+  }) end
   owner.pre_edit_capture = nil
 end
 
