@@ -51,6 +51,16 @@ test.describe("wallpaper selection", function()
     test.ok(style.line_highlight[4] < 255)
   end)
 
+  test.it("finds wallpaper selection by its background image keyword", function()
+    local picker = require("plugins.fuzzy_searcher").open(">select background image")
+    local found = false
+    for _, row in ipairs(picker.results) do
+      if row.command == "core:select_wallpaper" then found = true break end
+    end
+    picker:close()
+    test.ok(found, "the Command Palette must find the wallpaper command")
+  end)
+
   test.it("draws the original opaque window when None is selected", function()
     test.ok(command.perform("core:select_wallpaper"))
     local bar = core.global_prompt_bar

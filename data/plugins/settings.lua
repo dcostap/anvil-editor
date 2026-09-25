@@ -2787,7 +2787,7 @@ local theme_commands = {
         apply_wallpaper(name)
       end,
     })
-  end),
+  end, { keywords = { "select background image" } }),
 }
 
 command.add(nil, theme_commands)
