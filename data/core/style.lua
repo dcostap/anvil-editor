@@ -56,11 +56,9 @@ style.terminal_italic_font = style.terminal_font:copy(
 style.terminal_bold_italic_font = style.terminal_font:copy(
   style.terminal_font:get_size(), { ligatures = false, bold = true, italic = true }
 )
--- Reusable proportional typography roles. Markdown Live Preview, navigation
--- trees, and other prose-oriented surfaces may share these faces without
--- making the fonts belong to any one feature.
-style.prose_font = renderer.font.load(DATADIR .. "/fonts/Inter-Regular.ttf", 14 * SCALE)
-style.markdown_body_font = style.prose_font
+-- UI View text and document prose use separate Typography Roles.
+style.view_text_font = renderer.font.load(DATADIR .. "/fonts/Inter-Regular.ttf", 14 * SCALE)
+style.markdown_body_font = renderer.font.load(DATADIR .. "/fonts/Inter-Regular.ttf", 15 * SCALE)
 style.prose_strong_font = renderer.font.load(DATADIR .. "/fonts/Inter-SemiBold.ttf", 14 * SCALE)
 style.prose_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Inter-Italic.ttf", 14 * SCALE)
 style.prose_strong_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Inter-SemiBoldItalic.ttf", 14 * SCALE)

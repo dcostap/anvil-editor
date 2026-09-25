@@ -33,16 +33,19 @@ test.describe("Light2 color theme", function()
 
   test.it("does not change global fonts when switching themes", function()
     local code_font = style.code_font
-    local base_prose = style.prose_font
+    local base_view_text = style.view_text_font
+    local base_prose = style.markdown_body_font
     local base_heading = style.prose_heading_font
     local base_big = style.big_font
     core.reload_module("colors.light2")
-    test.equal(base_prose, style.prose_font)
+    test.equal(base_view_text, style.view_text_font)
+    test.equal(base_prose, style.markdown_body_font)
     test.equal(base_heading, style.prose_heading_font)
     test.equal(base_big, style.big_font)
     test.equal(code_font, style.code_font)
     core.reload_module("colors.light")
-    test.equal(base_prose, style.prose_font)
+    test.equal(base_view_text, style.view_text_font)
+    test.equal(base_prose, style.markdown_body_font)
     test.equal(base_heading, style.prose_heading_font)
     test.equal(base_big, style.big_font)
     test.same({255, 255, 255, 255}, style.background)

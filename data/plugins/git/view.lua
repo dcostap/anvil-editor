@@ -341,7 +341,7 @@ function GitView:pane_view(name)
     local ViewType = (name == "file-list" or name == "details") and path_tree.View
       or name == "log-list" and RowTextView or TextView
     view = ViewType(make_pane_buffer("Git " .. name))
-    view.font = "prose_font"
+    view.font = "view_text_font"
     view:set_wrapping_enabled(false)
     view.git_owner_view = self
     view.git_pane = name
@@ -645,7 +645,7 @@ function GitView:can_discard_from_history()
 end
 
 function GitView:commit_list_y()
-  return self.position.y + style.prose_font:get_height() + style.padding.y * 2
+  return self.position.y + style.view_text_font:get_height() + style.padding.y * 2
 end
 
 function GitView:row_height()
@@ -1987,14 +1987,14 @@ function GitView:draw_log_tab(tab, x, y)
   details.position.x, details.position.y = detail_x + style.padding.x, self.position.y + style.padding.y
   details.size.x, details.size.y = self.position.x + self.size.x - details.position.x - style.padding.x, self.size.y - style.padding.y * 2
   local header_height = top - self.position.y
-  local header_y = self.position.y + (header_height - style.prose_font:get_height()) / 2
+  local header_y = self.position.y + (header_height - style.view_text_font:get_height()) / 2
   renderer.draw_rect(self.position.x, self.position.y, list_width, header_height, style.background2)
-  renderer.draw_text(style.prose_font, "Commits", x, header_y, style.text)
+  renderer.draw_text(style.view_text_font, "Commits", x, header_y, style.text)
   local status = self:log_commit_count_text(tab)
   if status ~= "" then
     renderer.draw_text(
-      style.prose_font, status,
-      list.position.x + list.size.x - style.prose_font:get_width(status) - style.padding.x,
+      style.view_text_font, status,
+      list.position.x + list.size.x - style.view_text_font:get_width(status) - style.padding.x,
       header_y,
       style.dim
     )
@@ -2433,7 +2433,7 @@ function GitView:layout_diff_tab(tab, x)
 end
 
 local function draw_diff_status(text, color, x, y)
-  local font = style.prose_font
+  local font = style.view_text_font
   local pad_x = style.padding.x * 0.75
   local pad_y = style.padding.y * 0.5
   local width = font:get_width(text) + pad_x * 2
@@ -2493,7 +2493,7 @@ function GitView:draw()
   local y = self.position.y + style.padding.y
   local tab = self:model_tab()
   if not tab then
-    renderer.draw_text(style.prose_font, "Git tab is no longer available", x, y, style.dim)
+    renderer.draw_text(style.view_text_font, "Git tab is no longer available", x, y, style.dim)
   elseif tab.kind == "commit_diff" then
     self:draw_diff_tab(tab, x, y)
   elseif tab.kind == "file_history" then

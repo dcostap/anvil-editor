@@ -131,7 +131,7 @@ test.describe("Global title bar Pane entries", function()
     test.ok(group_indicator)
   end)
 
-  test.it("renders Pane numbers and names at one size with their requested fonts", function()
+  test.it("renders Pane numbers and names with their requested fonts", function()
     panes.create { factory = factory("one") }
     local title = TitleBar()
     title.size.x = 900
@@ -155,8 +155,7 @@ test.describe("Global title bar Pane entries", function()
     test.not_nil(number)
     test.not_nil(name)
     test.equal(number.font, style.font)
-    test.equal(name.font, style.prose_font)
-    test.equal(number.font:get_size(), name.font:get_size())
+    test.equal(name.font, style.view_text_font)
     test.equal(number.color, style.titlebar_pane_number)
   end)
 

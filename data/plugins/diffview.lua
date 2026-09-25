@@ -2247,7 +2247,7 @@ local function draw_header_items(font, items, x, y, gap)
 end
 
 local function draw_diff_header(view)
-  local font = style.prose_font
+  local font = style.view_text_font
   local stat_font = style.get_small_font(font)
   local header_height = view.diff_header_height or 0
   if header_height <= 0 then return end
@@ -2290,7 +2290,7 @@ function DiffView:update()
   local divider_half = self:get_divider_width() / 2
 
   self.buffer_view_a.position.x = self.position.x
-  local header_height = style.prose_font:get_height() + style.padding.y
+  local header_height = style.view_text_font:get_height() + style.padding.y
   self.diff_header_height = header_height
   self.buffer_view_a.position.y = self.position.y + header_height
   self.buffer_view_a.size.x = math.max(0, (self.size.x / 2) - divider_half)
@@ -2332,7 +2332,7 @@ function DiffView:draw()
   draw_diff_header(self)
   if self.comparison_message then
     renderer.draw_text(
-      style.prose_font, self.comparison_message,
+      style.view_text_font, self.comparison_message,
       self.position.x + style.padding.x,
       self.position.y + (self.diff_header_height or 0) + style.padding.y,
       style.dim
@@ -2344,7 +2344,7 @@ function DiffView:draw()
   if not self.diff_model or self.pending_first_change_reveal then
     if self.diff_loading_visible then
       renderer.draw_text(
-        style.prose_font, "Computing differences...",
+        style.view_text_font, "Computing differences...",
         self.position.x + style.padding.x,
         self.position.y + (self.diff_header_height or 0) + style.padding.y,
         style.dim

@@ -31,7 +31,7 @@ local IMAGE_EXTENSIONS = { avif = true, bmp = true, gif = true, jpeg = true, jpg
 local AUDIO_EXTENSIONS = { flac = true, mp3 = true, ogg = true, wav = true }
 local VIDEO_EXTENSIONS = { mov = true, mp4 = true, webm = true }
 local PROSE_FONT_ROLE_NAMES = {
-  "prose_font", "markdown_body_font", "prose_strong_font", "prose_emphasis_font",
+  "markdown_body_font", "prose_strong_font", "prose_emphasis_font",
   "prose_strong_emphasis_font", "prose_heading_font",
   "prose_heading_emphasis_font",
 }

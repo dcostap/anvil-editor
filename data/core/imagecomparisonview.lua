@@ -21,7 +21,7 @@ end
 function ImageComparisonView:layout()
   local gap = math.max(SCALE, style.padding.x)
   local side_width = math.max(0, math.floor((self.size.x - gap) / 2))
-  local header_height = style.prose_font:get_height() + style.padding.y
+  local header_height = style.view_text_font:get_height() + style.padding.y
   local image_y = self.position.y + header_height
   local image_height = math.max(0, self.size.y - header_height)
   if self.left_view then
@@ -66,13 +66,13 @@ end
 local function draw_side_title(title, x, y, width, height)
   renderer.draw_rect(x, y, width, height, style.background2)
   renderer.draw_text(
-    style.prose_font, title, x + style.padding.x,
-    y + (height - style.prose_font:get_height()) / 2, style.text
+    style.view_text_font, title, x + style.padding.x,
+    y + (height - style.view_text_font:get_height()) / 2, style.text
   )
 end
 
 local function draw_missing_side(text, x, y, width, height)
-  local font = style.prose_font
+  local font = style.view_text_font
   renderer.draw_text(
     font, text, x + (width - font:get_width(text)) / 2,
     y + (height - font:get_height()) / 2, style.dim

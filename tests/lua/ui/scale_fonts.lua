@@ -37,13 +37,13 @@ test.describe("font scaling", function()
     local factor = 1.1
     local fallback = style.font[2]
     local fallback_size = fallback:get_size()
-    local prose_size = style.prose_font:get_size()
+    local view_text_size = style.view_text_font:get_size()
     local markdown_body_size = style.markdown_body_font:get_size()
 
     scale.set(context.interface_scale * factor)
 
     test.near(fallback:get_size(), fallback_size * factor, 0.001)
-    test.near(style.prose_font:get_size(), prose_size * factor, 0.001)
+    test.near(style.view_text_font:get_size(), view_text_size * factor, 0.001)
     test.near(style.markdown_body_font:get_size(), markdown_body_size * factor, 0.001)
   end)
 

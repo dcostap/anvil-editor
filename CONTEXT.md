@@ -221,6 +221,10 @@ The magnification of an image inside its View or preview. It does not change the
 A globally configurable text style for a semantic use such as interface text, source code, prose, emphasis, or headings.
 _Avoid_: Global font, Markdown font
 
+**View Text**:
+A Typography Role for names, labels, and messages shown by Views, apart from Buffer content.
+_Avoid_: Content Labels, Navigation Text
+
 **Editing Surface**:
 A View whose primary purpose is editing or navigating a Buffer.
 _Avoid_: Code context, editor context

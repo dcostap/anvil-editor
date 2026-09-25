@@ -395,7 +395,7 @@ settings.add("Graphics",
   }
 )
 
-local function prose_font_option(label, description, path, name, filename, bold, italic)
+local function typography_font_option(label, description, path, name, filename, bold, italic)
   return {
     label = label,
     description = description,
@@ -423,29 +423,29 @@ end
 
 settings.add("Typography",
   {
-    prose_font_option(
-      "Prose Font", "Regular proportional text used by prose and navigation surfaces.",
-      "prose_font", "Crimson Pro Regular", "CrimsonPro-Regular.ttf"
+    typography_font_option(
+      "View Text Font", "Text used for View names, labels, and messages.",
+      "view_text_font", "Crimson Pro Regular", "CrimsonPro-Regular.ttf"
     ),
-    prose_font_option(
+    typography_font_option(
       "Prose Strong Font", "Strong proportional prose text.",
       "prose_strong_font", "Crimson Pro Bold", "CrimsonPro-Bold.ttf", true
     ),
-    prose_font_option(
+    typography_font_option(
       "Prose Emphasis Font", "Emphasized proportional prose text.",
       "prose_emphasis_font", "Crimson Pro Italic", "CrimsonPro-Italic.ttf", false, true
     ),
-    prose_font_option(
+    typography_font_option(
       "Prose Strong Emphasis Font", "Strong emphasized proportional prose text.",
       "prose_strong_emphasis_font", "Crimson Pro SemiBold Italic",
       "CrimsonPro-SemiBoldItalic.ttf", true, true
     ),
-    prose_font_option(
+    typography_font_option(
       "Prose Heading Font", "Heading text used by prose presentations.",
       "prose_heading_font", "Cormorant Garamond Medium",
       "CormorantGaramond-Medium.ttf", true
     ),
-    prose_font_option(
+    typography_font_option(
       "Prose Heading Emphasis Font", "Emphasized heading text used by prose presentations.",
       "prose_heading_emphasis_font", "Cormorant Garamond Medium Italic",
       "CormorantGaramond-MediumItalic.ttf", true, true
@@ -2574,6 +2574,25 @@ function core.run()
 
   -- append all settings defined in the plugins spec
   startup_measure("settings_scan_plugin_specs", scan_plugins_spec)
+
+  startup_measure("settings_migrate_view_text_font", function()
+    local saved = settings.config
+    local changed = false
+    if saved.prose_font then
+      saved.view_text_font = saved.view_text_font or saved.prose_font
+      saved.prose_font = nil
+      changed = true
+    end
+    local selected = saved.font_categories
+    if type(selected) == "table" and selected.prose and not selected.view_text then
+      selected.view_text = selected.prose
+      changed = true
+    end
+    if changed then
+      save_settings()
+      core.log_quiet("Migrated saved Prose font settings to View Text")
+    end
+  end)
 
   -- merge custom settings into config
   startup_measure("settings_merge_saved_values", merge_settings)

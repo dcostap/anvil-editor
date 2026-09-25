@@ -520,7 +520,7 @@ PathTreeView.show_line_numbers = false
 
 function PathTreeView:new(buffer)
   PathTreeView.super.new(self, buffer, false)
-  self.font = "prose_font"
+  self.font = "view_text_font"
   self:add_line_render_provider("path-tree-inline-file-icons", INLINE_FILE_ICON_PROVIDER)
   self:set_wrapping_enabled(false)
   self.path_tree = nil

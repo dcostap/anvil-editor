@@ -343,11 +343,10 @@ terminal_fallbacks = code_fallbacks
 startup_measure("font_primary_loading", function()
   load_default_monospace_fonts()
 end)
--- Reusable proportional typography roles. Live Preview prose and compact
--- navigation surfaces use these roles; source and diff text retain code_font.
-startup_measure("font_prose_and_heading_construction", function()
+-- View text and Live Preview prose have independent font choices.
+startup_measure("font_typography_construction", function()
   style.big_font = load_text_font(prose_heading_font_path, nil, interface_fallbacks, 46 * SCALE)
-  style.prose_font = load_text_font(prose_font_path, nil, interface_fallbacks)
+  style.view_text_font = load_text_font(prose_font_path, nil, interface_fallbacks)
   style.markdown_body_font = load_text_font(
     prose_font_path, nil, interface_fallbacks, 15 * SCALE
   )
@@ -371,7 +370,9 @@ startup_measure("font_prose_and_heading_construction", function()
   style.prose_heading_emphasis_font = load_text_font(
     prose_heading_emphasis_font_path, nil, interface_fallbacks
   )
-  require("core.font_categories").apply("prose", "crimson_pro")
+  local font_categories = require "core.font_categories"
+  font_categories.apply("view_text", "crimson_pro")
+  font_categories.apply("prose", "crimson_pro")
 end)
 -- Keep scrollbars visible in a small/contracted form instead of expanding/fading.
 -- Set this before constructing Views such as the File Tree.

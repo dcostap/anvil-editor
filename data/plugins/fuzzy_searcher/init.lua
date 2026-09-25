@@ -2395,7 +2395,7 @@ end
 
 local function draw_project_result_row(font, r, x, y, width)
   local label, spans, prefix = result_list_label_and_spans(r)
-  local project_font = style.prose_font
+  local project_font = style.view_text_font
   local age = r.opened_at and compact_age(r.opened_at)
   local gap = style.padding.x
   local label_w = width
@@ -2545,7 +2545,7 @@ end
 local function draw_new_project_result_row(font, r, x, y, width)
   local prefix = "Open this new folder as project: "
   local cx = renderer.draw_text(font, prefix, x, y, style.dim)
-  local project_font = style.prose_font
+  local project_font = style.view_text_font
   local project_y = y + math.max(0, math.floor((font:get_height() - project_font:get_height()) / 2))
   draw_highlighted_text(project_font, r.project or r.label or "", cx, project_y, math.max(0, x + width - cx), style.text, {})
 end
@@ -2656,7 +2656,7 @@ function fuzzy_searcher.file_result_filename_width(font, file, prefix, suffix, s
   suffix = tostring(suffix or "")
   local row_height = font:get_height()
   local icon_width = show_file_icon and fuzzy_searcher.file_icons.column_width(row_height) or 0
-  local file_font = style.prose_font
+  local file_font = style.view_text_font
   local name = basename(file)
   local directory_gap = #file > #name and (SCALE or 1) or 0
   return icon_width + font:get_width(prefix)
@@ -2669,7 +2669,7 @@ function fuzzy_searcher.file_result_full_width(font, file, prefix, suffix, show_
   suffix = tostring(suffix or "")
   local row_height = font:get_height()
   local icon_width = show_file_icon and fuzzy_searcher.file_icons.column_width(row_height) or 0
-  local file_font = style.prose_font
+  local file_font = style.view_text_font
   local path_font = style.get_small_font(file_font)
   local name = basename(file)
   local directory = file:sub(1, math.max(0, #file - #name))
@@ -2878,7 +2878,7 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, 
     width = math.max(0, width - icon_column_width)
   end
 
-  local file_font = style.prose_font
+  local file_font = style.view_text_font
   local path_font = style.get_small_font(file_font)
   local prefix_color = style.dim
   local dir_color = style.dim
@@ -2961,12 +2961,12 @@ function FSView:grep_file_column_width(font, path_w)
   local count = #results
   local cache = self._grep_file_column_width
   local font_size = font:get_size()
-  local prose_size = style.prose_font:get_size()
+  local view_text_size = style.view_text_font:get_size()
   if cache and cache.results == results and cache.count == count
       and cache.first == results[1] and cache.last == results[count]
       and cache.path_w == path_w and cache.font == font
-      and cache.font_size == font_size and cache.prose_font == style.prose_font
-      and cache.prose_size == prose_size then
+      and cache.font_size == font_size and cache.view_text_font == style.view_text_font
+      and cache.view_text_size == view_text_size then
     return cache.width
   end
 
@@ -2990,8 +2990,8 @@ function FSView:grep_file_column_width(font, path_w)
     path_w = path_w,
     font = font,
     font_size = font_size,
-    prose_font = style.prose_font,
-    prose_size = prose_size,
+    view_text_font = style.view_text_font,
+    view_text_size = view_text_size,
     width = width,
   }
   return width
@@ -3848,7 +3848,7 @@ function FSView:list_metrics(font)
   font = font or style.code_font
   local pad = style.padding.x
   local row_padding = style.fuzzy_searcher_result_row_padding
-  local lh = math.max(font:get_height(), style.prose_font:get_height()) + row_padding * 2
+  local lh = math.max(font:get_height(), style.view_text_font:get_height()) + row_padding * 2
   local x, y = self.position.x, self.position.y
   local w, h = self.size.x, self.size.y
   local top = y + self.input.size.y + pad * 3 + lh
@@ -4123,12 +4123,12 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
       width = math.max(0, row_text_w - icon_w)
     end
     text = r.label or r.path or r.project or r.file or ""
-    text_font = style.prose_font
+    text_font = style.view_text_font
   elseif r.kind == "project" then
     local label, _, prefix = result_list_label_and_spans(r)
     local prefix_w = font:get_width(prefix)
     text = label
-    text_font = style.prose_font
+    text_font = style.view_text_font
     x = row_x + prefix_w
     width = math.max(0, row_text_w - prefix_w)
     local age = r.opened_at and compact_age(r.opened_at)
@@ -4140,7 +4140,7 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
     x = row_x + font:get_width(prefix)
     width = math.max(0, row_text_w - font:get_width(prefix))
     text = r.project or r.label or ""
-    text_font = style.prose_font
+    text_font = style.view_text_font
   end
 
   local text_w = text_font:get_width(text)

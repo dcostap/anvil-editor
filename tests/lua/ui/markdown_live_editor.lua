@@ -216,7 +216,7 @@ test.describe("Markdown Live Preview", function()
     end
     body = test.not_nil(body)
     test.equal(body.font, live_body_font(view))
-    test.not_equal(body.font, style.prose_font)
+    test.not_equal(body.font, style.view_text_font)
   end)
 
   test.it("hides gutter line numbers in Live Preview", function()

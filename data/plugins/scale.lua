@@ -156,7 +156,7 @@ function scale.set(scale)
   local scaled_fonts = {}
   for _, name in ipairs {
     "font", "big_font", "icon_font", "icon_big_font",
-    "prose_font", "markdown_body_font", "prose_strong_font", "prose_emphasis_font",
+    "view_text_font", "markdown_body_font", "prose_strong_font", "prose_emphasis_font",
     "prose_strong_emphasis_font", "prose_heading_font",
     "prose_heading_emphasis_font",
   } do

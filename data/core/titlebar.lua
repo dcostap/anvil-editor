@@ -56,7 +56,7 @@ local function project_name()
 end
 
 local function project_title_font()
-  return style.get_small_font(style.prose_font)
+  return style.get_small_font(style.view_text_font)
 end
 
 local function contains(rect, x, y)
@@ -178,7 +178,7 @@ end
 local function pane_label_metrics(number, pane, row_height)
   local icon = pane_icon(pane)
   local number_font = style.font
-  local name_font = style.prose_font
+  local name_font = style.view_text_font
   local number_text = tostring(number)
   local name = pane_name(pane)
   local number_width = number_font:get_width(number_text)

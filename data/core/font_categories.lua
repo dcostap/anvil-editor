@@ -29,7 +29,8 @@ local categories = {
   {id = "interface", name = "Interface", roles = {"font"}},
   {id = "code", name = "Code", roles = {"code_font"}},
   {id = "terminal", name = "Terminal", roles = {"terminal_font"}},
-  {id = "prose", name = "Prose", roles = {"prose_font", "markdown_body_font",
+  {id = "view_text", name = "View Text", roles = {"view_text_font"}},
+  {id = "prose", name = "Prose", roles = {"markdown_body_font",
     "prose_strong_font", "prose_emphasis_font", "prose_strong_emphasis_font"}},
   {id = "headings", name = "Headings", roles = {"prose_heading_font", "prose_heading_emphasis_font", "big_font"}},
 }
@@ -107,7 +108,7 @@ function fonts.apply(id, choice)
   for _, role in ipairs(category.roles) do
     local filename, bold, italic = file_for(role, family)
     -- Heading levels keep their existing effective sizes. Body text uses optical calibration.
-    local size_modifier = (id == "interface" or id == "prose")
+    local size_modifier = (id == "interface" or id == "view_text" or id == "prose")
       and (family.size_modifier or 1) or 1
     style[role] = load_for(
       style[role], filename, bold, italic, id ~= "terminal",
