@@ -167,6 +167,21 @@ test.describe("Command Palette View launchers", function()
     test.ok(entry and common.path_equals(entry.abs, context.file))
   end)
 
+  test.it("opens the current file when the command receives a key event", function(context)
+    local source = View()
+    source.path = context.file
+    local pane = panes.create { factory = function() return source end }
+
+    test.ok(command.perform_with_context("filetree:open_at_current_path", {
+      source_pane = pane, source_view = source, placement = "current",
+    }, { key = "semicolon" }))
+
+    local tree = pane.current_view
+    test.equal(tree.root_dir, common.normalize_path(context.root))
+    local entry = tree:entry_for_line(tree.buffer:get_selection(true))
+    test.ok(entry and common.path_equals(entry.abs, context.file))
+  end)
+
   test.it("opens a source directory with open at current path", function(context)
     local source = View()
     source.current_dir = context.folder

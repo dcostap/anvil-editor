@@ -3730,7 +3730,7 @@ command.add(nil, {
   }),
   ["filetree:open_at_current_path"] = command.palette(function(target_path)
     local context, pane, source_view = command_context()
-    local path = target_path and file_context.resolve_path(target_path, source_view)
+    local path = type(target_path) == "string" and file_context.resolve_path(target_path, source_view)
       or file_context.view_context_path(source_view)
       or file_context.source_directory(source_view)
     if path and project_paths.resolve(path) then
