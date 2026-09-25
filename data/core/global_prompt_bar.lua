@@ -73,6 +73,7 @@ local noop = function() end
 ---@field draw_text? fun(item: table, font: renderer.font, color: renderer.color, x: number, y: number, w: number, h: number) Custom suggestion renderer
 ---@field select_text boolean Whether to select initial text
 ---@field show_suggestions boolean Whether to show suggestions box
+---@field overlay boolean Whether to dim the editor behind the prompt
 ---@field typeahead boolean Whether to enable typeahead completion
 ---@field wrap boolean Whether suggestion cycling wraps around
 local default_state = {
@@ -85,6 +86,7 @@ local default_state = {
   draw_text = nil,
   select_text = false,
   show_suggestions = true,
+  overlay = true,
   typeahead = true,
   wrap = true,
 }
@@ -306,7 +308,7 @@ function GlobalPromptBar:enter(label, ...)
   end
 
   core.set_active_view(self)
-  if not self.pane_scope then
+  if not self.pane_scope and self.state.overlay then
     core.root_panel:show_app_overlay(self, "global_prompt_bar_overlay_background", {
       unobscured_view = self,
       transition_name = "global_prompt_bar",
@@ -341,7 +343,7 @@ function GlobalPromptBar:exit(submitted, inexplicit)
       end
     end
   end
-  if not self.pane_scope then core.root_panel:hide_app_overlay(self) end
+  if not self.pane_scope and self.state.overlay then core.root_panel:hide_app_overlay(self) end
   local cancel = self.state.cancel
   self.state = default_state
   self.buffer:reset()

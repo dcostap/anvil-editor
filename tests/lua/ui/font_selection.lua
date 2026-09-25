@@ -1,0 +1,87 @@
+local command = require "core.command"
+local core = require "core"
+local settings = require "plugins.settings"
+local style = require "core.style"
+local test = require "core.test"
+
+local function primary_path(font)
+  local path = font:get_path()
+  return type(path) == "table" and path[1] or path
+end
+
+test.describe("global font selection", function()
+  local saved, previous
+  test.before_each(function()
+    core.global_prompt_bar:exit(true)
+    saved = settings.config.font_categories
+    previous = {}
+    for _, role in ipairs({"font", "code_font", "terminal_font", "prose_font",
+      "terminal_bold_font", "terminal_italic_font", "terminal_bold_italic_font",
+      "markdown_body_font", "prose_strong_font", "prose_emphasis_font",
+      "prose_strong_emphasis_font", "prose_heading_font",
+      "prose_heading_emphasis_font", "big_font"}) do
+      previous[role] = style[role]
+    end
+  end)
+  test.after_each(function()
+    core.global_prompt_bar:exit(true)
+    for role, font in pairs(previous) do style[role] = font end
+    settings.config.font_categories = saved
+  end)
+
+  test.it("shows font categories without dimming the editor", function()
+    test.ok(command.perform("editor:select_font"))
+    local bar = core.global_prompt_bar
+    test.equal(core.active_view, bar)
+    test.ok(#bar.suggestions >= 5)
+    test.not_equal(core.root_panel.app_overlay and core.root_panel.app_overlay.owner, bar)
+    test.ok(not command.is_valid("editor:select_monospace_font"))
+  end)
+
+  test.it("previews a prose font and restores it on cancel", function()
+    test.ok(command.perform("editor:select_font"))
+    local bar = core.global_prompt_bar
+    bar:set_text("Prose")
+    bar:submit()
+    test.ok(bar.label:find("Prose", 1, true) ~= nil)
+    test.not_equal(core.root_panel.app_overlay and core.root_panel.app_overlay.owner, bar)
+    bar:set_text("Inter")
+    bar:update_suggestions()
+    test.ok(primary_path(style.prose_font):find("Inter-Regular.ttf", 1, true))
+    test.ok(primary_path(style.markdown_body_font):find("Inter-Regular.ttf", 1, true))
+    bar:exit(false)
+    test.equal(previous.prose_font, style.prose_font)
+    test.equal(previous.markdown_body_font, style.markdown_body_font)
+    test.equal(saved, settings.config.font_categories)
+  end)
+
+  test.it("saves a global heading choice that remains after a theme change", function()
+    test.ok(command.perform("editor:select_font"))
+    local bar = core.global_prompt_bar
+    bar:set_text("Headings")
+    bar:submit()
+    bar:set_text("Merriweather")
+    bar:submit()
+    test.equal("merriweather", settings.config.font_categories.headings)
+    local fp = assert(io.open(USERDIR .. "/user_settings.lua", "rb"))
+    local saved_text = fp:read("*a")
+    fp:close()
+    test.ok(saved_text:find("merriweather", 1, true) ~= nil)
+    test.ok(primary_path(style.prose_heading_font):find("Merriweather", 1, true))
+    core.reload_module("colors.light2")
+    test.ok(primary_path(style.prose_heading_font):find("Merriweather", 1, true))
+    test.ok(primary_path(style.big_font):find("Merriweather", 1, true))
+  end)
+
+  test.it("changes terminal font without changing code or interface font", function()
+    test.ok(command.perform("editor:select_font"))
+    local bar = core.global_prompt_bar
+    bar:set_text("Terminal")
+    bar:submit()
+    bar:set_text("JetBrains Mono")
+    bar:submit()
+    test.ok(primary_path(style.terminal_font):find("JetBrainsMono-Regular.ttf", 1, true))
+    test.equal(previous.code_font, style.code_font)
+    test.equal(previous.font, style.font)
+  end)
+end)

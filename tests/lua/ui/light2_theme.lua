@@ -31,15 +31,15 @@ test.describe("Light2 color theme", function()
     test.ok(style.selection[4] < 255)
   end)
 
-  test.it("uses the bundled page fonts for prose and headings only", function()
+  test.it("does not change global fonts when switching themes", function()
     local code_font = style.code_font
     local base_prose = style.prose_font
     local base_heading = style.prose_heading_font
     local base_big = style.big_font
     core.reload_module("colors.light2")
-    test.ok(font_path(style.prose_font):find("CrimsonPro", 1, true) ~= nil)
-    test.ok(font_path(style.prose_heading_font):find("CormorantGaramond", 1, true) ~= nil)
-    test.ok(font_path(style.big_font):find("CormorantGaramond", 1, true) ~= nil)
+    test.equal(base_prose, style.prose_font)
+    test.equal(base_heading, style.prose_heading_font)
+    test.equal(base_big, style.big_font)
     test.equal(code_font, style.code_font)
     core.reload_module("colors.light")
     test.equal(base_prose, style.prose_font)

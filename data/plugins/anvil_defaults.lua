@@ -234,27 +234,15 @@ end
 if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
-local monospace_font_choices = {
-  {
-    id = "caskaydia_cove",
-    name = "Caskaydia Cove Nerd Font Mono",
-    path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf",
-  },
-  {
-    id = "jetbrains_mono",
-    name = "JetBrains Mono",
-    path = DATADIR .. "/fonts/JetBrainsMono-Regular.ttf",
-  },
-}
-local default_monospace_font_id = monospace_font_choices[1].id
-local prose_font_path = DATADIR .. "/fonts/Inter-Regular.ttf"
-local prose_strong_font_path = DATADIR .. "/fonts/Inter-SemiBold.ttf"
-local prose_emphasis_font_path = DATADIR .. "/fonts/Inter-Italic.ttf"
-local prose_strong_emphasis_font_path = DATADIR .. "/fonts/Inter-SemiBoldItalic.ttf"
+local default_monospace_font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
+local prose_font_path = DATADIR .. "/fonts/CrimsonPro-Regular.ttf"
+local prose_strong_font_path = DATADIR .. "/fonts/CrimsonPro-Bold.ttf"
+local prose_emphasis_font_path = DATADIR .. "/fonts/CrimsonPro-Italic.ttf"
+local prose_strong_emphasis_font_path = DATADIR .. "/fonts/CrimsonPro-SemiBoldItalic.ttf"
 local prose_heading_font_path = DATADIR
-  .. "/fonts/Merriweather_24pt-SemiBold.ttf"
+  .. "/fonts/CormorantGaramond-Medium.ttf"
 local prose_heading_emphasis_font_path = DATADIR
-  .. "/fonts/Merriweather_24pt-SemiBoldItalic.ttf"
+  .. "/fonts/CormorantGaramond-MediumItalic.ttf"
 local font_size = 14 * SCALE
 local max_default_font_group = 10 -- native renderer FONT_FALLBACK_MAX
 
@@ -313,50 +301,20 @@ local function load_text_font(primary_path, options, fallbacks, size)
 end
 local interface_fallbacks, code_fallbacks, terminal_fallbacks
 
-local function find_monospace_font(id)
-  for _, choice in ipairs(monospace_font_choices) do
-    if choice.id == id then return choice end
-  end
-end
-
-function core.get_monospace_font_choices()
-  local choices = {}
-  for index, choice in ipairs(monospace_font_choices) do
-    choices[index] = {
-      id = choice.id,
-      name = choice.name,
-      path = choice.path,
-    }
-  end
-  return choices
-end
-
-local active_monospace_font_id
-
-function core.get_monospace_font_id()
-  return active_monospace_font_id
-end
-
-function core.set_monospace_font(id)
-  local choice = find_monospace_font(id)
-  if not choice then
-    core.log_quiet("Unknown monospace font choice: %s", tostring(id))
-    return false
-  end
-
+local function load_default_monospace_fonts()
   local interface_size = style.font:get_size()
   local code_size = style.code_font:get_size()
   local terminal_size = style.terminal_font:get_size()
   style.font = load_text_font(
-    choice.path, { ligatures = true, hinting = "full" },
+    default_monospace_font_path, { ligatures = true, hinting = "full" },
     interface_fallbacks, interface_size
   )
   style.code_font = load_text_font(
-    choice.path, { ligatures = true, hinting = "full" },
+    default_monospace_font_path, { ligatures = true, hinting = "full" },
     code_fallbacks, code_size
   )
   style.terminal_font = load_text_font(
-    choice.path, { ligatures = false, hinting = "full" },
+    default_monospace_font_path, { ligatures = false, hinting = "full" },
     terminal_fallbacks, terminal_size
   )
   style.terminal_bold_font = style.terminal_font:copy(
@@ -370,11 +328,6 @@ function core.set_monospace_font(id)
       ligatures = false, hinting = "full", bold = true, italic = true,
     }
   )
-  active_monospace_font_id = choice.id
-  config.monospace_font = choice.id
-  core.redraw = true
-  core.log_quiet("Monospace font selected: %s", choice.name)
-  return true
 end
 
 interface_fallbacks = startup_measure(
@@ -388,18 +341,21 @@ code_fallbacks = startup_measure(
 terminal_fallbacks = code_fallbacks
 
 startup_measure("font_primary_loading", function()
-  core.set_monospace_font(default_monospace_font_id)
+  load_default_monospace_fonts()
 end)
 -- Reusable proportional typography roles. Live Preview prose and compact
 -- navigation surfaces use these roles; source and diff text retain code_font.
 startup_measure("font_prose_and_heading_construction", function()
+  style.big_font = load_text_font(prose_heading_font_path, nil, interface_fallbacks, 46 * SCALE)
   style.prose_font = load_text_font(prose_font_path, nil, interface_fallbacks)
   style.markdown_body_font = load_text_font(
     prose_font_path, nil, interface_fallbacks, 15 * SCALE
   )
   -- Keep the wrap arrow on Inter's monochrome text glyph instead of allowing
   -- the code-font fallback group to select Segoe UI Emoji's boxed arrow.
-  style.soft_wrap_indicator_font = style.prose_font
+  style.soft_wrap_indicator_font = load_text_font(
+    DATADIR .. "/fonts/Inter-Regular.ttf", nil, interface_fallbacks
+  )
   style.prose_strong_font = load_text_font(
     prose_strong_font_path, nil, interface_fallbacks
   )

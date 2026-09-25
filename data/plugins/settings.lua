@@ -5,6 +5,7 @@ local common = require "core.common"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local style = require "core.style"
+local font_categories = require "core.font_categories"
 local tokenizer = require "core.tokenizer"
 local View = require "core.view"
 local TextView = require "core.textview"
@@ -424,30 +425,30 @@ settings.add("Typography",
   {
     prose_font_option(
       "Prose Font", "Regular proportional text used by prose and navigation surfaces.",
-      "prose_font", "Inter Regular", "Inter-Regular.ttf"
+      "prose_font", "Crimson Pro Regular", "CrimsonPro-Regular.ttf"
     ),
     prose_font_option(
       "Prose Strong Font", "Strong proportional prose text.",
-      "prose_strong_font", "Inter SemiBold", "Inter-SemiBold.ttf", true
+      "prose_strong_font", "Crimson Pro Bold", "CrimsonPro-Bold.ttf", true
     ),
     prose_font_option(
       "Prose Emphasis Font", "Emphasized proportional prose text.",
-      "prose_emphasis_font", "Inter Italic", "Inter-Italic.ttf", false, true
+      "prose_emphasis_font", "Crimson Pro Italic", "CrimsonPro-Italic.ttf", false, true
     ),
     prose_font_option(
       "Prose Strong Emphasis Font", "Strong emphasized proportional prose text.",
-      "prose_strong_emphasis_font", "Inter SemiBold Italic",
-      "Inter-SemiBoldItalic.ttf", true, true
+      "prose_strong_emphasis_font", "Crimson Pro SemiBold Italic",
+      "CrimsonPro-SemiBoldItalic.ttf", true, true
     ),
     prose_font_option(
       "Prose Heading Font", "Heading text used by prose presentations.",
-      "prose_heading_font", "Merriweather 24pt SemiBold",
-      "Merriweather_24pt-SemiBold.ttf", true
+      "prose_heading_font", "Cormorant Garamond Medium",
+      "CormorantGaramond-Medium.ttf", true
     ),
     prose_font_option(
       "Prose Heading Emphasis Font", "Emphasized heading text used by prose presentations.",
-      "prose_heading_emphasis_font", "Merriweather 24pt SemiBold Italic",
-      "Merriweather_24pt-SemiBoldItalic.ttf", true, true
+      "prose_heading_emphasis_font", "Cormorant Garamond Medium Italic",
+      "CormorantGaramond-MediumItalic.ttf", true, true
     ),
   }
 )
@@ -630,23 +631,6 @@ settings.add("Editor",
           hinting = "slight"
         }
       }
-    },
-    {
-      label = "Monospace Font",
-      description = "The bundled monospace font used by the UI, code editor, and terminal.",
-      path = "monospace_font",
-      type = settings.type.SELECTION,
-      default = "caskaydia_cove",
-      values = (function()
-        local values = {}
-        for _, choice in ipairs(core.get_monospace_font_choices()) do
-          values[#values + 1] = { choice.name, choice.id }
-        end
-        return values
-      end)(),
-      on_apply = function(value)
-        core.set_monospace_font(value)
-      end,
     },
     {
       label = "Indentation Type",
@@ -2594,6 +2578,25 @@ function core.run()
   -- merge custom settings into config
   startup_measure("settings_merge_saved_values", merge_settings)
 
+  -- Apply global family choices after individual font sizes and fallbacks.
+  startup_measure("settings_apply_font_categories", function()
+    local selected = settings.config.font_categories or {}
+    if settings.config.monospace_font then
+      for _, category in ipairs({"interface", "code", "terminal"}) do
+        selected[category] = selected[category] or settings.config.monospace_font
+      end
+      settings.config.monospace_font = nil
+      settings.config.font_categories = selected
+      save_settings()
+    end
+    for _, category in ipairs(font_categories.categories()) do
+      local choice = selected[category.id]
+      if choice and not font_categories.apply(category.id, choice) then
+        core.warn("Unknown %s font: %s", category.name, tostring(choice))
+      end
+    end
+  end)
+
   -- apply user chosen color theme
   startup_measure("settings_apply_theme", function()
     if settings.config.theme then
@@ -2668,8 +2671,37 @@ local theme_commands = {
   end),
 
   ["core:select_theme"] = command.palette(function()
+    local original = normalize_color_theme_name(settings.config.theme)
+    local preview = original
     core.global_prompt_bar:enter("Theme", {
-      suggest = suggest_color_themes,
+      overlay = false,
+      suggest = function(text)
+        local suggestions = suggest_color_themes(text)
+        table.sort(suggestions, function(a, b)
+          if a.name == original then return true end
+          if b.name == original then return false end
+          return a.name < b.name
+        end)
+        return suggestions
+      end,
+      on_suggestion = function(suggestion)
+        local name = suggestion and suggestion.name
+        if not name or name == preview then return end
+        if core.try(function()
+          core.reload_module("colors." .. color_theme_module_name(name))
+        end) then
+          preview = name
+        else
+          core.try(function()
+            core.reload_module("colors." .. color_theme_module_name(preview))
+          end)
+        end
+      end,
+      cancel = function()
+        if preview ~= original then
+          core.reload_module("colors." .. color_theme_module_name(original))
+        end
+      end,
       validate = function(text, suggestion)
         return (suggestion and suggestion.name) or color_theme_exists(text)
       end,
@@ -2696,76 +2728,106 @@ command.add(nil, {
   }),
 })
 
-local function monospace_font_choice(text)
+local function font_choice(choices, text)
   local needle = tostring(text or ""):lower()
-  for _, choice in ipairs(core.get_monospace_font_choices()) do
+  for _, choice in ipairs(choices) do
     if choice.id:lower() == needle or choice.name:lower() == needle then
       return choice
     end
   end
 end
 
-local function suggest_monospace_fonts(text)
-  local choices = core.get_monospace_font_choices()
+local function suggest_font_choices(choices, text, selected)
   local names = {}
   local by_name = {}
-  local current_id = core.get_monospace_font_id()
-  local ordered = {}
+  local current
   for _, choice in ipairs(choices) do
-    if choice.id == current_id then ordered[#ordered + 1] = choice end
+    if choice.id == selected then current = choice end
   end
+  if current then names[#names + 1] = current.name end
   for _, choice in ipairs(choices) do
-    if choice.id ~= current_id then ordered[#ordered + 1] = choice end
-  end
-  for _, choice in ipairs(ordered) do
-    names[#names + 1] = choice.name
+    if choice ~= current then names[#names + 1] = choice.name end
     by_name[choice.name] = choice
   end
-
   local suggestions = {}
   for _, name in ipairs(common.fuzzy_match(names, text or "")) do
     local choice = by_name[name]
     suggestions[#suggestions + 1] = {
       text = choice.name,
       id = choice.id,
-      info = "bundled monospace font",
+      info = choice.id == selected and "current" or "bundled font",
     }
   end
   return suggestions
 end
 
+local function open_font_choices(category)
+  local choices = font_categories.choices(category.id)
+  local current = font_categories.current(category.id)
+  local original = {}
+  for _, role in ipairs(category.roles) do original[role] = style[role] end
+  if category.id == "terminal" then
+    for _, variant in ipairs({"bold", "italic", "bold_italic"}) do
+      local role = "terminal_" .. variant .. "_font"
+      original[role] = style[role]
+    end
+  end
+  local preview = current
+  core.global_prompt_bar:enter(category.name .. " Font", {
+    overlay = false,
+    suggest = function(text) return suggest_font_choices(choices, text, current) end,
+    on_suggestion = function(item)
+      if item and item.id ~= preview and font_categories.apply(category.id, item.id) then
+        preview = item.id
+      end
+    end,
+    cancel = function()
+      for role, font in pairs(original) do style[role] = font end
+      core.color_theme_generation = (core.color_theme_generation or 0) + 1
+      core.bump_render_style_generation("font-selection-cancel")
+    end,
+    validate = function(text, item)
+      return not not ((item and item.id) or font_choice(choices, text))
+    end,
+    submit = function(text, item)
+      local choice = font_choice(choices, text) or (item and item.id and item)
+      if not choice or not font_categories.apply(category.id, choice.id) then return end
+      settings.config.font_categories = settings.config.font_categories or {}
+      settings.config.font_categories[category.id] = choice.id
+      save_settings()
+      core.log_quiet("Saved global %s font: %s", category.name, choice.name)
+    end,
+  })
+end
+
 command.add(nil, {
-  ["editor:select_monospace_font"] = command.palette(function()
-    local original_id = core.get_monospace_font_id()
-    core.global_prompt_bar:enter("Monospace Font", {
-      suggest = suggest_monospace_fonts,
-      on_suggestion = function(item)
-        if item and item.id and item.id ~= core.get_monospace_font_id() then
-          core.set_monospace_font(item.id)
+  ["editor:select_font"] = command.palette(function()
+    local categories = font_categories.categories()
+    core.global_prompt_bar:enter("Font Category", {
+      overlay = false,
+      suggest = function(text)
+        local result = {}
+        for _, category in ipairs(categories) do
+          if text == "" or category.name:lower():find(text:lower(), 1, true) then
+            result[#result + 1] = {text = category.name, id = category.id}
+          end
         end
-      end,
-      cancel = function()
-        if original_id and original_id ~= core.get_monospace_font_id() then
-          core.set_monospace_font(original_id)
-        end
+        return result
       end,
       validate = function(text, item)
-        return not not ((item and item.id) or monospace_font_choice(text))
+        return not not ((item and item.id) or font_choice(categories, text))
       end,
       submit = function(text, item)
-        local choice = item and item.id and item or monospace_font_choice(text)
-        if not choice then return end
-        if choice.id ~= core.get_monospace_font_id()
-          and not core.set_monospace_font(choice.id)
-        then
-          return
+        local category = font_choice(categories, text) or (item and item.id and item)
+        if category then
+          for _, candidate in ipairs(categories) do
+            if candidate.id == category.id then return open_font_choices(candidate) end
+          end
         end
-        settings.config.monospace_font = choice.id
-        save_settings()
       end,
     })
   end, {
-    keywords = { "font", "typeface", "monospace", "terminal" },
+    keywords = { "typeface", "typography", "prose", "terminal" },
   }),
 })
 

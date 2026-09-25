@@ -2,6 +2,24 @@ local core = require "core"
 local style = require "core.style"
 local test = require "core.test"
 
+test.describe("Global Prompt Bar attention overlay", function()
+  test.it("can keep the editor clear while previewing choices", function()
+    local bar = core.global_prompt_bar
+    local root = core.root_panel
+    bar:exit(true)
+    local old_overlay = root.app_overlay
+    root.app_overlay = nil
+    bar:enter("Font Category", {overlay = false, suggest = function() return {"Prose"} end})
+    test.equal(nil, root.app_overlay)
+    bar:exit(false)
+    test.equal(nil, root.app_overlay)
+    bar:enter("Ordinary Prompt", {suggest = function() return {"one"} end})
+    test.equal(root.app_overlay.owner, bar)
+    bar:exit(true)
+    root.app_overlay = old_overlay
+  end)
+end)
+
 test.describe("Global Prompt Bar pointer interception", function()
   test.it("routes pointer movement when no View owns focus", function()
     local active = core.active_view

@@ -371,17 +371,4 @@ style.log["INFO"] = { icon = "i", color = style.text }
 style.log["WARN"] = { icon = "!", color = style.warn }
 style.log["ERROR"] = { icon = "!", color = style.error }
 
--- The code and terminal keep their configured monospace fonts.
--- Headings and prose use the site's two licensed typefaces.
-style.theme_typography = {
-  big_font = "CormorantGaramond-Medium.ttf",
-  prose_font = "CrimsonPro-Regular.ttf",
-  markdown_body_font = "CrimsonPro-Regular.ttf",
-  prose_strong_font = "CrimsonPro-Bold.ttf",
-  prose_emphasis_font = "CrimsonPro-Italic.ttf",
-  prose_strong_emphasis_font = "CrimsonPro-SemiBoldItalic.ttf",
-  prose_heading_font = "CormorantGaramond-Medium.ttf",
-  prose_heading_emphasis_font = "CormorantGaramond-MediumItalic.ttf",
-}
-
 return style

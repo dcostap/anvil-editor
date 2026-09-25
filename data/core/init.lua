@@ -1437,8 +1437,6 @@ function core.reload_module(name, options)
   -- Every color scheme is layered over colors.default so first-party style
   -- keys always have baseline values when users switch themes.
   if is_color_scheme then
-    require("core.theme_typography").restore(style)
-    style.theme_typography = nil
     for key in pairs(core.theme_edit_custom_syntax or {}) do style.syntax[key] = nil end
     core.theme_edit_custom_syntax = {}
     setmetatable(style.syntax, nil)
@@ -1457,7 +1455,6 @@ function core.reload_module(name, options)
   end
   -- map colors that may be missing on the new color scheme
   if is_color_scheme then
-    require("core.theme_typography").apply(style, style.theme_typography)
     local theme_name = name:sub(8)
     if theme_name == "default" then theme_name = "dark" end
     local theme_edits = require "core.theme_edits"
