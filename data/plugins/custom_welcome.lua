@@ -137,8 +137,7 @@ end
 function EmptyView:draw()
   if not self:is_visible() or self.size.x <= 0 or self.size.y <= 0 then return end
 
-  -- Use the normal view background path so shared background customizations
-  -- such as the editor wallpaper are applied here too.
+  -- Use the normal View background so the window image shows through.
   self:draw_background(style.background)
 
   local quote = self.quote or pick_quote()

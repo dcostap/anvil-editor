@@ -544,7 +544,7 @@ end
 function Tabs:draw_tab_borders(item, is_active, is_hovered, x, y, w, h, standalone)
   local ds = style.divider_size
   local margin_y = style.margin.tab.top or 0
-  renderer.draw_rect(x, y - margin_y, w, h + margin_y, style.tab_background)
+  renderer.draw_rect(x, y - margin_y, w, h + margin_y, style.wallpaper_surface(style.tab_background))
   return x + ds, y, w - ds*2, h
 end
 
@@ -586,7 +586,7 @@ function Tabs:draw_tabs(hooks)
   local size = self:get_size()
   local x = position.x
   core.push_clip_rect(x, y, size.x, h)
-  renderer.draw_rect(x, y, size.x, h, style.tab_background)
+  renderer.draw_rect(x, y, size.x, h, style.wallpaper_surface(style.tab_background))
   local tabs_number = self:get_visible_tabs_number()
   local show_scroll_buttons = self:item_count() > tabs_number
   local tabs_clip_w = show_scroll_buttons and math.max(1, size.x - get_scroll_button_width() * 2) or size.x

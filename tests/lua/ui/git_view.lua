@@ -1201,8 +1201,8 @@ test.describe("Git View command", function()
   test.it("uses an Image Comparison View for binary image revisions", function(context)
     local _, view = open_fake_git_view(context.project)
     view.position.y = 40
-    local image_path = DATADIR .. PATHSEP .. "plugins" .. PATHSEP
-      .. "editor_wallpaper" .. PATHSEP .. "wallpaper.jpg"
+    local image_path = DATADIR .. PATHSEP .. "core" .. PATHSEP
+      .. "assets" .. PATHSEP .. "wallpaper.jpg"
     local tab = {
       id = "image-comparison",
       kind = "commit_diff",

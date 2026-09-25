@@ -92,6 +92,8 @@ end
 for name in pairs(C) do p(name) end
 
 -- Core UI
+style.wallpaper_backdrop_opacity = 0.70
+style.wallpaper_surface_opacity = 0.30
 style.background = p("text_bg")
 style.background2 = c("26282b")
 style.tab_background = style.background
@@ -248,8 +250,6 @@ style.performance_hud_background = { common.color "rgba(0, 0, 0, 0.70)" }
 style.performance_hud_recording_background = { common.color "rgba(140, 0, 0, 0.75)" }
 style.performance_hud_text = c("ffffff")
 style.performance_hud_dim = c("c8c8c8")
-style.editor_wallpaper_line_highlight = { 64, 64, 64, 128 }
-style.editor_wallpaper_tab_hover = { 255, 255, 255, 10 }
 style.textview_content_left_edge = style.line_wrapping_guide
 style.line_hint = style.dim
 style.fold_widget_background = p("folded_bg")

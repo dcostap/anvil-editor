@@ -217,7 +217,7 @@ test.describe("Commit remote POIs", function()
   end)
 
   test.it("keeps historical image files until the standalone comparison closes", function(context)
-    local file = assert(io.open(DATADIR .. "/plugins/editor_wallpaper/wallpaper.jpg", "rb"))
+    local file = assert(io.open(DATADIR .. "/core/assets/wallpaper.jpg", "rb"))
     local bytes = file:read("*a")
     file:close()
     context.tab.changed_files = {{ status = "modified", old_path = "a.jpg", new_path = "a.jpg", binary = true }}

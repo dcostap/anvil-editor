@@ -4238,7 +4238,7 @@ local function draw_preview_debug(view, result, x, y, w, h)
 end
 
 local function draw_preview_placeholder(message, detail, x, y, w, h)
-  renderer.draw_rect(x, y, w, h, style.background)
+  renderer.draw_rect(x, y, w, h, style.wallpaper_surface(style.background))
   local font = style.code_font
   local lh = font:get_height()
   local yy = y + style.padding.y

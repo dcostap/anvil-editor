@@ -691,7 +691,8 @@ end
 
 function TitleBar:draw()
   if self.size.y <= 0 then return end
-  renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.titlebar)
+  renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y,
+    style.wallpaper_surface(style.titlebar))
   local font = style.font
   local project_font = project_title_font()
   local pane_entries = self:get_pane_entries()

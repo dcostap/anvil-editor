@@ -1,6 +1,7 @@
 local core = require "core"
 local config = require "core.config"
 local common = require "core.common"
+local style = require "core.style"
 local Object = require "core.object"
 local Scrollbar = require "core.scrollbar"
 
@@ -653,7 +654,7 @@ end
 function View:draw_background(color)
   local x, y = self.position.x, self.position.y
   local w, h = self.size.x, self.size.y
-  renderer.draw_rect(x, y, w, h, color)
+  renderer.draw_rect(x, y, w, h, style.wallpaper_surface(color))
 end
 
 

@@ -4227,7 +4227,8 @@ end
 
 function TextView:draw_fold_widget_gutter(fold, x, y, width, height)
   local lh = height or self:get_line_height()
-  renderer.draw_rect(x, y, width, lh, style.gutter_bg or style.background2)
+  renderer.draw_rect(x, y, width, lh,
+    style.wallpaper_surface(style.gutter_bg or style.background2))
   if self:line_number_visible_at(fold.line1) then
     local color = selection_overlaps_fold(self.buffer, fold) and style.line_number2 or style.line_number
     common.draw_text(self:get_font(), color, tostring(fold.line1), "right", x + style.padding.x, y, width - style.padding.x, lh)

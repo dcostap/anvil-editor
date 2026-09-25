@@ -1,6 +1,12 @@
 local common = require "core.common"
 local style = {}
 
+-- Keep foreground colors opaque. Only flat surfaces let the wallpaper show through.
+function style.wallpaper_surface(color, opacity)
+  return { color[1], color[2], color[3],
+    math.floor((color[4] or 255) * (opacity or style.wallpaper_surface_opacity) + 0.5) }
+end
+
 style.divider_size = common.round(1 * SCALE)
 style.scrollbar_size = common.round(12.6 * SCALE)
 style.expanded_scrollbar_size = common.round(25.2 * SCALE)

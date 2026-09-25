@@ -10,6 +10,7 @@ local RootPanel = View:extend()
 
 local APP_OVERLAY_FADE_DURATION = 0.06
 local DIVIDER_TOLERANCE = 4
+local WALLPAPER_PATH = DATADIR .. "/core/assets/wallpaper.jpg"
 
 function RootPanel:__tostring() return "RootPanel" end
 
@@ -731,10 +732,34 @@ local function draw_split_dividers(node)
   draw_split_dividers(node.b)
 end
 
+function RootPanel:draw_wallpaper()
+  if self.wallpaper == nil then
+    local image, err = canvas.load_image(WALLPAPER_PATH)
+    self.wallpaper = image or false
+    if image then
+      core.log_quiet("Window wallpaper loaded: %s", WALLPAPER_PATH)
+    else
+      core.log_quiet("Window wallpaper unavailable: %s (%s)", WALLPAPER_PATH, tostring(err))
+    end
+  end
+  if not self.wallpaper then
+    renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.background)
+    return
+  end
+  local iw, ih = self.wallpaper:get_size()
+  local scale = math.max(self.size.x / iw, self.size.y / ih)
+  local w, h = iw * scale, ih * scale
+  renderer.draw_canvas_scaled(self.wallpaper,
+    self.position.x + (self.size.x - w) / 2,
+    self.position.y + (self.size.y - h) / 2, w, h)
+  renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y,
+    style.wallpaper_surface(style.background, style.wallpaper_backdrop_opacity))
+end
+
 function RootPanel:draw()
   local started, scope = perf_begin("rootpanel_core_draw")
   self:begin_keyboard_caret_frame()
-  renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.background)
+  self:draw_wallpaper()
   local group = panes().visible_group()
   for _, view in ipairs(self:pane_views()) do call_view(view, "draw") end
   if group then draw_split_dividers(group.root) end

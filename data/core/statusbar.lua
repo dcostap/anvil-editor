@@ -1472,7 +1472,8 @@ function StatusBar:draw()
 
   local background = style.background
   local ds = style.divider_size or 0
-  renderer.draw_rect(self.position.x, self.position.y - ds, self.size.x, self.size.y + ds, background)
+  renderer.draw_rect(self.position.x, self.position.y - ds, self.size.x, self.size.y + ds,
+    style.wallpaper_surface(background))
 
   if self.message and system.get_time() <= self.message_timeout then
     self:draw_items(get_rendered_message(self), false, 0, self.size.y + get_message_pulse_yoffset(self))
