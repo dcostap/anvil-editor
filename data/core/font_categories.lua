@@ -26,17 +26,12 @@ local families = {
 }
 
 local categories = {
-  {id = "interface", name = "Interface", roles = {"font"},
-    choices = {"caskaydia_cove", "jetbrains_mono", "fira_sans", "inter", "crimson_pro"}},
-  {id = "code", name = "Code", roles = {"code_font"},
-    choices = {"caskaydia_cove", "jetbrains_mono"}},
-  {id = "terminal", name = "Terminal", roles = {"terminal_font"},
-    choices = {"caskaydia_cove", "jetbrains_mono"}},
+  {id = "interface", name = "Interface", roles = {"font"}},
+  {id = "code", name = "Code", roles = {"code_font"}},
+  {id = "terminal", name = "Terminal", roles = {"terminal_font"}},
   {id = "prose", name = "Prose", roles = {"prose_font", "markdown_body_font",
-    "prose_strong_font", "prose_emphasis_font", "prose_strong_emphasis_font"},
-    choices = {"crimson_pro", "inter", "fira_sans"}},
-  {id = "headings", name = "Headings", roles = {"prose_heading_font", "prose_heading_emphasis_font", "big_font"},
-    choices = {"cormorant_garamond", "merriweather", "crimson_pro", "inter", "fira_sans"}},
+    "prose_strong_font", "prose_emphasis_font", "prose_strong_emphasis_font"}},
+  {id = "headings", name = "Headings", roles = {"prose_heading_font", "prose_heading_emphasis_font", "big_font"}},
 }
 
 local function category_for(id)
@@ -87,12 +82,12 @@ function fonts.categories()
 end
 
 function fonts.choices(id)
-  local category = category_for(id)
-  if not category then return {} end
+  if not category_for(id) then return {} end
   local result = {}
-  for _, choice in ipairs(category.choices) do
-    result[#result + 1] = {id = choice, name = families[choice].name}
+  for family_id, family in pairs(families) do
+    result[#result + 1] = {id = family_id, name = family.name}
   end
+  table.sort(result, function(a, b) return a.name < b.name end)
   return result
 end
 
@@ -100,20 +95,14 @@ function fonts.current(id)
   local category = category_for(id)
   if not category then return nil end
   local current = first_path(style[category.roles[1]])
-  for _, choice in ipairs(category.choices) do
-    local family = families[choice]
-    if current:sub(-#family.regular) == family.regular then return choice end
+  for family_id, family in pairs(families) do
+    if current:sub(-#family.regular) == family.regular then return family_id end
   end
 end
 
 function fonts.apply(id, choice)
   local category, family = category_for(id), families[choice]
   if not category or not family then return false end
-  local allowed = false
-  for _, candidate in ipairs(category.choices) do
-    if candidate == choice then allowed = true; break end
-  end
-  if not allowed then return false end
 
   for _, role in ipairs(category.roles) do
     local filename, bold, italic = file_for(role, family)

@@ -38,6 +38,37 @@ test.describe("global font selection", function()
     test.ok(not command.is_valid("editor:select_monospace_font"))
   end)
 
+  test.it("offers the same bundled fonts in every category", function()
+    local bar = core.global_prompt_bar
+    local names_for_interface
+    for _, category in ipairs({"Interface", "Code", "Terminal", "Prose", "Headings"}) do
+      test.ok(command.perform("editor:select_font"))
+      bar:set_text(category)
+      bar:submit()
+      local names = {}
+      for _, item in ipairs(bar.suggestions) do names[#names + 1] = item.text end
+      table.sort(names)
+      if names_for_interface then
+        test.same(names_for_interface, names)
+      else
+        names_for_interface = names
+      end
+      bar:exit(false)
+    end
+  end)
+
+  test.it("can preview a proportional font for code and restore the prior font", function()
+    test.ok(command.perform("editor:select_font"))
+    local bar = core.global_prompt_bar
+    bar:set_text("Code")
+    bar:submit()
+    bar:set_text("Crimson Pro")
+    bar:update_suggestions()
+    test.ok(primary_path(style.code_font):find("CrimsonPro-Regular.ttf", 1, true))
+    bar:exit(false)
+    test.equal(previous.code_font, style.code_font)
+  end)
+
   test.it("previews a prose font and restores it on cancel", function()
     test.ok(command.perform("editor:select_font"))
     local bar = core.global_prompt_bar
