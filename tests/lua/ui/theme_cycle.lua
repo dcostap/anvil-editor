@@ -23,11 +23,15 @@ test.describe("cycle to next color theme", function()
     settings.apply_color_theme(themes[2].name)
     local expected_background = { table.unpack(style.background) }
     settings.apply_color_theme(themes[1].name)
+    local previous_notice = core.status_bar.message
 
     test.ok(command.perform("core:cycle_to_next_theme"))
 
     test.equal(settings.config.theme, themes[2].name)
     test.same(expected_background, style.background)
+    local notice = test.not_nil(core.status_bar.message)
+    test.not_equal(notice, previous_notice)
+    test.ok(notice.text:find(themes[2].name, 1, true), notice.text)
   end)
 
   test.it("wraps from the last theme to the first and saves the choice", function()
