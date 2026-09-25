@@ -9,6 +9,37 @@ local function near(actual, expected)
 end
 
 test.describe("Window wallpaper", function()
+  test.it("does not brighten the image while the window has no Pane View", function()
+    local root = RootPanel()
+    root.wallpaper = canvas.new(200, 100, { 40, 100, 80, 255 })
+    root.size.x, root.size.y = 200, 100
+    root.shell_views = function() return {} end
+    root.begin_keyboard_caret_frame = function() end
+    root.draw_keyboard_caret = function() end
+    root.draw_active_app_overlay = function() end
+    local old_rect, old_scaled = renderer.draw_rect, renderer.draw_canvas_scaled
+    local fills = {}
+    renderer.draw_rect = function(_, _, _, _, color) fills[#fills + 1] = color end
+    renderer.draw_canvas_scaled = function() end
+    local ok, err = pcall(function()
+      root.pane_views = function() return {} end
+      root:draw()
+      local empty_visibility = 1 - fills[1][4] / 255
+
+      fills = {}
+      local view = View()
+      view.size.x, view.size.y = 200, 100
+      view.draw = function(self) self:draw_background(style.background) end
+      root.pane_views = function() return { view } end
+      root:draw()
+      local loaded_visibility = (1 - fills[1][4] / 255) * (1 - fills[2][4] / 255)
+      test.ok(math.abs(empty_visibility - loaded_visibility) <= 1 / 255,
+        "the loading frame must not show more of the image")
+    end)
+    renderer.draw_rect, renderer.draw_canvas_scaled = old_rect, old_scaled
+    if not ok then error(err, 0) end
+  end)
+
   test.it("lets the image show through a View without fading its foreground colors", function()
     local view = View()
     view.position.x, view.position.y = 0, 0

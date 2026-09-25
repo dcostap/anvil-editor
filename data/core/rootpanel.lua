@@ -732,7 +732,7 @@ local function draw_split_dividers(node)
   draw_split_dividers(node.b)
 end
 
-function RootPanel:draw_wallpaper()
+function RootPanel:draw_wallpaper(has_pane_view)
   if self.wallpaper == nil then
     local image, err = canvas.load_image(WALLPAPER_PATH)
     self.wallpaper = image or false
@@ -752,16 +752,22 @@ function RootPanel:draw_wallpaper()
   renderer.draw_canvas_scaled(self.wallpaper,
     self.position.x + (self.size.x - w) / 2,
     self.position.y + (self.size.y - h) / 2, w, h)
+  local opacity = style.wallpaper_backdrop_opacity
+  if not has_pane_view then
+    -- Match the backdrop plus one View surface until a Pane View can draw.
+    opacity = 1 - (1 - opacity) * (1 - style.wallpaper_surface_opacity)
+  end
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y,
-    style.wallpaper_surface(style.background, style.wallpaper_backdrop_opacity))
+    style.wallpaper_surface(style.background, opacity))
 end
 
 function RootPanel:draw()
   local started, scope = perf_begin("rootpanel_core_draw")
   self:begin_keyboard_caret_frame()
-  self:draw_wallpaper()
+  local pane_views = self:pane_views()
+  self:draw_wallpaper(#pane_views > 0)
   local group = panes().visible_group()
-  for _, view in ipairs(self:pane_views()) do call_view(view, "draw") end
+  for _, view in ipairs(pane_views) do call_view(view, "draw") end
   if group then draw_split_dividers(group.root) end
   for _, view in ipairs(self:shell_views()) do call_view(view, "draw") end
   local overlay_started, overlay_scope = perf_begin("rootpanel_overlays_draw")
