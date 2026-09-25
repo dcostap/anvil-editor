@@ -661,7 +661,9 @@ local function inline_style_font(
   else
     font = base_font or style.markdown_body_font
   end
-  local size = base_font and base_font:get_size() or view:get_font():get_size()
+  local size = base_font and base_font:get_size()
+    or span_type == "code" and view:get_font():get_size()
+    or markdown_live_body_font(view):get_size()
   local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(span_type)
   if not cache[key] then
     cache[key] = font:copy(size)
