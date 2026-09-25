@@ -2651,6 +2651,18 @@ end
 -- Add command and keymap to load settings view
 --------------------------------------------------------------------------------
 local theme_commands = {
+  ["core:cycle_to_next_theme"] = command.palette(function()
+    local themes = get_installed_colors()
+    local current = normalize_color_theme_name(settings.config.theme)
+    for index, theme in ipairs(themes) do
+      if theme.name == current then
+        apply_color_theme(themes[index % #themes + 1].name)
+        return
+      end
+    end
+    if themes[1] then apply_color_theme(themes[1].name) end
+  end),
+
   ["core:select_theme"] = command.palette(function()
     core.global_prompt_bar:enter("Theme", {
       suggest = suggest_color_themes,
