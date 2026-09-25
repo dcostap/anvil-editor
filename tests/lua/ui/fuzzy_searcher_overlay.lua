@@ -53,6 +53,42 @@ test.describe("Fuzzy Searcher attention overlay", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("hides editor content without hiding the wallpaper inside the popup", function()
+    local root = core.root_panel
+    local old_wallpaper = root.wallpaper
+    local old_x, old_y = root.position.x, root.position.y
+    local old_w, old_h = root.size.x, root.size.y
+    root.position.x, root.position.y = 0, 0
+    root.size.x, root.size.y = 800, 600
+    local picker = fuzzy_searcher.open_static_results("Results", {})
+    root:update()
+    local window = renwindow.create("fuzzy-wallpaper-test", 800, 600)
+    local sx = math.floor(picker.position.x + picker.size.x - 18)
+    local sy = math.floor(picker.position.y + picker.size.y - 18)
+    local function pixel(image, editor_color)
+      root.wallpaper = canvas.new(8, 8, image)
+      renderer.begin_frame(window)
+      renderer.set_clip_rect(0, 0, 800, 600)
+      root:draw_wallpaper(true)
+      renderer.draw_rect(picker.position.x, picker.position.y,
+        picker.size.x, picker.size.y, editor_color)
+      picker:draw()
+      renderer.end_frame()
+      return renwindow.get_color(window, sx, sy)
+    end
+    local ok, err = pcall(function()
+      local red = { 255, 0, 0, 255 }
+      local first = pixel(red, { 0, 0, 0, 255 })
+      test.same(pixel(red, { 255, 255, 255, 255 }), first)
+      test.not_equal(pixel({ 0, 255, 0, 255 }, { 0, 0, 0, 255 })[1], first[1])
+    end)
+    root.wallpaper = old_wallpaper
+    root.position.x, root.position.y = old_x, old_y
+    root.size.x, root.size.y = old_w, old_h
+    picker:close()
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps hover separate from selection and activates on two clicks", function()
     local picker = fuzzy_searcher.open_static_results("Results", {
       { kind = "file", label = "first.lua", file = "first.lua" },

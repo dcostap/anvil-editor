@@ -733,6 +733,27 @@ local function draw_split_dividers(node)
   draw_split_dividers(node.b)
 end
 
+-- Replace existing content in one region with the window-aligned wallpaper.
+function RootPanel:draw_wallpaper_region(x, y, width, height)
+  if width <= 0 or height <= 0 then return end
+  if not self.wallpaper then
+    renderer.draw_rect(x, y, width, height, style.background)
+    return
+  end
+  local clipped = x ~= self.position.x or y ~= self.position.y
+    or width ~= self.size.x or height ~= self.size.y
+  if clipped then core.push_clip_rect(x, y, width, height) end
+  local iw, ih = self.wallpaper:get_size()
+  local scale = math.max(self.size.x / iw, self.size.y / ih)
+  local w, h = iw * scale, ih * scale
+  renderer.draw_canvas_scaled(self.wallpaper,
+    self.position.x + (self.size.x - w) / 2,
+    self.position.y + (self.size.y - h) / 2, w, h)
+  if clipped then core.pop_clip_rect() end
+  renderer.draw_rect(x, y, width, height,
+    style.wallpaper_surface(style.background, self.wallpaper_backdrop_opacity))
+end
+
 function RootPanel:draw_wallpaper(has_pane_view)
   if self.wallpaper == nil then
     local image, err = canvas.load_image(WALLPAPER_PATH)
@@ -744,7 +765,7 @@ function RootPanel:draw_wallpaper(has_pane_view)
     end
   end
   if not self.wallpaper then
-    renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.background)
+    self:draw_wallpaper_region(self.position.x, self.position.y, self.size.x, self.size.y)
     return
   end
   if self.wallpaper_contrast_image ~= self.wallpaper then
@@ -762,17 +783,10 @@ function RootPanel:draw_wallpaper(has_pane_view)
     core.log_quiet("Window wallpaper theme visibility: %.1f%% generation=%s",
       self.wallpaper_visibility * 100, tostring(core.color_theme_generation))
   end
-  local iw, ih = self.wallpaper:get_size()
-  local scale = math.max(self.size.x / iw, self.size.y / ih)
-  local w, h = iw * scale, ih * scale
-  renderer.draw_canvas_scaled(self.wallpaper,
-    self.position.x + (self.size.x - w) / 2,
-    self.position.y + (self.size.y - h) / 2, w, h)
   -- With a View, both fills attenuate the image. Without one, the root does it alone.
-  local opacity = 1 - self.wallpaper_visibility
+  self.wallpaper_backdrop_opacity = 1 - self.wallpaper_visibility
     / (has_pane_view and (1 - style.wallpaper_surface_opacity) or 1)
-  renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y,
-    style.wallpaper_surface(style.background, opacity))
+  self:draw_wallpaper_region(self.position.x, self.position.y, self.size.x, self.size.y)
 end
 
 function RootPanel:draw()

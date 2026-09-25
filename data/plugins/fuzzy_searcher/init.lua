@@ -7400,6 +7400,10 @@ function FSView:draw_open_content()
   local draw_scope = fuzzy_searcher._perf_scope_begin("fuzzy_searcher", true)
 
   local phase_scope = fuzzy_searcher._perf_scope_begin("widget_chrome")
+  if self.updated and self.size.x > 0 and self.size.y > 0 then
+    core.root_panel:draw_wallpaper_region(
+      self.position.x, self.position.y, self.size.x, self.size.y)
+  end
   local widget_drawn = FSView.super.draw(self)
   fuzzy_searcher._perf_scope_end(phase_scope)
   if not widget_drawn then
