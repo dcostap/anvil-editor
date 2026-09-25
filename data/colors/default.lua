@@ -93,7 +93,7 @@ for name in pairs(C) do p(name) end
 
 -- Core UI
 -- Other themes match the image detail visible on this dark theme.
-style.wallpaper_reference_visibility = 0.05
+style.wallpaper_reference_visibility = 0.04
 style.wallpaper_surface_opacity = 0.50
 style.background = p("text_bg")
 style.wallpaper_reference_background = style.background
