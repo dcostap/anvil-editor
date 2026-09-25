@@ -56,6 +56,7 @@ test.describe("Fuzzy Searcher attention overlay", function()
   test.it("hides editor content without hiding the wallpaper inside the popup", function()
     local root = core.root_panel
     local old_wallpaper = root.wallpaper
+    local old_fps = core.fps
     local old_x, old_y = root.position.x, root.position.y
     local old_w, old_h = root.size.x, root.size.y
     root.position.x, root.position.y = 0, 0
@@ -81,8 +82,25 @@ test.describe("Fuzzy Searcher attention overlay", function()
       local first = pixel(red, { 0, 0, 0, 255 })
       test.same(pixel(red, { 255, 255, 255, 255 }), first)
       test.not_equal(pixel({ 0, 255, 0, 255 }, { 0, 0, 0, 255 })[1], first[1])
+
+      config.transitions = true
+      config.disabled_transitions.fuzzy_searcher = false
+      core.fps = 60
+      picker.open_transition_complete = false
+      local start = system.get_time() - 0.005
+      picker.open_transition_requested_at = start
+      picker.open_transition_ready_at = start
+      local scale, visible = picker:opening_transition(start + 0.005)
+      test.ok(visible and scale < 1,
+        "the popup must be partway through its opening animation")
+      local opening = pixel(red, { 0, 0, 0, 255 })
+      test.same(pixel(red, { 255, 255, 255, 255 }), opening,
+        "the opening animation must not reveal the editor")
+      test.not_equal(pixel({ 0, 255, 0, 255 }, { 0, 0, 0, 255 })[1], opening[1],
+        "the opening animation must still show the wallpaper")
     end)
     root.wallpaper = old_wallpaper
+    core.fps = old_fps
     root.position.x, root.position.y = old_x, old_y
     root.size.x, root.size.y = old_w, old_h
     picker:close()

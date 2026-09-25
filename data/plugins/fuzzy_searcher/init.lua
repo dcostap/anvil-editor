@@ -7307,7 +7307,7 @@ end
 
 function FSView:update()
   if self.closing then
-    local _, _, _, complete = self:closing_transition()
+    local _, _, complete = self:closing_transition()
     if complete then
       self:finish_close()
       return
@@ -7361,14 +7361,14 @@ end
 
 function FSView:draw()
   if not self:is_visible() then return false end
-  local opacity, scale, visible
+  local scale, visible
   if self.closing then
-    opacity, scale, visible = self:closing_transition()
+    scale, visible = self:closing_transition()
   else
-    opacity, scale, visible = self:opening_transition()
+    scale, visible = self:opening_transition()
   end
   if not visible then return false end
-  return fuzzy_searcher.open_transition.draw(self, opacity, scale, function()
+  return fuzzy_searcher.open_transition.draw(self, scale, function()
     return self:draw_open_content()
   end)
 end
