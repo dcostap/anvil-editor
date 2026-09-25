@@ -350,10 +350,16 @@ function TextView:draw(...)
 
   local scope = perf_scope_begin("centered_editor")
 
-  -- Paint the whole tab background first; the existing draw chain then uses
-  -- centered geometry for the buffer origin while preserving the full
-  -- drawable width unless line wrapping is active.
-  self:draw_background(style.background)
+  -- The Text View paints its editor rect. Paint only the outer margins here.
+  -- A second translucent fill over the editor would hide the wallpaper.
+  local editor_x, editor_width = M.get_editor_rect(self)
+  local x, y, w, h = self.position.x, self.position.y, self.size.x, self.size.y
+  local color = style.wallpaper_surface(style.background)
+  if editor_x > x then renderer.draw_rect(x, y, editor_x - x, h, color) end
+  local editor_right = editor_x + editor_width
+  if editor_right < x + w then
+    renderer.draw_rect(editor_right, y, x + w - editor_right, h, color)
+  end
   local result = M.with_editor_geometry(self, function(...)
     return originals.textview.draw(self, ...)
   end, ...)

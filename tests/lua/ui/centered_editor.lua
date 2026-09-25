@@ -103,6 +103,39 @@ test.describe("centered editor", function()
     end
   end)
 
+  test.it("paints the centered editor background once across its width", function(context)
+    local view = open_editor(context, "plain text\n")
+    view.wrapping_enabled = false
+    view.wrapped_settings = nil
+    local lane_x = centered_editor.get_lane_rect(view)
+    test.ok(centered_editor.should_center(view))
+    local old_rect = renderer.draw_rect
+    local backgrounds = {}
+    renderer.draw_rect = function(x, y, w, h, color)
+      if h == view.size.y and color[1] == style.background[1]
+        and color[2] == style.background[2] and color[3] == style.background[3]
+        and color[4] == style.wallpaper_surface(style.background)[4] then
+        backgrounds[#backgrounds + 1] = { x = x, y = y, w = w, h = h }
+      end
+    end
+    local window = renwindow.create("centered-background-test", 1024, 300)
+    renderer.begin_frame(window)
+    local ok, err = pcall(function() view:draw() end)
+    renderer.end_frame()
+    renderer.draw_rect = old_rect
+    if not ok then error(err, 0) end
+
+    local function fill_count(x)
+      local count = 0
+      for _, rect in ipairs(backgrounds) do
+        if x >= rect.x and x < rect.x + rect.w then count = count + 1 end
+      end
+      return count
+    end
+    test.equal(fill_count(view.position.x + 4), 1)
+    test.equal(fill_count(lane_x + 4), 1)
+  end)
+
   test.it("uses the real Text View right edge for unwrapped centered drawing", function(context)
     local view, buffer = open_editor(context, string.rep("x", 1000) .. "\n")
     view.wrapping_enabled = false

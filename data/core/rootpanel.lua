@@ -749,12 +749,14 @@ function RootPanel:draw_wallpaper(has_pane_view)
   end
   if self.wallpaper_contrast_image ~= self.wallpaper then
     self.wallpaper_contrast_image = self.wallpaper
-    self.wallpaper_sample_low, self.wallpaper_sample_high = wallpaper_contrast.sample(self.wallpaper)
+    self.wallpaper_sample_low, self.wallpaper_sample_high, self.wallpaper_sample_mid =
+      wallpaper_contrast.sample(self.wallpaper)
     self.wallpaper_contrast_generation = nil
   end
   if not self.wallpaper_visibility or self.wallpaper_contrast_generation ~= core.color_theme_generation then
     self.wallpaper_visibility = wallpaper_contrast.visibility(
-      self.wallpaper_sample_low, self.wallpaper_sample_high, style.background,
+      self.wallpaper_sample_low, self.wallpaper_sample_high, self.wallpaper_sample_mid,
+      style.background,
       style.wallpaper_reference_background, style.wallpaper_reference_visibility)
     self.wallpaper_contrast_generation = core.color_theme_generation
     core.log_quiet("Window wallpaper theme visibility: %.1f%% generation=%s",

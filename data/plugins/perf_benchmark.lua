@@ -57,6 +57,7 @@ local benchmark = {
   start_line = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_START_LINE", 1))),
   scroll_lines = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_SCROLL_LINES", 1))),
   tab_count = math.max(1, math.floor(env_number("ANVIL_PERF_BENCHMARK_TAB_COUNT", 40))),
+  theme = env_string("ANVIL_PERF_BENCHMARK_THEME"),
   window_width = math.max(320, math.floor(env_number("ANVIL_PERF_BENCHMARK_WINDOW_WIDTH", 1400))),
   window_height = math.max(240, math.floor(env_number("ANVIL_PERF_BENCHMARK_WINDOW_HEIGHT", 900))),
   rows = {},
@@ -615,6 +616,7 @@ local function setup_scenario()
   if benchmark.mode == "video" then
     config.markdown_live_editor = true
   end
+  if benchmark.theme ~= "" then core.reload_module("colors." .. benchmark.theme) end
   local view = open_file(benchmark.fixture)
   mark_lifecycle("fixture_opened")
   setup_tabs(view)

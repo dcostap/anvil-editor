@@ -34,10 +34,11 @@ function contrast.sample(image)
     }
   end
   table.sort(samples, function(a, b) return a.brightness < b.brightness end)
-  return samples[math.floor(#samples * 0.1)], samples[math.floor(#samples * 0.9)]
+  return samples[math.floor(#samples * 0.1)], samples[math.floor(#samples * 0.9)],
+    samples[math.floor(#samples * 0.5)]
 end
 
-function contrast.visibility(low, high, background, reference, reference_visibility)
+function contrast.visibility(low, high, middle_tone, background, reference, reference_visibility)
   if not low or not high then return reference_visibility end
   local function detail(color, visibility)
     return lightness(high, color, visibility) - lightness(low, color, visibility)
@@ -53,7 +54,17 @@ function contrast.visibility(low, high, background, reference, reference_visibil
       maximum = middle
     end
   end
-  return (minimum + maximum) / 2
+  local visibility = (minimum + maximum) / 2
+  -- A white surface can keep the image pale even when its tonal range matches.
+  -- Move its middle tone away from the surface, with a limit for text clarity.
+  local background_tone = 0.2126 * background[1] + 0.7152 * background[2]
+    + 0.0722 * background[3]
+  local light_fraction = math.min(1, math.max(0, (background_tone - 170) / 60))
+  if light_fraction > 0 and middle_tone then
+    local separation = math.abs(background_tone - middle_tone.brightness)
+    visibility = math.max(visibility, light_fraction * 24 / math.max(1, separation))
+  end
+  return math.min(MAX_VISIBILITY, visibility)
 end
 
 return contrast

@@ -127,6 +127,15 @@ SCENARIOS["image-viewer"] = {
     "paced": False,
 }
 SCENARIOS["image-filtering"] = dict(SCENARIOS["image-viewer"])
+for wallpaper_theme in ("light", "light2", "dark2"):
+    SCENARIOS[f"wallpaper-{wallpaper_theme}"] = {
+        "start_line": 1700,
+        "window_width": 1400,
+        "window_height": 900,
+        "theme": wallpaper_theme,
+        "visual": True,
+        "paced": False,
+    }
 SCENARIOS["markdown-callout-shift"] = {
     "fixture": "video-callout",
     "window_width": 320,
@@ -798,6 +807,7 @@ def run_case(
         "ANVIL_PERF_CAPTURE": "0",
         "ANVIL_PERF_CADENCE_ONLY": "0",
         "ANVIL_PERF_BENCHMARK_SCENARIO": scenario,
+        "ANVIL_PERF_BENCHMARK_THEME": str(settings.get("theme", "")),
         "ANVIL_PERF_BENCHMARK_MODE": mode,
         "ANVIL_PERF_BENCHMARK_FILE": str(case_fixture),
         "ANVIL_PERF_BENCHMARK_TAB_DIR": str(tab_dir),
