@@ -5,6 +5,7 @@ local style = require "core.style"
 local View = require "core.view"
 local layout = require "core.pane_layout"
 local CaretRenderer = require "core.caret_renderer"
+local wallpaper_contrast = require "core.wallpaper_contrast"
 
 local RootPanel = View:extend()
 
@@ -746,17 +747,28 @@ function RootPanel:draw_wallpaper(has_pane_view)
     renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.background)
     return
   end
+  if self.wallpaper_contrast_image ~= self.wallpaper then
+    self.wallpaper_contrast_image = self.wallpaper
+    self.wallpaper_sample_low, self.wallpaper_sample_high = wallpaper_contrast.sample(self.wallpaper)
+    self.wallpaper_contrast_generation = nil
+  end
+  if not self.wallpaper_visibility or self.wallpaper_contrast_generation ~= core.color_theme_generation then
+    self.wallpaper_visibility = wallpaper_contrast.visibility(
+      self.wallpaper_sample_low, self.wallpaper_sample_high, style.background,
+      style.wallpaper_reference_background, style.wallpaper_reference_visibility)
+    self.wallpaper_contrast_generation = core.color_theme_generation
+    core.log_quiet("Window wallpaper theme visibility: %.1f%% generation=%s",
+      self.wallpaper_visibility * 100, tostring(core.color_theme_generation))
+  end
   local iw, ih = self.wallpaper:get_size()
   local scale = math.max(self.size.x / iw, self.size.y / ih)
   local w, h = iw * scale, ih * scale
   renderer.draw_canvas_scaled(self.wallpaper,
     self.position.x + (self.size.x - w) / 2,
     self.position.y + (self.size.y - h) / 2, w, h)
-  local opacity = style.wallpaper_backdrop_opacity
-  if not has_pane_view then
-    -- Match the backdrop plus one View surface until a Pane View can draw.
-    opacity = 1 - (1 - opacity) * (1 - style.wallpaper_surface_opacity)
-  end
+  -- With a View, both fills attenuate the image. Without one, the root does it alone.
+  local opacity = 1 - self.wallpaper_visibility
+    / (has_pane_view and (1 - style.wallpaper_surface_opacity) or 1)
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y,
     style.wallpaper_surface(style.background, opacity))
 end

@@ -92,9 +92,11 @@ end
 for name in pairs(C) do p(name) end
 
 -- Core UI
-style.wallpaper_backdrop_opacity = 0.90
+-- Other themes match the image detail visible on this dark theme.
+style.wallpaper_reference_visibility = 0.05
 style.wallpaper_surface_opacity = 0.50
 style.background = p("text_bg")
+style.wallpaper_reference_background = style.background
 style.background2 = c("26282b")
 style.tab_background = style.background
 style.titlebar = c("30343a")

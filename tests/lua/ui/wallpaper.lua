@@ -1,3 +1,4 @@
+local core = require "core"
 local RootPanel = require "core.rootpanel"
 local View = require "core.view"
 local style = require "core.style"
@@ -9,6 +10,39 @@ local function near(actual, expected)
 end
 
 test.describe("Window wallpaper", function()
+  test.it("keeps image detail visible on very dark and light themes", function()
+    local image, err = canvas.load_image(DATADIR .. "/core/assets/wallpaper.jpg")
+    test.ok(image, err)
+    local root = RootPanel()
+    root.wallpaper = image
+    root.size.x, root.size.y = 600, 400
+    root.pane_views = function() return { { draw = function() end } } end
+    root.shell_views = function() return {} end
+    root.begin_keyboard_caret_frame = function() end
+    root.draw_keyboard_caret = function() end
+    root.draw_active_app_overlay = function() end
+    local previous = require("plugins.settings").config.theme or "dark"
+    local old_rect, old_scaled = renderer.draw_rect, renderer.draw_canvas_scaled
+    local backdrop
+    renderer.draw_rect = function(_, _, _, _, color) backdrop = color end
+    renderer.draw_canvas_scaled = function() end
+    local ok, failure = pcall(function()
+      local function visibility(theme)
+        core.reload_module("colors." .. theme)
+        root:draw()
+        return (1 - backdrop[4] / 255) * (1 - style.wallpaper_surface_opacity)
+      end
+      local ordinary = visibility("default")
+      local near_black = visibility("dark2")
+      local bright = visibility("light")
+      test.ok(near_black > ordinary, "Dark2 needs more visible image detail")
+      test.ok(bright > ordinary, "a light theme needs more visible image detail")
+    end)
+    core.reload_module("colors." .. (previous == "dark" and "default" or previous))
+    renderer.draw_rect, renderer.draw_canvas_scaled = old_rect, old_scaled
+    if not ok then error(failure, 0) end
+  end)
+
   test.it("does not brighten the image while the window has no Pane View", function()
     local root = RootPanel()
     root.wallpaper = canvas.new(200, 100, { 40, 100, 80, 255 })
