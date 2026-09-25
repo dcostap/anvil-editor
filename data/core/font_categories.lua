@@ -7,6 +7,7 @@ local cache = setmetatable({}, {__mode = "k"})
 local applied_size_modifiers = setmetatable({}, {__mode = "k"})
 
 -- A bundled family's optional size modifier calibrates body text, not heading levels.
+-- Slight hinting keeps small serif glyphs from snapping unevenly to the pixel grid.
 local families = {
   caskaydia_cove = {name = "Caskaydia Cove Nerd Font Mono", regular = "CaskaydiaCoveNerdFontMono-Regular.ttf"},
   jetbrains_mono = {name = "JetBrains Mono", regular = "JetBrainsMono-Regular.ttf"},
@@ -14,9 +15,11 @@ local families = {
   inter = {name = "Inter", regular = "Inter-Regular.ttf", strong = "Inter-SemiBold.ttf",
     emphasis = "Inter-Italic.ttf", strong_emphasis = "Inter-SemiBoldItalic.ttf"},
   crimson_pro = {name = "Crimson Pro", regular = "CrimsonPro-Regular.ttf", size_modifier = 1.25,
+    hinting = "slight",
     strong = "CrimsonPro-Bold.ttf",
     emphasis = "CrimsonPro-Italic.ttf", strong_emphasis = "CrimsonPro-SemiBoldItalic.ttf"},
   merriweather = {name = "Merriweather", regular = "Merriweather_24pt-SemiBold.ttf",
+    hinting = "slight",
     emphasis = "Merriweather_24pt-SemiBoldItalic.ttf"},
   cormorant_garamond = {name = "Cormorant Garamond", regular = "CormorantGaramond-Medium.ttf",
     emphasis = "CormorantGaramond-MediumItalic.ttf"},
@@ -59,14 +62,14 @@ local function file_for(role, family)
   return family.regular, false, false
 end
 
-local function load_for(base, filename, bold, italic, ligatures, size_modifier)
+local function load_for(base, filename, bold, italic, ligatures, size_modifier, hinting)
   -- Keep the logical role size stable when switching families or restoring a preview.
   local size = base:get_size() / (applied_size_modifiers[base] or 1) * size_modifier
   local by_key = cache[base]
   if not by_key then by_key = {}; cache[base] = by_key end
-  local key = table.concat({filename, tostring(bold), tostring(italic), tostring(ligatures), tostring(size)}, ":")
+  local key = table.concat({filename, tostring(bold), tostring(italic), tostring(ligatures), tostring(size), hinting}, ":")
   if by_key[key] then return by_key[key] end
-  local opts = {ligatures = ligatures, hinting = "full", bold = bold, italic = italic}
+  local opts = {ligatures = ligatures, hinting = hinting, bold = bold, italic = italic}
   local primary = renderer.font.load(DATADIR .. "/fonts/" .. filename, size, opts)
   local fallback = base:copy(size)
   if type(fallback) == "table" then
@@ -117,7 +120,10 @@ function fonts.apply(id, choice)
     -- Heading levels keep their existing effective sizes. Body text uses optical calibration.
     local size_modifier = (id == "interface" or id == "prose")
       and (family.size_modifier or 1) or 1
-    style[role] = load_for(style[role], filename, bold, italic, id ~= "terminal", size_modifier)
+    style[role] = load_for(
+      style[role], filename, bold, italic, id ~= "terminal",
+      size_modifier, family.hinting or "full"
+    )
   end
   if id == "terminal" then
     local size = style.terminal_font:get_size()
