@@ -44,6 +44,7 @@ local command = {}
 ---@field supports_placement? boolean
 ---@field palette? boolean
 ---@field opens_view? boolean
+---@field record_last? boolean
 
 ---@class core.command.registration
 ---@field perform fun(...: any)
@@ -411,7 +412,9 @@ end
 ---@return boolean # true if the command is performed successfully.
 function command.perform(name, ...)
   local ok, res = core.try(perform, name, ...)
-  if ok and res and name ~= "core:repeat_last_command" then
+  local metadata = command.get_metadata(name)
+  if ok and res and name ~= "core:repeat_last_command"
+      and (not metadata or metadata.record_last ~= false) then
     last_command = { name = name, args = pack(...) }
   end
   return not ok or res
@@ -422,6 +425,7 @@ end
 ---@return boolean
 function command.repeat_last()
   if not last_command then return false end
+  core.log_quiet("Repeat command: name=%s", last_command.name)
   return command.perform(last_command.name, table.unpack(last_command.args, 1, last_command.args.n))
 end
 

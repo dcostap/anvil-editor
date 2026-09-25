@@ -7955,7 +7955,10 @@ command.add(nil, {
   ["fuzzy:open_grep"] = command.palette(function() open("#") end, { opens_view = true }),
   ["fuzzy:open_symbols"] = command.palette(function() open("$") end, { opens_view = true }),
   ["fuzzy:open_current_buffer_symbols"] = command.palette(function() open("$$") end, { opens_view = true }),
-  ["fuzzy:open_commands"] = function() open(">") end,
+  ["fuzzy:open_commands"] = {
+    perform = function() open(">") end,
+    metadata = { record_last = false },
+  },
   ["command_output:run_shell_command"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     return open("!", {
@@ -7998,6 +8001,16 @@ end, {
     if view then view:navigate_prompt_history(-1) end
   end,
 })
+
+-- Picker controls select commands but are not the command to repeat.
+command.set_metadata("fuzzy:close", { record_last = false })
+command.set_metadata("fuzzy:confirm", { record_last = false })
+command.set_metadata("fuzzy:confirm_new_group", { record_last = false })
+command.set_metadata("fuzzy:next", { record_last = false })
+command.set_metadata("fuzzy:previous", { record_last = false })
+command.set_metadata("fuzzy:fill_prompt_from_selected", { record_last = false })
+command.set_metadata("fuzzy:prompt_history_previous", { record_last = false })
+command.set_metadata("fuzzy:prompt_history_next", { record_last = false })
 
 command.add(picker_active, {
   ["fuzzy:open_selected_in_filetree"] = function()
