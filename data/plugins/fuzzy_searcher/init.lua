@@ -7368,6 +7368,14 @@ function FSView:draw()
     scale, visible = self:opening_transition()
   end
   if not visible then return false end
+  if config.wallpaper ~= "none"
+    and self.updated and self.size.x > 0 and self.size.y > 0 then
+    local inset_x = self.size.x * (1 - scale) / 2
+    local inset_y = self.size.y * (1 - scale) / 2
+    core.root_panel:draw_wallpaper_region(
+      self.position.x + inset_x, self.position.y + inset_y,
+      self.size.x * scale, self.size.y * scale)
+  end
   return fuzzy_searcher.open_transition.draw(self, scale, function()
     return self:draw_open_content()
   end)
@@ -7400,11 +7408,6 @@ function FSView:draw_open_content()
   local draw_scope = fuzzy_searcher._perf_scope_begin("fuzzy_searcher", true)
 
   local phase_scope = fuzzy_searcher._perf_scope_begin("widget_chrome")
-  if config.wallpaper ~= "none"
-    and self.updated and self.size.x > 0 and self.size.y > 0 then
-    core.root_panel:draw_wallpaper_region(
-      self.position.x, self.position.y, self.size.x, self.size.y)
-  end
   local widget_drawn = FSView.super.draw(self)
   fuzzy_searcher._perf_scope_end(phase_scope)
   if not widget_drawn then

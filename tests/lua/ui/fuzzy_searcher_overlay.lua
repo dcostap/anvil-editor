@@ -107,6 +107,64 @@ test.describe("Fuzzy Searcher attention overlay", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("keeps the wallpaper fixed while the popup scales", function()
+    local root = core.root_panel
+    local old_wallpaper, old_name = root.wallpaper, root.wallpaper_name
+    local old_fps, old_time = core.fps, system.get_time
+    local old_x, old_y = root.position.x, root.position.y
+    local old_w, old_h = root.size.x, root.size.y
+    root.position.x, root.position.y = 0, 0
+    root.size.x, root.size.y = 800, 600
+    local picker = fuzzy_searcher.open_static_results("Results", {})
+    root:update()
+    local window = renwindow.create("fuzzy-fixed-wallpaper", 800, 600)
+    local sx = math.floor(picker.position.x + picker.size.x - 18)
+    local sy = math.floor(picker.position.y + picker.size.y - 18)
+    local now = old_time()
+    local ok, err = pcall(function()
+      config.transitions = true
+      config.disabled_transitions.fuzzy_searcher = false
+      core.fps = 60
+      system.get_time = function() return now end
+      picker.open_transition_complete = false
+      picker.open_transition_requested_at = now - 0.003
+      picker.open_transition_ready_at = now - 0.003
+      local scale, visible = picker:opening_transition()
+      test.ok(visible and scale < 1, "the popup must be scaling")
+      local center = picker.position.x + picker.size.x / 2
+      local source_x = center + (sx - center) / scale
+      local edge = math.floor((sx + source_x) / 2)
+      local image = canvas.new(800, 600, { 255, 0, 0, 255 }, true)
+      image:draw_rect(edge, 0, 800 - edge, 600, { 0, 0, 255, 255 }, true)
+      image:render()
+      root.wallpaper = image
+      root.wallpaper_name = require("core.wallpapers").current()
+
+      local function sample()
+        renderer.begin_frame(window)
+        renderer.set_clip_rect(0, 0, 800, 600)
+        root:draw_wallpaper(true)
+        renderer.draw_rect(picker.position.x, picker.position.y,
+          picker.size.x, picker.size.y, { 0, 0, 0, 255 })
+        picker:draw()
+        renderer.end_frame()
+        return renwindow.get_color(window, sx, sy)
+      end
+
+      picker.open_transition_complete = true
+      local settled = sample()
+      picker.open_transition_complete = false
+      test.same(settled, sample(), "the image must not move with the popup")
+    end)
+    system.get_time = old_time
+    core.fps = old_fps
+    root.wallpaper, root.wallpaper_name = old_wallpaper, old_name
+    root.position.x, root.position.y = old_x, old_y
+    root.size.x, root.size.y = old_w, old_h
+    picker:close()
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps hover separate from selection and activates on two clicks", function()
     local picker = fuzzy_searcher.open_static_results("Results", {
       { kind = "file", label = "first.lua", file = "first.lua" },
