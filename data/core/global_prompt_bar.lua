@@ -343,7 +343,8 @@ function GlobalPromptBar:exit(submitted, inexplicit)
       end
     end
   end
-  if not self.pane_scope and self.state.overlay then core.root_panel:hide_app_overlay(self) end
+  -- Always clear an overlay this prompt owns, including one left by a previous frame.
+  if not self.pane_scope then core.root_panel:hide_app_overlay(self) end
   local cancel = self.state.cancel
   self.state = default_state
   self.buffer:reset()
@@ -420,7 +421,7 @@ function GlobalPromptBar:update()
     local was_covered = self.covered_by_app_overlay
     self.covered_by_app_overlay = nil
     local overlay = not self.pane_scope and core.root_panel.app_overlay
-    if not self.pane_scope
+    if not self.pane_scope and self.state.overlay
         and (not overlay or overlay.owner ~= self or overlay.target ~= 1) then
       core.root_panel:show_app_overlay(
         self, "global_prompt_bar_overlay_background", {
