@@ -1,6 +1,8 @@
 local core = require "core"
 local RootPanel = require "core.rootpanel"
 local View = require "core.view"
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -10,6 +12,21 @@ local function near(actual, expected)
 end
 
 test.describe("Window wallpaper", function()
+  test.it("shows the wallpaper through the current line", function()
+    local view = TextView(Buffer(nil, nil, true))
+    view.size.x, view.size.y = 200, 100
+    local old_rect = renderer.draw_rect
+    local line_color
+    renderer.draw_rect = function(_, _, _, _, color) line_color = color end
+    local ok, err = pcall(function()
+      view:draw_line_highlight(0, 10, 20)
+      test.ok(line_color and line_color[4] > 0 and line_color[4] < 255,
+        "the current line must not cover the image")
+    end)
+    renderer.draw_rect = old_rect
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps image detail visible on very dark and light themes", function()
     local image, err = canvas.load_image(DATADIR .. "/core/assets/wallpaper.jpg")
     test.ok(image, err)
@@ -29,6 +46,7 @@ test.describe("Window wallpaper", function()
     local ok, failure = pcall(function()
       local function visibility(theme)
         core.reload_module("colors." .. theme)
+        test.ok(style.line_highlight[4] < 255, "the Color Theme must let the current line show the image")
         root:draw()
         return (1 - backdrop[4] / 255) * (1 - style.wallpaper_surface_opacity)
       end

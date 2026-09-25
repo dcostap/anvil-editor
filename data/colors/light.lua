@@ -108,6 +108,7 @@ style.row_selection_inactive = { common.color "rgba(55, 112, 185, 0.12)" }
 style.line_number = c("aeb3c2")
 style.line_number2 = c("767a8a")
 style.line_highlight = p("caret_row")
+style.line_highlight[4] = math.floor(255 * style.wallpaper_surface_opacity + 0.5)
 style.scrollbar = p("scrollbar_thumb")
 style.scrollbar_hover = p("scrollbar_thumb_hover")
 style.scrollbar_active = p("scrollbar_thumb_active")
