@@ -1,10 +1,19 @@
 local common = require "core.common"
+local config = require "core.config"
 local style = {}
 
 -- Keep foreground colors opaque. Only flat surfaces let the wallpaper show through.
 function style.wallpaper_surface(color, opacity)
+  if config.wallpaper == "none" then return color end
   return { color[1], color[2], color[3],
     math.floor((color[4] or 255) * (opacity or style.wallpaper_surface_opacity) + 0.5) }
+end
+
+function style.update_wallpaper_line_highlight()
+  if style.line_highlight then
+    style.line_highlight[4] = config.wallpaper == "none" and 255
+      or math.floor(255 * style.wallpaper_surface_opacity + 0.5)
+  end
 end
 
 style.divider_size = common.round(1 * SCALE)

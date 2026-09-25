@@ -32,6 +32,7 @@ test.describe("Window wallpaper", function()
     test.ok(image, err)
     local root = RootPanel()
     root.wallpaper = image
+    root.wallpaper_name = "image1"
     root.size.x, root.size.y = 600, 400
     root.pane_views = function() return { { draw = function() end } } end
     root.shell_views = function() return {} end
@@ -64,6 +65,7 @@ test.describe("Window wallpaper", function()
   test.it("does not brighten the image while the window has no Pane View", function()
     local root = RootPanel()
     root.wallpaper = canvas.new(200, 100, { 40, 100, 80, 255 })
+    root.wallpaper_name = "image1"
     root.size.x, root.size.y = 200, 100
     root.shell_views = function() return {} end
     root.begin_keyboard_caret_frame = function() end
@@ -114,6 +116,7 @@ test.describe("Window wallpaper", function()
   test.it("fills the window behind its Views without changing the image shape", function()
     local root = RootPanel()
     root.wallpaper = canvas.new(1200, 800, { 40, 100, 80, 255 })
+    root.wallpaper_name = "image1"
     root.position.x, root.position.y = 0, 0
     local draws = {}
     root.pane_views = function()

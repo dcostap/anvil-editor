@@ -12,6 +12,7 @@ local TextView = require "core.textview"
 local panes = require "core.panes"
 local view_icons = require "core.view_icons"
 local startup = package.loaded["core.startup"]
+local wallpapers = require "core.wallpapers"
 
 local function startup_measure(name, fn)
   if startup then return startup.measure(name, fn) end
@@ -1259,6 +1260,13 @@ local function apply_color_theme(name)
   settings.config.theme = name
   save_settings()
   core.log_quiet("Theme set to %s", name)
+end
+
+local function apply_wallpaper(name)
+  if not wallpapers.select(name) then return false end
+  settings.config.wallpaper = name
+  save_settings()
+  return true
 end
 
 local function color_theme_exists(name)
@@ -2632,6 +2640,15 @@ function core.run()
     end
   end)
 
+  startup_measure("settings_apply_wallpaper", function()
+    local name = settings.config.wallpaper or "image1"
+    if not wallpapers.exists(name) then
+      core.log_quiet("Unknown saved wallpaper: %s; using image1", tostring(name))
+      name = "image1"
+    end
+    wallpapers.select(name)
+  end)
+
   -- re-apply user settings
   -- TODO: come up with a better solution for this that doesn't requires
   -- reloading these user modules, got an idea time ago and forgot it :(
@@ -2731,6 +2748,43 @@ local theme_commands = {
         else
           core.warn("Theme not found: %s", tostring(name))
         end
+      end,
+    })
+  end),
+  ["core:select_wallpaper"] = command.palette(function()
+    local original = wallpapers.current()
+    local preview = original
+    core.global_prompt_bar:enter("Wallpaper", {
+      overlay = false,
+      suggest = function(text)
+        local suggestions = {}
+        local needle = (text or ""):lower()
+        for _, option in ipairs(wallpapers.options()) do
+          if option.text:lower():find(needle, 1, true) then
+            if option.name == original then
+              table.insert(suggestions, 1, option)
+            else
+              suggestions[#suggestions + 1] = option
+            end
+          end
+        end
+        return suggestions
+      end,
+      on_suggestion = function(option)
+        if option and option.name ~= preview and wallpapers.select(option.name) then
+          preview = option.name
+        end
+      end,
+      cancel = function()
+        if preview ~= original then wallpapers.select(original) end
+      end,
+      validate = function(text, option)
+        return (option and wallpapers.exists(option.name))
+          or wallpapers.exists((text or ""):lower())
+      end,
+      submit = function(text, option)
+        local name = option and option.name or (text or ""):lower()
+        apply_wallpaper(name)
       end,
     })
   end),
@@ -2893,5 +2947,6 @@ end
 
 settings.get_installed_colors = get_installed_colors
 settings.apply_color_theme = apply_color_theme
+settings.apply_wallpaper = apply_wallpaper
 
 return settings;

@@ -554,6 +554,10 @@ _Avoid_: popup, modal, detached panel
 A named set of colors for Anvil's interface and language text.
 _Avoid_: Color scheme
 
+**Wallpaper**:
+An optional image behind the content of an Anvil Window. None shows the window without an image.
+_Avoid_: background image
+
 **Theme Editor**:
 A tool for changing a Color Theme's named colors and color rules while viewing the result.
 _Avoid_: Runtime Theme Editor, Theme popup

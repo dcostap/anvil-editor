@@ -6,12 +6,12 @@ local View = require "core.view"
 local layout = require "core.pane_layout"
 local CaretRenderer = require "core.caret_renderer"
 local wallpaper_contrast = require "core.wallpaper_contrast"
+local wallpapers = require "core.wallpapers"
 
 local RootPanel = View:extend()
 
 local APP_OVERLAY_FADE_DURATION = 0.06
 local DIVIDER_TOLERANCE = 4
-local WALLPAPER_PATH = DATADIR .. "/core/assets/wallpaper.jpg"
 
 function RootPanel:__tostring() return "RootPanel" end
 
@@ -755,13 +755,25 @@ function RootPanel:draw_wallpaper_region(x, y, width, height)
 end
 
 function RootPanel:draw_wallpaper(has_pane_view)
-  if self.wallpaper == nil then
-    local image, err = canvas.load_image(WALLPAPER_PATH)
+  local selected = wallpapers.current()
+  if selected == "none" then
+    self.wallpaper = nil
+    self.wallpaper_name = nil
+    self.wallpaper_contrast_image = nil
+    self.wallpaper_visibility = nil
+    self.wallpaper_backdrop_opacity = nil
+    renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.background)
+    return
+  end
+  if self.wallpaper_name ~= selected then
+    local path = wallpapers.path(selected)
+    local image, err = canvas.load_image(path)
     self.wallpaper = image or false
+    self.wallpaper_name = selected
     if image then
-      core.log_quiet("Window wallpaper loaded: %s", WALLPAPER_PATH)
+      core.log_quiet("Window wallpaper loaded: %s", path)
     else
-      core.log_quiet("Window wallpaper unavailable: %s (%s)", WALLPAPER_PATH, tostring(err))
+      core.log_quiet("Window wallpaper unavailable: %s (%s)", path, tostring(err))
     end
   end
   if not self.wallpaper then

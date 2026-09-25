@@ -9,6 +9,8 @@ local panes = require "core.panes"
 local style = require "core.style"
 local startup = package.loaded["core.startup"]
 
+config.wallpaper = "image1"
+
 local function startup_measure(name, fn)
   if startup then return startup.measure(name, fn) end
   return fn()
