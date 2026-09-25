@@ -1,0 +1,387 @@
+local style = require "core.style"
+local common = require "core.common"
+
+-- Anvil Light2 theme: Light's syntax colors on yegge.ai's light paper.
+-- Reference: https://yegge.ai/style.css (light palette, 2026-09-25).
+-- The site selects white text on solid oxblood. Anvil does not recolor
+-- selected syntax text, so selected backgrounds use translucent oxblood.
+
+local function c(hex)
+  return { common.color("#" .. hex) }
+end
+
+local C = {
+  -- editor/UI colors from IntelliJ Light / ExpUI Light
+  text_fg = "1a1814",
+  text_bg = "f5ead7",
+  caret_row = "ebdec5",
+  gutter_bg = "ebdec5",
+  ignored = "6b6257",
+  scrollbar_thumb = "c9ccd6",
+  scrollbar_thumb_hover = "aeb3c2",
+  scrollbar_thumb_active = "8f96a8",
+  tearline = "d6cfc1",
+  whitespace = "b3a995",
+
+  -- attributes from IntelliJ Light / ExpUI Light
+  ctrl_clickable = "6b1d1d",
+  ctrl_clickable_effect = "6b1d1d",
+  block_comment = "8c8c8c",
+  class_name = "174be6",
+  constant = "871094",
+  doc_comment = "8c8c8c",
+  doc_comment_tag = "8c8c8c",
+  doc_comment_tag_effect = "999999",
+  doc_comment_tag_value = "3d3d3d",
+  doc_markup = "008000",
+  function_call = "080808",
+  function_declaration = "00627a",
+  identifier = "080808",
+  instance_field = "871094",
+  interface_name = "174be6",
+  interface_effect = "3777e6",
+  invalid_string_escape = "067d17",
+  invalid_string_escape_effect = "ff0000",
+  keyword = "0033b3",
+  metadata = "9e880d",
+  number = "1750eb",
+  semicolon = "080808",
+  static_field = "871094",
+  static_method = "00627a",
+  string = "067d17",
+  deleted_fg = "6c707e",
+  deleted_bg = "f0f0f0",
+  folded_fg = "414d41",
+  folded_bg = "e9f5e6",
+  folded_effect = "add9c7",
+  followed_hyperlink = "8552c6",
+  identifier_under_caret_bg = "f0e3dc",
+  identifier_under_caret_stripe = "d0a1ff",
+  info_effect = "818594",
+  java_keyword = "0033b3",
+  kotlin_annotation = "9e880d",
+  kotlin_constructor = "00627a",
+  kotlin_dynamic_function_call = "00627a",
+  kotlin_dynamic_property_call = "871094",
+  kotlin_extension_function_call = "00627a",
+  kotlin_instance_property = "871094",
+  kotlin_mutable_variable_effect = "000000",
+  kotlin_parameter = "080808",
+  kotlin_type_parameter = "007e8a",
+  kotlin_wrapped_into_ref = "494b57",
+  not_used = "a8adbd",
+  not_used_effect = "c9ccd6",
+  warning_effect = "f2bf57",
+  warning_stripe = "f2bf57",
+  write_identifier_under_caret_bg = "fce8f4",
+  write_identifier_under_caret_stripe = "f0a8d2",
+}
+
+style.theme_palette = {}
+local function p(name)
+  local value = style.theme_palette[name]
+  if not value then
+    value = c(C[name])
+    style.theme_palette[name] = value
+  end
+  return value
+end
+for name in pairs(C) do p(name) end
+
+-- Core UI
+style.background = p("text_bg")
+style.background2 = c("ebdec5")
+style.tab_background = style.background
+style.titlebar = c("ebdec5")
+style.background3 = c("faf2dd")
+style.autocomplete_border = { common.color "rgba(0, 0, 0, 0.28)" }
+style.autocomplete_selection = c("f0e3dc")
+style.text = p("text_fg")
+style.caret = c("000000")
+style.caret_trail = { common.color "rgba(107, 29, 29, 0.30)" }
+style.accent = p("ctrl_clickable")
+style.dim = p("ignored")
+style.divider = p("tearline")
+style.selection = { common.color "rgba(107, 29, 29, 0.28)" }
+style.row_selection = { common.color "rgba(107, 29, 29, 0.16)" }
+style.row_selection_inactive = { common.color "rgba(107, 29, 29, 0.10)" }
+style.line_number = p("ignored")
+style.line_number2 = c("4a4239")
+style.line_highlight = p("caret_row")
+style.scrollbar = p("scrollbar_thumb")
+style.scrollbar_hover = p("scrollbar_thumb_hover")
+style.scrollbar_active = p("scrollbar_thumb_active")
+style.scrollbar_track = p("gutter_bg")
+style.nagbar = c("ffe8e8")
+style.nagbar_text = c("ad2b38")
+style.nagbar_dim = { common.color "rgba(0, 0, 0, 0.20)" }
+style.drag_overlay = { common.color "rgba(107, 29, 29, 0.10)" }
+style.drag_overlay_tab = style.accent
+style.interactive_hover_background = { common.color "rgba(107, 29, 29, 0.12)" }
+style.interactive_hover_overlay = { common.color "rgba(107, 29, 29, 0.07)" }
+style.interactive_hover_border = p("ctrl_clickable")
+style.good = c("067d17")
+style.warn = p("warning_stripe")
+style.error = c("db3b4b")
+style.modified = c("003dd7")
+
+-- Integrated terminal colors for a light terminal surface.
+style.terminal_foreground = p("text_fg")
+style.terminal_background = p("text_bg")
+style.terminal_cursor = c("000000")
+style.terminal_palette = {
+  c("000000"), c("cd3131"), c("008000"), c("949800"),
+  c("547da7"), c("a626a4"), c("007e8a"), c("555555"),
+  c("666666"), c("db3b4b"), c("14a614"), c("b5a000"),
+  c("3574f0"), c("bc05bc"), c("0598bc"), c("a5a5a5"),
+}
+
+-- Diff/search/selection-like colors
+style.diff_delete = c("ffe5e5")
+style.diff_insert = c("e3f7e7")
+style.diff_modify = c("edf3ff")
+style.diff_delete_background = { common.color "rgba(255, 229, 229, 0.80)" }
+style.diff_insert_background = c("e3f7e7")
+style.diff_modify_background = c("edf3ff")
+style.diff_modify_inline = { common.color "rgba(210, 219, 255, 0.85)" }
+style.diff_marker_delete = { common.color "rgba(207, 117, 125, 0.58)" }
+style.diff_marker_insert = { common.color "rgba(98, 157, 112, 0.52)" }
+style.diff_marker_modify = { common.color "rgba(106, 140, 181, 0.50)" }
+style.diff_overview_delete = { common.color "rgba(196, 88, 99, 0.38)" }
+style.diff_overview_insert = { common.color "rgba(65, 137, 82, 0.34)" }
+style.diff_overview_modify = { common.color "rgba(76, 116, 164, 0.30)" }
+style.search_selection = c("f0e3dc")
+style.search_selection_text = p("text_fg")
+style.search_selection_outline = style.accent
+style.search_selection_secondary = c("ebdec5")
+style.search_selection_secondary_outline = p("tearline")
+style.search_overview = style.accent
+style.search_overview_secondary = p("ignored")
+style.fuzzy_searcher_match = p("text_fg")
+style.fuzzy_searcher_match_background = { 240, 227, 220, 204 }
+style.fuzzy_searcher_recent_project_icon = c("871094")
+style.selectionhighlight = p("identifier_under_caret_bg")
+style.copy_feedback = { common.color "rgba(255, 255, 255, 0.45)" }
+style.fuzzy_searcher_copy_feedback = { common.color "rgba(107, 29, 29, 0.18)" }
+style.reload_diff_flash_line = { common.color "rgba(194, 128, 0, 0.20)" }
+style.reload_diff_flash_inline = { common.color "rgba(194, 128, 0, 0.42)" }
+style.reload_diff_flash_insert_inline = { common.color "rgba(45, 145, 70, 0.38)" }
+style.reload_diff_flash_delete_anchor = { common.color "rgba(210, 55, 70, 0.24)" }
+style.indent_guide = c("ebecf0")
+style.indent_guide_active = c("aeb3c2")
+style.whitespace = { common.color "rgba(0, 0, 0, 0.18)" }
+style.whitespace_trailing = { common.color "rgba(219, 59, 75, 0.55)" }
+style.soft_wrap_indicator = style.whitespace
+style.transparent = { common.color "#00000000" }
+
+-- First-party plugin colors
+style.bracketmatch_color = c("93d9d9")
+style.bracketmatch_char_color = p("java_keyword")
+style.bracketmatch_block_char_color = style.background
+style.bracketmatch_block_color = c("6c707e")
+style.bracketmatch_frame_color = c("7d8291")
+style.line_wrapping_guide = { common.color "rgba(0, 0, 0, 0.15)" }
+style.guide = style.line_wrapping_guide
+style.performance_hud_background = { common.color "rgba(255, 255, 255, 0.92)" }
+style.performance_hud_recording_background = { common.color "rgba(255, 235, 236, 0.95)" }
+style.performance_hud_text = c("000000")
+style.performance_hud_dim = c("5a5d6b")
+style.editor_wallpaper_line_highlight = { 235, 222, 197, 180 }
+style.editor_wallpaper_tab_hover = { 0, 0, 0, 10 }
+style.textview_content_left_edge = style.line_wrapping_guide
+style.line_hint = style.dim
+style.fold_widget_background = c("f4f4f5")
+style.fold_widget_text = p("folded_fg")
+style.fold_widget_effect = p("folded_effect")
+style.fold_widget_border = c("8ab4f8")
+style.diagnostic_error_underline = { common.color "rgba(255, 0, 0, 0.75)" }
+style.diagnostic_warning_underline = style.warn
+style.titlebar_close_hover = { 229, 87, 101, 255 }
+style.titlebar_close_pressed = { 188, 48, 62, 255 }
+style.titlebar_control_hover = { 0, 0, 0, 13 }
+style.titlebar_control_pressed = { 0, 0, 0, 29 }
+style.titlebar_close_text = { 0, 0, 0, 255 }
+style.titlebar_tab_active = style.background
+style.titlebar_tab_hover = { 0, 0, 0, 12 }
+style.titlebar_pane_number = style.dim
+style.titlebar_group_indicator = { common.color "rgba(107, 29, 29, 0.60)" }
+style.image_grid_bright = style.background3
+style.image_grid_dark = p("tearline")
+style.fuzzy_searcher_preview_background = { 255, 255, 255, 235 }
+style.fuzzy_searcher_overlay_background = { 0, 0, 0, 56 }
+style.fuzzy_searcher_result_selection_background = { common.color "rgba(107, 29, 29, 0.13)" }
+style.fuzzy_searcher_result_hover_background = { common.color "rgba(107, 29, 29, 0.07)" }
+style.global_prompt_bar_overlay_background = { 0, 0, 0, 48 }
+style.filetree_operation_create = { 32, 138, 60, 255 }
+style.filetree_operation_copy = { 3, 155, 161, 255 }
+style.filetree_operation_move = { 53, 116, 240, 255 }
+style.filetree_operation_rename = { 131, 77, 240, 255 }
+style.filetree_operation_delete = { 219, 59, 75, 255 }
+style.filetree_folder_row_background = { common.color "rgba(0, 0, 0, 0.035)" }
+style.diffview_plain_text = c("080808")
+
+-- Git changed-line colors
+style.git_change_addition = c("08a91f")
+style.git_change_modification = {47, 169, 255, 255}
+style.git_change_deletion = c("ff5065")
+style.gitdiff_width = common.round(2 * SCALE)
+style.git_graph_colors = {
+  c("0053ff"), c("08a91f"), c("7c3aed"), c("b66a00"), c("d82f55"), c("008c86"),
+}
+style.git_ref_head = c("087b19")
+style.git_ref_branch = c("0053ff")
+style.git_ref_remote = c("7c3aed")
+style.git_ref_tag = c("9a5700")
+
+-- File tree Git status and line-count colors
+style.filetree_git_status_ignored = c("bd6b00")
+style.filetree_git_status_untracked = c("db3b4b")
+style.filetree_git_status_added = c("08a91f")
+style.filetree_git_status_modified = c("2f6fbd")
+style.filetree_git_status_deleted = c("db3b4b")
+style.filetree_git_status_unmerged = style.error
+style.filetree_git_line_additions = style.git_change_addition
+style.filetree_git_line_deletions = style.git_change_deletion
+style.filetree_folder = p("ignored")
+
+-- Anvil's common syntax slots.
+style.syntax["normal"] = p("text_fg")
+style.syntax["symbol"] = p("identifier")
+style.syntax["comment"] = p("block_comment")
+style.syntax["keyword"] = p("java_keyword")
+style.syntax["keyword2"] = p("java_keyword")
+style.syntax["number"] = p("number")
+style.syntax["literal"] = p("java_keyword")
+style.syntax["string"] = p("string")
+style.syntax["operator"] = p("semicolon")
+style.syntax["function"] = p("function_declaration")
+
+-- Broad semantic roots. Detailed Tree-sitter/LSP child keys (for example
+-- `type.class`, `variable.property.readonly`, or `function.method`) are resolved
+-- through the syntax hierarchy unless a theme overrides them.
+style.syntax["type"] = p("class_name")
+style.syntax["variable"] = p("identifier")
+style.syntax["constant"] = p("constant")
+style.syntax["annotation"] = p("kotlin_annotation")
+style.syntax["markup"] = p("doc_markup")
+style.syntax["punctuation"] = p("semicolon")
+style.syntax["error"] = p("invalid_string_escape_effect")
+style.syntax["warning"] = p("warning_stripe")
+
+-- IntelliJ Light semantic refinements.
+style.syntax["keyword.return"] = p("java_keyword")
+style.syntax["keyword.function"] = p("java_keyword")
+style.syntax["keyword.operator"] = p("java_keyword")
+style.syntax["keyword.modifier"] = p("java_keyword")
+style.syntax["function.declaration"] = p("function_declaration")
+style.syntax["function.definition"] = p("function_declaration")
+style.syntax["function.call"] = p("function_call")
+style.syntax["function.method"] = p("function_declaration")
+style.syntax["function.method.declaration"] = p("function_declaration")
+style.syntax["function.method.definition"] = p("function_declaration")
+style.syntax["function.method.call"] = p("function_call")
+style.syntax["function.constructor"] = p("kotlin_constructor")
+style.syntax["function.method.static"] = p("static_method")
+style.syntax["function.macro"] = p("static_method")
+style.syntax["type.class"] = p("class_name")
+style.syntax["type.struct"] = p("class_name")
+style.syntax["type.enum"] = p("class_name")
+style.syntax["type.interface"] = p("interface_name")
+style.syntax["type.parameter"] = p("kotlin_type_parameter")
+style.syntax["type.builtin"] = p("java_keyword")
+style.syntax["type.namespace"] = p("identifier")
+style.syntax["variable.property"] = p("kotlin_instance_property")
+style.syntax["variable.field"] = p("kotlin_instance_property")
+style.syntax["variable.property.static"] = p("static_field")
+style.syntax["variable.parameter"] = p("kotlin_parameter")
+style.syntax["variable.readonly"] = p("constant")
+style.syntax["constant.builtin"] = p("constant")
+style.syntax["constant.enum_member"] = p("constant")
+style.syntax["annotation.decorator"] = p("kotlin_annotation")
+style.syntax["metadata"] = p("metadata")
+style.syntax["doc_comment"] = p("doc_comment")
+style.syntax["doccomment"] = p("doc_comment")
+style.syntax["tag"] = p("doc_comment_tag")
+style.syntax["string.escape"] = p("invalid_string_escape")
+style.syntax["punctuation.delimiter"] = p("semicolon")
+style.syntax["punctuation.bracket"] = p("semicolon")
+
+-- Project path roles. These are assigned after the light semantic palette so
+-- aliases do not retain the dark theme's color tables during theme changes.
+style.project_path_external = style.accent
+style.project_path_external_dim = style.dim
+style.project_path_vendored = style.syntax.metadata
+style.project_path_vendored_dim = style.dim
+style.project_path_missing = style.warn
+style.project_path_separator = style.dim
+
+-- Markdown Live Preview. These must be rebound after the light palette and
+-- syntax slots are installed; otherwise aliases inherited from colors.default
+-- keep their dark-theme color tables when the theme changes at runtime.
+style.markdown_live_heading_marker = style.dim
+style.markdown_live_link = p("ctrl_clickable")
+style.markdown_live_link_error = style.error
+style.markdown_live_inline_code_bg = style.background2
+style.markdown_live_code_background = style.background2
+style.markdown_live_code_header = style.dim
+style.markdown_live_highlight_bg = c("fff1b8")
+style.markdown_live_quote_bar = style.accent
+style.markdown_live_quote_background = { 0, 0, 0, 13 }
+style.markdown_live_callout_palette = {
+  note     = { accent = c("2878c8"), background = c("eaf3fc") },
+  abstract = { accent = c("16869a"), background = c("e7f6f8") },
+  info     = { accent = c("1f76b8"), background = c("e9f3fb") },
+  todo     = { accent = c("1f76b8"), background = c("e9f3fb") },
+  tip      = { accent = c("168878"), background = c("e7f6f2") },
+  success  = { accent = c("39884a"), background = c("eaf6ec") },
+  question = { accent = c("a77a13"), background = c("fbf5df") },
+  warning  = { accent = c("b56516"), background = c("fff0df") },
+  failure  = { accent = c("b64250"), background = c("fbeaec") },
+  danger   = { accent = c("c52f3f"), background = c("fce7ea") },
+  bug      = { accent = c("b63870"), background = c("f8e8ef") },
+  example  = { accent = c("7650b5"), background = c("f1ebfa") },
+  quote    = { accent = c("626872"), background = c("f0f1f3") },
+}
+style.markdown_live_list_marker = style.dim
+style.markdown_live_task_checked = style.accent
+style.markdown_live_task_unchecked = style.dim
+style.markdown_live_task_background = style.background
+style.markdown_live_task_checkmark = style.background
+style.markdown_live_rule = style.dim
+style.markdown_live_tag = style.accent
+style.markdown_live_reference_definition = style.dim
+style.markdown_live_math_background = style.background2
+style.markdown_live_math = style.syntax.literal
+style.markdown_live_footnote = style.accent
+style.markdown_live_image_background = style.background2
+style.markdown_live_image_hover_inner_border = c("000000")
+style.markdown_live_image_loading = style.dim
+style.markdown_live_image_blocked = c("9a6700")
+style.markdown_live_image_error = style.error
+style.markdown_live_attachment_bg = style.background2
+style.markdown_live_embed_background = style.background2
+style.markdown_live_embed_text = style.text
+style.markdown_live_table_background = style.background
+style.markdown_live_table_header = style.text
+style.markdown_live_table_cell = style.text
+style.markdown_live_table_separator = style.divider
+style.markdown_live_hidden_syntax = style.dim
+
+style.log["INFO"] = { icon = "i", color = style.text }
+style.log["WARN"] = { icon = "!", color = style.warn }
+style.log["ERROR"] = { icon = "!", color = style.error }
+
+-- The code and terminal keep their configured monospace fonts.
+-- Headings and prose use the site's two licensed typefaces.
+style.theme_typography = {
+  big_font = "CormorantGaramond-Medium.ttf",
+  prose_font = "CrimsonPro-Regular.ttf",
+  markdown_body_font = "CrimsonPro-Regular.ttf",
+  prose_strong_font = "CrimsonPro-Bold.ttf",
+  prose_emphasis_font = "CrimsonPro-Italic.ttf",
+  prose_strong_emphasis_font = "CrimsonPro-SemiBoldItalic.ttf",
+  prose_heading_font = "CormorantGaramond-Medium.ttf",
+  prose_heading_emphasis_font = "CormorantGaramond-MediumItalic.ttf",
+}
+
+return style

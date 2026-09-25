@@ -160,6 +160,22 @@ Copyright 2020 The Merriweather Project Authors
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 
+## Cormorant Garamond
+
+Copyright 2015 the Cormorant Project Authors (github.com/CatharsisFonts/Cormorant)
+
+The bundled Medium and Medium Italic files come from the Google Fonts URLs in
+the stylesheet used by https://yegge.ai/essays/model-welfare/.
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+
+## Crimson Pro
+
+Copyright 2018 The Crimson Pro Project Authors (https://github.com/Fonthausen/CrimsonPro)
+
+The bundled Regular, Bold, Italic, and SemiBold Italic files come from the
+Google Fonts URLs in the stylesheet used by https://yegge.ai/essays/model-welfare/.
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+
 # SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
 
 PREAMBLE
