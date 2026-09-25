@@ -424,7 +424,7 @@ end
 settings.add("Typography",
   {
     typography_font_option(
-      "View Text Font", "Text used for View names, labels, and messages.",
+      "Text Font", "Text used for View names, labels, and messages.",
       "view_text_font", "Crimson Pro Regular", "CrimsonPro-Regular.ttf"
     ),
     typography_font_option(
@@ -2590,7 +2590,7 @@ function core.run()
     end
     if changed then
       save_settings()
-      core.log_quiet("Migrated saved Prose font settings to View Text")
+      core.log_quiet("Migrated saved Prose font settings to Text")
     end
   end)
 

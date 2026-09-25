@@ -25,12 +25,13 @@ local families = {
     emphasis = "CormorantGaramond-MediumItalic.ttf"},
 }
 
+-- IDs are saved in user settings. Display names can change without changing choices.
 local categories = {
   {id = "interface", name = "Interface", roles = {"font"}},
   {id = "code", name = "Code", roles = {"code_font"}},
   {id = "terminal", name = "Terminal", roles = {"terminal_font"}},
-  {id = "view_text", name = "View Text", roles = {"view_text_font"}},
-  {id = "prose", name = "Prose", roles = {"markdown_body_font",
+  {id = "view_text", name = "Text", roles = {"view_text_font"}},
+  {id = "prose", name = "Markdown Prose", roles = {"markdown_body_font",
     "prose_strong_font", "prose_emphasis_font", "prose_strong_emphasis_font"}},
   {id = "headings", name = "Headings", roles = {"prose_heading_font", "prose_heading_emphasis_font", "big_font"}},
 }
