@@ -4,14 +4,17 @@ local style = require "core.style"
 
 local fonts = {}
 local cache = setmetatable({}, {__mode = "k"})
+local applied_size_modifiers = setmetatable({}, {__mode = "k"})
 
+-- A bundled family's optional size modifier calibrates body text, not heading levels.
 local families = {
   caskaydia_cove = {name = "Caskaydia Cove Nerd Font Mono", regular = "CaskaydiaCoveNerdFontMono-Regular.ttf"},
   jetbrains_mono = {name = "JetBrains Mono", regular = "JetBrainsMono-Regular.ttf"},
   fira_sans = {name = "Fira Sans", regular = "FiraSans-Regular.ttf"},
   inter = {name = "Inter", regular = "Inter-Regular.ttf", strong = "Inter-SemiBold.ttf",
     emphasis = "Inter-Italic.ttf", strong_emphasis = "Inter-SemiBoldItalic.ttf"},
-  crimson_pro = {name = "Crimson Pro", regular = "CrimsonPro-Regular.ttf", strong = "CrimsonPro-Bold.ttf",
+  crimson_pro = {name = "Crimson Pro", regular = "CrimsonPro-Regular.ttf", size_modifier = 1.25,
+    strong = "CrimsonPro-Bold.ttf",
     emphasis = "CrimsonPro-Italic.ttf", strong_emphasis = "CrimsonPro-SemiBoldItalic.ttf"},
   merriweather = {name = "Merriweather", regular = "Merriweather_24pt-SemiBold.ttf",
     emphasis = "Merriweather_24pt-SemiBoldItalic.ttf"},
@@ -56,8 +59,9 @@ local function file_for(role, family)
   return family.regular, false, false
 end
 
-local function load_for(base, filename, bold, italic, ligatures)
-  local size = base:get_size()
+local function load_for(base, filename, bold, italic, ligatures, size_modifier)
+  -- Keep the logical role size stable when switching families or restoring a preview.
+  local size = base:get_size() / (applied_size_modifiers[base] or 1) * size_modifier
   local by_key = cache[base]
   if not by_key then by_key = {}; cache[base] = by_key end
   local key = table.concat({filename, tostring(bold), tostring(italic), tostring(ligatures), tostring(size)}, ":")
@@ -71,6 +75,7 @@ local function load_for(base, filename, bold, italic, ligatures)
     fallback = renderer.font.group({primary, fallback})
   end
   by_key[key] = fallback
+  applied_size_modifiers[fallback] = size_modifier
   return fallback
 end
 
@@ -109,7 +114,10 @@ function fonts.apply(id, choice)
 
   for _, role in ipairs(category.roles) do
     local filename, bold, italic = file_for(role, family)
-    style[role] = load_for(style[role], filename, bold, italic, id ~= "terminal")
+    -- Heading levels keep their existing effective sizes. Body text uses optical calibration.
+    local size_modifier = (id == "interface" or id == "prose")
+      and (family.size_modifier or 1) or 1
+    style[role] = load_for(style[role], filename, bold, italic, id ~= "terminal", size_modifier)
   end
   if id == "terminal" then
     local size = style.terminal_font:get_size()

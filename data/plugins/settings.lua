@@ -410,7 +410,7 @@ local function prose_font_option(label, description, path, name, filename, bold,
         },
       },
       options = {
-        size = 15,
+        size = 14,
         antialiasing = "subpixel",
         hinting = "slight",
         ligatures = true,

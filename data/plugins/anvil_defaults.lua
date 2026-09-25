@@ -371,6 +371,7 @@ startup_measure("font_prose_and_heading_construction", function()
   style.prose_heading_emphasis_font = load_text_font(
     prose_heading_emphasis_font_path, nil, interface_fallbacks
   )
+  require("core.font_categories").apply("prose", "crimson_pro")
 end)
 -- Keep scrollbars visible in a small/contracted form instead of expanding/fading.
 -- Set this before constructing Views such as the File Tree.

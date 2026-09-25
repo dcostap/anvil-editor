@@ -55,6 +55,36 @@ test.describe("global font selection", function()
     test.equal(saved, settings.config.font_categories)
   end)
 
+  test.it("keeps calibrated prose sizes stable across previews and cancel", function()
+    test.ok(command.perform("editor:select_font"))
+    local bar = core.global_prompt_bar
+    bar:set_text("Prose")
+    bar:submit()
+    bar:set_text("Inter")
+    bar:update_suggestions()
+    local inter_size = style.prose_font:get_size()
+    local body_ratio = style.markdown_body_font:get_size() / inter_size
+    bar:set_text("Crimson Pro")
+    bar:update_suggestions()
+    local crimson_size = style.prose_font:get_size()
+    test.ok(crimson_size > inter_size)
+    test.ok(math.abs(style.markdown_body_font:get_size() / crimson_size - body_ratio) < 0.00001)
+    bar:set_text("Inter")
+    bar:update_suggestions()
+    bar:set_text("Crimson Pro")
+    bar:update_suggestions()
+    test.equal(crimson_size, style.prose_font:get_size())
+    bar:exit(false)
+
+    test.ok(command.perform("editor:select_font"))
+    bar:set_text("Prose")
+    bar:submit()
+    bar:set_text("Crimson Pro")
+    bar:update_suggestions()
+    test.equal(crimson_size, style.prose_font:get_size())
+    bar:exit(false)
+  end)
+
   test.it("saves a global heading choice that remains after a theme change", function()
     test.ok(command.perform("editor:select_font"))
     local bar = core.global_prompt_bar
@@ -71,6 +101,20 @@ test.describe("global font selection", function()
     core.reload_module("colors.light2")
     test.ok(primary_path(style.prose_heading_font):find("Merriweather", 1, true))
     test.ok(primary_path(style.big_font):find("Merriweather", 1, true))
+  end)
+
+  test.it("keeps heading role sizes when switching heading families", function()
+    test.ok(command.perform("editor:select_font"))
+    local bar = core.global_prompt_bar
+    bar:set_text("Headings")
+    bar:submit()
+    for _, name in ipairs({"Crimson Pro", "Inter", "Cormorant Garamond"}) do
+      bar:set_text(name)
+      bar:update_suggestions()
+      test.equal(previous.prose_heading_font:get_size(), style.prose_heading_font:get_size())
+      test.equal(previous.big_font:get_size(), style.big_font:get_size())
+    end
+    bar:exit(false)
   end)
 
   test.it("changes terminal font without changing code or interface font", function()
