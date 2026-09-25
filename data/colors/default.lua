@@ -92,8 +92,8 @@ end
 for name in pairs(C) do p(name) end
 
 -- Core UI
-style.wallpaper_backdrop_opacity = 0.70
-style.wallpaper_surface_opacity = 0.30
+style.wallpaper_backdrop_opacity = 0.90
+style.wallpaper_surface_opacity = 0.50
 style.background = p("text_bg")
 style.background2 = c("26282b")
 style.tab_background = style.background
