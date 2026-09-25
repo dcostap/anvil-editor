@@ -1,7 +1,8 @@
 -- Estimate how much of the wallpaper remains visible against a theme color.
 local contrast = {}
 
-local BLACK_FLOOR = 24 -- Dim display tones lose detail near black.
+local BLACK_FLOOR = 20 -- Dim display tones lose detail near black.
+local LIGHT_TONE_SEPARATION = 18 -- Keep a light surface from washing out the image.
 local MIN_VISIBILITY, MAX_VISIBILITY = 0.02, 0.14 -- Limit color noise behind text.
 
 local function linear_channel(value)
@@ -62,7 +63,7 @@ function contrast.visibility(low, high, middle_tone, background, reference, refe
   local light_fraction = math.min(1, math.max(0, (background_tone - 170) / 60))
   if light_fraction > 0 and middle_tone then
     local separation = math.abs(background_tone - middle_tone.brightness)
-    visibility = math.max(visibility, light_fraction * 24 / math.max(1, separation))
+    visibility = math.max(visibility, light_fraction * LIGHT_TONE_SEPARATION / math.max(1, separation))
   end
   return math.min(MAX_VISIBILITY, visibility)
 end
