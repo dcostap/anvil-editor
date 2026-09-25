@@ -3,129 +3,62 @@ local command = require "core.command"
 local style = require "core.style"
 local theme_editor = require "plugins.theme_editor"
 
-test.describe("runtime theme editor", function()
-  local old_background
-
-  test.before_each(function()
-    old_background = style.background
-  end)
-
+test.describe("theme editor", function()
   test.after_each(function()
-    style.background = old_background
-    theme_editor.hide()
+    theme_editor.close()
   end)
 
-  test.it("collects current theme colors for runtime editing and export", function()
-    local entries = theme_editor.collect_color_entries()
-    local background_entry
-    local syntax_entry
-    for _, entry in ipairs(entries) do
-      if entry.expr == "style.background" then background_entry = entry end
-      if entry.expr == "style.syntax.normal" or entry.expr == "style.syntax[\"normal\"]" then
-        syntax_entry = entry
-      end
-    end
-
-    test.not_nil(background_entry)
-    test.not_nil(syntax_entry)
-
-    local exported = theme_editor.export_theme_text(entries)
-    test.ok(exported:find("style.background =", 1, true) ~= nil)
-    test.ok(exported:find("return style", 1, true) ~= nil)
+  test.it("previews named color edits and drops them on reload", function()
+    local editor = theme_editor.open("dark2")
+    local original = {table.unpack(style.theme_palette.text_bg)}
+    editor:set_palette("text_bg", {8, 9, 10, 255})
+    test.same({8, 9, 10, 255}, style.background)
+    editor:reload()
+    test.same(original, style.background)
   end)
 
-  test.it("groups style keys that share the same color table", function()
-    local groups = theme_editor.collect_color_groups(theme_editor.collect_color_entries())
-    local found
-    for _, group in ipairs(groups) do
-      local names = {}
-      for _, entry in ipairs(group.entries) do names[entry.expr] = true end
-      if names["style.git_change_addition"] and names["style.filetree_git_line_additions"] then
-        found = group
-        break
-      end
-    end
-
-    test.not_nil(found)
-    test.ok(#found.entries >= 2)
-    test.equal("Git / File Tree", found.category)
+  test.it("keeps a disabled child rule while using the parent color", function()
+    local editor = theme_editor.open("dark2")
+    local original = {table.unpack(style.syntax["function.call"])}
+    editor:set_rule("syntax.function.call", {enabled = false, color = {11, 12, 13, 255}})
+    test.same(style.syntax["function"], style.syntax["function.call"])
+    test.same({11, 12, 13, 255}, editor.draft.rules["syntax.function.call"].color)
+    editor:reload()
+    test.same(original, style.syntax["function.call"])
   end)
 
-  test.it("applies selected color immediately without saving a theme file", function()
-    local view = theme_editor.show()
-    local background_entry
-    for _, entry in ipairs(theme_editor.collect_color_entries()) do
-      if entry.expr == "style.background" then
-        background_entry = entry
-        break
-      end
-    end
-    test.not_nil(background_entry)
-
-    view:select_entry(background_entry)
-    view:apply_color_to_selected({1, 2, 3, 4})
-
-    test.same({1, 2, 3, 4}, style.background)
+  test.it("saves a theme for a later reload", function()
+    local path = USERDIR .. "/colors/edits/dark2.lua"
+    local editor = theme_editor.open("dark2")
+    editor:set_palette("text_bg", {18, 19, 20, 255})
+    editor:save(false)
+    editor:reload()
+    test.same({18, 19, 20, 255}, style.background)
+    test.not_nil(system.get_file_info(path))
+    os.remove(path)
   end)
 
-  test.it("exports only colors changed since the editor baseline", function()
-    local view = theme_editor.show()
-    local background_entry
-    for _, entry in ipairs(theme_editor.collect_color_entries()) do
-      if entry.expr == "style.background" then
-        background_entry = entry
-        break
-      end
-    end
-    test.not_nil(background_entry)
-
-    view:select_entry(background_entry)
-    view:apply_color_to_selected({5, 6, 7, 8})
-
-    local changed = view:changed_entries()
-    local exported = theme_editor.export_theme_text(changed)
-
-    test.equal(1, #changed)
-    test.ok(exported:find("style.background = {5, 6, 7, 8}", 1, true) ~= nil)
-    test.ok(exported:find("style.text =", 1, true) == nil)
+  test.it("registers a command for selecting a theme to edit", function()
+    test.ok(command.is_valid("theme_editor:edit_theme"))
   end)
 
-  test.it("resizes from the bottom-right grip", function()
-    local view = theme_editor.show()
-    local start_w = view:get_width()
-    local start_h = view:get_height()
-    local x = view.position.x + start_w - 2
-    local y = view.position.y + start_h - 2
-
-    test.ok(view:on_mouse_pressed("left", x, y, 1))
-    test.ok(view:on_mouse_moved(x + 80, y + 40, 80, 40))
-    test.ok(view:get_width() >= start_w + 79)
-    test.ok(view:get_height() >= start_h + 39)
-    test.ok(view:on_mouse_released("left", x + 80, y + 40))
+  test.it("drops a new unsaved syntax rule on reload", function()
+    local editor = theme_editor.open("dark2")
+    editor:set_rule("syntax.anvil_temporary.child", {enabled = true, color = {11, 12, 13, 255}})
+    test.same({11, 12, 13, 255}, style.syntax["anvil_temporary.child"])
+    editor:reload()
+    test.equal(nil, rawget(style.syntax, "anvil_temporary.child"))
   end)
 
-  test.it("tracks and resets runtime changes", function()
-    local view = theme_editor.show()
-    local background_entry
-    for _, entry in ipairs(theme_editor.collect_color_entries()) do
-      if entry.expr == "style.background" then
-        background_entry = entry
-        break
-      end
-    end
-    test.not_nil(background_entry)
-
-    view:select_entry(background_entry)
-    view:apply_color_to_selected({9, 10, 11, 12})
-    test.equal(1, #view:changed_entries())
-
-    view:reset_all_changes()
-    test.same(old_background, style.background)
-    test.equal(0, #view:changed_entries())
-  end)
-
-  test.it("registers commands for showing and hiding the editor", function()
-    test.ok(command.is_valid("theme_editor:show"))
-    test.ok(command.is_valid("theme_editor:hide"))
+  test.it("keeps a disabled child override after saving and reopening", function()
+    local path = USERDIR .. "/colors/edits/dark2.lua"
+    local editor = theme_editor.open("dark2")
+    editor:set_rule("syntax.function.call", {enabled = false, color = {4, 5, 6, 255}})
+    editor:save(false)
+    theme_editor.close()
+    editor = theme_editor.open("dark2")
+    test.same({4, 5, 6, 255}, editor.draft.rules["syntax.function.call"].color)
+    test.same(style.syntax["function"], style.syntax["function.call"])
+    os.remove(path)
   end)
 end)

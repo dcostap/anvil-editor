@@ -1430,13 +1430,15 @@ function core.bump_render_style_generation(reason)
 end
 
 
-function core.reload_module(name)
+function core.reload_module(name, options)
   local old = package.loaded[name]
   local is_color_scheme = name:match("^colors%..*")
 
   -- Every color scheme is layered over colors.default so first-party style
   -- keys always have baseline values when users switch themes.
   if is_color_scheme then
+    for key in pairs(core.theme_edit_custom_syntax or {}) do style.syntax[key] = nil end
+    core.theme_edit_custom_syntax = {}
     setmetatable(style.syntax, nil)
     map_new_syntax_colors(true)
     if name ~= "colors.default" then
@@ -1453,6 +1455,14 @@ function core.reload_module(name)
   end
   -- map colors that may be missing on the new color scheme
   if is_color_scheme then
+    local theme_name = name:sub(8)
+    if theme_name == "default" then theme_name = "dark" end
+    local theme_edits = require "core.theme_edits"
+    local draft, err = options and options.theme_draft or theme_edits.load(theme_name)
+    if err then core.error("%s", err) end
+    local base = theme_edits.capture(style)
+    theme_edits.apply(style, base, draft)
+    core.theme_edit_custom_syntax = theme_edits.custom_syntax_keys(base, draft)
     map_new_syntax_colors()
     core.color_theme_generation = (core.color_theme_generation or 0) + 1
     core.bump_render_style_generation("color-theme-reload")

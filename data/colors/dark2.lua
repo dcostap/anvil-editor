@@ -1,11 +1,8 @@
 local style = require "core.style"
 local common = require "core.common"
 
--- Anvil Dark theme.
--- Exposed to users as "dark" while remaining the internal default style schema.
--- Promoted from the personal OneDark defaults; this file is the complete
--- first-party style schema. Other themes may override any of these keys, but
--- first-party plugins should be able to rely on these values existing.
+-- Anvil Dark2 theme. This is an independent copy of the Dark colors.
+-- Theme Editor source edits for Dark2 live in colors/edits/dark2.lua.
 
 local function c(hex)
   return { common.color("#" .. hex) }

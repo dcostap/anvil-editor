@@ -542,9 +542,13 @@ Navigation through the Project's current Remote POI Source, with activation in t
 A separate project-owned window for a large singleton tool that should stay available without taking over the main editing layout.
 _Avoid_: popup, modal, detached panel
 
-**Runtime Theme Editor**:
-A floating in-window tool for inspecting and temporarily changing the current theme's colors during a running Anvil session.
-_Avoid_: Theme popup, color config
+**Color Theme**:
+A named set of colors for Anvil's interface and language text.
+_Avoid_: Color scheme
+
+**Theme Editor**:
+A tool for changing a Color Theme's named colors and color rules while viewing the result.
+_Avoid_: Runtime Theme Editor, Theme popup
 
 **Git View**:
 The family of top-level Git-related Views for a Project, including the Git Log, Commit Diff Views, File History Views, Directory History Views, and Combined Path History Views. It is not a visible container with nested tabs.

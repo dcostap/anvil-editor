@@ -2602,11 +2602,11 @@ function core.run()
         settings.config.theme = normalized_theme
         save_settings()
       end
-      if normalized_theme ~= DEFAULT_COLOR_THEME_NAME then
-        core.try(function()
-          core.reload_module("colors." .. color_theme_module_name(normalized_theme))
-        end)
-      end
+      core.try(function()
+        core.reload_module("colors." .. color_theme_module_name(normalized_theme))
+      end)
+    else
+      core.try(function() core.reload_module("colors.default") end)
     end
   end)
 
@@ -2793,5 +2793,8 @@ function Widget:draw()
   end
   return widget_draw(self)
 end
+
+settings.get_installed_colors = get_installed_colors
+settings.apply_color_theme = apply_color_theme
 
 return settings;

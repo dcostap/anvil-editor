@@ -77,30 +77,41 @@ local C = {
   write_identifier_under_caret_stripe = "f0a8d2",
 }
 
+style.theme_palette = {}
+local function p(name)
+  local value = style.theme_palette[name]
+  if not value then
+    value = c(C[name])
+    style.theme_palette[name] = value
+  end
+  return value
+end
+for name in pairs(C) do p(name) end
+
 -- Core UI
-style.background = c(C.text_bg)
+style.background = p("text_bg")
 style.background2 = c("f7f8fa")
 style.tab_background = style.background
 style.titlebar = c("e8ebf0")
 style.background3 = c("ffffff")
 style.autocomplete_border = { common.color "rgba(0, 0, 0, 0.28)" }
 style.autocomplete_selection = c("e8f1ff")
-style.text = c(C.text_fg)
+style.text = p("text_fg")
 style.caret = c("000000")
 style.caret_trail = { common.color "rgba(53, 116, 240, 0.35)" }
 style.accent = c("3574f0")
-style.dim = c(C.ignored)
-style.divider = c(C.tearline)
+style.dim = p("ignored")
+style.divider = p("tearline")
 style.selection = c("a6d2ff")
 style.row_selection = { common.color "rgba(55, 112, 185, 0.18)" }
 style.row_selection_inactive = { common.color "rgba(55, 112, 185, 0.12)" }
 style.line_number = c("aeb3c2")
 style.line_number2 = c("767a8a")
-style.line_highlight = c(C.caret_row)
-style.scrollbar = c(C.scrollbar_thumb)
-style.scrollbar_hover = c(C.scrollbar_thumb_hover)
-style.scrollbar_active = c(C.scrollbar_thumb_active)
-style.scrollbar_track = c(C.gutter_bg)
+style.line_highlight = p("caret_row")
+style.scrollbar = p("scrollbar_thumb")
+style.scrollbar_hover = p("scrollbar_thumb_hover")
+style.scrollbar_active = p("scrollbar_thumb_active")
+style.scrollbar_track = p("gutter_bg")
 style.nagbar = c("ffe8e8")
 style.nagbar_text = c("ad2b38")
 style.nagbar_dim = { common.color "rgba(0, 0, 0, 0.20)" }
@@ -108,15 +119,15 @@ style.drag_overlay = { common.color "rgba(53, 116, 240, 0.12)" }
 style.drag_overlay_tab = c("3574f0")
 style.interactive_hover_background = { common.color "rgba(36, 112, 220, 0.14)" }
 style.interactive_hover_overlay = { common.color "rgba(36, 112, 220, 0.09)" }
-style.interactive_hover_border = c(C.ctrl_clickable)
+style.interactive_hover_border = p("ctrl_clickable")
 style.good = c("067d17")
-style.warn = c(C.warning_stripe)
+style.warn = p("warning_stripe")
 style.error = c("db3b4b")
 style.modified = c("003dd7")
 
 -- Integrated terminal colors for a light terminal surface.
-style.terminal_foreground = c(C.text_fg)
-style.terminal_background = c(C.text_bg)
+style.terminal_foreground = p("text_fg")
+style.terminal_background = p("text_bg")
 style.terminal_cursor = c("000000")
 style.terminal_palette = {
   c("000000"), c("cd3131"), c("008000"), c("949800"),
@@ -147,7 +158,7 @@ style.search_selection_secondary_outline = c("86aa8e")
 style.fuzzy_searcher_match = c("000000")
 style.fuzzy_searcher_match_background = { 252, 212, 126, 204 }
 style.fuzzy_searcher_recent_project_icon = c("871094")
-style.selectionhighlight = c(C.identifier_under_caret_bg)
+style.selectionhighlight = p("identifier_under_caret_bg")
 style.copy_feedback = { common.color "rgba(255, 255, 255, 0.45)" }
 style.fuzzy_searcher_copy_feedback = { common.color "rgba(166, 210, 255, 0.60)" }
 style.reload_diff_flash_line = { common.color "rgba(194, 128, 0, 0.20)" }
@@ -163,7 +174,7 @@ style.transparent = { common.color "#00000000" }
 
 -- First-party plugin colors
 style.bracketmatch_color = c("93d9d9")
-style.bracketmatch_char_color = c(C.java_keyword)
+style.bracketmatch_char_color = p("java_keyword")
 style.bracketmatch_block_char_color = style.background
 style.bracketmatch_block_color = c("6c707e")
 style.bracketmatch_frame_color = c("7d8291")
@@ -178,8 +189,8 @@ style.editor_wallpaper_tab_hover = { 0, 0, 0, 10 }
 style.textview_content_left_edge = style.line_wrapping_guide
 style.line_hint = style.dim
 style.fold_widget_background = c("f4f4f5")
-style.fold_widget_text = c(C.folded_fg)
-style.fold_widget_effect = c(C.folded_effect)
+style.fold_widget_text = p("folded_fg")
+style.fold_widget_effect = p("folded_effect")
 style.fold_widget_border = c("8ab4f8")
 style.diagnostic_error_underline = { common.color "rgba(255, 0, 0, 0.75)" }
 style.diagnostic_warning_underline = style.warn
@@ -232,66 +243,66 @@ style.filetree_git_line_deletions = style.git_change_deletion
 style.filetree_folder = c("5c5f6b")
 
 -- Anvil's common syntax slots.
-style.syntax["normal"] = c(C.text_fg)
-style.syntax["symbol"] = c(C.identifier)
-style.syntax["comment"] = c(C.block_comment)
-style.syntax["keyword"] = c(C.java_keyword)
-style.syntax["keyword2"] = c(C.java_keyword)
-style.syntax["number"] = c(C.number)
-style.syntax["literal"] = c(C.java_keyword)
-style.syntax["string"] = c(C.string)
-style.syntax["operator"] = c(C.semicolon)
-style.syntax["function"] = c(C.function_declaration)
+style.syntax["normal"] = p("text_fg")
+style.syntax["symbol"] = p("identifier")
+style.syntax["comment"] = p("block_comment")
+style.syntax["keyword"] = p("java_keyword")
+style.syntax["keyword2"] = p("java_keyword")
+style.syntax["number"] = p("number")
+style.syntax["literal"] = p("java_keyword")
+style.syntax["string"] = p("string")
+style.syntax["operator"] = p("semicolon")
+style.syntax["function"] = p("function_declaration")
 
 -- Broad semantic roots. Detailed Tree-sitter/LSP child keys (for example
 -- `type.class`, `variable.property.readonly`, or `function.method`) are resolved
 -- through the syntax hierarchy unless a theme overrides them.
-style.syntax["type"] = c(C.class_name)
-style.syntax["variable"] = c(C.identifier)
-style.syntax["constant"] = c(C.constant)
-style.syntax["annotation"] = c(C.kotlin_annotation)
-style.syntax["markup"] = c(C.doc_markup)
-style.syntax["punctuation"] = c(C.semicolon)
-style.syntax["error"] = c(C.invalid_string_escape_effect)
-style.syntax["warning"] = c(C.warning_stripe)
+style.syntax["type"] = p("class_name")
+style.syntax["variable"] = p("identifier")
+style.syntax["constant"] = p("constant")
+style.syntax["annotation"] = p("kotlin_annotation")
+style.syntax["markup"] = p("doc_markup")
+style.syntax["punctuation"] = p("semicolon")
+style.syntax["error"] = p("invalid_string_escape_effect")
+style.syntax["warning"] = p("warning_stripe")
 
 -- IntelliJ Light semantic refinements.
-style.syntax["keyword.return"] = c(C.java_keyword)
-style.syntax["keyword.function"] = c(C.java_keyword)
-style.syntax["keyword.operator"] = c(C.java_keyword)
-style.syntax["keyword.modifier"] = c(C.java_keyword)
-style.syntax["function.declaration"] = c(C.function_declaration)
-style.syntax["function.definition"] = c(C.function_declaration)
-style.syntax["function.call"] = c(C.function_call)
-style.syntax["function.method"] = c(C.function_declaration)
-style.syntax["function.method.declaration"] = c(C.function_declaration)
-style.syntax["function.method.definition"] = c(C.function_declaration)
-style.syntax["function.method.call"] = c(C.function_call)
-style.syntax["function.constructor"] = c(C.kotlin_constructor)
-style.syntax["function.method.static"] = c(C.static_method)
-style.syntax["function.macro"] = c(C.static_method)
-style.syntax["type.class"] = c(C.class_name)
-style.syntax["type.struct"] = c(C.class_name)
-style.syntax["type.enum"] = c(C.class_name)
-style.syntax["type.interface"] = c(C.interface_name)
-style.syntax["type.parameter"] = c(C.kotlin_type_parameter)
-style.syntax["type.builtin"] = c(C.java_keyword)
-style.syntax["type.namespace"] = c(C.identifier)
-style.syntax["variable.property"] = c(C.kotlin_instance_property)
-style.syntax["variable.field"] = c(C.kotlin_instance_property)
-style.syntax["variable.property.static"] = c(C.static_field)
-style.syntax["variable.parameter"] = c(C.kotlin_parameter)
-style.syntax["variable.readonly"] = c(C.constant)
-style.syntax["constant.builtin"] = c(C.constant)
-style.syntax["constant.enum_member"] = c(C.constant)
-style.syntax["annotation.decorator"] = c(C.kotlin_annotation)
-style.syntax["metadata"] = c(C.metadata)
-style.syntax["doc_comment"] = c(C.doc_comment)
-style.syntax["doccomment"] = c(C.doc_comment)
-style.syntax["tag"] = c(C.doc_comment_tag)
-style.syntax["string.escape"] = c(C.invalid_string_escape)
-style.syntax["punctuation.delimiter"] = c(C.semicolon)
-style.syntax["punctuation.bracket"] = c(C.semicolon)
+style.syntax["keyword.return"] = p("java_keyword")
+style.syntax["keyword.function"] = p("java_keyword")
+style.syntax["keyword.operator"] = p("java_keyword")
+style.syntax["keyword.modifier"] = p("java_keyword")
+style.syntax["function.declaration"] = p("function_declaration")
+style.syntax["function.definition"] = p("function_declaration")
+style.syntax["function.call"] = p("function_call")
+style.syntax["function.method"] = p("function_declaration")
+style.syntax["function.method.declaration"] = p("function_declaration")
+style.syntax["function.method.definition"] = p("function_declaration")
+style.syntax["function.method.call"] = p("function_call")
+style.syntax["function.constructor"] = p("kotlin_constructor")
+style.syntax["function.method.static"] = p("static_method")
+style.syntax["function.macro"] = p("static_method")
+style.syntax["type.class"] = p("class_name")
+style.syntax["type.struct"] = p("class_name")
+style.syntax["type.enum"] = p("class_name")
+style.syntax["type.interface"] = p("interface_name")
+style.syntax["type.parameter"] = p("kotlin_type_parameter")
+style.syntax["type.builtin"] = p("java_keyword")
+style.syntax["type.namespace"] = p("identifier")
+style.syntax["variable.property"] = p("kotlin_instance_property")
+style.syntax["variable.field"] = p("kotlin_instance_property")
+style.syntax["variable.property.static"] = p("static_field")
+style.syntax["variable.parameter"] = p("kotlin_parameter")
+style.syntax["variable.readonly"] = p("constant")
+style.syntax["constant.builtin"] = p("constant")
+style.syntax["constant.enum_member"] = p("constant")
+style.syntax["annotation.decorator"] = p("kotlin_annotation")
+style.syntax["metadata"] = p("metadata")
+style.syntax["doc_comment"] = p("doc_comment")
+style.syntax["doccomment"] = p("doc_comment")
+style.syntax["tag"] = p("doc_comment_tag")
+style.syntax["string.escape"] = p("invalid_string_escape")
+style.syntax["punctuation.delimiter"] = p("semicolon")
+style.syntax["punctuation.bracket"] = p("semicolon")
 
 -- Project path roles. These are assigned after the light semantic palette so
 -- aliases do not retain the dark theme's color tables during theme changes.
@@ -306,7 +317,7 @@ style.project_path_separator = style.dim
 -- syntax slots are installed; otherwise aliases inherited from colors.default
 -- keep their dark-theme color tables when the theme changes at runtime.
 style.markdown_live_heading_marker = style.dim
-style.markdown_live_link = c(C.ctrl_clickable)
+style.markdown_live_link = p("ctrl_clickable")
 style.markdown_live_link_error = style.error
 style.markdown_live_inline_code_bg = style.background2
 style.markdown_live_code_background = style.background2
