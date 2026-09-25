@@ -247,12 +247,19 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     local x, width = picker:copy_flash_bounds(
       style.code_font, picker.results[1], row_x, row_w
     )
-    local project_font = style.prose_font:get_size() == style.code_font:get_size()
-      and style.prose_font
-      or style.get_scaled_font(style.prose_font, style.code_font:get_size())
     local expected_x = row_x + style.code_font:get_width("@ ")
 
     test.equal(x, expected_x)
-    test.equal(width, project_font:get_width(path))
+    test.equal(width, style.prose_font:get_width(path))
+  end)
+
+  test.it("keeps result rows tall enough for Prose when Code Zoom is smaller", function()
+    local picker = fuzzy_searcher.open_static_results("Results", {
+      { kind = "file", label = "src/app.lua", file = "src/app.lua" },
+    })
+    local small_code_font = style.code_font:copy(8 * SCALE)
+    local row = picker:list_metrics(small_code_font)
+    test.ok(row.lh >= style.prose_font:get_height()
+      + 2 * style.fuzzy_searcher_result_row_padding)
   end)
 end)
