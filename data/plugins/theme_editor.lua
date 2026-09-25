@@ -1,3 +1,4 @@
+-- mod-version:3
 -- Live color theme editor. Drafts stay in memory until saved.
 local core = require "core"
 local command = require "core.command"

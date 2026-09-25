@@ -1,4 +1,5 @@
 local test = require "core.test"
+local core = require "core"
 local command = require "core.command"
 local style = require "core.style"
 local theme_editor = require "plugins.theme_editor"
@@ -40,6 +41,12 @@ test.describe("theme editor", function()
 
   test.it("registers a command for selecting a theme to edit", function()
     test.ok(command.is_valid("theme_editor:edit_theme"))
+  end)
+
+  test.it("loads as a compatible bundled plugin", function()
+    local details = core.get_plugin_details(DATADIR .. "/plugins/theme_editor.lua")
+    test.not_nil(details)
+    test.ok(details.version_match)
   end)
 
   test.it("drops a new unsaved syntax rule on reload", function()
