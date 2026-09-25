@@ -7,6 +7,7 @@ local function keymap_macos(keymap)
     ["cmd+shift+o"] = "core:open_project_folder",
     ["cmd+option+r"] = "core:restart",
     ["cmd+ctrl+return"] = "core:toggle_fullscreen",
+    ["f4"] = "core:repeat_last_command",
 
     ["cmd+ctrl+j"] = "pane:focus_left",
     ["cmd+ctrl+l"] = "pane:focus_right",

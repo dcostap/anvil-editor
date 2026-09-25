@@ -263,6 +263,10 @@ local function add_project_directory_with_system_file_picker()
 end
 
 command.add(nil, {
+  ["core:repeat_last_command"] = command.palette(function()
+    command.repeat_last()
+  end),
+
   ["core:quit"] = command.palette(function()
     core.quit()
   end),

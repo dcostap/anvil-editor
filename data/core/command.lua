@@ -66,6 +66,7 @@ local function validate_metadata(metadata)
 end
 
 local invocation_context
+local last_command
 
 ---@type core.command.predicate_function
 local always_true = function() return true end
@@ -410,7 +411,18 @@ end
 ---@return boolean # true if the command is performed successfully.
 function command.perform(name, ...)
   local ok, res = core.try(perform, name, ...)
+  if ok and res and name ~= "core:repeat_last_command" then
+    last_command = { name = name, args = pack(...) }
+  end
   return not ok or res
+end
+
+---Run the most recent successful command again with its original arguments.
+---Repeating does not replace the saved command.
+---@return boolean
+function command.repeat_last()
+  if not last_command then return false end
+  return command.perform(last_command.name, table.unpack(last_command.args, 1, last_command.args.n))
 end
 
 ---Perform a command with source and placement context.

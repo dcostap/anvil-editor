@@ -312,6 +312,7 @@ keymap.add_direct {
   ["ctrl+shift+r"] = "core:restart",
   ["alt+return"] = "core:toggle_fullscreen",
   ["f11"] = "core:toggle_fullscreen",
+  ["f4"] = "core:repeat_last_command",
 
   ["ctrl+w"] = "pane:close",
   ["ctrl+tab"] = "pane:focus_next",
