@@ -3728,9 +3728,10 @@ command.add(nil, {
     supports_placement = true,
     opens_view = true,
   }),
-  ["filetree:open_at_current_path"] = command.palette(function()
+  ["filetree:open_at_current_path"] = command.palette(function(target_path)
     local context, pane, source_view = command_context()
-    local path = file_context.view_context_path(source_view)
+    local path = target_path and file_context.resolve_path(target_path, source_view)
+      or file_context.view_context_path(source_view)
       or file_context.source_directory(source_view)
     if path and project_paths.resolve(path) then
       local project = core.root_project and core.root_project()

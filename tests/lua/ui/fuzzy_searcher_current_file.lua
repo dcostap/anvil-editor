@@ -1,6 +1,7 @@
 local common = require "core.common"
 local command = require "core.command"
 local core = require "core"
+local panes = require "core.panes"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local test = require "core.test"
@@ -43,6 +44,7 @@ test.describe("Fuzzy Searcher current file query", function()
     context.active_view = core.active_view
     context.cwd = system.getcwd()
     context.clipboard = system.get_clipboard()
+    panes.reset_for_tests()
     context.root = join_path(system.absolute_path("."), "fuzzy-current-file-query")
     context.external = join_path(system.absolute_path("."), "fuzzy-current-file-external")
     common.rm(context.root, true)
@@ -57,6 +59,7 @@ test.describe("Fuzzy Searcher current file query", function()
 
   test.after_each(function(context)
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
+    panes.reset_for_tests()
     project_paths.configure_workspace {}
     core.projects = context.projects
     core.active_view = context.active_view
@@ -161,5 +164,47 @@ test.describe("Fuzzy Searcher current file query", function()
     test.equal(picker.input:get_text(), common.normalize_path(path))
     test.ok(picker.path_search_active)
     test.ok(common.path_equals(picker.results[1].abs_path, path))
+  end)
+
+  test.it("opens the selected file in a File Tree", function(context)
+    local source_path = join_path(context.root, "src", "source.lua")
+    local selected_path = join_path(context.root, "lib", "selected.lua")
+    write_file(source_path)
+    write_file(selected_path)
+    local source = FileView(source_path)
+    local pane = panes.create { factory = function() return source end }
+    core.active_view = source
+
+    fuzzy_searcher.open("")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker.results = { { kind = "file", file = selected_path, abs_path = selected_path } }
+    picker.selected = 1
+
+    test.ok(command.perform("fuzzy:open_selected_in_filetree"))
+
+    local tree = pane.current_view
+    test.equal(tree.root_dir, common.normalize_path(context.root))
+    local entry = tree:entry_for_line(tree.buffer:get_selection(true))
+    test.ok(entry and common.path_equals(entry.abs, selected_path))
+    test.ok(picker.closed)
+  end)
+
+  test.it("does not open a File Tree for a selected folder", function(context)
+    local folder = join_path(context.root, "selected-folder")
+    test.ok(common.mkdirp(folder))
+    local source = FileView(join_path(context.root, "source.lua"))
+    write_file(source.path)
+    local pane = panes.create { factory = function() return source end }
+    core.active_view = source
+
+    fuzzy_searcher.open("")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker.results = { { kind = "folder", abs_path = folder, is_folder = true } }
+    picker.selected = 1
+
+    test.ok(command.perform("fuzzy:open_selected_in_filetree"))
+
+    test.equal(pane.current_view, source)
+    test.not_ok(picker.closed)
   end)
 end)

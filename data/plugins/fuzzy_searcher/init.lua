@@ -6913,6 +6913,21 @@ function FSView:reveal_selected_in_explorer()
   command.perform("editor:reveal_active_file_in_explorer", path)
 end
 
+function FSView:open_selected_in_filetree()
+  local path = self:selected_file_path()
+  local info = path and system.get_file_info(path)
+  if not info or info.type ~= "file" then return false end
+
+  core.log_quiet("Fuzzy Searcher: opening selected file in File Tree path_len=%d", #path)
+  local context = {
+    source_view = self.source_view,
+    source_pane = panes.find(self.source_pane) or panes.active(),
+    placement = "current",
+  }
+  self:close()
+  return command.perform_with_context("filetree:open_at_current_path", context, path)
+end
+
 function FSView:restore_activation_focus(new_group)
   if not new_group or self.closed or self.closing then return end
   if self.preview_view and self.preview_view:extends(TextView) then
@@ -7984,6 +7999,13 @@ end, {
   end,
 })
 
+command.add(picker_active, {
+  ["fuzzy:open_selected_in_filetree"] = function()
+    local view = current_picker()
+    if view then view:open_selected_in_filetree() end
+  end,
+})
+
 command.add(function()
   local view = current_picker()
   return view and not view:is_preview_focused() and view:can_toggle_ignored_files()
@@ -8018,6 +8040,8 @@ core.fuzzy_searcher_install_picker_keymaps = function()
     ["ctrl+return"] = "fuzzy:confirm_new_group",
     ["ctrl+l"] = "fuzzy:open_current_file",
     ["ctrl+shift+l"] = "fuzzy:reveal_selected_in_explorer",
+    ["ctrl+\\"] = "fuzzy:open_selected_in_filetree",
+    ["ctrl+;"] = "fuzzy:open_selected_in_filetree",
     ["ctrl+c"] = "fuzzy:copy_selected",
     ["ctrl+i"] = "fuzzy:toggle_ignored_files",
     ["tab"] = "fuzzy:fill_prompt_from_selected",
