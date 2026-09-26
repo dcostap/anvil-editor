@@ -2095,7 +2095,9 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
       self.render_cache_diagnostics.line_invalidations + requested_line2 - requested_line1 + 1
     local layout_line1 = common.clamp(requested_line1, 1, #self.buffer.lines)
     local layout_line2 = common.clamp(requested_line2, layout_line1, #self.buffer.lines)
-    if self.wrapped_settings and not self.__line_render_wrap_invalidating then
+    if self.wrapped_settings and not self.__line_render_wrap_invalidating
+      and not self.__presentation_reload_frozen
+    then
       self.__line_render_wrap_invalidating = true
       local invalidated_layout_lines = layout_line2 - layout_line1 + 1
       local defer_wrapped_reconstruction = opts.defer_wrapped_reconstruction

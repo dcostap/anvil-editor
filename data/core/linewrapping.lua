@@ -1598,6 +1598,9 @@ function LineWrapping.compute_wrap_width(textview)
 end
 
 function LineWrapping.update_textview_breaks(textview, width)
+  -- A reload retains one committed presentation, including its wrap map.
+  -- Do not combine frozen row heights with breaks from the new source.
+  if textview.__presentation_reload_frozen and textview.wrapped_settings then return end
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
   width = width or LineWrapping.compute_wrap_width(textview)

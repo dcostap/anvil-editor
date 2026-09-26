@@ -114,13 +114,22 @@ test.describe("Markdown publication frames", function()
 
   test.it("keeps list presentation unchanged when indentation publishes", function(context)
     local view, buffer = make_view(context,
-      "- test\n    - child\n    - child two\n- parent\n- test\nfollowing\n(note)\n")
+      "- test\n    - child\n    - child two\n- parent\n- test\nfollowing\n(note)\n\n"
+      .. string.rep("## Heading\n\nA paragraph with **bold** words.\n", 180))
     buffer:set_selection(5, 3)
     frame(view, 1, 7)
     for step = 1, 5 do
       test.ok(command.perform(step % 2 == 1 and "core:indent" or "core:unindent", view))
       local pending = frame(view, 1, 7)
-      ready(view)
+      local instance = model.peek(buffer)
+      local deadline = system.get_time() + 5
+      repeat
+        drain()
+        same_rows(frame(view, 1, 7), pending, "indent publication " .. step)
+        if instance.status ~= "ready" then coroutine.yield(0.001) end
+      until instance.status == "ready" or system.get_time() >= deadline
+      test.equal(instance.status, "ready")
+      wrapping.complete_async_reconstruction(view)
       local published = frame(view, 1, 7)
       same_rows(published, pending, "indent step " .. step)
     end
@@ -129,18 +138,19 @@ test.describe("Markdown publication frames", function()
   test.it("keeps every visible row fixed through an offscreen file reload", function(context)
     local lines = {}
     for i = 1, 360 do
-      lines[i] = i % 9 == 1 and "## Heading with **bold** text\n"
+      lines[i] = i % 9 == 1 and ("# " .. string.rep("Heading words ", 30) .. "\n")
         or i % 9 == 2 and "\n"
         or "- A list item with **bold** and *italic* text. " .. string.rep("More wrapped words. ", 15) .. "\n"
     end
     local view, buffer = make_view(context, table.concat(lines))
-    buffer:set_selection(205, 6)
-    view:scroll_to_make_visible(205, 6, true)
-    frame(view, 205, 205)
+    local target = 205
+    buffer:set_selection(target, 6)
+    view:scroll_to_make_visible(target, 6, true)
+    frame(view, target, target)
     local first, last = view:get_visible_line_range()
     local baseline = frame(view, first, last)
     context.path = USERDIR .. PATHSEP .. "publication-frame-reload.md"
-    lines[20] = lines[20]:gsub("item", "items")
+    lines[20] = lines[20]:gsub("\n$", "x\n")
     local file = test.not_nil(io.open(context.path, "wb"))
     file:write(table.concat(lines))
     file:close()
