@@ -2875,11 +2875,8 @@ local function markdown_indent_width(prefix)
   return width
 end
 
-local function markdown_list_visual_indent_width(prefix)
-  local source_width = markdown_indent_width(prefix)
-  local visual_step = math.max(
-    1, math.floor(tonumber(config.markdown_live_list_indent_spaces) or 4)
-  )
+local function markdown_visual_indent_width(source_width)
+  local visual_step = math.max(4, math.floor(config.markdown_live_indent_spaces))
   return math.floor(source_width / 4) * visual_step + source_width % 4
 end
 
@@ -3165,7 +3162,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       local body_font = markdown_live_body_font(view)
       local leading = line_text:match("^[\t ]*") or ""
       local source_leading_width = body_font:get_width(
-        string.rep(" ", markdown_indent_width(leading))
+        string.rep(" ", markdown_visual_indent_width(markdown_indent_width(leading)))
       )
       local width = target_x - source_leading_width
       -- Keep unindented lazy continuations at their source margin.
@@ -3278,7 +3275,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         local raw = line_text:sub(marker_source_col1, marker.col2 - 1)
         local ordered = raw:match("^%s*(%d+[.)])")
         local indent_width = body_font:get_width(
-          string.rep(" ", markdown_list_visual_indent_width(indent))
+          string.rep(" ", markdown_visual_indent_width(markdown_indent_width(indent)))
         )
         local raw_width = body_font:get_width(raw)
         local marker_gap_width = body_font:get_width(" ")
@@ -3499,14 +3496,78 @@ local function prose_render_line(view, line_text, render_line)
     or markdown_live_body_line_height(view)
   render_line.caret_height = render_line.caret_height or render_line.text_row_height
   local fragments, cursor = {}, 1
-  for _, fragment in ipairs(render_line.fragments or {}) do
+  local source_fragments = render_line.fragments or {}
+  local leading = line_text:match("^[ \t]+") or ""
+  -- Edits can retain several plain fragments across a new indent prefix.
+  -- Replace only that source prefix; keep the following styled fragments.
+  if leading ~= "" and not render_line.raw_passthrough then
+    local prefix_end, index, next_col = #leading + 1, 1, 1
+    while next_col < prefix_end do
+      local fragment = source_fragments[index]
+      local col2 = fragment and fragment.source_col2
+      if not fragment or fragment.source_col1 ~= next_col
+        or not col2 or col2 <= next_col
+        or fragment.text ~= line_text:sub(next_col, col2 - 1)
+        or fragment.hidden or fragment.widget or fragment.text_x_offset
+        or fragment.text_source_col1 or fragment.markdown_list_content_col
+        or fragment.markdown_callout_content_col
+        or fragment.width and col2 > prefix_end
+      then break end
+      next_col = math.min(col2, prefix_end)
+      if col2 <= prefix_end then index = index + 1 end
+    end
+    if next_col == prefix_end then
+      local rest = {}
+      local partial = source_fragments[index]
+      if partial and partial.source_col1 < prefix_end then
+        local suffix = {}
+        for key, value in pairs(partial) do suffix[key] = value end
+        suffix.source_col1 = prefix_end
+        suffix.text = partial.text:sub(prefix_end - partial.source_col1 + 1)
+        rest[#rest + 1] = suffix
+        index = index + 1
+      end
+      for remaining = index, #source_fragments do
+        rest[#rest + 1] = source_fragments[remaining]
+      end
+      source_fragments = rest
+    end
+  end
+  local function append_source_text(from, to)
+    if from >= to then return end
+    if from == 1 then
+      local leading = (line_text:match("^[ \t]+") or ""):sub(1, to - 1)
+      if leading ~= "" then
+        render_line.continuation_indent_col = #leading + 1
+      end
+      local previous_width, source_width = 0, 0
+      for col = 1, #leading do
+        local char = leading:sub(col, col)
+        source_width = char == "\t"
+          and source_width + 4 - source_width % 4 or source_width + 1
+        local visual_width = markdown_visual_indent_width(source_width)
+        -- Keep each source column addressable for caret and wrap mapping.
+        fragments[#fragments + 1] = {
+          source_col1 = col, source_col2 = col + 1,
+          text = char, font = font,
+          width = font:get_width(string.rep(" ", visual_width - previous_width)),
+        }
+        previous_width = visual_width
+      end
+      from = from + #leading
+    end
+    if from < to then
+      fragments[#fragments + 1] = {
+        source_col1 = from, source_col2 = to,
+        text = line_text:sub(from, to - 1), font = font,
+      }
+    end
+  end
+  for _, fragment in ipairs(source_fragments) do
     local col1 = math.max(1, fragment.source_col1 or cursor)
     local col2 = math.max(col1, fragment.source_col2 or col1)
     if col1 > cursor then
-      fragments[#fragments + 1] = {
-        source_col1 = cursor, source_col2 = col1,
-        text = line_text:sub(cursor, col1 - 1), font = font,
-      }
+      append_source_text(cursor, col1)
     end
     if not fragment.font then fragment.font = font end
     fragments[#fragments + 1] = fragment
@@ -3530,10 +3591,7 @@ local function prose_render_line(view, line_text, render_line)
     cursor = math.max(cursor, col2)
   end
   if cursor <= #line_text then
-    fragments[#fragments + 1] = {
-      source_col1 = cursor, source_col2 = #line_text + 1,
-      text = line_text:sub(cursor), font = font,
-    }
+    append_source_text(cursor, #line_text + 1)
   elseif #fragments == 0 then
     fragments[1] = {
       source_col1 = 1, source_col2 = 1, text = "", font = font,
@@ -4068,7 +4126,7 @@ function edit_visual_projection.pending_list_render(
   local body_font = markdown_live_body_font(view)
   local row_height = markdown_live_body_line_height(view)
   local indent_width = body_font:get_width(string.rep(
-    " ", markdown_list_visual_indent_width(parsed.indent)
+    " ", markdown_visual_indent_width(markdown_indent_width(parsed.indent))
   ))
   local control_size = math.max(
     math.floor(SCALE * 12), math.floor(body_font:get_height() * 0.84)
@@ -4437,6 +4495,12 @@ local function split_pending_render(view, render_line, text)
           line_render.fragments[#line_render.fragments + 1] = copy
         end
       end
+    end
+    -- The pending frame must use the same indent widths as publication.
+    if source:match("^[ \t]") and not line_render.raw_passthrough
+      and not line_render.markdown_code_block
+    then
+      line_render = prose_render_line(view, source, line_render)
     end
     lines[#lines + 1] = line_render
     if not newline then break end

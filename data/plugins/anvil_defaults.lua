@@ -440,8 +440,8 @@ end
 if config.markdown_live_scroll_context_lines == nil then
   config.markdown_live_scroll_context_lines = 14
 end
-if config.markdown_live_list_indent_spaces == nil then
-  config.markdown_live_list_indent_spaces = 8
+if config.markdown_live_indent_spaces == nil then
+  config.markdown_live_indent_spaces = 8
 end
 if config.markdown_live_link_path_policy == nil then
   config.markdown_live_link_path_policy = "shortest_unique"

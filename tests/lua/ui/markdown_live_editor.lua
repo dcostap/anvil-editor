@@ -2508,7 +2508,7 @@ test.describe("Markdown Live Preview", function()
     test.equal(parent_task_x, parent_plain_x)
     test.equal(child_task_x, child_plain_x)
     local indent_step = live_body_font(view):get_width(
-      string.rep(" ", config.markdown_live_list_indent_spaces)
+      string.rep(" ", config.markdown_live_indent_spaces)
     )
     test.equal(child_plain_x - parent_plain_x, indent_step)
     test.equal(child_task_x - parent_task_x, indent_step)

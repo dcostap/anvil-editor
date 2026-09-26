@@ -176,6 +176,89 @@ test.describe("Markdown publication frames", function()
   end)
 
   for _, case in ipairs {
+    { name = "spaces", indent = "    " },
+    { name = "tab", indent = "\t" },
+    { name = "two tabs", indent = "\t\t" },
+    { name = "mixed spaces and tab", indent = " \t" },
+  } do
+    test.it("aligns " .. case.name .. " prose indentation with a list marker", function(context)
+      local view, buffer = make_view(context,
+        "intro\n" .. case.indent .. "Q\n" .. case.indent .. "1. item\n")
+      buffer:set_selection(1, #buffer.lines[1])
+      local _, painted = frame(view, 1, 3)
+      local prose_x, marker_x
+      for _, glyph in ipairs(painted) do
+        if glyph.text == "Q" then prose_x = glyph.x end
+        if glyph.text == "1" then marker_x = glyph.x end
+      end
+      test.not_nil(prose_x)
+      test.not_nil(marker_x)
+      test.ok(math.abs(prose_x - marker_x) < 0.001,
+        "prose and list indentation use different visual widths")
+
+      buffer:set_selection(2, #case.indent + 1, 2, #buffer.lines[2])
+      view:on_text_input("1. item")
+      local pending, pending_paint = frame(view, 1, 3)
+      local edited_marker_x
+      for _, glyph in ipairs(pending_paint) do
+        if glyph.text == "1" then edited_marker_x = glyph.x end
+      end
+      test.not_nil(edited_marker_x)
+      test.ok(math.abs(prose_x - edited_marker_x) < 0.001,
+        "the marker moved when prose became a list item")
+      ready(view)
+      local published, published_paint = frame(view, 1, 3)
+      same_rows(pending, published, "prose-to-list publication")
+      same_paint(pending_paint, published_paint)
+    end)
+
+    test.it("keeps " .. case.name .. " prose indent fixed while typing", function(context)
+      local view, buffer = make_view(context, "intro\n" .. case.indent .. "Q\n")
+      buffer:set_selection(2, #buffer.lines[2])
+      frame(view, 1, 2)
+      view:on_text_input("x")
+      local pending, pending_paint = frame(view, 1, 2)
+      ready(view)
+      local published, published_paint = frame(view, 1, 2)
+      same_rows(pending, published, "plain indent publication")
+      same_paint(pending_paint, published_paint)
+    end)
+  end
+
+  test.it("shows a newly inserted prose indent at its final width", function(context)
+    local view, buffer = make_view(context, "intro\nQ\n")
+    buffer:set_selection(2, 1)
+    frame(view, 1, 2)
+    test.ok(command.perform("core:indent", view))
+    local pending, pending_paint = frame(view, 1, 2)
+    ready(view)
+    local published, painted = frame(view, 1, 2)
+    same_paint(pending_paint, painted)
+    same_rows(pending, published, "new prose indent publication")
+  end)
+
+  test.it("keeps a mixed prose indent fixed when a tab joins spaces", function(context)
+    local view, buffer = make_view(context, "intro\n Q\n")
+    buffer:set_selection(2, 2)
+    frame(view, 1, 2)
+    view:on_text_input("\t")
+    local pending, pending_paint = frame(view, 1, 2)
+    ready(view)
+    local published, painted = frame(view, 1, 2)
+    same_paint(pending_paint, painted)
+    same_rows(pending, published, "mixed prose indent publication")
+  end)
+
+  test.it("maps clicks across the full preview tab width", function(context)
+    local view = make_view(context, "intro\n\tQ\n")
+    local tab_width = view:get_col_x_offset(2, 2) - view:get_col_x_offset(2, 1)
+    local font = view:get_line_render(2).fragments[1].font
+    test.ok(tab_width > font:get_width("    "), "preview tab did not grow")
+    test.equal(view:get_x_offset_col(2, tab_width * 0.4), 1)
+    test.equal(view:get_x_offset_col(2, tab_width * 0.6), 2)
+  end)
+
+  for _, case in ipairs {
     { name = "at the end of the file", source = "- test" },
     { name = "before a blank line", source = "- test\n" },
     { name = "before plain text", source = "- test\nplain\n" },

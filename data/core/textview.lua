@@ -5406,6 +5406,11 @@ function TextView:get_line_render_x_offset_col(render_line, x)
         local text_col2 = fragment.text_source_col2 or col2
         if x <= xoffset + text_offset then return text_col1 end
         local local_x = xoffset + text_offset
+        if fragment.width and not fragment.widget
+          and #text == 1 and text_col1 == col1 and text_col2 == col1 + 1
+        then
+          return x <= local_x + width / 2 and col1 or col2
+        end
         if entry and entry.text_layout then
           return math.min(
             text_col1 + entry.text_layout:byte_at_x(math.max(0, x - local_x)),
