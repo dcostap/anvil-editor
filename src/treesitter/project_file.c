@@ -447,6 +447,29 @@ static bool symbol_add_child(Symbol *symbol, uint32_t child) {
   return true;
 }
 
+static bool assign_symbol_parents(AnvilTSProjectFileResult *result) {
+  Symbol **stack = result->symbol_count ? (Symbol **)malloc(sizeof(*stack) * result->symbol_count) : NULL;
+  if (result->symbol_count && !stack) return false;
+  uint32_t stack_count = 0;
+  for (uint32_t i = 0; i < result->symbol_count; i++) {
+    Symbol *symbol = &result->symbols[i];
+    free(symbol->children);
+    symbol->children = NULL;
+    symbol->child_count = symbol->child_capacity = symbol->depth = 0;
+    symbol->parent = ANVIL_PROJECT_NO_OFFSET;
+    while (stack_count && !contains_symbol(stack[stack_count - 1], symbol)) stack_count--;
+    if (stack_count) {
+      Symbol *parent = stack[stack_count - 1];
+      symbol->parent = (uint32_t)(parent - result->symbols) + 1;
+      symbol->depth = parent->depth + 1;
+      if (!symbol_add_child(parent, i + 1)) { free(stack); return false; }
+    }
+    stack[stack_count++] = symbol;
+  }
+  free(stack);
+  return true;
+}
+
 static bool build_symbols(AnvilTSProjectFileResult *result, const AnvilTSSnapshot *snapshot, const AnvilTSProjectCapture *captures, uint32_t capture_count, char **error) {
   if (!capture_count) return true;
   if (capture_count > UINT32_MAX / 4) { set_error(error, "native Project symbol capture table is too large"); return false; }
@@ -522,22 +545,7 @@ static bool build_symbols(AnvilTSProjectFileResult *result, const AnvilTSSnapsho
   }
 
   if (!sort_symbols(result)) goto oom;
-  Symbol **stack = result->symbol_count ? (Symbol **)malloc(sizeof(*stack) * result->symbol_count) : NULL;
-  if (result->symbol_count && !stack) goto oom;
-  uint32_t stack_count = 0;
-  for (uint32_t i = 0; i < result->symbol_count; i++) {
-    Symbol *symbol = &result->symbols[i];
-    while (stack_count && !contains_symbol(stack[stack_count - 1], symbol)) stack_count--;
-    if (stack_count) {
-      Symbol *parent = stack[stack_count - 1];
-      uint32_t parent_index = (uint32_t)(parent - result->symbols);
-      symbol->parent = parent_index + 1;
-      symbol->depth = parent->depth + 1;
-      if (!symbol_add_child(parent, i + 1)) { free(stack); goto oom; }
-    }
-    stack[stack_count++] = symbol;
-  }
-  free(stack);
+  if (!assign_symbol_parents(result)) goto oom;
   for (uint32_t i = 0; i < group_count; i++) free(groups[i].signatures);
   free(groups);
   free(slots);
@@ -666,6 +674,65 @@ AnvilTSProjectFileResult *anvil_ts_project_file_build(
     return NULL;
   }
   return result;
+}
+
+static bool copy_slice(AnvilTSProjectFileResult *to, const AnvilTSProjectFileResult *from, Slice source, Slice *target) {
+  const char *text = slice_text(from, source);
+  if (!text) { *target = absent_slice(); return true; }
+  return arena_append(to, text, source.length, 0, target);
+}
+
+bool anvil_ts_project_file_merge(AnvilTSProjectFileResult *primary, const AnvilTSProjectFileResult *secondary, char **error) {
+  if (!primary || !secondary || strcmp(primary->path, secondary->path) != 0) {
+    set_error(error, "cannot merge records for different Project files");
+    return false;
+  }
+  for (uint32_t i = 0; i < secondary->symbol_count; i++) {
+    const Symbol *source = &secondary->symbols[i];
+    bool duplicate = false;
+    for (uint32_t j = 0; j < primary->symbol_count; j++) {
+      const Symbol *existing = &primary->symbols[j];
+      if (existing->name_range.start_byte == source->name_range.start_byte &&
+          existing->name_range.end_byte == source->name_range.end_byte &&
+          existing->name.length == source->name.length &&
+          memcmp(slice_text(primary, existing->name), slice_text(secondary, source->name), source->name.length) == 0) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) continue;
+    if (!checked_grow((void **)&primary->symbols, &primary->symbol_capacity, primary->symbol_count + 1, sizeof(*primary->symbols))) goto oom;
+    Symbol *target = &primary->symbols[primary->symbol_count++];
+    *target = *source;
+    target->children = NULL;
+    target->child_count = target->child_capacity = 0;
+    if (!copy_slice(primary, secondary, source->name, &target->name) ||
+        !copy_slice(primary, secondary, source->kind, &target->kind) ||
+        !copy_slice(primary, secondary, source->signature, &target->signature) ||
+        !copy_slice(primary, secondary, source->declaration, &target->declaration)) goto oom;
+  }
+  if (!sort_symbols(primary) || !assign_symbol_parents(primary)) goto oom;
+  for (uint32_t i = 0; i < secondary->usage_count; i++) {
+    const Usage *source = &secondary->usages[i];
+    bool duplicate = false;
+    for (uint32_t j = 0; j < primary->usage_count; j++) {
+      if (usage_same(primary, &primary->usages[j], slice_text(secondary, source->name), source->name.length,
+          source->range.start_byte, source->range.end_byte)) { duplicate = true; break; }
+    }
+    if (duplicate) continue;
+    if (!checked_grow((void **)&primary->usages, &primary->usage_capacity, primary->usage_count + 1, sizeof(*primary->usages))) goto oom;
+    Usage *target = &primary->usages[primary->usage_count++];
+    *target = *source;
+    if (!copy_slice(primary, secondary, source->name, &target->name) ||
+        !copy_slice(primary, secondary, source->capture, &target->capture) ||
+        !copy_slice(primary, secondary, source->kind, &target->kind) ||
+        !copy_slice(primary, secondary, source->line_text, &target->line_text)) goto oom;
+  }
+  qsort(primary->usages, primary->usage_count, sizeof(*primary->usages), usage_compare);
+  return true;
+oom:
+  set_error(error, "out of memory merging C and C++ header records");
+  return false;
 }
 
 void anvil_ts_project_file_retain(AnvilTSProjectFileResult *result) {

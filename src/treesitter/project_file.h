@@ -77,6 +77,8 @@ AnvilTSProjectFileResult *anvil_ts_project_file_build(
   uint32_t usage_count,
   char **error
 );
+/* Add records from the second parse of a mixed C/C++ header to the first. */
+bool anvil_ts_project_file_merge(AnvilTSProjectFileResult *primary, const AnvilTSProjectFileResult *secondary, char **error);
 void anvil_ts_project_file_retain(AnvilTSProjectFileResult *result);
 void anvil_ts_project_file_free(AnvilTSProjectFileResult *result);
 const char *anvil_ts_project_file_path(const AnvilTSProjectFileResult *result);

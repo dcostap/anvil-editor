@@ -279,6 +279,7 @@ static int pool_submit(lua_State *L) {
   spec.usage_max_captures = opt_uint32_field(L, 2, "usage_max_captures", 0);
   spec.project_usage_cap = opt_uint32_field(L, 2, "project_usage_cap", 750000);
   spec.project_root = opt_string_field(L, 2, "project_root", NULL);
+  spec.project_mixed_headers = opt_bool_field(L, 2, "project_mixed_headers", NULL);
   spec.project_progress_files = opt_uint32_field(L, 2, "project_progress_files", 64);
   spec.project_publish_partial_snapshots = opt_bool_field(L, 2, "publish_partial_snapshots", NULL);
   spec.manifest_show_unsupported_files = opt_bool_field(L, 2, "show_unsupported_files", NULL);

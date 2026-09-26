@@ -96,6 +96,7 @@ struct AnvilWorkerJob {
   uint32_t project_excluded_path_count;
   AnvilWorkerProjectRunLanguageSpec *project_languages;
   uint32_t project_language_count;
+  bool project_mixed_headers;
   uint32_t project_progress_files;
   bool project_publish_partial_snapshots;
   bool manifest_show_unsupported_files;
@@ -2524,6 +2525,7 @@ typedef struct ProjectRunFile {
   char *fingerprint;
   uint64_t size;
   uint32_t language_index;
+  uint32_t secondary_language_index;
 } ProjectRunFile;
 
 typedef struct ProjectRunPatternSet {
@@ -2693,6 +2695,14 @@ static bool project_run_add_file(ProjectRunWalk *walk, const char *path, const S
   }
   if (language_index == UINT32_MAX || best_length < 0) return true;
   size_t path_len = strlen(path);
+  uint32_t secondary_index = UINT32_MAX;
+  if (walk->job->project_mixed_headers && path_len >= 2 && SDL_strcasecmp(path + path_len - 2, ".h") == 0) {
+    for (uint32_t i = 0; i < walk->job->project_language_count; i++) {
+      const char *id = walk->job->project_languages[i].id;
+      if (id && strcmp(id, "cpp") == 0) language_index = i;
+      if (id && strcmp(id, "c") == 0) secondary_index = i;
+    }
+  }
   if (walk->file_count >= 1000000 || path_len > UINT64_MAX - walk->path_bytes ||
       walk->path_bytes + path_len > UINT64_C(536870912)) {
     if (!walk->error) walk->error = pool_strdup("native Project enumeration exceeds its bounded file metadata limit");
@@ -2721,12 +2731,15 @@ static bool project_run_add_file(ProjectRunWalk *walk, const char *path, const S
   file->relpath = pool_strdup(relative);
   char fingerprint[128];
   uint64_t language_fingerprint = project_run_language_fingerprint(&walk->job->project_languages[language_index]);
-  SDL_snprintf(fingerprint, sizeof(fingerprint), "%llu:%lld:%u:%llu",
+  uint64_t secondary_fingerprint = secondary_index == UINT32_MAX ? 0
+    : project_run_language_fingerprint(&walk->job->project_languages[secondary_index]);
+  SDL_snprintf(fingerprint, sizeof(fingerprint), "%llu:%lld:%u:%llu:%llu",
     (unsigned long long)info->size, (long long)info->modify_time, language_index,
-    (unsigned long long)language_fingerprint);
+    (unsigned long long)language_fingerprint, (unsigned long long)secondary_fingerprint);
   file->fingerprint = pool_strdup(fingerprint);
   file->size = info->size;
   file->language_index = language_index;
+  file->secondary_language_index = secondary_index;
   if (!file->path || !file->relpath || !file->fingerprint) {
     SDL_free(file->path);
     SDL_free(file->relpath);
@@ -2956,6 +2969,49 @@ static SDL_Semaphore *project_run_parse_slots(void) {
   return project_parse_slots;
 }
 
+static bool project_run_merge_header(
+  AnvilWorkerContext *context, AnvilWorkerJob *job, const ProjectRunFile *file,
+  const AnvilWorkerProjectBatchFileSpec *primary_spec, AnvilWorkerTreeSitterIndexResult *primary,
+  uint32_t usage_budget, bool *usage_complete, char **error, bool *cancelled
+) {
+  if (file->secondary_language_index == UINT32_MAX) return true;
+  const AnvilWorkerProjectRunLanguageSpec *language = &job->project_languages[file->secondary_language_index];
+  AnvilWorkerProjectBatchFileSpec secondary_spec = *primary_spec;
+  secondary_spec.language = language->grammar;
+  secondary_spec.outline_query = language->outline_query;
+  secondary_spec.outline_query_len = language->outline_query_len;
+  secondary_spec.usage_query = language->usage_query;
+  secondary_spec.usage_query_len = language->usage_query_len;
+  secondary_spec.parse_timeout_ms = language->parse_timeout_ms;
+  secondary_spec.query_timeout_ms = language->query_timeout_ms;
+  secondary_spec.match_limit = language->match_limit;
+  secondary_spec.max_captures = language->max_captures;
+  secondary_spec.usage_query_timeout_ms = language->usage_query_timeout_ms;
+  secondary_spec.usage_match_limit = language->usage_match_limit;
+  secondary_spec.usage_max_captures = language->usage_max_captures;
+  if (secondary_spec.usage_max_captures > usage_budget) secondary_spec.usage_max_captures = usage_budget;
+  if (!secondary_spec.usage_max_captures) secondary_spec.usage_query = NULL;
+  AnvilWorkerTreeSitterIndexResult *secondary = execute_project_batch_file(
+    context, job, &secondary_spec, error, cancelled);
+  if (!secondary) return false;
+  const char *outline_status = anvil_worker_treesitter_index_result_status(secondary, "outline");
+  bool ok = outline_status && (!strcmp(outline_status, "ready") || !strcmp(outline_status, "limit"));
+  if (ok) {
+    char *merge_error = NULL;
+    ok = anvil_ts_project_file_merge(primary->project_file, secondary->project_file, &merge_error);
+    if (!ok) *error = merge_error ? merge_error : pool_strdup("could not merge C and C++ header symbols");
+    const char *usage_status = anvil_worker_treesitter_index_result_status(secondary, "usage");
+    *usage_complete = *usage_complete && (!language->usage_query ||
+      (secondary_spec.usage_query && usage_status && strcmp(usage_status, "ready") == 0));
+    primary->parse_ns += secondary->parse_ns;
+    primary->project_record_ns += secondary->project_record_ns;
+  } else {
+    *error = pool_strdup("C header outline query failed in mixed Project");
+  }
+  anvil_worker_treesitter_index_result_free(secondary);
+  return ok;
+}
+
 static int SDLCALL project_run_thread_main(void *userdata) {
   ProjectRunThread *thread = (ProjectRunThread *)userdata;
   ProjectRunExecution *execution = thread->execution;
@@ -3024,10 +3080,20 @@ static int SDLCALL project_run_thread_main(void *userdata) {
       continue;
     }
     const char *usage_status = anvil_worker_treesitter_index_result_status(result, "usage");
+    bool usage_complete = !language->usage_query ||
+      (spec.usage_query && usage_status && strcmp(usage_status, "ready") == 0);
+    uint32_t primary_usages = anvil_worker_treesitter_index_result_project_usage_count(result);
+    if (!project_run_merge_header(&context, job, file, &spec, result,
+        primary_usages < usage_remaining ? usage_remaining - primary_usages : 0,
+        &usage_complete, &file_error, &file_cancelled)) {
+      anvil_worker_treesitter_index_result_free(result);
+      if (file_cancelled || job_cancelled(job)) { SDL_free(file_error); break; }
+      project_run_set_fatal(execution, file_error);
+      break;
+    }
     chunk_results[chunk_count] = result;
     chunk_fingerprints[chunk_count] = file->fingerprint;
-    chunk_usage_complete[chunk_count] = !language->usage_query ||
-      (spec.usage_query && usage_status && strcmp(usage_status, "ready") == 0);
+    chunk_usage_complete[chunk_count] = usage_complete;
     chunk_count++;
     local_completed++;
     uint32_t result_symbols = anvil_worker_treesitter_index_result_project_symbol_count(result);
@@ -3299,6 +3365,15 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     }
     const char *usage_status = anvil_worker_treesitter_index_result_status(retry, "usage");
     bool usage_complete = !language->usage_query || (usage_status && strcmp(usage_status, "ready") == 0);
+    uint32_t primary_usages = anvil_worker_treesitter_index_result_project_usage_count(retry);
+    if (!project_run_merge_header(context, job, file, &spec, retry,
+        primary_usages < retry_limit ? (uint32_t)(retry_limit - primary_usages) : 0,
+        &usage_complete, &retry_error, &retry_cancelled)) {
+      anvil_worker_treesitter_index_result_free(retry);
+      if (retry_cancelled || job_cancelled(job)) { SDL_free(retry_error); break; }
+      execution.fatal_error = retry_error ? retry_error : pool_strdup("native Project header usage retry failed");
+      break;
+    }
     uint32_t new_count = anvil_worker_treesitter_index_result_project_usage_count(retry);
     AnvilWorkerTreeSitterIndexResult *retry_results[1] = { retry };
     const char *retry_fingerprints[1] = { file->fingerprint };
@@ -4273,6 +4348,7 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   }
   job->project_usage_cap = spec->project_usage_cap;
   job->project_root = pool_strdup(spec->project_root);
+  job->project_mixed_headers = spec->project_mixed_headers;
   job->project_scoped = spec->project_scoped;
   job->project_progress_files = spec->project_progress_files ? spec->project_progress_files : 64;
   job->project_publish_partial_snapshots = spec->project_publish_partial_snapshots;

@@ -328,16 +328,23 @@ local function coalesce_scope_candidates(candidates)
   return scopes
 end
 
-local function native_project_run_languages_payload()
+local function native_project_run_languages_payload(mode)
   local out = {}
   for _, language in ipairs(registry.get_languages() or {}) do
     local sources = language.query_sources or {}
     if sources.outline then
       local usage_kind = usage_query_kind(language)
+      local files = language.files
+      if mode == "cpp" and language.id == "c" then
+        files = { "%.c$" }
+      elseif mode == "cpp" and language.id == "cpp" then
+        files = common.merge({}, files)
+        files[#files + 1] = "%.h$"
+      end
       out[#out + 1] = {
         id = language.id,
         grammar = language.grammar,
-        files = language.files,
+        files = files,
         outline_query = sources.outline,
         usage_query = usage_kind and sources[usage_kind] or nil,
         parse_timeout_ms = language.parse_timeout_ms or DEFAULT_PARSE_TIMEOUT_MS,
@@ -392,6 +399,13 @@ local function finish_worker_scan(index, message, status)
   index.completed_runs[message.generation - 32] = nil
   core.redraw = true
   if status == "ready" then
+    local ts = require "core.treesitter"
+    for _, buffer in pairs(core.buffers or {}) do
+      local path = buffer and (buffer.abs_filename or buffer.filename)
+      if path and path:lower():match("%.h$") and common.path_belongs_to(path, index.root) then
+        ts.attach_or_update_buffer(buffer, "project-header-mode")
+      end
+    end
     local diagnostics = index.diagnostics or {}
     local worker = diagnostics.worker or {}
     local ui = diagnostics.ui or {}
@@ -576,6 +590,15 @@ end
 local function submit_native_run(index, generation, opts, phase)
   opts = opts or {}
   phase = phase or "combined"
+  if phase ~= "combined" and index.header_mode then
+    local listed = project_files.cached(index.root)
+    local current_mode = listed and registry.header_mode(listed)
+    if current_mode and current_mode ~= index.header_mode then
+      log_quiet("Tree-sitter Project index: .h mode changed %s -> %s under %s; rebuilding",
+        index.header_mode, current_mode, index.root)
+      return submit_worker_scan(index, generation, { force = true, reason = "header-mode-changed" }, "combined")
+    end
+  end
   cancel_index_work(index)
   if not project_native then
     index.status = "failed"
@@ -644,7 +667,8 @@ local function submit_native_run(index, generation, opts, phase)
         project_scoped = scoped,
         scan_paths = scan_paths,
         remove_paths = opts.remove_paths or {},
-        languages = native_project_run_languages_payload(),
+        languages = native_project_run_languages_payload(index.header_mode),
+        project_mixed_headers = index.header_mode == "mixed",
         project_usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
         project_progress_files = opts.progress_files or 64,
         publish_partial_snapshots = phase == "combined",
@@ -769,6 +793,8 @@ submit_worker_scan = function(index, generation, opts, phase)
         files[#files + 1] = { path = file.path }
         if i % 128 == 0 then safe_yield(0) end
       end
+      index.header_mode = registry.header_mode(listed)
+      log_quiet("Tree-sitter Project index: .h mode=%s under %s", index.header_mode, index.root)
       local run_opts = common.merge(opts, { files = files })
       submit_native_run(index, generation, run_opts, phase)
     end)
@@ -1920,6 +1946,9 @@ end
 
 local function submit_open_buffer_overlay(index, buffer, path, reason)
   if not buffer_can_overlay_project_index(buffer) then return false, "disabled" end
+  if index.header_mode == "mixed" and path:lower():match("%.h$") and not buffer_should_suppress_disk(buffer) then
+    return false, "mixed-header-disk-index"
+  end
   local ts = buffer and buffer.treesitter
   if not ts or ts.status ~= "ready" then return false, "not-ready" end
   local language = ts.language
@@ -2060,7 +2089,8 @@ refresh_open_buffer_overlays = function(index)
       seen[path] = true
       local current = index.open_buffers[path]
       local change_id = buffer.get_change_id and buffer:get_change_id() or 0
-      if not buffer_can_overlay_project_index(buffer) then
+      if not buffer_can_overlay_project_index(buffer)
+        or index.header_mode == "mixed" and path:lower():match("%.h$") and not buffer_should_suppress_disk(buffer) then
         local job = index.open_buffer_jobs and index.open_buffer_jobs[path]
         if job then cancel_open_buffer_job(index, path); changed = true end
         if current then index.open_buffers[path] = nil; changed = true end
@@ -2097,7 +2127,8 @@ function symbol_index.update_open_buffer(buffer, reason)
   for _, index in pairs(indexes) do
     if common.path_belongs_to(path, index.root) then
       local current = index.open_buffers[path]
-      if current and current.buffer == buffer and current.change_id == change_id then
+      if current and current.buffer == buffer and current.change_id == change_id
+        and not (index.header_mode == "mixed" and path:lower():match("%.h$") and not buffer_should_suppress_disk(buffer)) then
         updated = true
       else
         local scheduled, err = submit_open_buffer_overlay(index, buffer, path, reason)
