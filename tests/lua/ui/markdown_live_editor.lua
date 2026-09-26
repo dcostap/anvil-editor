@@ -2010,7 +2010,7 @@ test.describe("Markdown Live Preview", function()
     test.equal(visible_render_text(view, 1), source)
   end)
 
-  test.it("keeps heading markers hidden when revealing a nested inline construct", function()
+  test.it("reveals heading markers with a nested inline construct", function()
     local source = "# Head **bold** tail\nplain"
     local view, buffer = make_view(source, "note.md")
     buffer:set_selection(1, 11)
@@ -2019,7 +2019,7 @@ test.describe("Markdown Live Preview", function()
     for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
       if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
     end
-    test.equal(table.concat(visible), "Head **bold** tail")
+    test.equal(table.concat(visible), "# Head **bold** tail")
   end)
 
   test.it("renders semantic code, highlight, strikethrough, and escapes", function()

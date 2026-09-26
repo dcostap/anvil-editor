@@ -3736,6 +3736,7 @@ compute_visual_row_height = function(
       end
       if descriptor then
         local value = descriptor.heights and descriptor.heights[entry.row_in_line]
+          or (entry.row_in_line == 1 and descriptor.first_height)
           or (entry.row_in_line == descriptor.row_count and descriptor.final_height)
           or descriptor.height
         if value then height = math.max(1, tonumber(value) or height) end
@@ -8091,18 +8092,9 @@ end
 local function draw_line_selected_newline(view, line, x, y, color)
   local col = #view.buffer.lines[line] + 1
   local x1 = x + view:get_col_x_offset(line, col, true)
-  local row_y, row_height = y, view:get_position_visual_row_height(line, col, true)
-  if view.wrapped_settings then
-    local idx0 = linewrapping.get_line_idx_col_count(view, line)
-    local idx = linewrapping.get_line_idx_col_count(view, line, col, true)
-    row_y, row_height = wrapped_row_geometry(view, y, idx0, idx)
-  else
-    local _, row = view:get_position_line_render_row(line, col)
-    if row then
-      row_y = y + (row.y_offset or 0)
-      row_height = row.height or row_height
-    end
-  end
+  local _, line_y = view:get_line_screen_position(line)
+  local row_y, row_height = view:get_position_highlight_geometry(line, col, true)
+  row_y = y + row_y - line_y
   local right = view.position.x + view.size.x
   if right > x1 then renderer.draw_rect(x1, row_y, right - x1, row_height, color) end
 end

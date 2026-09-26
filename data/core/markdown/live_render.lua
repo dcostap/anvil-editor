@@ -342,25 +342,12 @@ local function reveal_units_for_line(view, line, state)
         local has_localized_reveal, added = false, {}
         for _, node in ipairs(semantic_line(view, line) or {}) do
           if REVEAL_TYPES[node.type] then
-            -- A heading is a block-level presentation. Its marker ranges
-            -- decide whether its source is revealed, but the heading itself
-            -- must not suppress the ordinary whole-line fallback for a
-            -- selection in otherwise plain heading text. Keep this aligned
-            -- with the collapsed-caret path below.
+            -- Block reveal and inline reveal compose. A heading does not
+            -- suppress the inline unit or reveal its unselected siblings.
             if node.type ~= "heading" then has_localized_reveal = true end
-            local intersects = false
-            if node.type == "heading" then
-              for _, marker in ipairs(node.marker_ranges or {}) do
-                if source_intersects_selection(marker, line1, col1, line2, col2) then
-                  intersects = true
-                  break
-                end
-              end
-            else
-              intersects = source_intersects_selection(
-                node.source, line1, col1, line2, col2
-              )
-            end
+            local intersects = source_intersects_selection(
+              node.source, line1, col1, line2, col2
+            )
             if intersects and not added[node.id] then
               local unit_col1, unit_col2 = node_line_range(node, line, line_length)
               units[#units + 1] = {
@@ -411,7 +398,15 @@ local function reveal_units_for_line(view, line, state)
             local node_col1, node_col2 = node_line_range(node, line1, cursor_length)
             local contains = node_col1 and col1 >= node_col1 and col1 < node_col2
             local inclusive_right_edge = node_col1 and col1 == node_col2
-            if contains or inclusive_right_edge then
+            if node.type == "heading" and (contains or inclusive_right_edge) then
+              local unit_col1, unit_col2 = node_line_range(node, line, line_length)
+              if unit_col1 then
+                units[#units + 1] = {
+                  type = node.type, id = node.id, col1 = unit_col1, col2 = unit_col2,
+                  line1 = node.source.line1, line2 = node.source.line2,
+                }
+              end
+            elseif contains or inclusive_right_edge then
               local size = (node.source.end_byte or 0) - (node.source.start_byte or 0)
               if not best_size or size < best_size
                 or size == best_size and contains and not best_contains
@@ -463,7 +458,6 @@ local function reveal_unit_matches(units, semantic_id, col1, col2)
   for _, unit in ipairs(units or {}) do
     if unit.whole_line or unit.id == semantic_id
       or unit.col1 == col1 and unit.col2 == col2
-      or unit.type == "heading" and unit.col1 <= col1 and unit.col2 >= col2
     then
       return true
     end
@@ -4283,6 +4277,7 @@ local metric_records = {}
 function metric_records.height(record, row)
   if not record or row < 1 or row > record.row_count then return nil end
   return record.heights and record.heights[row]
+    or row == 1 and record.first_height
     or row == record.row_count and record.final_height or record.height
 end
 
@@ -6543,7 +6538,8 @@ function provider:line_metrics(view, line, row_count)
   local height = compute_line_height(view, line, { row_in_line = 1 })
   local record = row_count == 1 and metric_records.single(height) or {
     row_count = row_count,
-    height = height,
+    first_height = height,
+    height = compute_line_height(view, line, { row_in_line = 2 }),
     final_height = compute_line_height(view, line, { row_in_line = row_count }),
   }
   if semantic_model and owner then
@@ -7467,11 +7463,11 @@ refresh_projected_reveal = function(view, line, state, projected_entry)
   if not entry then return false end
   local changed = false
   local render = clone_render_line(entry.render_line)
-  local heading_revealed = heading_for_line(entry.source_text, line)
+  local whole_line = config.markdown_live_reveal_mode == "line"
     and edit_visual_projection.selection_reveals_line(state, line)
   for _, fragment in ipairs(render.fragments or {}) do
     if fragment.markdown_reveal_col1 and fragment.markdown_reveal_col2 then
-      local reveal = heading_revealed or selection_reveals_projected_range(
+      local reveal = whole_line or selection_reveals_projected_range(
           state, line, fragment.markdown_reveal_col1,
           fragment.markdown_reveal_col2
         )

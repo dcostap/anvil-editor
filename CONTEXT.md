@@ -203,6 +203,7 @@ _Avoid_: permanent table toolbar, table context menu
 
 **Markdown Reveal Unit**:
 The smallest formatted Markdown construct whose source syntax becomes visible while it is being edited in Markdown Live Preview.
+An enclosing heading also shows its source markers. Other inline constructs keep their own reveal state.
 _Avoid_: Raw rendering mode
 
 **Markdown Semantic Selection**:
