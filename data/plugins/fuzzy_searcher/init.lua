@@ -7625,16 +7625,22 @@ end
 function FSView:draw_status(font, x, y, max_width)
   local full_status = tostring(self.status or "")
   local modifier = self:search_modifier_text()
+  if modifier ~= "" and (self.modifier_font_base ~= font or self.modifier_font_size ~= font:get_size()) then
+    self.modifier_font = font:copy(font:get_size(), { italic = true })
+    self.modifier_font_base = font
+    self.modifier_font_size = font:get_size()
+  end
+  local modifier_font = modifier ~= "" and self.modifier_font or font
   local gap = modifier ~= "" and full_status ~= "" and font:get_width("  ") or 0
   if modifier ~= "" then
     local available = max_width
-    if full_status ~= "" and font:get_width(full_status) + font:get_width(modifier) + gap > max_width then
+    if full_status ~= "" and font:get_width(full_status) + modifier_font:get_width(modifier) + gap > max_width then
       available = max_width / 2
     end
-    modifier = truncate_text(font, modifier, available)
+    modifier = truncate_text(modifier_font, modifier, available)
   end
   if modifier == "" then gap = 0 end
-  local status = truncate_text(font, full_status, max_width - font:get_width(modifier) - gap)
+  local status = truncate_text(font, full_status, max_width - modifier_font:get_width(modifier) - gap)
   local label = status:match("^(Searching.-…)") or status:match("^(Indexing.-…)")
   if not label then
     renderer.draw_text(font, status, x, y, style.dim)
@@ -7653,7 +7659,7 @@ function FSView:draw_status(font, x, y, max_width)
     renderer.draw_text(font, status:sub(#label + 1), x + width, y, style.dim)
   end
   if modifier ~= "" then
-    renderer.draw_text(font, modifier, x + font:get_width(status) + gap, y,
+    renderer.draw_text(modifier_font, modifier, x + font:get_width(status) + gap, y,
       common.lerp(style.dim, style.accent, 0.6))
   end
 end
