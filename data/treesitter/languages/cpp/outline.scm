@@ -50,6 +50,9 @@
     (field_identifier) @name
     (pointer_declarator
       declarator: (field_identifier) @name)
+    (pointer_declarator
+      declarator: (pointer_declarator
+        declarator: (field_identifier) @name))
     (reference_declarator
       (field_identifier) @name)
     (array_declarator

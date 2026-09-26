@@ -59,8 +59,8 @@ local function assert_global_symbols(root, expected_paths, local_name)
   test.equal(#(symbols or {}), 0, "local variables are not Project symbols")
 end
 
-test.describe("Tree-sitter Project global variables", function()
-  test.it("indexes C and mixed C/C++ file-scope declarations and definitions", function()
+test.describe("Tree-sitter Project symbols", function()
+  test.it("indexes C and mixed C/C++ globals and pointer fields", function()
     symbol_index.reset_for_tests()
     local suffix = tostring(system.get_process_id()) .. "-" .. tostring(math.floor(system.get_time() * 1000000))
     local c_root = USERDIR .. PATHSEP .. "treesitter-c-globals-" .. suffix
@@ -82,7 +82,8 @@ test.describe("Tree-sitter Project global variables", function()
     mkdir(mixed_root .. PATHSEP .. "include")
     mkdir(mixed_root .. PATHSEP .. "src")
     write_file(mixed_root .. PATHSEP .. "include" .. PATHSEP .. "colorlog.h",
-      "extern unsigned char do_color_log;\n")
+      "extern unsigned char do_color_log;\n"
+        .. "class RGE_Base_Game { public: TShape** shapes; };\n")
     write_file(mixed_root .. PATHSEP .. "src" .. PATHSEP .. "game_globals.cpp",
       "unsigned char do_color_log = 0;\n"
         .. "void use_color_log() { int local_color_log = 0; (void)local_color_log; }\n")
@@ -91,6 +92,19 @@ test.describe("Tree-sitter Project global variables", function()
       "include/colorlog.h",
       "src/game_globals.cpp",
     }, "local_color_log")
+    local fields, reason, status = wait_workspace_symbols("shapes", {
+      root = mixed_root,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    local shapes
+    for _, symbol in ipairs(fields or {}) do
+      if symbol.name == "shapes" then shapes = symbol end
+    end
+    test.ok(shapes, "missing C++ pointer-to-pointer field from mixed Project header")
+    test.equal(shapes.kind, "field")
+    test.equal(shapes.relpath, "include/colorlog.h")
     common.rm(mixed_root, true)
     symbol_index.reset_for_tests()
   end)
