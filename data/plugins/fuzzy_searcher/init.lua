@@ -3614,6 +3614,11 @@ function FSView:new(prefix, opts)
   self.results = {}
   self.selected = 1
   self.viewport_offset = 1
+  self.list_scroll = { y = 0 }
+  self.manual_list_scroll = false
+  self.marked_result_keys = {}
+  self.marked_results_snapshot = nil
+  self.range_anchor = nil
   self.loaded_limit = nil
   self.has_more = false
   self.current_query_key = nil
@@ -3874,6 +3879,12 @@ function FSView:reset_pagination()
   self.loaded_limit = self:list_metrics().result_rows
   self.selected = 1
   self.viewport_offset = 1
+  self.list_scroll.y = 0
+  self.list_scroll.move_data_y = nil
+  self.manual_list_scroll = false
+  self.marked_result_keys = {}
+  self.marked_results_snapshot = nil
+  self.range_anchor = nil
   self.pending_select_index = nil
 end
 
@@ -3972,31 +3983,141 @@ function FSView:load_more(select_next)
   return true
 end
 
-function FSView:ensure_selection_visible()
+function FSView:result_selection_key(result)
+  if not result then return nil end
+  return table.concat({
+    tostring(result.kind or ""), tostring(result.file or result.abs_path or result.path or
+      (result.buffer and result.buffer.abs_filename) or ""),
+    tostring(result.revision or ""), tostring(result.revision_path or ""),
+    tostring(result.line or ""), tostring(result.col or ""),
+    tostring(result.label or ""), tostring(result.text or ""),
+  }, "\0")
+end
+
+function FSView:can_mark_result(index)
+  local result = self.results[index]
+  return not self.file_picker and result and not result.header
+    and (result.file or result.buffer and result.line) and not result.is_folder
+    and result.kind ~= "create_path"
+end
+
+function FSView:get_selected_result_indices()
+  local indices = {}
+  local first = self.range_anchor and math.min(self.range_anchor, self.selected)
+  local last = self.range_anchor and math.max(self.range_anchor, self.selected)
+  for index, result in ipairs(self.results) do
+    if self:can_mark_result(index) and (index == self.selected
+      or self.marked_result_keys[self:result_selection_key(result)]
+      or first and index >= first and index <= last) then
+      indices[#indices + 1] = index
+    end
+  end
+  return indices
+end
+
+function FSView:prune_result_marks()
+  if not next(self.marked_result_keys) then return end
+  local present = {}
+  for index, result in ipairs(self.results) do
+    if self:can_mark_result(index) then present[self:result_selection_key(result)] = true end
+  end
+  for key in pairs(self.marked_result_keys) do
+    if not present[key] then self.marked_result_keys[key] = nil end
+  end
+end
+
+function FSView:ensure_selection_visible(force)
   if #self.results == 0 then self.selected, self.viewport_offset = 1, 1; return end
   local rows = self:list_metrics().result_rows
-  self.viewport_offset = common.clamp(self.viewport_offset or 1, 1, math.max(1, #self.results))
-  if self.selected < self.viewport_offset then
-    self.viewport_offset = self.selected
-  elseif self.selected > self.viewport_offset + rows - 1 then
-    self.viewport_offset = self.selected - rows + 1
+  self.viewport_offset = common.clamp(self.viewport_offset or 1, 1, math.max(1, #self.results - rows + 1))
+  if force then self.manual_list_scroll = false end
+  if not self.manual_list_scroll then
+    if self.selected < self.viewport_offset then
+      self.viewport_offset = self.selected
+    elseif self.selected > self.viewport_offset + rows - 1 then
+      self.viewport_offset = self.selected - rows + 1
+    end
   end
   self.viewport_offset = common.clamp(self.viewport_offset, 1, math.max(1, #self.results - rows + 1))
 end
 
-function FSView:select_delta(delta)
+function FSView:displayed_list_offset(metrics)
+  metrics = metrics or self:list_metrics()
+  local pixels = common.clamp(self.list_scroll.y, 0,
+    math.max(0, #self.results - metrics.result_rows) * metrics.lh)
+  local row = math.floor(pixels / metrics.lh)
+  return row + 1, pixels - row * metrics.lh
+end
+
+function FSView:scroll_results(delta)
+  delta = delta < 0 and -math.floor(-delta + 0.5) or math.floor(delta + 0.5)
+  if #self.results == 0 or delta == 0 then return end
+  local rows = self:list_metrics().result_rows
+  self.manual_list_scroll = true
+  if delta > 0 and self.viewport_offset + rows - 1 + delta > #self.results
+      and self:can_load_more() then
+    self:load_more(false)
+  end
+  self.viewport_offset = common.clamp(self.viewport_offset + delta, 1,
+    math.max(1, #self.results - rows + 1))
+  self:schedule_update(true)
+end
+
+function FSView:select_delta(delta, extend)
   if #self.results == 0 then self.selected = 1; self.viewport_offset = 1; return end
   if delta > 0 and self.selected >= #self.results and self.has_more then
     if self:load_more(true) then return end
   end
-  local i = self.selected
+  local previous = self.selected
+  local i = previous
   repeat
     i = common.clamp(i + delta, 1, #self.results)
     if not self.results[i].header then break end
     if i == 1 or i == #self.results then break end
   until false
   self.selected = i
-  self:ensure_selection_visible()
+  if extend and self:can_mark_result(i) then
+    self.range_anchor = self.range_anchor or previous
+  else
+    self.range_anchor = nil
+  end
+  self:ensure_selection_visible(true)
+end
+
+function FSView:select_result(index, extend, toggle)
+  if not self.results[index] or self.results[index].header then return false end
+  local previous = self.selected
+  if toggle and self:can_mark_result(index) then
+    local previous_key = self:can_mark_result(previous) and self:result_selection_key(self.results[previous])
+    local key = self:result_selection_key(self.results[index])
+    if previous_key and previous ~= index then self.marked_result_keys[previous_key] = true end
+    self.marked_result_keys[key] = not self.marked_result_keys[key] or nil
+    self.range_anchor = nil
+  elseif extend and self:can_mark_result(index) then
+    self.range_anchor = self.range_anchor or previous
+  else
+    self.marked_result_keys = {}
+    self.range_anchor = nil
+  end
+  self.selected = index
+  self:ensure_selection_visible(true)
+  self:schedule_update(true)
+  return true
+end
+
+function FSView:toggle_result_marks()
+  if not self:can_mark_result(self.selected) then return false end
+  local indices = self:get_selected_result_indices()
+  local all_marked = #indices > 0
+  for _, index in ipairs(indices) do
+    all_marked = all_marked and self.marked_result_keys[self:result_selection_key(self.results[index])]
+  end
+  for _, index in ipairs(indices) do
+    self.marked_result_keys[self:result_selection_key(self.results[index])] = not all_marked or nil
+  end
+  self.range_anchor = nil
+  self:schedule_update(true)
+  return true
 end
 
 function FSView:selected_result()
@@ -4601,16 +4722,17 @@ function FSView:result_at_point(x, y)
   if not self:panel_contains(x, y) then return nil end
   local m = self:list_metrics(style.code_font)
   if x < m.x or x > m.x + m.list_w - style.divider_size then return nil end
+  local first, shift = self:displayed_list_offset(m)
 
   if y >= m.results_top and y < m.results_top + m.result_rows * m.lh then
-    local idx = self.viewport_offset + math.floor((y - m.results_top) / m.lh)
+    local idx = first + math.floor((y - m.results_top + shift) / m.lh)
     if idx >= 1 and idx <= #self.results then return idx end
   end
-  if y >= m.top and y < m.top + m.lh and self.viewport_offset > 1 then
+  if y >= m.top and y < m.top + m.lh and first > 1 then
     return "scroll-up"
   end
   if y >= m.bottom_indicator_y and y < m.bottom_indicator_y + m.lh
-    and (self.viewport_offset + m.result_rows - 1 < #self.results or self:can_load_more())
+    and (first + m.result_rows - 1 < #self.results or self:can_load_more())
   then
     return "scroll-down"
   end
@@ -4661,16 +4783,14 @@ function FSView:on_mouse_pressed(button, x, y, clicks)
 
   local hit = self:result_at_point(x, y)
   if hit == "scroll-up" then
-    for _ = 1, self:list_metrics().result_rows do self:select_delta(-1) end
-    self:schedule_update(true)
+    self:scroll_results(-self:list_metrics().result_rows)
   elseif hit == "scroll-down" then
-    for _ = 1, self:list_metrics().result_rows do self:select_delta(1) end
-    self:schedule_update(true)
-  elseif type(hit) == "number" and self.results[hit] and not self.results[hit].header then
-    self.selected = hit
+    self:scroll_results(self:list_metrics().result_rows)
+  elseif button == "left" and type(hit) == "number" and self.results[hit] and not self.results[hit].header then
+    local modified = keymap.modkeys.ctrl or keymap.modkeys.cmd or keymap.modkeys.shift
+    self:select_result(hit, keymap.modkeys.shift, keymap.modkeys.ctrl or keymap.modkeys.cmd)
     self.pressed_result = hit
-    self:ensure_selection_visible()
-    self:schedule_update(true)
+    self.pressed_modified = modified
   end
 
   if self:is_preview_focused() then
@@ -4704,13 +4824,12 @@ function FSView:on_mouse_released(button, x, y)
 
   local hit = self:result_at_point(x, y)
   if button == "left" and type(hit) == "number" and hit == self.pressed_result then
-    self.selected = hit
-    self:ensure_selection_visible()
-    if (self.pressed_clicks or 1) >= 2 then self:confirm() end
+    if (self.pressed_clicks or 1) >= 2 and not self.pressed_modified then self:confirm() end
   end
 
   self.pressed_result = nil
   self.pressed_clicks = 0
+  self.pressed_modified = nil
   -- A double-click can open another View and start the close transition
   -- inside confirm(). Do not restore the picker's input after that focus
   -- change, or the newly opened View loses its caret and command context.
@@ -4772,8 +4891,11 @@ function FSView:on_mouse_wheel(y, x)
     call_preview_view_method(self.preview_view, self.preview_view.update)
     self:schedule_update(true)
   elseif self:panel_contains(self.mouse.x, self.mouse.y) then
-    self:select_delta(y < 0 and 1 or -1)
-    self:schedule_update(true)
+    local m = self:list_metrics()
+    if self.mouse.x >= m.x and self.mouse.x <= m.x + m.list_w
+        and self.mouse.y >= m.top and self.mouse.y < m.top + m.list_h then
+      self:scroll_results(-y * 3)
+    end
   end
   return true
 end
@@ -6958,7 +7080,7 @@ function FSView:restore_opened_preview_position(view, restore, line, col, line2,
   end
 end
 
-function FSView:open_historical_result(result, new_group, restore)
+function FSView:open_historical_result(result, new_group, restore, done)
   if self.open_revision_job then self.open_revision_job:cancel() end
   local token = {}
   self.revision_open_token = token
@@ -6975,13 +7097,18 @@ function FSView:open_historical_result(result, new_group, restore)
         self.status = err and err.message or "Cannot open historical text"
         core.log_quiet("Commit Search open failed: %s", self.status)
         self:schedule_update(true)
+        if done then done(nil) end
         return
       end
       if not new_group then self:close() end
       local view, open_error = panes.place(function() return historical.View(buffer) end, {
         pane = self.source_pane, placement = new_group and "new" or "current", focus = true,
       })
-      if not view then core.error("Cannot open Historical Buffer: %s", tostring(open_error)); return end
+      if not view then
+        core.error("Cannot open Historical Buffer: %s", tostring(open_error))
+        if done then done(nil) end
+        return
+      end
       opened_view = view
       local line, col, line2, col2 = result.line or 1, result.col or 1
       if result.kind == "grep" then line, col, line2, col2 = grep_accept_range(result) end
@@ -6994,13 +7121,14 @@ function FSView:open_historical_result(result, new_group, restore)
       end)
       self:restore_opened_preview_position(view, restore, line, col, line2, col2)
       self:restore_activation_focus(new_group)
+      if done then done(view) end
     end
   )
   return opened_view
 end
 
-function FSView:open_file_result(r, new_group, restore)
-  if r.revision then return self:open_historical_result(r, new_group, restore) end
+function FSView:open_file_result(r, new_group, restore, done)
+  if r.revision then return self:open_historical_result(r, new_group, restore, done) end
   local path = fullpath(r)
   local file_open = fuzzy_searcher._perf_file_open_begin(path, "fuzzy_searcher")
   local line, col, line2, col2 = r.line or 1, r.col or 1, nil, nil
@@ -7175,9 +7303,61 @@ function FSView:confirm_folder_open(r, new_group)
 end
 
 function FSView:confirm(new_group)
+  if self:can_mark_result(self.selected) then
+    local indices = self:get_selected_result_indices()
+    if #indices > 1 then return self:open_selected_results(indices) end
+  end
   local result = self:activate_selected_result(new_group)
   self:restore_activation_focus(new_group)
   return result
+end
+
+function FSView:open_selected_results(indices)
+  local results = {}
+  local focused
+  for _, index in ipairs(indices) do
+    if index == self.selected then focused = self.results[index]
+    else results[#results + 1] = self.results[index] end
+  end
+  if focused then results[#results + 1] = focused end
+
+  local opened = {}
+  local index = 0
+  local function advance()
+    while not self.closing and not self.closed do
+      index = index + 1
+      if index > #results then
+        self:close()
+        local last = opened[#opened]
+        local pane = last and panes.pane_for_view(last)
+        if pane then panes.focus(pane) end
+        core.log_quiet("Fuzzy Searcher opened %d of %d selected results in new Panes", #opened, #results)
+        return
+      end
+
+      local result = results[index]
+      if result.revision then
+        self:open_historical_result(result, true, nil, function(view)
+          if view then opened[#opened + 1] = view end
+          advance()
+        end)
+        return
+      end
+      local ok, view = pcall(function()
+        if result.buffer and result.line then
+          return core.root_panel:open_buffer(result.buffer, {
+            pane = self.source_pane, placement = "new", focus = true,
+            line = result.line, col = result.col, line2 = result.line2, col2 = result.col2,
+          })
+        end
+        return self:open_file_result(result, true)
+      end)
+      if ok and view then opened[#opened + 1] = view
+      else core.error("Cannot open selected result: %s", tostring(view or "open failed")) end
+    end
+  end
+  advance()
+  return true
 end
 
 function FSView:activate_selected_result(new_group)
@@ -7345,6 +7525,14 @@ function FSView:update()
   end
   self:poll_modifier_result_metadata()
   self:refresh(self.input:get_text())
+  if self.marked_results_snapshot ~= self.results then
+    self.marked_results_snapshot = self.results
+    self:prune_result_marks()
+  end
+  local metrics = self:list_metrics()
+  self.list_scroll.y = common.clamp(self.list_scroll.y, 0,
+    math.max(0, #self.results - metrics.result_rows) * metrics.lh)
+  self:move_towards(self.list_scroll, "y", (self.viewport_offset - 1) * metrics.lh, 0.2, "scroll")
   self:update_selected_preview()
   if self:is_visible() and self:search_status_label() then
     core.redraw = true
@@ -7423,6 +7611,7 @@ function FSView:draw_open_content()
   local top, list_w, lh = m.top, m.list_w, m.lh
   local row_padding = m.row_padding
   self:ensure_selection_visible()
+  local first, scroll_shift = self:displayed_list_offset(m)
 
   self:draw_status(font, x + pad, y + self.input.size.y + pad * 1.5, w - pad * 2)
   local full_width_mode = self:is_full_width_mode()
@@ -7440,18 +7629,18 @@ function FSView:draw_open_content()
   local pane_markers = fuzzy_searcher.current_file_pane_markers(pad)
   local arrow_color = style.dim
   local up_arrow, down_arrow = "▲", "▼"
-  if self.viewport_offset > 1 then
+  if first > 1 then
     renderer.draw_text(font, up_arrow, x + (list_w - font:get_width(up_arrow)) / 2, top + row_padding, arrow_color)
   end
-  if self.viewport_offset + m.result_rows - 1 < #self.results or self:can_load_more() then
+  if first + m.result_rows - 1 < #self.results or self:can_load_more() then
     renderer.draw_text(font, down_arrow, x + (list_w - font:get_width(down_arrow)) / 2, m.bottom_indicator_y + row_padding, arrow_color)
   end
   fuzzy_searcher._perf_scope_end(phase_scope)
 
   phase_scope = fuzzy_searcher._perf_scope_begin("result_scan")
-  local last = math.min(#self.results, self.viewport_offset + m.result_rows - 1)
+  local last = math.min(#self.results, first + m.result_rows - 1 + (scroll_shift > 0 and 1 or 0))
   local has_visible_split = false
-  for idx = self.viewport_offset, last do
+  for idx = first, last do
     local r = self.results[idx]
     if r and r.kind == "grep" then has_visible_split = true; break end
   end
@@ -7467,8 +7656,9 @@ function FSView:draw_open_content()
 
   local results_scope = fuzzy_searcher._perf_scope_begin("result_rows")
   local metadata_rows, metadata_columns = fuzzy_searcher.visible_file_metadata(
-    self, font, self.viewport_offset, last
+    self, font, first, last
   )
+  core.push_clip_rect(x, m.results_top, list_w - divider_w, m.result_rows * lh)
   local previous_rendered_file_kind = nil
   local previous_rendered_file = nil
   local previous_rendered_line_x = nil
@@ -7479,14 +7669,14 @@ function FSView:draw_open_content()
     previous_rendered_line_x = nil
     previous_rendered_context_x = nil
   end
-  if self.viewport_offset > 1 then
-    local first = self.results[self.viewport_offset]
-    local before = self.results[self.viewport_offset - 1]
-    local kind = first and (first.kind == "grep" or first.kind == "symbol") and first.kind
-    local file = kind and tostring(first.file or "") or ""
+  if first > 1 then
+    local first_result = self.results[first]
+    local before = self.results[first - 1]
+    local kind = first_result and (first_result.kind == "grep" or first_result.kind == "symbol") and first_result.kind
+    local file = kind and tostring(first_result.file or "") or ""
     if file ~= "" and before and before.kind == kind
         and tostring(before.file or "") == file then
-      local group_start = self.viewport_offset - 1
+      local group_start = first - 1
       while group_start > 1 do
         local candidate = self.results[group_start - 1]
         if not candidate or candidate.kind ~= kind
@@ -7512,9 +7702,9 @@ function FSView:draw_open_content()
       previous_rendered_file = file
     end
   end
-  for idx = self.viewport_offset, last do
+  for idx = first, last do
     local r = self.results[idx]
-    local yy = m.results_top + (idx - self.viewport_offset) * lh
+    local yy = m.results_top + (idx - first) * lh - scroll_shift
     local row_y = yy + row_padding
     local row_scope
     if core.perf_draw_scope_active then
@@ -7530,8 +7720,15 @@ function FSView:draw_open_content()
         renderer.draw_text(font, truncate_text(font, r.label, row_text_w), x + pad, row_y, style.accent)
       end
     else
-      if idx == self.selected then
+      local marked = self:can_mark_result(idx)
+        and self.marked_result_keys[self:result_selection_key(r)]
+      local range_first = self.range_anchor and math.min(self.range_anchor, self.selected)
+      local range_last = self.range_anchor and math.max(self.range_anchor, self.selected)
+      if idx == self.selected or marked or range_first and idx >= range_first and idx <= range_last then
         renderer.draw_rect(x, yy, list_w, lh, style.fuzzy_searcher_result_selection_background)
+        if idx == self.selected then
+          renderer.draw_rect(x, yy, math.max(2, style.divider_size), lh, style.accent)
+        end
       elseif idx == self.hovered_result then
         renderer.draw_rect(x, yy, list_w, lh, style.fuzzy_searcher_result_hover_background)
       end
@@ -7627,9 +7824,10 @@ function FSView:draw_open_content()
     local sx = x + pad + path_w + gap / 2
     renderer.draw_rect(
       sx, m.results_top, style.divider_size,
-      math.max(0, last - self.viewport_offset + 1) * lh, style.divider
+      math.max(0, last - first + 1) * lh, style.divider
     )
   end
+  core.pop_clip_rect()
   core.pop_clip_rect()
   fuzzy_searcher._perf_scope_end(results_scope)
 
@@ -7994,6 +8192,18 @@ end, {
   end,
   ["fuzzy:next"] = picker_next,
   ["fuzzy:previous"] = picker_previous,
+  ["fuzzy:select_next"] = function()
+    local view = current_picker()
+    if view then view:select_delta(1, true); view:schedule_update(true) end
+  end,
+  ["fuzzy:select_previous"] = function()
+    local view = current_picker()
+    if view then view:select_delta(-1, true); view:schedule_update(true) end
+  end,
+  ["fuzzy:toggle_result_marks"] = function()
+    local view = current_picker()
+    if view then return view:toggle_result_marks() end
+  end,
   ["fuzzy:prompt_history_previous"] = function()
     local view = current_picker()
     if view then view:navigate_prompt_history(1) end
@@ -8010,6 +8220,9 @@ command.set_metadata("fuzzy:confirm", { record_last = false })
 command.set_metadata("fuzzy:confirm_new_group", { record_last = false })
 command.set_metadata("fuzzy:next", { record_last = false })
 command.set_metadata("fuzzy:previous", { record_last = false })
+command.set_metadata("fuzzy:select_next", { record_last = false })
+command.set_metadata("fuzzy:select_previous", { record_last = false })
+command.set_metadata("fuzzy:toggle_result_marks", { record_last = false })
 command.set_metadata("fuzzy:fill_prompt_from_selected", { record_last = false })
 command.set_metadata("fuzzy:prompt_history_previous", { record_last = false })
 command.set_metadata("fuzzy:prompt_history_next", { record_last = false })
@@ -8062,6 +8275,9 @@ core.fuzzy_searcher_install_picker_keymaps = function()
     ["tab"] = "fuzzy:fill_prompt_from_selected",
     ["up"] = "fuzzy:previous",
     ["down"] = "fuzzy:next",
+    ["shift+up"] = "fuzzy:select_previous",
+    ["shift+down"] = "fuzzy:select_next",
+    ["ctrl+space"] = "fuzzy:toggle_result_marks",
     ["alt+left"] = "fuzzy:prompt_history_previous",
     ["alt+right"] = "fuzzy:prompt_history_next",
   })
