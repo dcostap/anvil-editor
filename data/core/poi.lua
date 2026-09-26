@@ -348,7 +348,12 @@ end
 local function active_view_has_activatable_poi(...)
   local view = provider_view(core.active_view)
   local poi = M.point_at_caret(view, { activatable = true, silent = true })
-  return poi ~= nil, view, poi, ...
+  return poi ~= nil or require("core.commands.language").symbol_at_view(view) ~= nil, view, poi, ...
+end
+
+local function activate_or_search_symbol(view, point, opts)
+  if point then return M.activate(view, point, opts) end
+  return require("core.commands.language").activate_symbol(view, opts)
 end
 
 command.add(nil, {
@@ -384,12 +389,14 @@ end, {
 
 command.add(active_view_has_activatable_poi, {
   ["core:activate_point_of_interest"] = function(view, poi)
-    M.activate(view, poi, { preserve_focus = false })
+    activate_or_search_symbol(view, poi, { preserve_focus = false })
   end,
   ["core:activate_point_of_interest_alternate"] = function(view, poi)
-    local placement = poi.alternate_placement or "split"
-    core.log_quiet("Point of Interest alternate activation: kind=%s placement=%s", tostring(poi.kind), placement)
-    M.activate(view, poi, {
+    local placement = poi and poi.alternate_placement or "split"
+    if poi then
+      core.log_quiet("Point of Interest alternate activation: kind=%s placement=%s", tostring(poi.kind), placement)
+    end
+    activate_or_search_symbol(view, poi, {
       placement = placement,
       preserve_focus = false,
     })

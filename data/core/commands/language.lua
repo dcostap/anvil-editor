@@ -4,7 +4,7 @@ local common = require "core.common"
 local config = require "core.config"
 local intelligence = require "core.language_intelligence"
 local language_mode = require "core.language_mode"
-local poi = require "core.poi"
+local navigation_history = require "core.navigation_history"
 
 local language = {}
 
@@ -379,6 +379,57 @@ local function symbol_buffer_view_predicate(value)
   return symbol_text_at_buffer_selection(view.buffer) ~= nil, view
 end
 
+function language.symbol_at_view(view)
+  if not view or view.context == "application" or view.command_output_view or not view.buffer
+      or view.buffer.git_view_pane_read_only then return nil end
+  return symbol_text_at_buffer_selection(view.buffer)
+end
+
+local function unique_local_definition(buffer, symbol, line, col)
+  local definition = intelligence.local_definition(buffer, line, col)
+  if not definition or definition.name ~= symbol or not definition.start_line or not definition.start_col
+      or not definition.end_line or not definition.end_col then return nil end
+  if definition.kind == "function" or definition.kind == "method" then
+    local outline = intelligence.buffer_outline(buffer)
+    local count, matches = 0, false
+    for _, item in ipairs(outline) do
+      if item.name == symbol and (item.kind == "function" or item.kind == "method") then
+        count = count + 1
+        local name = item.name_range and item.name_range.start
+        if name and name.line == definition.start_line and name.col == definition.start_col then
+          matches = true
+        end
+      end
+    end
+    if count ~= 1 or not matches then return nil end
+  end
+  return definition
+end
+
+function language.activate_symbol(view, opts)
+  opts = opts or {}
+  local symbol = language.symbol_at_view(view)
+  if not symbol then return false end
+  local buffer = view.buffer
+  local line, col = buffer:get_selection()
+  if not opts.placement then
+    local definition = unique_local_definition(buffer, symbol, line, col)
+    if definition and (definition.start_line ~= line or col < definition.start_col or col >= definition.end_col) then
+      navigation_history.perform_jump(view, function()
+        buffer:set_selection(definition.start_line, definition.start_col, definition.end_line, definition.end_col)
+        view:scroll_to_make_visible(definition.start_line, definition.start_col)
+      end)
+      quiet_log("Symbol activation: local definition %s at %d:%d", symbol, definition.start_line, definition.start_col)
+      return true
+    end
+  end
+  quiet_log("Symbol activation: Project Symbol Search for %s (no unique local definition)", symbol)
+  return require("plugins.fuzzy_searcher").open_project_symbols(symbol, {
+    source_view = view,
+    case_sensitive = true,
+  })
+end
+
 command.add(symbol_buffer_view_predicate, {
   ["editor:show_references"] = command.palette(function(view)
     return language.show_references(view)
@@ -389,30 +440,5 @@ command.add(buffer_view_predicate, {
   ["editor:set_language_mode"] = command.palette(set_language_mode_command),
 })
 
-
-poi.add_activation_provider("language-symbol-search", {
-  priority = -100,
-  point_at_caret = function(_, view)
-    local valid, buffer_view = symbol_buffer_view_predicate(view)
-    if not valid or buffer_view.context == "application" or buffer_view.buffer.git_view_pane_read_only then return nil end
-    local line, col = buffer_view.buffer:get_selection()
-    return {
-      kind = "symbol-search",
-      line = line,
-      col = col,
-      line2 = line,
-      col2 = col + 1,
-      text_bounds = true,
-      activate = function()
-        local symbol = symbol_text_at_buffer_selection(buffer_view.buffer)
-        if not symbol then return false end
-        return require("plugins.fuzzy_searcher").open_project_symbols(symbol, {
-          source_view = buffer_view,
-          case_sensitive = true,
-        })
-      end,
-    }
-  end,
-})
 
 return language

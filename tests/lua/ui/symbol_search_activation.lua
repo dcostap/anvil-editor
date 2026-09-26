@@ -5,11 +5,31 @@ local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local test = require "core.test"
 local symbol_index = require "core.treesitter.symbol_index"
+local treesitter = require "core.treesitter"
 
 require "core.commands.language"
 require "plugins.fuzzy_searcher"
 
 test.describe("Symbol activation", function()
+  local function open_cpp(context, text, line, col)
+    context.view:on_close()
+    context.buffer:on_close()
+    context.buffer = Buffer()
+    context.buffer:insert(1, 1, text)
+    local path = "symbol-activation-" .. tostring(math.floor(system.get_time() * 1000000)) .. ".cpp"
+    context.buffer:set_filename(path, path)
+    context.view = Editor(context.buffer)
+    core.set_active_view(context.view)
+    local deadline = system.get_time() + 3
+    while system.get_time() < deadline do
+      treesitter.poll_buffer(context.buffer)
+      if context.buffer.treesitter and context.buffer.treesitter.status == "ready" then break end
+      coroutine.yield(0.01)
+    end
+    test.equal(context.buffer.treesitter.status, "ready")
+    context.buffer:set_selection(line, col)
+  end
+
   test.before_each(function(context)
     context.active = core.active_view
     context.buffer = Buffer()
@@ -86,5 +106,33 @@ test.describe("Symbol activation", function()
     test.equal(#picker.results, 1)
     test.equal(core.fuzzy_searcher_active_view, picker)
     test.same({ context.buffer:get_selection() }, { 1, 10, 1, 10 })
+  end)
+
+  test.it("goes to a C++ definition in the same Buffer without opening Project Symbol Search", function(context)
+    open_cpp(context, [[// RGE_Base_Game is declared in a header.
+int RGE_Base_Game::start() {
+  return this->setup_palette();
+}
+int RGE_Base_Game::setup_palette() { return 1; }
+]], 3, 19)
+
+    test.is_nil(poi.point_at_caret(context.view, { activatable = true }))
+    test.ok(command.perform("core:activate_point_of_interest"))
+    test.is_nil(core.fuzzy_searcher_active_view)
+    test.equal(context.buffer:get_text(context.buffer:get_selection(true)), "setup_palette")
+    test.equal(select(1, context.buffer:get_selection()), 5)
+  end)
+
+  test.it("opens Project Symbol Search when same-name C++ definitions are ambiguous", function(context)
+    open_cpp(context, [[class First { public: int run(); };
+class Second { public: int run(); };
+int First::run() { return 1; }
+int Second::run() { return 2; }
+int call(First& value) { return value.run(); }
+]], 5, 39)
+
+    test.ok(command.perform("core:activate_point_of_interest"))
+    test.equal(test.not_nil(core.fuzzy_searcher_active_view).input:get_text(), "$run")
+    test.equal(select(1, context.buffer:get_selection()), 5)
   end)
 end)
