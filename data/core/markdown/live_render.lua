@@ -4028,35 +4028,13 @@ function edit_visual_projection.pending_list_render(
   local parsed = edit_visual_projection.source_list_prefix(current_text)
   if not parsed then return nil end
   local allow_list_reindent = previous and previous.markdown_allow_list_reindent
-  if previous and previous.markdown_preserve_list_source
-    and not allow_list_reindent
-  then
-    local render = raw_pending_source_render(view, previous, current_text, false)
-    render.markdown_preserve_list_source = true
-    return render
-  end
 
   local old_prefix = previous and edit_visual_projection.source_list_prefix(
     previous.source_text or ""
   )
-  -- Keep an existing raw source presentation while its body changes.
-  -- Do not invent a widget transition before the semantic render arrives.
-  local same_prefix = old_prefix
-    and old_prefix.indent == parsed.indent
-    and old_prefix.token == parsed.token
-    and old_prefix.task_state == parsed.task_state
-  local deleting_body = parsed.body == ""
-    and old_prefix and old_prefix.body ~= ""
-  if old_prefix and previous
-    and not edit_visual_projection.has_list_prefix(previous)
-    and same_prefix
-    and not allow_list_reindent
-    and (parsed.body ~= "" or deleting_body)
-  then
-    local render = raw_pending_source_render(view, previous, current_text, false)
-    render.markdown_preserve_list_source = true
-    return render
-  end
+  -- Callers retain semantic raw blocks before this builder runs.
+  -- A raw prefix does not identify a raw block.
+  -- An empty item needs its bullet when its first body character arrives.
   -- An empty marker can change meaning when its indentation changes.  In
   -- particular, `- test` followed by an indented `- ` can be a setext
   -- heading, not a nested list item.  Do not invent a list presentation for
@@ -5023,13 +5001,11 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
       captured.indented = nil
     end
     if list_reindented then
-      render.markdown_preserve_list_source = nil
       render.markdown_allow_list_reindent = true
     end
     if not suppress_list_projection
       and (not render.raw_passthrough
         or list_reindented)
-      and not render.markdown_preserve_list_source
       and not retains_raw_list_source(captured)
     then
       if edit_visual_projection.source_list_prefix(source)
