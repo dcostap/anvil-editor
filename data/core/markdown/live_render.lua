@@ -5778,12 +5778,26 @@ local function fenced_code_content_render_line(view, line, text, fenced)
   local owner = view.__markdown_live_owner
   local service = owner and owner.fence_service
   local entry = service and service:line_tokens(fenced, line, 100)
+  local opening = view.buffer.lines[fenced.source.line1]
+  local retained = owner and owner.fence_presentations and owner.fence_presentations[line]
+  local retained_render = retained and retained.render_line
+  local fragments
+  if not entry and retained_render and retained.source_text == text
+    and retained_render.markdown_fence_source == opening
+  then
+    -- Semantic readiness does not imply token readiness. Keep display colors
+    -- until the tokenizer can replace them, without exposing stale tokens.
+    fragments = retained_render.fragments
+  elseif retained then
+    owner.fence_presentations[line] = nil
+  end
   local render = {
     source_text = text,
     x_offset = view:get_font():get_width(" "),
     text_row_height = fenced_code_line_height(view),
     markdown_code_block = true,
-    fragments = fenced_code_fragments(text, entry),
+    markdown_fence_source = opening,
+    fragments = fragments or fenced_code_fragments(text, entry),
   }
   local callout = callout_runtime.for_line(view, line)
   if callout then
@@ -7049,11 +7063,20 @@ local function invalidate_semantic_publication(view, instance, reason)
   if owner then
     -- Local publications can remeasure only a few rows. Keep measurements for every unchanged line.
     local published_metrics = {}
+    local fence_presentations = {}
     for line, record in pairs(owner.pending_metrics or {}) do
       published_metrics[line] = record
     end
     for line, pending in pairs(owner.pending_lines or {}) do
       if pending.metrics then published_metrics[line] = pending.metrics end
+      if pending.render_line and pending.render_line.markdown_fence_source then
+        fence_presentations[line] = pending
+      end
+    end
+    owner.fence_presentations = fence_presentations
+    if next(fence_presentations) then
+      core.log_quiet("Markdown kept code presentation until replacement tokens are ready: revision=%d",
+        view.buffer.text_revision)
     end
     owner.published_metrics = published_metrics
     local raw = owner.raw_fallback_record
