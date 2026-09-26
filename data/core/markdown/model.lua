@@ -2,6 +2,7 @@ local common = require "core.common"
 local core = require "core"
 local Buffer = require "core.buffer"
 local queries = require "core.markdown.queries"
+local native = require "treesitter"
 local worker_pool = require "core.worker_pool"
 
 local model = {}
@@ -466,6 +467,41 @@ function Model:ensure()
   if self.status == "pending" and self.request then return false end
   self:submit("first-use")
   return false
+end
+
+-- Check list ownership before projecting a changed prefix. Use the block
+-- grammar, not an indentation heuristic. Bound work on the input thread;
+-- callers retain the last presentation when this probe cannot finish.
+function Model:probe_list_markers()
+  local buffer = self:buffer()
+  if not buffer then return nil end
+  if self.list_probe_revision == buffer.text_revision then return self.list_probe end
+  self.list_probe_revision, self.list_probe = buffer.text_revision, nil
+  local bytes = 0
+  for _, line in ipairs(buffer.lines) do
+    bytes = bytes + #line
+    if bytes > 65536 then
+      core.log_quiet("Markdown list probe deferred: source exceeds input-thread bound")
+      return nil
+    end
+  end
+  local result, err = native.index_text {
+    language = "markdown", lines = buffer.lines,
+    outline_query = queries.list_markers,
+    parse_timeout_ms = 4, query_timeout_ms = 2,
+    match_limit = 4096, max_captures = 4096,
+  }
+  if not result or result.outline.status ~= "ready" then
+    core.log_quiet("Markdown list probe deferred: %s",
+      err or result and result.outline.status or "unavailable")
+    return nil
+  end
+  local markers = {}
+  for _, capture in ipairs(result.outline.captures) do
+    markers[capture.start_line] = true
+  end
+  self.list_probe = markers
+  return markers
 end
 
 function Model:status_snapshot()

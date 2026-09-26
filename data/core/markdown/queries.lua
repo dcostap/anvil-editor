@@ -1,5 +1,10 @@
 local queries = {}
 
+queries.list_markers = [[
+  [ (list_marker_minus) (list_marker_plus) (list_marker_star)
+    (list_marker_dot) (list_marker_parenthesis) ] @marker.list
+]]
+
 queries.block = [[
   (atx_heading) @block.heading
   (setext_heading) @block.heading

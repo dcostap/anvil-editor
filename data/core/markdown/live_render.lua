@@ -4977,6 +4977,9 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     local previous_list = captured
       and edit_visual_projection.source_list_prefix(captured.source_text or "")
     local current_list = edit_visual_projection.source_list_prefix(source)
+    local instance = current_list and markdown_model.peek(view.buffer)
+    local list_markers = instance and instance:probe_list_markers()
+    local confirmed_list = list_markers and list_markers[line]
     local empty_list_reindented = list_reindented and previous_list and current_list
       and previous_list.body == "" and current_list.body == ""
       and #previous_list.indent > #current_list.indent
@@ -5034,6 +5037,78 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
             view, source, heading, { { whole_line = true } }
           )
         end
+      end
+    end
+    if current_list and not list_markers and captured and captured.render_line
+      and list_prefix_reindented(captured.source_text, source)
+    then
+      -- Keep one committed layout when grammar ownership is not ready.
+      -- Map its source columns through the edit without moving its glyphs.
+      render = clone_render_line(captured.render_line)
+      render.source_text = source
+      local delta = current_list.content_col - previous_list.content_col
+      if render.continuation_indent_col then
+        render.continuation_indent_col = render.continuation_indent_col + delta
+      end
+      if render.markdown_task_content_col then
+        render.markdown_task_content_col = render.markdown_task_content_col + delta
+      end
+      for _, fragment in ipairs(render.fragments or {}) do
+        for _, key in ipairs {
+          "source_col1", "source_col2", "text_source_col1", "text_source_col2",
+          "image_block_col1", "image_block_col2",
+          "markdown_list_content_col", "markdown_reveal_col1", "markdown_reveal_col2",
+        } do
+          if fragment[key] and fragment[key] > 1 then
+            fragment[key] = fragment[key] + delta
+          end
+        end
+      end
+      if not render.continuation_indent_col then
+        local first = render.fragments and render.fragments[1]
+        if first and first.source_col1 == 1 and first.text
+          and not first.width and not first.widget
+        then
+          -- Keep the old whitespace width separate from the body.
+          -- Wrap measurement uses this width, not the new source indentation.
+          local indent_width = view:get_line_render_col_x_offset(
+            captured.render_line, #previous_list.indent + 1
+          ) - (render.x_offset or 0)
+          first.text = first.text:sub(#previous_list.indent + 1)
+          first.source_col1 = #current_list.indent + 1
+          if first.text_source_col1 then first.text_source_col1 = first.source_col1 end
+          table.insert(render.fragments, 1, {
+            source_col1 = 1, source_col2 = first.source_col1,
+            text = previous_list.indent, width = indent_width,
+            font = first.font or markdown_live_body_font(view),
+          })
+          render.continuation_indent_col = first.source_col1
+        end
+      end
+      core.log_quiet("Markdown retained list indentation until semantic publication: line=%d revision=%d",
+        line, view.buffer.text_revision)
+    elseif current_list and edit_visual_projection.has_list_prefix(render)
+      and (list_markers and not confirmed_list
+        or not list_markers and not edit_visual_projection.has_list_prefix(
+          captured and captured.render_line
+        ))
+    then
+      -- The source can still belong to a paragraph after a deeper indent.
+      -- Replace only the prefix. Keep the body's projected inline formatting.
+      local fragments = { {
+        source_col1 = 1, source_col2 = current_list.content_col,
+        text = source:sub(1, current_list.content_col - 1),
+        font = markdown_live_body_font(view),
+      } }
+      for _, fragment in ipairs(render.fragments or {}) do
+        if not edit_visual_projection.is_list_prefix_fragment(fragment) then
+          fragments[#fragments + 1] = fragment
+        end
+      end
+      render.fragments = fragments
+      render.continuation_indent_col = nil
+      if render.markdown_task_checked then
+        set_render_line_task_completion(render, false, current_list.content_col)
       end
     end
     if render.position_rows then
