@@ -7728,11 +7728,12 @@ function FSView:draw_open_content()
       local range_last = self.range_anchor and math.max(self.range_anchor, self.selected)
       if idx == self.selected or marked or range_first and idx >= range_first and idx <= range_last then
         renderer.draw_rect(x, yy, list_w, lh, style.fuzzy_searcher_result_selection_background)
-        if idx == self.selected then
-          renderer.draw_rect(x, yy, math.max(2, style.divider_size), lh, style.accent)
-        end
-      elseif idx == self.hovered_result then
+      end
+      if idx == self.hovered_result then
         renderer.draw_rect(x, yy, list_w, lh, style.fuzzy_searcher_result_hover_background)
+      end
+      if idx == self.selected then
+        renderer.draw_rect(x, yy, math.max(2, style.divider_size), lh, style.accent)
       end
       if not r.revision and (r.kind == "file" or (r.kind == "path" and r.file)) then
         local path = fullpath(r)
