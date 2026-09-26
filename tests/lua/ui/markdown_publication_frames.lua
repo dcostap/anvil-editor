@@ -44,6 +44,11 @@ end
 
 local function frame(view, first, last)
   core.active_view = view
+  local draw_text, painted = renderer.draw_text, {}
+  renderer.draw_text = function(font, text, x, y, color, opts)
+    painted[#painted + 1] = { text = text, x = x, y = y, size = font:get_size() }
+    return draw_text(font, text, x, y, color, opts)
+  end
   renderer.begin_frame(core.window)
   local ok, err = pcall(function()
     core.ui_snapshot_active = true
@@ -53,6 +58,7 @@ local function frame(view, first, last)
     view:draw()
   end)
   renderer.end_frame()
+  renderer.draw_text = draw_text
   core.ui_snapshot_active = false
   if not ok then error(err, 0) end
   local rows = {}
@@ -72,7 +78,7 @@ local function frame(view, first, last)
       x = x, y = y, height = view:get_position_visual_row_height(line, col),
     }
   end
-  return rows
+  return rows, painted
 end
 
 local function same_rows(actual, expected, phase)
@@ -120,12 +126,14 @@ test.describe("Markdown publication frames", function()
     frame(view, 1, 7)
     for step = 1, 5 do
       test.ok(command.perform(step % 2 == 1 and "core:indent" or "core:unindent", view))
-      local pending = frame(view, 1, 7)
+      local pending, pending_paint = frame(view, 1, 7)
       local instance = model.peek(buffer)
       local deadline = system.get_time() + 5
       repeat
         drain()
-        same_rows(frame(view, 1, 7), pending, "indent publication " .. step)
+        local rows, painted = frame(view, 1, 7)
+        same_rows(rows, pending, "indent publication " .. step)
+        test.same(painted, pending_paint)
         if instance.status ~= "ready" then coroutine.yield(0.001) end
       until instance.status == "ready" or system.get_time() >= deadline
       test.equal(instance.status, "ready")

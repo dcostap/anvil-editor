@@ -88,6 +88,16 @@ test.describe("Markdown heading geometry", function()
     test.equal(visible_text(view), pending, "publication must not hide or reveal more markers")
   end)
 
+  test.it("keeps sibling formatting hidden when another editor changes the heading", function(context)
+    local view, buffer = make_view(context, "# Head **bold** and *other*", false)
+    buffer:set_selection(1, 11)
+    test.equal(visible_text(view), "# Head **bold** and other")
+    buffer:insert(1, #buffer.lines[1], "!")
+    test.equal(visible_text(view), "# Head **bold** and other!")
+    ready(view)
+    test.equal(visible_text(view), "# Head **bold** and other!")
+  end)
+
   for _, wrapped in ipairs { false, true } do
     test.it("aligns selection past heading text with its content row (wrapped=" .. tostring(wrapped) .. ")", function(context)
       local view, buffer = make_view(context, "# Selected heading", wrapped)

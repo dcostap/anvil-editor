@@ -3862,6 +3862,18 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
     render_line.markdown_pending_provenance = "retained"
     return current_text
   end
+  if owner and owner.hidden and owner.markdown_reveal_col1
+    and start_col == end_col and start_col == #current_text + 1
+  then
+    -- Text after a closing delimiter belongs outside the hidden source span.
+    render_line.fragments[#render_line.fragments + 1] = {
+      source_col1 = start_col, source_col2 = start_col + #replacement,
+      text = replacement, font = owner.font, color = normal_text_color(),
+    }
+    render_line.source_text = current_text .. replacement
+    render_line.markdown_pending_provenance = "active-source-reveal"
+    return render_line.source_text
+  end
   if not owner or owner.hidden or owner.widget or owner.width or owner.text_x_offset then return nil end
   local owner_col1 = owner.source_col1 or 1
   local owner_col2 = owner.source_col2 or owner_col1
@@ -5041,20 +5053,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
             break
           end
         end
-        if retained_heading then
-          local font = heading_font(view, heading.level)
-          for _, fragment in ipairs(render.fragments or {}) do
-            if fragment.hidden then
-              fragment.hidden = nil
-              fragment.text = source:sub(
-                fragment.source_col1, fragment.source_col2 - 1
-              )
-              fragment.font = fragment.font or font
-              fragment.color = fragment.color
-                or style.markdown_live_heading_marker
-            end
-          end
-        else
+        if not retained_heading then
           render = heading_render_line(
             view, source, heading, { { whole_line = true } }
           )
@@ -5082,6 +5081,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     )
     if not entry then return false end
     entry.background = captured and captured.background or nil
+    refresh_projected_reveal(view, line, projected_selection_state, entry)
     edit_visual_projection.rebind_image_consumers(view, entry.render_line, line)
     next_lines[line] = entry
     next_metrics[line] = nil
