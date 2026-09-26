@@ -3951,6 +3951,23 @@ function edit_visual_projection.source_list_prefix(text)
   }
 end
 
+-- Show list-shaped source as a bullet even when Markdown treats it as prose
+-- or indented code. Explicit raw blocks keep their source presentation.
+function edit_visual_projection.preview_bullet_for_line(view, line, text)
+  local prefix = edit_visual_projection.source_list_prefix(text)
+  if not prefix or prefix.ordered or prefix.task then return nil end
+  local raw = raw_block_for_line(view, line)
+  if raw and raw.type ~= "code_indented" then return nil end
+  local owner = view.__markdown_live_owner
+  if owner and owner.fence_service and owner.fence_service:contains_line(line)
+    or line_in_semantic_comment(view, line)
+    or line_in_semantic_math(view, line)
+  then
+    return nil
+  end
+  return prefix
+end
+
 function edit_visual_projection.empty_list_prefix_transition(previous_text, current_text)
   local current = edit_visual_projection.source_list_prefix(current_text)
   if not current or current.body ~= "" then return false end
@@ -4089,6 +4106,9 @@ function edit_visual_projection.pending_list_render(
     )
   local render = clone_render_line(previous or {})
   render.source_text = current_text
+  render.x_offset = nil
+  render.continuation_indent_col = parsed.content_col
+  render.continuation_indent_font = body_font
   render.markdown_allow_list_reindent = nil
   render.markdown_pending_provenance = "retained-list-presentation"
   render.position_rows = nil
@@ -4731,11 +4751,15 @@ local function capture_pre_edit_renders(view, change)
         or pending.render_line.markdown_pending_code_background)
       or false
     local raw_block = raw_block_for_line(view, line)
-    local raw_source_removed = removes_block_source(view, transaction, raw_block)
+    local preview_bullet = edit_visual_projection.preview_bullet_for_line(
+      view, line, source_text
+    ) ~= nil
+    local raw_source_removed = not preview_bullet
+      and removes_block_source(view, transaction, raw_block)
     if raw_source_removed then removed_raw_rows = removed_raw_rows + 1 end
-    local raw_passthrough = raw_block ~= nil
+    local raw_passthrough = not preview_bullet and (raw_block ~= nil
       or pending and pending.render_line
-        and pending.render_line.raw_passthrough == true
+        and pending.render_line.raw_passthrough == true)
     if not render and raw_passthrough then
       if fenced and service:is_body_line(line) then
         render = raw_pending_source_render(view, nil, source_text, true)
@@ -4756,9 +4780,9 @@ local function capture_pre_edit_renders(view, change)
       raw_source_removed = raw_source_removed,
       metrics = captured_metrics,
       fenced = fenced,
-      indented = owner.pending_indented_lines
+      indented = not preview_bullet and (owner.pending_indented_lines
         and owner.pending_indented_lines[line]
-        or indented_node ~= nil,
+        or indented_node ~= nil),
       indented_line1 = indented_node and indented_node.source.line1 or nil,
       indented_line2 = indented_end_line,
       frontmatter = frontmatter_node ~= nil,
@@ -4977,7 +5001,10 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     local previous_list = captured
       and edit_visual_projection.source_list_prefix(captured.source_text or "")
     local current_list = edit_visual_projection.source_list_prefix(source)
-    local instance = current_list and markdown_model.peek(view.buffer)
+    local preview_bullet = not (captured and captured.fenced)
+      and edit_visual_projection.preview_bullet_for_line(view, line, source) ~= nil
+    local instance = current_list and not preview_bullet
+      and markdown_model.peek(view.buffer)
     local list_markers = instance and instance:probe_list_markers()
     local confirmed_list = list_markers and list_markers[line]
     local edit = #(transaction.edits or {}) == 1 and transaction.edits[1]
@@ -5002,7 +5029,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
       and edit_visual_projection.empty_list_prefix_transition(
         captured.source_text, source
       )
-    if suppress_list_projection then
+    if suppress_list_projection and not preview_bullet then
       render = raw_pending_source_render(view, nil, source, false)
     end
     if captured and captured.raw_source_removed
@@ -5053,7 +5080,8 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
         end
       end
     end
-    if current_list and not list_markers and captured and captured.render_line
+    if current_list and not preview_bullet and not list_markers
+      and captured and captured.render_line
       and list_prefix_reindented(captured.source_text, source)
     then
       -- Keep one committed layout when grammar ownership is not ready.
@@ -5102,6 +5130,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
       core.log_quiet("Markdown retained list indentation until semantic publication: line=%d revision=%d",
         line, view.buffer.text_revision)
     elseif current_list and edit_visual_projection.has_list_prefix(render)
+      and not preview_bullet
       and (list_markers and not confirmed_list
         or not list_markers and not generated_sibling
           and not edit_visual_projection.has_list_prefix(
@@ -5126,6 +5155,14 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
         set_render_line_task_completion(render, false, current_list.content_col)
       end
     end
+    if preview_bullet then
+      -- Preview-only bullets use source-local geometry on every edit.
+      -- Do not carry a paragraph's old continuation indent across frames.
+      render = edit_visual_projection.pending_list_render(
+        view, line, { source_text = source, fragments = render.fragments },
+        source, projected_selection_state
+      ) or render
+    end
     if render.position_rows then
       render.position_rows = nil
       render.layout_height = nil
@@ -5146,7 +5183,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
       provenance or render.markdown_pending_provenance
     )
     if not entry then return false end
-    entry.background = captured and captured.background or nil
+    entry.background = not preview_bullet and captured and captured.background or nil
     refresh_projected_reveal(view, line, projected_selection_state, entry)
     edit_visual_projection.rebind_image_consumers(view, entry.render_line, line)
     next_lines[line] = entry
@@ -5912,6 +5949,10 @@ function decoration_provider:line_background_descriptor(view, line)
 end
 
 semantic_line_background = function(view, line)
+  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  if edit_visual_projection.preview_bullet_for_line(view, line, text) then
+    return nil
+  end
   if line_in_semantic_comment(view, line) then
     return nil
   end
@@ -6853,11 +6894,14 @@ local function build_render_line(view, line, _context)
     return fenced_code_content_render_line(view, line, text, fenced)
   end
   local table_node = table_for_line(view, line)
-  if not in_comment and not table_node and raw_block_for_line(view, line) then
+  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  local preview_bullet = edit_visual_projection.preview_bullet_for_line(view, line, text)
+  if not in_comment and not table_node and raw_block_for_line(view, line)
+    and not preview_bullet
+  then
     return { raw_passthrough = true }
   end
 
-  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
   local reveal_units = reveal_units_for_line(view, line)
   local setext_marker = semantic_setext_marker_for_line(view, text, line)
   if setext_marker then
@@ -6902,6 +6946,16 @@ local function build_render_line(view, line, _context)
   end
 
   local fragments, continuation_indent = inline_fragments(text, line, view, reveal_units)
+  if preview_bullet and not edit_visual_projection.has_list_prefix({
+    fragments = fragments,
+  }) then
+    local previous = prose_render_line(view, text, {
+      source_text = text, fragments = fragments,
+    })
+    return edit_visual_projection.pending_list_render(
+      view, line, previous, text, current_selection_state(view)
+    ) or previous
+  end
   if #fragments > 0 or continuation_indent then
     local _, semantic_generation = semantic_line(view, line)
     local render_line = layout_inline_image_rows(view, text, prose_render_line(view, text, {

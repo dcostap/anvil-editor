@@ -48,13 +48,15 @@ local function frame(view, first, last)
   local draw_text, painted = renderer.draw_text, {}
   renderer.draw_text = function(font, text, x, y, color, opts)
     -- These fixtures use ASCII. Compare glyph positions, not draw-call splits.
-    for col = 1, #text do
-      local char = text:sub(col, col)
-      if not char:match("%s") then
-        painted[#painted + 1] = {
-          text = char, x = x + font:get_width(text:sub(1, col - 1)),
-          y = y, size = font:get_size(),
-        }
+    if type(text) == "string" then
+      for col = 1, #text do
+        local char = text:sub(col, col)
+        if not char:match("%s") then
+          painted[#painted + 1] = {
+            text = char, x = x + font:get_width(text:sub(1, col - 1)),
+            y = y, size = font:get_size(),
+          }
+        end
       end
     end
     return draw_text(font, text, x, y, color, opts)
@@ -232,15 +234,107 @@ test.describe("Markdown publication frames", function()
     end
   end)
 
-  test.it("keeps an empty nested marker raw until it has a body", function(context)
+  for _, case in ipairs {
+    { name = "empty nested", source = "- sdfsdf\n     - \n", text = "<widget>" },
+    { name = "deep filled", source = "- sdfsdf\n             - child\n", text = "<widget>child" },
+    { name = "indented code", source = "prose\n\n             - child\n", line = 3,
+      text = "<widget>child" },
+    { name = "empty after prose", source = "prose\n     - \n", text = "<widget>" },
+    { name = "empty plus", source = "prose\n     + \n", text = "<widget>" },
+    { name = "empty star", source = "prose\n     * \n", text = "<widget>" },
+  } do
+    test.it("shows a preview-only bullet for " .. case.name .. " source", function(context)
+      local view, buffer = make_view(context, case.source)
+      local line = case.line or 2
+      buffer:set_selection(line, #buffer.lines[line])
+      local rows, painted = frame(view, 1, line)
+      test.equal(rows[line].text, case.text, "the bullet stayed as source text")
+      if case.name == "indented code" then
+        for _, entry in ipairs(view:decoration_provider_entries()) do
+          if entry.id == "markdown-live" then
+            test.equal(entry.provider:line_background(view, line), nil,
+              "the preview bullet kept an indented-code background")
+            view:on_text_input("x")
+            local pending = frame(view, 1, line)
+            test.equal(pending[line].text, "<widget>childx")
+            test.equal(entry.provider:line_background(view, line), nil,
+              "the pending preview bullet gained a code background")
+            ready(view)
+            same_rows(frame(view, 1, line), pending, "indented preview bullet edit")
+          end
+        end
+      end
+      local marker_y = rows[line].y
+      for _, glyph in ipairs(painted) do
+        test.ok(not (glyph.text == "-" and glyph.y == marker_y),
+          "the raw list marker reached the drawing API")
+      end
+    end)
+  end
+
+  test.it("exits a preview-only empty bullet with Enter", function(context)
     local view, buffer = make_view(context, "- sdfsdf\n     - \n")
     buffer:set_selection(2, #buffer.lines[2])
-    test.equal(frame(view, 1, 2)[2].text, "     - ")
-    view:on_text_input("x")
+    frame(view, 1, 2)
+    test.ok(command.perform("core:newline", view))
+    test.equal(buffer.lines[2], "\n")
     local pending = frame(view, 1, 2)
-    test.equal(pending[2].text, "<widget>x", "the new item did not gain a bullet")
     ready(view)
-    same_rows(frame(view, 1, 2), pending, "nested list first character")
+    same_rows(frame(view, 1, 2), pending, "preview-only bullet exit")
+  end)
+
+  test.it("continues a deep preview-only bullet with Enter", function(context)
+    local view, buffer = make_view(context, "prose\n             - child\n")
+    buffer:set_selection(2, #buffer.lines[2])
+    frame(view, 1, 2)
+    test.ok(command.perform("core:newline", view))
+    test.equal(buffer.lines[3], "             - \n")
+    local pending, pending_paint = frame(view, 1, 3)
+    test.equal(pending[3].text, "<widget>")
+    ready(view)
+    local published, painted = frame(view, 1, 3)
+    same_rows(pending, published, "deep bullet continuation")
+    same_paint(pending_paint, painted)
+  end)
+
+  test.it("keeps a nested bullet through its first body character", function(context)
+    local view, buffer = make_view(context, "- sdfsdf\n     - \n")
+    buffer:set_selection(2, #buffer.lines[2])
+    test.equal(frame(view, 1, 2)[2].text, "<widget>")
+    view:on_text_input("x")
+    local pending, pending_paint = frame(view, 1, 2)
+    test.equal(pending[2].text, "<widget>x")
+    ready(view)
+    local published, painted = frame(view, 1, 2)
+    same_rows(pending, published, "first preview-only bullet character")
+    same_paint(pending_paint, painted)
+  end)
+
+  test.it("shows a preview-only bullet on the frame that creates its source", function(context)
+    local view, buffer = make_view(context, "prose\nnext\n")
+    buffer:set_selection(2, 1, 2, #buffer.lines[2])
+    frame(view, 1, 2)
+    view:on_text_input("     - ")
+    local pending, pending_paint = frame(view, 1, 2)
+    test.equal(pending[2].text, "<widget>")
+    ready(view)
+    local published, painted = frame(view, 1, 2)
+    same_rows(pending, published, "new preview-only bullet")
+    same_paint(pending_paint, painted)
+  end)
+
+  test.it("keeps list-looking source inside a fence literal", function(context)
+    local view, buffer = make_view(context, "```text\n     - \n```\n")
+    buffer:set_selection(2, #buffer.lines[2])
+    test.equal(frame(view, 1, 3)[2].text, "     - ")
+  end)
+
+  test.it("keeps preview-only bullets literal in Markdown Source Mode", function(context)
+    local view, buffer = make_view(context, "prose\n     - \n")
+    buffer:set_selection(2, #buffer.lines[2])
+    test.equal(frame(view, 1, 2)[2].text, "<widget>")
+    markdown.live_render.set_source_mode(view, true, "test-preview-bullet")
+    test.equal(frame(view, 1, 2)[2].text:gsub("\n$", ""), "     - ")
   end)
 
   test.it("outdents the third nested item by one list level", function(context)
@@ -392,20 +486,20 @@ test.describe("Markdown publication frames", function()
     { name = "short", body = "item" },
     { name = "wrapped", body = string.rep("item ", 40) .. "end" },
   } do
-    test.it("retains " .. case.name .. " indentation when the bounded parser cannot finish", function(context)
+    test.it("keeps " .. case.name .. " indentation stable when the parser cannot finish", function(context)
       local view, buffer = make_view(context, "- parent\n- " .. case.body .. "\nplain\n")
       buffer:set_selection(2, #buffer.lines[2])
       for step = 1, 6 do
-        local before = frame(view, 1, 3)
+        frame(view, 1, 3)
         native.index_text = function() return nil, "Tree-sitter parse timed out" end
         test.ok(command.perform(step <= 3 and "core:indent" or "core:unindent", view))
-        same_rows(frame(view, 1, 3), before, "deferred indentation " .. step)
+        local pending = frame(view, 1, 3)
         native.index_text = context.index_text
-        ready(view)
-        local published = frame(view, 1, 3)
         local fresh, fresh_buffer = make_view(context, table.concat(buffer.lines))
         fresh_buffer:set_selection(2, #fresh_buffer.lines[2])
-        same_rows(frame(fresh, 1, 3), published, "completed deferred indentation " .. step)
+        same_rows(pending, frame(fresh, 1, 3), "deferred indentation " .. step)
+        ready(view)
+        same_rows(frame(view, 1, 3), pending, "completed deferred indentation " .. step)
         frame(view, 1, 3)
         native.index_text = function() return nil, "Tree-sitter parse timed out" end
         view:on_text_input("x")
