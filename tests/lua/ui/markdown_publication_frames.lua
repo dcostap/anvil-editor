@@ -272,6 +272,70 @@ test.describe("Markdown publication frames", function()
     end)
   end
 
+  for _, case in ipairs {
+    { name = "empty dot", source = "prose\n     1. \n", display = "1." },
+    { name = "empty parenthesis", source = "prose\n     1) \n", display = "1)" },
+    { name = "deep filled", source = "prose\n             42. child\n",
+      display = "42.child" },
+  } do
+    test.it("shows a preview-only ordered item for " .. case.name .. " source", function(context)
+      local view, buffer = make_view(context, case.source)
+      buffer:set_selection(2, #buffer.lines[2])
+      local rows = frame(view, 1, 2)
+      test.equal(rows[2].text, case.display)
+      local render = test.not_nil(view:get_line_render(2))
+      local marker = false
+      for _, fragment in ipairs(render.fragments or {}) do
+        if fragment.ordered_list_marker then marker = true end
+      end
+      test.ok(marker, "the numbered marker stayed raw")
+    end)
+  end
+
+  test.it("continues a deep preview-only ordered item with Enter", function(context)
+    local view, buffer = make_view(context, "prose\n             3. child\n")
+    buffer:set_selection(2, #buffer.lines[2])
+    frame(view, 1, 2)
+    test.ok(command.perform("core:newline", view))
+    test.equal(buffer.lines[3], "             4. \n")
+    local pending, pending_paint = frame(view, 1, 3)
+    test.equal(pending[3].text, "4.")
+    ready(view)
+    local published, painted = frame(view, 1, 3)
+    same_rows(pending, published, "deep ordered continuation")
+    same_paint(pending_paint, painted)
+  end)
+
+  test.it("keeps a preview-only ordered item through its first body character", function(context)
+    local view, buffer = make_view(context, "prose\n     2) \n")
+    buffer:set_selection(2, #buffer.lines[2])
+    test.equal(frame(view, 1, 2)[2].text, "2)")
+    view:on_text_input("x")
+    local pending, pending_paint = frame(view, 1, 2)
+    test.equal(pending[2].text, "2)x")
+    ready(view)
+    local published, painted = frame(view, 1, 2)
+    same_rows(pending, published, "first ordered item character")
+    same_paint(pending_paint, painted)
+  end)
+
+  test.it("exits a preview-only empty ordered item with Enter", function(context)
+    local view, buffer = make_view(context, "prose\n     1. \n")
+    buffer:set_selection(2, #buffer.lines[2])
+    frame(view, 1, 2)
+    test.ok(command.perform("core:newline", view))
+    test.equal(buffer.lines[2], "\n")
+    local pending = frame(view, 1, 2)
+    ready(view)
+    same_rows(frame(view, 1, 2), pending, "ordered item exit")
+  end)
+
+  test.it("keeps numbered source inside a fence literal", function(context)
+    local view, buffer = make_view(context, "```text\n     1. \n```\n")
+    buffer:set_selection(2, #buffer.lines[2])
+    test.equal(frame(view, 1, 3)[2].text, "     1. ")
+  end)
+
   test.it("exits a preview-only empty bullet with Enter", function(context)
     local view, buffer = make_view(context, "- sdfsdf\n     - \n")
     buffer:set_selection(2, #buffer.lines[2])

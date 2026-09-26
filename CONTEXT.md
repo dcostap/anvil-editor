@@ -182,6 +182,11 @@ A bullet shown by Markdown Live Preview for an unordered marker that Markdown do
 It does not change the source meaning.
 _Avoid_: Invalid bullet, forced list item
 
+**Preview-only Ordered Item**:
+A numbered item shown by Markdown Live Preview for an ordered marker that Markdown does not treat as a list item.
+It does not change the source meaning.
+_Avoid_: Invalid numbered item
+
 **Markdown Callout**:
 A blockquote whose first line contains a case-insensitive `[!type]` marker, with an optional custom title and Markdown-formatted body.
 _Avoid_: admonition, alert block
