@@ -4980,6 +4980,20 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     local instance = current_list and markdown_model.peek(view.buffer)
     local list_markers = instance and instance:probe_list_markers()
     local confirmed_list = list_markers and list_markers[line]
+    local edit = #(transaction.edits or {}) == 1 and transaction.edits[1]
+    local parent = edit and pre_edit_lines[edit.line1]
+    local parent_list = parent and edit_visual_projection.source_list_prefix(
+      parent.source_text or ""
+    )
+    -- Enter created this marker from a presented list item. Its owner is
+    -- known even when the bounded grammar probe cannot finish this frame.
+    local generated_sibling = edit and parent_list and current_list
+      and not retains_raw_list_source(parent)
+      and edit_visual_projection.has_list_prefix(parent.render_line)
+      and line == edit.line1 + 1
+      and (edit.text or ""):match("\n([^\n]*)$") == source
+      and parent_list.indent == current_list.indent
+      and parent_list.token == current_list.token
     local empty_list_reindented = list_reindented and previous_list and current_list
       and previous_list.body == "" and current_list.body == ""
       and #previous_list.indent > #current_list.indent
@@ -5089,9 +5103,10 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
         line, view.buffer.text_revision)
     elseif current_list and edit_visual_projection.has_list_prefix(render)
       and (list_markers and not confirmed_list
-        or not list_markers and not edit_visual_projection.has_list_prefix(
-          captured and captured.render_line
-        ))
+        or not list_markers and not generated_sibling
+          and not edit_visual_projection.has_list_prefix(
+            captured and captured.render_line
+          ))
     then
       -- The source can still belong to a paragraph after a deeper indent.
       -- Replace only the prefix. Keep the body's projected inline formatting.

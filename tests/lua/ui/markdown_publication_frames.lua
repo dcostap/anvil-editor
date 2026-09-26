@@ -173,6 +173,65 @@ test.describe("Markdown publication frames", function()
     end
   end)
 
+  for _, case in ipairs {
+    { name = "at the end of the file", source = "- test" },
+    { name = "before a blank line", source = "- test\n" },
+    { name = "before plain text", source = "- test\nplain\n" },
+  } do
+    test.it("keeps a new sibling marker presented " .. case.name, function(context)
+      local view, buffer = make_view(context, case.source)
+      buffer:set_selection(1, #buffer.lines[1])
+      frame(view, 1, 1)
+      test.ok(command.perform("core:newline", view))
+      test.equal((buffer.lines[2] or ""):gsub("\n$", ""), "- ")
+      local last = math.min(#buffer.lines, 3)
+      local frames = { { frame(view, 1, last) } }
+      local instance = test.not_nil(model.peek(buffer))
+      local deadline = system.get_time() + 5
+      repeat
+        local pool = workers.current_system()
+        if pool then pool:drain({ max_ms = 1, max_messages = 1 }) end
+        frames[#frames + 1] = { frame(view, 1, last) }
+        if instance.status ~= "ready" then coroutine.yield(0.001) end
+      until instance.status == "ready" or system.get_time() >= deadline
+      test.equal(instance.status, "ready")
+      wrapping.complete_async_reconstruction(view)
+      local published, painted = frame(view, 1, last)
+      test.equal(published[2].text, "<widget>", "the new list marker must be presented")
+      for index, captured in ipairs(frames) do
+        same_rows(captured[1], published, "new sibling frame " .. index)
+        same_paint(captured[2], painted)
+      end
+    end)
+  end
+
+  test.it("keeps a new sibling marker presented when the list probe times out", function(context)
+    local view, buffer = make_view(context, "- test\nplain\n")
+    buffer:set_selection(1, #buffer.lines[1])
+    frame(view, 1, 2)
+    native.index_text = function() return nil, "Tree-sitter parse timed out" end
+    test.ok(command.perform("core:newline", view))
+    local frames = { { frame(view, 1, 3) } }
+    test.equal(frames[1][1][2].text, "<widget>", "Enter exposed the new list source")
+    native.index_text = context.index_text
+    local instance = test.not_nil(model.peek(buffer))
+    local deadline = system.get_time() + 5
+    repeat
+      local pool = workers.current_system()
+      if pool then pool:drain({ max_ms = 1, max_messages = 1 }) end
+      frames[#frames + 1] = { frame(view, 1, 3) }
+      if instance.status ~= "ready" then coroutine.yield(0.001) end
+    until instance.status == "ready" or system.get_time() >= deadline
+    test.equal(instance.status, "ready")
+    wrapping.complete_async_reconstruction(view)
+    local published, painted = frame(view, 1, 3)
+    test.equal(published[2].text, "<widget>")
+    for index, captured in ipairs(frames) do
+      same_rows(captured[1], published, "bounded parser Enter frame " .. index)
+      same_paint(captured[2], painted)
+    end
+  end)
+
   test.it("keeps every visible row fixed through an offscreen file reload", function(context)
     local lines = {}
     for i = 1, 360 do
