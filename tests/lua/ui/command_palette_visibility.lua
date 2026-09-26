@@ -3,6 +3,7 @@ local core = require "core"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local panes = require "core.panes"
+local storage = require "core.storage"
 local test = require "core.test"
 local View = require "core.view"
 
@@ -14,6 +15,19 @@ local function result_commands(picker)
     if row.command then result[row.command] = true end
   end
   return result
+end
+
+local function palette_position(picker, name)
+  for index, row in ipairs(picker.results or {}) do
+    if row.command == name then return index end
+  end
+end
+
+local function run_from_palette(name)
+  fuzzy_searcher.open(">" .. name)
+  local picker = test.not_nil(core.fuzzy_searcher_active_view)
+  picker.selected = test.not_nil(palette_position(picker, name), name)
+  picker:confirm(false)
 end
 
 test.describe("Command Palette visibility", function()
@@ -123,6 +137,52 @@ test.describe("Command Palette visibility", function()
     test.not_nil(positions[context.names.fuzzy_contiguous])
     test.ok(positions[context.names.fuzzy_contiguous]
       < positions[context.names.fuzzy_compact])
+  end)
+
+  test.it("counts only commands run from the Command Palette", function(context)
+    local name = context.names.visible
+    local before = (storage.load("fuzzy_searcher", "command_usage") or {})[name] or 0
+    test.ok(command.perform(name))
+    test.equal((storage.load("fuzzy_searcher", "command_usage") or {})[name] or 0, before)
+
+    run_from_palette(name)
+    test.equal((storage.load("fuzzy_searcher", "command_usage") or {})[name], before + 1)
+  end)
+
+  test.it("ranks frequent Palette commands above newer ones with equal text matches", function(context)
+    local suffix = tostring(math.floor(system.get_time() * 1000000))
+    local frequent = "test_palette:bravo_rank_" .. suffix
+    local newer = "test_palette:alpha_rank_" .. suffix
+    context.names.frequent = frequent
+    context.names.newer = newer
+    command.add(nil, {
+      [frequent] = command.palette(function() end),
+      [newer] = command.palette(function() end),
+    })
+
+    for _ = 1, 3 do run_from_palette(frequent) end
+    run_from_palette(newer)
+
+    fuzzy_searcher.open(">")
+    local picker = core.fuzzy_searcher_active_view
+    picker.input:set_text(">")
+    picker.current_query_key = nil
+    picker.force_refresh = true
+    picker:refresh(">")
+    local frequent_position = test.not_nil(palette_position(picker, frequent),
+      "missing frequent command for " .. picker.input:get_text())
+    local newer_position = test.not_nil(palette_position(picker, newer),
+      "missing newer command for " .. picker.input:get_text())
+    test.ok(frequent_position < newer_position)
+    picker:close()
+
+    fuzzy_searcher.open(">test_palette:")
+    picker = core.fuzzy_searcher_active_view
+    frequent_position = test.not_nil(palette_position(picker, frequent),
+      "missing frequent command for " .. picker.input:get_text())
+    newer_position = test.not_nil(palette_position(picker, newer),
+      "missing newer command for " .. picker.input:get_text())
+    test.ok(frequent_position < newer_position)
   end)
 
   test.it("hides keymap primitives while retaining useful editor actions", function()

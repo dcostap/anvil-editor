@@ -437,6 +437,10 @@ _Avoid_: Command prompt, command bar
 The Fuzzy Searcher mode used to find and run curated Anvil commands available to its source View. A command can continue into another input mode when it needs an argument.
 _Avoid_: Pane Command Bar, command prompt
 
+**Command Palette Usage**:
+The number of times a command runs from the Command Palette. Runs from shortcuts or other sources do not count.
+_Avoid_: command frequency
+
 **Command Identifier**:
 The raw Command Palette name of a command, written as `prefix:snake_case_action`. The prefix identifies the View, feature, or domain that owns the command. Commands without a more specific owner use `core`.
 _Avoid_: command title, display name

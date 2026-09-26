@@ -341,6 +341,8 @@ fuzzy_searcher.files_skip_next_picker_refresh = false
 fuzzy_searcher.files_cache_test_override = false
 local recent_commands = {}
 local recent_command_set = {}
+fuzzy_searcher.command_usage = storage.load("fuzzy_searcher", "command_usage")
+if type(fuzzy_searcher.command_usage) ~= "table" then fuzzy_searcher.command_usage = {} end
 local recent_project_times = {}
 local line_count_cache = {}
 local grep_proc
@@ -1116,6 +1118,22 @@ local function remember_command(name)
   end
 
   save_recent_commands()
+end
+
+function fuzzy_searcher.command_use_count(name)
+  local count = fuzzy_searcher.command_usage[name]
+  return type(count) == "number" and count >= 0 and count or 0
+end
+
+function fuzzy_searcher.record_command_use(name)
+  fuzzy_searcher.command_usage[name] = fuzzy_searcher.command_use_count(name) + 1
+  storage.save("fuzzy_searcher", "command_usage", fuzzy_searcher.command_usage)
+  core.log_quiet("Command Palette: used %s %d times", name, fuzzy_searcher.command_usage[name])
+end
+
+function fuzzy_searcher.command_use_bonus(name)
+  -- Small early gains, with a cap so a poor text match cannot win by habit alone.
+  return math.min(600, math.floor(math.log(fuzzy_searcher.command_use_count(name) + 1) / math.log(2) * 80))
 end
 
 load_recent_commands()
@@ -5454,18 +5472,23 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
 
     if trim_query(query) == "" then
       local candidates = {}
-      for recent_index, name in ipairs(recent_commands) do
-        if command.map[name] and self.palette_command_set[name] then
+      local recent_index = {}
+      for index, name in ipairs(recent_commands) do recent_index[name] = index end
+      for _, name in ipairs(self.palette_commands) do
+        if fuzzy_searcher.command_use_count(name) > 0 or recent_index[name] then
           candidates[#candidates + 1] = {
             name = name,
-            recent_index = recent_index,
+            count = fuzzy_searcher.command_use_count(name),
+            recent_index = recent_index[name] or math.huge,
             opens_view = command.get_metadata(name).opens_view == true,
           }
         end
       end
       table.sort(candidates, function(a, b)
+        if a.count ~= b.count then return a.count > b.count end
         if a.opens_view ~= b.opens_view then return a.opens_view end
-        return a.recent_index < b.recent_index
+        if a.recent_index ~= b.recent_index then return a.recent_index < b.recent_index end
+        return a.name < b.name
       end)
       for index, candidate in ipairs(candidates) do
         if index > max_items then self.has_more = true; break end
@@ -5480,11 +5503,12 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
     table.sort(matches, function(a, b)
       local a_opens = command.get_metadata(a.item).opens_view == true
       local b_opens = command.get_metadata(b.item).opens_view == true
-      if a_opens ~= b_opens then return a_opens end
-      -- Use match quality, then identifier order. Command and keyword length
-      -- must not break an otherwise equal match.
-      local a_score = a.score + math.floor(#a.text / 8)
-      local b_score = b.score + math.floor(#b.text / 8)
+      -- Preserve match quality, then give familiar commands a bounded boost.
+      -- View Openers keep a small advantage when text and usage are similar.
+      local a_score = a.score + math.floor(#a.text / 8) + fuzzy_searcher.command_use_bonus(a.item)
+        + (a_opens and 100 or 0)
+      local b_score = b.score + math.floor(#b.text / 8) + fuzzy_searcher.command_use_bonus(b.item)
+        + (b_opens and 100 or 0)
       if a_score == b_score then return a.item < b.item end
       return a_score > b_score
     end)
@@ -7433,9 +7457,11 @@ function FSView:activate_selected_result(new_group)
       source_pane = panes.find(self.source_pane) or panes.active(),
       placement = placement,
     }
-    remember_command(cmd)
     if not new_group then self:close() end
-    command.perform_with_context(cmd, context)
+    if command.perform_with_context(cmd, context) then
+      remember_command(cmd)
+      fuzzy_searcher.record_command_use(cmd)
+    end
     return
   end
   if self.file_picker then
