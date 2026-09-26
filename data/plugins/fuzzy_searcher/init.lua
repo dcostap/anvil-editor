@@ -3720,9 +3720,6 @@ function FSView:new(prefix, opts)
   table.sort(self.palette_commands)
 
   self.input = TextBox(self, prefix or "", "")
-  self.input:set_trailing_text(function()
-    return self:search_modifier_text()
-  end)
   -- The picker query is a single-line field.  TextView defaults to the global
   -- editor wrapping setting, which can otherwise make long queries wrap in
   -- the input widget instead of scrolling horizontally.
@@ -7626,25 +7623,39 @@ function FSView:draw()
 end
 
 function FSView:draw_status(font, x, y, max_width)
-  local status = truncate_text(font, self.status, max_width)
+  local full_status = tostring(self.status or "")
+  local modifier = self:search_modifier_text()
+  local gap = modifier ~= "" and full_status ~= "" and font:get_width("  ") or 0
+  if modifier ~= "" then
+    local available = max_width
+    if full_status ~= "" and font:get_width(full_status) + font:get_width(modifier) + gap > max_width then
+      available = max_width / 2
+    end
+    modifier = truncate_text(font, modifier, available)
+  end
+  if modifier == "" then gap = 0 end
+  local status = truncate_text(font, full_status, max_width - font:get_width(modifier) - gap)
   local label = status:match("^(Searching.-…)") or status:match("^(Indexing.-…)")
   if not label then
     renderer.draw_text(font, status, x, y, style.dim)
-    return
+  else
+    local width = font:get_width(label)
+    local radius = font:get_width("MMMM")
+    -- Start and finish outside the label so the repeated wave fades cleanly.
+    local center = (system.get_time() % 0.6) / 0.6 * (width + radius * 2) - radius
+    for first, letter in label:gmatch("()([%z\1-\127\194-\244][\128-\191]*)") do
+      local offset = font:get_width(label:sub(1, first - 1))
+      local distance = math.abs(offset + font:get_width(letter) / 2 - center)
+      local amount = math.max(0, 1 - distance / radius)
+      amount = amount * amount * (3 - 2 * amount)
+      renderer.draw_text(font, letter, x + offset, y, common.lerp(style.dim, style.accent, amount))
+    end
+    renderer.draw_text(font, status:sub(#label + 1), x + width, y, style.dim)
   end
-
-  local width = font:get_width(label)
-  local radius = font:get_width("MMMM")
-  -- Start and finish outside the label so the repeated wave fades cleanly.
-  local center = (system.get_time() % 0.6) / 0.6 * (width + radius * 2) - radius
-  for first, letter in label:gmatch("()([%z\1-\127\194-\244][\128-\191]*)") do
-    local offset = font:get_width(label:sub(1, first - 1))
-    local distance = math.abs(offset + font:get_width(letter) / 2 - center)
-    local amount = math.max(0, 1 - distance / radius)
-    amount = amount * amount * (3 - 2 * amount)
-    renderer.draw_text(font, letter, x + offset, y, common.lerp(style.dim, style.accent, amount))
+  if modifier ~= "" then
+    renderer.draw_text(font, modifier, x + font:get_width(status) + gap, y,
+      common.lerp(style.dim, style.accent, 0.6))
   end
-  renderer.draw_text(font, status:sub(#label + 1), x + width, y, style.dim)
 end
 
 function FSView:draw_open_content()
