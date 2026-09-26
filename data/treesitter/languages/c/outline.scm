@@ -2,6 +2,23 @@
 ; Each pattern captures one outline item as @outline.<kind> and its display name
 ; as @name. Lua groups captures by Tree-sitter match id.
 
+(translation_unit
+  (declaration
+    declarator: [
+      (identifier) @name
+      (pointer_declarator declarator: (identifier) @name)
+      (array_declarator declarator: (identifier) @name)
+    ]) @outline.variable)
+
+(translation_unit
+  (declaration
+    declarator: (init_declarator
+      declarator: [
+        (identifier) @name
+        (pointer_declarator declarator: (identifier) @name)
+        (array_declarator declarator: (identifier) @name)
+      ])) @outline.variable)
+
 (function_definition
   declarator: (function_declarator
     declarator: (identifier) @name
