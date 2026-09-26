@@ -6012,8 +6012,35 @@ function decoration_provider:line_background_descriptor(view, line)
   }
 end
 
+function edit_visual_projection.blank_after_preview_item_in_code(view, line)
+  -- Indented-code ranges can include blanks after a preview-only list item.
+  -- Those blanks follow the item's presentation, not the code background.
+  local source = view.buffer.lines[line] or ""
+  if source:find("%S") then return false end
+  local owner = view.__markdown_live_owner
+  local code = indented_code_for_line(view, line)
+  if not code and not (owner and owner.pending_indented_lines
+    and owner.pending_indented_lines[line])
+  then return false end
+
+  local first = code and code.source.line1 or 1
+  local previous = line - 1
+  while previous >= first and not (view.buffer.lines[previous] or ""):find("%S") do
+    previous = previous - 1
+  end
+  if previous < first then return false end
+  local prior_source = (view.buffer.lines[previous] or ""):gsub("\n$", "")
+  if not edit_visual_projection.preview_list_item_for_line(
+    view, previous, prior_source
+  ) then return false end
+  local prior_code = indented_code_for_line(view, previous)
+  return prior_code ~= nil or owner and owner.pending_indented_lines
+    and owner.pending_indented_lines[previous] == true or false
+end
+
 semantic_line_background = function(view, line)
   local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  if edit_visual_projection.blank_after_preview_item_in_code(view, line) then return nil end
   if edit_visual_projection.preview_list_item_for_line(view, line, text) then
     return nil
   end
@@ -6041,6 +6068,7 @@ end
 
 function decoration_provider:line_background(view, line)
   if view_in_source_mode(view) then return nil end
+  if edit_visual_projection.blank_after_preview_item_in_code(view, line) then return nil end
   local owner = view.__markdown_live_owner
   local model = owner and owner.semantic_model
   local semantics_pending = model and (
